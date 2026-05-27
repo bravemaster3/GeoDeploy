@@ -32,6 +32,11 @@ async def provision_local() -> dict:
         if container.status != "running":
             container.start()
     except docker.errors.NotFound:
+        # Remove stale volume so postgres initialises fresh with the new password
+        try:
+            client.volumes.get("geodeploy_postgres").remove()
+        except docker.errors.NotFound:
+            pass
         client.containers.run(
             IMAGE,
             name=CONTAINER_NAME,

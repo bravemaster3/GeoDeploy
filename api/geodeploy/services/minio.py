@@ -36,6 +36,11 @@ async def provision_local() -> dict:
         if container.status != "running":
             container.start()
     except docker.errors.NotFound:
+        # Remove stale volume so MinIO initialises fresh with the new credentials
+        try:
+            client.volumes.get("geodeploy_minio").remove()
+        except docker.errors.NotFound:
+            pass
         client.containers.run(
             IMAGE,
             name=CONTAINER_NAME,
