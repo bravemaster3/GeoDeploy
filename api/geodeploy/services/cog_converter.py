@@ -2,9 +2,12 @@
 import os
 import subprocess
 import tempfile
-from osgeo import gdal
 
-gdal.UseExceptions()
+
+def _gdal():
+    from osgeo import gdal as _g
+    _g.UseExceptions()
+    return _g
 
 COG_OPTIONS = [
     "-of", "GTiff",
@@ -19,6 +22,7 @@ OVERVIEW_LEVELS = [2, 4, 8, 16, 32, 64]
 
 
 def is_cog(path: str) -> bool:
+    gdal = _gdal()
     result = gdal.VSIStatL(path)
     if result is None:
         return False
@@ -31,6 +35,7 @@ def is_cog(path: str) -> bool:
 
 def convert_to_cog(src_path: str, dst_path: str) -> None:
     """Convert any GDAL-readable raster to COG with overviews."""
+    gdal = _gdal()
     with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
         tmp_path = tmp.name
 
@@ -39,12 +44,7 @@ def convert_to_cog(src_path: str, dst_path: str) -> None:
         if ds is None:
             raise ValueError(f"GDAL cannot open: {src_path}")
 
-        gdal.BuildOverviews(
-            ds,
-            "NEAREST",
-            OVERVIEW_LEVELS,
-            callback=gdal.TermProgress_nocb,
-        )
+        gdal.BuildOverviews(ds, "NEAREST", OVERVIEW_LEVELS, callback=gdal.TermProgress_nocb)
         ds.FlushCache()
         ds = None
 
@@ -61,6 +61,7 @@ def convert_to_cog(src_path: str, dst_path: str) -> None:
 
 def inspect(path: str) -> dict:
     """Return basic metadata from a raster file."""
+    gdal = _gdal()
     ds = gdal.Open(path, gdal.GA_ReadOnly)
     if ds is None:
         raise ValueError(f"Cannot open raster: {path}")
@@ -72,11 +73,9 @@ def inspect(path: str) -> dict:
 
     gt = ds.GetGeoTransform()
     cols, rows = ds.RasterXSize, ds.RasterYSize
-    minx = gt[0]
-    maxy = gt[3]
+    minx, maxy = gt[0], gt[3]
     maxx = minx + gt[1] * cols
     miny = maxy + gt[5] * rows
-
     nodata = ds.GetRasterBand(1).GetNoDataValue()
 
     return {
