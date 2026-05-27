@@ -13,12 +13,18 @@ error() { echo -e "${RED}[geodeploy]${NC} $*" >&2; exit 1; }
 
 # ── Checks ────────────────────────────────────────────────────────────────────
 
-command -v docker  >/dev/null 2>&1 || error "Docker is not installed. Install it first: https://docs.docker.com/engine/install/"
-command -v curl    >/dev/null 2>&1 || error "curl is required."
+command -v curl >/dev/null 2>&1 || error "curl is required."
 
-docker compose version >/dev/null 2>&1 || \
-  docker-compose version >/dev/null 2>&1 || \
-  error "Docker Compose is not installed."
+if ! command -v docker >/dev/null 2>&1; then
+  info "Docker not found. Installing Docker…"
+  curl -fsSL https://get.docker.com | sh
+  sudo usermod -aG docker "$USER"
+  info "Docker installed. You may need to log out and back in for group changes to take effect."
+fi
+
+if ! docker compose version >/dev/null 2>&1 && ! docker-compose version >/dev/null 2>&1; then
+  error "Docker Compose is not available. Try: sudo apt-get install docker-compose-plugin"
+fi
 
 info "Docker found: $(docker --version)"
 
