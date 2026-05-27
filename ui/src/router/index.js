@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { getSetupStatus } from '@/api'
 
 const routes = [
   { path: '/setup', component: () => import('@/views/SetupWizard.vue'), meta: { public: true } },
@@ -31,6 +32,12 @@ router.beforeEach(async (to) => {
     try {
       await auth.fetchMe()
     } catch {
+      try {
+        const { data } = await getSetupStatus()
+        if (!data.completed) return '/setup'
+      } catch {
+        // API unreachable — fall through to login
+      }
       return '/login'
     }
   }
