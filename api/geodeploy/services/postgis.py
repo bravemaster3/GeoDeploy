@@ -46,10 +46,10 @@ async def provision_local() -> dict:
             network=NETWORK,
         )
 
-    await _wait_healthy("postgres", 5432, "geodeploy", "geodeploy", password)
+    await _wait_healthy(CONTAINER_NAME, 5432, "geodeploy", "geodeploy", password)
 
     return {
-        "host": "postgres",
+        "host": CONTAINER_NAME,
         "port": 5432,
         "db": "geodeploy",
         "user": "geodeploy",

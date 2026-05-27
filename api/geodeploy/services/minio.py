@@ -50,14 +50,14 @@ async def provision_local() -> dict:
             network=NETWORK,
         )
 
-    await _wait_healthy("http://minio:9000", access_key, secret_key)
+    await _wait_healthy(f"http://{CONTAINER_NAME}:9000", access_key, secret_key)
 
-    s3 = _make_client("http://minio:9000", access_key, secret_key, "us-east-1")
+    s3 = _make_client(f"http://{CONTAINER_NAME}:9000", access_key, secret_key, "us-east-1")
     _ensure_bucket(s3, "geodeploy")
 
     return {
         "type": "local",
-        "endpoint": "http://minio:9000",
+        "endpoint": f"http://{CONTAINER_NAME}:9000",
         "bucket": "geodeploy",
         "access_key": access_key,
         "secret_key": secret_key,
