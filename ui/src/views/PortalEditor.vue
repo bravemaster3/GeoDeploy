@@ -33,7 +33,6 @@
             <button @click="showAddLayer = !showAddLayer" class="text-xs text-brand-600 hover:text-brand-700 font-medium">+ Add</button>
           </div>
 
-          <!-- Layer picker dropdown -->
           <div v-if="showAddLayer" class="mb-3 p-2 bg-gray-50 rounded-lg text-xs space-y-0.5 max-h-40 overflow-y-auto border border-gray-200">
             <p v-if="!availableLayers.length" class="text-gray-400 p-1">No ready layers available.</p>
             <div v-for="layer in availableLayers" :key="`${layer.type}-${layer.id}`"
@@ -111,16 +110,18 @@
     <!-- Map preview -->
     <div class="flex-1 relative bg-gray-100">
       <div id="portal-preview-map" class="w-full h-full" />
-      <div class="absolute inset-0 flex items-center justify-center pointer-events-none"
-        v-if="!previewReady">
-        <span class="text-xs text-gray-400">Map preview loads after saving & publishing</span>
+      <div v-if="!layerConfigs.length"
+        class="absolute inset-0 flex items-center justify-center pointer-events-none">
+        <span class="text-xs text-gray-400 bg-white/80 px-3 py-1.5 rounded-full">
+          Add layers to see a preview
+        </span>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { usePortalsStore } from '@/stores/portals'
 import { useDataStore } from '@/stores/data'
@@ -142,15 +143,14 @@ const accessType = ref('public')
 const accessPassword = ref('')
 const busy = ref(false)
 const saveMsg = ref(null)
-const previewReady = ref(false)
 
 const accessOptions = [
   { value: 'public',   label: 'Public',   desc: 'Anyone with the URL can view' },
   { value: 'password', label: 'Password', desc: 'Require a password to view' },
-  { value: 'private',  label: 'Private',  desc: 'Only you can view' },
+  { value: 'private',  label: 'Private',  desc: 'Only signed-in users can view' },
 ]
 
-useMaplibre('portal-preview-map')
+const { map, loaded, applyStyle, fitToBbox } = useMaplibre('portal-preview-map')
 
 onMounted(async () => {
   await Promise.all([portalsStore.refresh(), dataStore.refresh()])
@@ -159,11 +159,97 @@ onMounted(async () => {
     layerConfigs.value = portal.value.layer_configs || []
     selectedTemplate.value = portal.value.template_id
     accessType.value = portal.value.access_type || 'public'
-    previewReady.value = portal.value.published
   }
   const { data } = await listTemplates()
   templates.value = data
 })
+
+// Rebuild preview whenever configs or layer data change
+watch([layerConfigs, loaded], () => {
+  if (!loaded.value) return
+  const { style, bounds } = buildPreviewStyle()
+  applyStyle(style)
+  if (bounds) fitToBbox(bounds)
+}, { deep: true })
+
+function buildPreviewStyle() {
+  const style = {
+    version: 8,
+    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+    sources: {
+      basemap: {
+        type: 'raster',
+        tiles: [
+          'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png',
+          'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png',
+        ],
+        tileSize: 256,
+        attribution: '© OpenStreetMap contributors © CARTO',
+      },
+    },
+    layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }],
+  }
+
+  let bounds = null
+
+  for (const cfg of layerConfigs.value) {
+    if (cfg.layer_type === 'vector') {
+      const layer = dataStore.vectorLayers.find(l => l.id === cfg.layer_id)
+      if (!layer || layer.status !== 'ready') continue
+
+      const srcId = `vector_${layer.id}`
+      style.sources[srcId] = {
+        type: 'vector',
+        tiles: [`/tiles/${layer.schema_name}.${layer.table_name}/{z}/{x}/{y}`],
+        minzoom: 0, maxzoom: 22,
+      }
+      const sourceLayer = `${layer.schema_name}.${layer.table_name}`
+      const color = cfg.style?.color || '#3b82f6'
+      const opacity = cfg.opacity ?? 1.0
+      const geom = (layer.geometry_type || '').toLowerCase()
+
+      if (geom.includes('polygon')) {
+        style.layers.push({
+          id: srcId, type: 'fill', source: srcId, 'source-layer': sourceLayer,
+          paint: {
+            'fill-color': color,
+            'fill-opacity': opacity * (cfg.style?.fill_opacity ?? 0.45),
+            'fill-outline-color': cfg.style?.outline_color || '#1d4ed8',
+          },
+        })
+      } else if (geom.includes('line')) {
+        style.layers.push({
+          id: srcId, type: 'line', source: srcId, 'source-layer': sourceLayer,
+          paint: { 'line-color': color, 'line-width': cfg.style?.line_width ?? 2, 'line-opacity': opacity },
+        })
+      } else {
+        style.layers.push({
+          id: srcId, type: 'circle', source: srcId, 'source-layer': sourceLayer,
+          paint: {
+            'circle-color': color, 'circle-radius': cfg.style?.radius ?? 5,
+            'circle-opacity': opacity, 'circle-stroke-width': 1, 'circle-stroke-color': '#fff',
+          },
+        })
+      }
+
+      if (layer.bbox) bounds = layer.bbox
+
+    } else if (cfg.layer_type === 'raster') {
+      const layer = dataStore.rasterLayers.find(l => l.id === cfg.layer_id)
+      if (!layer || layer.status !== 'ready' || !layer.tile_url) continue
+
+      const srcId = `raster_${layer.id}`
+      style.sources[srcId] = { type: 'raster', tiles: [layer.tile_url], tileSize: 256 }
+      style.layers.push({
+        id: srcId, type: 'raster', source: srcId,
+        paint: { 'raster-opacity': cfg.opacity ?? 1.0 },
+      })
+      if (layer.bbox) bounds = layer.bbox
+    }
+  }
+
+  return { style, bounds }
+}
 
 const availableLayers = computed(() => [
   ...dataStore.vectorLayers.filter(l => l.status === 'ready').map(l => ({ ...l, type: 'vector' })),
@@ -214,7 +300,6 @@ async function handlePublish() {
   try {
     const updated = await portalsStore.publish(portal.value.id)
     portal.value = updated
-    previewReady.value = true
   } catch (err) {
     saveMsg.value = { type: 'err', text: err.response?.data?.detail || err.message }
   } finally {

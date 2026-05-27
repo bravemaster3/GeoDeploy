@@ -104,6 +104,7 @@ class RasterLayerOut(BaseModel):
     status: str
     error_message: str | None
     created_at: datetime
+    tile_url: str | None = None  # populated by router for ready layers
 
     model_config = {"from_attributes": True}
 
@@ -112,6 +113,7 @@ class RasterLayerOut(BaseModel):
         import json
         data = {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
         data["bbox"] = json.loads(obj.bbox) if obj.bbox else None
+        data["tile_url"] = None
         return cls(**data)
 
 

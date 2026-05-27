@@ -223,10 +223,23 @@
   const sub  = document.getElementById('access-gate-sub');
 
   if (ACCESS_TYPE === 'private') {
-    gate.style.display = 'flex';
-    document.getElementById('access-gate-input').style.display = 'none';
-    document.getElementById('access-gate-btn').style.display = 'none';
-    sub.textContent = 'This portal is private.';
+    const token = localStorage.getItem('geodeploy_token');
+    if (token) {
+      fetch('/api/auth/me', { headers: { Authorization: 'Bearer ' + token } })
+        .then(r => {
+          if (!r.ok) throw new Error('unauthorized');
+          // Authenticated — portal stays visible, nothing to do
+        })
+        .catch(() => showPrivateGate());
+    } else {
+      showPrivateGate();
+    }
+    function showPrivateGate() {
+      gate.style.display = 'flex';
+      document.getElementById('access-gate-input').style.display = 'none';
+      document.getElementById('access-gate-btn').style.display = 'none';
+      sub.innerHTML = 'This portal is private. <a href="/" style="color:var(--accent)">Sign in</a> to view.';
+    }
     return;
   }
 

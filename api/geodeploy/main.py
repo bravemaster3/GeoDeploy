@@ -18,11 +18,25 @@ async def lifespan(app: FastAPI):
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_apply_schema_migrations)
 
     # Write a minimal Martin config on first start so Martin can boot without layers
     _ensure_martin_config(settings)
 
     yield
+
+
+def _apply_schema_migrations(conn) -> None:
+    """Add columns that may be missing on databases created before the current schema."""
+    from sqlalchemy import text
+    pending = [
+        "ALTER TABLE portals ADD COLUMN access_password_sha256 VARCHAR(64)",
+    ]
+    for sql in pending:
+        try:
+            conn.execute(text(sql))
+        except Exception:
+            pass  # Column already exists
 
 
 def _ensure_martin_config(settings) -> None:

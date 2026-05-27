@@ -9,6 +9,7 @@ from ...database import get_db
 from ...deps import get_current_user
 from ...models import RasterLayer, UploadJob, User
 from ...schemas import JobStatus, RasterLayerOut
+from ...services.titiler import get_tile_url as raster_tile_url
 from ...tasks.raster_ingest import ingest_raster
 
 router = APIRouter(prefix="/data/raster", tags=["raster"])
@@ -23,7 +24,13 @@ async def list_layers(user: User = Depends(get_current_user), db: AsyncSession =
         select(RasterLayer).where(RasterLayer.user_id == user.id).order_by(RasterLayer.created_at.desc())
     )
     layers = result.scalars().all()
-    return [RasterLayerOut.from_orm_json(l) for l in layers]
+    out = []
+    for l in layers:
+        obj = RasterLayerOut.from_orm_json(l)
+        if l.status == "ready":
+            obj.tile_url = raster_tile_url(l.s3_key)
+        out.append(obj)
+    return out
 
 
 @router.post("/upload", response_model=JobStatus, status_code=202)

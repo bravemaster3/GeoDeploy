@@ -3,14 +3,15 @@ import uuid
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from slugify import slugify
 
 from ...config import get_settings
 from ...database import get_db
 from ...deps import get_current_user
 from ...models import UploadJob, User, VectorLayer
 from ...schemas import JobStatus, VectorLayerOut
+from ...services import martin as martin_svc
 from ...tasks.vector_ingest import ingest_vector
-from slugify import slugify
 
 router = APIRouter(prefix="/data/vector", tags=["vector"])
 
@@ -106,9 +107,9 @@ async def delete_layer(
     if not layer:
         raise HTTPException(404, "Layer not found.")
 
+    settings = get_settings()
     if layer.status == "ready":
         import asyncpg
-        settings = get_settings()
         try:
             conn = await asyncpg.connect(settings.postgis_dsn)
             await conn.execute(f'DROP TABLE IF EXISTS "{layer.schema_name}"."{layer.table_name}"')
@@ -118,3 +119,18 @@ async def delete_layer(
 
     await db.delete(layer)
     await db.commit()
+
+    # Regenerate Martin config without the deleted layer
+    remaining = await db.execute(
+        select(VectorLayer).where(
+            VectorLayer.user_id == user.id,
+            VectorLayer.status == "ready",
+            VectorLayer.storage_backend == "postgis",
+        )
+    )
+    all_layers = [{"schema_name": l.schema_name, "table_name": l.table_name}
+                  for l in remaining.scalars().all()]
+    try:
+        await martin_svc.regenerate_config(all_layers)
+    except Exception:
+        pass  # Non-fatal — tiles still work until next successful regeneration
