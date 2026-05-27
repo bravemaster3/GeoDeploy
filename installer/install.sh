@@ -19,14 +19,22 @@ if ! command -v docker >/dev/null 2>&1; then
   info "Docker not found. Installing Docker…"
   curl -fsSL https://get.docker.com | sh
   sudo usermod -aG docker "$USER"
-  info "Docker installed. You may need to log out and back in for group changes to take effect."
+  info "Docker installed."
 fi
 
-if ! docker compose version >/dev/null 2>&1 && ! docker-compose version >/dev/null 2>&1; then
+# Determine whether we need sudo to talk to the Docker socket
+# (happens when Docker was just installed and the group change hasn't been applied to this session yet)
+if docker info >/dev/null 2>&1; then
+  DOCKER="docker"
+else
+  DOCKER="sudo docker"
+fi
+
+if ! $DOCKER compose version >/dev/null 2>&1 && ! $DOCKER-compose version >/dev/null 2>&1; then
   error "Docker Compose is not available. Try: sudo apt-get install docker-compose-plugin"
 fi
 
-info "Docker found: $(docker --version)"
+info "Docker found: $($DOCKER --version)"
 
 # ── Install ───────────────────────────────────────────────────────────────────
 
@@ -54,12 +62,12 @@ fi
 # ── Pull images ───────────────────────────────────────────────────────────────
 
 info "Pulling Docker images…"
-docker compose pull geodeploy-ui nginx redis 2>/dev/null || true
+$DOCKER compose pull geodeploy-ui nginx redis 2>/dev/null || true
 
 # ── Start core services ───────────────────────────────────────────────────────
 
 info "Starting GeoDeploy…"
-docker compose up -d geodeploy-api geodeploy-ui nginx redis celery
+$DOCKER compose up -d geodeploy-api geodeploy-ui nginx redis celery
 
 # ── Wait for API ──────────────────────────────────────────────────────────────
 
@@ -72,7 +80,7 @@ for i in $(seq 1 30); do
 done
 
 if ! curl -sf http://localhost/api/health >/dev/null 2>&1; then
-  warn "API did not respond in time. Check logs: docker compose logs geodeploy-api"
+  warn "API did not respond in time. Check logs: $DOCKER compose logs geodeploy-api"
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
