@@ -27,17 +27,19 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   if (to.meta.public) return true
 
+  // Check setup before anything else so the 401 interceptor can't race ahead
+  try {
+    const { data } = await getSetupStatus()
+    if (!data.completed) return '/setup'
+  } catch {
+    // API unreachable — fall through
+  }
+
   const auth = useAuthStore()
   if (!auth.user) {
     try {
       await auth.fetchMe()
     } catch {
-      try {
-        const { data } = await getSetupStatus()
-        if (!data.completed) return '/setup'
-      } catch {
-        // API unreachable — fall through to login
-      }
       return '/login'
     }
   }
