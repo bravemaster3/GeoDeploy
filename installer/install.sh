@@ -65,13 +65,13 @@ sudo docker compose up -d geodeploy-api geodeploy-ui nginx redis celery
 
 info "Waiting for API to be ready…"
 for i in $(seq 1 30); do
-  if curl -sf http://localhost/api/health >/dev/null 2>&1; then
+  if curl -sf http://localhost/health >/dev/null 2>&1; then
     break
   fi
   sleep 2
 done
 
-if ! curl -sf http://localhost/api/health >/dev/null 2>&1; then
+if ! curl -sf http://localhost/health >/dev/null 2>&1; then
   warn "API did not respond in time. Check logs: sudo docker compose logs geodeploy-api"
 fi
 
