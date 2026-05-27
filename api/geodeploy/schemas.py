@@ -33,14 +33,14 @@ class ConfigureStorageRequest(BaseModel):
 class CreateAdminRequest(BaseModel):
     name: str
     email: EmailStr
-    password: str = Field(min_length=8, max_length=72)
+    password: str = Field(min_length=8)
 
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str = Field(max_length=72)
+    password: str
 
 
 class TokenResponse(BaseModel):

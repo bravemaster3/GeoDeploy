@@ -74,7 +74,11 @@
           <div class="space-y-3">
             <div><label class="label">Full name</label><input v-model="admin.name" class="input" /></div>
             <div><label class="label">Email</label><input v-model="admin.email" type="email" class="input" /></div>
-            <div><label class="label">Password</label><input v-model="admin.password" type="password" class="input" /></div>
+            <div>
+              <label class="label">Password</label>
+              <input v-model="admin.password" type="password" class="input" minlength="8" />
+              <p class="text-xs text-gray-500 mt-1">Minimum 8 characters</p>
+            </div>
           </div>
         </template>
 
