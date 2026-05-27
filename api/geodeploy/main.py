@@ -13,15 +13,39 @@ from .routers.data import vector, raster, sources
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    os.makedirs(f"{settings.data_dir}/sqlite", exist_ok=True)
-    os.makedirs(f"{settings.data_dir}/portals", exist_ok=True)
-    os.makedirs(f"{settings.data_dir}/temp", exist_ok=True)
-    os.makedirs(f"{settings.data_dir}/martin", exist_ok=True)
+    for subdir in ("sqlite", "portals", "temp", "martin"):
+        os.makedirs(f"{settings.data_dir}/{subdir}", exist_ok=True)
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    # Write a minimal Martin config on first start so Martin can boot without layers
+    _ensure_martin_config(settings)
+
     yield
+
+
+def _ensure_martin_config(settings) -> None:
+    """Write an empty-tables Martin config if none exists, so the Martin container can start."""
+    import yaml
+    config_path = settings.martin_config_path
+    if os.path.exists(config_path):
+        return
+    if not settings.postgis_host:
+        return  # PostGIS not configured yet — Martin won't start anyway
+    try:
+        config = {
+            "postgres": {
+                "connection_string": settings.postgis_sync_dsn,
+                "pool_size": 5,
+                "tables": {},
+            },
+            "srv": {"listen_addresses": "0.0.0.0:3000"},
+        }
+        with open(config_path, "w") as f:
+            yaml.dump(config, f, default_flow_style=False)
+    except Exception:
+        pass  # Non-fatal — Martin will emit an error on start but won't crash GeoDeploy
 
 
 app = FastAPI(

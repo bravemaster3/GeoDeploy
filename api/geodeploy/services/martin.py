@@ -20,10 +20,12 @@ async def regenerate_config(layers: list[dict]) -> None:
 def _build_config(layers: list[dict], settings) -> dict:
     tables = {}
     for layer in layers:
-        key = f"{layer['schema']}.{layer['table']}"
+        schema = layer.get("schema_name") or layer.get("schema", "")
+        table = layer.get("table_name") or layer.get("table", "")
+        key = f"{schema}.{table}"
         tables[key] = {
-            "schema": layer["schema"],
-            "table": layer["table"],
+            "schema": schema,
+            "table": table,
             "srid": 4326,
             "geometry_column": "geom",
             "id_column": layer.get("id_column", "id"),
@@ -68,6 +70,5 @@ def _docker_reload() -> None:
 
 
 def get_tile_url(schema: str, table: str, settings=None) -> str:
-    if settings is None:
-        settings = get_settings()
-    return f"{settings.martin_url}/{schema}.{table}/{{z}}/{{x}}/{{y}}"
+    """Return browser-accessible tile URL served through nginx's /tiles/ proxy."""
+    return f"/tiles/{schema}.{table}/{{z}}/{{x}}/{{y}}"

@@ -27,7 +27,7 @@ async def _get_or_create_config(db: AsyncSession) -> SetupConfig:
 @router.get("/status", response_model=SetupStatus)
 async def setup_status(db: AsyncSession = Depends(get_db)):
     config = await _get_or_create_config(db)
-    has_admin = bool((await db.execute(select(User))).scalar_one_or_none())
+    has_admin = bool((await db.execute(select(User))).scalars().first())
     return SetupStatus(
         completed=config.completed,
         postgis_configured=bool(config.postgis_host),
