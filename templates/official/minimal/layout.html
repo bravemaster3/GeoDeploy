@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{TITLE}}</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css">
+  <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --header-h: 52px;
+      --sidebar-w: 260px;
+      --bg: #ffffff;
+      --surface: #f8fafc;
+      --border: #e2e8f0;
+      --text: #1e293b;
+      --text-muted: #64748b;
+      --accent: #2563eb;
+      --accent-light: #dbeafe;
+      --radius: 8px;
+      --shadow: 0 1px 3px rgba(0,0,0,.1), 0 1px 2px rgba(0,0,0,.06);
+      --shadow-lg: 0 4px 16px rgba(0,0,0,.12);
+    }
+
+    html, body { height: 100%; overflow: hidden; font-family: system-ui, -apple-system, sans-serif; color: var(--text); }
+
+    /* ── Header ─────────────────────────────────────────── */
+    #header {
+      position: fixed; top: 0; left: 0; right: 0; height: var(--header-h); z-index: 100;
+      background: var(--bg); border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 10px; padding: 0 16px;
+      box-shadow: var(--shadow);
+    }
+    #sidebar-toggle {
+      width: 32px; height: 32px; border: none; background: none; cursor: pointer;
+      border-radius: 6px; display: flex; align-items: center; justify-content: center;
+      color: var(--text-muted); flex-shrink: 0;
+    }
+    #sidebar-toggle:hover { background: var(--surface); color: var(--text); }
+    #sidebar-toggle svg { width: 18px; height: 18px; }
+    #portal-title {
+      font-size: 15px; font-weight: 600; color: var(--text);
+      flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    #header-badge {
+      font-size: 11px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0;
+    }
+    #header-badge a { color: inherit; text-decoration: none; }
+    #header-badge a:hover { color: var(--accent); }
+
+    /* ── Layout ─────────────────────────────────────────── */
+    #layout {
+      position: fixed; top: var(--header-h); left: 0; right: 0; bottom: 0;
+      display: flex;
+    }
+
+    /* ── Sidebar ─────────────────────────────────────────── */
+    #sidebar {
+      width: var(--sidebar-w); flex-shrink: 0; background: var(--bg);
+      border-right: 1px solid var(--border); overflow-y: auto;
+      transition: transform .2s ease, width .2s ease;
+      display: flex; flex-direction: column;
+    }
+    #sidebar.collapsed {
+      width: 0; overflow: hidden; border-right: none;
+    }
+    #sidebar-inner { padding: 16px; min-width: var(--sidebar-w); }
+
+    .sidebar-section-title {
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .06em; color: var(--text-muted); margin-bottom: 10px;
+    }
+
+    /* Layer cards */
+    .layer-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 10px 12px; margin-bottom: 8px;
+    }
+    .layer-card-top {
+      display: flex; align-items: center; gap-8px; gap: 8px;
+    }
+    .layer-visibility {
+      width: 16px; height: 16px; cursor: pointer; flex-shrink: 0;
+      accent-color: var(--accent);
+    }
+    .layer-color-dot {
+      width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+    }
+    .layer-name {
+      flex: 1; font-size: 13px; font-weight: 500; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis;
+    }
+    .layer-type-badge {
+      font-size: 10px; color: var(--text-muted); background: var(--border);
+      padding: 1px 5px; border-radius: 4px; flex-shrink: 0;
+    }
+    .layer-opacity-row {
+      display: flex; align-items: center; gap: 8px; margin-top: 8px;
+    }
+    .layer-opacity-label { font-size: 11px; color: var(--text-muted); width: 28px; text-align: right; }
+    .layer-opacity-slider {
+      flex: 1; height: 3px; cursor: pointer; accent-color: var(--accent);
+    }
+
+    /* ── Map ─────────────────────────────────────────────── */
+    #map { flex: 1; }
+
+    /* ── MapLibre overrides ──────────────────────────────── */
+    .maplibregl-ctrl-bottom-left { bottom: 24px; }
+    .maplibregl-ctrl-attrib { font-size: 10px; }
+    .maplibregl-ctrl-top-right { top: 10px; right: 10px; }
+
+    /* ── Popup ───────────────────────────────────────────── */
+    .gd-popup .maplibregl-popup-content {
+      padding: 0; border-radius: var(--radius); box-shadow: var(--shadow-lg);
+      max-width: 280px; overflow: hidden; font-family: inherit;
+    }
+    .gd-popup .maplibregl-popup-tip { border-top-color: var(--bg) !important; }
+    .popup-header {
+      background: var(--accent); color: #fff;
+      padding: 8px 12px; font-size: 12px; font-weight: 600;
+    }
+    .popup-table { width: 100%; border-collapse: collapse; }
+    .popup-table tr:nth-child(even) td,
+    .popup-table tr:nth-child(even) th { background: var(--surface); }
+    .popup-table th {
+      text-align: left; padding: 5px 10px; font-size: 11px; font-weight: 500;
+      color: var(--text-muted); white-space: nowrap; width: 40%;
+    }
+    .popup-table td {
+      padding: 5px 10px; font-size: 12px; color: var(--text);
+      word-break: break-word; max-width: 160px;
+    }
+
+    /* ── Mobile ──────────────────────────────────────────── */
+    @media (max-width: 640px) {
+      #sidebar {
+        position: absolute; top: 0; left: 0; bottom: 0; z-index: 50;
+        box-shadow: var(--shadow-lg);
+        transform: translateX(0);
+      }
+      #sidebar.collapsed { transform: translateX(-100%); width: var(--sidebar-w); }
+      :root { --sidebar-w: 85vw; }
+      #header-badge { display: none; }
+    }
+
+    /* ── Theme override slot ─────────────────────────────── */
+    {{THEME_CSS}}
+  </style>
+</head>
+<body>
+
+<header id="header">
+  <button id="sidebar-toggle" aria-label="Toggle layers panel" title="Layers">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M3 6h18M3 12h18M3 18h18"/>
+    </svg>
+  </button>
+  <span id="portal-title">{{TITLE}}</span>
+  <span id="header-badge">
+    <a href="https://geodeploy.io" target="_blank" rel="noopener">GeoDeploy</a>
+  </span>
+</header>
+
+<div id="layout">
+  <aside id="sidebar">
+    <div id="sidebar-inner">
+      <p class="sidebar-section-title">Layers</p>
+      <div id="layer-list"></div>
+    </div>
+  </aside>
+  <div id="map"></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  const STYLE = {{STYLE_JSON}};
+  const POPUP_CONFIG = {{POPUP_CONFIG}};
+
+  // ── Sidebar toggle ──────────────────────────────────────
+  const sidebar = document.getElementById('sidebar');
+  document.getElementById('sidebar-toggle').addEventListener('click', () => {
+    sidebar.classList.toggle('collapsed');
+    setTimeout(() => map.resize(), 220);
+  });
+
+  // ── Map init ────────────────────────────────────────────
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: STYLE,
+    center: [0, 20],
+    zoom: 2,
+    attributionControl: false,
+  });
+
+  map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
+  map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-left');
+  map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
+
+  // ── Auto-fit to data bounds ─────────────────────────────
+  const bounds = STYLE.geodeploy?.bounds;
+  if (bounds && bounds[0] < bounds[2]) {
+    map.fitBounds([[bounds[0], bounds[1]], [bounds[2], bounds[3]]], {
+      padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 },
+      duration: 0,
+    });
+  }
+
+  // ── Layer switcher ──────────────────────────────────────
+  map.on('load', function () {
+    const userLayers = STYLE.layers.filter(l => l.metadata && l.metadata['geodeploy:name']);
+    buildLayerSwitcher(userLayers);
+  });
+
+  function buildLayerSwitcher(layers) {
+    const container = document.getElementById('layer-list');
+    if (!layers.length) {
+      container.innerHTML = '<p style="font-size:13px;color:var(--text-muted)">No layers</p>';
+      return;
+    }
+
+    layers.forEach(layer => {
+      const meta = layer.metadata;
+      const name = meta['geodeploy:name'];
+      const type = meta['geodeploy:type'];
+      const opacity = meta['geodeploy:opacity'] ?? 1;
+      const color = getLayerColor(layer);
+
+      const card = document.createElement('div');
+      card.className = 'layer-card';
+      card.innerHTML = `
+        <div class="layer-card-top">
+          <input class="layer-visibility" type="checkbox" checked
+            data-layer-id="${layer.id}" title="Toggle visibility">
+          <span class="layer-color-dot" style="background:${color}"></span>
+          <span class="layer-name" title="${name}">${name}</span>
+          <span class="layer-type-badge">${type === 'vector' ? 'V' : 'R'}</span>
+        </div>
+        <div class="layer-opacity-row">
+          <span class="layer-opacity-label">${Math.round(opacity * 100)}%</span>
+          <input class="layer-opacity-slider" type="range" min="0" max="1" step="0.01"
+            value="${opacity}" data-layer-id="${layer.id}" data-layer-type="${layer.type}">
+        </div>
+      `;
+      container.appendChild(card);
+    });
+
+    // Visibility toggle
+    container.querySelectorAll('.layer-visibility').forEach(cb => {
+      cb.addEventListener('change', e => {
+        map.setLayoutProperty(
+          e.target.dataset.layerId,
+          'visibility',
+          e.target.checked ? 'visible' : 'none'
+        );
+      });
+    });
+
+    // Opacity slider
+    container.querySelectorAll('.layer-opacity-slider').forEach(slider => {
+      slider.addEventListener('input', e => {
+        const id = e.target.dataset.layerId;
+        const mapType = e.target.dataset.layerType;
+        const val = parseFloat(e.target.value);
+        const label = e.target.closest('.layer-opacity-row').querySelector('.layer-opacity-label');
+        label.textContent = Math.round(val * 100) + '%';
+        const opacityProp = mapType === 'raster'    ? 'raster-opacity'
+                          : mapType === 'fill'       ? 'fill-opacity'
+                          : mapType === 'line'       ? 'line-opacity'
+                          : mapType === 'circle'     ? 'circle-opacity'
+                          : null;
+        if (opacityProp) map.setPaintProperty(id, opacityProp, val);
+      });
+    });
+  }
+
+  function getLayerColor(layer) {
+    const paint = layer.paint || {};
+    return paint['fill-color'] || paint['line-color'] || paint['circle-color'] || '#64748b';
+  }
+
+  // ── Feature popup ───────────────────────────────────────
+  const popup = new maplibregl.Popup({
+    closeButton: true,
+    closeOnClick: false,
+    className: 'gd-popup',
+    maxWidth: '300px',
+  });
+
+  map.on('click', e => {
+    const userLayerIds = (STYLE.layers || [])
+      .filter(l => l.metadata?.['geodeploy:name'])
+      .map(l => l.id);
+
+    if (!userLayerIds.length) return;
+
+    const features = map.queryRenderedFeatures(e.point, { layers: userLayerIds });
+    if (!features.length) return;
+
+    const f = features[0];
+    const layerId = f.layer.metadata?.['geodeploy:layer_id'];
+    const layerName = f.layer.metadata?.['geodeploy:name'] || f.layer.id;
+    const fields = POPUP_CONFIG[layerId] || POPUP_CONFIG[String(layerId)];
+
+    const props = f.properties || {};
+    const keys = fields?.length
+      ? fields.filter(k => props[k] != null)
+      : Object.keys(props).filter(k => props[k] != null).slice(0, 8);
+
+    if (!keys.length) return;
+
+    const rows = keys.map(k =>
+      `<tr><th>${escHtml(k)}</th><td>${escHtml(String(props[k]))}</td></tr>`
+    ).join('');
+
+    popup
+      .setLngLat(e.lngLat)
+      .setHTML(`
+        <div class="popup-header">${escHtml(layerName)}</div>
+        <table class="popup-table">${rows}</table>
+      `)
+      .addTo(map);
+  });
+
+  // Pointer cursor over interactive layers
+  map.on('mousemove', e => {
+    const userLayerIds = (STYLE.layers || [])
+      .filter(l => l.metadata?.['geodeploy:name'])
+      .map(l => l.id);
+    if (!userLayerIds.length) return;
+    const f = map.queryRenderedFeatures(e.point, { layers: userLayerIds });
+    map.getCanvas().style.cursor = f.length ? 'pointer' : '';
+  });
+
+  function escHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+})();
+</script>
+</body>
+</html>

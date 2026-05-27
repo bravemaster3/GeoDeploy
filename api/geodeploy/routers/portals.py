@@ -96,8 +96,8 @@ async def publish_portal(portal_id: int, user: User = Depends(get_current_user),
         r = await db.execute(select(RasterLayer).where(RasterLayer.id.in_(raster_ids), RasterLayer.status == "ready"))
         raster_layers = r.scalars().all()
 
-    style = generate_style(layer_configs, vector_layers, raster_layers)
-    build_portal_bundle(portal.slug, portal.title, style, portal.template_id, layer_configs)
+    user_data = generate_style(layer_configs, vector_layers, raster_layers)
+    build_portal_bundle(portal.slug, portal.title, user_data, portal.template_id, layer_configs)
 
     portal.published = True
     portal.published_at = datetime.now(timezone.utc)
