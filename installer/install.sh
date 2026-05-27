@@ -51,6 +51,10 @@ if [ ! -f .env ]; then
   info ".env created with a generated secret key."
 fi
 
+# ── Ensure the geodeploy network exists (persists across compose down/up) ────
+
+sudo docker network create geodeploy 2>/dev/null || true
+
 # ── Pull images ───────────────────────────────────────────────────────────────
 
 info "Pulling Docker images…"

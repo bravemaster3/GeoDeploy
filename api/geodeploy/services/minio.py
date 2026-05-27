@@ -35,6 +35,10 @@ async def provision_local() -> dict:
                 secret_key = env_var.split("=", 1)[1]
         if container.status != "running":
             container.start()
+        try:
+            client.networks.get(NETWORK).connect(container)
+        except docker.errors.APIError:
+            pass  # already connected
     except docker.errors.NotFound:
         # Remove stale volume so MinIO initialises fresh with the new credentials
         try:

@@ -151,4 +151,4 @@ services:
 networks:
   geodeploy:
     name: geodeploy
-    driver: bridge
+    external: true
