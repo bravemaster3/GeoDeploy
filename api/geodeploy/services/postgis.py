@@ -18,13 +18,17 @@ def _random_password(length: int = 32) -> str:
 
 async def provision_local() -> dict:
     """Start the PostGIS container and return connection credentials."""
-    settings = get_settings()
     password = _random_password()
 
     client = docker.from_env()
 
     try:
         container = client.containers.get(CONTAINER_NAME)
+        # Read the password the container was originally created with
+        for env_var in container.attrs["Config"]["Env"] or []:
+            if env_var.startswith("POSTGRES_PASSWORD="):
+                password = env_var.split("=", 1)[1]
+                break
         if container.status != "running":
             container.start()
     except docker.errors.NotFound:

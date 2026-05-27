@@ -27,6 +27,12 @@ async def provision_local() -> dict:
 
     try:
         container = client.containers.get(CONTAINER_NAME)
+        # Read the credentials the container was originally created with
+        for env_var in container.attrs["Config"]["Env"] or []:
+            if env_var.startswith("MINIO_ROOT_USER="):
+                access_key = env_var.split("=", 1)[1]
+            elif env_var.startswith("MINIO_ROOT_PASSWORD="):
+                secret_key = env_var.split("=", 1)[1]
         if container.status != "running":
             container.start()
     except docker.errors.NotFound:
