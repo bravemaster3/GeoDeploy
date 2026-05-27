@@ -1,88 +1,73 @@
-"""GDAL-based Cloud-Optimised GeoTIFF conversion."""
+"""Cloud-Optimised GeoTIFF conversion and inspection using rasterio."""
 import os
-import subprocess
 import tempfile
 
+import rasterio
+from rasterio.enums import Resampling
+from rasterio.shutil import copy as rio_copy
 
-def _gdal():
-    from osgeo import gdal as _g
-    _g.UseExceptions()
-    return _g
-
-COG_OPTIONS = [
-    "-of", "GTiff",
-    "-co", "TILED=YES",
-    "-co", "BLOCKXSIZE=512",
-    "-co", "BLOCKYSIZE=512",
-    "-co", "COMPRESS=LZW",
-    "-co", "PREDICTOR=2",
-    "-co", "COPY_SRC_OVERVIEWS=YES",
-]
 OVERVIEW_LEVELS = [2, 4, 8, 16, 32, 64]
+COG_PROFILE = {
+    "driver": "GTiff",
+    "tiled": True,
+    "blockxsize": 512,
+    "blockysize": 512,
+    "compress": "lzw",
+    "predictor": 2,
+    "copy_src_overviews": True,
+}
 
 
 def is_cog(path: str) -> bool:
-    gdal = _gdal()
-    result = gdal.VSIStatL(path)
-    if result is None:
+    try:
+        with rasterio.open(path) as ds:
+            return ds.is_tiled and bool(ds.overviews(1))
+    except Exception:
         return False
-    ds = gdal.Open(path)
-    if ds is None:
-        return False
-    md = ds.GetMetadata("MAIN_FILE")
-    return md.get("OVR_RESAMPLING_ALG") is not None
 
 
 def convert_to_cog(src_path: str, dst_path: str) -> None:
-    """Convert any GDAL-readable raster to COG with overviews."""
-    gdal = _gdal()
-    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
-        tmp_path = tmp.name
-
+    """Convert any rasterio-readable raster to a COG with overviews."""
+    tmp_path = None
     try:
-        ds = gdal.Open(src_path, gdal.GA_ReadOnly)
-        if ds is None:
-            raise ValueError(f"GDAL cannot open: {src_path}")
+        with rasterio.open(src_path) as src:
+            profile = src.profile.copy()
 
-        gdal.BuildOverviews(ds, "NEAREST", OVERVIEW_LEVELS, callback=gdal.TermProgress_nocb)
-        ds.FlushCache()
-        ds = None
+        # Build overviews on a temp copy so the source is not modified
+        with tempfile.NamedTemporaryFile(suffix=".tif", delete=False,
+                                        dir=os.path.dirname(src_path)) as tmp:
+            tmp_path = tmp.name
 
-        cmd = ["gdal_translate", src_path, tmp_path] + COG_OPTIONS
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"gdal_translate failed: {result.stderr}")
+        with rasterio.open(src_path) as src:
+            rio_copy(src, tmp_path, **profile)
 
-        os.replace(tmp_path, dst_path)
+        with rasterio.open(tmp_path, "r+") as ds:
+            ds.build_overviews(OVERVIEW_LEVELS, Resampling.nearest)
+            ds.update_tags(ns="rio_overview", resampling="nearest")
+
+        cog_profile = profile.copy()
+        cog_profile.update(COG_PROFILE)
+
+        with rasterio.open(tmp_path) as src:
+            rio_copy(src, dst_path, copy_src_overviews=True, **cog_profile)
     finally:
-        if os.path.exists(tmp_path):
+        if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
 
 def inspect(path: str) -> dict:
     """Return basic metadata from a raster file."""
-    gdal = _gdal()
-    ds = gdal.Open(path, gdal.GA_ReadOnly)
-    if ds is None:
-        raise ValueError(f"Cannot open raster: {path}")
-
-    srs = ds.GetSpatialRef()
-    crs = srs.GetAuthorityCode(None) if srs else None
-    if crs:
-        crs = f"EPSG:{crs}"
-
-    gt = ds.GetGeoTransform()
-    cols, rows = ds.RasterXSize, ds.RasterYSize
-    minx, maxy = gt[0], gt[3]
-    maxx = minx + gt[1] * cols
-    miny = maxy + gt[5] * rows
-    nodata = ds.GetRasterBand(1).GetNoDataValue()
-
-    return {
-        "crs": crs,
-        "bbox": [minx, miny, maxx, maxy],
-        "band_count": ds.RasterCount,
-        "nodata_value": nodata,
-        "width": cols,
-        "height": rows,
-    }
+    with rasterio.open(path) as ds:
+        crs = ds.crs
+        epsg = crs.to_epsg() if crs else None
+        crs_str = f"EPSG:{epsg}" if epsg else (crs.to_string() if crs else None)
+        b = ds.bounds
+        nodata = ds.nodata
+        return {
+            "crs": crs_str,
+            "bbox": [b.left, b.bottom, b.right, b.top],
+            "band_count": ds.count,
+            "nodata_value": float(nodata) if nodata is not None else None,
+            "width": ds.width,
+            "height": ds.height,
+        }

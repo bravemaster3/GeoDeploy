@@ -193,7 +193,7 @@ def _load_into_postgis(dsn: str, schema: str, table: str, features: list, col_sc
         for feat in features:
             if feat["geometry"] is None:
                 continue
-            geom_str = json.dumps(feat["geometry"])
+            geom_str = json.dumps(mapping(shape(feat["geometry"])))
             row_vals = [geom_str] + [feat["properties"].get(c) for c in cols_list]
             batch.append(tuple(row_vals))
 
