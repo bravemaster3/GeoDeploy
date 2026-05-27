@@ -39,8 +39,6 @@ async def setup_status(db: AsyncSession = Depends(get_db)):
 @router.post("/configure-db")
 async def configure_db(req: ConfigureDBRequest, db: AsyncSession = Depends(get_db)):
     config = await _get_or_create_config(db)
-    if config.completed:
-        raise HTTPException(400, "Setup already completed.")
 
     if req.type == "local":
         try:
@@ -72,8 +70,6 @@ async def configure_db(req: ConfigureDBRequest, db: AsyncSession = Depends(get_d
 @router.post("/configure-storage")
 async def configure_storage(req: ConfigureStorageRequest, db: AsyncSession = Depends(get_db)):
     config = await _get_or_create_config(db)
-    if config.completed:
-        raise HTTPException(400, "Setup already completed.")
 
     if req.type == "local":
         try:
@@ -106,10 +102,12 @@ async def configure_storage(req: ConfigureStorageRequest, db: AsyncSession = Dep
 async def create_admin(req: CreateAdminRequest, db: AsyncSession = Depends(get_db)):
     from passlib.context import CryptContext
     config = await _get_or_create_config(db)
-    if config.completed:
-        raise HTTPException(400, "Setup already completed.")
     if not config.postgis_host or not config.storage_endpoint:
         raise HTTPException(400, "Configure database and storage before creating the admin account.")
+
+    has_admin = bool((await db.execute(select(User))).scalars().first())
+    if has_admin:
+        raise HTTPException(400, "An admin account already exists. Please log in.")
 
     existing = (await db.execute(select(User).where(User.email == req.email))).scalar_one_or_none()
     if existing:

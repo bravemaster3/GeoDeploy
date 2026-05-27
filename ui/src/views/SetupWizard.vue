@@ -102,9 +102,9 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { configureDB, configureStorage, createAdmin } from '@/api'
+import { configureDB, configureStorage, createAdmin, getSetupStatus } from '@/api'
 
 const router = useRouter()
 const step = ref(0)
@@ -116,6 +116,21 @@ const steps = ['Database', 'Storage', 'Admin']
 const db = reactive({ type: 'local', host: '', port: 5432, db: 'geodeploy', user: 'geodeploy', password: '' })
 const storage = reactive({ type: 'local', endpoint: '', bucket: 'geodeploy', access_key: '', secret_key: '', region: 'us-east-1' })
 const admin = reactive({ name: '', email: '', password: '' })
+
+onMounted(async () => {
+  try {
+    const { data } = await getSetupStatus()
+    if (data.admin_created) {
+      router.push('/login')
+    } else if (data.storage_configured) {
+      step.value = 2
+    } else if (data.postgis_configured) {
+      step.value = 1
+    }
+  } catch {
+    // Can't reach API — start at step 0
+  }
+})
 
 const dbOptions = [
   { value: 'local', label: 'Set up PostGIS on this server (recommended)', desc: 'GeoDeploy installs and manages PostgreSQL + PostGIS for you.' },
