@@ -1,0 +1,23 @@
+name: Validate template PR
+
+on:
+  pull_request:
+    paths:
+      - "templates/community/**"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install validation deps
+        run: pip install jsonschema Pillow maplibre-style-spec 2>/dev/null || pip install jsonschema Pillow
+
+      - name: Validate changed templates
+        run: python .github/scripts/validate_template.py

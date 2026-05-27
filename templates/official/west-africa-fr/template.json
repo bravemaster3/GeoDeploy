@@ -1,0 +1,11 @@
+{
+  "name": "Afrique de l'Ouest — Clair (FR)",
+  "author": "Koffi Noumonvi",
+  "description": "Interface entièrement en français, fond de carte OSM adapté à l'Afrique de l'Ouest.",
+  "tags": ["africa", "french", "light", "official"],
+  "language": "fr",
+  "basemap": "osm-bright",
+  "preview": "preview.png",
+  "version": "1.0.0",
+  "license": "MIT"
+}

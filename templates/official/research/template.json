@@ -1,0 +1,11 @@
+{
+  "name": "Research",
+  "author": "GeoDeploy",
+  "description": "Academic layout with legend panel and coordinate display. Suitable for scientific publications.",
+  "tags": ["research", "academic", "light", "official"],
+  "language": "en",
+  "basemap": "osm-bright",
+  "preview": "preview.png",
+  "version": "1.0.0",
+  "license": "MIT"
+}

@@ -1,0 +1,32 @@
+{
+  "nav": {
+    "data": "Mes données",
+    "portals": "Portails",
+    "templates": "Modèles",
+    "settings": "Paramètres",
+    "logout": "Déconnexion"
+  },
+  "data": {
+    "upload_vector": "Importer vecteur",
+    "upload_raster": "Importer raster",
+    "no_vector": "Aucune couche vecteur. Importez un Shapefile, GeoJSON ou GeoPackage.",
+    "no_raster": "Aucun fichier raster. Importez un GeoTIFF.",
+    "vector_section": "Couches vecteur (PostGIS)",
+    "raster_section": "Fichiers raster (Stockage cloud)"
+  },
+  "status": {
+    "ready": "Prêt",
+    "processing": "En cours",
+    "error": "Erreur",
+    "queued": "En attente"
+  },
+  "portal": {
+    "new": "Nouveau portail",
+    "publish": "Publier",
+    "unpublish": "Dépublier",
+    "edit": "Modifier",
+    "view": "Voir",
+    "delete": "Supprimer",
+    "live": "En ligne"
+  }
+}

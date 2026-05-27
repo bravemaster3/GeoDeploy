@@ -1,0 +1,43 @@
+services:
+  geodeploy-api:
+    build:
+      context: ./api
+      target: development
+    volumes:
+      - ./api:/app
+      - ./data/sqlite:/data/sqlite
+      - ./data/portals:/data/portals
+      - ./data/temp:/data/temp
+      - ./data/martin:/data/martin
+      - ./templates:/templates:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: uvicorn geodeploy.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      GEODEPLOY_ENV: development
+
+  geodeploy-ui:
+    build:
+      context: ./ui
+      target: development
+    volumes:
+      - ./ui/src:/app/src
+    ports:
+      - "5173:5173"
+    command: npm run dev -- --host
+
+  celery:
+    volumes:
+      - ./api:/app
+    command: celery -A geodeploy.celery_app worker --loglevel=debug --concurrency=1 -Q ingest
+
+  postgres:
+    profiles: []
+
+  martin:
+    profiles: []
+
+  titiler:
+    profiles: []
+
+  minio:
+    profiles: []

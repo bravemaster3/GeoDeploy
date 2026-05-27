@@ -1,0 +1,42 @@
+notes_temp
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+dist/
+*.egg-info/
+.pytest_cache/
+
+# Node
+node_modules/
+ui/dist/
+ui/.vite/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Data (runtime, not source)
+data/sqlite/*.db
+data/postgres/
+data/minio/
+data/redis/
+data/temp/
+data/portals/
+data/martin/martin-config.yaml
+
+# Certs
+data/certbot/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,32 @@
+{
+  "nav": {
+    "data": "My Data",
+    "portals": "Portals",
+    "templates": "Templates",
+    "settings": "Settings",
+    "logout": "Sign out"
+  },
+  "data": {
+    "upload_vector": "Upload vector",
+    "upload_raster": "Upload raster",
+    "no_vector": "No vector layers yet. Upload a Shapefile, GeoJSON, or GeoPackage.",
+    "no_raster": "No raster files yet. Upload a GeoTIFF.",
+    "vector_section": "Vector layers (PostGIS)",
+    "raster_section": "Raster files (Cloud storage)"
+  },
+  "status": {
+    "ready": "Ready",
+    "processing": "Processing",
+    "error": "Error",
+    "queued": "Queued"
+  },
+  "portal": {
+    "new": "New portal",
+    "publish": "Publish",
+    "unpublish": "Unpublish",
+    "edit": "Edit",
+    "view": "View",
+    "delete": "Delete",
+    "live": "Live"
+  }
+}

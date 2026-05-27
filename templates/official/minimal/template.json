@@ -1,0 +1,11 @@
+{
+  "name": "Minimal",
+  "author": "GeoDeploy",
+  "description": "Clean white layout, no distractions. Works with any dataset.",
+  "tags": ["minimal", "light", "official"],
+  "language": "en",
+  "basemap": "osm-bright",
+  "preview": "preview.png",
+  "version": "1.0.0",
+  "license": "MIT"
+}
