@@ -20,9 +20,11 @@ def _load_templates() -> list[TemplateOut]:
             if not meta_file.exists():
                 continue
             try:
+                if not (entry / "layout.html").exists():
+                    continue  # incomplete template — skip until layout is contributed
                 meta = json.loads(meta_file.read_text())
                 templates.append(TemplateOut(
-                    id=f"{category}/{entry.name}",
+                    id=entry.name,
                     name=meta.get("name", entry.name),
                     author=meta.get("author", ""),
                     description=meta.get("description", ""),

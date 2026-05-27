@@ -146,11 +146,50 @@
       #header-badge { display: none; }
     }
 
+    /* ── Access gate ─────────────────────────────────────── */
+    #access-gate {
+      position: fixed; inset: 0; z-index: 200;
+      background: var(--bg);
+      display: flex; align-items: center; justify-content: center;
+    }
+    #access-gate-box {
+      width: 100%; max-width: 360px; padding: 32px 28px;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 12px; box-shadow: var(--shadow-lg);
+      text-align: center;
+    }
+    #access-gate-title { font-size: 18px; font-weight: 600; margin-bottom: 6px; }
+    #access-gate-sub   { font-size: 13px; color: var(--text-muted); margin-bottom: 24px; }
+    #access-gate-input {
+      width: 100%; padding: 9px 12px; font-size: 14px;
+      border: 1px solid var(--border); border-radius: var(--radius);
+      outline: none; margin-bottom: 10px; font-family: inherit;
+    }
+    #access-gate-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
+    #access-gate-btn {
+      width: 100%; padding: 10px; font-size: 14px; font-weight: 600;
+      background: var(--accent); color: #fff; border: none; border-radius: var(--radius);
+      cursor: pointer; transition: background .15s;
+    }
+    #access-gate-btn:hover { background: #1d4ed8; }
+    #access-gate-error { font-size: 12px; color: #ef4444; margin-top: 8px; min-height: 16px; }
+
     /* ── Theme override slot ─────────────────────────────── */
     {{THEME_CSS}}
   </style>
 </head>
 <body>
+
+<!-- Access gate — shown by JS when ACCESS_TYPE != 'public' -->
+<div id="access-gate" style="display:none">
+  <div id="access-gate-box">
+    <div id="access-gate-title">{{TITLE}}</div>
+    <div id="access-gate-sub" id="access-gate-sub"></div>
+    <input id="access-gate-input" type="password" placeholder="Enter password" autocomplete="current-password" />
+    <button id="access-gate-btn">Continue</button>
+    <div id="access-gate-error"></div>
+  </div>
+</div>
 
 <header id="header">
   <button id="sidebar-toggle" aria-label="Toggle layers panel" title="Layers">
@@ -173,6 +212,60 @@
   </aside>
   <div id="map"></div>
 </div>
+
+<script>
+// ── Access control gate ─────────────────────────────────────────────────────
+(function () {
+  const ACCESS_TYPE = "{{ACCESS_TYPE}}";
+  const PASSWORD_SHA256 = "{{PASSWORD_SHA256}}";
+  const TITLE = "{{TITLE}}";
+  const gate = document.getElementById('access-gate');
+  const sub  = document.getElementById('access-gate-sub');
+
+  if (ACCESS_TYPE === 'private') {
+    gate.style.display = 'flex';
+    document.getElementById('access-gate-input').style.display = 'none';
+    document.getElementById('access-gate-btn').style.display = 'none';
+    sub.textContent = 'This portal is private.';
+    return;
+  }
+
+  if (ACCESS_TYPE !== 'password' || !PASSWORD_SHA256) return;
+
+  // Check session storage for already-verified session
+  const CACHE_KEY = 'gd_auth_' + location.pathname;
+  if (sessionStorage.getItem(CACHE_KEY) === PASSWORD_SHA256) return;
+
+  gate.style.display = 'flex';
+  sub.textContent = 'Enter the password to view this portal.';
+
+  async function sha256hex(str) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function tryUnlock() {
+    const val = document.getElementById('access-gate-input').value;
+    if (!val) return;
+    const hash = await sha256hex(val);
+    if (hash === PASSWORD_SHA256) {
+      sessionStorage.setItem(CACHE_KEY, hash);
+      gate.style.display = 'none';
+    } else {
+      const err = document.getElementById('access-gate-error');
+      err.textContent = 'Incorrect password.';
+      setTimeout(() => { err.textContent = ''; }, 3000);
+    }
+  }
+
+  document.getElementById('access-gate-btn').addEventListener('click', tryUnlock);
+  document.getElementById('access-gate-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') tryUnlock();
+  });
+  // Auto-focus after next tick so the gate is visible
+  setTimeout(() => document.getElementById('access-gate-input').focus(), 50);
+})();
+</script>
 
 <script>
 (function () {

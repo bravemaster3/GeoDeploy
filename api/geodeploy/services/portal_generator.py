@@ -71,7 +71,8 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
     return {"sources": sources, "layers": layers, "bounds": valid_bounds}
 
 
-def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str, layer_configs: list[dict]) -> str:
+def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str, layer_configs: list[dict],
+                        access_type: str = "public", password_sha256: str | None = None) -> str:
     """
     Merge basemap + user data into a complete style, inject into layout.html,
     write to data/portals/{slug}/index.html.
@@ -110,6 +111,8 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
     html = html.replace("{{STYLE_JSON}}", json.dumps(full_style))
     html = html.replace("{{THEME_CSS}}", theme_css)
     html = html.replace("{{POPUP_CONFIG}}", json.dumps(popup_configs))
+    html = html.replace("{{ACCESS_TYPE}}", access_type)
+    html = html.replace("{{PASSWORD_SHA256}}", password_sha256 or "")
 
     (portals_dir / "index.html").write_text(html, encoding="utf-8")
     (portals_dir / "style.json").write_text(json.dumps(full_style, indent=2), encoding="utf-8")

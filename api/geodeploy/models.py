@@ -116,7 +116,8 @@ class Portal(Base):
     template_id: Mapped[str] = mapped_column(String(128), default="minimal")
     layer_configs: Mapped[str] = mapped_column(Text, default="[]")  # JSON
     access_type: Mapped[str] = mapped_column(String(16), default="public")  # public | password | private
-    access_password_hash: Mapped[str | None] = mapped_column(String(256))
+    access_password_hash: Mapped[str | None] = mapped_column(String(256))    # bcrypt — for future server-side auth
+    access_password_sha256: Mapped[str | None] = mapped_column(String(64))   # SHA-256 hex — embedded in published portal
     published: Mapped[bool] = mapped_column(Boolean, default=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

@@ -41,8 +41,10 @@ async def create_portal(req: PortalCreate, user: User = Depends(get_current_user
         access_type=req.access_type,
     )
     if req.access_password:
+        from hashlib import sha256
         from passlib.context import CryptContext
         portal.access_password_hash = CryptContext(schemes=["bcrypt"], deprecated="auto").hash(req.access_password)
+        portal.access_password_sha256 = sha256(req.access_password.encode()).hexdigest()
 
     db.add(portal)
     await db.commit()
@@ -70,8 +72,10 @@ async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(
     if req.access_type is not None:
         portal.access_type = req.access_type
     if req.access_password is not None:
+        from hashlib import sha256
         from passlib.context import CryptContext
         portal.access_password_hash = CryptContext(schemes=["bcrypt"], deprecated="auto").hash(req.access_password)
+        portal.access_password_sha256 = sha256(req.access_password.encode()).hexdigest()
 
     await db.commit()
     await db.refresh(portal)
@@ -97,7 +101,11 @@ async def publish_portal(portal_id: int, user: User = Depends(get_current_user),
         raster_layers = r.scalars().all()
 
     user_data = generate_style(layer_configs, vector_layers, raster_layers)
-    build_portal_bundle(portal.slug, portal.title, user_data, portal.template_id, layer_configs)
+    build_portal_bundle(
+        portal.slug, portal.title, user_data, portal.template_id, layer_configs,
+        access_type=portal.access_type,
+        password_sha256=portal.access_password_sha256,
+    )
 
     portal.published = True
     portal.published_at = datetime.now(timezone.utc)

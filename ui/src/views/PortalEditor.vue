@@ -2,78 +2,131 @@
   <div class="flex h-screen">
     <!-- Left panel -->
     <div class="w-80 flex-shrink-0 bg-white border-r border-gray-200 flex flex-col overflow-hidden">
-      <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
-        <button @click="$router.push('/portals')" class="text-sm text-gray-500 hover:text-gray-900">← Back</button>
-        <span class="text-sm font-semibold truncate mx-2">{{ portal?.title }}</span>
-        <button @click="handlePublish" :disabled="busy || !portal" class="btn-primary text-xs py-1.5">
+
+      <!-- Top bar -->
+      <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between gap-2">
+        <button @click="$router.push('/portals')" class="text-sm text-gray-500 hover:text-gray-900 flex-shrink-0">← Back</button>
+        <span class="text-sm font-semibold truncate flex-1 text-center">{{ portal?.title }}</span>
+        <button @click="handlePublish" :disabled="busy || !portal"
+          class="btn-primary text-xs py-1.5 flex-shrink-0">
           {{ portal?.published ? 'Re-publish' : 'Publish' }}
         </button>
       </div>
 
+      <!-- Live URL bar -->
+      <div v-if="portal?.published" class="px-4 py-2 bg-green-50 border-b border-green-100 flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-green-500 flex-shrink-0 animate-pulse" />
+        <a :href="`/portals/${portal.slug}/`" target="_blank"
+          class="text-xs text-green-700 hover:text-green-900 truncate font-medium flex-1">
+          /portals/{{ portal.slug }}/
+        </a>
+        <ExternalLinkIcon class="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
+      </div>
+
+      <!-- Scrollable body -->
       <div class="flex-1 overflow-y-auto">
-        <!-- Layers -->
+
+        <!-- Layers section -->
         <section class="p-4 border-b border-gray-100">
           <div class="flex items-center justify-between mb-3">
             <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Layers</h3>
             <button @click="showAddLayer = !showAddLayer" class="text-xs text-brand-600 hover:text-brand-700 font-medium">+ Add</button>
           </div>
 
-          <!-- Add layer picker -->
-          <div v-if="showAddLayer" class="mb-3 p-2 bg-gray-50 rounded-lg text-xs space-y-1 max-h-40 overflow-y-auto">
+          <!-- Layer picker dropdown -->
+          <div v-if="showAddLayer" class="mb-3 p-2 bg-gray-50 rounded-lg text-xs space-y-0.5 max-h-40 overflow-y-auto border border-gray-200">
+            <p v-if="!availableLayers.length" class="text-gray-400 p-1">No ready layers available.</p>
             <div v-for="layer in availableLayers" :key="`${layer.type}-${layer.id}`"
               class="flex items-center justify-between p-1.5 hover:bg-white rounded cursor-pointer"
               @click="addLayer(layer)"
             >
-              <span>{{ layer.name }}</span>
-              <span class="text-gray-400">{{ layer.type }}</span>
+              <span class="font-medium">{{ layer.name }}</span>
+              <span class="text-gray-400 text-[10px] uppercase">{{ layer.type }}</span>
             </div>
           </div>
 
-          <div v-if="!layerConfigs.length" class="text-xs text-gray-400">No layers added yet.</div>
-          <LayerPanel v-for="(cfg, i) in layerConfigs" :key="i" :config="cfg"
+          <div v-if="!layerConfigs.length" class="text-xs text-gray-400 py-1">No layers added yet.</div>
+          <LayerPanel v-for="(cfg, i) in layerConfigs" :key="`${cfg.layer_type}-${cfg.layer_id}`"
+            :config="cfg"
             @remove="layerConfigs.splice(i, 1)"
             @update="layerConfigs[i] = { ...layerConfigs[i], ...$event }"
           />
         </section>
 
-        <!-- Template -->
+        <!-- Template section -->
         <section class="p-4 border-b border-gray-100">
           <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Template</h3>
           <div class="grid grid-cols-2 gap-2">
             <button v-for="t in templates" :key="t.id"
-              class="p-2 rounded-lg border text-xs font-medium transition-colors"
-              :class="selectedTemplate === t.id ? 'border-brand-500 bg-brand-50 text-brand-700' : 'border-gray-200 hover:border-gray-300'"
+              class="p-2 rounded-lg border text-xs font-medium transition-colors text-left"
+              :class="selectedTemplate === t.id
+                ? 'border-brand-500 bg-brand-50 text-brand-700'
+                : 'border-gray-200 hover:border-gray-300 text-gray-700'"
               @click="selectedTemplate = t.id"
             >{{ t.name }}</button>
           </div>
         </section>
+
+        <!-- Access control section -->
+        <section class="p-4">
+          <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Access</h3>
+          <div class="space-y-1.5">
+            <label v-for="opt in accessOptions" :key="opt.value"
+              class="flex items-start gap-2.5 p-2 rounded-lg border cursor-pointer transition-colors"
+              :class="accessType === opt.value
+                ? 'border-brand-500 bg-brand-50'
+                : 'border-gray-200 hover:border-gray-300'"
+            >
+              <input type="radio" :value="opt.value" v-model="accessType" class="mt-0.5 accent-brand-500 flex-shrink-0" />
+              <div>
+                <div class="text-xs font-medium" :class="accessType === opt.value ? 'text-brand-700' : 'text-gray-700'">
+                  {{ opt.label }}
+                </div>
+                <div class="text-[10px] text-gray-400 mt-0.5">{{ opt.desc }}</div>
+              </div>
+            </label>
+          </div>
+          <div v-if="accessType === 'password'" class="mt-3">
+            <label class="text-xs text-gray-500 block mb-1">Password</label>
+            <input v-model="accessPassword" type="password" placeholder="Set portal password"
+              class="w-full text-xs border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-brand-400"
+            />
+          </div>
+        </section>
+
       </div>
 
-      <!-- Save -->
-      <div class="p-4 border-t border-gray-200">
+      <!-- Save footer -->
+      <div class="p-4 border-t border-gray-200 space-y-2">
         <button @click="save" :disabled="busy" class="btn-secondary w-full justify-center text-sm">
           Save changes
         </button>
-        <p v-if="saveMsg" class="text-xs text-center mt-2" :class="saveMsg.type === 'ok' ? 'text-green-600' : 'text-red-600'">
+        <p v-if="saveMsg" class="text-xs text-center"
+          :class="saveMsg.type === 'ok' ? 'text-green-600' : 'text-red-600'">
           {{ saveMsg.text }}
         </p>
       </div>
     </div>
 
     <!-- Map preview -->
-    <div class="flex-1 relative">
+    <div class="flex-1 relative bg-gray-100">
       <div id="portal-preview-map" class="w-full h-full" />
+      <div class="absolute inset-0 flex items-center justify-center pointer-events-none"
+        v-if="!previewReady">
+        <span class="text-xs text-gray-400">Map preview loads after saving & publishing</span>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { usePortalsStore } from '@/stores/portals'
 import { useDataStore } from '@/stores/data'
 import { listTemplates } from '@/api'
 import { useMaplibre } from '@/composables/useMaplibre'
+import { ExternalLinkIcon } from '@/views/icons'
 import LayerPanel from '@/components/portal/LayerPanel.vue'
 
 const route = useRoute()
@@ -85,10 +138,19 @@ const layerConfigs = ref([])
 const selectedTemplate = ref('minimal')
 const templates = ref([])
 const showAddLayer = ref(false)
+const accessType = ref('public')
+const accessPassword = ref('')
 const busy = ref(false)
 const saveMsg = ref(null)
+const previewReady = ref(false)
 
-const { map, loaded } = useMaplibre('portal-preview-map')
+const accessOptions = [
+  { value: 'public',   label: 'Public',   desc: 'Anyone with the URL can view' },
+  { value: 'password', label: 'Password', desc: 'Require a password to view' },
+  { value: 'private',  label: 'Private',  desc: 'Only you can view' },
+]
+
+useMaplibre('portal-preview-map')
 
 onMounted(async () => {
   await Promise.all([portalsStore.refresh(), dataStore.refresh()])
@@ -96,6 +158,8 @@ onMounted(async () => {
   if (portal.value) {
     layerConfigs.value = portal.value.layer_configs || []
     selectedTemplate.value = portal.value.template_id
+    accessType.value = portal.value.access_type || 'public'
+    previewReady.value = portal.value.published
   }
   const { data } = await listTemplates()
   templates.value = data
@@ -123,13 +187,21 @@ async function save() {
   busy.value = true
   saveMsg.value = null
   try {
-    await portalsStore.update(portal.value.id, {
+    const payload = {
       layer_configs: layerConfigs.value,
       template_id: selectedTemplate.value,
-    })
+      access_type: accessType.value,
+    }
+    if (accessType.value === 'password' && accessPassword.value) {
+      payload.access_password = accessPassword.value
+    }
+    const updated = await portalsStore.update(portal.value.id, payload)
+    portal.value = updated
+    accessPassword.value = ''
     saveMsg.value = { type: 'ok', text: 'Saved' }
+    setTimeout(() => { saveMsg.value = null }, 3000)
   } catch (err) {
-    saveMsg.value = { type: 'err', text: err.message }
+    saveMsg.value = { type: 'err', text: err.response?.data?.detail || err.message }
   } finally {
     busy.value = false
   }
@@ -137,12 +209,14 @@ async function save() {
 
 async function handlePublish() {
   await save()
+  if (saveMsg.value?.type === 'err') return
   busy.value = true
   try {
-    await portalsStore.publish(portal.value.id)
-    portal.value = portalsStore.portals.find(p => p.id === portal.value.id)
+    const updated = await portalsStore.publish(portal.value.id)
+    portal.value = updated
+    previewReady.value = true
   } catch (err) {
-    alert(err.response?.data?.detail || err.message)
+    saveMsg.value = { type: 'err', text: err.response?.data?.detail || err.message }
   } finally {
     busy.value = false
   }
