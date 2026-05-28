@@ -25,6 +25,8 @@ async def provision_local() -> dict:
 
     client = docker.from_env()
 
+    network = client.networks.get(NETWORK)
+
     try:
         container = client.containers.get(CONTAINER_NAME)
         # Read the credentials the container was originally created with
@@ -35,17 +37,19 @@ async def provision_local() -> dict:
                 secret_key = env_var.split("=", 1)[1]
         if container.status != "running":
             container.start()
+        # Reconnect with the service-name alias so Docker DNS resolves "minio"
         try:
-            client.networks.get(NETWORK).connect(container)
+            network.disconnect(container)
         except docker.errors.APIError:
-            pass  # already connected
+            pass
+        network.connect(container, aliases=["minio"])
     except docker.errors.NotFound:
         # Remove stale volume so MinIO initialises fresh with the new credentials
         try:
             client.volumes.get("geodeploy_minio").remove()
         except docker.errors.NotFound:
             pass
-        client.containers.run(
+        container = client.containers.run(
             IMAGE,
             name=CONTAINER_NAME,
             detach=True,
@@ -56,8 +60,8 @@ async def provision_local() -> dict:
                 "MINIO_ROOT_PASSWORD": secret_key,
             },
             volumes={"geodeploy_minio": {"bind": "/data", "mode": "rw"}},
-            network=NETWORK,
         )
+        network.connect(container, aliases=["minio"])
 
     await _wait_healthy(f"http://{CONTAINER_NAME}:9000", access_key, secret_key)
 
