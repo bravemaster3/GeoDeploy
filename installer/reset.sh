@@ -25,6 +25,7 @@ info "Removing GeoDeploy Docker network..."
 sudo docker network rm geodeploy 2>/dev/null || true
 
 info "Removing GeoDeploy directory ($GEODEPLOY_DIR)..."
+cd "$HOME"
 sudo rm -rf "$GEODEPLOY_DIR"
 
 echo ""
