@@ -14,7 +14,6 @@ COG_PROFILE = {
     "blockysize": 512,
     "compress": "lzw",
     "predictor": 2,
-    "copy_src_overviews": True,
 }
 
 
@@ -45,7 +44,16 @@ def convert_to_cog(src_path: str, dst_path: str) -> None:
             ds.build_overviews(OVERVIEW_LEVELS, Resampling.nearest)
             ds.update_tags(ns="rio_overview", resampling="nearest")
 
-        cog_profile = profile.copy()
+        cog_profile = {
+            "driver": profile.get("driver", "GTiff"),
+            "dtype": profile["dtype"],
+            "nodata": profile.get("nodata"),
+            "width": profile["width"],
+            "height": profile["height"],
+            "count": profile["count"],
+            "crs": profile.get("crs"),
+            "transform": profile.get("transform"),
+        }
         cog_profile.update(COG_PROFILE)
 
         with rasterio.open(tmp_path) as src:
