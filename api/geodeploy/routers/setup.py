@@ -95,6 +95,7 @@ async def configure_storage(req: ConfigureStorageRequest, db: AsyncSession = Dep
         config.storage_region = req.region
 
     await db.commit()
+    _write_env(config)
     return {"status": "ok", "type": config.storage_type}
 
 
