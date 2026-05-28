@@ -8,7 +8,7 @@ from ...config import get_settings
 from ...database import get_db
 from ...deps import get_current_user
 from ...models import RasterLayer, UploadJob, User
-from ...schemas import JobStatus, RasterLayerOut
+from ...schemas import JobStatus, RasterDefaultStyle, RasterLayerOut
 from ...services.titiler import get_tile_url as raster_tile_url
 from ...tasks.raster_ingest import ingest_raster
 
@@ -90,6 +90,24 @@ async def job_status(job_id: str, db: AsyncSession = Depends(get_db), user: User
     if not job:
         raise HTTPException(404, "Job not found.")
     return job
+
+
+@router.put("/{layer_id}/default-style", response_model=RasterLayerOut)
+async def save_default_style(
+    layer_id: int,
+    body: RasterDefaultStyle,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    import json
+    result = await db.execute(select(RasterLayer).where(RasterLayer.id == layer_id, RasterLayer.user_id == user.id))
+    layer = result.scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not found.")
+    layer.default_style = json.dumps(body.model_dump())
+    await db.commit()
+    await db.refresh(layer)
+    return RasterLayerOut.from_orm_json(layer)
 
 
 @router.delete("/{layer_id}", status_code=204)

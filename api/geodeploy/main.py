@@ -31,6 +31,8 @@ def _apply_schema_migrations(conn) -> None:
     from sqlalchemy import text
     pending = [
         "ALTER TABLE portals ADD COLUMN access_password_sha256 VARCHAR(64)",
+        "ALTER TABLE vector_layers ADD COLUMN default_style TEXT",
+        "ALTER TABLE raster_layers ADD COLUMN default_style TEXT",
     ]
     for sql in pending:
         try:

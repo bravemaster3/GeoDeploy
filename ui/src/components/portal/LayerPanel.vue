@@ -121,6 +121,23 @@
         </div>
 
       </template>
+
+      <!-- Default style actions -->
+      <div class="flex items-center gap-2 pt-1 border-t border-gray-100">
+        <button
+          v-if="layer?.default_style"
+          @click="useDefault"
+          class="text-xs text-brand-600 hover:text-brand-700 font-medium"
+          title="Apply saved default style to this portal"
+        >↩ Use default</button>
+        <button
+          @click="saveDefault"
+          :disabled="savingDefault"
+          class="text-xs text-gray-500 hover:text-gray-700 ml-auto"
+          title="Save current style as the default for this layer"
+        >{{ savingDefault ? 'Saving…' : '⭐ Save as default' }}</button>
+      </div>
+
     </div>
   </div>
 </template>
@@ -128,6 +145,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useDataStore } from '@/stores/data'
+import { saveVectorDefaultStyle, saveRasterDefaultStyle } from '@/api'
 import { TrashIcon } from '@/views/icons'
 
 const props = defineProps({ config: Object })
@@ -135,6 +153,7 @@ const emit = defineEmits(['remove', 'update'])
 
 const dataStore = useDataStore()
 const expanded = ref(false)
+const savingDefault = ref(false)
 
 const layer = computed(() => {
   const list = props.config.layer_type === 'vector' ? dataStore.vectorLayers : dataStore.rasterLayers
@@ -162,7 +181,6 @@ function isFieldSelected(name) {
 
 function toggleField(name, checked) {
   const cols = layer.value?.columns || []
-  // Start from explicit list; if empty, expand to all columns first
   let current = props.config.popup_fields?.length
     ? [...props.config.popup_fields]
     : cols.map(c => c.name)
@@ -173,7 +191,6 @@ function toggleField(name, checked) {
     current = current.filter(n => n !== name)
   }
 
-  // If every column is selected, store as [] (means "all")
   const allSelected = cols.every(c => current.includes(c.name))
   emit('update', { popup_fields: allSelected ? [] : current })
 }
@@ -185,5 +202,33 @@ function shortType(type) {
   if (t.includes('bool')) return 'bool'
   if (t.includes('date') || t.includes('time')) return 'date'
   return 'str'
+}
+
+async function saveDefault() {
+  if (!layer.value) return
+  savingDefault.value = true
+  try {
+    const body = props.config.layer_type === 'vector'
+      ? { opacity: props.config.opacity, style: props.config.style, popup_fields: props.config.popup_fields }
+      : { opacity: props.config.opacity }
+    const fn = props.config.layer_type === 'vector' ? saveVectorDefaultStyle : saveRasterDefaultStyle
+    const { data: updated } = await fn(layer.value.id, body)
+    // Update the layer in the store so "Use default" reflects the new default immediately
+    const list = props.config.layer_type === 'vector' ? dataStore.vectorLayers : dataStore.rasterLayers
+    const idx = list.findIndex(l => l.id === layer.value.id)
+    if (idx !== -1) list[idx] = updated
+  } finally {
+    savingDefault.value = false
+  }
+}
+
+function useDefault() {
+  if (!layer.value?.default_style) return
+  const ds = layer.value.default_style
+  emit('update', {
+    opacity: ds.opacity ?? 1.0,
+    style: ds.style ?? {},
+    ...(props.config.layer_type === 'vector' ? { popup_fields: ds.popup_fields ?? [] } : {}),
+  })
 }
 </script>

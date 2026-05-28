@@ -9,7 +9,7 @@ from ...config import get_settings
 from ...database import get_db
 from ...deps import get_current_user
 from ...models import UploadJob, User, VectorLayer
-from ...schemas import JobStatus, VectorLayerOut
+from ...schemas import DefaultStyle, JobStatus, VectorLayerOut
 from ...services import martin as martin_svc
 from ...tasks.vector_ingest import ingest_vector
 
@@ -94,6 +94,24 @@ async def job_status(job_id: str, db: AsyncSession = Depends(get_db), user: User
     if not job:
         raise HTTPException(404, "Job not found.")
     return job
+
+
+@router.put("/{layer_id}/default-style", response_model=VectorLayerOut)
+async def save_default_style(
+    layer_id: int,
+    body: DefaultStyle,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    import json
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id, VectorLayer.user_id == user.id))
+    layer = result.scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not found.")
+    layer.default_style = json.dumps(body.model_dump())
+    await db.commit()
+    await db.refresh(layer)
+    return VectorLayerOut.from_orm_json(layer)
 
 
 @router.delete("/{layer_id}", status_code=204)

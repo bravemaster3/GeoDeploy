@@ -60,6 +60,12 @@ class UserOut(BaseModel):
 
 # ── Vector Layers ─────────────────────────────────────────────────────────────
 
+class DefaultStyle(BaseModel):
+    opacity: float = 1.0
+    style: dict[str, Any] = Field(default_factory=dict)
+    popup_fields: list[str] = Field(default_factory=list)
+
+
 class VectorLayerOut(BaseModel):
     id: int
     name: str
@@ -74,6 +80,7 @@ class VectorLayerOut(BaseModel):
     storage_backend: str
     status: str
     error_message: str | None
+    default_style: DefaultStyle | None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -87,10 +94,15 @@ class VectorLayerOut(BaseModel):
         }
         data["bbox"] = json.loads(obj.bbox) if obj.bbox else None
         data["columns"] = json.loads(obj.columns) if obj.columns else None
+        data["default_style"] = json.loads(obj.default_style) if obj.default_style else None
         return cls(**data)
 
 
 # ── Raster Layers ─────────────────────────────────────────────────────────────
+
+class RasterDefaultStyle(BaseModel):
+    opacity: float = 1.0
+
 
 class RasterLayerOut(BaseModel):
     id: int
@@ -103,6 +115,7 @@ class RasterLayerOut(BaseModel):
     file_size: int | None
     status: str
     error_message: str | None
+    default_style: RasterDefaultStyle | None
     created_at: datetime
     tile_url: str | None = None  # populated by router for ready layers
 
@@ -113,6 +126,7 @@ class RasterLayerOut(BaseModel):
         import json
         data = {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
         data["bbox"] = json.loads(obj.bbox) if obj.bbox else None
+        data["default_style"] = json.loads(obj.default_style) if obj.default_style else None
         data["tile_url"] = None
         return cls(**data)
 

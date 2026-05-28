@@ -44,6 +44,7 @@ export const uploadVectorFile = (file, onProgress) => {
   })
 }
 export const getVectorJobStatus = (jobId) => api.get(`/data/vector/jobs/${jobId}`)
+export const saveVectorDefaultStyle = (id, style) => api.put(`/data/vector/${id}/default-style`, style)
 export const deleteVectorLayer = (id) => api.delete(`/data/vector/${id}`)
 
 // Raster layers
@@ -56,6 +57,7 @@ export const uploadRasterFile = (file, onProgress) => {
   })
 }
 export const getRasterJobStatus = (jobId) => api.get(`/data/raster/jobs/${jobId}`)
+export const saveRasterDefaultStyle = (id, style) => api.put(`/data/raster/${id}/default-style`, style)
 export const deleteRasterLayer = (id) => api.delete(`/data/raster/${id}`)
 
 // Portals

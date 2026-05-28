@@ -64,6 +64,7 @@ class VectorLayer(Base):
     s3_key: Mapped[str | None] = mapped_column(String(512))
     status: Mapped[str] = mapped_column(String(16), default="processing")  # processing | ready | error
     error_message: Mapped[str | None] = mapped_column(Text)
+    default_style: Mapped[str | None] = mapped_column(Text)  # JSON {opacity, style, popup_fields}
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -84,6 +85,7 @@ class RasterLayer(Base):
     file_size: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(16), default="processing")
     error_message: Mapped[str | None] = mapped_column(Text)
+    default_style: Mapped[str | None] = mapped_column(Text)  # JSON {opacity}
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

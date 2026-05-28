@@ -257,13 +257,14 @@ const availableLayers = computed(() => [
 ].filter(l => !layerConfigs.value.some(c => c.layer_id === l.id && c.layer_type === l.type)))
 
 function addLayer(layer) {
+  const ds = layer.default_style
   layerConfigs.value.push({
     layer_id: layer.id,
     layer_type: layer.type,
     visible: true,
-    opacity: 1.0,
-    style: {},
-    popup_fields: [],
+    opacity: ds?.opacity ?? 1.0,
+    style: ds?.style ?? {},
+    popup_fields: ds?.popup_fields ?? [],
   })
   showAddLayer.value = false
 }
