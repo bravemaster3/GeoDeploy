@@ -13,7 +13,8 @@ ENV GDAL_VERSION=3.8 \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir --timeout 120 --retries 5 -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --timeout 120 --retries 5 -r requirements.txt
 
 # ---
 
