@@ -22,3 +22,7 @@ export const EyeIcon = icon('M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3
 export const CheckIcon = icon('M20 6L9 17l-5-5')
 export const AlertIcon = icon('M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01')
 export const ExternalLinkIcon = icon('M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3')
+export const LocateIcon = { render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2 }, [
+  h('circle', { cx: 12, cy: 12, r: 3 }),
+  h('path', { d: 'M12 2v3M12 19v3M2 12h3M19 12h3' }),
+]) }

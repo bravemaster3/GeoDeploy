@@ -9,7 +9,7 @@ from ...database import get_db
 from ...deps import get_current_user
 from ...models import RasterLayer, UploadJob, User
 from ...schemas import JobStatus, RasterDefaultStyle, RasterLayerOut
-from ...services.titiler import get_tile_url as raster_tile_url
+from ...services.titiler import get_tile_url as raster_tile_url, COLORMAPS
 from ...tasks.raster_ingest import ingest_raster
 
 router = APIRouter(prefix="/data/raster", tags=["raster"])
@@ -18,8 +18,14 @@ ALLOWED_EXTENSIONS = {".tif", ".tiff"}
 MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024  # 10 GB
 
 
+@router.get("/colormaps")
+async def list_colormaps():
+    return COLORMAPS
+
+
 @router.get("", response_model=list[RasterLayerOut])
 async def list_layers(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    import json
     result = await db.execute(
         select(RasterLayer).where(RasterLayer.user_id == user.id).order_by(RasterLayer.created_at.desc())
     )
@@ -28,7 +34,8 @@ async def list_layers(user: User = Depends(get_current_user), db: AsyncSession =
     for l in layers:
         obj = RasterLayerOut.from_orm_json(l)
         if l.status == "ready":
-            obj.tile_url = raster_tile_url(l.s3_key)
+            colormap = json.loads(l.default_style).get("colormap") if l.default_style else None
+            obj.tile_url = raster_tile_url(l.s3_key, colormap=colormap)
         out.append(obj)
     return out
 

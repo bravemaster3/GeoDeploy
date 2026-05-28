@@ -11,6 +11,8 @@ from ..config import get_settings
 CONTAINER_NAME = "geodeploy-minio"
 IMAGE = "minio/minio:latest"
 NETWORK = "geodeploy"
+TITILER_NAME = "geodeploy-titiler"
+TITILER_IMAGE = "ghcr.io/developmentseed/titiler:latest"
 
 
 def _random_key(length: int = 32) -> str:
@@ -67,6 +69,8 @@ async def provision_local() -> dict:
 
     s3 = _make_client(f"http://{CONTAINER_NAME}:9000", access_key, secret_key, "us-east-1")
     _ensure_bucket(s3, "geodeploy")
+
+    _start_titiler(client, network, access_key, secret_key, f"http://{CONTAINER_NAME}:9000")
 
     return {
         "type": "local",
@@ -127,6 +131,37 @@ def presigned_upload_url(key: str, expires: int = 3600) -> str:
         Params={"Bucket": settings.storage_bucket, "Key": key},
         ExpiresIn=expires,
     )
+
+
+def _start_titiler(client: docker.DockerClient, network, access_key: str, secret_key: str, endpoint: str) -> None:
+    """Start the TiTiler raster tile server with storage credentials."""
+    try:
+        container = client.containers.get(TITILER_NAME)
+        if container.status != "running":
+            container.start()
+        try:
+            network.disconnect(container)
+        except docker.errors.APIError:
+            pass
+        network.connect(container, aliases=["titiler"])
+    except docker.errors.NotFound:
+        container = client.containers.run(
+            TITILER_IMAGE,
+            name=TITILER_NAME,
+            detach=True,
+            restart_policy={"Name": "unless-stopped"},
+            environment={
+                "AWS_ACCESS_KEY_ID": access_key,
+                "AWS_SECRET_ACCESS_KEY": secret_key,
+                "AWS_S3_ENDPOINT": endpoint,
+                "AWS_HTTPS": "NO",
+                "AWS_VIRTUAL_HOSTING": "FALSE",
+                "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
+                "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff",
+                "WORKERS_PER_CORE": "1",
+            },
+        )
+        network.connect(container, aliases=["titiler"])
 
 
 async def _wait_healthy(endpoint: str, access_key: str, secret_key: str, retries: int = 30) -> None:

@@ -49,6 +49,7 @@
             :config="cfg"
             @remove="layerConfigs.splice(i, 1)"
             @update="layerConfigs[i] = { ...layerConfigs[i], ...$event }"
+            @zoom="zoomToLayer(cfg)"
           />
         </section>
 
@@ -239,7 +240,11 @@ function buildPreviewStyle() {
       if (!layer || layer.status !== 'ready' || !layer.tile_url) continue
 
       const srcId = `raster_${layer.id}`
-      style.sources[srcId] = { type: 'raster', tiles: [layer.tile_url], tileSize: 256 }
+      const colormap = cfg.style?.colormap
+      const tileUrl = colormap
+        ? layer.tile_url.replace(/(&colormap_name=\w+)?$/, `&colormap_name=${colormap}`)
+        : layer.tile_url
+      style.sources[srcId] = { type: 'raster', tiles: [tileUrl], tileSize: 256 }
       style.layers.push({
         id: srcId, type: 'raster', source: srcId,
         paint: { 'raster-opacity': cfg.opacity ?? 1.0 },
@@ -256,17 +261,34 @@ const availableLayers = computed(() => [
   ...dataStore.rasterLayers.filter(l => l.status === 'ready').map(l => ({ ...l, type: 'raster' })),
 ].filter(l => !layerConfigs.value.some(c => c.layer_id === l.id && c.layer_type === l.type)))
 
+const LAYER_COLORS = [
+  '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6',
+  '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1',
+]
+
+function nextColor() {
+  const used = layerConfigs.value.map(c => c.style?.color).filter(Boolean)
+  return LAYER_COLORS.find(c => !used.includes(c)) || LAYER_COLORS[layerConfigs.value.length % LAYER_COLORS.length]
+}
+
 function addLayer(layer) {
   const ds = layer.default_style
+  const style = ds?.style ?? (layer.type === 'vector' ? { color: nextColor() } : {})
   layerConfigs.value.push({
     layer_id: layer.id,
     layer_type: layer.type,
     visible: true,
     opacity: ds?.opacity ?? 1.0,
-    style: ds?.style ?? {},
+    style,
     popup_fields: ds?.popup_fields ?? [],
   })
   showAddLayer.value = false
+}
+
+function zoomToLayer(cfg) {
+  const list = cfg.layer_type === 'vector' ? dataStore.vectorLayers : dataStore.rasterLayers
+  const layer = list.find(l => l.id === cfg.layer_id)
+  if (layer?.bbox) fitToBbox(layer.bbox)
 }
 
 async function save() {

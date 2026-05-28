@@ -1,13 +1,21 @@
 """TiTiler integration — raster tile URL construction."""
 from ..config import get_settings
 
+COLORMAPS = [
+    "viridis", "plasma", "inferno", "magma", "cividis",
+    "gray", "rdylgn", "rdbu", "spectral", "terrain",
+]
 
-def get_tile_url(s3_key: str, settings=None) -> str:
+
+def get_tile_url(s3_key: str, colormap: str | None = None, settings=None) -> str:
     """Return browser-accessible tile URL served through nginx's /raster/ proxy."""
     if settings is None:
         settings = get_settings()
     cog_url = f"s3://{settings.storage_bucket}/{s3_key}"
-    return f"/raster/cog/tiles/{{z}}/{{x}}/{{y}}?url={cog_url}"
+    url = f"/raster/cog/tiles/{{z}}/{{x}}/{{y}}?url={cog_url}"
+    if colormap:
+        url += f"&colormap_name={colormap}"
+    return url
 
 
 def get_tilejson_url(s3_key: str, settings=None) -> str:

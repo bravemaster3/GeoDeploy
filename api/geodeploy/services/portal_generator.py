@@ -46,9 +46,10 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
             if not layer:
                 continue
             source_id = f"raster_{layer.id}"
+            colormap = cfg.get("style", {}).get("colormap")
             sources[source_id] = {
                 "type": "raster",
-                "tiles": [raster_tile_url(layer.s3_key)],
+                "tiles": [raster_tile_url(layer.s3_key, colormap=colormap)],
                 "tileSize": 256,
             }
             layers.append({

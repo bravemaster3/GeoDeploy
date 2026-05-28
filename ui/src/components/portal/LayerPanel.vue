@@ -6,6 +6,9 @@
         :class="config.layer_type === 'vector' ? 'bg-blue-100 text-blue-600' : 'bg-amber-100 text-amber-600'"
       >{{ config.layer_type === 'vector' ? 'V' : 'R' }}</span>
       <span class="text-xs font-medium flex-1 truncate" :title="layerName">{{ layerName }}</span>
+      <button @click="$emit('zoom')" class="text-gray-400 hover:text-brand-600 flex-shrink-0" title="Zoom to layer">
+        <LocateIcon class="w-3.5 h-3.5" />
+      </button>
       <button @click="expanded = !expanded" class="text-gray-400 hover:text-gray-600 text-xs px-0.5">
         {{ expanded ? '▲' : '▼' }}
       </button>
@@ -122,6 +125,20 @@
 
       </template>
 
+      <!-- Raster: colormap (single-band only) -->
+      <template v-else-if="config.layer_type === 'raster' && layer?.band_count === 1">
+        <div>
+          <label class="text-xs text-gray-500">Color ramp</label>
+          <select :value="config.style?.colormap || ''"
+            @change="emitStyle({ colormap: $event.target.value || null })"
+            class="mt-0.5 w-full text-xs border border-gray-200 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-brand-400"
+          >
+            <option value="">None (grayscale)</option>
+            <option v-for="cm in colormaps" :key="cm" :value="cm">{{ cm }}</option>
+          </select>
+        </div>
+      </template>
+
       <!-- Default style actions -->
       <div class="flex items-center gap-2 pt-1 border-t border-gray-100">
         <button
@@ -143,17 +160,27 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useDataStore } from '@/stores/data'
-import { saveVectorDefaultStyle, saveRasterDefaultStyle } from '@/api'
-import { TrashIcon } from '@/views/icons'
+import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps } from '@/api'
+import { TrashIcon, LocateIcon } from '@/views/icons'
 
 const props = defineProps({ config: Object })
-const emit = defineEmits(['remove', 'update'])
+const emit = defineEmits(['remove', 'update', 'zoom'])
 
 const dataStore = useDataStore()
 const expanded = ref(false)
 const savingDefault = ref(false)
+const colormaps = ref([])
+
+onMounted(async () => {
+  if (props.config.layer_type === 'raster') {
+    try {
+      const { data } = await listColormaps()
+      colormaps.value = data
+    } catch {}
+  }
+})
 
 const layer = computed(() => {
   const list = props.config.layer_type === 'vector' ? dataStore.vectorLayers : dataStore.rasterLayers
@@ -210,10 +237,9 @@ async function saveDefault() {
   try {
     const body = props.config.layer_type === 'vector'
       ? { opacity: props.config.opacity, style: props.config.style, popup_fields: props.config.popup_fields }
-      : { opacity: props.config.opacity }
+      : { opacity: props.config.opacity, colormap: props.config.style?.colormap || null }
     const fn = props.config.layer_type === 'vector' ? saveVectorDefaultStyle : saveRasterDefaultStyle
     const { data: updated } = await fn(layer.value.id, body)
-    // Update the layer in the store so "Use default" reflects the new default immediately
     const list = props.config.layer_type === 'vector' ? dataStore.vectorLayers : dataStore.rasterLayers
     const idx = list.findIndex(l => l.id === layer.value.id)
     if (idx !== -1) list[idx] = updated
@@ -227,7 +253,7 @@ function useDefault() {
   const ds = layer.value.default_style
   emit('update', {
     opacity: ds.opacity ?? 1.0,
-    style: ds.style ?? {},
+    style: props.config.layer_type === 'vector' ? (ds.style ?? {}) : { colormap: ds.colormap || null },
     ...(props.config.layer_type === 'vector' ? { popup_fields: ds.popup_fields ?? [] } : {}),
   })
 }

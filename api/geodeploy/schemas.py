@@ -102,6 +102,7 @@ class VectorLayerOut(BaseModel):
 
 class RasterDefaultStyle(BaseModel):
     opacity: float = 1.0
+    colormap: str | None = None
 
 
 class RasterLayerOut(BaseModel):
@@ -152,7 +153,7 @@ class LayerConfig(BaseModel):
     layer_type: str   # vector | raster
     visible: bool = True
     opacity: float = 1.0
-    style: dict[str, Any] = Field(default_factory=dict)
+    style: dict[str, Any] = Field(default_factory=dict)  # for rasters: may contain colormap key
     popup_fields: list[str] = Field(default_factory=list)
 
 
