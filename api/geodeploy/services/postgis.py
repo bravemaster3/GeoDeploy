@@ -1,5 +1,6 @@
 """PostGIS provisioning and management."""
 import asyncio
+import os
 import secrets
 import string
 import docker
@@ -60,6 +61,7 @@ async def provision_local() -> dict:
 
     await _wait_healthy(CONTAINER_NAME, 5432, "geodeploy", "geodeploy", password)
 
+    _write_initial_martin_config(CONTAINER_NAME, password)
     _start_martin(client, network)
 
     return {
@@ -106,6 +108,25 @@ async def _wait_healthy(host: str, port: int, db: str, user: str, password: str,
             if attempt == retries - 1:
                 raise RuntimeError(f"PostGIS did not become healthy after {retries} attempts.")
             await asyncio.sleep(2)
+
+
+def _write_initial_martin_config(pg_host: str, password: str) -> None:
+    """Write a minimal Martin config so Martin can start immediately after PostGIS is ready."""
+    import yaml
+    config_path = "/data/martin/martin-config.yaml"
+    if os.path.exists(config_path):
+        return  # Already written (e.g. from a previous setup or layer upload)
+    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    config = {
+        "postgres": {
+            "connection_string": f"postgresql://geodeploy:{password}@{pg_host}:5432/geodeploy",
+            "pool_size": 5,
+            "tables": {},
+        },
+        "srv": {"listen_addresses": "0.0.0.0:3000"},
+    }
+    with open(config_path, "w") as f:
+        yaml.dump(config, f, default_flow_style=False)
 
 
 def _get_host_bind_path(client: docker.DockerClient, container_path: str) -> str:
