@@ -96,6 +96,7 @@ async def configure_storage(req: ConfigureStorageRequest, db: AsyncSession = Dep
 
     await db.commit()
     _write_env(config)
+    _apply_to_process(config)
     return {"status": "ok", "type": config.storage_type}
 
 
@@ -127,10 +128,41 @@ async def create_admin(req: CreateAdminRequest, db: AsyncSession = Depends(get_d
     await db.commit()
     await db.refresh(user)
 
-    # Persist credentials to .env so containers pick them up on restart
+    # Persist credentials to .env and apply to running process
     _write_env(config)
+    _apply_to_process(config)
 
     return {"status": "ok", "user_id": user.id}
+
+
+def _apply_to_process(config: SetupConfig) -> None:
+    """Push new credentials into the running process and restart celery."""
+    import os
+    import docker
+    updates = {
+        "POSTGIS_HOST": config.postgis_host or "",
+        "POSTGIS_PORT": str(config.postgis_port) if config.postgis_port else "",
+        "POSTGIS_DB": config.postgis_db or "",
+        "POSTGIS_USER": config.postgis_user or "",
+        "POSTGIS_PASSWORD": config.postgis_password or "",
+        "STORAGE_TYPE": config.storage_type or "",
+        "STORAGE_ENDPOINT": config.storage_endpoint or "",
+        "STORAGE_BUCKET": config.storage_bucket or "",
+        "STORAGE_ACCESS_KEY": config.storage_access_key or "",
+        "STORAGE_SECRET_KEY": config.storage_secret_key or "",
+        "STORAGE_REGION": config.storage_region or "us-east-1",
+    }
+    for key, val in updates.items():
+        os.environ[key] = val
+    get_settings.cache_clear()
+
+    try:
+        client = docker.from_env()
+        for c in client.containers.list():
+            if "celery" in c.name and "geodeploy" in c.name:
+                c.restart()
+    except Exception:
+        pass
 
 
 def _write_env(config: SetupConfig) -> None:

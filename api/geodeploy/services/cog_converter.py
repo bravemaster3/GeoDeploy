@@ -13,8 +13,17 @@ COG_PROFILE = {
     "blockxsize": 512,
     "blockysize": 512,
     "compress": "lzw",
-    "predictor": 2,
 }
+
+
+def _predictor(dtype: str) -> int:
+    import numpy as np
+    kind = np.dtype(dtype).kind
+    if kind == "f":
+        return 3  # floating-point predictor
+    if np.dtype(dtype).itemsize >= 2:
+        return 2  # horizontal differencing for multi-byte integers
+    return 1  # no predictor for 8-bit
 
 
 def is_cog(path: str) -> bool:
@@ -55,6 +64,7 @@ def convert_to_cog(src_path: str, dst_path: str) -> None:
             "transform": profile.get("transform"),
         }
         cog_profile.update(COG_PROFILE)
+        cog_profile["predictor"] = _predictor(profile["dtype"])
 
         with rasterio.open(tmp_path) as src:
             rio_copy(src, dst_path, copy_src_overviews=True, **cog_profile)
