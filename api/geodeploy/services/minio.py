@@ -135,33 +135,32 @@ def presigned_upload_url(key: str, expires: int = 3600) -> str:
 
 def _start_titiler(client: docker.DockerClient, network, access_key: str, secret_key: str, endpoint: str) -> None:
     """Start the TiTiler raster tile server with storage credentials."""
+    # GDAL VSI S3 expects host:port only — no http:// scheme
+    endpoint_for_gdal = endpoint.removeprefix("https://").removeprefix("http://")
+
+    # Always recreate so updated credentials/endpoint are picked up
     try:
-        container = client.containers.get(TITILER_NAME)
-        if container.status != "running":
-            container.start()
-        try:
-            network.disconnect(container)
-        except docker.errors.APIError:
-            pass
-        network.connect(container, aliases=["titiler"])
+        client.containers.get(TITILER_NAME).remove(force=True)
     except docker.errors.NotFound:
-        container = client.containers.run(
-            TITILER_IMAGE,
-            name=TITILER_NAME,
-            detach=True,
-            restart_policy={"Name": "unless-stopped"},
-            environment={
-                "AWS_ACCESS_KEY_ID": access_key,
-                "AWS_SECRET_ACCESS_KEY": secret_key,
-                "AWS_S3_ENDPOINT": endpoint,
-                "AWS_HTTPS": "NO",
-                "AWS_VIRTUAL_HOSTING": "FALSE",
-                "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
-                "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff",
-                "WORKERS_PER_CORE": "1",
-            },
-        )
-        network.connect(container, aliases=["titiler"])
+        pass
+
+    container = client.containers.run(
+        TITILER_IMAGE,
+        name=TITILER_NAME,
+        detach=True,
+        restart_policy={"Name": "unless-stopped"},
+        environment={
+            "AWS_ACCESS_KEY_ID": access_key,
+            "AWS_SECRET_ACCESS_KEY": secret_key,
+            "AWS_S3_ENDPOINT": endpoint_for_gdal,
+            "AWS_HTTPS": "NO",
+            "AWS_VIRTUAL_HOSTING": "FALSE",
+            "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
+            "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff",
+            "WORKERS_PER_CORE": "1",
+        },
+    )
+    network.connect(container, aliases=["titiler"])
 
 
 async def _wait_healthy(endpoint: str, access_key: str, secret_key: str, retries: int = 30) -> None:
