@@ -12,8 +12,8 @@ export default defineConfig({
     proxy: {
       '/api': { target: 'http://geodeploy-api:8000', changeOrigin: true },
       '/portals': { target: 'http://geodeploy-api:8000', changeOrigin: true },
-      '/tiles': { target: 'http://martin:3000', changeOrigin: true },
-      '/raster': { target: 'http://titiler:8080', changeOrigin: true },
+      '/tiles': { target: 'http://martin:3000', changeOrigin: true, rewrite: (p) => p.replace(/^\/tiles/, '') },
+      '/raster': { target: 'http://titiler:80', changeOrigin: true, rewrite: (p) => p.replace(/^\/raster/, '') },
     },
   },
   build: {
