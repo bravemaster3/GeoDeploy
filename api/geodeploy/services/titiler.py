@@ -12,7 +12,7 @@ def get_tile_url(s3_key: str, colormap: str | None = None, settings=None) -> str
     if settings is None:
         settings = get_settings()
     cog_url = f"s3://{settings.storage_bucket}/{s3_key}"
-    url = f"/raster/cog/tiles/{{z}}/{{x}}/{{y}}?url={cog_url}"
+    url = f"/raster/cog/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}?url={cog_url}"
     if colormap:
         url += f"&colormap_name={colormap}"
     return url
@@ -22,7 +22,7 @@ def get_tilejson_url(s3_key: str, settings=None) -> str:
     if settings is None:
         settings = get_settings()
     cog_url = f"s3://{settings.storage_bucket}/{s3_key}"
-    return f"{settings.titiler_url}/cog/tilejson.json?url={cog_url}"
+    return f"{settings.titiler_url}/cog/WebMercatorQuad/tilejson.json?url={cog_url}"
 
 
 def get_info_url(s3_key: str, settings=None) -> str:
