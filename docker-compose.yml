@@ -81,10 +81,9 @@ services:
     volumes:
       - ./data/martin:/config
     networks:
-      - geodeploy
-    depends_on:
-      postgres:
-        condition: service_healthy
+      geodeploy:
+        aliases:
+          - martin
 
   titiler:
     image: ghcr.io/developmentseed/titiler:latest

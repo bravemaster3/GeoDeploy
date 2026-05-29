@@ -25,7 +25,15 @@
           {{ svc.status }}
         </span>
       </div>
-      <button @click="systemStore.refreshHealth()" class="btn-secondary text-xs mt-1">Refresh</button>
+      <div class="flex gap-2 mt-1">
+        <button @click="systemStore.refreshHealth()" class="btn-secondary text-xs">Refresh</button>
+        <button @click="reloadMartin" :disabled="martinBusy" class="btn-secondary text-xs">
+          {{ martinBusy ? 'Reloading…' : 'Reload Martin config' }}
+        </button>
+      </div>
+      <p v-if="martinMsg" class="text-xs" :class="martinMsg.ok ? 'text-green-600' : 'text-red-600'">
+        {{ martinMsg.text }}
+      </p>
     </section>
 
     <!-- Storage stats -->
@@ -58,16 +66,34 @@
 </template>
 
 <script setup>
-import { onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useSystemStore } from '@/stores/system'
 import { useAuthStore } from '@/stores/auth'
 import StorageBar from '@/components/shared/StorageBar.vue'
+import api from '@/api'
 
 const systemStore = useSystemStore()
 const auth = useAuthStore()
+const martinBusy = ref(false)
+const martinMsg = ref(null)
 
 onMounted(() => {
   systemStore.refreshHealth()
   systemStore.refreshStats()
 })
+
+async function reloadMartin() {
+  martinBusy.value = true
+  martinMsg.value = null
+  try {
+    const { data } = await api.post('/admin/reload-martin')
+    martinMsg.value = { ok: true, text: `Config reloaded — ${data.tables} table(s) registered.` }
+    setTimeout(() => systemStore.refreshHealth(), 2000)
+  } catch (err) {
+    martinMsg.value = { ok: false, text: err.response?.data?.detail || err.message }
+  } finally {
+    martinBusy.value = false
+    setTimeout(() => { martinMsg.value = null }, 6000)
+  }
+}
 </script>
