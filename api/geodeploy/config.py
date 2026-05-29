@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
     martin_url: str = "http://martin:3000"
     martin_config_path: str = "/data/martin/martin-config.yaml"
-    titiler_url: str = "http://titiler:8080"
+    titiler_url: str = "http://titiler:80"
 
     @property
     def secret_key(self) -> str:
