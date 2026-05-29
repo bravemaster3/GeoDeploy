@@ -62,11 +62,17 @@ def _docker_reload() -> None:
     try:
         client = docker.from_env()
         container = client.containers.get("geodeploy-martin")
-        container.kill(signal="SIGHUP")
+        if container.status != "running":
+            container.start()
+        else:
+            try:
+                container.kill(signal="SIGHUP")
+            except Exception:
+                container.restart()
     except docker.errors.NotFound:
         pass  # Martin not running yet — config will be picked up on start
     except Exception:
-        pass  # Non-fatal: tiles will still work after next restart
+        pass  # Non-fatal
 
 
 def get_tile_url(schema: str, table: str, settings=None) -> str:

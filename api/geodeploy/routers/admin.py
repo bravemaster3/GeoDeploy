@@ -44,6 +44,17 @@ async def service_health(_: User = Depends(require_admin)):
     return results
 
 
+@router.post("/reload-martin")
+async def reload_martin(_: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    from ..services.martin import regenerate_config
+    result = await db.execute(
+        select(VectorLayer).where(VectorLayer.status == "ready", VectorLayer.storage_backend == "postgis")
+    )
+    layers = [{"schema_name": l.schema_name, "table_name": l.table_name} for l in result.scalars().all()]
+    await regenerate_config(layers)
+    return {"status": "ok", "tables": len(layers)}
+
+
 @router.get("/storage-stats", response_model=StorageStats)
 async def storage_stats(_: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     settings = get_settings()
