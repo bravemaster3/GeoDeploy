@@ -185,6 +185,8 @@ def _write_env(config: SetupConfig) -> None:
         "STORAGE_ACCESS_KEY": config.storage_access_key,
         "STORAGE_SECRET_KEY": config.storage_secret_key,
         "STORAGE_REGION": config.storage_region or "us-east-1",
+        # GDAL VSI S3 needs endpoint without http:// scheme
+        "TITILER_S3_ENDPOINT": (config.storage_endpoint or "").removeprefix("https://").removeprefix("http://"),
     }
 
     existing_keys = set()
