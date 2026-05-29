@@ -32,6 +32,7 @@ def _build_config(layers: list[dict], settings) -> dict:
         }
 
     return {
+        "listen_addresses": "0.0.0.0:3000",
         "postgres": {
             "connection_string": (
                 f"postgresql://{settings.postgis_user}:{settings.postgis_password}"
@@ -39,9 +40,6 @@ def _build_config(layers: list[dict], settings) -> dict:
             ),
             "pool_size": 5,
             "tables": tables,
-        },
-        "srv": {
-            "listen_addresses": "0.0.0.0:3000",
         },
     }
 

@@ -287,6 +287,17 @@
   const STYLE = {{STYLE_JSON}};
   const POPUP_CONFIG = {{POPUP_CONFIG}};
 
+  // Make tile URLs absolute so MapLibre's Web Worker can resolve them
+  // (Workers can't resolve relative URLs against the page origin)
+  ;(function absolutifyTileUrls(style) {
+    const base = location.origin;
+    Object.values(style.sources || {}).forEach(src => {
+      if (Array.isArray(src.tiles)) {
+        src.tiles = src.tiles.map(u => u.startsWith('/') ? base + u : u);
+      }
+    });
+  })(STYLE);
+
   // ── Sidebar toggle ──────────────────────────────────────
   const sidebar = document.getElementById('sidebar');
   document.getElementById('sidebar-toggle').addEventListener('click', () => {

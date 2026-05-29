@@ -201,7 +201,7 @@ function buildPreviewStyle() {
       const srcId = `vector_${layer.id}`
       style.sources[srcId] = {
         type: 'vector',
-        tiles: [`/tiles/${layer.schema_name}.${layer.table_name}/{z}/{x}/{y}`],
+        tiles: [`${location.origin}/tiles/${layer.schema_name}.${layer.table_name}/{z}/{x}/{y}`],
         minzoom: 0, maxzoom: 22,
       }
       const sourceLayer = `${layer.schema_name}.${layer.table_name}`
@@ -244,7 +244,8 @@ function buildPreviewStyle() {
       const tileUrl = colormap
         ? layer.tile_url.replace(/(&colormap_name=\w+)?$/, `&colormap_name=${colormap}`)
         : layer.tile_url
-      style.sources[srcId] = { type: 'raster', tiles: [tileUrl], tileSize: 256 }
+      const absTileUrl = tileUrl.startsWith('/') ? location.origin + tileUrl : tileUrl
+      style.sources[srcId] = { type: 'raster', tiles: [absTileUrl], tileSize: 256 }
       style.layers.push({
         id: srcId, type: 'raster', source: srcId,
         paint: { 'raster-opacity': cfg.opacity ?? 1.0 },
