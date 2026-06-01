@@ -189,6 +189,7 @@
       cursor: pointer; padding: 2px 0; font-weight: 600; font-family: inherit;
     }
     .popup-fulltable-btn:hover { text-decoration: underline; }
+    .popup-raster-loading { padding: 6px 12px; font-size: 11px; color: var(--text-muted); }
 
     /* ── Attribute table panel ───────────────────────────── */
     #attr-panel {
@@ -793,46 +794,93 @@
     maxWidth: '300px',
   });
 
-  map.on('click', e => {
-    const userLayerIds = (STYLE.layers || [])
-      .filter(l => l.metadata?.['geodeploy:name'])
+  map.on('click', async e => {
+    const vectorLayerIds = (STYLE.layers || [])
+      .filter(l => l.metadata && l.metadata['geodeploy:type'] === 'vector')
       .map(l => l.id);
 
-    if (!userLayerIds.length) return;
+    const features = vectorLayerIds.length
+      ? map.queryRenderedFeatures(e.point, { layers: vectorLayerIds })
+      : [];
 
-    const features = map.queryRenderedFeatures(e.point, { layers: userLayerIds });
-    if (!features.length) return;
+    // ── Vector section ──
+    let vectorHtml = '', ftLayerId = null, ftLayerName = '';
+    if (features.length) {
+      const f = features[0];
+      ftLayerId = f.layer.id;
+      const layerId = f.layer.metadata && f.layer.metadata['geodeploy:layer_id'];
+      ftLayerName = (f.layer.metadata && f.layer.metadata['geodeploy:name']) || f.layer.id;
+      const fields = POPUP_CONFIG[layerId] || POPUP_CONFIG[String(layerId)];
+      const props = f.properties || {};
+      const keys = fields && fields.length
+        ? fields.filter(k => props[k] != null)
+        : Object.keys(props).filter(k => props[k] != null).slice(0, 8);
+      const body = keys.length
+        ? '<table class="popup-table">' + keys.map(k =>
+            '<tr><th>' + escHtml(k) + '</th><td>' + escHtml(String(props[k])) + '</td></tr>').join('') + '</table>'
+        : '<div style="padding:8px 12px;font-size:12px;color:var(--text-muted)">No attributes</div>';
+      vectorHtml = '<div class="popup-header">' + escHtml(ftLayerName) + '</div>' + body +
+        '<div class="popup-actions"><button class="popup-fulltable-btn" type="button">View full table ▸</button></div>';
+    }
 
-    const f = features[0];
-    const mapLayerId = f.layer.id;
-    const layerId = f.layer.metadata?.['geodeploy:layer_id'];
-    const layerName = f.layer.metadata?.['geodeploy:name'] || mapLayerId;
-    const isVector = f.layer.metadata?.['geodeploy:type'] === 'vector';
-    const fields = POPUP_CONFIG[layerId] || POPUP_CONFIG[String(layerId)];
+    // ── Raster identify section ──
+    const rasters = visibleRasterLayers();
+    if (!vectorHtml && !rasters.length) return;
 
-    const props = f.properties || {};
-    const keys = fields?.length
-      ? fields.filter(k => props[k] != null)
-      : Object.keys(props).filter(k => props[k] != null).slice(0, 8);
+    const loading = rasters.length ? '<div class="popup-raster-loading">Reading pixel value…</div>' : '';
+    popup.setLngLat(e.lngLat).setHTML(vectorHtml + loading).addTo(map);
+    wireFullTableBtn(ftLayerId, ftLayerName);
 
-    const body = keys.length
-      ? `<table class="popup-table">${keys.map(k =>
-          `<tr><th>${escHtml(k)}</th><td>${escHtml(String(props[k]))}</td></tr>`).join('')}</table>`
-      : `<div style="padding:8px 12px;font-size:12px;color:var(--text-muted)">No attributes</div>`;
-    const actions = isVector
-      ? `<div class="popup-actions"><button class="popup-fulltable-btn" type="button">View full table ▸</button></div>`
-      : '';
-
-    popup.setLngLat(e.lngLat)
-      .setHTML(`<div class="popup-header">${escHtml(layerName)}</div>${body}${actions}`)
-      .addTo(map);
-
-    if (isVector) {
-      const el = popup.getElement();
-      const btn = el && el.querySelector('.popup-fulltable-btn');
-      if (btn) btn.addEventListener('click', () => openAttrPanel(mapLayerId, layerName));
+    if (rasters.length) {
+      const results = await Promise.all(rasters.map(l => fetchRasterPoint(l, e.lngLat)));
+      popup.setHTML(vectorHtml + rasterValuesHtml(results));
+      wireFullTableBtn(ftLayerId, ftLayerName);
     }
   });
+
+  function wireFullTableBtn(mapLayerId, layerName) {
+    if (!mapLayerId) return;
+    const el = popup.getElement();
+    const btn = el && el.querySelector('.popup-fulltable-btn');
+    if (btn) btn.addEventListener('click', () => openAttrPanel(mapLayerId, layerName));
+  }
+
+  function visibleRasterLayers() {
+    return (STYLE.layers || []).filter(l => {
+      if (!l.metadata || l.metadata['geodeploy:type'] !== 'raster') return false;
+      if (!map.getLayer(l.id)) return false;
+      try { return map.getLayoutProperty(l.id, 'visibility') !== 'none'; } catch (e) { return true; }
+    });
+  }
+
+  async function fetchRasterPoint(layer, lngLat) {
+    const baseFull = (STYLE.sources[layer.source] && STYLE.sources[layer.source].tiles && STYLE.sources[layer.source].tiles[0]) || '';
+    const base = baseFull.split('&')[0];
+    const qIdx = base.indexOf('?');
+    if (qIdx < 0) return null;
+    const url = base.slice(0, qIdx)
+      .replace(/\/cog\/tiles\/[^/]+\/\{z\}\/\{x\}\/\{y\}/, '/cog/point/' + lngLat.lng + ',' + lngLat.lat) + base.slice(qIdx);
+    try {
+      const r = await fetch(url);
+      if (!r.ok) return null;
+      const j = await r.json();
+      return { name: (layer.metadata && layer.metadata['geodeploy:name']) || 'Raster',
+               values: j.values || [], bands: j.band_names || [] };
+    } catch (e) { return null; }
+  }
+
+  function rasterValuesHtml(results) {
+    const blocks = (results || []).filter(r => r && r.values && r.values.length).map(r => {
+      const rows = r.values.map((v, i) => {
+        const band = (r.bands && r.bands[i]) || ('Band ' + (i + 1));
+        const val = (typeof v === 'number') ? (Math.round(v * 10000) / 10000) : v;
+        return '<tr><th>' + escHtml(String(band)) + '</th><td>' + escHtml(String(val)) + '</td></tr>';
+      }).join('');
+      return '<div class="popup-header">' + escHtml(r.name) + '</div><table class="popup-table">' + rows + '</table>';
+    });
+    return blocks.length ? blocks.join('')
+      : '<div style="padding:8px 12px;font-size:12px;color:var(--text-muted)">No raster value at this point.</div>';
+  }
 
   // ── Attribute table panel ───────────────────────────────
   function openAttrPanel(mapLayerId, layerName) {
@@ -871,13 +919,13 @@
     document.getElementById('attr-panel').classList.remove('open');
   });
 
-  // Pointer cursor over interactive layers
+  // Pointer cursor over interactive vector layers
   map.on('mousemove', e => {
-    const userLayerIds = (STYLE.layers || [])
-      .filter(l => l.metadata?.['geodeploy:name'])
+    const vectorLayerIds = (STYLE.layers || [])
+      .filter(l => l.metadata && l.metadata['geodeploy:type'] === 'vector')
       .map(l => l.id);
-    if (!userLayerIds.length) return;
-    const f = map.queryRenderedFeatures(e.point, { layers: userLayerIds });
+    if (!vectorLayerIds.length) { map.getCanvas().style.cursor = ''; return; }
+    const f = map.queryRenderedFeatures(e.point, { layers: vectorLayerIds });
     map.getCanvas().style.cursor = f.length ? 'pointer' : '';
   });
 
