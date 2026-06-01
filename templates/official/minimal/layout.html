@@ -213,6 +213,41 @@
     .attr-table tbody tr:hover { background: var(--accent-light); cursor: pointer; }
     .attr-table tbody tr.attr-row-active { background: var(--accent-light); }
 
+    /* ── Reset styling link ──────────────────────────────── */
+    #reset-styling {
+      margin-top: 8px; font-size: 12px; color: var(--text-muted);
+      background: none; border: none; cursor: pointer; padding: 4px 2px; font-family: inherit;
+    }
+    #reset-styling:hover { color: var(--accent); }
+
+    /* ── Basemap switcher control ────────────────────────── */
+    .gd-basemap-ctrl { position: relative; }
+    .gd-basemap-btn {
+      width: 29px; height: 29px; display: flex; align-items: center; justify-content: center;
+      background: var(--bg); border: none; cursor: pointer; color: var(--text);
+    }
+    .gd-basemap-btn svg { width: 18px; height: 18px; }
+    .gd-basemap-menu {
+      display: none; position: absolute; top: 0; right: 35px; min-width: 130px;
+      background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+      box-shadow: var(--shadow-lg); padding: 4px; white-space: nowrap;
+    }
+    .gd-basemap-ctrl.open .gd-basemap-menu { display: block; }
+    .gd-basemap-opt {
+      display: flex; align-items: center; gap: 7px; padding: 5px 8px;
+      font-size: 12px; border-radius: 5px; cursor: pointer;
+    }
+    .gd-basemap-opt:hover { background: var(--surface); }
+    .gd-basemap-opt input { accent-color: var(--accent); }
+
+    /* ── Coordinate readout ──────────────────────────────── */
+    #coords {
+      position: absolute; right: 8px; bottom: 4px; z-index: 20; pointer-events: none;
+      font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text);
+      background: rgba(255,255,255,.85); padding: 2px 7px; border-radius: 4px;
+      box-shadow: var(--shadow); min-height: 18px;
+    }
+
     /* ── Mobile ──────────────────────────────────────────── */
     @media (max-width: 640px) {
       #sidebar {
@@ -287,10 +322,12 @@
     <div id="sidebar-inner">
       <p class="sidebar-section-title">Layers</p>
       <div id="layer-list"></div>
+      <button id="reset-styling" type="button" style="display:none">↺ Reset styling</button>
     </div>
   </aside>
   <div id="map-wrap">
     <div id="map"></div>
+    <div id="coords"></div>
     <div id="attr-panel">
       <div id="attr-panel-head">
         <span id="attr-panel-title">Attributes</span>
@@ -429,10 +466,30 @@
   map.on('load', function () {
     const userLayers = STYLE.layers.filter(l => l.metadata && l.metadata['geodeploy:name']);
     buildLayerSwitcher(userLayers);
+    setupBasemaps();
   });
+
+  const resetBtn = document.getElementById('reset-styling');
+  if (resetBtn) resetBtn.addEventListener('click', resetStyling);
+
+  // Restore each user layer's original paint + visibility, then rebuild controls
+  function resetStyling() {
+    STYLE.layers.forEach(l => {
+      if (!l.metadata || !l.metadata['geodeploy:name']) return;
+      const paint = l.paint || {};
+      Object.keys(paint).forEach(prop => {
+        try { map.setPaintProperty(l.id, prop, paint[prop]); } catch (e) {}
+      });
+      try { map.setLayoutProperty(l.id, 'visibility', 'visible'); } catch (e) {}
+    });
+    buildLayerSwitcher(STYLE.layers.filter(l => l.metadata && l.metadata['geodeploy:name']));
+  }
 
   function buildLayerSwitcher(layers) {
     const container = document.getElementById('layer-list');
+    container.innerHTML = '';
+    const resetBtn = document.getElementById('reset-styling');
+    if (resetBtn) resetBtn.style.display = layers.length ? '' : 'none';
     if (!layers.length) {
       container.innerHTML = '<p style="font-size:13px;color:var(--text-muted)">No layers</p>';
       return;
@@ -695,6 +752,93 @@
     const f = map.queryRenderedFeatures(e.point, { layers: userLayerIds });
     map.getCanvas().style.cursor = f.length ? 'pointer' : '';
   });
+
+  // ── Coordinate readout (bottom-right) ───────────────────
+  const coordsEl = document.getElementById('coords');
+  if (coordsEl) {
+    map.on('mousemove', e => {
+      coordsEl.textContent = e.lngLat.lng.toFixed(5) + ', ' + e.lngLat.lat.toFixed(5);
+    });
+    map.on('mouseout', () => { coordsEl.textContent = ''; });
+  }
+
+  // ── Basemap switcher (top-right) ────────────────────────
+  const BASEMAPS = [
+    { id: 'default', name: 'Default', builtin: true },
+    { id: 'osm', name: 'OpenStreetMap',
+      tiles: ['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png', 'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png'],
+      attribution: '© OpenStreetMap contributors' },
+    { id: 'dark', name: 'Dark',
+      tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'],
+      attribution: '© OpenStreetMap © CARTO' },
+    { id: 'satellite', name: 'Satellite',
+      tiles: ['https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+      attribution: 'Imagery © Esri' },
+  ];
+
+  function builtinBasemapIds() {
+    return STYLE.layers.filter(l => !(l.metadata && l.metadata['geodeploy:name'])).map(l => l.id);
+  }
+
+  function setupBasemaps() {
+    const firstId = (map.getStyle().layers[0] || {}).id;
+    BASEMAPS.forEach(bm => {
+      if (bm.builtin) return;
+      const srcId = 'gd-basemap-' + bm.id;
+      if (!map.getSource(srcId)) {
+        map.addSource(srcId, { type: 'raster', tiles: bm.tiles, tileSize: 256, attribution: bm.attribution || '' });
+      }
+      if (!map.getLayer(srcId)) {
+        map.addLayer({ id: srcId, type: 'raster', source: srcId, layout: { visibility: 'none' } }, firstId);
+      }
+    });
+    map.addControl(new BasemapControl(), 'top-right');
+  }
+
+  function selectBasemap(id) {
+    const builtin = builtinBasemapIds();
+    BASEMAPS.forEach(bm => {
+      if (bm.builtin) return;
+      const lid = 'gd-basemap-' + bm.id;
+      if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', 'none');
+    });
+    if (id === 'default') {
+      builtin.forEach(lid => { if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', 'visible'); });
+    } else {
+      builtin.forEach(lid => { if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', 'none'); });
+      const lid = 'gd-basemap-' + id;
+      if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', 'visible');
+    }
+  }
+
+  function layersIcon() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">' +
+      '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>';
+  }
+
+  class BasemapControl {
+    onAdd(m) {
+      this._map = m;
+      const c = document.createElement('div');
+      c.className = 'maplibregl-ctrl maplibregl-ctrl-group gd-basemap-ctrl';
+      c.innerHTML =
+        '<button type="button" class="gd-basemap-btn" title="Basemaps" aria-label="Choose basemap">' + layersIcon() + '</button>' +
+        '<div class="gd-basemap-menu">' +
+          BASEMAPS.map((bm, i) =>
+            '<label class="gd-basemap-opt"><input type="radio" name="gd-basemap" value="' + bm.id + '"' +
+            (i === 0 ? ' checked' : '') + '>' + escHtml(bm.name) + '</label>').join('') +
+        '</div>';
+      const btn = c.querySelector('.gd-basemap-btn');
+      const menu = c.querySelector('.gd-basemap-menu');
+      btn.addEventListener('click', ev => { ev.stopPropagation(); c.classList.toggle('open'); });
+      menu.addEventListener('change', ev => selectBasemap(ev.target.value));
+      menu.addEventListener('click', ev => ev.stopPropagation());
+      document.addEventListener('click', () => c.classList.remove('open'));
+      this._c = c;
+      return c;
+    }
+    onRemove() { if (this._c) this._c.remove(); }
+  }
 
   function escHtml(str) {
     return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');

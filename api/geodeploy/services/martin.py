@@ -12,9 +12,44 @@ async def regenerate_config(layers: list[dict]) -> None:
     layers: [{"schema": str, "table": str, "id_column": str}]
     """
     settings = get_settings()
+    layers = await _attach_properties(layers, settings)
     config = _build_config(layers, settings)
     _write_config(config, settings.martin_config_path)
     await _reload_martin()
+
+
+async def _attach_properties(layers: list[dict], settings) -> list[dict]:
+    """
+    Attach each table's attribute columns (name -> Postgres type) so Martin includes
+    them in the MVT tiles. A configured Martin table source with no `properties` map
+    serves geometry only — which is why feature popups would show no attributes.
+    """
+    import asyncpg
+    enriched = []
+    conn = None
+    try:
+        conn = await asyncpg.connect(settings.postgis_sync_dsn, timeout=10)
+        for layer in layers:
+            schema = layer.get("schema_name") or layer.get("schema", "")
+            table = layer.get("table_name") or layer.get("table", "")
+            id_col = layer.get("id_column", "id")
+            rows = await conn.fetch(
+                """SELECT column_name, udt_name FROM information_schema.columns
+                   WHERE table_schema = $1 AND table_name = $2""",
+                schema, table,
+            )
+            props = {
+                r["column_name"]: r["udt_name"]
+                for r in rows
+                if r["column_name"] not in ("geom", id_col)
+            }
+            enriched.append({**layer, "properties": props})
+    except Exception:
+        return layers  # non-fatal — fall back to no explicit properties
+    finally:
+        if conn is not None:
+            await conn.close()
+    return enriched
 
 
 def _build_config(layers: list[dict], settings) -> dict:
@@ -23,13 +58,17 @@ def _build_config(layers: list[dict], settings) -> dict:
         schema = layer.get("schema_name") or layer.get("schema", "")
         table = layer.get("table_name") or layer.get("table", "")
         key = f"{schema}.{table}"
-        tables[key] = {
+        table_cfg = {
             "schema": schema,
             "table": table,
             "srid": 4326,
             "geometry_column": "geom",
             "id_column": layer.get("id_column", "id"),
         }
+        props = layer.get("properties")
+        if props:
+            table_cfg["properties"] = props
+        tables[key] = table_cfg
 
     return {
         "listen_addresses": "0.0.0.0:3000",
