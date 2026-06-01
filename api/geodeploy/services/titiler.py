@@ -7,13 +7,29 @@ COLORMAPS = [
 ]
 
 
-def get_tile_url(s3_key: str, colormap: str | None = None, settings=None) -> str:
-    """Return browser-accessible tile URL served through nginx's /raster/ proxy."""
+def get_tile_url(
+    s3_key: str,
+    colormap: str | None = None,
+    rescale: str | None = None,
+    algorithm: str | None = None,
+    settings=None,
+) -> str:
+    """
+    Return a browser-accessible raster tile URL served through nginx's /raster/ proxy.
+
+    - colormap: a TiTiler colormap name (single-band data).
+    - rescale: "min,max" stretch applied before display (needed for non-8-bit data).
+    - algorithm: a TiTiler algorithm such as "hillshade" (single-band DEM data).
+    """
     if settings is None:
         settings = get_settings()
     cog_url = f"s3://{settings.storage_bucket}/{s3_key}"
     url = f"/raster/cog/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}?url={cog_url}"
-    if colormap:
+    if rescale:
+        url += f"&rescale={rescale}"
+    if algorithm:
+        url += f"&algorithm={algorithm}"
+    elif colormap:  # colormap is ignored when an algorithm (e.g. hillshade) is active
         url += f"&colormap_name={colormap}"
     return url
 

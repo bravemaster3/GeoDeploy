@@ -8,7 +8,7 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
 - `data/RasterRow.vue` — raster equivalent.
 - `data/UploadModal.vue` — drag/drop upload dialog; uses `useUpload` for progress + optimistic insert + background polling. `type` prop = `vector | raster`.
 - `portal/CreatePortalModal.vue` — new-portal dialog (title, description, access); creates via the portals store then routes to the editor.
-- `portal/LayerPanel.vue` — per-layer controls in the editor (opacity, vector color/fill/outline/width/radius by geometry type, popup field picker, raster colormap, save/use default style). Header shows a **geometry icon** (point/line/polygon/raster) and the name/row is **click-to-expand**. Accepts `initialExpanded` so the editor can auto-open newly added layers. Emits `update`/`remove`/`zoom`.
+- `portal/LayerPanel.vue` — per-layer controls in the editor (opacity, vector color/fill/outline/width/radius by geometry type, popup field picker, save/use default style). Raster controls: **color palette + hillshade** (single-band), and **stretch/rescale** (all rasters, "min,max"). Header shows a **geometry icon** (point/line/polygon/raster) and the name/row is **click-to-expand**. Accepts `initialExpanded` so the editor can auto-open newly added layers. Emits `update`/`remove`/`zoom`.
 - `portal/PortalCard.vue` — portal tile in the builder grid (edit/publish/view/unpublish/delete).
 - `shared/StatusBadge.vue` — colored processing/ready/error pill.
 - `shared/StorageBar.vue` — used/total storage bar (Settings).

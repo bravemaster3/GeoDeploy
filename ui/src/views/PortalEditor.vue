@@ -242,11 +242,7 @@ function buildPreviewStyle() {
       if (!layer || layer.status !== 'ready' || !layer.tile_url) continue
 
       const srcId = `raster_${layer.id}`
-      const colormap = cfg.style?.colormap
-      const tileUrl = colormap
-        ? layer.tile_url.replace(/(&colormap_name=\w+)?$/, `&colormap_name=${colormap}`)
-        : layer.tile_url
-      const absTileUrl = tileUrl.startsWith('/') ? location.origin + tileUrl : tileUrl
+      const absTileUrl = rasterTilesUrl(layer.tile_url, cfg.style)
       style.sources[srcId] = { type: 'raster', tiles: [absTileUrl], tileSize: 256 }
       style.layers.push({
         id: srcId, type: 'raster', source: srcId,
@@ -257,6 +253,17 @@ function buildPreviewStyle() {
   }
 
   return { style, bounds }
+}
+
+// Build a raster tile URL from the layer's base URL + the configured raster style.
+function rasterTilesUrl(baseTileUrl, style) {
+  const base = (baseTileUrl || '').split('&')[0]  // s3 key has no '&', so this keeps ?url=...
+  const params = []
+  if (style?.rescale) params.push(`rescale=${style.rescale}`)
+  if (style?.algorithm) params.push(`algorithm=${style.algorithm}`)
+  else if (style?.colormap) params.push(`colormap_name=${style.colormap}`)
+  const url = base + (params.length ? '&' + params.join('&') : '')
+  return url.startsWith('/') ? location.origin + url : url
 }
 
 const availableLayers = computed(() => [

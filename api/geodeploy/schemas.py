@@ -103,6 +103,8 @@ class VectorLayerOut(BaseModel):
 class RasterDefaultStyle(BaseModel):
     opacity: float = 1.0
     colormap: str | None = None
+    rescale: str | None = None       # "min,max" stretch
+    algorithm: str | None = None     # e.g. "hillshade" (single-band)
 
 
 class RasterLayerOut(BaseModel):

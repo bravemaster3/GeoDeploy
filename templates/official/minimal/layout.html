@@ -135,9 +135,13 @@
       width: 24px; height: 22px; padding: 0; border: 1px solid var(--border);
       border-radius: 4px; cursor: pointer; background: none;
     }
-    .layer-style-size {
+    .layer-style-size, .rstyle-min, .rstyle-max {
       width: 54px; font-size: 11px; padding: 2px 5px; font-family: inherit;
       border: 1px solid var(--border); border-radius: 4px;
+    }
+    .rstyle-colormap {
+      font-size: 11px; padding: 2px 4px; font-family: inherit;
+      border: 1px solid var(--border); border-radius: 4px; max-width: 110px;
     }
 
     /* ── Map ─────────────────────────────────────────────── */
@@ -482,6 +486,15 @@
       });
       try { map.setLayoutProperty(l.id, 'visibility', 'visible'); } catch (e) {}
     });
+    // Revert any raster tile-URL restyling (palette / hillshade / stretch)
+    Object.keys(rasterState).forEach(k => delete rasterState[k]);
+    Object.keys(STYLE.sources || {}).forEach(srcId => {
+      const s = STYLE.sources[srcId];
+      if (s && s.type === 'raster' && s.tiles) {
+        const src = map.getSource(srcId);
+        if (src && src.setTiles) src.setTiles(s.tiles);
+      }
+    });
     buildLayerSwitcher(STYLE.layers.filter(l => l.metadata && l.metadata['geodeploy:name']));
   }
 
@@ -528,15 +541,15 @@
               <line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/>
             </svg>
           </button>
-          ${isVector ? `<button class="layer-style-toggle" data-layer-id="${layer.id}"
-            title="Style this layer" aria-label="Style this layer">${slidersIcon()}</button>` : ''}
+          <button class="layer-style-toggle" data-layer-id="${layer.id}"
+            title="Style this layer" aria-label="Style this layer">${slidersIcon()}</button>
         </div>
         <div class="layer-opacity-row">
           <span class="layer-opacity-label">${Math.round(opacity * 100)}%</span>
           <input class="layer-opacity-slider" type="range" min="0" max="1" step="0.01"
             value="${opacity}" data-layer-id="${layer.id}" data-layer-type="${layer.type}">
         </div>
-        ${isVector ? styleRow(layer, geom, color) : ''}
+        ${styleRow(layer, geom, color)}
       `;
       container.appendChild(card);
     });
@@ -566,6 +579,27 @@
         if (!isNaN(v)) map.setPaintProperty(id, prop, v);
       });
     });
+    // Raster viewer styling (palette / hillshade / stretch)
+    container.querySelectorAll('.rstyle-colormap').forEach(el => el.addEventListener('change', e => {
+      const s = e.target.dataset.src;
+      rasterState[s] = Object.assign({}, rasterState[s], { colormap: e.target.value || null });
+      applyRaster(s);
+    }));
+    container.querySelectorAll('.rstyle-hillshade').forEach(el => el.addEventListener('change', e => {
+      const s = e.target.dataset.src;
+      rasterState[s] = Object.assign({}, rasterState[s], { hillshade: e.target.checked });
+      applyRaster(s);
+    }));
+    container.querySelectorAll('.rstyle-min').forEach(el => el.addEventListener('input', e => {
+      const s = e.target.dataset.src;
+      rasterState[s] = Object.assign({}, rasterState[s], { min: e.target.value });
+      applyRaster(s);
+    }));
+    container.querySelectorAll('.rstyle-max').forEach(el => el.addEventListener('input', e => {
+      const s = e.target.dataset.src;
+      rasterState[s] = Object.assign({}, rasterState[s], { max: e.target.value });
+      applyRaster(s);
+    }));
 
     // Zoom to layer
     container.querySelectorAll('.layer-zoom').forEach(btn => {
@@ -637,7 +671,10 @@
   function toHex(c) {
     return (typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c)) ? c : '#3b82f6';
   }
+  const PORTAL_COLORMAPS = ['viridis','plasma','inferno','magma','cividis','terrain','gray','rdylgn','spectral','rdbu'];
+
   function styleRow(layer, geom, color) {
+    if (layer.type === 'raster') return rasterStyleRow(layer);
     const t = layer.type;
     let sizeField = '';
     if (geom === 'line') {
@@ -655,6 +692,40 @@
         `<div class="layer-style-field"><label>Color</label>` +
         `<input class="layer-style-color" type="color" value="${toHex(color)}" ` +
         `data-layer-id="${layer.id}" data-layer-type="${t}"></div>${sizeField}</div>`;
+  }
+
+  function rasterStyleRow(layer) {
+    const src = layer.source;
+    const bands = layer.metadata && layer.metadata['geodeploy:bands'];
+    let html = '';
+    if (bands === 1) {
+      html += '<div class="layer-style-field"><label>Palette</label>' +
+        '<select class="rstyle-colormap" data-src="' + src + '"><option value="">Grayscale</option>' +
+        PORTAL_COLORMAPS.map(c => '<option value="' + c + '">' + c + '</option>').join('') +
+        '</select></div>';
+      html += '<label class="layer-style-field" style="cursor:pointer">' +
+        '<input type="checkbox" class="rstyle-hillshade" data-src="' + src + '"> Hillshade</label>';
+    }
+    html += '<div class="layer-style-field"><label>Stretch</label>' +
+      '<input class="rstyle-min" data-src="' + src + '" type="number" placeholder="min">' +
+      '<input class="rstyle-max" data-src="' + src + '" type="number" placeholder="max"></div>';
+    return '<div class="layer-style-row" data-style-for="' + layer.id + '">' + html + '</div>';
+  }
+
+  // Rebuild a raster source's tile URL from the viewer's chosen params (session only)
+  const rasterState = {};
+  function applyRaster(srcId) {
+    const st = rasterState[srcId] || {};
+    const baseFull = (STYLE.sources[srcId] && STYLE.sources[srcId].tiles && STYLE.sources[srcId].tiles[0]) || '';
+    if (!baseFull) return;
+    const base = baseFull.split('&')[0];  // keep up to ?url=s3://... (s3 key has no '&')
+    const params = [];
+    if (st.min != null && st.min !== '' && st.max != null && st.max !== '') params.push('rescale=' + st.min + ',' + st.max);
+    if (st.hillshade) params.push('algorithm=hillshade');
+    else if (st.colormap) params.push('colormap_name=' + st.colormap);
+    const url = base + (params.length ? '&' + params.join('&') : '');
+    const src = map.getSource(srcId);
+    if (src && src.setTiles) src.setTiles([url]);
   }
 
   // ── Feature popup ───────────────────────────────────────

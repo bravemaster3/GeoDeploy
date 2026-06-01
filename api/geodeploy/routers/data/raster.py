@@ -34,8 +34,13 @@ async def list_layers(user: User = Depends(get_current_user), db: AsyncSession =
     for l in layers:
         obj = RasterLayerOut.from_orm_json(l)
         if l.status == "ready":
-            colormap = json.loads(l.default_style).get("colormap") if l.default_style else None
-            obj.tile_url = raster_tile_url(l.s3_key, colormap=colormap)
+            ds = json.loads(l.default_style) if l.default_style else {}
+            obj.tile_url = raster_tile_url(
+                l.s3_key,
+                colormap=ds.get("colormap"),
+                rescale=ds.get("rescale"),
+                algorithm=ds.get("algorithm"),
+            )
         out.append(obj)
     return out
 

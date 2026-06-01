@@ -127,17 +127,45 @@
 
       </template>
 
-      <!-- Raster: colormap (single-band only) -->
-      <template v-else-if="config.layer_type === 'raster' && layer?.band_count === 1">
+      <!-- Raster styling -->
+      <template v-else-if="config.layer_type === 'raster'">
+        <!-- single-band: palette + hillshade -->
+        <template v-if="layer?.band_count === 1">
+          <div>
+            <label class="text-xs text-gray-500">Color palette</label>
+            <select :value="config.style?.colormap || ''"
+              :disabled="config.style?.algorithm === 'hillshade'"
+              @change="emitStyle({ colormap: $event.target.value || null })"
+              class="mt-0.5 w-full text-xs border border-gray-200 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-brand-400 disabled:opacity-50"
+            >
+              <option value="">None (grayscale)</option>
+              <option v-for="cm in colormaps" :key="cm" :value="cm">{{ cm }}</option>
+            </select>
+          </div>
+          <label class="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+            <input type="checkbox" :checked="config.style?.algorithm === 'hillshade'"
+              @change="emitStyle({ algorithm: $event.target.checked ? 'hillshade' : null })"
+              class="accent-brand-500 flex-shrink-0" />
+            Hillshade
+          </label>
+        </template>
+        <p v-else class="text-[10px] text-gray-400">
+          Multi-band image ({{ layer?.band_count }} bands) — use stretch to adjust brightness.
+        </p>
+
+        <!-- stretch / rescale (all rasters) -->
         <div>
-          <label class="text-xs text-gray-500">Color ramp</label>
-          <select :value="config.style?.colormap || ''"
-            @change="emitStyle({ colormap: $event.target.value || null })"
-            class="mt-0.5 w-full text-xs border border-gray-200 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-brand-400"
-          >
-            <option value="">None (grayscale)</option>
-            <option v-for="cm in colormaps" :key="cm" :value="cm">{{ cm }}</option>
-          </select>
+          <label class="text-xs text-gray-500">Stretch (min / max)</label>
+          <div class="flex items-center gap-2 mt-0.5">
+            <input type="number" :value="rescaleMin" @input="setRescale('min', $event.target.value)"
+              placeholder="min"
+              class="w-16 text-xs border border-gray-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-brand-400" />
+            <span class="text-gray-300">–</span>
+            <input type="number" :value="rescaleMax" @input="setRescale('max', $event.target.value)"
+              placeholder="max"
+              class="w-16 text-xs border border-gray-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-brand-400" />
+          </div>
+          <p class="text-[10px] text-gray-400 mt-0.5">For non-8-bit imagery (e.g. 0–4095). Blank = default.</p>
         </div>
       </template>
 
@@ -220,6 +248,16 @@ function emitStyle(patch) {
   emit('update', { style: { ...props.config.style, ...patch } })
 }
 
+const rescaleMin = computed(() => (props.config.style?.rescale || '').split(',')[0] || '')
+const rescaleMax = computed(() => (props.config.style?.rescale || '').split(',')[1] || '')
+function setRescale(which, val) {
+  const parts = (props.config.style?.rescale || ',').split(',')
+  let mn = which === 'min' ? val : parts[0]
+  let mx = which === 'max' ? val : parts[1]
+  const rescale = (mn !== '' && mn != null && mx !== '' && mx != null) ? `${mn},${mx}` : null
+  emitStyle({ rescale })
+}
+
 function isFieldSelected(name) {
   const fields = props.config.popup_fields
   return !fields?.length || fields.includes(name)
@@ -256,7 +294,12 @@ async function saveDefault() {
   try {
     const body = props.config.layer_type === 'vector'
       ? { opacity: props.config.opacity, style: props.config.style, popup_fields: props.config.popup_fields }
-      : { opacity: props.config.opacity, colormap: props.config.style?.colormap || null }
+      : {
+          opacity: props.config.opacity,
+          colormap: props.config.style?.colormap || null,
+          rescale: props.config.style?.rescale || null,
+          algorithm: props.config.style?.algorithm || null,
+        }
     const fn = props.config.layer_type === 'vector' ? saveVectorDefaultStyle : saveRasterDefaultStyle
     const { data: updated } = await fn(layer.value.id, body)
     const list = props.config.layer_type === 'vector' ? dataStore.vectorLayers : dataStore.rasterLayers
@@ -272,7 +315,9 @@ function useDefault() {
   const ds = layer.value.default_style
   emit('update', {
     opacity: ds.opacity ?? 1.0,
-    style: props.config.layer_type === 'vector' ? (ds.style ?? {}) : { colormap: ds.colormap || null },
+    style: props.config.layer_type === 'vector'
+      ? (ds.style ?? {})
+      : { colormap: ds.colormap || null, rescale: ds.rescale || null, algorithm: ds.algorithm || null },
     ...(props.config.layer_type === 'vector' ? { popup_fields: ds.popup_fields ?? [] } : {}),
   })
 }

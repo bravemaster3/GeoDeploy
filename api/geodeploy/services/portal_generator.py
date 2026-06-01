@@ -48,10 +48,15 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
             if not layer:
                 continue
             source_id = f"raster_{layer.id}"
-            colormap = cfg.get("style", {}).get("colormap")
+            rstyle = cfg.get("style", {})
             sources[source_id] = {
                 "type": "raster",
-                "tiles": [raster_tile_url(layer.s3_key, colormap=colormap)],
+                "tiles": [raster_tile_url(
+                    layer.s3_key,
+                    colormap=rstyle.get("colormap"),
+                    rescale=rstyle.get("rescale"),
+                    algorithm=rstyle.get("algorithm"),
+                )],
                 "tileSize": 256,
             }
             layers.append({
@@ -66,6 +71,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                     "geodeploy:opacity": cfg.get("opacity", 1.0),
                     "geodeploy:bbox": json.loads(layer.bbox) if layer.bbox else None,
                     "geodeploy:geometry": "raster",
+                    "geodeploy:bands": layer.band_count,
                 },
             })
 
