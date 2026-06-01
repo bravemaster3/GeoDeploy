@@ -319,12 +319,21 @@
   map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 
   // ── Auto-fit to data bounds ─────────────────────────────
+  // Validate lon/lat ranges so one bad layer bbox can't throw and abort the
+  // rest of this script (which would leave the layer switcher unbuilt).
+  function validLonLatBounds(b) {
+    return Array.isArray(b) && b.length === 4 &&
+      b[0] >= -180 && b[2] <= 180 && b[0] < b[2] &&
+      b[1] >= -90  && b[3] <= 90  && b[1] < b[3];
+  }
   const bounds = STYLE.geodeploy?.bounds;
-  if (bounds && bounds[0] < bounds[2]) {
-    map.fitBounds([[bounds[0], bounds[1]], [bounds[2], bounds[3]]], {
-      padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 },
-      duration: 0,
-    });
+  if (validLonLatBounds(bounds)) {
+    try {
+      map.fitBounds([[bounds[0], bounds[1]], [bounds[2], bounds[3]]], {
+        padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 },
+        duration: 0,
+      });
+    } catch (e) { /* ignore — keep default view */ }
   }
 
   // ── Layer switcher ──────────────────────────────────────
