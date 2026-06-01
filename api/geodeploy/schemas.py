@@ -105,6 +105,7 @@ class RasterDefaultStyle(BaseModel):
     colormap: str | None = None
     rescale: str | None = None       # "min,max" stretch
     algorithm: str | None = None     # e.g. "hillshade" (single-band)
+    zfactor: float | None = None     # hillshade vertical exaggeration
 
 
 class RasterLayerOut(BaseModel):
@@ -221,8 +222,9 @@ class TemplateOut(BaseModel):
 
 class ServiceHealth(BaseModel):
     name: str
-    status: str       # healthy | unhealthy | stopped | unknown
+    status: str       # healthy | unhealthy | running | stopped | exited | unknown
     message: str | None = None
+    controllable: bool = False   # whether start/stop/restart is offered for this service
 
 
 class StorageStats(BaseModel):

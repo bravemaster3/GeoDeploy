@@ -76,3 +76,4 @@ export const listTemplates = () => api.get('/templates')
 // Admin
 export const getServiceHealth = () => api.get('/admin/health')
 export const getStorageStats = () => api.get('/admin/storage-stats')
+export const controlService = (name, action) => api.post(`/admin/services/${name}/${action}`)

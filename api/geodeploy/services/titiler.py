@@ -12,6 +12,7 @@ def get_tile_url(
     colormap: str | None = None,
     rescale: str | None = None,
     algorithm: str | None = None,
+    zfactor: float | str | None = None,
     settings=None,
 ) -> str:
     """
@@ -20,6 +21,8 @@ def get_tile_url(
     - colormap: a TiTiler colormap name (single-band data).
     - rescale: "min,max" stretch applied before display (needed for non-8-bit data).
     - algorithm: a TiTiler algorithm such as "hillshade" (single-band DEM data).
+    - zfactor: vertical exaggeration for hillshade — applied as a pre-scale expression
+      (b1*z) so the DEM is exaggerated before the hillshade is computed.
     """
     if settings is None:
         settings = get_settings()
@@ -29,6 +32,13 @@ def get_tile_url(
         url += f"&rescale={rescale}"
     if algorithm:
         url += f"&algorithm={algorithm}"
+        if algorithm == "hillshade":
+            try:
+                z = float(zfactor) if zfactor is not None else 1.0
+            except (TypeError, ValueError):
+                z = 1.0
+            if z and z != 1.0:
+                url += f"&expression=b1*{z}"
     elif colormap:  # colormap is ignored when an algorithm (e.g. hillshade) is active
         url += f"&colormap_name={colormap}"
     return url

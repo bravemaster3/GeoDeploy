@@ -127,7 +127,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { usePortalsStore } from '@/stores/portals'
 import { useDataStore } from '@/stores/data'
-import { listTemplates } from '@/api'
+import { listTemplates, getRasterStats } from '@/api'
 import { useMaplibre } from '@/composables/useMaplibre'
 import { ExternalLinkIcon } from '@/views/icons'
 import LayerPanel from '@/components/portal/LayerPanel.vue'
@@ -260,8 +260,14 @@ function rasterTilesUrl(baseTileUrl, style) {
   const base = (baseTileUrl || '').split('&')[0]  // s3 key has no '&', so this keeps ?url=...
   const params = []
   if (style?.rescale) params.push(`rescale=${style.rescale}`)
-  if (style?.algorithm) params.push(`algorithm=${style.algorithm}`)
-  else if (style?.colormap) params.push(`colormap_name=${style.colormap}`)
+  if (style?.algorithm) {
+    params.push(`algorithm=${style.algorithm}`)
+    if (style.algorithm === 'hillshade' && style.zfactor && Number(style.zfactor) !== 1) {
+      params.push(`expression=b1*${style.zfactor}`)
+    }
+  } else if (style?.colormap) {
+    params.push(`colormap_name=${style.colormap}`)
+  }
   const url = base + (params.length ? '&' + params.join('&') : '')
   return url.startsWith('/') ? location.origin + url : url
 }
@@ -281,9 +287,18 @@ function nextColor() {
   return LAYER_COLORS.find(c => !used.includes(c)) || LAYER_COLORS[layerConfigs.value.length % LAYER_COLORS.length]
 }
 
-function addLayer(layer) {
+async function addLayer(layer) {
   const ds = layer.default_style
-  const style = ds?.style ?? (layer.type === 'vector' ? { color: nextColor() } : {})
+  let style
+  if (layer.type === 'vector') {
+    style = ds?.style ?? { color: nextColor() }
+  } else {
+    style = {}
+    if (ds?.colormap) style.colormap = ds.colormap
+    if (ds?.rescale) style.rescale = ds.rescale
+    if (ds?.algorithm) style.algorithm = ds.algorithm
+    if (ds?.zfactor != null) style.zfactor = ds.zfactor
+  }
   layerConfigs.value.push({
     layer_id: layer.id,
     layer_type: layer.type,
@@ -294,6 +309,22 @@ function addLayer(layer) {
   })
   lastAddedKey.value = `${layer.type}-${layer.id}`
   showAddLayer.value = false
+
+  // Auto-stretch a freshly added raster that has no stretch yet
+  if (layer.type === 'raster' && !style.rescale) {
+    try {
+      const { data } = await getRasterStats(layer.id)
+      if (data?.rescale) {
+        const idx = layerConfigs.value.findIndex(c => c.layer_id === layer.id && c.layer_type === 'raster')
+        if (idx !== -1) {
+          layerConfigs.value[idx] = {
+            ...layerConfigs.value[idx],
+            style: { ...layerConfigs.value[idx].style, rescale: data.rescale },
+          }
+        }
+      }
+    } catch { /* leave unstretched */ }
+  }
 }
 
 function zoomToLayer(cfg) {

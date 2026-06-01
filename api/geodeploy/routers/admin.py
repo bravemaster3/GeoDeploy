@@ -1,5 +1,5 @@
 import os
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,37 +11,81 @@ from ..schemas import ServiceHealth, StorageStats
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
+# Services shown on the Settings page, in display order.
+SERVICE_KEYS = ["postgres", "minio", "redis", "martin", "titiler", "nginx", "celery", "ui", "api"]
+# The API container serves this very request — don't let the panel stop/restart itself.
+NON_CONTROLLABLE = {"api"}
+
+
+def _resolve_container(client, key: str):
+    """Find a container for a service key whether it uses a fixed container_name
+    (geodeploy-<key>) or Compose's auto name (geodeploy[-geodeploy]-<key>-N)."""
+    try:
+        return client.containers.get(f"geodeploy-{key}")
+    except Exception:
+        pass
+    for c in client.containers.list(all=True):
+        if "geodeploy" in c.name and key in c.name:
+            return c
+    return None
+
 
 @router.get("/health", response_model=list[ServiceHealth])
 async def service_health(_: User = Depends(require_admin)):
     import httpx
     import docker
     settings = get_settings()
-    results = []
 
-    async def check_http(name: str, url: str) -> ServiceHealth:
+    async def check_http(url: str):
         try:
             async with httpx.AsyncClient(timeout=3) as client:
                 r = await client.get(url)
-                return ServiceHealth(name=name, status="healthy" if r.status_code < 400 else "unhealthy")
-        except Exception as e:
-            return ServiceHealth(name=name, status="unhealthy", message=str(e))
+                return r.status_code < 400
+        except Exception:
+            return None
 
-    results.append(await check_http("martin", f"{settings.martin_url}/catalog"))
-    results.append(await check_http("titiler", f"{settings.titiler_url}/healthz"))
+    http_ok = {
+        "martin": await check_http(f"{settings.martin_url}/catalog"),
+        "titiler": await check_http(f"{settings.titiler_url}/healthz"),
+    }
 
+    results = []
     try:
         client = docker.from_env()
-        for name in ["geodeploy-postgres", "geodeploy-minio", "geodeploy-redis"]:
-            try:
-                c = client.containers.get(name)
-                results.append(ServiceHealth(name=name.replace("geodeploy-", ""), status=c.status))
-            except docker.errors.NotFound:
-                results.append(ServiceHealth(name=name.replace("geodeploy-", ""), status="stopped"))
+        for key in SERVICE_KEYS:
+            c = _resolve_container(client, key)
+            if c is None:
+                status = "stopped"
+            else:
+                status = c.status  # running | exited | paused | restarting | ...
+                if status == "running" and http_ok.get(key) is not None:
+                    status = "healthy" if http_ok[key] else "unhealthy"
+            results.append(ServiceHealth(name=key, status=status, controllable=key not in NON_CONTROLLABLE))
     except Exception as e:
         results.append(ServiceHealth(name="docker", status="unhealthy", message=str(e)))
 
     return results
+
+
+@router.post("/services/{name}/{action}")
+async def control_service(name: str, action: str, _: User = Depends(require_admin)):
+    """Start / stop / restart a GeoDeploy container (Coolify-style controls)."""
+    import docker
+    if name not in SERVICE_KEYS or name in NON_CONTROLLABLE:
+        raise HTTPException(400, f"Service '{name}' cannot be controlled.")
+    if action not in ("start", "stop", "restart"):
+        raise HTTPException(400, "Action must be start, stop, or restart.")
+    try:
+        client = docker.from_env()
+        c = _resolve_container(client, name)
+        if c is None:
+            raise HTTPException(404, f"Container for '{name}' not found.")
+        getattr(c, action)()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to {action} {name}: {exc}") from exc
+    return {"status": "ok", "service": name, "action": action}
 
 
 @router.post("/reload-martin")

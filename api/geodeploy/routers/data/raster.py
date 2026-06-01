@@ -40,6 +40,7 @@ async def list_layers(user: User = Depends(get_current_user), db: AsyncSession =
                 colormap=ds.get("colormap"),
                 rescale=ds.get("rescale"),
                 algorithm=ds.get("algorithm"),
+                zfactor=ds.get("zfactor"),
             )
         out.append(obj)
     return out

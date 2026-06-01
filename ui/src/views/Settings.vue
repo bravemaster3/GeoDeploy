@@ -6,24 +6,34 @@
     <section class="card p-5 space-y-3">
       <h2 class="font-semibold text-sm text-gray-700">Infrastructure health</h2>
       <div v-if="!systemStore.health.length" class="text-sm text-gray-400">Loading…</div>
-      <div v-for="svc in systemStore.health" :key="svc.name" class="flex items-center justify-between">
-        <span class="text-sm text-gray-700 capitalize">{{ svc.name }}</span>
+      <div v-for="svc in systemStore.health" :key="svc.name" class="flex items-center justify-between gap-3">
+        <span class="text-sm text-gray-700 capitalize flex-1">{{ svc.name }}</span>
         <span class="text-xs font-medium flex items-center gap-1.5"
           :class="{
             'text-green-600': svc.status === 'running' || svc.status === 'healthy',
-            'text-red-600': svc.status === 'unhealthy' || svc.status === 'stopped',
-            'text-gray-400': !['running','healthy','unhealthy','stopped'].includes(svc.status),
+            'text-red-600': ['unhealthy','stopped','exited'].includes(svc.status),
+            'text-gray-400': !['running','healthy','unhealthy','stopped','exited'].includes(svc.status),
           }"
         >
           <span class="w-2 h-2 rounded-full"
             :class="{
               'bg-green-500': svc.status === 'running' || svc.status === 'healthy',
-              'bg-red-500': svc.status === 'unhealthy' || svc.status === 'stopped',
-              'bg-gray-300': !['running','healthy','unhealthy','stopped'].includes(svc.status),
+              'bg-red-500': ['unhealthy','stopped','exited'].includes(svc.status),
+              'bg-gray-300': !['running','healthy','unhealthy','stopped','exited'].includes(svc.status),
             }"
           />
           {{ svc.status }}
         </span>
+        <div v-if="svc.controllable" class="flex items-center gap-1 w-20 justify-end">
+          <button v-if="!['running','healthy'].includes(svc.status)"
+            @click="svcAction(svc.name, 'start')" :disabled="busySvc === svc.name"
+            class="svc-btn text-green-600" title="Start">▶</button>
+          <button v-else @click="svcAction(svc.name, 'stop')" :disabled="busySvc === svc.name"
+            class="svc-btn text-red-500" title="Stop">■</button>
+          <button @click="svcAction(svc.name, 'restart')" :disabled="busySvc === svc.name"
+            class="svc-btn text-gray-500" title="Restart">↻</button>
+        </div>
+        <div v-else class="w-20" />
       </div>
       <div class="flex gap-2 mt-1">
         <button @click="systemStore.refreshHealth()" class="btn-secondary text-xs">Refresh</button>
@@ -70,12 +80,31 @@ import { ref, onMounted } from 'vue'
 import { useSystemStore } from '@/stores/system'
 import { useAuthStore } from '@/stores/auth'
 import StorageBar from '@/components/shared/StorageBar.vue'
-import api from '@/api'
+import api, { controlService } from '@/api'
 
 const systemStore = useSystemStore()
 const auth = useAuthStore()
 const martinBusy = ref(false)
 const martinMsg = ref(null)
+const busySvc = ref(null)
+
+async function svcAction(name, action) {
+  if (action === 'stop' &&
+      !confirm(`Stop the "${name}" service? Features that depend on it will be unavailable until you start it again.`)) {
+    return
+  }
+  busySvc.value = name
+  try {
+    await controlService(name, action)
+  } catch (e) {
+    // Restarting nginx drops the proxy mid-request, so a network error here is expected.
+  } finally {
+    setTimeout(async () => {
+      try { await systemStore.refreshHealth() } catch {}
+      busySvc.value = null
+    }, 2500)
+  }
+}
 
 onMounted(() => {
   systemStore.refreshHealth()
@@ -97,3 +126,13 @@ async function reloadMartin() {
   }
 }
 </script>
+
+<style scoped>
+.svc-btn {
+  width: 22px; height: 22px; border-radius: 5px; font-size: 11px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid #e5e7eb; background: #fff; cursor: pointer;
+}
+.svc-btn:hover:not(:disabled) { background: #f9fafb; }
+.svc-btn:disabled { opacity: .4; cursor: default; }
+</style>

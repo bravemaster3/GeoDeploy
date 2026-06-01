@@ -142,12 +142,21 @@
               <option v-for="cm in colormaps" :key="cm" :value="cm">{{ cm }}</option>
             </select>
           </div>
-          <label class="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
-            <input type="checkbox" :checked="config.style?.algorithm === 'hillshade'"
-              @change="emitStyle({ algorithm: $event.target.checked ? 'hillshade' : null })"
-              class="accent-brand-500 flex-shrink-0" />
-            Hillshade
-          </label>
+          <div class="flex items-center gap-3">
+            <label class="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+              <input type="checkbox" :checked="config.style?.algorithm === 'hillshade'"
+                @change="emitStyle({ algorithm: $event.target.checked ? 'hillshade' : null })"
+                class="accent-brand-500 flex-shrink-0" />
+              Hillshade
+            </label>
+            <div v-if="config.style?.algorithm === 'hillshade'" class="flex items-center gap-1.5"
+              title="Vertical exaggeration (Z factor)">
+              <label class="text-xs text-gray-500">Z</label>
+              <input type="number" min="0.1" max="10" step="0.1" :value="config.style?.zfactor ?? 1"
+                @input="emitStyle({ zfactor: parseFloat($event.target.value) || 1 })"
+                class="w-14 text-xs border border-gray-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-brand-400" />
+            </div>
+          </div>
         </template>
         <p v-else class="text-[10px] text-gray-400">
           Multi-band image ({{ layer?.band_count }} bands) — use stretch to adjust brightness.
@@ -317,6 +326,7 @@ async function saveDefault() {
           colormap: props.config.style?.colormap || null,
           rescale: props.config.style?.rescale || null,
           algorithm: props.config.style?.algorithm || null,
+          zfactor: props.config.style?.zfactor ?? null,
         }
     const fn = props.config.layer_type === 'vector' ? saveVectorDefaultStyle : saveRasterDefaultStyle
     const { data: updated } = await fn(layer.value.id, body)
@@ -335,7 +345,7 @@ function useDefault() {
     opacity: ds.opacity ?? 1.0,
     style: props.config.layer_type === 'vector'
       ? (ds.style ?? {})
-      : { colormap: ds.colormap || null, rescale: ds.rescale || null, algorithm: ds.algorithm || null },
+      : { colormap: ds.colormap || null, rescale: ds.rescale || null, algorithm: ds.algorithm || null, zfactor: ds.zfactor ?? null },
     ...(props.config.layer_type === 'vector' ? { popup_fields: ds.popup_fields ?? [] } : {}),
   })
 }
