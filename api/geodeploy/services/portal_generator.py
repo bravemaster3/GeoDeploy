@@ -36,6 +36,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 "geodeploy:layer_id": layer.id,
                 "geodeploy:opacity": cfg.get("opacity", 1.0),
                 "geodeploy:bbox": json.loads(layer.bbox) if layer.bbox else None,
+                "geodeploy:geometry": _geom_kind(layer.geometry_type),
             }
             layers.append(ml_layer)
 
@@ -64,6 +65,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                     "geodeploy:layer_id": layer.id,
                     "geodeploy:opacity": cfg.get("opacity", 1.0),
                     "geodeploy:bbox": json.loads(layer.bbox) if layer.bbox else None,
+                    "geodeploy:geometry": "raster",
                 },
             })
 
@@ -169,6 +171,18 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
             "circle-stroke-color": "#fff",
         },
     }
+
+
+def _geom_kind(geometry_type: str | None) -> str:
+    """Normalize a PostGIS/Fiona geometry type to point|line|polygon."""
+    g = (geometry_type or "").lower()
+    if "polygon" in g:
+        return "polygon"
+    if "line" in g:
+        return "line"
+    if "point" in g:
+        return "point"
+    return "point"
 
 
 def _expand_bounds(bounds: list, bbox: list) -> None:

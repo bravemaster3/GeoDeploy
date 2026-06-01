@@ -1,15 +1,17 @@
 <template>
   <div class="py-2 border-b border-gray-100 last:border-0">
-    <!-- Header row -->
+    <!-- Header row (click name/icon to expand styling) -->
     <div class="flex items-center gap-2">
-      <span class="w-5 h-5 rounded text-xs flex items-center justify-center font-bold flex-shrink-0"
-        :class="config.layer_type === 'vector' ? 'bg-blue-100 text-blue-600' : 'bg-amber-100 text-amber-600'"
-      >{{ config.layer_type === 'vector' ? 'V' : 'R' }}</span>
-      <span class="text-xs font-medium flex-1 truncate" :title="layerName">{{ layerName }}</span>
+      <span class="flex-shrink-0 flex items-center justify-center w-[18px] h-[18px]"
+        :class="config.layer_type === 'raster' ? 'text-amber-600' : 'text-blue-600'"
+        :title="geomLabel" v-html="geomSvg"></span>
+      <button type="button" @click="expanded = !expanded"
+        class="text-xs font-medium flex-1 truncate text-left" :title="layerName">{{ layerName }}</button>
       <button @click="$emit('zoom')" class="text-gray-400 hover:text-brand-600 flex-shrink-0" title="Zoom to layer">
         <LocateIcon class="w-3.5 h-3.5" />
       </button>
-      <button @click="expanded = !expanded" class="text-gray-400 hover:text-gray-600 text-xs px-0.5">
+      <button @click="expanded = !expanded" class="text-gray-400 hover:text-gray-600 text-xs px-0.5"
+        :title="expanded ? 'Collapse' : 'Expand styling'">
         {{ expanded ? '▲' : '▼' }}
       </button>
       <button @click="$emit('remove')" class="text-gray-400 hover:text-red-500 flex-shrink-0">
@@ -165,11 +167,14 @@ import { useDataStore } from '@/stores/data'
 import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps } from '@/api'
 import { TrashIcon, LocateIcon } from '@/views/icons'
 
-const props = defineProps({ config: Object })
+const props = defineProps({
+  config: Object,
+  initialExpanded: { type: Boolean, default: false },
+})
 const emit = defineEmits(['remove', 'update', 'zoom'])
 
 const dataStore = useDataStore()
-const expanded = ref(false)
+const expanded = ref(props.initialExpanded)
 const savingDefault = ref(false)
 const colormaps = ref([])
 
@@ -195,6 +200,20 @@ const geomType = computed(() => {
   if (g.includes('line')) return 'line'
   if (g.includes('point')) return 'point'
   return 'unknown'
+})
+
+const geomKind = computed(() => props.config.layer_type === 'raster' ? 'raster' : geomType.value)
+const geomLabel = computed(() => ({
+  polygon: 'Polygons', line: 'Lines', point: 'Points', raster: 'Raster',
+}[geomKind.value] || 'Vector'))
+const geomSvg = computed(() => {
+  const a = 'width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"'
+  switch (geomKind.value) {
+    case 'polygon': return `<svg ${a}><path d="M12 3l8 6-3 11H7L4 9z"/></svg>`
+    case 'line': return `<svg ${a}><polyline points="3 17 9 11 14 15 21 5"/></svg>`
+    case 'raster': return `<svg ${a}><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>`
+    default: return `<svg width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>`
+  }
 })
 
 function emitStyle(patch) {

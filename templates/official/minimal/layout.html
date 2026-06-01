@@ -111,9 +111,38 @@
     .layer-opacity-slider {
       flex: 1; height: 3px; cursor: pointer; accent-color: var(--accent);
     }
+    /* geometry icon + viewer style controls */
+    .layer-geom {
+      width: 18px; height: 18px; flex-shrink: 0; color: var(--text-muted);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .layer-geom svg { width: 15px; height: 15px; }
+    .layer-style-toggle {
+      width: 22px; height: 22px; flex-shrink: 0; padding: 0; border: none;
+      background: none; cursor: pointer; color: var(--text-muted);
+      border-radius: 4px; display: flex; align-items: center; justify-content: center;
+    }
+    .layer-style-toggle:hover { background: var(--border); color: var(--accent); }
+    .layer-style-toggle.active { color: var(--accent); }
+    .layer-style-toggle svg { width: 14px; height: 14px; }
+    .layer-style-row {
+      display: none; align-items: center; gap: 12px; margin-top: 8px; flex-wrap: wrap;
+    }
+    .layer-style-row.open { display: flex; }
+    .layer-style-field { display: flex; align-items: center; gap: 5px; }
+    .layer-style-field label { font-size: 11px; color: var(--text-muted); }
+    .layer-style-color {
+      width: 24px; height: 22px; padding: 0; border: 1px solid var(--border);
+      border-radius: 4px; cursor: pointer; background: none;
+    }
+    .layer-style-size {
+      width: 54px; font-size: 11px; padding: 2px 5px; font-family: inherit;
+      border: 1px solid var(--border); border-radius: 4px;
+    }
 
     /* ── Map ─────────────────────────────────────────────── */
-    #map { flex: 1; }
+    #map-wrap { flex: 1; position: relative; overflow: hidden; }
+    #map { position: absolute; inset: 0; }
 
     /* ── MapLibre overrides ──────────────────────────────── */
     .maplibregl-ctrl-bottom-left { bottom: 24px; }
@@ -141,6 +170,48 @@
       padding: 5px 10px; font-size: 12px; color: var(--text);
       word-break: break-word; max-width: 160px;
     }
+    .popup-actions {
+      padding: 6px 10px; border-top: 1px solid var(--border); background: var(--surface);
+    }
+    .popup-fulltable-btn {
+      font-size: 11px; color: var(--accent); background: none; border: none;
+      cursor: pointer; padding: 2px 0; font-weight: 600; font-family: inherit;
+    }
+    .popup-fulltable-btn:hover { text-decoration: underline; }
+
+    /* ── Attribute table panel ───────────────────────────── */
+    #attr-panel {
+      position: absolute; left: 0; right: 0; bottom: 0;
+      height: 42%; max-height: 380px; min-height: 140px;
+      background: var(--bg); border-top: 1px solid var(--border);
+      box-shadow: 0 -4px 16px rgba(0,0,0,.10);
+      display: none; flex-direction: column; z-index: 30;
+    }
+    #attr-panel.open { display: flex; }
+    #attr-panel-head {
+      display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+      border-bottom: 1px solid var(--border); flex-shrink: 0;
+    }
+    #attr-panel-title { font-size: 13px; font-weight: 600; }
+    #attr-panel-count { font-size: 11px; color: var(--text-muted); flex: 1; }
+    #attr-panel-close {
+      width: 24px; height: 24px; border: none; background: none; cursor: pointer;
+      color: var(--text-muted); font-size: 18px; line-height: 1; border-radius: 4px;
+    }
+    #attr-panel-close:hover { background: var(--surface); color: var(--text); }
+    #attr-panel-body { overflow: auto; flex: 1; }
+    .attr-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    .attr-table th, .attr-table td {
+      border: 1px solid var(--border); padding: 4px 8px; text-align: left;
+      white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis;
+    }
+    .attr-table thead th {
+      position: sticky; top: 0; background: var(--surface); z-index: 1;
+      font-weight: 600; color: var(--text-muted);
+    }
+    .attr-table tbody tr:nth-child(even) { background: var(--surface); }
+    .attr-table tbody tr:hover { background: var(--accent-light); cursor: pointer; }
+    .attr-table tbody tr.attr-row-active { background: var(--accent-light); }
 
     /* ── Mobile ──────────────────────────────────────────── */
     @media (max-width: 640px) {
@@ -218,7 +289,17 @@
       <div id="layer-list"></div>
     </div>
   </aside>
-  <div id="map"></div>
+  <div id="map-wrap">
+    <div id="map"></div>
+    <div id="attr-panel">
+      <div id="attr-panel-head">
+        <span id="attr-panel-title">Attributes</span>
+        <span id="attr-panel-count"></span>
+        <button id="attr-panel-close" title="Close" aria-label="Close attribute table">&times;</button>
+      </div>
+      <div id="attr-panel-body"></div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -369,15 +450,18 @@
       bboxById[layer.id] = bbox;
       const canZoom = validLonLatBounds(bbox);
 
+      const geom = meta['geodeploy:geometry'] || (type === 'raster' ? 'raster' : 'point');
+      const isVector = type === 'vector';
+
       const card = document.createElement('div');
       card.className = 'layer-card';
       card.innerHTML = `
         <div class="layer-card-top">
           <input class="layer-visibility" type="checkbox" checked
             data-layer-id="${layer.id}" title="Toggle visibility">
-          <span class="layer-color-dot" style="background:${color}"></span>
+          <span class="layer-color-dot" data-dot="${layer.id}" style="background:${color}"></span>
           <span class="layer-name" title="${name}">${name}</span>
-          <span class="layer-type-badge">${type === 'vector' ? 'V' : 'R'}</span>
+          <span class="layer-geom" title="${geomLabel(geom)}">${geomIcon(geom)}</span>
           <button class="layer-zoom" data-layer-id="${layer.id}" title="Zoom to layer"
             aria-label="Zoom to layer" ${canZoom ? '' : 'disabled'}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -387,14 +471,43 @@
               <line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/>
             </svg>
           </button>
+          ${isVector ? `<button class="layer-style-toggle" data-layer-id="${layer.id}"
+            title="Style this layer" aria-label="Style this layer">${slidersIcon()}</button>` : ''}
         </div>
         <div class="layer-opacity-row">
           <span class="layer-opacity-label">${Math.round(opacity * 100)}%</span>
           <input class="layer-opacity-slider" type="range" min="0" max="1" step="0.01"
             value="${opacity}" data-layer-id="${layer.id}" data-layer-type="${layer.type}">
         </div>
+        ${isVector ? styleRow(layer, geom, color) : ''}
       `;
       container.appendChild(card);
+    });
+
+    // Viewer styling — color / size (session only)
+    container.querySelectorAll('.layer-style-toggle').forEach(btn => {
+      btn.addEventListener('click', e => {
+        const id = e.currentTarget.dataset.layerId;
+        const row = container.querySelector(`.layer-style-row[data-style-for="${id}"]`);
+        if (row) e.currentTarget.classList.toggle('active', row.classList.toggle('open'));
+      });
+    });
+    container.querySelectorAll('.layer-style-color').forEach(inp => {
+      inp.addEventListener('input', e => {
+        const id = e.target.dataset.layerId, t = e.target.dataset.layerType;
+        const prop = t === 'fill' ? 'fill-color' : t === 'line' ? 'line-color' : 'circle-color';
+        map.setPaintProperty(id, prop, e.target.value);
+        const dot = container.querySelector(`.layer-color-dot[data-dot="${id}"]`);
+        if (dot) dot.style.background = e.target.value;
+      });
+    });
+    container.querySelectorAll('.layer-style-size').forEach(inp => {
+      inp.addEventListener('input', e => {
+        const id = e.target.dataset.layerId, t = e.target.dataset.layerType;
+        const prop = t === 'line' ? 'line-width' : 'circle-radius';
+        const v = parseFloat(e.target.value);
+        if (!isNaN(v)) map.setPaintProperty(id, prop, v);
+      });
     });
 
     // Zoom to layer
@@ -444,6 +557,49 @@
     return paint['fill-color'] || paint['line-color'] || paint['circle-color'] || '#64748b';
   }
 
+  function geomIcon(kind) {
+    const s = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"';
+    if (kind === 'polygon') return `<svg ${s}><path d="M12 3l8 6-3 11H7L4 9z"/></svg>`;
+    if (kind === 'line')    return `<svg ${s}><polyline points="3 17 9 11 14 15 21 5"/></svg>`;
+    if (kind === 'raster')  return `<svg ${s}><rect x="3" y="3" width="18" height="18" rx="1"/>` +
+      `<line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/>` +
+      `<line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>`;
+    return `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>`;
+  }
+  function geomLabel(kind) {
+    return kind === 'polygon' ? 'Polygons' : kind === 'line' ? 'Lines'
+         : kind === 'raster'  ? 'Raster'   : 'Points';
+  }
+  function slidersIcon() {
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">` +
+      `<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>` +
+      `<line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>` +
+      `<line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>` +
+      `<line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>`;
+  }
+  function toHex(c) {
+    return (typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c)) ? c : '#3b82f6';
+  }
+  function styleRow(layer, geom, color) {
+    const t = layer.type;
+    let sizeField = '';
+    if (geom === 'line') {
+      const w = (layer.paint && layer.paint['line-width']) ?? 2;
+      sizeField = `<div class="layer-style-field"><label>Width</label>` +
+        `<input class="layer-style-size" type="number" min="0.5" max="20" step="0.5" value="${w}" ` +
+        `data-layer-id="${layer.id}" data-layer-type="${t}"></div>`;
+    } else if (geom === 'point') {
+      const r = (layer.paint && layer.paint['circle-radius']) ?? 5;
+      sizeField = `<div class="layer-style-field"><label>Size</label>` +
+        `<input class="layer-style-size" type="number" min="1" max="30" step="1" value="${r}" ` +
+        `data-layer-id="${layer.id}" data-layer-type="${t}"></div>`;
+    }
+    return `<div class="layer-style-row" data-style-for="${layer.id}">` +
+        `<div class="layer-style-field"><label>Color</label>` +
+        `<input class="layer-style-color" type="color" value="${toHex(color)}" ` +
+        `data-layer-id="${layer.id}" data-layer-type="${t}"></div>${sizeField}</div>`;
+  }
+
   // ── Feature popup ───────────────────────────────────────
   const popup = new maplibregl.Popup({
     closeButton: true,
@@ -463,8 +619,10 @@
     if (!features.length) return;
 
     const f = features[0];
+    const mapLayerId = f.layer.id;
     const layerId = f.layer.metadata?.['geodeploy:layer_id'];
-    const layerName = f.layer.metadata?.['geodeploy:name'] || f.layer.id;
+    const layerName = f.layer.metadata?.['geodeploy:name'] || mapLayerId;
+    const isVector = f.layer.metadata?.['geodeploy:type'] === 'vector';
     const fields = POPUP_CONFIG[layerId] || POPUP_CONFIG[String(layerId)];
 
     const props = f.properties || {};
@@ -472,19 +630,60 @@
       ? fields.filter(k => props[k] != null)
       : Object.keys(props).filter(k => props[k] != null).slice(0, 8);
 
-    if (!keys.length) return;
+    const body = keys.length
+      ? `<table class="popup-table">${keys.map(k =>
+          `<tr><th>${escHtml(k)}</th><td>${escHtml(String(props[k]))}</td></tr>`).join('')}</table>`
+      : `<div style="padding:8px 12px;font-size:12px;color:var(--text-muted)">No attributes</div>`;
+    const actions = isVector
+      ? `<div class="popup-actions"><button class="popup-fulltable-btn" type="button">View full table ▸</button></div>`
+      : '';
 
-    const rows = keys.map(k =>
-      `<tr><th>${escHtml(k)}</th><td>${escHtml(String(props[k]))}</td></tr>`
-    ).join('');
-
-    popup
-      .setLngLat(e.lngLat)
-      .setHTML(`
-        <div class="popup-header">${escHtml(layerName)}</div>
-        <table class="popup-table">${rows}</table>
-      `)
+    popup.setLngLat(e.lngLat)
+      .setHTML(`<div class="popup-header">${escHtml(layerName)}</div>${body}${actions}`)
       .addTo(map);
+
+    if (isVector) {
+      const el = popup.getElement();
+      const btn = el && el.querySelector('.popup-fulltable-btn');
+      if (btn) btn.addEventListener('click', () => openAttrPanel(mapLayerId, layerName));
+    }
+  });
+
+  // ── Attribute table panel ───────────────────────────────
+  function openAttrPanel(mapLayerId, layerName) {
+    const panel = document.getElementById('attr-panel');
+    const bodyEl = document.getElementById('attr-panel-body');
+    const countEl = document.getElementById('attr-panel-count');
+    document.getElementById('attr-panel-title').textContent = layerName;
+
+    const feats = map.queryRenderedFeatures({ layers: [mapLayerId] });
+    const seen = new Set(), rows = [];
+    feats.forEach(ft => {
+      const key = ft.id != null ? ft.id : JSON.stringify(ft.properties);
+      if (seen.has(key)) return;
+      seen.add(key);
+      rows.push(ft.properties || {});
+    });
+
+    if (!rows.length) {
+      countEl.textContent = '';
+      bodyEl.innerHTML = '<p style="padding:12px;font-size:12px;color:var(--text-muted)">' +
+        'No features in the current view. Zoom or pan to load features, then try again.</p>';
+    } else {
+      const cols = [];
+      rows.forEach(p => Object.keys(p).forEach(k => { if (!cols.includes(k)) cols.push(k); }));
+      countEl.textContent = rows.length + ' feature' + (rows.length === 1 ? '' : 's') + ' in view';
+      const thead = '<thead><tr>' + cols.map(c => `<th>${escHtml(c)}</th>`).join('') + '</tr></thead>';
+      const tbody = '<tbody>' + rows.map(p => '<tr>' + cols.map(c => {
+        const v = p[c] == null ? '' : String(p[c]);
+        return `<td title="${escHtml(v)}">${escHtml(v)}</td>`;
+      }).join('') + '</tr>').join('') + '</tbody>';
+      bodyEl.innerHTML = `<table class="attr-table">${thead}${tbody}</table>`;
+    }
+    panel.classList.add('open');
+  }
+  document.getElementById('attr-panel-close').addEventListener('click', () => {
+    document.getElementById('attr-panel').classList.remove('open');
   });
 
   // Pointer cursor over interactive layers

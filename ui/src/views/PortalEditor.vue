@@ -47,6 +47,7 @@
           <div v-if="!layerConfigs.length" class="text-xs text-gray-400 py-1">No layers added yet.</div>
           <LayerPanel v-for="(cfg, i) in layerConfigs" :key="`${cfg.layer_type}-${cfg.layer_id}`"
             :config="cfg"
+            :initial-expanded="`${cfg.layer_type}-${cfg.layer_id}` === lastAddedKey"
             @remove="layerConfigs.splice(i, 1)"
             @update="layerConfigs[i] = { ...layerConfigs[i], ...$event }"
             @zoom="zoomToLayer(cfg)"
@@ -140,6 +141,7 @@ const layerConfigs = ref([])
 const selectedTemplate = ref('minimal')
 const templates = ref([])
 const showAddLayer = ref(false)
+const lastAddedKey = ref(null)
 const accessType = ref('public')
 const accessPassword = ref('')
 const busy = ref(false)
@@ -283,6 +285,7 @@ function addLayer(layer) {
     style,
     popup_fields: ds?.popup_fields ?? [],
   })
+  lastAddedKey.value = `${layer.type}-${layer.id}`
   showAddLayer.value = false
 }
 
