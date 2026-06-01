@@ -35,6 +35,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 "geodeploy:type": "vector",
                 "geodeploy:layer_id": layer.id,
                 "geodeploy:opacity": cfg.get("opacity", 1.0),
+                "geodeploy:bbox": json.loads(layer.bbox) if layer.bbox else None,
             }
             layers.append(ml_layer)
 
@@ -62,6 +63,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                     "geodeploy:type": "raster",
                     "geodeploy:layer_id": layer.id,
                     "geodeploy:opacity": cfg.get("opacity", 1.0),
+                    "geodeploy:bbox": json.loads(layer.bbox) if layer.bbox else None,
                 },
             })
 
