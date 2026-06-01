@@ -143,6 +143,12 @@
       font-size: 11px; padding: 2px 4px; font-family: inherit;
       border: 1px solid var(--border); border-radius: 4px; max-width: 110px;
     }
+    .rstyle-auto {
+      font-size: 11px; color: var(--accent); background: none; border: none;
+      cursor: pointer; padding: 2px 4px; font-weight: 600; font-family: inherit;
+    }
+    .rstyle-auto:hover { text-decoration: underline; }
+    .rstyle-auto:disabled { opacity: .5; cursor: default; }
 
     /* ── Map ─────────────────────────────────────────────── */
     #map-wrap { flex: 1; position: relative; overflow: hidden; }
@@ -600,6 +606,10 @@
       rasterState[s] = Object.assign({}, rasterState[s], { max: e.target.value });
       applyRaster(s);
     }));
+    container.querySelectorAll('.rstyle-auto').forEach(el => el.addEventListener('click', e => {
+      const btn = e.currentTarget, s = btn.dataset.src, row = btn.closest('.layer-style-row');
+      autoStretchRaster(s, row.querySelector('.rstyle-min'), row.querySelector('.rstyle-max'), btn);
+    }));
 
     // Zoom to layer
     container.querySelectorAll('.layer-zoom').forEach(btn => {
@@ -708,7 +718,8 @@
     }
     html += '<div class="layer-style-field"><label>Stretch</label>' +
       '<input class="rstyle-min" data-src="' + src + '" type="number" placeholder="min">' +
-      '<input class="rstyle-max" data-src="' + src + '" type="number" placeholder="max"></div>';
+      '<input class="rstyle-max" data-src="' + src + '" type="number" placeholder="max">' +
+      '<button type="button" class="rstyle-auto" data-src="' + src + '" title="Auto stretch from raster statistics">Auto</button></div>';
     return '<div class="layer-style-row" data-style-for="' + layer.id + '">' + html + '</div>';
   }
 
@@ -726,6 +737,40 @@
     const url = base + (params.length ? '&' + params.join('&') : '');
     const src = map.getSource(srcId);
     if (src && src.setTiles) src.setTiles([url]);
+  }
+
+  // Auto-stretch: ask TiTiler statistics for the data range, fill min/max, apply
+  async function autoStretchRaster(srcId, minInput, maxInput, btn) {
+    const baseFull = (STYLE.sources[srcId] && STYLE.sources[srcId].tiles && STYLE.sources[srcId].tiles[0]) || '';
+    const base = baseFull.split('&')[0];
+    const qIdx = base.indexOf('?');
+    if (qIdx < 0) return;
+    const statsUrl = base.slice(0, qIdx).replace(/\/cog\/tiles\/[^/]+\/\{z\}\/\{x\}\/\{y\}/, '/cog/statistics') + base.slice(qIdx);
+    const orig = btn ? btn.textContent : '';
+    if (btn) { btn.textContent = '…'; btn.disabled = true; }
+    try {
+      const r = await fetch(statsUrl);
+      if (!r.ok) throw new Error('stats');
+      const stats = await r.json();
+      const mins = [], maxs = [];
+      Object.values(stats).forEach(s => {
+        if (!s || typeof s !== 'object') return;
+        const lo = s.percentile_2 != null ? s.percentile_2 : s.min;
+        const hi = s.percentile_98 != null ? s.percentile_98 : s.max;
+        if (lo != null) mins.push(lo);
+        if (hi != null) maxs.push(hi);
+      });
+      if (mins.length && maxs.length) {
+        const lo = Math.min.apply(null, mins), hi = Math.max.apply(null, maxs);
+        if (minInput) minInput.value = lo;
+        if (maxInput) maxInput.value = hi;
+        rasterState[srcId] = Object.assign({}, rasterState[srcId], { min: lo, max: hi });
+        applyRaster(srcId);
+      }
+    } catch (e) {
+    } finally {
+      if (btn) { btn.textContent = orig || 'Auto'; btn.disabled = false; }
+    }
   }
 
   // ── Feature popup ───────────────────────────────────────

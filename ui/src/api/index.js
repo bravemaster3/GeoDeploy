@@ -60,6 +60,7 @@ export const getRasterJobStatus = (jobId) => api.get(`/data/raster/jobs/${jobId}
 export const saveRasterDefaultStyle = (id, style) => api.put(`/data/raster/${id}/default-style`, style)
 export const deleteRasterLayer = (id) => api.delete(`/data/raster/${id}`)
 export const listColormaps = () => api.get('/data/raster/colormaps')
+export const getRasterStats = (id) => api.get(`/data/raster/${id}/stats`)
 
 // Portals
 export const listPortals = () => api.get('/portals')

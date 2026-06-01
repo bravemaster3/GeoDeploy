@@ -155,8 +155,15 @@
 
         <!-- stretch / rescale (all rasters) -->
         <div>
-          <label class="text-xs text-gray-500">Stretch (min / max)</label>
-          <div class="flex items-center gap-2 mt-0.5">
+          <div class="flex items-center justify-between mb-0.5">
+            <label class="text-xs text-gray-500">Stretch (min / max)</label>
+            <button @click="autoStretch" :disabled="autoStretching"
+              class="text-xs text-brand-600 hover:text-brand-700 font-medium disabled:opacity-50"
+              title="Compute min/max from the raster (2–98th percentile)">
+              {{ autoStretching ? 'Computing…' : '⚡ Auto' }}
+            </button>
+          </div>
+          <div class="flex items-center gap-2">
             <input type="number" :value="rescaleMin" @input="setRescale('min', $event.target.value)"
               placeholder="min"
               class="w-16 text-xs border border-gray-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-brand-400" />
@@ -192,7 +199,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useDataStore } from '@/stores/data'
-import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps } from '@/api'
+import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps, getRasterStats } from '@/api'
 import { TrashIcon, LocateIcon } from '@/views/icons'
 
 const props = defineProps({
@@ -250,6 +257,17 @@ function emitStyle(patch) {
 
 const rescaleMin = computed(() => (props.config.style?.rescale || '').split(',')[0] || '')
 const rescaleMax = computed(() => (props.config.style?.rescale || '').split(',')[1] || '')
+const autoStretching = ref(false)
+async function autoStretch() {
+  if (!layer.value) return
+  autoStretching.value = true
+  try {
+    const { data } = await getRasterStats(layer.value.id)
+    if (data?.rescale) emitStyle({ rescale: data.rescale })
+  } catch { /* leave manual values */ } finally {
+    autoStretching.value = false
+  }
+}
 function setRescale(which, val) {
   const parts = (props.config.style?.rescale || ',').split(',')
   let mn = which === 'min' ? val : parts[0]

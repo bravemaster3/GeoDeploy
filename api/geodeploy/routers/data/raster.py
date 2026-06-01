@@ -45,6 +45,42 @@ async def list_layers(user: User = Depends(get_current_user), db: AsyncSession =
     return out
 
 
+@router.get("/{layer_id}/stats")
+async def raster_stats(layer_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Suggested stretch (min,max) from TiTiler band statistics (2nd–98th percentile)."""
+    result = await db.execute(select(RasterLayer).where(RasterLayer.id == layer_id, RasterLayer.user_id == user.id))
+    layer = result.scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not found.")
+    if layer.status != "ready":
+        raise HTTPException(409, "Layer is not ready yet.")
+
+    import httpx
+    settings = get_settings()
+    cog_url = f"s3://{settings.storage_bucket}/{layer.s3_key}"
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(f"{settings.titiler_url}/cog/statistics", params={"url": cog_url})
+            r.raise_for_status()
+            stats = r.json()
+    except Exception as exc:
+        raise HTTPException(502, f"Could not read raster statistics: {exc}") from exc
+
+    mins, maxs = [], []
+    for s in stats.values():
+        if not isinstance(s, dict):
+            continue
+        lo = s.get("percentile_2", s.get("min"))
+        hi = s.get("percentile_98", s.get("max"))
+        if lo is not None:
+            mins.append(lo)
+        if hi is not None:
+            maxs.append(hi)
+    if not mins or not maxs:
+        raise HTTPException(422, "No usable statistics returned.")
+    return {"rescale": f"{round(min(mins), 4)},{round(max(maxs), 4)}"}
+
+
 @router.post("/upload", response_model=JobStatus, status_code=202)
 async def upload_raster(
     file: UploadFile = File(...),
