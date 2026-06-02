@@ -98,7 +98,8 @@
     attributionControl: false,
   });
 
-  map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
+  // Zoom/compass added later (after the basemap + tools controls) so the basemap
+  // icon sits above the zoom controls in the top-right stack.
   map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-left');
   map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 
@@ -124,7 +125,8 @@
   map.on('load', function () {
     const userLayers = STYLE.layers.filter(l => l.metadata && l.metadata['geodeploy:name']);
     buildLayerSwitcher(userLayers);
-    setupBasemaps();
+    setupBasemaps();  // adds the basemap + tools controls (top-right)
+    map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');  // zoom below them
   });
 
   const resetBtn = document.getElementById('reset-styling');
@@ -762,7 +764,9 @@
     if (!a) return;
     const bbox = [Math.min(a.lng, b.lng), Math.min(a.lat, b.lat), Math.max(a.lng, b.lng), Math.max(a.lat, b.lat)];
     if (Math.abs(bbox[2] - bbox[0]) < 1e-7 || Math.abs(bbox[3] - bbox[1]) < 1e-7) { clearDraw(); return; }
-    openDownloadDialog(bbox);
+    const pa = map.project(a), pb = map.project(b);
+    const pixBox = [[Math.min(pa.x, pb.x), Math.min(pa.y, pb.y)], [Math.max(pa.x, pb.x), Math.max(pa.y, pb.y)]];
+    openDownloadDialog(bbox, pixBox);
   }
 
   function showHint(text) {
@@ -772,30 +776,38 @@
   }
   function hideHint() { const h = document.getElementById('gd-hint'); if (h) h.style.display = 'none'; }
 
-  function openDownloadDialog(bbox) {
+  function openDownloadDialog(bbox, pixBox) {
     const slug = (window.GEODEPLOY && window.GEODEPLOY.slug) || (location.pathname.split('/').filter(Boolean)[1] || '');
+
+    // Only offer layers that actually have data inside the box.
     const seen = new Set(), items = [];
     (STYLE.layers || []).forEach(l => {
       if (!l.metadata || !l.metadata['geodeploy:name']) return;
-      const type = l.metadata['geodeploy:type'];
-      const id = l.metadata['geodeploy:layer_id'];
+      const type = l.metadata['geodeploy:type'], id = l.metadata['geodeploy:layer_id'];
       const key = type + '-' + id;
       if (seen.has(key)) return;
+      let hit = false;
+      if (type === 'vector') {
+        try { hit = map.queryRenderedFeatures(pixBox, { layers: [l.id] }).length > 0; } catch (e) { hit = true; }
+      } else {
+        const bb = l.metadata['geodeploy:bbox'];
+        hit = Array.isArray(bb) && bb.length === 4 &&
+          !(bb[2] < bbox[0] || bb[0] > bbox[2] || bb[3] < bbox[1] || bb[1] > bbox[3]);
+      }
+      if (!hit) return;
       seen.add(key);
       items.push({ id: id, type: type, name: l.metadata['geodeploy:name'] || ('Layer ' + id) });
     });
-    const base = '/api/portals/' + encodeURIComponent(slug);
-    const vURL = (id, fmt) => base + '/export?layer_id=' + encodeURIComponent(id) + '&format=' + fmt + '&bbox=' + bbox.join(',');
-    const rURL = (id) => base + '/export-raster?layer_id=' + encodeURIComponent(id) + '&bbox=' + bbox.join(',');
 
-    const rowHtml = (it) => {
-      const links = it.type === 'raster'
-        ? '<a class="gd-download-link" href="' + rURL(it.id) + '" download>GeoTIFF</a>'
-        : '<a class="gd-download-link" href="' + vURL(it.id, 'geojson') + '" download>GeoJSON</a>' +
-          '<a class="gd-download-link" href="' + vURL(it.id, 'csv') + '" download>CSV</a>';
-      return '<div class="gd-download-row"><span class="gd-download-name" title="' + escHtml(it.name) + '">' +
-        escHtml(it.name) + '</span>' + links + '</div>';
-    };
+    const fmtOptions = (type) => type === 'raster'
+      ? '<option value="tif" selected>GeoTIFF</option>'
+      : '<option value="geojson" selected>GeoJSON</option><option value="gpkg">GeoPackage</option><option value="csv">CSV</option>';
+    const rowHtml = (it) =>
+      '<label class="gd-download-row">' +
+        '<input type="checkbox" class="gd-dl-check" data-id="' + it.id + '" data-type="' + it.type + '" checked>' +
+        '<span class="gd-download-name" title="' + escHtml(it.name) + '">' + escHtml(it.name) + '</span>' +
+        '<select class="gd-dl-format">' + fmtOptions(it.type) + '</select>' +
+      '</label>';
 
     const old = document.getElementById('gd-download');
     if (old) old.remove();
@@ -806,12 +818,49 @@
         '<div class="gd-download-head"><span>Download selected area</span>' +
         '<button class="gd-download-close" aria-label="Close">&times;</button></div>' +
         '<div class="gd-download-body">' +
-          (items.length ? items.map(rowHtml).join('') : '<p class="gd-download-empty">No layers to download.</p>') +
-        '</div></div>';
+          (items.length ? items.map(rowHtml).join('') : '<p class="gd-download-empty">No layers intersect the selected area.</p>') +
+        '</div>' +
+        (items.length ? '<div class="gd-download-foot"><span class="gd-dl-status"></span>' +
+          '<button class="gd-dl-go">Download</button></div>' : '') +
+      '</div>';
     document.body.appendChild(dlg);
+
     const close = () => { dlg.remove(); clearDraw(); };
     dlg.querySelector('.gd-download-close').addEventListener('click', close);
     dlg.addEventListener('click', e => { if (e.target === dlg) close(); });
+
+    const go = dlg.querySelector('.gd-dl-go');
+    if (go) go.addEventListener('click', async () => {
+      const picks = [];
+      dlg.querySelectorAll('.gd-download-row').forEach(row => {
+        const chk = row.querySelector('.gd-dl-check');
+        if (!chk || !chk.checked) return;
+        const sel = row.querySelector('.gd-dl-format');
+        picks.push({ layer_id: Number(chk.dataset.id), layer_type: chk.dataset.type, format: sel ? sel.value : 'geojson' });
+      });
+      if (!picks.length) return;
+      const status = dlg.querySelector('.gd-dl-status');
+      go.disabled = true; status.textContent = 'Preparing…';
+      try {
+        const resp = await fetch('/api/portals/' + encodeURIComponent(slug) + '/export-bundle', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bbox: bbox.join(','), items: picks }),
+        });
+        if (!resp.ok) throw new Error('export failed');
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'selection.zip';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 8000);
+        status.textContent = 'Downloaded';
+        setTimeout(close, 700);
+      } catch (e) {
+        status.textContent = 'Failed — try again';
+      } finally {
+        go.disabled = false;
+      }
+    });
   }
 
   function selectBasemap(id) {

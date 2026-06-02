@@ -336,16 +336,31 @@
       color: var(--text-muted);
     }
     .gd-download-close:hover { color: var(--text); }
-    .gd-download-body { padding: 8px 6px; max-height: 50vh; overflow: auto; }
-    .gd-download-row { display: flex; align-items: center; gap: 8px; padding: 7px 10px; }
+    .gd-download-body { padding: 6px; max-height: 50vh; overflow: auto; }
+    .gd-download-row {
+      display: flex; align-items: center; gap: 9px; padding: 7px 8px;
+      border-radius: 6px; cursor: pointer;
+    }
+    .gd-download-row:hover { background: var(--surface); }
+    .gd-dl-check { width: 15px; height: 15px; flex-shrink: 0; accent-color: var(--accent); cursor: pointer; }
     .gd-download-name {
       flex: 1; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .gd-download-link {
-      font-size: 12px; font-weight: 600; color: var(--accent); text-decoration: none;
-      padding: 3px 9px; border: 1px solid var(--border); border-radius: 6px;
+    .gd-dl-format {
+      font-size: 12px; padding: 3px 6px; font-family: inherit; cursor: pointer;
+      border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text);
     }
-    .gd-download-link:hover { background: var(--surface); }
-    .gd-download-empty { padding: 12px; font-size: 12px; color: var(--text-muted); }
+    .gd-download-empty { padding: 14px; font-size: 12px; color: var(--text-muted); }
+    .gd-download-foot {
+      display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+      padding: 10px 14px; border-top: 1px solid var(--border);
+    }
+    .gd-dl-status { font-size: 11px; color: var(--text-muted); }
+    .gd-dl-go {
+      font-size: 13px; font-weight: 600; color: #fff; background: var(--accent);
+      border: none; border-radius: 7px; padding: 7px 16px; cursor: pointer;
+    }
+    .gd-dl-go:hover { filter: brightness(1.05); }
+    .gd-dl-go:disabled { opacity: .55; cursor: default; }
 
     /* ── Theme override slot ─────────────────────────────── */
