@@ -85,8 +85,16 @@
       width: 16px; height: 16px; cursor: pointer; flex-shrink: 0;
       accent-color: var(--accent);
     }
-    .layer-color-dot {
-      width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+    .layer-swatch {
+      width: 18px; height: 18px; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .layer-legend { margin-top: 8px; }
+    .legend-bar { height: 10px; border-radius: 3px; border: 1px solid var(--border); }
+    .legend-range {
+      display: flex; justify-content: space-between;
+      font-size: 10px; color: var(--text-muted); margin-top: 2px;
+      font-variant-numeric: tabular-nums;
     }
     .layer-name {
       flex: 1; font-size: 13px; font-weight: 500; white-space: nowrap;
@@ -165,10 +173,15 @@
       padding: 0; border-radius: var(--radius); box-shadow: var(--shadow-lg);
       max-width: 280px; overflow: hidden; font-family: inherit;
     }
-    .gd-popup .maplibregl-popup-tip { border-top-color: var(--bg) !important; }
+    .gd-popup .maplibregl-popup-tip { border-top-color: var(--accent) !important; }
+    .gd-popup .maplibregl-popup-close-button {
+      top: 4px; right: 4px; width: 22px; height: 22px; padding: 0;
+      color: #fff; font-size: 17px; line-height: 20px; border-radius: 5px;
+    }
+    .gd-popup .maplibregl-popup-close-button:hover { background: rgba(255,255,255,.22); color: #fff; }
     .popup-header {
       background: var(--accent); color: #fff;
-      padding: 8px 12px; font-size: 12px; font-weight: 600;
+      padding: 8px 30px 8px 12px; font-size: 12px; font-weight: 600;
     }
     .popup-table { width: 100%; border-collapse: collapse; }
     .popup-table tr:nth-child(even) td,
@@ -240,17 +253,21 @@
     }
     .gd-basemap-btn svg { width: 18px; height: 18px; }
     .gd-basemap-menu {
-      display: none; position: absolute; top: 0; right: 35px; min-width: 130px;
+      display: none; position: absolute; top: 0; right: 35px; min-width: 200px;
       background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
-      box-shadow: var(--shadow-lg); padding: 4px; white-space: nowrap;
+      box-shadow: var(--shadow-lg); padding: 5px; white-space: nowrap;
     }
     .gd-basemap-ctrl.open .gd-basemap-menu { display: block; }
     .gd-basemap-opt {
-      display: flex; align-items: center; gap: 7px; padding: 5px 8px;
-      font-size: 12px; border-radius: 5px; cursor: pointer;
+      display: flex; align-items: center; gap: 9px; padding: 5px 7px;
+      font-size: 12px; border-radius: 6px; cursor: pointer;
     }
     .gd-basemap-opt:hover { background: var(--surface); }
-    .gd-basemap-opt input { accent-color: var(--accent); }
+    .gd-basemap-opt input { accent-color: var(--accent); flex-shrink: 0; }
+    .gd-basemap-thumb {
+      width: 46px; height: 30px; object-fit: cover; border-radius: 4px;
+      border: 1px solid var(--border); flex-shrink: 0; background: var(--surface);
+    }
 
     /* ── Coordinate readout ──────────────────────────────── */
     #coords {
@@ -537,9 +554,9 @@
         <div class="layer-card-top">
           <input class="layer-visibility" type="checkbox" checked
             data-layer-id="${layer.id}" title="Toggle visibility">
-          <span class="layer-color-dot" data-dot="${layer.id}" style="background:${color}"></span>
+          <span class="layer-swatch" data-swatch="${layer.id}"
+            title="${geomLabel(geom)}">${legendSwatch(geom, color)}</span>
           <span class="layer-name" title="${name}">${name}</span>
-          <span class="layer-geom" title="${geomLabel(geom)}">${geomIcon(geom)}</span>
           <button class="layer-zoom" data-layer-id="${layer.id}" title="Zoom to layer"
             aria-label="Zoom to layer" ${canZoom ? '' : 'disabled'}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -557,6 +574,7 @@
           <input class="layer-opacity-slider" type="range" min="0" max="1" step="0.01"
             value="${opacity}" data-layer-id="${layer.id}" data-layer-type="${layer.type}">
         </div>
+        ${type === 'raster' ? `<div class="layer-legend" data-legend="${layer.id}">${rasterLegendHtml(layer)}</div>` : ''}
         ${styleRow(layer, geom, color)}
       `;
       container.appendChild(card);
@@ -575,8 +593,9 @@
         const id = e.target.dataset.layerId, t = e.target.dataset.layerType;
         const prop = t === 'fill' ? 'fill-color' : t === 'line' ? 'line-color' : 'circle-color';
         map.setPaintProperty(id, prop, e.target.value);
-        const dot = container.querySelector(`.layer-color-dot[data-dot="${id}"]`);
-        if (dot) dot.style.background = e.target.value;
+        const geomK = t === 'fill' ? 'polygon' : t === 'line' ? 'line' : 'point';
+        const sw = container.querySelector(`.layer-swatch[data-swatch="${id}"]`);
+        if (sw) sw.innerHTML = legendSwatch(geomK, e.target.value);
       });
     });
     container.querySelectorAll('.layer-style-size').forEach(inp => {
@@ -591,22 +610,22 @@
     container.querySelectorAll('.rstyle-colormap').forEach(el => el.addEventListener('change', e => {
       const s = e.target.dataset.src;
       rasterState[s] = Object.assign({}, rasterState[s], { colormap: e.target.value || null });
-      applyRaster(s);
+      applyRaster(s); updateRasterLegend(s);
     }));
     container.querySelectorAll('.rstyle-hillshade').forEach(el => el.addEventListener('change', e => {
       const s = e.target.dataset.src;
       rasterState[s] = Object.assign({}, rasterState[s], { hillshade: e.target.checked });
-      applyRaster(s);
+      applyRaster(s); updateRasterLegend(s);
     }));
     container.querySelectorAll('.rstyle-min').forEach(el => el.addEventListener('input', e => {
       const s = e.target.dataset.src;
       rasterState[s] = Object.assign({}, rasterState[s], { min: e.target.value });
-      applyRaster(s);
+      applyRaster(s); updateRasterLegend(s);
     }));
     container.querySelectorAll('.rstyle-max').forEach(el => el.addEventListener('input', e => {
       const s = e.target.dataset.src;
       rasterState[s] = Object.assign({}, rasterState[s], { max: e.target.value });
-      applyRaster(s);
+      applyRaster(s); updateRasterLegend(s);
     }));
     container.querySelectorAll('.rstyle-zfactor').forEach(el => el.addEventListener('input', e => {
       const s = e.target.dataset.src;
@@ -677,6 +696,63 @@
   function geomLabel(kind) {
     return kind === 'polygon' ? 'Polygons' : kind === 'line' ? 'Lines'
          : kind === 'raster'  ? 'Raster'   : 'Points';
+  }
+
+  // Legend swatch that mirrors the layer's actual symbol + colour
+  function legendSwatch(geom, color) {
+    const c = color || '#3b82f6';
+    if (geom === 'line')
+      return '<svg width="18" height="18" viewBox="0 0 18 18"><line x1="2" y1="9" x2="16" y2="9" stroke="' + c + '" stroke-width="3" stroke-linecap="round"/></svg>';
+    if (geom === 'polygon')
+      return '<svg width="18" height="18" viewBox="0 0 18 18"><rect x="2.5" y="4" width="13" height="10" fill="' + c + '" fill-opacity="0.45" stroke="' + c + '" stroke-width="1.5"/></svg>';
+    if (geom === 'raster')
+      return geomIcon('raster');
+    return '<svg width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="5" fill="' + c + '" stroke="#fff" stroke-width="1.5"/></svg>';
+  }
+
+  // Approximate CSS gradients for the TiTiler palettes (for the raster legend bar)
+  const LEGEND_GRADIENTS = {
+    '':        'linear-gradient(to right,#000,#fff)',
+    gray:      'linear-gradient(to right,#000,#fff)',
+    viridis:   'linear-gradient(to right,#440154,#3b528b,#21918c,#5ec962,#fde725)',
+    plasma:    'linear-gradient(to right,#0d0887,#6a00a8,#b12a90,#e16462,#fca636,#f0f921)',
+    inferno:   'linear-gradient(to right,#000004,#420a68,#932667,#dd513a,#fca50a,#fcffa4)',
+    magma:     'linear-gradient(to right,#000004,#3b0f70,#8c2981,#de4968,#fe9f6d,#fcfdbf)',
+    cividis:   'linear-gradient(to right,#00204d,#31446b,#666970,#958f78,#cbba69,#ffea46)',
+    terrain:   'linear-gradient(to right,#333399,#00b3b3,#99e699,#f2f2b3,#cc9966,#fff)',
+    rdylgn:    'linear-gradient(to right,#a50026,#f46d43,#fee08b,#a6d96a,#006837)',
+    spectral:  'linear-gradient(to right,#9e0142,#f46d43,#fee08b,#abdda4,#5e4fa2)',
+    rdbu:      'linear-gradient(to right,#67001f,#f7f7f7,#053061)',
+  };
+
+  function parseRasterParams(srcId) {
+    const t = (STYLE.sources[srcId] && STYLE.sources[srcId].tiles && STYLE.sources[srcId].tiles[0]) || '';
+    const q = t.indexOf('?') >= 0 ? t.slice(t.indexOf('?') + 1) : '';
+    const out = {};
+    q.split('&').forEach(kv => { const i = kv.indexOf('='); if (i > 0) out[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1)); });
+    return out;
+  }
+
+  function rasterLegendHtml(layer) {
+    const srcId = layer.source;
+    const st = (typeof rasterState !== 'undefined' && rasterState[srcId]) || {};
+    const baked = parseRasterParams(srcId);
+    const cmap = st.hillshade ? 'gray' : (st.colormap !== undefined ? (st.colormap || '') : (baked.colormap_name || ''));
+    const rescale = (st.min != null && st.min !== '' && st.max != null && st.max !== '')
+      ? (st.min + ',' + st.max) : (baked.rescale || '');
+    const p = rescale.split(',');
+    const mn = (p[0] !== undefined && p[0] !== '') ? p[0] : 'min';
+    const mx = (p[1] !== undefined && p[1] !== '') ? p[1] : 'max';
+    const grad = LEGEND_GRADIENTS[cmap] || LEGEND_GRADIENTS.gray;
+    return '<div class="legend-bar" style="background:' + grad + '"></div>' +
+      '<div class="legend-range"><span>' + escHtml(String(mn)) + '</span><span>' + escHtml(String(mx)) + '</span></div>';
+  }
+
+  function updateRasterLegend(srcId) {
+    const layer = STYLE.layers.find(l => l.source === srcId && l.metadata && l.metadata['geodeploy:type'] === 'raster');
+    if (!layer) return;
+    const el = document.querySelector('.layer-legend[data-legend="' + layer.id + '"]');
+    if (el) el.innerHTML = rasterLegendHtml(layer);
   }
   function slidersIcon() {
     return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">` +
@@ -779,6 +855,7 @@
         if (maxInput) maxInput.value = hi;
         rasterState[srcId] = Object.assign({}, rasterState[srcId], { min: lo, max: hi });
         applyRaster(srcId);
+        updateRasterLegend(srcId);
       }
     } catch (e) {
     } finally {
@@ -943,16 +1020,20 @@
 
   // ── Basemap switcher (top-right) ────────────────────────
   const BASEMAPS = [
-    { id: 'default', name: 'Default', builtin: true },
+    { id: 'default', name: 'Default', builtin: true,
+      thumb: 'https://a.basemaps.cartocdn.com/light_all/4/8/5.png' },
     { id: 'osm', name: 'OpenStreetMap',
       tiles: ['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png', 'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png'],
-      attribution: '© OpenStreetMap contributors' },
+      attribution: '© OpenStreetMap contributors',
+      thumb: 'https://a.tile.openstreetmap.org/4/8/5.png' },
     { id: 'dark', name: 'Dark',
       tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'],
-      attribution: '© OpenStreetMap © CARTO' },
+      attribution: '© OpenStreetMap © CARTO',
+      thumb: 'https://a.basemaps.cartocdn.com/dark_all/4/8/5.png' },
     { id: 'satellite', name: 'Satellite',
       tiles: ['https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-      attribution: 'Imagery © Esri' },
+      attribution: 'Imagery © Esri',
+      thumb: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/4/5/8' },
   ];
 
   function builtinBasemapIds() {
@@ -1005,7 +1086,9 @@
         '<div class="gd-basemap-menu">' +
           BASEMAPS.map((bm, i) =>
             '<label class="gd-basemap-opt"><input type="radio" name="gd-basemap" value="' + bm.id + '"' +
-            (i === 0 ? ' checked' : '') + '>' + escHtml(bm.name) + '</label>').join('') +
+            (i === 0 ? ' checked' : '') + '>' +
+            '<img class="gd-basemap-thumb" src="' + bm.thumb + '" alt="" loading="lazy">' +
+            '<span>' + escHtml(bm.name) + '</span></label>').join('') +
         '</div>';
       const btn = c.querySelector('.gd-basemap-btn');
       const menu = c.querySelector('.gd-basemap-menu');
