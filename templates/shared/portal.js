@@ -500,7 +500,11 @@
     maxWidth: '300px',
   });
 
+  // Area-select (box draw) state — shared with the click/cursor handlers below.
+  let drawing = false, suppressClick = false, drawStart = null;
+
   map.on('click', async e => {
+    if (suppressClick) { suppressClick = false; return; }  // ignore the click that ends a box draw
     const vectorLayerIds = (STYLE.layers || [])
       .filter(l => l.metadata && l.metadata['geodeploy:type'] === 'vector')
       .map(l => l.id);
@@ -630,6 +634,7 @@
 
   // Pointer cursor over interactive vector layers
   map.on('mousemove', e => {
+    if (drawing) return;  // keep the crosshair while drawing a selection box
     const vectorLayerIds = (STYLE.layers || [])
       .filter(l => l.metadata && l.metadata['geodeploy:type'] === 'vector')
       .map(l => l.id);
@@ -682,6 +687,123 @@
       }
     });
     map.addControl(new BasemapControl(), 'top-right');
+    map.addControl(new ToolsControl(), 'top-right');
+  }
+
+  // ── Tools: select an area and download the vector data inside it ──────────────
+  function toolsIcon() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<rect x="3" y="3" width="18" height="18" rx="1" stroke-dasharray="4 3"/><path d="M12 8v8M8 12h8"/></svg>';
+  }
+
+  class ToolsControl {
+    onAdd(m) {
+      this._map = m;
+      const c = document.createElement('div');
+      c.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+      c.innerHTML = '<button type="button" class="gd-tools-btn" title="Select area & download" aria-label="Select area and download">' + toolsIcon() + '</button>';
+      c.querySelector('.gd-tools-btn').addEventListener('click', ev => { ev.stopPropagation(); startAreaSelect(); });
+      this._c = c;
+      return c;
+    }
+    onRemove() { if (this._c) this._c.remove(); }
+  }
+
+  function emptyFC() { return { type: 'FeatureCollection', features: [] }; }
+
+  function ensureDrawLayers() {
+    if (!map.getSource('gd-draw')) {
+      map.addSource('gd-draw', { type: 'geojson', data: emptyFC() });
+      map.addLayer({ id: 'gd-draw-fill', type: 'fill', source: 'gd-draw',
+        paint: { 'fill-color': '#2563eb', 'fill-opacity': 0.12 } });
+      map.addLayer({ id: 'gd-draw-line', type: 'line', source: 'gd-draw',
+        paint: { 'line-color': '#2563eb', 'line-width': 2, 'line-dasharray': [2, 1] } });
+    }
+  }
+
+  function rectFC(a, b) {
+    const x1 = Math.min(a.lng, b.lng), x2 = Math.max(a.lng, b.lng);
+    const y1 = Math.min(a.lat, b.lat), y2 = Math.max(a.lat, b.lat);
+    return { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {},
+      geometry: { type: 'Polygon', coordinates: [[[x1, y1], [x2, y1], [x2, y2], [x1, y2], [x1, y1]]] } }] };
+  }
+
+  function clearDraw() { if (map.getSource('gd-draw')) map.getSource('gd-draw').setData(emptyFC()); }
+
+  function startAreaSelect() {
+    if (drawing) return;
+    drawing = true;
+    ensureDrawLayers();
+    clearDraw();
+    map.getCanvas().style.cursor = 'crosshair';
+    map.dragPan.disable();
+    showHint('Drag a box on the map to select an area');
+    map.on('mousedown', onDrawDown);
+  }
+
+  function onDrawDown(e) {
+    drawStart = e.lngLat;
+    map.on('mousemove', onDrawMove);
+    map.once('mouseup', onDrawUp);
+  }
+  function onDrawMove(e) {
+    if (drawStart) map.getSource('gd-draw').setData(rectFC(drawStart, e.lngLat));
+  }
+  function onDrawUp(e) {
+    map.off('mousemove', onDrawMove);
+    map.off('mousedown', onDrawDown);
+    map.dragPan.enable();
+    map.getCanvas().style.cursor = '';
+    hideHint();
+    drawing = false;
+    suppressClick = true;  // swallow the click event that follows this mouseup
+    const a = drawStart, b = e.lngLat;
+    drawStart = null;
+    if (!a) return;
+    const bbox = [Math.min(a.lng, b.lng), Math.min(a.lat, b.lat), Math.max(a.lng, b.lng), Math.max(a.lat, b.lat)];
+    if (Math.abs(bbox[2] - bbox[0]) < 1e-7 || Math.abs(bbox[3] - bbox[1]) < 1e-7) { clearDraw(); return; }
+    openDownloadDialog(bbox);
+  }
+
+  function showHint(text) {
+    let h = document.getElementById('gd-hint');
+    if (!h) { h = document.createElement('div'); h.id = 'gd-hint'; document.body.appendChild(h); }
+    h.textContent = text; h.style.display = 'block';
+  }
+  function hideHint() { const h = document.getElementById('gd-hint'); if (h) h.style.display = 'none'; }
+
+  function openDownloadDialog(bbox) {
+    const slug = (window.GEODEPLOY && window.GEODEPLOY.slug) || (location.pathname.split('/').filter(Boolean)[1] || '');
+    const seen = new Set(), items = [];
+    (STYLE.layers || []).forEach(l => {
+      if (!l.metadata || l.metadata['geodeploy:type'] !== 'vector') return;
+      const id = l.metadata['geodeploy:layer_id'];
+      if (seen.has(id)) return;
+      seen.add(id);
+      items.push({ id: id, name: l.metadata['geodeploy:name'] || ('Layer ' + id) });
+    });
+    const exURL = (id, fmt) => '/api/portals/' + encodeURIComponent(slug) + '/export?layer_id=' +
+      encodeURIComponent(id) + '&format=' + fmt + '&bbox=' + bbox.join(',');
+
+    const old = document.getElementById('gd-download');
+    if (old) old.remove();
+    const dlg = document.createElement('div');
+    dlg.id = 'gd-download';
+    dlg.innerHTML =
+      '<div class="gd-download-box">' +
+        '<div class="gd-download-head"><span>Download selected area</span>' +
+        '<button class="gd-download-close" aria-label="Close">&times;</button></div>' +
+        '<div class="gd-download-body">' +
+          (items.length ? items.map(it =>
+            '<div class="gd-download-row"><span class="gd-download-name" title="' + escHtml(it.name) + '">' + escHtml(it.name) + '</span>' +
+            '<a class="gd-download-link" href="' + exURL(it.id, 'geojson') + '" download>GeoJSON</a>' +
+            '<a class="gd-download-link" href="' + exURL(it.id, 'csv') + '" download>CSV</a></div>'
+          ).join('') : '<p class="gd-download-empty">No vector layers to download.</p>') +
+        '</div></div>';
+    document.body.appendChild(dlg);
+    const close = () => { dlg.remove(); clearDraw(); };
+    dlg.querySelector('.gd-download-close').addEventListener('click', close);
+    dlg.addEventListener('click', e => { if (e.target === dlg) close(); });
   }
 
   function selectBasemap(id) {

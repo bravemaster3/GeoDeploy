@@ -1,7 +1,7 @@
 import json
 import uuid
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from slugify import slugify
@@ -139,6 +139,95 @@ async def delete_portal(portal_id: int, user: User = Depends(get_current_user), 
         shutil.rmtree(portal_dir)
     await db.delete(portal)
     await db.commit()
+
+
+@router.get("/{slug}/export")
+async def export_portal_layer(
+    slug: str,
+    layer_id: int,
+    bbox: str,
+    format: str = "geojson",
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Public: download a portal's vector layer clipped to a bbox, as GeoJSON or CSV.
+    Only layers that belong to the portal can be exported; capped at 50k features.
+    (Portal vector tiles are already public, so this does not expose new data.)
+    """
+    portal = (await db.execute(select(Portal).where(Portal.slug == slug))).scalar_one_or_none()
+    if not portal:
+        raise HTTPException(404, "Portal not found.")
+    configs = json.loads(portal.layer_configs or "[]")
+    if not any(c.get("layer_id") == layer_id and c.get("layer_type") == "vector" for c in configs):
+        raise HTTPException(404, "Layer is not part of this portal.")
+    layer = (await db.execute(
+        select(VectorLayer).where(VectorLayer.id == layer_id, VectorLayer.status == "ready")
+    )).scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not available.")
+    if format not in ("geojson", "csv"):
+        raise HTTPException(400, "format must be 'geojson' or 'csv'.")
+    try:
+        minx, miny, maxx, maxy = (float(v) for v in bbox.split(","))
+    except Exception:
+        raise HTTPException(400, "bbox must be 'minx,miny,maxx,maxy'.")
+
+    import asyncpg
+    settings = get_settings()
+    schema, table = layer.schema_name, layer.table_name
+    env = "ST_MakeEnvelope($1,$2,$3,$4,4326)"
+    cap = 50000
+    conn = await asyncpg.connect(settings.postgis_sync_dsn, timeout=20)
+    try:
+        if format == "geojson":
+            sql = (
+                "SELECT jsonb_build_object('type','FeatureCollection','features',"
+                "COALESCE(jsonb_agg(f.feat), '[]'::jsonb))::text FROM ("
+                "  SELECT jsonb_build_object('type','Feature',"
+                "    'geometry', ST_AsGeoJSON(geom)::jsonb,"
+                "    'properties', to_jsonb(t) - 'geom') AS feat"
+                f'  FROM "{schema}"."{table}" t'
+                f"  WHERE geom && {env} AND ST_Intersects(geom, {env})"
+                f"  LIMIT {cap}"
+                ") f"
+            )
+            data = await conn.fetchval(sql, minx, miny, maxx, maxy)
+            return Response(
+                content=data or '{"type":"FeatureCollection","features":[]}',
+                media_type="application/geo+json",
+                headers={"Content-Disposition": f'attachment; filename="{table}.geojson"'},
+            )
+
+        # CSV — attributes + a geometry_wkt column
+        sql = (
+            "SELECT (to_jsonb(t) - 'geom')::text AS props, ST_AsText(geom) AS wkt "
+            f'FROM "{schema}"."{table}" t '
+            f"WHERE geom && {env} AND ST_Intersects(geom, {env}) LIMIT {cap}"
+        )
+        rows = await conn.fetch(sql, minx, miny, maxx, maxy)
+        import csv
+        import io
+        cols: list[str] = []
+        recs: list[dict] = []
+        for r in rows:
+            props = json.loads(r["props"])
+            props["geometry_wkt"] = r["wkt"]
+            recs.append(props)
+            for k in props:
+                if k not in cols:
+                    cols.append(k)
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=cols)
+        writer.writeheader()
+        for rec in recs:
+            writer.writerow(rec)
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{table}.csv"'},
+        )
+    finally:
+        await conn.close()
 
 
 async def _get_owned(portal_id: int, user_id: int, db: AsyncSession) -> Portal:

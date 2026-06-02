@@ -135,6 +135,7 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
     html = html.replace("{{POPUP_CONFIG}}", json.dumps(popup_configs))
     html = html.replace("{{ACCESS_TYPE}}", access_type)
     html = html.replace("{{PASSWORD_SHA256}}", password_sha256 or "")
+    html = html.replace("{{SLUG}}", slug)
     html = html.replace("{{TITLE}}", title)
 
     (portals_dir / "index.html").write_text(html, encoding="utf-8")

@@ -308,4 +308,44 @@
     #access-gate-btn:hover { background: #1d4ed8; }
     #access-gate-error { font-size: 12px; color: #ef4444; margin-top: 8px; min-height: 16px; }
 
+    /* ── Tools: select area & download ───────────────────── */
+    .gd-tools-btn {
+      width: 29px; height: 29px; display: flex; align-items: center; justify-content: center;
+      background: var(--bg); border: none; cursor: pointer; color: var(--text);
+    }
+    .gd-tools-btn svg { width: 18px; height: 18px; }
+    #gd-hint {
+      position: fixed; top: calc(var(--header-h) + 12px); left: 50%; transform: translateX(-50%);
+      z-index: 90; background: var(--accent); color: #fff; font-size: 12px; font-weight: 500;
+      padding: 6px 14px; border-radius: 20px; box-shadow: var(--shadow-lg);
+    }
+    #gd-download {
+      position: fixed; inset: 0; z-index: 150; background: rgba(0,0,0,.28);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .gd-download-box {
+      width: 340px; max-width: 92vw; background: var(--bg); border-radius: 10px;
+      box-shadow: var(--shadow-lg); overflow: hidden;
+    }
+    .gd-download-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 14px; font-size: 14px; font-weight: 600; border-bottom: 1px solid var(--border);
+    }
+    .gd-download-close {
+      border: none; background: none; font-size: 20px; line-height: 1; cursor: pointer;
+      color: var(--text-muted);
+    }
+    .gd-download-close:hover { color: var(--text); }
+    .gd-download-body { padding: 8px 6px; max-height: 50vh; overflow: auto; }
+    .gd-download-row { display: flex; align-items: center; gap: 8px; padding: 7px 10px; }
+    .gd-download-name {
+      flex: 1; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .gd-download-link {
+      font-size: 12px; font-weight: 600; color: var(--accent); text-decoration: none;
+      padding: 3px 9px; border: 1px solid var(--border); border-radius: 6px;
+    }
+    .gd-download-link:hover { background: var(--surface); }
+    .gd-download-empty { padding: 12px; font-size: 12px; color: var(--text-muted); }
+
     /* ── Theme override slot ─────────────────────────────── */

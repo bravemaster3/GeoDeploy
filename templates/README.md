@@ -9,7 +9,8 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
 - **`shared/`** — the runtime, edited ONCE, inherited by every template:
   - `portal.js` — all portal behaviour (access gate, map init, layer switcher + **legend**,
     viewer styling for vector & raster, popup + attribute table, **raster pixel identify**,
-    basemap switcher, coordinate readout, zoom-to-layer, reset styling). It reads its data from a
+    basemap switcher, coordinate readout, zoom-to-layer, reset styling, **Tools control:
+    select-area-and-download** via `GET /api/portals/{slug}/export`). It reads its data from a
     `window.GEODEPLOY` object (`title`, `style`, `popupConfig`, `accessType`, `passwordSha256`) and
     operates on a fixed set of element IDs (`#map`, `#sidebar`, `#layer-list`, `#attr-panel`,
     `#coords`, `#access-gate`, …). **Add/҂fix a portal feature here and every template gets it.**
