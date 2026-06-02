@@ -700,9 +700,11 @@
     }
   }
 
-  function layersIcon() {
-    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">' +
-      '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>';
+  function basemapIcon() {
+    // 2x2 grid — the ArcGIS-style "basemap gallery" glyph (distinct from the layer-list icon)
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">' +
+      '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>' +
+      '<rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>';
   }
 
   class BasemapControl {
@@ -711,7 +713,7 @@
       const c = document.createElement('div');
       c.className = 'maplibregl-ctrl maplibregl-ctrl-group gd-basemap-ctrl';
       c.innerHTML =
-        '<button type="button" class="gd-basemap-btn" title="Basemaps" aria-label="Choose basemap">' + layersIcon() + '</button>' +
+        '<button type="button" class="gd-basemap-btn" title="Basemaps" aria-label="Choose basemap">' + basemapIcon() + '</button>' +
         '<div class="gd-basemap-menu">' +
           BASEMAPS.map((bm, i) =>
             '<label class="gd-basemap-opt"><input type="radio" name="gd-basemap" value="' + bm.id + '"' +

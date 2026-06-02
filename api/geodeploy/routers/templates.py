@@ -20,8 +20,10 @@ def _load_templates() -> list[TemplateOut]:
             if not meta_file.exists():
                 continue
             try:
-                if not (entry / "layout.html").exists():
-                    continue  # incomplete template — skip until layout is contributed
+                # A complete template needs a basemap (style.json). layout.html is optional —
+                # templates fall back to the shared skeleton (templates/shared/layout.html).
+                if not (entry / "style.json").exists():
+                    continue
                 meta = json.loads(meta_file.read_text())
                 templates.append(TemplateOut(
                     id=entry.name,
