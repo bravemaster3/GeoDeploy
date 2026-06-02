@@ -90,22 +90,22 @@ def _write_config(config: dict, path: str) -> None:
 
 
 async def _reload_martin() -> None:
-    """Send SIGHUP to Martin container for graceful config reload."""
+    """Reload Martin so it picks up the new config."""
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, _docker_reload)
 
 
 def _docker_reload() -> None:
+    # NOTE: a full restart (not SIGHUP) is required — Martin only rebuilds table
+    # source field/property definitions at startup, so SIGHUP leaves feature
+    # attributes (vector_layers[].fields) empty after a config change.
     try:
         client = docker.from_env()
         container = client.containers.get("geodeploy-martin")
         if container.status != "running":
             container.start()
         else:
-            try:
-                container.kill(signal="SIGHUP")
-            except Exception:
-                container.restart()
+            container.restart()
     except docker.errors.NotFound:
         _start_martin_container()
     except Exception:
