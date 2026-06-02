@@ -1,0 +1,15 @@
+/* Research theme — teal academic accent over the shared GeoDeploy runtime.
+   Only CSS-variable overrides + a few touches; all behaviour comes from portal.css/js. */
+:root {
+  --surface: #f3f6f4;
+  --border: #dde5e0;
+  --text: #16241d;
+  --text-muted: #5a6b62;
+  --accent: #0f766e;        /* teal-700 */
+  --accent-light: #ccfbf1;  /* teal-100 */
+  --radius: 6px;
+}
+#header { border-bottom: 2px solid var(--accent); }
+#portal-title { font-weight: 700; letter-spacing: .2px; }
+.sidebar-section-title { color: var(--accent); }
+.layer-card { border-left: 3px solid var(--accent); }

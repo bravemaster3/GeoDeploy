@@ -1,10 +1,10 @@
 {
   "name": "Research",
   "author": "GeoDeploy",
-  "description": "Academic layout with legend panel and coordinate display. Suitable for scientific publications.",
+  "description": "Academic teal theme on the CARTO Voyager basemap. Clean layer legend, attribute table and coordinate readout — suited to scientific portals.",
   "tags": ["research", "academic", "light", "official"],
   "language": "en",
-  "basemap": "osm-bright",
+  "basemap": "voyager",
   "preview": "preview.png",
   "version": "1.0.0",
   "license": "MIT"

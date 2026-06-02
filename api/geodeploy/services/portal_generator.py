@@ -94,10 +94,18 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
     portals_dir = Path(settings.data_dir) / "portals" / slug
     portals_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load template files
+    # Shared portal runtime (CSS + JS + skeleton) — edited once, inherited by every template.
+    shared_dir = Path("/templates/shared")
+    portal_css = _read(shared_dir / "portal.css", "")
+    portal_js = _read(shared_dir / "portal.js", "")
+
+    # Load template files. A template only needs theme.css + style.json + template.json;
+    # layout.html is optional and falls back to the shared skeleton.
     basemap_style = _load_basemap(template_dir)
     theme_css = _read(template_dir / "theme.css", "")
-    layout_html = _read(template_dir / "layout.html") or _default_layout()
+    layout_html = (_read(template_dir / "layout.html")
+                   or _read(shared_dir / "layout.html")
+                   or _default_layout())
 
     # Merge basemap + user layers into a single complete MapLibre style
     full_style = {
@@ -119,12 +127,15 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
         if cfg.get("popup_fields")
     }
 
-    html = layout_html.replace("{{TITLE}}", title)
+    # Inject the shared runtime first (it contains no placeholders), then the data.
+    html = layout_html.replace("{{PORTAL_CSS}}", portal_css)
+    html = html.replace("{{PORTAL_JS}}", portal_js)
     html = html.replace("{{STYLE_JSON}}", json.dumps(full_style))
     html = html.replace("{{THEME_CSS}}", theme_css)
     html = html.replace("{{POPUP_CONFIG}}", json.dumps(popup_configs))
     html = html.replace("{{ACCESS_TYPE}}", access_type)
     html = html.replace("{{PASSWORD_SHA256}}", password_sha256 or "")
+    html = html.replace("{{TITLE}}", title)
 
     (portals_dir / "index.html").write_text(html, encoding="utf-8")
     (portals_dir / "style.json").write_text(json.dumps(full_style, indent=2), encoding="utf-8")
