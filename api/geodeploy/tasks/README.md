@@ -8,6 +8,11 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   validate (Fiona) → reproject to EPSG:4326 (pyproj/Fiona) → load into PostGIS (psycopg2, batched inserts, `geometry(Geometry,4326)`) → GiST spatial index → save metadata (bbox, columns, geometry_type) → regenerate Martin config. Updates `upload_jobs`/`vector_layers` rows directly via **raw sqlite3** (not the async ORM — it runs in the Celery process).
 - `raster_ingest.py` — `ingest_raster(job_id, layer_id, file_path, s3_key)`:
   inspect (rasterio) → COG-convert if needed (`services.cog_converter`) → upload to MinIO (boto3) → save metadata (crs, bbox, band_count, nodata). Same raw-sqlite3 status updates. Reads storage creds from the `setup_config` table first, falling back to settings.
+- `export.py` — `export_bundle(bbox, items)`: clips the chosen portal layers to a bbox and writes a
+  ZIP to `data/temp/exports/{task_id}.zip` (served by the API's `export-download`). Vector via
+  psycopg2 (GeoJSON/CSV) + `ogr2ogr` (GeoPackage); raster via rasterio windowed read with an output
+  cap (`MAX_PIXELS`, downsamples huge selections via overviews). Offloads the heavy clip off the API
+  process. Routed to the `ingest` queue (the only one the worker consumes).
 - `__init__.py` — package marker.
 
 ## Dependencies / relationships

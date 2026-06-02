@@ -840,27 +840,42 @@
       });
       if (!picks.length) return;
       const status = dlg.querySelector('.gd-dl-status');
-      go.disabled = true; status.textContent = 'Preparing…';
+      const apiBase = '/api/portals/' + encodeURIComponent(slug);
+      go.disabled = true; status.textContent = 'Queued…';
       try {
-        const resp = await fetch('/api/portals/' + encodeURIComponent(slug) + '/export-bundle', {
+        const resp = await fetch(apiBase + '/export-bundle', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ bbox: bbox.join(','), items: picks }),
         });
-        if (!resp.ok) throw new Error('export failed');
-        const blob = await resp.blob();
-        const url = URL.createObjectURL(blob);
+        if (!resp.ok) throw new Error('start failed');
+        const { job_id } = await resp.json();
+        const ok = await pollExport(apiBase, job_id, status);
+        if (!ok) { status.textContent = 'Failed — try again'; go.disabled = false; return; }
         const a = document.createElement('a');
-        a.href = url; a.download = 'selection.zip';
+        a.href = apiBase + '/export-download/' + encodeURIComponent(job_id);
+        a.download = 'selection.zip';
         document.body.appendChild(a); a.click(); a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 8000);
         status.textContent = 'Downloaded';
-        setTimeout(close, 700);
+        setTimeout(close, 900);
       } catch (e) {
         status.textContent = 'Failed — try again';
-      } finally {
         go.disabled = false;
       }
     });
+  }
+
+  // Poll the export job until the ZIP is ready (or it fails / times out ~4 min).
+  async function pollExport(apiBase, jobId, statusEl) {
+    for (let i = 0; i < 160; i++) {
+      await new Promise(r => setTimeout(r, 1500));
+      let s;
+      try { const r = await fetch(apiBase + '/export-status/' + encodeURIComponent(jobId)); s = await r.json(); }
+      catch (e) { continue; }
+      if (s.status === 'ready') return true;
+      if (s.status === 'error') return false;
+      if (statusEl) statusEl.textContent = (s.status === 'processing') ? 'Processing…' : 'Queued…';
+    }
+    return false;
   }
 
   function selectBasemap(id) {

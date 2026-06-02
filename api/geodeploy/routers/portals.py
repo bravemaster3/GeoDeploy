@@ -1,4 +1,5 @@
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -142,194 +143,96 @@ async def delete_portal(portal_id: int, user: User = Depends(get_current_user), 
     await db.commit()
 
 
-# ── Area-select export ───────────────────────────────────────────────────────
+# ── Area-select export (offloaded to Celery) ─────────────────────────────────
 
 class ExportItem(BaseModel):
     layer_id: int
-    layer_type: str        # vector | raster
-    format: str            # geojson | gpkg | csv | tif
+    layer_type: str          # vector | raster
+    format: str = "geojson"  # geojson | gpkg | csv | tif
 
 
 class ExportBundleRequest(BaseModel):
-    bbox: str              # "minx,miny,maxx,maxy" in EPSG:4326
+    bbox: str                # "minx,miny,maxx,maxy" in EPSG:4326
     items: list[ExportItem]
 
 
-_EXPORT_CAP = 50000
-_ENV = "ST_MakeEnvelope($1,$2,$3,$4,4326)"
+def _sweep_old_exports(settings, max_age: int = 3600) -> None:
+    import time
+    d = f"{settings.data_dir}/temp/exports"
+    if not os.path.isdir(d):
+        return
+    now = time.time()
+    for f in os.listdir(d):
+        fp = os.path.join(d, f)
+        try:
+            if now - os.path.getmtime(fp) > max_age:
+                os.unlink(fp)
+        except Exception:
+            pass
 
 
-def _safe_name(name: str) -> str:
-    return slugify(name or "layer", separator="_") or "layer"
-
-
-async def _vec_geojson(conn, schema: str, table: str, b) -> str:
-    sql = (
-        "SELECT jsonb_build_object('type','FeatureCollection','features',"
-        "COALESCE(jsonb_agg(f.feat), '[]'::jsonb))::text FROM ("
-        "  SELECT jsonb_build_object('type','Feature',"
-        "    'geometry', ST_AsGeoJSON(geom)::jsonb,"
-        "    'properties', to_jsonb(t) - 'geom') AS feat"
-        f'  FROM "{schema}"."{table}" t'
-        f"  WHERE geom && {_ENV} AND ST_Intersects(geom, {_ENV})"
-        f"  LIMIT {_EXPORT_CAP}"
-        ") f"
-    )
-    data = await conn.fetchval(sql, *b)
-    return data or '{"type":"FeatureCollection","features":[]}'
-
-
-async def _vec_csv(conn, schema: str, table: str, b) -> str:
-    import csv
-    import io
-    sql = (
-        "SELECT (to_jsonb(t) - 'geom')::text AS props, ST_AsText(geom) AS wkt "
-        f'FROM "{schema}"."{table}" t '
-        f"WHERE geom && {_ENV} AND ST_Intersects(geom, {_ENV}) LIMIT {_EXPORT_CAP}"
-    )
-    rows = await conn.fetch(sql, *b)
-    cols: list[str] = []
-    recs: list[dict] = []
-    for r in rows:
-        props = json.loads(r["props"])
-        props["geometry_wkt"] = r["wkt"]
-        recs.append(props)
-        for k in props:
-            if k not in cols:
-                cols.append(k)
-    buf = io.StringIO()
-    w = csv.DictWriter(buf, fieldnames=cols)
-    w.writeheader()
-    for rec in recs:
-        w.writerow(rec)
-    return buf.getvalue()
-
-
-async def _gj_to_gpkg(geojson_text: str, layer_name: str) -> bytes:
-    """GeoJSON FeatureCollection -> GeoPackage bytes via ogr2ogr (core GeoJSON reader)."""
-    import asyncio
-    import os
-    import tempfile
-    with tempfile.TemporaryDirectory() as td:
-        src_path = os.path.join(td, "in.geojson")
-        out_path = os.path.join(td, "out.gpkg")
-        with open(src_path, "w", encoding="utf-8") as f:
-            f.write(geojson_text)
-        proc = await asyncio.create_subprocess_exec(
-            "ogr2ogr", "-f", "GPKG", "-nln", layer_name, out_path, src_path,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
-        _, err = await proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError((err or b"").decode("utf-8", "ignore")[:300])
-        with open(out_path, "rb") as f:
-            return f.read()
-
-
-def _clip_raster(s3_key: str, b, settings) -> bytes:
-    import io
-    import rasterio
-    from rasterio.windows import Window, from_bounds
-    from rasterio.warp import transform_bounds
-    minx, miny, maxx, maxy = b
-    env = {
-        "AWS_ACCESS_KEY_ID": settings.storage_access_key,
-        "AWS_SECRET_ACCESS_KEY": settings.storage_secret_key,
-        "AWS_S3_ENDPOINT": settings.storage_endpoint.replace("https://", "").replace("http://", ""),
-        "AWS_HTTPS": "NO", "AWS_VIRTUAL_HOSTING": "FALSE",
-        "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
-    }
-    with rasterio.Env(**env):
-        with rasterio.open(f"s3://{settings.storage_bucket}/{s3_key}") as ds:
-            west, south, east, north = transform_bounds("EPSG:4326", ds.crs, minx, miny, maxx, maxy, densify_pts=21)
-            win = from_bounds(west, south, east, north, ds.transform).round_offsets().round_lengths()
-            win = win.intersection(Window(0, 0, ds.width, ds.height))
-            if win.width < 1 or win.height < 1:
-                raise ValueError("no-overlap")
-            data = ds.read(window=win)
-            profile = ds.profile.copy()
-            profile.update(driver="GTiff", height=int(win.height), width=int(win.width),
-                           transform=ds.window_transform(win), compress="lzw")
-            buf = io.BytesIO()
-            with rasterio.open(buf, "w", **profile) as out:
-                out.write(data)
-            return buf.getvalue()
-
-
-@router.post("/{slug}/export-bundle")
-async def export_bundle(slug: str, req: ExportBundleRequest, db: AsyncSession = Depends(get_db)):
-    """
-    Public: download several portal layers clipped to a bbox as a single ZIP.
-    Only layers that belong to the portal are included; 50k-feature cap per vector layer.
-    """
+@router.post("/{slug}/export-bundle", status_code=202)
+async def start_export_bundle(slug: str, req: ExportBundleRequest, db: AsyncSession = Depends(get_db)):
+    """Validate + enqueue a clip job; returns a job_id to poll. Heavy work runs in Celery."""
+    from ..tasks.export import export_bundle as export_task
     portal = (await db.execute(select(Portal).where(Portal.slug == slug))).scalar_one_or_none()
     if not portal:
         raise HTTPException(404, "Portal not found.")
     configs = json.loads(portal.layer_configs or "[]")
     try:
-        b = tuple(float(v) for v in req.bbox.split(","))
-        assert len(b) == 4
+        parts = [float(v) for v in req.bbox.split(",")]
+        assert len(parts) == 4
     except Exception:
         raise HTTPException(400, "bbox must be 'minx,miny,maxx,maxy'.")
 
-    import asyncio
-    import io
-    import zipfile
-    import asyncpg
+    resolved: list[dict] = []
+    for it in req.items:
+        if not any(c.get("layer_id") == it.layer_id and c.get("layer_type") == it.layer_type for c in configs):
+            continue
+        if it.layer_type == "vector":
+            layer = (await db.execute(select(VectorLayer).where(
+                VectorLayer.id == it.layer_id, VectorLayer.status == "ready"))).scalar_one_or_none()
+            if layer:
+                resolved.append({"type": "vector", "schema": layer.schema_name,
+                                 "table": layer.table_name, "name": layer.name, "format": it.format})
+        else:
+            layer = (await db.execute(select(RasterLayer).where(
+                RasterLayer.id == it.layer_id, RasterLayer.status == "ready"))).scalar_one_or_none()
+            if layer:
+                resolved.append({"type": "raster", "s3_key": layer.s3_key, "name": layer.name})
+    if not resolved:
+        raise HTTPException(400, "No exportable layers in the request.")
+
+    _sweep_old_exports(get_settings())
+    task = export_task.delay(req.bbox, resolved)
+    return {"job_id": task.id}
+
+
+@router.get("/{slug}/export-status/{job_id}")
+async def export_status(slug: str, job_id: str):
+    from ..celery_app import celery_app
     settings = get_settings()
-    used: set[str] = set()
+    if os.path.exists(f"{settings.data_dir}/temp/exports/{job_id}.zip"):
+        return {"status": "ready"}
+    state = celery_app.AsyncResult(job_id).state
+    if state == "FAILURE":
+        return {"status": "error"}
+    if state == "STARTED":
+        return {"status": "processing"}
+    return {"status": "queued"}
 
-    def _fn(base: str, ext: str) -> str:
-        fn = f"{base}.{ext}"
-        i = 1
-        while fn in used:
-            fn = f"{base}_{i}.{ext}"
-            i += 1
-        used.add(fn)
-        return fn
 
-    zbuf = io.BytesIO()
-    conn = await asyncpg.connect(settings.postgis_sync_dsn, timeout=30)
-    try:
-        with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as z:
-            for it in req.items:
-                if not any(c.get("layer_id") == it.layer_id and c.get("layer_type") == it.layer_type for c in configs):
-                    continue
-                if it.layer_type == "vector":
-                    layer = (await db.execute(select(VectorLayer).where(
-                        VectorLayer.id == it.layer_id, VectorLayer.status == "ready"))).scalar_one_or_none()
-                    if not layer:
-                        continue
-                    base = _safe_name(layer.name)
-                    if it.format == "csv":
-                        z.writestr(_fn(base, "csv"), await _vec_csv(conn, layer.schema_name, layer.table_name, b))
-                    elif it.format == "gpkg":
-                        gj = await _vec_geojson(conn, layer.schema_name, layer.table_name, b)
-                        try:
-                            z.writestr(_fn(base, "gpkg"), await _gj_to_gpkg(gj, base))
-                        except Exception:
-                            z.writestr(_fn(base, "geojson"), gj)  # fall back if ogr2ogr is unavailable
-                    else:  # geojson (default)
-                        z.writestr(_fn(base, "geojson"), await _vec_geojson(conn, layer.schema_name, layer.table_name, b))
-                else:  # raster
-                    layer = (await db.execute(select(RasterLayer).where(
-                        RasterLayer.id == it.layer_id, RasterLayer.status == "ready"))).scalar_one_or_none()
-                    if not layer:
-                        continue
-                    try:
-                        data = await asyncio.get_event_loop().run_in_executor(
-                            None, _clip_raster, layer.s3_key, b, settings)
-                    except ValueError:
-                        continue  # no overlap — skip silently
-                    z.writestr(_fn(_safe_name(layer.name) + "_clip", "tif"), data)
-    finally:
-        await conn.close()
-
-    return Response(
-        content=zbuf.getvalue(),
-        media_type="application/zip",
-        headers={"Content-Disposition": 'attachment; filename="selection.zip"'},
-    )
+@router.get("/{slug}/export-download/{job_id}")
+async def export_download(slug: str, job_id: str):
+    import re
+    from fastapi.responses import FileResponse
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", job_id):
+        raise HTTPException(400, "Invalid job id.")
+    settings = get_settings()
+    path = f"{settings.data_dir}/temp/exports/{job_id}.zip"
+    if not os.path.exists(path):
+        raise HTTPException(404, "Export not ready or expired.")
+    return FileResponse(path, media_type="application/zip", filename="selection.zip")
 
 
 async def _get_owned(portal_id: int, user_id: int, db: AsyncSession) -> Portal:
