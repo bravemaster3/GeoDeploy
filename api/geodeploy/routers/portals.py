@@ -230,6 +230,76 @@ async def export_portal_layer(
         await conn.close()
 
 
+@router.get("/{slug}/export-raster")
+async def export_portal_raster(slug: str, layer_id: int, bbox: str, db: AsyncSession = Depends(get_db)):
+    """Public: download a portal raster clipped to a bbox as a GeoTIFF (native resolution)."""
+    portal = (await db.execute(select(Portal).where(Portal.slug == slug))).scalar_one_or_none()
+    if not portal:
+        raise HTTPException(404, "Portal not found.")
+    configs = json.loads(portal.layer_configs or "[]")
+    if not any(c.get("layer_id") == layer_id and c.get("layer_type") == "raster" for c in configs):
+        raise HTTPException(404, "Layer is not part of this portal.")
+    layer = (await db.execute(
+        select(RasterLayer).where(RasterLayer.id == layer_id, RasterLayer.status == "ready")
+    )).scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not available.")
+    try:
+        minx, miny, maxx, maxy = (float(v) for v in bbox.split(","))
+    except Exception:
+        raise HTTPException(400, "bbox must be 'minx,miny,maxx,maxy'.")
+
+    settings = get_settings()
+
+    def _clip() -> bytes:
+        import io
+        import rasterio
+        from rasterio.windows import Window, from_bounds
+        from rasterio.warp import transform_bounds
+        env = {
+            "AWS_ACCESS_KEY_ID": settings.storage_access_key,
+            "AWS_SECRET_ACCESS_KEY": settings.storage_secret_key,
+            "AWS_S3_ENDPOINT": settings.storage_endpoint.replace("https://", "").replace("http://", ""),
+            "AWS_HTTPS": "NO",
+            "AWS_VIRTUAL_HOSTING": "FALSE",
+            "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
+        }
+        with rasterio.Env(**env):
+            with rasterio.open(f"s3://{settings.storage_bucket}/{layer.s3_key}") as src:
+                west, south, east, north = transform_bounds("EPSG:4326", src.crs, minx, miny, maxx, maxy, densify_pts=21)
+                win = from_bounds(west, south, east, north, src.transform)
+                win = win.round_offsets().round_lengths()
+                win = win.intersection(Window(0, 0, src.width, src.height))
+                if win.width < 1 or win.height < 1:
+                    raise ValueError("no-overlap")
+                data = src.read(window=win)
+                profile = src.profile.copy()
+                profile.update(
+                    driver="GTiff", height=int(win.height), width=int(win.width),
+                    transform=src.window_transform(win), compress="lzw",
+                )
+                buf = io.BytesIO()
+                with rasterio.open(buf, "w", **profile) as dst:
+                    dst.write(data)
+                return buf.getvalue()
+
+    import asyncio
+    try:
+        content = await asyncio.get_event_loop().run_in_executor(None, _clip)
+    except ValueError:
+        raise HTTPException(404, "The selected area does not overlap this raster.")
+    except Exception as exc:
+        raise HTTPException(500, f"Could not clip raster: {exc}") from exc
+
+    from slugify import slugify as _slug
+    name = _slug(layer.name, separator="_") or "raster"
+    return Response(
+        content=content,
+        media_type="image/tiff",
+        headers={"Content-Disposition": f'attachment; filename="{name}_clip.tif"'},
+    )
+
+
 async def _get_owned(portal_id: int, user_id: int, db: AsyncSession) -> Portal:
     result = await db.execute(select(Portal).where(Portal.id == portal_id, Portal.user_id == user_id))
     portal = result.scalar_one_or_none()

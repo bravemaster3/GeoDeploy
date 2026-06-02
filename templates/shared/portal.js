@@ -776,14 +776,26 @@
     const slug = (window.GEODEPLOY && window.GEODEPLOY.slug) || (location.pathname.split('/').filter(Boolean)[1] || '');
     const seen = new Set(), items = [];
     (STYLE.layers || []).forEach(l => {
-      if (!l.metadata || l.metadata['geodeploy:type'] !== 'vector') return;
+      if (!l.metadata || !l.metadata['geodeploy:name']) return;
+      const type = l.metadata['geodeploy:type'];
       const id = l.metadata['geodeploy:layer_id'];
-      if (seen.has(id)) return;
-      seen.add(id);
-      items.push({ id: id, name: l.metadata['geodeploy:name'] || ('Layer ' + id) });
+      const key = type + '-' + id;
+      if (seen.has(key)) return;
+      seen.add(key);
+      items.push({ id: id, type: type, name: l.metadata['geodeploy:name'] || ('Layer ' + id) });
     });
-    const exURL = (id, fmt) => '/api/portals/' + encodeURIComponent(slug) + '/export?layer_id=' +
-      encodeURIComponent(id) + '&format=' + fmt + '&bbox=' + bbox.join(',');
+    const base = '/api/portals/' + encodeURIComponent(slug);
+    const vURL = (id, fmt) => base + '/export?layer_id=' + encodeURIComponent(id) + '&format=' + fmt + '&bbox=' + bbox.join(',');
+    const rURL = (id) => base + '/export-raster?layer_id=' + encodeURIComponent(id) + '&bbox=' + bbox.join(',');
+
+    const rowHtml = (it) => {
+      const links = it.type === 'raster'
+        ? '<a class="gd-download-link" href="' + rURL(it.id) + '" download>GeoTIFF</a>'
+        : '<a class="gd-download-link" href="' + vURL(it.id, 'geojson') + '" download>GeoJSON</a>' +
+          '<a class="gd-download-link" href="' + vURL(it.id, 'csv') + '" download>CSV</a>';
+      return '<div class="gd-download-row"><span class="gd-download-name" title="' + escHtml(it.name) + '">' +
+        escHtml(it.name) + '</span>' + links + '</div>';
+    };
 
     const old = document.getElementById('gd-download');
     if (old) old.remove();
@@ -794,11 +806,7 @@
         '<div class="gd-download-head"><span>Download selected area</span>' +
         '<button class="gd-download-close" aria-label="Close">&times;</button></div>' +
         '<div class="gd-download-body">' +
-          (items.length ? items.map(it =>
-            '<div class="gd-download-row"><span class="gd-download-name" title="' + escHtml(it.name) + '">' + escHtml(it.name) + '</span>' +
-            '<a class="gd-download-link" href="' + exURL(it.id, 'geojson') + '" download>GeoJSON</a>' +
-            '<a class="gd-download-link" href="' + exURL(it.id, 'csv') + '" download>CSV</a></div>'
-          ).join('') : '<p class="gd-download-empty">No vector layers to download.</p>') +
+          (items.length ? items.map(rowHtml).join('') : '<p class="gd-download-empty">No layers to download.</p>') +
         '</div></div>';
     document.body.appendChild(dlg);
     const close = () => { dlg.remove(); clearDraw(); };
