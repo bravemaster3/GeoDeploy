@@ -799,8 +799,11 @@
       .filter(l => l.metadata && l.metadata['geodeploy:type'] === 'vector')
       .map(l => l.id);
 
+    // Query a small box around the click so thin lines / points are easy to hit.
+    const pad = 5;
+    const clickBox = [[e.point.x - pad, e.point.y - pad], [e.point.x + pad, e.point.y + pad]];
     const features = vectorLayerIds.length
-      ? map.queryRenderedFeatures(e.point, { layers: vectorLayerIds })
+      ? map.queryRenderedFeatures(clickBox, { layers: vectorLayerIds })
       : [];
 
     // ── Vector section ──
