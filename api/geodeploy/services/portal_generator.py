@@ -95,7 +95,8 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
 
 
 def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str, layer_configs: list[dict],
-                        access_type: str = "public", password_sha256: str | None = None) -> str:
+                        access_type: str = "public", password_sha256: str | None = None,
+                        initial_view: dict | None = None) -> str:
     """
     Merge basemap + user data into a complete style, inject into layout.html,
     write to data/portals/{slug}/index.html.
@@ -128,6 +129,7 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
         # Custom key — MapLibre ignores unknown top-level keys
         "geodeploy": {
             "bounds": user_data.get("bounds"),
+            "view": initial_view,  # admin-set center/zoom; portal.js prefers this over fitBounds
             "title": title,
         },
     }

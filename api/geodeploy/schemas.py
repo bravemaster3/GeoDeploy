@@ -175,6 +175,7 @@ class PortalUpdate(BaseModel):
     description: str | None = None
     template_id: str | None = None
     layer_configs: list[LayerConfig] | None = None
+    initial_view: dict[str, Any] | None = None  # {center:[lng,lat], zoom, bearing, pitch}
     access_type: str | None = None
     access_password: str | None = None
 
@@ -186,6 +187,7 @@ class PortalOut(BaseModel):
     description: str | None
     template_id: str
     layer_configs: list[LayerConfig]
+    initial_view: dict[str, Any] | None = None
     access_type: str
     published: bool
     published_at: datetime | None
@@ -198,6 +200,7 @@ class PortalOut(BaseModel):
         import json
         data = {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
         data["layer_configs"] = json.loads(obj.layer_configs) if obj.layer_configs else []
+        data["initial_view"] = json.loads(obj.initial_view) if obj.initial_view else None
         data.pop("access_password_hash", None)
         data.pop("user_id", None)
         return cls(**data)

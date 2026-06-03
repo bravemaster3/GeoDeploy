@@ -15,6 +15,8 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
     **raster pixel identify**, basemap switcher, coordinate readout, reset styling, **Tools control:
     select-area-and-download** (`POST /api/portals/{slug}/export-bundle`)). It reads its data from a
     `window.GEODEPLOY` object (`title`, `slug`, `style`, `popupConfig`, `accessType`, `passwordSha256`) and
+    sets the **initial view** from `style.geodeploy.view` (admin-pinned center/zoom → `jumpTo`) when
+    present, else `fitBounds` to `style.geodeploy.bounds`; and
     operates on a fixed set of element IDs (`#map`, `#sidebar`, `#layer-list`, `#attr-panel`,
     `#coords`, `#access-gate`, …). **Add/҂fix a portal feature here and every template gets it.**
   - `portal.css` — all structural CSS, written against CSS variables (`--accent`, `--bg`, …).

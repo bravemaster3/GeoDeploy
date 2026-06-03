@@ -71,6 +71,8 @@ async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(
         portal.template_id = req.template_id
     if req.layer_configs is not None:
         portal.layer_configs = json.dumps([lc.model_dump() for lc in req.layer_configs])
+    if req.initial_view is not None:
+        portal.initial_view = json.dumps(req.initial_view)
     if req.access_type is not None:
         portal.access_type = req.access_type
     if req.access_password is not None:
@@ -103,10 +105,12 @@ async def publish_portal(portal_id: int, user: User = Depends(get_current_user),
         raster_layers = r.scalars().all()
 
     user_data = generate_style(layer_configs, vector_layers, raster_layers)
+    initial_view = json.loads(portal.initial_view) if portal.initial_view else None
     build_portal_bundle(
         portal.slug, portal.title, user_data, portal.template_id, layer_configs,
         access_type=portal.access_type,
         password_sha256=portal.access_password_sha256,
+        initial_view=initial_view,
     )
 
     portal.published = True

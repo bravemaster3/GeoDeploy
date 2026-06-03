@@ -39,6 +39,18 @@ export function useMaplibre(containerId, initialStyle = null) {
     map.value.setStyle(style)
   }
 
+  function jumpTo(view) {
+    if (!map.value || !view || !Array.isArray(view.center)) return
+    try {
+      map.value.jumpTo({
+        center: view.center,
+        zoom: view.zoom != null ? view.zoom : 2,
+        bearing: view.bearing || 0,
+        pitch: view.pitch || 0,
+      })
+    } catch { /* keep current view */ }
+  }
+
   function fitToBbox(bbox) {
     if (!map.value || !bbox) return
     // Guard against non-lon/lat bboxes (e.g. a projected raster bbox) so a bad
@@ -52,5 +64,5 @@ export function useMaplibre(containerId, initialStyle = null) {
     } catch { /* keep current view */ }
   }
 
-  return { map, loaded, applyStyle, fitToBbox }
+  return { map, loaded, applyStyle, fitToBbox, jumpTo }
 }

@@ -120,6 +120,18 @@
     <!-- Map preview -->
     <div class="flex-1 relative bg-gray-100">
       <div id="portal-preview-map" class="w-full h-full" />
+
+      <!-- Zoom to all layers. The current view is saved on "Save changes" and becomes
+           the published portal's initial extent. -->
+      <button v-if="layerConfigs.length" @click="zoomToAll"
+        class="absolute top-3 left-3 z-10 flex items-center gap-1.5 bg-white/95 hover:bg-white shadow-md border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-700"
+        title="Zoom to the full extent of all layers. The current view is saved on Save and becomes the published portal's starting view.">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3" />
+        </svg>
+        Zoom to all
+      </button>
+
       <div v-if="!layerConfigs.length"
         class="absolute inset-0 flex items-center justify-center pointer-events-none">
         <span class="text-xs text-gray-400 bg-white/80 px-3 py-1.5 rounded-full">
@@ -173,7 +185,10 @@ const accessOptions = [
   { value: 'private',  label: 'Private',  desc: 'Only signed-in users can view' },
 ]
 
-const { map, loaded, applyStyle, fitToBbox } = useMaplibre('portal-preview-map')
+const { map, loaded, applyStyle, fitToBbox, jumpTo } = useMaplibre('portal-preview-map')
+
+// Admin-pinned view (center/zoom) for the published portal; null = fit to all layers.
+const savedView = ref(null)
 
 onMounted(async () => {
   await Promise.all([portalsStore.refresh(), dataStore.refresh()])
@@ -182,17 +197,24 @@ onMounted(async () => {
     layerConfigs.value = portal.value.layer_configs || []
     selectedTemplate.value = portal.value.template_id
     accessType.value = portal.value.access_type || 'public'
+    savedView.value = portal.value.initial_view || null
   }
   const { data } = await listTemplates()
   templates.value = data
 })
 
-// Rebuild preview whenever configs or layer data change
+// Rebuild the preview style on any config/layer change, but only move the camera on
+// the FIRST build (restore the saved view, else fit to all layers). After that, style
+// edits (band/colour/etc.) must NOT yank the view — setStyle keeps the current camera.
+let viewInitialized = false
 watch([layerConfigs, loaded], () => {
   if (!loaded.value) return
   const { style, bounds } = buildPreviewStyle()
   applyStyle(style)
-  if (bounds) fitToBbox(bounds)
+  if (!viewInitialized) {
+    if (savedView.value) { jumpTo(savedView.value); viewInitialized = true }
+    else if (bounds) { fitToBbox(bounds); viewInitialized = true }
+  }
 }, { deep: true })
 
 // Point marker icons — mirror of templates/shared/portal.js. Generated on demand
@@ -256,7 +278,17 @@ function buildPreviewStyle() {
     layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }],
   }
 
+  // Merge every visible layer's bbox (skipping non-lon/lat bboxes, e.g. an old
+  // projected raster) so "fit"/zoom-to-all covers all layers, not just the last one.
   let bounds = null
+  const expandBounds = (b) => {
+    const ok = Array.isArray(b) && b.length === 4 &&
+      b[0] >= -180 && b[2] <= 180 && b[0] < b[2] && b[1] >= -90 && b[3] <= 90 && b[1] < b[3]
+    if (!ok) return
+    bounds = bounds
+      ? [Math.min(bounds[0], b[0]), Math.min(bounds[1], b[1]), Math.max(bounds[2], b[2]), Math.max(bounds[3], b[3])]
+      : b.slice()
+  }
 
   // config[0] is the top of the list → draw it on top → build in reverse.
   for (const cfg of [...layerConfigs.value].reverse()) {
@@ -306,7 +338,7 @@ function buildPreviewStyle() {
         })
       }
 
-      if (layer.bbox) bounds = layer.bbox
+      expandBounds(layer.bbox)
 
     } else if (cfg.layer_type === 'raster') {
       const layer = dataStore.rasterLayers.find(l => l.id === cfg.layer_id)
@@ -319,7 +351,7 @@ function buildPreviewStyle() {
         id: srcId, type: 'raster', source: srcId,
         paint: { 'raster-opacity': cfg.opacity ?? 1.0 },
       })
-      if (layer.bbox) bounds = layer.bbox
+      expandBounds(layer.bbox)
     }
   }
 
@@ -408,15 +440,37 @@ function zoomToLayer(cfg) {
   if (layer?.bbox) fitToBbox(layer.bbox)
 }
 
+// Fit the preview to the merged extent of all (visible) layers.
+function zoomToAll() {
+  const { bounds } = buildPreviewStyle()
+  if (bounds) fitToBbox(bounds)
+}
+
+// The map's current center/zoom — persisted so the published portal opens here.
+function currentView() {
+  const m = map.value
+  if (!m) return null
+  const c = m.getCenter()
+  return {
+    center: [c.lng, c.lat],
+    zoom: m.getZoom(),
+    bearing: m.getBearing(),
+    pitch: m.getPitch(),
+  }
+}
+
 async function save() {
   if (!portal.value) return
   busy.value = true
   saveMsg.value = null
   try {
+    const view = currentView()
+    if (view) savedView.value = view
     const payload = {
       layer_configs: layerConfigs.value,
       template_id: selectedTemplate.value,
       access_type: accessType.value,
+      initial_view: view,
     }
     if (accessType.value === 'password' && accessPassword.value) {
       payload.access_password = accessPassword.value

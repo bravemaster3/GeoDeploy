@@ -120,7 +120,18 @@
       b[1] >= -90  && b[3] <= 90  && b[1] < b[3];
   }
   const bounds = STYLE.geodeploy?.bounds;
-  if (validLonLatBounds(bounds)) {
+  const savedView = STYLE.geodeploy?.view;
+  if (savedView && Array.isArray(savedView.center) && savedView.center.length === 2) {
+    // Admin pinned a specific extent/zoom during portal creation — honour it exactly.
+    try {
+      map.jumpTo({
+        center: savedView.center,
+        zoom: savedView.zoom != null ? savedView.zoom : 2,
+        bearing: savedView.bearing || 0,
+        pitch: savedView.pitch || 0,
+      });
+    } catch (e) { /* ignore — keep default view */ }
+  } else if (validLonLatBounds(bounds)) {
     try {
       map.fitBounds([[bounds[0], bounds[1]], [bounds[2], bounds[3]]], {
         padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 },
