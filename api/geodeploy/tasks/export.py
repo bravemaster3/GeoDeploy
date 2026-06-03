@@ -5,6 +5,7 @@ Vector via psycopg2 (+ ogr2ogr for GeoPackage); raster via rasterio (windowed, c
 """
 import io
 import json
+import logging
 import os
 import subprocess
 import tempfile
@@ -12,6 +13,8 @@ import zipfile
 
 from ..celery_app import celery_app
 from ..config import get_settings
+
+log = logging.getLogger(__name__)
 
 FEATURE_CAP = 50000          # max features per vector layer
 MAX_PIXELS = 16_000_000      # raster output cap (~4000x4000) — bigger selections are downsampled
@@ -70,12 +73,15 @@ def _gj_to_gpkg(geojson_text: str, layer_name: str) -> bytes:
         out = os.path.join(td, "out.gpkg")
         with open(src, "w", encoding="utf-8") as f:
             f.write(geojson_text)
+        # ogr2ogr needs an explicit source SRS for GeoJSON (it is EPSG:4326 per spec / ST_AsGeoJSON).
         r = subprocess.run(
-            ["ogr2ogr", "-f", "GPKG", "-nln", layer_name, out, src],
+            ["ogr2ogr", "-f", "GPKG", "-a_srs", "EPSG:4326", "-nln", layer_name, out, src],
             capture_output=True,
         )
         if r.returncode != 0:
-            raise RuntimeError(r.stderr.decode("utf-8", "ignore")[:300])
+            raise RuntimeError("ogr2ogr failed: " + r.stderr.decode("utf-8", "ignore")[:300])
+        if not os.path.exists(out) or os.path.getsize(out) == 0:
+            raise RuntimeError("ogr2ogr produced no output")
         with open(out, "rb") as f:
             return f.read()
 
@@ -111,10 +117,16 @@ def _clip_raster(s3_key: str, b, settings) -> bytes:
             transform = ds.window_transform(win) * Affine.scale(win.width / out_w, win.height / out_h)
             profile = ds.profile.copy()
             profile.update(driver="GTiff", height=out_h, width=out_w, transform=transform, compress="lzw")
-            buf = io.BytesIO()
-            with rasterio.open(buf, "w", **profile) as out:
-                out.write(data)
-            return buf.getvalue()
+            # Tiling/block sizes from the source COG can be invalid for a small clip; let GDAL pick.
+            for k in ("blockxsize", "blockysize", "tiled", "interleave", "photometric"):
+                profile.pop(k, None)
+            # GTiff must be written through a real (seekable) GDAL dataset — a plain BytesIO
+            # yields a truncated/empty file. MemoryFile is the supported in-memory writer.
+            from rasterio.io import MemoryFile
+            with MemoryFile() as memfile:
+                with memfile.open(**profile) as dst:
+                    dst.write(data)
+                return memfile.read()
 
 
 @celery_app.task(bind=True, name="geodeploy.tasks.export.export_bundle")
@@ -155,7 +167,8 @@ def export_bundle(self, bbox: str, items: list[dict]) -> dict:
                         gj = _vec_geojson(cur, it["schema"], it["table"], b)
                         try:
                             z.writestr(fn(base, "gpkg"), _gj_to_gpkg(gj, base))
-                        except Exception:
+                        except Exception as e:
+                            log.warning("GeoPackage export failed for %s, falling back to GeoJSON: %s", base, e)
                             z.writestr(fn(base, "geojson"), gj)
                     else:
                         z.writestr(fn(base, "geojson"), _vec_geojson(cur, it["schema"], it["table"], b))
@@ -163,7 +176,11 @@ def export_bundle(self, bbox: str, items: list[dict]) -> dict:
                     try:
                         data = _clip_raster(it["s3_key"], b, settings)
                     except ValueError:
+                        log.info("Raster %s does not overlap the selection — skipped.", it.get("name"))
                         continue  # no overlap
+                    except Exception:
+                        log.exception("Raster clip failed for %s", it.get("name"))
+                        raise
                     z.writestr(fn(_safe(it.get("name")) + "_clip", "tif"), data)
             cur.close()
     except Exception:
