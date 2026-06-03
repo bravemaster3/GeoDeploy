@@ -129,26 +129,12 @@ def _docker_reload() -> None:
 
 
 def _start_martin_container() -> None:
-    """Create and start the Martin container when it doesn't exist yet."""
-    from .postgis import MARTIN_NAME, MARTIN_IMAGE, NETWORK, _get_host_bind_path
+    """Ensure the Martin container is running (adopt-or-create + network alias)."""
+    from .postgis import NETWORK, _start_martin
     try:
         client = docker.from_env()
-        settings = get_settings()
-        martin_host_path = _get_host_bind_path(client, settings.data_dir + "/martin")
-        if not martin_host_path:
-            martin_host_path = _get_host_bind_path(client, "/data/martin")
-        if not martin_host_path:
-            return  # Can't determine host path — user must start Martin via docker compose
         network = client.networks.get(NETWORK)
-        container = client.containers.run(
-            MARTIN_IMAGE,
-            name=MARTIN_NAME,
-            detach=True,
-            restart_policy={"Name": "unless-stopped"},
-            command="--config /config/martin-config.yaml",
-            volumes={martin_host_path: {"bind": "/config", "mode": "rw"}},
-        )
-        network.connect(container, aliases=["martin"])
+        _start_martin(client, network)  # idempotent + tolerant of an existing container
     except Exception:
         pass  # Non-fatal — user can start Martin via docker compose
 

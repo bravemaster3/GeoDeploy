@@ -143,27 +143,47 @@ def _get_host_bind_path(client: docker.DockerClient, container_path: str) -> str
 
 
 def _start_martin(client: docker.DockerClient, network) -> None:
-    """Start the Martin tile server container and connect it with the martin DNS alias."""
-    martin_host_path = _get_host_bind_path(client, "/data/martin")
+    """Ensure the Martin container exists, is running, and has the 'martin' network alias.
 
+    Idempotent and tolerant of a pre-existing container — Martin is now a core compose service
+    (started by install.sh), so it usually already exists; we adopt it rather than failing with a
+    name conflict (the bug: provision_local used to blindly `run()` and 409 if it was already there)."""
+    container = None
     try:
         container = client.containers.get(MARTIN_NAME)
+    except docker.errors.NotFound:
+        container = None
+
+    if container is None:
+        martin_host_path = _get_host_bind_path(client, "/data/martin")
+        if not martin_host_path:
+            return  # Can't determine config path — Martin will start on the next compose up
+        try:
+            container = client.containers.run(
+                MARTIN_IMAGE,
+                name=MARTIN_NAME,
+                detach=True,
+                restart_policy={"Name": "unless-stopped"},
+                command="--config /config/martin-config.yaml",
+                volumes={martin_host_path: {"bind": "/config", "mode": "rw"}},
+            )
+        except docker.errors.APIError:
+            # Raced with compose (or a leftover container) — adopt the existing one.
+            try:
+                container = client.containers.get(MARTIN_NAME)
+            except docker.errors.NotFound:
+                return
+
+    try:
         if container.status != "running":
             container.start()
-        try:
-            network.disconnect(container)
-        except docker.errors.APIError:
-            pass
+    except docker.errors.APIError:
+        pass
+    try:
+        network.disconnect(container)
+    except docker.errors.APIError:
+        pass
+    try:
         network.connect(container, aliases=["martin"])
-    except docker.errors.NotFound:
-        if not martin_host_path:
-            return  # Can't determine config path — Martin will start on next compose up
-        container = client.containers.run(
-            MARTIN_IMAGE,
-            name=MARTIN_NAME,
-            detach=True,
-            restart_policy={"Name": "unless-stopped"},
-            command="--config /config/martin-config.yaml",
-            volumes={martin_host_path: {"bind": "/config", "mode": "rw"}},
-        )
-        network.connect(container, aliases=["martin"])
+    except docker.errors.APIError:
+        pass
