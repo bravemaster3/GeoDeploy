@@ -21,6 +21,9 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
 - `LayerPanel.vue` reads layer metadata (`columns`, `geometry_type`, `band_count`, `default_style`) from the data store; its style fields must stay consistent with the paint logic in `views/PortalEditor.vue` and the backend `portal_generator.py`.
 - Icons from `../../views/icons.js`.
 
+## Modals
+All dialogs (`UploadModal`, `AddSourceModal`, `DiscoverModal`, `portal/CreatePortalModal`) wrap their overlay in `<Teleport to="body">` so the backdrop covers the full viewport (they used to render inside the scrollable `<main>`, which left an un-dimmed strip). Overlay style: `bg-gray-900/50 backdrop-blur-sm`, card `shadow-2xl`.
+
 ## Current status & known issues
 - `LayerPanel` colormap/hillshade controls show for single-band output: a single-band raster
   (`band_count === 1`) or a multiband raster in **Single band** mode. Multiband rasters also get a

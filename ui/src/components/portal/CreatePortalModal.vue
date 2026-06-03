@@ -1,6 +1,7 @@
 <template>
-  <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-    <div class="card w-full max-w-md p-6 space-y-4">
+  <Teleport to="body">
+  <div class="fixed inset-0 bg-gray-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+    <div class="card w-full max-w-md p-6 space-y-4 shadow-2xl">
       <div class="flex items-center justify-between">
         <h2 class="text-lg font-semibold">New portal</h2>
         <button @click="$emit('close')" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
@@ -37,6 +38,7 @@
       </div>
     </div>
   </div>
+  </Teleport>
 </template>
 
 <script setup>

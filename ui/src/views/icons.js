@@ -26,3 +26,25 @@ export const LocateIcon = { render: () => h('svg', { viewBox: '0 0 24 24', fill:
   h('circle', { cx: 12, cy: 12, r: 3 }),
   h('path', { d: 'M12 2v3M12 19v3M2 12h3M19 12h3' }),
 ]) }
+
+export const ImageIcon = { render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
+  h('rect', { x: 3, y: 3, width: 18, height: 18, rx: 2 }),
+  h('circle', { cx: 8.5, cy: 8.5, r: 1.5 }),
+  h('path', { d: 'M21 15l-5-5L5 21' }),
+]) }
+export const LinkIcon = icon('M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71')
+export const ServerIcon = { render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
+  h('rect', { x: 2, y: 3, width: 20, height: 8, rx: 2 }),
+  h('rect', { x: 2, y: 13, width: 20, height: 8, rx: 2 }),
+  h('path', { d: 'M6 7h.01M6 17h.01' }),
+]) }
+export const HardDriveIcon = { render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
+  h('path', { d: 'M22 12H2M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z' }),
+  h('path', { d: 'M6 16h.01M10 16h.01' }),
+]) }
+export const UserIcon = { render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
+  h('path', { d: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2' }),
+  h('circle', { cx: 12, cy: 7, r: 4 }),
+]) }
+export const RefreshIcon = icon('M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15')
+export const DownloadIcon = icon('M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3')
