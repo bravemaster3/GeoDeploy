@@ -103,6 +103,14 @@
   map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-left');
   map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 
+  // Generate point-marker icons on demand (also covers the first render gap).
+  map.on('styleimagemissing', function (e) {
+    if (!e.id || e.id.indexOf('gd-pt-') !== 0 || map.hasImage(e.id)) return;
+    const l = (STYLE.layers || []).find(x => x.layout && x.layout['icon-image'] === e.id);
+    const m = (l && l.metadata) || {};
+    setMarkerImage(e.id, m['geodeploy:marker'] || 'circle', m['geodeploy:markerColor'] || '#3b82f6', m['geodeploy:markerSize'] || 5);
+  });
+
   // ── Auto-fit to data bounds ─────────────────────────────
   // Validate lon/lat ranges so one bad layer bbox can't throw and abort the
   // rest of this script (which would leave the layer switcher unbuilt).
@@ -123,6 +131,7 @@
 
   // ── Layer switcher ──────────────────────────────────────
   map.on('load', function () {
+    ensurePointImages();  // register canvas icons before the symbol layers paint
     // Reverse so the list shows config[0] (drawn on top) at the top of the list.
     const userLayers = STYLE.layers.filter(l => l.metadata && l.metadata['geodeploy:name']).reverse();
     buildLayerSwitcher(userLayers);
@@ -152,7 +161,68 @@
         if (src && src.setTiles) src.setTiles(s.tiles);
       }
     });
+    ensurePointImages();  // restore original marker icons (shape/colour/size)
     buildLayerSwitcher(STYLE.layers.filter(l => l.metadata && l.metadata['geodeploy:name']).reverse());
+  }
+
+  // ---- Point marker shapes -------------------------------------------------
+  // Points render as symbol layers with a canvas-drawn icon, so shapes work on
+  // raster basemaps (no glyph dependency). Shape/colour/size = regenerate the icon.
+  const MARKER_SHAPES = ['circle', 'square', 'triangle', 'diamond', 'star', 'cross'];
+  function starPoints(cx, cy, r) {
+    const p = [];
+    for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, rr = (i % 2) ? r * 0.45 : r; p.push((cx + Math.cos(a) * rr).toFixed(1) + ',' + (cy + Math.sin(a) * rr).toFixed(1)); }
+    return p.join(' ');
+  }
+  function crossPoints(cx, cy, r) {
+    const t = r * 0.38, pts = [[-t, -r], [t, -r], [t, -t], [r, -t], [r, t], [t, t], [t, r], [-t, r], [-t, t], [-r, t], [-r, -t], [-t, -t]];
+    return pts.map(d => (cx + d[0]).toFixed(1) + ',' + (cy + d[1]).toFixed(1)).join(' ');
+  }
+  function drawMarkerPath(ctx, shape, cx, cy, r) {
+    ctx.beginPath();
+    if (shape === 'square') { ctx.rect(cx - r, cy - r, r * 2, r * 2); }
+    else if (shape === 'triangle') { ctx.moveTo(cx, cy - r); ctx.lineTo(cx + r * 0.92, cy + r * 0.72); ctx.lineTo(cx - r * 0.92, cy + r * 0.72); ctx.closePath(); }
+    else if (shape === 'diamond') { ctx.moveTo(cx, cy - r); ctx.lineTo(cx + r, cy); ctx.lineTo(cx, cy + r); ctx.lineTo(cx - r, cy); ctx.closePath(); }
+    else if (shape === 'star') { const a = starPoints(cx, cy, r).split(' '); a.forEach((pt, i) => { const xy = pt.split(','); i ? ctx.lineTo(+xy[0], +xy[1]) : ctx.moveTo(+xy[0], +xy[1]); }); ctx.closePath(); }
+    else if (shape === 'cross') { const a = crossPoints(cx, cy, r).split(' '); a.forEach((pt, i) => { const xy = pt.split(','); i ? ctx.lineTo(+xy[0], +xy[1]) : ctx.moveTo(+xy[0], +xy[1]); }); ctx.closePath(); }
+    else { ctx.arc(cx, cy, r, 0, Math.PI * 2); }
+  }
+  function markerImage(shape, color, size) {
+    const dpr = 2, r = Math.max(3, Number(size) || 5), stroke = Math.max(1, r * 0.28), pad = stroke + 1;
+    const dim = Math.ceil((r + pad) * 2);
+    const cv = document.createElement('canvas');
+    cv.width = dim * dpr; cv.height = dim * dpr;
+    const ctx = cv.getContext('2d');
+    ctx.scale(dpr, dpr); ctx.lineJoin = 'round';
+    drawMarkerPath(ctx, shape, dim / 2, dim / 2, r);
+    ctx.fillStyle = color || '#3b82f6'; ctx.fill();
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = stroke; ctx.stroke();
+    const d = ctx.getImageData(0, 0, dim * dpr, dim * dpr);
+    return { width: dim * dpr, height: dim * dpr, data: d.data, pixelRatio: dpr };
+  }
+  function setMarkerImage(imgId, shape, color, size) {
+    const im = markerImage(shape, color, size);
+    try { if (map.hasImage(imgId)) map.updateImage(imgId, im); else map.addImage(imgId, im, { pixelRatio: im.pixelRatio }); }
+    catch (e) { try { if (map.hasImage(imgId)) map.removeImage(imgId); map.addImage(imgId, im, { pixelRatio: im.pixelRatio }); } catch (e2) {} }
+  }
+  // SVG mirror of a marker shape, for the list/legend swatch.
+  function markerSvg(shape, c) {
+    const stroke = ' stroke="#fff" stroke-width="1.5" stroke-linejoin="round"';
+    if (shape === 'square') return '<rect x="3" y="3" width="12" height="12" fill="' + c + '"' + stroke + '/>';
+    if (shape === 'triangle') return '<polygon points="9,2.5 15.5,15 2.5,15" fill="' + c + '"' + stroke + '/>';
+    if (shape === 'diamond') return '<polygon points="9,2 16,9 9,16 2,9" fill="' + c + '"' + stroke + '/>';
+    if (shape === 'star') return '<polygon points="' + starPoints(9, 9, 6.5) + '" fill="' + c + '"' + stroke + '/>';
+    if (shape === 'cross') return '<polygon points="' + crossPoints(9, 9, 6.5) + '" fill="' + c + '"' + stroke + '/>';
+    return '<circle cx="9" cy="9" r="5.5" fill="' + c + '"' + stroke + '/>';
+  }
+  // Build/refresh icon images for every point (symbol) layer from its metadata.
+  function ensurePointImages() {
+    (STYLE.layers || []).forEach(l => {
+      if (l.type !== 'symbol' || !l.layout || !l.layout['icon-image'] || !l.metadata) return;
+      if (l.metadata['geodeploy:marker'] === undefined) return;
+      setMarkerImage(l.layout['icon-image'], l.metadata['geodeploy:marker'] || 'circle',
+        l.metadata['geodeploy:markerColor'] || '#3b82f6', l.metadata['geodeploy:markerSize'] || 5);
+    });
   }
 
   function buildLayerSwitcher(layers) {
@@ -182,13 +252,14 @@
       card.dataset.layerId = layer.id;
       card.setAttribute('draggable', 'true');
       const dash = dashKind(layer.paint);
+      const shape = meta['geodeploy:marker'] || 'circle';
       let visOn = true;
       try { visOn = map.getLayoutProperty(layer.id, 'visibility') !== 'none'; } catch (e) {}
       card.innerHTML =
         '<div class="layer-row">' +
           '<span class="layer-drag" title="Drag to reorder">' + dragIcon() + '</span>' +
           '<button class="layer-eye' + (visOn ? '' : ' off') + '" data-layer-id="' + layer.id + '" title="Hide / show" aria-label="Toggle visibility">' + eyeIcon(visOn) + '</button>' +
-          '<button class="layer-swatch-btn" data-swatch="' + layer.id + '" data-layer-id="' + layer.id + '" title="Symbology" aria-label="Edit symbology">' + legendSwatch(geom, color, dash) + '</button>' +
+          '<button class="layer-swatch-btn" data-swatch="' + layer.id + '" data-layer-id="' + layer.id + '" title="Symbology" aria-label="Edit symbology">' + legendSwatch(geom, color, dash, shape) + '</button>' +
           '<span class="layer-name" title="' + escHtml(name) + '">' + escHtml(name) + '</span>' +
           '<button class="layer-zoom" data-layer-id="' + layer.id + '" title="Zoom to layer" aria-label="Zoom to layer"' + (canZoom ? '' : ' disabled') + '>' +
             '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
@@ -361,10 +432,28 @@
         const label = e.target.closest('.layer-opacity-row').querySelector('.layer-opacity-label');
         if (label) label.textContent = Math.round(val * 100) + '%';
         const prop = mapType === 'raster' ? 'raster-opacity' : mapType === 'fill' ? 'fill-opacity'
-                   : mapType === 'line' ? 'line-opacity' : mapType === 'circle' ? 'circle-opacity' : null;
+                   : mapType === 'line' ? 'line-opacity' : mapType === 'symbol' ? 'icon-opacity'
+                   : mapType === 'circle' ? 'circle-opacity' : null;
         if (prop) map.setPaintProperty(id, prop, val);
       });
     });
+    // Point marker controls (colour / shape / size all regenerate the icon image).
+    function applyMarkerFrom(el) {
+      const row = el.closest('.layer-style-row'); if (!row) return;
+      const colorEl = row.querySelector('.layer-marker-color');
+      const shapeEl = row.querySelector('.layer-marker-shape');
+      const sizeEl = row.querySelector('.layer-marker-size');
+      const color = colorEl ? colorEl.value : '#3b82f6';
+      const shape = shapeEl ? shapeEl.value : 'circle';
+      const size = sizeEl ? (parseFloat(sizeEl.value) || 5) : 5;
+      setMarkerImage(el.dataset.imgId, shape, color, size);
+      map.triggerRepaint && map.triggerRepaint();
+      updateSwatch(el.dataset.layerId, 'point', color, shape);
+    }
+    root.querySelectorAll('.layer-marker-color, .layer-marker-size').forEach(el =>
+      el.addEventListener('input', e => applyMarkerFrom(e.target)));
+    root.querySelectorAll('.layer-marker-shape').forEach(el =>
+      el.addEventListener('change', e => applyMarkerFrom(e.target)));
     root.querySelectorAll('.rstyle-colormap').forEach(el => el.addEventListener('change', e => {
       const s = e.target.dataset.src;
       rasterState[s] = Object.assign({}, rasterState[s], { colormap: e.target.value || null });
@@ -398,7 +487,8 @@
 
   function getLayerColor(layer) {
     const paint = layer.paint || {};
-    return paint['fill-color'] || paint['line-color'] || paint['circle-color'] || '#64748b';
+    return paint['fill-color'] || paint['line-color'] || paint['circle-color'] ||
+      (layer.metadata && layer.metadata['geodeploy:markerColor']) || '#64748b';
   }
 
   function geomIcon(kind) {
@@ -420,16 +510,16 @@
     if (!Array.isArray(d) || !d.length) return 'solid';
     return d[0] < 1 ? 'dotted' : 'dashed';
   }
-  function updateSwatch(id, geomK, color) {
+  function updateSwatch(id, geomK, color, shape) {
     const sw = document.querySelector('.layer-swatch-btn[data-swatch="' + id + '"]');
     if (!sw) return;
     let dash = 'solid';
     if (geomK === 'line') { try { dash = dashKind({ 'line-dasharray': map.getPaintProperty(id, 'line-dasharray') }); } catch (e) {} }
-    sw.innerHTML = legendSwatch(geomK, color, dash);
+    sw.innerHTML = legendSwatch(geomK, color, dash, shape);
   }
 
-  // Legend swatch that mirrors the layer's actual symbol + colour (+ line dash)
-  function legendSwatch(geom, color, dash) {
+  // Legend swatch that mirrors the layer's actual symbol + colour (+ line dash / marker shape)
+  function legendSwatch(geom, color, dash, shape) {
     const c = color || '#3b82f6';
     if (geom === 'line') {
       const da = dash === 'dashed' ? ' stroke-dasharray="3 2"' : dash === 'dotted' ? ' stroke-dasharray="0.6 3"' : '';
@@ -439,7 +529,7 @@
       return '<svg width="18" height="18" viewBox="0 0 18 18"><rect x="2.5" y="4" width="13" height="10" fill="' + c + '" fill-opacity="0.45" stroke="' + c + '" stroke-width="1.5"/></svg>';
     if (geom === 'raster')
       return geomIcon('raster');
-    return '<svg width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="5" fill="' + c + '" stroke="#fff" stroke-width="1.5"/></svg>';
+    return '<svg width="18" height="18" viewBox="0 0 18 18">' + markerSvg(shape || 'circle', c) + '</svg>';
   }
 
   // Approximate CSS gradients for the TiTiler palettes (for the raster legend bar)
@@ -501,16 +591,27 @@
   function styleRow(layer, geom, color) {
     if (layer.type === 'raster') return rasterStyleRow(layer);
     const t = layer.type;
+    if (geom === 'point') {
+      const m = layer.metadata || {};
+      const imgId = (layer.layout && layer.layout['icon-image']) || ('gd-pt-' + m['geodeploy:layer_id']);
+      const curShape = m['geodeploy:marker'] || 'circle';
+      const curSize = m['geodeploy:markerSize'] || 5;
+      const shapeOpts = MARKER_SHAPES.map(s =>
+        `<option value="${s}"${s === curShape ? ' selected' : ''}>${s[0].toUpperCase() + s.slice(1)}</option>`).join('');
+      return `<div class="layer-style-row" data-style-for="${layer.id}">` +
+        `<div class="layer-style-field"><label>Color</label>` +
+        `<input class="layer-marker-color" type="color" value="${toHex(color)}" data-layer-id="${layer.id}" data-img-id="${imgId}"></div>` +
+        `<div class="layer-style-field"><label>Shape</label>` +
+        `<select class="layer-marker-shape" data-layer-id="${layer.id}" data-img-id="${imgId}">${shapeOpts}</select></div>` +
+        `<div class="layer-style-field"><label>Size</label>` +
+        `<input class="layer-marker-size" type="number" min="1" max="30" step="1" value="${curSize}" data-layer-id="${layer.id}" data-img-id="${imgId}"></div>` +
+        `</div>`;
+    }
     let sizeField = '', lineType = '';
     if (geom === 'line') {
       const w = (layer.paint && layer.paint['line-width']) ?? 2;
       sizeField = `<div class="layer-style-field"><label>Width</label>` +
         `<input class="layer-style-size" type="number" min="0.5" max="20" step="0.5" value="${w}" ` +
-        `data-layer-id="${layer.id}" data-layer-type="${t}"></div>`;
-    } else if (geom === 'point') {
-      const r = (layer.paint && layer.paint['circle-radius']) ?? 5;
-      sizeField = `<div class="layer-style-field"><label>Size</label>` +
-        `<input class="layer-style-size" type="number" min="1" max="30" step="1" value="${r}" ` +
         `data-layer-id="${layer.id}" data-layer-type="${t}"></div>`;
     }
     if (geom === 'line') {

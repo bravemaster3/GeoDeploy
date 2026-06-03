@@ -195,6 +195,49 @@ watch([layerConfigs, loaded], () => {
   if (bounds) fitToBbox(bounds)
 }, { deep: true })
 
+// Point marker icons — mirror of templates/shared/portal.js. Generated on demand
+// when a symbol layer references a missing icon image (styleimagemissing).
+const markerSpecs = {}
+watch(loaded, (v) => {
+  if (!v || !map.value) return
+  map.value.on('styleimagemissing', (e) => {
+    if (!e.id || !e.id.startsWith('gd-pt-') || map.value.hasImage(e.id)) return
+    const spec = markerSpecs[e.id]
+    if (!spec) return
+    const im = markerImage(spec.shape, spec.color, spec.size)
+    try { map.value.addImage(e.id, im, { pixelRatio: im.pixelRatio }) } catch { /* ignore */ }
+  })
+})
+function starPts(cx, cy, r) {
+  const p = []
+  for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, rr = (i % 2) ? r * 0.45 : r; p.push([cx + Math.cos(a) * rr, cy + Math.sin(a) * rr]) }
+  return p
+}
+function crossPts(cx, cy, r) {
+  const t = r * 0.38
+  return [[-t, -r], [t, -r], [t, -t], [r, -t], [r, t], [t, t], [t, r], [-t, r], [-t, t], [-r, t], [-r, -t], [-t, -t]].map(d => [cx + d[0], cy + d[1]])
+}
+function markerImage(shape, color, size) {
+  const dpr = 2, r = Math.max(3, Number(size) || 5), stroke = Math.max(1, r * 0.28), pad = stroke + 1
+  const dim = Math.ceil((r + pad) * 2)
+  const cv = document.createElement('canvas')
+  cv.width = dim * dpr; cv.height = dim * dpr
+  const ctx = cv.getContext('2d')
+  ctx.scale(dpr, dpr); ctx.lineJoin = 'round'
+  const cx = dim / 2, cy = dim / 2
+  ctx.beginPath()
+  if (shape === 'square') ctx.rect(cx - r, cy - r, r * 2, r * 2)
+  else if (shape === 'triangle') { ctx.moveTo(cx, cy - r); ctx.lineTo(cx + r * 0.92, cy + r * 0.72); ctx.lineTo(cx - r * 0.92, cy + r * 0.72); ctx.closePath() }
+  else if (shape === 'diamond') { ctx.moveTo(cx, cy - r); ctx.lineTo(cx + r, cy); ctx.lineTo(cx, cy + r); ctx.lineTo(cx - r, cy); ctx.closePath() }
+  else if (shape === 'star') { starPts(cx, cy, r).forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.closePath() }
+  else if (shape === 'cross') { crossPts(cx, cy, r).forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.closePath() }
+  else ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.fillStyle = color || '#3b82f6'; ctx.fill()
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = stroke; ctx.stroke()
+  const d = ctx.getImageData(0, 0, dim * dpr, dim * dpr)
+  return { width: dim * dpr, height: dim * dpr, data: d.data, pixelRatio: dpr }
+}
+
 function buildPreviewStyle() {
   const style = {
     version: 8,
@@ -250,12 +293,16 @@ function buildPreviewStyle() {
           id: srcId, type: 'line', source: srcId, 'source-layer': sourceLayer, paint: linePaint,
         })
       } else {
+        // Points render as a symbol layer with a runtime-generated icon (so shapes
+        // work on raster basemaps). Icon id encodes the style so it refreshes on change.
+        const shape = cfg.style?.marker || 'circle'
+        const mSize = cfg.style?.radius ?? 5
+        const iconId = `gd-pt-${layer.id}-${shape}-${String(color).replace('#', '')}-${mSize}`
+        markerSpecs[iconId] = { shape, color, size: mSize }
         style.layers.push({
-          id: srcId, type: 'circle', source: srcId, 'source-layer': sourceLayer,
-          paint: {
-            'circle-color': color, 'circle-radius': cfg.style?.radius ?? 5,
-            'circle-opacity': opacity, 'circle-stroke-width': 1, 'circle-stroke-color': '#fff',
-          },
+          id: srcId, type: 'symbol', source: srcId, 'source-layer': sourceLayer,
+          layout: { 'icon-image': iconId, 'icon-allow-overlap': true, 'icon-ignore-placement': true },
+          paint: { 'icon-opacity': opacity },
         })
       }
 

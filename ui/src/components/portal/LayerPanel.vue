@@ -88,13 +88,22 @@
               </div>
             </div>
 
-            <div v-else-if="geomType === 'point'">
-              <label class="text-xs text-gray-500">Point size</label>
-              <div class="flex items-center gap-2 mt-0.5">
-                <input type="number" min="1" max="30" step="1" :value="config.style?.radius ?? 5"
-                  @input="emitStyle({ radius: parseFloat($event.target.value) })"
-                  class="w-16 text-xs border border-gray-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-brand-400" />
-                <span class="text-xs text-gray-400">px</span>
+            <div v-else-if="geomType === 'point'" class="space-y-2">
+              <div>
+                <label class="text-xs text-gray-500">Marker shape</label>
+                <select :value="config.style?.marker || 'circle'" @change="emitStyle({ marker: $event.target.value })"
+                  class="mt-0.5 w-full text-xs border border-gray-200 rounded px-1.5 py-1 capitalize focus:outline-none focus:ring-1 focus:ring-brand-400">
+                  <option v-for="s in markerShapes" :key="s" :value="s">{{ s }}</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-xs text-gray-500">Point size</label>
+                <div class="flex items-center gap-2 mt-0.5">
+                  <input type="number" min="1" max="30" step="1" :value="config.style?.radius ?? 5"
+                    @input="emitStyle({ radius: parseFloat($event.target.value) })"
+                    class="w-16 text-xs border border-gray-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-brand-400" />
+                  <span class="text-xs text-gray-400">px</span>
+                </div>
               </div>
             </div>
 
@@ -264,8 +273,29 @@ const geomSvg = computed(() => {
   }
   if (k === 'raster')
     return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>'
-  return `<svg width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="5" fill="${col}" stroke="#fff" stroke-width="1.5"/></svg>`
+  return `<svg width="18" height="18" viewBox="0 0 18 18">${markerSvg(props.config.style?.marker || 'circle', col)}</svg>`
 })
+
+const markerShapes = ['circle', 'square', 'triangle', 'diamond', 'star', 'cross']
+function starPts(cx, cy, r) {
+  const p = []
+  for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, rr = (i % 2) ? r * 0.45 : r; p.push((cx + Math.cos(a) * rr).toFixed(1) + ',' + (cy + Math.sin(a) * rr).toFixed(1)) }
+  return p.join(' ')
+}
+function crossPts(cx, cy, r) {
+  const t = r * 0.38
+  return [[-t, -r], [t, -r], [t, -t], [r, -t], [r, t], [t, t], [t, r], [-t, r], [-t, t], [-r, t], [-r, -t], [-t, -t]]
+    .map(d => (cx + d[0]).toFixed(1) + ',' + (cy + d[1]).toFixed(1)).join(' ')
+}
+function markerSvg(shape, c) {
+  const s = ' stroke="#fff" stroke-width="1.5" stroke-linejoin="round"'
+  if (shape === 'square') return `<rect x="3" y="3" width="12" height="12" fill="${c}"${s}/>`
+  if (shape === 'triangle') return `<polygon points="9,2.5 15.5,15 2.5,15" fill="${c}"${s}/>`
+  if (shape === 'diamond') return `<polygon points="9,2 16,9 9,16 2,9" fill="${c}"${s}/>`
+  if (shape === 'star') return `<polygon points="${starPts(9, 9, 6.5)}" fill="${c}"${s}/>`
+  if (shape === 'cross') return `<polygon points="${crossPts(9, 9, 6.5)}" fill="${c}"${s}/>`
+  return `<circle cx="9" cy="9" r="5.5" fill="${c}"${s}/>`
+}
 
 function emitStyle(patch) {
   emit('update', { style: { ...props.config.style, ...patch } })

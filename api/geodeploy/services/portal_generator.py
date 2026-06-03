@@ -39,9 +39,12 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 "geodeploy:opacity": cfg.get("opacity", 1.0),
                 "geodeploy:bbox": json.loads(layer.bbox) if layer.bbox else None,
                 "geodeploy:geometry": _geom_kind(layer.geometry_type),
+                "geodeploy:marker": (cfg.get("style") or {}).get("marker", "circle"),
+                "geodeploy:markerColor": (cfg.get("style") or {}).get("color", "#3b82f6"),
+                "geodeploy:markerSize": (cfg.get("style") or {}).get("radius", 5),
             }
             if not cfg.get("visible", True):
-                ml_layer["layout"] = {"visibility": "none"}
+                ml_layer.setdefault("layout", {})["visibility"] = "none"
             layers.append(ml_layer)
 
             if layer.bbox:
@@ -189,18 +192,21 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
             "source-layer": source_layer,
             "paint": paint,
         }
-    # point / unknown
+    # point / unknown — rendered as a symbol layer with a runtime-generated icon
+    # (portal.js / the editor build the image from the marker metadata). This lets
+    # points use shapes (circle/square/triangle/diamond/star/cross) on raster basemaps.
     return {
         "id": f"vector-{layer.id}",
-        "type": "circle",
+        "type": "symbol",
         "source": source_id,
         "source-layer": source_layer,
+        "layout": {
+            "icon-image": f"gd-pt-{layer.id}",
+            "icon-allow-overlap": True,
+            "icon-ignore-placement": True,
+        },
         "paint": {
-            "circle-color": style.get("color", "#3b82f6"),
-            "circle-radius": style.get("radius", 5),
-            "circle-opacity": opacity,
-            "circle-stroke-width": 1,
-            "circle-stroke-color": "#fff",
+            "icon-opacity": opacity,
         },
     }
 
