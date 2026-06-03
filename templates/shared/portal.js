@@ -180,16 +180,22 @@
       card.className = 'layer-card';
       card.dataset.layerId = layer.id;
       card.setAttribute('draggable', 'true');
+      const dash = dashKind(layer.paint);
       card.innerHTML =
-        '<span class="layer-drag" title="Drag to reorder">' + dragIcon() + '</span>' +
-        '<button class="layer-eye" data-layer-id="' + layer.id + '" title="Hide / show" aria-label="Toggle visibility">' + eyeIcon(true) + '</button>' +
-        '<button class="layer-swatch-btn" data-swatch="' + layer.id + '" data-layer-id="' + layer.id + '" title="Symbology" aria-label="Edit symbology">' + legendSwatch(geom, color) + '</button>' +
-        '<span class="layer-name" title="' + escHtml(name) + '">' + escHtml(name) + '</span>' +
-        '<button class="layer-zoom" data-layer-id="' + layer.id + '" title="Zoom to layer" aria-label="Zoom to layer"' + (canZoom ? '' : ' disabled') + '>' +
-          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
-          '<circle cx="12" cy="12" r="7"/><line x1="12" y1="1" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="23"/>' +
-          '<line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/></svg>' +
-        '</button>';
+        '<div class="layer-row">' +
+          '<span class="layer-drag" title="Drag to reorder">' + dragIcon() + '</span>' +
+          '<button class="layer-eye" data-layer-id="' + layer.id + '" title="Hide / show" aria-label="Toggle visibility">' + eyeIcon(true) + '</button>' +
+          '<button class="layer-swatch-btn" data-swatch="' + layer.id + '" data-layer-id="' + layer.id + '" title="Symbology" aria-label="Edit symbology">' + legendSwatch(geom, color, dash) + '</button>' +
+          '<span class="layer-name" title="' + escHtml(name) + '">' + escHtml(name) + '</span>' +
+          '<button class="layer-zoom" data-layer-id="' + layer.id + '" title="Zoom to layer" aria-label="Zoom to layer"' + (canZoom ? '' : ' disabled') + '>' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+            '<circle cx="12" cy="12" r="7"/><line x1="12" y1="1" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="23"/>' +
+            '<line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/></svg>' +
+          '</button>' +
+        '</div>' +
+        (type === 'raster'
+          ? '<div class="layer-legend" data-legend="' + layer.id + '">' + rasterLegendHtml(layer) + '</div>'
+          : '');
       container.appendChild(card);
     });
 
@@ -284,9 +290,7 @@
     const color = getLayerColor(layer);
     const opacity = layer.metadata['geodeploy:opacity'] != null ? layer.metadata['geodeploy:opacity'] : 1;
 
-    const body = type === 'raster'
-      ? '<div class="layer-legend" data-legend="' + id + '">' + rasterLegendHtml(layer) + '</div>' + rasterStyleRow(layer)
-      : styleRow(layer, geom, color);
+    const body = type === 'raster' ? rasterStyleRow(layer) : styleRow(layer, geom, color);
 
     const pop = document.createElement('div');
     pop.className = 'gd-symbology';
@@ -326,8 +330,7 @@
         const prop = t === 'fill' ? 'fill-color' : t === 'line' ? 'line-color' : 'circle-color';
         map.setPaintProperty(id, prop, e.target.value);
         const geomK = t === 'fill' ? 'polygon' : t === 'line' ? 'line' : 'point';
-        const sw = document.querySelector('.layer-swatch-btn[data-swatch="' + id + '"]');
-        if (sw) sw.innerHTML = legendSwatch(geomK, e.target.value);
+        updateSwatch(id, geomK, e.target.value);
       });
     });
     root.querySelectorAll('.layer-style-size').forEach(inp => {
@@ -343,6 +346,9 @@
         const id = e.target.dataset.layerId;
         const dash = e.target.value === 'dashed' ? [2, 1.5] : e.target.value === 'dotted' ? [0.4, 1.8] : null;
         try { map.setPaintProperty(id, 'line-dasharray', dash); } catch (err) { /* ignore */ }
+        let color = '#3b82f6';
+        try { color = map.getPaintProperty(id, 'line-color') || color; } catch (e2) {}
+        updateSwatch(id, 'line', color);
       });
     });
     root.querySelectorAll('.layer-opacity-slider').forEach(slider => {
@@ -406,11 +412,26 @@
          : kind === 'raster'  ? 'Raster'   : 'Points';
   }
 
-  // Legend swatch that mirrors the layer's actual symbol + colour
-  function legendSwatch(geom, color) {
+  function dashKind(paint) {
+    const d = paint && paint['line-dasharray'];
+    if (!Array.isArray(d) || !d.length) return 'solid';
+    return d[0] < 1 ? 'dotted' : 'dashed';
+  }
+  function updateSwatch(id, geomK, color) {
+    const sw = document.querySelector('.layer-swatch-btn[data-swatch="' + id + '"]');
+    if (!sw) return;
+    let dash = 'solid';
+    if (geomK === 'line') { try { dash = dashKind({ 'line-dasharray': map.getPaintProperty(id, 'line-dasharray') }); } catch (e) {} }
+    sw.innerHTML = legendSwatch(geomK, color, dash);
+  }
+
+  // Legend swatch that mirrors the layer's actual symbol + colour (+ line dash)
+  function legendSwatch(geom, color, dash) {
     const c = color || '#3b82f6';
-    if (geom === 'line')
-      return '<svg width="18" height="18" viewBox="0 0 18 18"><line x1="2" y1="9" x2="16" y2="9" stroke="' + c + '" stroke-width="3" stroke-linecap="round"/></svg>';
+    if (geom === 'line') {
+      const da = dash === 'dashed' ? ' stroke-dasharray="3 2"' : dash === 'dotted' ? ' stroke-dasharray="0.6 3"' : '';
+      return '<svg width="18" height="18" viewBox="0 0 18 18"><line x1="2" y1="9" x2="16" y2="9" stroke="' + c + '" stroke-width="3" stroke-linecap="round"' + da + '/></svg>';
+    }
     if (geom === 'polygon')
       return '<svg width="18" height="18" viewBox="0 0 18 18"><rect x="2.5" y="4" width="13" height="10" fill="' + c + '" fill-opacity="0.45" stroke="' + c + '" stroke-width="1.5"/></svg>';
     if (geom === 'raster')
@@ -490,9 +511,11 @@
         `data-layer-id="${layer.id}" data-layer-type="${t}"></div>`;
     }
     if (geom === 'line') {
+      const cur = dashKind(layer.paint);
+      const opt = (v, l) => `<option value="${v}"${cur === v ? ' selected' : ''}>${l}</option>`;
       lineType = `<div class="layer-style-field"><label>Style</label>` +
         `<select class="layer-linetype" data-layer-id="${layer.id}">` +
-        `<option value="solid">Solid</option><option value="dashed">Dashed</option><option value="dotted">Dotted</option></select></div>`;
+        opt('solid', 'Solid') + opt('dashed', 'Dashed') + opt('dotted', 'Dotted') + `</select></div>`;
     }
     return `<div class="layer-style-row" data-style-for="${layer.id}">` +
         `<div class="layer-style-field"><label>Color</label>` +

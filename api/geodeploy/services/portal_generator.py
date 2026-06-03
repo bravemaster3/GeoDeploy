@@ -165,16 +165,22 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
             },
         }
     if "line" in geom:
+        paint = {
+            "line-color": style.get("color", "#3b82f6"),
+            "line-width": style.get("line_width", 2),
+            "line-opacity": opacity,
+        }
+        line_type = style.get("lineType")
+        if line_type == "dashed":
+            paint["line-dasharray"] = [2, 1.5]
+        elif line_type == "dotted":
+            paint["line-dasharray"] = [0.4, 1.8]
         return {
             "id": f"vector-{layer.id}",
             "type": "line",
             "source": source_id,
             "source-layer": source_layer,
-            "paint": {
-                "line-color": style.get("color", "#3b82f6"),
-                "line-width": style.get("line_width", 2),
-                "line-opacity": opacity,
-            },
+            "paint": paint,
         }
     # point / unknown
     return {

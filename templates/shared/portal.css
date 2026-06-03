@@ -65,13 +65,13 @@
     }
 
     /* Layer cards */
-    /* Thin layer row: drag · eye · swatch · name · zoom */
+    /* Thin layer row: drag · eye · swatch · name · zoom (+ inline legend for rasters) */
     .layer-card {
-      display: flex; align-items: center; gap: 7px;
       padding: 5px 6px; margin-bottom: 2px; border-radius: 6px;
     }
     .layer-card:hover { background: var(--surface); }
     .layer-card.dragging { opacity: .4; }
+    .layer-row { display: flex; align-items: center; gap: 7px; }
     .layer-drag {
       flex-shrink: 0; width: 14px; color: var(--text-muted); cursor: grab;
       display: flex; align-items: center; opacity: .55;

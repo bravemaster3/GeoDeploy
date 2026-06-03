@@ -221,9 +221,11 @@ function buildPreviewStyle() {
           },
         })
       } else if (geom.includes('line')) {
+        const linePaint = { 'line-color': color, 'line-width': cfg.style?.line_width ?? 2, 'line-opacity': opacity }
+        if (cfg.style?.lineType === 'dashed') linePaint['line-dasharray'] = [2, 1.5]
+        else if (cfg.style?.lineType === 'dotted') linePaint['line-dasharray'] = [0.4, 1.8]
         style.layers.push({
-          id: srcId, type: 'line', source: srcId, 'source-layer': sourceLayer,
-          paint: { 'line-color': color, 'line-width': cfg.style?.line_width ?? 2, 'line-opacity': opacity },
+          id: srcId, type: 'line', source: srcId, 'source-layer': sourceLayer, paint: linePaint,
         })
       } else {
         style.layers.push({

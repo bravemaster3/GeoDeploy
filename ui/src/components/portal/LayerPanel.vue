@@ -74,16 +74,29 @@
           </div>
         </template>
 
-        <!-- Line: width -->
-        <div v-else-if="geomType === 'line'">
-          <label class="text-xs text-gray-500">Line width</label>
-          <div class="flex items-center gap-2 mt-0.5">
-            <input type="number" min="0.5" max="20" step="0.5"
-              :value="config.style?.line_width ?? 2"
-              @input="emitStyle({ line_width: parseFloat($event.target.value) })"
-              class="w-16 text-xs border border-gray-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-brand-400"
-            />
-            <span class="text-xs text-gray-400">px</span>
+        <!-- Line: width + style -->
+        <div v-else-if="geomType === 'line'" class="space-y-2">
+          <div>
+            <label class="text-xs text-gray-500">Line width</label>
+            <div class="flex items-center gap-2 mt-0.5">
+              <input type="number" min="0.5" max="20" step="0.5"
+                :value="config.style?.line_width ?? 2"
+                @input="emitStyle({ line_width: parseFloat($event.target.value) })"
+                class="w-16 text-xs border border-gray-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-brand-400"
+              />
+              <span class="text-xs text-gray-400">px</span>
+            </div>
+          </div>
+          <div>
+            <label class="text-xs text-gray-500">Line style</label>
+            <select :value="config.style?.lineType || 'solid'"
+              @change="emitStyle({ lineType: $event.target.value })"
+              class="mt-0.5 w-full text-xs border border-gray-200 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-brand-400"
+            >
+              <option value="solid">Solid</option>
+              <option value="dashed">Dashed</option>
+              <option value="dotted">Dotted</option>
+            </select>
           </div>
         </div>
 
@@ -250,14 +263,20 @@ const geomKind = computed(() => props.config.layer_type === 'raster' ? 'raster' 
 const geomLabel = computed(() => ({
   polygon: 'Polygons', line: 'Lines', point: 'Points', raster: 'Raster',
 }[geomKind.value] || 'Vector'))
+// Legend swatch mirroring the layer's actual symbol — colour + line dash for vectors.
 const geomSvg = computed(() => {
-  const a = 'width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"'
-  switch (geomKind.value) {
-    case 'polygon': return `<svg ${a}><path d="M12 3l8 6-3 11H7L4 9z"/></svg>`
-    case 'line': return `<svg ${a}><polyline points="3 17 9 11 14 15 21 5"/></svg>`
-    case 'raster': return `<svg ${a}><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>`
-    default: return `<svg width="16" height="16" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5" fill="currentColor"/></svg>`
+  const k = geomKind.value
+  const col = props.config.style?.color || '#3b82f6'
+  if (k === 'polygon')
+    return `<svg width="18" height="18" viewBox="0 0 18 18"><rect x="2.5" y="4" width="13" height="10" fill="${col}" fill-opacity="0.45" stroke="${col}" stroke-width="1.5"/></svg>`
+  if (k === 'line') {
+    const lt = props.config.style?.lineType
+    const da = lt === 'dashed' ? ' stroke-dasharray="3 2"' : lt === 'dotted' ? ' stroke-dasharray="0.6 3"' : ''
+    return `<svg width="18" height="18" viewBox="0 0 18 18"><line x1="2" y1="9" x2="16" y2="9" stroke="${col}" stroke-width="3" stroke-linecap="round"${da}/></svg>`
   }
+  if (k === 'raster')
+    return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>'
+  return `<svg width="18" height="18" viewBox="0 0 18 18"><circle cx="9" cy="9" r="5" fill="${col}" stroke="#fff" stroke-width="1.5"/></svg>`
 })
 
 function emitStyle(patch) {
