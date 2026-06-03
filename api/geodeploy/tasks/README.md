@@ -8,6 +8,12 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   validate (Fiona) → reproject to EPSG:4326 (pyproj/Fiona) → load into PostGIS (psycopg2, batched inserts, `geometry(Geometry,4326)`) → GiST spatial index → save metadata (bbox, columns, geometry_type) → regenerate Martin config. Updates `upload_jobs`/`vector_layers` rows directly via **raw sqlite3** (not the async ORM — it runs in the Celery process).
 - `raster_ingest.py` — `ingest_raster(job_id, layer_id, file_path, s3_key)`:
   inspect (rasterio) → COG-convert if needed (`services.cog_converter`) → upload to MinIO (boto3) → save metadata (crs, bbox, band_count, nodata). Same raw-sqlite3 status updates. Reads storage creds from the `setup_config` table first, falling back to settings.
+- `csv_import.py` — `import_csv(job_id, layer_id, key, schema, table, x_col, y_col, srid)`: reads a CSV
+  from object storage → infers each column's type (`bigint`/`double precision`/`date`/`text`; leading-zero
+  ints like zip codes stay text, ISO dates only) → loads points into PostGIS (`ST_MakePoint`→`ST_Transform`
+  4326, GiST index) → saves metadata → regenerates Martin. Dispatched from `routers/data/discover.py`
+  (the "Import existing → CSV" flow). Caps: 1M rows, 200 MB read (in-memory `executemany`; COPY would lift
+  these). Reuses `vector_ingest`'s sqlite status helpers.
 - `export.py` — `export_bundle(bbox, items)`: clips the chosen portal layers to a bbox and writes a
   ZIP to `data/temp/exports/{task_id}.zip` (served by the API's `export-download`). Vector via
   psycopg2 (GeoJSON/CSV) + `ogr2ogr` (GeoPackage); raster via rasterio windowed read with an output
@@ -21,7 +27,7 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
 - `vector_ingest` calls `services.martin.regenerate_config` (so a successful upload makes the layer immediately tileable).
 - `raster_ingest` calls `services.cog_converter` and writes to MinIO; TiTiler reads the COG straight from MinIO at tile time (no registration step needed).
 - Both write to the same SQLite DB the API reads (`{data_dir}/sqlite/geodeploy.db`) — that file is a shared bind mount across api + celery containers.
-- Dispatched from `routers/data/vector.py` and `routers/data/raster.py` via `.delay(...)`.
+- Dispatched from `routers/data/vector.py`, `routers/data/raster.py`, and `routers/data/discover.py` (CSV) via `.delay(...)`.
 
 ## Current status & known issues
 - **Raster pixels keep their source CRS** (e.g. UTM 31N); TiTiler reprojects at tile time via the TileMatrixSet. **The stored bbox IS now reprojected to EPSG:4326** (`services/cog_converter.py::inspect()`, 2026-06-01) so `raster_layers.bbox` is lon/lat like vector. Before this, the UTM bbox crashed portal `fitBounds` with "Invalid LngLat latitude", aborting the whole portal init script (no layer switcher, no tiles). **Raster rows uploaded before the fix still hold UTM bbox — re-upload or backfill.**
@@ -40,4 +46,4 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
-2026-06-03
+2026-06-04

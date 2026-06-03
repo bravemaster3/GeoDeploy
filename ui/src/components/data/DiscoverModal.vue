@@ -158,6 +158,7 @@ function toggleStorage(f) {
 async function doImport() {
   importing.value = true
   importError.value = ''
+  const csvJobs = []
   try {
     if (tab.value === 'db') {
       const tables = dbTables.value
@@ -179,14 +180,18 @@ async function doImport() {
       if (rasters.length) {
         await importStorage(rasters.map(f => ({ key: f.key, name: (f.importName || '').trim() || baseName(f.key) })))
       }
+      // CSV import runs as a background job — collect the job ids to poll after refresh.
       for (const f of csvs) {
-        await importCsv({
+        const { data } = await importCsv({
           key: f.key, name: (f.importName || '').trim() || baseName(f.key),
           x_column: f.xCol, y_column: f.yCol, srid: Number(f.srid) || 4326,
         })
+        csvJobs.push({ jobId: data.id, layerId: data.layer_id })
       }
     }
     await dataStore.refresh()
+    // Poll the CSV jobs so My Data flips processing → ready (the modal can close meanwhile).
+    csvJobs.forEach(j => dataStore.pollJob(j.jobId, 'vector', j.layerId).catch(() => {}))
     emit('close')
   } catch (e) {
     importError.value = e.response?.data?.detail || e.message

@@ -4,10 +4,7 @@ Importing registers a layer in GeoDeploy's catalog (a vector_layers / raster_lay
 points at the existing table/object — it does NOT copy or re-upload the data. Use this when you
 connect GeoDeploy to a database/bucket that already has data (yours or someone else's).
 """
-import csv as csvlib
-import io
 import json
-import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -19,7 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...config import get_settings
 from ...database import get_db
 from ...deps import get_current_user
-from ...models import RasterLayer, User, VectorLayer
+from ...models import RasterLayer, UploadJob, User, VectorLayer
+from ...schemas import JobStatus
 from ...services import martin as martin_svc
 from ...services import cog_converter
 
@@ -276,10 +274,7 @@ async def import_storage(
 
 
 # ── CSV → points (loads into PostGIS; a CSV isn't tile-servable as-is) ─────────
-
-CSV_MAX_BYTES = 50 * 1024 * 1024
-CSV_MAX_ROWS = 200_000
-
+# The heavy load runs in a Celery job (geodeploy.tasks.csv_import) with type inference.
 
 class ImportCsvRequest(BaseModel):
     key: str
@@ -289,138 +284,46 @@ class ImportCsvRequest(BaseModel):
     srid: int = 4326
 
 
-def _safe_name(s: str, fallback: str = "col") -> str:
-    s = re.sub(r"[^a-zA-Z0-9_]", "_", (s or "").strip().lower()).strip("_")
-    if not s:
-        s = fallback
-    if s[0].isdigit():
-        s = "_" + s
-    return s[:60]
-
-
-def _read_csv_text(key: str, settings, max_bytes: int = CSV_MAX_BYTES) -> str:
-    from ...services.minio import get_s3_client
-    s3 = get_s3_client()
-    obj = s3.get_object(Bucket=settings.storage_bucket, Key=key)
-    body = obj["Body"].read(max_bytes + 1)
-    if len(body) > max_bytes:
-        raise ValueError(f"CSV exceeds the {max_bytes // (1024 * 1024)} MB limit.")
-    return body.decode("utf-8-sig", errors="replace")
-
-
-def _csv_header(key: str, settings) -> list[str]:
-    text = _read_csv_text(key, settings, max_bytes=1024 * 1024)  # 1 MB header peek
-    return next(csvlib.reader(io.StringIO(text)), [])
-
-
-def _import_csv(key: str, layer_name: str, x_col: str, y_col: str, srid: int, user_id: int, settings) -> dict:
-    import psycopg2
-    text = _read_csv_text(key, settings)
-    reader = csvlib.DictReader(io.StringIO(text))
-    fields = reader.fieldnames or []
-    if x_col not in fields or y_col not in fields:
-        raise ValueError("Selected X/Y columns are not in the CSV header.")
-
-    safe, used = {}, set()
-    for f in fields:
-        s = _safe_name(f)
-        base, n = s, 1
-        while s in used:
-            s = f"{base}_{n}"; n += 1
-        used.add(s); safe[f] = s
-
-    schema = f"geodeploy_u{user_id}"
-    table = f"csv_{_safe_name(layer_name, 'layer')}_{uuid.uuid4().hex[:6]}"
-    srid = int(srid) or 4326
-
-    params = []
-    for row in reader:
-        if len(params) >= CSV_MAX_ROWS:
-            break
-        try:
-            x, y = float(row.get(x_col)), float(row.get(y_col))
-        except (TypeError, ValueError):
-            continue  # skip rows without usable coordinates
-        params.append([row.get(f) for f in fields] + [x, y])
-    if not params:
-        raise ValueError("No rows had valid numeric X/Y values.")
-
-    geom_expr = (f"ST_Transform(ST_SetSRID(ST_MakePoint(%s,%s),{srid}),4326)"
-                 if srid != 4326 else "ST_SetSRID(ST_MakePoint(%s,%s),4326)")
-    conn = psycopg2.connect(settings.postgis_sync_dsn)
-    try:
-        cur = conn.cursor()
-        cur.execute(f"CREATE SCHEMA IF NOT EXISTS {_q(schema)}")
-        cur.execute("CREATE EXTENSION IF NOT EXISTS postgis")
-        cols_ddl = ", ".join(f"{_q(safe[f])} text" for f in fields)
-        cur.execute(f"CREATE TABLE {_q(schema)}.{_q(table)} "
-                    f"(id serial primary key, {cols_ddl}, geom geometry(Point,4326))")
-        insert_cols = ", ".join(_q(safe[f]) for f in fields)
-        placeholders = ", ".join(["%s"] * len(fields))
-        cur.executemany(
-            f"INSERT INTO {_q(schema)}.{_q(table)} ({insert_cols}, geom) "
-            f"VALUES ({placeholders}, {geom_expr})", params)
-        cur.execute(f"CREATE INDEX ON {_q(schema)}.{_q(table)} USING GIST (geom)")
-        cur.execute(f"SELECT ST_XMin(e), ST_YMin(e), ST_XMax(e), ST_YMax(e) "
-                    f"FROM (SELECT ST_Extent(geom) e FROM {_q(schema)}.{_q(table)}) s")
-        b = cur.fetchone()
-        bbox = [b[0], b[1], b[2], b[3]] if b and b[0] is not None else None
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-    return {
-        "schema": schema, "table": table, "bbox": bbox, "feature_count": len(params),
-        "columns": [{"name": safe[f], "type": "text"} for f in fields],
-    }
-
-
 @router.get("/storage/csv-columns")
 async def csv_columns(key: str, _: User = Depends(get_current_user)):
     """Read a CSV's header so the UI can offer X/Y column pickers."""
+    from ...tasks import csv_import
     settings = get_settings()
     try:
-        cols = await run_in_threadpool(_csv_header, key, settings)
+        cols = await run_in_threadpool(csv_import.csv_header, key, settings)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(400, f"Could not read CSV header: {exc}") from exc
     return {"columns": cols}
 
 
-@router.post("/storage/csv", status_code=201)
+@router.post("/storage/csv", response_model=JobStatus, status_code=202)
 async def import_csv(
     req: ImportCsvRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Build a point layer in PostGIS from a CSV's X/Y columns (reprojected to 4326)."""
+    """Queue a CSV → PostGIS point-layer import (X/Y columns reprojected to 4326)."""
+    from ...tasks import csv_import
     settings = get_settings()
     if not settings.postgis_host:
         raise HTTPException(409, "No PostGIS database is configured.")
     name = (req.name or "").strip() or req.key.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-    try:
-        res = await run_in_threadpool(
-            _import_csv, req.key, name, req.x_column, req.y_column, req.srid, user.id, settings)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(400, f"CSV import failed: {exc}") from exc
+    schema = f"geodeploy_u{user.id}"
+    table = f"csv_{csv_import.safe_name(name, 'layer')}_{uuid.uuid4().hex[:6]}"
 
-    db.add(VectorLayer(
-        user_id=user.id, name=name, schema_name=res["schema"], table_name=res["table"],
-        crs="EPSG:4326", feature_count=res["feature_count"],
-        bbox=json.dumps(res["bbox"]) if res["bbox"] else None,
-        columns=json.dumps(res["columns"]), geometry_type="point",
-        geometry_column="geom", id_column="id", storage_backend="postgis", status="ready",
-    ))
+    layer = VectorLayer(
+        user_id=user.id, name=name, schema_name=schema, table_name=table,
+        geometry_type="point", geometry_column="geom", id_column="id",
+        storage_backend="postgis", status="processing",
+    )
+    db.add(layer)
+    await db.flush()
+    job_id = str(uuid.uuid4())
+    db.add(UploadJob(id=job_id, layer_id=layer.id, layer_type="vector"))
     await db.commit()
+    await db.refresh(layer)
 
-    result = await db.execute(select(VectorLayer).where(
-        VectorLayer.status == "ready", VectorLayer.storage_backend == "postgis"))
-    layers = [{"schema_name": l.schema_name, "table_name": l.table_name,
-               "geometry_column": l.geometry_column, "id_column": l.id_column, "crs": l.crs}
-              for l in result.scalars().all()]
-    try:
-        await martin_svc.regenerate_config(layers)
-    except Exception:  # noqa: BLE001
-        pass
-    return {"imported": [f'{res["schema"]}.{res["table"]}'], "feature_count": res["feature_count"]}
+    csv_import.import_csv.delay(job_id, layer.id, req.key, schema, table,
+                               req.x_column, req.y_column, req.srid)
+    return JobStatus(id=job_id, layer_id=layer.id, layer_type="vector",
+                     status="queued", progress=0, current_step="Queued", error_message=None)
