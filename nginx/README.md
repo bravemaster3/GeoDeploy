@@ -7,7 +7,7 @@ The single public entrypoint. Reverse-proxies the SPA, the API, the two tile ser
 - `nginx.conf` — one `server` block on :80 (443 block commented out, ready for certbot). Locations:
   - `/health`, `/api/` → `geodeploy-api:8000` (with stricter rate-limit + longer timeout on the two `/upload` paths).
   - `/tiles/` → Martin and `/raster/` → TiTiler both use `set $var` + `rewrite ^/<prefix>/(.*)$ /$1 break;` to strip the prefix, then **`proxy_pass http://$var$uri$is_args$args;`**. The explicit `$uri$is_args$args` is required: with a *variable* host, plain `proxy_pass http://$var;` does not reliably forward the rewritten path + query args (this is why correct-format tile URLs 404'd through nginx while working directly in the container).
-  - `/portals/` → static `alias /var/www/portals/` (the bundles written by the API).
+  - `/portals/` → static published bundles under `/var/www/portals/{slug}/index.html`, but **falls back to the SPA** (`@spa` → `geodeploy-ui`) when the path isn't a portal file — because the dashboard's Vue routes also live under `/portals/...` (e.g. `/portals/3/edit`). Without the fallback, refreshing/deep-linking an editor URL 404'd. Uses `root /var/www` + `try_files $uri $uri/index.html @spa`.
   - `/templates-static/` → API. `/` → `geodeploy-ui:80` (SPA, with websocket upgrade for dev HMR).
   - Uses Docker's internal resolver (`127.0.0.11`) + `set $var` so recreated containers are re-resolved without an nginx restart.
   - **`merge_slashes off;`** at the server level — left in but **was a misdiagnosis**: `merge_slashes` only normalizes the URI *path*, never the query string, so it never affected `?url=s3://...`. Harmless; the real query-forwarding fix is the explicit `$uri$is_args$args` proxy_pass above.
