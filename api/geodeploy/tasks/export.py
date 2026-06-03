@@ -125,6 +125,9 @@ def export_bundle(self, bbox: str, items: list[dict]) -> dict:
     exports_dir = f"{settings.data_dir}/temp/exports"
     os.makedirs(exports_dir, exist_ok=True)
     out_path = os.path.join(exports_dir, f"{self.request.id}.zip")
+    # Build under a temp name and atomically rename when fully written — the status
+    # endpoint treats the existence of {id}.zip as "ready", so it must only appear complete.
+    tmp_path = out_path + ".part"
 
     used: set[str] = set()
 
@@ -140,7 +143,7 @@ def export_bundle(self, bbox: str, items: list[dict]) -> dict:
     import psycopg2
     conn = psycopg2.connect(settings.postgis_sync_dsn)
     try:
-        with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as z:
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as z:
             cur = conn.cursor()
             for it in items:
                 if it.get("type") == "vector":
@@ -163,7 +166,12 @@ def export_bundle(self, bbox: str, items: list[dict]) -> dict:
                         continue  # no overlap
                     z.writestr(fn(_safe(it.get("name")) + "_clip", "tif"), data)
             cur.close()
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
     finally:
         conn.close()
 
+    os.replace(tmp_path, out_path)  # atomic publish — only now does status flip to "ready"
     return {"path": out_path}
