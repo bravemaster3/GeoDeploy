@@ -45,13 +45,21 @@
           </div>
 
           <div v-if="!layerConfigs.length" class="text-xs text-gray-400 py-1">No layers added yet.</div>
-          <LayerPanel v-for="(cfg, i) in layerConfigs" :key="`${cfg.layer_type}-${cfg.layer_id}`"
-            :config="cfg"
-            :initial-expanded="`${cfg.layer_type}-${cfg.layer_id}` === lastAddedKey"
-            @remove="layerConfigs.splice(i, 1)"
-            @update="layerConfigs[i] = { ...layerConfigs[i], ...$event }"
-            @zoom="zoomToLayer(cfg)"
-          />
+          <div v-for="(cfg, i) in layerConfigs" :key="`${cfg.layer_type}-${cfg.layer_id}`"
+            draggable="true"
+            @dragstart="onDragStart(i)"
+            @dragover.prevent="onDragOver(i)"
+            @drop="onDragEnd"
+            @dragend="onDragEnd"
+            :class="{ 'opacity-40': dragIndex === i }"
+          >
+            <LayerPanel
+              :config="cfg"
+              @remove="layerConfigs.splice(i, 1)"
+              @update="layerConfigs[i] = { ...layerConfigs[i], ...$event }"
+              @zoom="zoomToLayer(cfg)"
+            />
+          </div>
         </section>
 
         <!-- Template section -->
@@ -143,6 +151,18 @@ const templates = ref([])
 const showAddLayer = ref(false)
 const lastAddedKey = ref(null)
 const accessType = ref('public')
+
+// Drag-to-reorder layers (top of list = top of map)
+const dragIndex = ref(null)
+function onDragStart(i) { dragIndex.value = i }
+function onDragOver(i) {
+  if (dragIndex.value === null || dragIndex.value === i) return
+  const arr = layerConfigs.value
+  const [moved] = arr.splice(dragIndex.value, 1)
+  arr.splice(i, 0, moved)
+  dragIndex.value = i
+}
+function onDragEnd() { dragIndex.value = null }
 const accessPassword = ref('')
 const busy = ref(false)
 const saveMsg = ref(null)
@@ -195,7 +215,9 @@ function buildPreviewStyle() {
 
   let bounds = null
 
-  for (const cfg of layerConfigs.value) {
+  // config[0] is the top of the list → draw it on top → build in reverse.
+  for (const cfg of [...layerConfigs.value].reverse()) {
+    if (cfg.visible === false) continue
     if (cfg.layer_type === 'vector') {
       const layer = dataStore.vectorLayers.find(l => l.id === cfg.layer_id)
       if (!layer || layer.status !== 'ready') continue
@@ -301,7 +323,8 @@ async function addLayer(layer) {
     if (ds?.algorithm) style.algorithm = ds.algorithm
     if (ds?.zfactor != null) style.zfactor = ds.zfactor
   }
-  layerConfigs.value.push({
+  // Add to the top of the list (and the top of the map).
+  layerConfigs.value.unshift({
     layer_id: layer.id,
     layer_type: layer.type,
     visible: true,

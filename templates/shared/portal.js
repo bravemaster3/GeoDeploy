@@ -123,7 +123,8 @@
 
   // ── Layer switcher ──────────────────────────────────────
   map.on('load', function () {
-    const userLayers = STYLE.layers.filter(l => l.metadata && l.metadata['geodeploy:name']);
+    // Reverse so the list shows config[0] (drawn on top) at the top of the list.
+    const userLayers = STYLE.layers.filter(l => l.metadata && l.metadata['geodeploy:name']).reverse();
     buildLayerSwitcher(userLayers);
     setupBasemaps();  // adds the basemap + tools controls (top-right)
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');  // zoom below them
@@ -151,7 +152,7 @@
         if (src && src.setTiles) src.setTiles(s.tiles);
       }
     });
-    buildLayerSwitcher(STYLE.layers.filter(l => l.metadata && l.metadata['geodeploy:name']));
+    buildLayerSwitcher(STYLE.layers.filter(l => l.metadata && l.metadata['geodeploy:name']).reverse());
   }
 
   function buildLayerSwitcher(layers) {

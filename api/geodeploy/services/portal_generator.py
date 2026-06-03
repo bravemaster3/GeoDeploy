@@ -17,7 +17,9 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
     layers = []
     bounds = [180, 90, -180, -90]  # expanded below
 
-    for cfg in layer_configs:
+    # layer_configs[0] is the TOP of the layer list and should draw on TOP of the map.
+    # MapLibre draws later layers on top, so build them in reverse (config[0] added last).
+    for cfg in reversed(layer_configs):
         if cfg["layer_type"] == "vector":
             layer = next((l for l in vector_layers if l.id == cfg["layer_id"]), None)
             if not layer:
