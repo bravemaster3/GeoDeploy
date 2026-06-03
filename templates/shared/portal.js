@@ -182,10 +182,12 @@
       card.dataset.layerId = layer.id;
       card.setAttribute('draggable', 'true');
       const dash = dashKind(layer.paint);
+      let visOn = true;
+      try { visOn = map.getLayoutProperty(layer.id, 'visibility') !== 'none'; } catch (e) {}
       card.innerHTML =
         '<div class="layer-row">' +
           '<span class="layer-drag" title="Drag to reorder">' + dragIcon() + '</span>' +
-          '<button class="layer-eye" data-layer-id="' + layer.id + '" title="Hide / show" aria-label="Toggle visibility">' + eyeIcon(true) + '</button>' +
+          '<button class="layer-eye' + (visOn ? '' : ' off') + '" data-layer-id="' + layer.id + '" title="Hide / show" aria-label="Toggle visibility">' + eyeIcon(visOn) + '</button>' +
           '<button class="layer-swatch-btn" data-swatch="' + layer.id + '" data-layer-id="' + layer.id + '" title="Symbology" aria-label="Edit symbology">' + legendSwatch(geom, color, dash) + '</button>' +
           '<span class="layer-name" title="' + escHtml(name) + '">' + escHtml(name) + '</span>' +
           '<button class="layer-zoom" data-layer-id="' + layer.id + '" title="Zoom to layer" aria-label="Zoom to layer"' + (canZoom ? '' : ' disabled') + '>' +

@@ -40,6 +40,8 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 "geodeploy:bbox": json.loads(layer.bbox) if layer.bbox else None,
                 "geodeploy:geometry": _geom_kind(layer.geometry_type),
             }
+            if not cfg.get("visible", True):
+                ml_layer["layout"] = {"visibility": "none"}
             layers.append(ml_layer)
 
             if layer.bbox:
@@ -62,7 +64,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 )],
                 "tileSize": 256,
             }
-            layers.append({
+            raster_layer = {
                 "id": f"raster-{layer.id}",
                 "type": "raster",
                 "source": source_id,
@@ -76,7 +78,10 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                     "geodeploy:geometry": "raster",
                     "geodeploy:bands": layer.band_count,
                 },
-            })
+            }
+            if not cfg.get("visible", True):
+                raster_layer["layout"] = {"visibility": "none"}
+            layers.append(raster_layer)
 
             if layer.bbox:
                 _expand_bounds(bounds, json.loads(layer.bbox))
