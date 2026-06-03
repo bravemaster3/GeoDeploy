@@ -64,6 +64,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                     rescale=rstyle.get("rescale"),
                     algorithm=rstyle.get("algorithm"),
                     zfactor=rstyle.get("zfactor"),
+                    bidx=rstyle.get("bidx"),
                 )],
                 "tileSize": 256,
             }

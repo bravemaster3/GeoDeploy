@@ -10,7 +10,8 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
   - `portal.js` — all portal behaviour (access gate, map init, **thin layer list**: drag-to-reorder ·
     eye/eye-off visibility · symbol swatch that opens a **symbology popover** (opacity, colour, line
     type, size; **point marker shape** circle/square/triangle/diamond/star/cross; raster:
-    palette/hillshade/Z/stretch + legend bar) · zoom; popup + attribute table,
+    **band selection** (multiband → RGB composite or single band), palette/hillshade/Z/stretch +
+    legend bar — the viewer's tweaks preserve the admin's baked `bidx`) · zoom; popup + attribute table,
     **raster pixel identify**, basemap switcher, coordinate readout, reset styling, **Tools control:
     select-area-and-download** (`POST /api/portals/{slug}/export-bundle`)). It reads its data from a
     `window.GEODEPLOY` object (`title`, `slug`, `style`, `popupConfig`, `accessType`, `passwordSha256`) and
@@ -59,4 +60,4 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (the theming is already variable-based, so this is now straightforward).
 
 ## Last updated
-2026-06-03
+2026-06-04

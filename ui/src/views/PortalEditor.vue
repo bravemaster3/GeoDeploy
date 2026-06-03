@@ -330,13 +330,15 @@ function buildPreviewStyle() {
 function rasterTilesUrl(baseTileUrl, style) {
   const base = (baseTileUrl || '').split('&')[0]  // s3 key has no '&', so this keeps ?url=...
   const params = []
+  const bands = Array.isArray(style?.bidx) ? style.bidx.filter(b => b != null) : []
+  bands.forEach(b => params.push(`bidx=${b}`))
   if (style?.rescale) params.push(`rescale=${style.rescale}`)
   if (style?.algorithm) {
     params.push(`algorithm=${style.algorithm}`)
     if (style.algorithm === 'hillshade' && style.zfactor && Number(style.zfactor) !== 1) {
       params.push(`expression=b1*${style.zfactor}`)
     }
-  } else if (style?.colormap) {
+  } else if (style?.colormap && bands.length !== 3) {
     params.push(`colormap_name=${style.colormap}`)
   }
   const url = base + (params.length ? '&' + params.join('&') : '')
@@ -369,6 +371,7 @@ async function addLayer(layer) {
     if (ds?.rescale) style.rescale = ds.rescale
     if (ds?.algorithm) style.algorithm = ds.algorithm
     if (ds?.zfactor != null) style.zfactor = ds.zfactor
+    if (Array.isArray(ds?.bidx) && ds.bidx.length) style.bidx = ds.bidx.slice()
   }
   // Add to the top of the list (and the top of the map).
   layerConfigs.value.unshift({

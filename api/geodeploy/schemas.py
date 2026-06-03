@@ -106,6 +106,7 @@ class RasterDefaultStyle(BaseModel):
     rescale: str | None = None       # "min,max" stretch
     algorithm: str | None = None     # e.g. "hillshade" (single-band)
     zfactor: float | None = None     # hillshade vertical exaggeration
+    bidx: list[int] | None = None    # band selection: [n] single-band, [r,g,b] RGB composite
 
 
 class RasterLayerOut(BaseModel):

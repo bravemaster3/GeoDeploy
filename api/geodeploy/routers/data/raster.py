@@ -41,6 +41,7 @@ async def list_layers(user: User = Depends(get_current_user), db: AsyncSession =
                 rescale=ds.get("rescale"),
                 algorithm=ds.get("algorithm"),
                 zfactor=ds.get("zfactor"),
+                bidx=ds.get("bidx"),
             )
         out.append(obj)
     return out

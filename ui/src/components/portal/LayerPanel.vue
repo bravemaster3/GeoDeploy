@@ -127,7 +127,36 @@
 
           <!-- Raster styling -->
           <template v-else-if="config.layer_type === 'raster'">
-            <template v-if="layer?.band_count === 1">
+            <!-- Band selection (multiband rasters only) -->
+            <template v-if="bandCount > 1">
+              <div>
+                <label class="text-xs text-gray-500">Bands</label>
+                <select :value="bandMode" @change="setBandMode($event.target.value)"
+                  class="mt-0.5 w-full text-xs border border-gray-200 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-brand-400">
+                  <option value="rgb">RGB composite</option>
+                  <option value="single">Single band</option>
+                </select>
+              </div>
+              <div v-if="bandMode === 'rgb'" class="flex items-center gap-2">
+                <div v-for="(chan, i) in ['R', 'G', 'B']" :key="chan" class="flex items-center gap-1">
+                  <label class="text-xs font-medium" :class="['text-red-500','text-green-600','text-blue-500'][i]">{{ chan }}</label>
+                  <select :value="rgbBands[i]" @change="setRgbBand(i, $event.target.value)"
+                    class="text-xs border border-gray-200 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-brand-400">
+                    <option v-for="b in bandList" :key="b" :value="b">{{ b }}</option>
+                  </select>
+                </div>
+              </div>
+              <div v-else>
+                <label class="text-xs text-gray-500">Band</label>
+                <select :value="singleBand" @change="setSingleBand($event.target.value)"
+                  class="mt-0.5 w-full text-xs border border-gray-200 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-brand-400">
+                  <option v-for="b in bandList" :key="b" :value="b">Band {{ b }}</option>
+                </select>
+              </div>
+            </template>
+
+            <!-- Palette + hillshade: single-band raster, or a multiband raster in single-band mode -->
+            <template v-if="bandCount === 1 || bandMode === 'single'">
               <div>
                 <label class="text-xs text-gray-500">Color palette</label>
                 <select :value="config.style?.colormap || ''" :disabled="config.style?.algorithm === 'hillshade'"
@@ -151,9 +180,6 @@
                 </div>
               </div>
             </template>
-            <p v-else class="text-[10px] text-gray-400">
-              Multi-band image ({{ layer?.band_count }} bands) — use stretch to adjust brightness.
-            </p>
 
             <div>
               <div class="flex items-center justify-between mb-0.5">
@@ -301,6 +327,32 @@ function emitStyle(patch) {
   emit('update', { style: { ...props.config.style, ...patch } })
 }
 
+// ── Multiband band selection (bidx) ──────────────────────────────────────────
+// bidx in the style: [n] = single band, [r,g,b] = RGB composite, absent = TiTiler default.
+const bandCount = computed(() => layer.value?.band_count || 1)
+const bandList = computed(() => Array.from({ length: bandCount.value }, (_, i) => i + 1))
+const bidx = computed(() => props.config.style?.bidx || null)
+// Default a multiband raster to RGB; one selected band means single-band mode.
+const bandMode = computed(() => (bidx.value && bidx.value.length === 1) ? 'single' : 'rgb')
+const rgbBands = computed(() =>
+  (bidx.value && bidx.value.length === 3)
+    ? bidx.value
+    : [1, Math.min(2, bandCount.value), Math.min(3, bandCount.value)])
+const singleBand = computed(() => (bidx.value && bidx.value.length === 1) ? bidx.value[0] : 1)
+
+function setBandMode(mode) {
+  if (mode === 'rgb') emitStyle({ bidx: rgbBands.value.slice(), colormap: null, algorithm: null })
+  else emitStyle({ bidx: [singleBand.value] })
+}
+function setRgbBand(i, val) {
+  const b = rgbBands.value.slice()
+  b[i] = parseInt(val)
+  emitStyle({ bidx: b, colormap: null, algorithm: null })
+}
+function setSingleBand(val) {
+  emitStyle({ bidx: [parseInt(val)] })
+}
+
 const rescaleMin = computed(() => (props.config.style?.rescale || '').split(',')[0] || '')
 const rescaleMax = computed(() => (props.config.style?.rescale || '').split(',')[1] || '')
 const autoStretching = ref(false)
@@ -355,6 +407,7 @@ async function saveDefault() {
           rescale: props.config.style?.rescale || null,
           algorithm: props.config.style?.algorithm || null,
           zfactor: props.config.style?.zfactor ?? null,
+          bidx: props.config.style?.bidx || null,
         }
     const fn = props.config.layer_type === 'vector' ? saveVectorDefaultStyle : saveRasterDefaultStyle
     const { data: updated } = await fn(layer.value.id, body)
@@ -373,7 +426,7 @@ function useDefault() {
     opacity: ds.opacity ?? 1.0,
     style: props.config.layer_type === 'vector'
       ? (ds.style ?? {})
-      : { colormap: ds.colormap || null, rescale: ds.rescale || null, algorithm: ds.algorithm || null, zfactor: ds.zfactor ?? null },
+      : { colormap: ds.colormap || null, rescale: ds.rescale || null, algorithm: ds.algorithm || null, zfactor: ds.zfactor ?? null, bidx: ds.bidx || null },
     ...(props.config.layer_type === 'vector' ? { popup_fields: ds.popup_fields ?? [] } : {}),
   })
 }

@@ -485,6 +485,45 @@
       const btn = e.currentTarget, s = btn.dataset.src, r = btn.closest('.layer-style-row');
       autoStretchRaster(s, r.querySelector('.rstyle-min'), r.querySelector('.rstyle-max'), btn);
     }));
+    // Multiband band selection (RGB composite ↔ single band).
+    root.querySelectorAll('.rstyle-bandmode').forEach(el => el.addEventListener('change', e => {
+      const s = e.target.dataset.src, n = rasterBandCount(s), cur = effectiveBidx(s);
+      let bidx;
+      if (e.target.value === 'rgb') bidx = (cur.length === 3) ? cur : [1, Math.min(2, n), Math.min(3, n)];
+      else bidx = [cur.length === 1 ? cur[0] : 1];
+      const patch = { bidx: bidx };
+      if (bidx.length === 3) patch.colormap = null;  // colormap is meaningless for RGB
+      rasterState[s] = Object.assign({}, rasterState[s], patch);
+      applyRaster(s); refreshRasterRow(s); updateRasterLegend(s);
+    }));
+    root.querySelectorAll('.rstyle-rgb').forEach(el => el.addEventListener('change', e => {
+      const s = e.target.dataset.src, n = rasterBandCount(s), chan = parseInt(e.target.dataset.chan), cur = effectiveBidx(s);
+      const rgb = (cur.length === 3) ? cur.slice() : [1, Math.min(2, n), Math.min(3, n)];
+      rgb[chan] = parseInt(e.target.value);
+      rasterState[s] = Object.assign({}, rasterState[s], { bidx: rgb, colormap: null });
+      applyRaster(s); updateRasterLegend(s);
+    }));
+    root.querySelectorAll('.rstyle-band').forEach(el => el.addEventListener('change', e => {
+      const s = e.target.dataset.src;
+      rasterState[s] = Object.assign({}, rasterState[s], { bidx: [parseInt(e.target.value)] });
+      applyRaster(s); updateRasterLegend(s);
+    }));
+  }
+
+  // Re-render just the raster style row in the open popover (used when the band mode
+  // switches between RGB and single, which changes which controls are shown).
+  function refreshRasterRow(srcId) {
+    if (!symbolPop) return;
+    const layer = STYLE.layers.find(l => l.source === srcId && l.metadata && l.metadata['geodeploy:type'] === 'raster');
+    if (!layer) return;
+    const oldRow = symbolPop.querySelector('.layer-style-row');
+    if (!oldRow) return;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = rasterStyleRow(layer);
+    const newRow = tmp.firstElementChild;
+    newRow.classList.add('open');
+    oldRow.replaceWith(newRow);
+    attachStyleHandlers(newRow, layer);  // scoped to the new row — won't double-bind the opacity slider (a sibling)
   }
 
   function getLayerColor(layer) {
@@ -557,9 +596,29 @@
     return out;
   }
 
+  // Band selection (bidx) helpers — bidx can repeat in the URL, so parseRasterParams
+  // (last-wins) can't read it. Pull all bidx values from the baked tile URL.
+  function bakedBidx(srcId) {
+    const t = (STYLE.sources[srcId] && STYLE.sources[srcId].tiles && STYLE.sources[srcId].tiles[0]) || '';
+    const out = []; const re = /[?&]bidx=(\d+)/g; let m;
+    while ((m = re.exec(t))) out.push(parseInt(m[1]));
+    return out;
+  }
+  function effectiveBidx(srcId) {
+    const st = rasterState[srcId] || {};
+    return Array.isArray(st.bidx) ? st.bidx : bakedBidx(srcId);
+  }
+  function rasterBandCount(srcId) {
+    const l = STYLE.layers.find(x => x.source === srcId && x.metadata && x.metadata['geodeploy:type'] === 'raster');
+    return (l && l.metadata['geodeploy:bands']) || 1;
+  }
+
   function rasterLegendHtml(layer) {
     const srcId = layer.source;
     const st = (typeof rasterState !== 'undefined' && rasterState[srcId]) || {};
+    const bidx = Array.isArray(st.bidx) ? st.bidx : bakedBidx(srcId);
+    if (bidx.length === 3)  // RGB composite — a colormap gradient would be misleading
+      return '<div class="legend-range"><span>RGB composite</span><span>bands ' + escHtml(bidx.join(' / ')) + '</span></div>';
     const baked = parseRasterParams(srcId);
     const cmap = st.hillshade ? 'gray' : (st.colormap !== undefined ? (st.colormap || '') : (baked.colormap_name || ''));
     const rescale = (st.min != null && st.min !== '' && st.max != null && st.max !== '')
@@ -631,9 +690,29 @@
 
   function rasterStyleRow(layer) {
     const src = layer.source;
-    const bands = layer.metadata && layer.metadata['geodeploy:bands'];
+    const bands = (layer.metadata && layer.metadata['geodeploy:bands']) || 1;
+    const cur = effectiveBidx(src);
+    const mode = (cur.length === 1) ? 'single' : 'rgb';
     let html = '';
-    if (bands === 1) {
+    if (bands > 1) {
+      const bandOpts = sel => { let o = ''; for (let b = 1; b <= bands; b++) o += '<option value="' + b + '"' + (b === sel ? ' selected' : '') + '>' + b + '</option>'; return o; };
+      html += '<div class="layer-style-field"><label>Bands</label>' +
+        '<select class="rstyle-bandmode" data-src="' + src + '">' +
+        '<option value="rgb"' + (mode === 'rgb' ? ' selected' : '') + '>RGB composite</option>' +
+        '<option value="single"' + (mode === 'single' ? ' selected' : '') + '>Single band</option>' +
+        '</select></div>';
+      if (mode === 'rgb') {
+        const rgb = (cur.length === 3) ? cur : [1, Math.min(2, bands), Math.min(3, bands)];
+        html += '<div class="layer-style-field"><label>R G B</label>' +
+          '<select class="rstyle-rgb" data-src="' + src + '" data-chan="0">' + bandOpts(rgb[0]) + '</select>' +
+          '<select class="rstyle-rgb" data-src="' + src + '" data-chan="1">' + bandOpts(rgb[1]) + '</select>' +
+          '<select class="rstyle-rgb" data-src="' + src + '" data-chan="2">' + bandOpts(rgb[2]) + '</select></div>';
+      } else {
+        html += '<div class="layer-style-field"><label>Band</label>' +
+          '<select class="rstyle-band" data-src="' + src + '">' + bandOpts(cur[0] || 1) + '</select></div>';
+      }
+    }
+    if (bands === 1 || mode === 'single') {
       html += '<div class="layer-style-field"><label>Palette</label>' +
         '<select class="rstyle-colormap" data-src="' + src + '"><option value="">Grayscale</option>' +
         PORTAL_COLORMAPS.map(c => '<option value="' + c + '">' + c + '</option>').join('') +
@@ -658,11 +737,14 @@
     if (!baseFull) return;
     const base = baseFull.split('&')[0];  // keep up to ?url=s3://... (s3 key has no '&')
     const params = [];
+    // Preserve the admin's baked band selection unless the viewer overrode it.
+    const bidx = Array.isArray(st.bidx) ? st.bidx : bakedBidx(srcId);
+    bidx.forEach(b => params.push('bidx=' + b));
     if (st.min != null && st.min !== '' && st.max != null && st.max !== '') params.push('rescale=' + st.min + ',' + st.max);
     if (st.hillshade) {
       params.push('algorithm=hillshade');
       if (st.zfactor && Number(st.zfactor) !== 1) params.push('expression=b1*' + st.zfactor);
-    } else if (st.colormap) {
+    } else if (st.colormap && bidx.length !== 3) {  // colormap is ignored for an RGB composite
       params.push('colormap_name=' + st.colormap);
     }
     const url = base + (params.length ? '&' + params.join('&') : '');
