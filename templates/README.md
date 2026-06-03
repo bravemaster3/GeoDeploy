@@ -59,4 +59,4 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (the theming is already variable-based, so this is now straightforward).
 
 ## Last updated
-2026-06-02
+2026-06-03

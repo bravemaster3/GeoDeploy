@@ -12,7 +12,8 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   ZIP to `data/temp/exports/{task_id}.zip` (served by the API's `export-download`). Vector via
   psycopg2 (GeoJSON/CSV) + `ogr2ogr` (GeoPackage); raster via rasterio windowed read with an output
   cap (`MAX_PIXELS`, downsamples huge selections via overviews). Offloads the heavy clip off the API
-  process. Routed to the `ingest` queue (the only one the worker consumes).
+  process. Routed to the `ingest` queue (the only one the worker consumes). **Writes to `{id}.zip.part`
+  then `os.replace()`** to the final name — see known issues for why.
 - `__init__.py` — package marker.
 
 ## Dependencies / relationships
@@ -27,6 +28,16 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
 - Vector reprojection uses a per-feature Fiona transform; fine for typical files, not optimized for huge datasets.
 - Status updates use raw sqlite3 with string-built `SET` clauses over a fixed set of internal keys — safe here but don't pass user input as column names.
 - Errors set both job and layer `status='error'` with the message; the UI surfaces `error_message`.
+- **`export.py` traps (all hit + fixed 2026-06-03; full detail in `notes_temp/notes_for_future.md`):**
+  (1) the status endpoint calls the job ready when `{id}.zip` exists, but `zipfile.ZipFile(path,'w')`
+  creates it empty immediately → poller downloaded an empty zip → **build to `.part` then `os.replace`**.
+  (2) **GeoTIFF to a `BytesIO` is silently truncated** (GTiff needs a seekable dataset) → use
+  `rasterio.io.MemoryFile`; also strip `tiled/blockxsize/blockysize/...` from the source profile.
+  (3) **rasterio ≥1.4 forbids AWS creds in `rasterio.Env`** → pass them via
+  `rasterio.session.AWSSession(endpoint_url=...)`, keep only `AWS_S3_ENDPOINT`/`AWS_HTTPS`/etc as Env kwargs.
+- **Deploy:** the worker shares the api image — any task change needs
+  `docker compose build geodeploy-api && up -d --force-recreate geodeploy-api celery` (recreating only
+  api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
-2026-06-01
+2026-06-03
