@@ -188,7 +188,18 @@ def _write_env(config: SetupConfig) -> None:
         with open(env_path) as f:
             lines = f.readlines()
 
+    # Which optional (profile-gated) local containers this install runs. Persisting this to
+    # COMPOSE_PROFILES means `docker compose up` (install/update) keeps managing them — without
+    # it, `--remove-orphans` would delete the wizard-provisioned postgres/minio. External users
+    # leave the relevant profile off so the local container never starts. (notes_for_future §1)
+    profiles = []
+    if config.postgis_type == "local":
+        profiles.append("local-db")
+    if config.storage_type == "local":
+        profiles.append("local-storage")
+
     updates = {
+        "COMPOSE_PROFILES": ",".join(profiles),
         "POSTGIS_HOST": config.postgis_host,
         "POSTGIS_PORT": str(config.postgis_port),
         "POSTGIS_DB": config.postgis_db,
