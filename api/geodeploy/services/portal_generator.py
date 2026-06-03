@@ -5,9 +5,11 @@ from pathlib import Path
 from ..config import get_settings
 from .martin import get_tile_url as vector_tile_url
 from .titiler import get_tile_url as raster_tile_url
+from . import external_sources as ext_svc
 
 
-def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers: list) -> dict:
+def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers: list,
+                   external_sources: list | None = None) -> dict:
     """
     Return user data sources and layers only.
     The basemap is provided by the template's style.json and merged in build_portal_bundle.
@@ -90,6 +92,48 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
             if layer.bbox:
                 _expand_bounds(bounds, json.loads(layer.bbox))
 
+        elif cfg["layer_type"] == "external":
+            src = next((s for s in (external_sources or []) if s.id == cfg["layer_id"]), None)
+            if not src:
+                continue
+            estyle = cfg.get("style", {})
+            source_id = f"ext_{src.id}"
+            src_bbox = json.loads(src.bbox) if src.bbox else None
+            base_meta = {
+                "geodeploy:name": src.name,
+                "geodeploy:type": src.kind,          # raster | vector
+                "geodeploy:external": True,
+                "geodeploy:layer_id": src.id,
+                "geodeploy:opacity": cfg.get("opacity", 1.0),
+                "geodeploy:bbox": src_bbox,
+                "geodeploy:attribution": src.attribution,
+            }
+            if src.kind == "raster":
+                sources[source_id] = {"type": "raster", "tiles": [ext_svc.tile_url(src)], "tileSize": 256}
+                if src.attribution:
+                    sources[source_id]["attribution"] = src.attribution
+                ext_layer = {
+                    "id": f"external-{src.id}",
+                    "type": "raster",
+                    "source": source_id,
+                    "paint": {"raster-opacity": cfg.get("opacity", 1.0)},
+                    "metadata": {**base_meta, "geodeploy:geometry": "raster"},
+                }
+                if not cfg.get("visible", True):
+                    ext_layer["layout"] = {"visibility": "none"}
+            else:  # vector — WFS through the GeoJSON proxy
+                sources[source_id] = {"type": "geojson", "data": ext_svc.features_url(src)}
+                if src.attribution:
+                    sources[source_id]["attribution"] = src.attribution
+                geom = src.geometry_type or "polygon"
+                ext_layer = _external_vector_layer(source_id, src, geom, estyle, cfg.get("opacity", 1.0))
+                ext_layer["metadata"] = {**base_meta, "geodeploy:geometry": geom}
+                if not cfg.get("visible", True):
+                    ext_layer.setdefault("layout", {})["visibility"] = "none"
+            layers.append(ext_layer)
+            if src_bbox:
+                _expand_bounds(bounds, src_bbox)
+
     valid_bounds = bounds if bounds[0] < bounds[2] else None
     return {"sources": sources, "layers": layers, "bounds": valid_bounds}
 
@@ -158,6 +202,36 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+def _external_vector_layer(source_id: str, src, geom: str, style: dict, opacity: float) -> dict:
+    """A MapLibre layer for a WFS GeoJSON source (no source-layer; geom from the probe)."""
+    color = style.get("color", "#3b82f6")
+    lid = f"external-{src.id}"
+    if geom == "polygon":
+        return {
+            "id": lid, "type": "fill", "source": source_id,
+            "paint": {
+                "fill-color": color,
+                "fill-opacity": opacity * style.get("fill_opacity", 0.45),
+                "fill-outline-color": style.get("outline_color", "#1d4ed8"),
+            },
+        }
+    if geom == "line":
+        return {
+            "id": lid, "type": "line", "source": source_id,
+            "paint": {"line-color": color, "line-width": style.get("line_width", 2), "line-opacity": opacity},
+        }
+    return {
+        "id": lid, "type": "circle", "source": source_id,
+        "paint": {
+            "circle-color": color,
+            "circle-radius": style.get("radius", 5),
+            "circle-opacity": opacity,
+            "circle-stroke-color": "#ffffff",
+            "circle-stroke-width": 1,
+        },
+    }
+
 
 def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
     geom = (layer.geometry_type or "").lower()

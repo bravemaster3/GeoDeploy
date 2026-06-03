@@ -75,7 +75,8 @@ services:
   martin:
     image: ghcr.io/maplibre/martin:latest
     restart: unless-stopped
-    profiles: ["postgis"]
+    # Core service (NOT profile-gated): vector tiles are needed for both local and external
+    # PostGIS. Boots from a sources-less config until a DB is configured (see main.py).
     container_name: geodeploy-martin
     command: --config /config/martin-config.yaml
     volumes:
@@ -88,7 +89,8 @@ services:
   titiler:
     image: ghcr.io/developmentseed/titiler:latest
     restart: unless-stopped
-    profiles: ["raster"]
+    # Core service (NOT profile-gated): the raster tile server. Harmless to run before
+    # storage is configured (S3 access is per-request via env). Local/external both use it.
     container_name: geodeploy-titiler
     environment:
       AWS_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY}

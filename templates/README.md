@@ -11,7 +11,9 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
     eye/eye-off visibility · symbol swatch that opens a **symbology popover** (opacity, colour, line
     type, size; **point marker shape** circle/square/triangle/diamond/star/cross; raster:
     **band selection** (multiband → RGB composite or single band), palette/hillshade/Z/stretch +
-    legend bar — the viewer's tweaks preserve the admin's baked `bidx`) · zoom; popup + attribute table,
+    legend bar — the viewer's tweaks preserve the admin's baked `bidx`; **external sources**
+    (WMS/XYZ/WFS, flagged `geodeploy:external`) get an opacity-only popover (+colour for WFS) and
+    skip the raster stretch path; geojson `data` URLs are absolutified like tile URLs) · zoom; popup + attribute table,
     **raster pixel identify**, basemap switcher, coordinate readout, reset styling, **Tools control:
     select-area-and-download** (`POST /api/portals/{slug}/export-bundle`)). It reads its data from a
     `window.GEODEPLOY` object (`title`, `slug`, `style`, `popupConfig`, `accessType`, `passwordSha256`) and

@@ -62,6 +62,11 @@ export const deleteRasterLayer = (id) => api.delete(`/data/raster/${id}`)
 export const listColormaps = () => api.get('/data/raster/colormaps')
 export const getRasterStats = (id) => api.get(`/data/raster/${id}/stats`)
 
+// External sources (WMS / XYZ raster, WFS vector — displayed without ingesting)
+export const listExternalSources = () => api.get('/data/sources')
+export const createExternalSource = (data) => api.post('/data/sources', data)
+export const deleteExternalSource = (id) => api.delete(`/data/sources/${id}`)
+
 // Portals
 export const listPortals = () => api.get('/portals')
 export const createPortal = (data) => api.post('/portals', data)

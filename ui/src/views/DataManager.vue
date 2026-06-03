@@ -9,6 +9,9 @@
         <button @click="showRasterUpload = true" class="btn-secondary">
           <UploadIcon class="w-4 h-4" /> Upload raster
         </button>
+        <button @click="showAddSource = true" class="btn-secondary">
+          + Connect source
+        </button>
       </div>
     </div>
 
@@ -40,9 +43,24 @@
       </div>
     </section>
 
+    <!-- External sources -->
+    <section>
+      <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">
+        External sources (WMS / XYZ / WFS)
+      </h2>
+      <div class="card divide-y divide-gray-100">
+        <div v-if="!dataStore.externalSources.length" class="px-4 py-6 text-sm text-gray-400 text-center">
+          No external sources. Connect a WMS, XYZ/WMTS, or WFS service to show it in portals without importing.
+        </div>
+        <SourceRow v-for="src in dataStore.externalSources" :key="src.id" :source="src"
+          @delete="dataStore.removeExternal(src.id)" />
+      </div>
+    </section>
+
     <!-- Upload modals -->
     <UploadModal v-if="showVectorUpload" type="vector" @close="showVectorUpload = false" />
     <UploadModal v-if="showRasterUpload" type="raster" @close="showRasterUpload = false" />
+    <AddSourceModal v-if="showAddSource" @close="showAddSource = false" />
   </div>
 </template>
 
@@ -53,10 +71,13 @@ import { UploadIcon } from './icons'
 import VectorRow from '@/components/data/VectorRow.vue'
 import RasterRow from '@/components/data/RasterRow.vue'
 import UploadModal from '@/components/data/UploadModal.vue'
+import SourceRow from '@/components/data/SourceRow.vue'
+import AddSourceModal from '@/components/data/AddSourceModal.vue'
 
 const dataStore = useDataStore()
 const showVectorUpload = ref(false)
 const showRasterUpload = ref(false)
+const showAddSource = ref(false)
 
 onMounted(() => dataStore.refresh())
 </script>

@@ -201,8 +201,25 @@
             </div>
           </template>
 
-          <!-- Default style actions -->
-          <div class="flex items-center gap-2 pt-1 border-t border-gray-100">
+          <!-- External source (WMS / XYZ / WFS) -->
+          <template v-else-if="config.layer_type === 'external'">
+            <div v-if="layer?.kind === 'vector'">
+              <label class="text-xs text-gray-500">Color</label>
+              <div class="flex items-center gap-2 mt-0.5">
+                <input type="color" :value="config.style?.color || '#3b82f6'"
+                  @input="emitStyle({ color: $event.target.value })"
+                  class="w-6 h-6 rounded border border-gray-200 cursor-pointer p-0" />
+                <span class="text-xs text-gray-400 font-mono">{{ config.style?.color || '#3b82f6' }}</span>
+              </div>
+            </div>
+            <p class="text-[10px] text-gray-400">
+              External {{ layer?.source_type?.toUpperCase() }} source — served by the provider.
+              <span v-if="layer?.attribution">© {{ layer.attribution }}</span>
+            </p>
+          </template>
+
+          <!-- Default style actions (not applicable to external sources) -->
+          <div v-if="config.layer_type !== 'external'" class="flex items-center gap-2 pt-1 border-t border-gray-100">
             <button v-if="layer?.default_style" @click="useDefault" class="text-xs text-brand-600 hover:text-brand-700 font-medium"
               title="Apply saved default style to this portal">↩ Use default</button>
             <button @click="saveDefault" :disabled="savingDefault" class="text-xs text-gray-500 hover:text-gray-700 ml-auto"
@@ -267,6 +284,7 @@ onMounted(async () => {
 onBeforeUnmount(() => document.removeEventListener('mousedown', onDocClick))
 
 const layer = computed(() => {
+  if (props.config.layer_type === 'external') return dataStore.externalSources.find(s => s.id === props.config.layer_id) || null
   const list = props.config.layer_type === 'vector' ? dataStore.vectorLayers : dataStore.rasterLayers
   return list.find(l => l.id === props.config.layer_id) || null
 })
@@ -281,7 +299,11 @@ const geomType = computed(() => {
   return 'unknown'
 })
 
-const geomKind = computed(() => props.config.layer_type === 'raster' ? 'raster' : geomType.value)
+const geomKind = computed(() => {
+  if (props.config.layer_type === 'raster') return 'raster'
+  if (props.config.layer_type === 'external') return layer.value?.kind === 'raster' ? 'raster' : geomType.value
+  return geomType.value
+})
 const geomLabel = computed(() => ({
   polygon: 'Polygons', line: 'Lines', point: 'Points', raster: 'Raster',
 }[geomKind.value] || 'Vector'))

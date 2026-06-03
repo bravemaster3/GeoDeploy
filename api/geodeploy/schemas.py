@@ -136,6 +136,46 @@ class RasterLayerOut(BaseModel):
         return cls(**data)
 
 
+# ── External sources (WMS / XYZ / WFS) ────────────────────────────────────────
+
+class ExternalSourceCreate(BaseModel):
+    name: str
+    source_type: str = Field(pattern="^(xyz|wms|wfs)$")
+    url: str
+    layer_name: str | None = None     # WMS layers= / WFS typeName (required for wms/wfs)
+    version: str | None = None        # WMS (default 1.3.0) / WFS (default 2.0.0)
+    image_format: str | None = None   # WMS image format (default image/png)
+    attribution: str | None = None
+
+
+class ExternalSourceOut(BaseModel):
+    id: int
+    name: str
+    source_type: str
+    kind: str                         # raster | vector
+    url: str
+    layer_name: str | None
+    version: str | None
+    image_format: str | None
+    attribution: str | None
+    geometry_type: str | None
+    bbox: list[float] | None
+    created_at: datetime
+    tile_url: str | None = None       # raster sources: MapLibre tiles[] template
+    data_url: str | None = None       # vector sources: GeoJSON proxy path
+
+    model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_orm_json(cls, obj: Any) -> "ExternalSourceOut":
+        import json
+        data = {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
+        data["bbox"] = json.loads(obj.bbox) if obj.bbox else None
+        data["tile_url"] = None
+        data["data_url"] = None
+        return cls(**data)
+
+
 # ── Upload Jobs ───────────────────────────────────────────────────────────────
 
 class JobStatus(BaseModel):

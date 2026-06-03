@@ -352,6 +352,36 @@ function buildPreviewStyle() {
         paint: { 'raster-opacity': cfg.opacity ?? 1.0 },
       })
       expandBounds(layer.bbox)
+
+    } else if (cfg.layer_type === 'external') {
+      const src = dataStore.externalSources.find(s => s.id === cfg.layer_id)
+      if (!src) continue
+      const srcId = `ext_${src.id}`
+      const abs = (u) => (u && u.startsWith('/')) ? location.origin + u : u
+      const op = cfg.opacity ?? 1.0
+      if (src.kind === 'raster') {
+        if (!src.tile_url) continue
+        style.sources[srcId] = { type: 'raster', tiles: [abs(src.tile_url)], tileSize: 256 }
+        if (src.attribution) style.sources[srcId].attribution = src.attribution
+        style.layers.push({ id: `external-${src.id}`, type: 'raster', source: srcId, paint: { 'raster-opacity': op } })
+      } else {
+        if (!src.data_url) continue
+        style.sources[srcId] = { type: 'geojson', data: abs(src.data_url) }
+        if (src.attribution) style.sources[srcId].attribution = src.attribution
+        const geom = src.geometry_type || 'polygon'
+        const color = cfg.style?.color || '#3b82f6'
+        if (geom === 'polygon') {
+          style.layers.push({ id: `external-${src.id}`, type: 'fill', source: srcId,
+            paint: { 'fill-color': color, 'fill-opacity': op * (cfg.style?.fill_opacity ?? 0.45), 'fill-outline-color': cfg.style?.outline_color || '#1d4ed8' } })
+        } else if (geom === 'line') {
+          style.layers.push({ id: `external-${src.id}`, type: 'line', source: srcId,
+            paint: { 'line-color': color, 'line-width': cfg.style?.line_width ?? 2, 'line-opacity': op } })
+        } else {
+          style.layers.push({ id: `external-${src.id}`, type: 'circle', source: srcId,
+            paint: { 'circle-color': color, 'circle-radius': cfg.style?.radius ?? 5, 'circle-opacity': op, 'circle-stroke-color': '#fff', 'circle-stroke-width': 1 } })
+        }
+      }
+      expandBounds(src.bbox)
     }
   }
 
@@ -380,6 +410,7 @@ function rasterTilesUrl(baseTileUrl, style) {
 const availableLayers = computed(() => [
   ...dataStore.vectorLayers.filter(l => l.status === 'ready').map(l => ({ ...l, type: 'vector' })),
   ...dataStore.rasterLayers.filter(l => l.status === 'ready').map(l => ({ ...l, type: 'raster' })),
+  ...dataStore.externalSources.map(s => ({ ...s, type: 'external' })),
 ].filter(l => !layerConfigs.value.some(c => c.layer_id === l.id && c.layer_type === l.type)))
 
 const LAYER_COLORS = [
@@ -397,6 +428,9 @@ async function addLayer(layer) {
   let style
   if (layer.type === 'vector') {
     style = ds?.style ?? { color: nextColor() }
+  } else if (layer.type === 'external') {
+    // External vector (WFS) gets a colour; external raster (WMS/XYZ) has no style.
+    style = layer.kind === 'vector' ? { color: nextColor() } : {}
   } else {
     style = {}
     if (ds?.colormap) style.colormap = ds.colormap
@@ -435,7 +469,8 @@ async function addLayer(layer) {
 }
 
 function zoomToLayer(cfg) {
-  const list = cfg.layer_type === 'vector' ? dataStore.vectorLayers : dataStore.rasterLayers
+  const list = cfg.layer_type === 'external' ? dataStore.externalSources
+    : cfg.layer_type === 'vector' ? dataStore.vectorLayers : dataStore.rasterLayers
   const layer = list.find(l => l.id === cfg.layer_id)
   if (layer?.bbox) fitToBbox(layer.bbox)
 }

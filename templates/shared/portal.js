@@ -79,6 +79,11 @@
       if (Array.isArray(src.tiles)) {
         src.tiles = src.tiles.map(u => u.startsWith('/') ? base + u : u);
       }
+      // External WFS sources point at our same-origin GeoJSON proxy (root-relative) —
+      // absolutify so the worker can fetch it too.
+      if (typeof src.data === 'string' && src.data.startsWith('/')) {
+        src.data = base + src.data;
+      }
     });
   })(STYLE);
 
@@ -280,7 +285,7 @@
             '<line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/></svg>' +
           '</button>' +
         '</div>' +
-        (type === 'raster'
+        (type === 'raster' && !meta['geodeploy:external']
           ? '<div class="layer-legend" data-legend="' + layer.id + '">' + rasterLegendHtml(layer) + '</div>'
           : '');
       container.appendChild(card);
@@ -377,7 +382,11 @@
     const color = getLayerColor(layer);
     const opacity = layer.metadata['geodeploy:opacity'] != null ? layer.metadata['geodeploy:opacity'] : 1;
 
-    const body = type === 'raster' ? rasterStyleRow(layer) : styleRow(layer, geom, color);
+    // External sources (WMS/XYZ/WFS) can't use the raster stretch/colormap or marker
+    // controls — show opacity (header) + a colour picker for vector, attribution note.
+    const body = layer.metadata['geodeploy:external']
+      ? externalStyleRow(layer, geom, color)
+      : (type === 'raster' ? rasterStyleRow(layer) : styleRow(layer, geom, color));
 
     const pop = document.createElement('div');
     pop.className = 'gd-symbology';
@@ -697,6 +706,22 @@
         `<div class="layer-style-field"><label>Color</label>` +
         `<input class="layer-style-color" type="color" value="${toHex(color)}" ` +
         `data-layer-id="${layer.id}" data-layer-type="${t}"></div>${sizeField}${lineType}</div>`;
+  }
+
+  // Minimal controls for an external source: opacity lives in the popover header;
+  // vector (WFS) gets a colour picker; everything gets an attribution note.
+  function externalStyleRow(layer, geom, color) {
+    const attribution = layer.metadata['geodeploy:attribution'];
+    let html = '';
+    if (geom !== 'raster') {
+      html += '<div class="layer-style-field"><label>Color</label>' +
+        '<input class="layer-style-color" type="color" value="' + toHex(color) + '" ' +
+        'data-layer-id="' + layer.id + '" data-layer-type="' + layer.type + '"></div>';
+    }
+    let note = '<div style="font-size:11px;color:var(--text-muted);margin-top:6px">External source — tiles/features served by the provider.';
+    if (attribution) note += '<br>© ' + escHtml(String(attribution));
+    note += '</div>';
+    return '<div class="layer-style-row" data-style-for="' + layer.id + '">' + html + '</div>' + note;
   }
 
   function rasterStyleRow(layer) {

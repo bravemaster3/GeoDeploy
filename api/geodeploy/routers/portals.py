@@ -11,7 +11,7 @@ from slugify import slugify
 from ..config import get_settings
 from ..database import get_db
 from ..deps import get_current_user
-from ..models import Portal, RasterLayer, User, VectorLayer
+from ..models import ExternalSource, Portal, RasterLayer, User, VectorLayer
 from ..schemas import PortalCreate, PortalOut, PortalUpdate
 from ..services.portal_generator import build_portal_bundle, generate_style
 
@@ -93,6 +93,7 @@ async def publish_portal(portal_id: int, user: User = Depends(get_current_user),
 
     vector_ids = [cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "vector"]
     raster_ids = [cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "raster"]
+    external_ids = [cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "external"]
 
     vector_layers = []
     if vector_ids:
@@ -104,7 +105,12 @@ async def publish_portal(portal_id: int, user: User = Depends(get_current_user),
         r = await db.execute(select(RasterLayer).where(RasterLayer.id.in_(raster_ids), RasterLayer.status == "ready"))
         raster_layers = r.scalars().all()
 
-    user_data = generate_style(layer_configs, vector_layers, raster_layers)
+    external_sources = []
+    if external_ids:
+        r = await db.execute(select(ExternalSource).where(ExternalSource.id.in_(external_ids)))
+        external_sources = r.scalars().all()
+
+    user_data = generate_style(layer_configs, vector_layers, raster_layers, external_sources)
     initial_view = json.loads(portal.initial_view) if portal.initial_view else None
     build_portal_bundle(
         portal.slug, portal.title, user_data, portal.template_id, layer_configs,

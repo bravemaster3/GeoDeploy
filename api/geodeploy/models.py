@@ -92,6 +92,28 @@ class RasterLayer(Base):
     user: Mapped["User"] = relationship(back_populates="raster_layers")
 
 
+class ExternalSource(Base):
+    """A third-party map service (WMS/WMTS/XYZ raster or WFS vector) displayed in a
+    portal WITHOUT ingesting — tiles/features are fetched from the provider at view time."""
+    __tablename__ = "external_sources"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(16), nullable=False)  # xyz | wms | wfs
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)          # raster | vector
+    url: Mapped[str] = mapped_column(Text, nullable=False)               # XYZ template or WMS/WFS base URL
+    layer_name: Mapped[str | None] = mapped_column(Text)                 # WMS layers= / WFS typeName
+    version: Mapped[str | None] = mapped_column(String(16))              # WMS/WFS version
+    image_format: Mapped[str | None] = mapped_column(String(32))         # WMS format (default image/png)
+    attribution: Mapped[str | None] = mapped_column(Text)               # required credit string
+    geometry_type: Mapped[str | None] = mapped_column(String(32))        # WFS: point|line|polygon (probed)
+    bbox: Mapped[str | None] = mapped_column(Text)                       # JSON [minx,miny,maxx,maxy] EPSG:4326
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    user: Mapped["User"] = relationship()
+
+
 class UploadJob(Base):
     __tablename__ = "upload_jobs"
 

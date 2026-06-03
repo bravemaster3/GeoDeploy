@@ -55,15 +55,24 @@ fi
 
 sudo docker network create geodeploy 2>/dev/null || true
 
+# ── Seed a minimal Martin config so the always-on tile server boots cleanly ──
+# (Martin needs a config file to start; the API rewrites it once a DB is configured.)
+mkdir -p data/martin
+if [ ! -f data/martin/martin-config.yaml ]; then
+  printf 'listen_addresses: 0.0.0.0:3000\n' > data/martin/martin-config.yaml
+fi
+
 # ── Pull images ───────────────────────────────────────────────────────────────
 
 info "Pulling Docker images…"
 sudo docker compose pull geodeploy-ui nginx redis 2>/dev/null || true
 
 # ── Start core services ───────────────────────────────────────────────────────
+# martin (vector tiles) + titiler (raster tiles) are core — needed for both local and
+# external PostGIS/S3 — so they start here rather than being profile-gated.
 
 info "Starting GeoDeploy…"
-sudo docker compose up -d geodeploy-api geodeploy-ui nginx redis celery
+sudo docker compose up -d geodeploy-api geodeploy-ui nginx redis celery martin titiler
 
 # ── Wait for API ──────────────────────────────────────────────────────────────
 

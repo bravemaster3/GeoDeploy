@@ -1,22 +1,24 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import {
-  listVectorLayers, listRasterLayers,
-  deleteVectorLayer, deleteRasterLayer,
+  listVectorLayers, listRasterLayers, listExternalSources,
+  deleteVectorLayer, deleteRasterLayer, deleteExternalSource,
   getVectorJobStatus, getRasterJobStatus,
 } from '@/api'
 
 export const useDataStore = defineStore('data', () => {
   const vectorLayers = ref([])
   const rasterLayers = ref([])
+  const externalSources = ref([])
   const loading = ref(false)
 
   async function refresh() {
     loading.value = true
     try {
-      const [v, r] = await Promise.all([listVectorLayers(), listRasterLayers()])
+      const [v, r, e] = await Promise.all([listVectorLayers(), listRasterLayers(), listExternalSources()])
       vectorLayers.value = v.data
       rasterLayers.value = r.data
+      externalSources.value = e.data
     } finally {
       loading.value = false
     }
@@ -61,5 +63,17 @@ export const useDataStore = defineStore('data', () => {
     rasterLayers.value = rasterLayers.value.filter(l => l.id !== id)
   }
 
-  return { vectorLayers, rasterLayers, loading, refresh, pollJob, removeVector, removeRaster }
+  function addExternal(source) {
+    externalSources.value = [source, ...externalSources.value]
+  }
+
+  async function removeExternal(id) {
+    await deleteExternalSource(id)
+    externalSources.value = externalSources.value.filter(s => s.id !== id)
+  }
+
+  return {
+    vectorLayers, rasterLayers, externalSources, loading,
+    refresh, pollJob, removeVector, removeRaster, addExternal, removeExternal,
+  }
 })

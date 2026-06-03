@@ -62,6 +62,9 @@ async def configure_db(req: ConfigureDBRequest, db: AsyncSession = Depends(get_d
         config.postgis_db = req.db
         config.postgis_user = req.user
         config.postgis_password = req.password
+        # Martin is a core always-on service now, so external DBs need nothing special here:
+        # it boots on a sources-less config and `regenerate_config` rewrites + restarts it
+        # when the first layer is uploaded.
 
     await db.commit()
     return {"status": "ok", "type": config.postgis_type}

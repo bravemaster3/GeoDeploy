@@ -43,22 +43,26 @@ def _apply_schema_migrations(conn) -> None:
 
 
 def _ensure_martin_config(settings) -> None:
-    """Write an empty-tables Martin config if none exists, so the Martin container can start."""
+    """Write a Martin config if none exists so the always-on Martin container can boot.
+
+    Martin is a core service (started by the installer / compose, not profile-gated), so it
+    may start before any database is configured. With no PostGIS yet we write a sources-less
+    config (just `listen_addresses`) — Martin boots and serves an empty catalog instead of
+    crash-looping on an unreachable DB. Once a DB is set up + a layer uploaded,
+    `services.martin.regenerate_config` rewrites this with the `postgres` source and restarts.
+    """
     import yaml
     config_path = settings.martin_config_path
     if os.path.exists(config_path):
         return
-    if not settings.postgis_host:
-        return  # PostGIS not configured yet — Martin won't start anyway
     try:
-        config = {
-            "postgres": {
+        config = {"listen_addresses": "0.0.0.0:3000"}
+        if settings.postgis_host:
+            config["postgres"] = {
                 "connection_string": settings.postgis_sync_dsn,
                 "pool_size": 5,
                 "tables": {},
-            },
-            "srv": {"listen_addresses": "0.0.0.0:3000"},
-        }
+            }
         with open(config_path, "w") as f:
             yaml.dump(config, f, default_flow_style=False)
     except Exception:
