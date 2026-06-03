@@ -6,6 +6,39 @@ import yaml
 from ..config import get_settings
 
 
+def _pg_creds(settings) -> dict:
+    """Postgres creds from the SQLite setup_config (authoritative).
+
+    The env (`settings.postgis_*`) is empty in the celery container — `docker restart` doesn't
+    re-read env_file — and `regenerate_config` runs in celery after every ingest. Reading creds
+    from env would write a password-less Martin connection string → Martin can't connect → no
+    vector tiles (the table is "ready" but never renders). Falls back to env if SQLite has none."""
+    import sqlite3
+    try:
+        with sqlite3.connect(f"{settings.data_dir}/sqlite/geodeploy.db") as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT postgis_host, postgis_port, postgis_db, postgis_user, postgis_password "
+                "FROM setup_config WHERE id = 1"
+            ).fetchone()
+        if row and row["postgis_password"]:
+            return dict(row)
+    except Exception:
+        pass
+    return {
+        "postgis_host": settings.postgis_host, "postgis_port": settings.postgis_port,
+        "postgis_db": settings.postgis_db, "postgis_user": settings.postgis_user,
+        "postgis_password": settings.postgis_password,
+    }
+
+
+def _pg_sync_dsn(settings) -> str:
+    c = _pg_creds(settings)
+    ssl = f"?sslmode={settings.postgis_sslmode}" if settings.postgis_sslmode else ""
+    return (f"postgresql://{c['postgis_user']}:{c['postgis_password']}"
+            f"@{c['postgis_host']}:{c['postgis_port']}/{c['postgis_db']}{ssl}")
+
+
 async def regenerate_config(layers: list[dict]) -> None:
     """
     Rebuild martin-config.yaml from the current layer list and signal Martin to reload.
@@ -38,7 +71,7 @@ async def _attach_properties(layers: list[dict], settings) -> list[dict]:
     enriched = []
     conn = None
     try:
-        conn = await asyncpg.connect(settings.postgis_sync_dsn, timeout=10)
+        conn = await asyncpg.connect(_pg_sync_dsn(settings), timeout=10)
         for layer in layers:
             schema = layer.get("schema_name") or layer.get("schema", "")
             table = layer.get("table_name") or layer.get("table", "")
@@ -85,14 +118,10 @@ def _build_config(layers: list[dict], settings) -> dict:
             table_cfg["properties"] = props
         tables[key] = table_cfg
 
-    sslmode = f"?sslmode={settings.postgis_sslmode}" if settings.postgis_sslmode else ""
     return {
         "listen_addresses": "0.0.0.0:3000",
         "postgres": {
-            "connection_string": (
-                f"postgresql://{settings.postgis_user}:{settings.postgis_password}"
-                f"@{settings.postgis_host}:{settings.postgis_port}/{settings.postgis_db}{sslmode}"
-            ),
+            "connection_string": _pg_sync_dsn(settings),
             "pool_size": 5,
             "tables": tables,
         },
