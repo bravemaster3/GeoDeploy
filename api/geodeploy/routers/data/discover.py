@@ -73,6 +73,15 @@ async def discover_database(user: User = Depends(get_current_user), db: AsyncSes
                ORDER BY f_table_schema, f_table_name""",
             _SYS_SCHEMAS,
         )
+        out_types = {}
+        for r in rows:
+            declared = (r["type"] or "").upper()
+            gt = _GEOM_MAP.get(declared)
+            if gt is None:
+                # Generic `geometry(Geometry,...)` columns (e.g. GeoDeploy's own ingested tables)
+                # report type "GEOMETRY" — sample one row to learn the real geometry type.
+                gt = await _sample_geom_type(conn, r["schema"], r["tbl"], r["gcol"])
+            out_types[(r["schema"], r["tbl"])] = gt
     finally:
         await conn.close()
 
@@ -85,11 +94,22 @@ async def discover_database(user: User = Depends(get_current_user), db: AsyncSes
             "schema_name": r["schema"], "table_name": r["tbl"],
             "geometry_column": r["gcol"], "srid": r["srid"] or 0,
             "type": r["type"],
-            "geometry_type": _GEOM_MAP.get((r["type"] or "").upper(), "polygon"),
+            "geometry_type": out_types.get((r["schema"], r["tbl"]), "polygon"),
             "already_imported": (r["schema"], r["tbl"]) in have,
         }
         for r in rows
     ]
+
+
+async def _sample_geom_type(conn, schema, table, gcol) -> str:
+    """Read one row's GeometryType so generic `geometry` columns map to point/line/polygon."""
+    try:
+        t = await conn.fetchval(
+            f"SELECT GeometryType({_q(gcol)}) FROM {_q(schema)}.{_q(table)} "
+            f"WHERE {_q(gcol)} IS NOT NULL LIMIT 1")
+        return _GEOM_MAP.get((t or "").upper(), "polygon")
+    except Exception:  # noqa: BLE001
+        return "polygon"
 
 
 async def _table_bbox_4326(conn, schema, table, gcol, srid) -> list | None:

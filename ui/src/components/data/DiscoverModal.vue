@@ -29,7 +29,7 @@
           class="flex items-center gap-2 p-1.5 rounded text-xs"
           :class="t.already_imported ? 'opacity-50' : 'hover:bg-gray-50'">
           <input type="checkbox" class="accent-brand-500 flex-shrink-0" :disabled="t.already_imported"
-            :checked="t.already_imported || dbSel.includes(dbKey(t))" @change="toggle(dbSel, dbKey(t))" />
+            :checked="t.already_imported || dbSel.includes(dbKey(t))" @change="toggleDb(dbKey(t))" />
           <div class="flex-1 min-w-0">
             <div class="font-mono truncate">{{ t.schema_name }}.{{ t.table_name }}</div>
             <input v-if="!t.already_imported && dbSel.includes(dbKey(t))" v-model="t.importName"
@@ -113,9 +113,12 @@ const dbSel = ref([]); const stSel = ref([])
 const importing = ref(false); const importError = ref('')
 
 const dbKey = (t) => `${t.schema_name}.${t.table_name}`
+// NB: in the template a ref auto-unwraps, so we can't pass dbSel/stSel into a generic helper —
+// these wrappers keep the ref in JS scope.
 function toggle(listRef, k) {
   listRef.value = listRef.value.includes(k) ? listRef.value.filter(x => x !== k) : [...listRef.value, k]
 }
+function toggleDb(k) { toggle(dbSel, k) }
 const selectedCount = computed(() => tab.value === 'db' ? dbSel.value.length : stSel.value.length)
 const canImport = computed(() => selectedCount.value > 0)
 const fmtSize = (b) => b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${(b / 1e3).toFixed(0)} KB`
