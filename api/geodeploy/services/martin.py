@@ -70,12 +70,13 @@ def _build_config(layers: list[dict], settings) -> dict:
             table_cfg["properties"] = props
         tables[key] = table_cfg
 
+    sslmode = f"?sslmode={settings.postgis_sslmode}" if settings.postgis_sslmode else ""
     return {
         "listen_addresses": "0.0.0.0:3000",
         "postgres": {
             "connection_string": (
                 f"postgresql://{settings.postgis_user}:{settings.postgis_password}"
-                f"@{settings.postgis_host}:{settings.postgis_port}/{settings.postgis_db}"
+                f"@{settings.postgis_host}:{settings.postgis_port}/{settings.postgis_db}{sslmode}"
             ),
             "pool_size": 5,
             "tables": tables,

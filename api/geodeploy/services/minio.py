@@ -133,9 +133,23 @@ def presigned_upload_url(key: str, expires: int = 3600) -> str:
     )
 
 
-def _start_titiler(client: docker.DockerClient, network, access_key: str, secret_key: str, endpoint: str) -> None:
+def restart_titiler(endpoint: str, access_key: str, secret_key: str, region: str = "us-east-1") -> None:
+    """(Re)create the TiTiler container for an arbitrary S3 endpoint (local MinIO or external).
+
+    Used by the setup wizard's *existing storage* branch so an external HTTPS provider
+    (AWS S3 / R2 / Backblaze / Hetzner) gets the right GDAL flags — the docker-compose
+    defaults are tuned for the local MinIO (HTTP, path-style)."""
+    client = docker.from_env()
+    network = client.networks.get(NETWORK)
+    _start_titiler(client, network, access_key, secret_key, endpoint, region)
+
+
+def _start_titiler(client: docker.DockerClient, network, access_key: str, secret_key: str,
+                   endpoint: str, region: str = "us-east-1") -> None:
     """Start the TiTiler raster tile server with storage credentials."""
-    # GDAL VSI S3 expects host:port only — no http:// scheme
+    # GDAL VSI S3 expects host:port only — no http:// scheme. HTTPS is derived from the
+    # endpoint so a real (HTTPS) S3 works; the local MinIO endpoint is http → "NO".
+    use_https = endpoint.lower().startswith("https://")
     endpoint_for_gdal = endpoint.removeprefix("https://").removeprefix("http://")
 
     # Always recreate so updated credentials/endpoint are picked up
@@ -152,9 +166,11 @@ def _start_titiler(client: docker.DockerClient, network, access_key: str, secret
         environment={
             "AWS_ACCESS_KEY_ID": access_key,
             "AWS_SECRET_ACCESS_KEY": secret_key,
+            "AWS_REGION": region or "us-east-1",
+            "AWS_DEFAULT_REGION": region or "us-east-1",
             "AWS_S3_ENDPOINT": endpoint_for_gdal,
-            "AWS_HTTPS": "NO",
-            "AWS_VIRTUAL_HOSTING": "FALSE",
+            "AWS_HTTPS": "YES" if use_https else "NO",
+            "AWS_VIRTUAL_HOSTING": "FALSE",  # path-style works for MinIO/R2/B2/Hetzner and AWS
             "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
             "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff",
             "WORKERS_PER_CORE": "1",

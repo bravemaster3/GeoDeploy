@@ -93,8 +93,12 @@ services:
     environment:
       AWS_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY}
       AWS_SECRET_ACCESS_KEY: ${STORAGE_SECRET_KEY}
+      AWS_REGION: ${STORAGE_REGION:-us-east-1}
+      AWS_DEFAULT_REGION: ${STORAGE_REGION:-us-east-1}
       AWS_S3_ENDPOINT: ${TITILER_S3_ENDPOINT}
-      AWS_HTTPS: "NO"
+      # Defaults suit the local MinIO (HTTP); the setup wizard writes TITILER_AWS_HTTPS=YES
+      # for an existing/external HTTPS S3 (and also recreates this container directly).
+      AWS_HTTPS: ${TITILER_AWS_HTTPS:-NO}
       AWS_VIRTUAL_HOSTING: "FALSE"
       GDAL_DISABLE_READDIR_ON_OPEN: EMPTY_DIR
       CPL_VSIL_CURL_ALLOWED_EXTENSIONS: .tif,.tiff

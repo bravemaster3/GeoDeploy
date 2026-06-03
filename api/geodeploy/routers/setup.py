@@ -93,6 +93,14 @@ async def configure_storage(req: ConfigureStorageRequest, db: AsyncSession = Dep
         config.storage_access_key = req.access_key
         config.storage_secret_key = req.secret_key
         config.storage_region = req.region
+        # The local branch starts TiTiler inside provision_local(); for an existing
+        # store we must (re)create it here with provider-correct GDAL flags (HTTPS for a
+        # real S3). Non-fatal: `docker compose --profile raster up` is a fallback (it now
+        # reads TITILER_AWS_HTTPS from .env too).
+        try:
+            minio_svc.restart_titiler(req.endpoint, req.access_key, req.secret_key, req.region)
+        except Exception:
+            pass
 
     await db.commit()
     _write_env(config)
@@ -145,12 +153,16 @@ def _apply_to_process(config: SetupConfig) -> None:
         "POSTGIS_DB": config.postgis_db or "",
         "POSTGIS_USER": config.postgis_user or "",
         "POSTGIS_PASSWORD": config.postgis_password or "",
+        # Managed/external DBs usually require SSL; the local provisioned DB has none.
+        "POSTGIS_SSLMODE": ("prefer" if config.postgis_type == "external" else ""),
         "STORAGE_TYPE": config.storage_type or "",
         "STORAGE_ENDPOINT": config.storage_endpoint or "",
         "STORAGE_BUCKET": config.storage_bucket or "",
         "STORAGE_ACCESS_KEY": config.storage_access_key or "",
         "STORAGE_SECRET_KEY": config.storage_secret_key or "",
         "STORAGE_REGION": config.storage_region or "us-east-1",
+        # TiTiler/GDAL must speak HTTPS to a real S3; MinIO/local stays HTTP.
+        "TITILER_AWS_HTTPS": ("YES" if (config.storage_endpoint or "").lower().startswith("https") else "NO"),
     }
     for key, val in updates.items():
         os.environ[key] = val
@@ -179,6 +191,8 @@ def _write_env(config: SetupConfig) -> None:
         "POSTGIS_DB": config.postgis_db,
         "POSTGIS_USER": config.postgis_user,
         "POSTGIS_PASSWORD": config.postgis_password,
+        # Managed/external DBs usually require SSL; the local provisioned DB has none.
+        "POSTGIS_SSLMODE": ("prefer" if config.postgis_type == "external" else ""),
         "STORAGE_TYPE": config.storage_type,
         "STORAGE_ENDPOINT": config.storage_endpoint,
         "STORAGE_BUCKET": config.storage_bucket,
@@ -187,6 +201,8 @@ def _write_env(config: SetupConfig) -> None:
         "STORAGE_REGION": config.storage_region or "us-east-1",
         # GDAL VSI S3 needs endpoint without http:// scheme
         "TITILER_S3_ENDPOINT": (config.storage_endpoint or "").removeprefix("https://").removeprefix("http://"),
+        # TiTiler/GDAL must speak HTTPS to a real S3; MinIO/local stays HTTP.
+        "TITILER_AWS_HTTPS": ("YES" if (config.storage_endpoint or "").lower().startswith("https") else "NO"),
     }
 
     existing_keys = set()

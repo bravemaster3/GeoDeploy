@@ -129,7 +129,9 @@ async def delete_layer(
     if layer.status == "ready":
         import asyncpg
         try:
-            conn = await asyncpg.connect(settings.postgis_dsn)
+            # asyncpg wants the plain postgresql:// DSN (not the +asyncpg SQLAlchemy form);
+            # postgis_sync_dsn also carries sslmode for external/managed DBs.
+            conn = await asyncpg.connect(settings.postgis_sync_dsn)
             await conn.execute(f'DROP TABLE IF EXISTS "{layer.schema_name}"."{layer.table_name}"')
             await conn.close()
         except Exception:

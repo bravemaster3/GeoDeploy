@@ -82,6 +82,9 @@ def ingest_vector(self, job_id: str, layer_id: int, file_path: str, layer_name: 
         step("Loading into PostGIS", 40)
         setup = _get_setup(db_path)
         dsn = f"host={setup['postgis_host']} port={setup['postgis_port']} dbname={setup['postgis_db']} user={setup['postgis_user']} password={setup['postgis_password']}"
+        # External/managed DBs may require SSL; local provisioned DB leaves this empty.
+        if settings.postgis_sslmode:
+            dsn += f" sslmode={settings.postgis_sslmode}"
 
         bbox, feature_count = _load_into_postgis(dsn, schema_name, table_name, projected, col_schema, geom_type)
 
