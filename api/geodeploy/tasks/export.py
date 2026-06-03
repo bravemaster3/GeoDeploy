@@ -89,17 +89,26 @@ def _gj_to_gpkg(geojson_text: str, layer_name: str) -> bytes:
 def _clip_raster(s3_key: str, b, settings) -> bytes:
     import rasterio
     from rasterio import Affine
+    from rasterio.session import AWSSession
     from rasterio.windows import Window, from_bounds
     from rasterio.warp import transform_bounds
     minx, miny, maxx, maxy = b
-    env = {
-        "AWS_ACCESS_KEY_ID": settings.storage_access_key,
-        "AWS_SECRET_ACCESS_KEY": settings.storage_secret_key,
-        "AWS_S3_ENDPOINT": settings.storage_endpoint.replace("https://", "").replace("http://", ""),
-        "AWS_HTTPS": "NO", "AWS_VIRTUAL_HOSTING": "FALSE",
-        "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
-    }
-    with rasterio.Env(**env):
+    # rasterio >=1.4 forbids passing AWS credentials into Env directly — they must go through a
+    # boto3 session. Non-credential GDAL/VSI options (endpoint, http, path-style) stay as Env kwargs.
+    endpoint = settings.storage_endpoint.replace("https://", "").replace("http://", "")
+    use_https = settings.storage_endpoint.lower().startswith("https")
+    session = AWSSession(
+        aws_access_key_id=settings.storage_access_key,
+        aws_secret_access_key=settings.storage_secret_key,
+        endpoint_url=endpoint,
+    )
+    with rasterio.Env(
+        session,
+        AWS_S3_ENDPOINT=endpoint,
+        AWS_HTTPS="YES" if use_https else "NO",
+        AWS_VIRTUAL_HOSTING="FALSE",
+        GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR",
+    ):
         with rasterio.open(f"s3://{settings.storage_bucket}/{s3_key}") as ds:
             west, south, east, north = transform_bounds("EPSG:4326", ds.crs, minx, miny, maxx, maxy, densify_pts=21)
             win = from_bounds(west, south, east, north, ds.transform).round_offsets().round_lengths()
