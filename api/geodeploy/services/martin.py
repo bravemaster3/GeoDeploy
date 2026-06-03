@@ -18,6 +18,16 @@ async def regenerate_config(layers: list[dict]) -> None:
     await _reload_martin()
 
 
+def _srid_from_crs(crs) -> int:
+    """Parse the numeric SRID from an "EPSG:NNNN" crs string (default 4326)."""
+    if crs and str(crs).upper().startswith("EPSG:"):
+        try:
+            return int(str(crs).split(":")[1])
+        except (ValueError, IndexError):
+            pass
+    return 4326
+
+
 async def _attach_properties(layers: list[dict], settings) -> list[dict]:
     """
     Attach each table's attribute columns (name -> Postgres type) so Martin includes
@@ -32,16 +42,18 @@ async def _attach_properties(layers: list[dict], settings) -> list[dict]:
         for layer in layers:
             schema = layer.get("schema_name") or layer.get("schema", "")
             table = layer.get("table_name") or layer.get("table", "")
-            id_col = layer.get("id_column", "id")
+            geom_col = layer.get("geometry_column") or "geom"
+            id_col = layer.get("id_column") or "id"
             rows = await conn.fetch(
                 """SELECT column_name, udt_name FROM information_schema.columns
                    WHERE table_schema = $1 AND table_name = $2""",
                 schema, table,
             )
+            exclude = {geom_col, id_col}
             props = {
                 r["column_name"]: r["udt_name"]
                 for r in rows
-                if r["column_name"] not in ("geom", id_col)
+                if r["column_name"] not in exclude
             }
             enriched.append({**layer, "properties": props})
     except Exception:
@@ -58,13 +70,16 @@ def _build_config(layers: list[dict], settings) -> dict:
         schema = layer.get("schema_name") or layer.get("schema", "")
         table = layer.get("table_name") or layer.get("table", "")
         key = f"{schema}.{table}"
+        id_col = layer.get("id_column") or "id"
         table_cfg = {
             "schema": schema,
             "table": table,
-            "srid": 4326,
-            "geometry_column": "geom",
-            "id_column": layer.get("id_column", "id"),
+            # Imported tables may be in any CRS / use any geometry column name.
+            "srid": _srid_from_crs(layer.get("crs")),
+            "geometry_column": layer.get("geometry_column") or "geom",
         }
+        if id_col:
+            table_cfg["id_column"] = id_col
         props = layer.get("properties")
         if props:
             table_cfg["properties"] = props

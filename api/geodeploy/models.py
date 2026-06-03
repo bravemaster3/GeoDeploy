@@ -59,6 +59,10 @@ class VectorLayer(Base):
     bbox: Mapped[str | None] = mapped_column(Text)      # JSON [minx, miny, maxx, maxy]
     columns: Mapped[str | None] = mapped_column(Text)   # JSON [{name, type}]
     geometry_type: Mapped[str | None] = mapped_column(String(64))
+    # Geometry / id column names — GeoDeploy-ingested tables use geom/id, but layers IMPORTED
+    # from an existing PostGIS may use any names (NULL → fall back to geom/id).
+    geometry_column: Mapped[str | None] = mapped_column(String(128))
+    id_column: Mapped[str | None] = mapped_column(String(128))
     file_size: Mapped[int | None] = mapped_column(Integer)
     storage_backend: Mapped[str] = mapped_column(String(16), default="postgis")  # postgis | geoparquet
     s3_key: Mapped[str | None] = mapped_column(String(512))

@@ -148,7 +148,8 @@ async def delete_layer(
             VectorLayer.storage_backend == "postgis",
         )
     )
-    all_layers = [{"schema_name": l.schema_name, "table_name": l.table_name}
+    all_layers = [{"schema_name": l.schema_name, "table_name": l.table_name,
+                   "geometry_column": l.geometry_column, "id_column": l.id_column, "crs": l.crs}
                   for l in remaining.scalars().all()]
     try:
         await martin_svc.regenerate_config(all_layers)

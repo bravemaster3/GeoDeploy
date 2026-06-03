@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import get_settings
 from .database import engine, Base
 from .routers import setup, auth, portals, templates, admin
-from .routers.data import vector, raster, sources
+from .routers.data import vector, raster, sources, discover
 
 
 @asynccontextmanager
@@ -33,6 +33,8 @@ def _apply_schema_migrations(conn) -> None:
         "ALTER TABLE portals ADD COLUMN access_password_sha256 VARCHAR(64)",
         "ALTER TABLE portals ADD COLUMN initial_view TEXT",
         "ALTER TABLE vector_layers ADD COLUMN default_style TEXT",
+        "ALTER TABLE vector_layers ADD COLUMN geometry_column VARCHAR(128)",
+        "ALTER TABLE vector_layers ADD COLUMN id_column VARCHAR(128)",
         "ALTER TABLE raster_layers ADD COLUMN default_style TEXT",
     ]
     for sql in pending:
@@ -92,7 +94,7 @@ app.add_middleware(
 
 # API routes
 for router in [setup.router, auth.router, portals.router, templates.router, admin.router,
-               vector.router, raster.router, sources.router]:
+               vector.router, raster.router, sources.router, discover.router]:
     app.include_router(router, prefix="/api")
 
 # Serve published portals as static files

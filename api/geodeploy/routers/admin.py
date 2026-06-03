@@ -94,7 +94,9 @@ async def reload_martin(_: User = Depends(require_admin), db: AsyncSession = Dep
     result = await db.execute(
         select(VectorLayer).where(VectorLayer.status == "ready", VectorLayer.storage_backend == "postgis")
     )
-    layers = [{"schema_name": l.schema_name, "table_name": l.table_name} for l in result.scalars().all()]
+    layers = [{"schema_name": l.schema_name, "table_name": l.table_name,
+               "geometry_column": l.geometry_column, "id_column": l.id_column, "crs": l.crs}
+              for l in result.scalars().all()]
     await regenerate_config(layers)
     return {"status": "ok", "tables": len(layers)}
 

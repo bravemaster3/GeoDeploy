@@ -62,6 +62,12 @@ export const deleteRasterLayer = (id) => api.delete(`/data/raster/${id}`)
 export const listColormaps = () => api.get('/data/raster/colormaps')
 export const getRasterStats = (id) => api.get(`/data/raster/${id}/stats`)
 
+// Discover + import data already in the connected DB / storage (registers catalog entries, no copy)
+export const discoverDatabase = () => api.get('/data/discover/database')
+export const importDatabase = (tables) => api.post('/data/discover/database', { tables })
+export const discoverStorage = () => api.get('/data/discover/storage')
+export const importStorage = (keys) => api.post('/data/discover/storage', { keys })
+
 // External sources (WMS / XYZ raster, WFS vector — displayed without ingesting)
 export const listExternalSources = () => api.get('/data/sources')
 export const createExternalSource = (data) => api.post('/data/sources', data)

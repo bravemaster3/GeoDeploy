@@ -41,7 +41,8 @@ def _get_all_layers(db_path: str) -> list[dict]:
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT schema_name, table_name FROM vector_layers WHERE status = 'ready' AND storage_backend = 'postgis'"
+            "SELECT schema_name, table_name, geometry_column, id_column, crs "
+            "FROM vector_layers WHERE status = 'ready' AND storage_backend = 'postgis'"
         ).fetchall()
         return [dict(r) for r in rows]
 

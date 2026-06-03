@@ -12,6 +12,9 @@
         <button @click="showAddSource = true" class="btn-secondary">
           + Connect source
         </button>
+        <button @click="showDiscover = true" class="btn-secondary">
+          Import existing
+        </button>
       </div>
     </div>
 
@@ -61,6 +64,7 @@
     <UploadModal v-if="showVectorUpload" type="vector" @close="showVectorUpload = false" />
     <UploadModal v-if="showRasterUpload" type="raster" @close="showRasterUpload = false" />
     <AddSourceModal v-if="showAddSource" @close="showAddSource = false" />
+    <DiscoverModal v-if="showDiscover" @close="showDiscover = false" />
   </div>
 </template>
 
@@ -73,11 +77,13 @@ import RasterRow from '@/components/data/RasterRow.vue'
 import UploadModal from '@/components/data/UploadModal.vue'
 import SourceRow from '@/components/data/SourceRow.vue'
 import AddSourceModal from '@/components/data/AddSourceModal.vue'
+import DiscoverModal from '@/components/data/DiscoverModal.vue'
 
 const dataStore = useDataStore()
 const showVectorUpload = ref(false)
 const showRasterUpload = ref(false)
 const showAddSource = ref(false)
+const showDiscover = ref(false)
 
 onMounted(() => dataStore.refresh())
 </script>

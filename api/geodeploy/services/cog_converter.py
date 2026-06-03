@@ -73,35 +73,56 @@ def convert_to_cog(src_path: str, dst_path: str) -> None:
             os.unlink(tmp_path)
 
 
-def inspect(path: str) -> dict:
-    """Return basic metadata from a raster file.
-
-    bbox is always returned in EPSG:4326 (lon/lat) so the map/portal code can use
-    it directly for fitBounds — the source raster is often in a projected CRS (UTM
-    etc.) and passing those coordinates as lat/lng crashes MapLibre.
-    """
+def _read_meta(ds) -> dict:
+    """Metadata from an open rasterio dataset. bbox is always EPSG:4326 (lon/lat) so the
+    map/portal code can use it directly for fitBounds (sources are often in a projected CRS)."""
     from rasterio.warp import transform_bounds
+    crs = ds.crs
+    epsg = crs.to_epsg() if crs else None
+    crs_str = f"EPSG:{epsg}" if epsg else (crs.to_string() if crs else None)
+    b = ds.bounds
+    nodata = ds.nodata
+    if crs and epsg != 4326:
+        try:
+            west, south, east, north = transform_bounds(crs, "EPSG:4326", b.left, b.bottom, b.right, b.top)
+            bbox = [west, south, east, north]
+        except Exception:
+            bbox = [b.left, b.bottom, b.right, b.top]  # fall back to source CRS
+    else:
+        bbox = [b.left, b.bottom, b.right, b.top]
+    return {
+        "crs": crs_str,
+        "bbox": bbox,
+        "band_count": ds.count,
+        "nodata_value": float(nodata) if nodata is not None else None,
+        "width": ds.width,
+        "height": ds.height,
+    }
+
+
+def inspect(path: str) -> dict:
+    """Return basic metadata from a local raster file (bbox reprojected to EPSG:4326)."""
     with rasterio.open(path) as ds:
-        crs = ds.crs
-        epsg = crs.to_epsg() if crs else None
-        crs_str = f"EPSG:{epsg}" if epsg else (crs.to_string() if crs else None)
-        b = ds.bounds
-        nodata = ds.nodata
+        return _read_meta(ds)
 
-        if crs and epsg != 4326:
-            try:
-                west, south, east, north = transform_bounds(crs, "EPSG:4326", b.left, b.bottom, b.right, b.top)
-                bbox = [west, south, east, north]
-            except Exception:
-                bbox = [b.left, b.bottom, b.right, b.top]  # fall back to source CRS
-        else:
-            bbox = [b.left, b.bottom, b.right, b.top]
 
-        return {
-            "crs": crs_str,
-            "bbox": bbox,
-            "band_count": ds.count,
-            "nodata_value": float(nodata) if nodata is not None else None,
-            "width": ds.width,
-            "height": ds.height,
-        }
+def inspect_s3(s3_key: str, settings) -> dict:
+    """Inspect a raster that already lives in S3/MinIO (for 'import existing data') — reads
+    only the header via a range request, no download. Mirrors the GDAL S3 env used elsewhere."""
+    from rasterio.session import AWSSession
+    endpoint = (settings.storage_endpoint or "").replace("https://", "").replace("http://", "")
+    use_https = (settings.storage_endpoint or "").lower().startswith("https")
+    session = AWSSession(
+        aws_access_key_id=settings.storage_access_key,
+        aws_secret_access_key=settings.storage_secret_key,
+        endpoint_url=endpoint,
+    )
+    with rasterio.Env(
+        session,
+        AWS_S3_ENDPOINT=endpoint,
+        AWS_HTTPS="YES" if use_https else "NO",
+        AWS_VIRTUAL_HOSTING="FALSE",
+        GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR",
+    ):
+        with rasterio.open(f"s3://{settings.storage_bucket}/{s3_key}") as ds:
+            return _read_meta(ds)
