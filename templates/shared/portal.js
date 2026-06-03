@@ -188,8 +188,10 @@
     else { ctx.arc(cx, cy, r, 0, Math.PI * 2); }
   }
   function markerImage(shape, color, size) {
-    const dpr = 2, r = Math.max(3, Number(size) || 5), stroke = Math.max(1, r * 0.28), pad = stroke + 1;
-    const dim = Math.ceil((r + pad) * 2);
+    const dpr = 2, r = Math.max(3, Number(size) || 5), stroke = Math.max(1, r * 0.28);
+    // Fixed canvas size (fits the max marker radius) so every icon for a layer shares
+    // dimensions — that lets map.updateImage() work when only the SIZE changes.
+    const dim = 80;
     const cv = document.createElement('canvas');
     cv.width = dim * dpr; cv.height = dim * dpr;
     const ctx = cv.getContext('2d');

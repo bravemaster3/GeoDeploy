@@ -218,8 +218,8 @@ function crossPts(cx, cy, r) {
   return [[-t, -r], [t, -r], [t, -t], [r, -t], [r, t], [t, t], [t, r], [-t, r], [-t, t], [-r, t], [-r, -t], [-t, -t]].map(d => [cx + d[0], cy + d[1]])
 }
 function markerImage(shape, color, size) {
-  const dpr = 2, r = Math.max(3, Number(size) || 5), stroke = Math.max(1, r * 0.28), pad = stroke + 1
-  const dim = Math.ceil((r + pad) * 2)
+  const dpr = 2, r = Math.max(3, Number(size) || 5), stroke = Math.max(1, r * 0.28)
+  const dim = 80  // fixed canvas (see portal.js): constant dims let updateImage handle size changes
   const cv = document.createElement('canvas')
   cv.width = dim * dpr; cv.height = dim * dpr
   const ctx = cv.getContext('2d')
