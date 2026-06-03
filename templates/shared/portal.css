@@ -65,17 +65,32 @@
     }
 
     /* Layer cards */
+    /* Thin layer row: drag · eye · swatch · name · zoom */
     .layer-card {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: var(--radius); padding: 10px 12px; margin-bottom: 8px;
+      display: flex; align-items: center; gap: 7px;
+      padding: 5px 6px; margin-bottom: 2px; border-radius: 6px;
     }
-    .layer-card-top {
-      display: flex; align-items: center; gap-8px; gap: 8px;
+    .layer-card:hover { background: var(--surface); }
+    .layer-card.dragging { opacity: .4; }
+    .layer-drag {
+      flex-shrink: 0; width: 14px; color: var(--text-muted); cursor: grab;
+      display: flex; align-items: center; opacity: .55;
     }
-    .layer-visibility {
-      width: 16px; height: 16px; cursor: pointer; flex-shrink: 0;
-      accent-color: var(--accent);
+    .layer-drag svg { width: 14px; height: 14px; }
+    .layer-eye {
+      width: 24px; height: 24px; flex-shrink: 0; padding: 0; border: none;
+      background: none; cursor: pointer; color: var(--text-muted); border-radius: 4px;
+      display: flex; align-items: center; justify-content: center;
     }
+    .layer-eye:hover { background: var(--border); color: var(--text); }
+    .layer-eye.off { color: var(--text-muted); opacity: .5; }
+    .layer-eye svg { width: 16px; height: 16px; }
+    .layer-swatch-btn {
+      width: 24px; height: 24px; flex-shrink: 0; padding: 0; border: none;
+      background: none; cursor: pointer; border-radius: 4px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .layer-swatch-btn:hover { background: var(--border); }
     .layer-swatch {
       width: 18px; height: 18px; flex-shrink: 0;
       display: flex; align-items: center; justify-content: center;
@@ -149,6 +164,31 @@
     }
     .rstyle-auto:hover { text-decoration: underline; }
     .rstyle-auto:disabled { opacity: .5; cursor: default; }
+
+    /* ── Symbology popover (opens from the layer swatch) ── */
+    .gd-symbology {
+      position: fixed; z-index: 140; background: var(--bg);
+      border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow-lg);
+      overflow: hidden;
+    }
+    .gd-sym-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 9px 12px; border-bottom: 1px solid var(--border);
+      font-size: 12px; font-weight: 600;
+    }
+    .gd-sym-head span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .gd-sym-close {
+      border: none; background: none; font-size: 18px; line-height: 1; cursor: pointer;
+      color: var(--text-muted); flex-shrink: 0;
+    }
+    .gd-sym-close:hover { color: var(--text); }
+    .gd-sym-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }
+    .gd-sym-body .layer-opacity-row, .gd-sym-body .layer-legend { margin-top: 0; }
+    .gd-sym-body .layer-style-row { margin-top: 0; }
+    .layer-linetype {
+      font-size: 11px; padding: 2px 4px; font-family: inherit;
+      border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text);
+    }
 
     /* ── Map ─────────────────────────────────────────────── */
     #map-wrap { flex: 1; position: relative; overflow: hidden; }

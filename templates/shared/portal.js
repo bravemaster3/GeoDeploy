@@ -170,105 +170,38 @@
       const meta = layer.metadata;
       const name = meta['geodeploy:name'];
       const type = meta['geodeploy:type'];
-      const opacity = meta['geodeploy:opacity'] ?? 1;
       const color = getLayerColor(layer);
       const bbox = meta['geodeploy:bbox'];
       bboxById[layer.id] = bbox;
       const canZoom = validLonLatBounds(bbox);
-
       const geom = meta['geodeploy:geometry'] || (type === 'raster' ? 'raster' : 'point');
-      const isVector = type === 'vector';
 
       const card = document.createElement('div');
       card.className = 'layer-card';
-      card.innerHTML = `
-        <div class="layer-card-top">
-          <input class="layer-visibility" type="checkbox" checked
-            data-layer-id="${layer.id}" title="Toggle visibility">
-          <span class="layer-swatch" data-swatch="${layer.id}"
-            title="${geomLabel(geom)}">${legendSwatch(geom, color)}</span>
-          <span class="layer-name" title="${name}">${name}</span>
-          <button class="layer-zoom" data-layer-id="${layer.id}" title="Zoom to layer"
-            aria-label="Zoom to layer" ${canZoom ? '' : 'disabled'}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-              stroke-linecap="round">
-              <circle cx="12" cy="12" r="7"/>
-              <line x1="12" y1="1" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="23"/>
-              <line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/>
-            </svg>
-          </button>
-          <button class="layer-style-toggle" data-layer-id="${layer.id}"
-            title="Style this layer" aria-label="Style this layer">${slidersIcon()}</button>
-        </div>
-        <div class="layer-opacity-row">
-          <span class="layer-opacity-label">${Math.round(opacity * 100)}%</span>
-          <input class="layer-opacity-slider" type="range" min="0" max="1" step="0.01"
-            value="${opacity}" data-layer-id="${layer.id}" data-layer-type="${layer.type}">
-        </div>
-        ${type === 'raster' ? `<div class="layer-legend" data-legend="${layer.id}">${rasterLegendHtml(layer)}</div>` : ''}
-        ${styleRow(layer, geom, color)}
-      `;
+      card.dataset.layerId = layer.id;
+      card.setAttribute('draggable', 'true');
+      card.innerHTML =
+        '<span class="layer-drag" title="Drag to reorder">' + dragIcon() + '</span>' +
+        '<button class="layer-eye" data-layer-id="' + layer.id + '" title="Hide / show" aria-label="Toggle visibility">' + eyeIcon(true) + '</button>' +
+        '<button class="layer-swatch-btn" data-swatch="' + layer.id + '" data-layer-id="' + layer.id + '" title="Symbology" aria-label="Edit symbology">' + legendSwatch(geom, color) + '</button>' +
+        '<span class="layer-name" title="' + escHtml(name) + '">' + escHtml(name) + '</span>' +
+        '<button class="layer-zoom" data-layer-id="' + layer.id + '" title="Zoom to layer" aria-label="Zoom to layer"' + (canZoom ? '' : ' disabled') + '>' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+          '<circle cx="12" cy="12" r="7"/><line x1="12" y1="1" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="23"/>' +
+          '<line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/></svg>' +
+        '</button>';
       container.appendChild(card);
     });
 
-    // Viewer styling — color / size (session only)
-    container.querySelectorAll('.layer-style-toggle').forEach(btn => {
+    container.querySelectorAll('.layer-eye').forEach(btn => {
       btn.addEventListener('click', e => {
         const id = e.currentTarget.dataset.layerId;
-        const row = container.querySelector(`.layer-style-row[data-style-for="${id}"]`);
-        if (row) e.currentTarget.classList.toggle('active', row.classList.toggle('open'));
+        const vis = (map.getLayoutProperty(id, 'visibility') === 'none') ? 'visible' : 'none';
+        map.setLayoutProperty(id, 'visibility', vis);
+        e.currentTarget.innerHTML = eyeIcon(vis === 'visible');
+        e.currentTarget.classList.toggle('off', vis === 'none');
       });
     });
-    container.querySelectorAll('.layer-style-color').forEach(inp => {
-      inp.addEventListener('input', e => {
-        const id = e.target.dataset.layerId, t = e.target.dataset.layerType;
-        const prop = t === 'fill' ? 'fill-color' : t === 'line' ? 'line-color' : 'circle-color';
-        map.setPaintProperty(id, prop, e.target.value);
-        const geomK = t === 'fill' ? 'polygon' : t === 'line' ? 'line' : 'point';
-        const sw = container.querySelector(`.layer-swatch[data-swatch="${id}"]`);
-        if (sw) sw.innerHTML = legendSwatch(geomK, e.target.value);
-      });
-    });
-    container.querySelectorAll('.layer-style-size').forEach(inp => {
-      inp.addEventListener('input', e => {
-        const id = e.target.dataset.layerId, t = e.target.dataset.layerType;
-        const prop = t === 'line' ? 'line-width' : 'circle-radius';
-        const v = parseFloat(e.target.value);
-        if (!isNaN(v)) map.setPaintProperty(id, prop, v);
-      });
-    });
-    // Raster viewer styling (palette / hillshade / stretch)
-    container.querySelectorAll('.rstyle-colormap').forEach(el => el.addEventListener('change', e => {
-      const s = e.target.dataset.src;
-      rasterState[s] = Object.assign({}, rasterState[s], { colormap: e.target.value || null });
-      applyRaster(s); updateRasterLegend(s);
-    }));
-    container.querySelectorAll('.rstyle-hillshade').forEach(el => el.addEventListener('change', e => {
-      const s = e.target.dataset.src;
-      rasterState[s] = Object.assign({}, rasterState[s], { hillshade: e.target.checked });
-      applyRaster(s); updateRasterLegend(s);
-    }));
-    container.querySelectorAll('.rstyle-min').forEach(el => el.addEventListener('input', e => {
-      const s = e.target.dataset.src;
-      rasterState[s] = Object.assign({}, rasterState[s], { min: e.target.value });
-      applyRaster(s); updateRasterLegend(s);
-    }));
-    container.querySelectorAll('.rstyle-max').forEach(el => el.addEventListener('input', e => {
-      const s = e.target.dataset.src;
-      rasterState[s] = Object.assign({}, rasterState[s], { max: e.target.value });
-      applyRaster(s); updateRasterLegend(s);
-    }));
-    container.querySelectorAll('.rstyle-zfactor').forEach(el => el.addEventListener('input', e => {
-      const s = e.target.dataset.src;
-      rasterState[s] = Object.assign({}, rasterState[s], { zfactor: e.target.value });
-      applyRaster(s);
-    }));
-    container.querySelectorAll('.rstyle-auto').forEach(el => el.addEventListener('click', e => {
-      const btn = e.currentTarget, s = btn.dataset.src, row = btn.closest('.layer-style-row');
-      autoStretchRaster(s, row.querySelector('.rstyle-min'), row.querySelector('.rstyle-max'), btn);
-    }));
-
-    // Zoom to layer
     container.querySelectorAll('.layer-zoom').forEach(btn => {
       btn.addEventListener('click', e => {
         const b = bboxById[e.currentTarget.dataset.layerId];
@@ -280,34 +213,178 @@
         } catch (err) { /* ignore */ }
       });
     });
-
-    // Visibility toggle
-    container.querySelectorAll('.layer-visibility').forEach(cb => {
-      cb.addEventListener('change', e => {
-        map.setLayoutProperty(
-          e.target.dataset.layerId,
-          'visibility',
-          e.target.checked ? 'visible' : 'none'
-        );
+    container.querySelectorAll('.layer-swatch-btn').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const layer = STYLE.layers.find(l => l.id === e.currentTarget.dataset.layerId);
+        if (layer) openSymbology(layer, e.currentTarget);
       });
     });
+    enableLayerDrag(container);
+  }
 
-    // Opacity slider
-    container.querySelectorAll('.layer-opacity-slider').forEach(slider => {
-      slider.addEventListener('input', e => {
+  function dragIcon() {
+    return '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/>' +
+      '<circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg>';
+  }
+  function eyeIcon(on) {
+    const a = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+    return on
+      ? '<svg ' + a + '><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>'
+      : '<svg ' + a + '><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a18.5 18.5 0 0 1 5.06-5.94M9.9 4.24A11 11 0 0 1 12 4c7 0 11 7 11 7a18.5 18.5 0 0 1-2.16 3.19M1 1l22 22"/></svg>';
+  }
+
+  // ── Drag to reorder (changes map draw order; session only) ──
+  function enableLayerDrag(container) {
+    container.querySelectorAll('.layer-card').forEach(card => {
+      card.addEventListener('dragstart', () => card.classList.add('dragging'));
+      card.addEventListener('dragend', () => { card.classList.remove('dragging'); applyLayerOrder(container); });
+    });
+    container.addEventListener('dragover', e => {
+      e.preventDefault();
+      const cur = container.querySelector('.dragging');
+      if (!cur) return;
+      const after = dragAfter(container, e.clientY);
+      if (after == null) container.appendChild(cur);
+      else container.insertBefore(cur, after);
+    });
+  }
+  function dragAfter(container, y) {
+    const els = Array.prototype.slice.call(container.querySelectorAll('.layer-card:not(.dragging)'));
+    let best = null, bestOff = -Infinity;
+    els.forEach(child => {
+      const box = child.getBoundingClientRect();
+      const off = y - box.top - box.height / 2;
+      if (off < 0 && off > bestOff) { bestOff = off; best = child; }
+    });
+    return best;
+  }
+  function applyLayerOrder(container) {
+    // Top of the list = topmost on the map. moveLayer(id) with no beforeId moves to top,
+    // so move from the bottom card up to the top card.
+    const ids = Array.prototype.slice.call(container.querySelectorAll('.layer-card')).map(c => c.dataset.layerId);
+    for (let i = ids.length - 1; i >= 0; i--) {
+      try { if (map.getLayer(ids[i])) map.moveLayer(ids[i]); } catch (e) { /* ignore */ }
+    }
+  }
+
+  // ── Symbology popover (opens from the swatch) ──
+  let symbolPop = null;
+  function closeSymbology() {
+    if (symbolPop) { symbolPop.remove(); symbolPop = null; document.removeEventListener('mousedown', symbolOutside); }
+  }
+  function symbolOutside(e) {
+    if (symbolPop && !symbolPop.contains(e.target) && !e.target.closest('.layer-swatch-btn')) closeSymbology();
+  }
+  function openSymbology(layer, anchorEl) {
+    closeSymbology();
+    const id = layer.id;
+    const type = layer.metadata['geodeploy:type'];
+    const geom = layer.metadata['geodeploy:geometry'] || (type === 'raster' ? 'raster' : 'point');
+    const color = getLayerColor(layer);
+    const opacity = layer.metadata['geodeploy:opacity'] != null ? layer.metadata['geodeploy:opacity'] : 1;
+
+    const body = type === 'raster'
+      ? '<div class="layer-legend" data-legend="' + id + '">' + rasterLegendHtml(layer) + '</div>' + rasterStyleRow(layer)
+      : styleRow(layer, geom, color);
+
+    const pop = document.createElement('div');
+    pop.className = 'gd-symbology';
+    pop.innerHTML =
+      '<div class="gd-sym-head"><span>' + escHtml(layer.metadata['geodeploy:name']) + '</span>' +
+      '<button class="gd-sym-close" aria-label="Close">&times;</button></div>' +
+      '<div class="gd-sym-body">' +
+        '<div class="layer-opacity-row"><span class="layer-opacity-label">' + Math.round(opacity * 100) + '%</span>' +
+        '<input class="layer-opacity-slider" type="range" min="0" max="1" step="0.01" value="' + opacity +
+        '" data-layer-id="' + id + '" data-layer-type="' + layer.type + '"></div>' +
+        body +
+      '</div>';
+    document.body.appendChild(pop);
+    symbolPop = pop;
+    positionPopover(pop, anchorEl);
+    pop.querySelector('.gd-sym-close').addEventListener('click', closeSymbology);
+    const row = pop.querySelector('.layer-style-row');
+    if (row) row.classList.add('open');
+    attachStyleHandlers(pop, layer);
+    setTimeout(() => document.addEventListener('mousedown', symbolOutside), 0);
+  }
+  function positionPopover(pop, anchorEl) {
+    const r = anchorEl.getBoundingClientRect();
+    const w = 240;
+    let left = r.right + 8;
+    if (left + w > window.innerWidth) left = Math.max(8, r.left - w - 8);
+    pop.style.left = left + 'px';
+    pop.style.top = Math.min(r.top, window.innerHeight - 300) + 'px';
+    pop.style.width = w + 'px';
+  }
+
+  // Attach the styling control handlers to a root element (the popover).
+  function attachStyleHandlers(root, layer) {
+    root.querySelectorAll('.layer-style-color').forEach(inp => {
+      inp.addEventListener('input', e => {
+        const id = e.target.dataset.layerId, t = e.target.dataset.layerType;
+        const prop = t === 'fill' ? 'fill-color' : t === 'line' ? 'line-color' : 'circle-color';
+        map.setPaintProperty(id, prop, e.target.value);
+        const geomK = t === 'fill' ? 'polygon' : t === 'line' ? 'line' : 'point';
+        const sw = document.querySelector('.layer-swatch-btn[data-swatch="' + id + '"]');
+        if (sw) sw.innerHTML = legendSwatch(geomK, e.target.value);
+      });
+    });
+    root.querySelectorAll('.layer-style-size').forEach(inp => {
+      inp.addEventListener('input', e => {
+        const id = e.target.dataset.layerId, t = e.target.dataset.layerType;
+        const prop = t === 'line' ? 'line-width' : 'circle-radius';
+        const v = parseFloat(e.target.value);
+        if (!isNaN(v)) map.setPaintProperty(id, prop, v);
+      });
+    });
+    root.querySelectorAll('.layer-linetype').forEach(sel => {
+      sel.addEventListener('change', e => {
         const id = e.target.dataset.layerId;
-        const mapType = e.target.dataset.layerType;
+        const dash = e.target.value === 'dashed' ? [2, 1.5] : e.target.value === 'dotted' ? [0.4, 1.8] : null;
+        try { map.setPaintProperty(id, 'line-dasharray', dash); } catch (err) { /* ignore */ }
+      });
+    });
+    root.querySelectorAll('.layer-opacity-slider').forEach(slider => {
+      slider.addEventListener('input', e => {
+        const id = e.target.dataset.layerId, mapType = e.target.dataset.layerType;
         const val = parseFloat(e.target.value);
         const label = e.target.closest('.layer-opacity-row').querySelector('.layer-opacity-label');
-        label.textContent = Math.round(val * 100) + '%';
-        const opacityProp = mapType === 'raster'    ? 'raster-opacity'
-                          : mapType === 'fill'       ? 'fill-opacity'
-                          : mapType === 'line'       ? 'line-opacity'
-                          : mapType === 'circle'     ? 'circle-opacity'
-                          : null;
-        if (opacityProp) map.setPaintProperty(id, opacityProp, val);
+        if (label) label.textContent = Math.round(val * 100) + '%';
+        const prop = mapType === 'raster' ? 'raster-opacity' : mapType === 'fill' ? 'fill-opacity'
+                   : mapType === 'line' ? 'line-opacity' : mapType === 'circle' ? 'circle-opacity' : null;
+        if (prop) map.setPaintProperty(id, prop, val);
       });
     });
+    root.querySelectorAll('.rstyle-colormap').forEach(el => el.addEventListener('change', e => {
+      const s = e.target.dataset.src;
+      rasterState[s] = Object.assign({}, rasterState[s], { colormap: e.target.value || null });
+      applyRaster(s); updateRasterLegend(s);
+    }));
+    root.querySelectorAll('.rstyle-hillshade').forEach(el => el.addEventListener('change', e => {
+      const s = e.target.dataset.src;
+      rasterState[s] = Object.assign({}, rasterState[s], { hillshade: e.target.checked });
+      applyRaster(s); updateRasterLegend(s);
+    }));
+    root.querySelectorAll('.rstyle-min').forEach(el => el.addEventListener('input', e => {
+      const s = e.target.dataset.src;
+      rasterState[s] = Object.assign({}, rasterState[s], { min: e.target.value });
+      applyRaster(s); updateRasterLegend(s);
+    }));
+    root.querySelectorAll('.rstyle-max').forEach(el => el.addEventListener('input', e => {
+      const s = e.target.dataset.src;
+      rasterState[s] = Object.assign({}, rasterState[s], { max: e.target.value });
+      applyRaster(s); updateRasterLegend(s);
+    }));
+    root.querySelectorAll('.rstyle-zfactor').forEach(el => el.addEventListener('input', e => {
+      const s = e.target.dataset.src;
+      rasterState[s] = Object.assign({}, rasterState[s], { zfactor: e.target.value });
+      applyRaster(s);
+    }));
+    root.querySelectorAll('.rstyle-auto').forEach(el => el.addEventListener('click', e => {
+      const btn = e.currentTarget, s = btn.dataset.src, r = btn.closest('.layer-style-row');
+      autoStretchRaster(s, r.querySelector('.rstyle-min'), r.querySelector('.rstyle-max'), btn);
+    }));
   }
 
   function getLayerColor(layer) {
@@ -400,7 +477,7 @@
   function styleRow(layer, geom, color) {
     if (layer.type === 'raster') return rasterStyleRow(layer);
     const t = layer.type;
-    let sizeField = '';
+    let sizeField = '', lineType = '';
     if (geom === 'line') {
       const w = (layer.paint && layer.paint['line-width']) ?? 2;
       sizeField = `<div class="layer-style-field"><label>Width</label>` +
@@ -412,10 +489,15 @@
         `<input class="layer-style-size" type="number" min="1" max="30" step="1" value="${r}" ` +
         `data-layer-id="${layer.id}" data-layer-type="${t}"></div>`;
     }
+    if (geom === 'line') {
+      lineType = `<div class="layer-style-field"><label>Style</label>` +
+        `<select class="layer-linetype" data-layer-id="${layer.id}">` +
+        `<option value="solid">Solid</option><option value="dashed">Dashed</option><option value="dotted">Dotted</option></select></div>`;
+    }
     return `<div class="layer-style-row" data-style-for="${layer.id}">` +
         `<div class="layer-style-field"><label>Color</label>` +
         `<input class="layer-style-color" type="color" value="${toHex(color)}" ` +
-        `data-layer-id="${layer.id}" data-layer-type="${t}"></div>${sizeField}</div>`;
+        `data-layer-id="${layer.id}" data-layer-type="${t}"></div>${sizeField}${lineType}</div>`;
   }
 
   function rasterStyleRow(layer) {

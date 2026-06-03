@@ -7,11 +7,12 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
 
 ## Architecture (read this before touching templates)
 - **`shared/`** — the runtime, edited ONCE, inherited by every template:
-  - `portal.js` — all portal behaviour (access gate, map init, layer switcher + **legend**,
-    viewer styling for vector & raster, popup + attribute table, **raster pixel identify**,
-    basemap switcher, coordinate readout, zoom-to-layer, reset styling, **Tools control:
-    select-area-and-download** via `GET /api/portals/{slug}/export`). It reads its data from a
-    `window.GEODEPLOY` object (`title`, `style`, `popupConfig`, `accessType`, `passwordSha256`) and
+  - `portal.js` — all portal behaviour (access gate, map init, **thin layer list**: drag-to-reorder ·
+    eye/eye-off visibility · symbol swatch that opens a **symbology popover** (opacity, colour, line
+    type, size; raster: palette/hillshade/Z/stretch + legend bar) · zoom; popup + attribute table,
+    **raster pixel identify**, basemap switcher, coordinate readout, reset styling, **Tools control:
+    select-area-and-download** (`POST /api/portals/{slug}/export-bundle`)). It reads its data from a
+    `window.GEODEPLOY` object (`title`, `slug`, `style`, `popupConfig`, `accessType`, `passwordSha256`) and
     operates on a fixed set of element IDs (`#map`, `#sidebar`, `#layer-list`, `#attr-panel`,
     `#coords`, `#access-gate`, …). **Add/҂fix a portal feature here and every template gets it.**
   - `portal.css` — all structural CSS, written against CSS variables (`--accent`, `--bg`, …).
