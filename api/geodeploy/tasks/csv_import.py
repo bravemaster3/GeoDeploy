@@ -151,7 +151,12 @@ def _load_copy(path: str, schema: str, table: str, x_col: str, y_col: str, srid,
             return f"NULLIF({c}, '')"
 
         make_point = f"ST_SetSRID(ST_MakePoint(btrim({xc})::double precision, btrim({yc})::double precision), {srid})"
-        geom = f"ST_Transform({make_point}, 4326)" if srid != 4326 else make_point
+        g4326 = f"ST_Transform({make_point}, 4326)" if srid != 4326 else make_point
+        # Clamp latitude to the Web Mercator limit (±85.0511): Martin tiles in EPSG:3857, where a
+        # point at/near the poles transforms to infinity and breaks tile generation (HTTP 500). A
+        # sentinel/polar row (e.g. a lat=-90 "country") would otherwise blank out low-zoom tiles.
+        geom = (f"ST_SetSRID(ST_MakePoint(ST_X({g4326}), "
+                f"GREATEST(-85.05112878, LEAST(85.05112878, ST_Y({g4326})))), 4326)")
         cur.execute(
             f"INSERT INTO {q(schema)}.{q(table)} ({copy_cols}, geom) "
             f"SELECT {', '.join(cast_expr(f) for f in fields)}, {geom} "
