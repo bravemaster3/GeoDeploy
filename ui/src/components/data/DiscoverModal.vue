@@ -25,15 +25,20 @@
         <p v-if="loadingDb" class="text-xs text-gray-400 py-6 text-center">Scanning database…</p>
         <p v-else-if="dbError" class="text-xs text-red-600 py-2">{{ dbError }}</p>
         <p v-else-if="!dbTables.length" class="text-xs text-gray-400 py-6 text-center">No spatial tables found.</p>
-        <label v-for="t in dbTables" :key="dbKey(t)"
+        <div v-for="t in dbTables" :key="dbKey(t)"
           class="flex items-center gap-2 p-1.5 rounded text-xs"
-          :class="t.already_imported ? 'opacity-50' : 'hover:bg-gray-50 cursor-pointer'">
+          :class="t.already_imported ? 'opacity-50' : 'hover:bg-gray-50'">
           <input type="checkbox" class="accent-brand-500 flex-shrink-0" :disabled="t.already_imported"
             :checked="t.already_imported || dbSel.includes(dbKey(t))" @change="toggle(dbSel, dbKey(t))" />
-          <span class="font-mono flex-1 truncate">{{ t.schema_name }}.{{ t.table_name }}</span>
+          <div class="flex-1 min-w-0">
+            <div class="font-mono truncate">{{ t.schema_name }}.{{ t.table_name }}</div>
+            <input v-if="!t.already_imported && dbSel.includes(dbKey(t))" v-model="t.importName"
+              class="mt-0.5 w-full text-xs border border-gray-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-brand-400"
+              placeholder="Layer name" />
+          </div>
           <span class="text-gray-400 flex-shrink-0">{{ t.geometry_type }} · EPSG:{{ t.srid }}</span>
           <span v-if="t.already_imported" class="text-[10px] text-gray-400 flex-shrink-0">imported</span>
-        </label>
+        </div>
       </div>
 
       <!-- Storage files -->
@@ -41,15 +46,41 @@
         <p v-if="loadingSt" class="text-xs text-gray-400 py-6 text-center">Scanning storage…</p>
         <p v-else-if="stError" class="text-xs text-red-600 py-2">{{ stError }}</p>
         <p v-else-if="!stFiles.length" class="text-xs text-gray-400 py-6 text-center">No GeoTIFFs found in the bucket.</p>
-        <label v-for="f in stFiles" :key="f.key"
-          class="flex items-center gap-2 p-1.5 rounded text-xs"
-          :class="f.already_imported ? 'opacity-50' : 'hover:bg-gray-50 cursor-pointer'">
-          <input type="checkbox" class="accent-brand-500 flex-shrink-0" :disabled="f.already_imported"
-            :checked="f.already_imported || stSel.includes(f.key)" @change="toggle(stSel, f.key)" />
-          <span class="font-mono flex-1 truncate">{{ f.key }}</span>
-          <span class="text-gray-400 flex-shrink-0">{{ fmtSize(f.size) }}</span>
-          <span v-if="f.already_imported" class="text-[10px] text-gray-400 flex-shrink-0">imported</span>
-        </label>
+        <div v-for="f in stFiles" :key="f.key"
+          class="p-1.5 rounded text-xs"
+          :class="f.already_imported ? 'opacity-50' : 'hover:bg-gray-50'">
+          <div class="flex items-center gap-2">
+            <input type="checkbox" class="accent-brand-500 flex-shrink-0" :disabled="f.already_imported"
+              :checked="f.already_imported || stSel.includes(f.key)" @change="toggleStorage(f)" />
+            <div class="flex-1 min-w-0">
+              <div class="font-mono truncate">{{ f.key }}</div>
+              <input v-if="!f.already_imported && stSel.includes(f.key)" v-model="f.importName"
+                class="mt-0.5 w-full text-xs border border-gray-200 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-brand-400"
+                placeholder="Layer name" />
+            </div>
+            <span class="text-[10px] uppercase px-1.5 py-0.5 rounded-full flex-shrink-0"
+              :class="f.kind === 'csv' ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'">{{ f.kind }}</span>
+            <span class="text-gray-400 flex-shrink-0">{{ fmtSize(f.size) }}</span>
+            <span v-if="f.already_imported" class="text-[10px] text-gray-400 flex-shrink-0">imported</span>
+          </div>
+          <!-- CSV → points needs coordinate columns + CRS -->
+          <div v-if="f.kind === 'csv' && stSel.includes(f.key)" class="mt-1.5 ml-6 flex flex-wrap items-center gap-2">
+            <span v-if="f.colLoading" class="text-gray-400">Reading columns…</span>
+            <span v-else-if="f.colError" class="text-red-600">{{ f.colError }}</span>
+            <template v-else-if="f.columns && f.columns.length">
+              <label class="flex items-center gap-1"><span class="text-gray-500">X</span>
+                <select v-model="f.xCol" class="text-xs border border-gray-200 rounded px-1 py-0.5">
+                  <option v-for="c in f.columns" :key="c" :value="c">{{ c }}</option>
+                </select></label>
+              <label class="flex items-center gap-1"><span class="text-gray-500">Y</span>
+                <select v-model="f.yCol" class="text-xs border border-gray-200 rounded px-1 py-0.5">
+                  <option v-for="c in f.columns" :key="c" :value="c">{{ c }}</option>
+                </select></label>
+              <label class="flex items-center gap-1"><span class="text-gray-500">EPSG</span>
+                <input v-model.number="f.srid" type="number" class="w-20 text-xs border border-gray-200 rounded px-1 py-0.5" /></label>
+            </template>
+          </div>
+        </div>
       </div>
 
       <div v-if="importError" class="text-sm text-red-600 bg-red-50 p-3 rounded-lg">{{ importError }}</div>
@@ -68,6 +99,7 @@
 import { ref, computed, onMounted } from 'vue'
 import {
   discoverDatabase, importDatabase, discoverStorage, importStorage,
+  getCsvColumns, importCsv,
 } from '@/api'
 import { useDataStore } from '@/stores/data'
 
@@ -88,16 +120,40 @@ const selectedCount = computed(() => tab.value === 'db' ? dbSel.value.length : s
 const canImport = computed(() => selectedCount.value > 0)
 const fmtSize = (b) => b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${(b / 1e3).toFixed(0)} KB`
 
+const baseName = (key) => key.split('/').pop().replace(/\.[^.]+$/, '')
+
 onMounted(() => {
   discoverDatabase()
-    .then(({ data }) => { dbTables.value = data })
+    .then(({ data }) => { dbTables.value = data.map(t => ({ ...t, importName: t.table_name })) })
     .catch(e => { dbError.value = e.response?.data?.detail || e.message })
     .finally(() => { loadingDb.value = false })
   discoverStorage()
-    .then(({ data }) => { stFiles.value = data })
+    .then(({ data }) => {
+      stFiles.value = data.map(f => ({
+        ...f, importName: baseName(f.key),
+        columns: null, xCol: '', yCol: '', srid: 4326, colLoading: false, colError: '',
+      }))
+    })
     .catch(e => { stError.value = e.response?.data?.detail || e.message })
     .finally(() => { loadingSt.value = false })
 })
+
+// CSV rows need their header to offer X/Y pickers — fetch lazily on first selection.
+function toggleStorage(f) {
+  toggle(stSel, f.key)
+  if (f.kind === 'csv' && stSel.value.includes(f.key) && !f.columns && !f.colLoading) {
+    f.colLoading = true
+    getCsvColumns(f.key)
+      .then(({ data }) => {
+        const cols = data.columns || []
+        f.columns = cols
+        f.xCol = cols.find(c => /^(x|lon|long|longitude|easting|e)$/i.test(c)) || cols[0] || ''
+        f.yCol = cols.find(c => /^(y|lat|latitude|northing|n)$/i.test(c)) || cols[1] || cols[0] || ''
+      })
+      .catch(e => { f.colError = e.response?.data?.detail || e.message })
+      .finally(() => { f.colLoading = false })
+  }
+}
 
 async function doImport() {
   importing.value = true
@@ -109,11 +165,26 @@ async function doImport() {
         .map(t => ({
           schema_name: t.schema_name, table_name: t.table_name,
           geometry_column: t.geometry_column, srid: t.srid,
-          geometry_type: t.geometry_type, name: t.table_name,
+          geometry_type: t.geometry_type,
+          name: (t.importName || '').trim() || t.table_name,
         }))
       await importDatabase(tables)
     } else {
-      await importStorage(stSel.value.slice())
+      const selected = stFiles.value.filter(f => stSel.value.includes(f.key))
+      const rasters = selected.filter(f => f.kind === 'raster')
+      const csvs = selected.filter(f => f.kind === 'csv')
+      for (const f of csvs) {
+        if (!f.xCol || !f.yCol) throw new Error(`Pick X and Y columns for ${f.key}`)
+      }
+      if (rasters.length) {
+        await importStorage(rasters.map(f => ({ key: f.key, name: (f.importName || '').trim() || baseName(f.key) })))
+      }
+      for (const f of csvs) {
+        await importCsv({
+          key: f.key, name: (f.importName || '').trim() || baseName(f.key),
+          x_column: f.xCol, y_column: f.yCol, srid: Number(f.srid) || 4326,
+        })
+      }
     }
     await dataStore.refresh()
     emit('close')
