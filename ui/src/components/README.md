@@ -6,7 +6,7 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
 ## Contents
 - `data/VectorRow.vue` — one row in the Data Manager vector list (name, status badge, metadata, delete).
 - `data/RasterRow.vue` — raster equivalent.
-- `data/UploadModal.vue` — drag/drop upload dialog; uses `useUpload` for progress + optimistic insert + background polling. `type` prop = `vector | raster`.
+- `data/UploadModal.vue` — drag/drop upload dialog; uses `useUpload` for progress + optimistic insert + background polling. `type` prop = `vector | raster`. **CSV** (vector): on selecting a `.csv` it parses the header client-side and shows X/Y column + EPSG pickers, then posts to `/data/vector/upload-csv` (background job → point layer) instead of the normal ingest.
 - `data/AddSourceModal.vue` — connect an **external source** (XYZ/WMTS · WMS · WFS): type picker, URL, layer name (WMS/WFS), attribution; POSTs to `/data/sources` (WFS validated server-side) and inserts via `dataStore.addExternal`.
 - `data/SourceRow.vue` — one external-source row (type badge, kind/geometry/layer, URL, delete).
 - `data/DiscoverModal.vue` — **import existing data**: two tabs (PostGIS tables / storage files) from `/data/discover/*`, checkbox-select with an editable per-row **name** (default = table/file name). Storage lists GeoTIFFs (raster) + CSVs; selecting a CSV fetches its header and shows **X/Y column + EPSG** pickers (CSV loads points into PostGIS, the rest register catalog rows with no copy). Refreshes the store after import.

@@ -43,6 +43,17 @@ export const uploadVectorFile = (file, onProgress) => {
     onUploadProgress: (e) => onProgress?.(Math.round((e.loaded * 100) / e.total)),
   })
 }
+export const uploadCsvFile = (file, params, onProgress) => {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('x_column', params.x_column)
+  form.append('y_column', params.y_column)
+  form.append('srid', params.srid ?? 4326)
+  if (params.name) form.append('name', params.name)
+  return api.post('/data/vector/upload-csv', form, {
+    onUploadProgress: (e) => onProgress?.(Math.round((e.loaded * 100) / e.total)),
+  })
+}
 export const getVectorJobStatus = (jobId) => api.get(`/data/vector/jobs/${jobId}`)
 export const saveVectorDefaultStyle = (id, style) => api.put(`/data/vector/${id}/default-style`, style)
 export const deleteVectorLayer = (id) => api.delete(`/data/vector/${id}`)

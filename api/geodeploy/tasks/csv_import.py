@@ -1,26 +1,28 @@
-"""Import a CSV from object storage as a PostGIS point layer (Celery, background).
+"""Import a CSV as a PostGIS point layer (Celery, background).
 
-Unlike attaching an existing table/COG, a CSV isn't tile-servable, so we build points from its
-X/Y columns into PostGIS. Runs as a job (status via UploadJob) with column type inference.
+A CSV isn't tile-servable, so we build points from its X/Y columns into PostGIS. The load uses
+COPY into a staging table → infer column types in SQL → INSERT…SELECT into the final table, so
+it streams from disk (no in-memory row list) and scales to large files. Works for a CSV already
+in object storage (discover/import) or one freshly uploaded (saved to a local temp file).
 """
 import csv as csvlib
 import io
+import os
 import re
 import uuid
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 from ..celery_app import celery_app
 from ..config import get_settings
 from ..services import martin as martin_svc
 from .vector_ingest import _update_job, _update_layer, _get_all_layers
 
-CSV_MAX_BYTES = 200 * 1024 * 1024   # 200 MB read cap
-CSV_MAX_ROWS = 1_000_000            # in-memory load cap (COPY would lift this further)
-
-_INT_RE = re.compile(r"-?\d+")
-_LEADING_ZERO_RE = re.compile(r"-?0\d+")
-_FLOAT_RE = re.compile(r"-?\d+(\.\d+)?([eE][+-]?\d+)?")
-_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+# Regex used both to infer types and to guard the casts (so a stray cell becomes NULL, never an
+# error that aborts the whole INSERT). 18-digit cap keeps integers inside bigint range.
+_INT = r"^-?[0-9]{1,18}$"
+_LEADZERO = r"^-?0[0-9]"          # leading-zero ints (zip codes) stay text
+_FLOAT = r"^-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$"
+_DATE = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
 
 
 def q(ident: str) -> str:
@@ -36,114 +38,112 @@ def safe_name(s: str, fallback: str = "col") -> str:
     return s[:60]
 
 
-def read_csv_text(key: str, settings, max_bytes: int = CSV_MAX_BYTES) -> str:
+def read_csv_text(key: str, settings, max_bytes: int = 1024 * 1024) -> str:
+    """Small header peek from object storage (used by the discover 'csv-columns' endpoint)."""
     from ..services.minio import get_s3_client
     s3 = get_s3_client()
     obj = s3.get_object(Bucket=settings.storage_bucket, Key=key)
-    body = obj["Body"].read(max_bytes + 1)
-    if len(body) > max_bytes:
-        raise ValueError(f"CSV exceeds the {max_bytes // (1024 * 1024)} MB limit.")
-    return body.decode("utf-8-sig", errors="replace")
+    return obj["Body"].read(max_bytes).decode("utf-8-sig", errors="replace")
 
 
 def csv_header(key: str, settings) -> list[str]:
-    text = read_csv_text(key, settings, max_bytes=1024 * 1024)  # 1 MB peek
-    return next(csvlib.reader(io.StringIO(text)), [])
+    return next(csvlib.reader(io.StringIO(read_csv_text(key, settings))), [])
 
 
-# ── type inference ─────────────────────────────────────────────────────────────
-
-def _is_int(v: str) -> bool:
-    return bool(_INT_RE.fullmatch(v)) and not _LEADING_ZERO_RE.fullmatch(v)  # leading zero → text (zip codes)
-
-
-def _is_float(v: str) -> bool:
-    return bool(_FLOAT_RE.fullmatch(v))
+def _download_s3(key: str, settings) -> str:
+    from ..services.minio import get_s3_client
+    os.makedirs(f"{settings.data_dir}/temp", exist_ok=True)
+    path = f"{settings.data_dir}/temp/{uuid.uuid4().hex}.csv"
+    get_s3_client().download_file(settings.storage_bucket, key, path)
+    return path
 
 
-def _is_date(v: str) -> bool:
-    if not _DATE_RE.fullmatch(v):
-        return False
-    try:
-        datetime.strptime(v, "%Y-%m-%d")
-        return True
-    except ValueError:
-        return False
+def _file_header(path: str) -> list[str]:
+    with open(path, "r", encoding="utf-8-sig", newline="") as fh:
+        return next(csvlib.reader(fh), [])
 
 
-def _infer(values) -> str:
-    seen = False
-    is_int = is_float = is_dt = True
-    for v in values:
-        if v is None:
-            continue
-        v = v.strip()
-        if v == "":
-            continue
-        seen = True
-        if is_int and not _is_int(v):
-            is_int = False
-        if is_float and not _is_float(v):
-            is_float = False
-        if is_dt and not _is_date(v):
-            is_dt = False
-        if not (is_int or is_float or is_dt):
-            break
-    if not seen:
-        return "text"
-    if is_int:
-        return "bigint"
-    if is_float:
-        return "double precision"
-    if is_dt:
-        return "date"
-    return "text"
-
-
-def _convert(v, pg_type: str):
-    if v is None or v.strip() == "":
-        return None
-    v = v.strip()
-    try:
-        if pg_type == "bigint":
-            return int(v)
-        if pg_type == "double precision":
-            return float(v)
-        if pg_type == "date":
-            y, m, d = v.split("-")
-            return date(int(y), int(m), int(d))
-    except (ValueError, TypeError):
-        return None  # tolerate a stray bad cell
-    return v
-
-
-def _load_postgis(settings, schema, table, fields, safe, types, rows, srid):
-    """rows: list of (raw_dict, x, y). Returns (bbox_4326, feature_count)."""
+def _load_copy(path: str, schema: str, table: str, x_col: str, y_col: str, srid, settings) -> dict:
+    """COPY the CSV into a staging table, infer types, then INSERT…SELECT into the point table."""
     import psycopg2
+
+    fields = _file_header(path)
+    if not fields:
+        raise ValueError("CSV has no header row.")
+    if x_col not in fields or y_col not in fields:
+        raise ValueError("Selected X/Y columns are not in the CSV header.")
+
+    safe, used = {}, set()
+    for f in fields:
+        s = safe_name(f)
+        base, n = s, 1
+        while s in used:
+            s = f"{base}_{n}"; n += 1
+        used.add(s); safe[f] = s
+
     srid = int(srid) or 4326
-    geom_expr = (f"ST_Transform(ST_SetSRID(ST_MakePoint(%s,%s),{srid}),4326)"
-                 if srid != 4326 else "ST_SetSRID(ST_MakePoint(%s,%s),4326)")
+    stg = f"{table}_stg"
+    xc, yc = q(safe[x_col]), q(safe[y_col])
+
     conn = psycopg2.connect(settings.postgis_sync_dsn)
     try:
         cur = conn.cursor()
         cur.execute(f"CREATE SCHEMA IF NOT EXISTS {q(schema)}")
         cur.execute("CREATE EXTENSION IF NOT EXISTS postgis")
-        cols_ddl = ", ".join(f"{q(safe[f])} {types[f]}" for f in fields)
+        cur.execute(f"DROP TABLE IF EXISTS {q(schema)}.{q(stg)}")
+        cur.execute(f"CREATE UNLOGGED TABLE {q(schema)}.{q(stg)} "
+                    f"({', '.join(f'{q(safe[f])} text' for f in fields)})")
+
+        copy_cols = ", ".join(q(safe[f]) for f in fields)
+        with open(path, "r", encoding="utf-8-sig", newline="") as fh:
+            cur.copy_expert(
+                f"COPY {q(schema)}.{q(stg)} ({copy_cols}) FROM STDIN WITH (FORMAT csv, HEADER true)", fh)
+
+        # Infer each column's type from the staged text values.
+        types = {}
+        for f in fields:
+            t = f"btrim({q(safe[f])})"
+            cur.execute(
+                f"SELECT bool_and(v ~ '{_INT}' AND v !~ '{_LEADZERO}'), "
+                f"       bool_and(v ~ '{_FLOAT}'), bool_and(v ~ '{_DATE}') "
+                f"FROM (SELECT NULLIF({t}, '') AS v FROM {q(schema)}.{q(stg)}) s WHERE v IS NOT NULL")
+            is_int, is_float, is_date = cur.fetchone()
+            types[f] = ("bigint" if is_int else "double precision" if is_float
+                        else "date" if is_date else "text")
+
+        typed = ", ".join(f"{q(safe[f])} {types[f]}" for f in fields)
         cur.execute(f"CREATE TABLE {q(schema)}.{q(table)} "
-                    f"(id serial primary key, {cols_ddl}, geom geometry(Point,4326))")
-        insert_cols = ", ".join(q(safe[f]) for f in fields)
-        placeholders = ", ".join(["%s"] * len(fields))
-        params = [[_convert(row.get(f), types[f]) for f in fields] + [x, y] for (row, x, y) in rows]
-        cur.executemany(
-            f"INSERT INTO {q(schema)}.{q(table)} ({insert_cols}, geom) "
-            f"VALUES ({placeholders}, {geom_expr})", params)
+                    f"(id serial primary key, {typed}, geom geometry(Point,4326))")
+
+        def cast_expr(f):
+            c = q(safe[f]); t = f"btrim({c})"
+            if types[f] == "bigint":
+                return f"CASE WHEN {t} ~ '{_INT}' AND {t} !~ '{_LEADZERO}' THEN {t}::bigint END"
+            if types[f] == "double precision":
+                return f"CASE WHEN {t} ~ '{_FLOAT}' THEN {t}::double precision END"
+            if types[f] == "date":
+                return f"CASE WHEN {t} ~ '{_DATE}' THEN to_date({t}, 'YYYY-MM-DD') END"
+            return f"NULLIF({c}, '')"
+
+        make_point = f"ST_SetSRID(ST_MakePoint(btrim({xc})::double precision, btrim({yc})::double precision), {srid})"
+        geom = f"ST_Transform({make_point}, 4326)" if srid != 4326 else make_point
+        cur.execute(
+            f"INSERT INTO {q(schema)}.{q(table)} ({copy_cols}, geom) "
+            f"SELECT {', '.join(cast_expr(f) for f in fields)}, {geom} "
+            f"FROM {q(schema)}.{q(stg)} WHERE btrim({xc}) ~ '{_FLOAT}' AND btrim({yc}) ~ '{_FLOAT}'")
+        fc = cur.rowcount
+        cur.execute(f"DROP TABLE {q(schema)}.{q(stg)}")
+        if not fc:
+            cur.execute(f"DROP TABLE {q(schema)}.{q(table)}")
+            raise ValueError("No rows had valid numeric X/Y values.")
         cur.execute(f"CREATE INDEX ON {q(schema)}.{q(table)} USING GIST (geom)")
         cur.execute(f"SELECT ST_XMin(e), ST_YMin(e), ST_XMax(e), ST_YMax(e) "
                     f"FROM (SELECT ST_Extent(geom) e FROM {q(schema)}.{q(table)}) s")
         b = cur.fetchone()
         bbox = [b[0], b[1], b[2], b[3]] if b and b[0] is not None else None
         conn.commit()
-        return bbox, len(params)
+        return {"bbox": bbox, "feature_count": fc,
+                "columns": [{"name": safe[f], "type": types[f]} for f in fields]}
     except Exception:
         conn.rollback()
         raise
@@ -152,7 +152,8 @@ def _load_postgis(settings, schema, table, fields, safe, types, rows, srid):
 
 
 @celery_app.task(bind=True, name="geodeploy.tasks.csv_import.import_csv")
-def import_csv(self, job_id, layer_id, key, schema, table, x_col, y_col, srid):
+def import_csv(self, job_id, layer_id, source, schema, table, x_col, y_col, srid, is_s3=True):
+    """source = S3 key (is_s3) or a local temp CSV path (uploaded)."""
     import json
     settings = get_settings()
     db_path = f"{settings.data_dir}/sqlite/geodeploy.db"
@@ -161,43 +162,19 @@ def import_csv(self, job_id, layer_id, key, schema, table, x_col, y_col, srid):
         _update_job(db_path, job_id, status="processing", current_step=msg, progress=pct,
                     started_at=datetime.now(timezone.utc).isoformat())
 
+    downloaded = None
     try:
-        step("Reading CSV", 10)
-        reader = csvlib.DictReader(io.StringIO(read_csv_text(key, settings)))
-        fields = reader.fieldnames or []
-        if x_col not in fields or y_col not in fields:
-            raise ValueError("Selected X/Y columns are not in the CSV header.")
+        step("Reading CSV", 15)
+        path = _download_s3(source, settings) if is_s3 else source
+        downloaded = path if is_s3 else None
 
-        rows = []
-        for row in reader:
-            if len(rows) >= CSV_MAX_ROWS:
-                break
-            try:
-                x, y = float(row.get(x_col)), float(row.get(y_col))
-            except (TypeError, ValueError):
-                continue  # skip rows without usable coordinates
-            rows.append((row, x, y))
-        if not rows:
-            raise ValueError("No rows had valid numeric X/Y values.")
-
-        step("Inferring column types", 30)
-        safe, used = {}, set()
-        for f in fields:
-            s = safe_name(f)
-            base, n = s, 1
-            while s in used:
-                s = f"{base}_{n}"; n += 1
-            used.add(s); safe[f] = s
-        types = {f: _infer(r[0].get(f) for r in rows) for f in fields}
-
-        step("Loading into PostGIS", 55)
-        bbox, fc = _load_postgis(settings, schema, table, fields, safe, types, rows, srid)
+        step("Loading into PostGIS", 45)
+        res = _load_copy(path, schema, table, x_col, y_col, srid, settings)
 
         step("Saving metadata", 90)
-        columns = [{"name": safe[f], "type": types[f]} for f in fields]
-        _update_layer(db_path, layer_id, status="ready", feature_count=fc,
-                      bbox=json.dumps(bbox) if bbox else None, columns=json.dumps(columns),
-                      crs="EPSG:4326", geometry_type="point",
+        _update_layer(db_path, layer_id, status="ready", feature_count=res["feature_count"],
+                      bbox=json.dumps(res["bbox"]) if res["bbox"] else None,
+                      columns=json.dumps(res["columns"]), crs="EPSG:4326", geometry_type="point",
                       updated_at=datetime.now(timezone.utc).isoformat())
         _update_job(db_path, job_id, status="ready", progress=100,
                     completed_at=datetime.now(timezone.utc).isoformat())
@@ -209,3 +186,11 @@ def import_csv(self, job_id, layer_id, key, schema, table, x_col, y_col, srid):
                     completed_at=datetime.now(timezone.utc).isoformat())
         _update_layer(db_path, layer_id, status="error", error_message=str(exc))
         raise
+    finally:
+        # Clean up the temp file (the downloaded S3 copy, or the uploaded local file).
+        for p in (downloaded, None if is_s3 else source):
+            if p and os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass

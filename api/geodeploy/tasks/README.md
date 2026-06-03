@@ -8,12 +8,16 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   validate (Fiona) → reproject to EPSG:4326 (pyproj/Fiona) → load into PostGIS (psycopg2, batched inserts, `geometry(Geometry,4326)`) → GiST spatial index → save metadata (bbox, columns, geometry_type) → regenerate Martin config. Updates `upload_jobs`/`vector_layers` rows directly via **raw sqlite3** (not the async ORM — it runs in the Celery process).
 - `raster_ingest.py` — `ingest_raster(job_id, layer_id, file_path, s3_key)`:
   inspect (rasterio) → COG-convert if needed (`services.cog_converter`) → upload to MinIO (boto3) → save metadata (crs, bbox, band_count, nodata). Same raw-sqlite3 status updates. Reads storage creds from the `setup_config` table first, falling back to settings.
-- `csv_import.py` — `import_csv(job_id, layer_id, key, schema, table, x_col, y_col, srid)`: reads a CSV
-  from object storage → infers each column's type (`bigint`/`double precision`/`date`/`text`; leading-zero
-  ints like zip codes stay text, ISO dates only) → loads points into PostGIS (`ST_MakePoint`→`ST_Transform`
-  4326, GiST index) → saves metadata → regenerates Martin. Dispatched from `routers/data/discover.py`
-  (the "Import existing → CSV" flow). Caps: 1M rows, 200 MB read (in-memory `executemany`; COPY would lift
-  these). Reuses `vector_ingest`'s sqlite status helpers.
+- `csv_import.py` — `import_csv(job_id, layer_id, source, schema, table, x_col, y_col, srid, is_s3)`:
+  builds a PostGIS point layer from a CSV's X/Y columns. **COPY-based** (`_load_copy`): the CSV (a temp
+  file — downloaded from S3 when `is_s3`, or the uploaded local file otherwise) is `COPY`d into an UNLOGGED
+  staging table, each column's type is inferred **in SQL** (regex over the staged text → `bigint`/`double
+  precision`/`date`/`text`; leading-zero ints stay text, ISO dates only, 18-digit int cap), then a single
+  `INSERT…SELECT` with **guarded casts** (a bad cell → NULL, never aborts) + `ST_MakePoint`→`ST_Transform`
+  4326 fills the final table; GiST index; staging dropped; temp file removed. Streams from disk, so no
+  in-memory row cap. **All** CSV columns are kept (X/Y stay as attributes too). Dispatched from
+  `routers/data/discover.py` (import existing) and `routers/data/vector.py::upload-csv` (upload). Reuses
+  `vector_ingest`'s sqlite status helpers.
 - `export.py` — `export_bundle(bbox, items)`: clips the chosen portal layers to a bbox and writes a
   ZIP to `data/temp/exports/{task_id}.zip` (served by the API's `export-download`). Vector via
   psycopg2 (GeoJSON/CSV) + `ogr2ogr` (GeoPackage); raster via rasterio windowed read with an output

@@ -1,6 +1,6 @@
 import os
 import uuid
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from slugify import slugify
@@ -85,6 +85,58 @@ async def upload_vector(
         current_step="Queued",
         error_message=None,
     )
+
+
+@router.post("/upload-csv", response_model=JobStatus, status_code=202)
+async def upload_csv(
+    file: UploadFile = File(...),
+    x_column: str = Form(...),
+    y_column: str = Form(...),
+    srid: int = Form(4326),
+    name: str | None = Form(None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload a CSV and build a PostGIS point layer from its X/Y columns (queued, Celery)."""
+    from ...tasks import csv_import
+    settings = get_settings()
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext != ".csv":
+        raise HTTPException(400, "Upload a .csv file.")
+
+    os.makedirs(f"{settings.data_dir}/temp", exist_ok=True)
+    tmp_path = f"{settings.data_dir}/temp/{uuid.uuid4().hex}.csv"
+    size = 0
+    with open(tmp_path, "wb") as f:
+        while chunk := await file.read(4 * 1024 * 1024):
+            size += len(chunk)
+            if size > MAX_FILE_SIZE:
+                os.unlink(tmp_path)
+                raise HTTPException(413, "File exceeds 2 GB limit.")
+            f.write(chunk)
+
+    base_name = os.path.splitext(file.filename or "layer")[0]
+    layer_name = (name or "").strip() or base_name
+    schema_name = f"geodeploy_u{user.id}"
+    table_name = f"csv_{csv_import.safe_name(layer_name, 'layer')}_{uuid.uuid4().hex[:6]}"
+
+    layer = VectorLayer(
+        user_id=user.id, name=layer_name, table_name=table_name, schema_name=schema_name,
+        file_size=size, geometry_type="point", geometry_column="geom", id_column="id",
+        storage_backend="postgis", status="processing",
+    )
+    db.add(layer)
+    await db.flush()
+    job_id = str(uuid.uuid4())
+    db.add(UploadJob(id=job_id, layer_id=layer.id, layer_type="vector"))
+    await db.commit()
+    await db.refresh(layer)
+
+    # is_s3=False → the task reads (and then deletes) this local temp CSV.
+    csv_import.import_csv.delay(job_id, layer.id, tmp_path, schema_name, table_name,
+                               x_column, y_column, srid, False)
+    return JobStatus(id=job_id, layer_id=layer.id, layer_type="vector",
+                     status="queued", progress=0, current_step="Queued", error_message=None)
 
 
 @router.get("/jobs/{job_id}", response_model=JobStatus)

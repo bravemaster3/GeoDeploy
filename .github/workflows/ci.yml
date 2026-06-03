@@ -21,10 +21,10 @@ jobs:
 
       - name: Install dependencies
         working-directory: api
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gdal-bin libgdal-dev libpq-dev
-          pip install -r requirements.txt pytest pytest-asyncio httpx
+        # No system GDAL/libpq needed: psycopg2-binary, rasterio and fiona ship self-contained
+        # manylinux wheels. (Installing libgdal-dev pulled a liblzma-dev version that 404s on the
+        # runner mirror — see git history.)
+        run: pip install -r requirements.txt pytest pytest-asyncio httpx
 
       - name: Run tests
         working-directory: api
