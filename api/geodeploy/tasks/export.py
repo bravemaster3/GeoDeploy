@@ -162,7 +162,17 @@ def export_bundle(self, bbox: str, items: list[dict]) -> dict:
         return name
 
     import psycopg2
-    conn = psycopg2.connect(settings.postgis_sync_dsn)
+    # Build the DSN from the SQLite setup_config (authoritative) rather than env settings —
+    # the celery container's POSTGIS_PASSWORD isn't reliably populated. See csv_import.
+    from .vector_ingest import _get_setup
+    setup = _get_setup(f"{settings.data_dir}/sqlite/geodeploy.db")
+    if not setup:
+        raise ValueError("Setup is not complete — no database configured.")
+    dsn = (f"host={setup['postgis_host']} port={setup['postgis_port']} dbname={setup['postgis_db']} "
+           f"user={setup['postgis_user']} password={setup['postgis_password']}")
+    if settings.postgis_sslmode:
+        dsn += f" sslmode={settings.postgis_sslmode}"
+    conn = psycopg2.connect(dsn)
     try:
         with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as z:
             cur = conn.cursor()

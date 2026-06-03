@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from ..celery_app import celery_app
 from ..config import get_settings
 from ..services import martin as martin_svc
-from .vector_ingest import _update_job, _update_layer, _get_all_layers
+from .vector_ingest import _update_job, _update_layer, _get_all_layers, _get_setup
 
 # Regex used both to infer types and to guard the casts (so a stray cell becomes NULL, never an
 # error that aborts the whole INSERT). 18-digit cap keeps integers inside bigint range.
@@ -64,10 +64,20 @@ def csv_header(key: str, settings, delimiter: str = "comma") -> list[str]:
 
 
 def _download_s3(key: str, settings) -> str:
-    from ..services.minio import get_s3_client
+    # Storage creds come from the SQLite setup_config (like raster_ingest) — the celery
+    # container's env isn't reliably populated (restart doesn't re-read .env).
+    import boto3
+    from botocore.client import Config
+    from .raster_ingest import _get_storage_creds
+    creds = _get_storage_creds(f"{settings.data_dir}/sqlite/geodeploy.db")
+    s3 = boto3.client(
+        "s3", endpoint_url=creds["endpoint"],
+        aws_access_key_id=creds["access_key"], aws_secret_access_key=creds["secret_key"],
+        region_name=creds["region"], config=Config(signature_version="s3v4"),
+    )
     os.makedirs(f"{settings.data_dir}/temp", exist_ok=True)
     path = f"{settings.data_dir}/temp/{uuid.uuid4().hex}.csv"
-    get_s3_client().download_file(settings.storage_bucket, key, path)
+    s3.download_file(creds["bucket"], key, path)
     return path
 
 
@@ -76,7 +86,7 @@ def _file_header(path: str, delimiter: str = "comma") -> list[str]:
         return next(csvlib.reader(fh, delimiter=_delim_char(delimiter)), [])
 
 
-def _load_copy(path: str, schema: str, table: str, x_col: str, y_col: str, srid, settings,
+def _load_copy(path: str, schema: str, table: str, x_col: str, y_col: str, srid, dsn: str,
                delimiter: str = "comma") -> dict:
     """COPY the CSV into a staging table, infer types, then INSERT…SELECT into the point table."""
     import psycopg2
@@ -99,7 +109,7 @@ def _load_copy(path: str, schema: str, table: str, x_col: str, y_col: str, srid,
     stg = f"{table}_stg"
     xc, yc = q(safe[x_col]), q(safe[y_col])
 
-    conn = psycopg2.connect(settings.postgis_sync_dsn)
+    conn = psycopg2.connect(dsn)
     try:
         cur = conn.cursor()
         cur.execute(f"CREATE SCHEMA IF NOT EXISTS {q(schema)}")
@@ -177,6 +187,16 @@ def import_csv(self, job_id, layer_id, source, schema, table, x_col, y_col, srid
         _update_job(db_path, job_id, status="processing", current_step=msg, progress=pct,
                     started_at=datetime.now(timezone.utc).isoformat())
 
+    # Build the DB connection from the SQLite setup_config (authoritative) — NOT from env
+    # settings, whose POSTGIS_PASSWORD isn't reliably present in the celery container.
+    setup = _get_setup(db_path)
+    if not setup:
+        raise ValueError("Setup is not complete — no database configured.")
+    dsn = (f"host={setup['postgis_host']} port={setup['postgis_port']} dbname={setup['postgis_db']} "
+           f"user={setup['postgis_user']} password={setup['postgis_password']}")
+    if settings.postgis_sslmode:
+        dsn += f" sslmode={settings.postgis_sslmode}"
+
     downloaded = None
     try:
         step("Reading CSV", 15)
@@ -184,7 +204,7 @@ def import_csv(self, job_id, layer_id, source, schema, table, x_col, y_col, srid
         downloaded = path if is_s3 else None
 
         step("Loading into PostGIS", 45)
-        res = _load_copy(path, schema, table, x_col, y_col, srid, settings, delimiter)
+        res = _load_copy(path, schema, table, x_col, y_col, srid, dsn, delimiter)
 
         step("Saving metadata", 90)
         _update_layer(db_path, layer_id, status="ready", feature_count=res["feature_count"],
