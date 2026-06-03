@@ -21,8 +21,9 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   `INSERT…SELECT` with **guarded casts** (a bad cell → NULL, never aborts) + `ST_MakePoint`→`ST_Transform`
   4326 fills the final table; GiST index; staging dropped; temp file removed. Streams from disk, so no
   in-memory row cap. **All** CSV columns are kept (X/Y stay as attributes too). Dispatched from
-  `routers/data/discover.py` (import existing) and `routers/data/vector.py::upload-csv` (upload). Reuses
-  `vector_ingest`'s sqlite status helpers.
+  `routers/data/discover.py` (import existing) and `routers/data/vector.py::upload-csv` (upload). The
+  `delimiter` is user-chosen (comma default; comma/semicolon/tab/pipe — auto-sniffing is unreliable),
+  threaded into both the header read and the `COPY … DELIMITER`. Reuses `vector_ingest`'s sqlite helpers.
 - `export.py` — `export_bundle(bbox, items)`: clips the chosen portal layers to a bbox and writes a
   ZIP to `data/temp/exports/{task_id}.zip` (served by the API's `export-download`). Vector via
   psycopg2 (GeoJSON/CSV) + `ogr2ogr` (GeoPackage); raster via rasterio windowed read with an output

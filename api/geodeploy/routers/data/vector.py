@@ -94,6 +94,7 @@ async def upload_csv(
     y_column: str = Form(...),
     srid: int = Form(4326),
     name: str | None = Form(None),
+    delimiter: str = Form("comma"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -134,7 +135,7 @@ async def upload_csv(
 
     # is_s3=False → the task reads (and then deletes) this local temp CSV.
     csv_import.import_csv.delay(job_id, layer.id, tmp_path, schema_name, table_name,
-                               x_column, y_column, srid, False)
+                               x_column, y_column, srid, False, delimiter)
     return JobStatus(id=job_id, layer_id=layer.id, layer_type="vector",
                      status="queued", progress=0, current_step="Queued", error_message=None)
 

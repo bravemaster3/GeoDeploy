@@ -49,6 +49,7 @@ export const uploadCsvFile = (file, params, onProgress) => {
   form.append('x_column', params.x_column)
   form.append('y_column', params.y_column)
   form.append('srid', params.srid ?? 4326)
+  form.append('delimiter', params.delimiter ?? 'comma')
   if (params.name) form.append('name', params.name)
   return api.post('/data/vector/upload-csv', form, {
     onUploadProgress: (e) => onProgress?.(Math.round((e.loaded * 100) / e.total)),
@@ -78,7 +79,7 @@ export const discoverDatabase = () => api.get('/data/discover/database')
 export const importDatabase = (tables) => api.post('/data/discover/database', { tables })
 export const discoverStorage = () => api.get('/data/discover/storage')
 export const importStorage = (items) => api.post('/data/discover/storage', { items })
-export const getCsvColumns = (key) => api.get('/data/discover/storage/csv-columns', { params: { key } })
+export const getCsvColumns = (key, delimiter = 'comma') => api.get('/data/discover/storage/csv-columns', { params: { key, delimiter } })
 export const importCsv = (data) => api.post('/data/discover/storage/csv', data)
 
 // External sources (WMS / XYZ raster, WFS vector — displayed without ingesting)

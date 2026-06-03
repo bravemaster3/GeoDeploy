@@ -65,6 +65,13 @@
           </div>
           <!-- CSV → points needs coordinate columns + CRS -->
           <div v-if="f.kind === 'csv' && stSel.includes(f.key)" class="mt-1.5 ml-6 flex flex-wrap items-center gap-2">
+            <label class="flex items-center gap-1"><span class="text-gray-500">Delim</span>
+              <select v-model="f.delim" @change="fetchCsvColumns(f)" class="text-xs border border-gray-200 rounded px-1 py-0.5">
+                <option value="comma">,</option>
+                <option value="semicolon">;</option>
+                <option value="tab">Tab</option>
+                <option value="pipe">|</option>
+              </select></label>
             <span v-if="f.colLoading" class="text-gray-400">Reading columns…</span>
             <span v-else-if="f.colError" class="text-red-600">{{ f.colError }}</span>
             <template v-else-if="f.columns && f.columns.length">
@@ -134,7 +141,7 @@ onMounted(() => {
     .then(({ data }) => {
       stFiles.value = data.map(f => ({
         ...f, importName: baseName(f.key),
-        columns: null, xCol: '', yCol: '', srid: 4326, colLoading: false, colError: '',
+        columns: null, xCol: '', yCol: '', srid: 4326, delim: 'comma', colLoading: false, colError: '',
       }))
     })
     .catch(e => { stError.value = e.response?.data?.detail || e.message })
@@ -145,17 +152,21 @@ onMounted(() => {
 function toggleStorage(f) {
   toggle(stSel, f.key)
   if (f.kind === 'csv' && stSel.value.includes(f.key) && !f.columns && !f.colLoading) {
-    f.colLoading = true
-    getCsvColumns(f.key)
-      .then(({ data }) => {
-        const cols = data.columns || []
-        f.columns = cols
-        f.xCol = cols.find(c => /^(x|lon|long|longitude|easting|e)$/i.test(c)) || cols[0] || ''
-        f.yCol = cols.find(c => /^(y|lat|latitude|northing|n)$/i.test(c)) || cols[1] || cols[0] || ''
-      })
-      .catch(e => { f.colError = e.response?.data?.detail || e.message })
-      .finally(() => { f.colLoading = false })
+    fetchCsvColumns(f)
   }
+}
+function fetchCsvColumns(f) {
+  f.colLoading = true
+  f.colError = ''
+  getCsvColumns(f.key, f.delim)
+    .then(({ data }) => {
+      const cols = data.columns || []
+      f.columns = cols
+      f.xCol = cols.find(c => /^(x|lon|long|longitude|easting|e)$/i.test(c)) || cols[0] || ''
+      f.yCol = cols.find(c => /^(y|lat|latitude|northing|n)$/i.test(c)) || cols[1] || cols[0] || ''
+    })
+    .catch(e => { f.colError = e.response?.data?.detail || e.message; f.columns = [] })
+    .finally(() => { f.colLoading = false })
 }
 
 async function doImport() {
@@ -187,7 +198,7 @@ async function doImport() {
       for (const f of csvs) {
         const { data } = await importCsv({
           key: f.key, name: (f.importName || '').trim() || baseName(f.key),
-          x_column: f.xCol, y_column: f.yCol, srid: Number(f.srid) || 4326,
+          x_column: f.xCol, y_column: f.yCol, srid: Number(f.srid) || 4326, delimiter: f.delim,
         })
         csvJobs.push({ jobId: data.id, layerId: data.layer_id })
       }

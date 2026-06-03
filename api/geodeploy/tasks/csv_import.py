@@ -38,6 +38,19 @@ def safe_name(s: str, fallback: str = "col") -> str:
     return s[:60]
 
 
+# Delimiter is chosen by the user (comma default); auto-sniffing is unreliable.
+_DELIM_CHAR = {"comma": ",", "semicolon": ";", "tab": "\t", "pipe": "|", "space": " "}
+
+
+def _delim_char(name: str) -> str:
+    return _DELIM_CHAR.get(name, ",")
+
+
+def _copy_delim_sql(name: str) -> str:
+    """COPY DELIMITER clause value (whitelisted, so safe to inline)."""
+    return "E'\\t'" if name == "tab" else "'" + _DELIM_CHAR.get(name, ",") + "'"
+
+
 def read_csv_text(key: str, settings, max_bytes: int = 1024 * 1024) -> str:
     """Small header peek from object storage (used by the discover 'csv-columns' endpoint)."""
     from ..services.minio import get_s3_client
@@ -46,8 +59,8 @@ def read_csv_text(key: str, settings, max_bytes: int = 1024 * 1024) -> str:
     return obj["Body"].read(max_bytes).decode("utf-8-sig", errors="replace")
 
 
-def csv_header(key: str, settings) -> list[str]:
-    return next(csvlib.reader(io.StringIO(read_csv_text(key, settings))), [])
+def csv_header(key: str, settings, delimiter: str = "comma") -> list[str]:
+    return next(csvlib.reader(io.StringIO(read_csv_text(key, settings)), delimiter=_delim_char(delimiter)), [])
 
 
 def _download_s3(key: str, settings) -> str:
@@ -58,16 +71,17 @@ def _download_s3(key: str, settings) -> str:
     return path
 
 
-def _file_header(path: str) -> list[str]:
+def _file_header(path: str, delimiter: str = "comma") -> list[str]:
     with open(path, "r", encoding="utf-8-sig", newline="") as fh:
-        return next(csvlib.reader(fh), [])
+        return next(csvlib.reader(fh, delimiter=_delim_char(delimiter)), [])
 
 
-def _load_copy(path: str, schema: str, table: str, x_col: str, y_col: str, srid, settings) -> dict:
+def _load_copy(path: str, schema: str, table: str, x_col: str, y_col: str, srid, settings,
+               delimiter: str = "comma") -> dict:
     """COPY the CSV into a staging table, infer types, then INSERT…SELECT into the point table."""
     import psycopg2
 
-    fields = _file_header(path)
+    fields = _file_header(path, delimiter)
     if not fields:
         raise ValueError("CSV has no header row.")
     if x_col not in fields or y_col not in fields:
@@ -97,7 +111,8 @@ def _load_copy(path: str, schema: str, table: str, x_col: str, y_col: str, srid,
         copy_cols = ", ".join(q(safe[f]) for f in fields)
         with open(path, "r", encoding="utf-8-sig", newline="") as fh:
             cur.copy_expert(
-                f"COPY {q(schema)}.{q(stg)} ({copy_cols}) FROM STDIN WITH (FORMAT csv, HEADER true)", fh)
+                f"COPY {q(schema)}.{q(stg)} ({copy_cols}) FROM STDIN "
+                f"WITH (FORMAT csv, HEADER true, DELIMITER {_copy_delim_sql(delimiter)})", fh)
 
         # Infer each column's type from the staged text values.
         types = {}
@@ -152,7 +167,7 @@ def _load_copy(path: str, schema: str, table: str, x_col: str, y_col: str, srid,
 
 
 @celery_app.task(bind=True, name="geodeploy.tasks.csv_import.import_csv")
-def import_csv(self, job_id, layer_id, source, schema, table, x_col, y_col, srid, is_s3=True):
+def import_csv(self, job_id, layer_id, source, schema, table, x_col, y_col, srid, is_s3=True, delimiter="comma"):
     """source = S3 key (is_s3) or a local temp CSV path (uploaded)."""
     import json
     settings = get_settings()
@@ -169,7 +184,7 @@ def import_csv(self, job_id, layer_id, source, schema, table, x_col, y_col, srid
         downloaded = path if is_s3 else None
 
         step("Loading into PostGIS", 45)
-        res = _load_copy(path, schema, table, x_col, y_col, srid, settings)
+        res = _load_copy(path, schema, table, x_col, y_col, srid, settings, delimiter)
 
         step("Saving metadata", 90)
         _update_layer(db_path, layer_id, status="ready", feature_count=res["feature_count"],

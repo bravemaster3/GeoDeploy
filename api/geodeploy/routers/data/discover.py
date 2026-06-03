@@ -302,15 +302,16 @@ class ImportCsvRequest(BaseModel):
     x_column: str
     y_column: str
     srid: int = 4326
+    delimiter: str = "comma"   # comma | semicolon | tab | pipe | space
 
 
 @router.get("/storage/csv-columns")
-async def csv_columns(key: str, _: User = Depends(get_current_user)):
+async def csv_columns(key: str, delimiter: str = "comma", _: User = Depends(get_current_user)):
     """Read a CSV's header so the UI can offer X/Y column pickers."""
     from ...tasks import csv_import
     settings = get_settings()
     try:
-        cols = await run_in_threadpool(csv_import.csv_header, key, settings)
+        cols = await run_in_threadpool(csv_import.csv_header, key, settings, delimiter)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(400, f"Could not read CSV header: {exc}") from exc
     return {"columns": cols}
@@ -344,6 +345,6 @@ async def import_csv(
     await db.refresh(layer)
 
     csv_import.import_csv.delay(job_id, layer.id, req.key, schema, table,
-                               req.x_column, req.y_column, req.srid)
+                               req.x_column, req.y_column, req.srid, True, req.delimiter)
     return JobStatus(id=job_id, layer_id=layer.id, layer_type="vector",
                      status="queued", progress=0, current_step="Queued", error_message=None)

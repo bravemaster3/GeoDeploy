@@ -23,9 +23,20 @@
       <!-- CSV options (X/Y/CRS) -->
       <div v-else-if="csvFile" class="space-y-3">
         <p class="text-sm font-medium text-gray-700 truncate">{{ csvFile.name }}</p>
-        <div>
-          <label class="text-xs text-gray-500 block mb-1">Layer name</label>
-          <input v-model="csvName" class="input w-full text-sm" placeholder="Layer name" />
+        <div class="flex gap-2">
+          <div class="flex-1 min-w-0">
+            <label class="text-xs text-gray-500 block mb-1">Layer name</label>
+            <input v-model="csvName" class="input w-full text-sm" placeholder="Layer name" />
+          </div>
+          <div class="w-32 flex-shrink-0">
+            <label class="text-xs text-gray-500 block mb-1">Delimiter</label>
+            <select v-model="csvDelim" @change="parseCsvHeader(csvFile)" class="input w-full text-sm">
+              <option value="comma">Comma ,</option>
+              <option value="semicolon">Semicolon ;</option>
+              <option value="tab">Tab</option>
+              <option value="pipe">Pipe |</option>
+            </select>
+          </div>
         </div>
         <div class="flex gap-2">
           <div class="flex-1 min-w-0">
@@ -90,6 +101,8 @@ const csvX = ref('')
 const csvY = ref('')
 const csvSrid = ref(4326)
 const csvName = ref('')
+const csvDelim = ref('comma')
+const DELIM_CHAR = { comma: ',', semicolon: ';', tab: '\t', pipe: '|' }
 
 const acceptMap = {
   vector: { accept: 'Shapefile (.zip), GeoJSON, GeoPackage (.gpkg), CSV (X/Y points)', acceptAttr: '.zip,.geojson,.json,.gpkg,.csv' },
@@ -103,10 +116,11 @@ function resetCsv() {
 }
 
 function parseCsvHeader(file) {
+  if (!file) return
   const reader = new FileReader()
   reader.onload = () => {
     const first = String(reader.result).split(/\r?\n/)[0] || ''
-    const cols = first.split(',').map(c => c.trim().replace(/^"|"$/g, '')).filter(Boolean)
+    const cols = first.split(DELIM_CHAR[csvDelim.value] || ',').map(c => c.trim().replace(/^"|"$/g, '')).filter(Boolean)
     csvColumns.value = cols
     csvX.value = cols.find(c => /^(x|lon|long|longitude|easting|e)$/i.test(c)) || cols[0] || ''
     csvY.value = cols.find(c => /^(y|lat|latitude|northing|n)$/i.test(c)) || cols[1] || cols[0] || ''
@@ -138,7 +152,7 @@ async function importCsv() {
   try {
     const { data: job } = await uploadCsvFile(csvFile.value, {
       x_column: csvX.value, y_column: csvY.value,
-      srid: Number(csvSrid.value) || 4326, name: csvName.value,
+      srid: Number(csvSrid.value) || 4326, name: csvName.value, delimiter: csvDelim.value,
     }, (p) => (uploadProgress.value = p))
     dataStore.vectorLayers.unshift({ id: job.layer_id, name: csvName.value || csvFile.value.name, status: 'processing', _job: job })
     dataStore.pollJob(job.id, 'vector', job.layer_id).catch(() => {})
