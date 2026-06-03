@@ -5,7 +5,12 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
 
 ## Contents
 - `vector_ingest.py` — `ingest_vector(job_id, layer_id, file_path, layer_name, schema_name, table_name)`:
-  validate (Fiona) → reproject to EPSG:4326 (pyproj/Fiona) → load into PostGIS (psycopg2, batched inserts, `geometry(Geometry,4326)`) → GiST spatial index → save metadata (bbox, columns, geometry_type) → regenerate Martin config. Updates `upload_jobs`/`vector_layers` rows directly via **raw sqlite3** (not the async ORM — it runs in the Celery process).
+  **COPY-based** (`_ingest_via_copy`): stream Fiona features → temp CSV (attributes + geometry as **WKB
+  hex**) → `COPY` into an UNLOGGED staging `geometry` column → one `INSERT…SELECT` that **reprojects in
+  PostGIS** (`ST_Transform`, using the source EPSG; client-side pyproj only as a fallback when the EPSG
+  is unknown) into the final `geometry(Geometry,4326)` table → GiST index → `ST_Extent` bbox. Streams from
+  disk (no in-memory feature list), bulk-loads, set-based reprojection — fast on large files. Int columns
+  use `BIGINT`. Updates `upload_jobs`/`vector_layers` via **raw sqlite3** (runs in the Celery process).
 - `raster_ingest.py` — `ingest_raster(job_id, layer_id, file_path, s3_key)`:
   inspect (rasterio) → COG-convert if needed (`services.cog_converter`) → upload to MinIO (boto3) → save metadata (crs, bbox, band_count, nodata). Same raw-sqlite3 status updates. Reads storage creds from the `setup_config` table first, falling back to settings.
 - `csv_import.py` — `import_csv(job_id, layer_id, source, schema, table, x_col, y_col, srid, is_s3)`:
@@ -35,7 +40,7 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
 
 ## Current status & known issues
 - **Raster pixels keep their source CRS** (e.g. UTM 31N); TiTiler reprojects at tile time via the TileMatrixSet. **The stored bbox IS now reprojected to EPSG:4326** (`services/cog_converter.py::inspect()`, 2026-06-01) so `raster_layers.bbox` is lon/lat like vector. Before this, the UTM bbox crashed portal `fitBounds` with "Invalid LngLat latitude", aborting the whole portal init script (no layer switcher, no tiles). **Raster rows uploaded before the fix still hold UTM bbox — re-upload or backfill.**
-- Vector reprojection uses a per-feature Fiona transform; fine for typical files, not optimized for huge datasets.
+- Vector reprojection is now set-based in PostGIS (`ST_Transform`) over a COPY-loaded staging table; the per-feature pyproj transform only runs as a fallback when the source CRS has no resolvable EPSG code.
 - Status updates use raw sqlite3 with string-built `SET` clauses over a fixed set of internal keys — safe here but don't pass user input as column names.
 - Errors set both job and layer `status='error'` with the message; the UI surfaces `error_message`.
 - **`export.py` traps (all hit + fixed 2026-06-03; full detail in `notes_temp/notes_for_future.md`):**

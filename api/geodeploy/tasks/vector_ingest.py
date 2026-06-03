@@ -1,23 +1,48 @@
 """
 Vector ingest pipeline: uploaded file → PostGIS table → Martin MVT endpoint.
-Steps: validate → reproject → load PostGIS → spatial index → metadata → regenerate Martin config
+
+Loads via COPY: features are streamed to a temp CSV (geometry as WKB hex), COPYd into an UNLOGGED
+staging table, then a single INSERT…SELECT reprojects to EPSG:4326 IN PostGIS (ST_Transform) into
+the final table. Streams from disk (no in-memory feature list) and bulk-loads — fast on large files.
 """
+import csv as csvlib
 import json
 import os
-import tempfile
+import uuid
 import zipfile
 from datetime import datetime, timezone
 
 import fiona
-import fiona.transform
 import psycopg2
-from shapely import wkt
-from shapely.geometry import shape, mapping
-from shapely.ops import unary_union
+from shapely.geometry import shape as shp_shape
 
 from ..celery_app import celery_app
 from ..config import get_settings
 from ..services import martin as martin_svc
+
+_PG_TYPE = {
+    "int": "BIGINT", "int32": "BIGINT", "int64": "BIGINT",
+    "float": "DOUBLE PRECISION", "str": "TEXT",
+    "date": "DATE", "datetime": "TIMESTAMP", "time": "TIME",
+}
+
+
+def _q(ident: str) -> str:
+    return '"' + str(ident).replace('"', '""') + '"'
+
+
+def _pg_type(fiona_type) -> str:
+    return _PG_TYPE.get(str(fiona_type).lower().split(":")[0], "TEXT")
+
+
+def _srid_of(crs_wkt) -> int | None:
+    if not crs_wkt:
+        return None
+    try:
+        from pyproj import CRS
+        return CRS.from_wkt(crs_wkt).to_epsg()
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _update_job(db_path: str, job_id: str, **kwargs) -> None:
@@ -68,46 +93,31 @@ def ingest_vector(self, job_id: str, layer_id: int, file_path: str, layer_name: 
         step("Validating file", 5)
         src_path = _resolve_source(file_path)
 
-        with fiona.open(src_path) as src:
-            original_crs = src.crs_wkt
-            geom_type = src.schema["geometry"]
-            col_schema = src.schema["properties"]
-            features = list(src)
-
-        step("Reprojecting to EPSG:4326", 20)
-        if original_crs:
-            projected = _reproject_features(features, original_crs, src_path)
-        else:
-            projected = features
-
-        step("Loading into PostGIS", 40)
         setup = _get_setup(db_path)
-        dsn = f"host={setup['postgis_host']} port={setup['postgis_port']} dbname={setup['postgis_db']} user={setup['postgis_user']} password={setup['postgis_password']}"
-        # External/managed DBs may require SSL; local provisioned DB leaves this empty.
+        dsn = (f"host={setup['postgis_host']} port={setup['postgis_port']} dbname={setup['postgis_db']} "
+               f"user={setup['postgis_user']} password={setup['postgis_password']}")
+        # External/managed DBs may require SSL; the local provisioned DB leaves this empty.
         if settings.postgis_sslmode:
             dsn += f" sslmode={settings.postgis_sslmode}"
 
-        bbox, feature_count = _load_into_postgis(dsn, schema_name, table_name, projected, col_schema, geom_type)
-
-        step("Building spatial index", 80)
-        _create_spatial_index(dsn, schema_name, table_name)
+        step("Loading into PostGIS (COPY)", 30)
+        res = _ingest_via_copy(dsn, schema_name, table_name, src_path, settings.data_dir)
 
         step("Saving metadata", 90)
-        columns_json = json.dumps([{"name": k, "type": str(v)} for k, v in col_schema.items()])
-
         _update_layer(db_path, layer_id,
                       status="ready",
-                      feature_count=feature_count,
-                      bbox=json.dumps(bbox),
-                      columns=columns_json,
-                      geometry_type=geom_type,
+                      feature_count=res["count"],
+                      bbox=json.dumps(res["bbox"]) if res["bbox"] else None,
+                      columns=json.dumps(res["columns"]),
+                      geometry_type=res["geom_type"],
+                      geometry_column="geom",
+                      id_column="id",
                       crs="EPSG:4326",
                       updated_at=datetime.now(timezone.utc).isoformat())
 
         step("Updating tile server", 95)
-        all_layers = _get_all_layers(db_path)
         import asyncio
-        asyncio.run(martin_svc.regenerate_config(all_layers))
+        asyncio.run(martin_svc.regenerate_config(_get_all_layers(db_path)))
 
         _update_job(db_path, job_id, status="ready", progress=100,
                     completed_at=datetime.now(timezone.utc).isoformat())
@@ -136,109 +146,95 @@ def _resolve_source(file_path: str) -> str:
     return file_path
 
 
-def _reproject_features(features, src_crs_wkt: str, src_path: str) -> list:
-    from pyproj import CRS, Transformer
-    src_crs = CRS.from_wkt(src_crs_wkt)
-    dst_crs = CRS.from_epsg(4326)
-    if src_crs == dst_crs:
-        return features
-    transformer = Transformer.from_crs(src_crs, dst_crs, always_xy=True)
+def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir: str) -> dict:
+    """Stream features → temp CSV (geom as WKB hex) → COPY into staging → INSERT…SELECT (reproject)."""
+    tmp_csv = os.path.join(data_dir, "temp", f"{uuid.uuid4().hex}.copy.csv")
+    os.makedirs(os.path.dirname(tmp_csv), exist_ok=True)
 
-    reprojected = []
-    for feat in features:
-        geom = shape(feat["geometry"])
-        coords = list(geom.geoms) if hasattr(geom, "geoms") else [geom]
-        # Use fiona's transform for correctness with complex geometries
-        try:
-            new_geom = fiona.transform.transform_geom(
-                f"EPSG:{src_crs.to_epsg()}" if src_crs.to_epsg() else src_crs_wkt,
-                "EPSG:4326",
-                feat["geometry"],
-            )
-        except Exception:
-            new_geom = feat["geometry"]
-        reprojected.append({**feat, "geometry": new_geom})
-    return reprojected
+    with fiona.open(src_path) as src:
+        crs_wkt = src.crs_wkt
+        geom_type = src.schema["geometry"]
+        col_schema = src.schema["properties"]
+        cols = list(col_schema.keys())
+        srid = _srid_of(crs_wkt)
 
+        # Decide where reprojection happens. Known EPSG → reproject set-based in PostGIS (fastest).
+        # Unknown EPSG but a WKT is present → transform client-side (rare). No CRS → assume 4326.
+        client_tr = None
+        db_srid = 4326
+        if srid and srid != 4326:
+            db_srid = srid
+        elif srid is None and crs_wkt:
+            from pyproj import CRS, Transformer
+            from shapely.ops import transform as shp_transform
+            _t = Transformer.from_crs(CRS.from_wkt(crs_wkt), CRS.from_epsg(4326), always_xy=True)
+            client_tr = lambda g: shp_transform(_t.transform, g)  # noqa: E731
 
-def _load_into_postgis(dsn: str, schema: str, table: str, features: list, col_schema: dict, geom_type: str) -> tuple[list, int]:
-    type_map = {
-        "int": "INTEGER", "float": "DOUBLE PRECISION", "str": "TEXT", "date": "DATE",
-    }
-
-    col_defs = ", ".join(
-        f'"{name}" {type_map.get(str(ftype).lower().split(":")[0], "TEXT")}'
-        for name, ftype in col_schema.items()
-    )
-
-    with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
-        cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
-        cur.execute(f'CREATE EXTENSION IF NOT EXISTS postgis')
-        cur.execute(f'DROP TABLE IF EXISTS "{schema}"."{table}"')
-        cur.execute(f'''
-            CREATE TABLE "{schema}"."{table}" (
-                id SERIAL PRIMARY KEY,
-                geom geometry(Geometry, 4326),
-                {col_defs}
-            )
-        ''')
-
-        cols_list = list(col_schema.keys())
-        placeholders = ", ".join(["%s"] * (len(cols_list) + 1))
-        insert_sql = f'''
-            INSERT INTO "{schema}"."{table}" (geom, {", ".join(f'"{c}"' for c in cols_list)})
-            VALUES (ST_GeomFromGeoJSON(%s), {", ".join(["%s"] * len(cols_list))})
-        '''
-
-        minx, miny, maxx, maxy = 180, 90, -180, -90
         count = 0
-        batch = []
+        try:
+            with open(tmp_csv, "w", newline="", encoding="utf-8") as fh:
+                w = csvlib.writer(fh)
+                for feat in src:
+                    g = feat["geometry"]
+                    if g is None:
+                        continue
+                    geom = shp_shape(g)
+                    if client_tr:
+                        geom = client_tr(geom)
+                    props = feat["properties"]
+                    row = []
+                    for c in cols:
+                        v = props.get(c)
+                        row.append("" if v is None else (v.isoformat() if hasattr(v, "isoformat") else v))
+                    row.append(geom.wkb_hex)
+                    w.writerow(row)
+                    count += 1
+        except Exception:
+            if os.path.exists(tmp_csv):
+                os.unlink(tmp_csv)
+            raise
 
-        for feat in features:
-            if feat["geometry"] is None:
-                continue
-            geom_str = json.dumps(mapping(shape(feat["geometry"])))
-            row_vals = [geom_str] + [feat["properties"].get(c) for c in cols_list]
-            batch.append(tuple(row_vals))
+    if count == 0:
+        if os.path.exists(tmp_csv):
+            os.unlink(tmp_csv)
+        raise ValueError("No features with geometry found in the file.")
 
-            # Track bbox
-            coords = _extract_coords(feat["geometry"])
-            for x, y in coords:
-                minx = min(minx, x); miny = min(miny, y)
-                maxx = max(maxx, x); maxy = max(maxy, y)
-            count += 1
-
-            if len(batch) >= 1000:
-                cur.executemany(insert_sql, batch)
-                batch = []
-
-        if batch:
-            cur.executemany(insert_sql, batch)
-
+    geom_sql = (f"ST_Transform(ST_SetSRID(geom, {db_srid}), 4326)" if db_srid != 4326
+                else "ST_SetSRID(geom, 4326)")
+    stg = f"{table}_stg"
+    coldefs = ", ".join(f"{_q(c)} {_pg_type(col_schema[c])}" for c in cols)
+    copycols = ", ".join(_q(c) for c in cols)
+    conn = psycopg2.connect(dsn)
+    try:
+        cur = conn.cursor()
+        cur.execute(f"CREATE SCHEMA IF NOT EXISTS {_q(schema)}")
+        cur.execute("CREATE EXTENSION IF NOT EXISTS postgis")
+        cur.execute(f"DROP TABLE IF EXISTS {_q(schema)}.{_q(table)}")
+        cur.execute(f"DROP TABLE IF EXISTS {_q(schema)}.{_q(stg)}")
+        cur.execute(f"CREATE UNLOGGED TABLE {_q(schema)}.{_q(stg)} ({coldefs}, geom geometry)")
+        with open(tmp_csv, "r", encoding="utf-8", newline="") as fh:
+            cur.copy_expert(
+                f"COPY {_q(schema)}.{_q(stg)} ({copycols}, geom) FROM STDIN WITH (FORMAT csv)", fh)
+        cur.execute(f"CREATE TABLE {_q(schema)}.{_q(table)} "
+                    f"(id serial primary key, {coldefs}, geom geometry(Geometry,4326))")
+        cur.execute(f"INSERT INTO {_q(schema)}.{_q(table)} ({copycols}, geom) "
+                    f"SELECT {copycols}, {geom_sql} FROM {_q(schema)}.{_q(stg)}")
+        cur.execute(f"DROP TABLE {_q(schema)}.{_q(stg)}")
+        cur.execute(f"CREATE INDEX {_q(table + '_geom_idx')} ON {_q(schema)}.{_q(table)} USING GIST (geom)")
+        cur.execute(f"SELECT ST_XMin(e), ST_YMin(e), ST_XMax(e), ST_YMax(e) "
+                    f"FROM (SELECT ST_Extent(geom) e FROM {_q(schema)}.{_q(table)}) s")
+        b = cur.fetchone()
+        bbox = [b[0], b[1], b[2], b[3]] if b and b[0] is not None else None
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+        if os.path.exists(tmp_csv):
+            os.unlink(tmp_csv)
 
-    return [minx, miny, maxx, maxy], count
-
-
-def _create_spatial_index(dsn: str, schema: str, table: str) -> None:
-    with psycopg2.connect(dsn) as conn, conn.cursor() as cur:
-        cur.execute(f'CREATE INDEX IF NOT EXISTS "{table}_geom_idx" ON "{schema}"."{table}" USING GIST (geom)')
-        conn.commit()
-
-
-def _extract_coords(geom: dict) -> list[tuple]:
-    coords = []
-    gtype = geom.get("type", "")
-    raw = geom.get("coordinates", [])
-    if gtype == "Point":
-        coords.append((raw[0], raw[1]))
-    elif gtype in ("MultiPoint", "LineString"):
-        coords.extend((c[0], c[1]) for c in raw)
-    elif gtype in ("MultiLineString", "Polygon"):
-        for ring in raw:
-            coords.extend((c[0], c[1]) for c in ring)
-    elif gtype == "MultiPolygon":
-        for poly in raw:
-            for ring in poly:
-                coords.extend((c[0], c[1]) for c in ring)
-    return coords
+    return {
+        "bbox": bbox, "count": count, "geom_type": geom_type,
+        "columns": [{"name": c, "type": str(col_schema[c])} for c in cols],
+    }
