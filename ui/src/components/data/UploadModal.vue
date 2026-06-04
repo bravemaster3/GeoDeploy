@@ -93,7 +93,7 @@ const emit = defineEmits(['close'])
 
 const fileInput = ref(null)
 const fileName = ref('')
-const { uploading, uploadProgress, error, uploadFile } = useUpload()
+const { uploading, uploadProgress, error, uploadFile, uploadGeoParquet } = useUpload()
 const dataStore = useDataStore()
 
 // CSV import state (vector only)
@@ -107,9 +107,10 @@ const csvDelim = ref('comma')
 const DELIM_CHAR = { comma: ',', semicolon: ';', tab: '\t', pipe: '|' }
 
 const acceptMap = {
-  vector: { accept: 'Shapefile (.zip), GeoJSON, GeoPackage (.gpkg), CSV (X/Y points)', acceptAttr: '.zip,.geojson,.json,.gpkg,.csv' },
+  vector: { accept: 'Shapefile (.zip), GeoJSON, GeoPackage (.gpkg), GeoParquet (.parquet), CSV (X/Y points)', acceptAttr: '.zip,.geojson,.json,.gpkg,.parquet,.geoparquet,.csv' },
   raster: { accept: 'GeoTIFF (.tif / .tiff)', acceptAttr: '.tif,.tiff' },
 }
+const MAX_GEOPARQUET = 10 * 1024 * 1024 * 1024  // 10 GB
 const { accept, acceptAttr } = acceptMap[props.type]
 
 function resetCsv() {
@@ -131,11 +132,25 @@ function parseCsvHeader(file) {
 }
 
 async function handleFile(file) {
+  const lower = file.name.toLowerCase()
   // CSV needs X/Y/CRS first — show the options form instead of uploading immediately.
-  if (props.type === 'vector' && file.name.toLowerCase().endsWith('.csv')) {
+  if (props.type === 'vector' && lower.endsWith('.csv')) {
     csvFile.value = file
     csvName.value = file.name.replace(/\.csv$/i, '')
     parseCsvHeader(file)
+    return
+  }
+  // GeoParquet uploads DIRECT to storage (presigned) — never through the API.
+  if (props.type === 'vector' && (lower.endsWith('.parquet') || lower.endsWith('.geoparquet'))) {
+    if (file.size > MAX_GEOPARQUET) {
+      error.value = 'File exceeds the 10 GB limit.'
+      return
+    }
+    fileName.value = file.name
+    try {
+      await uploadGeoParquet(file, file.name.replace(/\.(geo)?parquet$/i, ''))
+      setTimeout(() => emit('close'), 800)
+    } catch { /* error shown via `error` */ }
     return
   }
   fileName.value = file.name

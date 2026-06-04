@@ -3,7 +3,9 @@
     <div class="w-8 h-8 rounded-md bg-blue-100 text-blue-600 flex items-center justify-center text-xs font-bold flex-shrink-0">V</div>
     <div class="flex-1 min-w-0">
       <div class="text-sm font-medium truncate">{{ layer.name }}</div>
-      <div class="text-xs text-gray-500 flex gap-3 mt-0.5">
+      <div class="text-xs text-gray-500 flex gap-3 mt-0.5 items-center">
+        <span v-if="layer.storage_backend === 'geoparquet'"
+          class="px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 font-medium text-[10px] uppercase tracking-wide">GeoParquet</span>
         <span v-if="layer.feature_count">{{ layer.feature_count?.toLocaleString() }} features</span>
         <span v-if="layer.geometry_type">{{ layer.geometry_type }}</span>
         <span v-if="layer.file_size">{{ formatBytes(layer.file_size) }}</span>

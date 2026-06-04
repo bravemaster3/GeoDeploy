@@ -24,6 +24,13 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   `routers/data/discover.py` (import existing) and `routers/data/vector.py::upload-csv` (upload). The
   `delimiter` is user-chosen (comma default; comma/semicolon/tab/pipe — auto-sniffing is unreliable),
   threaded into both the header read and the `COPY … DELIMITER`. Reuses `vector_ingest`'s sqlite helpers.
+- `geoparquet_import.py` — `import_geoparquet(job_id, layer_id, s3_key)`: registers a **GeoParquet**
+  vector layer. Unlike CSV/shapefile (copied/ingested into PostGIS), the file STAYS on object storage
+  and is read in place by DuckDB/deck.gl — so this task touches **neither PostGIS nor Martin**. The
+  object is already present (the browser PUTs it direct via a presigned URL; or it's an import-existing
+  attach), so the task only `duckdb_engine.inspect_parquet`s it (geometry type / bbox→4326 / columns /
+  CRS / count) and marks the layer ready. Storage creds from SQLite (§0f). Sets
+  `storage_backend='geoparquet'` + `s3_key` on the layer.
 - `export.py` — `export_bundle(bbox, items)`: clips the chosen portal layers to a bbox and writes a
   ZIP to `data/temp/exports/{task_id}.zip` (served by the API's `export-download`). Vector via
   psycopg2 (GeoJSON/CSV) + `ogr2ogr` (GeoPackage); raster via rasterio windowed read with an output

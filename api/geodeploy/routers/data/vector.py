@@ -1,6 +1,7 @@
 import os
 import uuid
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from slugify import slugify
@@ -16,7 +17,9 @@ from ...tasks.vector_ingest import ingest_vector
 router = APIRouter(prefix="/data/vector", tags=["vector"])
 
 ALLOWED_EXTENSIONS = {".zip", ".geojson", ".json", ".gpkg"}
+GEOPARQUET_EXTENSIONS = {".parquet", ".geoparquet"}
 MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
+MAX_GEOPARQUET_SIZE = 10 * 1024 * 1024 * 1024  # 10 GB (uploaded direct-to-storage, not via the API)
 
 
 @router.get("", response_model=list[VectorLayerOut])
@@ -140,6 +143,77 @@ async def upload_csv(
                      status="queued", progress=0, current_step="Queued", error_message=None)
 
 
+class GeoParquetPresign(BaseModel):
+    filename: str
+    name: str | None = None
+    file_size: int | None = None
+
+
+class GeoParquetComplete(BaseModel):
+    s3_key: str
+    name: str | None = None
+    file_size: int | None = None
+
+
+@router.post("/geoparquet/presign")
+async def geoparquet_presign(
+    body: GeoParquetPresign,
+    user: User = Depends(get_current_user),
+):
+    """Step 1 of the GeoParquet upload: hand the browser a presigned PUT URL so it uploads the
+    file DIRECTLY to object storage (no multi-GB passthrough of the API process/disk). The key
+    is derived server-side under the user's `vectors/` prefix so the client can't choose it."""
+    from ...services.minio import browser_upload_url
+    ext = os.path.splitext(body.filename or "")[1].lower()
+    if ext not in GEOPARQUET_EXTENSIONS:
+        raise HTTPException(400, "Upload a .parquet / .geoparquet file.")
+    if body.file_size and body.file_size > MAX_GEOPARQUET_SIZE:
+        raise HTTPException(413, "File exceeds 10 GB limit.")
+
+    base_name = os.path.splitext(os.path.basename(body.filename or "layer"))[0]
+    safe_file = slugify(base_name, separator="_") or "layer"
+    # Parallel to the raster convention (rasters/{uid}/{uuid}/x.tif); vectors live under vectors/.
+    s3_key = f"vectors/{user.id}/{uuid.uuid4().hex}/{safe_file}.parquet"
+    return {"upload_url": browser_upload_url(s3_key), "s3_key": s3_key}
+
+
+@router.post("/geoparquet/complete", response_model=JobStatus, status_code=202)
+async def geoparquet_complete(
+    body: GeoParquetComplete,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Step 2: the browser has PUT the file to `s3_key`; register the layer and queue inspection
+    (DuckDB reads it in place — never loaded into PostGIS)."""
+    from ...tasks.geoparquet_import import import_geoparquet
+    if body.file_size and body.file_size > MAX_GEOPARQUET_SIZE:
+        raise HTTPException(413, "File exceeds 10 GB limit.")
+    # The key must be inside this user's own prefix (the presign step issued it there).
+    if not (body.s3_key or "").startswith(f"vectors/{user.id}/"):
+        raise HTTPException(400, "Invalid storage key.")
+
+    base_name = os.path.splitext(os.path.basename(body.s3_key))[0]
+    layer_name = (body.name or "").strip() or base_name
+    table_name = f"gpq_{slugify(layer_name, separator='_') or 'layer'}_{uuid.uuid4().hex[:6]}"
+    schema_name = f"geodeploy_u{user.id}"
+
+    layer = VectorLayer(
+        user_id=user.id, name=layer_name, table_name=table_name, schema_name=schema_name,
+        file_size=body.file_size, storage_backend="geoparquet", s3_key=body.s3_key,
+        status="processing",
+    )
+    db.add(layer)
+    await db.flush()
+    job_id = str(uuid.uuid4())
+    db.add(UploadJob(id=job_id, layer_id=layer.id, layer_type="vector"))
+    await db.commit()
+    await db.refresh(layer)
+
+    import_geoparquet.delay(job_id, layer.id, body.s3_key)
+    return JobStatus(id=job_id, layer_id=layer.id, layer_type="vector",
+                     status="queued", progress=0, current_step="Queued", error_message=None)
+
+
 @router.get("/jobs/{job_id}", response_model=JobStatus)
 async def job_status(job_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
     result = await db.execute(select(UploadJob).where(UploadJob.id == job_id))
@@ -179,7 +253,15 @@ async def delete_layer(
         raise HTTPException(404, "Layer not found.")
 
     settings = get_settings()
-    if layer.status == "ready":
+    if layer.storage_backend == "geoparquet":
+        # GeoParquet layers live as a file on object storage — delete the object, no PostGIS table.
+        if layer.s3_key:
+            try:
+                from ...services.minio import get_s3_client
+                get_s3_client().delete_object(Bucket=settings.storage_bucket, Key=layer.s3_key)
+            except Exception:
+                pass
+    elif layer.status == "ready":
         import asyncpg
         try:
             # asyncpg wants the plain postgresql:// DSN (not the +asyncpg SQLAlchemy form);

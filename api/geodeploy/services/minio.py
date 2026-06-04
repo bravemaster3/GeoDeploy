@@ -133,6 +133,24 @@ def presigned_upload_url(key: str, expires: int = 3600) -> str:
     )
 
 
+def browser_upload_url(key: str, expires: int = 3600) -> str:
+    """A presigned PUT URL the BROWSER can reach.
+
+    The local MinIO has an internal Docker hostname (geodeploy-minio:9000) that the browser
+    can't resolve, so we strip the scheme+host and return a same-origin `/s3/...` path that
+    nginx proxies to MinIO **with the signed Host preserved** — the SigV4 signature still
+    verifies and, being same-origin, there's no CORS. For an external (public) S3 endpoint we
+    return the full presigned URL (that bucket must allow cross-origin PUT from the dashboard).
+    """
+    settings = get_settings()
+    url = presigned_upload_url(key, expires)
+    if "geodeploy-minio" in (settings.storage_endpoint or ""):
+        from urllib.parse import urlsplit
+        parts = urlsplit(url)
+        return f"/s3{parts.path}?{parts.query}" if parts.query else f"/s3{parts.path}"
+    return url
+
+
 def restart_titiler(endpoint: str, access_key: str, secret_key: str, region: str = "us-east-1") -> None:
     """(Re)create the TiTiler container for an arbitrary S3 endpoint (local MinIO or external).
 

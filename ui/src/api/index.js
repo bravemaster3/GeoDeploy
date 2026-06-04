@@ -55,6 +55,17 @@ export const uploadCsvFile = (file, params, onProgress) => {
     onUploadProgress: (e) => onProgress?.(Math.round((e.loaded * 100) / e.total)),
   })
 }
+// GeoParquet: presigned DIRECT-to-storage upload (browser → MinIO), then register + inspect.
+export const presignGeoParquet = (data) => api.post('/data/vector/geoparquet/presign', data)
+export const completeGeoParquet = (data) => api.post('/data/vector/geoparquet/complete', data)
+// Raw axios (NOT the `api` instance): no /api baseURL and no JWT header, which would otherwise
+// clash with the presigned request's own auth. The URL is same-origin (/s3/...) for local MinIO.
+export const putFileToUrl = (url, file, onProgress) =>
+  axios.put(url, file, {
+    headers: { 'Content-Type': 'application/octet-stream' },
+    onUploadProgress: (e) => onProgress?.(Math.round((e.loaded * 100) / (e.total || e.loaded || 1))),
+  })
+
 export const getVectorJobStatus = (jobId) => api.get(`/data/vector/jobs/${jobId}`)
 export const saveVectorDefaultStyle = (id, style) => api.put(`/data/vector/${id}/default-style`, style)
 export const deleteVectorLayer = (id) => api.delete(`/data/vector/${id}`)

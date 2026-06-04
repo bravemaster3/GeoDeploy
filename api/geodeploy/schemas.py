@@ -78,6 +78,7 @@ class VectorLayerOut(BaseModel):
     geometry_type: str | None
     file_size: int | None
     storage_backend: str
+    s3_key: str | None = None
     status: str
     error_message: str | None
     default_style: DefaultStyle | None

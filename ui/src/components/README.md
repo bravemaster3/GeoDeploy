@@ -4,9 +4,9 @@
 Reusable presentational/interactive widgets used by the views, grouped by feature area.
 
 ## Contents
-- `data/VectorRow.vue` — one row in the Data Manager vector list (name, status badge, metadata, delete).
+- `data/VectorRow.vue` — one row in the Data Manager vector list (name, status badge, metadata, delete). Shows a violet **GeoParquet** tag when `storage_backend === 'geoparquet'` (file-backed, not PostGIS).
 - `data/RasterRow.vue` — raster equivalent.
-- `data/UploadModal.vue` — drag/drop upload dialog; uses `useUpload` for progress + optimistic insert + background polling. `type` prop = `vector | raster`. **CSV** (vector): on selecting a `.csv` it parses the header client-side (with the chosen **delimiter** — comma/semicolon/tab/pipe) and shows X/Y column + EPSG pickers, then posts to `/data/vector/upload-csv` (background job → point layer) instead of the normal ingest.
+- `data/UploadModal.vue` — drag/drop upload dialog; uses `useUpload` for progress + optimistic insert + background polling. `type` prop = `vector | raster`. **CSV** (vector): on selecting a `.csv` it parses the header client-side (with the chosen **delimiter** — comma/semicolon/tab/pipe) and shows X/Y column + EPSG pickers, then posts to `/data/vector/upload-csv` (background job → point layer) instead of the normal ingest. **GeoParquet** (vector, `.parquet`/`.geoparquet`): uploads **direct to storage** via `useUpload.uploadGeoParquet` (presign → PUT to `/s3/` → complete) — never through the API; 10 GB client-side cap.
 - `data/AddSourceModal.vue` — connect an **external source** (XYZ/WMTS · WMS · WFS): type picker, URL, layer name (WMS/WFS), attribution; POSTs to `/data/sources` (WFS validated server-side) and inserts via `dataStore.addExternal`.
 - `data/SourceRow.vue` — one external-source row (type badge, kind/geometry/layer, URL, delete).
 - `data/DiscoverModal.vue` — **import existing data**: two tabs (PostGIS tables / storage files) from `/data/discover/*`, checkbox-select with an editable per-row **name** (default = table/file name). Storage lists GeoTIFFs (raster) + CSVs; selecting a CSV fetches its header (with a chosen **delimiter**) and shows **X/Y column + EPSG** pickers (CSV loads points into PostGIS, the rest register catalog rows with no copy). Refreshes the store after import.

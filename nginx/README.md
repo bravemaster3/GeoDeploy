@@ -8,6 +8,7 @@ The single public entrypoint. Reverse-proxies the SPA, the API, the two tile ser
   - `/health`, `/api/` → `geodeploy-api:8000` (with stricter rate-limit + longer timeout on the two `/upload` paths).
   - `/tiles/` → Martin and `/raster/` → TiTiler both use `set $var` + `rewrite ^/<prefix>/(.*)$ /$1 break;` to strip the prefix, then **`proxy_pass http://$var$uri$is_args$args;`**. The explicit `$uri$is_args$args` is required: with a *variable* host, plain `proxy_pass http://$var;` does not reliably forward the rewritten path + query args (this is why correct-format tile URLs 404'd through nginx while working directly in the container).
   - `/portals/` → static published bundles under `/var/www/portals/{slug}/index.html`, but **falls back to the SPA** (`@spa` → `geodeploy-ui`) when the path isn't a portal file — because the dashboard's Vue routes also live under `/portals/...` (e.g. `/portals/3/edit`). Without the fallback, refreshing/deep-linking an editor URL 404'd. Uses `root /var/www` + `try_files $uri $uri/index.html @spa`.
+  - `/s3/` → local MinIO (`geodeploy-minio:9000`), for **presigned direct uploads** (GeoParquet). The browser can't reach MinIO's internal hostname, so it PUTs here. The presigned URL is signed against `geodeploy-minio:9000`, so this block forwards that **exact** `Host` (hardcoded, not `$host`) for SigV4 to verify, and sets `proxy_request_buffering off` so a 10 GB body streams straight to MinIO instead of spooling to nginx disk. Same `rewrite … break;` + explicit `$uri$is_args$args` pattern as the tile routes (keeps the `?X-Amz-…` signature query intact). Only the local MinIO uses this path; external/public S3 gets a full presigned URL and uploads cross-origin (bucket CORS).
   - `/templates-static/` → API. `/` → `geodeploy-ui:80` (SPA, with websocket upgrade for dev HMR).
   - Uses Docker's internal resolver (`127.0.0.11`) + `set $var` so recreated containers are re-resolved without an nginx restart.
   - **`merge_slashes off;`** at the server level — left in but **was a misdiagnosis**: `merge_slashes` only normalizes the URI *path*, never the query string, so it never affected `?url=s3://...`. Harmless; the real query-forwarding fix is the explicit `$uri$is_args$args` proxy_pass above.
@@ -23,4 +24,4 @@ The single public entrypoint. Reverse-proxies the SPA, the API, the two tile ser
 - HTTPS/443 is stubbed but not wired (no automated certbot flow yet).
 
 ## Last updated
-2026-06-01
+2026-06-04
