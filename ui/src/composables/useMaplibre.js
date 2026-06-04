@@ -1,5 +1,13 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import maplibregl from 'maplibre-gl'
+import { Protocol } from 'pmtiles'
+
+// Register the pmtiles:// protocol once so MapLibre can read PMTiles archives (GeoParquet display).
+// addProtocol is global on the maplibregl module, so a single registration covers every map.
+if (!maplibregl.__pmtilesRegistered) {
+  maplibregl.addProtocol('pmtiles', new Protocol().tile)
+  maplibregl.__pmtilesRegistered = true
+}
 
 export function useMaplibre(containerId, initialStyle = null) {
   const map = ref(null)

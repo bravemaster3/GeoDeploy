@@ -6,6 +6,10 @@
       <div class="text-xs text-gray-500 flex gap-3 mt-0.5 items-center">
         <span v-if="layer.storage_backend === 'geoparquet'"
           class="px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 font-medium text-[10px] uppercase tracking-wide">GeoParquet</span>
+        <span v-if="layer.storage_backend === 'geoparquet' && layer.tile_status && layer.tile_status !== 'ready'"
+          class="px-1.5 py-0.5 rounded text-[10px] font-medium"
+          :class="layer.tile_status === 'error' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'">
+          {{ layer.tile_status === 'error' ? 'tiling failed' : 'tiling…' }}</span>
         <span v-if="layer.feature_count">{{ layer.feature_count?.toLocaleString() }} features</span>
         <span v-if="layer.geometry_type">{{ layer.geometry_type }}</span>
         <span v-if="layer.file_size">{{ formatBytes(layer.file_size) }}</span>

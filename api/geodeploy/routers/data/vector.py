@@ -1,9 +1,11 @@
 import os
 import uuid
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 from slugify import slugify
 
 from ...config import get_settings
@@ -278,6 +280,42 @@ async def tile_layer(
     await db.refresh(layer)
     tile_geoparquet.delay(layer.id, layer.s3_key, pmtiles_key)
     return VectorLayerOut.from_orm_json(layer)
+
+
+@router.get("/{layer_id}/pmtiles")
+async def vector_pmtiles(layer_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    """PUBLIC range proxy for a GeoParquet layer's PMTiles archive — MapLibre's pmtiles protocol
+    streams the tiles via HTTP Range requests. Public like Martin vector tiles (`/tiles/`), since
+    published portals are unauthenticated; same-origin so no CORS, and the bucket creds stay
+    server-side. The DB row is the only thing the caller can address (by id), not arbitrary keys."""
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    layer = result.scalar_one_or_none()
+    if not layer or layer.storage_backend != "geoparquet" or not layer.pmtiles_key:
+        raise HTTPException(404, "No tiles for this layer.")
+
+    settings = get_settings()
+    from ...services.minio import get_s3_client
+    s3 = get_s3_client()
+    params = {"Bucket": settings.storage_bucket, "Key": layer.pmtiles_key}
+    rng = request.headers.get("range")
+    if rng:
+        params["Range"] = rng
+    try:
+        obj = await run_in_threadpool(lambda: s3.get_object(**params))
+    except Exception:
+        raise HTTPException(404, "Tiles not found.")
+
+    headers = {"Accept-Ranges": "bytes", "Cache-Control": "public, max-age=3600"}
+    status = 200
+    if obj.get("ContentRange"):
+        headers["Content-Range"] = obj["ContentRange"]
+        status = 206
+    if obj.get("ContentLength") is not None:
+        headers["Content-Length"] = str(obj["ContentLength"])
+
+    body = obj["Body"]
+    return StreamingResponse(body.iter_chunks(256 * 1024), status_code=status,
+                             media_type="application/octet-stream", headers=headers)
 
 
 @router.put("/{layer_id}/default-style", response_model=VectorLayerOut)

@@ -16,6 +16,7 @@
     "vue-i18n": "^9.13.0",
     "axios": "^1.7.0",
     "maplibre-gl": "^4.7.0",
+    "pmtiles": "^3.2.0",
     "deck.gl": "^9.0.0",
     "@deck.gl/mapbox": "^9.0.0",
     "@deck.gl/layers": "^9.0.0",

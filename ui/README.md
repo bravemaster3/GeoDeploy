@@ -11,7 +11,7 @@ Vue 3 single-page dashboard — the browser-only control panel for setup, data u
 - `src/stores/` — Pinia state. See `stores/README.md`.
 - `src/views/` — page-level components. See `views/README.md`.
 - `src/components/` — reusable widgets. See `components/README.md`.
-- `src/composables/useMaplibre.js` — wraps a MapLibre map instance (`applyStyle`, `fitToBbox`, `jumpTo`, `loaded`).
+- `src/composables/useMaplibre.js` — wraps a MapLibre map instance (`applyStyle`, `fitToBbox`, `jumpTo`, `loaded`). Registers the `pmtiles://` protocol once (for GeoParquet PMTiles vector sources).
 - `src/composables/useUpload.js` — upload + optimistic store insert + background job polling. `uploadGeoParquet()` does the presigned DIRECT-to-storage flow (presign → raw PUT to `/s3/` → complete), bypassing the API for multi-GB files.
 - `src/views/icons.js` — shared inline SVG icon components.
 - `src/i18n/en.json`, `fr.json` — UI strings (FR ships at Phase 1).
