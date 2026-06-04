@@ -18,6 +18,10 @@ from .vector_ingest import _update_layer
 
 # tippecanoe layer name → the MVT "source-layer" the MapLibre style references.
 PMTILES_LAYER = "geodeploy"
+# Cap the max zoom (instead of `-zg`, which picks a high zoom for dense data → an explosion of
+# tiles and very long tiling). MapLibre overzooms vector tiles, so features still show past z14,
+# just without extra detail. This is the main lever on tiling time + output size.
+PMTILES_MAXZOOM = 14
 
 
 @celery_app.task(bind=True, name="geodeploy.tasks.pmtiles_tile.tile_geoparquet")
@@ -32,11 +36,11 @@ def tile_geoparquet(self, layer_id, s3_key, pmtiles_key):
 
     _update_layer(db_path, layer_id, tile_status="tiling")
     try:
-        # -zg: guess max zoom; drop/extend keep dense areas legible without blowing up tile size.
-        # Read GeoJSONSeq from stdin (/dev/stdin) so there's no giant intermediate file on disk.
-        cmd = ["tippecanoe", "-o", out_path, "-l", PMTILES_LAYER, "-zg",
-               "--drop-densest-as-needed", "--extend-zooms-if-still-dropping",
-               "--force", "-t", tmpdir, "/dev/stdin"]
+        # Capped max zoom (PMTILES_MAXZOOM) keeps tiling fast; --drop-densest-as-needed thins dense
+        # areas so tiles stay under size limits without extending the zoom. Read GeoJSONSeq from
+        # stdin (/dev/stdin) so there's no giant intermediate file on disk.
+        cmd = ["tippecanoe", "-o", out_path, "-l", PMTILES_LAYER, "-z", str(PMTILES_MAXZOOM),
+               "--drop-densest-as-needed", "--force", "-t", tmpdir, "/dev/stdin"]
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
 
         feed_err = {}

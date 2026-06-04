@@ -32,8 +32,8 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   CRS / count) and marks the layer ready. Storage creds from SQLite (§0f). Sets
   `storage_backend='geoparquet'` + `s3_key` on the layer.
 - `pmtiles_tile.py` — `tile_geoparquet(layer_id, s3_key, pmtiles_key)`: the GeoParquet **display** path.
-  Runs **tippecanoe** (built into the image, `/dev/stdin`, `-l geodeploy`, `-zg --drop-densest-as-needed
-  --extend-zooms-if-still-dropping`) fed by a thread streaming `duckdb_engine.stream_geojsonseq` (GeoParquet →
+  Runs **tippecanoe** (built into the image, `/dev/stdin`, `-l geodeploy`, **`-z14` capped max zoom**
+  `--drop-densest-as-needed`) fed by a thread streaming `duckdb_engine.stream_geojsonseq` (GeoParquet →
   GeoJSONSeq, no giant temp file), uploads the `.pmtiles` to storage, sets `pmtiles_key`/`tile_status`. The
   browser streams the tiles via range requests (no per-pan server work). Chained from `geoparquet_import` after
   inspect (auto-tile on upload); also triggerable via `POST /data/vector/{id}/tile`. DuckDB keeps reading the
