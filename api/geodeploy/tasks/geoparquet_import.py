@@ -43,10 +43,17 @@ def import_geoparquet(self, job_id, layer_id, s3_key):
             feature_count=info.get("feature_count"),
             bbox=json.dumps(info["bbox"]) if info.get("bbox") else None,
             columns=json.dumps(info.get("columns") or []),
+            tile_status="tiling",
             updated_at=datetime.now(timezone.utc).isoformat(),
         )
         _update_job(db_path, job_id, status="ready", progress=100,
                     completed_at=datetime.now(timezone.utc).isoformat())
+
+        # The layer is usable in the catalog now; tile it to PMTiles in the background (the
+        # display path). DuckDB keeps reading the original .parquet for analysis/download.
+        from .pmtiles_tile import tile_geoparquet
+        pmtiles_key = (s3_key.rsplit(".", 1)[0] if "." in s3_key else s3_key) + ".pmtiles"
+        tile_geoparquet.delay(layer_id, s3_key, pmtiles_key)
     except Exception as exc:
         _update_job(db_path, job_id, status="error", error_message=str(exc),
                     completed_at=datetime.now(timezone.utc).isoformat())

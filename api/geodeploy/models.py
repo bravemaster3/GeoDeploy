@@ -66,6 +66,10 @@ class VectorLayer(Base):
     file_size: Mapped[int | None] = mapped_column(Integer)
     storage_backend: Mapped[str] = mapped_column(String(16), default="postgis")  # postgis | geoparquet
     s3_key: Mapped[str | None] = mapped_column(String(512))
+    # GeoParquet display path: a PMTiles archive tiled from the file (key on storage). tile_status:
+    # NULL/none (n/a or not started) | tiling | ready | error. Until ready, the layer isn't displayable.
+    pmtiles_key: Mapped[str | None] = mapped_column(String(512))
+    tile_status: Mapped[str | None] = mapped_column(String(16))
     status: Mapped[str] = mapped_column(String(16), default="processing")  # processing | ready | error
     error_message: Mapped[str | None] = mapped_column(Text)
     default_style: Mapped[str | None] = mapped_column(Text)  # JSON {opacity, style, popup_fields}

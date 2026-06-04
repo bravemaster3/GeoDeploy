@@ -256,6 +256,30 @@ async def vector_features(
     return await run_in_threadpool(duckdb_engine.query_features_geojson, layer.s3_key, box, limit)
 
 
+@router.post("/{layer_id}/tile", response_model=VectorLayerOut)
+async def tile_layer(
+    layer_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """(Re)generate the PMTiles archive for a GeoParquet layer — used to tile a file uploaded
+    before tiling existed, or to retry after an error."""
+    from ...tasks.pmtiles_tile import tile_geoparquet
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id, VectorLayer.user_id == user.id))
+    layer = result.scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not found.")
+    if layer.storage_backend != "geoparquet" or not layer.s3_key:
+        raise HTTPException(400, "This layer is not a GeoParquet (file-backed) layer.")
+
+    pmtiles_key = (layer.s3_key.rsplit(".", 1)[0] if "." in layer.s3_key else layer.s3_key) + ".pmtiles"
+    layer.tile_status = "tiling"
+    await db.commit()
+    await db.refresh(layer)
+    tile_geoparquet.delay(layer.id, layer.s3_key, pmtiles_key)
+    return VectorLayerOut.from_orm_json(layer)
+
+
 @router.put("/{layer_id}/default-style", response_model=VectorLayerOut)
 async def save_default_style(
     layer_id: int,
@@ -287,13 +311,16 @@ async def delete_layer(
 
     settings = get_settings()
     if layer.storage_backend == "geoparquet":
-        # GeoParquet layers live as a file on object storage — delete the object, no PostGIS table.
-        if layer.s3_key:
-            try:
-                from ...services.minio import get_s3_client
-                get_s3_client().delete_object(Bucket=settings.storage_bucket, Key=layer.s3_key)
-            except Exception:
-                pass
+        # GeoParquet layers live as files on object storage (the .parquet + its .pmtiles) — delete
+        # both objects, no PostGIS table.
+        from ...services.minio import get_s3_client
+        s3 = get_s3_client()
+        for key in (layer.s3_key, layer.pmtiles_key):
+            if key:
+                try:
+                    s3.delete_object(Bucket=settings.storage_bucket, Key=key)
+                except Exception:
+                    pass
     elif layer.status == "ready":
         import asyncpg
         try:

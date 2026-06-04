@@ -37,6 +37,8 @@ def _apply_schema_migrations(conn) -> None:
         "ALTER TABLE vector_layers ADD COLUMN id_column VARCHAR(128)",
         "ALTER TABLE vector_layers ADD COLUMN storage_backend VARCHAR(16) DEFAULT 'postgis'",
         "ALTER TABLE vector_layers ADD COLUMN s3_key VARCHAR(512)",
+        "ALTER TABLE vector_layers ADD COLUMN pmtiles_key VARCHAR(512)",
+        "ALTER TABLE vector_layers ADD COLUMN tile_status VARCHAR(16)",
         "ALTER TABLE raster_layers ADD COLUMN default_style TEXT",
     ]
     for sql in pending:

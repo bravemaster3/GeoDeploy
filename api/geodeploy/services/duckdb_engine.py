@@ -313,3 +313,62 @@ def query_features_geojson(s3_key: str, bbox=None, limit: int = 50_000, creds: d
                 "geodeploy:capped": len(features) >= limit}
     finally:
         conn.close()
+
+
+def stream_geojsonseq(s3_key: str, out, creds: dict | None = None, bucket: str | None = None,
+                      batch_size: int = 20_000) -> int:
+    """Stream a whole GeoParquet file as newline-delimited GeoJSON (GeoJSONSeq, EPSG:4326) to the
+    writable binary stream `out` (e.g. tippecanoe's stdin). Reads WKB without spatial and converts
+    with shapely, in batches — never materialising the whole file. Returns the feature count.
+    """
+    settings = get_settings()
+    bkt = bucket or settings.storage_bucket
+    loc = f"s3://{bkt}/{s3_key}".replace("'", "''")
+    conn = _connect_read(creds)
+    try:
+        meta = _read_geo_metadata(conn, loc)
+        all_cols = [r[0] for r in conn.execute(
+            f"DESCRIBE SELECT * FROM read_parquet('{loc}')").fetchall()]
+        geom_col = meta["column"] or next(
+            (c for c in all_cols if c.lower() in ("geometry", "geom", "wkb_geometry", "wkb")), None)
+        if not geom_col:
+            raise ValueError("No geometry column found.")
+        src_epsg = meta["epsg"] or "EPSG:4326"
+        prop_cols = [c for c in all_cols if c != geom_col]
+        sel = ", ".join([f"{_q(geom_col)} AS __wkb"] + [_q(c) for c in prop_cols])
+
+        from shapely import from_wkb, to_geojson
+        reproject = None
+        if src_epsg != "EPSG:4326":
+            from pyproj import Transformer
+            from shapely.ops import transform as _shp_transform
+            _tr = Transformer.from_crs(src_epsg, "EPSG:4326", always_xy=True)
+            reproject = lambda g: _shp_transform(lambda x, y, z=None: _tr.transform(x, y), g)
+
+        rel = conn.execute(f"SELECT {sel} FROM read_parquet('{loc}')")
+        count = 0
+        while True:
+            batch = rel.fetchmany(batch_size)
+            if not batch:
+                break
+            for r in batch:
+                w = r[0]
+                if w is None:
+                    continue
+                try:
+                    g = from_wkb(bytes(w))
+                    if reproject is not None:
+                        g = reproject(g)
+                    gj = to_geojson(g)
+                except Exception:
+                    continue
+                props = {prop_cols[i]: _jsonable(r[i + 1]) for i in range(len(prop_cols))}
+                out.write(b'{"type":"Feature","geometry":')
+                out.write(gj.encode())
+                out.write(b',"properties":')
+                out.write(json.dumps(props, default=str).encode())
+                out.write(b"}\n")
+                count += 1
+        return count
+    finally:
+        conn.close()

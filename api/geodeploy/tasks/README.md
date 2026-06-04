@@ -31,6 +31,13 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   attach), so the task only `duckdb_engine.inspect_parquet`s it (geometry type / bbox→4326 / columns /
   CRS / count) and marks the layer ready. Storage creds from SQLite (§0f). Sets
   `storage_backend='geoparquet'` + `s3_key` on the layer.
+- `pmtiles_tile.py` — `tile_geoparquet(layer_id, s3_key, pmtiles_key)`: the GeoParquet **display** path.
+  Runs **tippecanoe** (built into the image, `/dev/stdin`, `-l geodeploy`, `-zg --drop-densest-as-needed
+  --extend-zooms-if-still-dropping`) fed by a thread streaming `duckdb_engine.stream_geojsonseq` (GeoParquet →
+  GeoJSONSeq, no giant temp file), uploads the `.pmtiles` to storage, sets `pmtiles_key`/`tile_status`. The
+  browser streams the tiles via range requests (no per-pan server work). Chained from `geoparquet_import` after
+  inspect (auto-tile on upload); also triggerable via `POST /data/vector/{id}/tile`. DuckDB keeps reading the
+  original `.parquet` for analysis/download — the `.pmtiles` is display-only.
 - `export.py` — `export_bundle(bbox, items)`: clips the chosen portal layers to a bbox and writes a
   ZIP to `data/temp/exports/{task_id}.zip` (served by the API's `export-download`). Vector via
   psycopg2 (GeoJSON/CSV) + `ogr2ogr` (GeoPackage); raster via rasterio windowed read with an output

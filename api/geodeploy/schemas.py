@@ -79,6 +79,8 @@ class VectorLayerOut(BaseModel):
     file_size: int | None
     storage_backend: str
     s3_key: str | None = None
+    pmtiles_key: str | None = None
+    tile_status: str | None = None
     status: str
     error_message: str | None
     default_style: DefaultStyle | None
