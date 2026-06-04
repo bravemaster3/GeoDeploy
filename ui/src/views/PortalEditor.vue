@@ -147,8 +147,10 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { usePortalsStore } from '@/stores/portals'
 import { useDataStore } from '@/stores/data'
-import { listTemplates, getRasterStats } from '@/api'
+import { listTemplates, getRasterStats, getVectorFeatures } from '@/api'
 import { useMaplibre } from '@/composables/useMaplibre'
+import { MapboxOverlay } from '@deck.gl/mapbox'
+import { GeoJsonLayer } from '@deck.gl/layers'
 import { ExternalLinkIcon } from '@/views/icons'
 import LayerPanel from '@/components/portal/LayerPanel.vue'
 
@@ -211,6 +213,7 @@ watch([layerConfigs, loaded], () => {
   if (!loaded.value) return
   const { style, bounds } = buildPreviewStyle()
   applyStyle(style)
+  refreshDeck()
   if (!viewInitialized) {
     if (savedView.value) { jumpTo(savedView.value); viewInitialized = true }
     else if (bounds) { fitToBbox(bounds); viewInitialized = true }
@@ -296,6 +299,9 @@ function buildPreviewStyle() {
     if (cfg.layer_type === 'vector') {
       const layer = dataStore.vectorLayers.find(l => l.id === cfg.layer_id)
       if (!layer || layer.status !== 'ready') continue
+      // GeoParquet (file-backed) layers are rendered by deck.gl, not MapLibre tiles —
+      // skip the source/layer here but still include the bbox in zoom-to-all.
+      if (layer.storage_backend === 'geoparquet') { expandBounds(layer.bbox); continue }
 
       const srcId = `vector_${layer.id}`
       style.sources[srcId] = {
@@ -405,6 +411,108 @@ function rasterTilesUrl(baseTileUrl, style) {
   }
   const url = base + (params.length ? '&' + params.join('&') : '')
   return url.startsWith('/') ? location.origin + url : url
+}
+
+// ── deck.gl overlay for GeoParquet (file-backed) layers ─────────────────────────
+// These aren't tiled by Martin; DuckDB serves the features in the current viewport
+// (capped) and deck.gl renders them as an overlay on top of MapLibre. The overlay is a
+// map control, so it survives setStyle (unlike interleaved layers, which would be lost).
+let deckOverlay = null
+const deckData = {}          // layer_id → fetched GeoJSON FeatureCollection for the current view
+let deckMoveBound = false
+
+function isGeoparquet(layerId) {
+  return dataStore.vectorLayers.find(l => l.id === layerId)?.storage_backend === 'geoparquet'
+}
+
+function ensureDeck() {
+  if (!map.value || !loaded.value) return
+  if (!deckOverlay) {
+    deckOverlay = new MapboxOverlay({ interleaved: false, layers: [] })
+    map.value.addControl(deckOverlay)
+  }
+  if (!deckMoveBound) {
+    map.value.on('moveend', onDeckMoveEnd)
+    deckMoveBound = true
+  }
+}
+
+function viewBbox() {
+  const b = map.value.getBounds()
+  return [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]
+}
+
+async function fetchDeckLayer(cfg) {
+  if (!isGeoparquet(cfg.layer_id)) return
+  try {
+    const { data } = await getVectorFeatures(cfg.layer_id, viewBbox().join(','), 50000)
+    deckData[cfg.layer_id] = data
+  } catch { /* keep previous data */ }
+}
+
+function hexToRgb(hex) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || '')
+  return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [59, 130, 246]
+}
+
+function makeDeckLayer(cfg, layer) {
+  const fc = deckData[cfg.layer_id]
+  if (!fc) return null
+  const op = cfg.opacity ?? 1.0
+  const geom = (layer.geometry_type || '').toLowerCase()
+  const fill = hexToRgb(cfg.style?.color || '#3b82f6')
+  const line = hexToRgb(cfg.style?.outline_color || cfg.style?.color || '#1d4ed8')
+  const fillAlpha = Math.round(255 * op * (geom.includes('polygon') ? (cfg.style?.fill_opacity ?? 0.45) : 1))
+  return new GeoJsonLayer({
+    id: `gpq-${layer.id}`,
+    data: fc,
+    pickable: true,
+    stroked: true,
+    filled: true,
+    pointRadiusUnits: 'pixels',
+    pointRadiusMinPixels: 2,
+    getPointRadius: cfg.style?.radius ?? 5,
+    lineWidthUnits: 'pixels',
+    lineWidthMinPixels: 1,
+    getLineWidth: cfg.style?.line_width ?? 1.5,
+    getFillColor: [...fill, fillAlpha],
+    getLineColor: [...line, Math.round(255 * op)],
+    updateTriggers: {
+      getFillColor: [cfg.style?.color, cfg.opacity, cfg.style?.fill_opacity],
+      getLineColor: [cfg.style?.outline_color, cfg.style?.color, cfg.opacity],
+      getPointRadius: [cfg.style?.radius],
+      getLineWidth: [cfg.style?.line_width],
+    },
+  })
+}
+
+function updateDeckLayers() {
+  if (!deckOverlay) return
+  const layers = []
+  // config[0] = top of list = top of map → draw it LAST (deck renders in array order).
+  for (const cfg of [...layerConfigs.value].reverse()) {
+    if (cfg.visible === false || !isGeoparquet(cfg.layer_id)) continue
+    const layer = dataStore.vectorLayers.find(l => l.id === cfg.layer_id)
+    if (!layer || layer.status !== 'ready') continue
+    const dl = makeDeckLayer(cfg, layer)
+    if (dl) layers.push(dl)
+  }
+  deckOverlay.setProps({ layers })
+}
+
+async function refreshDeck() {
+  ensureDeck()
+  if (!deckOverlay) return
+  const visible = layerConfigs.value.filter(c => c.visible !== false && isGeoparquet(c.layer_id))
+  // Fetch only layers without cached data (new add); style/visibility-only edits reuse the cache.
+  await Promise.all(visible.filter(c => !deckData[c.layer_id]).map(fetchDeckLayer))
+  updateDeckLayers()
+}
+
+function onDeckMoveEnd() {
+  const visible = layerConfigs.value.filter(c => c.visible !== false && isGeoparquet(c.layer_id))
+  if (!visible.length) return
+  Promise.all(visible.map(fetchDeckLayer)).then(updateDeckLayers)
 }
 
 const availableLayers = computed(() => [

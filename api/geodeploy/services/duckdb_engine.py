@@ -116,7 +116,7 @@ def _read_geo_metadata(conn: duckdb.DuckDBPyConnection, loc: str) -> dict:
     The metadata bbox + geometry_types (when the writer included them) let us avoid reading any
     geometry at all — the expensive part of inspecting a multi-GB file.
     """
-    out = {"column": None, "epsg": None, "bbox": None, "geometry_types": None}
+    out = {"column": None, "epsg": None, "bbox": None, "geometry_types": None, "covering": None}
     try:
         rows = conn.execute(
             f"SELECT decode(value) FROM parquet_kv_metadata('{loc}') WHERE decode(key) = 'geo'"
@@ -139,13 +139,24 @@ def _read_geo_metadata(conn: duckdb.DuckDBPyConnection, loc: str) -> dict:
     gts = col_meta.get("geometry_types")
     if isinstance(gts, list) and gts:
         out["geometry_types"] = gts
+    # Covering bbox column (GeoParquet 1.1) → (struct_column, {xmin,ymin,xmax,ymax field names}).
+    # Lets us filter by viewport on plain numeric columns (row-group pruning, no geometry read).
+    cov = (col_meta.get("covering") or {}).get("bbox")
+    if isinstance(cov, dict) and all(k in cov for k in ("xmin", "ymin", "xmax", "ymax")):
+        try:
+            col = cov["xmin"][0]
+            out["covering"] = (col, {k: cov[k][1] for k in ("xmin", "ymin", "xmax", "ymax")})
+        except Exception:
+            pass
     return out
 
 
-def _reproject_bbox(bbox: list[float], src_epsg: str) -> list[float]:
+def _reproject_bbox(bbox: list[float], src_epsg: str, dst_epsg: str = "EPSG:4326") -> list[float]:
+    if src_epsg == dst_epsg:
+        return bbox
     try:
         from pyproj import Transformer
-        t = Transformer.from_crs(src_epsg, "EPSG:4326", always_xy=True)
+        t = Transformer.from_crs(src_epsg, dst_epsg, always_xy=True)
         xs, ys = [], []
         for x in (bbox[0], bbox[2]):
             for y in (bbox[1], bbox[3]):
@@ -219,26 +230,86 @@ def inspect_parquet(location: str, creds: dict | None = None) -> dict:
         conn.close()
 
 
-def query_geojson(s3_key: str, where: str | None = None, limit: int = 10_000) -> dict:
-    """Return a GeoJSON FeatureCollection from a GeoParquet file in S3."""
+def _jsonable(v):
+    """Coerce a DuckDB cell to something JSON-serialisable (dates/Decimal/bytes → str/float)."""
+    import datetime
+    import decimal
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    if isinstance(v, decimal.Decimal):
+        return float(v)
+    if isinstance(v, (datetime.date, datetime.datetime, datetime.time)):
+        return v.isoformat()
+    if isinstance(v, (bytes, bytearray, memoryview)):
+        return None  # don't ship raw blobs as properties
+    return str(v)
+
+
+def query_features_geojson(s3_key: str, bbox=None, limit: int = 50_000, creds: dict | None = None,
+                           bucket: str | None = None) -> dict:
+    """Viewport query for a GeoParquet layer → a GeoJSON FeatureCollection (geometries in EPSG:4326).
+
+    `bbox` is `[minx, miny, maxx, maxy]` in EPSG:4326 (the current map view) or None for "first N".
+    Spatial filtering uses the GeoParquet **covering bbox** column when present — plain numeric
+    comparisons that let DuckDB prune row-groups, so a multi-GB file isn't fully scanned per view.
+    Without a covering column we can't bbox-filter cheaply (no spatial extension — see inspect notes),
+    so we fall back to the first `limit` rows. Reads WKB (no spatial) and converts with shapely.
+    """
     settings = get_settings()
-    conn = get_connection()
-    path = f"s3://{settings.storage_bucket}/{s3_key}"
-    sql = f"SELECT * FROM read_parquet('{path}')"
-    if where:
-        sql += f" WHERE {where}"
-    sql += f" LIMIT {limit}"
-    rel = conn.execute(sql)
-    rows = rel.fetchall()
-    cols = [desc[0] for desc in rel.description]
+    bkt = bucket or settings.storage_bucket
+    loc = f"s3://{bkt}/{s3_key}".replace("'", "''")
+    limit = max(1, int(limit))
 
-    features = []
-    for row in rows:
-        props = {cols[i]: row[i] for i in range(len(cols)) if cols[i] != "geometry"}
-        geom_idx = cols.index("geometry") if "geometry" in cols else None
-        geom = None
-        if geom_idx is not None and row[geom_idx]:
-            geom = {"type": "Unknown", "coordinates": []}  # WKB parsing handled by frontend via deck.gl
-        features.append({"type": "Feature", "geometry": geom, "properties": props})
+    conn = _connect_read(creds)
+    try:
+        meta = _read_geo_metadata(conn, loc)
+        all_cols = [r[0] for r in conn.execute(
+            f"DESCRIBE SELECT * FROM read_parquet('{loc}')").fetchall()]
+        geom_col = meta["column"]
+        if not geom_col:
+            geom_col = next((c for c in all_cols
+                             if c.lower() in ("geometry", "geom", "wkb_geometry", "wkb")), None)
+        if not geom_col:
+            raise ValueError("No geometry column found.")
+        src_epsg = meta["epsg"] or "EPSG:4326"
+        prop_cols = [c for c in all_cols if c != geom_col]
 
-    return {"type": "FeatureCollection", "features": features}
+        where = ""
+        if bbox and len(bbox) == 4 and meta["covering"]:
+            qb = _reproject_bbox(list(bbox), "EPSG:4326", src_epsg)  # filter in the file's CRS
+            col, fields = meta["covering"]
+            def ce(f):
+                return f"struct_extract({_q(col)}, '{fields[f]}')"
+            where = (f"WHERE {ce('xmin')} <= {qb[2]} AND {ce('xmax')} >= {qb[0]} "
+                     f"AND {ce('ymin')} <= {qb[3]} AND {ce('ymax')} >= {qb[1]}")
+
+        sel = ", ".join([f"{_q(geom_col)} AS __wkb"] + [_q(c) for c in prop_cols])
+        rows = conn.execute(
+            f"SELECT {sel} FROM read_parquet('{loc}') {where} LIMIT {limit}").fetchall()
+
+        from shapely import from_wkb, to_geojson
+        transformer = None
+        if src_epsg != "EPSG:4326":
+            from pyproj import Transformer
+            transformer = Transformer.from_crs(src_epsg, "EPSG:4326", always_xy=True)
+
+        features = []
+        for r in rows:
+            wkb = r[0]
+            if wkb is None:
+                continue
+            try:
+                g = from_wkb(bytes(wkb))
+                if transformer is not None:
+                    from shapely.ops import transform as _shp_transform
+                    g = _shp_transform(lambda x, y, z=None: transformer.transform(x, y), g)
+                geom = json.loads(to_geojson(g))
+            except Exception:
+                continue
+            props = {prop_cols[i]: _jsonable(r[i + 1]) for i in range(len(prop_cols))}
+            features.append({"type": "Feature", "geometry": geom, "properties": props})
+
+        return {"type": "FeatureCollection", "features": features,
+                "geodeploy:capped": len(features) >= limit}
+    finally:
+        conn.close()

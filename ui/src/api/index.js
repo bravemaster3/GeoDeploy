@@ -67,6 +67,9 @@ export const putFileToUrl = (url, file, onProgress) =>
   })
 
 export const getVectorJobStatus = (jobId) => api.get(`/data/vector/jobs/${jobId}`)
+// Viewport query for a GeoParquet (file-backed) layer → GeoJSON in EPSG:4326 (rendered by deck.gl).
+export const getVectorFeatures = (id, bbox, limit = 50000) =>
+  api.get(`/data/vector/${id}/features`, { params: { bbox, limit } })
 export const saveVectorDefaultStyle = (id, style) => api.put(`/data/vector/${id}/default-style`, style)
 export const deleteVectorLayer = (id) => api.delete(`/data/vector/${id}`)
 

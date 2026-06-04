@@ -223,6 +223,39 @@ async def job_status(job_id: str, db: AsyncSession = Depends(get_db), user: User
     return job
 
 
+@router.get("/{layer_id}/features")
+async def vector_features(
+    layer_id: int,
+    bbox: str | None = None,
+    limit: int = 50000,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Viewport query for a GeoParquet (file-backed) layer → GeoJSON in EPSG:4326. DuckDB filters
+    by the bbox (covering-column pruning) and caps results; deck.gl renders the subset. The DuckDB
+    work runs in a threadpool so the single uvicorn worker isn't blocked."""
+    from starlette.concurrency import run_in_threadpool
+    from ...services import duckdb_engine
+
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id, VectorLayer.user_id == user.id))
+    layer = result.scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not found.")
+    if layer.storage_backend != "geoparquet" or not layer.s3_key:
+        raise HTTPException(400, "This layer is not a GeoParquet (file-backed) layer.")
+
+    box = None
+    if bbox:
+        try:
+            parts = [float(x) for x in bbox.split(",")]
+            if len(parts) == 4:
+                box = parts
+        except ValueError:
+            box = None
+    limit = max(1, min(limit, 200000))
+    return await run_in_threadpool(duckdb_engine.query_features_geojson, layer.s3_key, box, limit)
+
+
 @router.put("/{layer_id}/default-style", response_model=VectorLayerOut)
 async def save_default_style(
     layer_id: int,
