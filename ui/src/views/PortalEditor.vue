@@ -420,9 +420,17 @@ function rasterTilesUrl(baseTileUrl, style) {
 let deckOverlay = null
 const deckData = {}          // layer_id → fetched GeoJSON FeatureCollection for the current view
 let deckMoveBound = false
+// The live deck.gl/DuckDB viewport preview is being replaced by PMTiles. Until then, only
+// preview SMALL geoparquet layers — a multi-GB DuckDB scan per pan would freeze the app.
+const MAX_PREVIEW_FEATURES = 250000
 
 function isGeoparquet(layerId) {
   return dataStore.vectorLayers.find(l => l.id === layerId)?.storage_backend === 'geoparquet'
+}
+
+function previewableGeoparquet(layerId) {
+  const l = dataStore.vectorLayers.find(x => x.id === layerId)
+  return !!l && l.storage_backend === 'geoparquet' && (l.feature_count || 0) <= MAX_PREVIEW_FEATURES
 }
 
 function ensureDeck() {
@@ -443,7 +451,7 @@ function viewBbox() {
 }
 
 async function fetchDeckLayer(cfg) {
-  if (!isGeoparquet(cfg.layer_id)) return
+  if (!previewableGeoparquet(cfg.layer_id)) return
   try {
     const { data } = await getVectorFeatures(cfg.layer_id, viewBbox().join(','), 50000)
     deckData[cfg.layer_id] = data
@@ -503,14 +511,14 @@ function updateDeckLayers() {
 async function refreshDeck() {
   ensureDeck()
   if (!deckOverlay) return
-  const visible = layerConfigs.value.filter(c => c.visible !== false && isGeoparquet(c.layer_id))
+  const visible = layerConfigs.value.filter(c => c.visible !== false && previewableGeoparquet(c.layer_id))
   // Fetch only layers without cached data (new add); style/visibility-only edits reuse the cache.
   await Promise.all(visible.filter(c => !deckData[c.layer_id]).map(fetchDeckLayer))
   updateDeckLayers()
 }
 
 function onDeckMoveEnd() {
-  const visible = layerConfigs.value.filter(c => c.visible !== false && isGeoparquet(c.layer_id))
+  const visible = layerConfigs.value.filter(c => c.visible !== false && previewableGeoparquet(c.layer_id))
   if (!visible.length) return
   Promise.all(visible.map(fetchDeckLayer)).then(updateDeckLayers)
 }
