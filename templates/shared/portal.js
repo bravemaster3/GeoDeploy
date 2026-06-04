@@ -84,8 +84,20 @@
       if (typeof src.data === 'string' && src.data.startsWith('/')) {
         src.data = base + src.data;
       }
+      // GeoParquet PMTiles sources: "pmtiles:///api/..." → "pmtiles://<origin>/api/..."
+      // (the pmtiles lib fetches the part after pmtiles://, which must be absolute for the worker).
+      if (typeof src.url === 'string' && src.url.indexOf('pmtiles://') === 0) {
+        const rest = src.url.slice('pmtiles://'.length);
+        if (rest.charAt(0) === '/') src.url = 'pmtiles://' + base + rest;
+      }
     });
   })(STYLE);
+
+  // Register the pmtiles:// protocol (the lib is loaded via CDN in layout.html) before map init.
+  if (window.pmtiles && maplibregl && !maplibregl.__pmtilesRegistered) {
+    maplibregl.addProtocol('pmtiles', new window.pmtiles.Protocol().tile);
+    maplibregl.__pmtilesRegistered = true;
+  }
 
   // ── Sidebar toggle ──────────────────────────────────────
   const sidebar = document.getElementById('sidebar');

@@ -26,21 +26,26 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
             layer = next((l for l in vector_layers if l.id == cfg["layer_id"]), None)
             if not layer:
                 continue
-            # GeoParquet (file-backed) layers aren't tiled by Martin — they render via deck.gl,
-            # which the published-portal runtime doesn't support yet (editor preview only). Skip
-            # the (would-be-broken) Martin source for now but still include the bbox in the fit.
-            # TODO (deck.gl-in-published increment): emit a deck.gl/viewport source here.
-            if getattr(layer, "storage_backend", "postgis") == "geoparquet":
-                if layer.bbox:
-                    _expand_bounds(bounds, json.loads(layer.bbox))
-                continue
             source_id = f"vector_{layer.id}"
-            sources[source_id] = {
-                "type": "vector",
-                "tiles": [vector_tile_url(layer.schema_name, layer.table_name)],
-                "minzoom": 0,
-                "maxzoom": 22,
-            }
+            if getattr(layer, "storage_backend", "postgis") == "geoparquet":
+                # File-backed: render from the PMTiles archive via the pmtiles:// protocol. Until
+                # tiling finishes, skip the layer (keep its bbox in the fit). The URL is
+                # root-relative; portal.js absolutifies pmtiles:// urls at runtime.
+                if layer.tile_status != "ready" or not layer.pmtiles_key:
+                    if layer.bbox:
+                        _expand_bounds(bounds, json.loads(layer.bbox))
+                    continue
+                sources[source_id] = {
+                    "type": "vector",
+                    "url": f"pmtiles:///api/data/vector/{layer.id}/pmtiles",
+                }
+            else:
+                sources[source_id] = {
+                    "type": "vector",
+                    "tiles": [vector_tile_url(layer.schema_name, layer.table_name)],
+                    "minzoom": 0,
+                    "maxzoom": 22,
+                }
             ml_layer = _vector_layer(source_id, layer, cfg)
             ml_layer["metadata"] = {
                 "geodeploy:name": layer.name,
@@ -245,7 +250,10 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
     geom = (layer.geometry_type or "").lower()
     style = cfg.get("style", {})
     opacity = cfg.get("opacity", 1.0)
-    source_layer = f"{layer.schema_name}.{layer.table_name}"
+    # PostGIS layers tile by Martin under schema.table; GeoParquet PMTiles use the tippecanoe
+    # layer name "geodeploy" (see tasks/pmtiles_tile.PMTILES_LAYER).
+    source_layer = ("geodeploy" if getattr(layer, "storage_backend", "postgis") == "geoparquet"
+                    else f"{layer.schema_name}.{layer.table_name}")
 
     if "polygon" in geom:
         return {

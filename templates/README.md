@@ -13,7 +13,7 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
     **band selection** (multiband → RGB composite or single band), palette/hillshade/Z/stretch +
     legend bar — the viewer's tweaks preserve the admin's baked `bidx`; **external sources**
     (WMS/XYZ/WFS, flagged `geodeploy:external`) get an opacity-only popover (+colour for WFS) and
-    skip the raster stretch path; geojson `data` URLs are absolutified like tile URLs) · zoom; popup + attribute table,
+    skip the raster stretch path; geojson `data` URLs are absolutified like tile URLs; **GeoParquet** layers render from a `pmtiles://` vector source — portal.js registers the pmtiles protocol (lib via CDN in layout.html) and rewrites `pmtiles:///api/...` → `pmtiles://<origin>/api/...`) · zoom; popup + attribute table,
     **raster pixel identify**, basemap switcher, coordinate readout, reset styling, **Tools control:
     select-area-and-download** (`POST /api/portals/{slug}/export-bundle`)). It reads its data from a
     `window.GEODEPLOY` object (`title`, `slug`, `style`, `popupConfig`, `accessType`, `passwordSha256`) and
