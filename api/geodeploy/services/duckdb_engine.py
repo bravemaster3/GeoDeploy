@@ -50,12 +50,18 @@ def _apply_s3(conn: duckdb.DuckDBPyConnection, endpoint: str, access_key: str,
     conn.execute("SET s3_use_ssl=" + ("false" if endpoint.startswith("http://") else "true"))
 
 
-def _connect(creds: dict | None = None) -> duckdb.DuckDBPyConnection:
-    """A fresh DuckDB connection configured for S3. Used by Celery tasks, which must read
-    storage creds from SQLite (passed in as `creds`) — the worker's env isn't reliably
-    populated (a `docker restart` doesn't re-read .env). See notes_for_future §0f."""
+# Inspect does geometry math with shapely, NOT the DuckDB spatial extension: spatial's GeoParquet
+# decoder rejects files tagged with spec versions it doesn't know (e.g. "2.0-dev"), and that check
+# fires on read_parquet the moment spatial is loaded. Reading WITHOUT spatial returns the geometry
+# column as raw WKB bytes, which shapely parses regardless of the declared GeoParquet spec version.
+_BBOX_SCAN_CAP = 2_000_000  # only scan geometries for a bbox when the file is smaller than this
+
+
+def _connect_read(creds: dict | None = None) -> duckdb.DuckDBPyConnection:
+    """A fresh DuckDB connection for READING parquet (httpfs + S3, NO spatial extension). Celery
+    tasks must pass storage creds from SQLite — the worker's env isn't reliably populated (a
+    `docker restart` doesn't re-read .env). See notes_for_future §0f."""
     conn = duckdb.connect(":memory:")
-    conn.execute("INSTALL spatial; LOAD spatial;")
     conn.execute("INSTALL httpfs; LOAD httpfs;")
     if creds:
         _apply_s3(conn, creds.get("endpoint"), creds.get("access_key"),
@@ -63,6 +69,26 @@ def _connect(creds: dict | None = None) -> duckdb.DuckDBPyConnection:
     else:
         _configure_s3(conn, get_settings())
     return conn
+
+
+def _geom_kind_from_wkb(wkb) -> str | None:
+    try:
+        from shapely import from_wkb
+        return _GEOM_TYPE_MAP.get(from_wkb(bytes(wkb)).geom_type.upper())
+    except Exception:
+        return None
+
+
+def _bbox_from_wkbs(blobs) -> list | None:
+    try:
+        from shapely import from_wkb, total_bounds
+        geoms = from_wkb([bytes(b) for b in blobs if b is not None])
+        b = total_bounds(geoms)
+    except Exception:
+        return None
+    if b is None or any(v != v for v in b):  # NaN guard (empty / unparseable)
+        return None
+    return [float(b[0]), float(b[1]), float(b[2]), float(b[3])]
 
 
 def _q(ident: str) -> str:
@@ -84,30 +110,36 @@ def _crs_to_epsg(crs) -> str | None:
     return None
 
 
-def _read_geo_metadata(conn: duckdb.DuckDBPyConnection, loc: str):
-    """Parse the GeoParquet 'geo' key → (primary geometry column, source EPSG, metadata bbox).
+def _read_geo_metadata(conn: duckdb.DuckDBPyConnection, loc: str) -> dict:
+    """Parse the GeoParquet 'geo' key → {column, epsg, bbox, geometry_types}.
 
-    The metadata bbox (when the writer included it) lets us skip a full geometry scan — the
-    expensive part of inspecting a multi-GB file.
+    The metadata bbox + geometry_types (when the writer included them) let us avoid reading any
+    geometry at all — the expensive part of inspecting a multi-GB file.
     """
+    out = {"column": None, "epsg": None, "bbox": None, "geometry_types": None}
     try:
         rows = conn.execute(
             f"SELECT decode(value) FROM parquet_kv_metadata('{loc}') WHERE decode(key) = 'geo'"
         ).fetchall()
     except Exception:
-        return None, None, None
+        return out
     if not rows:
-        return None, None, None
+        return out
     try:
         meta = json.loads(rows[0][0])
     except Exception:
-        return None, None, None
+        return out
     primary = meta.get("primary_column")
+    out["column"] = primary
     col_meta = (meta.get("columns") or {}).get(primary, {}) if primary else {}
+    out["epsg"] = _crs_to_epsg(col_meta.get("crs"))
     bbox = col_meta.get("bbox")
-    if not (isinstance(bbox, list) and len(bbox) == 4):
-        bbox = None
-    return primary, _crs_to_epsg(col_meta.get("crs")), bbox
+    if isinstance(bbox, list) and len(bbox) == 4:
+        out["bbox"] = bbox
+    gts = col_meta.get("geometry_types")
+    if isinstance(gts, list) and gts:
+        out["geometry_types"] = gts
+    return out
 
 
 def _reproject_bbox(bbox: list[float], src_epsg: str) -> list[float]:
@@ -130,10 +162,11 @@ def inspect_parquet(location: str, creds: dict | None = None) -> dict:
     `location` is a local path or an `s3://bucket/key` URL. Returns geometry_column,
     geometry_type (point|line|polygon), bbox (EPSG:4326), columns, feature_count, crs.
     """
-    conn = _connect(creds)
+    conn = _connect_read(creds)
     try:
         loc = location.replace("'", "''")
-        geom_col, src_epsg, meta_bbox = _read_geo_metadata(conn, loc)
+        meta = _read_geo_metadata(conn, loc)
+        geom_col, src_epsg = meta["column"], meta["epsg"]
 
         desc = conn.execute(f"DESCRIBE SELECT * FROM read_parquet('{loc}')").fetchall()
         all_cols = [(r[0], (r[1] or "")) for r in desc]  # (name, duckdb_type)
@@ -147,33 +180,32 @@ def inspect_parquet(location: str, creds: dict | None = None) -> dict:
         if not geom_col:
             raise ValueError("No geometry column found — is this a GeoParquet file?")
 
-        gtype_raw = next((t for n, t in all_cols if n == geom_col), "")
         gq = _q(geom_col)
-        gexpr = gq if gtype_raw.upper() == "GEOMETRY" else f"ST_GeomFromWKB({gq})"
-        rel = f"(SELECT {gexpr} AS g FROM read_parquet('{loc}'))"
-
-        # COUNT(*) is cheap (parquet footer); geometry-type needs one row.
         fc = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{loc}')").fetchone()[0]
+        columns = [{"name": n, "type": t.lower()} for n, t in all_cols if n != geom_col]
 
-        # Prefer the bbox from the GeoParquet metadata — scanning every geometry is the slow
-        # part on a multi-GB file. Fall back to a scan only when the writer omitted it.
-        bbox = list(meta_bbox) if meta_bbox else None
-        if bbox is None:
-            b = conn.execute(
-                f"SELECT MIN(ST_XMin(g)), MIN(ST_YMin(g)), MAX(ST_XMax(g)), MAX(ST_YMax(g)) "
-                f"FROM {rel} WHERE g IS NOT NULL"
+        # Geometry type: prefer the metadata's geometry_types (no data read needed); else parse
+        # one feature's WKB with shapely. Metadata values may carry a " Z"/" M" suffix → first token.
+        geometry_type = None
+        if meta["geometry_types"]:
+            geometry_type = _GEOM_TYPE_MAP.get(str(meta["geometry_types"][0]).upper().split()[0])
+        if geometry_type is None:
+            sample = conn.execute(
+                f"SELECT {gq} FROM read_parquet('{loc}') WHERE {gq} IS NOT NULL LIMIT 1"
             ).fetchone()
-            bbox = [b[0], b[1], b[2], b[3]] if b and b[0] is not None else None
+            if sample and sample[0] is not None:
+                geometry_type = _geom_kind_from_wkb(sample[0])
+
+        # bbox: prefer the metadata bbox (avoids scanning a multi-GB file); else scan WKB with
+        # shapely, but only for files under the cap (a partial scan would give a wrong extent).
+        bbox = list(meta["bbox"]) if meta["bbox"] else None
+        if bbox is None and fc and fc <= _BBOX_SCAN_CAP:
+            rows = conn.execute(
+                f"SELECT {gq} FROM read_parquet('{loc}') WHERE {gq} IS NOT NULL"
+            ).fetchall()
+            bbox = _bbox_from_wkbs([r[0] for r in rows])
         if bbox and src_epsg and src_epsg != "EPSG:4326":
             bbox = _reproject_bbox(bbox, src_epsg)
-
-        gt = conn.execute(
-            f"SELECT UPPER(ST_GeometryType(g)) FROM {rel} WHERE g IS NOT NULL LIMIT 1"
-        ).fetchone()
-        gt_name = (gt[0] if gt else "").replace("ST_", "").upper()
-        geometry_type = _GEOM_TYPE_MAP.get(gt_name)
-
-        columns = [{"name": n, "type": t.lower()} for n, t in all_cols if n != geom_col]
 
         return {
             "geometry_column": geom_col,
