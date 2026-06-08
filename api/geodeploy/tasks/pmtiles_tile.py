@@ -23,9 +23,14 @@ logger = logging.getLogger(__name__)
 # tippecanoe layer name → the MVT "source-layer" the MapLibre style references.
 PMTILES_LAYER = "geodeploy"
 # Cap the max zoom (instead of `-zg`, which picks a high zoom for dense data → an explosion of
-# tiles and very long tiling). MapLibre overzooms vector tiles, so features still show past z14,
-# just without extra detail. This is the main lever on tiling time + output size.
-PMTILES_MAXZOOM = 14
+# tiles and very long tiling). `-zg` exploded; z14 was still ~2h on a 9.5M-polygon file (the tiling
+# pass, not the stream, dominates). z12 is ~16x fewer bottom-level tiles and is visually identical
+# at portal zooms — MapLibre overzooms past the cap, so features still show past z12, just without
+# extra detail. The single biggest lever on tiling time + output size. Env-tunable to retune per run.
+PMTILES_MAXZOOM = int(os.getenv("PMTILES_MAXZOOM", "12"))
+# Extra geometry simplification below the max zoom (tippecanoe's tile-space factor; default 1, higher
+# = more aggressive). Cuts per-tile vertex work on dense data. Set to 0/"" to drop the flag.
+PMTILES_SIMPLIFICATION = os.getenv("PMTILES_SIMPLIFICATION", "10")
 
 
 @celery_app.task(bind=True, name="geodeploy.tasks.pmtiles_tile.tile_geoparquet")
@@ -42,11 +47,16 @@ def tile_geoparquet(self, layer_id, s3_key, pmtiles_key):
     started = time.monotonic()
     logger.info("tile_geoparquet: layer %s — tiling %s → z%s (PMTiles)", layer_id, s3_key, PMTILES_MAXZOOM)
     try:
-        # Capped max zoom (PMTILES_MAXZOOM) keeps tiling fast; --drop-densest-as-needed thins dense
-        # areas so tiles stay under size limits without extending the zoom. Read GeoJSONSeq from
-        # stdin (/dev/stdin) so there's no giant intermediate file on disk.
+        # Capped max zoom (PMTILES_MAXZOOM) keeps tiling fast. --coalesce-densest-as-needed MERGES
+        # the densest features when a tile is over budget (vs --drop, which discards them) — preserves
+        # area coverage for polygons at low zoom, at the cost of merging their attributes in those
+        # over-budget tiles. --simplification cuts vertex work. Read GeoJSONSeq from stdin
+        # (/dev/stdin) so there's no giant intermediate file on disk.
         cmd = ["tippecanoe", "-o", out_path, "-l", PMTILES_LAYER, "-z", str(PMTILES_MAXZOOM),
-               "--drop-densest-as-needed", "--force", "-t", tmpdir, "/dev/stdin"]
+               "--coalesce-densest-as-needed", "--force", "-t", tmpdir]
+        if PMTILES_SIMPLIFICATION and str(PMTILES_SIMPLIFICATION) not in ("0", ""):
+            cmd += ["--simplification", str(PMTILES_SIMPLIFICATION)]
+        cmd.append("/dev/stdin")
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
         # tippecanoe writes its progress bar to stderr using carriage returns (\r), which never
