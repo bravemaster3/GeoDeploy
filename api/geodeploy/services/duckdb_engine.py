@@ -5,8 +5,12 @@ loaded into PostGIS (unlike CSV). `inspect_parquet` reads a file's metadata + ge
 register (the file equivalent of `cog_converter.inspect_s3` for rasters).
 """
 import json
+import logging
+import time
 import duckdb
 from ..config import get_settings
+
+logger = logging.getLogger(__name__)
 
 _conn: duckdb.DuckDBPyConnection | None = None
 
@@ -316,10 +320,14 @@ def query_features_geojson(s3_key: str, bbox=None, limit: int = 50_000, creds: d
 
 
 def stream_geojsonseq(s3_key: str, out, creds: dict | None = None, bucket: str | None = None,
-                      batch_size: int = 20_000) -> int:
+                      batch_size: int = 20_000, log_every: int = 100_000) -> int:
     """Stream a whole GeoParquet file as newline-delimited GeoJSON (GeoJSONSeq, EPSG:4326) to the
     writable binary stream `out` (e.g. tippecanoe's stdin). Reads WKB without spatial and converts
     with shapely, in batches — never materialising the whole file. Returns the feature count.
+
+    Logs progress every `log_every` features (count, elapsed, feat/s) so a long tiling run is
+    observable in the celery log (the shapely conversion loop is usually the slow phase, and
+    tippecanoe stays silent while blocked on stdin). Pass `log_every=0` to disable.
     """
     settings = get_settings()
     bkt = bucket or settings.storage_bucket
@@ -337,38 +345,56 @@ def stream_geojsonseq(s3_key: str, out, creds: dict | None = None, bucket: str |
         prop_cols = [c for c in all_cols if c != geom_col]
         sel = ", ".join([f"{_q(geom_col)} AS __wkb"] + [_q(c) for c in prop_cols])
 
-        from shapely import from_wkb, to_geojson
+        import numpy as np
+        from shapely import from_wkb, to_geojson, transform as _shp_transform
         reproject = None
         if src_epsg != "EPSG:4326":
             from pyproj import Transformer
-            from shapely.ops import transform as _shp_transform
             _tr = Transformer.from_crs(src_epsg, "EPSG:4326", always_xy=True)
-            reproject = lambda g: _shp_transform(lambda x, y, z=None: _tr.transform(x, y), g)
+            # Vectorised: shapely.transform hands each geometry's whole (N, 2) coordinate array to
+            # the func, and pyproj transforms the column arrays in one call — far faster than
+            # shapely.ops.transform, which invoked pyproj per coordinate pair.
+            def _reproject_coords(coords):
+                x, y = _tr.transform(coords[:, 0], coords[:, 1])
+                return np.column_stack([x, y])
+            reproject = lambda geoms: _shp_transform(geoms, _reproject_coords)
 
         rel = conn.execute(f"SELECT {sel} FROM read_parquet('{loc}')")
         count = 0
+        start = time.monotonic()
+        next_log = log_every
+        logger.info("stream_geojsonseq: started streaming %s (geom=%s, src=%s)", loc, geom_col, src_epsg)
         while True:
             batch = rel.fetchmany(batch_size)
             if not batch:
                 break
-            for r in batch:
-                w = r[0]
-                if w is None:
+            # Vectorise the geometry conversion over the whole fetch batch: from_wkb / reproject /
+            # to_geojson each run once per batch in C (releasing the GIL) instead of once per
+            # feature in Python — the dominant cost on multi-million-feature files.
+            wkbs = [bytes(r[0]) if r[0] is not None else None for r in batch]
+            geoms = from_wkb(wkbs, on_invalid="ignore")
+            if reproject is not None:
+                geoms = reproject(geoms)
+            gjs = to_geojson(geoms)  # ndarray of str; None where the geometry was missing/invalid
+            parts = []
+            for i, gj in enumerate(gjs):
+                if not gj:
                     continue
-                try:
-                    g = from_wkb(bytes(w))
-                    if reproject is not None:
-                        g = reproject(g)
-                    gj = to_geojson(g)
-                except Exception:
-                    continue
-                props = {prop_cols[i]: _jsonable(r[i + 1]) for i in range(len(prop_cols))}
-                out.write(b'{"type":"Feature","geometry":')
-                out.write(gj.encode())
-                out.write(b',"properties":')
-                out.write(json.dumps(props, default=str).encode())
-                out.write(b"}\n")
+                r = batch[i]
+                props = {prop_cols[j]: _jsonable(r[j + 1]) for j in range(len(prop_cols))}
+                parts.append(b'{"type":"Feature","geometry":' + gj.encode()
+                             + b',"properties":' + json.dumps(props, default=str).encode() + b"}\n")
                 count += 1
+            if parts:
+                out.write(b"".join(parts))  # one write per batch, not four per feature
+            if log_every and count >= next_log:
+                el = time.monotonic() - start
+                logger.info("stream_geojsonseq: %s features streamed in %.0fs (%.0f feat/s)",
+                            f"{count:,}", el, count / el if el else 0)
+                next_log += log_every
+        el = time.monotonic() - start
+        logger.info("stream_geojsonseq: DONE — %s features in %.0fs (%.0f feat/s)",
+                    f"{count:,}", el, count / el if el else 0)
         return count
     finally:
         conn.close()

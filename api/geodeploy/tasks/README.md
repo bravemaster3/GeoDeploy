@@ -38,6 +38,11 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   browser streams the tiles via range requests (no per-pan server work). Chained from `geoparquet_import` after
   inspect (auto-tile on upload); also triggerable via `POST /data/vector/{id}/tile`. DuckDB keeps reading the
   original `.parquet` for analysis/download — the `.pmtiles` is display-only.
+  **Progress logging (2026-06-08):** the task captures tippecanoe's stderr progress bar (it uses `\r`, which
+  never newline-flushes to `docker logs` — read byte-wise, split on `\r`/`\n`, re-logged as `tippecanoe: …`)
+  and logs start / stream feature-count / total elapsed; `stream_geojsonseq` logs periodic feature throughput.
+  So `docker compose logs -f celery` now shows live tiling progress (the stream's feature counter is the real
+  signal — tippecanoe stays silent while blocked on stdin during the slow shapely-conversion phase).
 - `export.py` — `export_bundle(bbox, items)`: clips the chosen portal layers to a bbox and writes a
   ZIP to `data/temp/exports/{task_id}.zip` (served by the API's `export-download`). Vector via
   psycopg2 (GeoJSON/CSV) + `ogr2ogr` (GeoPackage); raster via rasterio windowed read with an output
@@ -70,4 +75,4 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
-2026-06-04
+2026-06-08
