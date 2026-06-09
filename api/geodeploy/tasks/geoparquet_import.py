@@ -33,9 +33,9 @@ def import_geoparquet(self, job_id, layer_id, s3_key):
         step("Inspecting GeoParquet", 40)
         info = duckdb_engine.inspect_parquet(f"s3://{creds['bucket']}/{s3_key}", creds)
 
-        step("Saving metadata", 90)
+        step("Saving metadata", 60)
         _update_layer(
-            db_path, layer_id, status="ready",
+            db_path, layer_id, status="processing",
             storage_backend="geoparquet", s3_key=s3_key,
             geometry_type=info.get("geometry_type"),
             geometry_column=info.get("geometry_column"),
@@ -43,17 +43,15 @@ def import_geoparquet(self, job_id, layer_id, s3_key):
             feature_count=info.get("feature_count"),
             bbox=json.dumps(info["bbox"]) if info.get("bbox") else None,
             columns=json.dumps(info.get("columns") or []),
-            tile_status="tiling",
+            tile_status="none",
             updated_at=datetime.now(timezone.utc).isoformat(),
         )
-        _update_job(db_path, job_id, status="ready", progress=100,
-                    completed_at=datetime.now(timezone.utc).isoformat())
 
-        # The layer is usable in the catalog now; tile it to PMTiles in the background (the
-        # display path). DuckDB keeps reading the original .parquet for analysis/download.
-        from .pmtiles_tile import tile_geoparquet
-        pmtiles_key = (s3_key.rsplit(".", 1)[0] if "." in s3_key else s3_key) + ".pmtiles"
-        tile_geoparquet.delay(layer_id, s3_key, pmtiles_key)
+        # Spatially prepare the file in the background (Z-order sort + GeoParquet 1.1 bbox covering
+        # column) — fast DuckDB analysis + the deck.gl viewport feed. The file STAYS GeoParquet
+        # (no PostGIS, no PMTiles); the prep task marks the layer + job ready when it finishes.
+        from .geoparquet_prep import prepare_geoparquet
+        prepare_geoparquet.delay(layer_id, s3_key, job_id)
     except Exception as exc:
         _update_job(db_path, job_id, status="error", error_message=str(exc),
                     completed_at=datetime.now(timezone.utc).isoformat())

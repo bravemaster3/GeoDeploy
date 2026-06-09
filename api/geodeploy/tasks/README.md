@@ -28,9 +28,19 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   vector layer. Unlike CSV/shapefile (copied/ingested into PostGIS), the file STAYS on object storage
   and is read in place by DuckDB/deck.gl — so this task touches **neither PostGIS nor Martin**. The
   object is already present (the browser PUTs it direct via a presigned URL; or it's an import-existing
-  attach), so the task only `duckdb_engine.inspect_parquet`s it (geometry type / bbox→4326 / columns /
-  CRS / count) and marks the layer ready. Storage creds from SQLite (§0f). Sets
-  `storage_backend='geoparquet'` + `s3_key` on the layer.
+  attach), so the task `duckdb_engine.inspect_parquet`s it (geometry type / bbox→4326 / columns /
+  CRS / count), saves metadata with `status='processing'`, then **chains
+  `geoparquet_prep.prepare_geoparquet`** (which marks the layer + job ready when the spatial prep
+  finishes). Storage creds from SQLite (§0f). Sets `storage_backend='geoparquet'` + `s3_key`. No longer
+  auto-tiles to PMTiles (display is moving to deck.gl over the prepared GeoParquet — see `geoparquet_prep`).
+- `geoparquet_prep.py` — `prepare_geoparquet(layer_id, s3_key, job_id=None)`: rewrites the GeoParquet
+  **Z-order-sorted (Morton) by bbox centre with a GeoParquet 1.1 `bbox` covering column**
+  (`duckdb_engine.sort_with_covering`) so DuckDB prunes row-groups on a bbox filter — fast analysis AND
+  the deck.gl viewport feed (`query_features_geojson`). The file STAYS GeoParquet (no PostGIS, no
+  PMTiles); **overwrites the object in place** (`out_key==s3_key`) so the catalog key is stable and
+  re-running is idempotent. Then re-inspects (the covering column is dropped from catalog columns) and
+  marks layer + job ready. Chained from `geoparquet_import` (auto on upload) and triggerable via
+  `POST /data/vector/{id}/prepare`. Requires `pyarrow` (vectorised arrow UDFs); creds from SQLite (§0f).
 - `pmtiles_tile.py` — `tile_geoparquet(layer_id, s3_key, pmtiles_key)`: the GeoParquet **display** path.
   Runs **tippecanoe** (built into the image, `/dev/stdin`, `-l geodeploy`, **`-z12` capped max zoom**
   `--coalesce-densest-as-needed --simplification 10`) fed by a thread streaming `duckdb_engine.stream_geojsonseq` (GeoParquet →
@@ -75,4 +85,4 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
-2026-06-08
+2026-06-09

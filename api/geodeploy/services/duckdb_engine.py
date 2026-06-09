@@ -199,7 +199,10 @@ def inspect_parquet(location: str, creds: dict | None = None) -> dict:
 
         gq = _q(geom_col)
         fc = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{loc}')").fetchone()[0]
-        columns = [{"name": n, "type": t.lower()} for n, t in all_cols if n != geom_col]
+        # The synthetic bbox covering column (added by sort_with_covering) is not user data.
+        cov_col = meta["covering"][0] if meta.get("covering") else None
+        columns = [{"name": n, "type": t.lower()} for n, t in all_cols
+                   if n != geom_col and n != cov_col]
 
         # Geometry type: prefer the metadata's geometry_types (no data read needed); else parse
         # one feature's WKB with shapely. Metadata values may carry a " Z"/" M" suffix → first token.
@@ -278,7 +281,8 @@ def query_features_geojson(s3_key: str, bbox=None, limit: int = 50_000, creds: d
         if not geom_col:
             raise ValueError("No geometry column found.")
         src_epsg = meta["epsg"] or "EPSG:4326"
-        prop_cols = [c for c in all_cols if c != geom_col]
+        cov_col = meta["covering"][0] if meta.get("covering") else None
+        prop_cols = [c for c in all_cols if c != geom_col and c != cov_col]
 
         where = ""
         if bbox and len(bbox) == 4 and meta["covering"]:
@@ -344,7 +348,8 @@ def stream_geojsonseq(s3_key: str, out, creds: dict | None = None, bucket: str |
         if not geom_col:
             raise ValueError("No geometry column found.")
         src_epsg = meta["epsg"] or "EPSG:4326"
-        prop_cols = [c for c in all_cols if c != geom_col]
+        cov_col = meta["covering"][0] if meta.get("covering") else None
+        prop_cols = [c for c in all_cols if c != geom_col and c != cov_col]
         sel = ", ".join([f"{_q(geom_col)} AS __wkb"] + [_q(c) for c in prop_cols])
 
         import numpy as np

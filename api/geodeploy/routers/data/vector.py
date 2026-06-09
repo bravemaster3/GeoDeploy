@@ -282,6 +282,30 @@ async def tile_layer(
     return VectorLayerOut.from_orm_json(layer)
 
 
+@router.post("/{layer_id}/prepare", response_model=VectorLayerOut)
+async def prepare_layer(
+    layer_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Spatially prepare a GeoParquet layer: rewrite it Z-order-sorted with a GeoParquet 1.1 bbox
+    covering column so DuckDB prunes row-groups on a bbox filter (fast analysis + viewport display).
+    Idempotent — overwrites the object in place. The file stays GeoParquet (no PostGIS, no PMTiles)."""
+    from ...tasks.geoparquet_prep import prepare_geoparquet
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id, VectorLayer.user_id == user.id))
+    layer = result.scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not found.")
+    if layer.storage_backend != "geoparquet" or not layer.s3_key:
+        raise HTTPException(400, "This layer is not a GeoParquet (file-backed) layer.")
+
+    layer.status = "processing"
+    await db.commit()
+    await db.refresh(layer)
+    prepare_geoparquet.delay(layer.id, layer.s3_key)
+    return VectorLayerOut.from_orm_json(layer)
+
+
 @router.get("/{layer_id}/pmtiles")
 async def vector_pmtiles(layer_id: int, request: Request, db: AsyncSession = Depends(get_db)):
     """PUBLIC range proxy for a GeoParquet layer's PMTiles archive — MapLibre's pmtiles protocol
