@@ -41,6 +41,10 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   re-running is idempotent. Then re-inspects (the covering column is dropped from catalog columns) and
   marks layer + job ready. Chained from `geoparquet_import` (auto on upload) and triggerable via
   `POST /data/vector/{id}/prepare`. Requires `pyarrow` (vectorised arrow UDFs); creds from SQLite (§0f).
+  **Tunable without an image rebuild:** `PREP_MEMORY_LIMIT` (DuckDB RAM cap, default `4GB`, spills to
+  `data/temp`) and `PREP_BBOX_CHUNK` (shapely geometries parsed per UDF slice, default `50000`) — set
+  these in celery's env to retune on a small VPS. The prep now parses geometry WKB **at most once**
+  (was twice → the OOM risk on the 9.5 M-polygon file); see `duckdb_engine.sort_with_covering`.
 - `pmtiles_tile.py` — `tile_geoparquet(layer_id, s3_key, pmtiles_key)`: the GeoParquet **display** path.
   Runs **tippecanoe** (built into the image, `/dev/stdin`, `-l geodeploy`, **`-z12` capped max zoom**
   `--coalesce-densest-as-needed --simplification 10`) fed by a thread streaming `duckdb_engine.stream_geojsonseq` (GeoParquet →
@@ -85,4 +89,4 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
-2026-06-09
+2026-06-11

@@ -6,8 +6,10 @@
   <title>{{TITLE}}</title>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css">
   <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
-  <!-- PMTiles protocol (GeoParquet layers render from a .pmtiles archive) -->
+  <!-- PMTiles protocol (GeoParquet layers tiled to a .pmtiles archive — fallback display path) -->
   <script src="https://unpkg.com/pmtiles@3/dist/pmtiles.js"></script>
+  <!-- deck.gl (primary GeoParquet display: a MapboxOverlay fed by the viewport query) -->
+  <script src="https://unpkg.com/deck.gl@9/dist.min.js"></script>
   <!-- Shared GeoDeploy portal runtime (same for every template) -->
   <style>{{PORTAL_CSS}}</style>
   <!-- Template theme: override CSS variables / fonts here -->

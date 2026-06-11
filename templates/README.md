@@ -13,7 +13,7 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
     **band selection** (multiband → RGB composite or single band), palette/hillshade/Z/stretch +
     legend bar — the viewer's tweaks preserve the admin's baked `bidx`; **external sources**
     (WMS/XYZ/WFS, flagged `geodeploy:external`) get an opacity-only popover (+colour for WFS) and
-    skip the raster stretch path; geojson `data` URLs are absolutified like tile URLs; **GeoParquet** layers render from a `pmtiles://` vector source — portal.js registers the pmtiles protocol (lib via CDN in layout.html) and rewrites `pmtiles:///api/...` → `pmtiles://<origin>/api/...`) · zoom; popup + attribute table,
+    skip the raster stretch path; geojson `data` URLs are absolutified like tile URLs; **GeoParquet** layers render PRIMARILY via a **deck.gl `MapboxOverlay`** (deck.gl loaded via CDN in layout.html) fed by the public `/api/data/vector/{id}/features.geojson?bbox=` viewport query (descriptors in `STYLE.geodeploy.deckLayers`, refetched on `moveend`, basic switcher row = show/hide + zoom, no symbology popover yet); a layer explicitly tiled to PMTiles falls back to a `pmtiles://` vector source — portal.js registers the pmtiles protocol (lib via CDN) and rewrites `pmtiles:///api/...` → `pmtiles://<origin>/api/...`) · zoom; popup + attribute table,
     **raster pixel identify**, basemap switcher, coordinate readout, reset styling, **Tools control:
     select-area-and-download** (`POST /api/portals/{slug}/export-bundle`)). It reads its data from a
     `window.GEODEPLOY` object (`title`, `slug`, `style`, `popupConfig`, `accessType`, `passwordSha256`) and
@@ -64,4 +64,4 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (the theming is already variable-based, so this is now straightforward).
 
 ## Last updated
-2026-06-04
+2026-06-11

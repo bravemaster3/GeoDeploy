@@ -17,6 +17,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
     """
     sources = {}
     layers = []
+    deck_layers = []  # GeoParquet layers rendered by the deck.gl overlay (not MapLibre layers)
     bounds = [180, 90, -180, -90]  # expanded below
 
     # layer_configs[0] is the TOP of the layer list and should draw on TOP of the map.
@@ -28,10 +29,26 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 continue
             source_id = f"vector_{layer.id}"
             if getattr(layer, "storage_backend", "postgis") == "geoparquet":
-                # File-backed: render from the PMTiles archive via the pmtiles:// protocol. Until
-                # tiling finishes, skip the layer (keep its bbox in the fit). The URL is
-                # root-relative; portal.js absolutifies pmtiles:// urls at runtime.
-                if layer.tile_status != "ready" or not layer.pmtiles_key:
+                # File-backed (GeoParquet). PRIMARY display = a deck.gl overlay fed by the public
+                # viewport query (rendered outside the MapLibre style by portal.js), so collect a
+                # descriptor and emit NO MapLibre layer. FALLBACK: a layer explicitly tiled (ready
+                # PMTiles) renders via the pmtiles:// vector source (root-relative; portal.js
+                # absolutifies it) and falls through to the normal vector-layer build below.
+                if not (layer.tile_status == "ready" and layer.pmtiles_key):
+                    dstyle = cfg.get("style") or {}
+                    deck_layers.append({
+                        "layer_id": layer.id,
+                        "name": layer.name,
+                        "geometry": _geom_kind(layer.geometry_type),
+                        "color": dstyle.get("color", "#3b82f6"),
+                        "opacity": cfg.get("opacity", 1.0),
+                        "fill_opacity": dstyle.get("fill_opacity", 0.45),
+                        "outline_color": dstyle.get("outline_color", "#1d4ed8"),
+                        "line_width": dstyle.get("line_width", 2),
+                        "radius": dstyle.get("radius", 5),
+                        "visible": cfg.get("visible", True),
+                        "bbox": json.loads(layer.bbox) if layer.bbox else None,
+                    })
                     if layer.bbox:
                         _expand_bounds(bounds, json.loads(layer.bbox))
                     continue
@@ -148,7 +165,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 _expand_bounds(bounds, src_bbox)
 
     valid_bounds = bounds if bounds[0] < bounds[2] else None
-    return {"sources": sources, "layers": layers, "bounds": valid_bounds}
+    return {"sources": sources, "layers": layers, "bounds": valid_bounds, "deck_layers": deck_layers}
 
 
 def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str, layer_configs: list[dict],
@@ -188,6 +205,7 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
             "bounds": user_data.get("bounds"),
             "view": initial_view,  # admin-set center/zoom; portal.js prefers this over fitBounds
             "title": title,
+            "deckLayers": user_data.get("deck_layers", []),  # GeoParquet layers → deck.gl overlay
         },
     }
 

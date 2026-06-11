@@ -225,6 +225,31 @@ async def job_status(job_id: str, db: AsyncSession = Depends(get_db), user: User
     return job
 
 
+def _parse_bbox(bbox: str | None) -> list[float] | None:
+    if not bbox:
+        return None
+    try:
+        parts = [float(x) for x in bbox.split(",")]
+        return parts if len(parts) == 4 else None
+    except ValueError:
+        return None
+
+
+async def _viewport_geojson(layer: VectorLayer | None, bbox: str | None, limit: int) -> dict:
+    """Shared GeoParquet viewport query → GeoJSON (EPSG:4326). DuckDB filters by the bbox using the
+    covering column (row-group pruning) and caps results; the deck.gl overlay renders the subset.
+    The DuckDB work runs in a threadpool so the single uvicorn worker isn't blocked."""
+    from starlette.concurrency import run_in_threadpool
+    from ...services import duckdb_engine
+
+    if not layer:
+        raise HTTPException(404, "Layer not found.")
+    if layer.storage_backend != "geoparquet" or not layer.s3_key:
+        raise HTTPException(400, "This layer is not a GeoParquet (file-backed) layer.")
+    limit = max(1, min(limit, 200000))
+    return await run_in_threadpool(duckdb_engine.query_features_geojson, layer.s3_key, _parse_bbox(bbox), limit)
+
+
 @router.get("/{layer_id}/features")
 async def vector_features(
     layer_id: int,
@@ -233,29 +258,25 @@ async def vector_features(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Viewport query for a GeoParquet (file-backed) layer → GeoJSON in EPSG:4326. DuckDB filters
-    by the bbox (covering-column pruning) and caps results; deck.gl renders the subset. The DuckDB
-    work runs in a threadpool so the single uvicorn worker isn't blocked."""
-    from starlette.concurrency import run_in_threadpool
-    from ...services import duckdb_engine
-
+    """Authed viewport query for the editor preview's deck.gl overlay."""
     result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id, VectorLayer.user_id == user.id))
-    layer = result.scalar_one_or_none()
-    if not layer:
-        raise HTTPException(404, "Layer not found.")
-    if layer.storage_backend != "geoparquet" or not layer.s3_key:
-        raise HTTPException(400, "This layer is not a GeoParquet (file-backed) layer.")
+    return await _viewport_geojson(result.scalar_one_or_none(), bbox, limit)
 
-    box = None
-    if bbox:
-        try:
-            parts = [float(x) for x in bbox.split(",")]
-            if len(parts) == 4:
-                box = parts
-        except ValueError:
-            box = None
-    limit = max(1, min(limit, 200000))
-    return await run_in_threadpool(duckdb_engine.query_features_geojson, layer.s3_key, box, limit)
+
+@router.get("/{layer_id}/features.geojson")
+async def vector_features_public(
+    layer_id: int,
+    bbox: str | None = None,
+    limit: int = 50000,
+    db: AsyncSession = Depends(get_db),
+):
+    """PUBLIC viewport query for the deck.gl overlay in published (unauthenticated) portals. Public
+    by layer id, mirroring the `/pmtiles` range proxy's posture: published portals are public, the
+    caller can only address a DB row by id (not arbitrary keys), and bucket creds stay server-side.
+    (Single-admin self-hosted assumption — for multi-tenant cloud this needs portal scoping + auth,
+    same open question as the rest of the public-portal surface; see notes §0h-addendum.)"""
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    return await _viewport_geojson(result.scalar_one_or_none(), bbox, limit)
 
 
 @router.post("/{layer_id}/tile", response_model=VectorLayerOut)

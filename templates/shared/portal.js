@@ -157,12 +157,133 @@
     } catch (e) { /* ignore — keep default view */ }
   }
 
+  // ── deck.gl overlay for GeoParquet layers ───────────────
+  // GeoParquet layers are too big for a MapLibre geojson source, so they render in a deck.gl
+  // MapboxOverlay fed by the PUBLIC viewport query (covering-column-pruned GeoJSON), refetched on
+  // pan/zoom. (PMTiles-tiled layers instead come through the normal vector path above — fallback.)
+  // Overlay draws above all MapLibre layers (interleaved:false); deck layers get a basic switcher
+  // row (show/hide + zoom) but not the full symbology popover yet.
+  const DECK_LAYERS = (STYLE.geodeploy && STYLE.geodeploy.deckLayers) || [];
+  const deckState = {};  // layer_id → { visible, data }
+  DECK_LAYERS.forEach(function (d) { deckState[d.layer_id] = { visible: d.visible !== false, data: null }; });
+  let deckOverlay = null;
+
+  function deckHexToRgb(hex) {
+    const h = String(hex || '#3b82f6').replace('#', '');
+    const f = h.length === 3 ? h.split('').map(function (c) { return c + c; }).join('') : h;
+    const n = parseInt(f, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+
+  function makeDeckLayer(d) {
+    const st = deckState[d.layer_id];
+    if (!st || !st.visible || !st.data) return null;
+    const geom = (d.geometry || '').toLowerCase();
+    const isPoly = geom.indexOf('polygon') !== -1, isLine = geom.indexOf('line') !== -1;
+    const rgb = deckHexToRgb(d.color), outline = deckHexToRgb(d.outline_color || '#1d4ed8');
+    const op = d.opacity != null ? d.opacity : 1;
+    return new deck.GeoJsonLayer({
+      id: 'deck_' + d.layer_id,
+      data: st.data,
+      pickable: false,
+      filled: !isLine,
+      stroked: true,
+      getFillColor: rgb.concat(Math.round(255 * op * (isPoly ? (d.fill_opacity != null ? d.fill_opacity : 0.45) : 1))),
+      getLineColor: (isPoly ? outline : rgb).concat(Math.round(255 * op)),
+      lineWidthUnits: 'pixels',
+      getLineWidth: d.line_width != null ? d.line_width : (isLine ? 2 : 1),
+      lineWidthMinPixels: isLine ? (d.line_width || 2) : 1,
+      pointType: 'circle',
+      pointRadiusUnits: 'pixels',
+      getPointRadius: d.radius != null ? d.radius : 5,
+      pointRadiusMinPixels: 2,
+    });
+  }
+
+  function rebuildDeck() {
+    if (!deckOverlay) return;
+    // DECK_LAYERS is in reversed-config order (config[0] last) → config[0] draws on top.
+    deckOverlay.setProps({ layers: DECK_LAYERS.map(makeDeckLayer).filter(Boolean) });
+  }
+
+  function fetchDeck(refetch) {
+    if (!deckOverlay) return;
+    const b = map.getBounds();
+    const bbox = b.getWest() + ',' + b.getSouth() + ',' + b.getEast() + ',' + b.getNorth();
+    const pending = DECK_LAYERS.filter(function (d) {
+      const st = deckState[d.layer_id];
+      return st && st.visible && (refetch || !st.data);
+    }).map(function (d) {
+      const url = location.origin + '/api/data/vector/' + d.layer_id +
+        '/features.geojson?bbox=' + encodeURIComponent(bbox) + '&limit=100000';
+      return fetch(url).then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (j) { if (j) deckState[d.layer_id].data = j; })
+        .catch(function () {});
+    });
+    Promise.all(pending).then(rebuildDeck);
+  }
+
+  function initDeck() {
+    if (!DECK_LAYERS.length || !window.deck || !deck.MapboxOverlay) return;
+    deckOverlay = new deck.MapboxOverlay({ interleaved: false, layers: [] });
+    map.addControl(deckOverlay);
+    map.on('moveend', function () { fetchDeck(true); });
+    fetchDeck(true);
+  }
+
+  // Append a basic switcher row per deck layer (the MapLibre switcher only knows STYLE.layers).
+  function appendDeckRows() {
+    if (!DECK_LAYERS.length) return;
+    const container = document.getElementById('layer-list');
+    if (!container) return;
+    const empty = container.querySelector('p');  // "No layers" placeholder when no MapLibre layers
+    if (empty) container.removeChild(empty);
+    const zoomSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+      '<circle cx="12" cy="12" r="7"/><line x1="12" y1="1" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="23"/>' +
+      '<line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/></svg>';
+    // Show config[0] at the top → iterate reversed (DECK_LAYERS holds config[0] last).
+    DECK_LAYERS.slice().reverse().forEach(function (d) {
+      const st = deckState[d.layer_id];
+      const canZoom = validLonLatBounds(d.bbox);
+      const card = document.createElement('div');
+      card.className = 'layer-card';
+      card.innerHTML =
+        '<div class="layer-row">' +
+          '<span class="layer-drag" style="visibility:hidden">' + dragIcon() + '</span>' +
+          '<button class="layer-eye' + (st.visible ? '' : ' off') + '" title="Hide / show" aria-label="Toggle visibility">' + eyeIcon(st.visible) + '</button>' +
+          '<span class="layer-swatch-btn" title="' + escHtml(d.name) + '">' + legendSwatch(d.geometry || 'point', d.color, null, 'circle') + '</span>' +
+          '<span class="layer-name" title="' + escHtml(d.name) + '">' + escHtml(d.name) + '</span>' +
+          '<button class="layer-zoom" title="Zoom to layer" aria-label="Zoom to layer"' + (canZoom ? '' : ' disabled') + '>' + zoomSvg + '</button>' +
+        '</div>';
+      const eye = card.querySelector('.layer-eye');
+      eye.addEventListener('click', function () {
+        st.visible = !st.visible;
+        eye.innerHTML = eyeIcon(st.visible);
+        eye.classList.toggle('off', !st.visible);
+        if (st.visible && !st.data) fetchDeck(false); else rebuildDeck();
+      });
+      const zoomBtn = card.querySelector('.layer-zoom');
+      zoomBtn.addEventListener('click', function () {
+        if (!validLonLatBounds(d.bbox)) return;
+        try {
+          map.fitBounds([[d.bbox[0], d.bbox[1]], [d.bbox[2], d.bbox[3]]],
+            { padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 } });
+        } catch (e) { /* ignore */ }
+      });
+      container.appendChild(card);
+    });
+    const reset = document.getElementById('reset-styling');
+    if (reset) reset.style.display = '';
+  }
+
   // ── Layer switcher ──────────────────────────────────────
   map.on('load', function () {
     ensurePointImages();  // register canvas icons before the symbol layers paint
     // Reverse so the list shows config[0] (drawn on top) at the top of the list.
     const userLayers = STYLE.layers.filter(l => l.metadata && l.metadata['geodeploy:name']).reverse();
     buildLayerSwitcher(userLayers);
+    appendDeckRows();
+    initDeck();
     setupBasemaps();  // adds the basemap + tools controls (top-right)
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');  // zoom below them
   });
@@ -191,6 +312,7 @@
     });
     ensurePointImages();  // restore original marker icons (shape/colour/size)
     buildLayerSwitcher(STYLE.layers.filter(l => l.metadata && l.metadata['geodeploy:name']).reverse());
+    appendDeckRows();  // re-add the GeoParquet deck-layer rows (not in STYLE.layers)
   }
 
   // ---- Point marker shapes -------------------------------------------------

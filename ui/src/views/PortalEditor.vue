@@ -147,8 +147,10 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { usePortalsStore } from '@/stores/portals'
 import { useDataStore } from '@/stores/data'
-import { listTemplates, getRasterStats } from '@/api'
+import { listTemplates, getRasterStats, getVectorFeatures } from '@/api'
 import { useMaplibre } from '@/composables/useMaplibre'
+import { MapboxOverlay } from '@deck.gl/mapbox'
+import { GeoJsonLayer } from '@deck.gl/layers'
 import { ExternalLinkIcon } from '@/views/icons'
 import LayerPanel from '@/components/portal/LayerPanel.vue'
 
@@ -203,6 +205,79 @@ onMounted(async () => {
   templates.value = data
 })
 
+// ── deck.gl overlay for GeoParquet layers ───────────────────────────────────
+// GeoParquet layers are too big for a MapLibre geojson source, so they render in a deck.gl
+// MapboxOverlay (added as a control → survives setStyle) fed by the viewport query
+// (getVectorFeatures → covering-column-pruned GeoJSON). Refetched on pan/zoom (moveend) and when a
+// new layer first appears; pure style edits rebuild from cached data without a network refetch.
+let deckOverlay = null
+const deckData = {}        // layer_id → cached FeatureCollection for the current view
+const DECK_LIMIT = 100000  // per-viewport feature cap (matches the endpoint's safety cap)
+
+function hexToRgb(hex) {
+  const h = String(hex || '#3b82f6').replace('#', '')
+  const f = h.length === 3 ? h.split('').map(c => c + c).join('') : h
+  const n = parseInt(f, 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+
+// Visible GeoParquet layer configs that the deck overlay (not MapLibre) is responsible for.
+// A layer that was explicitly tiled (ready PMTiles) uses the pmtiles:// fallback in the style instead.
+function deckConfigs() {
+  return [...layerConfigs.value].filter(cfg => {
+    if (cfg.visible === false || cfg.layer_type !== 'vector') return false
+    const layer = dataStore.vectorLayers.find(l => l.id === cfg.layer_id)
+    return layer && layer.status === 'ready' && layer.storage_backend === 'geoparquet' &&
+      !(layer.tile_status === 'ready' && layer.pmtiles_key)
+  })
+}
+
+function makeDeckLayer(cfg) {
+  const data = deckData[cfg.layer_id]
+  if (!data) return null
+  const layer = dataStore.vectorLayers.find(l => l.id === cfg.layer_id)
+  const geom = (layer?.geometry_type || '').toLowerCase()
+  const rgb = hexToRgb(cfg.style?.color || '#3b82f6')
+  const opacity = cfg.opacity ?? 1.0
+  const outline = hexToRgb(cfg.style?.outline_color || '#1d4ed8')
+  const isPoly = geom.includes('polygon'), isLine = geom.includes('line')
+  return new GeoJsonLayer({
+    id: `deck_${cfg.layer_id}`,
+    data,
+    pickable: false,
+    filled: !isLine,
+    stroked: true,
+    getFillColor: [...rgb, Math.round(255 * opacity * (isPoly ? (cfg.style?.fill_opacity ?? 0.45) : 1))],
+    getLineColor: isPoly ? [...outline, Math.round(255 * opacity)] : [...rgb, Math.round(255 * opacity)],
+    lineWidthUnits: 'pixels',
+    getLineWidth: cfg.style?.line_width ?? (isLine ? 2 : 1),
+    lineWidthMinPixels: isLine ? (cfg.style?.line_width ?? 2) : 1,
+    pointType: 'circle',
+    pointRadiusUnits: 'pixels',
+    getPointRadius: cfg.style?.radius ?? 5,
+    pointRadiusMinPixels: 2,
+  })
+}
+
+async function refreshDeck(refetch) {
+  if (!deckOverlay || !map.value) return
+  const configs = deckConfigs()
+  if (refetch || configs.some(c => !deckData[c.layer_id])) {
+    const b = map.value.getBounds()
+    const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`
+    await Promise.all(configs.map(async cfg => {
+      if (!refetch && deckData[cfg.layer_id]) return
+      try {
+        const { data } = await getVectorFeatures(cfg.layer_id, bbox, DECK_LIMIT)
+        deckData[cfg.layer_id] = data
+      } catch { deckData[cfg.layer_id] = deckData[cfg.layer_id] || { type: 'FeatureCollection', features: [] } }
+    }))
+  }
+  // config[0] = top of list → must draw on top → last in the deck layer array.
+  const layers = [...configs].reverse().map(makeDeckLayer).filter(Boolean)
+  deckOverlay.setProps({ layers })
+}
+
 // Rebuild the preview style on any config/layer change, but only move the camera on
 // the FIRST build (restore the saved view, else fit to all layers). After that, style
 // edits (band/colour/etc.) must NOT yank the view — setStyle keeps the current camera.
@@ -211,6 +286,7 @@ watch([layerConfigs, loaded], () => {
   if (!loaded.value) return
   const { style, bounds } = buildPreviewStyle()
   applyStyle(style)
+  refreshDeck(false)  // rebuild deck layers (fetch only newly-appeared geoparquet layers)
   if (!viewInitialized) {
     if (savedView.value) { jumpTo(savedView.value); viewInitialized = true }
     else if (bounds) { fitToBbox(bounds); viewInitialized = true }
@@ -229,6 +305,13 @@ watch(loaded, (v) => {
     const im = markerImage(spec.shape, spec.color, spec.size)
     try { map.value.addImage(e.id, im, { pixelRatio: im.pixelRatio }) } catch { /* ignore */ }
   })
+  // deck.gl overlay (once): a control so it survives setStyle; refetch the viewport on pan/zoom.
+  if (!deckOverlay) {
+    deckOverlay = new MapboxOverlay({ interleaved: false, layers: [] })
+    map.value.addControl(deckOverlay)
+    map.value.on('moveend', () => refreshDeck(true))
+    refreshDeck(true)
+  }
 })
 function starPts(cx, cy, r) {
   const p = []
@@ -300,9 +383,11 @@ function buildPreviewStyle() {
       const srcId = `vector_${layer.id}`
       let sourceLayer
       if (layer.storage_backend === 'geoparquet') {
-        // File-backed: render the PMTiles archive (served by our range proxy) via the pmtiles://
-        // protocol. Until tiling finishes, just keep the bbox for zoom-to-all.
-        if (layer.tile_status !== 'ready' || !layer.pmtiles_key) { expandBounds(layer.bbox); continue }
+        // File-backed (GeoParquet). PRIMARY display = a deck.gl overlay fed by the viewport query
+        // (rendered outside this MapLibre style — see refreshDeck), so EXCLUDE the layer here and
+        // just keep its bbox for zoom-to-all. FALLBACK: a layer explicitly tiled (ready PMTiles)
+        // renders via the pmtiles:// vector source instead.
+        if (!(layer.tile_status === 'ready' && layer.pmtiles_key)) { expandBounds(layer.bbox); continue }
         style.sources[srcId] = { type: 'vector', url: `pmtiles://${location.origin}/api/data/vector/${layer.id}/pmtiles` }
         sourceLayer = 'geodeploy'
       } else {

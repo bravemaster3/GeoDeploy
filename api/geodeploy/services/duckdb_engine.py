@@ -414,11 +414,28 @@ def stream_geojsonseq(s3_key: str, out, creds: dict | None = None, bucket: str |
 # feed — query_features_geojson already uses meta["covering"]). Per-row bbox is computed with
 # shapely (vectorised, NO DuckDB spatial → dodges the GeoParquet 2.0-dev decoder wall, see notes);
 # DuckDB does the out-of-core ORDER BY + Parquet write so a multi-GB file never loads fully.
+#
+# WKB is parsed AT MOST ONCE (the OOM/perf fix — see notes §0h "PREP OPTIMIZATION PATH" / memory
+# project_pmtiles_tiling): the old code ran the shapely `gd_bbox` UDF twice (a global-extent pass
+# then the sorted-write pass), doubling the parse and piling ~1.6 GB of geometry objects into
+# Python. Now the per-feature bbox is materialised ONCE to a local intermediate Parquet, and BOTH
+# the extent and the Z-order sort key are derived from that NUMERIC column (no geometry re-parse in
+# the sort pass). When the source already carries a covering bbox column (GDAL/GeoPandas writers,
+# or any re-run of an already-prepped file) the parse is skipped ENTIRELY — we sort straight off the
+# existing numeric column.
 
-def _build_geo_with_covering(conn: duckdb.DuckDBPyConnection, loc: str, geom_col: str) -> dict:
-    """Original `geo` metadata + a covering entry for the new `bbox` struct column, relabelled to
-    GeoParquet 1.1.0 WKB (covering is a 1.1 feature; 1.1.0/WKB is also spec-clean for DuckDB
-    spatial, unlike the original `2.0-dev` tag)."""
+# Logical bbox subfields, in the order gd_zkey / the extent query expect them.
+_BBOX_FIELDS = ("xmin", "ymin", "xmax", "ymax")
+
+
+def _build_geo_with_covering(conn: duckdb.DuckDBPyConnection, loc: str, geom_col: str,
+                             cov_col: str = "bbox",
+                             fields: dict[str, str] | None = None) -> dict:
+    """Original `geo` metadata + a covering entry pointing at the `cov_col` struct column,
+    relabelled to GeoParquet 1.1.0 WKB (covering is a 1.1 feature; 1.1.0/WKB is also spec-clean for
+    DuckDB spatial, unlike the original `2.0-dev` tag). `fields` maps each logical bbox corner to the
+    struct subfield name in `cov_col` (defaults to identity: xmin→xmin …)."""
+    fields = fields or {f: f for f in _BBOX_FIELDS}
     geo: dict = {}
     try:
         rows = conn.execute(
@@ -435,20 +452,22 @@ def _build_geo_with_covering(conn: duckdb.DuckDBPyConnection, loc: str, geom_col
     col = cols.setdefault(primary, {})
     col.setdefault("encoding", "WKB")
     col.setdefault("geometry_types", col.get("geometry_types") or [])
-    col["covering"] = {"bbox": {
-        "xmin": ["bbox", "xmin"], "ymin": ["bbox", "ymin"],
-        "xmax": ["bbox", "xmax"], "ymax": ["bbox", "ymax"],
-    }}
+    col["covering"] = {"bbox": {f: [cov_col, fields[f]] for f in _BBOX_FIELDS}}
     return geo
 
 
 def sort_with_covering(s3_key: str, creds: dict | None = None, out_key: str | None = None,
                        bucket: str | None = None, row_group_size: int = 50_000,
-                       memory_limit: str = "4GB") -> dict:
+                       memory_limit: str = "4GB", bbox_chunk: int = 50_000) -> dict:
     """Rewrite the GeoParquet at `s3_key` Z-order-sorted with a `bbox` covering column; upload the
     result to `out_key` (default: alongside the original, `…__sorted.parquet`). Returns
     {"out_key", "feature_count", "geometry_column"}. Requires pyarrow. Creds must come from SQLite
-    in Celery (env unreliable — §0f)."""
+    in Celery (env unreliable — §0f).
+
+    WKB is parsed at most once: the per-feature bbox is materialised to a local intermediate Parquet
+    first, then the extent + Z-order sort both read that numeric column. If the source already has a
+    covering bbox column, no geometry is parsed at all. `bbox_chunk` caps how many geometries shapely
+    parses per slice inside the UDF (peak-memory guard for small VPS)."""
     import numpy as np
     import pyarrow as pa
     from shapely import bounds as _bounds, from_wkb
@@ -462,6 +481,7 @@ def sort_with_covering(s3_key: str, creds: dict | None = None, out_key: str | No
 
     tmpdir = f"{settings.data_dir}/temp"
     os.makedirs(tmpdir, exist_ok=True)
+    local_bbox = os.path.join(tmpdir, f"{uuid4().hex}.parquet")  # intermediate: bbox materialised
     local_out = os.path.join(tmpdir, f"{uuid4().hex}.parquet")
 
     conn = _connect_read(creds)  # httpfs + S3, NO spatial
@@ -477,31 +497,56 @@ def sort_with_covering(s3_key: str, creds: dict | None = None, out_key: str | No
         if not geom_col:
             raise ValueError("No geometry column found.")
         gq = _q(geom_col)
-
-        # Vectorised bbox of each feature's WKB (shapely.bounds → (N,4); NaN for null/empty).
-        def _udf_bbox(arr):
-            geoms = from_wkb(arr.to_pylist())
-            b = _bounds(geoms)
-            return pa.StructArray.from_arrays(
-                [pa.array(b[:, 0]), pa.array(b[:, 1]), pa.array(b[:, 2]), pa.array(b[:, 3])],
-                names=["xmin", "ymin", "xmax", "ymax"])
-        conn.create_function(
-            "gd_bbox", _udf_bbox, [duckdb.typing.BLOB],
-            duckdb.struct_type({"xmin": "DOUBLE", "ymin": "DOUBLE",
-                                "xmax": "DOUBLE", "ymax": "DOUBLE"}),
-            type="arrow")
-
-        # Pass A — native-CRS extent (one bbox pass) to normalise the Z-order grid.
         started = time.monotonic()
+
+        # Decide where the per-feature bbox comes from. If the source already exposes a covering
+        # bbox column we read it straight off (zero WKB parse — fast re-runs + GDAL/GeoPandas files);
+        # otherwise we parse the geometry ONCE into an intermediate Parquet's `bbox` struct column.
+        existing = meta.get("covering")
+        if existing:
+            src_loc = loc                                   # sort the original in place
+            cov_col, cov_fields = existing[0], existing[1]  # (col, {logical: subfield})
+            logger.info("sort_with_covering: %s — reusing existing covering column %r (no parse)",
+                        s3_key, cov_col)
+        else:
+            # `bbox` is the spec-conventional covering name; fall back if the source already uses it
+            # for unrelated user data so we never clobber a real column.
+            cov_col = "bbox" if "bbox" not in all_cols else "gd_bbox_cov"
+            cov_fields = {f: f for f in _BBOX_FIELDS}
+
+            def _udf_bbox(arr):
+                wkbs = arr.to_pylist()
+                n = len(wkbs)
+                out = np.full((n, 4), np.nan)
+                for i in range(0, n, bbox_chunk):  # cap peak shapely geometry count per slice
+                    chunk = wkbs[i:i + bbox_chunk]
+                    out[i:i + len(chunk)] = _bounds(from_wkb(chunk))
+                return pa.StructArray.from_arrays(
+                    [pa.array(out[:, 0]), pa.array(out[:, 1]), pa.array(out[:, 2]), pa.array(out[:, 3])],
+                    names=list(_BBOX_FIELDS))
+            conn.create_function(
+                "gd_bbox", _udf_bbox, [duckdb.typing.BLOB],
+                duckdb.struct_type({f: "DOUBLE" for f in _BBOX_FIELDS}), type="arrow")
+
+            # Parse pass (the only WKB read): append the bbox struct, no sort, streams to disk.
+            conn.execute(
+                f"COPY (SELECT *, gd_bbox({gq}) AS {_q(cov_col)} FROM read_parquet('{loc}')) "
+                f"TO '{local_bbox}' (FORMAT PARQUET, COMPRESSION ZSTD)")
+            src_loc = local_bbox.replace("'", "''")
+            logger.info("sort_with_covering: %s — bbox materialised in %.0fs", s3_key,
+                        time.monotonic() - started)
+
+        def ce(f):  # numeric corner expression on whichever covering column we settled on
+            return f"struct_extract({_q(cov_col)}, '{cov_fields[f]}')"
+
+        # Extent (numeric, no geometry parse) to normalise the Z-order grid.
         minx, miny, maxx, maxy = conn.execute(
-            f"SELECT min(b.xmin), min(b.ymin), max(b.xmax), max(b.ymax) "
-            f"FROM (SELECT gd_bbox({gq}) AS b FROM read_parquet('{loc}'))").fetchone()
+            f"SELECT min({ce('xmin')}), min({ce('ymin')}), max({ce('xmax')}), max({ce('ymax')}) "
+            f"FROM read_parquet('{src_loc}')").fetchone()
         if minx is None:
             raise ValueError("Could not compute extent (no valid geometries).")
         spanx = (maxx - minx) or 1.0
         spany = (maxy - miny) or 1.0
-        logger.info("sort_with_covering: %s — extent computed in %.0fs", s3_key,
-                    time.monotonic() - started)
 
         bits = 16
         m = (1 << bits) - 1
@@ -528,13 +573,14 @@ def sort_with_covering(s3_key: str, creds: dict | None = None, out_key: str | No
         conn.create_function(
             "gd_zkey", _udf_zkey, [duckdb.typing.DOUBLE] * 4, duckdb.typing.BIGINT, type="arrow")
 
-        geo_str = json.dumps(_build_geo_with_covering(conn, loc, geom_col)).replace("'", "''")
+        # Preserve the original `geo` metadata (geometry_types, CRS) but point covering at cov_col.
+        geo_str = json.dumps(
+            _build_geo_with_covering(conn, loc, geom_col, cov_col, cov_fields)).replace("'", "''")
 
-        # Pass B — sorted copy with the bbox covering struct column + GeoParquet metadata.
+        # Sorted write — pure numeric ORDER BY (the bbox column already exists in src_loc).
         conn.execute(
-            f"COPY (WITH s AS (SELECT *, gd_bbox({gq}) AS __b FROM read_parquet('{loc}')) "
-            f"SELECT * EXCLUDE (__b), __b AS bbox FROM s "
-            f"ORDER BY gd_zkey(__b.xmin, __b.ymin, __b.xmax, __b.ymax)) "
+            f"COPY (SELECT * FROM read_parquet('{src_loc}') "
+            f"ORDER BY gd_zkey({ce('xmin')}, {ce('ymin')}, {ce('xmax')}, {ce('ymax')})) "
             f"TO '{local_out}' (FORMAT PARQUET, COMPRESSION ZSTD, "
             f"ROW_GROUP_SIZE {int(row_group_size)}, KV_METADATA {{geo: '{geo_str}'}})")
         fc = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{local_out}')").fetchone()[0]
@@ -553,8 +599,9 @@ def sort_with_covering(s3_key: str, creds: dict | None = None, out_key: str | No
         return {"out_key": out_key, "feature_count": int(fc), "geometry_column": geom_col}
     finally:
         conn.close()
-        if os.path.exists(local_out):
-            try:
-                os.unlink(local_out)
-            except OSError:
-                pass
+        for p in (local_bbox, local_out):
+            if os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass

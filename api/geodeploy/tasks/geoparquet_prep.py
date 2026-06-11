@@ -8,6 +8,7 @@ GeoParquet on object storage: no PostGIS, no PMTiles. Overwrites the object **in
 """
 import json
 import logging
+import os
 from datetime import datetime, timezone
 
 from ..celery_app import celery_app
@@ -28,7 +29,12 @@ def prepare_geoparquet(self, layer_id, s3_key, job_id=None):
     creds = _get_storage_creds(db_path)
     try:
         logger.info("prepare_geoparquet: layer %s — sorting %s + bbox covering", layer_id, s3_key)
-        duckdb_engine.sort_with_covering(s3_key, creds, out_key=s3_key)
+        # PREP_MEMORY_LIMIT lets a small VPS cap DuckDB's RAM without an image rebuild (the sort
+        # spills to data/temp); PREP_BBOX_CHUNK caps shapely geometries parsed per UDF slice.
+        duckdb_engine.sort_with_covering(
+            s3_key, creds, out_key=s3_key,
+            memory_limit=os.getenv("PREP_MEMORY_LIMIT", "4GB"),
+            bbox_chunk=int(os.getenv("PREP_BBOX_CHUNK", "50000")))
 
         # Re-inspect the rewritten file: the covering column is now present, and inspect drops it
         # from the catalog columns. bbox/feature_count are unchanged but cheap to refresh.

@@ -21,13 +21,13 @@ Vue 3 single-page dashboard — the browser-only control panel for setup, data u
 
 ## Dependencies / relationships
 - All data comes from `api/` via `src/api/index.js`, proxied by `nginx/` in production and by the Vite proxy in dev.
-- The **portal editor preview** (`views/PortalEditor.vue`) builds a MapLibre style by hand that mirrors what `api/.../services/portal_generator.py` produces for the *published* portal — keep the two layer/paint builders consistent (colors, source-layer names, opacity math).
+- The **portal editor preview** (`views/PortalEditor.vue`) builds a MapLibre style by hand that mirrors what `api/.../services/portal_generator.py` produces for the *published* portal — keep the two layer/paint builders consistent (colors, source-layer names, opacity math). **GeoParquet layers are the exception:** they're rendered by a deck.gl `MapboxOverlay` (`refreshDeck`, fed by `getVectorFeatures` viewport queries), NOT a MapLibre layer — mirror of `templates/shared/portal.js`'s deck overlay. PMTiles is a fallback for layers explicitly tiled.
 - Tile URLs from the API are root-relative; the editor prefixes `location.origin` before handing them to MapLibre (worker can't resolve relative URLs).
 
 ## Current status & known issues
-- Phases 0–1 features are present (setup, data manager, portal builder/editor, templates gallery, settings). deck.gl advanced layers and DuckDB filter UI are Phase 2 (not built).
+- Phases 0–1 features are present (setup, data manager, portal builder/editor, templates gallery, settings). **GeoParquet display via deck.gl is now wired** (editor preview + published portal); DuckDB filter/analysis UI is still Phase 2 (not built). deck.gl deps (`deck.gl`, `@deck.gl/mapbox`, `@deck.gl/layers`) are in `package.json`.
 - The preview-vs-published parity is a recurring footgun: a fix in `PortalEditor.vue` often needs a mirror fix in `portal_generator.py` (and `templates/.../layout.html`). See `notes_temp/notes_for_future.md`.
 - `vite.config.js` dev proxy must stay aligned with `nginx/nginx.conf` (prefix stripping + titiler port 80).
 
 ## Last updated
-2026-06-04
+2026-06-11
