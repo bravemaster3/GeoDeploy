@@ -497,11 +497,10 @@ def partition_with_covering(s3_key: str, creds: dict | None = None, out_prefix: 
         # the file it is reading from.
         layer_dir = s3_key.rstrip("/").rsplit("/", 1)[0] if "/" in s3_key.rstrip("/") else ""
         out_prefix = (layer_dir + "/" if layer_dir else "") + f"parts-{uuid4().hex[:8]}"
-    out_loc = f"s3://{bkt}/{out_prefix}".replace("'", "''")
-
     tmpdir = f"{settings.data_dir}/temp"
     os.makedirs(tmpdir, exist_ok=True)
     local_bbox = os.path.join(tmpdir, f"{uuid4().hex}.parquet")  # intermediate: bbox materialised
+    local_parts = os.path.join(tmpdir, f"parts-{uuid4().hex}")   # partitioned output (local, then uploaded)
     # Per-run spill dir + explicit cap: DuckDB's auto-detection of free temp space misreads
     # overlay/WSL filesystems (bogus "16383 PiB"), and concurrent runs sharing one temp dir miscount.
     spill_dir = os.path.join(tmpdir, f"duckdb-{uuid4().hex}")
@@ -584,20 +583,42 @@ def partition_with_covering(s3_key: str, creds: dict | None = None, out_prefix: 
         geo_str = json.dumps(
             _build_geo_with_covering(conn, src_meta_path, geom_col, cov_col, cov_fields)).replace("'", "''")
 
-        # Partitioned write straight to S3 (each file gets the geo covering metadata). `__cell` is a
-        # Hive partition column → encoded in the path, NOT stored as data.
+        # Partitioned write to a LOCAL dir (each file gets the geo covering metadata). `__cell` is a
+        # Hive partition column → encoded in the path, NOT stored as data. We write locally then
+        # upload because DuckDB's partitioned write straight to S3 buffers a large block per open
+        # partition file (~tens of MB × grid² partitions) and OOMs under a modest memory_limit; a
+        # local write streams each partition to disk with bounded memory.
+        local_glob = os.path.join(local_parts, "**", "*.parquet").replace("\\", "/").replace("'", "''")
         conn.execute(
             f"COPY (SELECT *, {cell_sql} AS __cell FROM {part_src}) "
-            f"TO '{out_loc}' (FORMAT PARQUET, PARTITION_BY (__cell), COMPRESSION ZSTD, "
-            f"ROW_GROUP_SIZE {int(row_group_size)}, KV_METADATA {{geo: '{geo_str}'}}, OVERWRITE_OR_IGNORE)")
+            f"TO '{local_parts.replace(chr(39), chr(39) * 2)}' (FORMAT PARQUET, PARTITION_BY (__cell), "
+            f"COMPRESSION ZSTD, ROW_GROUP_SIZE {int(row_group_size)}, KV_METADATA {{geo: '{geo_str}'}}, "
+            f"OVERWRITE_OR_IGNORE)")
         fc = conn.execute(
-            f"SELECT COUNT(*) FROM read_parquet('{out_loc}/**/*.parquet', hive_partitioning=false)"
-        ).fetchone()[0]
-        logger.info("partition_with_covering: %s — wrote %s features into grid %dx%d in %.0fs → %s",
+            f"SELECT COUNT(*) FROM read_parquet('{local_glob}', hive_partitioning=false)").fetchone()[0]
+        logger.info("partition_with_covering: %s — partitioned %s features into a %dx%d grid in %.0fs → uploading %s",
                     s3_key, f"{fc:,}", grid, grid, time.monotonic() - started, out_prefix)
 
+        # Upload every partition file to the S3 prefix, preserving the __cell=N/ layout.
+        import boto3
+        from botocore.client import Config
+        s3 = boto3.client(
+            "s3", endpoint_url=creds["endpoint"],
+            aws_access_key_id=creds["access_key"], aws_secret_access_key=creds["secret_key"],
+            region_name=creds["region"], config=Config(signature_version="s3v4"))
+        n_files = 0
+        for root, _dirs, fnames in os.walk(local_parts):
+            for fn in fnames:
+                full = os.path.join(root, fn)
+                rel = os.path.relpath(full, local_parts).replace(os.sep, "/")
+                s3.upload_file(full, bkt, f"{out_prefix}/{rel}",
+                               ExtraArgs={"ContentType": "application/octet-stream"})
+                n_files += 1
+        logger.info("partition_with_covering: %s — uploaded %d partition files in %.0fs total",
+                    s3_key, n_files, time.monotonic() - started)
+
         return {"out_key": out_prefix, "feature_count": int(fc),
-                "geometry_column": geom_col, "partitioned": True}
+                "geometry_column": geom_col, "partitioned": True, "partition_files": n_files}
     finally:
         conn.close()
         if os.path.exists(local_bbox):
@@ -605,4 +626,5 @@ def partition_with_covering(s3_key: str, creds: dict | None = None, out_prefix: 
                 os.unlink(local_bbox)
             except OSError:
                 pass
-        shutil.rmtree(spill_dir, ignore_errors=True)  # remove this run's DuckDB spill files
+        shutil.rmtree(local_parts, ignore_errors=True)  # local partition output
+        shutil.rmtree(spill_dir, ignore_errors=True)    # this run's DuckDB spill files
