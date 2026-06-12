@@ -66,7 +66,8 @@ def prepare_geoparquet(self, layer_id, s3_key, job_id=None):
             memory_limit=os.getenv("PREP_MEMORY_LIMIT", "4GB"),
             bbox_chunk=int(os.getenv("PREP_BBOX_CHUNK", "50000")),
             max_temp_dir_size=os.getenv("PREP_MAX_TEMP_DIR", "100GiB"),
-            partition_grid=int(os.getenv("PREP_PARTITION_GRID", "16")))
+            partition_grid=int(os.getenv("PREP_PARTITION_GRID", "16")),
+            extent_quantile=float(os.getenv("PREP_EXTENT_QUANTILE", "0.005")))
         new_key = result["out_key"]
 
         # Re-inspect the partitioned dataset (covering column now present; inspect drops it from the

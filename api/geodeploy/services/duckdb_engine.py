@@ -473,7 +473,8 @@ def _build_geo_with_covering(conn: duckdb.DuckDBPyConnection, loc: str, geom_col
 def partition_with_covering(s3_key: str, creds: dict | None = None, out_prefix: str | None = None,
                             bucket: str | None = None, row_group_size: int = 50_000,
                             memory_limit: str = "4GB", bbox_chunk: int = 50_000,
-                            max_temp_dir_size: str = "100GiB", partition_grid: int = 16) -> dict:
+                            max_temp_dir_size: str = "100GiB", partition_grid: int = 16,
+                            extent_quantile: float = 0.005) -> dict:
     """Rewrite the GeoParquet at `s3_key` into a spatially-partitioned dataset with a `bbox` covering
     column, written DIRECTLY to S3 as a PREFIX of `__cell=N/*.parquet` files. Returns
     {"out_key" (the prefix), "feature_count", "geometry_column", "partitioned": True}. Requires
@@ -559,9 +560,16 @@ def partition_with_covering(s3_key: str, creds: dict | None = None, out_prefix: 
         def ce(f):  # numeric corner expression on whichever covering column we settled on
             return f"struct_extract({_q(cov_col)}, '{cov_fields[f]}')"
 
-        # Extent (numeric, no geometry parse) to normalise the grid.
+        # Grid extent (numeric, no geometry parse). Use ROBUST percentiles, not min/max: a few
+        # far-flung features (e.g. overseas territories) otherwise stretch the extent so the dense
+        # mainland collapses into 1-2 giant cells (observed: 4 of 256 cells held ~8.3M of 9.5M rows
+        # → a small-bbox query scanned a 2.5M-feature partition in ~25s). Clamping the grid to the
+        # `extent_quantile`..`1-extent_quantile` range spreads the bulk across the whole grid (outliers
+        # land in edge cells via the LEAST/GREATEST clamp below). min/max is the fallback.
+        q = max(0.0, min(0.05, float(extent_quantile)))
         minx, miny, maxx, maxy = conn.execute(
-            f"SELECT min({ce('xmin')}), min({ce('ymin')}), max({ce('xmax')}), max({ce('ymax')}) "
+            f"SELECT approx_quantile({ce('xmin')}, {q}), approx_quantile({ce('ymin')}, {q}), "
+            f"approx_quantile({ce('xmax')}, {1 - q}), approx_quantile({ce('ymax')}, {1 - q}) "
             f"FROM {part_src}").fetchone()
         if minx is None:
             raise ValueError("Could not compute extent (no valid geometries).")
