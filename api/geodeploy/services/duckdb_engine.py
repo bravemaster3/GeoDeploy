@@ -7,6 +7,7 @@ register (the file equivalent of `cog_converter.inspect_s3` for rasters).
 import json
 import logging
 import os
+import shutil
 import time
 from uuid import uuid4
 import duckdb
@@ -458,7 +459,8 @@ def _build_geo_with_covering(conn: duckdb.DuckDBPyConnection, loc: str, geom_col
 
 def sort_with_covering(s3_key: str, creds: dict | None = None, out_key: str | None = None,
                        bucket: str | None = None, row_group_size: int = 50_000,
-                       memory_limit: str = "4GB", bbox_chunk: int = 50_000) -> dict:
+                       memory_limit: str = "4GB", bbox_chunk: int = 50_000,
+                       max_temp_dir_size: str = "100GiB") -> dict:
     """Rewrite the GeoParquet at `s3_key` Z-order-sorted with a `bbox` covering column; upload the
     result to `out_key` (default: alongside the original, `…__sorted.parquet`). Returns
     {"out_key", "feature_count", "geometry_column"}. Requires pyarrow. Creds must come from SQLite
@@ -483,11 +485,19 @@ def sort_with_covering(s3_key: str, creds: dict | None = None, out_key: str | No
     os.makedirs(tmpdir, exist_ok=True)
     local_bbox = os.path.join(tmpdir, f"{uuid4().hex}.parquet")  # intermediate: bbox materialised
     local_out = os.path.join(tmpdir, f"{uuid4().hex}.parquet")
+    # Per-run spill dir: concurrent preps must NOT share one temp_directory — DuckDB measures the
+    # whole dir, so two instances miscount each other's spill files and one hits a spurious
+    # max_temp_directory_size OOM. We also set that limit EXPLICITLY because DuckDB's auto-detection
+    # of free space misreads overlay/WSL filesystems (observed: a bogus "16383 PiB" limit that failed
+    # the out-of-core ORDER BY mid-sort despite ~900 GiB actually free).
+    spill_dir = os.path.join(tmpdir, f"duckdb-{uuid4().hex}")
+    os.makedirs(spill_dir, exist_ok=True)
 
     conn = _connect_read(creds)  # httpfs + S3, NO spatial
     try:
-        conn.execute(f"SET temp_directory='{tmpdir}'")
+        conn.execute(f"SET temp_directory='{spill_dir}'")
         conn.execute(f"SET memory_limit='{memory_limit}'")
+        conn.execute(f"SET max_temp_directory_size='{max_temp_dir_size}'")
 
         meta = _read_geo_metadata(conn, loc)
         all_cols = [r[0] for r in conn.execute(
@@ -605,3 +615,4 @@ def sort_with_covering(s3_key: str, creds: dict | None = None, out_key: str | No
                     os.unlink(p)
                 except OSError:
                     pass
+        shutil.rmtree(spill_dir, ignore_errors=True)  # remove this run's DuckDB spill files

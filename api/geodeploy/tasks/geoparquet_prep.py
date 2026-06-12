@@ -34,7 +34,8 @@ def prepare_geoparquet(self, layer_id, s3_key, job_id=None):
         duckdb_engine.sort_with_covering(
             s3_key, creds, out_key=s3_key,
             memory_limit=os.getenv("PREP_MEMORY_LIMIT", "4GB"),
-            bbox_chunk=int(os.getenv("PREP_BBOX_CHUNK", "50000")))
+            bbox_chunk=int(os.getenv("PREP_BBOX_CHUNK", "50000")),
+            max_temp_dir_size=os.getenv("PREP_MAX_TEMP_DIR", "100GiB"))
 
         # Re-inspect the rewritten file: the covering column is now present, and inspect drops it
         # from the catalog columns. bbox/feature_count are unchanged but cheap to refresh.
