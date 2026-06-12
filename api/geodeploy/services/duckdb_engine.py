@@ -174,19 +174,35 @@ def _reproject_bbox(bbox: list[float], src_epsg: str, dst_epsg: str = "EPSG:4326
         return bbox
 
 
+def _parquet_paths(location: str) -> tuple[str, str]:
+    """Resolve a layer storage `location` to (metadata_path, from_expr) for DuckDB.
+
+    A single-file layer is `…/file.parquet`; a spatially-partitioned layer (see
+    `partition_with_covering`) is a PREFIX directory holding `__cell=N/*.parquet` files. The
+    partitioned read globs the prefix with `hive_partitioning=false` so the synthetic `__cell`
+    partition column is NOT surfaced as data. `metadata_path` is what `parquet_kv_metadata` reads
+    (a glob is fine — every partition file carries the same `geo` covering metadata)."""
+    loc = location.replace("'", "''")
+    if location.rstrip("/").endswith(".parquet"):
+        return loc, f"read_parquet('{loc}')"
+    glob = f"{loc}/**/*.parquet"
+    return glob, f"read_parquet('{glob}', hive_partitioning=false)"
+
+
 def inspect_parquet(location: str, creds: dict | None = None) -> dict:
     """Read a GeoParquet file's metadata + geometry without loading it anywhere.
 
-    `location` is a local path or an `s3://bucket/key` URL. Returns geometry_column,
-    geometry_type (point|line|polygon), bbox (EPSG:4326), columns, feature_count, crs.
+    `location` is a local path, an `s3://bucket/key` single file, or an `s3://bucket/prefix`
+    partitioned dataset. Returns geometry_column, geometry_type (point|line|polygon),
+    bbox (EPSG:4326), columns, feature_count, crs.
     """
     conn = _connect_read(creds)
     try:
-        loc = location.replace("'", "''")
-        meta = _read_geo_metadata(conn, loc)
+        meta_path, src = _parquet_paths(location)
+        meta = _read_geo_metadata(conn, meta_path)
         geom_col, src_epsg = meta["column"], meta["epsg"]
 
-        desc = conn.execute(f"DESCRIBE SELECT * FROM read_parquet('{loc}')").fetchall()
+        desc = conn.execute(f"DESCRIBE SELECT * FROM {src}").fetchall()
         all_cols = [(r[0], (r[1] or "")) for r in desc]  # (name, duckdb_type)
 
         if not geom_col:
@@ -199,8 +215,8 @@ def inspect_parquet(location: str, creds: dict | None = None) -> dict:
             raise ValueError("No geometry column found — is this a GeoParquet file?")
 
         gq = _q(geom_col)
-        fc = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{loc}')").fetchone()[0]
-        # The synthetic bbox covering column (added by sort_with_covering) is not user data.
+        fc = conn.execute(f"SELECT COUNT(*) FROM {src}").fetchone()[0]
+        # The synthetic bbox covering column (added by partition_with_covering) is not user data.
         cov_col = meta["covering"][0] if meta.get("covering") else None
         columns = [{"name": n, "type": t.lower()} for n, t in all_cols
                    if n != geom_col and n != cov_col]
@@ -212,7 +228,7 @@ def inspect_parquet(location: str, creds: dict | None = None) -> dict:
             geometry_type = _GEOM_TYPE_MAP.get(str(meta["geometry_types"][0]).upper().split()[0])
         if geometry_type is None:
             sample = conn.execute(
-                f"SELECT {gq} FROM read_parquet('{loc}') WHERE {gq} IS NOT NULL LIMIT 1"
+                f"SELECT {gq} FROM {src} WHERE {gq} IS NOT NULL LIMIT 1"
             ).fetchone()
             if sample and sample[0] is not None:
                 geometry_type = _geom_kind_from_wkb(sample[0])
@@ -222,7 +238,7 @@ def inspect_parquet(location: str, creds: dict | None = None) -> dict:
         bbox = list(meta["bbox"]) if meta["bbox"] else None
         if bbox is None and fc and fc <= _BBOX_SCAN_CAP:
             rows = conn.execute(
-                f"SELECT {gq} FROM read_parquet('{loc}') WHERE {gq} IS NOT NULL"
+                f"SELECT {gq} FROM {src} WHERE {gq} IS NOT NULL"
             ).fetchall()
             bbox = _bbox_from_wkbs([r[0] for r in rows])
         if bbox and src_epsg and src_epsg != "EPSG:4326":
@@ -267,14 +283,14 @@ def query_features_geojson(s3_key: str, bbox=None, limit: int = 50_000, creds: d
     """
     settings = get_settings()
     bkt = bucket or settings.storage_bucket
-    loc = f"s3://{bkt}/{s3_key}".replace("'", "''")
+    meta_path, src = _parquet_paths(f"s3://{bkt}/{s3_key}")
     limit = max(1, int(limit))
 
     conn = _connect_read(creds)
     try:
-        meta = _read_geo_metadata(conn, loc)
+        meta = _read_geo_metadata(conn, meta_path)
         all_cols = [r[0] for r in conn.execute(
-            f"DESCRIBE SELECT * FROM read_parquet('{loc}')").fetchall()]
+            f"DESCRIBE SELECT * FROM {src}").fetchall()]
         geom_col = meta["column"]
         if not geom_col:
             geom_col = next((c for c in all_cols
@@ -296,7 +312,7 @@ def query_features_geojson(s3_key: str, bbox=None, limit: int = 50_000, creds: d
 
         sel = ", ".join([f"{_q(geom_col)} AS __wkb"] + [_q(c) for c in prop_cols])
         rows = conn.execute(
-            f"SELECT {sel} FROM read_parquet('{loc}') {where} LIMIT {limit}").fetchall()
+            f"SELECT {sel} FROM {src} {where} LIMIT {limit}").fetchall()
 
         from shapely import from_wkb, to_geojson
         transformer = None
@@ -338,12 +354,12 @@ def stream_geojsonseq(s3_key: str, out, creds: dict | None = None, bucket: str |
     """
     settings = get_settings()
     bkt = bucket or settings.storage_bucket
-    loc = f"s3://{bkt}/{s3_key}".replace("'", "''")
+    meta_path, src = _parquet_paths(f"s3://{bkt}/{s3_key}")
     conn = _connect_read(creds)
     try:
-        meta = _read_geo_metadata(conn, loc)
+        meta = _read_geo_metadata(conn, meta_path)
         all_cols = [r[0] for r in conn.execute(
-            f"DESCRIBE SELECT * FROM read_parquet('{loc}')").fetchall()]
+            f"DESCRIBE SELECT * FROM {src}").fetchall()]
         geom_col = meta["column"] or next(
             (c for c in all_cols if c.lower() in ("geometry", "geom", "wkb_geometry", "wkb")), None)
         if not geom_col:
@@ -367,7 +383,7 @@ def stream_geojsonseq(s3_key: str, out, creds: dict | None = None, bucket: str |
                 return np.column_stack([x, y])
             reproject = lambda geoms: _shp_transform(geoms, _reproject_coords)
 
-        rel = conn.execute(f"SELECT {sel} FROM read_parquet('{loc}')")
+        rel = conn.execute(f"SELECT {sel} FROM {src}")
         count = 0
         start = time.monotonic()
         next_log = log_every
@@ -408,24 +424,21 @@ def stream_geojsonseq(s3_key: str, out, creds: dict | None = None, bucket: str |
         conn.close()
 
 
-# --- GeoParquet preparation: spatial sort + bbox covering column ------------------------------
-# Rewrites a GeoParquet so spatial reads are fast: rows are Z-ordered (Morton) by bbox centre so
-# nearby features share Parquet row-groups, and a GeoParquet 1.1 `bbox` covering struct column is
-# added so DuckDB can prune row-groups on a bbox filter (fast analysis AND the deck.gl viewport
-# feed — query_features_geojson already uses meta["covering"]). Per-row bbox is computed with
-# shapely (vectorised, NO DuckDB spatial → dodges the GeoParquet 2.0-dev decoder wall, see notes);
-# DuckDB does the out-of-core ORDER BY + Parquet write so a multi-GB file never loads fully.
-#
-# WKB is parsed AT MOST ONCE (the OOM/perf fix — see notes §0h "PREP OPTIMIZATION PATH" / memory
-# project_pmtiles_tiling): the old code ran the shapely `gd_bbox` UDF twice (a global-extent pass
-# then the sorted-write pass), doubling the parse and piling ~1.6 GB of geometry objects into
-# Python. Now the per-feature bbox is materialised ONCE to a local intermediate Parquet, and BOTH
-# the extent and the Z-order sort key are derived from that NUMERIC column (no geometry re-parse in
-# the sort pass). When the source already carries a covering bbox column (GDAL/GeoPandas writers,
-# or any re-run of an already-prepped file) the parse is skipped ENTIRELY — we sort straight off the
-# existing numeric column.
+# --- GeoParquet preparation: spatial PARTITIONING + bbox covering column ----------------------
+# Rewrites a GeoParquet so spatial reads are fast WITHOUT a total-order sort (which was impractical
+# on millions of large polygons — out-of-core sorting GBs of geometry payload hung for hours). Two
+# moves give the same payoff far more cheaply:
+#   1. a GeoParquet 1.1 `bbox` covering struct column → DuckDB prunes row-groups on a bbox filter
+#      (fast analysis AND the deck.gl viewport feed; query_features_geojson uses meta["covering"]);
+#   2. **partition the rows into a coarse spatial grid** (`PARTITION_BY __cell`) — a single-pass
+#      scatter (NO sort/merge) that co-locates nearby features into the same partition file, so the
+#      covering's row-group stats are tight and pruning actually skips data.
+# Per-feature bbox is computed once with shapely (vectorised, NO DuckDB spatial → dodges the
+# GeoParquet 2.0-dev decoder wall). The output is a PREFIX of `__cell=N/*.parquet` files (each
+# carrying the `geo` covering metadata), read back via `_parquet_paths` with hive_partitioning off.
+# When the source already has a covering column (GDAL/GeoPandas, or a re-run) the parse is skipped.
 
-# Logical bbox subfields, in the order the Morton key / extent query expect them.
+# Logical bbox subfields, in the order the extent query / grid cell expect them.
 _BBOX_FIELDS = ("xmin", "ymin", "xmax", "ymax")
 
 
@@ -457,39 +470,40 @@ def _build_geo_with_covering(conn: duckdb.DuckDBPyConnection, loc: str, geom_col
     return geo
 
 
-def sort_with_covering(s3_key: str, creds: dict | None = None, out_key: str | None = None,
-                       bucket: str | None = None, row_group_size: int = 50_000,
-                       memory_limit: str = "4GB", bbox_chunk: int = 50_000,
-                       max_temp_dir_size: str = "100GiB") -> dict:
-    """Rewrite the GeoParquet at `s3_key` Z-order-sorted with a `bbox` covering column; upload the
-    result to `out_key` (default: alongside the original, `…__sorted.parquet`). Returns
-    {"out_key", "feature_count", "geometry_column"}. Requires pyarrow. Creds must come from SQLite
-    in Celery (env unreliable — §0f).
+def partition_with_covering(s3_key: str, creds: dict | None = None, out_prefix: str | None = None,
+                            bucket: str | None = None, row_group_size: int = 50_000,
+                            memory_limit: str = "4GB", bbox_chunk: int = 50_000,
+                            max_temp_dir_size: str = "100GiB", partition_grid: int = 16) -> dict:
+    """Rewrite the GeoParquet at `s3_key` into a spatially-partitioned dataset with a `bbox` covering
+    column, written DIRECTLY to S3 as a PREFIX of `__cell=N/*.parquet` files. Returns
+    {"out_key" (the prefix), "feature_count", "geometry_column", "partitioned": True}. Requires
+    pyarrow. Creds must come from SQLite in Celery (env unreliable — §0f).
 
-    WKB is parsed at most once: the per-feature bbox is materialised to a local intermediate Parquet
-    first, then the extent + Z-order sort both read that numeric column. If the source already has a
-    covering bbox column, no geometry is parsed at all. `bbox_chunk` caps how many geometries shapely
-    parses per slice inside the UDF (peak-memory guard for small VPS)."""
+    No total-order sort (that hung for hours on millions of large polygons): rows are scattered into
+    a `partition_grid`×`partition_grid` spatial grid in a single pass. WKB is parsed at most once —
+    the per-feature bbox is materialised once to a local intermediate, then the extent + grid cell
+    read that NUMERIC column. If the source already has a covering bbox column, no geometry is parsed.
+    `bbox_chunk` caps shapely geometries parsed per UDF slice (peak-memory guard)."""
     import numpy as np
     import pyarrow as pa
     from shapely import bounds as _bounds, from_wkb
 
     settings = get_settings()
     bkt = bucket or (creds.get("bucket") if creds else None) or settings.storage_bucket
-    loc = f"s3://{bkt}/{s3_key}".replace("'", "''")
-    if out_key is None:
-        base = s3_key.rsplit(".", 1)[0] if "." in s3_key else s3_key
-        out_key = base + "__sorted.parquet"
+    src_meta_path, src_expr = _parquet_paths(f"s3://{bkt}/{s3_key}")
+    if out_prefix is None:
+        # Partition files live under the layer's own dir, in a fresh `parts-<hex>` prefix so a
+        # re-prep writes a NEW dataset (read old → write new → delete old) rather than overwriting
+        # the file it is reading from.
+        layer_dir = s3_key.rstrip("/").rsplit("/", 1)[0] if "/" in s3_key.rstrip("/") else ""
+        out_prefix = (layer_dir + "/" if layer_dir else "") + f"parts-{uuid4().hex[:8]}"
+    out_loc = f"s3://{bkt}/{out_prefix}".replace("'", "''")
 
     tmpdir = f"{settings.data_dir}/temp"
     os.makedirs(tmpdir, exist_ok=True)
     local_bbox = os.path.join(tmpdir, f"{uuid4().hex}.parquet")  # intermediate: bbox materialised
-    local_out = os.path.join(tmpdir, f"{uuid4().hex}.parquet")
-    # Per-run spill dir: concurrent preps must NOT share one temp_directory — DuckDB measures the
-    # whole dir, so two instances miscount each other's spill files and one hits a spurious
-    # max_temp_directory_size OOM. We also set that limit EXPLICITLY because DuckDB's auto-detection
-    # of free space misreads overlay/WSL filesystems (observed: a bogus "16383 PiB" limit that failed
-    # the out-of-core ORDER BY mid-sort despite ~900 GiB actually free).
+    # Per-run spill dir + explicit cap: DuckDB's auto-detection of free temp space misreads
+    # overlay/WSL filesystems (bogus "16383 PiB"), and concurrent runs sharing one temp dir miscount.
     spill_dir = os.path.join(tmpdir, f"duckdb-{uuid4().hex}")
     os.makedirs(spill_dir, exist_ok=True)
 
@@ -499,9 +513,9 @@ def sort_with_covering(s3_key: str, creds: dict | None = None, out_key: str | No
         conn.execute(f"SET memory_limit='{memory_limit}'")
         conn.execute(f"SET max_temp_directory_size='{max_temp_dir_size}'")
 
-        meta = _read_geo_metadata(conn, loc)
+        meta = _read_geo_metadata(conn, src_meta_path)
         all_cols = [r[0] for r in conn.execute(
-            f"DESCRIBE SELECT * FROM read_parquet('{loc}')").fetchall()]
+            f"DESCRIBE SELECT * FROM {src_expr}").fetchall()]
         geom_col = meta["column"] or next(
             (c for c in all_cols if c.lower() in ("geometry", "geom", "wkb_geometry", "wkb")), None)
         if not geom_col:
@@ -509,18 +523,15 @@ def sort_with_covering(s3_key: str, creds: dict | None = None, out_key: str | No
         gq = _q(geom_col)
         started = time.monotonic()
 
-        # Decide where the per-feature bbox comes from. If the source already exposes a covering
-        # bbox column we read it straight off (zero WKB parse — fast re-runs + GDAL/GeoPandas files);
-        # otherwise we parse the geometry ONCE into an intermediate Parquet's `bbox` struct column.
+        # Where the per-feature bbox comes from: an existing covering column (zero WKB parse — fast
+        # re-runs / GDAL files), else parse the geometry ONCE into a local intermediate's bbox struct.
         existing = meta.get("covering")
         if existing:
-            src_loc = loc                                   # sort the original in place
-            cov_col, cov_fields = existing[0], existing[1]  # (col, {logical: subfield})
-            logger.info("sort_with_covering: %s — reusing existing covering column %r (no parse)",
+            part_src = src_expr
+            cov_col, cov_fields = existing[0], existing[1]
+            logger.info("partition_with_covering: %s — reusing existing covering column %r (no parse)",
                         s3_key, cov_col)
         else:
-            # `bbox` is the spec-conventional covering name; fall back if the source already uses it
-            # for unrelated user data so we never clobber a real column.
             cov_col = "bbox" if "bbox" not in all_cols else "gd_bbox_cov"
             cov_fields = {f: f for f in _BBOX_FIELDS}
 
@@ -538,84 +549,60 @@ def sort_with_covering(s3_key: str, creds: dict | None = None, out_key: str | No
                 "gd_bbox", _udf_bbox, [duckdb.typing.BLOB],
                 duckdb.struct_type({f: "DOUBLE" for f in _BBOX_FIELDS}), type="arrow")
 
-            # Parse pass (the only WKB read): append the bbox struct, no sort, streams to disk.
+            # Parse pass (the only WKB read): append the bbox struct, streams to a local file.
             conn.execute(
-                f"COPY (SELECT *, gd_bbox({gq}) AS {_q(cov_col)} FROM read_parquet('{loc}')) "
+                f"COPY (SELECT *, gd_bbox({gq}) AS {_q(cov_col)} FROM {src_expr}) "
                 f"TO '{local_bbox}' (FORMAT PARQUET, COMPRESSION ZSTD)")
-            src_loc = local_bbox.replace("'", "''")
-            logger.info("sort_with_covering: %s — bbox materialised in %.0fs", s3_key,
+            part_src = f"read_parquet('{local_bbox.replace(chr(39), chr(39) * 2)}')"
+            logger.info("partition_with_covering: %s — bbox materialised in %.0fs", s3_key,
                         time.monotonic() - started)
 
         def ce(f):  # numeric corner expression on whichever covering column we settled on
             return f"struct_extract({_q(cov_col)}, '{cov_fields[f]}')"
 
-        # Extent (numeric, no geometry parse) to normalise the Z-order grid.
+        # Extent (numeric, no geometry parse) to normalise the grid.
         minx, miny, maxx, maxy = conn.execute(
             f"SELECT min({ce('xmin')}), min({ce('ymin')}), max({ce('xmax')}), max({ce('ymax')}) "
-            f"FROM read_parquet('{src_loc}')").fetchone()
+            f"FROM {part_src}").fetchone()
         if minx is None:
             raise ValueError("Could not compute extent (no valid geometries).")
         spanx = (maxx - minx) or 1.0
         spany = (maxy - miny) or 1.0
 
-        # Z-order (Morton) sort key built as a NATIVE SQL expression (DuckDB C bit-math) — NOT a
-        # Python UDF. A Python UDF in the ORDER BY forces DuckDB's out-of-core sort to call back into
-        # Python, which was catastrophically slow on millions of rows (the sort produced ZERO output
-        # in ~2h at full CPU). Native integer arithmetic lets DuckDB's parallel C sort run at speed.
-        bits = 16
-        m = (1 << bits) - 1
+        # Coarse spatial grid cell (native SQL, row-major over a grid×grid grid). PARTITION_BY this
+        # scatters nearby features into the same file in ONE pass — no sort, no payload merge.
+        grid = max(2, int(partition_grid))
 
-        def _norm_int(center_expr, lo, span):
-            # center coordinate → integer grid cell in [0, m], clamped; NULL geometry → NULL.
-            return (f"CAST(LEAST({float(m)}, GREATEST(0.0, "
-                    f"(({center_expr}) - ({lo!r})) / ({span!r}) * {m})) AS BIGINT)")
-
-        def _spread_sql(e):
-            # Interleave the low 16 bits of integer expr `e` into even bit positions (Morton spread).
-            e = f"({e} & 65535)"
-            e = f"(({e} | ({e} << 8)) & 16711935)"        # 0x00FF00FF
-            e = f"(({e} | ({e} << 4)) & 252645135)"       # 0x0F0F0F0F
-            e = f"(({e} | ({e} << 2)) & 858993459)"       # 0x33333333
-            e = f"(({e} | ({e} << 1)) & 1431655765)"      # 0x55555555
-            return e
-
+        def _cell(center_expr, lo, span):
+            return (f"LEAST({grid - 1}, GREATEST(0, "
+                    f"CAST((({center_expr}) - ({lo!r})) / ({span!r}) * {grid} AS INTEGER)))")
         cx = f"(({ce('xmin')}) + ({ce('xmax')})) * 0.5"
         cy = f"(({ce('ymin')}) + ({ce('ymax')})) * 0.5"
-        # Full Morton expression inlined into ORDER BY (no subquery / no UDF). DuckDB common-
-        # subexpression-eliminates the repeated normalisation, and it's all native integer math.
-        zkey_sql = (f"({_spread_sql(_norm_int(cx, minx, spanx))}) "
-                    f"| (({_spread_sql(_norm_int(cy, miny, spany))}) << 1)")
+        cell_sql = f"({_cell(cx, minx, spanx)} * {grid} + {_cell(cy, miny, spany)})"
 
         # Preserve the original `geo` metadata (geometry_types, CRS) but point covering at cov_col.
         geo_str = json.dumps(
-            _build_geo_with_covering(conn, loc, geom_col, cov_col, cov_fields)).replace("'", "''")
+            _build_geo_with_covering(conn, src_meta_path, geom_col, cov_col, cov_fields)).replace("'", "''")
 
-        # Sorted write — NATIVE BIGINT Morton ORDER BY (NULLS LAST so null/empty geometries trail).
-        # The bbox covering column already exists in src_loc; SELECT * carries it through.
+        # Partitioned write straight to S3 (each file gets the geo covering metadata). `__cell` is a
+        # Hive partition column → encoded in the path, NOT stored as data.
         conn.execute(
-            f"COPY (SELECT * FROM read_parquet('{src_loc}') ORDER BY {zkey_sql} NULLS LAST) "
-            f"TO '{local_out}' (FORMAT PARQUET, COMPRESSION ZSTD, "
-            f"ROW_GROUP_SIZE {int(row_group_size)}, KV_METADATA {{geo: '{geo_str}'}})")
-        fc = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{local_out}')").fetchone()[0]
-        logger.info("sort_with_covering: %s — wrote %s features in %.0fs total → uploading %s",
-                    s3_key, f"{fc:,}", time.monotonic() - started, out_key)
+            f"COPY (SELECT *, {cell_sql} AS __cell FROM {part_src}) "
+            f"TO '{out_loc}' (FORMAT PARQUET, PARTITION_BY (__cell), COMPRESSION ZSTD, "
+            f"ROW_GROUP_SIZE {int(row_group_size)}, KV_METADATA {{geo: '{geo_str}'}}, OVERWRITE_OR_IGNORE)")
+        fc = conn.execute(
+            f"SELECT COUNT(*) FROM read_parquet('{out_loc}/**/*.parquet', hive_partitioning=false)"
+        ).fetchone()[0]
+        logger.info("partition_with_covering: %s — wrote %s features into grid %dx%d in %.0fs → %s",
+                    s3_key, f"{fc:,}", grid, grid, time.monotonic() - started, out_prefix)
 
-        import boto3
-        from botocore.client import Config
-        s3 = boto3.client(
-            "s3", endpoint_url=creds["endpoint"],
-            aws_access_key_id=creds["access_key"], aws_secret_access_key=creds["secret_key"],
-            region_name=creds["region"], config=Config(signature_version="s3v4"))
-        s3.upload_file(local_out, bkt, out_key,
-                       ExtraArgs={"ContentType": "application/octet-stream"})
-
-        return {"out_key": out_key, "feature_count": int(fc), "geometry_column": geom_col}
+        return {"out_key": out_prefix, "feature_count": int(fc),
+                "geometry_column": geom_col, "partitioned": True}
     finally:
         conn.close()
-        for p in (local_bbox, local_out):
-            if os.path.exists(p):
-                try:
-                    os.unlink(p)
-                except OSError:
-                    pass
+        if os.path.exists(local_bbox):
+            try:
+                os.unlink(local_bbox)
+            except OSError:
+                pass
         shutil.rmtree(spill_dir, ignore_errors=True)  # remove this run's DuckDB spill files

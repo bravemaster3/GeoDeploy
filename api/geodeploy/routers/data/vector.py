@@ -394,16 +394,30 @@ async def delete_layer(
 
     settings = get_settings()
     if layer.storage_backend == "geoparquet":
-        # GeoParquet layers live as files on object storage (the .parquet + its .pmtiles) — delete
-        # both objects, no PostGIS table.
+        # GeoParquet layers live as files on object storage, no PostGIS table. After spatial prep,
+        # s3_key is a PREFIX (a partitioned dataset of __cell=N/*.parquet files); before prep it's a
+        # single .parquet. Also remove any .pmtiles fallback archive.
         from ...services.minio import get_s3_client
         s3 = get_s3_client()
+        b = settings.storage_bucket
         for key in (layer.s3_key, layer.pmtiles_key):
-            if key:
-                try:
-                    s3.delete_object(Bucket=settings.storage_bucket, Key=key)
-                except Exception:
-                    pass
+            if not key:
+                continue
+            try:
+                if key.rstrip("/").endswith((".parquet", ".pmtiles")):
+                    s3.delete_object(Bucket=b, Key=key)
+                else:  # partitioned prefix → delete every object under it
+                    prefix = key.rstrip("/") + "/"
+                    batch = []
+                    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=b, Prefix=prefix):
+                        for obj in page.get("Contents", []):
+                            batch.append({"Key": obj["Key"]})
+                            if len(batch) >= 1000:
+                                s3.delete_objects(Bucket=b, Delete={"Objects": batch}); batch = []
+                    if batch:
+                        s3.delete_objects(Bucket=b, Delete={"Objects": batch})
+            except Exception:
+                pass
     elif layer.status == "ready":
         import asyncpg
         try:

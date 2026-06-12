@@ -1,10 +1,12 @@
 """Spatially prepare a GeoParquet layer (Celery, background).
 
-Rewrites the file Z-order-sorted with a GeoParquet 1.1 `bbox` covering column (see
-`services/duckdb_engine.sort_with_covering`) so DuckDB prunes row-groups on a spatial filter —
-fast analysis AND the deck.gl viewport feed (`query_features_geojson`). The file STAYS
-GeoParquet on object storage: no PostGIS, no PMTiles. Overwrites the object **in place**
-(`out_key == s3_key`) so the catalog `s3_key` stays stable and re-running is idempotent.
+Rewrites the upload into a spatially-partitioned GeoParquet dataset with a GeoParquet 1.1 `bbox`
+covering column (see `services/duckdb_engine.partition_with_covering`) so DuckDB prunes row-groups
+on a spatial filter — fast analysis AND the deck.gl viewport feed (`query_features_geojson`). The
+data STAYS GeoParquet on object storage: no PostGIS, no PMTiles. The output is a PREFIX of
+`__cell=N/*.parquet` files (not a single file); the layer's `s3_key` is repointed to that prefix and
+the original upload is deleted. A coarse-grid PARTITION scatter (one pass) replaces the old
+total-order Z-order sort, which hung for hours on millions of large polygons.
 """
 import json
 import logging
@@ -19,42 +21,81 @@ from .vector_ingest import _update_job, _update_layer
 logger = logging.getLogger(__name__)
 
 
+def _delete_s3_location(creds: dict, key: str) -> None:
+    """Delete a single `.parquet` object, or every object under a prefix (partitioned dataset)."""
+    import boto3
+    from botocore.client import Config
+    s3 = boto3.client(
+        "s3", endpoint_url=creds["endpoint"],
+        aws_access_key_id=creds["access_key"], aws_secret_access_key=creds["secret_key"],
+        region_name=creds["region"], config=Config(signature_version="s3v4"))
+    bkt = creds["bucket"]
+    if key.rstrip("/").endswith(".parquet"):
+        s3.delete_object(Bucket=bkt, Key=key)
+        return
+    prefix = key.rstrip("/") + "/"
+    paginator = s3.get_paginator("list_objects_v2")
+    batch = []
+    for page in paginator.paginate(Bucket=bkt, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            batch.append({"Key": obj["Key"]})
+            if len(batch) >= 1000:
+                s3.delete_objects(Bucket=bkt, Delete={"Objects": batch})
+                batch = []
+    if batch:
+        s3.delete_objects(Bucket=bkt, Delete={"Objects": batch})
+
+
 @celery_app.task(bind=True, name="geodeploy.tasks.geoparquet_prep.prepare_geoparquet")
 def prepare_geoparquet(self, layer_id, s3_key, job_id=None):
-    """Sort `s3_key` + add a bbox covering column, then refresh the layer's metadata."""
+    """Partition `s3_key` into a spatial grid + add a bbox covering column, repoint the layer at the
+    new partitioned prefix, refresh metadata, and delete the original upload."""
     from ..services import duckdb_engine
     settings = get_settings()
     db_path = f"{settings.data_dir}/sqlite/geodeploy.db"
     # Storage creds from SQLite (NOT env) — celery's env isn't reliably populated. See §0f.
     creds = _get_storage_creds(db_path)
     try:
-        logger.info("prepare_geoparquet: layer %s — sorting %s + bbox covering", layer_id, s3_key)
-        # PREP_MEMORY_LIMIT lets a small VPS cap DuckDB's RAM without an image rebuild (the sort
-        # spills to data/temp); PREP_BBOX_CHUNK caps shapely geometries parsed per UDF slice.
-        duckdb_engine.sort_with_covering(
-            s3_key, creds, out_key=s3_key,
+        logger.info("prepare_geoparquet: layer %s — partitioning %s + bbox covering", layer_id, s3_key)
+        # Env knobs (retunable on celery without an image rebuild): PREP_MEMORY_LIMIT caps DuckDB
+        # RAM, PREP_BBOX_CHUNK caps shapely geometries per UDF slice, PREP_MAX_TEMP_DIR bounds the
+        # spill, PREP_PARTITION_GRID sets the grid resolution (gridxgrid cells; more = tighter
+        # pruning but more files).
+        result = duckdb_engine.partition_with_covering(
+            s3_key, creds,
             memory_limit=os.getenv("PREP_MEMORY_LIMIT", "4GB"),
             bbox_chunk=int(os.getenv("PREP_BBOX_CHUNK", "50000")),
-            max_temp_dir_size=os.getenv("PREP_MAX_TEMP_DIR", "100GiB"))
+            max_temp_dir_size=os.getenv("PREP_MAX_TEMP_DIR", "100GiB"),
+            partition_grid=int(os.getenv("PREP_PARTITION_GRID", "16")))
+        new_key = result["out_key"]
 
-        # Re-inspect the rewritten file: the covering column is now present, and inspect drops it
-        # from the catalog columns. bbox/feature_count are unchanged but cheap to refresh.
-        info = duckdb_engine.inspect_parquet(f"s3://{creds['bucket']}/{s3_key}", creds)
+        # Re-inspect the partitioned dataset (covering column now present; inspect drops it from the
+        # catalog columns). inspect_parquet handles the prefix via _parquet_paths.
+        info = duckdb_engine.inspect_parquet(f"s3://{creds['bucket']}/{new_key}", creds)
         _update_layer(
             db_path, layer_id, status="ready",
+            s3_key=new_key,  # repoint the catalog at the partitioned prefix
             geometry_type=info.get("geometry_type"),
             geometry_column=info.get("geometry_column"),
             crs=info.get("crs"),
             feature_count=info.get("feature_count"),
             bbox=json.dumps(info["bbox"]) if info.get("bbox") else None,
             columns=json.dumps(info.get("columns") or []),
+            error_message=None,
             updated_at=datetime.now(timezone.utc).isoformat(),
         )
+        # Delete the original upload now that the layer points at the new partitioned prefix.
+        if new_key != s3_key:
+            try:
+                _delete_s3_location(creds, s3_key)
+            except Exception:
+                logger.warning("prepare_geoparquet: layer %s — could not delete old source %s",
+                               layer_id, s3_key, exc_info=True)
         if job_id:
             _update_job(db_path, job_id, status="ready", progress=100,
                         completed_at=datetime.now(timezone.utc).isoformat())
-        logger.info("prepare_geoparquet: layer %s — READY (%s features)",
-                    layer_id, info.get("feature_count"))
+        logger.info("prepare_geoparquet: layer %s — READY (%s features) → %s",
+                    layer_id, info.get("feature_count"), new_key)
     except Exception as exc:
         _update_layer(db_path, layer_id, status="error", error_message=str(exc))
         if job_id:
