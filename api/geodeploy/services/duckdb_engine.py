@@ -558,39 +558,42 @@ def sort_with_covering(s3_key: str, creds: dict | None = None, out_key: str | No
         spanx = (maxx - minx) or 1.0
         spany = (maxy - miny) or 1.0
 
+        # Z-order (Morton) sort key built as a NATIVE SQL expression (DuckDB C bit-math) — NOT a
+        # Python UDF. A Python UDF in the ORDER BY forces DuckDB's out-of-core sort to call back into
+        # Python, which was catastrophically slow on millions of rows (the sort produced ZERO output
+        # in ~2h at full CPU). Native integer arithmetic lets DuckDB's parallel C sort run at speed.
         bits = 16
         m = (1 << bits) - 1
 
-        def _spread(v):  # interleave-prep: spread 16 low bits of a uint64 array
-            v = v & np.uint64(0xFFFF)
-            v = (v | (v << np.uint64(8))) & np.uint64(0x00FF00FF)
-            v = (v | (v << np.uint64(4))) & np.uint64(0x0F0F0F0F)
-            v = (v | (v << np.uint64(2))) & np.uint64(0x33333333)
-            v = (v | (v << np.uint64(1))) & np.uint64(0x55555555)
-            return v
+        def _norm_int(center_expr, lo, span):
+            # center coordinate → integer grid cell in [0, m], clamped; NULL geometry → NULL.
+            return (f"CAST(LEAST({float(m)}, GREATEST(0.0, "
+                    f"(({center_expr}) - ({lo!r})) / ({span!r}) * {m})) AS BIGINT)")
 
-        def _udf_zkey(xmin_a, ymin_a, xmax_a, ymax_a):
-            xmin = np.asarray(xmin_a, dtype=np.float64); xmax = np.asarray(xmax_a, dtype=np.float64)
-            ymin = np.asarray(ymin_a, dtype=np.float64); ymax = np.asarray(ymax_a, dtype=np.float64)
-            cx = (xmin + xmax) * 0.5
-            cy = (ymin + ymax) * 0.5
-            bad = ~(np.isfinite(cx) & np.isfinite(cy))
-            ix = np.clip((cx - minx) / spanx * m, 0, m).astype(np.uint64)
-            iy = np.clip((cy - miny) / spany * m, 0, m).astype(np.uint64)
-            z = (_spread(ix) | (_spread(iy) << np.uint64(1))).astype(np.int64)
-            z[bad] = np.iinfo(np.int64).max  # nulls/empties sort to the end
-            return pa.array(z)
-        conn.create_function(
-            "gd_zkey", _udf_zkey, [duckdb.typing.DOUBLE] * 4, duckdb.typing.BIGINT, type="arrow")
+        def _spread_sql(e):
+            # Interleave the low 16 bits of integer expr `e` into even bit positions (Morton spread).
+            e = f"({e} & 65535)"
+            e = f"(({e} | ({e} << 8)) & 16711935)"        # 0x00FF00FF
+            e = f"(({e} | ({e} << 4)) & 252645135)"       # 0x0F0F0F0F
+            e = f"(({e} | ({e} << 2)) & 858993459)"       # 0x33333333
+            e = f"(({e} | ({e} << 1)) & 1431655765)"      # 0x55555555
+            return e
+
+        cx = f"(({ce('xmin')}) + ({ce('xmax')})) * 0.5"
+        cy = f"(({ce('ymin')}) + ({ce('ymax')})) * 0.5"
+        # Full Morton expression inlined into ORDER BY (no subquery / no UDF). DuckDB common-
+        # subexpression-eliminates the repeated normalisation, and it's all native integer math.
+        zkey_sql = (f"({_spread_sql(_norm_int(cx, minx, spanx))}) "
+                    f"| (({_spread_sql(_norm_int(cy, miny, spany))}) << 1)")
 
         # Preserve the original `geo` metadata (geometry_types, CRS) but point covering at cov_col.
         geo_str = json.dumps(
             _build_geo_with_covering(conn, loc, geom_col, cov_col, cov_fields)).replace("'", "''")
 
-        # Sorted write — pure numeric ORDER BY (the bbox column already exists in src_loc).
+        # Sorted write — NATIVE BIGINT Morton ORDER BY (NULLS LAST so null/empty geometries trail).
+        # The bbox covering column already exists in src_loc; SELECT * carries it through.
         conn.execute(
-            f"COPY (SELECT * FROM read_parquet('{src_loc}') "
-            f"ORDER BY gd_zkey({ce('xmin')}, {ce('ymin')}, {ce('xmax')}, {ce('ymax')})) "
+            f"COPY (SELECT * FROM read_parquet('{src_loc}') ORDER BY {zkey_sql} NULLS LAST) "
             f"TO '{local_out}' (FORMAT PARQUET, COMPRESSION ZSTD, "
             f"ROW_GROUP_SIZE {int(row_group_size)}, KV_METADATA {{geo: '{geo_str}'}})")
         fc = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{local_out}')").fetchone()[0]
