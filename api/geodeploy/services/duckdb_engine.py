@@ -425,7 +425,7 @@ def stream_geojsonseq(s3_key: str, out, creds: dict | None = None, bucket: str |
 # or any re-run of an already-prepped file) the parse is skipped ENTIRELY — we sort straight off the
 # existing numeric column.
 
-# Logical bbox subfields, in the order gd_zkey / the extent query expect them.
+# Logical bbox subfields, in the order the Morton key / extent query expect them.
 _BBOX_FIELDS = ("xmin", "ymin", "xmax", "ymax")
 
 
