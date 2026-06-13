@@ -38,12 +38,13 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # app points at via DUCKDB_EXTENSION_DIR; version is derived from the installed duckdb so it can't
 # drift. The final LOAD verifies the baked extension at build time (fails the build if wrong).
 ENV DUCKDB_EXTENSION_DIR=/opt/duckdb_ext
-RUN V="v$(python -c 'import duckdb; print(duckdb.__version__)')" && P=linux_amd64_gcc4 && \
-    mkdir -p "$DUCKDB_EXTENSION_DIR/$V/$P" && \
-    curl --retry 10 --retry-delay 5 --retry-all-errors -fL --max-time 600 \
-      "http://extensions.duckdb.org/$V/$P/httpfs.duckdb_extension.gz" \
-      | gunzip > "$DUCKDB_EXTENSION_DIR/$V/$P/httpfs.duckdb_extension" && \
-    python -c "import duckdb; c=duckdb.connect(); c.execute(\"SET extension_directory='$DUCKDB_EXTENSION_DIR'\"); c.execute('LOAD httpfs'); print('baked httpfs OK')"
+RUN set -eux; \
+    V="v$(python -c 'import duckdb; print(duckdb.__version__)')"; P=linux_amd64_gcc4; \
+    DEST="$DUCKDB_EXTENSION_DIR/$V/$P"; mkdir -p "$DEST"; \
+    curl --retry 15 --retry-delay 5 --retry-all-errors -C - -fL --max-time 900 \
+      -o /tmp/httpfs.gz "http://extensions.duckdb.org/$V/$P/httpfs.duckdb_extension.gz"; \
+    gunzip -c /tmp/httpfs.gz > "$DEST/httpfs.duckdb_extension"; rm -f /tmp/httpfs.gz; \
+    python -c "import duckdb, os; duckdb.connect(config={'extension_directory': os.environ['DUCKDB_EXTENSION_DIR']}).execute('LOAD httpfs'); print('baked httpfs OK')"
 
 # ---
 
