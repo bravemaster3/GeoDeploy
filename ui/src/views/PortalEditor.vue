@@ -212,7 +212,7 @@ onMounted(async () => {
 // new layer first appears; pure style edits rebuild from cached data without a network refetch.
 let deckOverlay = null
 const deckData = {}        // layer_id → cached FeatureCollection for the current view
-const DECK_LIMIT = 100000  // per-viewport feature cap (matches the endpoint's safety cap)
+const DECK_LIMIT = 50000  // per-viewport feature cap (more than the eye resolves; bounds payload)
 
 function hexToRgb(hex) {
   const h = String(hex || '#3b82f6').replace('#', '')

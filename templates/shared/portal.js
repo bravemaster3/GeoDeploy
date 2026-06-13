@@ -215,7 +215,7 @@
       return st && st.visible && (refetch || !st.data);
     }).map(function (d) {
       const url = location.origin + '/api/data/vector/' + d.layer_id +
-        '/features.geojson?bbox=' + encodeURIComponent(bbox) + '&limit=100000';
+        '/features.geojson?bbox=' + encodeURIComponent(bbox) + '&limit=50000';
       return fetch(url).then(function (r) { return r.ok ? r.json() : null; })
         .then(function (j) { if (j) deckState[d.layer_id].data = j; })
         .catch(function () {});

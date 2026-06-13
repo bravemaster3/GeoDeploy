@@ -140,7 +140,8 @@ def _read_geo_metadata(conn: duckdb.DuckDBPyConnection, loc: str) -> dict:
     The metadata bbox + geometry_types (when the writer included them) let us avoid reading any
     geometry at all — the expensive part of inspecting a multi-GB file.
     """
-    out = {"column": None, "epsg": None, "bbox": None, "geometry_types": None, "covering": None}
+    out = {"column": None, "epsg": None, "bbox": None, "geometry_types": None,
+           "covering": None, "grid": None}
     try:
         rows = conn.execute(
             f"SELECT decode(value) FROM parquet_kv_metadata('{loc}') WHERE decode(key) = 'geo'"
@@ -172,6 +173,11 @@ def _read_geo_metadata(conn: duckdb.DuckDBPyConnection, loc: str) -> dict:
             out["covering"] = (col, {k: cov[k][1] for k in ("xmin", "ymin", "xmax", "ymax")})
         except Exception:
             pass
+    # GeoDeploy partition grid (written by partition_with_covering): lets a viewport query open only
+    # the __cell partitions overlapping the bbox instead of every file. {minx,miny,spanx,spany,grid}.
+    g = meta.get("geodeploy:partition")
+    if isinstance(g, dict) and all(k in g for k in ("minx", "miny", "spanx", "spany", "grid")):
+        out["grid"] = g
     return out
 
 
@@ -318,43 +324,71 @@ def query_features_geojson(s3_key: str, bbox=None, limit: int = 50_000, creds: d
         cov_col = meta["covering"][0] if meta.get("covering") else None
         prop_cols = [c for c in all_cols if c != geom_col and c != cov_col]
 
-        where = ""
+        where_parts, qb = [], None
         if bbox and len(bbox) == 4 and meta["covering"]:
             qb = _reproject_bbox(list(bbox), "EPSG:4326", src_epsg)  # filter in the file's CRS
             col, fields = meta["covering"]
             def ce(f):
                 return f"struct_extract({_q(col)}, '{fields[f]}')"
-            where = (f"WHERE {ce('xmin')} <= {qb[2]} AND {ce('xmax')} >= {qb[0]} "
-                     f"AND {ce('ymin')} <= {qb[3]} AND {ce('ymax')} >= {qb[1]}")
+            where_parts.append(f"{ce('xmin')} <= {qb[2]} AND {ce('xmax')} >= {qb[0]} "
+                               f"AND {ce('ymin')} <= {qb[3]} AND {ce('ymax')} >= {qb[1]}")
 
+        # Partition pruning: open only the __cell partitions whose grid cells overlap the bbox
+        # (+1-cell pad for features straddling a boundary) instead of every partition file — this is
+        # what makes a small-bbox query fast when there are hundreds of partitions. Needs the hive
+        # partition column, so read with hive_partitioning=true. Cells mirror the prep grid layout
+        # (cell = ix*grid + iy; see partition_with_covering).
+        read_src = src
+        gm = meta.get("grid")
+        if qb is not None and gm:
+            gsz = int(gm["grid"]); pad = 1
+            def _ci(v, lo, span):
+                return int((v - lo) / (span or 1.0) * gsz)
+            ix0 = max(0, _ci(qb[0], gm["minx"], gm["spanx"]) - pad)
+            ix1 = min(gsz - 1, _ci(qb[2], gm["minx"], gm["spanx"]) + pad)
+            iy0 = max(0, _ci(qb[1], gm["miny"], gm["spany"]) - pad)
+            iy1 = min(gsz - 1, _ci(qb[3], gm["miny"], gm["spany"]) + pad)
+            if ix0 <= ix1 and iy0 <= iy1:
+                cells = [ix * gsz + iy for ix in range(ix0, ix1 + 1) for iy in range(iy0, iy1 + 1)]
+                if len(cells) < gsz * gsz:  # only worth it if a real subset of the grid
+                    read_src = f"read_parquet('{meta_path}', hive_partitioning=true)"
+                    where_parts.append(f"__cell IN ({','.join(str(c) for c in cells)})")
+
+        where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
         sel = ", ".join([f"{_q(geom_col)} AS __wkb"] + [_q(c) for c in prop_cols])
         rows = conn.execute(
-            f"SELECT {sel} FROM {src} {where} LIMIT {limit}").fetchall()
+            f"SELECT {sel} FROM {read_src} {where} LIMIT {limit}").fetchall()
 
-        from shapely import from_wkb, to_geojson
-        transformer = None
+        # Vectorised WKB→GeoJSON: from_wkb / reproject / to_geojson run ONCE over the whole result in
+        # C (GIL released), not per feature. The old per-feature pyproj reprojection made even a few
+        # thousand features on a projected-CRS layer take many seconds. (This bulk reproject also
+        # carries over to the planned GeoArrow transport; only the final to_geojson swaps out.)
+        import numpy as np
+        from shapely import from_wkb, to_geojson, transform as _shp_transform
+        reproject = None
         if src_epsg != "EPSG:4326":
             from pyproj import Transformer
-            transformer = Transformer.from_crs(src_epsg, "EPSG:4326", always_xy=True)
+            _tr = Transformer.from_crs(src_epsg, "EPSG:4326", always_xy=True)
+            def _reproject_coords(coords):
+                x, y = _tr.transform(coords[:, 0], coords[:, 1])
+                return np.column_stack([x, y])
+            reproject = lambda geoms: _shp_transform(geoms, _reproject_coords)
 
+        wkbs = [bytes(r[0]) if r[0] is not None else None for r in rows]
+        geoms = from_wkb(wkbs, on_invalid="ignore")
+        if reproject is not None:
+            geoms = reproject(geoms)
+        gjs = to_geojson(geoms)  # ndarray of GeoJSON strings (None where geometry missing/invalid)
         features = []
-        for r in rows:
-            wkb = r[0]
-            if wkb is None:
+        for i, gj in enumerate(gjs):
+            if not gj:
                 continue
-            try:
-                g = from_wkb(bytes(wkb))
-                if transformer is not None:
-                    from shapely.ops import transform as _shp_transform
-                    g = _shp_transform(lambda x, y, z=None: transformer.transform(x, y), g)
-                geom = json.loads(to_geojson(g))
-            except Exception:
-                continue
-            props = {prop_cols[i]: _jsonable(r[i + 1]) for i in range(len(prop_cols))}
-            features.append({"type": "Feature", "geometry": geom, "properties": props})
+            r = rows[i]
+            props = {prop_cols[j]: _jsonable(r[j + 1]) for j in range(len(prop_cols))}
+            features.append({"type": "Feature", "geometry": json.loads(gj), "properties": props})
 
         return {"type": "FeatureCollection", "features": features,
-                "geodeploy:capped": len(features) >= limit}
+                "geodeploy:capped": len(rows) >= limit}
     finally:
         conn.close()
 
@@ -461,7 +495,8 @@ _BBOX_FIELDS = ("xmin", "ymin", "xmax", "ymax")
 
 def _build_geo_with_covering(conn: duckdb.DuckDBPyConnection, loc: str, geom_col: str,
                              cov_col: str = "bbox",
-                             fields: dict[str, str] | None = None) -> dict:
+                             fields: dict[str, str] | None = None,
+                             partition: dict | None = None) -> dict:
     """Original `geo` metadata + a covering entry pointing at the `cov_col` struct column,
     relabelled to GeoParquet 1.1.0 WKB (covering is a 1.1 feature; 1.1.0/WKB is also spec-clean for
     DuckDB spatial, unlike the original `2.0-dev` tag). `fields` maps each logical bbox corner to the
@@ -484,6 +519,8 @@ def _build_geo_with_covering(conn: duckdb.DuckDBPyConnection, loc: str, geom_col
     col.setdefault("encoding", "WKB")
     col.setdefault("geometry_types", col.get("geometry_types") or [])
     col["covering"] = {"bbox": {f: [cov_col, fields[f]] for f in _BBOX_FIELDS}}
+    if partition:  # custom GeoDeploy key (GeoParquet readers ignore unknown top-level keys)
+        geo["geodeploy:partition"] = partition
     return geo
 
 
@@ -604,9 +641,13 @@ def partition_with_covering(s3_key: str, creds: dict | None = None, out_prefix: 
         cy = f"(({ce('ymin')}) + ({ce('ymax')})) * 0.5"
         cell_sql = f"({_cell(cx, minx, spanx)} * {grid} + {_cell(cy, miny, spany)})"
 
-        # Preserve the original `geo` metadata (geometry_types, CRS) but point covering at cov_col.
+        # Preserve the original `geo` metadata (geometry_types, CRS), point covering at cov_col, and
+        # record the grid so viewport queries can prune to the overlapping __cell partitions.
+        grid_meta = {"minx": float(minx), "miny": float(miny),
+                     "spanx": float(spanx), "spany": float(spany), "grid": int(grid)}
         geo_str = json.dumps(
-            _build_geo_with_covering(conn, src_meta_path, geom_col, cov_col, cov_fields)).replace("'", "''")
+            _build_geo_with_covering(conn, src_meta_path, geom_col, cov_col, cov_fields, grid_meta)
+        ).replace("'", "''")
 
         # Partitioned write to a LOCAL dir (each file gets the geo covering metadata). `__cell` is a
         # Hive partition column → encoded in the path, NOT stored as data. We write locally then
