@@ -31,6 +31,20 @@ COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --timeout 120 --retries 5 -r requirements.txt
 
+# Bake DuckDB's httpfs extension into the image so S3/GeoParquet reads work with NO runtime
+# download. extensions.duckdb.org is often slow/unreachable, and a container recreate wipes
+# DuckDB's ephemeral per-HOME cache — so a fresh `docker compose build` (e.g. on a new VPS) must
+# ship the extension. We curl it (patient --retry, robust to a slow CDN) into a FIXED dir that the
+# app points at via DUCKDB_EXTENSION_DIR; version is derived from the installed duckdb so it can't
+# drift. The final LOAD verifies the baked extension at build time (fails the build if wrong).
+ENV DUCKDB_EXTENSION_DIR=/opt/duckdb_ext
+RUN V="v$(python -c 'import duckdb; print(duckdb.__version__)')" && P=linux_amd64_gcc4 && \
+    mkdir -p "$DUCKDB_EXTENSION_DIR/$V/$P" && \
+    curl --retry 10 --retry-delay 5 --retry-all-errors -fL --max-time 600 \
+      "http://extensions.duckdb.org/$V/$P/httpfs.duckdb_extension.gz" \
+      | gunzip > "$DUCKDB_EXTENSION_DIR/$V/$P/httpfs.duckdb_extension" && \
+    python -c "import duckdb; c=duckdb.connect(); c.execute(\"SET extension_directory='$DUCKDB_EXTENSION_DIR'\"); c.execute('LOAD httpfs'); print('baked httpfs OK')"
+
 # ---
 
 FROM base AS development

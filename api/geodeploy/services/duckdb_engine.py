@@ -25,13 +25,30 @@ _GEOM_TYPE_MAP = {
 }
 
 
+# DuckDB extensions are baked into the image here at build time (see api/Dockerfile) so S3 reads
+# need NO runtime download from the often-slow/unreachable extensions.duckdb.org. Pointing
+# extension_directory here makes LOAD use the baked copy; INSTALL is only a network fallback.
+_DUCKDB_EXT_DIR = os.getenv("DUCKDB_EXTENSION_DIR")
+
+
+def _load_extension(conn: duckdb.DuckDBPyConnection, name: str) -> None:
+    """LOAD a DuckDB extension from the image-baked directory (no network); fall back to INSTALL
+    (which downloads) only if the baked copy is missing."""
+    if _DUCKDB_EXT_DIR:
+        conn.execute(f"SET extension_directory='{_DUCKDB_EXT_DIR}'")
+    try:
+        conn.execute(f"LOAD {name}")
+    except Exception:
+        conn.execute(f"INSTALL {name}; LOAD {name}")
+
+
 def get_connection() -> duckdb.DuckDBPyConnection:
     global _conn
     if _conn is None:
         settings = get_settings()
         _conn = duckdb.connect(":memory:")
-        _conn.execute("INSTALL spatial; LOAD spatial;")
-        _conn.execute("INSTALL httpfs; LOAD httpfs;")
+        _load_extension(_conn, "spatial")
+        _load_extension(_conn, "httpfs")
         _configure_s3(_conn, settings)
     return _conn
 
@@ -69,7 +86,7 @@ def _connect_read(creds: dict | None = None) -> duckdb.DuckDBPyConnection:
     tasks must pass storage creds from SQLite — the worker's env isn't reliably populated (a
     `docker restart` doesn't re-read .env). See notes_for_future §0f."""
     conn = duckdb.connect(":memory:")
-    conn.execute("INSTALL httpfs; LOAD httpfs;")
+    _load_extension(conn, "httpfs")
     if creds:
         _apply_s3(conn, creds.get("endpoint"), creds.get("access_key"),
                   creds.get("secret_key"), creds.get("region"))
