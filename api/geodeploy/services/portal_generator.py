@@ -48,6 +48,15 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                         "radius": dstyle.get("radius", 5),
                         "visible": cfg.get("visible", True),
                         "bbox": json.loads(layer.bbox) if layer.bbox else None,
+                        # Client-side duckdb-wasm read path (root-relative; portal.js
+                        # absolutifies). Only prepped (partitioned-prefix) layers carry a
+                        # manifest; portal.js falls back to the features.geojson endpoint
+                        # when this is null or the manifest fetch fails.
+                        "parquet": ({
+                            "manifest": f"/api/data/vector/{layer.id}/parquet/manifest.json",
+                            "base": f"/api/data/vector/{layer.id}/parquet/",
+                        } if (layer.s3_key
+                              and not layer.s3_key.rstrip("/").endswith(".parquet")) else None),
                     })
                     if layer.bbox:
                         _expand_bounds(bounds, json.loads(layer.bbox))

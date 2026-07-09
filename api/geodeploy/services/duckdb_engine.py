@@ -720,3 +720,69 @@ def partition_with_covering(s3_key: str, creds: dict | None = None, out_prefix: 
                 pass
         shutil.rmtree(local_parts, ignore_errors=True)  # local partition output
         shutil.rmtree(spill_dir, ignore_errors=True)    # this run's DuckDB spill files
+
+
+def build_manifest(s3_key: str, creds: dict | None = None, bucket: str | None = None) -> dict:
+    """Describe a partitioned GeoParquet dataset for clients that cannot list S3 — the portal.js
+    duckdb-wasm viewport reader: the partition grid, CRS, covering column, and each grid cell's
+    object keys (relative to the prefix, served via the public `/parquet/{path}` range proxy).
+    Row counts come from parquet footers (no data scan). Uploaded as `manifest.json` under the
+    prefix by `tasks/geoparquet_prep`; a re-prep writes a new prefix, so a manifest never goes
+    stale for the prefix it lives in."""
+    import re
+    settings = get_settings()
+    bkt = bucket or (creds.get("bucket") if creds else None) or settings.storage_bucket
+    base = s3_key.rstrip("/")
+    if base.endswith(".parquet"):
+        raise ValueError("Manifests are only built for partitioned prefixes.")
+    loc = f"s3://{bkt}/{base}"
+    meta_path, src = _parquet_paths(loc)
+    conn = _connect_read(creds)
+    try:
+        meta = _read_geo_metadata(conn, meta_path)
+        glob_sql = f"{loc}/**/*.parquet".replace("'", "''")
+        files = [r[0] for r in conn.execute(f"SELECT file FROM glob('{glob_sql}')").fetchall()]
+        if not files:
+            raise ValueError(f"No parquet files under {loc}")
+        rows_by_file: dict = {}
+        try:  # per-file row counts from the footers; optional (clients tolerate absence)
+            rows_by_file = dict(conn.execute(
+                f"SELECT file_name, max(num_rows) FROM parquet_file_metadata('{glob_sql}') "
+                "GROUP BY file_name").fetchall())
+        except Exception:
+            logger.warning("build_manifest: %s — row counts unavailable", base, exc_info=True)
+
+        cov = meta.get("covering")
+        cov_col = cov[0] if cov else None
+        desc = conn.execute(f"DESCRIBE SELECT * FROM {src}").fetchall()
+        columns = [{"name": r[0], "type": (r[1] or "").lower()} for r in desc
+                   if r[0] != meta.get("column") and r[0] != cov_col]
+
+        full_prefix = f"s3://{bkt}/{base}/"
+        cells: dict[str, list] = {}
+        total = 0
+        for f in files:
+            rel = f[len(full_prefix):] if f.startswith(full_prefix) else f
+            m = re.search(r"__cell=(\d+)/", rel)
+            cell = m.group(1) if m else "0"
+            entry: dict = {"key": rel}
+            n = rows_by_file.get(f)
+            if n is not None:
+                entry["rows"] = int(n)
+                total += int(n)
+            cells.setdefault(cell, []).append(entry)
+
+        return {
+            "version": 1,
+            "crs": meta.get("epsg") or "EPSG:4326",
+            "geometry_column": meta.get("column"),
+            "geometry_types": meta.get("geometry_types"),
+            "bbox": meta.get("bbox"),  # in the dataset's own CRS (from the geo metadata)
+            "covering": {"column": cov[0], "fields": cov[1]} if cov else None,
+            "grid": meta.get("grid"),  # {minx,miny,spanx,spany,grid} — mirrors query_features_geojson
+            "feature_count": total or None,
+            "columns": columns,
+            "cells": cells,  # cell number → [{key, rows}] relative to the prefix
+        }
+    finally:
+        conn.close()

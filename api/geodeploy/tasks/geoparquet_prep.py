@@ -21,14 +21,29 @@ from .vector_ingest import _update_job, _update_layer
 logger = logging.getLogger(__name__)
 
 
-def _delete_s3_location(creds: dict, key: str) -> None:
-    """Delete a single `.parquet` object, or every object under a prefix (partitioned dataset)."""
+def _s3_client(creds: dict):
     import boto3
     from botocore.client import Config
-    s3 = boto3.client(
+    return boto3.client(
         "s3", endpoint_url=creds["endpoint"],
         aws_access_key_id=creds["access_key"], aws_secret_access_key=creds["secret_key"],
         region_name=creds["region"], config=Config(signature_version="s3v4"))
+
+
+def _write_manifest(creds: dict, prefix: str) -> None:
+    """Build + upload `manifest.json` under the partitioned prefix — the partition/cell map the
+    portal.js duckdb-wasm client needs (a browser cannot LIST S3; it can only fetch keys it can
+    name through the public `/parquet/{path}` range proxy)."""
+    from ..services import duckdb_engine
+    manifest = duckdb_engine.build_manifest(prefix, creds)
+    _s3_client(creds).put_object(
+        Bucket=creds["bucket"], Key=prefix.rstrip("/") + "/manifest.json",
+        Body=json.dumps(manifest).encode(), ContentType="application/json")
+
+
+def _delete_s3_location(creds: dict, key: str) -> None:
+    """Delete a single `.parquet` object, or every object under a prefix (partitioned dataset)."""
+    s3 = _s3_client(creds)
     bkt = creds["bucket"]
     if key.rstrip("/").endswith(".parquet"):
         s3.delete_object(Bucket=bkt, Key=key)
@@ -85,6 +100,14 @@ def prepare_geoparquet(self, layer_id, s3_key, job_id=None):
             error_message=None,
             updated_at=datetime.now(timezone.utc).isoformat(),
         )
+        # Manifest for the browser-side duckdb-wasm reader. Non-fatal: without it, portal.js falls
+        # back to the server features.geojson endpoint for this layer.
+        try:
+            _write_manifest(creds, new_key)
+        except Exception:
+            logger.warning("prepare_geoparquet: layer %s — manifest write failed "
+                           "(portal.js will use the server fallback)", layer_id, exc_info=True)
+
         # Delete the original upload now that the layer points at the new partitioned prefix.
         if new_key != s3_key:
             try:

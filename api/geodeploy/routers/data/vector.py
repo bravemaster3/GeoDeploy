@@ -363,6 +363,52 @@ async def vector_pmtiles(layer_id: int, request: Request, db: AsyncSession = Dep
                              media_type="application/octet-stream", headers=headers)
 
 
+@router.get("/{layer_id}/parquet/{path:path}")
+async def vector_parquet_object(layer_id: int, path: str, request: Request,
+                                db: AsyncSession = Depends(get_db)):
+    """PUBLIC range proxy for a prepared GeoParquet layer's objects — `manifest.json` plus the
+    `__cell=N/*.parquet` partition files — so the portal.js duckdb-wasm client can read parquet
+    row groups via HTTP Range requests. Public + same-origin like `/pmtiles` (published portals
+    are unauthenticated; bucket creds stay server-side). The layer id addresses ONLY keys under
+    that layer's own prefix: S3 keys are literal strings, so the prefix join below cannot escape
+    it ('..' is rejected anyway as defense-in-depth)."""
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    layer = result.scalar_one_or_none()
+    if (not layer or layer.storage_backend != "geoparquet" or not layer.s3_key
+            or layer.s3_key.rstrip("/").endswith(".parquet")):  # unprepped single file: no manifest
+        raise HTTPException(404, "No parquet dataset for this layer.")
+    if not path or ".." in path.split("/"):
+        raise HTTPException(404, "Not found.")
+
+    settings = get_settings()
+    from ...services.minio import get_s3_client
+    s3 = get_s3_client()
+    params = {"Bucket": settings.storage_bucket, "Key": f"{layer.s3_key.rstrip('/')}/{path}"}
+    rng = request.headers.get("range")
+    if rng:
+        params["Range"] = rng
+    try:
+        obj = await run_in_threadpool(lambda: s3.get_object(**params))
+    except Exception:
+        raise HTTPException(404, "Object not found.")
+
+    # Partition files under a parts-<hex> prefix are immutable (a re-prep mints a NEW prefix), so
+    # the browser may cache them hard — that's what makes repeat pans/visits cheap. The manifest
+    # can be regenerated in place (backfill), so it gets a shorter TTL.
+    cache = ("public, max-age=86400, immutable" if path.endswith(".parquet")
+             else "public, max-age=3600")
+    headers = {"Accept-Ranges": "bytes", "Cache-Control": cache}
+    status = 200
+    if obj.get("ContentRange"):
+        headers["Content-Range"] = obj["ContentRange"]
+        status = 206
+    if obj.get("ContentLength") is not None:
+        headers["Content-Length"] = str(obj["ContentLength"])
+    media = "application/json" if path.endswith(".json") else "application/octet-stream"
+    return StreamingResponse(obj["Body"].iter_chunks(256 * 1024), status_code=status,
+                             media_type=media, headers=headers)
+
+
 @router.put("/{layer_id}/default-style", response_model=VectorLayerOut)
 async def save_default_style(
     layer_id: int,

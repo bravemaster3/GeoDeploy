@@ -43,6 +43,10 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   the original upload** (re-prep = read old → write new → delete old; layer delete removes the whole
   prefix). Then re-inspects (covering column dropped from catalog columns) and marks layer + job ready.
   Chained from `geoparquet_import` (auto on upload) and triggerable via `POST /data/vector/{id}/prepare`.
+  After the repoint it uploads **`manifest.json`** under the prefix (`_write_manifest` →
+  `duckdb_engine.build_manifest`): the partition grid + cell→file map the **browser duckdb-wasm client**
+  needs (a browser can't LIST S3), served via the public `GET /data/vector/{id}/parquet/{path}` range proxy.
+  Manifest failure is non-fatal (warning) — portal.js falls back to the server features.geojson endpoint.
   Requires `pyarrow`; creds from SQLite (§0f). **Tunable without an image rebuild (celery env):**
   `PREP_MEMORY_LIMIT` (default `4GB`, spills to a per-run temp dir), `PREP_BBOX_CHUNK` (shapely geometries
   per UDF slice, default `50000`), `PREP_PARTITION_GRID` (default 16 → 256 cells),
