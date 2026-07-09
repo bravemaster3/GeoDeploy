@@ -33,18 +33,24 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   `geoparquet_prep.prepare_geoparquet`** (which marks the layer + job ready when the spatial prep
   finishes). Storage creds from SQLite (§0f). Sets `storage_backend='geoparquet'` + `s3_key`. No longer
   auto-tiles to PMTiles (display is moving to deck.gl over the prepared GeoParquet — see `geoparquet_prep`).
-- `geoparquet_prep.py` — `prepare_geoparquet(layer_id, s3_key, job_id=None)`: rewrites the GeoParquet
-  **Z-order-sorted (Morton) by bbox centre with a GeoParquet 1.1 `bbox` covering column**
-  (`duckdb_engine.sort_with_covering`) so DuckDB prunes row-groups on a bbox filter — fast analysis AND
-  the deck.gl viewport feed (`query_features_geojson`). The file STAYS GeoParquet (no PostGIS, no
-  PMTiles); **overwrites the object in place** (`out_key==s3_key`) so the catalog key is stable and
-  re-running is idempotent. Then re-inspects (the covering column is dropped from catalog columns) and
-  marks layer + job ready. Chained from `geoparquet_import` (auto on upload) and triggerable via
-  `POST /data/vector/{id}/prepare`. Requires `pyarrow` (vectorised arrow UDFs); creds from SQLite (§0f).
-  **Tunable without an image rebuild:** `PREP_MEMORY_LIMIT` (DuckDB RAM cap, default `4GB`, spills to
-  `data/temp`) and `PREP_BBOX_CHUNK` (shapely geometries parsed per UDF slice, default `50000`) — set
-  these in celery's env to retune on a small VPS. The prep now parses geometry WKB **at most once**
-  (was twice → the OOM risk on the 9.5 M-polygon file); see `duckdb_engine.sort_with_covering`.
+- `geoparquet_prep.py` — `prepare_geoparquet(layer_id, s3_key, job_id=None)`: rewrites the GeoParquet as a
+  **spatially-partitioned dataset with a GeoParquet 1.1 `bbox` covering column**
+  (`duckdb_engine.partition_with_covering` — replaced the total Z-order sort 2026-06-12; the sort hung for
+  hours on the 9.5 M-polygon file). Output is a PREFIX of `__cell=N/*.parquet` hive files carrying the
+  covering + a `geodeploy:partition` grid key, so `query_features_geojson` prunes both row-groups (covering)
+  and whole partition files (grid → `__cell IN`). The data STAYS GeoParquet (no PostGIS, no PMTiles);
+  written to a NEW `parts-<hex>/` prefix, then the task **repoints `layer.s3_key` to the prefix and deletes
+  the original upload** (re-prep = read old → write new → delete old; layer delete removes the whole
+  prefix). Then re-inspects (covering column dropped from catalog columns) and marks layer + job ready.
+  Chained from `geoparquet_import` (auto on upload) and triggerable via `POST /data/vector/{id}/prepare`.
+  Requires `pyarrow`; creds from SQLite (§0f). **Tunable without an image rebuild (celery env):**
+  `PREP_MEMORY_LIMIT` (default `4GB`, spills to a per-run temp dir), `PREP_BBOX_CHUNK` (shapely geometries
+  per UDF slice, default `50000`), `PREP_PARTITION_GRID` (default 16 → 256 cells),
+  `PREP_EXTENT_QUANTILE` (default 0.005 — percentile grid extent so outliers don't collapse the grid).
+  WKB is parsed **at most once**; an existing covering column skips the parse. **Layers prepped before
+  commit 2d77499 lack the grid metadata → re-prep.** Status 2026-06-13: committed but the WSL validation
+  loop (re-prep layer 6, timing, viewport speed, deck.gl render) was never run — see §0h RESUME CHECKLIST
+  in `notes_temp/notes_for_future.md`.
 - `pmtiles_tile.py` — `tile_geoparquet(layer_id, s3_key, pmtiles_key)`: the GeoParquet **display** path.
   Runs **tippecanoe** (built into the image, `/dev/stdin`, `-l geodeploy`, **`-z12` capped max zoom**
   `--coalesce-densest-as-needed --simplification 10`) fed by a thread streaming `duckdb_engine.stream_geojsonseq` (GeoParquet →
@@ -89,4 +95,4 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
-2026-06-11
+2026-07-09 (docs only — geoparquet_prep entry updated to the partitioning pivot)

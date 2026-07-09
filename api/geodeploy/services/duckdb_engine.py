@@ -134,17 +134,40 @@ def _crs_to_epsg(crs) -> str | None:
     return None
 
 
+# Parsed 'geo' metadata per metadata_path. Safe to cache in-process: a partitioned prefix is
+# immutable (a re-prep writes a NEW parts-<hex> prefix and the layer's s3_key is repointed), and
+# single-file uploads land under a fresh uuid dir — so a given path's metadata never changes.
+# Only successful parses are cached, so a transient S3 failure is retried next call.
+_GEO_META_CACHE: dict[str, dict] = {}
+_GEO_META_CACHE_MAX = 128
+
+
+def _meta_probe_path(conn: duckdb.DuckDBPyConnection, loc: str) -> str:
+    """Resolve a glob metadata path to ONE concrete file. Every partition file carries the same
+    'geo' blob by construction (partition_with_covering attaches it to each file), but
+    parquet_kv_metadata over the glob opens EVERY footer over S3 — ~15 s on a 370-file prefix,
+    which dominated small viewport queries. glob() is a cheap LIST instead."""
+    if "*" not in loc:
+        return loc
+    row = conn.execute(f"SELECT file FROM glob('{loc}') LIMIT 1").fetchone()
+    return row[0].replace("'", "''") if row else loc
+
+
 def _read_geo_metadata(conn: duckdb.DuckDBPyConnection, loc: str) -> dict:
     """Parse the GeoParquet 'geo' key → {column, epsg, bbox, geometry_types}.
 
     The metadata bbox + geometry_types (when the writer included them) let us avoid reading any
     geometry at all — the expensive part of inspecting a multi-GB file.
     """
+    cached = _GEO_META_CACHE.get(loc)
+    if cached is not None:
+        return dict(cached)
     out = {"column": None, "epsg": None, "bbox": None, "geometry_types": None,
            "covering": None, "grid": None}
     try:
         rows = conn.execute(
-            f"SELECT decode(value) FROM parquet_kv_metadata('{loc}') WHERE decode(key) = 'geo'"
+            f"SELECT decode(value) FROM parquet_kv_metadata('{_meta_probe_path(conn, loc)}') "
+            "WHERE decode(key) = 'geo'"
         ).fetchall()
     except Exception:
         return out
@@ -178,6 +201,9 @@ def _read_geo_metadata(conn: duckdb.DuckDBPyConnection, loc: str) -> dict:
     g = meta.get("geodeploy:partition")
     if isinstance(g, dict) and all(k in g for k in ("minx", "miny", "spanx", "spany", "grid")):
         out["grid"] = g
+    if len(_GEO_META_CACHE) >= _GEO_META_CACHE_MAX:
+        _GEO_META_CACHE.clear()  # a handful of tiny dicts; a reset beats LRU bookkeeping
+    _GEO_META_CACHE[loc] = dict(out)
     return out
 
 
