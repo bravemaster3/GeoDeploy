@@ -350,7 +350,10 @@
   // would fetch hundreds of footers; the server response is tens of MB). Instead the layer
   // renders as a density-shaded partition-grid overview built from the manifest's per-cell
   // counts — instant, zero data reads. Zooming in drops under the cap and details load.
-  const WASM_MAX_FILES = 48;
+  // Kept small: duckdb-wasm's range reads are SERIAL sync-XHRs from the worker, so per-pan
+  // cost scales with file count × per-request latency. Keep equal to the editor's
+  // DECK_MAX_FILES so both surfaces switch to detail at the same moment.
+  const WASM_MAX_FILES = 16;
 
   // Partition file keys under a viewport bbox (via the manifest grid).
   function filesUnderViewport(m, bbox) {

@@ -375,6 +375,27 @@ async def vector_pmtiles(layer_id: int, request: Request, db: AsyncSession = Dep
                              media_type="application/octet-stream", headers=headers)
 
 
+# layer_id → s3_key prefix for the parquet range proxy. Cached because duckdb-wasm issues MANY
+# small range requests per map pan and an ORM SELECT per request starved the api. A re-prep
+# repoints s3_key to a NEW parts-<hex> prefix — handled by the miss-refresh in the route (a
+# stale prefix's objects are deleted, so the fetch fails, the entry is dropped and re-read).
+_PARQUET_PREFIX_CACHE: dict[int, str] = {}
+
+
+async def _parquet_prefix(layer_id: int, db: AsyncSession) -> str | None:
+    cached = _PARQUET_PREFIX_CACHE.get(layer_id)
+    if cached is not None:
+        return cached
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    layer = result.scalar_one_or_none()
+    if (not layer or layer.storage_backend != "geoparquet" or not layer.s3_key
+            or layer.s3_key.rstrip("/").endswith(".parquet")):  # unprepped single file: no manifest
+        return None
+    prefix = layer.s3_key.rstrip("/")
+    _PARQUET_PREFIX_CACHE[layer_id] = prefix
+    return prefix
+
+
 @router.get("/{layer_id}/parquet/{path:path}")
 async def vector_parquet_object(layer_id: int, path: str, request: Request,
                                 db: AsyncSession = Depends(get_db)):
@@ -383,26 +404,37 @@ async def vector_parquet_object(layer_id: int, path: str, request: Request,
     row groups via HTTP Range requests. Public + same-origin like `/pmtiles` (published portals
     are unauthenticated; bucket creds stay server-side). The layer id addresses ONLY keys under
     that layer's own prefix: S3 keys are literal strings, so the prefix join below cannot escape
-    it ('..' is rejected anyway as defense-in-depth)."""
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
-    layer = result.scalar_one_or_none()
-    if (not layer or layer.storage_backend != "geoparquet" or not layer.s3_key
-            or layer.s3_key.rstrip("/").endswith(".parquet")):  # unprepped single file: no manifest
-        raise HTTPException(404, "No parquet dataset for this layer.")
+    it ('..' is rejected anyway as defense-in-depth). HOT PATH: this route is hit dozens of times
+    per map pan — keep it off the DB (prefix cache) and reuse the cached boto3 client."""
     if not path or ".." in path.split("/"):
         raise HTTPException(404, "Not found.")
+    prefix = await _parquet_prefix(layer_id, db)
+    if not prefix:
+        raise HTTPException(404, "No parquet dataset for this layer.")
 
     settings = get_settings()
     from ...services.minio import get_s3_client
     s3 = get_s3_client()
-    params = {"Bucket": settings.storage_bucket, "Key": f"{layer.s3_key.rstrip('/')}/{path}"}
     rng = request.headers.get("range")
-    if rng:
-        params["Range"] = rng
+
+    def _get(pfx: str):
+        params = {"Bucket": settings.storage_bucket, "Key": f"{pfx}/{path}"}
+        if rng:
+            params["Range"] = rng
+        return s3.get_object(**params)
+
     try:
-        obj = await run_in_threadpool(lambda: s3.get_object(**params))
+        obj = await run_in_threadpool(_get, prefix)
     except Exception:
-        raise HTTPException(404, "Object not found.")
+        # The cached prefix may be stale (re-prep repointed the layer): refresh once and retry.
+        _PARQUET_PREFIX_CACHE.pop(layer_id, None)
+        fresh = await _parquet_prefix(layer_id, db)
+        if not fresh or fresh == prefix:
+            raise HTTPException(404, "Object not found.")
+        try:
+            obj = await run_in_threadpool(_get, fresh)
+        except Exception:
+            raise HTTPException(404, "Object not found.")
 
     # Partition files under a parts-<hex> prefix are immutable (a re-prep mints a NEW prefix), so
     # the browser may cache them hard — that's what makes repeat pans/visits cheap. The manifest

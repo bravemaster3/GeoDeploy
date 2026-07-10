@@ -225,7 +225,7 @@ function deckLimit() {
 // a density-shaded partition-grid overview built from the layer's manifest (per-cell counts —
 // instant, zero data reads) instead of per-feature detail; zooming in loads real features.
 // LIGHT layers (total features ≤ DECK_DETAIL_MAX) always show full detail at every zoom.
-const DECK_MAX_FILES = 48
+const DECK_MAX_FILES = 16  // keep equal to portal.js WASM_MAX_FILES (same switch moment)
 const DECK_DETAIL_MAX = 50000
 const deckManifests = {}   // layer_id → manifest object | 'none'
 

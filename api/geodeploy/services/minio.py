@@ -113,14 +113,23 @@ def _ensure_bucket(s3, bucket: str) -> None:
             raise
 
 
+# boto3 client construction costs ~100ms of CPU; the parquet range proxy serves dozens of tiny
+# range requests per map pan, so a client-per-call burned the api at 100%+ CPU and pushed
+# individual range requests to seconds. Clients are thread-safe for concurrent operations
+# (boto3 docs) — cache one per credential set (keyed so a setup-wizard change takes effect).
+_client_cache: dict[tuple, object] = {}
+
+
 def get_s3_client():
     settings = get_settings()
-    return _make_client(
-        settings.storage_endpoint,
-        settings.storage_access_key,
-        settings.storage_secret_key,
-        settings.storage_region,
-    )
+    key = (settings.storage_endpoint, settings.storage_access_key,
+           settings.storage_secret_key, settings.storage_region)
+    client = _client_cache.get(key)
+    if client is None:
+        client = _make_client(*key)
+        _client_cache.clear()  # one live credential set at a time
+        _client_cache[key] = client
+    return client
 
 
 def presigned_upload_url(key: str, expires: int = 3600) -> str:
