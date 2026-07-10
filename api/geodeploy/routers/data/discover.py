@@ -245,6 +245,11 @@ async def discover_storage(user: User = Depends(get_current_user), db: AsyncSess
         paginator = s3.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=settings.storage_bucket):
             for obj in page.get("Contents", []):
+                # Skip GeoDeploy's OWN upload areas — those objects were created by the upload
+                # pipelines and already live in My Data (same reasoning as the geodeploy_u%
+                # schema exclusion in discover/database).
+                if obj["Key"].startswith(("rasters/", "vectors/")):
+                    continue
                 low = obj["Key"].lower()
                 if low.endswith((".tif", ".tiff")):
                     found.append({"key": obj["Key"], "size": obj["Size"], "kind": "raster"})

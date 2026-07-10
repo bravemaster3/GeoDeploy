@@ -536,11 +536,14 @@ async def delete_layer(
         # GeoParquet layers live as files on object storage, no PostGIS table. After spatial prep,
         # s3_key is a PREFIX (a partitioned dataset of __cell=N/*.parquet files); before prep it's a
         # single .parquet. Also remove any .pmtiles fallback archive.
+        # DETACH vs DELETE: only objects under GeoDeploy's OWN `vectors/` area are deleted —
+        # that's where uploads land. A layer attached via import-existing points at someone
+        # else's key; deleting the catalog entry must NOT destroy their file (attach-don't-copy).
         from ...services.minio import get_s3_client
         s3 = get_s3_client()
         b = settings.storage_bucket
         for key in (layer.s3_key, layer.pmtiles_key):
-            if not key:
+            if not key or not key.startswith("vectors/"):
                 continue
             try:
                 if key.rstrip("/").endswith((".parquet", ".pmtiles")):
@@ -557,7 +560,11 @@ async def delete_layer(
                         s3.delete_objects(Bucket=b, Delete={"Objects": batch})
             except Exception:
                 pass
-    elif layer.status == "ready":
+    elif layer.status == "ready" and (layer.schema_name or "").startswith("geodeploy_u"):
+        # DROP only tables GeoDeploy itself created (they live in its per-user schema). A table
+        # in any OTHER schema was ATTACHED via import-existing — "import" means LISTING, not
+        # copying (user decision 2026-07-10), so deleting the layer just unlists it and the
+        # source table stays untouched (and reappears in Import existing).
         import asyncpg
         try:
             # asyncpg wants the plain postgresql:// DSN (not the +asyncpg SQLAlchemy form);

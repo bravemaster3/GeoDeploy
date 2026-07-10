@@ -224,19 +224,17 @@ async def delete_layer(layer_id: int, user: User = Depends(get_current_user), db
         raise HTTPException(404, "Layer not found.")
 
     settings = get_settings()
-    try:
-        import boto3
-        from botocore.client import Config
-        s3 = boto3.client(
-            "s3",
-            endpoint_url=settings.storage_endpoint,
-            aws_access_key_id=settings.storage_access_key,
-            aws_secret_access_key=settings.storage_secret_key,
-            config=Config(signature_version="s3v4"),
-        )
-        s3.delete_object(Bucket=settings.storage_bucket, Key=layer.s3_key)
-    except Exception:
-        pass
+    # DETACH vs DELETE: only objects under GeoDeploy's OWN `rasters/` upload area are removed.
+    # A COG attached via import-existing points at a pre-existing bucket key — "import" means
+    # LISTING, not copying (user decision 2026-07-10): deleting the layer unlists it, the file
+    # stays, and it reappears in Import existing.
+    if (layer.s3_key or "").startswith("rasters/"):
+        try:
+            from ...services.minio import get_s3_client
+            s3 = get_s3_client()
+            s3.delete_object(Bucket=settings.storage_bucket, Key=layer.s3_key)
+        except Exception:
+            pass
 
     await db.delete(layer)
     await db.commit()
