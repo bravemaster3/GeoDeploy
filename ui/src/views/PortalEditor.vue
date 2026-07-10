@@ -107,15 +107,50 @@
              each layer's catalog metadata and public data links -->
         <section>
           <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">About this portal</p>
-          <textarea v-model="description" rows="5"
-            class="w-full text-xs border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-brand-400"
-            placeholder="Documentation shown to portal visitors (About panel). Markdown supported: # headings, **bold**, [links](https://…), - lists."
-          ></textarea>
+          <p v-if="description" class="text-xs text-gray-600 line-clamp-3 whitespace-pre-line mb-2">{{ description }}</p>
+          <p v-else class="text-xs text-gray-400 italic mb-2">No documentation yet.</p>
+          <button type="button" @click="showAboutEditor = true"
+            class="w-full text-xs font-medium border border-gray-200 hover:border-brand-400 text-gray-700 rounded px-2 py-1.5">
+            {{ description ? 'Edit About page' : 'Write the About page' }}
+          </button>
           <p class="text-[10px] text-gray-400 mt-1">
-            Visitors also see each layer's abstract, license and public data links (set them via the
-            globe icon in My Data).
+            Shown to portal visitors, together with each layer's abstract, license and public data
+            links (set those via the globe icon in My Data).
           </p>
         </section>
+
+        <!-- About page editor: large markdown editor with live preview -->
+        <Teleport to="body">
+          <div v-if="showAboutEditor"
+            class="fixed inset-0 bg-gray-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div class="card w-full max-w-4xl p-6 shadow-2xl flex flex-col" style="max-height: 88vh">
+              <div class="flex items-center justify-between mb-3">
+                <h2 class="text-lg font-semibold">About this portal</h2>
+                <button @click="showAboutEditor = false"
+                  class="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+              </div>
+              <div class="grid grid-cols-2 gap-4 flex-1 min-h-0" style="min-height: 380px">
+                <div class="flex flex-col min-h-0">
+                  <label for="portal-about-md" class="text-xs text-gray-500 mb-1">Markdown</label>
+                  <textarea id="portal-about-md" name="portal-about-md" v-model="description"
+                    class="flex-1 w-full text-sm font-mono border border-gray-200 rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-brand-400 resize-none"
+                    placeholder="# Heading&#10;&#10;Describe the portal, the data, methods, contacts…&#10;&#10;- **bold**, *italic*, `code`&#10;- [links](https://example.org)"></textarea>
+                </div>
+                <div class="flex flex-col min-h-0">
+                  <span class="text-xs text-gray-500 mb-1">Preview (what portal visitors see)</span>
+                  <div class="flex-1 overflow-y-auto border border-gray-100 bg-gray-50 rounded px-4 py-3 text-sm gd-md-preview"
+                    v-html="aboutPreview"></div>
+                </div>
+              </div>
+              <p class="text-[10px] text-gray-400 mt-2">
+                Remember to Save changes and re-publish for visitors to see the new text.
+              </p>
+              <div class="flex justify-end gap-3 pt-2">
+                <button @click="showAboutEditor = false" class="btn-secondary text-sm">Done</button>
+              </div>
+            </div>
+          </div>
+        </Teleport>
 
       </div>
 
@@ -202,6 +237,33 @@ const accessPassword = ref('')
 const busy = ref(false)
 const saveMsg = ref(null)
 const description = ref('')  // About-panel documentation (markdown), baked at publish
+const showAboutEditor = ref(false)
+
+// Minimal SAFE markdown → HTML, kept in sync with templates/shared/portal.js::mdToHtml (the
+// published renderer): everything escaped first, then a small vocabulary re-introduced.
+function mdToHtml(md) {
+  const esc = String(md).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const inline = (s) => s
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+|\/[^)\s]*)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+  return esc.split(/\n{2,}/).map((block) => {
+    const lines = block.split('\n')
+    if (lines.every((l) => /^\s*[-*] /.test(l) || !l.trim())) {
+      return '<ul>' + lines.filter((l) => l.trim())
+        .map((l) => '<li>' + inline(l.replace(/^\s*[-*] /, '')) + '</li>').join('') + '</ul>'
+    }
+    const h = block.match(/^(#{1,3}) (.+)$/m)
+    if (h && lines.length === 1) {
+      const level = h[1].length + 1
+      return `<h${level}>` + inline(h[2]) + `</h${level}>`
+    }
+    return '<p>' + inline(block).replace(/\n/g, '<br>') + '</p>'
+  }).join('')
+}
+const aboutPreview = computed(() =>
+  description.value ? mdToHtml(description.value) : '<p class="text-gray-400 italic">Nothing yet…</p>')
 
 const accessOptions = [
   { value: 'public',   label: 'Public',   desc: 'Anyone with the URL can view' },
@@ -792,3 +854,14 @@ async function handlePublish() {
   }
 }
 </script>
+
+<style scoped>
+/* Tailwind preflight strips heading/list styling — restore it inside the About markdown preview
+   so it matches what the published portal's About panel renders. */
+.gd-md-preview :deep(h2) { font-size: 1.05rem; font-weight: 600; margin: .6rem 0 .3rem; }
+.gd-md-preview :deep(h3), .gd-md-preview :deep(h4) { font-size: .95rem; font-weight: 600; margin: .5rem 0 .25rem; }
+.gd-md-preview :deep(p) { margin: .3rem 0; }
+.gd-md-preview :deep(ul) { list-style: disc; margin: .3rem 0 .3rem 1.2rem; }
+.gd-md-preview :deep(a) { color: #2563eb; text-decoration: underline; }
+.gd-md-preview :deep(code) { font-size: .8rem; background: #eef2f7; border: 1px solid #e2e8f0; border-radius: 4px; padding: 0 3px; }
+</style>

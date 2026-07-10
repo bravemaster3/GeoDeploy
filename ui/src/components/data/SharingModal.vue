@@ -17,25 +17,25 @@
       <!-- Share toggle -->
       <label class="flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors"
         :class="form.is_public ? 'border-emerald-300 bg-emerald-50' : 'border-gray-200'">
-        <input type="checkbox" v-model="form.is_public" class="w-4 h-4 accent-emerald-600" />
+        <input id="gd-share-public" name="gd-share-public" type="checkbox" v-model="form.is_public" class="w-4 h-4 accent-emerald-600" />
         <span class="text-sm font-medium">{{ form.is_public ? 'Shared in the public catalog' : 'Not shared (private)' }}</span>
       </label>
 
       <div>
         <label class="text-xs text-gray-500 block mb-1">Abstract</label>
-        <textarea v-model="form.abstract" rows="3" class="input w-full text-sm"
+        <textarea id="gd-share-abstract" name="gd-share-abstract" v-model="form.abstract" rows="3" class="input w-full text-sm"
           placeholder="What is this dataset? Coverage, vintage, method…"></textarea>
       </div>
 
       <div>
         <label class="text-xs text-gray-500 block mb-1">Keywords <span class="text-gray-400">(comma-separated)</span></label>
-        <input v-model="form.keywords" type="text" class="input w-full text-sm" placeholder="landcover, france, 2018" />
+        <input id="gd-share-keywords" name="gd-share-keywords" v-model="form.keywords" type="text" class="input w-full text-sm" placeholder="landcover, france, 2018" />
       </div>
 
       <div class="grid grid-cols-2 gap-3">
         <div>
           <label class="text-xs text-gray-500 block mb-1">License</label>
-          <input v-model="form.license" type="text" list="gd-licenses" class="input w-full text-sm" placeholder="CC-BY-4.0" />
+          <input id="gd-share-license" name="gd-share-license" v-model="form.license" type="text" list="gd-licenses" class="input w-full text-sm" placeholder="CC-BY-4.0" />
           <datalist id="gd-licenses">
             <option value="CC-BY-4.0" /><option value="CC-BY-SA-4.0" /><option value="CC0-1.0" />
             <option value="ODbL-1.0" /><option value="proprietary" />
@@ -43,7 +43,7 @@
         </div>
         <div>
           <label class="text-xs text-gray-500 block mb-1">Attribution</label>
-          <input v-model="form.attribution" type="text" class="input w-full text-sm" placeholder="© Provider" />
+          <input id="gd-share-attribution" name="gd-share-attribution" v-model="form.attribution" type="text" class="input w-full text-sm" placeholder="© Provider" />
         </div>
       </div>
 

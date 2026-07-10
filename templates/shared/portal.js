@@ -814,7 +814,9 @@
     const overlay = document.createElement('div');
     overlay.id = 'gd-about-overlay';
     let html = '<div id="gd-about-panel"><button id="gd-about-close" aria-label="Close">&times;</button>';
-    html += '<h1>' + escAbout(TITLE || 'About') + '</h1>';
+    // NOTE: the top-of-file TITLE const lives in the access-gate IIFE, a different closure —
+    // read the global directly here.
+    html += '<h1>' + escAbout((window.GEODEPLOY && window.GEODEPLOY.title) || 'About') + '</h1>';
     if (desc) html += '<div class="gd-about-desc">' + mdToHtml(desc) + '</div>';
     if (hasLayerDocs) {
       html += '<h2 class="gd-about-layers-title">Layers &amp; data</h2>';
