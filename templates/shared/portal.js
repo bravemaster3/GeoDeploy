@@ -355,13 +355,20 @@
   // DECK_MAX_FILES so both surfaces switch to detail at the same moment.
   const WASM_MAX_FILES = 16;
 
-  // Partition file keys under a viewport bbox (via the manifest grid).
-  function filesUnderViewport(m, bbox) {
+  // Partition files AND total row count under a viewport bbox (via the manifest grid). The row
+  // count is the real cost driver of a detail query: at mid zooms a viewport can span few files
+  // but hundreds of thousands of dense features, and each such server query takes 10-25 s —
+  // that band must show the overview too.
+  function viewportLoad(m, bbox) {
     const files = [];
+    let rows = 0;
     cellsForBbox(m.grid, bbox).forEach(function (c) {
-      (m.cells[String(c)] || []).forEach(function (f) { files.push(String(f.key)); });
+      (m.cells[String(c)] || []).forEach(function (f) {
+        files.push(String(f.key));
+        rows += f.rows || 0;
+      });
     });
-    return files;
+    return { files: files, rows: rows };
   }
 
   // Density-shaded grid rectangles from the manifest (per-cell feature counts) — the
@@ -434,15 +441,26 @@
   }
 
   function serverViewportGeojson(d, bbox, limit) {
+    // Abort the layer's previous in-flight fetch: its result would be discarded by the sequence
+    // token anyway, and rapid zoom-outs otherwise stack several heavy queries in the browser.
+    const prev = gdWasm.aborters && gdWasm.aborters[d.layer_id];
+    if (prev) { try { prev.abort(); } catch (e) { /* already settled */ } }
+    const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+    (gdWasm.aborters || (gdWasm.aborters = {}))[d.layer_id] = ctl;
     const url = location.origin + '/api/data/vector/' + d.layer_id +
       '/features.geojson?bbox=' + encodeURIComponent(bbox.join(',')) + '&limit=' + limit;
-    return fetch(url).then(function (r) { return r.ok ? r.json() : null; });
+    return fetch(url, ctl ? { signal: ctl.signal } : undefined)
+      .then(function (r) { return r.ok ? r.json() : null; });
   }
 
   // Light layers (small TOTAL feature count — world countries, modest point sets) always show
   // full detail at every zoom; the grid overview is only for datasets too heavy to ship at
   // large scale.
   const DETAIL_MAX_FEATURES = 50000;
+  // Detail is also gated by the candidate rows under the viewport (manifest per-cell counts):
+  // a mid-zoom view over dense data can span few files but ~1M features — the covering scan
+  // alone takes 10-25 s server-side. Above this, show the overview instead.
+  const DETAIL_MAX_ROWS = 400000;
 
   // DuckDB-WASM direct range reads are DISABLED pending faster range serving: through the
   // FastAPI proxy each serial sync-XHR costs ~50-70 ms and ONE detail query issues hundreds
@@ -459,10 +477,14 @@
     return getManifest(d).then(function (m) {
       if (m === 'unsupported') return serverViewportGeojson(d, bbox, limit);
       const light = (m.feature_count || 0) <= DETAIL_MAX_FEATURES;
-      const files = filesUnderViewport(m, bbox);
+      const load = viewportLoad(m, bbox);
+      const files = load.files;
       if (!files.length) return { type: 'FeatureCollection', features: [] };
-      // Heavy layer at large scale → density grid, never details.
-      if (!light && files.length > WASM_MAX_FILES) return overviewGeojson(m);
+      // Heavy layer over too much data (too many files OR too many candidate rows under the
+      // viewport) → density grid, never details.
+      if (!light && (files.length > WASM_MAX_FILES || load.rows > DETAIL_MAX_ROWS)) {
+        return overviewGeojson(m);
+      }
       // This is a DETAIL fetch: if the previous view left the coarse overview grid cached, clear
       // it NOW — a zoomed-in view must never keep showing the whole-extent grid while features
       // load (brief blank is better than a misleading grid).

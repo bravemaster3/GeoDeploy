@@ -227,6 +227,7 @@ function deckLimit() {
 // LIGHT layers (total features ≤ DECK_DETAIL_MAX) always show full detail at every zoom.
 const DECK_MAX_FILES = 16  // keep equal to portal.js WASM_MAX_FILES (same switch moment)
 const DECK_DETAIL_MAX = 50000
+const DECK_DETAIL_MAX_ROWS = 400000  // keep equal to portal.js DETAIL_MAX_ROWS
 const deckManifests = {}   // layer_id → manifest object | 'none'
 
 async function deckManifest(id) {
@@ -239,19 +240,22 @@ async function deckManifest(id) {
   return deckManifests[id]
 }
 
-// Same grid math as the server/portal.js: cell = ix*grid + iy, +1-cell pad.
-function deckFilesUnderViewport(m, b) {
+// Same grid math as the server/portal.js: cell = ix*grid + iy, +1-cell pad. Returns both the
+// file count and the candidate ROW count under the viewport — rows are the real cost driver
+// (a mid-zoom view can span few files but ~1M dense features → 10-25 s server query).
+function deckViewportLoad(m, b) {
   const g = m.grid, gsz = g.grid | 0, pad = 1
   const ci = (v, lo, span) => Math.floor((v - lo) / (span || 1.0) * gsz)
   const ix0 = Math.max(0, ci(b[0], g.minx, g.spanx) - pad)
   const ix1 = Math.min(gsz - 1, ci(b[2], g.minx, g.spanx) + pad)
   const iy0 = Math.max(0, ci(b[1], g.miny, g.spany) - pad)
   const iy1 = Math.min(gsz - 1, ci(b[3], g.miny, g.spany) + pad)
-  let n = 0
+  let files = 0, rows = 0
   if (ix0 <= ix1 && iy0 <= iy1)
     for (let ix = ix0; ix <= ix1; ix++)
-      for (let iy = iy0; iy <= iy1; iy++) n += (m.cells[String(ix * gsz + iy)] || []).length
-  return n
+      for (let iy = iy0; iy <= iy1; iy++)
+        for (const f of (m.cells[String(ix * gsz + iy)] || [])) { files += 1; rows += f.rows || 0 }
+  return { files, rows }
 }
 
 function deckOverviewGeojson(m) {
@@ -350,10 +354,12 @@ async function refreshDeck(refetch) {
         // Heavy prepped layer at large scale → density-grid overview from the manifest
         // (instant, no feature query). Light layers and zoomed-in views load real features.
         const m = await deckManifest(cfg.layer_id)
-        if (m !== 'none' && (m.feature_count || 0) > DECK_DETAIL_MAX &&
-            deckFilesUnderViewport(m, nb) > DECK_MAX_FILES) {
-          deckData[cfg.layer_id] = deckOverviewGeojson(m)
-          return
+        if (m !== 'none' && (m.feature_count || 0) > DECK_DETAIL_MAX) {
+          const load = deckViewportLoad(m, nb)
+          if (load.files > DECK_MAX_FILES || load.rows > DECK_DETAIL_MAX_ROWS) {
+            deckData[cfg.layer_id] = deckOverviewGeojson(m)
+            return
+          }
         }
         // Detail fetch: clear a stale overview grid immediately (never show the whole-extent
         // grid at a zoomed-in view while features load) — mirrors portal.js.
