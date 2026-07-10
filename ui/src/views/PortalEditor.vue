@@ -121,6 +121,13 @@
     <div class="flex-1 relative bg-gray-100">
       <div id="portal-preview-map" class="w-full h-full" />
 
+      <!-- GeoParquet detail fetch in flight (mirrors the published portal's loading pill) -->
+      <div v-if="deckLoading > 0"
+        class="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-white/95 shadow-md border border-gray-200 rounded-full px-3.5 py-1.5 text-xs font-medium text-gray-700 pointer-events-none">
+        <span class="inline-block w-3 h-3 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+        Loading features…
+      </div>
+
       <!-- Zoom to all layers. The current view is saved on "Save changes" and becomes
            the published portal's initial extent. -->
       <button v-if="layerConfigs.length" @click="zoomToAll"
@@ -212,6 +219,7 @@ onMounted(async () => {
 // new layer first appears; pure style edits rebuild from cached data without a network refetch.
 let deckOverlay = null
 const deckData = {}        // layer_id → cached FeatureCollection for the current view
+const deckLoading = ref(0) // detail fetches in flight → shows the "Loading features…" pill
 // Per-viewport feature cap, scaled by zoom (matches portal.js): a zoomed-out view is a capped
 // subset either way, and a flat 50k limit made low-zoom responses tens of MB (slow query,
 // slow JSON parse). More than the eye resolves at each band.
@@ -367,8 +375,11 @@ async function refreshDeck(refetch) {
           deckData[cfg.layer_id] = { type: 'FeatureCollection', features: [] }
           deckOverlay.setProps({ layers: [...configs].reverse().map(makeDeckLayer).filter(Boolean) })
         }
-        const { data } = await getVectorFeatures(cfg.layer_id, bbox, deckLimit())
-        deckData[cfg.layer_id] = data
+        deckLoading.value++
+        try {
+          const { data } = await getVectorFeatures(cfg.layer_id, bbox, deckLimit())
+          deckData[cfg.layer_id] = data
+        } finally { deckLoading.value-- }
       } catch { deckData[cfg.layer_id] = deckData[cfg.layer_id] || { type: 'FeatureCollection', features: [] } }
     }))
   }
@@ -409,6 +420,33 @@ watch(loaded, (v) => {
     deckOverlay = new MapboxOverlay({ interleaved: false, layers: [] })
     map.value.addControl(deckOverlay)
     map.value.on('moveend', () => refreshDeck(true))
+    // Mid-gesture: hide the coarse overview grid the moment the viewport qualifies for detail —
+    // don't wait for moveend + the fetch (mirrors portal.js).
+    let moveRaf = false
+    map.value.on('move', () => {
+      if (moveRaf) return
+      moveRaf = true
+      requestAnimationFrame(() => {
+        moveRaf = false
+        if (!map.value) return
+        const b = map.value.getBounds()
+        const vb = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]
+        let changed = false
+        for (const cfg of deckConfigs()) {
+          const data = deckData[cfg.layer_id]
+          if (!data || !data.__overview) continue
+          const m = deckManifests[cfg.layer_id]
+          if (!m || m === 'none' || !m.grid) continue
+          const load = deckViewportLoad(m, vb)
+          const light = (m.feature_count || 0) <= DECK_DETAIL_MAX
+          if (light || (load.files <= DECK_MAX_FILES && load.rows <= DECK_DETAIL_MAX_ROWS)) {
+            deckData[cfg.layer_id] = { type: 'FeatureCollection', features: [] }
+            changed = true
+          }
+        }
+        if (changed) refreshDeck(false)
+      })
+    })
     refreshDeck(true)
   }
 })

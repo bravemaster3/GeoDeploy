@@ -571,25 +571,48 @@
       // load (brief blank is better than a misleading grid).
       const st = deckState[d.layer_id];
       if (st && st.data && st.data.__overview) { st.data = null; rebuildDeck(); }
+      let p;
       // Preferred detail transport: GeoArrow binary (one request, zero JSON on either side).
       if (ARROW_DETAIL && DK && DK.geo && DK.tableFromIPC && !gdArrow.broken) {
-        return arrowViewport(d, bbox, limit).catch(function (e) {
+        p = arrowViewport(d, bbox, limit).catch(function (e) {
           if (e && e.name === 'AbortError') throw e;  // superseded, not broken
           gdArrow.broken = true;  // hard failure → GeoJSON transport for the session
           console.warn('[geodeploy] GeoArrow transport failed; using GeoJSON fallback', e);
           return serverViewportGeojson(d, bbox, limit);
         });
-      }
-      if (WASM_DETAIL_READS && gdWasm.supported && !gdWasm.broken && files.length <= WASM_MAX_FILES) {
-        return wasmQuery(d, m, files, bbox, limit).catch(function (e) {
+      } else if (WASM_DETAIL_READS && gdWasm.supported && !gdWasm.broken &&
+                 files.length <= WASM_MAX_FILES) {
+        p = wasmQuery(d, m, files, bbox, limit).catch(function (e) {
           gdWasm.broken = true;  // one hard failure → stay on the server path for the session
           console.warn('[geodeploy] duckdb-wasm read failed; using server fallback', e);
           return serverViewportGeojson(d, bbox, limit);
         });
+      } else {
+        // Light layer spread over many small partitions, or wasm unavailable: one server call.
+        p = serverViewportGeojson(d, bbox, limit);
       }
-      // Light layer spread over many small partitions, or wasm unavailable: one server call.
-      return serverViewportGeojson(d, bbox, limit);
+      // Only DETAIL fetches show the loading pill — overview responses are instant.
+      deckLoading(1);
+      return p.then(function (x) { deckLoading(-1); return x; },
+                    function (e) { deckLoading(-1); throw e; });
     });
+  }
+
+  // Small "Loading features…" pill over the map while any detail fetch is in flight — visible
+  // feedback that something is happening (user request 2026-07-10). Counter-based so overlapping
+  // per-layer fetches keep it up until the last one settles.
+  let gdLoadingCount = 0, gdLoaderEl = null;
+  function deckLoading(delta) {
+    gdLoadingCount = Math.max(0, gdLoadingCount + delta);
+    if (!gdLoaderEl) {
+      const host = document.getElementById('map') || document.body;
+      gdLoaderEl = document.createElement('div');
+      gdLoaderEl.id = 'gd-deck-loading';
+      gdLoaderEl.innerHTML = '<span class="gd-spin"></span>Loading features…';
+      gdLoaderEl.style.display = 'none';
+      host.appendChild(gdLoaderEl);
+    }
+    gdLoaderEl.style.display = gdLoadingCount > 0 ? 'flex' : 'none';
   }
 
   // Fewer features when zoomed out: a country-wide view is a capped subset either way, and the
@@ -661,6 +684,32 @@
     refit.then(function () {
       // moveend attached AFTER the refit so the refit itself doesn't double-fetch.
       map.on('moveend', function () { fetchDeck(true); });
+      // Mid-gesture: the moment the viewport qualifies for DETAIL, hide the coarse grid — don't
+      // wait for moveend + the fetch (the grid lingering at zoomed-in views reads as wrong data).
+      let gdMoveRaf = false;
+      map.on('move', function () {
+        if (gdMoveRaf) return;
+        gdMoveRaf = true;
+        requestAnimationFrame(function () {
+          gdMoveRaf = false;
+          let changed = false;
+          const b = map.getBounds();
+          const vb = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+          DECK_LAYERS.forEach(function (d) {
+            const st = deckState[d.layer_id];
+            if (!st || !st.visible || !st.data || !st.data.__overview) return;
+            const m = gdWasm.manifests[d.layer_id];
+            if (!m || m === 'unsupported' || !m.grid) return;
+            const load = viewportLoad(m, vb);
+            const light = (m.feature_count || 0) <= DETAIL_MAX_FEATURES;
+            if (light || (load.files.length <= WASM_MAX_FILES && load.rows <= DETAIL_MAX_ROWS)) {
+              st.data = null;
+              changed = true;
+            }
+          });
+          if (changed) rebuildDeck();
+        });
+      });
       fetchDeck(true);
     });
   }
