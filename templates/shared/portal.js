@@ -453,6 +453,11 @@
       if (!files.length) return { type: 'FeatureCollection', features: [] };
       // Heavy layer at large scale → density grid, never details.
       if (!light && files.length > WASM_MAX_FILES) return overviewGeojson(m);
+      // This is a DETAIL fetch: if the previous view left the coarse overview grid cached, clear
+      // it NOW — a zoomed-in view must never keep showing the whole-extent grid while features
+      // load (brief blank is better than a misleading grid).
+      const st = deckState[d.layer_id];
+      if (st && st.data && st.data.__overview) { st.data = null; rebuildDeck(); }
       if (gdWasm.supported && !gdWasm.broken && files.length <= WASM_MAX_FILES) {
         return wasmQuery(d, m, files, bbox, limit).catch(function (e) {
           gdWasm.broken = true;  // one hard failure → stay on the server path for the session

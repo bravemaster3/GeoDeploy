@@ -355,6 +355,12 @@ async function refreshDeck(refetch) {
           deckData[cfg.layer_id] = deckOverviewGeojson(m)
           return
         }
+        // Detail fetch: clear a stale overview grid immediately (never show the whole-extent
+        // grid at a zoomed-in view while features load) — mirrors portal.js.
+        if (deckData[cfg.layer_id] && deckData[cfg.layer_id].__overview) {
+          deckData[cfg.layer_id] = { type: 'FeatureCollection', features: [] }
+          deckOverlay.setProps({ layers: [...configs].reverse().map(makeDeckLayer).filter(Boolean) })
+        }
         const { data } = await getVectorFeatures(cfg.layer_id, bbox, deckLimit())
         deckData[cfg.layer_id] = data
       } catch { deckData[cfg.layer_id] = deckData[cfg.layer_id] || { type: 'FeatureCollection', features: [] } }
