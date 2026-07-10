@@ -34,6 +34,7 @@ export function useMaplibre(containerId, initialStyle = null) {
       zoom: 2,
     })
 
+    if (maplibregl.GlobeControl) map.value.addControl(new maplibregl.GlobeControl(), 'top-right')
     map.value.addControl(new maplibregl.NavigationControl(), 'top-right')
     map.value.on('load', () => (loaded.value = true))
   })

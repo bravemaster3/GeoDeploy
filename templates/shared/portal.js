@@ -840,6 +840,9 @@
     initDeck();
     try { buildAboutPanel(); } catch (e) { console.warn('[geodeploy] About panel failed', e); }
     setupBasemaps();  // adds the basemap + tools controls (top-right)
+    // Globe/2D projection toggle (MapLibre v5 native — no Cesium, no token). Guarded so a
+    // cached v4 script can't crash the portal.
+    if (maplibregl.GlobeControl) map.addControl(new maplibregl.GlobeControl(), 'top-right');
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');  // zoom below them
   });
 
