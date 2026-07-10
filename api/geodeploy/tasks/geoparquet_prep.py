@@ -82,7 +82,11 @@ def prepare_geoparquet(self, layer_id, s3_key, job_id=None):
             bbox_chunk=int(os.getenv("PREP_BBOX_CHUNK", "50000")),
             max_temp_dir_size=os.getenv("PREP_MAX_TEMP_DIR", "100GiB"),
             partition_grid=int(os.getenv("PREP_PARTITION_GRID", "16")),
-            extent_quantile=float(os.getenv("PREP_EXTENT_QUANTILE", "0.005")))
+            extent_quantile=float(os.getenv("PREP_EXTENT_QUANTILE", "0.005")),
+            # Grid ceiling is PREP_PARTITION_GRID; the actual grid adapts to the dataset size
+            # (~this many rows per occupied cell) so light layers aren't shredded into
+            # hundreds of near-empty partition files.
+            rows_per_cell=int(os.getenv("PREP_ROWS_PER_CELL", "100000")))
         new_key = result["out_key"]
 
         # Re-inspect the partitioned dataset (covering column now present; inspect drops it from the

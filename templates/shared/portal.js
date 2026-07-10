@@ -185,6 +185,20 @@
     const isPoly = geom.indexOf('polygon') !== -1, isLine = geom.indexOf('line') !== -1;
     const rgb = deckHexToRgb(d.color), outline = deckHexToRgb(d.outline_color || '#1d4ed8');
     const op = d.opacity != null ? d.opacity : 1;
+    if (st.data.__overview) {
+      // Large-scale representation: the manifest's partition grid shaded by feature density.
+      return new deck.GeoJsonLayer({
+        id: 'deck_' + d.layer_id,
+        data: st.data,
+        pickable: false,
+        filled: true,
+        stroked: true,
+        getFillColor: function (f) { return rgb.concat(Math.round(200 * op * f.properties.density)); },
+        getLineColor: rgb.concat(Math.round(60 * op)),
+        lineWidthUnits: 'pixels',
+        getLineWidth: 0.5,
+      });
+    }
     return new deck.GeoJsonLayer({
       id: 'deck_' + d.layer_id,
       data: st.data,
@@ -331,29 +345,68 @@
     try { return geom(); } catch (e) { return null; }
   }
 
-  function wasmViewportGeojson(d, bbox, limit) {
-    return getManifest(d).then(function (m) {
-      if (m === 'unsupported') return null;  // caller uses the server fallback
-      return getWasmDb().then(function (db) {
-        const id = d.layer_id;
-        const cells = cellsForBbox(m.grid, bbox);
+  // Detail/overview switch: above this many partition files under the viewport, per-feature
+  // detail is never shown — the viewport spans too much data for ANY transport (duckdb-wasm
+  // would fetch hundreds of footers; the server response is tens of MB). Instead the layer
+  // renders as a density-shaded partition-grid overview built from the manifest's per-cell
+  // counts — instant, zero data reads. Zooming in drops under the cap and details load.
+  const WASM_MAX_FILES = 48;
+
+  // Partition file keys under a viewport bbox (via the manifest grid).
+  function filesUnderViewport(m, bbox) {
+    const files = [];
+    cellsForBbox(m.grid, bbox).forEach(function (c) {
+      (m.cells[String(c)] || []).forEach(function (f) { files.push(String(f.key)); });
+    });
+    return files;
+  }
+
+  // Density-shaded grid rectangles from the manifest (per-cell feature counts) — the
+  // large-scale representation of the layer. Built once and cached on the manifest.
+  function overviewGeojson(m) {
+    if (m.__overviewFc) return m.__overviewFc;
+    const g = m.grid, gsz = g.grid | 0, dx = g.spanx / gsz, dy = g.spany / gsz;
+    let max = 0;
+    const counts = {};
+    Object.keys(m.cells).forEach(function (k) {
+      const n = (m.cells[k] || []).reduce(function (a, f) { return a + (f.rows || 0); }, 0);
+      counts[k] = n;
+      if (n > max) max = n;
+    });
+    const feats = Object.keys(m.cells).map(function (k) {
+      const c = +k, ix = Math.floor(c / gsz), iy = c % gsz;
+      const x0 = g.minx + ix * dx, y0 = g.miny + iy * dy;
+      return {
+        type: 'Feature',
+        // sqrt so sparse cells stay visible next to the densest ones
+        properties: { count: counts[k], density: max ? Math.sqrt(counts[k] / max) : 0 },
+        geometry: { type: 'Polygon', coordinates: [[[x0, y0], [x0 + dx, y0],
+          [x0 + dx, y0 + dy], [x0, y0 + dy], [x0, y0]]] },
+      };
+    });
+    const fc = { type: 'FeatureCollection', features: feats };
+    fc.__overview = true;
+    m.__overviewFc = fc;
+    return fc;
+  }
+
+  function wasmQuery(d, m, files, bbox, limit) {
+    const id = d.layer_id;
+    return getWasmDb().then(function (db) {
         const reg = gdWasm.registered[id] || (gdWasm.registered[id] = {});
         const handles = [];
         let chain = Promise.resolve();
-        cells.forEach(function (c) {
-          (m.cells[String(c)] || []).forEach(function (f) {
-            const handle = 'l' + id + '_' + String(f.key).replace(/[^A-Za-z0-9_.]/g, '_');
-            handles.push(handle);
-            if (!reg[handle]) {
-              reg[handle] = true;
-              chain = chain.then(function () {
-                return db.registerFileURL(handle, location.origin + d.parquet.base + f.key,
-                  gdWasm.duckdb.DuckDBDataProtocol.HTTP, true);  // directIO → range requests
-              });
-            }
-          });
+        files.forEach(function (key) {
+          const handle = 'l' + id + '_' + key.replace(/[^A-Za-z0-9_.]/g, '_');
+          handles.push(handle);
+          if (!reg[handle]) {
+            reg[handle] = true;
+            chain = chain.then(function () {
+              return db.registerFileURL(handle, location.origin + d.parquet.base + key,
+                gdWasm.duckdb.DuckDBDataProtocol.HTTP, true);  // directIO → range requests
+            });
+          }
         });
-        if (!handles.length) return { type: 'FeatureCollection', features: [] };
         const cc = sqlIdent(m.covering.column), fl = m.covering.fields;
         function ce(k) { return 'struct_extract(' + cc + ', ' + sqlField(fl[k]) + ')'; }
         const nb = bbox.map(Number);
@@ -374,7 +427,6 @@
           }
           return { type: 'FeatureCollection', features: feats };
         });
-      });
     });
   }
 
@@ -384,17 +436,30 @@
     return fetch(url).then(function (r) { return r.ok ? r.json() : null; });
   }
 
+  // Light layers (small TOTAL feature count — world countries, modest point sets) always show
+  // full detail at every zoom; the grid overview is only for datasets too heavy to ship at
+  // large scale.
+  const DETAIL_MAX_FEATURES = 50000;
+
   function fetchDeckLayer(d, bbox, limit) {
-    if (gdWasm.supported && !gdWasm.broken && d.parquet && d.parquet.manifest) {
-      return wasmViewportGeojson(d, bbox, limit).then(function (fc) {
-        return fc || serverViewportGeojson(d, bbox, limit);
-      }).catch(function (e) {
-        gdWasm.broken = true;  // one hard failure → stay on the server path for the session
-        console.warn('[geodeploy] duckdb-wasm read failed; using server fallback', e);
-        return serverViewportGeojson(d, bbox, limit);
-      });
-    }
-    return serverViewportGeojson(d, bbox, limit);
+    if (!(d.parquet && d.parquet.manifest)) return serverViewportGeojson(d, bbox, limit);
+    return getManifest(d).then(function (m) {
+      if (m === 'unsupported') return serverViewportGeojson(d, bbox, limit);
+      const light = (m.feature_count || 0) <= DETAIL_MAX_FEATURES;
+      const files = filesUnderViewport(m, bbox);
+      if (!files.length) return { type: 'FeatureCollection', features: [] };
+      // Heavy layer at large scale → density grid, never details.
+      if (!light && files.length > WASM_MAX_FILES) return overviewGeojson(m);
+      if (gdWasm.supported && !gdWasm.broken && files.length <= WASM_MAX_FILES) {
+        return wasmQuery(d, m, files, bbox, limit).catch(function (e) {
+          gdWasm.broken = true;  // one hard failure → stay on the server path for the session
+          console.warn('[geodeploy] duckdb-wasm read failed; using server fallback', e);
+          return serverViewportGeojson(d, bbox, limit);
+        });
+      }
+      // Light layer spread over many small partitions, or wasm unavailable: one server call.
+      return serverViewportGeojson(d, bbox, limit);
+    });
   }
 
   // Fewer features when zoomed out: a country-wide view is a capped subset either way, and the
@@ -428,8 +493,38 @@
     if (!DECK_LAYERS.length || !window.deck || !deck.MapboxOverlay) return;
     deckOverlay = new deck.MapboxOverlay({ interleaved: false, layers: [] });
     map.addControl(deckOverlay);
-    map.on('moveend', function () { fetchDeck(true); });
-    fetchDeck(true);
+    // Deck-only portal without an admin-pinned view: the merged bounds can be stretched by
+    // far-flung outlier features (e.g. overseas territories on a mainland dataset), so the
+    // fitBounds above opens on a huge, mostly-empty area AND makes the first fetch
+    // near-full-extent. The manifest's partition grid extent is the percentile CORE of the
+    // data (PREP_EXTENT_QUANTILE at prep) — refit to it before the first fetch. Benefits the
+    // server-fallback path too (smaller first bbox), so it is not gated on wasm support.
+    const userMapLayers = (STYLE.layers || []).filter(function (l) {
+      return l.metadata && l.metadata['geodeploy:name'];
+    });
+    const manifested = DECK_LAYERS.filter(function (d) { return d.parquet && d.parquet.manifest; });
+    const refit = (!savedView && !userMapLayers.length && manifested.length)
+      ? Promise.all(manifested.map(getManifest)).then(function (ms) {
+          let u = null;
+          ms.forEach(function (m) {
+            if (!m || m === 'unsupported' || !m.grid) return;
+            const g = m.grid, e = [g.minx, g.miny, g.minx + g.spanx, g.miny + g.spany];
+            u = u ? [Math.min(u[0], e[0]), Math.min(u[1], e[1]),
+                     Math.max(u[2], e[2]), Math.max(u[3], e[3])] : e;
+          });
+          if (u && validLonLatBounds(u)) {
+            map.fitBounds([[u[0], u[1]], [u[2], u[3]]], {
+              padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 },
+              duration: 0,
+            });
+          }
+        }).catch(function () {})
+      : Promise.resolve();
+    refit.then(function () {
+      // moveend attached AFTER the refit so the refit itself doesn't double-fetch.
+      map.on('moveend', function () { fetchDeck(true); });
+      fetchDeck(true);
+    });
   }
 
   // Append a basic switcher row per deck layer (the MapLibre switcher only knows STYLE.layers).

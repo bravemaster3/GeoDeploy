@@ -212,7 +212,71 @@ onMounted(async () => {
 // new layer first appears; pure style edits rebuild from cached data without a network refetch.
 let deckOverlay = null
 const deckData = {}        // layer_id → cached FeatureCollection for the current view
-const DECK_LIMIT = 50000  // per-viewport feature cap (more than the eye resolves; bounds payload)
+// Per-viewport feature cap, scaled by zoom (matches portal.js): a zoomed-out view is a capped
+// subset either way, and a flat 50k limit made low-zoom responses tens of MB (slow query,
+// slow JSON parse). More than the eye resolves at each band.
+function deckLimit() {
+  const z = map.value ? map.value.getZoom() : 10
+  return z < 7 ? 10000 : z < 10 ? 25000 : 50000
+}
+
+// ── detail/overview switch (mirrors templates/shared/portal.js — keep in sync) ──────────────
+// A HEAVY prepped layer whose viewport spans more than DECK_MAX_FILES partition files renders as
+// a density-shaded partition-grid overview built from the layer's manifest (per-cell counts —
+// instant, zero data reads) instead of per-feature detail; zooming in loads real features.
+// LIGHT layers (total features ≤ DECK_DETAIL_MAX) always show full detail at every zoom.
+const DECK_MAX_FILES = 48
+const DECK_DETAIL_MAX = 50000
+const deckManifests = {}   // layer_id → manifest object | 'none'
+
+async function deckManifest(id) {
+  if (deckManifests[id] !== undefined) return deckManifests[id]
+  try {
+    const r = await fetch(`/api/data/vector/${id}/parquet/manifest.json`)
+    const m = r.ok ? await r.json() : null
+    deckManifests[id] = (m && m.grid && m.cells && (!m.crs || m.crs === 'EPSG:4326')) ? m : 'none'
+  } catch { deckManifests[id] = 'none' }
+  return deckManifests[id]
+}
+
+// Same grid math as the server/portal.js: cell = ix*grid + iy, +1-cell pad.
+function deckFilesUnderViewport(m, b) {
+  const g = m.grid, gsz = g.grid | 0, pad = 1
+  const ci = (v, lo, span) => Math.floor((v - lo) / (span || 1.0) * gsz)
+  const ix0 = Math.max(0, ci(b[0], g.minx, g.spanx) - pad)
+  const ix1 = Math.min(gsz - 1, ci(b[2], g.minx, g.spanx) + pad)
+  const iy0 = Math.max(0, ci(b[1], g.miny, g.spany) - pad)
+  const iy1 = Math.min(gsz - 1, ci(b[3], g.miny, g.spany) + pad)
+  let n = 0
+  if (ix0 <= ix1 && iy0 <= iy1)
+    for (let ix = ix0; ix <= ix1; ix++)
+      for (let iy = iy0; iy <= iy1; iy++) n += (m.cells[String(ix * gsz + iy)] || []).length
+  return n
+}
+
+function deckOverviewGeojson(m) {
+  if (m.__overviewFc) return m.__overviewFc
+  const g = m.grid, gsz = g.grid | 0, dx = g.spanx / gsz, dy = g.spany / gsz
+  let max = 0
+  const counts = {}
+  for (const k of Object.keys(m.cells)) {
+    counts[k] = (m.cells[k] || []).reduce((a, f) => a + (f.rows || 0), 0)
+    if (counts[k] > max) max = counts[k]
+  }
+  const features = Object.keys(m.cells).map(k => {
+    const c = +k, ix = Math.floor(c / gsz), iy = c % gsz
+    const x0 = g.minx + ix * dx, y0 = g.miny + iy * dy
+    return {
+      type: 'Feature',
+      properties: { count: counts[k], density: max ? Math.sqrt(counts[k] / max) : 0 },
+      geometry: { type: 'Polygon', coordinates: [[[x0, y0], [x0 + dx, y0], [x0 + dx, y0 + dy], [x0, y0 + dy], [x0, y0]]] },
+    }
+  })
+  const fc = { type: 'FeatureCollection', features }
+  fc.__overview = true
+  m.__overviewFc = fc
+  return fc
+}
 
 function hexToRgb(hex) {
   const h = String(hex || '#3b82f6').replace('#', '')
@@ -241,6 +305,20 @@ function makeDeckLayer(cfg) {
   const opacity = cfg.opacity ?? 1.0
   const outline = hexToRgb(cfg.style?.outline_color || '#1d4ed8')
   const isPoly = geom.includes('polygon'), isLine = geom.includes('line')
+  if (data.__overview) {
+    // Large-scale representation: partition grid shaded by feature density (see portal.js twin).
+    return new GeoJsonLayer({
+      id: `deck_${cfg.layer_id}`,
+      data,
+      pickable: false,
+      filled: true,
+      stroked: true,
+      getFillColor: f => [...rgb, Math.round(200 * opacity * f.properties.density)],
+      getLineColor: [...rgb, Math.round(60 * opacity)],
+      lineWidthUnits: 'pixels',
+      getLineWidth: 0.5,
+    })
+  }
   return new GeoJsonLayer({
     id: `deck_${cfg.layer_id}`,
     data,
@@ -264,11 +342,20 @@ async function refreshDeck(refetch) {
   const configs = deckConfigs()
   if (refetch || configs.some(c => !deckData[c.layer_id])) {
     const b = map.value.getBounds()
-    const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`
+    const nb = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]
+    const bbox = nb.join(',')
     await Promise.all(configs.map(async cfg => {
       if (!refetch && deckData[cfg.layer_id]) return
       try {
-        const { data } = await getVectorFeatures(cfg.layer_id, bbox, DECK_LIMIT)
+        // Heavy prepped layer at large scale → density-grid overview from the manifest
+        // (instant, no feature query). Light layers and zoomed-in views load real features.
+        const m = await deckManifest(cfg.layer_id)
+        if (m !== 'none' && (m.feature_count || 0) > DECK_DETAIL_MAX &&
+            deckFilesUnderViewport(m, nb) > DECK_MAX_FILES) {
+          deckData[cfg.layer_id] = deckOverviewGeojson(m)
+          return
+        }
+        const { data } = await getVectorFeatures(cfg.layer_id, bbox, deckLimit())
         deckData[cfg.layer_id] = data
       } catch { deckData[cfg.layer_id] = deckData[cfg.layer_id] || { type: 'FeatureCollection', features: [] } }
     }))

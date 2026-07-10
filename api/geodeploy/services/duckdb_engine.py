@@ -554,7 +554,7 @@ def partition_with_covering(s3_key: str, creds: dict | None = None, out_prefix: 
                             bucket: str | None = None, row_group_size: int = 50_000,
                             memory_limit: str = "4GB", bbox_chunk: int = 50_000,
                             max_temp_dir_size: str = "100GiB", partition_grid: int = 16,
-                            extent_quantile: float = 0.005) -> dict:
+                            extent_quantile: float = 0.005, rows_per_cell: int = 100_000) -> dict:
     """Rewrite the GeoParquet at `s3_key` into a spatially-partitioned dataset with a `bbox` covering
     column, written DIRECTLY to S3 as a PREFIX of `__cell=N/*.parquet` files. Returns
     {"out_key" (the prefix), "feature_count", "geometry_column", "partitioned": True}. Requires
@@ -658,7 +658,14 @@ def partition_with_covering(s3_key: str, creds: dict | None = None, out_prefix: 
 
         # Coarse spatial grid cell (native SQL, row-major over a grid×grid grid). PARTITION_BY this
         # scatters nearby features into the same file in ONE pass — no sort, no payload merge.
-        grid = max(2, int(partition_grid))
+        # The grid ADAPTS to the dataset size (`partition_grid` is the ceiling): a light layer
+        # (e.g. world countries) must not be scattered into hundreds of near-empty files — that
+        # makes every viewport read open many objects for no pruning benefit. Target roughly
+        # `rows_per_cell` features per OCCUPIED cell; assume ~half the grid cells hold data.
+        n_rows = conn.execute(f"SELECT count(*) FROM {part_src}").fetchone()[0] or 0
+        target = max(1, int(rows_per_cell))
+        grid = max(1, min(max(2, int(partition_grid)),
+                          int((n_rows / (0.5 * target)) ** 0.5) + 1))
 
         def _cell(center_expr, lo, span):
             return (f"LEAST({grid - 1}, GREATEST(0, "
