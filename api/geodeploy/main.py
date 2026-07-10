@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
 from .database import engine, Base
-from .routers import setup, auth, portals, templates, admin
+from .routers import setup, auth, portals, stac, templates, admin
 from .routers.data import vector, raster, sources, discover
 
 
@@ -40,6 +40,17 @@ def _apply_schema_migrations(conn) -> None:
         "ALTER TABLE vector_layers ADD COLUMN pmtiles_key VARCHAR(512)",
         "ALTER TABLE vector_layers ADD COLUMN tile_status VARCHAR(16)",
         "ALTER TABLE raster_layers ADD COLUMN default_style TEXT",
+        # Data sharing + STAC catalog metadata (notes §0h-addendum)
+        "ALTER TABLE vector_layers ADD COLUMN is_public BOOLEAN DEFAULT 0",
+        "ALTER TABLE vector_layers ADD COLUMN abstract TEXT",
+        "ALTER TABLE vector_layers ADD COLUMN keywords VARCHAR(512)",
+        "ALTER TABLE vector_layers ADD COLUMN license VARCHAR(128)",
+        "ALTER TABLE vector_layers ADD COLUMN attribution VARCHAR(256)",
+        "ALTER TABLE raster_layers ADD COLUMN is_public BOOLEAN DEFAULT 0",
+        "ALTER TABLE raster_layers ADD COLUMN abstract TEXT",
+        "ALTER TABLE raster_layers ADD COLUMN keywords VARCHAR(512)",
+        "ALTER TABLE raster_layers ADD COLUMN license VARCHAR(128)",
+        "ALTER TABLE raster_layers ADD COLUMN attribution VARCHAR(256)",
     ]
     for sql in pending:
         try:
@@ -98,7 +109,7 @@ app.add_middleware(
 
 # API routes
 for router in [setup.router, auth.router, portals.router, templates.router, admin.router,
-               vector.router, raster.router, sources.router, discover.router]:
+               vector.router, raster.router, sources.router, discover.router, stac.router]:
     app.include_router(router, prefix="/api")
 
 # Serve published portals as static files

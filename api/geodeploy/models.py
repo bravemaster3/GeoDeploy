@@ -73,6 +73,15 @@ class VectorLayer(Base):
     status: Mapped[str] = mapped_column(String(16), default="processing")  # processing | ready | error
     error_message: Mapped[str | None] = mapped_column(Text)
     default_style: Mapped[str | None] = mapped_column(Text)  # JSON {opacity, style, popup_fields}
+    # Data sharing (STAC catalog + raw-asset access): the admin opts a layer INTO the public
+    # catalog. Display endpoints that published portals need (tiles, viewport features) stay
+    # public-by-id regardless — this flag governs DISCOVERY + raw data assets.
+    is_public: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Catalog metadata (STAC common metadata / the GeoNode-parity fields — see notes §0h-addendum).
+    abstract: Mapped[str | None] = mapped_column(Text)
+    keywords: Mapped[str | None] = mapped_column(String(512))   # comma-separated
+    license: Mapped[str | None] = mapped_column(String(128))
+    attribution: Mapped[str | None] = mapped_column(String(256))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -94,6 +103,12 @@ class RasterLayer(Base):
     status: Mapped[str] = mapped_column(String(16), default="processing")
     error_message: Mapped[str | None] = mapped_column(Text)
     default_style: Mapped[str | None] = mapped_column(Text)  # JSON {opacity}
+    # Data sharing + catalog metadata — see the VectorLayer twin fields.
+    is_public: Mapped[bool] = mapped_column(Boolean, default=False)
+    abstract: Mapped[str | None] = mapped_column(Text)
+    keywords: Mapped[str | None] = mapped_column(String(512))
+    license: Mapped[str | None] = mapped_column(String(128))
+    attribution: Mapped[str | None] = mapped_column(String(256))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

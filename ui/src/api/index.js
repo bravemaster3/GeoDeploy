@@ -71,6 +71,8 @@ export const getVectorJobStatus = (jobId) => api.get(`/data/vector/jobs/${jobId}
 export const getVectorFeatures = (id, bbox, limit = 50000) =>
   api.get(`/data/vector/${id}/features`, { params: { bbox, limit } })
 export const saveVectorDefaultStyle = (id, style) => api.put(`/data/vector/${id}/default-style`, style)
+// Data sharing: opt a layer into the public STAC catalog (/api/stac) + set catalog metadata
+export const setVectorSharing = (id, data) => api.put(`/data/vector/${id}/sharing`, data)
 export const deleteVectorLayer = (id) => api.delete(`/data/vector/${id}`)
 
 // Raster layers
@@ -84,6 +86,7 @@ export const uploadRasterFile = (file, onProgress) => {
 }
 export const getRasterJobStatus = (jobId) => api.get(`/data/raster/jobs/${jobId}`)
 export const saveRasterDefaultStyle = (id, style) => api.put(`/data/raster/${id}/default-style`, style)
+export const setRasterSharing = (id, data) => api.put(`/data/raster/${id}/sharing`, data)
 export const deleteRasterLayer = (id) => api.delete(`/data/raster/${id}`)
 export const listColormaps = () => api.get('/data/raster/colormaps')
 export const getRasterStats = (id) => api.get(`/data/raster/${id}/stats`)

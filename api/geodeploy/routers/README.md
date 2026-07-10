@@ -18,6 +18,22 @@ All HTTP endpoints. Every router is registered in `main.py` under the `/api` pre
 - `data/raster.py` — raster equivalent; list endpoint attaches a computed `tile_url` for ready layers; `/colormaps` lists TiTiler colormaps; `/{id}/stats` proxies TiTiler `/cog/statistics` and returns a suggested `rescale` ("min,max", 2–98th percentile) for auto-stretch. Dispatches `tasks.raster_ingest`.
 - `data/sources.py` — **external sources** (WMS/XYZ raster, WFS vector) shown in portals without ingesting. Authed CRUD (`GET/POST/DELETE /data/sources`); POST probes a WFS to learn geometry + bbox. **Public** `GET /data/sources/{id}/features.geojson` proxies a WFS to GeoJSON (same-origin → no CORS; published portals are unauthenticated). Rendering helpers live in `services/external_sources.py`; `portal_generator` bakes them into the published style.
 - `data/discover.py` — **import existing data** (mostly no copy): `GET /data/discover/database` lists spatial tables from PostGIS `geometry_columns` (any non-system schema, flags already-imported); `POST` registers selected tables as `VectorLayer` rows (introspects bbox→EPSG:4326, columns, PK→`id_column`, geometry column, SRID, est. feature count) then regenerates Martin. `GET /data/discover/storage` lists `.tif/.tiff` (kind `raster`) + `.csv` (kind `csv`) in the bucket; `POST /storage` registers rasters as `RasterLayer` rows (`cog_converter.inspect_s3`, header-only). **CSV** is the exception (a CSV isn't tile-servable): `GET /storage/csv-columns` returns the header, `POST /storage/csv` (key, name, x/y column, srid) **queues a Celery job** (`tasks/csv_import.py`) that loads points into PostGIS with column **type inference**, returning a `JobStatus` the UI polls. All import endpoints accept a per-item `name` override. Identifiers are quote-escaped (`_q`) — no SQL-identifier injection.
+- `stac.py` — **PUBLIC STAC 1.0.0 catalog** (`/api/stac`, + `/conformance`, `/collections`,
+  `/collections/{vectors|rasters}/items[/{item}]`, GET `/search?bbox=&collections=&limit=`) — the
+  discovery half of the data-access story (notes §0h-addendum; GeoNode-catalog equivalent with zero
+  extra services). Lists ONLY `status='ready' AND is_public` layers, generated dynamically from SQLite
+  per request (deviation from the static-files-on-MinIO idea: same weight, always in sync, no public
+  MinIO plumbing). Items carry ready-to-use assets: raster → raw `cog` (`/vsicurl/`-able) + TiTiler
+  XYZ `tiles`; postgis vector → Martin XYZ `vector-tiles`; geoparquet → `manifest` + `features-geojson`
+  + `features-arrow` (+ `pmtiles` when tiled). Absolute hrefs from the forwarded Host/X-Forwarded-Proto.
+  Consumers: QGIS (native STAC 3.40+/plugin), stac-browser, pystac-client — see `docs/data-access.md`.
+- **Sharing endpoints** (authed): `PUT /data/vector/{id}/sharing` + `PUT /data/raster/{id}/sharing`
+  (`SharingUpdate`: partial `{is_public, abstract, keywords, license, attribution}`) — the admin's
+  opt-IN to the catalog; nothing is listed by default. `is_public` also gates the raster raw-COG
+  route; portal display endpoints stay public-by-id regardless (published portals need them).
+- `data/raster.py` also: **`GET /{layer_id}/cog`** — **PUBLIC** HTTP-Range proxy for the layer's COG,
+  **only when `is_public`** (404 otherwise). This is the "WCS replacement": full pixel access in
+  QGIS/GDAL via `/vsicurl/https://host/api/data/raster/{id}/cog`, and a direct-download URL.
 - `data/__init__.py`, `__init__.py` — package markers.
 
 ## Dependencies / relationships
@@ -30,4 +46,4 @@ All HTTP endpoints. Every router is registered in `main.py` under the `/api` pre
 - No rate limiting beyond nginx; no pagination on list endpoints (fine at current scale).
 
 ## Last updated
-2026-06-11
+2026-07-10 (STAC catalog + data-sharing endpoints + public COG route)

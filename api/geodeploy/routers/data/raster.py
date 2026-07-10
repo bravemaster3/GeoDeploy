@@ -1,6 +1,6 @@
 import os
 import uuid
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,7 +8,7 @@ from ...config import get_settings
 from ...database import get_db
 from ...deps import get_current_user
 from ...models import RasterLayer, UploadJob, User
-from ...schemas import JobStatus, RasterDefaultStyle, RasterLayerOut
+from ...schemas import JobStatus, RasterDefaultStyle, RasterLayerOut, SharingUpdate
 from ...services.titiler import get_tile_url as raster_tile_url, COLORMAPS
 from ...tasks.raster_ingest import ingest_raster
 
@@ -140,6 +140,62 @@ async def job_status(job_id: str, db: AsyncSession = Depends(get_db), user: User
     if not job:
         raise HTTPException(404, "Job not found.")
     return job
+
+
+@router.put("/{layer_id}/sharing", response_model=RasterLayerOut)
+async def save_sharing(
+    layer_id: int,
+    body: SharingUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Data-sharing settings: opt the layer into the public STAC catalog (`/api/stac`) and the
+    public raw-COG route, plus its catalog metadata (abstract/keywords/license/attribution)."""
+    result = await db.execute(select(RasterLayer).where(RasterLayer.id == layer_id, RasterLayer.user_id == user.id))
+    layer = result.scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not found.")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(layer, field, value)
+    await db.commit()
+    await db.refresh(layer)
+    return RasterLayerOut.from_orm_json(layer)
+
+
+@router.get("/{layer_id}/cog")
+async def raster_cog(layer_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    """PUBLIC range proxy for the layer's Cloud-Optimized GeoTIFF — ONLY when the admin shared
+    the layer (`is_public`). This is what makes `/vsicurl/https://host/api/data/raster/{id}/cog`
+    work in QGIS/GDAL (full pixel access, the modern WCS — notes §0h) and gives a direct
+    download URL. Same pmtiles/parquet proxy pattern: Range → 206, creds stay server-side."""
+    result = await db.execute(select(RasterLayer).where(RasterLayer.id == layer_id))
+    layer = result.scalar_one_or_none()
+    if not layer or layer.status != "ready" or not layer.is_public or not layer.s3_key:
+        raise HTTPException(404, "No shared raster for this layer.")
+
+    from starlette.concurrency import run_in_threadpool
+    from fastapi.responses import StreamingResponse
+    from ...services.minio import get_s3_client
+    settings = get_settings()
+    s3 = get_s3_client()
+    params = {"Bucket": settings.storage_bucket, "Key": layer.s3_key}
+    rng = request.headers.get("range")
+    if rng:
+        params["Range"] = rng
+    try:
+        obj = await run_in_threadpool(lambda: s3.get_object(**params))
+    except Exception:
+        raise HTTPException(404, "Object not found.")
+    headers = {"Accept-Ranges": "bytes", "Cache-Control": "public, max-age=3600",
+               "Content-Disposition": f'inline; filename="{layer.name}.tif"'}
+    status = 200
+    if obj.get("ContentRange"):
+        headers["Content-Range"] = obj["ContentRange"]
+        status = 206
+    if obj.get("ContentLength") is not None:
+        headers["Content-Length"] = str(obj["ContentLength"])
+    return StreamingResponse(obj["Body"].iter_chunks(256 * 1024), status_code=status,
+                             media_type="image/tiff", headers=headers)
 
 
 @router.put("/{layer_id}/default-style", response_model=RasterLayerOut)

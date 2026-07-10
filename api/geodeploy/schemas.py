@@ -66,6 +66,16 @@ class DefaultStyle(BaseModel):
     popup_fields: list[str] = Field(default_factory=list)
 
 
+class SharingUpdate(BaseModel):
+    """Data-sharing settings (STAC catalog opt-in + catalog metadata). Partial update:
+    only the fields present in the request body are applied."""
+    is_public: bool | None = None
+    abstract: str | None = None
+    keywords: str | None = None    # comma-separated
+    license: str | None = None
+    attribution: str | None = None
+
+
 class VectorLayerOut(BaseModel):
     id: int
     name: str
@@ -84,6 +94,11 @@ class VectorLayerOut(BaseModel):
     status: str
     error_message: str | None
     default_style: DefaultStyle | None
+    is_public: bool = False
+    abstract: str | None = None
+    keywords: str | None = None
+    license: str | None = None
+    attribution: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -124,6 +139,11 @@ class RasterLayerOut(BaseModel):
     status: str
     error_message: str | None
     default_style: RasterDefaultStyle | None
+    is_public: bool = False
+    abstract: str | None = None
+    keywords: str | None = None
+    license: str | None = None
+    attribution: str | None = None
     created_at: datetime
     tile_url: str | None = None  # populated by router for ready layers
 

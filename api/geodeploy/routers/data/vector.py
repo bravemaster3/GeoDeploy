@@ -12,7 +12,7 @@ from ...config import get_settings
 from ...database import get_db
 from ...deps import get_current_user
 from ...models import UploadJob, User, VectorLayer
-from ...schemas import DefaultStyle, JobStatus, VectorLayerOut
+from ...schemas import DefaultStyle, JobStatus, SharingUpdate, VectorLayerOut
 from ...services import martin as martin_svc
 from ...tasks.vector_ingest import ingest_vector
 
@@ -479,6 +479,27 @@ async def vector_parquet_object(layer_id: int, path: str, request: Request,
     media = "application/json" if path.endswith(".json") else "application/octet-stream"
     return StreamingResponse(obj["Body"].iter_chunks(256 * 1024), status_code=status,
                              media_type=media, headers=headers)
+
+
+@router.put("/{layer_id}/sharing", response_model=VectorLayerOut)
+async def save_sharing(
+    layer_id: int,
+    body: SharingUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Data-sharing settings: opt the layer into the public STAC catalog (`/api/stac`) plus its
+    catalog metadata. Display endpoints portals rely on stay public-by-id regardless; this flag
+    governs discovery (and, for rasters, the raw-COG route)."""
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id, VectorLayer.user_id == user.id))
+    layer = result.scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not found.")
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(layer, field, value)
+    await db.commit()
+    await db.refresh(layer)
+    return VectorLayerOut.from_orm_json(layer)
 
 
 @router.put("/{layer_id}/default-style", response_model=VectorLayerOut)
