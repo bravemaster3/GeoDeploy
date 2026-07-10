@@ -444,6 +444,16 @@
   // large scale.
   const DETAIL_MAX_FEATURES = 50000;
 
+  // DuckDB-WASM direct range reads are DISABLED pending faster range serving: through the
+  // FastAPI proxy each serial sync-XHR costs ~50-70 ms and ONE detail query issues hundreds
+  // (parquet footers + bbox-column pages + geometry pages across up to 16 partition files),
+  // so detail loads took far longer than the server query they replaced and queued up behind
+  // pans (observed live 2026-07-10: "requests forever, never displays"). The server viewport
+  // query answers the same request in one response (~1.5-5 s). Flip this back on to experiment
+  // once ranges are served by nginx directly from MinIO (~5 ms/request — see notes
+  // §0h-addendum-2); the manifest/overview/grid pipeline stays live either way.
+  const WASM_DETAIL_READS = false;
+
   function fetchDeckLayer(d, bbox, limit) {
     if (!(d.parquet && d.parquet.manifest)) return serverViewportGeojson(d, bbox, limit);
     return getManifest(d).then(function (m) {
@@ -458,7 +468,7 @@
       // load (brief blank is better than a misleading grid).
       const st = deckState[d.layer_id];
       if (st && st.data && st.data.__overview) { st.data = null; rebuildDeck(); }
-      if (gdWasm.supported && !gdWasm.broken && files.length <= WASM_MAX_FILES) {
+      if (WASM_DETAIL_READS && gdWasm.supported && !gdWasm.broken && files.length <= WASM_MAX_FILES) {
         return wasmQuery(d, m, files, bbox, limit).catch(function (e) {
           gdWasm.broken = true;  // one hard failure → stay on the server path for the session
           console.warn('[geodeploy] duckdb-wasm read failed; using server fallback', e);
