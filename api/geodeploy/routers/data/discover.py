@@ -55,7 +55,12 @@ class ImportDbRequest(BaseModel):
 
 @router.get("/database")
 async def discover_database(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """List spatial tables in the connected PostGIS (any non-system schema)."""
+    """List spatial tables in the connected PostGIS (any non-system schema).
+
+    GeoDeploy's OWN per-user schemas (`geodeploy_u{id}`) are excluded: tables there are created
+    by the upload/CSV pipelines and already live in My Data — listing them here made the user's
+    own uploads sit in 'Import existing' permanently flagged 'already imported' (confusing, and
+    importing them again would double-register)."""
     import asyncpg
     settings = get_settings()
     if not settings.postgis_host:
@@ -70,6 +75,7 @@ async def discover_database(user: User = Depends(get_current_user), db: AsyncSes
                       f_geometry_column AS gcol, srid, type
                FROM geometry_columns
                WHERE f_table_schema <> ALL($1::text[])
+                 AND f_table_schema NOT LIKE 'geodeploy\\_u%'
                ORDER BY f_table_schema, f_table_name""",
             _SYS_SCHEMAS,
         )

@@ -22,6 +22,9 @@
             <h2 class="text-sm font-semibold text-gray-900">Vector layers</h2>
             <p class="text-xs text-gray-400">Stored in PostGIS · served as vector tiles</p>
           </div>
+          <input v-if="dataStore.vectorLayers.length > 3" v-model="vectorSearch" type="search"
+            id="vector-search" name="vector-search" placeholder="Search…"
+            class="w-36 text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-brand-400" />
           <span class="text-xs font-medium text-gray-500 bg-gray-100 rounded-full px-2 py-0.5">{{ dataStore.vectorLayers.length }}</span>
           <button @click="showVectorUpload = true" class="btn-primary text-xs px-3 py-1.5">
             <UploadIcon class="w-3.5 h-3.5" /> Upload
@@ -32,8 +35,11 @@
           <p class="text-sm font-medium text-gray-600">No vector layers yet</p>
           <p class="text-xs text-gray-400 mt-0.5">Upload a Shapefile (.zip), GeoJSON, GeoPackage, or CSV.</p>
         </div>
+        <div v-else-if="!filteredVectors.length" class="px-5 py-6 text-center text-xs text-gray-400">
+          No vector layer matches “{{ vectorSearch }}”.
+        </div>
         <div v-else class="divide-y divide-gray-100">
-          <VectorRow v-for="layer in dataStore.vectorLayers" :key="layer.id" :layer="layer"
+          <VectorRow v-for="layer in filteredVectors" :key="layer.id" :layer="layer"
             @delete="dataStore.removeVector(layer.id)" />
         </div>
       </section>
@@ -48,6 +54,9 @@
             <h2 class="text-sm font-semibold text-gray-900">Raster files</h2>
             <p class="text-xs text-gray-400">Cloud-optimised GeoTIFFs in object storage</p>
           </div>
+          <input v-if="dataStore.rasterLayers.length > 3" v-model="rasterSearch" type="search"
+            id="raster-search" name="raster-search" placeholder="Search…"
+            class="w-36 text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-brand-400" />
           <span class="text-xs font-medium text-gray-500 bg-gray-100 rounded-full px-2 py-0.5">{{ dataStore.rasterLayers.length }}</span>
           <button @click="showRasterUpload = true" class="btn-primary text-xs px-3 py-1.5">
             <UploadIcon class="w-3.5 h-3.5" /> Upload
@@ -58,8 +67,11 @@
           <p class="text-sm font-medium text-gray-600">No raster files yet</p>
           <p class="text-xs text-gray-400 mt-0.5">Upload a GeoTIFF (.tif / .tiff).</p>
         </div>
+        <div v-else-if="!filteredRasters.length" class="px-5 py-6 text-center text-xs text-gray-400">
+          No raster file matches “{{ rasterSearch }}”.
+        </div>
         <div v-else class="divide-y divide-gray-100">
-          <RasterRow v-for="layer in dataStore.rasterLayers" :key="layer.id" :layer="layer"
+          <RasterRow v-for="layer in filteredRasters" :key="layer.id" :layer="layer"
             @delete="dataStore.removeRaster(layer.id)" />
         </div>
       </section>
@@ -100,7 +112,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useDataStore } from '@/stores/data'
 import { UploadIcon, DatabaseIcon, ImageIcon, LinkIcon, DownloadIcon, PlusIcon } from './icons'
 import VectorRow from '@/components/data/VectorRow.vue'
@@ -111,6 +123,20 @@ import AddSourceModal from '@/components/data/AddSourceModal.vue'
 import DiscoverModal from '@/components/data/DiscoverModal.vue'
 
 const dataStore = useDataStore()
+
+// Per-section search (shown once a section holds more than a handful of layers) — matches on
+// name plus catalog keywords/abstract so shared metadata makes layers findable.
+const vectorSearch = ref('')
+const rasterSearch = ref('')
+const matches = (layer, q) => {
+  const needle = q.trim().toLowerCase()
+  if (!needle) return true
+  return [layer.name, layer.keywords, layer.abstract, layer.geometry_type]
+    .some((v) => v && String(v).toLowerCase().includes(needle))
+}
+const filteredVectors = computed(() => dataStore.vectorLayers.filter((l) => matches(l, vectorSearch.value)))
+const filteredRasters = computed(() => dataStore.rasterLayers.filter((l) => matches(l, rasterSearch.value)))
+
 const showVectorUpload = ref(false)
 const showRasterUpload = ref(false)
 const showAddSource = ref(false)
