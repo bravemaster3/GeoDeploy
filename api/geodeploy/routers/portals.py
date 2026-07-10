@@ -117,6 +117,7 @@ async def publish_portal(portal_id: int, user: User = Depends(get_current_user),
         access_type=portal.access_type,
         password_sha256=portal.access_password_sha256,
         initial_view=initial_view,
+        description=portal.description,
     )
 
     portal.published = True

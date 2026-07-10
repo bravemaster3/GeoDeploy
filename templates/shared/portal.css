@@ -419,4 +419,49 @@
     }
     @keyframes gd-spin { to { transform: rotate(360deg); } }
 
+    /* ── About panel (portal documentation) ─────────────── */
+    #gd-about-btn {
+      display: block; width: 100%; margin-top: 10px; padding: 8px 10px;
+      font-size: 12.5px; font-weight: 500; text-align: left; cursor: pointer;
+      color: var(--text-muted); background: var(--surface);
+      border: 1px solid var(--border); border-radius: 8px;
+    }
+    #gd-about-btn:hover { color: var(--text); border-color: var(--accent); }
+    #gd-about-overlay {
+      position: fixed; inset: 0; z-index: 60; display: flex;
+      align-items: center; justify-content: center;
+      background: rgba(15, 23, 42, .55); backdrop-filter: blur(2px); padding: 24px;
+    }
+    #gd-about-panel {
+      position: relative; width: 100%; max-width: 680px; max-height: 84vh; overflow-y: auto;
+      background: var(--bg); color: var(--text); border-radius: 14px;
+      padding: 28px 32px; box-shadow: 0 24px 60px rgba(0,0,0,.35);
+      font-size: 14px; line-height: 1.55;
+    }
+    #gd-about-panel h1 { font-size: 20px; margin-bottom: 10px; }
+    #gd-about-panel h2 { font-size: 16px; margin: 18px 0 8px; }
+    #gd-about-panel h3, #gd-about-panel h4 { font-size: 14px; margin: 14px 0 6px; }
+    #gd-about-panel p { margin: 6px 0; }
+    #gd-about-panel ul { margin: 6px 0 6px 20px; }
+    #gd-about-panel a { color: var(--accent); }
+    #gd-about-panel code {
+      font-size: 12.5px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 4px; padding: 1px 4px;
+    }
+    #gd-about-close {
+      position: absolute; top: 10px; right: 14px; font-size: 22px; line-height: 1;
+      color: var(--text-muted); background: none; border: none; cursor: pointer;
+    }
+    #gd-about-close:hover { color: var(--text); }
+    .gd-about-layers-title { border-top: 1px solid var(--border); padding-top: 14px; }
+    .gd-about-layer { margin: 10px 0; padding: 10px 12px; background: var(--surface);
+      border: 1px solid var(--border); border-radius: 10px; }
+    .gd-about-layer-name { font-weight: 600; font-size: 13.5px; }
+    .gd-about-badge {
+      font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px;
+      color: #047857; background: #d1fae5; border-radius: 999px; padding: 2px 8px; margin-left: 6px;
+    }
+    .gd-about-meta { font-size: 12px; color: var(--text-muted); }
+    .gd-about-links { font-size: 12.5px; }
+
     /* ── Theme override slot ─────────────────────────────── */

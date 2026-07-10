@@ -103,6 +103,20 @@
           </div>
         </section>
 
+        <!-- About / documentation: shown in the published portal's About panel together with
+             each layer's catalog metadata and public data links -->
+        <section>
+          <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">About this portal</p>
+          <textarea v-model="description" rows="5"
+            class="w-full text-xs border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-brand-400"
+            placeholder="Documentation shown to portal visitors (About panel). Markdown supported: # headings, **bold**, [links](https://…), - lists."
+          ></textarea>
+          <p class="text-[10px] text-gray-400 mt-1">
+            Visitors also see each layer's abstract, license and public data links (set them via the
+            globe icon in My Data).
+          </p>
+        </section>
+
       </div>
 
       <!-- Save footer -->
@@ -187,6 +201,7 @@ function onDragEnd() { dragIndex.value = null }
 const accessPassword = ref('')
 const busy = ref(false)
 const saveMsg = ref(null)
+const description = ref('')  // About-panel documentation (markdown), baked at publish
 
 const accessOptions = [
   { value: 'public',   label: 'Public',   desc: 'Anyone with the URL can view' },
@@ -207,6 +222,7 @@ onMounted(async () => {
     selectedTemplate.value = portal.value.template_id
     accessType.value = portal.value.access_type || 'public'
     savedView.value = portal.value.initial_view || null
+    description.value = portal.value.description || ''
   }
   const { data } = await listTemplates()
   templates.value = data
@@ -745,6 +761,7 @@ async function save() {
       template_id: selectedTemplate.value,
       access_type: accessType.value,
       initial_view: view,
+      description: description.value,
     }
     if (accessType.value === 'password' && accessPassword.value) {
       payload.access_password = accessPassword.value

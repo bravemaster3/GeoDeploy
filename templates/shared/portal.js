@@ -770,6 +770,95 @@
     if (reset) reset.style.display = '';
   }
 
+  // ── About panel (portal documentation) ──────────────────
+  // Rich portal description (markdown) + per-layer catalog metadata and, for layers the admin
+  // shared, their public data-access links (baked by portal_generator into
+  // STYLE.geodeploy.description / .layersInfo). Portals are documentation, not just maps.
+  function mdToHtml(md) {
+    // Minimal, safe markdown: escape EVERYTHING first, then re-introduce a small vocabulary
+    // (headings, bold/italic, links, bullet lists, paragraphs). No raw HTML passes through.
+    const esc = String(md).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const blocks = esc.split(/\n{2,}/).map(function (block) {
+      const lines = block.split('\n');
+      if (lines.every(function (l) { return /^\s*[-*] /.test(l) || !l.trim(); })) {
+        const items = lines.filter(function (l) { return l.trim(); })
+          .map(function (l) { return '<li>' + inline(l.replace(/^\s*[-*] /, '')) + '</li>'; });
+        return '<ul>' + items.join('') + '</ul>';
+      }
+      const h = block.match(/^(#{1,3}) (.+)$/m);
+      if (h && lines.length === 1) {
+        const level = h[1].length + 1;  // portal h1 is the page title → start at h2
+        return '<h' + level + '>' + inline(h[2]) + '</h' + level + '>';
+      }
+      return '<p>' + inline(block).replace(/\n/g, '<br>') + '</p>';
+    });
+    function inline(s) {
+      return s
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+|\/[^)\s]*)\)/g,
+                 '<a href="$2" target="_blank" rel="noopener">$1</a>')
+        .replace(/`([^`]+)`/g, '<code>$1</code>');
+    }
+    return blocks.join('');
+  }
+
+  function buildAboutPanel() {
+    const desc = STYLE.geodeploy && STYLE.geodeploy.description;
+    const infos = (STYLE.geodeploy && STYLE.geodeploy.layersInfo) || [];
+    const hasLayerDocs = infos.some(function (i) {
+      return i.abstract || i.license || i.attribution || i.links;
+    });
+    if (!desc && !hasLayerDocs) return;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'gd-about-overlay';
+    let html = '<div id="gd-about-panel"><button id="gd-about-close" aria-label="Close">&times;</button>';
+    html += '<h1>' + escAbout(TITLE || 'About') + '</h1>';
+    if (desc) html += '<div class="gd-about-desc">' + mdToHtml(desc) + '</div>';
+    if (hasLayerDocs) {
+      html += '<h2 class="gd-about-layers-title">Layers &amp; data</h2>';
+      infos.forEach(function (i) {
+        html += '<div class="gd-about-layer"><div class="gd-about-layer-name">' + escAbout(i.name) +
+          (i.is_public ? ' <span class="gd-about-badge">public data</span>' : '') + '</div>';
+        if (i.abstract) html += '<p>' + escAbout(i.abstract) + '</p>';
+        const meta = [];
+        if (i.license) meta.push('License: ' + escAbout(i.license));
+        if (i.attribution) meta.push(escAbout(i.attribution));
+        if (meta.length) html += '<p class="gd-about-meta">' + meta.join(' · ') + '</p>';
+        if (i.links) {
+          const links = Object.keys(i.links).map(function (label) {
+            return '<a href="' + location.origin + i.links[label] + '" target="_blank" rel="noopener">' +
+              escAbout(label) + '</a>';
+          });
+          html += '<p class="gd-about-links">' + links.join(' · ') + '</p>';
+        }
+        html += '</div>';
+      });
+      html += '<p class="gd-about-meta">All shared data of this server: ' +
+        '<a href="' + location.origin + '/api/stac" target="_blank" rel="noopener">STAC catalog</a></p>';
+    }
+    html += '</div>';
+    overlay.innerHTML = html;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay || e.target.id === 'gd-about-close') overlay.style.display = 'none';
+    });
+    overlay.style.display = 'none';
+
+    const btn = document.createElement('button');
+    btn.id = 'gd-about-btn';
+    btn.type = 'button';
+    btn.innerHTML = '&#9432; About this portal';
+    btn.addEventListener('click', function () { overlay.style.display = 'flex'; });
+    const inner = document.getElementById('sidebar-inner') || sidebar;
+    if (inner) inner.appendChild(btn);
+  }
+
+  function escAbout(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
   // ── Layer switcher ──────────────────────────────────────
   map.on('load', function () {
     ensurePointImages();  // register canvas icons before the symbol layers paint
@@ -778,6 +867,7 @@
     buildLayerSwitcher(userLayers);
     appendDeckRows();
     initDeck();
+    buildAboutPanel();
     setupBasemaps();  // adds the basemap + tools controls (top-right)
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');  // zoom below them
   });

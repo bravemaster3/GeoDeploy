@@ -19,6 +19,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
     sources = {}
     layers = []
     deck_layers = []  # GeoParquet layers rendered by the deck.gl overlay (not MapLibre layers)
+    layers_info = []  # per-layer documentation for the portal About panel (name, abstract, links)
     bounds = [180, 90, -180, -90]  # expanded below
 
     # layer_configs[0] is the TOP of the layer list and should draw on TOP of the map.
@@ -28,6 +29,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
             layer = next((l for l in vector_layers if l.id == cfg["layer_id"]), None)
             if not layer:
                 continue
+            layers_info.append(_layer_info(layer, "vector"))
             source_id = f"vector_{layer.id}"
             if getattr(layer, "storage_backend", "postgis") == "geoparquet":
                 # File-backed (GeoParquet). PRIMARY display = a deck.gl overlay fed by the public
@@ -96,6 +98,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
             layer = next((l for l in raster_layers if l.id == cfg["layer_id"]), None)
             if not layer:
                 continue
+            layers_info.append(_layer_info(layer, "raster"))
             source_id = f"raster_{layer.id}"
             rstyle = cfg.get("style", {})
             sources[source_id] = {
@@ -136,6 +139,8 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
             src = next((s for s in (external_sources or []) if s.id == cfg["layer_id"]), None)
             if not src:
                 continue
+            layers_info.append({"name": src.name, "kind": "external",
+                                "attribution": src.attribution, "url": src.url})
             estyle = cfg.get("style", {})
             source_id = f"ext_{src.id}"
             src_bbox = json.loads(src.bbox) if src.bbox else None
@@ -175,12 +180,43 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 _expand_bounds(bounds, src_bbox)
 
     valid_bounds = bounds if bounds[0] < bounds[2] else None
-    return {"sources": sources, "layers": layers, "bounds": valid_bounds, "deck_layers": deck_layers}
+    layers_info.reverse()  # the loop runs over reversed configs; the About panel shows list order
+    return {"sources": sources, "layers": layers, "bounds": valid_bounds,
+            "deck_layers": deck_layers, "layers_info": layers_info}
+
+
+def _layer_info(layer, kind: str) -> dict:
+    """Documentation entry for the portal About panel: the layer's catalog metadata plus, when
+    the admin shared the layer (`is_public`), its public data-access links (root-relative;
+    portal.js absolutifies)."""
+    info = {
+        "name": layer.name,
+        "kind": kind,
+        "abstract": getattr(layer, "abstract", None),
+        "license": getattr(layer, "license", None),
+        "attribution": getattr(layer, "attribution", None),
+        "keywords": getattr(layer, "keywords", None),
+        "is_public": bool(getattr(layer, "is_public", False)),
+    }
+    if info["is_public"]:
+        if kind == "raster":
+            info["links"] = {
+                "STAC item": f"/api/stac/collections/rasters/items/raster-{layer.id}",
+                "Cloud-Optimized GeoTIFF": f"/api/data/raster/{layer.id}/cog",
+            }
+        else:
+            links = {"STAC item": f"/api/stac/collections/vectors/items/vector-{layer.id}"}
+            if getattr(layer, "storage_backend", "postgis") == "geoparquet" and layer.s3_key:
+                if not layer.s3_key.rstrip("/").endswith(".parquet"):
+                    links["GeoParquet manifest"] = f"/api/data/vector/{layer.id}/parquet/manifest.json"
+                links["Features (GeoJSON)"] = f"/api/data/vector/{layer.id}/features.geojson"
+            info["links"] = links
+    return info
 
 
 def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str, layer_configs: list[dict],
                         access_type: str = "public", password_sha256: str | None = None,
-                        initial_view: dict | None = None) -> str:
+                        initial_view: dict | None = None, description: str | None = None) -> str:
     """
     Merge basemap + user data into a complete style, inject into layout.html,
     write to data/portals/{slug}/index.html.
@@ -216,6 +252,9 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
             "view": initial_view,  # admin-set center/zoom; portal.js prefers this over fitBounds
             "title": title,
             "deckLayers": user_data.get("deck_layers", []),  # GeoParquet layers → deck.gl overlay
+            # About panel: portal description (markdown) + per-layer docs/metadata/data links
+            "description": description,
+            "layersInfo": user_data.get("layers_info", []),
         },
     }
 
