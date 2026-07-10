@@ -2,7 +2,7 @@ import json
 import os
 import uuid
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -125,6 +125,54 @@ async def publish_portal(portal_id: int, user: User = Depends(get_current_user),
     await db.commit()
     await db.refresh(portal)
     return PortalOut.from_orm_json(portal)
+
+
+# Images embedded in the About page (uploaded from the editor's WYSIWYG). Served by the public
+# GET below because both the editor preview and the published about.html reference them by URL.
+# SVG is deliberately excluded (script-capable when opened directly).
+_ASSET_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+_MAX_ASSET_SIZE = 10 * 1024 * 1024  # 10 MB
+
+
+@router.post("/{portal_id}/assets")
+async def upload_portal_asset(
+    portal_id: int,
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload an image for the portal's About documentation. Returns the public URL to embed."""
+    portal = await _get_owned(portal_id, user.id, db)
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in _ASSET_EXTENSIONS:
+        raise HTTPException(400, f"Unsupported image type ({ext or 'no extension'}). "
+                                 f"Use: {', '.join(sorted(_ASSET_EXTENSIONS))}")
+    data = await file.read()
+    if len(data) > _MAX_ASSET_SIZE:
+        raise HTTPException(400, "Image too large (max 10 MB).")
+    settings = get_settings()
+    asset_dir = f"{settings.data_dir}/portal_assets/{portal.id}"
+    os.makedirs(asset_dir, exist_ok=True)
+    name = f"{uuid.uuid4().hex}{ext}"
+    with open(os.path.join(asset_dir, name), "wb") as f:
+        f.write(data)
+    return {"url": f"/api/portals/{portal.id}/assets/{name}"}
+
+
+@router.get("/{portal_id}/assets/{filename}")
+async def portal_asset(portal_id: int, filename: str):
+    """PUBLIC image serving for About documentation (published portals are unauthenticated).
+    The filename is a server-minted uuid + extension — the strict pattern below is the
+    traversal guard AND limits exposure to exactly what the upload endpoint can create."""
+    import re
+    from fastapi.responses import FileResponse
+    if not re.fullmatch(r"[0-9a-f]{32}\.(png|jpe?g|gif|webp)", filename):
+        raise HTTPException(404, "Not found.")
+    settings = get_settings()
+    path = f"{settings.data_dir}/portal_assets/{portal_id}/{filename}"
+    if not os.path.isfile(path):
+        raise HTTPException(404, "Not found.")
+    return FileResponse(path, headers={"Cache-Control": "public, max-age=86400, immutable"})
 
 
 @router.post("/{portal_id}/unpublish", response_model=PortalOut)

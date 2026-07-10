@@ -24,6 +24,7 @@
     "@tiptap/vue-3": "^2.6.0",
     "@tiptap/starter-kit": "^2.6.0",
     "@tiptap/extension-link": "^2.6.0",
+    "@tiptap/extension-image": "^2.6.0",
     "tiptap-markdown": "^0.8.10"
   },
   "devDependencies": {

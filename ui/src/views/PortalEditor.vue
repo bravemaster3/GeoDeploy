@@ -140,16 +140,19 @@
               </div>
               <!-- Editor -->
               <div class="flex-1 min-h-0 overflow-y-auto border border-t-0 border-gray-200 rounded-b-lg"
-                style="min-height: 360px">
+                style="min-height: 320px; max-height: 52vh">
                 <EditorContent :editor="aboutEditor" class="gd-tiptap h-full" />
               </div>
-              <p class="text-[10px] text-gray-400 mt-2">
-                Formatted text (stored as markdown). Remember to Save changes and re-publish for
-                visitors to see the new page.
-              </p>
-              <div class="flex justify-end gap-3 pt-2">
-                <button @click="closeAboutEditor" class="btn-secondary text-sm">Done</button>
+              <!-- Footer stays INSIDE the card: fixed row under the editor -->
+              <div class="flex items-center justify-between gap-3 pt-3 mt-3 border-t border-gray-100 flex-shrink-0">
+                <p class="text-[10px] text-gray-400">
+                  Published as the portal's About page (about.html). Save changes + re-publish to
+                  update it.
+                </p>
+                <button @click="closeAboutEditor" class="btn-secondary text-sm flex-shrink-0">Done</button>
               </div>
+              <input ref="aboutImageInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp"
+                class="hidden" id="portal-about-image" name="portal-about-image" @change="insertAboutImage" />
             </div>
           </div>
         </Teleport>
@@ -206,10 +209,11 @@ import { useRoute } from 'vue-router'
 import { useEditor, EditorContent } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import TipTapLink from '@tiptap/extension-link'
+import TipTapImage from '@tiptap/extension-image'
 import { Markdown } from 'tiptap-markdown'
 import { usePortalsStore } from '@/stores/portals'
 import { useDataStore } from '@/stores/data'
-import { listTemplates, getRasterStats, getVectorFeatures } from '@/api'
+import { listTemplates, getRasterStats, getVectorFeatures, uploadPortalAsset } from '@/api'
 import { useMaplibre } from '@/composables/useMaplibre'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { GeoJsonLayer } from '@deck.gl/layers'
@@ -252,11 +256,28 @@ const aboutEditor = useEditor({
   extensions: [
     StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
     TipTapLink.configure({ openOnClick: false }),
+    TipTapImage,
     Markdown.configure({ html: false, linkify: true }),
   ],
   content: '',
   onUpdate: ({ editor }) => { description.value = editor.storage.markdown.getMarkdown() },
 })
+
+// Image embedding: pick a file → upload to the portal's asset store → insert the public URL.
+const aboutImageInput = ref(null)
+const uploadingImage = ref(false)
+async function insertAboutImage(e) {
+  const file = e.target.files && e.target.files[0]
+  e.target.value = ''
+  if (!file || !portal.value) return
+  uploadingImage.value = true
+  try {
+    const { data } = await uploadPortalAsset(portal.value.id, file)
+    aboutEditor.value.chain().focus().setImage({ src: data.url, alt: file.name.replace(/\.\w+$/, '') }).run()
+  } catch (err) {
+    saveMsg.value = { type: 'err', text: err.response?.data?.detail || 'Image upload failed' }
+  } finally { uploadingImage.value = false }
+}
 
 // Load the saved markdown whenever the modal opens (the portal may load after editor setup).
 watch(showAboutEditor, (open) => {
@@ -288,6 +309,7 @@ const toolbarButtons = [
   { label: '&ldquo;&rdquo;', title: 'Quote', run: () => aboutEditor.value.chain().focus().toggleBlockquote().run(), active: () => aboutEditor.value?.isActive('blockquote') },
   { label: '&lt;/&gt;', title: 'Inline code', run: () => aboutEditor.value.chain().focus().toggleCode().run(), active: () => aboutEditor.value?.isActive('code') },
   { label: '🔗', title: 'Link', run: promptLink, active: () => aboutEditor.value?.isActive('link') },
+  { label: '🖼', title: 'Insert image', run: () => aboutImageInput.value && aboutImageInput.value.click(), active: () => false },
 ]
 
 const accessOptions = [
@@ -893,4 +915,6 @@ async function handlePublish() {
 .gd-tiptap :deep(blockquote) { border-left: 3px solid #cbd5e1; padding-left: .8rem; color: #475569; margin: .4rem 0; }
 .gd-tiptap :deep(a) { color: #2563eb; text-decoration: underline; }
 .gd-tiptap :deep(code) { font-size: .8rem; background: #eef2f7; border: 1px solid #e2e8f0; border-radius: 4px; padding: 0 3px; }
+.gd-tiptap :deep(img) { max-width: 100%; border-radius: 8px; border: 1px solid #e2e8f0; margin: .5rem 0; }
+.gd-tiptap :deep(img.ProseMirror-selectednode) { outline: 2px solid #3b82f6; }
 </style>

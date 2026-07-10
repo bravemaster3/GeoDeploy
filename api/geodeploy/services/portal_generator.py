@@ -252,11 +252,17 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
             "view": initial_view,  # admin-set center/zoom; portal.js prefers this over fitBounds
             "title": title,
             "deckLayers": user_data.get("deck_layers", []),  # GeoParquet layers → deck.gl overlay
-            # About panel: portal description (markdown) + per-layer docs/metadata/data links
-            "description": description,
-            "layersInfo": user_data.get("layers_info", []),
+            # True when about.html was published → portal.js shows the About links
+            "aboutPage": False,  # set below once the page is written
         },
     }
+
+    # Standalone documentation page (GeoNode-style "full page that links to the map") — written
+    # BEFORE the style is baked so the aboutPage flag lands in the HTML.
+    about_html = _about_page(slug, title, description, user_data.get("layers_info", []))
+    if about_html:
+        (portals_dir / "about.html").write_text(about_html, encoding="utf-8")
+        full_style["geodeploy"]["aboutPage"] = True
 
     popup_configs = {
         str(cfg["layer_id"]): cfg.get("popup_fields", [])
@@ -289,6 +295,211 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
                 shutil.copy2(f, portals_dir / f.name)
 
     return f"/portals/{slug}/"
+
+
+# ── About page (portals-as-documentation) ────────────────────────────────────
+
+def _esc(s) -> str:
+    return (str(s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;"))
+
+
+def _md_inline(s: str) -> str:
+    """Inline markdown on an ALREADY-ESCAPED string: images, links, bold, italic, code."""
+    import re
+    s = re.sub(r"!\[([^\]]*)\]\((https?://[^)\s]+|/[^)\s]*)\)",
+               r'<img src="\2" alt="\1" loading="lazy">', s)
+    s = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+|/[^)\s]*)\)",
+               r'<a href="\2" target="_blank" rel="noopener">\1</a>', s)
+    s = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", s)
+    s = re.sub(r"(^|\W)\*([^*]+)\*(?=\W|$)", r"\1<em>\2</em>", s)
+    s = re.sub(r"(^|\W)_([^_]+)_(?=\W|$)", r"\1<em>\2</em>", s)
+    s = re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
+    return s
+
+
+def _md_to_html(md: str) -> str:
+    """Minimal SAFE markdown → HTML for the About page, LINE-based so headings/lists work even in
+    single-newline text. Everything is escaped first — no raw HTML passes through. Covers what the
+    editor's TipTap→markdown serializer emits (headings, bold/italic, links, images, bullet/numbered
+    lists, quotes, code, rules). Keep the vocabulary in sync with the editor's toolbar."""
+    import re
+    esc = _esc(md)
+    out, para, ul, ol, quote = [], [], [], [], []
+
+    def flush_para():
+        if para:
+            out.append("<p>" + "<br>".join(_md_inline(l) for l in para) + "</p>")
+            para.clear()
+
+    def flush_lists():
+        if ul:
+            out.append("<ul>" + "".join("<li>" + _md_inline(i) + "</li>" for i in ul) + "</ul>")
+            ul.clear()
+        if ol:
+            out.append("<ol>" + "".join("<li>" + _md_inline(i) + "</li>" for i in ol) + "</ol>")
+            ol.clear()
+        if quote:
+            out.append("<blockquote>" + "<br>".join(_md_inline(l) for l in quote) + "</blockquote>")
+            quote.clear()
+
+    for raw in esc.split("\n"):
+        line = raw.rstrip()
+        stripped = line.strip()
+        h = re.match(r"^(#{1,6}) (.+)$", stripped)
+        if not stripped:
+            flush_para(); flush_lists()
+        elif h:
+            flush_para(); flush_lists()
+            level = min(len(h.group(1)) + 1, 4)  # page h1 is the portal title → h2..h4
+            out.append(f"<h{level}>" + _md_inline(h.group(2)) + f"</h{level}>")
+        elif re.match(r"^(-{3,}|\*{3,})$", stripped):
+            flush_para(); flush_lists()
+            out.append("<hr>")
+        elif re.match(r"^[-*] ", stripped):
+            flush_para(); ol and flush_lists(); quote and flush_lists()
+            ul.append(stripped[2:])
+        elif re.match(r"^\d+[.)] ", stripped):
+            flush_para(); ul and flush_lists(); quote and flush_lists()
+            ol.append(re.sub(r"^\d+[.)] ", "", stripped))
+        elif stripped.startswith("&gt;"):
+            flush_para(); ul and flush_lists(); ol and flush_lists()
+            quote.append(re.sub(r"^&gt; ?", "", stripped))
+        else:
+            flush_lists()
+            para.append(stripped)
+    flush_para(); flush_lists()
+    return "".join(out)
+
+
+def _about_page(slug: str, title: str, description: str | None, layers_info: list[dict]) -> str | None:
+    """The standalone documentation page (`about.html`) published next to the map — GeoNode-style
+    'full page that links to the map', styled after GeoLibre's dark design tokens. Static HTML,
+    rendered server-side at publish (no JS needed)."""
+    has_layer_docs = any(i.get("abstract") or i.get("license") or i.get("attribution") or i.get("links")
+                         for i in layers_info)
+    if not description and not has_layer_docs:
+        return None
+
+    cards = []
+    for i in layers_info:
+        parts = ['<div class="layer"><div class="layer-name">' + _esc(i.get("name"))
+                 + ('<span class="badge">public data</span>' if i.get("is_public") else "") + "</div>"]
+        if i.get("abstract"):
+            parts.append('<p class="abstract">' + _esc(i["abstract"]) + "</p>")
+        meta = []
+        if i.get("license"):
+            meta.append("License: " + _esc(i["license"]))
+        if i.get("attribution"):
+            meta.append(_esc(i["attribution"]))
+        if meta:
+            parts.append('<p class="meta">' + " · ".join(meta) + "</p>")
+        if i.get("links"):
+            links = "".join(f'<a class="pill" href="{_esc(url)}" target="_blank" rel="noopener">'
+                            f"{_esc(label)} ↗</a>" for label, url in i["links"].items())
+            parts.append(f'<div class="links">{links}</div>')
+        parts.append("</div>")
+        cards.append("".join(parts))
+
+    desc_html = _md_to_html(description) if description else ""
+    # Design tokens borrowed from GeoLibre's dark theme (shadcn scale) — an intentional,
+    # self-contained look independent of the map template.
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{_esc(title)} — About</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  :root {{
+    --bg: hsl(222 47% 7%); --panel: hsl(222 44% 9%); --card: hsl(220 40% 12%);
+    --border: hsl(217 33% 17%); --fg: hsl(210 40% 98%); --muted: hsl(215 20% 65%);
+    --primary: hsl(217 91% 60%); --radius: 10px;
+  }}
+  body {{
+    background: var(--bg); color: var(--fg); line-height: 1.7; font-size: 16px;
+    font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  }}
+  .wrap {{ max-width: 880px; margin: 0 auto; padding: 0 28px 80px; }}
+  .top {{
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 22px 0; border-bottom: 1px solid var(--border); margin-bottom: 48px;
+  }}
+  .brand {{ font-size: 13px; color: var(--muted); letter-spacing: .4px; }}
+  .open-map {{
+    display: inline-flex; align-items: center; gap: 8px; padding: 9px 20px;
+    background: var(--primary); color: #fff; text-decoration: none; font-weight: 600;
+    font-size: 14px; border-radius: 999px; transition: filter .15s;
+  }}
+  .open-map:hover {{ filter: brightness(1.12); }}
+  .kicker {{
+    font-size: 11px; font-weight: 700; letter-spacing: 2.2px; text-transform: uppercase;
+    color: var(--primary); margin-bottom: 10px;
+  }}
+  h1 {{ font-size: 40px; font-weight: 750; letter-spacing: -.02em; margin-bottom: 26px; }}
+  .doc {{ max-width: 68ch; color: hsl(210 30% 88%); }}
+  .doc h2 {{ font-size: 23px; font-weight: 650; margin: 34px 0 10px; color: var(--fg); }}
+  .doc h3, .doc h4 {{ font-size: 18px; font-weight: 600; margin: 24px 0 8px; color: var(--fg); }}
+  .doc p {{ margin: 10px 0; }}
+  .doc ul, .doc ol {{ margin: 10px 0 10px 26px; }}
+  .doc li {{ margin: 4px 0; }}
+  .doc a {{ color: var(--primary); text-decoration: none; border-bottom: 1px solid transparent; }}
+  .doc a:hover {{ border-bottom-color: var(--primary); }}
+  .doc img {{ max-width: 100%; border-radius: var(--radius); border: 1px solid var(--border); margin: 14px 0; }}
+  .doc blockquote {{
+    border-left: 3px solid var(--primary); background: var(--panel);
+    padding: 10px 18px; margin: 14px 0; border-radius: 0 var(--radius) var(--radius) 0;
+    color: var(--muted);
+  }}
+  .doc hr {{ border: none; border-top: 1px solid var(--border); margin: 28px 0; }}
+  .doc code {{
+    font-size: 13.5px; background: var(--card); border: 1px solid var(--border);
+    border-radius: 6px; padding: 1.5px 6px;
+  }}
+  .section-title {{
+    font-size: 13px; font-weight: 700; letter-spacing: 1.8px; text-transform: uppercase;
+    color: var(--muted); margin: 56px 0 18px; padding-top: 26px; border-top: 1px solid var(--border);
+  }}
+  .grid {{ display: grid; grid-template-columns: 1fr; gap: 14px; }}
+  @media (min-width: 700px) {{ .grid {{ grid-template-columns: 1fr 1fr; }} }}
+  .layer {{
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 18px 20px; transition: border-color .15s;
+  }}
+  .layer:hover {{ border-color: hsl(217 33% 28%); }}
+  .layer-name {{ font-weight: 650; font-size: 15px; }}
+  .badge {{
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px;
+    color: hsl(142 71% 55%); background: hsl(142 71% 12%); border: 1px solid hsl(142 71% 20%);
+    border-radius: 999px; padding: 2.5px 9px; margin-left: 8px; vertical-align: 2px;
+  }}
+  .abstract {{ font-size: 13.5px; color: hsl(210 30% 85%); margin-top: 8px; }}
+  .meta {{ font-size: 12px; color: var(--muted); margin-top: 8px; }}
+  .links {{ display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }}
+  .pill {{
+    font-size: 12px; font-weight: 600; text-decoration: none; padding: 5px 13px;
+    border-radius: 999px; color: var(--primary); background: var(--card);
+    border: 1px solid var(--border); transition: border-color .15s;
+  }}
+  .pill:hover {{ border-color: var(--primary); }}
+  .foot {{ font-size: 12.5px; color: var(--muted); margin-top: 40px; }}
+  .foot a {{ color: var(--primary); text-decoration: none; }}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <span class="brand">GeoDeploy portal</span>
+    <a class="open-map" href="./">Open the map →</a>
+  </div>
+  <div class="kicker">Documentation</div>
+  <h1>{_esc(title)}</h1>
+  <div class="doc">{desc_html}</div>
+  {'<div class="section-title">Layers &amp; data</div><div class="grid">' + ''.join(cards) + '</div>' if cards else ''}
+  <p class="foot">All shared data of this server: <a href="/api/stac">STAC catalog</a></p>
+</div>
+</body>
+</html>"""
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

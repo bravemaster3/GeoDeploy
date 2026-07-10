@@ -108,6 +108,12 @@ export const deleteExternalSource = (id) => api.delete(`/data/sources/${id}`)
 export const listPortals = () => api.get('/portals')
 export const createPortal = (data) => api.post('/portals', data)
 export const updatePortal = (id, data) => api.put(`/portals/${id}`, data)
+// Image for the portal About page (WYSIWYG) -> public URL to embed
+export const uploadPortalAsset = (id, file) => {
+  const form = new FormData()
+  form.append('file', file)
+  return api.post(`/portals/${id}/assets`, form, { headers: { 'Content-Type': 'multipart/form-data' } })
+}
 export const publishPortal = (id) => api.post(`/portals/${id}/publish`)
 export const unpublishPortal = (id) => api.post(`/portals/${id}/unpublish`)
 export const deletePortal = (id) => api.delete(`/portals/${id}`)

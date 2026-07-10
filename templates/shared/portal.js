@@ -770,125 +770,29 @@
     if (reset) reset.style.display = '';
   }
 
-  // ── About panel (portal documentation) ──────────────────
-  // Rich portal description (markdown) + per-layer catalog metadata and, for layers the admin
-  // shared, their public data-access links (baked by portal_generator into
-  // STYLE.geodeploy.description / .layersInfo). Portals are documentation, not just maps.
-  function mdToHtml(md) {
-    // Minimal, safe markdown: escape EVERYTHING first, then re-introduce a small vocabulary
-    // (headings, bold/italic, links, bullet/numbered lists, quotes, code, rules). Covers what the
-    // editor's TipTap→markdown serializer emits. No raw HTML passes through.
-    const esc = String(md).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    function inline(s) {
-      return s
-        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-        .replace(/(^|\W)\*([^*]+)\*(?=\W|$)/g, '$1<em>$2</em>')
-        .replace(/(^|\W)_([^_]+)_(?=\W|$)/g, '$1<em>$2</em>')
-        .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+|\/[^)\s]*)\)/g,
-                 '<a href="$2" target="_blank" rel="noopener">$1</a>')
-        .replace(/`([^`]+)`/g, '<code>$1</code>');
-    }
-    return esc.split(/\n{2,}/).map(function (block) {
-      const lines = block.split('\n');
-      const live = lines.filter(function (l) { return l.trim(); });
-      if (/^\s*(-{3,}|\*{3,})\s*$/.test(block)) return '<hr>';
-      if (live.length && live.every(function (l) { return /^\s*[-*] /.test(l); })) {
-        return '<ul>' + live.map(function (l) {
-          return '<li>' + inline(l.replace(/^\s*[-*] /, '')) + '</li>';
-        }).join('') + '</ul>';
-      }
-      if (live.length && live.every(function (l) { return /^\s*\d+[.)] /.test(l); })) {
-        return '<ol>' + live.map(function (l) {
-          return '<li>' + inline(l.replace(/^\s*\d+[.)] /, '')) + '</li>';
-        }).join('') + '</ol>';
-      }
-      if (live.length && live.every(function (l) { return /^\s*&gt; ?/.test(l); })) {
-        return '<blockquote>' + live.map(function (l) {
-          return inline(l.replace(/^\s*&gt; ?/, ''));
-        }).join('<br>') + '</blockquote>';
-      }
-      const h = block.match(/^(#{1,6}) (.+)$/m);
-      if (h && lines.length === 1) {
-        const level = Math.min(h[1].length + 1, 4);  // portal h1 is the page title → h2..h4
-        return '<h' + level + '>' + inline(h[2]) + '</h' + level + '>';
-      }
-      return '<p>' + inline(block).replace(/\n/g, '<br>') + '</p>';
-    }).join('');
-  }
-
+  // ── About page links (portals-as-documentation) ─────────
+  // The documentation is a STANDALONE page (about.html), rendered server-side at publish by
+  // portal_generator._about_page — GeoNode-style "full page that links to the map". Only the
+  // entry points live here: an About pill in the header (always visible) and a sidebar link.
   function buildAboutPanel() {
-    const desc = STYLE.geodeploy && STYLE.geodeploy.description;
-    const infos = (STYLE.geodeploy && STYLE.geodeploy.layersInfo) || [];
-    const hasLayerDocs = infos.some(function (i) {
-      return i.abstract || i.license || i.attribution || i.links;
-    });
-    if (!desc && !hasLayerDocs) return;
-
-    const overlay = document.createElement('div');
-    overlay.id = 'gd-about-overlay';
-    // NOTE: the top-of-file TITLE const lives in the access-gate IIFE, a different closure —
-    // read the global directly here.
-    const title = escAbout((window.GEODEPLOY && window.GEODEPLOY.title) || 'About');
-    let html = '<div id="gd-about-panel"><button id="gd-about-close" aria-label="Close">&times;</button>';
-    html += '<div class="gd-about-hero"><span class="gd-about-kicker">Documentation</span>' +
-      '<h1>' + title + '</h1></div>';
-    html += '<div class="gd-about-body">';
-    if (desc) html += '<div class="gd-about-desc">' + mdToHtml(desc) + '</div>';
-    if (hasLayerDocs) {
-      html += '<h2 class="gd-about-layers-title">Layers &amp; data</h2><div class="gd-about-grid">';
-      infos.forEach(function (i) {
-        html += '<div class="gd-about-layer"><div class="gd-about-layer-name">' + escAbout(i.name) +
-          (i.is_public ? ' <span class="gd-about-badge">public data</span>' : '') + '</div>';
-        if (i.abstract) html += '<p class="gd-about-abstract">' + escAbout(i.abstract) + '</p>';
-        const meta = [];
-        if (i.license) meta.push('License: ' + escAbout(i.license));
-        if (i.attribution) meta.push(escAbout(i.attribution));
-        if (meta.length) html += '<p class="gd-about-meta">' + meta.join(' · ') + '</p>';
-        if (i.links) {
-          const links = Object.keys(i.links).map(function (label) {
-            return '<a class="gd-about-link" href="' + location.origin + i.links[label] +
-              '" target="_blank" rel="noopener">' + escAbout(label) + ' ↗</a>';
-          });
-          html += '<div class="gd-about-links">' + links.join('') + '</div>';
-        }
-        html += '</div>';
-      });
-      html += '</div><p class="gd-about-foot">All shared data of this server: ' +
-        '<a href="' + location.origin + '/api/stac" target="_blank" rel="noopener">STAC catalog</a></p>';
-    }
-    html += '</div></div>';
-    overlay.innerHTML = html;
-    document.body.appendChild(overlay);
-    overlay.addEventListener('click', function (e) {
-      if (e.target === overlay || e.target.id === 'gd-about-close') overlay.style.display = 'none';
-    });
-    overlay.style.display = 'none';
-
-    function openAbout() { overlay.style.display = 'flex'; }
-
-    // Primary entry: an "About" button in the header (always visible, never buried under a long
-    // layer list). The sidebar link below is kept as a secondary entry point.
+    if (!(STYLE.geodeploy && STYLE.geodeploy.aboutPage)) return;
+    const base = location.pathname.endsWith('/') ? location.pathname : location.pathname + '/';
+    const href = base + 'about.html';
     const header = document.getElementById('header');
     const badge = document.getElementById('header-badge');
     if (header) {
-      const navBtn = document.createElement('button');
-      navBtn.id = 'gd-about-nav';
-      navBtn.type = 'button';
-      navBtn.textContent = 'About';
-      navBtn.addEventListener('click', openAbout);
-      if (badge) header.insertBefore(navBtn, badge); else header.appendChild(navBtn);
+      const nav = document.createElement('a');
+      nav.id = 'gd-about-nav';
+      nav.href = href;
+      nav.textContent = 'About';
+      if (badge) header.insertBefore(nav, badge); else header.appendChild(nav);
     }
-    const btn = document.createElement('button');
-    btn.id = 'gd-about-btn';
-    btn.type = 'button';
-    btn.innerHTML = '&#9432; About this portal';
-    btn.addEventListener('click', openAbout);
+    const side = document.createElement('a');
+    side.id = 'gd-about-btn';
+    side.href = href;
+    side.innerHTML = '&#9432; About this portal';
     const inner = document.getElementById('sidebar-inner') || sidebar;
-    if (inner) inner.appendChild(btn);
-  }
-
-  function escAbout(s) {
-    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    if (inner) inner.appendChild(side);
   }
 
   // ── Layer switcher ──────────────────────────────────────
