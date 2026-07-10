@@ -14,6 +14,20 @@
       --shadow: 0 1px 3px rgba(0,0,0,.1), 0 1px 2px rgba(0,0,0,.06);
       --shadow-lg: 0 4px 16px rgba(0,0,0,.12);
     }
+    /* Dark theme (GeoLibre scale, same family as about.html and the dashboard). Selector is
+       html[data-theme=dark] — HIGHER specificity than :root, so template theme.css overrides
+       (which target :root) restyle the LIGHT theme without breaking dark. Toggled by portal.js
+       (visitor preference persisted in localStorage; defaults to the OS color scheme). */
+    html[data-theme="dark"] {
+      --bg: hsl(222 44% 10%);
+      --surface: hsl(220 40% 13%);
+      --border: hsl(217 33% 18%);
+      --text: hsl(210 40% 96%);
+      --text-muted: hsl(215 20% 65%);
+      --accent-light: hsl(220 35% 20%);
+      --shadow: 0 1px 3px rgba(0,0,0,.5), 0 1px 2px rgba(0,0,0,.4);
+      --shadow-lg: 0 6px 22px rgba(0,0,0,.55);
+    }
 
     html, body { height: 100%; overflow: hidden; font-family: system-ui, -apple-system, sans-serif; color: var(--text); }
 
@@ -427,6 +441,18 @@
       transition: background .15s, color .15s;
     }
     #gd-about-nav:hover { background: var(--accent); color: #fff; }
+    #gd-theme-toggle {
+      width: 30px; height: 30px; margin-right: 10px; flex-shrink: 0; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      color: var(--text-muted); background: transparent;
+      border: 1px solid var(--border); border-radius: 8px;
+    }
+    #gd-theme-toggle:hover { color: var(--text); border-color: var(--accent); }
+    #gd-theme-toggle svg { width: 15px; height: 15px; }
+    /* When present, the theme toggle takes the right-float role; whatever follows unfloats */
+    #gd-theme-toggle { margin-left: auto; }
+    #gd-theme-toggle ~ #gd-about-nav { margin-left: 0; }
+    #gd-theme-toggle + #header-badge { margin-left: 0; }
     /* #header-badge normally floats right via margin-left:auto — the About link takes that
        role and the badge follows it. */
     #gd-about-nav + #header-badge { margin-left: 0; }

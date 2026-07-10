@@ -71,6 +71,41 @@
   const STYLE = window.GEODEPLOY.style;
   const POPUP_CONFIG = window.GEODEPLOY.popupConfig;
 
+  // ── Theme (light/dark) ──────────────────────────────────
+  // Dark = html[data-theme=dark] variable overrides in portal.css (template theme.css restyles
+  // the LIGHT theme via :root and never clobbers dark). Default follows the visitor's OS color
+  // scheme; an explicit toggle choice is persisted per browser.
+  (function () {
+    const saved = localStorage.getItem('gd-portal-theme');
+    const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    if (saved ? saved === 'dark' : prefersDark) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    }
+    const header = document.getElementById('header');
+    if (!header) return;
+    const btn = document.createElement('button');
+    btn.id = 'gd-theme-toggle';
+    btn.type = 'button';
+    const sun = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+    const moon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+    function render() {
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      btn.innerHTML = isDark ? sun : moon;
+      btn.title = isDark ? 'Switch to light mode' : 'Switch to dark mode';
+      btn.setAttribute('aria-label', btn.title);
+    }
+    btn.addEventListener('click', function () {
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      if (isDark) document.documentElement.removeAttribute('data-theme');
+      else document.documentElement.setAttribute('data-theme', 'dark');
+      localStorage.setItem('gd-portal-theme', isDark ? 'light' : 'dark');
+      render();
+    });
+    render();
+    const badge = document.getElementById('header-badge');
+    if (badge) header.insertBefore(btn, badge); else header.appendChild(btn);
+  })();
+
   // Make tile URLs absolute so MapLibre's Web Worker can resolve them
   // (Workers can't resolve relative URLs against the page origin)
   ;(function absolutifyTileUrls(style) {

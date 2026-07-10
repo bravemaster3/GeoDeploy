@@ -7,6 +7,11 @@ import en from './i18n/en.json'
 import fr from './i18n/fr.json'
 import './style.css'
 
+// Theme: dark is the default (index.html ships class="dark"); a saved preference wins.
+// The toggle lives in the shell sidebar (Layout.vue) and writes the same key.
+const savedTheme = localStorage.getItem('gd-theme')
+if (savedTheme) document.documentElement.classList.toggle('dark', savedTheme === 'dark')
+
 const i18n = createI18n({
   legacy: false,
   locale: navigator.language.startsWith('fr') ? 'fr' : 'en',
