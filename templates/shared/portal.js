@@ -171,6 +171,40 @@
   DECK_LAYERS.forEach(function (d) { deckState[d.layer_id] = { visible: d.visible !== false, data: null }; });
   let deckOverlay = null;
 
+  // ── GeoArrow binary transport (detail) ──────────────────
+  // The server sends viewport detail as a GeoArrow Arrow IPC stream (geometry only, built
+  // WKB→ragged-arrays→Arrow with no GeoJSON text); the browser hands the buffer zero-copy to
+  // @geoarrow/deck.gl-layers — no JSON parse, no per-feature JS objects. If any module fails to
+  // load (CDN/offline) or the transport errors, everything falls back to the GeoJSON path on the
+  // classic UMD deck build — identical output, just the slower transport.
+  const ARROW_DETAIL = true;
+  const gdArrow = { broken: false };
+  let DK = null;  // the ONE deck module set in use: {MapboxOverlay, GeoJsonLayer, geo?, tableFromIPC?}
+
+  function loadDeckModules() {
+    function umd() {
+      return (window.deck && deck.MapboxOverlay)
+        ? { MapboxOverlay: deck.MapboxOverlay, GeoJsonLayer: deck.GeoJsonLayer,
+            geo: null, tableFromIPC: null }
+        : null;
+    }
+    if (!ARROW_DETAIL) return Promise.resolve(umd());
+    return Promise.all([
+      import('https://cdn.jsdelivr.net/npm/@deck.gl/mapbox@9/+esm'),
+      import('https://cdn.jsdelivr.net/npm/@deck.gl/layers@9/+esm'),
+      import('https://cdn.jsdelivr.net/npm/@geoarrow/deck.gl-layers/+esm'),
+      import('https://cdn.jsdelivr.net/npm/apache-arrow@17/+esm'),
+    ]).then(function (m) {
+      // Every layer class must come from ONE deck.gl core (jsdelivr dedupes same-version module
+      // URLs): mixing the UMD core with ESM-built layers breaks MapboxOverlay's layer handling.
+      return { MapboxOverlay: m[0].MapboxOverlay, GeoJsonLayer: m[1].GeoJsonLayer,
+               geo: m[2], tableFromIPC: m[3].tableFromIPC };
+    }).catch(function (e) {
+      console.warn('[geodeploy] GeoArrow modules unavailable; using GeoJSON transport', e);
+      return umd();
+    });
+  }
+
   function deckHexToRgb(hex) {
     const h = String(hex || '#3b82f6').replace('#', '');
     const f = h.length === 3 ? h.split('').map(function (c) { return c + c; }).join('') : h;
@@ -185,9 +219,40 @@
     const isPoly = geom.indexOf('polygon') !== -1, isLine = geom.indexOf('line') !== -1;
     const rgb = deckHexToRgb(d.color), outline = deckHexToRgb(d.outline_color || '#1d4ed8');
     const op = d.opacity != null ? d.opacity : 1;
+    if (st.data.__arrowTable) {
+      // GeoArrow detail: the Arrow table is consumed zero-copy by @geoarrow/deck.gl-layers —
+      // never converted to GeoJSON. Styling mirrors the GeoJsonLayer branch below.
+      const t = st.data.__arrowTable;
+      if (isLine) {
+        return new DK.geo.GeoArrowPathLayer({
+          id: 'deck_' + d.layer_id, data: t, pickable: false,
+          getColor: rgb.concat(Math.round(255 * op)),
+          getWidth: d.line_width != null ? d.line_width : 2,
+          widthUnits: 'pixels', widthMinPixels: d.line_width || 2,
+        });
+      }
+      if (isPoly) {
+        return new DK.geo.GeoArrowPolygonLayer({
+          id: 'deck_' + d.layer_id, data: t, pickable: false,
+          filled: true, stroked: true,
+          getFillColor: rgb.concat(Math.round(255 * op * (d.fill_opacity != null ? d.fill_opacity : 0.45))),
+          getLineColor: outline.concat(Math.round(255 * op)),
+          lineWidthUnits: 'pixels',
+          getLineWidth: d.line_width != null ? d.line_width : 1,
+          lineWidthMinPixels: 1,
+        });
+      }
+      return new DK.geo.GeoArrowScatterplotLayer({
+        id: 'deck_' + d.layer_id, data: t, pickable: false,
+        getFillColor: rgb.concat(Math.round(255 * op)),
+        radiusUnits: 'pixels',
+        getRadius: d.radius != null ? d.radius : 5,
+        radiusMinPixels: 2,
+      });
+    }
     if (st.data.__overview) {
       // Large-scale representation: the manifest's partition grid shaded by feature density.
-      return new deck.GeoJsonLayer({
+      return new DK.GeoJsonLayer({
         id: 'deck_' + d.layer_id,
         data: st.data,
         pickable: false,
@@ -199,7 +264,7 @@
         getLineWidth: 0.5,
       });
     }
-    return new deck.GeoJsonLayer({
+    return new DK.GeoJsonLayer({
       id: 'deck_' + d.layer_id,
       data: st.data,
       pickable: false,
@@ -440,17 +505,33 @@
     });
   }
 
-  function serverViewportGeojson(d, bbox, limit) {
-    // Abort the layer's previous in-flight fetch: its result would be discarded by the sequence
-    // token anyway, and rapid zoom-outs otherwise stack several heavy queries in the browser.
-    const prev = gdWasm.aborters && gdWasm.aborters[d.layer_id];
+  // Abort the layer's previous in-flight fetch: its result would be discarded by the sequence
+  // token anyway, and rapid zoom-outs otherwise stack several heavy queries in the browser.
+  function abortableFetch(layerId, url) {
+    const prev = gdWasm.aborters && gdWasm.aborters[layerId];
     if (prev) { try { prev.abort(); } catch (e) { /* already settled */ } }
     const ctl = typeof AbortController === 'function' ? new AbortController() : null;
-    (gdWasm.aborters || (gdWasm.aborters = {}))[d.layer_id] = ctl;
+    (gdWasm.aborters || (gdWasm.aborters = {}))[layerId] = ctl;
+    return fetch(url, ctl ? { signal: ctl.signal } : undefined);
+  }
+
+  function serverViewportGeojson(d, bbox, limit) {
     const url = location.origin + '/api/data/vector/' + d.layer_id +
       '/features.geojson?bbox=' + encodeURIComponent(bbox.join(',')) + '&limit=' + limit;
-    return fetch(url, ctl ? { signal: ctl.signal } : undefined)
+    return abortableFetch(d.layer_id, url)
       .then(function (r) { return r.ok ? r.json() : null; });
+  }
+
+  function arrowViewport(d, bbox, limit) {
+    const url = location.origin + '/api/data/vector/' + d.layer_id +
+      '/features.arrow?bbox=' + encodeURIComponent(bbox.join(',')) + '&limit=' + limit;
+    return abortableFetch(d.layer_id, url).then(function (r) {
+      if (r.status === 204) return { type: 'FeatureCollection', features: [] };
+      if (!r.ok) throw new Error('features.arrow HTTP ' + r.status);
+      return r.arrayBuffer().then(function (buf) {
+        return { __arrowTable: DK.tableFromIPC(new Uint8Array(buf)) };
+      });
+    });
   }
 
   // Light layers (small TOTAL feature count — world countries, modest point sets) always show
@@ -490,6 +571,15 @@
       // load (brief blank is better than a misleading grid).
       const st = deckState[d.layer_id];
       if (st && st.data && st.data.__overview) { st.data = null; rebuildDeck(); }
+      // Preferred detail transport: GeoArrow binary (one request, zero JSON on either side).
+      if (ARROW_DETAIL && DK && DK.geo && DK.tableFromIPC && !gdArrow.broken) {
+        return arrowViewport(d, bbox, limit).catch(function (e) {
+          if (e && e.name === 'AbortError') throw e;  // superseded, not broken
+          gdArrow.broken = true;  // hard failure → GeoJSON transport for the session
+          console.warn('[geodeploy] GeoArrow transport failed; using GeoJSON fallback', e);
+          return serverViewportGeojson(d, bbox, limit);
+        });
+      }
       if (WASM_DETAIL_READS && gdWasm.supported && !gdWasm.broken && files.length <= WASM_MAX_FILES) {
         return wasmQuery(d, m, files, bbox, limit).catch(function (e) {
           gdWasm.broken = true;  // one hard failure → stay on the server path for the session
@@ -530,8 +620,16 @@
   }
 
   function initDeck() {
-    if (!DECK_LAYERS.length || !window.deck || !deck.MapboxOverlay) return;
-    deckOverlay = new deck.MapboxOverlay({ interleaved: false, layers: [] });
+    if (!DECK_LAYERS.length) return;
+    loadDeckModules().then(function (dk) {
+      if (!dk) return;  // neither ESM nor UMD deck available — deck layers simply don't render
+      DK = dk;
+      initDeckWithModules();
+    });
+  }
+
+  function initDeckWithModules() {
+    deckOverlay = new DK.MapboxOverlay({ interleaved: false, layers: [] });
     map.addControl(deckOverlay);
     // Deck-only portal without an admin-pinned view: the merged bounds can be stretched by
     // far-flung outlier features (e.g. overseas territories on a mainland dataset), so the

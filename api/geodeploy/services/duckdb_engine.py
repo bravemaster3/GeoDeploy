@@ -419,6 +419,107 @@ def query_features_geojson(s3_key: str, bbox=None, limit: int = 50_000, creds: d
         conn.close()
 
 
+# shapely.GeometryType → GeoArrow extension name (geometry collections unsupported → caller
+# falls back to the GeoJSON transport).
+_GEOARROW_EXT = {0: "geoarrow.point", 1: "geoarrow.linestring", 3: "geoarrow.polygon",
+                 4: "geoarrow.multipoint", 5: "geoarrow.multilinestring", 6: "geoarrow.multipolygon"}
+
+
+def query_features_arrow(s3_key: str, bbox=None, limit: int = 50_000, creds: dict | None = None,
+                         bucket: str | None = None) -> bytes | None:
+    """Viewport query → a GeoArrow-encoded Arrow IPC stream (geometry only, EPSG:4326).
+
+    The binary twin of `query_features_geojson` for the portal deck.gl overlay: WKB →
+    `shapely.to_ragged_array` (flat coordinate ndarray + offsets, C speed) → zero-copy pyarrow
+    nested lists tagged `ARROW:extension:name = geoarrow.*` → IPC bytes. **No GeoJSON text is
+    produced anywhere on this path** — the browser hands the buffer to @geoarrow/deck.gl-layers
+    as-is. Only the geometry column is shipped (deck layers carry no popups yet). Returns None
+    for an empty viewport; raises for geometry collections (caller falls back to GeoJSON).
+    """
+    settings = get_settings()
+    bkt = bucket or settings.storage_bucket
+    meta_path, src = _parquet_paths(f"s3://{bkt}/{s3_key}")
+    limit = max(1, int(limit))
+
+    conn = _connect_read(creds)
+    try:
+        meta = _read_geo_metadata(conn, meta_path)
+        all_cols = [r[0] for r in conn.execute(
+            f"DESCRIBE SELECT * FROM {src}").fetchall()]
+        geom_col = meta["column"] or next(
+            (c for c in all_cols if c.lower() in ("geometry", "geom", "wkb_geometry", "wkb")), None)
+        if not geom_col:
+            raise ValueError("No geometry column found.")
+        src_epsg = meta["epsg"] or "EPSG:4326"
+
+        # Same covering + partition pruning as query_features_geojson.
+        where_parts, qb = [], None
+        if bbox and len(bbox) == 4 and meta["covering"]:
+            qb = _reproject_bbox(list(bbox), "EPSG:4326", src_epsg)
+            col, fields = meta["covering"]
+            def ce(f):
+                return f"struct_extract({_q(col)}, '{fields[f]}')"
+            where_parts.append(f"{ce('xmin')} <= {qb[2]} AND {ce('xmax')} >= {qb[0]} "
+                               f"AND {ce('ymin')} <= {qb[3]} AND {ce('ymax')} >= {qb[1]}")
+        read_src = src
+        gm = meta.get("grid")
+        if qb is not None and gm:
+            gsz = int(gm["grid"]); pad = 1
+            def _ci(v, lo, span):
+                return int((v - lo) / (span or 1.0) * gsz)
+            ix0 = max(0, _ci(qb[0], gm["minx"], gm["spanx"]) - pad)
+            ix1 = min(gsz - 1, _ci(qb[2], gm["minx"], gm["spanx"]) + pad)
+            iy0 = max(0, _ci(qb[1], gm["miny"], gm["spany"]) - pad)
+            iy1 = min(gsz - 1, _ci(qb[3], gm["miny"], gm["spany"]) + pad)
+            if ix0 <= ix1 and iy0 <= iy1:
+                cells = [ix * gsz + iy for ix in range(ix0, ix1 + 1) for iy in range(iy0, iy1 + 1)]
+                if len(cells) < gsz * gsz:
+                    read_src = f"read_parquet('{meta_path}', hive_partitioning=true)"
+                    where_parts.append(f"__cell IN ({','.join(str(c) for c in cells)})")
+        where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+        rows = conn.execute(
+            f"SELECT {_q(geom_col)} AS __wkb FROM {read_src} {where} LIMIT {limit}").fetchall()
+        wkbs = [bytes(r[0]) for r in rows if r[0] is not None]
+        if not wkbs:
+            return None
+
+        import numpy as np
+        import pyarrow as pa
+        from shapely import from_wkb, to_ragged_array
+        geoms = from_wkb(wkbs, on_invalid="ignore")
+        geoms = geoms[geoms != None]  # noqa: E711 — elementwise ndarray comparison
+        if geoms.size == 0:
+            return None
+        gt, coords, offsets = to_ragged_array(geoms, include_z=False)
+        ext = _GEOARROW_EXT.get(int(gt))
+        if ext is None:
+            raise ValueError(f"Unsupported geometry type for GeoArrow transport: {gt}")
+
+        if src_epsg != "EPSG:4326":
+            from pyproj import Transformer
+            _tr = Transformer.from_crs(src_epsg, "EPSG:4326", always_xy=True)
+            x, y = _tr.transform(coords[:, 0], coords[:, 1])
+            coords = np.column_stack([x, y])
+
+        # Zero-copy assembly: flat coords → FixedSizeList<double,2> ("xy"), then one ListArray
+        # per offsets level (innermost first, as shapely emits them).
+        flat = pa.array(np.ascontiguousarray(coords, dtype=np.float64).ravel(), type=pa.float64())
+        arr = pa.FixedSizeListArray.from_arrays(flat, 2)
+        for offs in offsets:
+            arr = pa.ListArray.from_arrays(
+                pa.array(np.asarray(offs, dtype=np.int32), type=pa.int32()), arr)
+        field = pa.field("geometry", arr.type, nullable=False,
+                         metadata={b"ARROW:extension:name": ext.encode()})
+        table = pa.Table.from_arrays([arr], schema=pa.schema([field]))
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, table.schema) as writer:
+            writer.write_table(table)
+        return sink.getvalue().to_pybytes()
+    finally:
+        conn.close()
+
+
 def stream_geojsonseq(s3_key: str, out, creds: dict | None = None, bucket: str | None = None,
                       batch_size: int = 20_000, log_every: int = 100_000) -> int:
     """Stream a whole GeoParquet file as newline-delimited GeoJSON (GeoJSONSeq, EPSG:4326) to the

@@ -275,6 +275,34 @@ async def vector_features(
     return await _viewport_geojson(result.scalar_one_or_none(), bbox, limit)
 
 
+@router.get("/{layer_id}/features.arrow")
+async def vector_features_arrow(
+    layer_id: int,
+    bbox: str | None = None,
+    limit: int = 50000,
+    db: AsyncSession = Depends(get_db),
+):
+    """PUBLIC viewport query as a GeoArrow-encoded Arrow IPC stream (geometry only) — the binary
+    transport for the portal deck.gl overlay (@geoarrow/deck.gl-layers consumes the buffer
+    zero-copy; no GeoJSON is produced server-side or reconstructed client-side). Same public-by-id
+    posture as features.geojson. 204 = empty viewport; errors → the client falls back to the
+    GeoJSON transport."""
+    from starlette.concurrency import run_in_threadpool
+    from ...services import duckdb_engine
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    layer = result.scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not found.")
+    if layer.storage_backend != "geoparquet" or not layer.s3_key:
+        raise HTTPException(400, "This layer is not a GeoParquet (file-backed) layer.")
+    body = await run_in_threadpool(
+        duckdb_engine.query_features_arrow, layer.s3_key, _parse_bbox(bbox),
+        max(1, min(limit, 200000)))
+    if body is None:
+        return Response(status_code=204)
+    return Response(content=body, media_type="application/vnd.apache.arrow.stream")
+
+
 @router.get("/{layer_id}/features.geojson")
 async def vector_features_public(
     layer_id: int,
