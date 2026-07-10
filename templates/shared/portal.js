@@ -189,19 +189,29 @@
         : null;
     }
     if (!ARROW_DETAIL) return Promise.resolve(umd());
-    return Promise.all([
-      import('https://cdn.jsdelivr.net/npm/@deck.gl/mapbox@9/+esm'),
-      import('https://cdn.jsdelivr.net/npm/@deck.gl/layers@9/+esm'),
-      import('https://cdn.jsdelivr.net/npm/@geoarrow/deck.gl-layers/+esm'),
-      import('https://cdn.jsdelivr.net/npm/apache-arrow@17/+esm'),
-    ]).then(function (m) {
-      // Every layer class must come from ONE deck.gl core (jsdelivr dedupes same-version module
-      // URLs): mixing the UMD core with ESM-built layers breaks MapboxOverlay's layer handling.
-      return { MapboxOverlay: m[0].MapboxOverlay, GeoJsonLayer: m[1].GeoJsonLayer,
-               geo: m[2], tableFromIPC: m[3].tableFromIPC };
-    }).catch(function (e) {
-      console.warn('[geodeploy] GeoArrow modules unavailable; using GeoJSON transport', e);
-      return umd();
+    // Preferred: the SELF-CONTAINED vendored bundle published next to index.html (one file, one
+    // deck core, same-origin — works offline and avoids cross-CDN ESM interop, which failed in
+    // practice with the jsDelivr module set).
+    const base = location.pathname.endsWith('/') ? location.pathname : location.pathname + '/';
+    return import(base + 'deck-arrow.esm.js').then(function (m) {
+      return { MapboxOverlay: m.MapboxOverlay, GeoJsonLayer: m.GeoJsonLayer,
+               geo: m.geoarrow, tableFromIPC: m.tableFromIPC };
+    }).catch(function () {
+      // Older publish without the bundle → try the CDN module set → UMD GeoJSON path.
+      return Promise.all([
+        import('https://cdn.jsdelivr.net/npm/@deck.gl/mapbox@9/+esm'),
+        import('https://cdn.jsdelivr.net/npm/@deck.gl/layers@9/+esm'),
+        import('https://cdn.jsdelivr.net/npm/@geoarrow/deck.gl-layers/+esm'),
+        import('https://cdn.jsdelivr.net/npm/apache-arrow@17/+esm'),
+      ]).then(function (m) {
+        // Every layer class must come from ONE deck.gl core: mixing the UMD core with ESM-built
+        // layers breaks MapboxOverlay's layer handling.
+        return { MapboxOverlay: m[0].MapboxOverlay, GeoJsonLayer: m[1].GeoJsonLayer,
+                 geo: m[2], tableFromIPC: m[3].tableFromIPC };
+      }).catch(function (e) {
+        console.warn('[geodeploy] GeoArrow modules unavailable; using GeoJSON transport', e);
+        return umd();
+      });
     });
   }
 

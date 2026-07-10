@@ -1,6 +1,7 @@
 """Assemble MapLibre GL JS style JSON and write the portal static bundle."""
 import json
 import os
+import shutil
 from pathlib import Path
 from ..config import get_settings
 from .martin import get_tile_url as vector_tile_url
@@ -237,6 +238,16 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
 
     (portals_dir / "index.html").write_text(html, encoding="utf-8")
     (portals_dir / "style.json").write_text(json.dumps(full_style, indent=2), encoding="utf-8")
+
+    # Vendored browser modules (deck.gl + GeoArrow + Arrow as ONE self-contained ESM bundle,
+    # templates/shared/vendor/) are copied next to index.html so the portal imports them
+    # same-origin — no CDN dependency (offline portals) and no cross-CDN ESM interop failures
+    # (the jsDelivr module set failed to load in practice; see notes §0h-addendum-2).
+    vendor_dir = shared_dir / "vendor"
+    if vendor_dir.is_dir():
+        for f in vendor_dir.iterdir():
+            if f.is_file():
+                shutil.copy2(f, portals_dir / f.name)
 
     return f"/portals/{slug}/"
 
