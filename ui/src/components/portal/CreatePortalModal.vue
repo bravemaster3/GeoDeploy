@@ -4,7 +4,7 @@
     <div class="card w-full max-w-md p-6 space-y-4 shadow-2xl">
       <div class="flex items-center justify-between">
         <h2 class="text-lg font-semibold">New portal</h2>
-        <button @click="$emit('close')" class="text-gray-400 hover:text-gray-600 text-xl">&times;</button>
+        <button @click="$emit('close')" class="text-muted-foreground/70 hover:text-foreground text-xl">&times;</button>
       </div>
 
       <div>
@@ -28,7 +28,7 @@
         <input v-model="form.access_password" type="password" class="input" />
       </div>
 
-      <div v-if="error" class="text-sm text-red-600">{{ error }}</div>
+      <div v-if="error" class="text-sm text-red-400">{{ error }}</div>
 
       <div class="flex gap-3 justify-end pt-2">
         <button @click="$emit('close')" class="btn-secondary">Cancel</button>

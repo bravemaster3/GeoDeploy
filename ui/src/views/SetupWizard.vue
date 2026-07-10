@@ -1,18 +1,18 @@
 <template>
-  <div class="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+  <div class="min-h-screen bg-muted/40 flex items-center justify-center p-4">
     <div class="w-full max-w-lg">
       <div class="text-center mb-8">
-        <h1 class="text-3xl font-bold text-gray-900">GeoDeploy</h1>
-        <p class="text-gray-500 mt-1">Initial setup — takes about 2 minutes</p>
+        <h1 class="text-3xl font-bold text-foreground">GeoDeploy</h1>
+        <p class="text-muted-foreground mt-1">Initial setup — takes about 2 minutes</p>
       </div>
 
       <!-- Step progress -->
       <div class="flex items-center justify-center gap-2 mb-8">
         <template v-for="(s, i) in steps" :key="i">
           <div class="w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold"
-            :class="step > i ? 'bg-brand-600 text-white' : step === i ? 'bg-brand-100 text-brand-700 ring-2 ring-brand-500' : 'bg-gray-200 text-gray-500'"
+            :class="step > i ? 'bg-brand-600 text-white' : step === i ? 'bg-primary/15 text-primary ring-2 ring-primary/60' : 'bg-muted text-muted-foreground'"
           >{{ i + 1 }}</div>
-          <div v-if="i < steps.length - 1" class="w-12 h-0.5" :class="step > i ? 'bg-brand-600' : 'bg-gray-200'" />
+          <div v-if="i < steps.length - 1" class="w-12 h-0.5" :class="step > i ? 'bg-brand-600' : 'bg-muted'" />
         </template>
       </div>
 
@@ -23,12 +23,12 @@
           <div class="space-y-3">
             <label v-for="opt in dbOptions" :key="opt.value"
               class="flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors"
-              :class="db.type === opt.value ? 'border-brand-500 bg-brand-50' : 'border-gray-200 hover:border-gray-300'"
+              :class="db.type === opt.value ? 'border-primary bg-primary/10' : 'border-border hover:border-muted-foreground/40'"
             >
               <input type="radio" v-model="db.type" :value="opt.value" class="mt-0.5" />
               <div>
                 <div class="font-medium text-sm">{{ opt.label }}</div>
-                <div class="text-xs text-gray-500">{{ opt.desc }}</div>
+                <div class="text-xs text-muted-foreground">{{ opt.desc }}</div>
               </div>
             </label>
           </div>
@@ -49,12 +49,12 @@
           <div class="space-y-3">
             <label v-for="opt in storageOptions" :key="opt.value"
               class="flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors"
-              :class="storage.type === opt.value ? 'border-brand-500 bg-brand-50' : 'border-gray-200 hover:border-gray-300'"
+              :class="storage.type === opt.value ? 'border-primary bg-primary/10' : 'border-border hover:border-muted-foreground/40'"
             >
               <input type="radio" v-model="storage.type" :value="opt.value" class="mt-0.5" />
               <div>
                 <div class="font-medium text-sm">{{ opt.label }}</div>
-                <div class="text-xs text-gray-500">{{ opt.desc }}</div>
+                <div class="text-xs text-muted-foreground">{{ opt.desc }}</div>
               </div>
             </label>
           </div>
@@ -77,13 +77,13 @@
             <div>
               <label class="label">Password</label>
               <input v-model="admin.password" type="password" class="input" minlength="8" />
-              <p class="text-xs text-gray-500 mt-1">Minimum 8 characters</p>
+              <p class="text-xs text-muted-foreground mt-1">Minimum 8 characters</p>
             </div>
           </div>
         </template>
 
         <!-- Error -->
-        <div v-if="error" class="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{{ error }}</div>
+        <div v-if="error" class="p-3 bg-red-500/15 border border-red-500/30 rounded-lg text-sm text-red-400">{{ error }}</div>
 
         <!-- Actions -->
         <div class="flex justify-between pt-2">

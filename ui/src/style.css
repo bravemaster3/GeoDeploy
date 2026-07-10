@@ -3,8 +3,34 @@
 @tailwind utilities;
 
 @layer base {
+  /* Design tokens - GeoLibre's shadcn scale with GeoDeploy's green as primary.
+     The dashboard defaults to DARK (class="dark" on <html>, Coolify-style); the light values
+     stay ready for a future theme toggle. about.html and portal.css speak the same language. */
+  :root {
+    --background: 210 40% 98%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 40%;
+    --border: 214.3 31.8% 91.4%;
+    --primary: 142.1 76.2% 36.3%;
+    --primary-foreground: 355.7 100% 97.3%;
+  }
+  .dark {
+    --background: 222 47% 7%;
+    --foreground: 210 40% 98%;
+    --card: 222 44% 10%;
+    --card-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --border: 217.2 32.6% 17.5%;
+    --primary: 142.1 70.6% 45.3%;
+    --primary-foreground: 144.9 80.4% 10%;
+  }
+
   body {
-    @apply bg-gray-50 text-gray-900 antialiased;
+    @apply bg-background text-foreground antialiased;
   }
 }
 
@@ -13,22 +39,23 @@
     @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors;
   }
   .btn-primary {
-    @apply btn bg-brand-600 text-white hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500;
+    @apply btn bg-primary text-primary-foreground hover:bg-primary/85 focus:outline-none focus:ring-2 focus:ring-primary/60;
   }
   .btn-secondary {
-    @apply btn bg-white text-gray-700 border border-gray-300 hover:bg-gray-50;
+    @apply btn bg-card text-foreground border border-border hover:bg-muted;
   }
   .btn-danger {
     @apply btn bg-red-600 text-white hover:bg-red-700;
   }
   .card {
-    @apply bg-white rounded-xl border border-gray-200 shadow-sm;
+    @apply bg-card text-card-foreground rounded-xl border border-border shadow-sm;
   }
   .input {
-    @apply block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm
-           focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500;
+    @apply block w-full rounded-lg bg-card text-foreground border border-border px-3 py-2 text-sm
+           placeholder:text-muted-foreground/70
+           focus:outline-none focus:ring-2 focus:ring-primary/60 focus:border-primary;
   }
   .label {
-    @apply block text-sm font-medium text-gray-700 mb-1;
+    @apply block text-sm font-medium text-foreground/85 mb-1;
   }
 }

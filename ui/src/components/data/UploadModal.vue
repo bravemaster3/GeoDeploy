@@ -6,31 +6,31 @@
         <h2 class="text-lg font-semibold">
           {{ csvFile ? 'Import CSV as points' : (type === 'vector' ? 'Upload vector file' : 'Upload raster file') }}
         </h2>
-        <button @click="$emit('close')" class="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+        <button @click="$emit('close')" class="text-muted-foreground/70 hover:text-foreground text-xl leading-none">&times;</button>
       </div>
 
       <!-- Upload progress -->
       <div v-if="uploading" class="space-y-3">
         <div class="flex justify-between text-sm">
-          <span class="text-gray-600">{{ fileName }}</span>
+          <span class="text-muted-foreground">{{ fileName }}</span>
           <span class="font-medium">{{ uploadProgress }}%</span>
         </div>
-        <div class="h-2 bg-gray-100 rounded-full overflow-hidden">
-          <div class="h-full bg-brand-500 rounded-full transition-all" :style="{ width: uploadProgress + '%' }" />
+        <div class="h-2 bg-muted rounded-full overflow-hidden">
+          <div class="h-full bg-primary/100 rounded-full transition-all" :style="{ width: uploadProgress + '%' }" />
         </div>
-        <p class="text-xs text-gray-500">Uploading… GeoDeploy will process it in the background.</p>
+        <p class="text-xs text-muted-foreground">Uploading… GeoDeploy will process it in the background.</p>
       </div>
 
       <!-- CSV options (X/Y/CRS) -->
       <div v-else-if="csvFile" class="space-y-3">
-        <p class="text-sm font-medium text-gray-700 truncate">{{ csvFile.name }}</p>
+        <p class="text-sm font-medium text-foreground/85 truncate">{{ csvFile.name }}</p>
         <div class="flex gap-2">
           <div class="flex-1 min-w-0">
-            <label class="text-xs text-gray-500 block mb-1">Layer name</label>
+            <label class="text-xs text-muted-foreground block mb-1">Layer name</label>
             <input v-model="csvName" class="input w-full text-sm" placeholder="Layer name" />
           </div>
           <div class="w-32 flex-shrink-0">
-            <label class="text-xs text-gray-500 block mb-1">Delimiter</label>
+            <label class="text-xs text-muted-foreground block mb-1">Delimiter</label>
             <select v-model="csvDelim" @change="parseCsvHeader(csvFile)" class="input w-full text-sm">
               <option value="comma">Comma ,</option>
               <option value="semicolon">Semicolon ;</option>
@@ -41,23 +41,23 @@
         </div>
         <div class="flex gap-2">
           <div class="flex-1 min-w-0">
-            <label class="text-xs text-gray-500 block mb-1">X / longitude</label>
+            <label class="text-xs text-muted-foreground block mb-1">X / longitude</label>
             <select v-model="csvX" class="input w-full text-sm">
               <option v-for="c in csvColumns" :key="c" :value="c">{{ c }}</option>
             </select>
           </div>
           <div class="flex-1 min-w-0">
-            <label class="text-xs text-gray-500 block mb-1">Y / latitude</label>
+            <label class="text-xs text-muted-foreground block mb-1">Y / latitude</label>
             <select v-model="csvY" class="input w-full text-sm">
               <option v-for="c in csvColumns" :key="c" :value="c">{{ c }}</option>
             </select>
           </div>
           <div class="w-20 flex-shrink-0">
-            <label class="text-xs text-gray-500 block mb-1">EPSG</label>
+            <label class="text-xs text-muted-foreground block mb-1">EPSG</label>
             <input v-model.number="csvSrid" type="number" class="input w-full text-sm" />
           </div>
         </div>
-        <p v-if="!csvColumns.length" class="text-xs text-amber-600">Couldn't read columns from the header — check the file.</p>
+        <p v-if="!csvColumns.length" class="text-xs text-amber-400">Couldn't read columns from the header — check the file.</p>
         <div class="flex justify-end gap-2 pt-1">
           <button @click="resetCsv" class="btn-secondary text-sm">Back</button>
           <button @click="importCsv" :disabled="!csvX || !csvY || !csvColumns.length" class="btn-primary text-sm">Import points</button>
@@ -66,16 +66,16 @@
 
       <!-- Dropzone -->
       <div v-else
-        class="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-brand-400 hover:bg-brand-50 transition-colors"
+        class="border-2 border-dashed border-border rounded-xl p-8 text-center cursor-pointer hover:border-primary/60 hover:bg-primary/10 transition-colors"
         @dragover.prevent @drop.prevent="onDrop" @click="fileInput.click()"
       >
-        <UploadIcon class="w-8 h-8 text-gray-400 mx-auto mb-3" />
-        <p class="text-sm font-medium text-gray-700">Drop file here or click to browse</p>
-        <p class="text-xs text-gray-400 mt-1">{{ accept }}</p>
+        <UploadIcon class="w-8 h-8 text-muted-foreground/70 mx-auto mb-3" />
+        <p class="text-sm font-medium text-foreground/85">Drop file here or click to browse</p>
+        <p class="text-xs text-muted-foreground/70 mt-1">{{ accept }}</p>
         <input ref="fileInput" type="file" class="hidden" :accept="acceptAttr" @change="onFileChange" />
       </div>
 
-      <div v-if="error" class="text-sm text-red-600 bg-red-50 p-3 rounded-lg">{{ error }}</div>
+      <div v-if="error" class="text-sm text-red-400 bg-red-500/15 p-3 rounded-lg">{{ error }}</div>
     </div>
   </div>
   </Teleport>

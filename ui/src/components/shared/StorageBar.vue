@@ -1,11 +1,11 @@
 <template>
   <div class="space-y-1">
-    <div class="flex justify-between text-xs text-gray-500">
+    <div class="flex justify-between text-xs text-muted-foreground">
       <span>Storage</span>
       <span>{{ formatBytes(used) }}{{ total ? ` / ${formatBytes(total)}` : '' }}</span>
     </div>
-    <div class="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-      <div class="h-full bg-brand-500 rounded-full transition-all" :style="{ width: pct + '%' }" />
+    <div class="h-1.5 bg-muted rounded-full overflow-hidden">
+      <div class="h-full bg-primary/100 rounded-full transition-all" :style="{ width: pct + '%' }" />
     </div>
   </div>
 </template>

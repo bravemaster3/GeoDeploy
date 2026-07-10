@@ -8,8 +8,8 @@
     </div>
 
     <div v-if="!portalsStore.portals.length" class="card p-12 text-center">
-      <GlobeIcon class="w-10 h-10 text-gray-300 mx-auto mb-3" />
-      <p class="text-gray-500 text-sm">No portals yet.</p>
+      <GlobeIcon class="w-10 h-10 text-muted-foreground/40 mx-auto mb-3" />
+      <p class="text-muted-foreground text-sm">No portals yet.</p>
       <button @click="showCreate = true" class="btn-primary mt-4 mx-auto">Create your first portal</button>
     </div>
 

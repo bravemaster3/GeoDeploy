@@ -1,11 +1,11 @@
 <template>
   <div class="flex h-screen">
     <!-- Left panel -->
-    <div class="w-80 flex-shrink-0 bg-white border-r border-gray-200 flex flex-col overflow-hidden">
+    <div class="w-80 flex-shrink-0 bg-card border-r border-border flex flex-col overflow-hidden">
 
       <!-- Top bar -->
-      <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between gap-2">
-        <button @click="$router.push('/portals')" class="text-sm text-gray-500 hover:text-gray-900 flex-shrink-0">← Back</button>
+      <div class="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
+        <button @click="$router.push('/portals')" class="text-sm text-muted-foreground hover:text-foreground flex-shrink-0">← Back</button>
         <span class="text-sm font-semibold truncate flex-1 text-center">{{ portal?.title }}</span>
         <button @click="handlePublish" :disabled="busy || !portal"
           class="btn-primary text-xs py-1.5 flex-shrink-0">
@@ -14,10 +14,10 @@
       </div>
 
       <!-- Live URL bar -->
-      <div v-if="portal?.published" class="px-4 py-2 bg-green-50 border-b border-green-100 flex items-center gap-2">
+      <div v-if="portal?.published" class="px-4 py-2 bg-green-500/15 border-b border-green-500/30 flex items-center gap-2">
         <span class="w-2 h-2 rounded-full bg-green-500 flex-shrink-0 animate-pulse" />
         <a :href="`/portals/${portal.slug}/`" target="_blank"
-          class="text-xs text-green-700 hover:text-green-900 truncate font-medium flex-1">
+          class="text-xs text-green-400 hover:text-green-900 truncate font-medium flex-1">
           /portals/{{ portal.slug }}/
         </a>
         <ExternalLinkIcon class="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
@@ -27,24 +27,24 @@
       <div class="flex-1 overflow-y-auto">
 
         <!-- Layers section -->
-        <section class="p-4 border-b border-gray-100">
+        <section class="p-4 border-b border-border/60">
           <div class="flex items-center justify-between mb-3">
-            <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Layers</h3>
-            <button @click="showAddLayer = !showAddLayer" class="text-xs text-brand-600 hover:text-brand-700 font-medium">+ Add</button>
+            <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Layers</h3>
+            <button @click="showAddLayer = !showAddLayer" class="text-xs text-primary hover:text-primary/80 font-medium">+ Add</button>
           </div>
 
-          <div v-if="showAddLayer" class="mb-3 p-2 bg-gray-50 rounded-lg text-xs space-y-0.5 max-h-40 overflow-y-auto border border-gray-200">
-            <p v-if="!availableLayers.length" class="text-gray-400 p-1">No ready layers available.</p>
+          <div v-if="showAddLayer" class="mb-3 p-2 bg-muted/40 rounded-lg text-xs space-y-0.5 max-h-40 overflow-y-auto border border-border">
+            <p v-if="!availableLayers.length" class="text-muted-foreground/70 p-1">No ready layers available.</p>
             <div v-for="layer in availableLayers" :key="`${layer.type}-${layer.id}`"
-              class="flex items-center justify-between p-1.5 hover:bg-white rounded cursor-pointer"
+              class="flex items-center justify-between p-1.5 hover:bg-card rounded cursor-pointer"
               @click="addLayer(layer)"
             >
               <span class="font-medium">{{ layer.name }}</span>
-              <span class="text-gray-400 text-[10px] uppercase">{{ layer.type }}</span>
+              <span class="text-muted-foreground/70 text-[10px] uppercase">{{ layer.type }}</span>
             </div>
           </div>
 
-          <div v-if="!layerConfigs.length" class="text-xs text-gray-400 py-1">No layers added yet.</div>
+          <div v-if="!layerConfigs.length" class="text-xs text-muted-foreground/70 py-1">No layers added yet.</div>
           <div v-for="(cfg, i) in layerConfigs" :key="`${cfg.layer_type}-${cfg.layer_id}`"
             draggable="true"
             @dragstart="onDragStart(i)"
@@ -63,14 +63,14 @@
         </section>
 
         <!-- Template section -->
-        <section class="p-4 border-b border-gray-100">
-          <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Template</h3>
+        <section class="p-4 border-b border-border/60">
+          <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Template</h3>
           <div class="grid grid-cols-2 gap-2">
             <button v-for="t in templates" :key="t.id"
               class="p-2 rounded-lg border text-xs font-medium transition-colors text-left"
               :class="selectedTemplate === t.id
-                ? 'border-brand-500 bg-brand-50 text-brand-700'
-                : 'border-gray-200 hover:border-gray-300 text-gray-700'"
+                ? 'border-primary bg-primary/10 text-primary'
+                : 'border-border hover:border-muted-foreground/40 text-foreground/85'"
               @click="selectedTemplate = t.id"
             >{{ t.name }}</button>
           </div>
@@ -78,27 +78,27 @@
 
         <!-- Access control section -->
         <section class="p-4">
-          <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Access</h3>
+          <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Access</h3>
           <div class="space-y-1.5">
             <label v-for="opt in accessOptions" :key="opt.value"
               class="flex items-start gap-2.5 p-2 rounded-lg border cursor-pointer transition-colors"
               :class="accessType === opt.value
-                ? 'border-brand-500 bg-brand-50'
-                : 'border-gray-200 hover:border-gray-300'"
+                ? 'border-primary bg-primary/10'
+                : 'border-border hover:border-muted-foreground/40'"
             >
-              <input type="radio" :value="opt.value" v-model="accessType" class="mt-0.5 accent-brand-500 flex-shrink-0" />
+              <input type="radio" :value="opt.value" v-model="accessType" class="mt-0.5 accent-primary flex-shrink-0" />
               <div>
-                <div class="text-xs font-medium" :class="accessType === opt.value ? 'text-brand-700' : 'text-gray-700'">
+                <div class="text-xs font-medium" :class="accessType === opt.value ? 'text-primary' : 'text-foreground/85'">
                   {{ opt.label }}
                 </div>
-                <div class="text-[10px] text-gray-400 mt-0.5">{{ opt.desc }}</div>
+                <div class="text-[10px] text-muted-foreground/70 mt-0.5">{{ opt.desc }}</div>
               </div>
             </label>
           </div>
           <div v-if="accessType === 'password'" class="mt-3">
-            <label class="text-xs text-gray-500 block mb-1">Password</label>
+            <label class="text-xs text-muted-foreground block mb-1">Password</label>
             <input v-model="accessPassword" type="password" placeholder="Set portal password"
-              class="w-full text-xs border border-gray-200 rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-brand-400"
+              class="w-full text-xs border border-border rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60"
             />
           </div>
         </section>
@@ -106,14 +106,14 @@
         <!-- About / documentation: shown in the published portal's About panel together with
              each layer's catalog metadata and public data links -->
         <section>
-          <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">About this portal</p>
-          <p v-if="description" class="text-xs text-gray-600 line-clamp-3 whitespace-pre-line mb-2">{{ description }}</p>
-          <p v-else class="text-xs text-gray-400 italic mb-2">No documentation yet.</p>
+          <p class="text-xs font-semibold text-muted-foreground/70 uppercase tracking-wide mb-2">About this portal</p>
+          <p v-if="description" class="text-xs text-muted-foreground line-clamp-3 whitespace-pre-line mb-2">{{ description }}</p>
+          <p v-else class="text-xs text-muted-foreground/70 italic mb-2">No documentation yet.</p>
           <button type="button" @click="showAboutEditor = true"
-            class="w-full text-xs font-medium border border-gray-200 hover:border-brand-400 text-gray-700 rounded px-2 py-1.5">
+            class="w-full text-xs font-medium border border-border hover:border-primary/60 text-foreground/85 rounded px-2 py-1.5">
             {{ description ? 'Edit About page' : 'Write the About page' }}
           </button>
-          <p class="text-[10px] text-gray-400 mt-1">
+          <p class="text-[10px] text-muted-foreground/70 mt-1">
             Shown to portal visitors, together with each layer's abstract, license and public data
             links (set those via the globe icon in My Data).
           </p>
@@ -127,25 +127,25 @@
               <div class="flex items-center justify-between mb-3">
                 <h2 class="text-lg font-semibold">About this portal</h2>
                 <button @click="closeAboutEditor"
-                  class="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+                  class="text-muted-foreground/70 hover:text-foreground text-xl leading-none">&times;</button>
               </div>
               <!-- Toolbar -->
-              <div v-if="aboutEditor" class="flex flex-wrap items-center gap-1 border border-gray-200 rounded-t-lg bg-gray-50 px-2 py-1.5">
+              <div v-if="aboutEditor" class="flex flex-wrap items-center gap-1 border border-border rounded-t-lg bg-muted/40 px-2 py-1.5">
                 <button v-for="btn in toolbarButtons" :key="btn.label" type="button"
                   class="px-2 py-1 rounded text-xs font-semibold transition-colors"
-                  :class="btn.active() ? 'bg-brand-100 text-brand-700' : 'text-gray-600 hover:bg-gray-200'"
+                  :class="btn.active() ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-muted'"
                   :title="btn.title" @click="btn.run()">
                   <span v-html="btn.label"></span>
                 </button>
               </div>
               <!-- Editor -->
-              <div class="flex-1 min-h-0 overflow-y-auto border border-t-0 border-gray-200 rounded-b-lg"
+              <div class="flex-1 min-h-0 overflow-y-auto border border-t-0 border-border rounded-b-lg"
                 style="min-height: 320px; max-height: 52vh">
                 <EditorContent :editor="aboutEditor" class="gd-tiptap h-full" />
               </div>
               <!-- Footer stays INSIDE the card: fixed row under the editor -->
-              <div class="flex items-center justify-between gap-3 pt-3 mt-3 border-t border-gray-100 flex-shrink-0">
-                <p class="text-[10px] text-gray-400">
+              <div class="flex items-center justify-between gap-3 pt-3 mt-3 border-t border-border/60 flex-shrink-0">
+                <p class="text-[10px] text-muted-foreground/70">
                   Published as the portal's About page (about.html). Save changes + re-publish to
                   update it.
                 </p>
@@ -160,24 +160,24 @@
       </div>
 
       <!-- Save footer -->
-      <div class="p-4 border-t border-gray-200 space-y-2">
+      <div class="p-4 border-t border-border space-y-2">
         <button @click="save" :disabled="busy" class="btn-secondary w-full justify-center text-sm">
           Save changes
         </button>
         <p v-if="saveMsg" class="text-xs text-center"
-          :class="saveMsg.type === 'ok' ? 'text-green-600' : 'text-red-600'">
+          :class="saveMsg.type === 'ok' ? 'text-green-400' : 'text-red-400'">
           {{ saveMsg.text }}
         </p>
       </div>
     </div>
 
     <!-- Map preview -->
-    <div class="flex-1 relative bg-gray-100">
+    <div class="flex-1 relative bg-muted">
       <div id="portal-preview-map" class="w-full h-full" />
 
       <!-- GeoParquet detail fetch in flight (mirrors the published portal's loading pill) -->
       <div v-if="deckLoading > 0"
-        class="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-white/95 shadow-md border border-gray-200 rounded-full px-3.5 py-1.5 text-xs font-medium text-gray-700 pointer-events-none">
+        class="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-card/95 shadow-md border border-border rounded-full px-3.5 py-1.5 text-xs font-medium text-foreground/85 pointer-events-none">
         <span class="inline-block w-3 h-3 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
         Loading features…
       </div>
@@ -185,7 +185,7 @@
       <!-- Zoom to all layers. The current view is saved on "Save changes" and becomes
            the published portal's initial extent. -->
       <button v-if="layerConfigs.length" @click="zoomToAll"
-        class="absolute top-3 left-3 z-10 flex items-center gap-1.5 bg-white/95 hover:bg-white shadow-md border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-700"
+        class="absolute top-3 left-3 z-10 flex items-center gap-1.5 bg-card/95 hover:bg-card shadow-md border border-border rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground/85"
         title="Zoom to the full extent of all layers. The current view is saved on Save and becomes the published portal's starting view.">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3" />
@@ -195,7 +195,7 @@
 
       <div v-if="!layerConfigs.length"
         class="absolute inset-0 flex items-center justify-center pointer-events-none">
-        <span class="text-xs text-gray-400 bg-white/80 px-3 py-1.5 rounded-full">
+        <span class="text-xs text-muted-foreground/70 bg-card/80 px-3 py-1.5 rounded-full">
           Add layers to see a preview
         </span>
       </div>
@@ -912,9 +912,9 @@ async function handlePublish() {
 .gd-tiptap :deep(p) { margin: .3rem 0; }
 .gd-tiptap :deep(ul) { list-style: disc; margin: .3rem 0 .3rem 1.2rem; }
 .gd-tiptap :deep(ol) { list-style: decimal; margin: .3rem 0 .3rem 1.2rem; }
-.gd-tiptap :deep(blockquote) { border-left: 3px solid #cbd5e1; padding-left: .8rem; color: #475569; margin: .4rem 0; }
-.gd-tiptap :deep(a) { color: #2563eb; text-decoration: underline; }
-.gd-tiptap :deep(code) { font-size: .8rem; background: #eef2f7; border: 1px solid #e2e8f0; border-radius: 4px; padding: 0 3px; }
-.gd-tiptap :deep(img) { max-width: 100%; border-radius: 8px; border: 1px solid #e2e8f0; margin: .5rem 0; }
-.gd-tiptap :deep(img.ProseMirror-selectednode) { outline: 2px solid #3b82f6; }
+.gd-tiptap :deep(blockquote) { border-left: 3px solid hsl(var(--border)); padding-left: .8rem; color: hsl(var(--muted-foreground)); margin: .4rem 0; }
+.gd-tiptap :deep(a) { color: hsl(var(--primary)); text-decoration: underline; }
+.gd-tiptap :deep(code) { font-size: .8rem; background: hsl(var(--muted)); border: 1px solid hsl(var(--border)); border-radius: 4px; padding: 0 3px; }
+.gd-tiptap :deep(img) { max-width: 100%; border-radius: 8px; border: 1px solid hsl(var(--border)); margin: .5rem 0; }
+.gd-tiptap :deep(img.ProseMirror-selectednode) { outline: 2px solid hsl(var(--primary)); }
 </style>

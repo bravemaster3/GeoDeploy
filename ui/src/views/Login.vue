@@ -1,8 +1,8 @@
 <template>
-  <div class="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+  <div class="min-h-screen bg-muted/40 flex items-center justify-center p-4">
     <div class="w-full max-w-sm">
       <div class="text-center mb-8">
-        <h1 class="text-2xl font-bold text-gray-900">GeoDeploy</h1>
+        <h1 class="text-2xl font-bold text-foreground">GeoDeploy</h1>
       </div>
       <div class="card p-6 space-y-4">
         <div>
@@ -13,7 +13,7 @@
           <label class="label">Password</label>
           <input v-model="password" type="password" class="input" @keydown.enter="submit" />
         </div>
-        <div v-if="error" class="text-sm text-red-600">{{ error }}</div>
+        <div v-if="error" class="text-sm text-red-400">{{ error }}</div>
         <button @click="submit" :disabled="busy" class="btn-primary w-full justify-center">
           <span v-if="busy" class="animate-spin">⟳</span>
           Sign in

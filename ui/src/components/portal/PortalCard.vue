@@ -11,11 +11,11 @@
 
     <div class="p-4 space-y-3">
       <div>
-        <h3 class="font-semibold text-gray-900 truncate">{{ portal.title }}</h3>
-        <p v-if="portal.description" class="text-xs text-gray-500 mt-0.5 line-clamp-2">{{ portal.description }}</p>
+        <h3 class="font-semibold text-foreground truncate">{{ portal.title }}</h3>
+        <p v-if="portal.description" class="text-xs text-muted-foreground mt-0.5 line-clamp-2">{{ portal.description }}</p>
       </div>
 
-      <div class="text-xs text-gray-400 flex gap-3">
+      <div class="text-xs text-muted-foreground/70 flex gap-3">
         <span>{{ portal.layer_configs?.length || 0 }} layer{{ portal.layer_configs?.length !== 1 ? 's' : '' }}</span>
         <span>{{ portal.template_id }}</span>
         <span>{{ portal.access_type }}</span>
@@ -28,9 +28,9 @@
           <a :href="`/portals/${portal.slug}/`" target="_blank" class="btn-primary flex-1 justify-center text-xs py-1.5 no-underline">
             <ExternalLinkIcon class="w-3 h-3" /> View
           </a>
-          <button @click="$emit('unpublish')" class="btn-secondary px-2 text-xs py-1.5 text-gray-500" title="Unpublish">⊘</button>
+          <button @click="$emit('unpublish')" class="btn-secondary px-2 text-xs py-1.5 text-muted-foreground" title="Unpublish">⊘</button>
         </template>
-        <button @click="$emit('delete')" class="px-2 text-gray-400 hover:text-red-500 transition-colors" title="Delete">
+        <button @click="$emit('delete')" class="px-2 text-muted-foreground/70 hover:text-red-500 transition-colors" title="Delete">
           <TrashIcon class="w-4 h-4" />
         </button>
       </div>

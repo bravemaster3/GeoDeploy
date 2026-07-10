@@ -4,41 +4,41 @@
     <div class="card w-full max-w-md p-6 space-y-4 shadow-2xl">
       <div class="flex items-center justify-between">
         <h2 class="text-lg font-semibold">Connect external source</h2>
-        <button @click="$emit('close')" class="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+        <button @click="$emit('close')" class="text-muted-foreground/70 hover:text-foreground text-xl leading-none">&times;</button>
       </div>
 
-      <p class="text-xs text-gray-500">
+      <p class="text-xs text-muted-foreground">
         Display a third-party map service in your portals without importing it. Tiles/features are
         fetched from the provider — make sure their licence permits this and add an attribution.
       </p>
 
       <!-- Type -->
       <div>
-        <label class="text-xs text-gray-500 block mb-1">Service type</label>
+        <label class="text-xs text-muted-foreground block mb-1">Service type</label>
         <div class="grid grid-cols-3 gap-2">
           <button v-for="t in types" :key="t.value" type="button"
             class="p-2 rounded-lg border text-xs font-medium transition-colors"
-            :class="form.source_type === t.value ? 'border-brand-500 bg-brand-50 text-brand-700' : 'border-gray-200 hover:border-gray-300 text-gray-700'"
+            :class="form.source_type === t.value ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-muted-foreground/40 text-foreground/85'"
             @click="form.source_type = t.value">{{ t.label }}</button>
         </div>
-        <p class="text-[10px] text-gray-400 mt-1">{{ typeHint }}</p>
+        <p class="text-[10px] text-muted-foreground/70 mt-1">{{ typeHint }}</p>
       </div>
 
       <!-- Name -->
       <div>
-        <label class="text-xs text-gray-500 block mb-1">Display name</label>
+        <label class="text-xs text-muted-foreground block mb-1">Display name</label>
         <input v-model="form.name" type="text" placeholder="e.g. National basemap" class="input w-full text-sm" />
       </div>
 
       <!-- URL -->
       <div>
-        <label class="text-xs text-gray-500 block mb-1">{{ urlLabel }}</label>
+        <label class="text-xs text-muted-foreground block mb-1">{{ urlLabel }}</label>
         <input v-model="form.url" type="text" :placeholder="urlPlaceholder" class="input w-full text-sm font-mono" />
       </div>
 
       <!-- Layer name (WMS/WFS) -->
       <div v-if="form.source_type !== 'xyz'">
-        <label class="text-xs text-gray-500 block mb-1">
+        <label class="text-xs text-muted-foreground block mb-1">
           {{ form.source_type === 'wms' ? 'WMS layer name (layers=)' : 'WFS feature type (typeName)' }}
         </label>
         <input v-model="form.layer_name" type="text" placeholder="e.g. topp:states" class="input w-full text-sm font-mono" />
@@ -46,11 +46,11 @@
 
       <!-- Attribution -->
       <div>
-        <label class="text-xs text-gray-500 block mb-1">Attribution <span class="text-gray-400">(shown on the map)</span></label>
+        <label class="text-xs text-muted-foreground block mb-1">Attribution <span class="text-muted-foreground/70">(shown on the map)</span></label>
         <input v-model="form.attribution" type="text" placeholder="© Provider name" class="input w-full text-sm" />
       </div>
 
-      <div v-if="error" class="text-sm text-red-600 bg-red-50 p-3 rounded-lg">{{ error }}</div>
+      <div v-if="error" class="text-sm text-red-400 bg-red-500/15 p-3 rounded-lg">{{ error }}</div>
 
       <div class="flex justify-end gap-2 pt-1">
         <button @click="$emit('close')" class="btn-secondary text-sm">Cancel</button>
