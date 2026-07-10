@@ -18,11 +18,11 @@
       </div>
     </div>
     <StatusBadge :status="layer.status" :progress="layer._job?.progress" :step="layer._job?.current_step" />
-    <!-- Share in the public data catalog (STAC + raw asset access) -->
-    <button v-if="layer.status === 'ready'" @click="toggleShare"
+    <!-- Data sharing: public catalog (STAC) listing + metadata -->
+    <button v-if="layer.status === 'ready'" @click="showSharing = true"
       class="p-1.5 rounded transition-all"
       :class="layer.is_public ? 'text-emerald-600' : 'opacity-0 group-hover:opacity-100 text-gray-400 hover:text-emerald-600'"
-      :title="layer.is_public ? 'Listed in the public data catalog (/api/stac) — click to unshare' : 'Share in the public data catalog (/api/stac)'"
+      :title="layer.is_public ? 'Shared in the public data catalog — edit sharing & metadata' : 'Data sharing & catalog metadata'"
     >
       <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
     </button>
@@ -32,23 +32,19 @@
     >
       <TrashIcon class="w-4 h-4" />
     </button>
+    <SharingModal v-if="showSharing" :layer="layer" layer-type="vector" @close="showSharing = false" />
   </div>
 </template>
 
 <script setup>
+import { ref } from 'vue'
 import { TrashIcon } from '@/views/icons'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
-import { setVectorSharing } from '@/api'
+import SharingModal from '@/components/data/SharingModal.vue'
 
-const props = defineProps({ layer: Object })
+defineProps({ layer: Object })
 defineEmits(['delete'])
 
+const showSharing = ref(false)
 const formatBytes = (b) => b > 1e9 ? `${(b/1e9).toFixed(1)} GB` : b > 1e6 ? `${(b/1e6).toFixed(1)} MB` : `${(b/1e3).toFixed(0)} KB`
-
-async function toggleShare() {
-  try {
-    const { data } = await setVectorSharing(props.layer.id, { is_public: !props.layer.is_public })
-    Object.assign(props.layer, data)
-  } catch (e) { /* keep current state on failure */ }
-}
 </script>
