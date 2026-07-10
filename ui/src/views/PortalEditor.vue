@@ -248,11 +248,12 @@ async function deckManifest(id) {
   return deckManifests[id]
 }
 
-// Same grid math as the server/portal.js: cell = ix*grid + iy, +1-cell pad. Returns both the
-// file count and the candidate ROW count under the viewport — rows are the real cost driver
-// (a mid-zoom view can span few files but ~1M dense features → 10-25 s server query).
+// Same grid math as the server/portal.js: cell = ix*grid + iy, +1-cell pad for the FILE list.
+// Rows are weighted by the fraction of each cell the viewport covers (whole-cell sums locked
+// dense regions in overview mode forever — the pad alone spans ≥9 cells at any deep zoom).
+// Keep in sync with portal.js viewportLoad.
 function deckViewportLoad(m, b) {
-  const g = m.grid, gsz = g.grid | 0, pad = 1
+  const g = m.grid, gsz = g.grid | 0, pad = 1, dx = g.spanx / gsz, dy = g.spany / gsz
   const ci = (v, lo, span) => Math.floor((v - lo) / (span || 1.0) * gsz)
   const ix0 = Math.max(0, ci(b[0], g.minx, g.spanx) - pad)
   const ix1 = Math.min(gsz - 1, ci(b[2], g.minx, g.spanx) + pad)
@@ -261,8 +262,15 @@ function deckViewportLoad(m, b) {
   let files = 0, rows = 0
   if (ix0 <= ix1 && iy0 <= iy1)
     for (let ix = ix0; ix <= ix1; ix++)
-      for (let iy = iy0; iy <= iy1; iy++)
-        for (const f of (m.cells[String(ix * gsz + iy)] || [])) { files += 1; rows += f.rows || 0 }
+      for (let iy = iy0; iy <= iy1; iy++) {
+        const list = m.cells[String(ix * gsz + iy)] || []
+        if (!list.length) continue
+        const x0 = g.minx + ix * dx, y0 = g.miny + iy * dy
+        const ox = Math.max(0, Math.min(b[2], x0 + dx) - Math.max(b[0], x0))
+        const oy = Math.max(0, Math.min(b[3], y0 + dy) - Math.max(b[1], y0))
+        const frac = Math.min(1, (ox * oy) / (dx * dy || 1))
+        for (const f of list) { files += 1; rows += (f.rows || 0) * frac }
+      }
   return { files, rows }
 }
 

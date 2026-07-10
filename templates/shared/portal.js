@@ -420,17 +420,28 @@
   // DECK_MAX_FILES so both surfaces switch to detail at the same moment.
   const WASM_MAX_FILES = 16;
 
-  // Partition files AND total row count under a viewport bbox (via the manifest grid). The row
-  // count is the real cost driver of a detail query: at mid zooms a viewport can span few files
-  // but hundreds of thousands of dense features, and each such server query takes 10-25 s —
-  // that band must show the overview too.
+  // Partition files AND the ESTIMATED feature count under a viewport bbox (via the manifest
+  // grid). Rows are weighted by how much of each cell the viewport actually covers — summing
+  // whole cells was a bug: the ±1-cell pad means ≥9 candidate cells at ANY deep zoom, which in
+  // dense regions summed to millions and locked the layer in overview mode forever (observed:
+  // a street-level view showing one solid overview rectangle, never polygons). With area
+  // weighting, a street-level view estimates a tiny fraction of the cell → detail; a mid-zoom
+  // view covering whole dense cells still estimates high → overview.
   function viewportLoad(m, bbox) {
+    const g = m.grid, gsz = g.grid | 0, dx = g.spanx / gsz, dy = g.spany / gsz;
     const files = [];
     let rows = 0;
-    cellsForBbox(m.grid, bbox).forEach(function (c) {
-      (m.cells[String(c)] || []).forEach(function (f) {
-        files.push(String(f.key));
-        rows += f.rows || 0;
+    cellsForBbox(g, bbox).forEach(function (c) {
+      const list = m.cells[String(c)] || [];
+      if (!list.length) return;
+      const ix = Math.floor(c / gsz), iy = c % gsz;
+      const x0 = g.minx + ix * dx, y0 = g.miny + iy * dy;
+      const ox = Math.max(0, Math.min(bbox[2], x0 + dx) - Math.max(bbox[0], x0));
+      const oy = Math.max(0, Math.min(bbox[3], y0 + dy) - Math.max(bbox[1], y0));
+      const frac = Math.min(1, (ox * oy) / (dx * dy || 1));
+      list.forEach(function (f) {
+        files.push(String(f.key));  // pad cells still count as files to open…
+        rows += (f.rows || 0) * frac;  // …but contribute rows only for the visible fraction
       });
     });
     return { files: files, rows: rows };
