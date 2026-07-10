@@ -196,22 +196,12 @@
     return import(base + 'deck-arrow.esm.js').then(function (m) {
       return { MapboxOverlay: m.MapboxOverlay, GeoJsonLayer: m.GeoJsonLayer,
                geo: m.geoarrow, tableFromIPC: m.tableFromIPC };
-    }).catch(function () {
-      // Older publish without the bundle → try the CDN module set → UMD GeoJSON path.
-      return Promise.all([
-        import('https://cdn.jsdelivr.net/npm/@deck.gl/mapbox@9/+esm'),
-        import('https://cdn.jsdelivr.net/npm/@deck.gl/layers@9/+esm'),
-        import('https://cdn.jsdelivr.net/npm/@geoarrow/deck.gl-layers/+esm'),
-        import('https://cdn.jsdelivr.net/npm/apache-arrow@17/+esm'),
-      ]).then(function (m) {
-        // Every layer class must come from ONE deck.gl core: mixing the UMD core with ESM-built
-        // layers breaks MapboxOverlay's layer handling.
-        return { MapboxOverlay: m[0].MapboxOverlay, GeoJsonLayer: m[1].GeoJsonLayer,
-                 geo: m[2], tableFromIPC: m[3].tableFromIPC };
-      }).catch(function (e) {
-        console.warn('[geodeploy] GeoArrow modules unavailable; using GeoJSON transport', e);
-        return umd();
-      });
+    }).catch(function (e) {
+      // Straight to the UMD GeoJSON path — no CDN module-set attempt: cross-CDN ESM resolution
+      // produced duplicate luma.gl copies (hard version-check throw) and just wasted seconds
+      // failing before the fallback (observed live 2026-07-10).
+      console.warn('[geodeploy] vendored GeoArrow bundle unavailable; using GeoJSON transport', e);
+      return umd();
     });
   }
 
