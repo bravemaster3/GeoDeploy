@@ -119,34 +119,36 @@
           </p>
         </section>
 
-        <!-- About page editor: large markdown editor with live preview -->
+        <!-- About page editor: WYSIWYG (TipTap) — stored as markdown, rendered safely in the portal -->
         <Teleport to="body">
           <div v-if="showAboutEditor"
             class="fixed inset-0 bg-gray-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div class="card w-full max-w-4xl p-6 shadow-2xl flex flex-col" style="max-height: 88vh">
+            <div class="card w-full max-w-3xl p-6 shadow-2xl flex flex-col" style="max-height: 88vh">
               <div class="flex items-center justify-between mb-3">
                 <h2 class="text-lg font-semibold">About this portal</h2>
-                <button @click="showAboutEditor = false"
+                <button @click="closeAboutEditor"
                   class="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
               </div>
-              <div class="grid grid-cols-2 gap-4 flex-1 min-h-0" style="min-height: 380px">
-                <div class="flex flex-col min-h-0">
-                  <label for="portal-about-md" class="text-xs text-gray-500 mb-1">Markdown</label>
-                  <textarea id="portal-about-md" name="portal-about-md" v-model="description"
-                    class="flex-1 w-full text-sm font-mono border border-gray-200 rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-brand-400 resize-none"
-                    placeholder="# Heading&#10;&#10;Describe the portal, the data, methods, contacts…&#10;&#10;- **bold**, *italic*, `code`&#10;- [links](https://example.org)"></textarea>
-                </div>
-                <div class="flex flex-col min-h-0">
-                  <span class="text-xs text-gray-500 mb-1">Preview (what portal visitors see)</span>
-                  <div class="flex-1 overflow-y-auto border border-gray-100 bg-gray-50 rounded px-4 py-3 text-sm gd-md-preview"
-                    v-html="aboutPreview"></div>
-                </div>
+              <!-- Toolbar -->
+              <div v-if="aboutEditor" class="flex flex-wrap items-center gap-1 border border-gray-200 rounded-t-lg bg-gray-50 px-2 py-1.5">
+                <button v-for="btn in toolbarButtons" :key="btn.label" type="button"
+                  class="px-2 py-1 rounded text-xs font-semibold transition-colors"
+                  :class="btn.active() ? 'bg-brand-100 text-brand-700' : 'text-gray-600 hover:bg-gray-200'"
+                  :title="btn.title" @click="btn.run()">
+                  <span v-html="btn.label"></span>
+                </button>
+              </div>
+              <!-- Editor -->
+              <div class="flex-1 min-h-0 overflow-y-auto border border-t-0 border-gray-200 rounded-b-lg"
+                style="min-height: 360px">
+                <EditorContent :editor="aboutEditor" class="gd-tiptap h-full" />
               </div>
               <p class="text-[10px] text-gray-400 mt-2">
-                Remember to Save changes and re-publish for visitors to see the new text.
+                Formatted text (stored as markdown). Remember to Save changes and re-publish for
+                visitors to see the new page.
               </p>
               <div class="flex justify-end gap-3 pt-2">
-                <button @click="showAboutEditor = false" class="btn-secondary text-sm">Done</button>
+                <button @click="closeAboutEditor" class="btn-secondary text-sm">Done</button>
               </div>
             </div>
           </div>
@@ -201,6 +203,10 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { useEditor, EditorContent } from '@tiptap/vue-3'
+import StarterKit from '@tiptap/starter-kit'
+import TipTapLink from '@tiptap/extension-link'
+import { Markdown } from 'tiptap-markdown'
 import { usePortalsStore } from '@/stores/portals'
 import { useDataStore } from '@/stores/data'
 import { listTemplates, getRasterStats, getVectorFeatures } from '@/api'
@@ -239,31 +245,50 @@ const saveMsg = ref(null)
 const description = ref('')  // About-panel documentation (markdown), baked at publish
 const showAboutEditor = ref(false)
 
-// Minimal SAFE markdown → HTML, kept in sync with templates/shared/portal.js::mdToHtml (the
-// published renderer): everything escaped first, then a small vocabulary re-introduced.
-function mdToHtml(md) {
-  const esc = String(md).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  const inline = (s) => s
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+|\/[^)\s]*)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-  return esc.split(/\n{2,}/).map((block) => {
-    const lines = block.split('\n')
-    if (lines.every((l) => /^\s*[-*] /.test(l) || !l.trim())) {
-      return '<ul>' + lines.filter((l) => l.trim())
-        .map((l) => '<li>' + inline(l.replace(/^\s*[-*] /, '')) + '</li>').join('') + '</ul>'
-    }
-    const h = block.match(/^(#{1,3}) (.+)$/m)
-    if (h && lines.length === 1) {
-      const level = h[1].length + 1
-      return `<h${level}>` + inline(h[2]) + `</h${level}>`
-    }
-    return '<p>' + inline(block).replace(/\n/g, '<br>') + '</p>'
-  }).join('')
+// WYSIWYG About editor (TipTap) — the document is STORED as markdown (tiptap-markdown), so the
+// published portal keeps rendering through its safe escape-first mini-markdown (portal.js
+// mdToHtml) and no HTML sanitizer is needed anywhere.
+const aboutEditor = useEditor({
+  extensions: [
+    StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
+    TipTapLink.configure({ openOnClick: false }),
+    Markdown.configure({ html: false, linkify: true }),
+  ],
+  content: '',
+  onUpdate: ({ editor }) => { description.value = editor.storage.markdown.getMarkdown() },
+})
+
+// Load the saved markdown whenever the modal opens (the portal may load after editor setup).
+watch(showAboutEditor, (open) => {
+  if (open && aboutEditor.value) {
+    aboutEditor.value.commands.setContent(description.value || '')
+  }
+})
+
+function closeAboutEditor() {
+  if (aboutEditor.value) description.value = aboutEditor.value.storage.markdown.getMarkdown()
+  showAboutEditor.value = false
 }
-const aboutPreview = computed(() =>
-  description.value ? mdToHtml(description.value) : '<p class="text-gray-400 italic">Nothing yet…</p>')
+
+function promptLink() {
+  const prev = aboutEditor.value?.getAttributes('link')?.href || ''
+  const url = window.prompt('Link URL', prev)
+  if (url === null) return
+  if (!url) aboutEditor.value.chain().focus().unsetLink().run()
+  else aboutEditor.value.chain().focus().setLink({ href: url }).run()
+}
+
+const toolbarButtons = [
+  { label: 'H2', title: 'Section heading', run: () => aboutEditor.value.chain().focus().toggleHeading({ level: 2 }).run(), active: () => aboutEditor.value?.isActive('heading', { level: 2 }) },
+  { label: 'H3', title: 'Subheading', run: () => aboutEditor.value.chain().focus().toggleHeading({ level: 3 }).run(), active: () => aboutEditor.value?.isActive('heading', { level: 3 }) },
+  { label: '<b>B</b>', title: 'Bold', run: () => aboutEditor.value.chain().focus().toggleBold().run(), active: () => aboutEditor.value?.isActive('bold') },
+  { label: '<i>I</i>', title: 'Italic', run: () => aboutEditor.value.chain().focus().toggleItalic().run(), active: () => aboutEditor.value?.isActive('italic') },
+  { label: '• List', title: 'Bullet list', run: () => aboutEditor.value.chain().focus().toggleBulletList().run(), active: () => aboutEditor.value?.isActive('bulletList') },
+  { label: '1. List', title: 'Numbered list', run: () => aboutEditor.value.chain().focus().toggleOrderedList().run(), active: () => aboutEditor.value?.isActive('orderedList') },
+  { label: '&ldquo;&rdquo;', title: 'Quote', run: () => aboutEditor.value.chain().focus().toggleBlockquote().run(), active: () => aboutEditor.value?.isActive('blockquote') },
+  { label: '&lt;/&gt;', title: 'Inline code', run: () => aboutEditor.value.chain().focus().toggleCode().run(), active: () => aboutEditor.value?.isActive('code') },
+  { label: '🔗', title: 'Link', run: promptLink, active: () => aboutEditor.value?.isActive('link') },
+]
 
 const accessOptions = [
   { value: 'public',   label: 'Public',   desc: 'Anyone with the URL can view' },
@@ -856,12 +881,16 @@ async function handlePublish() {
 </script>
 
 <style scoped>
-/* Tailwind preflight strips heading/list styling — restore it inside the About markdown preview
-   so it matches what the published portal's About panel renders. */
-.gd-md-preview :deep(h2) { font-size: 1.05rem; font-weight: 600; margin: .6rem 0 .3rem; }
-.gd-md-preview :deep(h3), .gd-md-preview :deep(h4) { font-size: .95rem; font-weight: 600; margin: .5rem 0 .25rem; }
-.gd-md-preview :deep(p) { margin: .3rem 0; }
-.gd-md-preview :deep(ul) { list-style: disc; margin: .3rem 0 .3rem 1.2rem; }
-.gd-md-preview :deep(a) { color: #2563eb; text-decoration: underline; }
-.gd-md-preview :deep(code) { font-size: .8rem; background: #eef2f7; border: 1px solid #e2e8f0; border-radius: 4px; padding: 0 3px; }
+/* TipTap editing surface — Tailwind preflight strips heading/list styling, restore it so the
+   editor reads like the published About page. */
+.gd-tiptap :deep(.ProseMirror) { min-height: 340px; padding: 14px 16px; outline: none; font-size: .875rem; line-height: 1.6; }
+.gd-tiptap :deep(h1) { font-size: 1.2rem; font-weight: 700; margin: .7rem 0 .35rem; }
+.gd-tiptap :deep(h2) { font-size: 1.05rem; font-weight: 600; margin: .6rem 0 .3rem; }
+.gd-tiptap :deep(h3) { font-size: .95rem; font-weight: 600; margin: .5rem 0 .25rem; }
+.gd-tiptap :deep(p) { margin: .3rem 0; }
+.gd-tiptap :deep(ul) { list-style: disc; margin: .3rem 0 .3rem 1.2rem; }
+.gd-tiptap :deep(ol) { list-style: decimal; margin: .3rem 0 .3rem 1.2rem; }
+.gd-tiptap :deep(blockquote) { border-left: 3px solid #cbd5e1; padding-left: .8rem; color: #475569; margin: .4rem 0; }
+.gd-tiptap :deep(a) { color: #2563eb; text-decoration: underline; }
+.gd-tiptap :deep(code) { font-size: .8rem; background: #eef2f7; border: 1px solid #e2e8f0; border-radius: 4px; padding: 0 3px; }
 </style>

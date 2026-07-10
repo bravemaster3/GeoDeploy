@@ -420,6 +420,16 @@
     @keyframes gd-spin { to { transform: rotate(360deg); } }
 
     /* ── About panel (portal documentation) ─────────────── */
+    #gd-about-nav {
+      margin-left: auto; margin-right: 12px; padding: 5px 14px; cursor: pointer;
+      font-size: 12.5px; font-weight: 600; color: var(--accent);
+      background: transparent; border: 1px solid var(--accent); border-radius: 999px;
+      transition: background .15s, color .15s;
+    }
+    #gd-about-nav:hover { background: var(--accent); color: #fff; }
+    /* #header-badge normally floats right via margin-left:auto — the About button takes that
+       role and the badge follows it. */
+    #gd-about-nav + #header-badge { margin-left: 0; }
     #gd-about-btn {
       display: block; width: 100%; margin-top: 10px; padding: 8px 10px;
       font-size: 12.5px; font-weight: 500; text-align: left; cursor: pointer;
@@ -430,38 +440,75 @@
     #gd-about-overlay {
       position: fixed; inset: 0; z-index: 60; display: flex;
       align-items: center; justify-content: center;
-      background: rgba(15, 23, 42, .55); backdrop-filter: blur(2px); padding: 24px;
+      background: rgba(15, 23, 42, .55); backdrop-filter: blur(3px); padding: 24px;
     }
     #gd-about-panel {
-      position: relative; width: 100%; max-width: 680px; max-height: 84vh; overflow-y: auto;
-      background: var(--bg); color: var(--text); border-radius: 14px;
-      padding: 28px 32px; box-shadow: 0 24px 60px rgba(0,0,0,.35);
-      font-size: 14px; line-height: 1.55;
+      position: relative; width: 100%; max-width: 760px; max-height: 86vh;
+      display: flex; flex-direction: column; overflow: hidden;
+      background: var(--bg); color: var(--text); border-radius: 16px;
+      box-shadow: 0 24px 60px rgba(0,0,0,.35);
+      font-size: 14.5px; line-height: 1.65;
     }
-    #gd-about-panel h1 { font-size: 20px; margin-bottom: 10px; }
-    #gd-about-panel h2 { font-size: 16px; margin: 18px 0 8px; }
-    #gd-about-panel h3, #gd-about-panel h4 { font-size: 14px; margin: 14px 0 6px; }
-    #gd-about-panel p { margin: 6px 0; }
-    #gd-about-panel ul { margin: 6px 0 6px 20px; }
+    .gd-about-hero {
+      padding: 30px 36px 22px;
+      background: var(--accent); /* fallback when color-mix() is unsupported */
+      background: linear-gradient(135deg, var(--accent) 0%,
+        color-mix(in srgb, var(--accent) 55%, #1e293b) 100%);
+      color: #fff;
+    }
+    .gd-about-kicker {
+      display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: 1.6px;
+      text-transform: uppercase; opacity: .85; margin-bottom: 6px;
+    }
+    .gd-about-hero h1 { font-size: 24px; font-weight: 700; margin: 0; color: #fff; }
+    .gd-about-body { padding: 22px 36px 28px; overflow-y: auto; }
+    .gd-about-desc { max-width: 62ch; }
+    #gd-about-panel h2 { font-size: 17px; font-weight: 650; margin: 20px 0 8px; }
+    #gd-about-panel h3, #gd-about-panel h4 { font-size: 15px; font-weight: 600; margin: 14px 0 6px; }
+    #gd-about-panel p { margin: 7px 0; }
+    #gd-about-panel ul, #gd-about-panel ol { margin: 7px 0 7px 22px; }
+    #gd-about-panel blockquote {
+      border-left: 3px solid var(--accent); padding: 4px 14px; margin: 10px 0;
+      background: var(--surface); border-radius: 0 8px 8px 0; color: var(--text-muted);
+    }
+    #gd-about-panel hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
     #gd-about-panel a { color: var(--accent); }
     #gd-about-panel code {
       font-size: 12.5px; background: var(--surface); border: 1px solid var(--border);
       border-radius: 4px; padding: 1px 4px;
     }
     #gd-about-close {
-      position: absolute; top: 10px; right: 14px; font-size: 22px; line-height: 1;
-      color: var(--text-muted); background: none; border: none; cursor: pointer;
+      position: absolute; top: 12px; right: 16px; z-index: 1; font-size: 22px; line-height: 1;
+      width: 30px; height: 30px; border-radius: 50%;
+      color: #fff; background: rgba(255,255,255,.18); border: none; cursor: pointer;
     }
-    #gd-about-close:hover { color: var(--text); }
-    .gd-about-layers-title { border-top: 1px solid var(--border); padding-top: 14px; }
-    .gd-about-layer { margin: 10px 0; padding: 10px 12px; background: var(--surface);
-      border: 1px solid var(--border); border-radius: 10px; }
-    .gd-about-layer-name { font-weight: 600; font-size: 13.5px; }
+    #gd-about-close:hover { background: rgba(255,255,255,.32); }
+    .gd-about-layers-title { border-top: 1px solid var(--border); padding-top: 16px; }
+    .gd-about-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+    @media (min-width: 640px) {
+      .gd-about-grid { grid-template-columns: 1fr 1fr; }
+      .gd-about-grid .gd-about-layer:only-child { grid-column: 1 / -1; }
+    }
+    .gd-about-layer {
+      padding: 12px 14px; background: var(--surface);
+      border: 1px solid var(--border); border-left: 3px solid var(--accent);
+      border-radius: 10px;
+    }
+    .gd-about-layer-name { font-weight: 650; font-size: 13.5px; }
+    .gd-about-abstract { font-size: 12.5px; }
     .gd-about-badge {
-      font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px;
+      font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
       color: #047857; background: #d1fae5; border-radius: 999px; padding: 2px 8px; margin-left: 6px;
+      vertical-align: 1px;
     }
-    .gd-about-meta { font-size: 12px; color: var(--text-muted); }
-    .gd-about-links { font-size: 12.5px; }
+    .gd-about-meta { font-size: 11.5px; color: var(--text-muted); }
+    .gd-about-links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .gd-about-link {
+      font-size: 11.5px; font-weight: 600; text-decoration: none;
+      padding: 4px 10px; border-radius: 999px;
+      color: var(--accent); background: var(--bg); border: 1px solid var(--border);
+    }
+    .gd-about-link:hover { border-color: var(--accent); }
+    .gd-about-foot { font-size: 12px; color: var(--text-muted); margin-top: 14px; }
 
     /* ── Theme override slot ─────────────────────────────── */

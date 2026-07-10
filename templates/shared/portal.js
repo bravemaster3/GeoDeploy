@@ -776,31 +776,44 @@
   // STYLE.geodeploy.description / .layersInfo). Portals are documentation, not just maps.
   function mdToHtml(md) {
     // Minimal, safe markdown: escape EVERYTHING first, then re-introduce a small vocabulary
-    // (headings, bold/italic, links, bullet lists, paragraphs). No raw HTML passes through.
+    // (headings, bold/italic, links, bullet/numbered lists, quotes, code, rules). Covers what the
+    // editor's TipTap→markdown serializer emits. No raw HTML passes through.
     const esc = String(md).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const blocks = esc.split(/\n{2,}/).map(function (block) {
-      const lines = block.split('\n');
-      if (lines.every(function (l) { return /^\s*[-*] /.test(l) || !l.trim(); })) {
-        const items = lines.filter(function (l) { return l.trim(); })
-          .map(function (l) { return '<li>' + inline(l.replace(/^\s*[-*] /, '')) + '</li>'; });
-        return '<ul>' + items.join('') + '</ul>';
-      }
-      const h = block.match(/^(#{1,3}) (.+)$/m);
-      if (h && lines.length === 1) {
-        const level = h[1].length + 1;  // portal h1 is the page title → start at h2
-        return '<h' + level + '>' + inline(h[2]) + '</h' + level + '>';
-      }
-      return '<p>' + inline(block).replace(/\n/g, '<br>') + '</p>';
-    });
     function inline(s) {
       return s
         .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-        .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+        .replace(/(^|\W)\*([^*]+)\*(?=\W|$)/g, '$1<em>$2</em>')
+        .replace(/(^|\W)_([^_]+)_(?=\W|$)/g, '$1<em>$2</em>')
         .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+|\/[^)\s]*)\)/g,
                  '<a href="$2" target="_blank" rel="noopener">$1</a>')
         .replace(/`([^`]+)`/g, '<code>$1</code>');
     }
-    return blocks.join('');
+    return esc.split(/\n{2,}/).map(function (block) {
+      const lines = block.split('\n');
+      const live = lines.filter(function (l) { return l.trim(); });
+      if (/^\s*(-{3,}|\*{3,})\s*$/.test(block)) return '<hr>';
+      if (live.length && live.every(function (l) { return /^\s*[-*] /.test(l); })) {
+        return '<ul>' + live.map(function (l) {
+          return '<li>' + inline(l.replace(/^\s*[-*] /, '')) + '</li>';
+        }).join('') + '</ul>';
+      }
+      if (live.length && live.every(function (l) { return /^\s*\d+[.)] /.test(l); })) {
+        return '<ol>' + live.map(function (l) {
+          return '<li>' + inline(l.replace(/^\s*\d+[.)] /, '')) + '</li>';
+        }).join('') + '</ol>';
+      }
+      if (live.length && live.every(function (l) { return /^\s*&gt; ?/.test(l); })) {
+        return '<blockquote>' + live.map(function (l) {
+          return inline(l.replace(/^\s*&gt; ?/, ''));
+        }).join('<br>') + '</blockquote>';
+      }
+      const h = block.match(/^(#{1,6}) (.+)$/m);
+      if (h && lines.length === 1) {
+        const level = Math.min(h[1].length + 1, 4);  // portal h1 is the page title → h2..h4
+        return '<h' + level + '>' + inline(h[2]) + '</h' + level + '>';
+      }
+      return '<p>' + inline(block).replace(/\n/g, '<br>') + '</p>';
+    }).join('');
   }
 
   function buildAboutPanel() {
@@ -813,34 +826,37 @@
 
     const overlay = document.createElement('div');
     overlay.id = 'gd-about-overlay';
-    let html = '<div id="gd-about-panel"><button id="gd-about-close" aria-label="Close">&times;</button>';
     // NOTE: the top-of-file TITLE const lives in the access-gate IIFE, a different closure —
     // read the global directly here.
-    html += '<h1>' + escAbout((window.GEODEPLOY && window.GEODEPLOY.title) || 'About') + '</h1>';
+    const title = escAbout((window.GEODEPLOY && window.GEODEPLOY.title) || 'About');
+    let html = '<div id="gd-about-panel"><button id="gd-about-close" aria-label="Close">&times;</button>';
+    html += '<div class="gd-about-hero"><span class="gd-about-kicker">Documentation</span>' +
+      '<h1>' + title + '</h1></div>';
+    html += '<div class="gd-about-body">';
     if (desc) html += '<div class="gd-about-desc">' + mdToHtml(desc) + '</div>';
     if (hasLayerDocs) {
-      html += '<h2 class="gd-about-layers-title">Layers &amp; data</h2>';
+      html += '<h2 class="gd-about-layers-title">Layers &amp; data</h2><div class="gd-about-grid">';
       infos.forEach(function (i) {
         html += '<div class="gd-about-layer"><div class="gd-about-layer-name">' + escAbout(i.name) +
           (i.is_public ? ' <span class="gd-about-badge">public data</span>' : '') + '</div>';
-        if (i.abstract) html += '<p>' + escAbout(i.abstract) + '</p>';
+        if (i.abstract) html += '<p class="gd-about-abstract">' + escAbout(i.abstract) + '</p>';
         const meta = [];
         if (i.license) meta.push('License: ' + escAbout(i.license));
         if (i.attribution) meta.push(escAbout(i.attribution));
         if (meta.length) html += '<p class="gd-about-meta">' + meta.join(' · ') + '</p>';
         if (i.links) {
           const links = Object.keys(i.links).map(function (label) {
-            return '<a href="' + location.origin + i.links[label] + '" target="_blank" rel="noopener">' +
-              escAbout(label) + '</a>';
+            return '<a class="gd-about-link" href="' + location.origin + i.links[label] +
+              '" target="_blank" rel="noopener">' + escAbout(label) + ' ↗</a>';
           });
-          html += '<p class="gd-about-links">' + links.join(' · ') + '</p>';
+          html += '<div class="gd-about-links">' + links.join('') + '</div>';
         }
         html += '</div>';
       });
-      html += '<p class="gd-about-meta">All shared data of this server: ' +
+      html += '</div><p class="gd-about-foot">All shared data of this server: ' +
         '<a href="' + location.origin + '/api/stac" target="_blank" rel="noopener">STAC catalog</a></p>';
     }
-    html += '</div>';
+    html += '</div></div>';
     overlay.innerHTML = html;
     document.body.appendChild(overlay);
     overlay.addEventListener('click', function (e) {
@@ -848,11 +864,25 @@
     });
     overlay.style.display = 'none';
 
+    function openAbout() { overlay.style.display = 'flex'; }
+
+    // Primary entry: an "About" button in the header (always visible, never buried under a long
+    // layer list). The sidebar link below is kept as a secondary entry point.
+    const header = document.getElementById('header');
+    const badge = document.getElementById('header-badge');
+    if (header) {
+      const navBtn = document.createElement('button');
+      navBtn.id = 'gd-about-nav';
+      navBtn.type = 'button';
+      navBtn.textContent = 'About';
+      navBtn.addEventListener('click', openAbout);
+      if (badge) header.insertBefore(navBtn, badge); else header.appendChild(navBtn);
+    }
     const btn = document.createElement('button');
     btn.id = 'gd-about-btn';
     btn.type = 'button';
     btn.innerHTML = '&#9432; About this portal';
-    btn.addEventListener('click', function () { overlay.style.display = 'flex'; });
+    btn.addEventListener('click', openAbout);
     const inner = document.getElementById('sidebar-inner') || sidebar;
     if (inner) inner.appendChild(btn);
   }
