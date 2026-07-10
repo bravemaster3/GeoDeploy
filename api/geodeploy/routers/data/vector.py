@@ -1,7 +1,7 @@
 import os
 import uuid
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -235,10 +235,15 @@ def _parse_bbox(bbox: str | None) -> list[float] | None:
         return None
 
 
-async def _viewport_geojson(layer: VectorLayer | None, bbox: str | None, limit: int) -> dict:
+async def _viewport_geojson(layer: VectorLayer | None, bbox: str | None, limit: int) -> Response:
     """Shared GeoParquet viewport query → GeoJSON (EPSG:4326). DuckDB filters by the bbox using the
     covering column (row-group pruning) and caps results; the deck.gl overlay renders the subset.
-    The DuckDB work runs in a threadpool so the single uvicorn worker isn't blocked."""
+    BOTH the DuckDB work AND the JSON serialization run in the threadpool: returning the raw dict
+    let FastAPI's jsonable_encoder walk every coordinate of a ~25 MB FeatureCollection ON the event
+    loop — minutes of pure-Python encoding at full extent that starved every other request into
+    nginx 504s (seen live 2026-07-09). json.dumps is C-speed and off-loop; the pre-serialized body
+    is returned as-is."""
+    import json
     from starlette.concurrency import run_in_threadpool
     from ...services import duckdb_engine
 
@@ -247,7 +252,14 @@ async def _viewport_geojson(layer: VectorLayer | None, bbox: str | None, limit: 
     if layer.storage_backend != "geoparquet" or not layer.s3_key:
         raise HTTPException(400, "This layer is not a GeoParquet (file-backed) layer.")
     limit = max(1, min(limit, 200000))
-    return await run_in_threadpool(duckdb_engine.query_features_geojson, layer.s3_key, _parse_bbox(bbox), limit)
+    parsed = _parse_bbox(bbox)
+
+    def _query_and_dump() -> str:
+        fc = duckdb_engine.query_features_geojson(layer.s3_key, parsed, limit)
+        return json.dumps(fc, separators=(",", ":"))
+
+    body = await run_in_threadpool(_query_and_dump)
+    return Response(content=body, media_type="application/geo+json")
 
 
 @router.get("/{layer_id}/features")
