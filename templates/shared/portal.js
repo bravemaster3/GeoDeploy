@@ -867,7 +867,7 @@
     buildLayerSwitcher(userLayers);
     appendDeckRows();
     initDeck();
-    buildAboutPanel();
+    try { buildAboutPanel(); } catch (e) { console.warn('[geodeploy] About panel failed', e); }
     setupBasemaps();  // adds the basemap + tools controls (top-right)
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');  // zoom below them
   });
