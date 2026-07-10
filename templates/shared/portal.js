@@ -159,8 +159,11 @@
 
   // ── deck.gl overlay for GeoParquet layers ───────────────
   // GeoParquet layers are too big for a MapLibre geojson source, so they render in a deck.gl
-  // MapboxOverlay fed by the PUBLIC viewport query (covering-column-pruned GeoJSON), refetched on
-  // pan/zoom. (PMTiles-tiled layers instead come through the normal vector path above — fallback.)
+  // MapboxOverlay refetched on pan/zoom. PRIMARY data path: DuckDB-WASM in the browser reading the
+  // layer's partitioned GeoParquet directly over HTTP Range requests (only the row groups under
+  // the viewport; partition files are immutable → browser-cached hard). FALLBACK: the PUBLIC
+  // features.geojson viewport query (non-prepped layers, non-4326 CRS, old browsers, or any wasm
+  // failure). (PMTiles-tiled layers instead come through the normal vector path above.)
   // Overlay draws above all MapLibre layers (interleaved:false); deck layers get a basic switcher
   // row (show/hide + zoom) but not the full symbology popover yet.
   const DECK_LAYERS = (STYLE.geodeploy && STYLE.geodeploy.deckLayers) || [];
@@ -206,18 +209,216 @@
     deckOverlay.setProps({ layers: DECK_LAYERS.map(makeDeckLayer).filter(Boolean) });
   }
 
+  // ── DuckDB-WASM client for prepped GeoParquet ───────────
+  // A prepped layer is a prefix of __cell=N/*.parquet files plus a manifest.json (partition grid,
+  // covering column, cell→file map — see api duckdb_engine.build_manifest). The browser cannot
+  // LIST S3, so the manifest names the files; each is registered as a DuckDB file handle with
+  // directIO=true so duckdb-wasm streams it via HTTP Range requests through the public
+  // /parquet/{path} proxy (NOT the in-WASM httpfs extension, which is unreliable). No spatial
+  // extension is loaded: the covering columns filter on plain numerics and the WKB geometry is
+  // decoded in JS below — this dodges the GeoParquet-version check and the extension download.
+  const DUCKDB_CDN = 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm';
+  const gdWasm = {
+    supported: typeof WebAssembly === 'object' && typeof Worker === 'function',
+    broken: false,     // any real wasm failure → permanent server fallback (no per-pan retries)
+    dbPromise: null, duckdb: null, conn: null,
+    manifests: {},     // layer_id → manifest object | 'unsupported'
+    registered: {},    // layer_id → { handleName: true }
+    seq: {},           // layer_id → latest fetch token (stale responses are dropped)
+  };
+
+  function sqlIdent(name) { return '"' + String(name).replace(/"/g, '""') + '"'; }
+  function sqlField(name) { return "'" + String(name).replace(/[^A-Za-z0-9_]/g, '') + "'"; }
+
+  function getWasmDb() {
+    if (!gdWasm.dbPromise) {
+      gdWasm.dbPromise = (async function () {
+        const duckdb = await import(DUCKDB_CDN);
+        const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
+        // CDN worker scripts can't be constructed cross-origin; the importScripts blob shim is
+        // the documented duckdb-wasm CDN pattern.
+        const workerUrl = URL.createObjectURL(new Blob(
+          ['importScripts("' + bundle.mainWorker + '");'], { type: 'text/javascript' }));
+        const worker = new Worker(workerUrl);
+        const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), worker);
+        await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+        URL.revokeObjectURL(workerUrl);
+        await db.open({});  // initialises the runtime/filesystem config; remote reads fail without it
+        gdWasm.duckdb = duckdb;
+        gdWasm.conn = await db.connect();
+        return db;
+      })().catch(function (e) { gdWasm.broken = true; throw e; });
+    }
+    return gdWasm.dbPromise;
+  }
+
+  function getManifest(d) {
+    const id = d.layer_id;
+    if (gdWasm.manifests[id]) return Promise.resolve(gdWasm.manifests[id]);
+    return fetch(location.origin + d.parquet.manifest)
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (m) {
+        // Client-side reprojection is deferred: a non-4326 dataset uses the server fallback
+        // (which reprojects). Missing grid/covering also → fallback.
+        const ok = m && m.grid && m.covering && m.cells && m.geometry_column &&
+          (!m.crs || m.crs === 'EPSG:4326');
+        gdWasm.manifests[id] = ok ? m : 'unsupported';
+        return gdWasm.manifests[id];
+      })
+      .catch(function () { gdWasm.manifests[id] = 'unsupported'; return 'unsupported'; });
+  }
+
+  // Mirrors the server's partition pruning (duckdb_engine.query_features_geojson): grid cell =
+  // ix*grid + iy, +1-cell pad for features straddling a boundary.
+  function cellsForBbox(g, bbox) {
+    const gsz = g.grid | 0, pad = 1;
+    function ci(v, lo, span) { return Math.floor((v - lo) / (span || 1.0) * gsz); }
+    const ix0 = Math.max(0, ci(bbox[0], g.minx, g.spanx) - pad);
+    const ix1 = Math.min(gsz - 1, ci(bbox[2], g.minx, g.spanx) + pad);
+    const iy0 = Math.max(0, ci(bbox[1], g.miny, g.spany) - pad);
+    const iy1 = Math.min(gsz - 1, ci(bbox[3], g.miny, g.spany) + pad);
+    const cells = [];
+    if (ix0 <= ix1 && iy0 <= iy1)
+      for (let ix = ix0; ix <= ix1; ix++)
+        for (let iy = iy0; iy <= iy1; iy++) cells.push(ix * gsz + iy);
+    return cells;
+  }
+
+  // Minimal WKB → GeoJSON geometry decoder (ISO WKB + EWKB; Z/M ordinates are dropped).
+  function decodeWkb(bytes) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const s = { o: 0 };
+    function geom() {
+      const little = dv.getUint8(s.o) === 1; s.o += 1;
+      let t = dv.getUint32(s.o, little); s.o += 4;
+      let extra = 0;
+      if (t & 0x80000000) extra += 1;             // EWKB Z
+      if (t & 0x40000000) extra += 1;             // EWKB M
+      if (t & 0x20000000) { s.o += 4; }           // EWKB SRID → skip
+      t = t & 0x0fffffff;
+      const iso = Math.floor((t % 10000) / 1000); // ISO: 1000=Z, 2000=M, 3000=ZM
+      if (iso === 1 || iso === 2) extra += 1; else if (iso === 3) extra += 2;
+      const base = t % 1000;
+      const dims = 2 + extra;
+      function pt() {
+        const x = dv.getFloat64(s.o, little), y = dv.getFloat64(s.o + 8, little);
+        s.o += 8 * dims;
+        return [x, y];
+      }
+      function ring() {
+        const n = dv.getUint32(s.o, little); s.o += 4;
+        const out = new Array(n);
+        for (let i = 0; i < n; i++) out[i] = pt();
+        return out;
+      }
+      function many(fn) {
+        const n = dv.getUint32(s.o, little); s.o += 4;
+        const out = new Array(n);
+        for (let i = 0; i < n; i++) out[i] = fn();
+        return out;
+      }
+      switch (base) {
+        case 1: return { type: 'Point', coordinates: pt() };
+        case 2: return { type: 'LineString', coordinates: ring() };
+        case 3: return { type: 'Polygon', coordinates: many(ring) };
+        case 4: return { type: 'MultiPoint', coordinates: many(geom).map(function (g) { return g.coordinates; }) };
+        case 5: return { type: 'MultiLineString', coordinates: many(geom).map(function (g) { return g.coordinates; }) };
+        case 6: return { type: 'MultiPolygon', coordinates: many(geom).map(function (g) { return g.coordinates; }) };
+        case 7: return { type: 'GeometryCollection', geometries: many(geom) };
+        default: return null;
+      }
+    }
+    try { return geom(); } catch (e) { return null; }
+  }
+
+  function wasmViewportGeojson(d, bbox, limit) {
+    return getManifest(d).then(function (m) {
+      if (m === 'unsupported') return null;  // caller uses the server fallback
+      return getWasmDb().then(function (db) {
+        const id = d.layer_id;
+        const cells = cellsForBbox(m.grid, bbox);
+        const reg = gdWasm.registered[id] || (gdWasm.registered[id] = {});
+        const handles = [];
+        let chain = Promise.resolve();
+        cells.forEach(function (c) {
+          (m.cells[String(c)] || []).forEach(function (f) {
+            const handle = 'l' + id + '_' + String(f.key).replace(/[^A-Za-z0-9_.]/g, '_');
+            handles.push(handle);
+            if (!reg[handle]) {
+              reg[handle] = true;
+              chain = chain.then(function () {
+                return db.registerFileURL(handle, location.origin + d.parquet.base + f.key,
+                  gdWasm.duckdb.DuckDBDataProtocol.HTTP, true);  // directIO → range requests
+              });
+            }
+          });
+        });
+        if (!handles.length) return { type: 'FeatureCollection', features: [] };
+        const cc = sqlIdent(m.covering.column), fl = m.covering.fields;
+        function ce(k) { return 'struct_extract(' + cc + ', ' + sqlField(fl[k]) + ')'; }
+        const nb = bbox.map(Number);
+        if (!nb.every(isFinite)) return { type: 'FeatureCollection', features: [] };
+        const sql = 'SELECT ' + sqlIdent(m.geometry_column) + ' AS __wkb FROM read_parquet([' +
+          handles.map(function (h) { return "'" + h + "'"; }).join(',') + ']) WHERE ' +
+          ce('xmin') + ' <= ' + nb[2] + ' AND ' + ce('xmax') + ' >= ' + nb[0] + ' AND ' +
+          ce('ymin') + ' <= ' + nb[3] + ' AND ' + ce('ymax') + ' >= ' + nb[1] +
+          ' LIMIT ' + (limit | 0);
+        return chain.then(function () { return gdWasm.conn.query(sql); }).then(function (table) {
+          const col = table.getChild('__wkb');
+          const feats = [];
+          for (let i = 0; i < table.numRows; i++) {
+            const wkb = col.get(i);
+            if (!wkb) continue;
+            const g = decodeWkb(wkb instanceof Uint8Array ? wkb : new Uint8Array(wkb));
+            if (g) feats.push({ type: 'Feature', geometry: g, properties: {} });
+          }
+          return { type: 'FeatureCollection', features: feats };
+        });
+      });
+    });
+  }
+
+  function serverViewportGeojson(d, bbox, limit) {
+    const url = location.origin + '/api/data/vector/' + d.layer_id +
+      '/features.geojson?bbox=' + encodeURIComponent(bbox.join(',')) + '&limit=' + limit;
+    return fetch(url).then(function (r) { return r.ok ? r.json() : null; });
+  }
+
+  function fetchDeckLayer(d, bbox, limit) {
+    if (gdWasm.supported && !gdWasm.broken && d.parquet && d.parquet.manifest) {
+      return wasmViewportGeojson(d, bbox, limit).then(function (fc) {
+        return fc || serverViewportGeojson(d, bbox, limit);
+      }).catch(function (e) {
+        gdWasm.broken = true;  // one hard failure → stay on the server path for the session
+        console.warn('[geodeploy] duckdb-wasm read failed; using server fallback', e);
+        return serverViewportGeojson(d, bbox, limit);
+      });
+    }
+    return serverViewportGeojson(d, bbox, limit);
+  }
+
+  // Fewer features when zoomed out: a country-wide view is a capped subset either way, and the
+  // full 50k at low zoom is what made portal-open take a 67 MB response.
+  function deckLimitForZoom() {
+    const z = map.getZoom();
+    return z < 7 ? 10000 : z < 10 ? 25000 : 50000;
+  }
+
   function fetchDeck(refetch) {
     if (!deckOverlay) return;
     const b = map.getBounds();
-    const bbox = b.getWest() + ',' + b.getSouth() + ',' + b.getEast() + ',' + b.getNorth();
+    const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+    const limit = deckLimitForZoom();
     const pending = DECK_LAYERS.filter(function (d) {
       const st = deckState[d.layer_id];
       return st && st.visible && (refetch || !st.data);
     }).map(function (d) {
-      const url = location.origin + '/api/data/vector/' + d.layer_id +
-        '/features.geojson?bbox=' + encodeURIComponent(bbox) + '&limit=50000';
-      return fetch(url).then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (j) { if (j) deckState[d.layer_id].data = j; })
+      const token = (gdWasm.seq[d.layer_id] = (gdWasm.seq[d.layer_id] || 0) + 1);
+      return fetchDeckLayer(d, bbox, limit)
+        .then(function (fc) {
+          // Drop stale responses: a later pan may already have resolved.
+          if (fc && gdWasm.seq[d.layer_id] === token) deckState[d.layer_id].data = fc;
+        })
         .catch(function () {});
     });
     Promise.all(pending).then(rebuildDeck);
