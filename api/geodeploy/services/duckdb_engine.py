@@ -693,6 +693,29 @@ def stream_geojsonseq(s3_key: str, out, creds: dict | None = None, bucket: str |
         shutil.rmtree(spill_dir, ignore_errors=True)
 
 
+# DuckDB column types the OGR FlatGeobuf writer accepts as-is. Anything else (DECIMAL, HUGEINT,
+# nested STRUCT/LIST/MAP, ENUM, UUID, INTERVAL, …) is cast in the COPY — numerics to DOUBLE, the rest
+# to VARCHAR — so the GeoParquet→FlatGeobuf export can't die on an "Unsupported type for OGR" column.
+_FGB_SAFE_TYPES = frozenset((
+    "BOOLEAN", "TINYINT", "SMALLINT", "INTEGER", "BIGINT",
+    "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT",
+    "FLOAT", "DOUBLE", "VARCHAR", "DATE", "TIMESTAMP", "TIME",
+))
+
+
+def _fgb_prop_expr(name: str, dtype: str) -> str:
+    """A SELECT expression for a property column that the OGR FlatGeobuf writer can store: pass
+    supported types through untouched, cast DECIMAL/large-int numerics to DOUBLE (keeps them numeric
+    for filtering), and coerce anything else (nested/enum/uuid/interval) to VARCHAR."""
+    base = (dtype or "").upper().split("(")[0].strip()
+    q = _q(name)
+    if base in _FGB_SAFE_TYPES:
+        return q
+    if base in ("DECIMAL", "NUMERIC", "HUGEINT", "UHUGEINT"):
+        return f"CAST({q} AS DOUBLE) AS {q}"
+    return f"CAST({q} AS VARCHAR) AS {q}"
+
+
 def export_geoparquet_to_fgb(s3_key: str, out_path: str, creds: dict | None = None,
                              bucket: str | None = None, memory_limit: str = "1GB",
                              threads: int | None = None) -> None:
@@ -743,7 +766,8 @@ def export_geoparquet_to_fgb(s3_key: str, out_path: str, creds: dict | None = No
         geom_expr = base_geom
         if src_epsg and src_epsg != "EPSG:4326":
             geom_expr = f"ST_Transform({base_geom}, '{src_epsg}', 'EPSG:4326')"
-        sel = ", ".join([f"{geom_expr} AS {gq}"] + [_q(c) for c in prop_cols])
+        sel = ", ".join([f"{geom_expr} AS {gq}"] +
+                        [_fgb_prop_expr(c, col_types.get(c, "")) for c in prop_cols])
         out_q = out_path.replace("'", "''")
         started = time.monotonic()
         logger.info("export_geoparquet_to_fgb: %s → %s (src=%s, cols=%d)",
