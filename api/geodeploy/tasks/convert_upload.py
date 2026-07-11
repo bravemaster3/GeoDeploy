@@ -139,7 +139,7 @@ def convert_to_geoparquet(self, job_id, layer_id, s3_key, csv_opts=None):
                     started_at=datetime.now(timezone.utc).isoformat())
 
     try:
-        step("Downloading upload", 15)
+        step("Fetching uploaded file", 15)
         _s3(creds).download_file(creds["bucket"], s3_key, local_in)
 
         step("Converting to GeoParquet", 40)
