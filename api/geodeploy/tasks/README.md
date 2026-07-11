@@ -51,8 +51,17 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   the original upload, and chains `geoparquet_prep` (partition + covering + manifest → ready). Result
   is identical to a direct `.parquet` upload: deck.gl display + DuckDB analysis, no PostGIS/Martin.
   Converted layers aren't Martin-tiled, so **no §0g polar clamp** (deck.gl renders any latitude).
-  Geometry helpers `_geom_wkb_array`/`_write_geo_footer`/`_kind_from_types` are shared with
-  `vector_ingest` (extracted 2026-07-11). Creds from SQLite (§0f).
+  Geometry helpers `_geom_wkb_array`/`_write_geo_footer`/`_kind_from_types`/`_bbox_struct_array` are
+  shared with `vector_ingest` (extracted 2026-07-11). Creds from SQLite (§0f).
+  **Prep-speed optimization (2026-07-11):** BOTH converters (`_csv_to_geoparquet` and
+  `_convert_to_geoparquet`) now emit the GeoParquet 1.1 **covering `bbox` struct column** as they
+  write (bounds computed in the same vectorised shapely pass that builds the WKB — `_geom_wkb_array(...,
+  return_bounds=True)` → `_bbox_struct_array`), and set `covering_col` in `_write_geo_footer`. So
+  `geoparquet_prep`'s `partition_with_covering` hits its **"reuse existing covering — no parse" fast
+  path** and skips the whole WKB re-parse + local intermediate write (previously the geometry was
+  parsed twice: once at convert, once at prep). `_geom_wkb_array` was also vectorised (dropped the
+  Python per-element WKB comprehension — it dominated cost on multi-million-row files). Both
+  converters log feature throughput (`… N features (X/s)`) so progress is visible in `docker logs`.
 - `geoparquet_import.py` — `import_geoparquet(job_id, layer_id, s3_key)`: registers a **GeoParquet**
   vector layer. Unlike CSV/shapefile (copied/ingested into PostGIS), the file STAYS on object storage
   and is read in place by DuckDB/deck.gl — so this task touches **neither PostGIS nor Martin**. The
@@ -135,4 +144,4 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
-2026-07-11 (CSV WKT geometry; heavy uploads → GeoParquet; large uploads (>2 GB) → direct-to-storage + convert_upload; GeoParquet in export_bundle; prep protects attached sources)
+2026-07-11 (CSV WKT geometry; heavy uploads → GeoParquet; large uploads (>2 GB) → direct-to-storage + convert_upload; GeoParquet in export_bundle; prep protects attached sources; converters emit covering column so prep skips the WKB re-parse + vectorised WKB build — prep-speed fix)

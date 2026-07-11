@@ -24,7 +24,7 @@
           </div>
           <input v-if="dataStore.vectorLayers.length > 3" v-model="vectorSearch" type="search"
             id="vector-search" name="vector-search" placeholder="Search…"
-            class="w-36 text-xs border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+            class="w-36 text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
           <span class="text-xs font-medium text-muted-foreground bg-muted rounded-full px-2 py-0.5">{{ dataStore.vectorLayers.length }}</span>
           <button @click="showVectorUpload = true" class="btn-primary text-xs px-3 py-1.5">
             <UploadIcon class="w-3.5 h-3.5" /> Upload
@@ -56,7 +56,7 @@
           </div>
           <input v-if="dataStore.rasterLayers.length > 3" v-model="rasterSearch" type="search"
             id="raster-search" name="raster-search" placeholder="Search…"
-            class="w-36 text-xs border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+            class="w-36 text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
           <span class="text-xs font-medium text-muted-foreground bg-muted rounded-full px-2 py-0.5">{{ dataStore.rasterLayers.length }}</span>
           <button @click="showRasterUpload = true" class="btn-primary text-xs px-3 py-1.5">
             <UploadIcon class="w-3.5 h-3.5" /> Upload

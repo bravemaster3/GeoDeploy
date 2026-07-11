@@ -12,7 +12,9 @@ deck.gl display, DuckDB analysis — exactly as if the user had uploaded a .parq
 """
 import csv as csvlib
 import json
+import logging
 import os
+import time
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -24,6 +26,8 @@ from shapely.geometry import shape as shp_shape
 from ..celery_app import celery_app
 from ..config import get_settings
 from ..services import martin as martin_svc
+
+logger = logging.getLogger(__name__)
 
 _PG_TYPE = {
     "int": "BIGINT", "int32": "BIGINT", "int64": "BIGINT",
@@ -183,6 +187,8 @@ _GEOM_KIND = {
     "Polygon": "polygon", "MultiPolygon": "polygon",
 }
 
+_BBOX_FIELDS = ("xmin", "ymin", "xmax", "ymax")
+
 # shapely GeometryType().name (UPPERCASE) → GeoParquet `geometry_types` spelling.
 _GEOM_TYPE_NAME = {
     "POINT": "Point", "LINESTRING": "LineString", "POLYGON": "Polygon",
@@ -191,16 +197,21 @@ _GEOM_TYPE_NAME = {
 }
 
 
-def _geom_wkb_array(geoms, reproject, bbox, geom_types):
+def _geom_wkb_array(geoms, reproject, bbox, geom_types, return_bounds=False):
     """Convert an object ndarray of shapely geometries (may contain None) to a pyarrow binary WKB
     array, reprojecting the valid ones (if `reproject` is given), and updating `bbox`
     [minx,miny,maxx,maxy] + the `geom_types` set in place. Shared by the Fiona converter and the
-    CSV→GeoParquet converter so both write identical geometry columns + footer stats."""
+    CSV→GeoParquet converter so both write identical geometry columns + footer stats.
+
+    When `return_bounds` is set, also return an (N, 4) ndarray of per-feature [xmin,ymin,xmax,ymax]
+    (NaN for missing geometries) — used to write a GeoParquet 1.1 covering column so the downstream
+    spatial prep can skip re-parsing the geometry."""
     import numpy as np
     import pyarrow as pa
     import shapely
     from shapely import bounds as shp_bounds, to_wkb
     mask = np.array([g is not None for g in geoms])
+    per = np.full((len(geoms), 4), np.nan) if return_bounds else None
     if mask.any():
         valid = geoms[mask]
         if reproject is not None:
@@ -212,20 +223,36 @@ def _geom_wkb_array(geoms, reproject, bbox, geom_types):
         bbox[1] = min(bbox[1], float(np.nanmin(b[:, 1])))
         bbox[2] = max(bbox[2], float(np.nanmax(b[:, 2])))
         bbox[3] = max(bbox[3], float(np.nanmax(b[:, 3])))
+        if return_bounds:
+            per[mask] = b
         for g in set(shapely.get_type_id(valid).tolist()):
             nm = shapely.GeometryType(g).name
             geom_types.add(_GEOM_TYPE_NAME.get(nm, nm.title()))
-    wkb = to_wkb(geoms)  # None geometries → None
-    return pa.array([bytes(w) if w is not None else None for w in wkb], type=pa.binary())
+    # to_wkb yields a numpy object array of bytes (None where missing); hand it straight to pyarrow
+    # instead of a Python per-element comprehension (that loop dominated cost on multi-million rows).
+    arr = pa.array(to_wkb(geoms), type=pa.binary())
+    return (arr, per) if return_bounds else arr
 
 
-def _write_geo_footer(writer, geom_types, bbox) -> None:
+def _bbox_struct_array(per):
+    """Build a pyarrow struct array {xmin,ymin,xmax,ymax} from an (N, 4) bounds ndarray."""
+    import pyarrow as pa
+    return pa.StructArray.from_arrays(
+        [pa.array(per[:, 0]), pa.array(per[:, 1]), pa.array(per[:, 2]), pa.array(per[:, 3])],
+        names=list(_BBOX_FIELDS))
+
+
+def _write_geo_footer(writer, geom_types, bbox, covering_col=None) -> None:
     """Attach GeoParquet 1.1 `geo` footer metadata. Needs pyarrow ≥ 18 (`add_key_value_metadata`);
     the image pins 18.1. Absent it, the file is still valid — every reader falls back to the
-    geometry-column-name heuristic + a WKB scan when the footer is missing."""
-    geo = {"version": "1.1.0", "primary_column": "geometry",
-           "columns": {"geometry": {"encoding": "WKB",
-                                    "geometry_types": sorted(geom_types), "bbox": bbox}}}
+    geometry-column-name heuristic + a WKB scan when the footer is missing.
+
+    `covering_col` (a struct column name with xmin/ymin/xmax/ymax fields) writes the GeoParquet 1.1
+    `covering` key so viewport queries and the spatial prep can filter/prune on plain numerics."""
+    col = {"encoding": "WKB", "geometry_types": sorted(geom_types), "bbox": bbox}
+    if covering_col:
+        col["covering"] = {"bbox": {k: [covering_col, k] for k in _BBOX_FIELDS}}
+    geo = {"version": "1.1.0", "primary_column": "geometry", "columns": {"geometry": col}}
     if hasattr(writer, "add_key_value_metadata"):
         writer.add_key_value_metadata({"geo": json.dumps(geo)})
 
@@ -306,8 +333,12 @@ def _convert_to_geoparquet(src_path: str, out_path: str, batch_size: int = 20_00
 
         def _base(c):
             return str(col_schema[c]).lower().split(":")[0]
+        # Emit a GeoParquet 1.1 covering bbox column so the downstream spatial prep reuses it and
+        # skips its own WKB parse pass. Pick a name that won't clash with a real attribute column.
+        cov_name = "bbox" if "bbox" not in cols else "gd_bbox_cov"
+        bbox_field = pa.field(cov_name, pa.struct([(f, pa.float64()) for f in _BBOX_FIELDS]))
         schema = pa.schema([pa.field(c, _PA_TYPE.get(_base(c), pa.string())) for c in cols]
-                           + [pa.field("geometry", pa.binary())])
+                           + [pa.field("geometry", pa.binary()), bbox_field])
 
         def _coerce(v, t):
             if v is None:
@@ -327,16 +358,20 @@ def _convert_to_geoparquet(src_path: str, out_path: str, batch_size: int = 20_00
         pend_props: list[tuple] = []
         pend_geoms: list = []
 
+        t0 = time.monotonic()
+        next_log = 500_000
+
         def _flush():
             nonlocal count
             if not pend_geoms:
                 return
             geoms = np.array(pend_geoms, dtype=object)  # no None here (None skipped on read)
-            wkb_arr = _geom_wkb_array(geoms, reproject, bbox, geom_types)
+            wkb_arr, per = _geom_wkb_array(geoms, reproject, bbox, geom_types, return_bounds=True)
             arrays = [pa.array([_coerce(row[j], schema.field(c).type) for row in pend_props],
                                type=schema.field(c).type)
                       for j, c in enumerate(cols)]
             arrays.append(wkb_arr)
+            arrays.append(_bbox_struct_array(per))
             writer.write_table(pa.Table.from_arrays(arrays, schema=schema))
             count += len(pend_geoms)
             pend_props.clear()
@@ -352,11 +387,17 @@ def _convert_to_geoparquet(src_path: str, out_path: str, batch_size: int = 20_00
                 pend_props.append(tuple(props.get(c) for c in cols))
                 if len(pend_geoms) >= batch_size:
                     _flush()
+                    if count >= next_log:
+                        logger.info("_convert_to_geoparquet: %d features (%.0f/s)",
+                                    count, count / max(time.monotonic() - t0, 0.001))
+                        next_log += 500_000
             _flush()
             if count == 0:
                 raise ValueError("No features with geometry found in the file.")
             # CRS is omitted from the footer → OGC:CRS84 (lon/lat), which is what we wrote.
-            _write_geo_footer(writer, geom_types, bbox)
+            _write_geo_footer(writer, geom_types, bbox, covering_col=cov_name)
+            logger.info("_convert_to_geoparquet: DONE %d features in %.0fs",
+                        count, time.monotonic() - t0)
         finally:
             writer.close()
 

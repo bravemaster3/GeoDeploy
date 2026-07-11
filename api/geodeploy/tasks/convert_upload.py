@@ -14,7 +14,9 @@ by the prep task. NOTE: converted GeoParquet layers are NOT served through Marti
 tiles), so the §0g polar-latitude clamp is unnecessary here — deck.gl renders any latitude.
 """
 import json
+import logging
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -22,9 +24,11 @@ from ..celery_app import celery_app
 from ..config import get_settings
 from .raster_ingest import _get_storage_creds
 from .vector_ingest import (
-    _convert_to_geoparquet, _geom_wkb_array, _get_layer_user, _kind_from_types,
-    _resolve_source, _update_job, _update_layer, _write_geo_footer,
+    _bbox_struct_array, _convert_to_geoparquet, _geom_wkb_array, _get_layer_user,
+    _kind_from_types, _resolve_source, _update_job, _update_layer, _write_geo_footer,
 )
+
+logger = logging.getLogger(__name__)
 
 _DELIM_CHAR = {"comma": ",", "semicolon": ";", "tab": "\t", "pipe": "|", "space": " "}
 
@@ -76,6 +80,12 @@ def _csv_to_geoparquet(csv_path: str, out_path: str, x_col, y_col, wkt_col, srid
             raise ValueError("Selected X/Y columns are not in the CSV header.")
         # Keep every column as an attribute EXCEPT the WKT geometry column (redundant + large).
         attr_cols = [c for c in all_cols if c != wkt_col]
+        # Emit a GeoParquet 1.1 covering bbox column so the downstream spatial prep skips its own
+        # WKB parse pass (it reuses an existing covering). Pick a name that won't clash with a
+        # real attribute column.
+        cov_name = "bbox" if "bbox" not in attr_cols else "gd_bbox_cov"
+        bbox_field = pa.field(cov_name, pa.struct([(f, pa.float64()) for f in
+                                                   ("xmin", "ymin", "xmax", "ymax")]))
 
         reader = con.execute(f"SELECT * FROM {src}").fetch_record_batch(batch_size)
         writer = None
@@ -83,15 +93,18 @@ def _csv_to_geoparquet(csv_path: str, out_path: str, x_col, y_col, wkt_col, srid
         count = 0
         bbox = [float("inf"), float("inf"), float("-inf"), float("-inf")]
         geom_types: set[str] = set()
+        t0 = time.monotonic()
+        next_log = 500_000
+        logger.info("_csv_to_geoparquet: started (%s geometry, srid=%s)",
+                    "WKT" if wkt_col else "X/Y", srid)
 
         for batch in reader:
             if wkt_col:
-                geoms = shapely.from_wkt(batch.column(wkt_col).to_pylist(), on_invalid="ignore")
+                geoms = shapely.from_wkt(batch.column(wkt_col).to_numpy(zero_copy_only=False),
+                                         on_invalid="ignore")
             else:
-                xa = np.asarray([v if v is not None else np.nan
-                                 for v in batch.column(x_col).to_pylist()], dtype="float64")
-                ya = np.asarray([v if v is not None else np.nan
-                                 for v in batch.column(y_col).to_pylist()], dtype="float64")
+                xa = np.asarray(batch.column(x_col).to_numpy(zero_copy_only=False), dtype="float64")
+                ya = np.asarray(batch.column(y_col).to_numpy(zero_copy_only=False), dtype="float64")
                 geoms = shapely.points(xa, ya)
                 geoms[np.isnan(xa) | np.isnan(ya)] = None
             mask = np.array([g is not None for g in geoms])
@@ -99,21 +112,27 @@ def _csv_to_geoparquet(csv_path: str, out_path: str, x_col, y_col, wkt_col, srid
                 continue
 
             pa_mask = pa.array(mask)
-            wkb_arr = _geom_wkb_array(geoms[mask], reproject, bbox, geom_types)
+            wkb_arr, per = _geom_wkb_array(geoms[mask], reproject, bbox, geom_types, return_bounds=True)
             attr_arrays = [batch.column(c).filter(pa_mask) for c in attr_cols]
             if writer is None:
                 schema = pa.schema([pa.field(c, batch.schema.field(c).type) for c in attr_cols]
-                                   + [pa.field("geometry", pa.binary())])
+                                   + [pa.field("geometry", pa.binary()), bbox_field])
                 writer = pq.ParquetWriter(out_path, schema, compression="zstd")
-            writer.write_table(pa.Table.from_arrays(attr_arrays + [wkb_arr], schema=schema))
+            writer.write_table(pa.Table.from_arrays(
+                attr_arrays + [wkb_arr, _bbox_struct_array(per)], schema=schema))
             count += int(mask.sum())
+            if count >= next_log:
+                logger.info("_csv_to_geoparquet: %d features (%.0f/s)",
+                            count, count / max(time.monotonic() - t0, 0.001))
+                next_log += 500_000
 
         if writer is None or count == 0:
             if writer is not None:
                 writer.close()
             raise ValueError("No rows had valid geometry.")
-        _write_geo_footer(writer, geom_types, bbox)
+        _write_geo_footer(writer, geom_types, bbox, covering_col=cov_name)
         writer.close()
+        logger.info("_csv_to_geoparquet: DONE %d features in %.0fs", count, time.monotonic() - t0)
         return {"count": count, "bbox": bbox if bbox[0] != float("inf") else None,
                 "geom_type": _kind_from_types(geom_types),
                 "columns": [{"name": c, "type": str(schema.field(c).type)} for c in attr_cols]}
