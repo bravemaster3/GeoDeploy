@@ -723,7 +723,9 @@ def export_geoparquet_to_fgb(s3_key: str, out_path: str, creds: dict | None = No
             conn.execute(f"SET threads={int(threads)}")
 
         meta = _read_geo_metadata(conn, meta_path)
-        all_cols = [r[0] for r in conn.execute(f"DESCRIBE SELECT * FROM {src}").fetchall()]
+        desc = conn.execute(f"DESCRIBE SELECT * FROM {src}").fetchall()
+        all_cols = [r[0] for r in desc]
+        col_types = {r[0]: (r[1] or "") for r in desc}
         geom_col = meta["column"] or next(
             (c for c in all_cols if c.lower() in ("geometry", "geom", "wkb_geometry", "wkb")), None)
         if not geom_col:
@@ -733,9 +735,14 @@ def export_geoparquet_to_fgb(s3_key: str, out_path: str, creds: dict | None = No
         prop_cols = [c for c in all_cols if c != geom_col and c != cov_col]
 
         gq = _q(geom_col)
-        geom_expr = f"ST_GeomFromWKB({gq})"
+        # With `spatial` loaded, read_parquet decodes a GeoParquet geometry column to the native
+        # GEOMETRY type already; only a plain WKB/BLOB column needs ST_GeomFromWKB. Branch on the
+        # actual DuckDB type so we never call ST_GeomFromWKB(GEOMETRY) (a binder error).
+        base_geom = gq if "GEOMETRY" in col_types.get(geom_col, "").upper() \
+            else f"ST_GeomFromWKB({gq})"
+        geom_expr = base_geom
         if src_epsg and src_epsg != "EPSG:4326":
-            geom_expr = f"ST_Transform({geom_expr}, '{src_epsg}', 'EPSG:4326')"
+            geom_expr = f"ST_Transform({base_geom}, '{src_epsg}', 'EPSG:4326')"
         sel = ", ".join([f"{geom_expr} AS {gq}"] + [_q(c) for c in prop_cols])
         out_q = out_path.replace("'", "''")
         started = time.monotonic()
