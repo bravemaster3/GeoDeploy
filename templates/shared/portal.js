@@ -681,20 +681,51 @@
     return z < 7 ? 10000 : z < 10 ? 25000 : 50000;
   }
 
+  // Incremental viewport loading: fetch a BUFFERED bbox (bigger than the screen) and skip refetching
+  // while the viewport stays inside the region we already loaded at this zoom. Without this, every
+  // pan reloaded the whole viewport — including the part already on screen — so panning stuttered and
+  // returning to a loaded area re-ran "Loading features…". DECK_FETCH_PAD is the buffer added on each
+  // side; the row limit is scaled to the buffer's area so on-screen density is preserved.
+  const DECK_FETCH_PAD = 0.35;
+  const DECK_PAD_AREA = (1 + 2 * DECK_FETCH_PAD) * (1 + 2 * DECK_FETCH_PAD);
+  const DECK_FETCH_MAX = 150000;   // server /features caps at 200k; leave headroom
+  function bboxContains(outer, inner) {
+    return !!outer && inner[0] >= outer[0] && inner[1] >= outer[1] &&
+           inner[2] <= outer[2] && inner[3] <= outer[3];
+  }
+  function padBbox(b, f) {
+    const dx = (b[2] - b[0]) * f, dy = (b[3] - b[1]) * f;
+    return [b[0] - dx, b[1] - dy, b[2] + dx, b[3] + dy];
+  }
+
   function fetchDeck(refetch) {
     if (!deckOverlay) return;
     const b = map.getBounds();
-    const bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
-    const limit = deckLimitForZoom();
+    const vb = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+    const zb = Math.round(map.getZoom());
     const pending = DECK_LAYERS.filter(function (d) {
       const st = deckState[d.layer_id];
-      return st && st.visible && (refetch || !st.data);
+      if (!st || !st.visible) return false;
+      if (!st.data) return true;                       // never loaded → fetch
+      if (!refetch) return false;                      // style-only refresh → keep cache
+      // Already loaded a buffered region covering this viewport at this zoom → nothing to do.
+      if (st.loaded && st.loaded.band === zb && bboxContains(st.loaded.bbox, vb)) return false;
+      return true;
     }).map(function (d) {
+      const fb = padBbox(vb, DECK_FETCH_PAD);
+      const limit = Math.min(DECK_FETCH_MAX, Math.round(deckLimitForZoom() * DECK_PAD_AREA));
       const token = (gdWasm.seq[d.layer_id] = (gdWasm.seq[d.layer_id] || 0) + 1);
-      return fetchDeckLayer(d, bbox, limit)
+      return fetchDeckLayer(d, fb, limit)
         .then(function (fc) {
           // Drop stale responses: a later pan may already have resolved.
-          if (fc && gdWasm.seq[d.layer_id] === token) deckState[d.layer_id].data = fc;
+          if (fc && gdWasm.seq[d.layer_id] === token) {
+            deckState[d.layer_id].data = fc;
+            // Remember what we covered so the next pan can skip. The overview grid already spans the
+            // whole extent, so mark it world-wide (only a zoom-band change reloads it).
+            deckState[d.layer_id].loaded = fc.__overview
+              ? { bbox: [-180, -90, 180, 90], band: zb }
+              : { bbox: fb, band: zb };
+          }
         })
         .catch(function () {});
     });
@@ -759,7 +790,7 @@
             if (!st || !st.visible || !st.data || !st.data.__overview) return;
             const m = gdWasm.manifests[d.layer_id];
             if (!m || m === 'unsupported' || !m.grid) return;
-            const load = viewportLoad(m, vb);
+            const load = viewportLoad(m, padBbox(vb, DECK_FETCH_PAD));  // same padded bbox as the fetch
             if (fitsDetail(m, load)) {   // now fits detail → drop the overview so a detail fetch runs
               st.data = null;
               changed = true;

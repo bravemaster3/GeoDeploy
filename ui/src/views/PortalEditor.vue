@@ -385,12 +385,22 @@ onMounted(async () => {
 // new layer first appears; pure style edits rebuild from cached data without a network refetch.
 let deckOverlay = null
 const deckData = {}        // layer_id → cached FeatureCollection for the current view
+const deckFetched = {}     // layer_id → { bbox:[w,s,e,n], band } region already loaded (see below)
 const deckLoading = ref(0) // detail fetches in flight → shows the "Loading features…" pill
 // In-flight viewport fetches are ABORTED when a newer view supersedes them (and before Save/Publish)
 // so rapid pans over a heavy GeoParquet can't pile up requests and saturate the browser's ~6
 // per-host connection limit — which otherwise starves the Save/Publish request and made it "hang".
 let deckAbort = null
 function abortDeckFetches() { if (deckAbort) { deckAbort.abort(); deckAbort = null } }
+// Incremental viewport loading (mirrors portal.js fetchDeck): fetch a BUFFERED bbox (bigger than the
+// screen) and skip refetching while the viewport stays inside the region already loaded at this zoom,
+// so panning doesn't reload data already on screen and returning to a loaded area is instant. The row
+// limit is scaled to the buffer's area so on-screen density is preserved.
+const DECK_FETCH_PAD = 0.35
+const DECK_PAD_AREA = (1 + 2 * DECK_FETCH_PAD) ** 2
+const DECK_FETCH_MAX = 150000
+const bboxContains = (o, i) => !!o && i[0] >= o[0] && i[1] >= o[1] && i[2] <= o[2] && i[3] <= o[3]
+const padBbox = (b, f) => { const dx = (b[2] - b[0]) * f, dy = (b[3] - b[1]) * f; return [b[0] - dx, b[1] - dy, b[2] + dx, b[3] + dy] }
 // Per-viewport feature cap, scaled by zoom (matches portal.js): a zoomed-out view is a capped
 // subset either way, and a flat 50k limit made low-zoom responses tens of MB (slow query,
 // slow JSON parse). More than the eye resolves at each band.
@@ -534,25 +544,34 @@ async function refreshDeck(refetch) {
   if (refetch || configs.some(c => !deckData[c.layer_id])) {
     const b = map.value.getBounds()
     const nb = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]
-    const bbox = nb.join(',')
+    const band = Math.round(map.value.getZoom())
     // Supersede any still-running fetch from a previous view before starting this one.
     abortDeckFetches()
     deckAbort = new AbortController()
     const signal = deckAbort.signal
     await Promise.all(configs.map(async cfg => {
       if (!refetch && deckData[cfg.layer_id]) return
+      // Already loaded a buffered region covering this viewport at this zoom → nothing to fetch.
+      const cached = deckFetched[cfg.layer_id]
+      if (refetch && deckData[cfg.layer_id] && cached && cached.band === band && bboxContains(cached.bbox, nb)) return
+      // Fetch a BUFFERED bbox (bigger than the screen) so nearby pans stay within it; decide
+      // overview-vs-detail on this SAME padded bbox so we only load detail when the area-capped
+      // fetch would be reasonably complete (matches portal.js fetchDeckLayer).
+      const fb = padBbox(nb, DECK_FETCH_PAD)
+      const lim = Math.min(DECK_FETCH_MAX, Math.round(deckLimit() * DECK_PAD_AREA))
       try {
         // Heavy prepped layer at large scale → density-grid overview from the manifest
         // (instant, no feature query). Light layers and zoomed-in views load real features.
         const m = await deckManifest(cfg.layer_id)
         if (m !== 'none' && (m.feature_count || 0) > DECK_DETAIL_MAX) {
-          const load = deckViewportLoad(m, nb)
-          // Gate on ROWS under the viewport only. The editor fetches detail from the SERVER in one
-          // request (getVectorFeatures), so the partition-FILE count is irrelevant — gating on it
-          // (like portal.js's disabled wasm path did) locked dense city cells, split into many
-          // files, into the overview at every zoom (mirrors portal.js fitsDetail).
+          const load = deckViewportLoad(m, fb)
+          // Gate on ROWS only. The editor fetches detail from the SERVER in one request
+          // (getVectorFeatures), so the partition-FILE count is irrelevant — gating on it (like
+          // portal.js's disabled wasm path did) locked dense city cells, split into many files,
+          // into the overview at every zoom (mirrors portal.js fitsDetail).
           if (load.rows > DECK_DETAIL_MAX_ROWS) {
             deckData[cfg.layer_id] = deckOverviewGeojson(m)
+            deckFetched[cfg.layer_id] = { bbox: [-180, -90, 180, 90], band } // grid spans the extent
             return
           }
         }
@@ -564,8 +583,9 @@ async function refreshDeck(refetch) {
         }
         deckLoading.value++
         try {
-          const { data } = await getVectorFeatures(cfg.layer_id, bbox, deckLimit(), signal)
+          const { data } = await getVectorFeatures(cfg.layer_id, fb.join(','), lim, signal)
           deckData[cfg.layer_id] = data
+          deckFetched[cfg.layer_id] = { bbox: fb, band }
         } finally { deckLoading.value-- }
       } catch (err) {
         // An aborted fetch (newer view or a save in progress) is expected — keep the last data.
@@ -699,11 +719,12 @@ watch(loaded, (v) => {
           if (!data || !data.__overview) continue
           const m = deckManifests[cfg.layer_id]
           if (!m || m === 'none' || !m.grid) continue
-          const load = deckViewportLoad(m, vb)
+          const load = deckViewportLoad(m, padBbox(vb, DECK_FETCH_PAD))  // same padded bbox as the fetch
           const light = (m.feature_count || 0) <= DECK_DETAIL_MAX
           // Rows-only gate (server fetch → file count irrelevant; see the refetch branch above).
           if (light || load.rows <= DECK_DETAIL_MAX_ROWS) {
             deckData[cfg.layer_id] = { type: 'FeatureCollection', features: [] }
+            delete deckFetched[cfg.layer_id]  // drop the cached region so moveend refetches detail
             changed = true
           }
         }
