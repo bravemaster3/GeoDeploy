@@ -18,6 +18,54 @@ from ..services.portal_generator import build_portal_bundle, generate_style
 router = APIRouter(prefix="/portals", tags=["portals"])
 
 
+async def _unique_slug(title: str, db: AsyncSession, exclude_id: int | None = None) -> str:
+    """A URL slug from the title, made unique across portals (skipping `exclude_id`, so a portal
+    keeping its own slug on rename doesn't collide with itself)."""
+    base_slug = slugify(title, separator="-") or "portal"
+    slug = base_slug
+    suffix = 0
+    while True:
+        q = select(Portal).where(Portal.slug == slug)
+        if exclude_id is not None:
+            q = q.where(Portal.id != exclude_id)
+        if (await db.execute(q)).scalar_one_or_none() is None:
+            return slug
+        suffix += 1
+        slug = f"{base_slug}-{suffix}"
+
+
+async def _rebuild_bundle(portal: Portal, db: AsyncSession) -> None:
+    """(Re)generate the published static bundle at data/portals/{portal.slug}/ from the portal's
+    current layer configs. Shared by publish (explicit) and rename (re-publish under the new slug)."""
+    layer_configs = json.loads(portal.layer_configs or "[]")
+    vector_ids = [cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "vector"]
+    raster_ids = [cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "raster"]
+    external_ids = [cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "external"]
+
+    vector_layers = []
+    if vector_ids:
+        r = await db.execute(select(VectorLayer).where(VectorLayer.id.in_(vector_ids), VectorLayer.status == "ready"))
+        vector_layers = r.scalars().all()
+    raster_layers = []
+    if raster_ids:
+        r = await db.execute(select(RasterLayer).where(RasterLayer.id.in_(raster_ids), RasterLayer.status == "ready"))
+        raster_layers = r.scalars().all()
+    external_sources = []
+    if external_ids:
+        r = await db.execute(select(ExternalSource).where(ExternalSource.id.in_(external_ids)))
+        external_sources = r.scalars().all()
+
+    user_data = generate_style(layer_configs, vector_layers, raster_layers, external_sources)
+    initial_view = json.loads(portal.initial_view) if portal.initial_view else None
+    build_portal_bundle(
+        portal.slug, portal.title, user_data, portal.template_id, layer_configs,
+        access_type=portal.access_type,
+        password_sha256=portal.access_password_sha256,
+        initial_view=initial_view,
+        description=portal.description,
+    )
+
+
 @router.get("", response_model=list[PortalOut])
 async def list_portals(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Portal).where(Portal.user_id == user.id).order_by(Portal.created_at.desc()))
@@ -63,8 +111,11 @@ async def get_portal(portal_id: int, user: User = Depends(get_current_user), db:
 @router.put("/{portal_id}", response_model=PortalOut)
 async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     portal = await _get_owned(portal_id, user.id, db)
-    if req.title is not None:
+    old_slug = portal.slug
+    if req.title is not None and req.title != portal.title:
         portal.title = req.title
+        # Renaming updates the URL slug too (the user's ask). Keep it unique across portals.
+        portal.slug = await _unique_slug(req.title, db, exclude_id=portal.id)
     if req.description is not None:
         portal.description = req.description
     if req.template_id is not None:
@@ -81,6 +132,18 @@ async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(
         portal.access_password_hash = CryptContext(schemes=["bcrypt"], deprecated="auto").hash(req.access_password)
         portal.access_password_sha256 = sha256(req.access_password.encode()).hexdigest()
 
+    # If the slug changed on a PUBLISHED portal, move the published bundle to the new URL: rebuild
+    # under the new slug (the slug is baked into the bundle as {{SLUG}}) and drop the old directory
+    # so the old URL 404s. A draft (unpublished) portal just carries the new slug until it's published.
+    slug_changed = portal.slug != old_slug
+    if slug_changed and portal.published:
+        import shutil
+        settings = get_settings()
+        await _rebuild_bundle(portal, db)
+        old_dir = f"{settings.data_dir}/portals/{old_slug}"
+        if old_slug != portal.slug and os.path.exists(old_dir):
+            shutil.rmtree(old_dir, ignore_errors=True)
+
     await db.commit()
     await db.refresh(portal)
     return PortalOut.from_orm_json(portal)
@@ -89,36 +152,7 @@ async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(
 @router.post("/{portal_id}/publish", response_model=PortalOut)
 async def publish_portal(portal_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     portal = await _get_owned(portal_id, user.id, db)
-    layer_configs = json.loads(portal.layer_configs or "[]")
-
-    vector_ids = [cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "vector"]
-    raster_ids = [cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "raster"]
-    external_ids = [cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "external"]
-
-    vector_layers = []
-    if vector_ids:
-        r = await db.execute(select(VectorLayer).where(VectorLayer.id.in_(vector_ids), VectorLayer.status == "ready"))
-        vector_layers = r.scalars().all()
-
-    raster_layers = []
-    if raster_ids:
-        r = await db.execute(select(RasterLayer).where(RasterLayer.id.in_(raster_ids), RasterLayer.status == "ready"))
-        raster_layers = r.scalars().all()
-
-    external_sources = []
-    if external_ids:
-        r = await db.execute(select(ExternalSource).where(ExternalSource.id.in_(external_ids)))
-        external_sources = r.scalars().all()
-
-    user_data = generate_style(layer_configs, vector_layers, raster_layers, external_sources)
-    initial_view = json.loads(portal.initial_view) if portal.initial_view else None
-    build_portal_bundle(
-        portal.slug, portal.title, user_data, portal.template_id, layer_configs,
-        access_type=portal.access_type,
-        password_sha256=portal.access_password_sha256,
-        initial_view=initial_view,
-        description=portal.description,
-    )
+    await _rebuild_bundle(portal, db)
 
     portal.published = True
     portal.published_at = datetime.now(timezone.utc)

@@ -21,7 +21,7 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
     present, else `fitBounds` to `style.geodeploy.bounds`; and
     operates on a fixed set of element IDs (`#map`, `#sidebar`, `#layer-list`, `#attr-panel`,
     `#coords`, `#access-gate`, …). **Add/҂fix a portal feature here and every template gets it.**
-  - `portal.css` — all structural CSS, written against CSS variables (`--accent`, `--bg`, …).
+  - `portal.css` — all structural CSS, written against CSS variables (`--accent`, `--bg`, …). **Basemap switcher (2026-07-11) is an enlarged popover**: `.gd-basemap-menu` 250px with a "Basemap" header, 68×46 `.gd-basemap-thumb` thumbnails, 13px labels, and a selected-row highlight via `.gd-basemap-opt:has(input:checked)` (accent border + check mark). **Dark-mode MapLibre controls**: `html[data-theme="dark"]` recolours `.maplibregl-ctrl-group` to the theme surface and light-inverts the built-in `.maplibregl-ctrl-icon` glyphs (nav zoom/compass/globe) — the custom basemap/tools buttons use `currentColor` so they're untouched. The dashboard editor mirrors this in `ui/src/style.css` (`.dark .maplibregl-ctrl…`).
   - `layout.html` — the default thin skeleton (the body structure with the required element IDs +
     placeholders). Templates that don't ship their own `layout.html` fall back to this.
 - **A template** (`official/<name>/`) just needs:

@@ -1992,14 +1992,18 @@
       this._map = m;
       const c = document.createElement('div');
       c.className = 'maplibregl-ctrl maplibregl-ctrl-group gd-basemap-ctrl';
+      var checkSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" ' +
+        'stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
       c.innerHTML =
         '<button type="button" class="gd-basemap-btn" title="Basemaps" aria-label="Choose basemap">' + basemapIcon() + '</button>' +
         '<div class="gd-basemap-menu">' +
+          '<div class="gd-basemap-title">Basemap</div>' +
           BASEMAPS.map((bm, i) =>
             '<label class="gd-basemap-opt"><input type="radio" name="gd-basemap" value="' + bm.id + '"' +
             (i === 0 ? ' checked' : '') + '>' +
             '<img class="gd-basemap-thumb" src="' + bm.thumb + '" alt="" loading="lazy">' +
-            '<span>' + escHtml(bm.name) + '</span></label>').join('') +
+            '<span class="gd-basemap-name">' + escHtml(bm.name) + '</span>' +
+            '<span class="gd-basemap-check">' + checkSvg + '</span></label>').join('') +
         '</div>';
       const btn = c.querySelector('.gd-basemap-btn');
       const menu = c.querySelector('.gd-basemap-menu');

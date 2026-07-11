@@ -6,7 +6,15 @@
       <!-- Top bar -->
       <div class="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
         <button @click="$router.push('/portals')" class="text-sm text-muted-foreground hover:text-foreground flex-shrink-0">← Back</button>
-        <span class="text-sm font-semibold truncate flex-1 text-center">{{ portal?.title }}</span>
+        <input v-if="renaming" ref="renameInput" v-model="renameTitle"
+          @blur="commitRename" @keydown.enter.prevent="commitRename" @keydown.esc="cancelRename"
+          maxlength="120"
+          class="text-sm font-semibold flex-1 min-w-0 text-center bg-transparent border-b border-primary text-foreground focus:outline-none" />
+        <button v-else @click="startRename" :disabled="!portal"
+          class="text-sm font-semibold truncate flex-1 text-center hover:text-primary transition-colors"
+          title="Rename portal (also updates the published URL)">
+          {{ portal?.title }}
+        </button>
         <button @click="handlePublish" :disabled="busy || !portal"
           class="btn-primary text-xs py-1.5 flex-shrink-0">
           {{ portal?.published ? 'Re-publish' : 'Publish' }}
@@ -204,7 +212,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { useEditor, EditorContent } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
@@ -247,6 +255,38 @@ function onDragEnd() { dragIndex.value = null }
 const accessPassword = ref('')
 const busy = ref(false)
 const saveMsg = ref(null)
+
+// ── Rename the portal (click the title) ─────────────────────────────────────
+// Renaming also changes the URL slug (server-side); if the portal is published it's re-published
+// under the new slug and the old URL is removed. The editor route uses the portal id, so this
+// page's own URL doesn't change — but the published /portals/{slug}/ link updates live.
+const renaming = ref(false)
+const renameTitle = ref('')
+const renameInput = ref(null)
+function startRename() {
+  if (!portal.value) return
+  renameTitle.value = portal.value.title
+  renaming.value = true
+  nextTick(() => { renameInput.value?.focus(); renameInput.value?.select() })
+}
+function cancelRename() { renaming.value = false }
+async function commitRename() {
+  if (!renaming.value) return           // guard against blur firing after Enter already committed
+  const name = renameTitle.value.trim()
+  renaming.value = false
+  if (!name || name === portal.value.title) return
+  busy.value = true
+  try {
+    const updated = await portalsStore.update(portal.value.id, { title: name })
+    portal.value = updated
+    saveMsg.value = { type: 'ok', text: 'Renamed' }
+    setTimeout(() => { saveMsg.value = null }, 3000)
+  } catch (err) {
+    saveMsg.value = { type: 'err', text: err.response?.data?.detail || err.message }
+  } finally {
+    busy.value = false
+  }
+}
 const description = ref('')  // About-panel documentation (markdown), baked at publish
 const showAboutEditor = ref(false)
 
@@ -346,6 +386,11 @@ onMounted(async () => {
 let deckOverlay = null
 const deckData = {}        // layer_id → cached FeatureCollection for the current view
 const deckLoading = ref(0) // detail fetches in flight → shows the "Loading features…" pill
+// In-flight viewport fetches are ABORTED when a newer view supersedes them (and before Save/Publish)
+// so rapid pans over a heavy GeoParquet can't pile up requests and saturate the browser's ~6
+// per-host connection limit — which otherwise starves the Save/Publish request and made it "hang".
+let deckAbort = null
+function abortDeckFetches() { if (deckAbort) { deckAbort.abort(); deckAbort = null } }
 // Per-viewport feature cap, scaled by zoom (matches portal.js): a zoomed-out view is a capped
 // subset either way, and a flat 50k limit made low-zoom responses tens of MB (slow query,
 // slow JSON parse). More than the eye resolves at each band.
@@ -490,6 +535,10 @@ async function refreshDeck(refetch) {
     const b = map.value.getBounds()
     const nb = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]
     const bbox = nb.join(',')
+    // Supersede any still-running fetch from a previous view before starting this one.
+    abortDeckFetches()
+    deckAbort = new AbortController()
+    const signal = deckAbort.signal
     await Promise.all(configs.map(async cfg => {
       if (!refetch && deckData[cfg.layer_id]) return
       try {
@@ -511,10 +560,14 @@ async function refreshDeck(refetch) {
         }
         deckLoading.value++
         try {
-          const { data } = await getVectorFeatures(cfg.layer_id, bbox, deckLimit())
+          const { data } = await getVectorFeatures(cfg.layer_id, bbox, deckLimit(), signal)
           deckData[cfg.layer_id] = data
         } finally { deckLoading.value-- }
-      } catch { deckData[cfg.layer_id] = deckData[cfg.layer_id] || { type: 'FeatureCollection', features: [] } }
+      } catch (err) {
+        // An aborted fetch (newer view or a save in progress) is expected — keep the last data.
+        if (err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError') return
+        deckData[cfg.layer_id] = deckData[cfg.layer_id] || { type: 'FeatureCollection', features: [] }
+      }
     }))
   }
   // config[0] = top of list → must draw on top → last in the deck layer array.
@@ -934,6 +987,9 @@ async function save() {
   if (!portal.value) return
   busy.value = true
   saveMsg.value = null
+  // Free any connections held by in-flight viewport fetches so the save request isn't queued
+  // behind them (the "sometimes it never saves" symptom on heavy GeoParquet layers).
+  abortDeckFetches()
   try {
     const view = currentView()
     if (view) savedView.value = view

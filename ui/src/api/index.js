@@ -76,8 +76,8 @@ export const putFileToUrl = (url, file, onProgress) =>
 
 export const getVectorJobStatus = (jobId) => api.get(`/data/vector/jobs/${jobId}`)
 // Viewport query for a GeoParquet (file-backed) layer → GeoJSON in EPSG:4326 (rendered by deck.gl).
-export const getVectorFeatures = (id, bbox, limit = 50000) =>
-  api.get(`/data/vector/${id}/features`, { params: { bbox, limit } })
+export const getVectorFeatures = (id, bbox, limit = 50000, signal = undefined) =>
+  api.get(`/data/vector/${id}/features`, { params: { bbox, limit }, signal })
 // Identify-on-click for a GeoParquet layer: attributes of the features under a point
 // (tol = half-width of the click box in degrees).
 export const identifyVectorFeatures = (id, lng, lat, tol, limit = 5) =>

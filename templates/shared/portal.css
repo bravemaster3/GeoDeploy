@@ -298,21 +298,49 @@
     }
     .gd-basemap-btn svg { width: 18px; height: 18px; }
     .gd-basemap-menu {
-      display: none; position: absolute; top: 0; right: 35px; min-width: 200px;
-      background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
-      box-shadow: var(--shadow-lg); padding: 5px; white-space: nowrap;
+      display: none; position: absolute; top: 0; right: 40px; width: 250px;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+      box-shadow: var(--shadow-lg); padding: 8px;
     }
     .gd-basemap-ctrl.open .gd-basemap-menu { display: block; }
+    .gd-basemap-title {
+      font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+      color: var(--text-muted); padding: 3px 6px 8px;
+    }
     .gd-basemap-opt {
-      display: flex; align-items: center; gap: 9px; padding: 5px 7px;
-      font-size: 12px; border-radius: 6px; cursor: pointer;
+      display: flex; align-items: center; gap: 12px; padding: 7px 8px;
+      font-size: 13px; border-radius: 9px; cursor: pointer; position: relative;
+      border: 1.5px solid transparent; transition: background .12s, border-color .12s;
     }
     .gd-basemap-opt:hover { background: var(--surface); }
-    .gd-basemap-opt input { accent-color: var(--accent); flex-shrink: 0; }
+    /* Radio drives state but is visually hidden — the whole row IS the control. */
+    .gd-basemap-opt input { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }
+    .gd-basemap-opt:has(input:checked) { border-color: var(--accent); background: var(--accent-light); }
+    .gd-basemap-name { flex: 1; font-weight: 500; color: var(--text); white-space: nowrap; }
+    .gd-basemap-check { display: flex; color: var(--accent); opacity: 0; flex-shrink: 0; }
+    .gd-basemap-check svg { width: 17px; height: 17px; }
+    .gd-basemap-opt:has(input:checked) .gd-basemap-check { opacity: 1; }
     .gd-basemap-thumb {
-      width: 46px; height: 30px; object-fit: cover; border-radius: 4px;
+      width: 68px; height: 46px; object-fit: cover; border-radius: 7px;
       border: 1px solid var(--border); flex-shrink: 0; background: var(--surface);
     }
+
+    /* ── Dark-mode MapLibre controls (nav zoom/compass, globe) ───────────────
+       MapLibre ships white control groups with dark icons — bright and out of place
+       on a dark portal. Recolour the group to the theme surface and light-invert the
+       built-in icon glyphs (our custom basemap/tools buttons use currentColor, not
+       .maplibregl-ctrl-icon, so they're untouched by the filter). */
+    html[data-theme="dark"] .maplibregl-ctrl-group {
+      background: var(--bg);
+      box-shadow: 0 0 0 1px var(--border), var(--shadow);
+    }
+    html[data-theme="dark"] .maplibregl-ctrl-group button + button { border-top-color: var(--border); }
+    html[data-theme="dark"] .maplibregl-ctrl-group button:hover { background: var(--surface); }
+    html[data-theme="dark"] .maplibregl-ctrl button .maplibregl-ctrl-icon {
+      filter: invert(1) hue-rotate(180deg) brightness(1.05);
+    }
+    html[data-theme="dark"] .maplibregl-ctrl-attrib { background: rgba(0,0,0,.4); }
+    html[data-theme="dark"] .maplibregl-ctrl-attrib a { color: var(--text-muted); }
 
     /* ── Coordinate readout ──────────────────────────────── */
     #coords {

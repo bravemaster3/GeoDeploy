@@ -59,3 +59,19 @@
     @apply block text-sm font-medium text-foreground/85 mb-1;
   }
 }
+
+/* MapLibre controls in the (dark-by-default) dashboard — the editor preview's zoom/compass/globe.
+   MapLibre ships a white control group with dark icons, which glares on the dark UI. Recolour the
+   group to the card surface and light-invert the built-in icon glyphs. Mirrors the published
+   portal's dark-control fix in templates/shared/portal.css (keep the two in sync). */
+.dark .maplibregl-ctrl-group {
+  background: hsl(var(--card));
+  box-shadow: 0 0 0 1px hsl(var(--border)), 0 1px 3px rgba(0, 0, 0, .5);
+}
+.dark .maplibregl-ctrl-group button + button { border-top-color: hsl(var(--border)); }
+.dark .maplibregl-ctrl-group button:hover { background: hsl(var(--muted)); }
+.dark .maplibregl-ctrl button .maplibregl-ctrl-icon {
+  filter: invert(1) hue-rotate(180deg) brightness(1.05);
+}
+.dark .maplibregl-ctrl-attrib { background: rgba(0, 0, 0, .4); }
+.dark .maplibregl-ctrl-attrib a { color: hsl(var(--muted-foreground)); }
