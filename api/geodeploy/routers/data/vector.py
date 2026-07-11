@@ -1,3 +1,4 @@
+import json
 import os
 import uuid
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -292,10 +293,18 @@ async def large_vector_complete(
     table_name = f"gpq_{slugify(layer_name, separator='_') or 'layer'}_{uuid.uuid4().hex[:6]}"
     schema_name = f"geodeploy_u{user.id}"
 
+    csv_opts = None
+    if ext == ".csv":
+        csv_opts = {"x_column": body.x_column, "y_column": body.y_column,
+                    "wkt_column": body.wkt_column, "srid": body.srid, "delimiter": body.delimiter}
+
     layer = VectorLayer(
         user_id=user.id, name=layer_name, table_name=table_name, schema_name=schema_name,
         file_size=body.file_size, storage_backend="geoparquet", s3_key=body.s3_key,
         status="processing",
+        # Persist convert options so "restart processing" can re-run the conversion stage (while the
+        # layer's s3_key still points at the raw upload) without the user re-picking columns.
+        convert_opts=json.dumps(csv_opts) if csv_opts else None,
     )
     db.add(layer)
     await db.flush()
@@ -304,10 +313,6 @@ async def large_vector_complete(
     await db.commit()
     await db.refresh(layer)
 
-    csv_opts = None
-    if ext == ".csv":
-        csv_opts = {"x_column": body.x_column, "y_column": body.y_column,
-                    "wkt_column": body.wkt_column, "srid": body.srid, "delimiter": body.delimiter}
     convert_to_geoparquet.delay(job_id, layer.id, body.s3_key, csv_opts)
     return JobStatus(id=job_id, layer_id=layer.id, layer_type="vector",
                      status="queued", progress=0, current_step="Queued", error_message=None)
@@ -490,6 +495,51 @@ async def prepare_layer(
     await db.refresh(layer)
     prepare_geoparquet.delay(layer.id, layer.s3_key)
     return VectorLayerOut.from_orm_json(layer)
+
+
+@router.post("/{layer_id}/reprocess", response_model=JobStatus, status_code=202)
+async def reprocess_layer(
+    layer_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Restart the background processing of a file-backed (GeoParquet) layer whose job stalled or
+    failed — used from the UI when a large upload's conversion or spatial prep died (e.g. the worker
+    was restarted mid-task). Re-runs the RIGHT stage based on where the data currently sits, so the
+    user never has to re-upload a multi-GB file:
+      • s3_key still points at the RAW upload (.csv/.gpkg/.geojson/.zip) → the convert-to-GeoParquet
+        stage never finished → re-queue `convert_to_geoparquet` with the saved `convert_opts`.
+      • s3_key is already a `.parquet` or a prepared `parts-…/` prefix → re-queue the spatial prep.
+    A fresh UploadJob is created so the UI's progress resets and can be polled to completion."""
+    from ...tasks.convert_upload import convert_to_geoparquet
+    from ...tasks.geoparquet_prep import prepare_geoparquet
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id, VectorLayer.user_id == user.id))
+    layer = result.scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not found.")
+    if layer.storage_backend != "geoparquet" or not layer.s3_key:
+        raise HTTPException(400, "Only file-backed (GeoParquet) layers can be reprocessed.")
+
+    ext = os.path.splitext(layer.s3_key)[1].lower()
+    needs_convert = ext in LARGE_VECTOR_EXTENSIONS  # raw upload — conversion never completed
+    if needs_convert and ext == ".csv" and not layer.convert_opts:
+        raise HTTPException(400, "Cannot restart: the CSV geometry options for this upload were not "
+                                 "saved (uploaded before restart support). Re-upload the file.")
+
+    layer.status = "processing"
+    layer.error_message = None
+    job_id = str(uuid.uuid4())
+    db.add(UploadJob(id=job_id, layer_id=layer.id, layer_type="vector"))
+    await db.commit()
+    await db.refresh(layer)
+
+    if needs_convert:
+        csv_opts = json.loads(layer.convert_opts) if layer.convert_opts else None
+        convert_to_geoparquet.delay(job_id, layer.id, layer.s3_key, csv_opts)
+    else:
+        prepare_geoparquet.delay(layer.id, layer.s3_key, job_id)
+    return JobStatus(id=job_id, layer_id=layer.id, layer_type="vector",
+                     status="queued", progress=0, current_step="Queued", error_message=None)
 
 
 @router.get("/{layer_id}/pmtiles")

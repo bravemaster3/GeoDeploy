@@ -5,7 +5,9 @@ Pinia stores — client-side state, all using the composition (setup) style.
 
 ## Contents
 - `auth.js` — `user`, `fetchMe`, `loginUser` (stores JWT in `localStorage` as `geodeploy_token`), `logout`.
-- `data.js` — `vectorLayers`, `rasterLayers`, `externalSources` (WMS/XYZ/WFS connections); `refresh()` loads all three; `pollJob(jobId, type, layerId)` polls every 2s until `ready`/`error` and refreshes (**tolerates transient failures — up to 8 consecutive before giving up — so a multi-minute convert/prep job's progress doesn't freeze on one blip**); **`watchProcessing()` (auto-run at the end of every `refresh()`) re-fetches the whole list every 3s while any layer is `processing`/`queued`** — the safety net that advances the UI processing→ready without a manual page refresh, and resumes after a reload (independent of the per-job poll); `removeVector`/`removeRaster`/`removeExternal`/`addExternal`.
+- `data.js` — `vectorLayers`, `rasterLayers`, `externalSources` (WMS/XYZ/WFS connections); `refresh()` loads all three; `pollJob(jobId, type, layerId)` polls every 2s until `ready`/`error` and refreshes (**tolerates transient failures — up to 8 consecutive before giving up — so a multi-minute convert/prep job's progress doesn't freeze on one blip**); **`watchProcessing()` (auto-run at the end of every `refresh()`) re-fetches the whole list every 3s while any layer is `processing`/`queued`** — the safety net that advances the UI processing→ready without a manual page refresh, and resumes after a reload (independent of the per-job poll); `reprocessVector(id)` (**restart a stalled/failed GeoParquet layer's
+convert/prep** — flips it to `processing` optimistically, POSTs `/data/vector/{id}/reprocess`, then polls
+the fresh job); `removeVector`/`removeRaster`/`removeExternal`/`addExternal`.
 - `portals.js` — `portals`; `refresh`, `create`, `update`, `publish`, `unpublish`, `remove`.
 - `system.js` — `health`, `stats`; `refreshHealth`, `refreshStats` (admin endpoints).
 
@@ -21,4 +23,4 @@ Pinia stores — client-side state, all using the composition (setup) style.
 - **UI bundle caching (see `ui/nginx.conf`):** content-hashed `/assets/*` are cached `immutable`; `index.html` is served `Cache-Control: no-cache` so a rebuild's new bundle loads immediately (a cached `index.html` used to keep the browser on a stale bundle — the page looked "stuck", live search felt non-live — until a manual hard-refresh).
 
 ## Last updated
-2026-07-11 (resilient pollJob + watchProcessing live-update backstop; nginx no-cache index.html)
+2026-07-11 (resilient pollJob + watchProcessing live-update backstop; nginx no-cache index.html; reprocessVector — restart a stalled GeoParquet convert/prep)

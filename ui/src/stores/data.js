@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import {
   listVectorLayers, listRasterLayers, listExternalSources,
   deleteVectorLayer, deleteRasterLayer, deleteExternalSource,
-  getVectorJobStatus, getRasterJobStatus,
+  getVectorJobStatus, getRasterJobStatus, reprocessVectorLayer,
 } from '@/api'
 
 export const useDataStore = defineStore('data', () => {
@@ -85,6 +85,16 @@ export const useDataStore = defineStore('data', () => {
     vectorLayers.value = vectorLayers.value.filter(l => l.id !== id)
   }
 
+  // Restart a stalled/failed GeoParquet layer's processing (e.g. a convert/prep job the worker was
+  // restarted out from under). Flips it to processing immediately, then polls the fresh job.
+  async function reprocessVector(id) {
+    const layer = vectorLayers.value.find(l => l.id === id)
+    if (layer) { layer.status = 'processing'; layer.error_message = null; layer._job = { progress: 0, current_step: 'Queued' } }
+    const { data: job } = await reprocessVectorLayer(id)
+    pollJob(job.id, 'vector', id).catch(() => {})
+    watchProcessing()
+  }
+
   async function removeRaster(id) {
     await deleteRasterLayer(id)
     rasterLayers.value = rasterLayers.value.filter(l => l.id !== id)
@@ -101,6 +111,6 @@ export const useDataStore = defineStore('data', () => {
 
   return {
     vectorLayers, rasterLayers, externalSources, loading,
-    refresh, pollJob, removeVector, removeRaster, addExternal, removeExternal,
+    refresh, pollJob, removeVector, reprocessVector, removeRaster, addExternal, removeExternal,
   }
 })

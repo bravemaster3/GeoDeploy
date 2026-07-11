@@ -6,7 +6,10 @@
       <div class="text-xs text-muted-foreground flex gap-3 mt-0.5 items-center">
         <span v-if="layer.storage_backend === 'geoparquet'"
           class="px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 font-medium text-[10px] uppercase tracking-wide">GeoParquet</span>
-        <span v-if="layer.storage_backend === 'geoparquet' && layer.tile_status && layer.tile_status !== 'ready'"
+        <!-- GeoParquet layers display via deck.gl over the prepared file — PMTiles tiling is OPT-IN
+             (POST /{id}/tile), so only show this badge for an ACTUAL tiling attempt. tile_status
+             'none'/null means "not tiled" (the normal deck.gl case), NOT "tiling in progress". -->
+        <span v-if="layer.storage_backend === 'geoparquet' && (layer.tile_status === 'tiling' || layer.tile_status === 'error')"
           class="px-1.5 py-0.5 rounded text-[10px] font-medium"
           :class="layer.tile_status === 'error' ? 'bg-red-500/15 text-red-400' : 'bg-amber-500/15 text-amber-400'">
           {{ layer.tile_status === 'error' ? 'tiling failed' : 'tiling…' }}</span>
@@ -18,6 +21,16 @@
       </div>
     </div>
     <StatusBadge :status="layer.status" :progress="layer._job?.progress" :step="layer._job?.current_step" />
+    <!-- Restart processing: a file-backed (GeoParquet) layer whose convert/prep stalled or failed —
+         re-runs the right stage without a re-upload (e.g. the worker was restarted mid-job). -->
+    <button v-if="layer.storage_backend === 'geoparquet' && (layer.status === 'error' || layer.status === 'processing')"
+      @click="onReprocess" :disabled="restarting"
+      class="p-1.5 rounded transition-all text-muted-foreground/70 hover:text-primary disabled:opacity-40"
+      :class="layer.status === 'error' ? 'text-amber-400' : 'opacity-0 group-hover:opacity-100'"
+      title="Restart processing (re-convert / re-prepare — no re-upload needed)"
+    >
+      <RefreshIcon class="w-4 h-4" :class="restarting ? 'animate-spin' : ''" />
+    </button>
     <!-- Data sharing: public catalog (STAC) listing + metadata -->
     <button v-if="layer.status === 'ready'" @click="showSharing = true"
       class="p-1.5 rounded transition-all"
@@ -38,13 +51,23 @@
 
 <script setup>
 import { ref } from 'vue'
-import { TrashIcon } from '@/views/icons'
+import { TrashIcon, RefreshIcon } from '@/views/icons'
+import { useDataStore } from '@/stores/data'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import SharingModal from '@/components/data/SharingModal.vue'
 
-defineProps({ layer: Object })
+const props = defineProps({ layer: Object })
 defineEmits(['delete'])
 
+const dataStore = useDataStore()
 const showSharing = ref(false)
+const restarting = ref(false)
+async function onReprocess() {
+  if (restarting.value) return
+  restarting.value = true
+  try { await dataStore.reprocessVector(props.layer.id) }
+  catch (e) { alert(e.response?.data?.detail || 'Could not restart processing.') }
+  finally { restarting.value = false }
+}
 const formatBytes = (b) => b > 1e9 ? `${(b/1e9).toFixed(1)} GB` : b > 1e6 ? `${(b/1e6).toFixed(1)} MB` : `${(b/1e3).toFixed(0)} KB`
 </script>
