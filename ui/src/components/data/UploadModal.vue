@@ -99,7 +99,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { UploadIcon } from '@/views/icons'
-import { useUpload } from '@/composables/useUpload'
+import { useUpload, LARGE_UPLOAD_THRESHOLD } from '@/composables/useUpload'
 import { useDataStore } from '@/stores/data'
 import { uploadCsvFile } from '@/api'
 
@@ -108,7 +108,7 @@ const emit = defineEmits(['close'])
 
 const fileInput = ref(null)
 const fileName = ref('')
-const { uploading, uploadProgress, error, uploadFile, uploadGeoParquet } = useUpload()
+const { uploading, uploadProgress, error, uploadFile, uploadGeoParquet, uploadLargeVector } = useUpload()
 const dataStore = useDataStore()
 
 // CSV import state (vector only)
@@ -177,6 +177,15 @@ async function handleFile(file) {
     return
   }
   fileName.value = file.name
+  // Vector files too big for the API multipart cap upload direct-to-storage and convert to
+  // GeoParquet in the background instead of being rejected.
+  if (props.type === 'vector' && file.size >= LARGE_UPLOAD_THRESHOLD) {
+    try {
+      await uploadLargeVector(file, file.name.replace(/\.[^.]+$/, ''))
+      setTimeout(() => emit('close'), 800)
+    } catch { /* error shown via `error` */ }
+    return
+  }
   try {
     await uploadFile(file, props.type)
     setTimeout(() => emit('close'), 800)
@@ -186,16 +195,26 @@ async function handleFile(file) {
 async function importCsv() {
   if (!csvReady.value) return
   fileName.value = csvFile.value.name
+  const geom = csvGeomMode.value === 'wkt'
+    ? { wkt_column: csvWkt.value }
+    : { x_column: csvX.value, y_column: csvY.value }
+  const srid = Number(csvSrid.value) || 4326
+  // A CSV too big for the API multipart cap uploads direct-to-storage and converts to GeoParquet
+  // in the background (deck.gl layer) instead of loading points into PostGIS.
+  if (csvFile.value.size >= LARGE_UPLOAD_THRESHOLD) {
+    try {
+      await uploadLargeVector(csvFile.value, csvName.value || csvFile.value.name.replace(/\.csv$/i, ''),
+        { ...geom, srid, delimiter: csvDelim.value })
+      setTimeout(() => emit('close'), 800)
+    } catch { /* error shown via `error` */ }
+    return
+  }
   uploading.value = true
   uploadProgress.value = 0
   error.value = null
   try {
-    const geom = csvGeomMode.value === 'wkt'
-      ? { wkt_column: csvWkt.value }
-      : { x_column: csvX.value, y_column: csvY.value }
     const { data: job } = await uploadCsvFile(csvFile.value, {
-      ...geom,
-      srid: Number(csvSrid.value) || 4326, name: csvName.value, delimiter: csvDelim.value,
+      ...geom, srid, name: csvName.value, delimiter: csvDelim.value,
     }, (p) => (uploadProgress.value = p))
     dataStore.vectorLayers.unshift({ id: job.layer_id, name: csvName.value || csvFile.value.name, status: 'processing', _job: job })
     dataStore.pollJob(job.id, 'vector', job.layer_id).catch(() => {})

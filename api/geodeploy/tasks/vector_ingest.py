@@ -183,6 +183,60 @@ _GEOM_KIND = {
     "Polygon": "polygon", "MultiPolygon": "polygon",
 }
 
+# shapely GeometryType().name (UPPERCASE) → GeoParquet `geometry_types` spelling.
+_GEOM_TYPE_NAME = {
+    "POINT": "Point", "LINESTRING": "LineString", "POLYGON": "Polygon",
+    "MULTIPOINT": "MultiPoint", "MULTILINESTRING": "MultiLineString",
+    "MULTIPOLYGON": "MultiPolygon", "GEOMETRYCOLLECTION": "GeometryCollection",
+}
+
+
+def _geom_wkb_array(geoms, reproject, bbox, geom_types):
+    """Convert an object ndarray of shapely geometries (may contain None) to a pyarrow binary WKB
+    array, reprojecting the valid ones (if `reproject` is given), and updating `bbox`
+    [minx,miny,maxx,maxy] + the `geom_types` set in place. Shared by the Fiona converter and the
+    CSV→GeoParquet converter so both write identical geometry columns + footer stats."""
+    import numpy as np
+    import pyarrow as pa
+    import shapely
+    from shapely import bounds as shp_bounds, to_wkb
+    mask = np.array([g is not None for g in geoms])
+    if mask.any():
+        valid = geoms[mask]
+        if reproject is not None:
+            valid = reproject(valid)
+            geoms = geoms.copy()
+            geoms[mask] = valid
+        b = shp_bounds(valid)
+        bbox[0] = min(bbox[0], float(np.nanmin(b[:, 0])))
+        bbox[1] = min(bbox[1], float(np.nanmin(b[:, 1])))
+        bbox[2] = max(bbox[2], float(np.nanmax(b[:, 2])))
+        bbox[3] = max(bbox[3], float(np.nanmax(b[:, 3])))
+        for g in set(shapely.get_type_id(valid).tolist()):
+            nm = shapely.GeometryType(g).name
+            geom_types.add(_GEOM_TYPE_NAME.get(nm, nm.title()))
+    wkb = to_wkb(geoms)  # None geometries → None
+    return pa.array([bytes(w) if w is not None else None for w in wkb], type=pa.binary())
+
+
+def _write_geo_footer(writer, geom_types, bbox) -> None:
+    """Attach GeoParquet 1.1 `geo` footer metadata. Needs pyarrow ≥ 18 (`add_key_value_metadata`);
+    the image pins 18.1. Absent it, the file is still valid — every reader falls back to the
+    geometry-column-name heuristic + a WKB scan when the footer is missing."""
+    geo = {"version": "1.1.0", "primary_column": "geometry",
+           "columns": {"geometry": {"encoding": "WKB",
+                                    "geometry_types": sorted(geom_types), "bbox": bbox}}}
+    if hasattr(writer, "add_key_value_metadata"):
+        writer.add_key_value_metadata({"geo": json.dumps(geo)})
+
+
+def _kind_from_types(geom_types) -> str:
+    """Pick the catalog's single point/line/polygon kind from the set of GeoParquet type names
+    (polygon > line > point, matching how mixed layers usually want to be treated)."""
+    return next((_GEOM_KIND[t] for t in ("Polygon", "MultiPolygon", "LineString",
+                                         "MultiLineString", "Point", "MultiPoint")
+                 if t in geom_types), "polygon")
+
 
 def _ingest_as_geoparquet(db_path: str, job_id: str, layer_id: int, src_path: str,
                           layer_name: str, step, settings) -> None:
@@ -227,8 +281,9 @@ def _convert_to_geoparquet(src_path: str, out_path: str, batch_size: int = 20_00
     import numpy as np
     import pyarrow as pa
     import pyarrow.parquet as pq
-    import shapely
-    from shapely import bounds as shp_bounds, to_wkb
+    import shapely  # used by the reproject closure below
+    # Geometry → WKB / bbox / type-name accumulation is shared with the CSV converter via
+    # _geom_wkb_array / _write_geo_footer / _kind_from_types (module-level).
 
     _PA_TYPE = {"int": pa.int64(), "int32": pa.int64(), "int64": pa.int64(),
                 "float": pa.float64(), "bool": pa.bool_()}
@@ -276,24 +331,12 @@ def _convert_to_geoparquet(src_path: str, out_path: str, batch_size: int = 20_00
             nonlocal count
             if not pend_geoms:
                 return
-            geoms = np.array(pend_geoms, dtype=object)
-            if reproject is not None:
-                geoms = reproject(geoms)
-            b = shp_bounds(geoms)
-            bbox[0] = min(bbox[0], float(np.nanmin(b[:, 0])))
-            bbox[1] = min(bbox[1], float(np.nanmin(b[:, 1])))
-            bbox[2] = max(bbox[2], float(np.nanmax(b[:, 2])))
-            bbox[3] = max(bbox[3], float(np.nanmax(b[:, 3])))
-            for g in set(shapely.get_type_id(geoms).tolist()):
-                name = shapely.GeometryType(g).name  # e.g. POLYGON
-                geom_types.add({"POINT": "Point", "LINESTRING": "LineString", "POLYGON": "Polygon",
-                                "MULTIPOINT": "MultiPoint", "MULTILINESTRING": "MultiLineString",
-                                "MULTIPOLYGON": "MultiPolygon",
-                                "GEOMETRYCOLLECTION": "GeometryCollection"}.get(name, name.title()))
+            geoms = np.array(pend_geoms, dtype=object)  # no None here (None skipped on read)
+            wkb_arr = _geom_wkb_array(geoms, reproject, bbox, geom_types)
             arrays = [pa.array([_coerce(row[j], schema.field(c).type) for row in pend_props],
                                type=schema.field(c).type)
                       for j, c in enumerate(cols)]
-            arrays.append(pa.array([bytes(w) for w in to_wkb(geoms)], type=pa.binary()))
+            arrays.append(wkb_arr)
             writer.write_table(pa.Table.from_arrays(arrays, schema=schema))
             count += len(pend_geoms)
             pend_props.clear()
@@ -312,26 +355,13 @@ def _convert_to_geoparquet(src_path: str, out_path: str, batch_size: int = 20_00
             _flush()
             if count == 0:
                 raise ValueError("No features with geometry found in the file.")
-            # GeoParquet 1.1 footer metadata. CRS is omitted → OGC:CRS84 (lon/lat), which is what
-            # we wrote. Everything downstream (inspect_parquet, partition_with_covering, the
-            # viewport queries) reads WKB without DuckDB-spatial, so no spec-version wall here.
-            # add_key_value_metadata needs pyarrow ≥ 18 (the image pins 18.1); on older pyarrow
-            # the file is still fine — every reader falls back to the geometry-column-name
-            # heuristic + a WKB scan when the geo footer is absent.
-            geo = {"version": "1.1.0", "primary_column": "geometry",
-                   "columns": {"geometry": {"encoding": "WKB",
-                                            "geometry_types": sorted(geom_types),
-                                            "bbox": bbox}}}
-            if hasattr(writer, "add_key_value_metadata"):
-                writer.add_key_value_metadata({"geo": json.dumps(geo)})
+            # CRS is omitted from the footer → OGC:CRS84 (lon/lat), which is what we wrote.
+            _write_geo_footer(writer, geom_types, bbox)
         finally:
             writer.close()
 
-    kind = next((_GEOM_KIND[t] for t in ("Polygon", "MultiPolygon", "LineString",
-                                         "MultiLineString", "Point", "MultiPoint")
-                 if t in geom_types), "polygon")
     return {"count": count, "bbox": bbox if bbox[0] != float("inf") else None,
-            "geom_type": kind,
+            "geom_type": _kind_from_types(geom_types),
             "columns": [{"name": c, "type": str(col_schema[c])} for c in cols]}
 
 

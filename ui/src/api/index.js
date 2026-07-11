@@ -62,6 +62,10 @@ export const uploadCsvFile = (file, params, onProgress) => {
 // GeoParquet: presigned DIRECT-to-storage upload (browser → MinIO), then register + inspect.
 export const presignGeoParquet = (data) => api.post('/data/vector/geoparquet/presign', data)
 export const completeGeoParquet = (data) => api.post('/data/vector/geoparquet/complete', data)
+// Large vector (CSV/GeoJSON/GPKG/zip too big to POST through the API): presigned DIRECT upload,
+// then background conversion to GeoParquet.
+export const presignLargeVector = (data) => api.post('/data/vector/large/presign', data)
+export const completeLargeVector = (data) => api.post('/data/vector/large/complete', data)
 // Raw axios (NOT the `api` instance): no /api baseURL and no JWT header, which would otherwise
 // clash with the presigned request's own auth. The URL is same-origin (/s3/...) for local MinIO.
 export const putFileToUrl = (url, file, onProgress) =>

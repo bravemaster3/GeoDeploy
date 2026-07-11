@@ -39,6 +39,20 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   `routers/data/discover.py` (import existing) and `routers/data/vector.py::upload-csv` (upload). The
   `delimiter` is user-chosen (comma default; comma/semicolon/tab/pipe — auto-sniffing is unreliable),
   threaded into both the header read and the `COPY … DELIMITER`. Reuses `vector_ingest`'s sqlite helpers.
+- `convert_upload.py` — `convert_to_geoparquet(job_id, layer_id, s3_key, csv_opts)` (2026-07-11):
+  the **large-file** path. Files too big to POST through the API (over `MAX_FILE_SIZE`, 2 GB) upload
+  DIRECT to storage via a presigned URL (`routers/data/vector.py::/large/presign` + `/large/complete`,
+  like the GeoParquet flow, up to `MAX_LARGE_UPLOAD` 10 GB) and this task converts them to GeoParquet:
+  downloads the object, then **CSV → `_csv_to_geoparquet`** (DuckDB `read_csv` streams the file, typed,
+  out-of-core; shapely builds geometry per Arrow batch — points from X/Y or any geometry from a WKT
+  column; invalid-geometry rows dropped; the WKT source column is dropped from output as redundant)
+  or **shapefile-zip/GeoJSON/GPKG → `vector_ingest._convert_to_geoparquet`** (Fiona, shared). Uploads
+  the `.parquet` under `vectors/{uid}/`, repoints the layer (`storage_backend='geoparquet'`), deletes
+  the original upload, and chains `geoparquet_prep` (partition + covering + manifest → ready). Result
+  is identical to a direct `.parquet` upload: deck.gl display + DuckDB analysis, no PostGIS/Martin.
+  Converted layers aren't Martin-tiled, so **no §0g polar clamp** (deck.gl renders any latitude).
+  Geometry helpers `_geom_wkb_array`/`_write_geo_footer`/`_kind_from_types` are shared with
+  `vector_ingest` (extracted 2026-07-11). Creds from SQLite (§0f).
 - `geoparquet_import.py` — `import_geoparquet(job_id, layer_id, s3_key)`: registers a **GeoParquet**
   vector layer. Unlike CSV/shapefile (copied/ingested into PostGIS), the file STAYS on object storage
   and is read in place by DuckDB/deck.gl — so this task touches **neither PostGIS nor Martin**. The
@@ -121,4 +135,4 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
-2026-07-11 (CSV WKT geometry; heavy uploads → GeoParquet; GeoParquet in export_bundle; prep protects attached sources)
+2026-07-11 (CSV WKT geometry; heavy uploads → GeoParquet; large uploads (>2 GB) → direct-to-storage + convert_upload; GeoParquet in export_bundle; prep protects attached sources)

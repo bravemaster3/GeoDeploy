@@ -20,8 +20,14 @@ router = APIRouter(prefix="/data/vector", tags=["vector"])
 
 ALLOWED_EXTENSIONS = {".zip", ".geojson", ".json", ".gpkg"}
 GEOPARQUET_EXTENSIONS = {".parquet", ".geoparquet"}
-MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
+# Vector formats that can be uploaded DIRECT-to-storage (presigned) and converted to GeoParquet in
+# the background — used when a file is too big to POST through the API (see MAX_FILE_SIZE).
+LARGE_VECTOR_EXTENSIONS = ALLOWED_EXTENSIONS | {".csv"}
+MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB — the API-passthrough cap (multipart through uvicorn)
 MAX_GEOPARQUET_SIZE = 10 * 1024 * 1024 * 1024  # 10 GB (uploaded direct-to-storage, not via the API)
+# Direct-to-storage cap for the convert-to-GeoParquet path. Env-tunable; per-plan quotas will
+# eventually govern this for GeoDeploy Cloud.
+MAX_LARGE_UPLOAD = int(os.getenv("MAX_LARGE_UPLOAD_BYTES", str(10 * 1024 * 1024 * 1024)))
 
 
 @router.get("", response_model=list[VectorLayerOut])
@@ -218,6 +224,91 @@ async def geoparquet_complete(
     await db.refresh(layer)
 
     import_geoparquet.delay(job_id, layer.id, body.s3_key)
+    return JobStatus(id=job_id, layer_id=layer.id, layer_type="vector",
+                     status="queued", progress=0, current_step="Queued", error_message=None)
+
+
+class LargeVectorPresign(BaseModel):
+    filename: str
+    name: str | None = None
+    file_size: int | None = None
+
+
+class LargeVectorComplete(BaseModel):
+    s3_key: str
+    name: str | None = None
+    file_size: int | None = None
+    # CSV geometry options (ignored for other formats)
+    x_column: str | None = None
+    y_column: str | None = None
+    wkt_column: str | None = None
+    srid: int = 4326
+    delimiter: str = "comma"
+
+
+@router.post("/large/presign")
+async def large_vector_presign(
+    body: LargeVectorPresign,
+    user: User = Depends(get_current_user),
+):
+    """Step 1 of the LARGE-vector upload (CSV / GeoJSON / GeoPackage / shapefile-zip too big to POST
+    through the API): hand the browser a presigned PUT URL so it uploads the file DIRECTLY to
+    storage, exactly like the GeoParquet flow. The key preserves the original extension so the
+    background converter knows the format."""
+    from ...services.minio import browser_upload_url
+    ext = os.path.splitext(body.filename or "")[1].lower()
+    if ext not in LARGE_VECTOR_EXTENSIONS:
+        raise HTTPException(400, f"Unsupported file type for large upload: {ext}. "
+                                 f"Accepted: {', '.join(sorted(LARGE_VECTOR_EXTENSIONS))}")
+    if body.file_size and body.file_size > MAX_LARGE_UPLOAD:
+        raise HTTPException(413, f"File exceeds the {MAX_LARGE_UPLOAD // (1024**3)} GB limit.")
+    base_name = os.path.splitext(os.path.basename(body.filename or "layer"))[0]
+    safe_file = slugify(base_name, separator="_") or "layer"
+    s3_key = f"vectors/{user.id}/{uuid.uuid4().hex}/{safe_file}{ext}"
+    return {"upload_url": browser_upload_url(s3_key), "s3_key": s3_key}
+
+
+@router.post("/large/complete", response_model=JobStatus, status_code=202)
+async def large_vector_complete(
+    body: LargeVectorComplete,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Step 2: the browser has PUT the large file to `s3_key`; register a processing layer and queue
+    the conversion to GeoParquet (which chains the spatial prep and marks the layer ready)."""
+    from ...tasks.convert_upload import convert_to_geoparquet
+    if body.file_size and body.file_size > MAX_LARGE_UPLOAD:
+        raise HTTPException(413, f"File exceeds the {MAX_LARGE_UPLOAD // (1024**3)} GB limit.")
+    if not (body.s3_key or "").startswith(f"vectors/{user.id}/"):
+        raise HTTPException(400, "Invalid storage key.")
+    ext = os.path.splitext(body.s3_key)[1].lower()
+    if ext not in LARGE_VECTOR_EXTENSIONS:
+        raise HTTPException(400, "Unsupported file type.")
+    if ext == ".csv" and not body.wkt_column and not (body.x_column and body.y_column):
+        raise HTTPException(400, "Pick X/Y columns or a WKT geometry column for the CSV.")
+
+    base_name = os.path.splitext(os.path.basename(body.s3_key))[0]
+    layer_name = (body.name or "").strip() or base_name
+    table_name = f"gpq_{slugify(layer_name, separator='_') or 'layer'}_{uuid.uuid4().hex[:6]}"
+    schema_name = f"geodeploy_u{user.id}"
+
+    layer = VectorLayer(
+        user_id=user.id, name=layer_name, table_name=table_name, schema_name=schema_name,
+        file_size=body.file_size, storage_backend="geoparquet", s3_key=body.s3_key,
+        status="processing",
+    )
+    db.add(layer)
+    await db.flush()
+    job_id = str(uuid.uuid4())
+    db.add(UploadJob(id=job_id, layer_id=layer.id, layer_type="vector"))
+    await db.commit()
+    await db.refresh(layer)
+
+    csv_opts = None
+    if ext == ".csv":
+        csv_opts = {"x_column": body.x_column, "y_column": body.y_column,
+                    "wkt_column": body.wkt_column, "srid": body.srid, "delimiter": body.delimiter}
+    convert_to_geoparquet.delay(job_id, layer.id, body.s3_key, csv_opts)
     return JobStatus(id=job_id, layer_id=layer.id, layer_type="vector",
                      status="queued", progress=0, current_step="Queued", error_message=None)
 
