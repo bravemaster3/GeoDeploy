@@ -98,12 +98,20 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   is gated on `s3_key.startswith("vectors/")`). The layer's original key survives in
   `vector_layers.source_s3_key` so discover/storage keeps flagging it as imported.
 - `pmtiles_tile.py` — `tile_geoparquet(layer_id, s3_key, pmtiles_key)`: the GeoParquet **display** path.
-  Runs **tippecanoe** (built into the image, `/dev/stdin`, `-l geodeploy`, **`-z12` capped max zoom**
-  `--coalesce-densest-as-needed --simplification 10`) fed by a thread streaming `duckdb_engine.stream_geojsonseq` (GeoParquet →
-  GeoJSONSeq, no giant temp file), uploads the `.pmtiles` to storage, sets `pmtiles_key`/`tile_status`. The
-  browser streams the tiles via range requests (no per-pan server work). Chained from `geoparquet_import` after
-  inspect (auto-tile on upload); also triggerable via `POST /data/vector/{id}/tile`. DuckDB keeps reading the
-  original `.parquet` for analysis/download — the `.pmtiles` is display-only.
+  Runs **tippecanoe** (built into the image, `-l geodeploy`, **`-z12` capped max zoom**, `--simplification 10`,
+  `--drop-densest-as-needed`). **Two feeds (2026-07-11):** the FAST primary converts GeoParquet → **FlatGeobuf**
+  natively via `duckdb_engine.export_geoparquet_to_fgb` (baked `spatial`; no shapely funnel) and tippecanoe reads
+  the binary `.fgb` file with `-P`; on any FGB error it FALLS BACK to streaming `stream_geojsonseq` (shapely →
+  GeoJSONSeq → `/dev/stdin`). Both are **memory-bounded** (env `PMTILES_TILE_MEMORY_LIMIT` default 1 GB, `PMTILES_TILE_THREADS` 2)
+  so a huge layer tiles in bounded RAM on a cheap VPS instead of OOM-killing. Densest strategy is env-tunable
+  (`PMTILES_DENSEST=drop|coalesce`, default drop — coalesce's per-tile geometry union dominated the slow pass);
+  feed mode via `PMTILES_INPUT=fgb|geojsonseq`. **All scratch (`.fgb`, DuckDB spills, tippecanoe `-t`, the output
+  `.pmtiles`) lives under a per-run dir removed in `finally`** — a killed run can no longer leak GBs into `data/temp`
+  (it used to leave a ~5 GB tippecanoe scratch on every OOM). Uploads the `.pmtiles` to storage, sets
+  `pmtiles_key`/`tile_status`. The browser streams the tiles via range requests (no per-pan server work).
+  **Tiling is OPT-IN**, triggered via `POST /data/vector/{id}/tile` (the Data Manager row's tile button, or a retry
+  after a workflow improvement) — NOT auto-run on upload. DuckDB keeps reading the original `.parquet` for
+  analysis/download — the `.pmtiles` is display-only.
   **Progress logging (2026-06-08):** the task captures tippecanoe's stderr progress bar (it uses `\r`, which
   never newline-flushes to `docker logs` — read byte-wise, split on `\r`/`\n`, re-logged as `tippecanoe: …`)
   and logs start / stream feature-count / total elapsed; `stream_geojsonseq` logs periodic feature throughput.
@@ -144,4 +152,4 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
-2026-07-11 (CSV WKT geometry; heavy uploads → GeoParquet; large uploads (>2 GB) → direct-to-storage + convert_upload; GeoParquet in export_bundle; prep protects attached sources; converters emit covering column so prep skips the WKB re-parse + vectorised WKB build — prep-speed fix)
+2026-07-11 (pmtiles_tile: native FlatGeobuf primary feed + GeoJSONSeq fallback, memory-bounded (cheap-VPS-safe, scales past 20 M), per-run scratch dir removed in finally so killed runs don't leak GBs, `--drop-densest` default, env knobs)

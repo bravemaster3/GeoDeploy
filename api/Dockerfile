@@ -31,20 +31,24 @@ COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --timeout 120 --retries 5 -r requirements.txt
 
-# Bake DuckDB's httpfs extension into the image so S3/GeoParquet reads work with NO runtime
-# download. extensions.duckdb.org is often slow/unreachable, and a container recreate wipes
-# DuckDB's ephemeral per-HOME cache — so a fresh `docker compose build` (e.g. on a new VPS) must
-# ship the extension. We curl it (patient --retry, robust to a slow CDN) into a FIXED dir that the
-# app points at via DUCKDB_EXTENSION_DIR; version is derived from the installed duckdb so it can't
-# drift. The final LOAD verifies the baked extension at build time (fails the build if wrong).
+# Bake DuckDB's httpfs + spatial extensions into the image so S3/GeoParquet reads AND native
+# geometry conversion (GeoParquet → FlatGeobuf for PMTiles tiling) work with NO runtime download.
+# extensions.duckdb.org is often slow/unreachable, and a container recreate wipes DuckDB's ephemeral
+# per-HOME cache — so a fresh `docker compose build` (e.g. on a new VPS) must ship the extensions.
+# `spatial` also lets the tiler drop the slow shapely GeoJSON funnel (it bundles GDAL, so DuckDB can
+# COPY straight to FlatGeobuf). We curl each (patient --retry, robust to a slow CDN) into a FIXED dir
+# the app points at via DUCKDB_EXTENSION_DIR; version is derived from the installed duckdb so it
+# can't drift. The final LOAD verifies both baked extensions at build time (fails the build if wrong).
 ENV DUCKDB_EXTENSION_DIR=/opt/duckdb_ext
 RUN set -eux; \
     V="v$(python -c 'import duckdb; print(duckdb.__version__)')"; P=linux_amd64_gcc4; \
     DEST="$DUCKDB_EXTENSION_DIR/$V/$P"; mkdir -p "$DEST"; \
-    curl --retry 15 --retry-delay 5 --retry-all-errors -C - -fL --max-time 900 \
-      -o /tmp/httpfs.gz "http://extensions.duckdb.org/$V/$P/httpfs.duckdb_extension.gz"; \
-    gunzip -c /tmp/httpfs.gz > "$DEST/httpfs.duckdb_extension"; rm -f /tmp/httpfs.gz; \
-    python -c "import duckdb, os; duckdb.connect(config={'extension_directory': os.environ['DUCKDB_EXTENSION_DIR']}).execute('LOAD httpfs'); print('baked httpfs OK')"
+    for EXT in httpfs spatial; do \
+      curl --retry 15 --retry-delay 5 --retry-all-errors -C - -fL --max-time 900 \
+        -o "/tmp/$EXT.gz" "http://extensions.duckdb.org/$V/$P/$EXT.duckdb_extension.gz"; \
+      gunzip -c "/tmp/$EXT.gz" > "$DEST/$EXT.duckdb_extension"; rm -f "/tmp/$EXT.gz"; \
+    done; \
+    python -c "import duckdb, os; c=duckdb.connect(config={'extension_directory': os.environ['DUCKDB_EXTENSION_DIR']}); c.execute('LOAD httpfs'); c.execute('LOAD spatial'); print('baked httpfs+spatial OK')"
 
 # ---
 

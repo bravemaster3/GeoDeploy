@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import {
   listVectorLayers, listRasterLayers, listExternalSources,
   deleteVectorLayer, deleteRasterLayer, deleteExternalSource,
-  getVectorJobStatus, getRasterJobStatus, reprocessVectorLayer,
+  getVectorJobStatus, getRasterJobStatus, reprocessVectorLayer, tileVectorLayer,
 } from '@/api'
 
 export const useDataStore = defineStore('data', () => {
@@ -95,6 +95,23 @@ export const useDataStore = defineStore('data', () => {
     watchProcessing()
   }
 
+  // (Re)tile a GeoParquet layer to PMTiles for fast, seamless pan/zoom (heavy layers). Tiling is a
+  // background Celery job with no JobStatus, so we flip tile_status locally then poll the layer list
+  // until it settles (ready/error). Meanwhile the portal keeps rendering via the deck.gl fallback.
+  async function tileVector(id) {
+    const layer = vectorLayers.value.find(l => l.id === id)
+    if (layer) { layer.tile_status = 'tiling'; layer.error_message = null }
+    await tileVectorLayer(id)
+    const poll = async (n) => {
+      if (n <= 0) return
+      await new Promise(r => setTimeout(r, 5000))
+      await refresh()
+      const l = vectorLayers.value.find(x => x.id === id)
+      if (l && l.tile_status === 'tiling') await poll(n - 1)
+    }
+    poll(240).catch(() => {})  // ~20 min ceiling; harmless if it outlives the job
+  }
+
   async function removeRaster(id) {
     await deleteRasterLayer(id)
     rasterLayers.value = rasterLayers.value.filter(l => l.id !== id)
@@ -111,6 +128,6 @@ export const useDataStore = defineStore('data', () => {
 
   return {
     vectorLayers, rasterLayers, externalSources, loading,
-    refresh, pollJob, removeVector, reprocessVector, removeRaster, addExternal, removeExternal,
+    refresh, pollJob, removeVector, reprocessVector, tileVector, removeRaster, addExternal, removeExternal,
   }
 })

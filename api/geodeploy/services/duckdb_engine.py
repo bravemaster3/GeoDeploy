@@ -597,10 +597,16 @@ def query_features_arrow(s3_key: str, bbox=None, limit: int = 50_000, creds: dic
 
 
 def stream_geojsonseq(s3_key: str, out, creds: dict | None = None, bucket: str | None = None,
-                      batch_size: int = 20_000, log_every: int = 100_000) -> int:
+                      batch_size: int = 20_000, log_every: int = 100_000,
+                      memory_limit: str = "1GB", threads: int | None = None) -> int:
     """Stream a whole GeoParquet file as newline-delimited GeoJSON (GeoJSONSeq, EPSG:4326) to the
     writable binary stream `out` (e.g. tippecanoe's stdin). Reads WKB without spatial and converts
     with shapely, in batches — never materialising the whole file. Returns the feature count.
+
+    This is the FALLBACK tiling feed (used when the native FlatGeobuf path is unavailable). It is
+    memory-bounded: DuckDB's `memory_limit` defaults to 80% of system RAM, which lets a huge-layer
+    read OOM a small VPS while tippecanoe also needs RAM — so we cap it and spill to a per-run disk
+    dir instead. Scales to any feature count in bounded memory (the cost is time, not RAM).
 
     Logs progress every `log_every` features (count, elapsed, feat/s) so a long tiling run is
     observable in the celery log (the shapely conversion loop is usually the slow phase, and
@@ -610,7 +616,15 @@ def stream_geojsonseq(s3_key: str, out, creds: dict | None = None, bucket: str |
     bkt = bucket or settings.storage_bucket
     meta_path, src = _parquet_paths(f"s3://{bkt}/{s3_key}")
     conn = _connect_read(creds)
+    spill_dir = os.path.join(settings.data_dir, "temp", f"duckdb-{uuid4().hex}")
     try:
+        # Bound DuckDB memory + spill to disk so tiling a huge layer can't OOM a small VPS.
+        os.makedirs(spill_dir, exist_ok=True)
+        conn.execute(f"SET temp_directory='{spill_dir}'")
+        conn.execute(f"SET memory_limit='{memory_limit}'")
+        conn.execute("SET max_temp_directory_size='200GiB'")
+        if threads:
+            conn.execute(f"SET threads={int(threads)}")
         meta = _read_geo_metadata(conn, meta_path)
         all_cols = [r[0] for r in conn.execute(
             f"DESCRIBE SELECT * FROM {src}").fetchall()]
@@ -641,7 +655,7 @@ def stream_geojsonseq(s3_key: str, out, creds: dict | None = None, bucket: str |
         count = 0
         start = time.monotonic()
         next_log = log_every
-        logger.info("stream_geojsonseq: started streaming %s (geom=%s, src=%s)", loc, geom_col, src_epsg)
+        logger.info("stream_geojsonseq: started streaming %s (geom=%s, src=%s)", s3_key, geom_col, src_epsg)
         while True:
             batch = rel.fetchmany(batch_size)
             if not batch:
@@ -676,6 +690,66 @@ def stream_geojsonseq(s3_key: str, out, creds: dict | None = None, bucket: str |
         return count
     finally:
         conn.close()
+        shutil.rmtree(spill_dir, ignore_errors=True)
+
+
+def export_geoparquet_to_fgb(s3_key: str, out_path: str, creds: dict | None = None,
+                             bucket: str | None = None, memory_limit: str = "1GB",
+                             threads: int | None = None) -> None:
+    """Convert a GeoParquet layer to a FlatGeobuf file (EPSG:4326) entirely inside DuckDB — the FAST
+    tiling feed. Uses the baked `spatial` extension (which bundles GDAL) so geometry is converted
+    natively via a single streaming `COPY`, dropping the per-feature shapely/pyproj GeoJSON funnel
+    that dominated tiling time. tippecanoe reads the resulting `.fgb` (binary, no text parse).
+
+    Memory-bounded like {@link stream_geojsonseq}: capped `memory_limit` + a per-run on-disk spill,
+    so it scales to any feature count on a small VPS. Requires the `spatial` extension to be present
+    (baked in api/Dockerfile); raises if it cannot be loaded, so the caller can fall back to the
+    GeoJSONSeq stream. Reprojects to WGS84 only when the source CRS is not already EPSG:4326.
+    The GeoParquet 1.1 covering-bbox STRUCT column (if any) is dropped — GDAL cannot write a struct
+    attribute and tippecanoe recomputes its own bounds.
+    """
+    settings = get_settings()
+    bkt = bucket or settings.storage_bucket
+    meta_path, src = _parquet_paths(f"s3://{bkt}/{s3_key}")
+    conn = _connect_read(creds)
+    spill_dir = os.path.join(settings.data_dir, "temp", f"duckdb-{uuid4().hex}")
+    try:
+        _load_extension(conn, "spatial")  # raises offline if not baked → caller falls back
+        os.makedirs(spill_dir, exist_ok=True)
+        conn.execute(f"SET temp_directory='{spill_dir}'")
+        conn.execute(f"SET memory_limit='{memory_limit}'")
+        conn.execute("SET max_temp_directory_size='200GiB'")
+        if threads:
+            conn.execute(f"SET threads={int(threads)}")
+
+        meta = _read_geo_metadata(conn, meta_path)
+        all_cols = [r[0] for r in conn.execute(f"DESCRIBE SELECT * FROM {src}").fetchall()]
+        geom_col = meta["column"] or next(
+            (c for c in all_cols if c.lower() in ("geometry", "geom", "wkb_geometry", "wkb")), None)
+        if not geom_col:
+            raise ValueError("No geometry column found.")
+        src_epsg = meta["epsg"] or "EPSG:4326"
+        cov_col = meta["covering"][0] if meta.get("covering") else None
+        prop_cols = [c for c in all_cols if c != geom_col and c != cov_col]
+
+        gq = _q(geom_col)
+        geom_expr = f"ST_GeomFromWKB({gq})"
+        if src_epsg and src_epsg != "EPSG:4326":
+            geom_expr = f"ST_Transform({geom_expr}, '{src_epsg}', 'EPSG:4326')"
+        sel = ", ".join([f"{geom_expr} AS {gq}"] + [_q(c) for c in prop_cols])
+        out_q = out_path.replace("'", "''")
+        started = time.monotonic()
+        logger.info("export_geoparquet_to_fgb: %s → %s (src=%s, cols=%d)",
+                    s3_key, out_path, src_epsg, len(prop_cols))
+        conn.execute(
+            f"COPY (SELECT {sel} FROM {src}) TO '{out_q}' "
+            f"WITH (FORMAT GDAL, DRIVER 'FlatGeobuf', SRS 'EPSG:4326')")
+        logger.info("export_geoparquet_to_fgb: DONE in %.0fs (%s bytes)",
+                    time.monotonic() - started,
+                    f"{os.path.getsize(out_path):,}" if os.path.exists(out_path) else "?")
+    finally:
+        conn.close()
+        shutil.rmtree(spill_dir, ignore_errors=True)
 
 
 # --- GeoParquet preparation: spatial PARTITIONING + bbox covering column ----------------------

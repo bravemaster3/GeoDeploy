@@ -89,6 +89,9 @@ export const deleteVectorLayer = (id) => api.delete(`/data/vector/${id}`)
 // Restart a stalled/failed GeoParquet layer's background processing (re-convert or re-prep) without
 // re-uploading. Returns a fresh JobStatus to poll.
 export const reprocessVectorLayer = (id) => api.post(`/data/vector/${id}/reprocess`)
+// (Re)generate the PMTiles archive for a GeoParquet layer — fast seamless display for heavy layers.
+// Runs tippecanoe in the background; returns the layer with tile_status='tiling'. Poll for 'ready'.
+export const tileVectorLayer = (id) => api.post(`/data/vector/${id}/tile`)
 
 // Raster layers
 export const listRasterLayers = () => api.get('/data/raster')

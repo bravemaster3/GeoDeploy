@@ -31,6 +31,20 @@
     >
       <RefreshIcon class="w-4 h-4" :class="restarting ? 'animate-spin' : ''" />
     </button>
+    <!-- Tile to PMTiles: OPT-IN fast/seamless display for heavy GeoParquet layers. Re-runnable
+         (re-tile after a workflow improvement). Shown for ready GeoParquet layers; the amber
+         "tiling…" badge above reflects progress. Disabled while a tiling run is in flight. -->
+    <button v-if="layer.storage_backend === 'geoparquet' && layer.status === 'ready'"
+      @click="onTile" :disabled="tiling || layer.tile_status === 'tiling'"
+      class="p-1.5 rounded transition-all text-muted-foreground/70 hover:text-violet-400 disabled:opacity-40"
+      :class="layer.tile_status === 'tiling' ? '' : 'opacity-0 group-hover:opacity-100'"
+      :title="layer.tile_status === 'ready' ? 'Re-tile for fast display (regenerate PMTiles)' : 'Tile for fast seamless display (PMTiles)'"
+    >
+      <svg class="w-4 h-4" :class="(tiling || layer.tile_status === 'tiling') ? 'animate-pulse' : ''"
+        viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+        <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+    </button>
     <!-- Data sharing: public catalog (STAC) listing + metadata -->
     <button v-if="layer.status === 'ready'" @click="showSharing = true"
       class="p-1.5 rounded transition-all"
@@ -62,12 +76,20 @@ defineEmits(['delete'])
 const dataStore = useDataStore()
 const showSharing = ref(false)
 const restarting = ref(false)
+const tiling = ref(false)
 async function onReprocess() {
   if (restarting.value) return
   restarting.value = true
   try { await dataStore.reprocessVector(props.layer.id) }
   catch (e) { alert(e.response?.data?.detail || 'Could not restart processing.') }
   finally { restarting.value = false }
+}
+async function onTile() {
+  if (tiling.value || props.layer.tile_status === 'tiling') return
+  tiling.value = true
+  try { await dataStore.tileVector(props.layer.id) }
+  catch (e) { alert(e.response?.data?.detail || 'Could not start tiling.') }
+  finally { tiling.value = false }
 }
 const formatBytes = (b) => b > 1e9 ? `${(b/1e9).toFixed(1)} GB` : b > 1e6 ? `${(b/1e6).toFixed(1)} MB` : `${(b/1e3).toFixed(0)} KB`
 </script>
