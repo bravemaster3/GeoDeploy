@@ -75,3 +75,15 @@
 }
 .dark .maplibregl-ctrl-attrib { background: rgba(0, 0, 0, .4); }
 .dark .maplibregl-ctrl-attrib a { color: hsl(var(--muted-foreground)); }
+
+/* The deck.gl overlay (interleaved:false) draws above the map in its own canvas — lift the preview
+   popup above it so a clicked feature's attributes aren't painted over by the layer. */
+.maplibregl-popup { z-index: 10; }
+/* Theme the preview popup in dark mode (MapLibre's default content is white → dark text unreadable). */
+.dark .maplibregl-popup-content {
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .5);
+}
+.dark .maplibregl-popup-tip { border-top-color: hsl(var(--card)); border-bottom-color: hsl(var(--card)); }
+.dark .maplibregl-popup-close-button { color: hsl(var(--muted-foreground)); }

@@ -599,6 +599,19 @@
   // §0h-addendum-2); the manifest/overview/grid pipeline stays live either way.
   const WASM_DETAIL_READS = false;
 
+  // Whether a viewport is small enough to load per-feature DETAIL (vs the density overview).
+  // Detail is fetched from the SERVER in ONE request (GeoArrow/GeoJSON), so the partition-FILE count
+  // only matters for the (currently disabled) duckdb-wasm serial-read path — otherwise gate on the
+  // frac-weighted ROW estimate alone. Gating on files locked dense cells (split into many partition
+  // files because they're dense) into overview at EVERY zoom, so cities never showed individual
+  // features however far you zoomed in.
+  function fitsDetail(m, load) {
+    if ((m.feature_count || 0) <= DETAIL_MAX_FEATURES) return true;   // light layer → always detail
+    if (load.rows > DETAIL_MAX_ROWS) return false;                     // too much data in view → overview
+    if (WASM_DETAIL_READS && load.files.length > WASM_MAX_FILES) return false;
+    return true;
+  }
+
   function fetchDeckLayer(d, bbox, limit) {
     if (!(d.parquet && d.parquet.manifest)) return serverViewportGeojson(d, bbox, limit);
     return getManifest(d).then(function (m) {
@@ -607,9 +620,9 @@
       const load = viewportLoad(m, bbox);
       const files = load.files;
       if (!files.length) return { type: 'FeatureCollection', features: [] };
-      // Heavy layer over too much data (too many files OR too many candidate rows under the
-      // viewport) → density grid, never details.
-      if (!light && (files.length > WASM_MAX_FILES || load.rows > DETAIL_MAX_ROWS)) {
+      // Heavy layer over too much DATA under the viewport → density grid, never details. (File count
+      // no longer gates this — detail is one server request; see fitsDetail.)
+      if (!fitsDetail(m, load)) {
         return overviewGeojson(m);
       }
       // This is a DETAIL fetch: if the previous view left the coarse overview grid cached, clear
@@ -747,8 +760,7 @@
             const m = gdWasm.manifests[d.layer_id];
             if (!m || m === 'unsupported' || !m.grid) return;
             const load = viewportLoad(m, vb);
-            const light = (m.feature_count || 0) <= DETAIL_MAX_FEATURES;
-            if (light || (load.files.length <= WASM_MAX_FILES && load.rows <= DETAIL_MAX_ROWS)) {
+            if (fitsDetail(m, load)) {   // now fits detail → drop the overview so a detail fetch runs
               st.data = null;
               changed = true;
             }

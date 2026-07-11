@@ -25,4 +25,4 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 - Raster layer `bbox` from the API is in source CRS (not lon/lat) — using it directly for `fitToBbox` can throw "Invalid LngLat" (see tasks/raster notes). Prefer zooming via vector bounds or TiTiler TileJSON.
 
 ## Last updated
-2026-07-11 (PortalEditor: preview identify popup; corrected stale PMTiles-primary text to deck.gl-primary; portal rename → slug/URL change + republish; viewport-fetch aborting so heavy GeoParquet doesn't starve Save/Publish; dark-mode MapLibre controls in style.css)
+2026-07-11 (PortalEditor: preview identify popup; corrected stale PMTiles-primary text to deck.gl-primary; portal rename → slug/URL change + republish; viewport-fetch aborting so heavy GeoParquet doesn't starve Save/Publish; dark-mode MapLibre controls + themed popup + popup z-index above deck in style.css; overview→detail switch is rows-only so dense city cells aren't locked in overview)

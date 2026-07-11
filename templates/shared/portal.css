@@ -214,9 +214,15 @@
     .maplibregl-ctrl-top-right { top: 10px; right: 10px; }
 
     /* ── Popup ───────────────────────────────────────────── */
+    /* The deck.gl overlay draws in its own canvas ABOVE the map; lift popups above it so a clicked
+       feature's attributes aren't painted over by the layer (and stay readable). */
+    .maplibregl-popup { z-index: 10; }
     .gd-popup .maplibregl-popup-content {
       padding: 0; border-radius: var(--radius); box-shadow: var(--shadow-lg);
       max-width: 280px; overflow: hidden; font-family: inherit;
+      /* Theme the popup surface — MapLibre's default is white, which left dark-mode text (var(--text),
+         light) unreadable on the un-striped rows (only the even rows got a dark background). */
+      background: var(--bg); color: var(--text);
     }
     .gd-popup .maplibregl-popup-tip { border-top-color: var(--accent) !important; }
     .gd-popup .maplibregl-popup-close-button {

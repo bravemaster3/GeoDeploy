@@ -547,7 +547,11 @@ async function refreshDeck(refetch) {
         const m = await deckManifest(cfg.layer_id)
         if (m !== 'none' && (m.feature_count || 0) > DECK_DETAIL_MAX) {
           const load = deckViewportLoad(m, nb)
-          if (load.files > DECK_MAX_FILES || load.rows > DECK_DETAIL_MAX_ROWS) {
+          // Gate on ROWS under the viewport only. The editor fetches detail from the SERVER in one
+          // request (getVectorFeatures), so the partition-FILE count is irrelevant — gating on it
+          // (like portal.js's disabled wasm path did) locked dense city cells, split into many
+          // files, into the overview at every zoom (mirrors portal.js fitsDetail).
+          if (load.rows > DECK_DETAIL_MAX_ROWS) {
             deckData[cfg.layer_id] = deckOverviewGeojson(m)
             return
           }
@@ -697,7 +701,8 @@ watch(loaded, (v) => {
           if (!m || m === 'none' || !m.grid) continue
           const load = deckViewportLoad(m, vb)
           const light = (m.feature_count || 0) <= DECK_DETAIL_MAX
-          if (light || (load.files <= DECK_MAX_FILES && load.rows <= DECK_DETAIL_MAX_ROWS)) {
+          // Rows-only gate (server fetch → file count irrelevant; see the refetch branch above).
+          if (light || load.rows <= DECK_DETAIL_MAX_ROWS) {
             deckData[cfg.layer_id] = { type: 'FeatureCollection', features: [] }
             changed = true
           }
