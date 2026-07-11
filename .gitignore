@@ -1,5 +1,7 @@
+# Local-only Claude context (kept on this machine, never pushed)
 notes_temp
 .claude
+CLAUDE.md
 # Python
 __pycache__/
 *.py[cod]
@@ -17,8 +19,11 @@ ui/.vite/
 
 # Env
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+
+# Logs
+*.log
 
 # Data (runtime, not source)
 data/sqlite/*.db
@@ -40,3 +45,6 @@ data/certbot/
 # OS
 .DS_Store
 Thumbs.db
+
+# External reference repos (local clones, not part of GeoDeploy)
+GeoLibre/
