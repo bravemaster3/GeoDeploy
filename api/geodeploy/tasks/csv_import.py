@@ -1,9 +1,10 @@
-"""Import a CSV as a PostGIS point layer (Celery, background).
+"""Import a CSV as a PostGIS vector layer (Celery, background).
 
-A CSV isn't tile-servable, so we build points from its X/Y columns into PostGIS. The load uses
-COPY into a staging table → infer column types in SQL → INSERT…SELECT into the final table, so
-it streams from disk (no in-memory row list) and scales to large files. Works for a CSV already
-in object storage (discover/import) or one freshly uploaded (saved to a local temp file).
+A CSV isn't tile-servable, so we build geometry from it into PostGIS: either points from X/Y
+columns, or any geometry from a WKT column (e.g. Google's Open Buildings ships polygons as CSV).
+The load uses COPY into a staging table → infer column types in SQL → INSERT…SELECT into the
+final table, so it streams from disk (no in-memory row list) and scales to large files. Works
+for a CSV already in object storage (discover/import) or one freshly uploaded (local temp file).
 """
 import csv as csvlib
 import io
@@ -86,15 +87,29 @@ def _file_header(path: str, delimiter: str = "comma") -> list[str]:
         return next(csvlib.reader(fh, delimiter=_delim_char(delimiter)), [])
 
 
-def _load_copy(path: str, schema: str, table: str, x_col: str, y_col: str, srid, dsn: str,
-               delimiter: str = "comma") -> dict:
-    """COPY the CSV into a staging table, infer types, then INSERT…SELECT into the point table."""
+# GeometryType() output → the catalog's point/line/polygon vocabulary.
+_GEOM_KIND = {
+    "POINT": "point", "MULTIPOINT": "point",
+    "LINESTRING": "line", "MULTILINESTRING": "line",
+    "POLYGON": "polygon", "MULTIPOLYGON": "polygon",
+}
+
+
+def _load_copy(path: str, schema: str, table: str, x_col: str | None, y_col: str | None, srid,
+               dsn: str, delimiter: str = "comma", wkt_col: str | None = None) -> dict:
+    """COPY the CSV into a staging table, infer types, then INSERT…SELECT into the final table.
+
+    Geometry comes from EITHER the X/Y numeric columns (points — the original path) OR a WKT
+    column (`wkt_col`, any geometry type — e.g. polygon footprints shipped as CSV)."""
     import psycopg2
 
     fields = _file_header(path, delimiter)
     if not fields:
         raise ValueError("CSV has no header row.")
-    if x_col not in fields or y_col not in fields:
+    if wkt_col:
+        if wkt_col not in fields:
+            raise ValueError("Selected WKT geometry column is not in the CSV header.")
+    elif x_col not in fields or y_col not in fields:
         raise ValueError("Selected X/Y columns are not in the CSV header.")
 
     safe, used = {}, set()
@@ -107,7 +122,6 @@ def _load_copy(path: str, schema: str, table: str, x_col: str, y_col: str, srid,
 
     srid = int(srid) or 4326
     stg = f"{table}_stg"
-    xc, yc = q(safe[x_col]), q(safe[y_col])
 
     conn = psycopg2.connect(dsn)
     try:
@@ -137,8 +151,10 @@ def _load_copy(path: str, schema: str, table: str, x_col: str, y_col: str, srid,
                         else "date" if is_date else "text")
 
         typed = ", ".join(f"{q(safe[f])} {types[f]}" for f in fields)
+        # X/Y mode always yields points; WKT can hold any geometry type → generic column.
+        geom_ddl = "geometry(Geometry,4326)" if wkt_col else "geometry(Point,4326)"
         cur.execute(f"CREATE TABLE {q(schema)}.{q(table)} "
-                    f"(id serial primary key, {typed}, geom geometry(Point,4326))")
+                    f"(id serial primary key, {typed}, geom {geom_ddl})")
 
         def cast_expr(f):
             c = q(safe[f]); t = f"btrim({c})"
@@ -150,29 +166,65 @@ def _load_copy(path: str, schema: str, table: str, x_col: str, y_col: str, srid,
                 return f"CASE WHEN {t} ~ '{_DATE}' THEN to_date({t}, 'YYYY-MM-DD') END"
             return f"NULLIF({c}, '')"
 
-        make_point = f"ST_SetSRID(ST_MakePoint(btrim({xc})::double precision, btrim({yc})::double precision), {srid})"
-        g4326 = f"ST_Transform({make_point}, 4326)" if srid != 4326 else make_point
-        # Clamp latitude to the Web Mercator limit (±85.0511): Martin tiles in EPSG:3857, where a
-        # point at/near the poles transforms to infinity and breaks tile generation (HTTP 500). A
-        # sentinel/polar row (e.g. a lat=-90 "country") would otherwise blank out low-zoom tiles.
-        geom = (f"ST_SetSRID(ST_MakePoint(ST_X({g4326}), "
-                f"GREATEST(-85.05112878, LEAST(85.05112878, ST_Y({g4326})))), 4326)")
+        if wkt_col:
+            # A malformed WKT cell would abort the whole INSERT (ST_GeomFromText raises), so parse
+            # through a session-local pg_temp function that swallows errors → NULL row, load
+            # continues. It also clips geometry to the Web Mercator band (±85.0511°): Martin tiles
+            # in EPSG:3857, where polar coordinates transform to infinity and 500 every low-zoom
+            # tile (§0g) — the clip only runs on rows that actually cross the band.
+            cur.execute(f"""
+                CREATE FUNCTION pg_temp.gd_wkt_geom(t text, s int) RETURNS geometry AS $$
+                DECLARE g geometry;
+                BEGIN
+                    g := ST_Transform(ST_SetSRID(ST_GeomFromText(t), s), 4326);
+                    IF ST_YMax(g) > 85.05112878 OR ST_YMin(g) < -85.05112878 THEN
+                        g := ST_Intersection(g,
+                             ST_MakeEnvelope(-180, -85.05112878, 180, 85.05112878, 4326));
+                    END IF;
+                    RETURN CASE WHEN g IS NULL OR ST_IsEmpty(g) THEN NULL ELSE g END;
+                EXCEPTION WHEN OTHERS THEN RETURN NULL;
+                END $$ LANGUAGE plpgsql IMMUTABLE""")
+            wc = q(safe[wkt_col])
+            geom = f"pg_temp.gd_wkt_geom(NULLIF(btrim({wc}), ''), {srid})"
+            row_filter = f"NULLIF(btrim({wc}), '') IS NOT NULL"
+        else:
+            xc, yc = q(safe[x_col]), q(safe[y_col])
+            make_point = f"ST_SetSRID(ST_MakePoint(btrim({xc})::double precision, btrim({yc})::double precision), {srid})"
+            g4326 = f"ST_Transform({make_point}, 4326)" if srid != 4326 else make_point
+            # Clamp latitude to the Web Mercator limit (±85.0511): Martin tiles in EPSG:3857, where a
+            # point at/near the poles transforms to infinity and breaks tile generation (HTTP 500). A
+            # sentinel/polar row (e.g. a lat=-90 "country") would otherwise blank out low-zoom tiles.
+            geom = (f"ST_SetSRID(ST_MakePoint(ST_X({g4326}), "
+                    f"GREATEST(-85.05112878, LEAST(85.05112878, ST_Y({g4326})))), 4326)")
+            row_filter = f"btrim({xc}) ~ '{_FLOAT}' AND btrim({yc}) ~ '{_FLOAT}'"
         cur.execute(
             f"INSERT INTO {q(schema)}.{q(table)} ({copy_cols}, geom) "
             f"SELECT {', '.join(cast_expr(f) for f in fields)}, {geom} "
-            f"FROM {q(schema)}.{q(stg)} WHERE btrim({xc}) ~ '{_FLOAT}' AND btrim({yc}) ~ '{_FLOAT}'")
-        fc = cur.rowcount
+            f"FROM {q(schema)}.{q(stg)} WHERE {row_filter}")
         cur.execute(f"DROP TABLE {q(schema)}.{q(stg)}")
+        if wkt_col:
+            # Rows whose WKT failed to parse (or clipped to empty) carry NULL geometry — drop them
+            # so every remaining feature is renderable.
+            cur.execute(f"DELETE FROM {q(schema)}.{q(table)} WHERE geom IS NULL")
+        cur.execute(f"SELECT count(*) FROM {q(schema)}.{q(table)}")
+        fc = cur.fetchone()[0]
         if not fc:
             cur.execute(f"DROP TABLE {q(schema)}.{q(table)}")
-            raise ValueError("No rows had valid numeric X/Y values.")
+            raise ValueError("No rows had valid WKT geometry." if wkt_col
+                             else "No rows had valid numeric X/Y values.")
+        geom_kind = "point"
+        if wkt_col:
+            cur.execute(f"SELECT GeometryType(geom) FROM {q(schema)}.{q(table)} "
+                        f"WHERE geom IS NOT NULL LIMIT 1")
+            row = cur.fetchone()
+            geom_kind = _GEOM_KIND.get((row[0] or "").upper(), "polygon") if row else "polygon"
         cur.execute(f"CREATE INDEX ON {q(schema)}.{q(table)} USING GIST (geom)")
         cur.execute(f"SELECT ST_XMin(e), ST_YMin(e), ST_XMax(e), ST_YMax(e) "
                     f"FROM (SELECT ST_Extent(geom) e FROM {q(schema)}.{q(table)}) s")
         b = cur.fetchone()
         bbox = [b[0], b[1], b[2], b[3]] if b and b[0] is not None else None
         conn.commit()
-        return {"bbox": bbox, "feature_count": fc,
+        return {"bbox": bbox, "feature_count": fc, "geometry_type": geom_kind,
                 "columns": [{"name": safe[f], "type": types[f]} for f in fields]}
     except Exception:
         conn.rollback()
@@ -182,8 +234,10 @@ def _load_copy(path: str, schema: str, table: str, x_col: str, y_col: str, srid,
 
 
 @celery_app.task(bind=True, name="geodeploy.tasks.csv_import.import_csv")
-def import_csv(self, job_id, layer_id, source, schema, table, x_col, y_col, srid, is_s3=True, delimiter="comma"):
-    """source = S3 key (is_s3) or a local temp CSV path (uploaded)."""
+def import_csv(self, job_id, layer_id, source, schema, table, x_col, y_col, srid, is_s3=True,
+               delimiter="comma", wkt_col=None):
+    """source = S3 key (is_s3) or a local temp CSV path (uploaded). Geometry from X/Y columns
+    (points) or, when `wkt_col` is set, from a WKT column (any geometry type)."""
     import json
     settings = get_settings()
     db_path = f"{settings.data_dir}/sqlite/geodeploy.db"
@@ -209,12 +263,13 @@ def import_csv(self, job_id, layer_id, source, schema, table, x_col, y_col, srid
         downloaded = path if is_s3 else None
 
         step("Loading into PostGIS", 45)
-        res = _load_copy(path, schema, table, x_col, y_col, srid, dsn, delimiter)
+        res = _load_copy(path, schema, table, x_col, y_col, srid, dsn, delimiter, wkt_col)
 
         step("Saving metadata", 90)
         _update_layer(db_path, layer_id, status="ready", feature_count=res["feature_count"],
                       bbox=json.dumps(res["bbox"]) if res["bbox"] else None,
-                      columns=json.dumps(res["columns"]), crs="EPSG:4326", geometry_type="point",
+                      columns=json.dumps(res["columns"]), crs="EPSG:4326",
+                      geometry_type=res.get("geometry_type", "point"),
                       updated_at=datetime.now(timezone.utc).isoformat())
         _update_job(db_path, job_id, status="ready", progress=100,
                     completed_at=datetime.now(timezone.utc).isoformat())

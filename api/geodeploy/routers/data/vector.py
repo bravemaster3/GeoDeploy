@@ -95,20 +95,24 @@ async def upload_vector(
 @router.post("/upload-csv", response_model=JobStatus, status_code=202)
 async def upload_csv(
     file: UploadFile = File(...),
-    x_column: str = Form(...),
-    y_column: str = Form(...),
+    x_column: str | None = Form(None),
+    y_column: str | None = Form(None),
+    wkt_column: str | None = Form(None),
     srid: int = Form(4326),
     name: str | None = Form(None),
     delimiter: str = Form("comma"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload a CSV and build a PostGIS point layer from its X/Y columns (queued, Celery)."""
+    """Upload a CSV and build a PostGIS layer from it (queued, Celery): points from X/Y columns,
+    or any geometry (e.g. polygons) from a WKT column."""
     from ...tasks import csv_import
     settings = get_settings()
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext != ".csv":
         raise HTTPException(400, "Upload a .csv file.")
+    if not wkt_column and not (x_column and y_column):
+        raise HTTPException(400, "Pick X/Y columns or a WKT geometry column.")
 
     os.makedirs(f"{settings.data_dir}/temp", exist_ok=True)
     tmp_path = f"{settings.data_dir}/temp/{uuid.uuid4().hex}.csv"
@@ -128,7 +132,9 @@ async def upload_csv(
 
     layer = VectorLayer(
         user_id=user.id, name=layer_name, table_name=table_name, schema_name=schema_name,
-        file_size=size, geometry_type="point", geometry_column="geom", id_column="id",
+        # WKT can hold any geometry type — the task fills in the real one after the load.
+        file_size=size, geometry_type=None if wkt_column else "point",
+        geometry_column="geom", id_column="id",
         storage_backend="postgis", status="processing",
     )
     db.add(layer)
@@ -140,7 +146,7 @@ async def upload_csv(
 
     # is_s3=False → the task reads (and then deletes) this local temp CSV.
     csv_import.import_csv.delay(job_id, layer.id, tmp_path, schema_name, table_name,
-                               x_column, y_column, srid, False, delimiter)
+                               x_column, y_column, srid, False, delimiter, wkt_column)
     return JobStatus(id=job_id, layer_id=layer.id, layer_type="vector",
                      status="queued", progress=0, current_step="Queued", error_message=None)
 
@@ -317,6 +323,34 @@ async def vector_features_public(
     same open question as the rest of the public-portal surface; see notes §0h-addendum.)"""
     result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
     return await _viewport_geojson(result.scalar_one_or_none(), bbox, limit)
+
+
+@router.get("/{layer_id}/identify")
+async def vector_identify(
+    layer_id: int,
+    lng: float,
+    lat: float,
+    tol: float = 1e-4,
+    limit: int = 10,
+    db: AsyncSession = Depends(get_db),
+):
+    """PUBLIC identify-on-click for GeoParquet (deck.gl-rendered) layers: the attributes of the
+    features under a clicked point. Needed because the deck.gl transports ship geometry only
+    (GeoArrow) — attributes are fetched per click, not per pan. Public-by-id like
+    features.geojson (published portals are unauthenticated); the tiny bbox + covering pruning
+    keeps it cheap. `tol` = half-width of the click box in degrees (client scales it by zoom)."""
+    from ...services import duckdb_engine
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    layer = result.scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not found.")
+    if layer.storage_backend != "geoparquet" or not layer.s3_key:
+        raise HTTPException(400, "This layer is not a GeoParquet (file-backed) layer.")
+    tol = min(max(float(tol), 1e-7), 1.0)
+    feats = await run_in_threadpool(
+        duckdb_engine.query_features_at_point, layer.s3_key, lng, lat, tol,
+        max(1, min(int(limit), 25)))
+    return {"features": feats}
 
 
 @router.post("/{layer_id}/tile", response_model=VectorLayerOut)

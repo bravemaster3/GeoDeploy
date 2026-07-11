@@ -39,6 +39,8 @@ def _apply_schema_migrations(conn) -> None:
         "ALTER TABLE vector_layers ADD COLUMN s3_key VARCHAR(512)",
         "ALTER TABLE vector_layers ADD COLUMN pmtiles_key VARCHAR(512)",
         "ALTER TABLE vector_layers ADD COLUMN tile_status VARCHAR(16)",
+        # Import-existing GeoParquet: the ORIGINAL attached key (prep repoints s3_key at a copy)
+        "ALTER TABLE vector_layers ADD COLUMN source_s3_key VARCHAR(512)",
         "ALTER TABLE raster_layers ADD COLUMN default_style TEXT",
         # Data sharing + STAC catalog metadata (notes §0h-addendum)
         "ALTER TABLE vector_layers ADD COLUMN is_public BOOLEAN DEFAULT 0",

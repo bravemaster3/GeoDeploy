@@ -233,7 +233,7 @@ class ImportStorageRequest(BaseModel):
 
 @router.get("/storage")
 async def discover_storage(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """List GeoTIFF objects already in the configured bucket."""
+    """List spatial objects already in the configured bucket (GeoTIFF, GeoParquet, CSV)."""
     from ...services.minio import get_s3_client
     settings = get_settings()
     if not settings.storage_endpoint:
@@ -253,6 +253,8 @@ async def discover_storage(user: User = Depends(get_current_user), db: AsyncSess
                 low = obj["Key"].lower()
                 if low.endswith((".tif", ".tiff")):
                     found.append({"key": obj["Key"], "size": obj["Size"], "kind": "raster"})
+                elif low.endswith((".parquet", ".geoparquet")):
+                    found.append({"key": obj["Key"], "size": obj["Size"], "kind": "geoparquet"})
                 elif low.endswith(".csv"):
                     found.append({"key": obj["Key"], "size": obj["Size"], "kind": "csv"})
         return found
@@ -264,10 +266,16 @@ async def discover_storage(user: User = Depends(get_current_user), db: AsyncSess
 
     existing = await db.execute(select(RasterLayer.s3_key).where(RasterLayer.user_id == user.id))
     have = {row[0] for row in existing.all()}
+    vec = await db.execute(select(VectorLayer.s3_key, VectorLayer.source_s3_key)
+                           .where(VectorLayer.user_id == user.id))
+    # source_s3_key is the attached original — s3_key alone stops matching once the spatial prep
+    # repoints the layer at its prepped copy under vectors/.
+    have_vec = {k for row in vec.all() for k in row if k}
     for k in keys:
         # CSV import creates a fresh PostGIS table (no stored source key), so it can't be
-        # de-duplicated here — only rasters track their s3_key.
-        k["already_imported"] = k["kind"] == "raster" and k["key"] in have
+        # de-duplicated here.
+        k["already_imported"] = ((k["kind"] == "raster" and k["key"] in have)
+                                 or (k["kind"] == "geoparquet" and k["key"] in have_vec))
     return keys
 
 
@@ -277,13 +285,48 @@ async def import_storage(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Register selected existing GeoTIFFs as raster layers (no data copy)."""
+    """Register selected existing storage objects (no data copy): GeoTIFFs become raster layers
+    immediately; GeoParquet files become file-backed vector layers via a queued inspect+prep job
+    (the prep writes its partitioned copy under vectors/ and NEVER touches the attached source —
+    import = listing, delete = unlist)."""
+    from slugify import slugify
+    from ...tasks.geoparquet_import import import_geoparquet
     settings = get_settings()
     if not req.items:
         raise HTTPException(400, "No files selected.")
     created: list[str] = []
+    jobs: list[JobStatus] = []
     for item in req.items:
         key = item.key
+        low = key.lower()
+        name = (item.name or "").strip() or key.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+
+        if low.endswith((".parquet", ".geoparquet")):
+            dup = (await db.execute(select(VectorLayer).where(
+                VectorLayer.user_id == user.id,
+                (VectorLayer.s3_key == key) | (VectorLayer.source_s3_key == key),
+            ))).scalars().first()
+            if dup:
+                continue
+            layer = VectorLayer(
+                user_id=user.id, name=name,
+                table_name=f"gpq_{slugify(name, separator='_') or 'layer'}_{uuid.uuid4().hex[:6]}",
+                schema_name=f"geodeploy_u{user.id}",
+                storage_backend="geoparquet", s3_key=key, source_s3_key=key,
+                status="processing",
+            )
+            db.add(layer)
+            await db.flush()
+            job_id = str(uuid.uuid4())
+            db.add(UploadJob(id=job_id, layer_id=layer.id, layer_type="vector"))
+            await db.commit()
+            import_geoparquet.delay(job_id, layer.id, key)
+            created.append(key)
+            jobs.append(JobStatus(id=job_id, layer_id=layer.id, layer_type="vector",
+                                  status="queued", progress=0, current_step="Queued",
+                                  error_message=None))
+            continue
+
         dup = (await db.execute(select(RasterLayer).where(
             RasterLayer.user_id == user.id, RasterLayer.s3_key == key))).scalar_one_or_none()
         if dup:
@@ -292,7 +335,6 @@ async def import_storage(
             meta = await run_in_threadpool(cog_converter.inspect_s3, key, settings)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(400, f"Could not read '{key}': {exc}") from exc
-        name = (item.name or "").strip() or key.rsplit("/", 1)[-1].rsplit(".", 1)[0]
         db.add(RasterLayer(
             user_id=user.id, name=name, s3_key=key,
             crs=meta["crs"], bbox=json.dumps(meta["bbox"]),
@@ -301,7 +343,7 @@ async def import_storage(
         ))
         created.append(key)
     await db.commit()
-    return {"imported": created}
+    return {"imported": created, "jobs": [j.model_dump() for j in jobs]}
 
 
 # ── CSV → points (loads into PostGIS; a CSV isn't tile-servable as-is) ─────────
@@ -310,8 +352,9 @@ async def import_storage(
 class ImportCsvRequest(BaseModel):
     key: str
     name: str | None = None
-    x_column: str
-    y_column: str
+    x_column: str | None = None
+    y_column: str | None = None
+    wkt_column: str | None = None   # WKT geometry column (any type) — alternative to X/Y points
     srid: int = 4326
     delimiter: str = "comma"   # comma | semicolon | tab | pipe | space
 
@@ -334,18 +377,23 @@ async def import_csv(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Queue a CSV → PostGIS point-layer import (X/Y columns reprojected to 4326)."""
+    """Queue a CSV → PostGIS layer import: points from X/Y columns, or any geometry (e.g.
+    polygons) from a WKT column. Reprojected to 4326."""
     from ...tasks import csv_import
     settings = get_settings()
     if not settings.postgis_host:
         raise HTTPException(409, "No PostGIS database is configured.")
+    if not req.wkt_column and not (req.x_column and req.y_column):
+        raise HTTPException(400, "Pick X/Y columns or a WKT geometry column.")
     name = (req.name or "").strip() or req.key.rsplit("/", 1)[-1].rsplit(".", 1)[0]
     schema = f"geodeploy_u{user.id}"
     table = f"csv_{csv_import.safe_name(name, 'layer')}_{uuid.uuid4().hex[:6]}"
 
     layer = VectorLayer(
         user_id=user.id, name=name, schema_name=schema, table_name=table,
-        geometry_type="point", geometry_column="geom", id_column="id",
+        # WKT can hold any geometry type — the task fills in the real one after the load.
+        geometry_type=None if req.wkt_column else "point",
+        geometry_column="geom", id_column="id",
         storage_backend="postgis", status="processing",
     )
     db.add(layer)
@@ -356,6 +404,7 @@ async def import_csv(
     await db.refresh(layer)
 
     csv_import.import_csv.delay(job_id, layer.id, req.key, schema, table,
-                               req.x_column, req.y_column, req.srid, True, req.delimiter)
+                               req.x_column, req.y_column, req.srid, True, req.delimiter,
+                               req.wkt_column)
     return JobStatus(id=job_id, layer_id=layer.id, layer_type="vector",
                      status="queued", progress=0, current_step="Queued", error_message=None)

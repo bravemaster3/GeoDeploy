@@ -213,8 +213,9 @@ import TipTapImage from '@tiptap/extension-image'
 import { Markdown } from 'tiptap-markdown'
 import { usePortalsStore } from '@/stores/portals'
 import { useDataStore } from '@/stores/data'
-import { listTemplates, getRasterStats, getVectorFeatures, uploadPortalAsset } from '@/api'
+import { listTemplates, getRasterStats, getVectorFeatures, identifyVectorFeatures, uploadPortalAsset } from '@/api'
 import { useMaplibre } from '@/composables/useMaplibre'
+import maplibregl from 'maplibre-gl'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { GeoJsonLayer } from '@deck.gl/layers'
 import { ExternalLinkIcon } from '@/views/icons'
@@ -521,6 +522,76 @@ async function refreshDeck(refetch) {
   deckOverlay.setProps({ layers })
 }
 
+// ── Preview identify popup ──────────────────────────────────────────────────
+// Clicking the preview shows feature attributes, like the published portal: MVT (PostGIS)
+// layers via queryRenderedFeatures; GeoParquet (deck-rendered) layers via the server identify
+// endpoint — the deck data is geometry-only/capped, so attributes are fetched per click.
+// Mirrors the popup logic in templates/shared/portal.js (keep in sync).
+const previewPopup = new maplibregl.Popup({ closeButton: true, closeOnClick: false, maxWidth: '300px' })
+const escAttr = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+function attrTableHtml(title, props, fields) {
+  const keys = fields && fields.length
+    ? fields.filter(k => props[k] != null)
+    : Object.keys(props).filter(k => props[k] != null).slice(0, 8)
+  const body = keys.length
+    ? '<table style="font-size:12px;border-collapse:collapse">' + keys.map(k =>
+        `<tr><th style="text-align:left;padding:2px 8px 2px 0;color:#6b7280">${escAttr(k)}</th><td style="padding:2px 0">${escAttr(props[k])}</td></tr>`).join('') + '</table>'
+    : '<div style="font-size:12px;color:#6b7280">No attributes</div>'
+  return `<div style="font-weight:600;font-size:12px;margin-bottom:4px">${escAttr(title)}</div>` + body
+}
+
+async function onPreviewClick(e) {
+  if (!map.value) return
+  const sections = []
+  // MVT layers under the click (small pixel pad so lines/points are hittable).
+  const pad = 5
+  const box = [[e.point.x - pad, e.point.y - pad], [e.point.x + pad, e.point.y + pad]]
+  const vecIds = (map.value.getStyle().layers || [])
+    .map(l => l.id).filter(id => id.startsWith('vector_') && map.value.getLayer(id))
+  try {
+    const feats = vecIds.length ? map.value.queryRenderedFeatures(box, { layers: vecIds }) : []
+    if (feats.length) {
+      const f = feats[0]
+      const lid = Number(String(f.layer.id).replace('vector_', ''))
+      const layer = dataStore.vectorLayers.find(l => l.id === lid)
+      const cfg = layerConfigs.value.find(c => c.layer_type === 'vector' && c.layer_id === lid)
+      sections.push(attrTableHtml(layer?.name || f.layer.id, f.properties || {}, cfg?.popup_fields))
+    }
+  } catch { /* style mid-rebuild */ }
+
+  // GeoParquet layers showing real detail (clicking the density-grid overview is meaningless).
+  const deckQ = deckConfigs().filter(cfg => {
+    const d = deckData[cfg.layer_id]
+    return d && !d.__overview
+  })
+  if (!sections.length && !deckQ.length) return
+  const p1 = map.value.unproject([e.point.x - pad, e.point.y])
+  const p2 = map.value.unproject([e.point.x + pad, e.point.y])
+  const tol = Math.max(Math.abs(p2.lng - p1.lng) / 2, 1e-7)
+
+  previewPopup.setLngLat(e.lngLat)
+    .setHTML(sections.join('<hr style="margin:6px 0;border-color:#e5e7eb">') +
+      (deckQ.length ? '<div style="font-size:12px;color:#6b7280">Reading attributes…</div>' : ''))
+    .addTo(map.value)
+
+  if (!deckQ.length) return
+  const results = await Promise.all(deckQ.map(async cfg => {
+    try {
+      const { data } = await identifyVectorFeatures(cfg.layer_id, e.lngLat.lng, e.lngLat.lat, tol, 5)
+      if (!data.features?.length) return null
+      const layer = dataStore.vectorLayers.find(l => l.id === cfg.layer_id)
+      let html = attrTableHtml(layer?.name || `Layer ${cfg.layer_id}`, data.features[0], cfg.popup_fields)
+      if (data.features.length > 1)
+        html += `<div style="font-size:11px;color:#6b7280;margin-top:2px">+${data.features.length - 1} more feature${data.features.length > 2 ? 's' : ''} here</div>`
+      return html
+    } catch { return null }
+  }))
+  const all = sections.concat(results.filter(Boolean))
+  if (!all.length) { previewPopup.remove(); return }
+  previewPopup.setHTML(all.join('<hr style="margin:6px 0;border-color:#e5e7eb">'))
+}
+
 // Rebuild the preview style on any config/layer change, but only move the camera on
 // the FIRST build (restore the saved view, else fit to all layers). After that, style
 // edits (band/colour/etc.) must NOT yank the view — setStyle keeps the current camera.
@@ -552,6 +623,7 @@ watch(loaded, (v) => {
   if (!deckOverlay) {
     deckOverlay = new MapboxOverlay({ interleaved: false, layers: [] })
     map.value.addControl(deckOverlay)
+    map.value.on('click', onPreviewClick)
     map.value.on('moveend', () => refreshDeck(true))
     // Mid-gesture: hide the coarse overview grid the moment the viewport qualifies for detail —
     // don't wait for moveend + the fetch (mirrors portal.js).

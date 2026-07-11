@@ -67,6 +67,53 @@ def _vec_csv(cur, schema: str, table: str, b) -> str:
     return buf.getvalue()
 
 
+def _gpq_features(s3_key: str, b, settings) -> list[dict]:
+    """Clip a GeoParquet layer to the bbox via DuckDB (covering/partition-pruned viewport query),
+    then an exact shapely intersects test — parity with the PostGIS ST_Intersects path (the
+    covering filter alone is bbox-overlap, which can include near-misses)."""
+    from shapely.geometry import box as shp_box, shape as gj_shape
+    from ..services import duckdb_engine
+    from .raster_ingest import _get_storage_creds
+    # Storage creds from SQLite (§0f) — celery env is unreliable.
+    creds = _get_storage_creds(f"{settings.data_dir}/sqlite/geodeploy.db")
+    fc = duckdb_engine.query_features_geojson(s3_key, list(b), FEATURE_CAP, creds)
+    sel = shp_box(b[0], b[1], b[2], b[3])
+    kept = []
+    for f in fc.get("features", []):
+        try:
+            if gj_shape(f["geometry"]).intersects(sel):
+                kept.append(f)
+        except Exception:  # noqa: BLE001 — a single bad geometry shouldn't kill the export
+            continue
+    return kept
+
+
+def _gpq_geojson(feats: list[dict]) -> str:
+    return json.dumps({"type": "FeatureCollection", "features": feats}, separators=(",", ":"))
+
+
+def _gpq_csv(feats: list[dict]) -> str:
+    import csv
+    from shapely.geometry import shape as gj_shape
+    cols, recs = [], []
+    for f in feats:
+        props = dict(f.get("properties") or {})
+        try:
+            props["geometry_wkt"] = gj_shape(f["geometry"]).wkt
+        except Exception:  # noqa: BLE001
+            props["geometry_wkt"] = None
+        recs.append(props)
+        for k in props:
+            if k not in cols:
+                cols.append(k)
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=cols)
+    w.writeheader()
+    for rec in recs:
+        w.writerow(rec)
+    return buf.getvalue()
+
+
 def _gj_to_gpkg(geojson_text: str, layer_name: str) -> bytes:
     with tempfile.TemporaryDirectory() as td:
         src = os.path.join(td, "in.geojson")
@@ -140,7 +187,8 @@ def _clip_raster(s3_key: str, b, settings) -> bytes:
 
 @celery_app.task(bind=True, name="geodeploy.tasks.export.export_bundle")
 def export_bundle(self, bbox: str, items: list[dict]) -> dict:
-    """items: [{type:'vector', schema, table, name, format} | {type:'raster', s3_key, name}]"""
+    """items: [{type:'vector', schema, table, name, format} |
+              {type:'geoparquet', s3_key, name, format} | {type:'raster', s3_key, name}]"""
     settings = get_settings()
     b = tuple(float(v) for v in bbox.split(","))
     exports_dir = f"{settings.data_dir}/temp/exports"
@@ -191,6 +239,21 @@ def export_bundle(self, bbox: str, items: list[dict]) -> dict:
                             z.writestr(fn(base, "geojson"), gj)
                     else:
                         z.writestr(fn(base, "geojson"), _vec_geojson(cur, it["schema"], it["table"], b))
+                elif it.get("type") == "geoparquet":
+                    base = _safe(it.get("name"))
+                    fmt = it.get("format", "geojson")
+                    feats = _gpq_features(it["s3_key"], b, settings)
+                    if fmt == "csv":
+                        z.writestr(fn(base, "csv"), _gpq_csv(feats))
+                    elif fmt == "gpkg":
+                        gj = _gpq_geojson(feats)
+                        try:
+                            z.writestr(fn(base, "gpkg"), _gj_to_gpkg(gj, base))
+                        except Exception as e:
+                            log.warning("GeoPackage export failed for %s, falling back to GeoJSON: %s", base, e)
+                            z.writestr(fn(base, "geojson"), gj)
+                    else:
+                        z.writestr(fn(base, "geojson"), _gpq_geojson(feats))
                 else:  # raster
                     try:
                         data = _clip_raster(it["s3_key"], b, settings)

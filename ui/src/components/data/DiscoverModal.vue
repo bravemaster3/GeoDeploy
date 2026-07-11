@@ -46,7 +46,7 @@
       <div v-else class="max-h-72 overflow-auto -mx-1 px-1">
         <p v-if="loadingSt" class="text-xs text-muted-foreground/70 py-6 text-center">Scanning storage…</p>
         <p v-else-if="stError" class="text-xs text-red-400 py-2">{{ stError }}</p>
-        <p v-else-if="!stFiles.length" class="text-xs text-muted-foreground/70 py-6 text-center">No GeoTIFFs found in the bucket.</p>
+        <p v-else-if="!stFiles.length" class="text-xs text-muted-foreground/70 py-6 text-center">No GeoTIFF, GeoParquet or CSV files found in the bucket.</p>
         <div v-for="f in stFiles" :key="f.key"
           class="p-1.5 rounded text-xs"
           :class="f.already_imported ? 'opacity-50' : 'hover:bg-muted/60'">
@@ -60,11 +60,13 @@
                 placeholder="Layer name" />
             </div>
             <span class="text-[10px] uppercase px-1.5 py-0.5 rounded-full flex-shrink-0"
-              :class="f.kind === 'csv' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/15 text-amber-400'">{{ f.kind }}</span>
+              :class="f.kind === 'csv' ? 'bg-emerald-500/15 text-emerald-400'
+                : f.kind === 'geoparquet' ? 'bg-violet-500/15 text-violet-400'
+                : 'bg-amber-500/15 text-amber-400'">{{ f.kind }}</span>
             <span class="text-muted-foreground/70 flex-shrink-0">{{ fmtSize(f.size) }}</span>
             <span v-if="f.already_imported" class="text-[10px] text-muted-foreground/70 flex-shrink-0">imported</span>
           </div>
-          <!-- CSV → points needs coordinate columns + CRS -->
+          <!-- CSV needs a geometry source (X/Y point columns or a WKT column) + CRS -->
           <div v-if="f.kind === 'csv' && stSel.includes(f.key)" class="mt-1.5 ml-6 flex flex-wrap items-center gap-2">
             <label class="flex items-center gap-1"><span class="text-muted-foreground">Delim</span>
               <select v-model="f.delim" @change="fetchCsvColumns(f)" class="text-xs border border-border rounded px-1 py-0.5">
@@ -76,12 +78,23 @@
             <span v-if="f.colLoading" class="text-muted-foreground/70">Reading columns…</span>
             <span v-else-if="f.colError" class="text-red-400">{{ f.colError }}</span>
             <template v-else-if="f.columns && f.columns.length">
-              <label class="flex items-center gap-1"><span class="text-muted-foreground">X</span>
-                <select v-model="f.xCol" class="text-xs border border-border rounded px-1 py-0.5">
-                  <option v-for="c in f.columns" :key="c" :value="c">{{ c }}</option>
+              <label class="flex items-center gap-1"><span class="text-muted-foreground">Geometry</span>
+                <select v-model="f.geomMode" class="text-xs border border-border rounded px-1 py-0.5">
+                  <option value="xy">X/Y points</option>
+                  <option value="wkt">WKT column</option>
                 </select></label>
-              <label class="flex items-center gap-1"><span class="text-muted-foreground">Y</span>
-                <select v-model="f.yCol" class="text-xs border border-border rounded px-1 py-0.5">
+              <template v-if="f.geomMode === 'xy'">
+                <label class="flex items-center gap-1"><span class="text-muted-foreground">X</span>
+                  <select v-model="f.xCol" class="text-xs border border-border rounded px-1 py-0.5">
+                    <option v-for="c in f.columns" :key="c" :value="c">{{ c }}</option>
+                  </select></label>
+                <label class="flex items-center gap-1"><span class="text-muted-foreground">Y</span>
+                  <select v-model="f.yCol" class="text-xs border border-border rounded px-1 py-0.5">
+                    <option v-for="c in f.columns" :key="c" :value="c">{{ c }}</option>
+                  </select></label>
+              </template>
+              <label v-else class="flex items-center gap-1"><span class="text-muted-foreground">WKT</span>
+                <select v-model="f.wktCol" class="text-xs border border-border rounded px-1 py-0.5">
                   <option v-for="c in f.columns" :key="c" :value="c">{{ c }}</option>
                 </select></label>
               <label class="flex items-center gap-1"><span class="text-muted-foreground">EPSG</span>
@@ -143,7 +156,8 @@ onMounted(() => {
     .then(({ data }) => {
       stFiles.value = data.map(f => ({
         ...f, importName: baseName(f.key),
-        columns: null, xCol: '', yCol: '', srid: 4326, delim: 'comma', colLoading: false, colError: '',
+        columns: null, geomMode: 'xy', xCol: '', yCol: '', wktCol: '',
+        srid: 4326, delim: 'comma', colLoading: false, colError: '',
       }))
     })
     .catch(e => { stError.value = e.response?.data?.detail || e.message })
@@ -166,6 +180,10 @@ function fetchCsvColumns(f) {
       f.columns = cols
       f.xCol = cols.find(c => /^(x|lon|long|longitude|easting|e)$/i.test(c)) || cols[0] || ''
       f.yCol = cols.find(c => /^(y|lat|latitude|northing|n)$/i.test(c)) || cols[1] || cols[0] || ''
+      // A column that looks like WKT (e.g. Google Open Buildings' `geometry`) → preselect WKT mode.
+      const wktGuess = cols.find(c => /^(wkt|geometry|geom|the_geom|wkt_geometry)$/i.test(c))
+      f.wktCol = wktGuess || cols[0] || ''
+      if (wktGuess) f.geomMode = 'wkt'
     })
     .catch(e => { f.colError = e.response?.data?.detail || e.message; f.columns = [] })
     .finally(() => { f.colLoading = false })
@@ -188,19 +206,24 @@ async function doImport() {
       await importDatabase(tables)
     } else {
       const selected = stFiles.value.filter(f => stSel.value.includes(f.key))
-      const rasters = selected.filter(f => f.kind === 'raster')
+      const files = selected.filter(f => f.kind === 'raster' || f.kind === 'geoparquet')
       const csvs = selected.filter(f => f.kind === 'csv')
       for (const f of csvs) {
-        if (!f.xCol || !f.yCol) throw new Error(`Pick X and Y columns for ${f.key}`)
+        if (f.geomMode === 'wkt' ? !f.wktCol : (!f.xCol || !f.yCol))
+          throw new Error(`Pick ${f.geomMode === 'wkt' ? 'a WKT column' : 'X and Y columns'} for ${f.key}`)
       }
-      if (rasters.length) {
-        await importStorage(rasters.map(f => ({ key: f.key, name: (f.importName || '').trim() || baseName(f.key) })))
+      if (files.length) {
+        // Rasters register immediately; GeoParquet files come back as background jobs
+        // (inspect + spatial prep) — poll them like the CSV jobs below.
+        const { data } = await importStorage(files.map(f => ({ key: f.key, name: (f.importName || '').trim() || baseName(f.key) })))
+        for (const j of (data.jobs || [])) csvJobs.push({ jobId: j.id, layerId: j.layer_id })
       }
       // CSV import runs as a background job — collect the job ids to poll after refresh.
       for (const f of csvs) {
+        const geom = f.geomMode === 'wkt' ? { wkt_column: f.wktCol } : { x_column: f.xCol, y_column: f.yCol }
         const { data } = await importCsv({
           key: f.key, name: (f.importName || '').trim() || baseName(f.key),
-          x_column: f.xCol, y_column: f.yCol, srid: Number(f.srid) || 4326, delimiter: f.delim,
+          ...geom, srid: Number(f.srid) || 4326, delimiter: f.delim,
         })
         csvJobs.push({ jobId: data.id, layerId: data.layer_id })
       }

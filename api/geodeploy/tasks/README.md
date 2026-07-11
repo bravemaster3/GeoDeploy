@@ -11,16 +11,31 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   is unknown) into the final `geometry(Geometry,4326)` table → GiST index → `ST_Extent` bbox. Streams from
   disk (no in-memory feature list), bulk-loads, set-based reprojection — fast on large files. Int columns
   use `BIGINT`. Updates `upload_jobs`/`vector_layers` via **raw sqlite3** (runs in the Celery process).
+  **HEAVY files skip PostGIS (2026-07-11):** a source whose uncompressed size (`_source_size`, whole
+  sidecar set for shapefiles) ≥ `VECTOR_GEOPARQUET_THRESHOLD_MB` (default **200**, env-tunable on celery,
+  `0` disables) goes through `_ingest_as_geoparquet` instead — `_convert_to_geoparquet` streams Fiona →
+  **GeoParquet 1.1** (WKB, EPSG:4326, zstd, batched shapely conversion; `geo` footer attached at close
+  via `ParquetWriter.add_key_value_metadata`, **pyarrow ≥ 18** — guarded, absent footer falls back to
+  name-heuristics downstream) → upload to `vectors/{uid}/{uuid}/` → repoint the layer
+  (`storage_backend='geoparquet'`) → chain `geoparquet_prep` (which marks layer + job ready). Exactly
+  the pipeline a direct `.parquet` upload takes; no PostGIS table, no Martin entry.
 - `raster_ingest.py` — `ingest_raster(job_id, layer_id, file_path, s3_key)`:
   inspect (rasterio) → COG-convert if needed (`services.cog_converter`) → upload to MinIO (boto3) → save metadata (crs, bbox, band_count, nodata). Same raw-sqlite3 status updates. Reads storage creds from the `setup_config` table first, falling back to settings.
-- `csv_import.py` — `import_csv(job_id, layer_id, source, schema, table, x_col, y_col, srid, is_s3)`:
-  builds a PostGIS point layer from a CSV's X/Y columns. **COPY-based** (`_load_copy`): the CSV (a temp
+- `csv_import.py` — `import_csv(job_id, layer_id, source, schema, table, x_col, y_col, srid, is_s3,
+  delimiter, wkt_col)`: builds a PostGIS vector layer from a CSV. **Geometry from X/Y columns (points)
+  OR — since 2026-07-11 — from a `wkt_col` WKT column (ANY geometry type**, e.g. Google Open Buildings
+  polygon footprints). **COPY-based** (`_load_copy`): the CSV (a temp
   file — downloaded from S3 when `is_s3`, or the uploaded local file otherwise) is `COPY`d into an UNLOGGED
   staging table, each column's type is inferred **in SQL** (regex over the staged text → `bigint`/`double
   precision`/`date`/`text`; leading-zero ints stay text, ISO dates only, 18-digit int cap), then a single
-  `INSERT…SELECT` with **guarded casts** (a bad cell → NULL, never aborts) + `ST_MakePoint`→`ST_Transform`
-  4326 fills the final table; GiST index; staging dropped; temp file removed. Streams from disk, so no
-  in-memory row cap. **All** CSV columns are kept (X/Y stay as attributes too). Dispatched from
+  `INSERT…SELECT` with **guarded casts** (a bad cell → NULL, never aborts) + geometry fills the final
+  table; GiST index; staging dropped; temp file removed. X/Y path: `ST_MakePoint`→`ST_Transform` 4326 +
+  the ±85.0511 lat clamp (§0g). WKT path: a **`pg_temp.gd_wkt_geom` plpgsql function** parses
+  `ST_GeomFromText` with an EXCEPTION handler (malformed WKT → NULL row, never aborts the INSERT),
+  transforms to 4326 and **clips to the Web Mercator band** only when a row crosses it; NULL-geometry
+  rows are deleted after the load; the real geometry type is sampled (`GeometryType`) and saved on the
+  layer (the routers create the layer with `geometry_type=None` for WKT). Streams from disk, so no
+  in-memory row cap. **All** CSV columns are kept (X/Y/WKT stay as attributes too). Dispatched from
   `routers/data/discover.py` (import existing) and `routers/data/vector.py::upload-csv` (upload). The
   `delimiter` is user-chosen (comma default; comma/semicolon/tab/pipe — auto-sniffing is unreliable),
   threaded into both the header read and the `COPY … DELIMITER`. Reuses `vector_ingest`'s sqlite helpers.
@@ -52,9 +67,13 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   per UDF slice, default `50000`), `PREP_PARTITION_GRID` (default 16 → 256 cells),
   `PREP_EXTENT_QUANTILE` (default 0.005 — percentile grid extent so outliers don't collapse the grid).
   WKB is parsed **at most once**; an existing covering column skips the parse. **Layers prepped before
-  commit 2d77499 lack the grid metadata → re-prep.** Status 2026-06-13: committed but the WSL validation
-  loop (re-prep layer 6, timing, viewport speed, deck.gl render) was never run — see §0h RESUME CHECKLIST
-  in `notes_temp/notes_for_future.md`.
+  commit 2d77499 lack the grid metadata → re-prep.** (The 2026-06-13 WSL validation loop was completed
+  2026-07-09 — see the §0h RESUME CHECKLIST outcome in `notes_temp/notes_for_future.md`.)
+  **ATTACHED sources are protected (2026-07-11):** when `s3_key` is NOT under `vectors/` (a layer
+  attached via import-existing), the prepped copy is written to a fresh `vectors/{uid}/{uuid}/parts-…`
+  prefix and the original object is **never deleted** (attach ≠ copy/destroy; the delete-original step
+  is gated on `s3_key.startswith("vectors/")`). The layer's original key survives in
+  `vector_layers.source_s3_key` so discover/storage keeps flagging it as imported.
 - `pmtiles_tile.py` — `tile_geoparquet(layer_id, s3_key, pmtiles_key)`: the GeoParquet **display** path.
   Runs **tippecanoe** (built into the image, `/dev/stdin`, `-l geodeploy`, **`-z12` capped max zoom**
   `--coalesce-densest-as-needed --simplification 10`) fed by a thread streaming `duckdb_engine.stream_geojsonseq` (GeoParquet →
@@ -69,10 +88,13 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   signal — tippecanoe stays silent while blocked on stdin during the slow shapely-conversion phase).
 - `export.py` — `export_bundle(bbox, items)`: clips the chosen portal layers to a bbox and writes a
   ZIP to `data/temp/exports/{task_id}.zip` (served by the API's `export-download`). Vector via
-  psycopg2 (GeoJSON/CSV) + `ogr2ogr` (GeoPackage); raster via rasterio windowed read with an output
-  cap (`MAX_PIXELS`, downsamples huge selections via overviews). Offloads the heavy clip off the API
-  process. Routed to the `ingest` queue (the only one the worker consumes). **Writes to `{id}.zip.part`
-  then `os.replace()`** to the final name — see known issues for why.
+  psycopg2 (GeoJSON/CSV) + `ogr2ogr` (GeoPackage); **GeoParquet (2026-07-11) via DuckDB**
+  (`_gpq_features`: the covering/partition-pruned `duckdb_engine.query_features_geojson` + an exact
+  shapely intersects test for ST_Intersects parity; storage creds from SQLite §0f; same
+  GeoJSON/CSV/GPKG formats, `geometry_wkt` column in CSV); raster via rasterio windowed read with an
+  output cap (`MAX_PIXELS`, downsamples huge selections via overviews). Offloads the heavy clip off the
+  API process. Routed to the `ingest` queue (the only one the worker consumes). **Writes to
+  `{id}.zip.part` then `os.replace()`** to the final name — see known issues for why.
 - `__init__.py` — package marker.
 
 ## Dependencies / relationships
@@ -99,4 +121,4 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
-2026-07-09 (docs only — geoparquet_prep entry updated to the partitioning pivot)
+2026-07-11 (CSV WKT geometry; heavy uploads → GeoParquet; GeoParquet in export_bundle; prep protects attached sources)

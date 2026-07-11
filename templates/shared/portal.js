@@ -1559,20 +1559,70 @@
         '<div class="popup-actions"><button class="popup-fulltable-btn" type="button">View full table ▸</button></div>';
     }
 
+    // ── GeoParquet (deck.gl) identify section ──
+    // Deck layers ship geometry only (GeoArrow) or capped subsets, so attributes are fetched on
+    // click from the server identify endpoint (covering-pruned point query). Only layers showing
+    // real DETAIL are queried — the density-grid overview has no per-feature meaning.
+    const deckQ = DECK_LAYERS.filter(d => {
+      const st = deckState[d.layer_id];
+      return st && st.visible && st.data && !st.data.__overview;
+    });
+    // Click tolerance = the same 5px pad, converted to degrees at the current view.
+    const tp1 = map.unproject([e.point.x - pad, e.point.y]);
+    const tp2 = map.unproject([e.point.x + pad, e.point.y]);
+    const deckTol = Math.max(Math.abs(tp2.lng - tp1.lng) / 2, 1e-7);
+
     // ── Raster identify section ──
     const rasters = visibleRasterLayers();
-    if (!vectorHtml && !rasters.length) return;
+    if (!vectorHtml && !rasters.length && !deckQ.length) return;
 
-    const loading = rasters.length ? '<div class="popup-raster-loading">Reading pixel value…</div>' : '';
+    const loading = (rasters.length || deckQ.length)
+      ? '<div class="popup-raster-loading">Reading values…</div>' : '';
     popup.setLngLat(e.lngLat).setHTML(vectorHtml + loading).addTo(map);
     wireFullTableBtn(ftLayerId, ftLayerName);
 
-    if (rasters.length) {
-      const results = await Promise.all(rasters.map(l => fetchRasterPoint(l, e.lngLat)));
-      popup.setHTML(vectorHtml + rasterValuesHtml(results));
+    if (rasters.length || deckQ.length) {
+      const [deckResults, rasterResults] = await Promise.all([
+        Promise.all(deckQ.map(d => fetchDeckIdentify(d, e.lngLat, deckTol))),
+        Promise.all(rasters.map(l => fetchRasterPoint(l, e.lngLat))),
+      ]);
+      popup.setHTML(vectorHtml + deckIdentifyHtml(deckResults)
+        + (rasters.length ? rasterValuesHtml(rasterResults) : ''));
       wireFullTableBtn(ftLayerId, ftLayerName);
     }
   });
+
+  async function fetchDeckIdentify(d, lngLat, tol) {
+    try {
+      const url = location.origin + '/api/data/vector/' + d.layer_id + '/identify?lng=' +
+        encodeURIComponent(lngLat.lng) + '&lat=' + encodeURIComponent(lngLat.lat) +
+        '&tol=' + encodeURIComponent(tol) + '&limit=5';
+      const r = await fetch(url);
+      if (!r.ok) return null;
+      const j = await r.json();
+      if (!j.features || !j.features.length) return null;
+      return { layerId: d.layer_id, name: d.name || ('Layer ' + d.layer_id), feats: j.features };
+    } catch (e) { return null; }
+  }
+
+  function deckIdentifyHtml(results) {
+    return (results || []).filter(Boolean).map(r => {
+      const fields = POPUP_CONFIG[r.layerId] || POPUP_CONFIG[String(r.layerId)];
+      const props = r.feats[0] || {};
+      const keys = fields && fields.length
+        ? fields.filter(k => props[k] != null)
+        : Object.keys(props).filter(k => props[k] != null).slice(0, 8);
+      const body = keys.length
+        ? '<table class="popup-table">' + keys.map(k =>
+            '<tr><th>' + escHtml(k) + '</th><td>' + escHtml(String(props[k])) + '</td></tr>').join('') + '</table>'
+        : '<div style="padding:8px 12px;font-size:12px;color:var(--text-muted)">No attributes</div>';
+      const more = r.feats.length > 1
+        ? '<div style="padding:2px 12px 8px;font-size:11px;color:var(--text-muted)">+' +
+          (r.feats.length - 1) + ' more feature' + (r.feats.length > 2 ? 's' : '') + ' here</div>'
+        : '';
+      return '<div class="popup-header">' + escHtml(r.name) + '</div>' + body + more;
+    }).join('');
+  }
 
   function wireFullTableBtn(mapLayerId, layerName) {
     if (!mapLayerId) return;
@@ -1818,6 +1868,21 @@
       if (!hit) return;
       seen.add(key);
       items.push({ id: id, type: type, name: l.metadata['geodeploy:name'] || ('Layer ' + id) });
+    });
+    // GeoParquet layers render via the deck.gl overlay (not STYLE.layers) but export like any
+    // vector layer — the server clips the file with DuckDB. Hit-test on the layer bbox (like
+    // rasters); no bbox recorded → offer it anyway and let the clip decide.
+    DECK_LAYERS.forEach(d => {
+      const key = 'vector-' + d.layer_id;
+      if (seen.has(key)) return;
+      const st = deckState[d.layer_id];
+      if (st && !st.visible) return;
+      const bb = d.bbox;
+      const hit = !(Array.isArray(bb) && bb.length === 4) ||
+        !(bb[2] < bbox[0] || bb[0] > bbox[2] || bb[3] < bbox[1] || bb[1] > bbox[3]);
+      if (!hit) return;
+      seen.add(key);
+      items.push({ id: d.layer_id, type: 'vector', name: d.name || ('Layer ' + d.layer_id) });
     });
 
     const fmtOptions = (type) => type === 'raster'

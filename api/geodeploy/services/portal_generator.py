@@ -403,18 +403,42 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
 
     desc_html = _md_to_html(description) if description else ""
     # Design tokens borrowed from GeoLibre's dark theme (shadcn scale) — an intentional,
-    # self-contained look independent of the map template.
+    # self-contained look independent of the map template. Light/dark via html[data-theme],
+    # sharing the SAME localStorage key ('gd-portal-theme') + OS-preference default as the
+    # portal's toggle (portal.js), so the choice carries between the map and this page. The
+    # head script applies the theme BEFORE first paint (no flash).
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{_esc(title)} — About</title>
+<script>
+  (function () {{
+    try {{
+      var saved = localStorage.getItem('gd-portal-theme');
+      var dark = saved ? saved === 'dark'
+        : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      if (dark) document.documentElement.setAttribute('data-theme', 'dark');
+    }} catch (e) {{}}
+  }})();
+</script>
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
   :root {{
+    --bg: hsl(210 40% 99%); --panel: hsl(210 40% 96%); --card: hsl(0 0% 100%);
+    --border: hsl(214 32% 88%); --fg: hsl(222 47% 11%); --muted: hsl(215 16% 44%);
+    --primary: hsl(217 91% 55%); --radius: 10px;
+    --doc-fg: hsl(222 40% 20%); --abstract-fg: hsl(222 35% 26%);
+    --layer-hover: hsl(214 32% 75%);
+    --badge-fg: hsl(142 71% 30%); --badge-bg: hsl(142 71% 94%); --badge-border: hsl(142 60% 80%);
+  }}
+  html[data-theme="dark"] {{
     --bg: hsl(222 47% 7%); --panel: hsl(222 44% 9%); --card: hsl(220 40% 12%);
     --border: hsl(217 33% 17%); --fg: hsl(210 40% 98%); --muted: hsl(215 20% 65%);
-    --primary: hsl(217 91% 60%); --radius: 10px;
+    --primary: hsl(217 91% 60%);
+    --doc-fg: hsl(210 30% 88%); --abstract-fg: hsl(210 30% 85%);
+    --layer-hover: hsl(217 33% 28%);
+    --badge-fg: hsl(142 71% 55%); --badge-bg: hsl(142 71% 12%); --badge-border: hsl(142 71% 20%);
   }}
   body {{
     background: var(--bg); color: var(--fg); line-height: 1.7; font-size: 16px;
@@ -432,12 +456,20 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
     font-size: 14px; border-radius: 999px; transition: filter .15s;
   }}
   .open-map:hover {{ filter: brightness(1.12); }}
+  .top-actions {{ display: inline-flex; align-items: center; gap: 10px; }}
+  .theme-toggle {{
+    display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px;
+    background: var(--card); color: var(--muted); border: 1px solid var(--border);
+    border-radius: 999px; cursor: pointer; transition: border-color .15s, color .15s;
+  }}
+  .theme-toggle:hover {{ border-color: var(--primary); color: var(--fg); }}
+  .theme-toggle svg {{ width: 17px; height: 17px; }}
   .kicker {{
     font-size: 11px; font-weight: 700; letter-spacing: 2.2px; text-transform: uppercase;
     color: var(--primary); margin-bottom: 10px;
   }}
   h1 {{ font-size: 40px; font-weight: 750; letter-spacing: -.02em; margin-bottom: 26px; }}
-  .doc {{ max-width: 68ch; color: hsl(210 30% 88%); }}
+  .doc {{ max-width: 68ch; color: var(--doc-fg); }}
   .doc h2 {{ font-size: 23px; font-weight: 650; margin: 34px 0 10px; color: var(--fg); }}
   .doc h3, .doc h4 {{ font-size: 18px; font-weight: 600; margin: 24px 0 8px; color: var(--fg); }}
   .doc p {{ margin: 10px 0; }}
@@ -466,14 +498,14 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
     background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
     padding: 18px 20px; transition: border-color .15s;
   }}
-  .layer:hover {{ border-color: hsl(217 33% 28%); }}
+  .layer:hover {{ border-color: var(--layer-hover); }}
   .layer-name {{ font-weight: 650; font-size: 15px; }}
   .badge {{
     font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px;
-    color: hsl(142 71% 55%); background: hsl(142 71% 12%); border: 1px solid hsl(142 71% 20%);
+    color: var(--badge-fg); background: var(--badge-bg); border: 1px solid var(--badge-border);
     border-radius: 999px; padding: 2.5px 9px; margin-left: 8px; vertical-align: 2px;
   }}
-  .abstract {{ font-size: 13.5px; color: hsl(210 30% 85%); margin-top: 8px; }}
+  .abstract {{ font-size: 13.5px; color: var(--abstract-fg); margin-top: 8px; }}
   .meta {{ font-size: 12px; color: var(--muted); margin-top: 8px; }}
   .links {{ display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }}
   .pill {{
@@ -490,7 +522,10 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
 <div class="wrap">
   <div class="top">
     <span class="brand">GeoDeploy portal</span>
-    <a class="open-map" href="./">Open the map →</a>
+    <span class="top-actions">
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
+      <a class="open-map" href="./">Open the map →</a>
+    </span>
   </div>
   <div class="kicker">Documentation</div>
   <h1>{_esc(title)}</h1>
@@ -498,6 +533,28 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
   {'<div class="section-title">Layers &amp; data</div><div class="grid">' + ''.join(cards) + '</div>' if cards else ''}
   <p class="foot">All shared data of this server: <a href="/api/stac">STAC catalog</a></p>
 </div>
+<script>
+  (function () {{
+    var btn = document.getElementById('theme-toggle');
+    if (!btn) return;
+    var sun = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+    var moon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+    function render() {{
+      var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      btn.innerHTML = isDark ? sun : moon;
+      btn.title = isDark ? 'Switch to light mode' : 'Switch to dark mode';
+      btn.setAttribute('aria-label', btn.title);
+    }}
+    btn.addEventListener('click', function () {{
+      var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      if (isDark) document.documentElement.removeAttribute('data-theme');
+      else document.documentElement.setAttribute('data-theme', 'dark');
+      try {{ localStorage.setItem('gd-portal-theme', isDark ? 'light' : 'dark'); }} catch (e) {{}}
+      render();
+    }});
+    render();
+  }})();
+</script>
 </body>
 </html>"""
 

@@ -4,7 +4,7 @@
     <div class="card w-full max-w-md p-6 space-y-4 shadow-2xl">
       <div class="flex items-center justify-between">
         <h2 class="text-lg font-semibold">
-          {{ csvFile ? 'Import CSV as points' : (type === 'vector' ? 'Upload vector file' : 'Upload raster file') }}
+          {{ csvFile ? 'Import CSV as a layer' : (type === 'vector' ? 'Upload vector file' : 'Upload raster file') }}
         </h2>
         <button @click="$emit('close')" class="text-muted-foreground/70 hover:text-foreground text-xl leading-none">&times;</button>
       </div>
@@ -39,16 +39,31 @@
             </select>
           </div>
         </div>
+        <div>
+          <label class="text-xs text-muted-foreground block mb-1">Geometry</label>
+          <select v-model="csvGeomMode" class="input w-full text-sm">
+            <option value="xy">Points from X / Y columns</option>
+            <option value="wkt">WKT geometry column (points, lines or polygons)</option>
+          </select>
+        </div>
         <div class="flex gap-2">
-          <div class="flex-1 min-w-0">
-            <label class="text-xs text-muted-foreground block mb-1">X / longitude</label>
-            <select v-model="csvX" class="input w-full text-sm">
-              <option v-for="c in csvColumns" :key="c" :value="c">{{ c }}</option>
-            </select>
-          </div>
-          <div class="flex-1 min-w-0">
-            <label class="text-xs text-muted-foreground block mb-1">Y / latitude</label>
-            <select v-model="csvY" class="input w-full text-sm">
+          <template v-if="csvGeomMode === 'xy'">
+            <div class="flex-1 min-w-0">
+              <label class="text-xs text-muted-foreground block mb-1">X / longitude</label>
+              <select v-model="csvX" class="input w-full text-sm">
+                <option v-for="c in csvColumns" :key="c" :value="c">{{ c }}</option>
+              </select>
+            </div>
+            <div class="flex-1 min-w-0">
+              <label class="text-xs text-muted-foreground block mb-1">Y / latitude</label>
+              <select v-model="csvY" class="input w-full text-sm">
+                <option v-for="c in csvColumns" :key="c" :value="c">{{ c }}</option>
+              </select>
+            </div>
+          </template>
+          <div v-else class="flex-1 min-w-0">
+            <label class="text-xs text-muted-foreground block mb-1">WKT column</label>
+            <select v-model="csvWkt" class="input w-full text-sm">
               <option v-for="c in csvColumns" :key="c" :value="c">{{ c }}</option>
             </select>
           </div>
@@ -60,7 +75,7 @@
         <p v-if="!csvColumns.length" class="text-xs text-amber-400">Couldn't read columns from the header — check the file.</p>
         <div class="flex justify-end gap-2 pt-1">
           <button @click="resetCsv" class="btn-secondary text-sm">Back</button>
-          <button @click="importCsv" :disabled="!csvX || !csvY || !csvColumns.length" class="btn-primary text-sm">Import points</button>
+          <button @click="importCsv" :disabled="!csvReady" class="btn-primary text-sm">Import layer</button>
         </div>
       </div>
 
@@ -82,7 +97,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { UploadIcon } from '@/views/icons'
 import { useUpload } from '@/composables/useUpload'
 import { useDataStore } from '@/stores/data'
@@ -99,15 +114,19 @@ const dataStore = useDataStore()
 // CSV import state (vector only)
 const csvFile = ref(null)
 const csvColumns = ref([])
+const csvGeomMode = ref('xy')  // 'xy' (points) | 'wkt' (any geometry, e.g. polygon footprints)
 const csvX = ref('')
 const csvY = ref('')
+const csvWkt = ref('')
 const csvSrid = ref(4326)
 const csvName = ref('')
 const csvDelim = ref('comma')
 const DELIM_CHAR = { comma: ',', semicolon: ';', tab: '\t', pipe: '|' }
+const csvReady = computed(() => csvColumns.value.length &&
+  (csvGeomMode.value === 'wkt' ? !!csvWkt.value : (!!csvX.value && !!csvY.value)))
 
 const acceptMap = {
-  vector: { accept: 'Shapefile (.zip), GeoJSON, GeoPackage (.gpkg), GeoParquet (.parquet), CSV (X/Y points)', acceptAttr: '.zip,.geojson,.json,.gpkg,.parquet,.geoparquet,.csv' },
+  vector: { accept: 'Shapefile (.zip), GeoJSON, GeoPackage (.gpkg), GeoParquet (.parquet), CSV (X/Y points or WKT geometry)', acceptAttr: '.zip,.geojson,.json,.gpkg,.parquet,.geoparquet,.csv' },
   raster: { accept: 'GeoTIFF (.tif / .tiff)', acceptAttr: '.tif,.tiff' },
 }
 const MAX_GEOPARQUET = 10 * 1024 * 1024 * 1024  // 10 GB
@@ -127,6 +146,10 @@ function parseCsvHeader(file) {
     csvColumns.value = cols
     csvX.value = cols.find(c => /^(x|lon|long|longitude|easting|e)$/i.test(c)) || cols[0] || ''
     csvY.value = cols.find(c => /^(y|lat|latitude|northing|n)$/i.test(c)) || cols[1] || cols[0] || ''
+    // A column that looks like WKT (e.g. Google Open Buildings' `geometry`) → preselect WKT mode.
+    const wktGuess = cols.find(c => /^(wkt|geometry|geom|the_geom|wkt_geometry)$/i.test(c))
+    csvWkt.value = wktGuess || cols[0] || ''
+    if (wktGuess) csvGeomMode.value = 'wkt'
   }
   reader.readAsText(file.slice(0, 65536))
 }
@@ -161,14 +184,17 @@ async function handleFile(file) {
 }
 
 async function importCsv() {
-  if (!csvX.value || !csvY.value) return
+  if (!csvReady.value) return
   fileName.value = csvFile.value.name
   uploading.value = true
   uploadProgress.value = 0
   error.value = null
   try {
+    const geom = csvGeomMode.value === 'wkt'
+      ? { wkt_column: csvWkt.value }
+      : { x_column: csvX.value, y_column: csvY.value }
     const { data: job } = await uploadCsvFile(csvFile.value, {
-      x_column: csvX.value, y_column: csvY.value,
+      ...geom,
       srid: Number(csvSrid.value) || 4326, name: csvName.value, delimiter: csvDelim.value,
     }, (p) => (uploadProgress.value = p))
     dataStore.vectorLayers.unshift({ id: job.layer_id, name: csvName.value || csvFile.value.name, status: 'processing', _job: job })

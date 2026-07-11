@@ -11,12 +11,13 @@ total-order Z-order sort, which hung for hours on millions of large polygons.
 import json
 import logging
 import os
+import uuid
 from datetime import datetime, timezone
 
 from ..celery_app import celery_app
 from ..config import get_settings
 from .raster_ingest import _get_storage_creds
-from .vector_ingest import _update_job, _update_layer
+from .vector_ingest import _get_layer_user, _update_job, _update_layer
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +77,17 @@ def prepare_geoparquet(self, layer_id, s3_key, job_id=None):
         # RAM, PREP_BBOX_CHUNK caps shapely geometries per UDF slice, PREP_MAX_TEMP_DIR bounds the
         # spill, PREP_PARTITION_GRID sets the grid resolution (gridxgrid cells; more = tighter
         # pruning but more files).
+        # An ATTACHED source (import-existing → key outside GeoDeploy's own vectors/ area) must
+        # never be overwritten or deleted: write the prepped copy under vectors/ instead (the
+        # everything-GeoDeploy-creates-lives-in-vectors/ invariant, which is also what the
+        # delete-detach heuristic relies on).
+        attached = not s3_key.startswith("vectors/")
+        out_prefix = None
+        if attached:
+            uid = _get_layer_user(db_path, layer_id) or 0
+            out_prefix = f"vectors/{uid}/{uuid.uuid4().hex}/parts-{uuid.uuid4().hex[:8]}"
         result = duckdb_engine.partition_with_covering(
-            s3_key, creds,
+            s3_key, creds, out_prefix=out_prefix,
             memory_limit=os.getenv("PREP_MEMORY_LIMIT", "4GB"),
             bbox_chunk=int(os.getenv("PREP_BBOX_CHUNK", "50000")),
             max_temp_dir_size=os.getenv("PREP_MAX_TEMP_DIR", "100GiB"),
@@ -112,8 +122,10 @@ def prepare_geoparquet(self, layer_id, s3_key, job_id=None):
             logger.warning("prepare_geoparquet: layer %s — manifest write failed "
                            "(portal.js will use the server fallback)", layer_id, exc_info=True)
 
-        # Delete the original upload now that the layer points at the new partitioned prefix.
-        if new_key != s3_key:
+        # Delete the original now that the layer points at the new partitioned prefix — but ONLY
+        # if it was GeoDeploy's own upload (vectors/). An attached import-existing source belongs
+        # to the user's bucket area and stays untouched.
+        if new_key != s3_key and s3_key.startswith("vectors/"):
             try:
                 _delete_s3_location(creds, s3_key)
             except Exception:

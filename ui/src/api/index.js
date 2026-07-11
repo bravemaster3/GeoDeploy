@@ -46,8 +46,12 @@ export const uploadVectorFile = (file, onProgress) => {
 export const uploadCsvFile = (file, params, onProgress) => {
   const form = new FormData()
   form.append('file', file)
-  form.append('x_column', params.x_column)
-  form.append('y_column', params.y_column)
+  // Geometry source: X/Y point columns OR a WKT geometry column (any geometry type).
+  if (params.wkt_column) form.append('wkt_column', params.wkt_column)
+  else {
+    form.append('x_column', params.x_column)
+    form.append('y_column', params.y_column)
+  }
   form.append('srid', params.srid ?? 4326)
   form.append('delimiter', params.delimiter ?? 'comma')
   if (params.name) form.append('name', params.name)
@@ -70,6 +74,10 @@ export const getVectorJobStatus = (jobId) => api.get(`/data/vector/jobs/${jobId}
 // Viewport query for a GeoParquet (file-backed) layer → GeoJSON in EPSG:4326 (rendered by deck.gl).
 export const getVectorFeatures = (id, bbox, limit = 50000) =>
   api.get(`/data/vector/${id}/features`, { params: { bbox, limit } })
+// Identify-on-click for a GeoParquet layer: attributes of the features under a point
+// (tol = half-width of the click box in degrees).
+export const identifyVectorFeatures = (id, lng, lat, tol, limit = 5) =>
+  api.get(`/data/vector/${id}/identify`, { params: { lng, lat, tol, limit } })
 export const saveVectorDefaultStyle = (id, style) => api.put(`/data/vector/${id}/default-style`, style)
 // Data sharing: opt a layer into the public STAC catalog (/api/stac) + set catalog metadata
 export const setVectorSharing = (id, data) => api.put(`/data/vector/${id}/sharing`, data)

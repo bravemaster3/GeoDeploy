@@ -251,7 +251,11 @@ async def start_export_bundle(slug: str, req: ExportBundleRequest, db: AsyncSess
         if it.layer_type == "vector":
             layer = (await db.execute(select(VectorLayer).where(
                 VectorLayer.id == it.layer_id, VectorLayer.status == "ready"))).scalar_one_or_none()
-            if layer:
+            if layer and layer.storage_backend == "geoparquet" and layer.s3_key:
+                # File-backed layer: the clip runs on the GeoParquet via DuckDB, not PostGIS.
+                resolved.append({"type": "geoparquet", "s3_key": layer.s3_key,
+                                 "name": layer.name, "format": it.format})
+            elif layer:
                 resolved.append({"type": "vector", "schema": layer.schema_name,
                                  "table": layer.table_name, "name": layer.name, "format": it.format})
         else:

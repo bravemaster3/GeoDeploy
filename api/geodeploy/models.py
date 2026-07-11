@@ -66,6 +66,11 @@ class VectorLayer(Base):
     file_size: Mapped[int | None] = mapped_column(Integer)
     storage_backend: Mapped[str] = mapped_column(String(16), default="postgis")  # postgis | geoparquet
     s3_key: Mapped[str | None] = mapped_column(String(512))
+    # For a GeoParquet layer ATTACHED via import-existing: the ORIGINAL object key it was imported
+    # from. The spatial prep repoints s3_key at a prepped copy under vectors/, so this is what lets
+    # discover/storage keep flagging the source file as already imported (and it is never deleted —
+    # attach, don't copy/destroy).
+    source_s3_key: Mapped[str | None] = mapped_column(String(512))
     # GeoParquet display path: a PMTiles archive tiled from the file (key on storage). tile_status:
     # NULL/none (n/a or not started) | tiling | ready | error. Until ready, the layer isn't displayable.
     pmtiles_key: Mapped[str | None] = mapped_column(String(512))

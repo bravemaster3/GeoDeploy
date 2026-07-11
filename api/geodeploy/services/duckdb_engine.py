@@ -419,6 +419,82 @@ def query_features_geojson(s3_key: str, bbox=None, limit: int = 50_000, creds: d
         conn.close()
 
 
+def query_features_at_point(s3_key: str, lng: float, lat: float, tol: float = 1e-4,
+                            limit: int = 10, creds: dict | None = None,
+                            bucket: str | None = None) -> list[dict]:
+    """Identify-on-click for a GeoParquet layer: attribute dicts of the features intersecting a
+    small box (`tol` degrees half-width) around the clicked EPSG:4326 point. This is what gives
+    deck.gl-rendered layers popups — the viewport transports ship geometry only (GeoArrow) or are
+    capped, so attributes are fetched on demand per click instead of riding every pan.
+
+    Same covering-column + partition pruning as the viewport queries (the tiny bbox makes this
+    cheap on a prepped layer), then an exact shapely intersects test in the file's CRS. On an
+    unprepped file (no covering) only the first candidates are scanned — best-effort."""
+    settings = get_settings()
+    bkt = bucket or settings.storage_bucket
+    meta_path, src = _parquet_paths(f"s3://{bkt}/{s3_key}")
+    limit = max(1, min(int(limit), 50))
+    bbox = [lng - tol, lat - tol, lng + tol, lat + tol]
+
+    conn = _connect_read(creds)
+    try:
+        meta = _read_geo_metadata(conn, meta_path)
+        all_cols = [r[0] for r in conn.execute(
+            f"DESCRIBE SELECT * FROM {src}").fetchall()]
+        geom_col = meta["column"] or next(
+            (c for c in all_cols if c.lower() in ("geometry", "geom", "wkb_geometry", "wkb")), None)
+        if not geom_col:
+            raise ValueError("No geometry column found.")
+        src_epsg = meta["epsg"] or "EPSG:4326"
+        cov_col = meta["covering"][0] if meta.get("covering") else None
+        prop_cols = [c for c in all_cols if c != geom_col and c != cov_col]
+
+        qb = _reproject_bbox(bbox, "EPSG:4326", src_epsg)
+        where_parts = []
+        if meta["covering"]:
+            col, fields = meta["covering"]
+            def ce(f):
+                return f"struct_extract({_q(col)}, '{fields[f]}')"
+            where_parts.append(f"{ce('xmin')} <= {qb[2]} AND {ce('xmax')} >= {qb[0]} "
+                               f"AND {ce('ymin')} <= {qb[3]} AND {ce('ymax')} >= {qb[1]}")
+        read_src = src
+        gm = meta.get("grid")
+        if gm and meta["covering"]:
+            gsz = int(gm["grid"]); pad = 1
+            def _ci(v, lo, span):
+                return int((v - lo) / (span or 1.0) * gsz)
+            ix0 = max(0, _ci(qb[0], gm["minx"], gm["spanx"]) - pad)
+            ix1 = min(gsz - 1, _ci(qb[2], gm["minx"], gm["spanx"]) + pad)
+            iy0 = max(0, _ci(qb[1], gm["miny"], gm["spany"]) - pad)
+            iy1 = min(gsz - 1, _ci(qb[3], gm["miny"], gm["spany"]) + pad)
+            if ix0 <= ix1 and iy0 <= iy1:
+                cells = [ix * gsz + iy for ix in range(ix0, ix1 + 1) for iy in range(iy0, iy1 + 1)]
+                if len(cells) < gsz * gsz:
+                    read_src = f"read_parquet('{meta_path}', hive_partitioning=true)"
+                    where_parts.append(f"__cell IN ({','.join(str(c) for c in cells)})")
+        where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+        sel = ", ".join([f"{_q(geom_col)} AS __wkb"] + [_q(c) for c in prop_cols])
+        rows = conn.execute(f"SELECT {sel} FROM {read_src} {where} LIMIT 512").fetchall()
+        if not rows:
+            return []
+
+        from shapely import box as shp_box, from_wkb, intersects
+        test = shp_box(qb[0], qb[1], qb[2], qb[3])
+        geoms = from_wkb([bytes(r[0]) if r[0] is not None else None for r in rows],
+                         on_invalid="ignore")
+        out = []
+        for i, hit in enumerate(intersects(geoms, test)):
+            if not hit:
+                continue
+            r = rows[i]
+            out.append({prop_cols[j]: _jsonable(r[j + 1]) for j in range(len(prop_cols))})
+            if len(out) >= limit:
+                break
+        return out
+    finally:
+        conn.close()
+
+
 # shapely.GeometryType → GeoArrow extension name (geometry collections unsupported → caller
 # falls back to the GeoJSON transport).
 _GEOARROW_EXT = {0: "geoarrow.point", 1: "geoarrow.linestring", 3: "geoarrow.polygon",
