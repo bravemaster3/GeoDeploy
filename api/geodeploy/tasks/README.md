@@ -98,8 +98,9 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   is gated on `s3_key.startswith("vectors/")`). The layer's original key survives in
   `vector_layers.source_s3_key` so discover/storage keeps flagging it as imported.
 - `pmtiles_tile.py` — `tile_geoparquet(layer_id, s3_key, pmtiles_key)`: the GeoParquet **display** path.
-  Runs **tippecanoe** (built into the image, `-l geodeploy`, **`-z12` capped max zoom**, `--simplification 10`,
-  `--drop-densest-as-needed`). **Two feeds (2026-07-11):** the FAST primary converts GeoParquet → **FlatGeobuf**
+  Runs **tippecanoe** (built into the image, `-l geodeploy`, **adaptive max zoom** — `_resolve_maxzoom`
+  picks z10/z11/z12/z13 by feature count (≥10M→z10 … <500k→z13) so heavy layers tile fast with no
+  tuning; `PMTILES_MAXZOOM` env overrides — `--simplification 10`, `--drop-densest-as-needed`). **Two feeds (2026-07-11):** the FAST primary converts GeoParquet → **FlatGeobuf**
   natively via `duckdb_engine.export_geoparquet_to_fgb` (baked `spatial`; no shapely funnel) and tippecanoe reads
   the binary `.fgb` file with `-P`; on any FGB error it FALLS BACK to streaming `stream_geojsonseq` (shapely →
   GeoJSONSeq → `/dev/stdin`). Both are **memory-bounded** (env `PMTILES_TILE_MEMORY_LIMIT` default 1 GB, `PMTILES_TILE_THREADS` 2)

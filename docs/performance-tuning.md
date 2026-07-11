@@ -38,7 +38,7 @@ docker compose up -d --force-recreate geodeploy-api celery
 |---|---|---|
 | `PMTILES_TILE_MEMORY_LIMIT` | `1GB` | Caps the memory the tiler's DuckDB step may use (it spills to disk beyond this). Lower to `512MB` on a very small VPS; the tiler stays within budget instead of being OOM-killed. Does **not** slow a normal run — the step streams and rarely reaches the cap. |
 | `PMTILES_TILE_THREADS` | `2` | Threads for the DuckDB geometry-conversion step only. tippecanoe (the main tiling pass) always uses all cores regardless. |
-| `PMTILES_MAXZOOM` | `12` | Maximum zoom baked into the tiles. **The biggest lever on tiling time and output size.** MapLibre overzooms past this, so the map still shows detail beyond it. Drop to `11` for very dense layers to tile ~4× faster. |
+| `PMTILES_MAXZOOM` | *adaptive* | Maximum zoom baked into the tiles — **the biggest lever on tiling time and output size.** By default it's chosen **automatically from the layer's feature count** (≥10M → z10, ≥2M → z11, ≥500k → z12, else z13), so heavy layers tile fast with no tuning. MapLibre overzooms past the cap, so the map still shows detail beyond it. Set this to force a fixed zoom for the whole deployment. |
 | `PMTILES_SIMPLIFICATION` | `10` | Geometry simplification factor below the max zoom (higher = more aggressive). Cuts per-tile vertex work on dense data. Set to `0` to disable. |
 | `PMTILES_DENSEST` | `drop` | How over-budget tiles shed features: `drop` (discard the densest — fast) or `coalesce` (merge them, preserving polygon area coverage at low zoom, but much slower). |
 | `PMTILES_INPUT` | `fgb` | Tiling feed: `fgb` (fast native FlatGeobuf conversion) with automatic fallback to `geojsonseq` (slower, but works even without the `spatial` extension). Set to `geojsonseq` only to force the fallback for debugging. |
@@ -47,7 +47,8 @@ docker compose up -d --force-recreate geodeploy-api celery
 
 - **Tiny VPS (≤ 4 GB total RAM):** `PMTILES_TILE_MEMORY_LIMIT=512MB`. Everything else default.
 - **Default cheap VPS (~8 GB):** leave everything unset.
-- **Very dense layers that still tile slowly:** lower `PMTILES_MAXZOOM` (to 10–11) and/or raise
+- **Very dense layers that still tile slowly:** the max zoom is already lowered automatically by
+  feature count, but you can force it lower still (e.g. `PMTILES_MAXZOOM=9`) and/or raise
   `PMTILES_SIMPLIFICATION`. These trade a little top-zoom detail for a large speedup.
 
 ## Monitoring a tiling run

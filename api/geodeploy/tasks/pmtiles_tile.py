@@ -32,11 +32,12 @@ logger = logging.getLogger(__name__)
 
 # tippecanoe layer name → the MVT "source-layer" the MapLibre style references.
 PMTILES_LAYER = "geodeploy"
-# Cap the max zoom (instead of `-zg`, which picks a high zoom for dense data → an explosion of
-# tiles and very long tiling). `-zg` exploded; z14 was still ~2h on a 9.5M-polygon file. z12 is
-# ~16x fewer bottom-level tiles and is visually identical at portal zooms — MapLibre overzooms past
-# the cap. The single biggest lever on tiling time + output size. Env-tunable to retune per run.
-PMTILES_MAXZOOM = int(os.getenv("PMTILES_MAXZOOM", "12"))
+# Max zoom baked into the tiles — the single biggest lever on tiling time + output size (`-zg`, which
+# guesses, exploded to z14+ ≈ 2h on 9.5M polygons). MapLibre overzooms past the cap, so the map still
+# shows detail beyond it. Chosen ADAPTIVELY by feature count (see `_resolve_maxzoom`) so a one-line
+# install needs no tuning: heavy layers get a lower zoom (far fewer tiles = fast), light layers a
+# higher one. Setting `PMTILES_MAXZOOM` in .env overrides the adaptive choice for the whole deployment.
+PMTILES_MAXZOOM_OVERRIDE = os.getenv("PMTILES_MAXZOOM")
 # Extra geometry simplification below the max zoom (tippecanoe's tile-space factor; higher = more
 # aggressive). Cuts per-tile vertex work on dense data. Set to 0/"" to drop the flag.
 PMTILES_SIMPLIFICATION = os.getenv("PMTILES_SIMPLIFICATION", "10")
@@ -53,15 +54,47 @@ PMTILES_TILE_THREADS = int(os.getenv("PMTILES_TILE_THREADS", "2"))
 PMTILES_INPUT = os.getenv("PMTILES_INPUT", "fgb").strip().lower()
 
 
+def _resolve_maxzoom(feature_count: int) -> int:
+    """Pick tippecanoe's max zoom from the layer's feature count so a one-line install tiles heavy
+    layers fast without any tuning. An explicit `PMTILES_MAXZOOM` env var overrides this. The tiers
+    trade a little top-zoom detail (MapLibre overzooms, so the map still looks right) for a large cut
+    in tiling time and archive size on dense data (each zoom is ~4x fewer bottom-level tiles)."""
+    if PMTILES_MAXZOOM_OVERRIDE:
+        return int(PMTILES_MAXZOOM_OVERRIDE)
+    n = feature_count or 0
+    if n >= 10_000_000:
+        return 10
+    if n >= 2_000_000:
+        return 11
+    if n >= 500_000:
+        return 12
+    return 13
+
+
+def _layer_feature_count(db_path: str, layer_id) -> int:
+    """Read a layer's stored feature_count (0 if unknown) to drive {@link _resolve_maxzoom}."""
+    import sqlite3
+    try:
+        con = sqlite3.connect(db_path)
+        try:
+            row = con.execute(
+                "SELECT feature_count FROM vector_layers WHERE id=?", (layer_id,)).fetchone()
+        finally:
+            con.close()
+        return int(row[0]) if row and row[0] is not None else 0
+    except Exception:
+        return 0
+
+
 def _densest_flag() -> str:
     return "--coalesce-densest-as-needed" if PMTILES_DENSEST == "coalesce" \
         else "--drop-densest-as-needed"
 
 
-def _tippecanoe_base(out_path: str, scratch: str) -> list:
+def _tippecanoe_base(out_path: str, scratch: str, maxzoom: int) -> list:
     """The tippecanoe argv common to both feeds (output, layer, zoom, simplification, densest,
     a dedicated on-disk scratch dir)."""
-    cmd = ["tippecanoe", "-o", out_path, "-l", PMTILES_LAYER, "-z", str(PMTILES_MAXZOOM),
+    cmd = ["tippecanoe", "-o", out_path, "-l", PMTILES_LAYER, "-z", str(maxzoom),
            _densest_flag(), "--force", "-t", scratch]
     if PMTILES_SIMPLIFICATION and str(PMTILES_SIMPLIFICATION) not in ("0", ""):
         cmd += ["--simplification", str(PMTILES_SIMPLIFICATION)]
@@ -137,10 +170,12 @@ def tile_geoparquet(self, layer_id, s3_key, pmtiles_key):
     os.makedirs(tile_scratch, exist_ok=True)
     out_path = os.path.join(run_dir, "out.pmtiles")
 
+    feature_count = _layer_feature_count(db_path, layer_id)
+    maxzoom = _resolve_maxzoom(feature_count)
     _update_layer(db_path, layer_id, tile_status="tiling")
     started = time.monotonic()
-    logger.info("tile_geoparquet: layer %s — tiling %s → z%s (PMTiles, input=%s, mem=%s)",
-                layer_id, s3_key, PMTILES_MAXZOOM, PMTILES_INPUT, PMTILES_TILE_MEMORY_LIMIT)
+    logger.info("tile_geoparquet: layer %s — tiling %s → z%s (PMTiles, input=%s, mem=%s, features=%s)",
+                layer_id, s3_key, maxzoom, PMTILES_INPUT, PMTILES_TILE_MEMORY_LIMIT, f"{feature_count:,}")
     try:
         used = None
         if PMTILES_INPUT != "geojsonseq":
@@ -153,7 +188,7 @@ def tile_geoparquet(self, layer_id, s3_key, pmtiles_key):
                 # No `-P`: tippecanoe's parallel read is line-delimited-GeoJSON only, not FlatGeobuf
                 # (passing it with a .fgb can error → silent fallback). The FGB win is binary parse +
                 # no shapely, not parallel input.
-                cmd = _tippecanoe_base(out_path, tile_scratch) + [fgb_path]
+                cmd = _tippecanoe_base(out_path, tile_scratch, maxzoom) + [fgb_path]
                 _run_tippecanoe(cmd)
                 used = "fgb"
             except Exception as exc:  # noqa: BLE001
@@ -167,7 +202,7 @@ def tile_geoparquet(self, layer_id, s3_key, pmtiles_key):
 
         if used is None:
             # FALLBACK path: shapely stream → tippecanoe stdin (memory-bounded).
-            cmd = _tippecanoe_base(out_path, tile_scratch) + ["/dev/stdin"]
+            cmd = _tippecanoe_base(out_path, tile_scratch, maxzoom) + ["/dev/stdin"]
 
             def _feed(stdin):
                 duckdb_engine.stream_geojsonseq(
