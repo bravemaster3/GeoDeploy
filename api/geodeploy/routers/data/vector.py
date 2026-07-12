@@ -542,27 +542,47 @@ async def reprocess_layer(
                      status="queued", progress=0, current_step="Queued", error_message=None)
 
 
+# layer_id → pmtiles object key. Cached because MapLibre's pmtiles protocol issues MANY small Range
+# requests per map pan, and an ORM SELECT per request added a DB round-trip to every tile fetch
+# (the same problem the parquet range proxy caches for). The key is deterministic and stable across
+# re-tiles (overwritten in place); a re-PREP mints a new key, so a stale entry self-heals on the S3
+# miss below (fetch fails → drop entry → re-read from the DB next request).
+_PMTILES_KEY_CACHE: dict[int, str] = {}
+
+
+async def _pmtiles_key(layer_id: int, db: AsyncSession) -> str | None:
+    cached = _PMTILES_KEY_CACHE.get(layer_id)
+    if cached is not None:
+        return cached
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    layer = result.scalar_one_or_none()
+    if not layer or layer.storage_backend != "geoparquet" or not layer.pmtiles_key:
+        return None
+    _PMTILES_KEY_CACHE[layer_id] = layer.pmtiles_key
+    return layer.pmtiles_key
+
+
 @router.get("/{layer_id}/pmtiles")
 async def vector_pmtiles(layer_id: int, request: Request, db: AsyncSession = Depends(get_db)):
     """PUBLIC range proxy for a GeoParquet layer's PMTiles archive — MapLibre's pmtiles protocol
     streams the tiles via HTTP Range requests. Public like Martin vector tiles (`/tiles/`), since
     published portals are unauthenticated; same-origin so no CORS, and the bucket creds stay
     server-side. The DB row is the only thing the caller can address (by id), not arbitrary keys."""
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
-    layer = result.scalar_one_or_none()
-    if not layer or layer.storage_backend != "geoparquet" or not layer.pmtiles_key:
+    key = await _pmtiles_key(layer_id, db)
+    if not key:
         raise HTTPException(404, "No tiles for this layer.")
 
     settings = get_settings()
     from ...services.minio import get_s3_client
     s3 = get_s3_client()
-    params = {"Bucket": settings.storage_bucket, "Key": layer.pmtiles_key}
+    params = {"Bucket": settings.storage_bucket, "Key": key}
     rng = request.headers.get("range")
     if rng:
         params["Range"] = rng
     try:
         obj = await run_in_threadpool(lambda: s3.get_object(**params))
     except Exception:
+        _PMTILES_KEY_CACHE.pop(layer_id, None)  # stale key (e.g. a re-prep) — re-read next request
         raise HTTPException(404, "Tiles not found.")
 
     headers = {"Accept-Ranges": "bytes", "Cache-Control": "public, max-age=3600"}
