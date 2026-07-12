@@ -783,6 +783,90 @@ def export_geoparquet_to_fgb(s3_key: str, out_path: str, creds: dict | None = No
         shutil.rmtree(spill_dir, ignore_errors=True)
 
 
+def stream_tiling_geojsonseq(s3_key: str, out, creds: dict | None = None, bucket: str | None = None,
+                             batch_size: int = 20_000, log_every: int = 200_000,
+                             simplify_tol: float | None = None, memory_limit: str = "1GB",
+                             threads: int | None = None) -> int:
+    """The PRIMARY PMTiles tiling feed: DuckDB (baked `spatial`) converts geometry to GeoJSON — and
+    OPTIONALLY simplifies it — natively, streamed as newline-delimited GeoJSON to `out` (tippecanoe's
+    stdin). Streaming means the feed OVERLAPS tiling (unlike writing a whole FlatGeobuf first), and
+    native conversion drops the per-feature shapely/pyproj funnel.
+
+    DISPLAY-ONLY simplification: `simplify_tol` (a degree tolerance in EPSG:4326) is applied here, to
+    the tiles feed ONLY. The source GeoParquet is read untouched — downloads/clip/identify still get
+    full-resolution geometry. Pass None to disable. Memory-bounded (spills to disk), so it scales to
+    any feature count on a small VPS. Returns the feature count. Raises if `spatial` can't load, so
+    the caller can fall back to the shapely {@link stream_geojsonseq}.
+    """
+    settings = get_settings()
+    bkt = bucket or settings.storage_bucket
+    meta_path, src = _parquet_paths(f"s3://{bkt}/{s3_key}")
+    conn = _connect_read(creds)
+    spill_dir = os.path.join(settings.data_dir, "temp", f"duckdb-{uuid4().hex}")
+    try:
+        _load_extension(conn, "spatial")  # raises offline if not baked → caller falls back
+        os.makedirs(spill_dir, exist_ok=True)
+        conn.execute(f"SET temp_directory='{spill_dir}'")
+        conn.execute(f"SET memory_limit='{memory_limit}'")
+        conn.execute("SET max_temp_directory_size='200GiB'")
+        if threads:
+            conn.execute(f"SET threads={int(threads)}")
+
+        meta = _read_geo_metadata(conn, meta_path)
+        desc = conn.execute(f"DESCRIBE SELECT * FROM {src}").fetchall()
+        all_cols = [r[0] for r in desc]
+        col_types = {r[0]: (r[1] or "") for r in desc}
+        geom_col = meta["column"] or next(
+            (c for c in all_cols if c.lower() in ("geometry", "geom", "wkb_geometry", "wkb")), None)
+        if not geom_col:
+            raise ValueError("No geometry column found.")
+        src_epsg = meta["epsg"] or "EPSG:4326"
+        cov_col = meta["covering"][0] if meta.get("covering") else None
+        prop_cols = [c for c in all_cols if c != geom_col and c != cov_col]
+
+        gq = _q(geom_col)
+        gexpr = gq if "GEOMETRY" in col_types.get(geom_col, "").upper() else f"ST_GeomFromWKB({gq})"
+        if src_epsg and src_epsg != "EPSG:4326":
+            gexpr = f"ST_Transform({gexpr}, '{src_epsg}', 'EPSG:4326')"
+        if simplify_tol and simplify_tol > 0:
+            gexpr = f"ST_Simplify({gexpr}, {float(simplify_tol)})"
+        sel = ", ".join([f"ST_AsGeoJSON({gexpr}) AS __gj"] + [_q(c) for c in prop_cols])
+
+        rel = conn.execute(f"SELECT {sel} FROM {src}")
+        count = 0
+        start = time.monotonic()
+        next_log = log_every
+        logger.info("stream_tiling_geojsonseq: streaming %s (geom=%s, src=%s, simplify_tol=%s)",
+                    s3_key, geom_col, src_epsg, simplify_tol)
+        while True:
+            batch = rel.fetchmany(batch_size)
+            if not batch:
+                break
+            parts = []
+            for r in batch:
+                gj = r[0]
+                if not gj:  # NULL/empty geometry (or fully simplified away) — GeoJSON has no feature
+                    continue
+                props = {prop_cols[j]: _jsonable(r[j + 1]) for j in range(len(prop_cols))}
+                parts.append(b'{"type":"Feature","geometry":' + gj.encode()
+                             + b',"properties":' + json.dumps(props, default=str).encode() + b"}\n")
+                count += 1
+            if parts:
+                out.write(b"".join(parts))
+            if log_every and count >= next_log:
+                el = time.monotonic() - start
+                logger.info("stream_tiling_geojsonseq: %s features in %.0fs (%.0f feat/s)",
+                            f"{count:,}", el, count / el if el else 0)
+                next_log += log_every
+        el = time.monotonic() - start
+        logger.info("stream_tiling_geojsonseq: DONE — %s features in %.0fs (%.0f feat/s)",
+                    f"{count:,}", el, count / el if el else 0)
+        return count
+    finally:
+        conn.close()
+        shutil.rmtree(spill_dir, ignore_errors=True)
+
+
 # --- GeoParquet preparation: spatial PARTITIONING + bbox covering column ----------------------
 # Rewrites a GeoParquet so spatial reads are fast WITHOUT a total-order sort (which was impractical
 # on millions of large polygons — out-of-core sorting GBs of geometry payload hung for hours). Two

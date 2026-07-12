@@ -5,14 +5,19 @@ which the browser then streams via HTTP range requests (no per-pan server work).
 (analysis/download) keeps reading the original .parquet — the .pmtiles is display-only.
 
 Two feeds into tippecanoe, primary + fallback:
-  1. FAST (default): DuckDB converts GeoParquet → FlatGeobuf natively (baked `spatial` extension),
-     tippecanoe reads the binary .fgb file. No per-feature shapely/pyproj funnel (the old bottleneck).
-  2. FALLBACK: stream GeoParquet → GeoJSONSeq into tippecanoe's stdin via shapely. Used if the FGB
-     export fails (e.g. `spatial` unavailable, or an unwritable attribute type).
+  1. PRIMARY (default): a native concurrent stream — DuckDB (baked `spatial`) converts geometry to
+     GeoJSON and applies DISPLAY-ONLY simplification, streamed to tippecanoe's stdin so the feed
+     OVERLAPS the tiling pass. No serialized intermediate, no per-feature shapely. Simplification
+     removes sub-tile-pixel vertices (cuts tippecanoe's dominant cost ~50–75% on dense polygons) and
+     touches ONLY the tiles — the source .parquet (downloads/clip/identify) stays full-resolution.
+  2. FALLBACK: stream GeoParquet → GeoJSONSeq via shapely (no simplify), used only if `spatial` is
+     unavailable.
 
 Both feeds cap DuckDB memory and spill to disk, so tiling a huge layer runs in bounded RAM on a
-small VPS. All scratch (the .fgb, DuckDB spills, tippecanoe's temp) lives under a per-run dir that
-is removed in `finally`, so a killed run cannot leak GBs into data/temp.
+small VPS. All scratch (DuckDB spills, tippecanoe's temp, the output .pmtiles) lives under a per-run
+dir removed in `finally`, so a killed run cannot leak GBs into data/temp. An earlier FlatGeobuf feed
+was dropped: writing the whole .fgb before tiling serialized the feed (lost the overlap) and was a
+net loss on heavy geometry.
 """
 import logging
 import os
@@ -49,9 +54,26 @@ PMTILES_DENSEST = os.getenv("PMTILES_DENSEST", "drop").strip().lower()
 # DuckDB memory cap for the tiling feed (default 80% of RAM would OOM a small VPS beside tippecanoe).
 PMTILES_TILE_MEMORY_LIMIT = os.getenv("PMTILES_TILE_MEMORY_LIMIT", "1GB")
 PMTILES_TILE_THREADS = int(os.getenv("PMTILES_TILE_THREADS", "2"))
-# Feed mode: "fgb" (native FlatGeobuf, fast) with automatic fallback to the GeoJSONSeq stream, or
-# "geojsonseq" to force the shapely stream (skip FGB entirely). Env-tunable for debugging.
-PMTILES_INPUT = os.getenv("PMTILES_INPUT", "fgb").strip().lower()
+# Feed mode: "native" (DuckDB→GeoJSON streamed concurrently to tippecanoe, with display-only
+# simplification) or "geojsonseq" to force the shapely stream (no simplify). Env-tunable for debugging.
+PMTILES_INPUT = os.getenv("PMTILES_INPUT", "native").strip().lower()
+# Display-only geometry simplification for the tiles feed — NOT the stored data. The tolerance is
+# derived from the max zoom so removed vertices are sub-tile-pixel (invisible at the tiled zoom); it
+# roughly halves the vertex count tippecanoe must process on dense polygon layers (measured 53–73%
+# smaller GeoJSON on real layers). Set PMTILES_SIMPLIFY=0 to disable; PMTILES_SIMPLIFY_FACTOR scales
+# the tolerance (higher = more aggressive). Never touches downloads/clip/identify (those read the
+# original .parquet at full resolution).
+PMTILES_SIMPLIFY = os.getenv("PMTILES_SIMPLIFY", "1").strip().lower() not in ("0", "false", "off", "")
+PMTILES_SIMPLIFY_FACTOR = float(os.getenv("PMTILES_SIMPLIFY_FACTOR", "1.0"))
+_TILE_EXTENT = 4096  # tippecanoe tile-units per edge; sizes the tolerance to ~1 unit at max zoom
+
+
+def _simplify_tol(maxzoom: int) -> float | None:
+    """A degree tolerance ~one tile-unit at `maxzoom` (sub-pixel at the tiled zoom), or None when
+    simplification is disabled. Feed-only — never applied to the stored GeoParquet."""
+    if not PMTILES_SIMPLIFY:
+        return None
+    return (360.0 / (2 ** maxzoom * _TILE_EXTENT)) * PMTILES_SIMPLIFY_FACTOR
 
 
 def _resolve_maxzoom(feature_count: int) -> int:
@@ -172,28 +194,29 @@ def tile_geoparquet(self, layer_id, s3_key, pmtiles_key):
 
     feature_count = _layer_feature_count(db_path, layer_id)
     maxzoom = _resolve_maxzoom(feature_count)
+    simplify_tol = _simplify_tol(maxzoom)
     _update_layer(db_path, layer_id, tile_status="tiling")
     started = time.monotonic()
-    logger.info("tile_geoparquet: layer %s — tiling %s → z%s (PMTiles, input=%s, mem=%s, features=%s)",
-                layer_id, s3_key, maxzoom, PMTILES_INPUT, PMTILES_TILE_MEMORY_LIMIT, f"{feature_count:,}")
+    logger.info("tile_geoparquet: layer %s — tiling %s → z%s (PMTiles, input=%s, mem=%s, features=%s, simplify_tol=%s)",
+                layer_id, s3_key, maxzoom, PMTILES_INPUT, PMTILES_TILE_MEMORY_LIMIT, f"{feature_count:,}", simplify_tol)
     try:
         used = None
         if PMTILES_INPUT != "geojsonseq":
-            # FAST path: DuckDB → FlatGeobuf, tippecanoe reads the binary file (parallel).
-            fgb_path = os.path.join(run_dir, "input.fgb")
+            # PRIMARY: native concurrent stream — DuckDB converts (and display-only simplifies)
+            # geometry to GeoJSON, streamed to tippecanoe's stdin so the feed OVERLAPS the tiling
+            # pass (no serialized intermediate file, no per-feature shapely).
             try:
-                duckdb_engine.export_geoparquet_to_fgb(
-                    s3_key, fgb_path, creds, memory_limit=PMTILES_TILE_MEMORY_LIMIT,
-                    threads=PMTILES_TILE_THREADS)
-                # No `-P`: tippecanoe's parallel read is line-delimited-GeoJSON only, not FlatGeobuf
-                # (passing it with a .fgb can error → silent fallback). The FGB win is binary parse +
-                # no shapely, not parallel input.
-                cmd = _tippecanoe_base(out_path, tile_scratch, maxzoom) + [fgb_path]
-                _run_tippecanoe(cmd)
-                used = "fgb"
+                cmd = _tippecanoe_base(out_path, tile_scratch, maxzoom) + ["/dev/stdin"]
+
+                def _feed_native(stdin):
+                    duckdb_engine.stream_tiling_geojsonseq(
+                        s3_key, stdin, creds, simplify_tol=simplify_tol,
+                        memory_limit=PMTILES_TILE_MEMORY_LIMIT, threads=PMTILES_TILE_THREADS)
+                _run_tippecanoe(cmd, feed=_feed_native)
+                used = "native"
             except Exception as exc:  # noqa: BLE001
-                logger.warning("tile_geoparquet: layer %s — FlatGeobuf path failed (%s); "
-                               "falling back to GeoJSONSeq stream", layer_id, str(exc)[:200])
+                logger.warning("tile_geoparquet: layer %s — native stream failed (%s); falling back "
+                               "to shapely GeoJSONSeq (no simplify)", layer_id, str(exc)[:200])
                 # Reset scratch/output so the fallback starts clean.
                 shutil.rmtree(tile_scratch, ignore_errors=True)
                 os.makedirs(tile_scratch, exist_ok=True)
@@ -201,14 +224,15 @@ def tile_geoparquet(self, layer_id, s3_key, pmtiles_key):
                     os.unlink(out_path)
 
         if used is None:
-            # FALLBACK path: shapely stream → tippecanoe stdin (memory-bounded).
+            # FALLBACK: shapely stream → tippecanoe stdin (no simplify; used only if `spatial` is
+            # unavailable). Also concurrent + memory-bounded.
             cmd = _tippecanoe_base(out_path, tile_scratch, maxzoom) + ["/dev/stdin"]
 
-            def _feed(stdin):
+            def _feed_shapely(stdin):
                 duckdb_engine.stream_geojsonseq(
                     s3_key, stdin, creds, memory_limit=PMTILES_TILE_MEMORY_LIMIT,
                     threads=PMTILES_TILE_THREADS)
-            _run_tippecanoe(cmd, feed=_feed)
+            _run_tippecanoe(cmd, feed=_feed_shapely)
             used = "geojsonseq"
 
         logger.info("tile_geoparquet: layer %s — tippecanoe done via %s in %.0fs; uploading .pmtiles",

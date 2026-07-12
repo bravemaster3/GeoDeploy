@@ -41,7 +41,9 @@ docker compose up -d --force-recreate geodeploy-api celery
 | `PMTILES_MAXZOOM` | *adaptive* | Maximum zoom baked into the tiles — **the biggest lever on tiling time and output size.** By default it's chosen **automatically from the layer's feature count** (≥10M → z10, ≥2M → z11, ≥500k → z12, else z13), so heavy layers tile fast with no tuning. MapLibre overzooms past the cap, so the map still shows detail beyond it. Set this to force a fixed zoom for the whole deployment. |
 | `PMTILES_SIMPLIFICATION` | `10` | Geometry simplification factor below the max zoom (higher = more aggressive). Cuts per-tile vertex work on dense data. Set to `0` to disable. |
 | `PMTILES_DENSEST` | `drop` | How over-budget tiles shed features: `drop` (discard the densest — fast) or `coalesce` (merge them, preserving polygon area coverage at low zoom, but much slower). |
-| `PMTILES_INPUT` | `fgb` | Tiling feed: `fgb` (fast native FlatGeobuf conversion) with automatic fallback to `geojsonseq` (slower, but works even without the `spatial` extension). Set to `geojsonseq` only to force the fallback for debugging. |
+| `PMTILES_SIMPLIFY` | `1` | Simplify geometry **for the display tiles only** while tiling (removes sub-pixel vertices invisible at the tiled zoom; cuts tiling time ~50–75% on dense polygons). **Never touches the stored data** — downloads/clip/identify always read the original file at full resolution. Set to `0` to disable. |
+| `PMTILES_SIMPLIFY_FACTOR` | `1.0` | Scales the simplification tolerance (higher = more aggressive/faster/coarser). Only used when `PMTILES_SIMPLIFY` is on. |
+| `PMTILES_INPUT` | `native` | Tiling feed: `native` (DuckDB streams GeoJSON to tippecanoe concurrently, with the simplification above) or `geojsonseq` (force the shapely fallback, no simplify). Debug knob; leave default. |
 
 ### Guidance by hardware
 

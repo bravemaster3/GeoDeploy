@@ -100,13 +100,18 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
 - `pmtiles_tile.py` — `tile_geoparquet(layer_id, s3_key, pmtiles_key)`: the GeoParquet **display** path.
   Runs **tippecanoe** (built into the image, `-l geodeploy`, **adaptive max zoom** — `_resolve_maxzoom`
   picks z10/z11/z12/z13 by feature count (≥10M→z10 … <500k→z13) so heavy layers tile fast with no
-  tuning; `PMTILES_MAXZOOM` env overrides — `--simplification 10`, `--drop-densest-as-needed`). **Two feeds (2026-07-11):** the FAST primary converts GeoParquet → **FlatGeobuf**
-  natively via `duckdb_engine.export_geoparquet_to_fgb` (baked `spatial`; no shapely funnel) and tippecanoe reads
-  the binary `.fgb` file with `-P`; on any FGB error it FALLS BACK to streaming `stream_geojsonseq` (shapely →
-  GeoJSONSeq → `/dev/stdin`). Both are **memory-bounded** (env `PMTILES_TILE_MEMORY_LIMIT` default 1 GB, `PMTILES_TILE_THREADS` 2)
-  so a huge layer tiles in bounded RAM on a cheap VPS instead of OOM-killing. Densest strategy is env-tunable
-  (`PMTILES_DENSEST=drop|coalesce`, default drop — coalesce's per-tile geometry union dominated the slow pass);
-  feed mode via `PMTILES_INPUT=fgb|geojsonseq`. **All scratch (`.fgb`, DuckDB spills, tippecanoe `-t`, the output
+  tuning; `PMTILES_MAXZOOM` env overrides — `--simplification 10`, `--drop-densest-as-needed`). **Two feeds (2026-07-12):** the PRIMARY is a **native concurrent stream** —
+  `duckdb_engine.stream_tiling_geojsonseq` (baked `spatial`) converts geometry to GeoJSON and applies
+  **display-only simplification**, streamed to tippecanoe's stdin so the feed **overlaps** the tiling pass; on any
+  error it FALLS BACK to `stream_geojsonseq` (shapely, no simplify). Simplification tolerance is ~1 tile-unit at
+  the max zoom (`_simplify_tol`, env `PMTILES_SIMPLIFY`/`PMTILES_SIMPLIFY_FACTOR`) — invisible at the tiled zoom,
+  cuts tippecanoe's dominant vertex cost ~50–75% on dense polygons, and touches ONLY the tiles (the source
+  `.parquet` read by downloads/clip/identify stays full-resolution). Both feeds are **memory-bounded** (env
+  `PMTILES_TILE_MEMORY_LIMIT` default 1 GB, `PMTILES_TILE_THREADS` 2) so a huge layer tiles in bounded RAM on a
+  cheap VPS instead of OOM-killing. Densest strategy is env-tunable (`PMTILES_DENSEST=drop|coalesce`, default
+  drop); feed mode via `PMTILES_INPUT=native|geojsonseq`. (An earlier FlatGeobuf feed — `export_geoparquet_to_fgb`,
+  still in `duckdb_engine` — was dropped from tiling: writing the whole `.fgb` first serialized the feed and was a
+  net loss on heavy geometry.) **All scratch (DuckDB spills, tippecanoe `-t`, the output
   `.pmtiles`) lives under a per-run dir removed in `finally`** — a killed run can no longer leak GBs into `data/temp`
   (it used to leave a ~5 GB tippecanoe scratch on every OOM). Uploads the `.pmtiles` to storage, sets
   `pmtiles_key`/`tile_status`. The browser streams the tiles via range requests (no per-pan server work).
@@ -153,4 +158,4 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
-2026-07-11 (pmtiles_tile: native FlatGeobuf primary feed + GeoJSONSeq fallback, memory-bounded (cheap-VPS-safe, scales past 20 M), per-run scratch dir removed in finally so killed runs don't leak GBs, `--drop-densest` default, env knobs)
+2026-07-12 (pmtiles_tile: native CONCURRENT stream feed with display-only simplification (~50–75% fewer vertices, source data untouched) replacing the serialized FlatGeobuf feed; memory-bounded, adaptive zoom, per-run scratch cleanup)
