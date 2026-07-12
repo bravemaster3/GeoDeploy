@@ -100,13 +100,20 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
 - `pmtiles_tile.py` — `tile_geoparquet(layer_id, s3_key, pmtiles_key)`: the GeoParquet **display** path.
   Runs **tippecanoe** (built into the image, `-l geodeploy`, **adaptive max zoom** — `_resolve_maxzoom`
   picks z10/z11/z12/z13 by feature count (≥10M→z10 … <500k→z13) so heavy layers tile fast with no
-  tuning; `PMTILES_MAXZOOM` env overrides — `--simplification 10`, `--drop-densest-as-needed`). **Two feeds (2026-07-12):** the PRIMARY is a **native concurrent stream** —
-  `duckdb_engine.stream_tiling_geojsonseq` (baked `spatial`) converts geometry to GeoJSON and applies
-  **display-only simplification**, streamed to tippecanoe's stdin so the feed **overlaps** the tiling pass; on any
-  error it FALLS BACK to `stream_geojsonseq` (shapely, no simplify). Simplification tolerance is ~1 tile-unit at
-  the max zoom (`_simplify_tol`, env `PMTILES_SIMPLIFY`/`PMTILES_SIMPLIFY_FACTOR`) — invisible at the tiled zoom,
-  cuts tippecanoe's dominant vertex cost ~50–75% on dense polygons, and touches ONLY the tiles (the source
-  `.parquet` read by downloads/clip/identify stays full-resolution). Both feeds are **memory-bounded** (env
+  tuning; `PMTILES_MAXZOOM` env overrides). **Completeness (2026-07-12): simplification is OFF by default and
+  every feature is kept to the deepest zoom** — the ~9.5 m-at-z10 simplify tolerance was cutting corners on big
+  parcels and collapsing small buildings, so both `PMTILES_SIMPLIFY` and tippecanoe `PMTILES_SIMPLIFICATION` now
+  default off. `PMTILES_KEEP_ALL_FEATURES=1` (default) adds `--extend-zooms-if-still-dropping`
+  `--no-tiny-polygon-reduction` so tippecanoe deepens only the dense tiles that were still dropping until every
+  feature fits → **nothing disappears when zoomed in, even in dense areas** (the pmtiles source reads its max zoom
+  from the archive header, so the extra levels are fetched on overzoom). Trade-off: denser layers tile slower /
+  bigger archive (disk+bandwidth, not RAM); set `PMTILES_KEEP_ALL_FEATURES=0` / `PMTILES_SIMPLIFY=1` to trade back
+  for speed. **Two feeds:** the PRIMARY is a **native concurrent stream** —
+  `duckdb_engine.stream_tiling_geojsonseq` (baked `spatial`) converts geometry to GeoJSON (optional display-only
+  simplification via `_simplify_tol`, now off), streamed to tippecanoe's stdin so the feed **overlaps** the tiling
+  pass; on any error it FALLS BACK to `stream_geojsonseq` (shapely, no simplify). Any simplification touches ONLY
+  the tiles (the source `.parquet` read by downloads/clip/identify stays full-resolution). Both feeds are
+  **memory-bounded** (env
   `PMTILES_TILE_MEMORY_LIMIT` default 1 GB, `PMTILES_TILE_THREADS` 2) so a huge layer tiles in bounded RAM on a
   cheap VPS instead of OOM-killing. Densest strategy is env-tunable (`PMTILES_DENSEST=drop|coalesce`, default
   drop); feed mode via `PMTILES_INPUT=native|geojsonseq`. (An earlier FlatGeobuf feed — `export_geoparquet_to_fgb`,
@@ -158,4 +165,4 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
-2026-07-12 (pmtiles_tile: native CONCURRENT stream feed with display-only simplification (~50–75% fewer vertices, source data untouched) replacing the serialized FlatGeobuf feed; memory-bounded, adaptive zoom, per-run scratch cleanup)
+2026-07-12 (pmtiles_tile: **completeness over compression** — simplification OFF by default + `PMTILES_KEEP_ALL_FEATURES` (`--extend-zooms-if-still-dropping` `--no-tiny-polygon-reduction`) so no features disappear when zoomed in, even dense areas; escape hatches to trade back for speed. Earlier same day: native CONCURRENT stream feed replacing serialized FlatGeobuf; memory-bounded, adaptive zoom, per-run scratch cleanup)

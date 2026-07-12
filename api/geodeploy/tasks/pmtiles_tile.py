@@ -6,10 +6,11 @@ which the browser then streams via HTTP range requests (no per-pan server work).
 
 Two feeds into tippecanoe, primary + fallback:
   1. PRIMARY (default): a native concurrent stream — DuckDB (baked `spatial`) converts geometry to
-     GeoJSON and applies DISPLAY-ONLY simplification, streamed to tippecanoe's stdin so the feed
-     OVERLAPS the tiling pass. No serialized intermediate, no per-feature shapely. Simplification
-     removes sub-tile-pixel vertices (cuts tippecanoe's dominant cost ~50–75% on dense polygons) and
-     touches ONLY the tiles — the source .parquet (downloads/clip/identify) stays full-resolution.
+     GeoJSON streamed to tippecanoe's stdin so the feed OVERLAPS the tiling pass. No serialized
+     intermediate, no per-feature shapely. An optional DISPLAY-ONLY simplification (OFF by default —
+     it cut corners on big polygons and dropped small ones; re-enable with PMTILES_SIMPLIFY=1) can
+     remove sub-tile-pixel vertices to speed tiling; even then it touches ONLY the tiles — the source
+     .parquet (downloads/clip/identify) always stays full-resolution.
   2. FALLBACK: stream GeoParquet → GeoJSONSeq via shapely (no simplify), used only if `spatial` is
      unavailable.
 
@@ -44,8 +45,9 @@ PMTILES_LAYER = "geodeploy"
 # higher one. Setting `PMTILES_MAXZOOM` in .env overrides the adaptive choice for the whole deployment.
 PMTILES_MAXZOOM_OVERRIDE = os.getenv("PMTILES_MAXZOOM")
 # Extra geometry simplification below the max zoom (tippecanoe's tile-space factor; higher = more
-# aggressive). Cuts per-tile vertex work on dense data. Set to 0/"" to drop the flag.
-PMTILES_SIMPLIFICATION = os.getenv("PMTILES_SIMPLIFICATION", "10")
+# aggressive). OFF by default ("0"): the aggressive factor cut corners on big polygons (visibly
+# ugly). Leaving it unset lets tippecanoe keep faithful geometry. Set a value to re-enable.
+PMTILES_SIMPLIFICATION = os.getenv("PMTILES_SIMPLIFICATION", "0")
 # How tippecanoe sheds features from over-budget tiles: "drop" (--drop-densest-as-needed, the
 # default — cheap, just discards the densest) or "coalesce" (--coalesce-densest-as-needed — MERGES
 # them, preserving polygon area coverage at low zoom but far more expensive per tile). Drop is the
@@ -57,14 +59,23 @@ PMTILES_TILE_THREADS = int(os.getenv("PMTILES_TILE_THREADS", "2"))
 # Feed mode: "native" (DuckDB→GeoJSON streamed concurrently to tippecanoe, with display-only
 # simplification) or "geojsonseq" to force the shapely stream (no simplify). Env-tunable for debugging.
 PMTILES_INPUT = os.getenv("PMTILES_INPUT", "native").strip().lower()
-# Display-only geometry simplification for the tiles feed — NOT the stored data. The tolerance is
-# derived from the max zoom so removed vertices are sub-tile-pixel (invisible at the tiled zoom); it
-# roughly halves the vertex count tippecanoe must process on dense polygon layers (measured 53–73%
-# smaller GeoJSON on real layers). Set PMTILES_SIMPLIFY=0 to disable; PMTILES_SIMPLIFY_FACTOR scales
-# the tolerance (higher = more aggressive). Never touches downloads/clip/identify (those read the
+# Display-only geometry simplification for the tiles feed — NOT the stored data. OFF by default:
+# the tolerance (~one tile-unit at the max zoom, ≈9.5 m at z10) cut corners on large parcels and made
+# sub-tolerance polygons (small buildings) collapse and disappear when zoomed in. Set PMTILES_SIMPLIFY=1
+# to re-enable (speeds tiling ~50-75% on dense polygons at the cost of that visual fidelity);
+# PMTILES_SIMPLIFY_FACTOR scales the tolerance. Never touches downloads/clip/identify (those read the
 # original .parquet at full resolution).
-PMTILES_SIMPLIFY = os.getenv("PMTILES_SIMPLIFY", "1").strip().lower() not in ("0", "false", "off", "")
+PMTILES_SIMPLIFY = os.getenv("PMTILES_SIMPLIFY", "0").strip().lower() not in ("0", "false", "off", "")
 PMTILES_SIMPLIFY_FACTOR = float(os.getenv("PMTILES_SIMPLIFY_FACTOR", "1.0"))
+# Guarantee every feature survives to the deepest zoom, so NOTHING disappears when zoomed in — even in
+# dense areas. tippecanoe keeps adding zoom levels ONLY in the tiles that are still dropping features
+# until they all fit (--extend-zooms-if-still-dropping), and never merges small polygons away
+# (--no-tiny-polygon-reduction). ON by default (visual completeness > tiling speed/size). The map's
+# pmtiles source reads its max zoom from the archive header, so these extra levels are fetched
+# automatically on overzoom. Trade-off: denser layers tile slower and produce a bigger archive (disk /
+# bandwidth only — not RAM, it streams by range request). Set PMTILES_KEEP_ALL_FEATURES=0 to let dense
+# tiles thin at the max zoom for smaller/faster archives.
+PMTILES_KEEP_ALL_FEATURES = os.getenv("PMTILES_KEEP_ALL_FEATURES", "1").strip().lower() not in ("0", "false", "off", "")
 _TILE_EXTENT = 4096  # tippecanoe tile-units per edge; sizes the tolerance to ~1 unit at max zoom
 
 
@@ -118,6 +129,10 @@ def _tippecanoe_base(out_path: str, scratch: str, maxzoom: int) -> list:
     a dedicated on-disk scratch dir)."""
     cmd = ["tippecanoe", "-o", out_path, "-l", PMTILES_LAYER, "-z", str(maxzoom),
            _densest_flag(), "--force", "-t", scratch]
+    if PMTILES_KEEP_ALL_FEATURES:
+        # Add deeper zooms only where tiles still drop, and keep small polygons — so every feature is
+        # present at the deepest zoom and visible when zoomed in, even in dense areas.
+        cmd += ["--extend-zooms-if-still-dropping", "--no-tiny-polygon-reduction"]
     if PMTILES_SIMPLIFICATION and str(PMTILES_SIMPLIFICATION) not in ("0", ""):
         cmd += ["--simplification", str(PMTILES_SIMPLIFICATION)]
     return cmd
