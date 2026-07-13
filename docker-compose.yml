@@ -93,8 +93,11 @@ services:
     # storage is configured (S3 access is per-request via env). Local/external both use it.
     container_name: geodeploy-titiler
     environment:
-      AWS_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY}
-      AWS_SECRET_ACCESS_KEY: ${STORAGE_SECRET_KEY}
+      # TiTiler runs on a READ-ONLY key (TITILER_ACCESS_KEY/SECRET, minted by the setup wizard),
+      # never the storage root key — so a TiTiler compromise can't write/delete storage. Falls back
+      # to the storage key when the read-only user wasn't provisioned (e.g. external S3).
+      AWS_ACCESS_KEY_ID: ${TITILER_ACCESS_KEY:-${STORAGE_ACCESS_KEY}}
+      AWS_SECRET_ACCESS_KEY: ${TITILER_SECRET_KEY:-${STORAGE_SECRET_KEY}}
       AWS_REGION: ${STORAGE_REGION:-us-east-1}
       AWS_DEFAULT_REGION: ${STORAGE_REGION:-us-east-1}
       AWS_S3_ENDPOINT: ${TITILER_S3_ENDPOINT}

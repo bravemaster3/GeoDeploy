@@ -12,7 +12,7 @@ from slugify import slugify
 from ...config import get_settings
 from ...database import get_db
 from ...deps import get_current_user
-from ...models import UploadJob, User, VectorLayer
+from ...models import Portal, UploadJob, User, VectorLayer
 from ...schemas import DefaultStyle, JobStatus, SharingUpdate, VectorLayerOut
 from ...services import martin as martin_svc
 from ...tasks.vector_ingest import ingest_vector
@@ -29,6 +29,53 @@ MAX_GEOPARQUET_SIZE = 10 * 1024 * 1024 * 1024  # 10 GB (uploaded direct-to-stora
 # Direct-to-storage cap for the convert-to-GeoParquet path. Env-tunable; per-plan quotas will
 # eventually govern this for GeoDeploy Cloud.
 MAX_LARGE_UPLOAD = int(os.getenv("MAX_LARGE_UPLOAD_BYTES", str(10 * 1024 * 1024 * 1024)))
+
+
+# ── Public-read authorization for the file-backed (GeoParquet) display endpoints ──────────────
+# These endpoints serve WITHOUT auth so published (unauthenticated) portals can render the data.
+# But only layers the admin actually exposed should be reachable by id: `is_public` (the explicit
+# share/catalog opt-in) OR membership in a PUBLISHED portal. A layer that is neither is private and
+# must 404 — even to a caller who enumerates ids. The published-portal id set is cached (these are
+# hot paths — pmtiles/parquet fire many range requests per pan) and invalidated by
+# `invalidate_public_layers()` whenever publish/share/delete state changes.
+_PUBLISHED_VECTOR_IDS: set[int] | None = None
+
+
+def invalidate_public_layers() -> None:
+    """Drop the cached public-layer set + the pmtiles/parquet key caches (which fold in the same
+    readability check). Call after any publish/unpublish/share/delete that changes exposure."""
+    global _PUBLISHED_VECTOR_IDS
+    _PUBLISHED_VECTOR_IDS = None
+    _PMTILES_KEY_CACHE.clear()
+    _PARQUET_PREFIX_CACHE.clear()
+
+
+async def _published_vector_ids(db: AsyncSession) -> set[int]:
+    global _PUBLISHED_VECTOR_IDS
+    if _PUBLISHED_VECTOR_IDS is None:
+        rows = (await db.execute(
+            select(Portal.layer_configs).where(Portal.published == True))).scalars().all()  # noqa: E712
+        ids: set[int] = set()
+        for cfg in rows:
+            try:
+                configs = json.loads(cfg) if isinstance(cfg, str) else (cfg or [])
+                for lc in configs:
+                    if lc.get("layer_id") is not None and lc.get("layer_type", "vector") in (None, "vector"):
+                        ids.add(int(lc["layer_id"]))
+            except (ValueError, TypeError, AttributeError):
+                continue
+        _PUBLISHED_VECTOR_IDS = ids
+    return _PUBLISHED_VECTOR_IDS
+
+
+async def _publicly_readable(layer, db: AsyncSession) -> bool:
+    """True if a file-backed layer may be served to an unauthenticated caller: shared (`is_public`)
+    or shown by a published portal. Otherwise it is private and callers get a 404."""
+    if layer is None:
+        return False
+    if getattr(layer, "is_public", False):
+        return True
+    return layer.id in await _published_vector_ids(db)
 
 
 @router.get("", response_model=list[VectorLayerOut])
@@ -393,7 +440,7 @@ async def vector_features_arrow(
     from ...services import duckdb_engine
     result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
     layer = result.scalar_one_or_none()
-    if not layer:
+    if not await _publicly_readable(layer, db):
         raise HTTPException(404, "Layer not found.")
     if layer.storage_backend != "geoparquet" or not layer.s3_key:
         raise HTTPException(400, "This layer is not a GeoParquet (file-backed) layer.")
@@ -418,7 +465,10 @@ async def vector_features_public(
     (Single-admin self-hosted assumption — for multi-tenant cloud this needs portal scoping + auth,
     same open question as the rest of the public-portal surface; see notes §0h-addendum.)"""
     result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
-    return await _viewport_geojson(result.scalar_one_or_none(), bbox, limit)
+    layer = result.scalar_one_or_none()
+    if not await _publicly_readable(layer, db):
+        raise HTTPException(404, "Layer not found.")
+    return await _viewport_geojson(layer, bbox, limit)
 
 
 @router.get("/{layer_id}/identify")
@@ -438,7 +488,7 @@ async def vector_identify(
     from ...services import duckdb_engine
     result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
     layer = result.scalar_one_or_none()
-    if not layer:
+    if not await _publicly_readable(layer, db):
         raise HTTPException(404, "Layer not found.")
     if layer.storage_backend != "geoparquet" or not layer.s3_key:
         raise HTTPException(400, "This layer is not a GeoParquet (file-backed) layer.")
@@ -558,6 +608,8 @@ async def _pmtiles_key(layer_id: int, db: AsyncSession) -> str | None:
     layer = result.scalar_one_or_none()
     if not layer or layer.storage_backend != "geoparquet" or not layer.pmtiles_key:
         return None
+    if not await _publicly_readable(layer, db):  # private layer, not in any published portal
+        return None
     _PMTILES_KEY_CACHE[layer_id] = layer.pmtiles_key
     return layer.pmtiles_key
 
@@ -613,6 +665,8 @@ async def _parquet_prefix(layer_id: int, db: AsyncSession) -> str | None:
     layer = result.scalar_one_or_none()
     if (not layer or layer.storage_backend != "geoparquet" or not layer.s3_key
             or layer.s3_key.rstrip("/").endswith(".parquet")):  # unprepped single file: no manifest
+        return None
+    if not await _publicly_readable(layer, db):  # private layer, not in any published portal
         return None
     prefix = layer.s3_key.rstrip("/")
     _PARQUET_PREFIX_CACHE[layer_id] = prefix
@@ -684,8 +738,9 @@ async def save_sharing(
     db: AsyncSession = Depends(get_db),
 ):
     """Data-sharing settings: opt the layer into the public STAC catalog (`/api/stac`) plus its
-    catalog metadata. Display endpoints portals rely on stay public-by-id regardless; this flag
-    governs discovery (and, for rasters, the raw-COG route)."""
+    catalog metadata, and set `is_public`. A layer's file-backed display endpoints are readable by
+    an unauthenticated caller when `is_public` OR it is shown by a published portal (see
+    `_publicly_readable`); toggling `is_public` here changes that, so we drop the exposure cache."""
     result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id, VectorLayer.user_id == user.id))
     layer = result.scalar_one_or_none()
     if not layer:
@@ -694,6 +749,7 @@ async def save_sharing(
         setattr(layer, field, value)
     await db.commit()
     await db.refresh(layer)
+    invalidate_public_layers()
     return VectorLayerOut.from_orm_json(layer)
 
 
@@ -772,6 +828,7 @@ async def delete_layer(
 
     await db.delete(layer)
     await db.commit()
+    invalidate_public_layers()  # drop cached exposure/key entries for the removed layer
 
     # Regenerate Martin config without the deleted layer
     remaining = await db.execute(

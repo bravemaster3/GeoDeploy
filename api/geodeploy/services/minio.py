@@ -20,6 +20,49 @@ def _random_key(length: int = 32) -> str:
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
+# The user TiTiler runs as. TiTiler only needs to READ objects (GetObject) — it must never hold the
+# MinIO root/write key, so if it is ever compromised the blast radius is read-only, not full storage.
+_TITILER_RO_USER = "gd-titiler-ro"
+
+
+def _ensure_readonly_user(endpoint: str, root_access: str, root_secret: str, bucket: str) -> tuple[str, str] | None:
+    """Create/refresh a READ-ONLY MinIO user scoped to `bucket` (GetObject + ListBucket only) and
+    return its (access_key, secret_key). Uses a short-lived `minio/mc` container against the local
+    MinIO admin API. Best-effort: returns None on ANY failure so the caller falls back to the root
+    credentials and raster serving is never broken by this hardening step."""
+    ro_secret = _random_key(40)
+    policy = ('{"Version":"2012-10-17","Statement":[{"Effect":"Allow",'
+              '"Action":["s3:GetObject","s3:GetBucketLocation","s3:ListBucket"],'
+              '"Resource":["arn:aws:s3:::%s","arn:aws:s3:::%s/*"]}]}' % (bucket, bucket))
+    # Remove-then-add makes the secret deterministic across re-provisioning (a plain re-add can
+    # error on an existing user, leaving MinIO on the OLD secret while TiTiler gets the NEW one).
+    # `policy create` (new mc) falls back to `policy add`, and `policy attach` to `policy set`, so
+    # this works across mc versions. Everything but the final add is tolerant; the add is guarded.
+    script = (
+        'set -e; '
+        'mc alias set gd "{ep}" "{ra}" "{rs}" >/dev/null; '
+        "printf '%s' '{pol}' > /tmp/p.json; "
+        '(mc admin policy create gd {user}-pol /tmp/p.json >/dev/null 2>&1 || '
+        ' mc admin policy add gd {user}-pol /tmp/p.json >/dev/null 2>&1 || true); '
+        'mc admin user remove gd "{ro}" >/dev/null 2>&1 || true; '
+        'mc admin user add gd "{ro}" "{rosec}" >/dev/null; '
+        '(mc admin policy attach gd {user}-pol --user "{ro}" >/dev/null 2>&1 || '
+        ' mc admin policy set gd {user}-pol user="{ro}" >/dev/null 2>&1 || true); '
+        'echo GEODEPLOY_RO_OK'
+    ).format(ep=endpoint, ra=root_access, rs=root_secret, pol=policy,
+             user=_TITILER_RO_USER, ro=_TITILER_RO_USER, rosec=ro_secret)
+    try:
+        client = docker.from_env()
+        out = client.containers.run(
+            "minio/mc", entrypoint="/bin/sh", command=["-c", script],
+            network=NETWORK, remove=True, stderr=True)
+        if b"GEODEPLOY_RO_OK" in (out or b""):
+            return _TITILER_RO_USER, ro_secret
+    except Exception:
+        pass
+    return None
+
+
 async def provision_local() -> dict:
     """Start the MinIO container and return S3 credentials."""
     access_key = _random_key(20)
@@ -67,18 +110,27 @@ async def provision_local() -> dict:
 
     await _wait_healthy(f"http://{CONTAINER_NAME}:9000", access_key, secret_key)
 
-    s3 = _make_client(f"http://{CONTAINER_NAME}:9000", access_key, secret_key, "us-east-1")
+    endpoint = f"http://{CONTAINER_NAME}:9000"
+    s3 = _make_client(endpoint, access_key, secret_key, "us-east-1")
     _ensure_bucket(s3, "geodeploy")
 
-    _start_titiler(client, network, access_key, secret_key, f"http://{CONTAINER_NAME}:9000")
+    # TiTiler gets a READ-ONLY key (never the root/write key). Falls back to root if the read-only
+    # user can't be provisioned, so raster serving always works.
+    ro = _ensure_readonly_user(endpoint, access_key, secret_key, "geodeploy")
+    ti_access, ti_secret = ro if ro else (access_key, secret_key)
+    _start_titiler(client, network, ti_access, ti_secret, endpoint)
 
     return {
         "type": "local",
-        "endpoint": f"http://{CONTAINER_NAME}:9000",
+        "endpoint": endpoint,
         "bucket": "geodeploy",
         "access_key": access_key,
         "secret_key": secret_key,
         "region": "us-east-1",
+        # Creds for TiTiler (read-only if provisioned, else the root key). The setup wizard persists
+        # these as TITILER_ACCESS_KEY/SECRET so compose recreates keep TiTiler on the scoped key.
+        "titiler_access_key": ti_access,
+        "titiler_secret_key": ti_secret,
     }
 
 

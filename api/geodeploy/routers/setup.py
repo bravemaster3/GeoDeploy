@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,6 +24,31 @@ async def _get_or_create_config(db: AsyncSession) -> SetupConfig:
     return config
 
 
+async def _guard_setup_mutation(request: Request, db: AsyncSession) -> None:
+    """The DB/storage config endpoints are unauthenticated during FIRST-RUN so the wizard works
+    before any account exists. Once setup is completed (or an admin exists), they would otherwise let
+    ANYONE repoint storage/DB on a live instance (data hijack / DoS) — so from that point on they
+    require a valid ADMIN bearer token. First run stays open; everything after is admin-only."""
+    config = await _get_or_create_config(db)
+    has_admin = bool((await db.execute(select(User))).scalars().first())
+    if not config.completed and not has_admin:
+        return  # first-run: setup is still open
+
+    auth = request.headers.get("Authorization", "")
+    token = auth[7:].strip() if auth[:7].lower() == "bearer " else None
+    if not token:
+        raise HTTPException(403, "Setup is already complete. Sign in as an admin to reconfigure.")
+    from jose import jwt, JWTError
+    try:
+        payload = jwt.decode(token, get_settings().secret_key, algorithms=["HS256"])
+        uid = int(payload.get("sub"))
+    except (JWTError, TypeError, ValueError):
+        raise HTTPException(403, "Invalid credentials.")
+    user = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+    if not user or not user.is_admin:
+        raise HTTPException(403, "Admin access required to reconfigure a running instance.")
+
+
 @router.get("/status", response_model=SetupStatus)
 async def setup_status(db: AsyncSession = Depends(get_db)):
     config = await _get_or_create_config(db)
@@ -37,7 +62,8 @@ async def setup_status(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/configure-db")
-async def configure_db(req: ConfigureDBRequest, db: AsyncSession = Depends(get_db)):
+async def configure_db(req: ConfigureDBRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    await _guard_setup_mutation(request, db)
     config = await _get_or_create_config(db)
 
     if req.type == "local":
@@ -71,9 +97,11 @@ async def configure_db(req: ConfigureDBRequest, db: AsyncSession = Depends(get_d
 
 
 @router.post("/configure-storage")
-async def configure_storage(req: ConfigureStorageRequest, db: AsyncSession = Depends(get_db)):
+async def configure_storage(req: ConfigureStorageRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    await _guard_setup_mutation(request, db)
     config = await _get_or_create_config(db)
 
+    import os
     if req.type == "local":
         try:
             creds = await minio_svc.provision_local()
@@ -85,6 +113,9 @@ async def configure_storage(req: ConfigureStorageRequest, db: AsyncSession = Dep
         config.storage_access_key = creds["access_key"]
         config.storage_secret_key = creds["secret_key"]
         config.storage_region = creds["region"]
+        # TiTiler runs on the read-only key (or root as fallback); persisted below so compose keeps it.
+        os.environ["TITILER_ACCESS_KEY"] = creds.get("titiler_access_key") or creds["access_key"]
+        os.environ["TITILER_SECRET_KEY"] = creds.get("titiler_secret_key") or creds["secret_key"]
     else:
         try:
             await minio_svc.test_connection(req.endpoint, req.bucket, req.access_key, req.secret_key, req.region)
@@ -96,6 +127,10 @@ async def configure_storage(req: ConfigureStorageRequest, db: AsyncSession = Dep
         config.storage_access_key = req.access_key
         config.storage_secret_key = req.secret_key
         config.storage_region = req.region
+        # External storage: TiTiler uses the caller's creds (can't mint a scoped user remotely —
+        # the operator should supply a read-only key for TiTiler when using external S3).
+        os.environ["TITILER_ACCESS_KEY"] = req.access_key
+        os.environ["TITILER_SECRET_KEY"] = req.secret_key
         # The local branch starts TiTiler inside provision_local(); for an existing
         # store we must (re)create it here with provider-correct GDAL flags (HTTPS for a
         # real S3). Non-fatal: `docker compose --profile raster up` is a fallback (it now
@@ -166,6 +201,9 @@ def _apply_to_process(config: SetupConfig) -> None:
         "STORAGE_REGION": config.storage_region or "us-east-1",
         # TiTiler/GDAL must speak HTTPS to a real S3; MinIO/local stays HTTP.
         "TITILER_AWS_HTTPS": ("YES" if (config.storage_endpoint or "").lower().startswith("https") else "NO"),
+        # Read-only key TiTiler runs as (falls back to the storage key if not provisioned).
+        "TITILER_ACCESS_KEY": os.environ.get("TITILER_ACCESS_KEY") or config.storage_access_key or "",
+        "TITILER_SECRET_KEY": os.environ.get("TITILER_SECRET_KEY") or config.storage_secret_key or "",
     }
     for key, val in updates.items():
         os.environ[key] = val
@@ -217,6 +255,9 @@ def _write_env(config: SetupConfig) -> None:
         "TITILER_S3_ENDPOINT": (config.storage_endpoint or "").removeprefix("https://").removeprefix("http://"),
         # TiTiler/GDAL must speak HTTPS to a real S3; MinIO/local stays HTTP.
         "TITILER_AWS_HTTPS": ("YES" if (config.storage_endpoint or "").lower().startswith("https") else "NO"),
+        # Read-only key TiTiler runs as (falls back to the storage key if not provisioned).
+        "TITILER_ACCESS_KEY": os.environ.get("TITILER_ACCESS_KEY") or config.storage_access_key or "",
+        "TITILER_SECRET_KEY": os.environ.get("TITILER_SECRET_KEY") or config.storage_secret_key or "",
     }
 
     existing_keys = set()
@@ -235,3 +276,9 @@ def _write_env(config: SetupConfig) -> None:
 
     with open(env_path, "w") as f:
         f.writelines(new_lines)
+    # .env holds DB + storage + JWT secrets — keep it owner-only (best-effort; no-op on filesystems
+    # without POSIX modes).
+    try:
+        os.chmod(env_path, 0o600)
+    except OSError:
+        pass

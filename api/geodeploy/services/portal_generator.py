@@ -273,13 +273,19 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
     # Inject the shared runtime first (it contains no placeholders), then the data.
     html = layout_html.replace("{{PORTAL_CSS}}", portal_css)
     html = html.replace("{{PORTAL_JS}}", portal_js)
-    html = html.replace("{{STYLE_JSON}}", json.dumps(full_style))
+    # STYLE_JSON / POPUP_CONFIG are embedded INSIDE a <script> block, so a user-controlled string
+    # (e.g. a layer name containing "</script>") could otherwise break out of the script and inject
+    # markup. `_json_for_html` neutralizes the HTML-significant characters as valid JS-string
+    # escapes, so the JSON stays valid but can never terminate the tag.
+    html = html.replace("{{STYLE_JSON}}", _json_for_html(full_style))
     html = html.replace("{{THEME_CSS}}", theme_css)
-    html = html.replace("{{POPUP_CONFIG}}", json.dumps(popup_configs))
+    html = html.replace("{{POPUP_CONFIG}}", _json_for_html(popup_configs))
     html = html.replace("{{ACCESS_TYPE}}", access_type)
     html = html.replace("{{PASSWORD_SHA256}}", password_sha256 or "")
     html = html.replace("{{SLUG}}", slug)
-    html = html.replace("{{TITLE}}", title)
+    # TITLE lands in both HTML text (<title>, header) and a JS string; escaping it for HTML also
+    # makes the JS-string context safe (no raw " or < survives to break out).
+    html = html.replace("{{TITLE}}", _esc(title))
 
     (portals_dir / "index.html").write_text(html, encoding="utf-8")
     (portals_dir / "style.json").write_text(json.dumps(full_style, indent=2), encoding="utf-8")
@@ -302,6 +308,15 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
 def _esc(s) -> str:
     return (str(s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             .replace('"', "&quot;"))
+
+
+def _json_for_html(obj) -> str:
+    """`json.dumps` for embedding inside an inline <script> element. Escapes the characters that
+    could terminate the script tag or confuse the HTML parser as JS unicode escapes (still valid
+    JSON/JS, so parsing is unaffected): `<`, `>`, `&`, and the U+2028/U+2029 line separators."""
+    return (json.dumps(obj)
+            .replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+            .replace(" ", "\\u2028").replace(" ", "\\u2029"))
 
 
 def _md_inline(s: str) -> str:

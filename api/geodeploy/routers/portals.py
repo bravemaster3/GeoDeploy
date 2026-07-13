@@ -14,6 +14,7 @@ from ..deps import get_current_user
 from ..models import ExternalSource, Portal, RasterLayer, User, VectorLayer
 from ..schemas import PortalCreate, PortalOut, PortalUpdate
 from ..services.portal_generator import build_portal_bundle, generate_style
+from .data.vector import invalidate_public_layers
 
 router = APIRouter(prefix="/portals", tags=["portals"])
 
@@ -146,6 +147,10 @@ async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(
 
     await db.commit()
     await db.refresh(portal)
+    # A published portal's layer_configs may have changed which layers it exposes → refresh the
+    # public-read cache so added layers become reachable and removed ones stop being served.
+    if portal.published:
+        invalidate_public_layers()
     return PortalOut.from_orm_json(portal)
 
 
@@ -158,6 +163,7 @@ async def publish_portal(portal_id: int, user: User = Depends(get_current_user),
     portal.published_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(portal)
+    invalidate_public_layers()  # this portal's layers are now publicly readable
     return PortalOut.from_orm_json(portal)
 
 
@@ -221,6 +227,7 @@ async def unpublish_portal(portal_id: int, user: User = Depends(get_current_user
     portal.published_at = None
     await db.commit()
     await db.refresh(portal)
+    invalidate_public_layers()  # its layers are no longer publicly readable (unless shared/in another portal)
     return PortalOut.from_orm_json(portal)
 
 
@@ -232,8 +239,11 @@ async def delete_portal(portal_id: int, user: User = Depends(get_current_user), 
     portal_dir = f"{settings.data_dir}/portals/{portal.slug}"
     if os.path.exists(portal_dir):
         shutil.rmtree(portal_dir)
+    was_published = portal.published
     await db.delete(portal)
     await db.commit()
+    if was_published:
+        invalidate_public_layers()  # its layers are no longer exposed via this portal
 
 
 # ── Area-select export (offloaded to Celery) ─────────────────────────────────

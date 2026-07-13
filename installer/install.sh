@@ -50,6 +50,8 @@ if [ ! -f .env ]; then
   sed -i "s/change-this-to-a-long-random-string/$SECRET_KEY/" .env
   info ".env created with a generated secret key."
 fi
+# .env holds the JWT + DB + storage secrets — keep it owner-only.
+chmod 600 .env 2>/dev/null || true
 
 # ── Ensure the geodeploy network exists (persists across compose down/up) ────
 
