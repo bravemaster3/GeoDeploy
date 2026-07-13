@@ -28,4 +28,8 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
 - All tile URLs returned are **root-relative** (`/tiles/...`, `/raster/...`); callers that feed MapLibre must make them absolute (MapLibre's web worker can't resolve relative URLs). Done in `portal_generator` output consumer (`layout.html`) and `PortalEditor.vue`.
 
 ## Last updated
+2026-07-14 (SECURITY: `portal_generator._json_for_html` HTML-escapes JSON embedded in the portal
+`<script>` (blocks a layer-name `</`+`script>` breakout); title is `_esc`'d. `minio._ensure_readonly_user`
+mints a read-only, bucket-scoped MinIO user (via a short-lived `minio/mc` container) that TiTiler runs
+as instead of the root key — falls back to root if mc is unavailable so raster never breaks.)
 2026-07-11 (duckdb_engine: native FlatGeobuf tiling feed `export_geoparquet_to_fgb` via baked `spatial`; memory-bounded tiling feeds; `loc` NameError fix)

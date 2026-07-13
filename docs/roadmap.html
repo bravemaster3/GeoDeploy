@@ -1,0 +1,543 @@
+<title>GeoDeploy Roadmap</title>
+<style>
+  :root {
+    /* survey-chart palette — light */
+    --paper: #EDF1EE;
+    --surface: #F7F9F6;
+    --surface-2: #FFFFFF;
+    --ink: #12232B;
+    --ink-soft: #47585F;
+    --ink-faint: #7C8B90;
+    --line: #D6DFDA;
+    --line-strong: #BAC7C1;
+    --accent: #1C5C86;
+    --accent-ink: #ffffff;
+    --emphasis: #C81D6B;
+    --emphasis-wash: rgba(200, 29, 107, 0.08);
+    --accent-wash: rgba(28, 92, 134, 0.08);
+
+    --st-shipped: #1F8F6B;
+    --st-building: #C6871A;
+    --st-next: #C81D6B;
+    --st-planned: #1C5C86;
+    --st-future: #6E6FA0;
+    --st-idea: #7F8E93;
+
+    --grid: rgba(18, 35, 43, 0.045);
+
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", "Roboto Mono", Consolas, Menlo, monospace;
+
+    --r: 10px;
+    --maxw: 1200px;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0A1922;
+      --surface: #0F2531;
+      --surface-2: #12303E;
+      --ink: #E6EEF0;
+      --ink-soft: #A7BCC2;
+      --ink-faint: #6E858D;
+      --line: #1E3B49;
+      --line-strong: #2C5163;
+      --accent: #4FA3D1;
+      --accent-ink: #06131b;
+      --emphasis: #FF4D93;
+      --emphasis-wash: rgba(255, 77, 147, 0.12);
+      --accent-wash: rgba(79, 163, 209, 0.12);
+      --st-shipped: #34C08D;
+      --st-building: #E6B14E;
+      --st-next: #FF4D93;
+      --st-planned: #4FA3D1;
+      --st-future: #9B9CD6;
+      --st-idea: #7F949B;
+      --grid: rgba(230, 238, 240, 0.05);
+      color-scheme: dark;
+    }
+  }
+  /* explicit toggle overrides (must win over media query in both directions) */
+  :root[data-theme="light"] {
+    --paper: #EDF1EE; --surface: #F7F9F6; --surface-2: #FFFFFF;
+    --ink: #12232B; --ink-soft: #47585F; --ink-faint: #7C8B90;
+    --line: #D6DFDA; --line-strong: #BAC7C1;
+    --accent: #1C5C86; --accent-ink: #fff; --emphasis: #C81D6B;
+    --emphasis-wash: rgba(200,29,107,0.08); --accent-wash: rgba(28,92,134,0.08);
+    --st-shipped:#1F8F6B; --st-building:#C6871A; --st-next:#C81D6B; --st-planned:#1C5C86; --st-future:#6E6FA0; --st-idea:#7F8E93;
+    --grid: rgba(18,35,43,0.045); color-scheme: light;
+  }
+  :root[data-theme="dark"] {
+    --paper: #0A1922; --surface: #0F2531; --surface-2: #12303E;
+    --ink: #E6EEF0; --ink-soft: #A7BCC2; --ink-faint: #6E858D;
+    --line: #1E3B49; --line-strong: #2C5163;
+    --accent: #4FA3D1; --accent-ink: #06131b; --emphasis: #FF4D93;
+    --emphasis-wash: rgba(255,77,147,0.12); --accent-wash: rgba(79,163,209,0.12);
+    --st-shipped:#34C08D; --st-building:#E6B14E; --st-next:#FF4D93; --st-planned:#4FA3D1; --st-future:#9B9CD6; --st-idea:#7F949B;
+    --grid: rgba(230,238,240,0.05); color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  #graticule {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    z-index: 0; pointer-events: none;
+  }
+  .wrap {
+    position: relative; z-index: 1;
+    max-width: var(--maxw); margin: 0 auto; padding: 0 24px 96px;
+  }
+  .mono { font-family: var(--font-mono); }
+  .eyebrow {
+    font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--ink-faint);
+  }
+
+  /* ---- masthead ---- */
+  header.mast { padding: 56px 0 28px; border-bottom: 1px solid var(--line); }
+  .mast-coord { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 22px; }
+  .mast-coord span { color: var(--ink-faint); }
+  .mast-coord b { color: var(--accent); font-weight: 600; }
+  h1 {
+    font-size: clamp(34px, 6vw, 58px); line-height: 1.02; margin: 0 0 14px;
+    letter-spacing: -0.02em; text-wrap: balance; font-weight: 680;
+  }
+  h1 .tail { color: var(--emphasis); }
+  .lede { font-size: clamp(15px, 2.2vw, 19px); color: var(--ink-soft); max-width: 60ch; margin: 0; }
+
+  /* ---- summary readout ---- */
+  .readout {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+    gap: 1px; background: var(--line); border: 1px solid var(--line);
+    border-radius: var(--r); overflow: hidden; margin: 30px 0 8px;
+  }
+  .stat { background: var(--surface); padding: 16px 18px; }
+  .stat .n {
+    font-family: var(--font-mono); font-size: 30px; font-weight: 600;
+    font-variant-numeric: tabular-nums; line-height: 1; display: block;
+  }
+  .stat .k { font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-faint); margin-top: 8px; }
+  .stat.emph .n { color: var(--emphasis); }
+
+  .cloudbar { margin: 22px 0 6px; }
+  .cloudbar .row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .cloudbar .lbl { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); }
+  .cloudbar .pct { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; }
+  .track { height: 8px; border-radius: 6px; background: var(--line); overflow: hidden; }
+  .track > i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), var(--emphasis)); border-radius: 6px; }
+
+  /* ---- frontier card ---- */
+  .frontier {
+    margin: 34px 0 10px; border: 1.5px solid var(--emphasis); border-radius: 14px;
+    background:
+      linear-gradient(var(--emphasis-wash), var(--emphasis-wash)),
+      var(--surface);
+    padding: 22px 24px; position: relative; overflow: hidden;
+  }
+  .frontier .you {
+    display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono);
+    font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--emphasis); font-weight: 600; margin-bottom: 12px;
+  }
+  .frontier .you::before { content:""; width: 9px; height: 9px; border-radius: 50%; background: var(--emphasis); box-shadow: 0 0 0 4px var(--emphasis-wash); }
+  .frontier h2 { font-size: clamp(20px, 3vw, 27px); margin: 0 0 8px; letter-spacing: -0.01em; }
+  .frontier p { margin: 0; color: var(--ink-soft); max-width: 68ch; }
+  .frontier .meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+
+  /* ---- controls ---- */
+  .controls {
+    position: sticky; top: 0; z-index: 5; margin: 40px 0 26px;
+    padding: 14px 0; background: color-mix(in srgb, var(--paper) 88%, transparent);
+    backdrop-filter: blur(8px); border-bottom: 1px solid var(--line);
+    display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+  }
+  .search {
+    flex: 1 1 220px; min-width: 180px; display: flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px 12px;
+  }
+  .search input { border: 0; background: transparent; color: var(--ink); font: inherit; width: 100%; outline: none; }
+  .search svg { flex: none; opacity: 0.5; }
+  .chips { display: flex; gap: 7px; flex-wrap: wrap; }
+  .chip {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.03em;
+    border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-soft);
+    padding: 6px 11px 6px 9px; border-radius: 20px; cursor: pointer; user-select: none;
+    display: inline-flex; align-items: center; gap: 7px; transition: opacity .15s, border-color .15s;
+  }
+  .chip .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c); flex: none; }
+  .chip .cnt { color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+  .chip[aria-pressed="false"] { opacity: 0.4; }
+  .chip:focus-visible, .search:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---- phases ---- */
+  .phase { margin: 46px 0 0; scroll-margin-top: 80px; }
+  .phase-head { display: flex; align-items: flex-start; gap: 16px; padding-bottom: 6px; }
+  .phase-num {
+    font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--accent);
+    border: 1px solid var(--accent); border-radius: 6px; padding: 3px 8px; margin-top: 4px; flex: none;
+    letter-spacing: 0.04em;
+  }
+  .phase-title { flex: 1 1 auto; }
+  .phase-title h3 { font-size: clamp(19px, 2.6vw, 24px); margin: 0; letter-spacing: -0.01em; }
+  .phase-title .tag { font-family: var(--font-mono); font-size: 12px; color: var(--emphasis); letter-spacing: 0.05em; text-transform: uppercase; }
+  .phase-title .note { color: var(--ink-soft); font-size: 14px; margin: 4px 0 0; max-width: 72ch; }
+  .phase-rail { display: flex; align-items: center; gap: 10px; margin: 14px 0 20px; }
+  .phase-rail .track { flex: 1 1 auto; }
+  .phase-rail .frac { font-family: var(--font-mono); font-size: 12px; color: var(--ink-faint); font-variant-numeric: tabular-nums; flex: none; }
+  .phase-rail .track > i { background: var(--st-shipped); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(272px, 1fr)); gap: 14px; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--c, var(--line-strong));
+    border-radius: var(--r); padding: 15px 16px; cursor: pointer; position: relative;
+    transition: border-color .15s, transform .12s, box-shadow .15s;
+  }
+  .card:hover { border-color: var(--line-strong); transform: translateY(-2px); box-shadow: 0 8px 22px -14px rgba(0,0,0,0.4); }
+  .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .card.hide { display: none; }
+  .card-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
+  .card-id { font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint); letter-spacing: 0.05em; }
+  .status {
+    font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 20px; font-weight: 600; white-space: nowrap;
+    color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--c) 40%, transparent);
+  }
+  .card h4 { font-size: 15.5px; margin: 0 0 6px; line-height: 1.25; letter-spacing: -0.005em; }
+  .card .why { font-size: 13px; color: var(--ink-soft); margin: 0; }
+  .card-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .pill {
+    font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.03em;
+    color: var(--ink-faint); border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px;
+  }
+  .pill.eff { color: var(--ink-soft); border-color: var(--line-strong); }
+
+  .detail { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .28s ease; }
+  .detail > div { overflow: hidden; }
+  .card.open .detail { grid-template-rows: 1fr; }
+  .detail p { font-size: 13px; color: var(--ink-soft); margin: 13px 0 0; padding-top: 13px; border-top: 1px dashed var(--line-strong); }
+  .detail .deps { font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint); margin-top: 10px; }
+  .detail .deps b { color: var(--accent); font-weight: 600; }
+
+  footer.foot { margin-top: 60px; padding-top: 24px; border-top: 1px solid var(--line); color: var(--ink-faint); font-size: 13px; }
+  footer.foot code { font-family: var(--font-mono); font-size: 12px; background: var(--surface); border: 1px solid var(--line); padding: 1px 5px; border-radius: 4px; color: var(--ink-soft); }
+  footer.foot a { color: var(--accent); }
+  .foot-grid { display: grid; gap: 6px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+  @media (max-width: 560px) {
+    .wrap { padding: 0 16px 72px; }
+    .controls { position: static; }
+  }
+</style>
+
+<canvas id="graticule"></canvas>
+<div class="wrap">
+
+  <header class="mast">
+    <div class="mast-coord mono">
+      <span>PROJECT <b>GeoDeploy</b></span>
+      <span>STATUS <b id="cc-live">live</b></span>
+      <span>HEADING <b>&#8594; Cloud</b></span>
+      <span>REV <b id="cc-date">2026-07-13</b></span>
+    </div>
+    <h1>A spatial data platform,<br>on a course to <span class="tail">Cloud</span>.</h1>
+    <p class="lede">A self-hosted platform to ingest any spatial data, render millions of features seamlessly, and publish geoportals &mdash; now growing the multi-user and multi-tenant spine it needs to become a hosted service.</p>
+
+    <div class="readout" id="readout"></div>
+
+    <div class="cloudbar">
+      <div class="row">
+        <span class="lbl">Cloud-readiness &mdash; foundations &amp; tenancy shipped</span>
+        <span class="pct" id="cloud-pct">0%</span>
+      </div>
+      <div class="track"><i id="cloud-fill" style="width:0"></i></div>
+    </div>
+  </header>
+
+  <section class="frontier" id="frontier" aria-label="Next step"></section>
+
+  <div class="controls">
+    <label class="search">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <input id="search" type="search" placeholder="Filter the map&hellip; (title, area, id)" aria-label="Filter items">
+    </label>
+    <div class="chips" id="chips"></div>
+  </div>
+
+  <div id="phases"></div>
+
+  <footer class="foot">
+    <div class="foot-grid">
+      <div><b style="color:var(--ink-soft)">Source of truth.</b> This page renders from the JSON in <code>docs/roadmap.html</code> (<code>&lt;script id="roadmap-data"&gt;</code>). Narrative &amp; schema live in <code>ROADMAP.md</code>.</div>
+      <div><b style="color:var(--ink-soft)">To update.</b> Edit an item's <code>status</code> or add one to the JSON, then re-publish the artifact &mdash; every count, bar, and card recomputes automatically.</div>
+      <div id="foot-meta"></div>
+    </div>
+  </footer>
+</div>
+
+<script id="roadmap-data" type="application/json">
+{
+  "updated": "2026-07-13",
+  "statusOrder": ["shipped", "building", "next", "planned", "future", "idea"],
+  "statusMeta": {
+    "shipped":  {"label": "Shipped",  "var": "--st-shipped"},
+    "building": {"label": "Building",  "var": "--st-building"},
+    "next":     {"label": "Next",      "var": "--st-next"},
+    "planned":  {"label": "Planned",   "var": "--st-planned"},
+    "future":   {"label": "Future",    "var": "--st-future"},
+    "idea":     {"label": "Idea",      "var": "--st-idea"}
+  },
+  "phases": [
+    {"n": "00", "key": "foundation", "title": "Foundation", "tag": "The platform, shipped", "note": "Self-hosted spatial stack: ingest anything, render heavy layers seamlessly, publish geoportals — all on a cheap VPS."},
+    {"n": "01", "key": "access", "title": "Multi-user & Access", "tag": "The bridge to Cloud", "note": "Turn the single-admin install into a real multi-user platform with ownership and permissions. Everything Cloud needs starts here."},
+    {"n": "02", "key": "cloud", "title": "GeoDeploy Cloud", "tag": "Managed, multi-tenant", "note": "Run many isolated tenants on shared infrastructure — self-serve, metered, and upgraded for them."},
+    {"n": "03", "key": "ecosystem", "title": "Ecosystem & Interop", "tag": "Adoption engine", "note": "Meet users inside the tools they already use — GeoLibre, QGIS, and open standards — to drive adoption."},
+    {"n": "04", "key": "advanced", "title": "Advanced Capabilities", "tag": "Differentiators", "note": "Depth beyond hosting: in-browser analysis, story maps, temporal and 3D scenes."}
+  ],
+  "items": [
+    {"id": "F-01", "phase": "foundation", "title": "Core platform", "status": "shipped", "effort": "L", "areas": ["infra", "api", "ui"], "why": "FastAPI + Celery + Vue 3 + PostGIS/Martin + MinIO/TiTiler behind nginx, in one Docker Compose.", "detail": "The whole stack comes up with a one-line install and holds state in SQLite. This is the polished, one-command base every later phase builds on.", "depends": []},
+    {"id": "F-02", "phase": "foundation", "title": "Universal vector ingest", "status": "shipped", "effort": "L", "areas": ["api", "celery", "duckdb"], "why": "Shapefile, GeoJSON, GeoPackage, CSV (X/Y + WKT) and GeoParquet — heavy uploads auto-convert.", "detail": "Large files upload direct to object storage and convert to GeoParquet in the background, ending up identical to a native .parquet upload: deck.gl display + DuckDB analysis, no PostGIS table.", "depends": ["F-01"]},
+    {"id": "F-03", "phase": "foundation", "title": "Raster → COG + tiles", "status": "shipped", "effort": "M", "areas": ["celery", "tiles"], "why": "Rasters become cloud-optimized GeoTIFFs served as tiles by TiTiler.", "detail": "Uploads are converted to COG and served via TiTiler with a Web-Mercator latitude clamp so polar rows never blank low-zoom tiles.", "depends": ["F-01"]},
+    {"id": "F-04", "phase": "foundation", "title": "Heavy GeoParquet display", "status": "shipped", "effort": "XL", "areas": ["duckdb", "tiles", "ui"], "why": "deck.gl + server DuckDB for live layers; PMTiles (tippecanoe) for millions of features.", "detail": "Small/medium layers render live from the file via DuckDB viewport queries; heavy layers tile once to PMTiles and stream by HTTP range request for seamless pan/zoom at 20 M+ features — no PostGIS ingestion, keeping the cheap-VPS promise.", "depends": ["F-02"]},
+    {"id": "F-05", "phase": "foundation", "title": "Faithful tiling (no data loss)", "status": "shipped", "effort": "M", "areas": ["tiles", "celery"], "why": "Simplification off + keep-all-features: every feature stays visible when zoomed in, even in dense areas.", "detail": "Display simplification was collapsing small polygons and cutting corners; it is now off by default, and extend-zooms deepens only the dense tiles that were still dropping features until they all fit. The source .parquet is never touched — downloads and analysis read it at full resolution.", "depends": ["F-04"]},
+    {"id": "F-06", "phase": "foundation", "title": "In-browser query & download", "status": "shipped", "effort": "M", "areas": ["duckdb", "ui"], "why": "DuckDB-WASM does identify-on-click and bbox-clip download with no server round trip.", "detail": "The browser reads GeoParquet directly for click-to-identify and area-clip export, keeping per-visitor server CPU near zero on public portals.", "depends": ["F-02"]},
+    {"id": "F-07", "phase": "foundation", "title": "Geoportal builder", "status": "shipped", "effort": "XL", "areas": ["portal", "ui"], "why": "Symbology, basemaps, a 3D globe, portal-as-documentation, and publish-to-URL.", "detail": "The editor, the published MapLibre style, and the live portal runtime stay in parity across z-order, symbology, and markers. Portals double as documentation pages with a styled header and layer catalog.", "depends": ["F-01"]},
+    {"id": "F-08", "phase": "foundation", "title": "External sources", "status": "shipped", "effort": "M", "areas": ["api", "tiles"], "why": "Consume WMS / XYZ / WFS as first-class, admin-added layers.", "detail": "Remote services can be attached and rendered alongside hosted data without copying it in.", "depends": ["F-01"]},
+    {"id": "F-09", "phase": "foundation", "title": "Single-admin onboarding", "status": "shipped", "effort": "S", "areas": ["auth"], "why": "First run creates one admin account. It works — but it's the ceiling this roadmap raises.", "detail": "There is exactly one user and no way to add or scope others. Phase 01 turns this into real user management.", "depends": ["F-01"]},
+    {"id": "F-10", "phase": "foundation", "title": "Security hardening", "status": "shipped", "effort": "M", "areas": ["auth", "api", "tiles"], "why": "Closed the 2026-07 audit: setup lock, private-layer enforcement, login rate-limit, portal XSS, read-only tile key, headers.", "detail": "Setup config endpoints require an admin once installed (were open → config tampering); vector display endpoints serve only public or published-portal layers (were any layer by id); nginx rate-limits login (429) and sends X-Frame-Options / nosniff / Referrer-Policy; portal JSON embedding can no longer break out of the inline script tag; TiTiler runs on a read-only MinIO key instead of the root key. All covered by regression tests.", "depends": ["F-09"]},
+    {"id": "F-11", "phase": "foundation", "title": "Automated tests & CI", "status": "building", "effort": "M", "areas": ["api", "docs"], "why": "A pytest suite (started with the security regressions) plus CI to run it on every change.", "detail": "The repo had only a health check; there is now a real regression suite covering auth, the setup lock, vector authorization, and portal XSS. Next: broaden coverage (ingest, portal build, tiling) and add a CI workflow so tests gate every change.", "depends": ["F-01"]},
+
+    {"id": "A-01", "phase": "access", "title": "Multi-user & RBAC", "status": "next", "effort": "XL", "areas": ["auth", "api", "ui"], "frontier": true, "why": "User management plus roles — owner / admin / editor / viewer. Invite, edit, and deactivate people.", "detail": "Today onboarding mints one admin and stops: no teammates, no scoping of who can do what. This adds a users table with roles, an invite flow, and a permission check on every mutating route, plus the missing user-management screens. It is the smallest change that unlocks teams now and is the load-bearing prerequisite for multi-tenancy later — which is why it's the next step.", "depends": ["F-09"]},
+    {"id": "A-02", "phase": "access", "title": "Resource ownership & sharing", "status": "planned", "effort": "L", "areas": ["api", "portal", "auth"], "why": "Layers and portals get an owner; share with users or roles; public / unlisted / private visibility.", "detail": "Ownership columns plus a sharing model so a portal can be private to a team, unlisted by link, or fully public — the access primitive both collaboration and Cloud depend on.", "depends": ["A-01"]},
+    {"id": "A-03", "phase": "access", "title": "API tokens", "status": "planned", "effort": "M", "areas": ["api", "auth"], "why": "Personal access tokens for scripting and CI — the same routes, headless.", "detail": "Scoped tokens let power users and pipelines upload, tile, and publish without the browser session.", "depends": ["A-01"]},
+    {"id": "A-04", "phase": "access", "title": "Auth hardening", "status": "planned", "effort": "M", "areas": ["auth", "ui"], "why": "Password reset, session management, and optional OAuth / SSO sign-in.", "detail": "Rounds out the identity layer so it's safe to open beyond a trusted single operator.", "depends": ["A-01"]},
+    {"id": "A-05", "phase": "access", "title": "Activity & audit log", "status": "future", "effort": "S", "areas": ["api"], "why": "Who did what, when — per resource. Groundwork for Cloud trust and support.", "detail": "An append-only log of mutations, surfaced per resource, so operators and (later) tenants can trace changes.", "depends": ["A-02"]},
+
+    {"id": "C-01", "phase": "cloud", "title": "Workspaces / organizations", "status": "planned", "effort": "L", "areas": ["api", "auth"], "why": "A tenant boundary above users: many members, shared resources, one bill.", "detail": "Introduces the organization/workspace entity that everything in Cloud hangs off — membership, shared layers, and the unit of billing.", "depends": ["A-01", "A-02"]},
+    {"id": "C-02", "phase": "cloud", "title": "Tenant isolation", "status": "planned", "effort": "XL", "areas": ["infra", "storage", "duckdb"], "why": "Per-tenant storage prefix, DB schema, and tile namespace so tenants never cross paths.", "detail": "Hard isolation of data at rest and in queries — object-storage prefixes, database schemas, and tile keys scoped per tenant, verified on every read.", "depends": ["C-01"]},
+    {"id": "C-03", "phase": "cloud", "title": "Quotas & fair use", "status": "planned", "effort": "M", "areas": ["infra", "celery"], "why": "Storage caps and tiling-minute budgets so one heavy job can't starve its neighbors.", "detail": "Per-tenant limits and queue fairness keep shared infrastructure predictable when a 20 M-feature tiling run lands.", "depends": ["C-01"]},
+    {"id": "C-04", "phase": "cloud", "title": "Self-serve provisioning", "status": "future", "effort": "L", "areas": ["infra", "ui", "billing"], "why": "Sign up, get a workspace, upload — no operator in the loop.", "detail": "The signup-to-first-map flow that makes Cloud a product rather than a managed install.", "depends": ["C-01", "A-04"]},
+    {"id": "C-05", "phase": "cloud", "title": "Metering & billing", "status": "future", "effort": "L", "areas": ["billing", "api"], "why": "Measure storage, tiles served, and compute; plug into a billing provider.", "detail": "Usage metering wired to plans and a payment provider — the commercial engine of Cloud.", "depends": ["C-03", "C-04"]},
+    {"id": "C-06", "phase": "cloud", "title": "Managed upgrades", "status": "future", "effort": "M", "areas": ["infra"], "why": "One-click, zero-downtime updates — hosted and hands-off.", "detail": "Rolling upgrades across tenants without an operator babysitting each instance.", "depends": ["C-02"]},
+    {"id": "C-07", "phase": "cloud", "title": "Observability & backups", "status": "planned", "effort": "M", "areas": ["infra"], "why": "Metrics, health, log aggregation, plus automated backups and restore drills.", "detail": "The operational floor for running someone else's data with confidence.", "depends": ["C-01"]},
+
+    {"id": "E-01", "phase": "ecosystem", "title": "Open in GeoLibre", "status": "planned", "effort": "M", "areas": ["geolibre", "portal"], "why": "Hand a portal's layers to the GeoLibre app as GeoParquet/COG URLs for instant client-side analysis.", "detail": "Ship the GeoLibre static app beside a portal with an 'Open in GeoLibre' button that passes vector layers as GeoParquet URLs and rasters as COG URLs — a big quick-analysis surface for almost no server cost.", "depends": ["F-07"]},
+    {"id": "E-02", "phase": "ecosystem", "title": "Push from GeoLibre", "status": "future", "effort": "L", "areas": ["geolibre", "api", "duckdb"], "why": "Prepare local files in GeoLibre, then publish straight to a GeoDeploy instance.", "detail": "A 'Publish to GeoDeploy' action inside GeoLibre: authenticate to an instance, pick prepared local layers, and upload + register in one step. Turns GeoLibre into GeoDeploy's desktop companion and a major adoption funnel.", "depends": ["E-01", "A-03"]},
+    {"id": "E-03", "phase": "ecosystem", "title": "Style interchange (MapLibre)", "status": "planned", "effort": "M", "areas": ["portal", "ui"], "why": "Import and export MapLibre style JSON so portal symbology round-trips with the ecosystem.", "detail": "Portals can adopt an external MapLibre style and emit their own, making cartography portable in and out of GeoDeploy.", "depends": ["F-07"]},
+    {"id": "E-04", "phase": "ecosystem", "title": "Style import: QGIS & GeoLibre", "status": "planned", "effort": "M", "areas": ["portal"], "why": "Bring QGIS QML/SLD and GeoLibre styles into a portal — keep the cartography you already made.", "detail": "A translation layer from common desktop/style formats into the portal symbology model, so users don't restyle from scratch.", "depends": ["E-03"]},
+    {"id": "E-05", "phase": "ecosystem", "title": "Connect from QGIS", "status": "future", "effort": "L", "areas": ["api", "qgis"], "why": "A QGIS plugin — the GeoNode-plugin equivalent — to browse and load an instance's layers directly.", "detail": "Desktop users reach a GeoDeploy instance from inside QGIS, loading hosted layers over the wire in a cloud-native, server-light way (not GeoServer).", "depends": ["E-06", "A-03"]},
+    {"id": "E-06", "phase": "ecosystem", "title": "Catalog / STAC", "status": "future", "effort": "M", "areas": ["api"], "why": "A machine-readable catalog of an instance's layers for discovery and interop.", "detail": "Exposes holdings as a browsable/queryable catalog — the index that plugins, clients, and search build on.", "depends": ["A-02"]},
+    {"id": "E-07", "phase": "ecosystem", "title": "OGC API endpoints", "status": "idea", "effort": "M", "areas": ["api", "tiles"], "why": "Optional OGC API Features/Tiles for standards-driven clients.", "detail": "Deliberately deprioritized in favor of the GeoParquet-lakehouse path, but kept on the map as an option for users who need the standard checkbox.", "depends": ["E-06"]},
+
+    {"id": "V-01", "phase": "advanced", "title": "In-browser analysis console", "status": "future", "effort": "L", "areas": ["duckdb", "ui"], "why": "A DuckDB-WASM spatial SQL console over your layers — query and derive without a server.", "detail": "Interactive SQL against hosted GeoParquet from the browser, extending the existing client-side read path into full analysis.", "depends": ["F-06"]},
+    {"id": "V-02", "phase": "advanced", "title": "Fast processing toolkit", "status": "planned", "effort": "L", "areas": ["duckdb", "celery", "ui"], "why": "Clip, buffer, overlay, and raster band math run in-process — DuckDB / TiTiler, not GeoServer.", "detail": "A small set of high-value geoprocessing tools executed server-light, matching the lakehouse philosophy.", "depends": ["F-04"]},
+    {"id": "V-03", "phase": "advanced", "title": "Story-map portals", "status": "future", "effort": "L", "areas": ["portal", "ui"], "why": "A portal type where chapters are composed on the live map — narrative cartography.", "detail": "Borrows GeoLibre's story-map pattern: scroll-linked chapters that fly the map and toggle layers, published as a portal.", "depends": ["F-07"]},
+    {"id": "V-04", "phase": "advanced", "title": "Photo features (field stories)", "status": "future", "effort": "M", "areas": ["portal", "api"], "why": "Attach photos to points via EXIF GPS; show them in popups and panels in the published portal.", "detail": "Bulk-import geotagged photos into a point layer with narrative + imagery per feature — the data model for field-story maps.", "depends": ["V-03"]},
+    {"id": "V-05", "phase": "advanced", "title": "Temporal data & time slider", "status": "idea", "effort": "M", "areas": ["portal", "tiles"], "why": "Time-aware layers with a slider for change over time.", "detail": "Temporal attributes drive a portal time control for animating change — land cover, growth, movement.", "depends": ["F-07"]},
+    {"id": "V-06", "phase": "advanced", "title": "3D tiles & terrain", "status": "idea", "effort": "L", "areas": ["tiles", "portal"], "why": "3D tilesets and terrain in the globe view for true 2.5D / 3D scenes.", "detail": "Extends the existing globe with elevation and 3D tiles for buildings and terrain-aware visualization.", "depends": ["F-07"]},
+    {"id": "V-07", "phase": "advanced", "title": "Live connectors & refresh", "status": "idea", "effort": "M", "areas": ["celery", "api"], "why": "Scheduled sync from PostGIS, S3, or APIs so hosted layers stay current.", "detail": "Connectors that periodically re-pull a source and re-prep the layer, keeping published maps fresh without manual re-upload.", "depends": ["F-02"]}
+  ]
+}
+</script>
+
+<script>
+(function () {
+  "use strict";
+  var DATA = JSON.parse(document.getElementById("roadmap-data").textContent);
+  var css = function (v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); };
+  var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); };
+
+  var itemsById = {};
+  DATA.items.forEach(function (it) { itemsById[it.id] = it; });
+
+  // ---- summary readout ----
+  var counts = {};
+  DATA.statusOrder.forEach(function (s) { counts[s] = 0; });
+  DATA.items.forEach(function (it) { counts[it.status] = (counts[it.status] || 0) + 1; });
+
+  var readout = document.getElementById("readout");
+  var readoutStats = [
+    { k: "Shipped", n: counts.shipped, emph: false },
+    { k: "Next up", n: counts.next, emph: true },
+    { k: "Planned", n: counts.planned, emph: false },
+    { k: "On horizon", n: (counts.future + counts.idea), emph: false },
+    { k: "Total tracked", n: DATA.items.length, emph: false }
+  ];
+  readout.innerHTML = readoutStats.map(function (s) {
+    return '<div class="stat' + (s.emph ? ' emph' : '') + '"><span class="n">' + s.n + '</span><span class="k">' + s.k + '</span></div>';
+  }).join("");
+
+  // ---- cloud readiness: weighted progress across foundation + access + cloud ----
+  var weight = { shipped: 1, building: 0.5, next: 0.15, planned: 0, future: 0, idea: 0 };
+  var cloudPhases = { foundation: 1, access: 1, cloud: 1 };
+  var cw = 0, ct = 0;
+  DATA.items.forEach(function (it) {
+    if (cloudPhases[it.phase]) { ct++; cw += (weight[it.status] || 0); }
+  });
+  var cloudPct = Math.round((cw / ct) * 100);
+  document.getElementById("cloud-pct").textContent = cloudPct + "%";
+  requestAnimationFrame(function () { document.getElementById("cloud-fill").style.width = cloudPct + "%"; });
+
+  // ---- frontier card ----
+  var fr = DATA.items.filter(function (it) { return it.frontier; })[0] || DATA.items.filter(function (it) { return it.status === "next"; })[0];
+  var frEl = document.getElementById("frontier");
+  if (fr) {
+    frEl.innerHTML =
+      '<div class="you">You are here &middot; ' + esc(fr.id) + '</div>' +
+      '<h2>' + esc(fr.title) + '</h2>' +
+      '<p>' + esc(fr.detail || fr.why) + '</p>' +
+      '<div class="meta">' +
+        '<span class="pill eff">effort &middot; ' + esc(fr.effort) + '</span>' +
+        fr.areas.map(function (a) { return '<span class="pill">' + esc(a) + '</span>'; }).join("") +
+      '</div>';
+  }
+
+  // ---- status filter chips ----
+  var active = {};
+  DATA.statusOrder.forEach(function (s) { active[s] = true; });
+  var chips = document.getElementById("chips");
+  chips.innerHTML = DATA.statusOrder.map(function (s) {
+    var m = DATA.statusMeta[s];
+    return '<button class="chip" data-s="' + s + '" aria-pressed="true" style="--c:var(' + m.var + ')">' +
+      '<span class="dot"></span>' + esc(m.label) + ' <span class="cnt">' + (counts[s] || 0) + '</span></button>';
+  }).join("");
+
+  // ---- phases + cards ----
+  var phasesEl = document.getElementById("phases");
+  DATA.phases.forEach(function (ph) {
+    var items = DATA.items.filter(function (it) { return it.phase === ph.key; });
+    var shipped = items.filter(function (it) { return it.status === "shipped"; }).length;
+    var pct = items.length ? Math.round((shipped / items.length) * 100) : 0;
+
+    var sec = document.createElement("section");
+    sec.className = "phase";
+    sec.id = "phase-" + ph.key;
+    sec.innerHTML =
+      '<div class="phase-head">' +
+        '<span class="phase-num">' + esc(ph.n) + '</span>' +
+        '<div class="phase-title">' +
+          '<div class="tag">' + esc(ph.tag) + '</div>' +
+          '<h3>' + esc(ph.title) + '</h3>' +
+          '<p class="note">' + esc(ph.note) + '</p>' +
+        '</div>' +
+      '</div>' +
+      '<div class="phase-rail"><div class="track"><i style="width:' + pct + '%"></i></div>' +
+        '<span class="frac">' + shipped + '/' + items.length + ' shipped</span></div>' +
+      '<div class="grid"></div>';
+
+    var grid = sec.querySelector(".grid");
+    items.forEach(function (it) {
+      var m = DATA.statusMeta[it.status];
+      var card = document.createElement("article");
+      card.className = "card";
+      card.setAttribute("tabindex", "0");
+      card.setAttribute("role", "button");
+      card.dataset.status = it.status;
+      card.dataset.text = (it.id + " " + it.title + " " + it.why + " " + it.areas.join(" ")).toLowerCase();
+      card.style.setProperty("--c", "var(" + m.var + ")");
+      var deps = (it.depends && it.depends.length)
+        ? '<div class="deps">requires &nbsp;<b>' + it.depends.map(esc).join("</b> &middot; <b>") + '</b></div>' : "";
+      card.innerHTML =
+        '<div class="card-top">' +
+          '<span class="card-id">' + esc(it.id) + '</span>' +
+          '<span class="status">' + esc(m.label) + '</span>' +
+        '</div>' +
+        '<h4>' + esc(it.title) + '</h4>' +
+        '<p class="why">' + esc(it.why) + '</p>' +
+        '<div class="card-foot">' +
+          '<span class="pill eff">' + esc(it.effort) + '</span>' +
+          it.areas.map(function (a) { return '<span class="pill">' + esc(a) + '</span>'; }).join("") +
+        '</div>' +
+        '<div class="detail"><div><p>' + esc(it.detail || "") + '</p>' + deps + '</div></div>';
+
+      var toggle = function () { card.classList.toggle("open"); };
+      card.addEventListener("click", toggle);
+      card.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+      });
+      grid.appendChild(card);
+    });
+    phasesEl.appendChild(sec);
+  });
+
+  // ---- filtering ----
+  var searchEl = document.getElementById("search");
+  function applyFilter() {
+    var q = searchEl.value.trim().toLowerCase();
+    document.querySelectorAll(".phase").forEach(function (sec) {
+      var shown = 0;
+      sec.querySelectorAll(".card").forEach(function (card) {
+        var ok = active[card.dataset.status] && (!q || card.dataset.text.indexOf(q) !== -1);
+        card.classList.toggle("hide", !ok);
+        if (ok) shown++;
+      });
+      sec.style.display = shown ? "" : "none";
+    });
+  }
+  chips.addEventListener("click", function (e) {
+    var b = e.target.closest(".chip"); if (!b) return;
+    var s = b.dataset.s; active[s] = !active[s];
+    b.setAttribute("aria-pressed", active[s] ? "true" : "false");
+    applyFilter();
+  });
+  searchEl.addEventListener("input", applyFilter);
+
+  // ---- footer meta ----
+  document.getElementById("cc-date").textContent = DATA.updated;
+  document.getElementById("foot-meta").innerHTML =
+    'Revision <b style="color:var(--ink-soft)">' + esc(DATA.updated) + '</b> &middot; maintained by Claude Code &amp; the GeoDeploy team.';
+
+  // ---- graticule background (static, atmospheric) ----
+  var cv = document.getElementById("graticule");
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function drawGrid() {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var w = cv.clientWidth, h = cv.clientHeight;
+    cv.width = w * dpr; cv.height = h * dpr;
+    var ctx = cv.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    var col = css("--grid") || "rgba(128,128,128,0.05)";
+    ctx.strokeStyle = col; ctx.lineWidth = 1;
+    var step = 68;
+    for (var x = (w % step) / 2; x < w; x += step) {
+      ctx.beginPath(); ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, h); ctx.stroke();
+    }
+    for (var y = (h % step) / 2; y < h; y += step) {
+      ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(w, y + 0.5); ctx.stroke();
+    }
+    // faint contour curves for a chart-like feel
+    ctx.lineWidth = 1.4;
+    for (var k = 0; k < 3; k++) {
+      var amp = 26 + k * 14, base = h * (0.28 + k * 0.22), freq = 0.006 + k * 0.0016;
+      ctx.beginPath();
+      for (var px = 0; px <= w; px += 6) {
+        var py = base + Math.sin(px * freq + k) * amp + Math.sin(px * freq * 2.3) * (amp * 0.3);
+        if (px === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+  }
+  drawGrid();
+  var rt;
+  window.addEventListener("resize", function () {
+    if (reduce) { drawGrid(); return; }
+    clearTimeout(rt); rt = setTimeout(drawGrid, 120);
+  });
+  // redraw on theme toggle so grid color tracks the theme
+  new MutationObserver(drawGrid).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawGrid);
+})();
+</script>

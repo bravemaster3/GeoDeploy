@@ -46,4 +46,10 @@ All HTTP endpoints. Every router is registered in `main.py` under the `/api` pre
 - No rate limiting beyond nginx; no pagination on list endpoints (fine at current scale).
 
 ## Last updated
+2026-07-14 (SECURITY: `setup.configure-db/-storage` now require an admin token once setup is
+completed — `_guard_setup_mutation` — closing an unauthenticated config-tampering hole. Vector
+display endpoints — `features.arrow/.geojson`, `identify`, `pmtiles`, `parquet/{path}` — now serve a
+layer only when `is_public` OR it is in a PUBLISHED portal (`_publicly_readable` + a cache invalidated
+on publish/unpublish/share/delete in vector.py and portals.py); previously any layer was readable by
+id. Regression tests in `api/tests/test_security.py`.)
 2026-07-11 (identify endpoint; CSV WKT geometry; large-vector direct upload + convert; GeoParquet discovery/import; export-bundle resolves geoparquet layers)
