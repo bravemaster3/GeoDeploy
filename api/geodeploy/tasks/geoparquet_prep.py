@@ -112,6 +112,7 @@ def prepare_geoparquet(self, layer_id, s3_key, job_id=None):
             bbox=json.dumps(info["bbox"]) if info.get("bbox") else None,
             columns=json.dumps(info.get("columns") or []),
             error_message=None,
+            tile_status="tiling",  # auto-tiling is enqueued below (see the end of the try block)
             updated_at=datetime.now(timezone.utc).isoformat(),
         )
         # Manifest for the browser-side duckdb-wasm reader. Non-fatal: without it, portal.js falls
@@ -136,6 +137,22 @@ def prepare_geoparquet(self, layer_id, s3_key, job_id=None):
                         completed_at=datetime.now(timezone.utc).isoformat())
         logger.info("prepare_geoparquet: layer %s — READY (%s features) → %s",
                     layer_id, info.get("feature_count"), new_key)
+
+        # Auto-tile to PMTiles right after prep — no manual "Tile" step. The layer is ALREADY
+        # displayable via deck.gl (Strategy A); this builds the tiled fallback in the background and
+        # tile_geoparquet flips tile_status ready/error when done. Keyed off the partitioned prefix
+        # (new_key), same as the manual /{layer_id}/tile route.
+        try:
+            from .pmtiles_tile import tile_geoparquet
+            pmtiles_key = (new_key.rsplit(".", 1)[0] if "." in new_key else new_key) + ".pmtiles"
+            tile_geoparquet.delay(layer_id, new_key, pmtiles_key)
+            logger.info("prepare_geoparquet: layer %s — auto-enqueued PMTiles tiling → %s",
+                        layer_id, pmtiles_key)
+        except Exception:
+            # Enqueue failed (e.g. broker hiccup): clear the 'tiling' badge so the layer isn't stuck.
+            logger.warning("prepare_geoparquet: layer %s — could not enqueue auto-tiling", layer_id,
+                           exc_info=True)
+            _update_layer(db_path, layer_id, tile_status=None)
     except Exception as exc:
         _update_layer(db_path, layer_id, status="error", error_message=str(exc))
         if job_id:
