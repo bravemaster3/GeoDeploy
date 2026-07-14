@@ -246,6 +246,41 @@ const showAddLayer = ref(false)
 const lastAddedKey = ref(null)
 const accessType = ref('public')
 const basemap = ref(null)  // chosen basemap catalog id; null → first catalog entry (see basemapCatalog)
+// Basemap catalog. The single source of truth is the server (GET /api/basemaps → the API's
+// BASEMAP_CATALOG); it's fetched in onMounted and REPLACES this list, so adding a basemap is a
+// one-place change on the server. The inline list is only an instant bootstrap/offline fallback so
+// the preview never flashes blank before the fetch resolves. (Declared here — above the watches
+// that reference it at setup time — to avoid a temporal-dead-zone error.)
+const basemapCatalog = ref([
+  { id: 'positron', name: 'Positron',
+    tiles: ['https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png'],
+    attribution: '© OpenStreetMap © CARTO',
+    thumb: 'https://a.basemaps.cartocdn.com/light_all/4/8/5.png' },
+  { id: 'voyager', name: 'Voyager',
+    tiles: ['https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png', 'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png'],
+    attribution: '© OpenStreetMap © CARTO',
+    thumb: 'https://a.basemaps.cartocdn.com/rastertiles/voyager/4/8/5.png' },
+  { id: 'dark', name: 'Dark Matter',
+    tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'],
+    attribution: '© OpenStreetMap © CARTO',
+    thumb: 'https://a.basemaps.cartocdn.com/dark_all/4/8/5.png' },
+  { id: 'osm', name: 'OpenStreetMap',
+    tiles: ['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png', 'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png'],
+    attribution: '© OpenStreetMap contributors',
+    thumb: 'https://a.tile.openstreetmap.org/4/8/5.png' },
+  { id: 'topo', name: 'OpenTopoMap',
+    tiles: ['https://a.tile.opentopomap.org/{z}/{x}/{y}.png', 'https://b.tile.opentopomap.org/{z}/{x}/{y}.png'],
+    attribution: '© OpenStreetMap, SRTM | © OpenTopoMap (CC-BY-SA)',
+    thumb: 'https://a.tile.opentopomap.org/4/8/5.png' },
+  { id: 'satellite', name: 'Satellite',
+    tiles: ['https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+    attribution: 'Imagery © Esri, Maxar, Earthstar Geographics',
+    thumb: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/4/5/8' },
+  { id: 'esri-topo', name: 'Esri Topographic',
+    tiles: ['https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}'],
+    attribution: '© Esri',
+    thumb: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/4/5/8' },
+])
 
 // Drag-to-reorder layers (top of list = top of map)
 const dragIndex = ref(null)
@@ -785,40 +820,8 @@ function markerImage(shape, color, size) {
   return { width: dim * dpr, height: dim * dpr, data: d.data, pixelRatio: dpr }
 }
 
-// Basemap catalog. The single source of truth is the server (GET /api/basemaps → the API's
-// BASEMAP_CATALOG); it's fetched in onMounted and REPLACES this list, so adding a basemap is a
-// one-place change on the server. The inline list is only an instant bootstrap/offline fallback so
-// the preview never flashes blank before the fetch resolves.
-const basemapCatalog = ref([
-  { id: 'positron', name: 'Positron',
-    tiles: ['https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png'],
-    attribution: '© OpenStreetMap © CARTO',
-    thumb: 'https://a.basemaps.cartocdn.com/light_all/4/8/5.png' },
-  { id: 'voyager', name: 'Voyager',
-    tiles: ['https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png', 'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png'],
-    attribution: '© OpenStreetMap © CARTO',
-    thumb: 'https://a.basemaps.cartocdn.com/rastertiles/voyager/4/8/5.png' },
-  { id: 'dark', name: 'Dark Matter',
-    tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'],
-    attribution: '© OpenStreetMap © CARTO',
-    thumb: 'https://a.basemaps.cartocdn.com/dark_all/4/8/5.png' },
-  { id: 'osm', name: 'OpenStreetMap',
-    tiles: ['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png', 'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png'],
-    attribution: '© OpenStreetMap contributors',
-    thumb: 'https://a.tile.openstreetmap.org/4/8/5.png' },
-  { id: 'topo', name: 'OpenTopoMap',
-    tiles: ['https://a.tile.opentopomap.org/{z}/{x}/{y}.png', 'https://b.tile.opentopomap.org/{z}/{x}/{y}.png'],
-    attribution: '© OpenStreetMap, SRTM | © OpenTopoMap (CC-BY-SA)',
-    thumb: 'https://a.tile.opentopomap.org/4/8/5.png' },
-  { id: 'satellite', name: 'Satellite',
-    tiles: ['https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-    attribution: 'Imagery © Esri, Maxar, Earthstar Geographics',
-    thumb: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/4/5/8' },
-  { id: 'esri-topo', name: 'Esri Topographic',
-    tiles: ['https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}'],
-    attribution: '© Esri',
-    thumb: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/4/5/8' },
-])
+// (basemapCatalog ref is declared up top with the other state — it's referenced by watches that
+// run at setup time, so it must exist before them.)
 function currentBasemap() {
   return basemapCatalog.value.find(b => b.id === basemap.value) || basemapCatalog.value[0]
 }
