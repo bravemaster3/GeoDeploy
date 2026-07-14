@@ -203,35 +203,8 @@
         Zoom to all
       </button>
 
-      <!-- Basemap picker (bottom-left, so it clears MapLibre's top-right globe/zoom controls). Same
-           catalog as the published portal, in the published portal's one-column list style; the menu
-           opens upward. The chosen basemap is saved and carried into the published portal. -->
-      <div class="absolute bottom-3 left-3 z-10">
-        <div v-if="basemapMenuOpen"
-          class="absolute bottom-full left-0 mb-1.5 w-52 bg-card border border-border rounded-lg shadow-xl p-1.5 max-h-72 overflow-y-auto space-y-0.5">
-          <button v-for="bm in BASEMAP_CATALOG" :key="bm.id"
-            @click="basemap = bm.id; basemapMenuOpen = false"
-            class="w-full flex items-center gap-2.5 rounded-md px-1.5 py-1 text-left transition-colors"
-            :class="currentBasemap().id === bm.id ? 'bg-primary/10' : 'hover:bg-muted/60'">
-            <img :src="bm.thumb" alt="" class="w-9 h-9 rounded object-cover border border-border/70 flex-shrink-0" />
-            <span class="text-xs font-medium flex-1 truncate"
-              :class="currentBasemap().id === bm.id ? 'text-primary' : 'text-foreground/85'">{{ bm.name }}</span>
-            <svg v-if="currentBasemap().id === bm.id" width="14" height="14" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"
-              class="text-primary flex-shrink-0"><path d="M20 6L9 17l-5-5" /></svg>
-          </button>
-        </div>
-        <button @click="basemapMenuOpen = !basemapMenuOpen"
-          class="flex items-center gap-2 bg-card/95 hover:bg-card shadow-md border border-border rounded-lg pl-1.5 pr-2.5 py-1.5 text-xs font-medium text-foreground/85"
-          title="Choose the portal basemap">
-          <img :src="currentBasemap().thumb" alt=""
-            class="w-6 h-6 rounded object-cover border border-border/70" />
-          <span>{{ currentBasemap().name }}</span>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
-            stroke-linecap="round" stroke-linejoin="round" class="transition-transform"
-            :class="basemapMenuOpen ? '' : 'rotate-180'"><path d="M6 9l6 6 6-6" /></svg>
-        </button>
-      </div>
+      <!-- Basemap picker: added imperatively as a MapLibre control (top-right, above the globe/zoom
+           controls) so it looks identical to the published portal. See BasemapControl below. -->
 
       <div v-if="!layerConfigs.length"
         class="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -273,7 +246,6 @@ const showAddLayer = ref(false)
 const lastAddedKey = ref(null)
 const accessType = ref('public')
 const basemap = ref(null)  // chosen basemap catalog id; null → BASEMAP_CATALOG[0] (see below)
-const basemapMenuOpen = ref(false)
 
 // Drag-to-reorder layers (top of list = top of map)
 const dragIndex = ref(null)
@@ -392,7 +364,7 @@ const accessOptions = [
   { value: 'private',  label: 'Private',  desc: 'Only signed-in users can view' },
 ]
 
-const { map, loaded, applyStyle, fitToBbox, jumpTo } = useMaplibre('portal-preview-map')
+const { map, loaded, applyStyle, fitToBbox, jumpTo, addTopRightControlFirst } = useMaplibre('portal-preview-map')
 
 // Admin-pinned view (center/zoom) for the published portal; null = fit to all layers.
 const savedView = ref(null)
@@ -732,6 +704,9 @@ watch(loaded, (v) => {
   })
   // deck.gl overlay (once): a control so it survives setStyle; refetch the viewport on pan/zoom.
   if (!deckOverlay) {
+    // Basemap picker control — top-right, above the globe/zoom controls, mirroring the published
+    // portal's switcher exactly (same grid icon, same flyout menu).
+    addTopRightControlFirst(new BasemapControl())
     deckOverlay = new MapboxOverlay({ interleaved: false, layers: [] })
     map.value.addControl(deckOverlay)
     map.value.on('click', onPreviewClick)
@@ -834,6 +809,51 @@ const BASEMAP_CATALOG = [
 ]
 function currentBasemap() {
   return BASEMAP_CATALOG.find(b => b.id === basemap.value) || BASEMAP_CATALOG[0]
+}
+
+const _escHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+// MapLibre control mirroring the published portal's BasemapControl (templates/shared/portal.js):
+// a grid-icon button that opens a flyout list of basemaps. Picking one sets `basemap`, which the
+// watcher rebuilds the preview from. Same markup/classes as the portal so the shared .gd-basemap-*
+// CSS (in this component's global <style> block) styles it identically.
+class BasemapControl {
+  onAdd() {
+    const gridIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">' +
+      '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>' +
+      '<rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>'
+    const checkIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" ' +
+      'stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>'
+    const c = document.createElement('div')
+    c.className = 'maplibregl-ctrl maplibregl-ctrl-group gd-basemap-ctrl'
+    c.innerHTML =
+      '<button type="button" class="gd-basemap-btn" title="Basemaps" aria-label="Choose basemap">' + gridIcon + '</button>' +
+      '<div class="gd-basemap-menu"><div class="gd-basemap-title">Basemap</div>' +
+      BASEMAP_CATALOG.map(bm =>
+        '<label class="gd-basemap-opt"><input type="radio" name="gd-basemap-editor" value="' + bm.id + '"' +
+        (currentBasemap().id === bm.id ? ' checked' : '') + '>' +
+        '<img class="gd-basemap-thumb" src="' + bm.thumb + '" alt="" loading="lazy">' +
+        '<span class="gd-basemap-name">' + _escHtml(bm.name) + '</span>' +
+        '<span class="gd-basemap-check">' + checkIcon + '</span></label>').join('') +
+      '</div>'
+    const btn = c.querySelector('.gd-basemap-btn')
+    const menu = c.querySelector('.gd-basemap-menu')
+    btn.addEventListener('click', ev => {
+      ev.stopPropagation()
+      // Sync the checked row to the current basemap (it may have loaded from the portal AFTER this
+      // control's DOM was built), so the highlight is always correct when the menu opens.
+      const cur = currentBasemap().id
+      menu.querySelectorAll('input[name="gd-basemap-editor"]').forEach(r => { r.checked = r.value === cur })
+      c.classList.toggle('open')
+    })
+    menu.addEventListener('change', ev => { basemap.value = ev.target.value })
+    menu.addEventListener('click', ev => ev.stopPropagation())
+    this._docClose = () => c.classList.remove('open')
+    document.addEventListener('click', this._docClose)
+    this._c = c
+    return c
+  }
+  onRemove() { document.removeEventListener('click', this._docClose); this._c?.remove() }
 }
 
 function buildPreviewStyle() {
@@ -1142,4 +1162,49 @@ async function handlePublish() {
 .gd-tiptap :deep(code) { font-size: .8rem; background: hsl(var(--muted)); border: 1px solid hsl(var(--border)); border-radius: 4px; padding: 0 3px; }
 .gd-tiptap :deep(img) { max-width: 100%; border-radius: 8px; border: 1px solid hsl(var(--border)); margin: .5rem 0; }
 .gd-tiptap :deep(img.ProseMirror-selectednode) { outline: 2px solid hsl(var(--primary)); }
+</style>
+
+<!-- Non-scoped: the basemap control DOM is created imperatively (MapLibre control), so scoped
+     styles wouldn't reach it. Mirrors templates/shared/portal.css .gd-basemap-* but colored from the
+     editor's theme tokens (which flip under html.dark) so it matches the published portal. -->
+<style>
+.gd-basemap-ctrl { position: relative; }
+.gd-basemap-btn {
+  width: 29px; height: 29px; display: flex; align-items: center; justify-content: center;
+  background: transparent; border: none; cursor: pointer; color: hsl(var(--foreground));
+}
+.gd-basemap-btn svg { width: 18px; height: 18px; }
+.gd-basemap-menu {
+  display: none; position: absolute; top: 0; right: 40px; width: 250px;
+  background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: 12px;
+  box-shadow: 0 10px 25px -5px rgb(0 0 0 / 0.35); padding: 8px;
+}
+.gd-basemap-ctrl.open .gd-basemap-menu { display: block; }
+.gd-basemap-title {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  color: hsl(var(--muted-foreground)); padding: 3px 6px 8px;
+}
+.gd-basemap-opt {
+  display: flex; align-items: center; gap: 12px; padding: 7px 8px;
+  font-size: 13px; border-radius: 9px; cursor: pointer; position: relative;
+  border: 1.5px solid transparent; transition: background .12s, border-color .12s;
+}
+.gd-basemap-opt:hover { background: hsl(var(--muted) / .6); }
+.gd-basemap-opt input { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }
+.gd-basemap-opt:has(input:checked) { border-color: hsl(var(--primary)); background: hsl(var(--primary) / .1); }
+.gd-basemap-name { flex: 1; font-weight: 500; color: hsl(var(--foreground)); white-space: nowrap; }
+.gd-basemap-check { display: flex; color: hsl(var(--primary)); opacity: 0; flex-shrink: 0; }
+.gd-basemap-check svg { width: 17px; height: 17px; }
+.gd-basemap-opt:has(input:checked) .gd-basemap-check { opacity: 1; }
+.gd-basemap-thumb {
+  width: 68px; height: 46px; object-fit: cover; border-radius: 7px;
+  border: 1px solid hsl(var(--border)); flex-shrink: 0; background: hsl(var(--muted));
+}
+/* Dark-mode MapLibre controls (globe/zoom) — recolour to the theme surface + invert the built-in
+   glyphs so the whole top-right stack matches (the basemap button uses currentColor, not
+   .maplibregl-ctrl-icon, so the filter leaves it alone). */
+.dark .maplibregl-ctrl-group { background: hsl(var(--card)); box-shadow: 0 0 0 1px hsl(var(--border)), 0 2px 6px rgb(0 0 0 / .3); }
+.dark .maplibregl-ctrl-group button + button { border-top-color: hsl(var(--border)); }
+.dark .maplibregl-ctrl-group button:hover { background: hsl(var(--muted)); }
+.dark .maplibregl-ctrl button .maplibregl-ctrl-icon { filter: invert(1) hue-rotate(180deg) brightness(1.05); }
 </style>

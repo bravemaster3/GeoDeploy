@@ -12,6 +12,8 @@ if (!maplibregl.__pmtilesRegistered) {
 export function useMaplibre(containerId, initialStyle = null) {
   const map = ref(null)
   const loaded = ref(false)
+  let globeCtrl = null
+  let navCtrl = null
 
   const defaultStyle = {
     version: 8,
@@ -34,10 +36,23 @@ export function useMaplibre(containerId, initialStyle = null) {
       zoom: 2,
     })
 
-    if (maplibregl.GlobeControl) map.value.addControl(new maplibregl.GlobeControl(), 'top-right')
-    map.value.addControl(new maplibregl.NavigationControl(), 'top-right')
+    if (maplibregl.GlobeControl) { globeCtrl = new maplibregl.GlobeControl(); map.value.addControl(globeCtrl, 'top-right') }
+    navCtrl = new maplibregl.NavigationControl()
+    map.value.addControl(navCtrl, 'top-right')
     map.value.on('load', () => (loaded.value = true))
   })
+
+  // Add a control to the TOP of the top-right stack (above the globe/zoom controls). MapLibre only
+  // appends within a corner, so we remove the globe/nav controls and re-add them after `control`.
+  function addTopRightControlFirst(control) {
+    if (!map.value) return
+    if (globeCtrl) { map.value.removeControl(globeCtrl); globeCtrl = null }
+    if (navCtrl) { map.value.removeControl(navCtrl); navCtrl = null }
+    map.value.addControl(control, 'top-right')
+    if (maplibregl.GlobeControl) { globeCtrl = new maplibregl.GlobeControl(); map.value.addControl(globeCtrl, 'top-right') }
+    navCtrl = new maplibregl.NavigationControl()
+    map.value.addControl(navCtrl, 'top-right')
+  }
 
   onUnmounted(() => {
     map.value?.remove()
@@ -73,5 +88,5 @@ export function useMaplibre(containerId, initialStyle = null) {
     } catch { /* keep current view */ }
   }
 
-  return { map, loaded, applyStyle, fitToBbox, jumpTo }
+  return { map, loaded, applyStyle, fitToBbox, jumpTo, addTopRightControlFirst }
 }
