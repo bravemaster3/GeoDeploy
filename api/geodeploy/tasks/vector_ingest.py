@@ -416,6 +416,21 @@ def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir:
         geom_type = src.schema["geometry"]
         col_schema = src.schema["properties"]
         cols = list(col_schema.keys())
+        # Our table always adds `id serial primary key` and a `geom` column. If the SOURCE has its own
+        # columns named "id"/"geom" (e.g. OSM extracts), a duplicate-column error would kill the
+        # CREATE TABLE. Keep `cols` as the source property keys (for reading values) but derive a
+        # parallel list of on-disk names that dedups (case-insensitively) against the reserved names
+        # and against each other: source "id" → "id_1", etc. Our serial "id" stays the canonical key.
+        _reserved = {"id", "geom"}
+        _seen = set(_reserved)
+        db_cols = []
+        for c in cols:
+            name = c
+            while name.lower() in _seen:
+                base, _, n = name.rpartition("_")
+                name = f"{base}_{int(n) + 1}" if base and n.isdigit() else f"{name}_1"
+            _seen.add(name.lower())
+            db_cols.append(name)
         srid = _srid_of(crs_wkt)
 
         # Decide where reprojection happens. Known EPSG → reproject set-based in PostGIS (fastest).
@@ -462,8 +477,8 @@ def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir:
     geom_sql = (f"ST_Transform(ST_SetSRID(geom, {db_srid}), 4326)" if db_srid != 4326
                 else "ST_SetSRID(geom, 4326)")
     stg = f"{table}_stg"
-    coldefs = ", ".join(f"{_q(c)} {_pg_type(col_schema[c])}" for c in cols)
-    copycols = ", ".join(_q(c) for c in cols)
+    coldefs = ", ".join(f"{_q(db)} {_pg_type(col_schema[src])}" for src, db in zip(cols, db_cols))
+    copycols = ", ".join(_q(db) for db in db_cols)
     conn = psycopg2.connect(dsn)
     try:
         cur = conn.cursor()
@@ -496,5 +511,5 @@ def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir:
 
     return {
         "bbox": bbox, "count": count, "geom_type": geom_type,
-        "columns": [{"name": c, "type": str(col_schema[c])} for c in cols],
+        "columns": [{"name": db, "type": str(col_schema[src])} for src, db in zip(cols, db_cols)],
     }
