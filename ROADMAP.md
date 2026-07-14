@@ -43,6 +43,12 @@ Highlights beyond the Cloud spine, captured as tracked items:
 - **Advanced:** in-browser DuckDB-WASM analysis console (`V-01`), fast processing toolkit (`V-02`),
   story-map portals (`V-03`), EXIF photo features (`V-04`), temporal (`V-05`), 3D tiles (`V-06`),
   live connectors (`V-07`).
+- **Portal tools framework** (`V-08`) — an admin-selectable toolbox chosen at publish time (measure,
+  print, download, swipe, share, filter, geolocate, saved views…), with the build-heavier measure +
+  print/PDF tools broken out as `V-09`. The shipped area-clip download (`F-06`) becomes the first
+  registered tool.
+- **Transactional email & export notifications** (`C-08`) — Resend-powered "your download is ready"
+  emails for queued exports once usage grows, reusing the same channel for invites, resets and receipts.
 
 ## Data schema (`<script id="roadmap-data">` in `docs/roadmap.html`)
 
@@ -96,6 +102,8 @@ When an item is delivered, the corresponding folder `README.md` gets the impleme
 roadmap only tracks *state*, not *how*.
 
 ## Last updated
+2026-07-14 — added `V-08` Portal tools framework (admin-selectable toolbox), `V-09` Measurement &
+print tools, and `C-08` Transactional email & export notifications (Resend). 40 items; frontier = `A-01`.
 2026-07-14 — added `F-10` Security hardening (shipped: 2026-07 audit — setup lock, private-layer
 enforcement, login rate-limit, portal XSS, read-only TiTiler key, security headers; all with
 regression tests) and `F-11` Automated tests & CI (building). 37 items; frontier = `A-01`.
