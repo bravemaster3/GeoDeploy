@@ -24,6 +24,11 @@ sudo docker rmi geodeploy/api:latest geodeploy/ui:latest 2>/dev/null || true
 info "Removing GeoDeploy Docker network..."
 sudo docker network rm geodeploy 2>/dev/null || true
 
+# Named volumes hold the PostGIS database and MinIO object store — removing the containers does NOT
+# remove these, so without this a "fresh" install would silently reuse the old Postgres/MinIO data.
+info "Removing GeoDeploy Docker volumes (PostGIS + MinIO data)..."
+sudo docker volume ls -q --filter "name=geodeploy" | xargs -r sudo docker volume rm 2>/dev/null || true
+
 info "Removing GeoDeploy directory ($GEODEPLOY_DIR)..."
 cd "$HOME"
 sudo rm -rf "$GEODEPLOY_DIR"
