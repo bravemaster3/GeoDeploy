@@ -115,7 +115,7 @@
 
         <!-- About / documentation: shown in the published portal's About panel together with
              each layer's catalog metadata and public data links -->
-        <section>
+        <section class="p-4 border-t border-border/60">
           <p class="text-xs font-semibold text-muted-foreground/70 uppercase tracking-wide mb-2">About this portal</p>
           <p v-if="description" class="text-xs text-muted-foreground line-clamp-3 whitespace-pre-line mb-2">{{ description }}</p>
           <p v-else class="text-xs text-muted-foreground/70 italic mb-2">No documentation yet.</p>
@@ -203,8 +203,24 @@
         Zoom to all
       </button>
 
-      <!-- Basemap picker (top-right). Same catalog as the published portal, so the choice carries. -->
-      <div class="absolute top-3 right-3 z-10">
+      <!-- Basemap picker (bottom-left, so it clears MapLibre's top-right globe/zoom controls). Same
+           catalog as the published portal, in the published portal's one-column list style; the menu
+           opens upward. The chosen basemap is saved and carried into the published portal. -->
+      <div class="absolute bottom-3 left-3 z-10">
+        <div v-if="basemapMenuOpen"
+          class="absolute bottom-full left-0 mb-1.5 w-52 bg-card border border-border rounded-lg shadow-xl p-1.5 max-h-72 overflow-y-auto space-y-0.5">
+          <button v-for="bm in BASEMAP_CATALOG" :key="bm.id"
+            @click="basemap = bm.id; basemapMenuOpen = false"
+            class="w-full flex items-center gap-2.5 rounded-md px-1.5 py-1 text-left transition-colors"
+            :class="currentBasemap().id === bm.id ? 'bg-primary/10' : 'hover:bg-muted/60'">
+            <img :src="bm.thumb" alt="" class="w-9 h-9 rounded object-cover border border-border/70 flex-shrink-0" />
+            <span class="text-xs font-medium flex-1 truncate"
+              :class="currentBasemap().id === bm.id ? 'text-primary' : 'text-foreground/85'">{{ bm.name }}</span>
+            <svg v-if="currentBasemap().id === bm.id" width="14" height="14" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"
+              class="text-primary flex-shrink-0"><path d="M20 6L9 17l-5-5" /></svg>
+          </button>
+        </div>
         <button @click="basemapMenuOpen = !basemapMenuOpen"
           class="flex items-center gap-2 bg-card/95 hover:bg-card shadow-md border border-border rounded-lg pl-1.5 pr-2.5 py-1.5 text-xs font-medium text-foreground/85"
           title="Choose the portal basemap">
@@ -213,21 +229,8 @@
           <span>{{ currentBasemap().name }}</span>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
             stroke-linecap="round" stroke-linejoin="round" class="transition-transform"
-            :class="basemapMenuOpen ? 'rotate-180' : ''"><path d="M6 9l6 6 6-6" /></svg>
+            :class="basemapMenuOpen ? '' : 'rotate-180'"><path d="M6 9l6 6 6-6" /></svg>
         </button>
-        <div v-if="basemapMenuOpen"
-          class="absolute top-full right-0 mt-1.5 w-56 bg-card border border-border rounded-lg shadow-xl p-1.5 grid grid-cols-2 gap-1.5">
-          <button v-for="bm in BASEMAP_CATALOG" :key="bm.id"
-            @click="basemap = bm.id; basemapMenuOpen = false"
-            class="group relative rounded-md overflow-hidden border-2 transition-colors"
-            :class="currentBasemap().id === bm.id ? 'border-primary' : 'border-transparent hover:border-border'"
-            :title="bm.name">
-            <img :src="bm.thumb" alt="" class="w-full h-14 object-cover" />
-            <span class="absolute inset-x-0 bottom-0 bg-black/55 text-white text-[10px] font-medium px-1 py-0.5 truncate text-left">
-              {{ bm.name }}
-            </span>
-          </button>
-        </div>
       </div>
 
       <div v-if="!layerConfigs.length"

@@ -1804,9 +1804,17 @@
       thumb: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/4/5/8' },
   ];
   const BASEMAPS = BASEMAP_CATALOG;
-  // The admin's chosen basemap (baked into the base layer). Fall back to the first catalog entry so
-  // pre-basemap portals still get a valid switcher selection ≈ their original Carto-light base.
-  const DEFAULT_BASEMAP = ((STYLE.geodeploy || {}).defaultBasemap) || BASEMAPS[0].id;
+  // The admin's chosen basemap, baked into the base layer at publish. Portals published BEFORE
+  // basemap selection have no defaultBasemap → keep the template's own baked basemap (the '__default__'
+  // sentinel) so their appearance is unchanged; only portals that explicitly chose one switch away.
+  const RAW_DEFAULT = ((STYLE.geodeploy || {}).defaultBasemap) || null;
+  const HAS_DEFAULT_ENTRY = !RAW_DEFAULT;           // show a "Default" (template) option for old portals
+  const DEFAULT_BASEMAP = RAW_DEFAULT || '__default__';
+  // Switcher options: catalog entries, plus a leading "Default" (the template's baked base) when the
+  // portal didn't pick a basemap.
+  const BASEMAP_OPTS = HAS_DEFAULT_ENTRY
+    ? [{ id: '__default__', name: 'Default', thumb: BASEMAP_CATALOG[0].thumb }].concat(BASEMAP_CATALOG)
+    : BASEMAP_CATALOG;
 
   function builtinBasemapIds() {
     return STYLE.layers.filter(l => !(l.metadata && l.metadata['geodeploy:name'])).map(l => l.id);
@@ -1823,7 +1831,7 @@
         map.addLayer({ id: srcId, type: 'raster', source: srcId, layout: { visibility: 'none' } }, firstId);
       }
     });
-    selectBasemap(DEFAULT_BASEMAP);  // drive the switcher layer, hide the baked builtin base
+    selectBasemap(DEFAULT_BASEMAP);  // drive the switcher layer (or keep the baked builtin for '__default__')
     map.addControl(new BasemapControl(), 'top-right');
     map.addControl(new ToolsControl(), 'top-right');
   }
@@ -2030,8 +2038,10 @@
   }
 
   function selectBasemap(id) {
-    // Hide the template's baked base layer(s) — the switcher owns the basemap once it's wired.
-    builtinBasemapIds().forEach(lid => { if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', 'none'); });
+    // '__default__' → show the template's baked base layer(s); any catalog id → hide the baked base
+    // and show that catalog raster instead.
+    const showBuiltin = id === '__default__';
+    builtinBasemapIds().forEach(lid => { if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', showBuiltin ? 'visible' : 'none'); });
     BASEMAPS.forEach(bm => {
       const lid = 'gd-basemap-' + bm.id;
       if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', bm.id === id ? 'visible' : 'none');
@@ -2056,7 +2066,7 @@
         '<button type="button" class="gd-basemap-btn" title="Basemaps" aria-label="Choose basemap">' + basemapIcon() + '</button>' +
         '<div class="gd-basemap-menu">' +
           '<div class="gd-basemap-title">Basemap</div>' +
-          BASEMAPS.map((bm) =>
+          BASEMAP_OPTS.map((bm) =>
             '<label class="gd-basemap-opt"><input type="radio" name="gd-basemap" value="' + bm.id + '"' +
             (bm.id === DEFAULT_BASEMAP ? ' checked' : '') + '>' +
             '<img class="gd-basemap-thumb" src="' + bm.thumb + '" alt="" loading="lazy">' +

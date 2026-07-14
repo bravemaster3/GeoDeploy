@@ -24,20 +24,9 @@
           class="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-medium text-[10px] uppercase tracking-wide">Public data</span>
       </div>
     </div>
-    <StatusBadge :status="layer.status" :progress="layer._job?.progress" :step="layer._job?.current_step" />
-    <!-- Restart processing: a file-backed (GeoParquet) layer whose convert/prep stalled or failed —
-         re-runs the right stage without a re-upload (e.g. the worker was restarted mid-job). -->
-    <button v-if="layer.storage_backend === 'geoparquet' && (layer.status === 'error' || layer.status === 'processing')"
-      @click="onReprocess" :disabled="restarting"
-      class="p-1.5 rounded transition-all text-muted-foreground/70 hover:text-primary disabled:opacity-40"
-      :class="layer.status === 'error' ? 'text-amber-400' : 'opacity-0 group-hover:opacity-100'"
-      title="Restart processing (re-convert / re-prepare — no re-upload needed)"
-    >
-      <RefreshIcon class="w-4 h-4" :class="restarting ? 'animate-spin' : ''" />
-    </button>
-    <!-- Tile to PMTiles: OPT-IN fast/seamless display for heavy GeoParquet layers. Re-runnable
-         (re-tile after a workflow improvement). Shown for ready GeoParquet layers; the amber
-         "tiling…" badge above reflects progress. Disabled while a tiling run is in flight. -->
+    <!-- Re-tile to PMTiles: tiling now runs automatically after prep, but this stays for a manual
+         re-tile (e.g. after a workflow change). Placed to the LEFT of the status badge so every
+         "Ready" badge lines up at the same right-hand position regardless of storage backend. -->
     <button v-if="layer.storage_backend === 'geoparquet' && layer.status === 'ready'"
       @click="onTile" :disabled="tiling || layer.tile_status === 'tiling'"
       class="p-1.5 rounded transition-all text-muted-foreground/70 hover:text-violet-400 disabled:opacity-40"
@@ -49,6 +38,18 @@
         <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
         <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
     </button>
+    <!-- Restart processing: a file-backed (GeoParquet) layer whose convert/prep stalled or failed —
+         re-runs the right stage without a re-upload (e.g. the worker was restarted mid-job). Left of
+         the badge too (only shows for error/processing, so it never shifts a "Ready" badge). -->
+    <button v-if="layer.storage_backend === 'geoparquet' && (layer.status === 'error' || layer.status === 'processing')"
+      @click="onReprocess" :disabled="restarting"
+      class="p-1.5 rounded transition-all text-muted-foreground/70 hover:text-primary disabled:opacity-40"
+      :class="layer.status === 'error' ? 'text-amber-400' : 'opacity-0 group-hover:opacity-100'"
+      title="Restart processing (re-convert / re-prepare — no re-upload needed)"
+    >
+      <RefreshIcon class="w-4 h-4" :class="restarting ? 'animate-spin' : ''" />
+    </button>
+    <StatusBadge :status="layer.status" :progress="layer._job?.progress" :step="layer._job?.current_step" />
     <!-- Data sharing: public catalog (STAC) listing + metadata -->
     <button v-if="layer.status === 'ready'" @click="showSharing = true"
       class="p-1.5 rounded transition-all"
