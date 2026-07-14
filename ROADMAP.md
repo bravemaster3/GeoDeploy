@@ -52,6 +52,11 @@ Highlights beyond the Cloud spine, captured as tracked items:
   registered tool.
 - **Transactional email & export notifications** (`C-08`) — Resend-powered "your download is ready"
   emails for queued exports once usage grows, reusing the same channel for invites, resets and receipts.
+- **Template gallery & branding** (`V-10`) — visual template gallery + per-portal brand colours/logo
+  (the look-and-feel half), with **structural layout templates** (`V-11`) as the separate,
+  build-heavier half: floating right-hand layer list, basemap-picker placement, sidebar side,
+  docked/overlay panels — layout variety like ArcGIS Experience Builder, by making the shared portal
+  runtime's regions configurable rather than fixed.
 
 ## Data schema (`<script id="roadmap-data">` in `docs/roadmap.html`)
 
@@ -105,6 +110,9 @@ When an item is delivered, the corresponding folder `README.md` gets the impleme
 roadmap only tracks *state*, not *how*.
 
 ## Last updated
+2026-07-14 — added `V-11` Structural layout templates (configurable portal regions — floating layer
+list, panel placement, sidebar side; Experience-Builder-style layout variety) and refocused `V-10` on
+the gallery + brand look-and-feel. 43 items; frontier = `A-01`.
 2026-07-14 — added `E-08` Multi-language (i18n) — dashboard + published-portal translation, French
 first, planned near-term. 42 items; frontier = `A-01`.
 2026-07-14 — added `V-10` Template gallery & branding (planned); shipped a first distinct template
