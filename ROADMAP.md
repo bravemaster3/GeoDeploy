@@ -40,6 +40,9 @@ Highlights beyond the Cloud spine, captured as tracked items:
   import (`E-04`).
 - **Connect from QGIS** (`E-05`), **Catalog/STAC** (`E-06`), optional **OGC API** (`E-07`, kept but
   deprioritized in favor of the lakehouse path).
+- **Multi-language (i18n)** (`E-08`, planned, near-term) — run the dashboard and published portals in
+  the visitor's language (French first, West-Africa focus). The admin UI already has vue-i18n
+  scaffolding; the bigger half is translating the shared portal runtime.
 - **Advanced:** in-browser DuckDB-WASM analysis console (`V-01`), fast processing toolkit (`V-02`),
   story-map portals (`V-03`), EXIF photo features (`V-04`), temporal (`V-05`), 3D tiles (`V-06`),
   live connectors (`V-07`).
@@ -102,6 +105,8 @@ When an item is delivered, the corresponding folder `README.md` gets the impleme
 roadmap only tracks *state*, not *how*.
 
 ## Last updated
+2026-07-14 — added `E-08` Multi-language (i18n) — dashboard + published-portal translation, French
+first, planned near-term. 42 items; frontier = `A-01`.
 2026-07-14 — added `V-10` Template gallery & branding (planned); shipped a first distinct template
 set (minimal, satellite-dark, editorial, humanitarian) and removed the weak research template. 41 items.
 2026-07-14 — added `V-08` Portal tools framework (admin-selectable toolbox), `V-09` Measurement &
