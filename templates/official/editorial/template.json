@@ -1,0 +1,11 @@
+{
+  "name": "Editorial",
+  "author": "GeoDeploy",
+  "description": "A warm, print-inspired look: cream paper, serif headings and a terracotta accent. Suited to stories, reports and narrative maps.",
+  "tags": ["editorial", "warm", "serif", "light", "official"],
+  "language": "en",
+  "basemap": "voyager",
+  "preview": "preview.png",
+  "version": "1.0.0",
+  "license": "MIT"
+}

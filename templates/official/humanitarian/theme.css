@@ -1,0 +1,25 @@
+/* Humanitarian — OCHA-style high contrast: a bold blue masthead with a red rule, red accents and
+   crisp, square-ish cards. :root overrides restyle the light theme; behaviour is the shared runtime. */
+:root {
+  --bg: #ffffff;
+  --surface: #eef3f8;
+  --border: #c7d5e3;
+  --text: #11222f;
+  --text-muted: #4c6273;
+  --accent: #e4032e;        /* OCHA red */
+  --accent-light: #fde1e6;
+  --radius: 2px;
+}
+body { font-family: "Helvetica Neue", Arial, system-ui, sans-serif; }
+
+/* OCHA cerulean header with a red bottom rule */
+#header { background: #1f69b3; border-bottom: 3px solid var(--accent); }
+#portal-title { color: #ffffff; font-weight: 700; letter-spacing: .2px; }
+#sidebar-toggle { color: #ffffff; }
+#sidebar-toggle:hover { background: rgba(255,255,255,.18); color: #ffffff; }
+#header-badge { color: rgba(255,255,255,.85); }
+#header-badge a:hover { color: #ffffff; }
+
+.sidebar-section-title { color: #1f69b3; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.layer-card { border-left: 4px solid var(--accent); }
+.layer-card:hover { border-color: #1f69b3; }

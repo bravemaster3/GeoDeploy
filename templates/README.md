@@ -41,29 +41,36 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
 
 ## Contents
 - `shared/` — `portal.js`, `portal.css`, `layout.html` (see above).
-- `official/minimal/` — light blue theme, CARTO Positron basemap. Complete.
-- `official/research/` — teal academic theme, CARTO Voyager basemap. Complete (theme.css + style.json
-  + template.json; reuses the shared skeleton via its own copy of `layout.html`).
-- `official/west-africa-fr/`, `official/humanitarian/` — metadata-only stubs (not listed until they
-  get a theme + are completed).
+- `official/minimal/` — clean white default (its `theme.css` only sets the body font — the stale
+  `#title` selector no longer exists, so it's effectively the shared portal.css look). Complete.
+- `official/satellite-dark/` — dark UI (dark `:root` overrides) over Esri satellite imagery; sky accent.
+- `official/editorial/` — warm cream + terracotta, serif headings, on CARTO Voyager. Print/story feel.
+- `official/humanitarian/` — OCHA-style cerulean header + red rule, high contrast, on OSM.
+- `official/west-africa-fr/` — metadata-only stub (no `style.json` → not listed until completed;
+  a French light theme is the intended finish).
 - `community/` — user submissions + `CONTRIBUTING.md` (CI-validated format).
 
 ## Dependencies / relationships
 - Bind-mounted read-only at `/templates` in the api + celery containers.
 - `services/portal_generator.py` assembles `shared/portal.{css,js}` + the template's
   `layout.html`/`theme.css`/`style.json` + the live data into the published `index.html`.
-- `routers/templates.py` lists a template if it has `template.json` + `layout.html` (a template
-  without its own `layout.html` still publishes fine via the shared skeleton, but add one — or relax
-  the router — if you want it listed).
+- `routers/templates.py` lists a template if it has **`style.json`** (a basemap); `theme.css` and
+  `layout.html` are optional (fall back to the shared skeleton). So a metadata-only stub without
+  `style.json` is silently hidden — add a `style.json` to make it appear.
 - **Parity:** `ui/src/views/PortalEditor.vue::buildPreviewStyle()` re-implements the same MapLibre
   style/raster-URL logic for the editor preview — keep it in sync with `shared/portal.js`.
 
 ## Current status & known issues
 - `shared/portal.js` is large; it's the single source of truth for portal behaviour. Editing it
   reflects in every template on the next publish (no rebuild needed — `/templates` is a bind mount).
-- The non-minimal/research official templates are intentionally hidden until completed.
+- Listed official templates: **minimal, satellite-dark, editorial, humanitarian** (each has a
+  `style.json`). `west-africa-fr` stays a hidden stub until it gets one. The old `research` template
+  was removed (2026-07-14).
+- Basemap is now chosen independently in the editor/portal (shared basemap catalog), so a template's
+  `style.json` basemap is only the DEFAULT; a template's real job is visual identity (`theme.css`).
 - Adding template-level **colour personalization** later = exposing a few `--accent`/etc. overrides
-  per portal (the theming is already variable-based, so this is now straightforward).
+  per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
-2026-07-11 (portal.js: GeoParquet identify-on-click popups; download dialog lists GeoParquet layers)
+2026-07-14 (removed the research template; added satellite-dark, editorial, humanitarian; fixed the
+listing requirement note to `style.json`; basemap now chosen separately from the template)

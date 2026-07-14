@@ -1,0 +1,21 @@
+{
+  "sources": {
+    "basemap": {
+      "type": "raster",
+      "tiles": [
+        "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+      ],
+      "tileSize": 256,
+      "maxzoom": 19,
+      "attribution": "Imagery © <a href='https://www.esri.com/'>Esri</a>, Maxar, Earthstar Geographics"
+    }
+  },
+  "layers": [
+    {
+      "id": "basemap",
+      "type": "raster",
+      "source": "basemap",
+      "paint": { "raster-opacity": 1 }
+    }
+  ]
+}

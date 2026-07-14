@@ -1,0 +1,25 @@
+/* Editorial — a warm, print-inspired identity. Cream paper, charcoal ink, terracotta accent and
+   serif headings. :root overrides restyle the light theme; the shared portal.css/js drive behaviour. */
+:root {
+  --bg: #faf6ef;
+  --surface: #f2ebdd;
+  --border: #e4d9c6;
+  --text: #2b2320;
+  --text-muted: #7a6f63;
+  --accent: #b5502f;        /* terracotta */
+  --accent-light: #f4e2d8;
+  --radius: 4px;
+}
+body { font-family: Georgia, "Iowan Old Style", "Times New Roman", serif; }
+
+/* Serif masthead with a fine accent rule under it */
+#header { background: var(--bg); border-bottom: 2px solid var(--accent); }
+#portal-title { font-family: Georgia, "Iowan Old Style", serif; font-weight: 700; letter-spacing: .2px; color: var(--text); }
+#sidebar-toggle { color: var(--text-muted); }
+#sidebar-toggle:hover { background: var(--accent-light); color: var(--accent); }
+#header-badge { color: var(--text-muted); }
+#header-badge a:hover { color: var(--accent); }
+
+/* Uppercase, letter-spaced eyebrow section titles; ruled layer cards */
+.sidebar-section-title { color: var(--accent); text-transform: uppercase; letter-spacing: .08em; font-size: 11px; font-weight: 700; }
+.layer-card { background: var(--surface); border-left: 3px solid var(--accent); }

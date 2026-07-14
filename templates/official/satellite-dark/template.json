@@ -1,0 +1,11 @@
+{
+  "name": "Satellite Dark",
+  "author": "GeoDeploy",
+  "description": "A dark, high-contrast interface over satellite imagery. Vivid data pops against the dark UI — good for imagery, environmental and night-mode portals.",
+  "tags": ["dark", "satellite", "imagery", "official"],
+  "language": "en",
+  "basemap": "satellite",
+  "preview": "preview.png",
+  "version": "1.0.0",
+  "license": "MIT"
+}

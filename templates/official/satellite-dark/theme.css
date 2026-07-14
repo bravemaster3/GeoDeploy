@@ -1,0 +1,29 @@
+/* Satellite Dark — a dark UI over imagery. Overrides the LIGHT :root palette with dark tokens so the
+   portal reads dark by default; --accent carries into the shared dark theme too, so the toggle stays
+   coherent. All behaviour comes from the shared portal.css / portal.js. */
+:root {
+  --bg: #0b1220;
+  --surface: #131d31;
+  --border: #263450;
+  --text: #e8eefb;
+  --text-muted: #93a6c6;
+  --accent: #38bdf8;        /* sky-400 — cold, luminous against imagery */
+  --accent-light: #0d2c40;
+  --radius: 8px;
+  --shadow: 0 1px 3px rgba(0,0,0,.55), 0 1px 2px rgba(0,0,0,.45);
+  --shadow-lg: 0 8px 26px rgba(0,0,0,.6);
+}
+body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+/* Glassy dark header + panels floating over the imagery */
+#header { background: rgba(11,18,32,.82); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); }
+#portal-title { color: #ffffff; font-weight: 700; letter-spacing: .2px; }
+#sidebar-toggle { color: #cfe0f7; }
+#sidebar-toggle:hover { background: rgba(255,255,255,.10); color: #fff; }
+#header-badge { color: rgba(207,224,247,.8); }
+#header-badge a:hover { color: #fff; }
+#sidebar { background: rgba(11,18,32,.9); backdrop-filter: blur(10px); }
+.sidebar-section-title { color: var(--accent); text-transform: uppercase; letter-spacing: .06em; }
+.layer-card { background: var(--surface); border: 1px solid var(--border); }
+.layer-card:hover { border-color: var(--accent); }
+#coords { background: rgba(11,18,32,.78); color: var(--text); box-shadow: var(--shadow); }

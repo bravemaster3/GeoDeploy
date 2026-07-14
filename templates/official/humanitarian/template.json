@@ -1,10 +1,10 @@
 {
   "name": "Humanitarian",
   "author": "GeoDeploy",
-  "description": "High-contrast layout following OCHA visual guidelines. Suitable for crisis response and NGO reporting.",
+  "description": "High-contrast layout in an OCHA-style blue and red. Bold, legible and printer-friendly — suited to crisis response and NGO reporting.",
   "tags": ["humanitarian", "ocha", "high-contrast", "official"],
   "language": "en",
-  "basemap": "osm-humanitarian",
+  "basemap": "osm",
   "preview": "preview.png",
   "version": "1.0.0",
   "license": "MIT"

@@ -102,6 +102,8 @@ When an item is delivered, the corresponding folder `README.md` gets the impleme
 roadmap only tracks *state*, not *how*.
 
 ## Last updated
+2026-07-14 — added `V-10` Template gallery & branding (planned); shipped a first distinct template
+set (minimal, satellite-dark, editorial, humanitarian) and removed the weak research template. 41 items.
 2026-07-14 — added `V-08` Portal tools framework (admin-selectable toolbox), `V-09` Measurement &
 print tools, and `C-08` Transactional email & export notifications (Resend). 40 items; frontier = `A-01`.
 2026-07-14 — added `F-10` Security hardening (shipped: 2026-07 audit — setup lock, private-layer
