@@ -1769,40 +1769,15 @@
   }
 
   // ── Basemap switcher (top-right) ────────────────────────
-  // Shared catalog — KEEP IN SYNC with api/geodeploy/services/portal_generator.py (BASEMAP_CATALOG)
-  // and ui/src/views/PortalEditor.vue (BASEMAP_CATALOG). All no-API-key raster basemaps. The published
-  // bundle repoints the template's baked base layer at the admin's chosen basemap (STYLE.geodeploy
-  // .defaultBasemap); the switcher lets the viewer flip among all catalog entries at view time.
-  const BASEMAP_CATALOG = [
-    { id: 'positron', name: 'Positron',
-      tiles: ['https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png'],
-      attribution: '© OpenStreetMap © CARTO',
-      thumb: 'https://a.basemaps.cartocdn.com/light_all/4/8/5.png' },
-    { id: 'voyager', name: 'Voyager',
-      tiles: ['https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png', 'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png'],
-      attribution: '© OpenStreetMap © CARTO',
-      thumb: 'https://a.basemaps.cartocdn.com/rastertiles/voyager/4/8/5.png' },
-    { id: 'dark', name: 'Dark Matter',
-      tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'],
-      attribution: '© OpenStreetMap © CARTO',
-      thumb: 'https://a.basemaps.cartocdn.com/dark_all/4/8/5.png' },
-    { id: 'osm', name: 'OpenStreetMap',
-      tiles: ['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png', 'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png'],
-      attribution: '© OpenStreetMap contributors',
-      thumb: 'https://a.tile.openstreetmap.org/4/8/5.png' },
-    { id: 'topo', name: 'OpenTopoMap',
-      tiles: ['https://a.tile.opentopomap.org/{z}/{x}/{y}.png', 'https://b.tile.opentopomap.org/{z}/{x}/{y}.png'],
-      attribution: '© OpenStreetMap, SRTM | © OpenTopoMap (CC-BY-SA)',
-      thumb: 'https://a.tile.opentopomap.org/4/8/5.png' },
-    { id: 'satellite', name: 'Satellite',
-      tiles: ['https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-      attribution: 'Imagery © Esri, Maxar, Earthstar Geographics',
-      thumb: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/4/5/8' },
-    { id: 'esri-topo', name: 'Esri Topographic',
-      tiles: ['https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}'],
-      attribution: '© Esri',
-      thumb: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/4/5/8' },
-  ];
+  // The catalog is the ONE source of truth on the server (portal_generator.BASEMAP_CATALOG); it's
+  // baked into this bundle as STYLE.geodeploy.basemaps, so there's nothing to keep in sync here.
+  // The minimal fallback only covers portals published before basemaps were baked in.
+  const BASEMAP_CATALOG = (((STYLE.geodeploy || {}).basemaps) || []).length
+    ? STYLE.geodeploy.basemaps
+    : [{ id: 'positron', name: 'Positron',
+         tiles: ['https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png'],
+         attribution: '© OpenStreetMap © CARTO',
+         thumb: 'https://a.basemaps.cartocdn.com/light_all/4/8/5.png' }];
   const BASEMAPS = BASEMAP_CATALOG;
   // The admin's chosen basemap, baked into the base layer at publish. Portals published BEFORE
   // basemap selection have no defaultBasemap → keep the template's own baked basemap (the '__default__'

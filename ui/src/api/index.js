@@ -139,6 +139,9 @@ export const deletePortal = (id) => api.delete(`/portals/${id}`)
 // Templates
 export const listTemplates = () => api.get('/templates')
 
+// Basemaps — the shared catalog (single source of truth; see api BASEMAP_CATALOG)
+export const listBasemaps = () => api.get('/basemaps')
+
 // Admin
 export const getServiceHealth = () => api.get('/admin/health')
 export const getStorageStats = () => api.get('/admin/storage-stats')

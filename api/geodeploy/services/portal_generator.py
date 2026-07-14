@@ -9,39 +9,47 @@ from .titiler import get_tile_url as raster_tile_url
 from . import external_sources as ext_svc
 
 
-# Shared basemap catalog — KEEP IN SYNC with templates/shared/portal.js (BASEMAP_CATALOG) and
-# ui/src/views/PortalEditor.vue (BASEMAP_CATALOG). All are no-API-key raster basemaps. The first
-# entry is the default when a portal has none set. The published bundle repoints the template's base
-# raster source at the chosen basemap and records its id in geodeploy.defaultBasemap.
+# ── Basemap catalog — THE single source of truth ─────────────────────────────────────────────────
+# All no-API-key raster basemaps. The first entry is the default when a portal has none set. This
+# list is the ONLY place to add/edit a basemap: it is served to the editor via GET /api/basemaps and
+# baked into every published portal as `geodeploy.basemaps` (so templates/shared/portal.js and
+# ui/src/views/PortalEditor.vue both consume it at runtime — neither hard-codes the catalog).
 BASEMAP_CATALOG = [
     {"id": "positron", "name": "Positron",
      "tiles": ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png",
                "https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png",
                "https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png"],
-     "attribution": "© OpenStreetMap © CARTO"},
+     "attribution": "© OpenStreetMap © CARTO",
+     "thumb": "https://a.basemaps.cartocdn.com/light_all/4/8/5.png"},
     {"id": "voyager", "name": "Voyager",
      "tiles": ["https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
                "https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
                "https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png"],
-     "attribution": "© OpenStreetMap © CARTO"},
+     "attribution": "© OpenStreetMap © CARTO",
+     "thumb": "https://a.basemaps.cartocdn.com/rastertiles/voyager/4/8/5.png"},
     {"id": "dark", "name": "Dark Matter",
      "tiles": ["https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
                "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png"],
-     "attribution": "© OpenStreetMap © CARTO"},
+     "attribution": "© OpenStreetMap © CARTO",
+     "thumb": "https://a.basemaps.cartocdn.com/dark_all/4/8/5.png"},
     {"id": "osm", "name": "OpenStreetMap",
      "tiles": ["https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
                "https://b.tile.openstreetmap.org/{z}/{x}/{y}.png"],
-     "attribution": "© OpenStreetMap contributors"},
+     "attribution": "© OpenStreetMap contributors",
+     "thumb": "https://a.tile.openstreetmap.org/4/8/5.png"},
     {"id": "topo", "name": "OpenTopoMap",
      "tiles": ["https://a.tile.opentopomap.org/{z}/{x}/{y}.png",
                "https://b.tile.opentopomap.org/{z}/{x}/{y}.png"],
-     "attribution": "© OpenStreetMap, SRTM | © OpenTopoMap (CC-BY-SA)"},
+     "attribution": "© OpenStreetMap, SRTM | © OpenTopoMap (CC-BY-SA)",
+     "thumb": "https://a.tile.opentopomap.org/4/8/5.png"},
     {"id": "satellite", "name": "Satellite",
      "tiles": ["https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
-     "attribution": "Imagery © Esri, Maxar, Earthstar Geographics"},
+     "attribution": "Imagery © Esri, Maxar, Earthstar Geographics",
+     "thumb": "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/4/5/8"},
     {"id": "esri-topo", "name": "Esri Topographic",
      "tiles": ["https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"],
-     "attribution": "© Esri"},
+     "attribution": "© Esri",
+     "thumb": "https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/4/5/8"},
 ]
 _BASEMAP_BY_ID = {b["id"]: b for b in BASEMAP_CATALOG}
 
@@ -290,6 +298,9 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
             "view": initial_view,  # admin-set center/zoom; portal.js prefers this over fitBounds
             "title": title,
             "deckLayers": user_data.get("deck_layers", []),  # GeoParquet layers → deck.gl overlay
+            # The full basemap catalog, baked in so portal.js builds the switcher from the SAME source
+            # as the editor (GET /api/basemaps) — one place to add a basemap.
+            "basemaps": BASEMAP_CATALOG,
             # True when about.html was published → portal.js shows the About links
             "aboutPage": False,  # set below once the page is written
         },
@@ -538,7 +549,7 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
   .doc {{ color: var(--doc-fg); }}
   .doc h2 {{ font-size: 23px; font-weight: 650; margin: 34px 0 10px; color: var(--fg); }}
   .doc h3, .doc h4 {{ font-size: 18px; font-weight: 600; margin: 24px 0 8px; color: var(--fg); }}
-  .doc p {{ margin: 10px 0; }}
+  .doc p {{ margin: 10px 0; text-align: justify; hyphens: auto; }}
   .doc ul, .doc ol {{ margin: 10px 0 10px 26px; }}
   .doc li {{ margin: 4px 0; }}
   .doc a {{ color: var(--primary); text-decoration: none; border-bottom: 1px solid transparent; }}

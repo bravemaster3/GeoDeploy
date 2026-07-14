@@ -226,7 +226,7 @@ import TipTapImage from '@tiptap/extension-image'
 import { Markdown } from 'tiptap-markdown'
 import { usePortalsStore } from '@/stores/portals'
 import { useDataStore } from '@/stores/data'
-import { listTemplates, getRasterStats, getVectorFeatures, identifyVectorFeatures, uploadPortalAsset } from '@/api'
+import { listTemplates, listBasemaps, getRasterStats, getVectorFeatures, identifyVectorFeatures, uploadPortalAsset } from '@/api'
 import { useMaplibre } from '@/composables/useMaplibre'
 import maplibregl from 'maplibre-gl'
 import { MapboxOverlay } from '@deck.gl/mapbox'
@@ -245,7 +245,7 @@ const templates = ref([])
 const showAddLayer = ref(false)
 const lastAddedKey = ref(null)
 const accessType = ref('public')
-const basemap = ref(null)  // chosen basemap catalog id; null → BASEMAP_CATALOG[0] (see below)
+const basemap = ref(null)  // chosen basemap catalog id; null → first catalog entry (see basemapCatalog)
 
 // Drag-to-reorder layers (top of list = top of map)
 const dragIndex = ref(null)
@@ -370,13 +370,19 @@ const { map, loaded, applyStyle, fitToBbox, jumpTo, addTopRightControlFirst } = 
 const savedView = ref(null)
 
 onMounted(async () => {
+  // Fetch the shared basemap catalog (single source of truth); replaces the inline bootstrap list.
+  // Non-fatal — the bootstrap list keeps the picker working if this fails.
+  listBasemaps().then(({ data }) => {
+    if (Array.isArray(data) && data.length) basemapCatalog.value = data
+  }).catch(() => { /* keep the bootstrap fallback */ })
+
   await Promise.all([portalsStore.refresh(), dataStore.refresh()])
   portal.value = portalsStore.portals.find(p => p.id === parseInt(route.params.id))
   if (portal.value) {
     layerConfigs.value = portal.value.layer_configs || []
     selectedTemplate.value = portal.value.template_id
     accessType.value = portal.value.access_type || 'public'
-    basemap.value = portal.value.basemap || BASEMAP_CATALOG[0].id
+    basemap.value = portal.value.basemap || basemapCatalog.value[0].id
     savedView.value = portal.value.initial_view || null
     description.value = portal.value.description || ''
   }
@@ -390,6 +396,7 @@ onMounted(async () => {
 // (getVectorFeatures → covering-column-pruned GeoJSON). Refetched on pan/zoom (moveend) and when a
 // new layer first appears; pure style edits rebuild from cached data without a network refetch.
 let deckOverlay = null
+let basemapControl = null
 const deckData = {}        // layer_id → cached FeatureCollection for the current view
 const deckFetched = {}     // layer_id → { bbox:[w,s,e,n], band } region already loaded (see below)
 const deckLoading = ref(0) // detail fetches in flight → shows the "Loading features…" pill
@@ -679,7 +686,11 @@ async function onPreviewClick(e) {
 // the FIRST build (restore the saved view, else fit to all layers). After that, style
 // edits (band/colour/etc.) must NOT yank the view — setStyle keeps the current camera.
 let viewInitialized = false
-watch([layerConfigs, loaded, basemap], () => {
+// When the catalog arrives from /api/basemaps (or changes), refresh the picker's list and, if the
+// chosen basemap's tiles differ, rebuild the preview.
+watch(basemapCatalog, () => basemapControl?.refresh())
+
+watch([layerConfigs, loaded, basemap, basemapCatalog], () => {
   if (!loaded.value) return
   const { style, bounds } = buildPreviewStyle()
   applyStyle(style)
@@ -706,7 +717,8 @@ watch(loaded, (v) => {
   if (!deckOverlay) {
     // Basemap picker control — top-right, above the globe/zoom controls, mirroring the published
     // portal's switcher exactly (same grid icon, same flyout menu).
-    addTopRightControlFirst(new BasemapControl())
+    basemapControl = new BasemapControl()
+    addTopRightControlFirst(basemapControl)
     deckOverlay = new MapboxOverlay({ interleaved: false, layers: [] })
     map.value.addControl(deckOverlay)
     map.value.on('click', onPreviewClick)
@@ -773,11 +785,11 @@ function markerImage(shape, color, size) {
   return { width: dim * dpr, height: dim * dpr, data: d.data, pixelRatio: dpr }
 }
 
-// Shared basemap catalog — KEEP IN SYNC with api/geodeploy/services/portal_generator.py
-// (BASEMAP_CATALOG) and templates/shared/portal.js (BASEMAP_CATALOG). All no-API-key raster
-// basemaps; the first is the default. The editor preview and the published portal draw from the
-// same list so what the admin picks here is exactly what visitors see.
-const BASEMAP_CATALOG = [
+// Basemap catalog. The single source of truth is the server (GET /api/basemaps → the API's
+// BASEMAP_CATALOG); it's fetched in onMounted and REPLACES this list, so adding a basemap is a
+// one-place change on the server. The inline list is only an instant bootstrap/offline fallback so
+// the preview never flashes blank before the fetch resolves.
+const basemapCatalog = ref([
   { id: 'positron', name: 'Positron',
     tiles: ['https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png'],
     attribution: '© OpenStreetMap © CARTO',
@@ -806,9 +818,9 @@ const BASEMAP_CATALOG = [
     tiles: ['https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}'],
     attribution: '© Esri',
     thumb: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/4/5/8' },
-]
+])
 function currentBasemap() {
-  return BASEMAP_CATALOG.find(b => b.id === basemap.value) || BASEMAP_CATALOG[0]
+  return basemapCatalog.value.find(b => b.id === basemap.value) || basemapCatalog.value[0]
 }
 
 const _escHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -817,33 +829,41 @@ const _escHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').r
 // a grid-icon button that opens a flyout list of basemaps. Picking one sets `basemap`, which the
 // watcher rebuilds the preview from. Same markup/classes as the portal so the shared .gd-basemap-*
 // CSS (in this component's global <style> block) styles it identically.
+const _checkIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" ' +
+  'stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>'
 class BasemapControl {
+  // Rebuild the menu's option rows from the current catalog + selection. Called on add and whenever
+  // the catalog changes (e.g. after the /api/basemaps fetch resolves with more basemaps).
+  _renderMenu() {
+    if (!this._menu) return
+    const cur = currentBasemap().id
+    this._menu.innerHTML = '<div class="gd-basemap-title">Basemap</div>' +
+      basemapCatalog.value.map(bm =>
+        '<label class="gd-basemap-opt"><input type="radio" name="gd-basemap-editor" value="' + bm.id + '"' +
+        (bm.id === cur ? ' checked' : '') + '>' +
+        '<img class="gd-basemap-thumb" src="' + bm.thumb + '" alt="" loading="lazy">' +
+        '<span class="gd-basemap-name">' + _escHtml(bm.name) + '</span>' +
+        '<span class="gd-basemap-check">' + _checkIcon + '</span></label>').join('')
+  }
+  refresh() { this._renderMenu() }
   onAdd() {
     const gridIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">' +
       '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>' +
       '<rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>'
-    const checkIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" ' +
-      'stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>'
     const c = document.createElement('div')
     c.className = 'maplibregl-ctrl maplibregl-ctrl-group gd-basemap-ctrl'
     c.innerHTML =
       '<button type="button" class="gd-basemap-btn" title="Basemaps" aria-label="Choose basemap">' + gridIcon + '</button>' +
-      '<div class="gd-basemap-menu"><div class="gd-basemap-title">Basemap</div>' +
-      BASEMAP_CATALOG.map(bm =>
-        '<label class="gd-basemap-opt"><input type="radio" name="gd-basemap-editor" value="' + bm.id + '"' +
-        (currentBasemap().id === bm.id ? ' checked' : '') + '>' +
-        '<img class="gd-basemap-thumb" src="' + bm.thumb + '" alt="" loading="lazy">' +
-        '<span class="gd-basemap-name">' + _escHtml(bm.name) + '</span>' +
-        '<span class="gd-basemap-check">' + checkIcon + '</span></label>').join('') +
-      '</div>'
+      '<div class="gd-basemap-menu"></div>'
     const btn = c.querySelector('.gd-basemap-btn')
     const menu = c.querySelector('.gd-basemap-menu')
+    this._menu = menu
+    this._renderMenu()
     btn.addEventListener('click', ev => {
       ev.stopPropagation()
-      // Sync the checked row to the current basemap (it may have loaded from the portal AFTER this
-      // control's DOM was built), so the highlight is always correct when the menu opens.
-      const cur = currentBasemap().id
-      menu.querySelectorAll('input[name="gd-basemap-editor"]').forEach(r => { r.checked = r.value === cur })
+      // Re-render so the checked row matches the current basemap (it may have loaded from the portal
+      // AFTER this control was built) and reflects any catalog update.
+      this._renderMenu()
       c.classList.toggle('open')
     })
     menu.addEventListener('change', ev => { basemap.value = ev.target.value })
@@ -1115,7 +1135,7 @@ async function save() {
       access_type: accessType.value,
       initial_view: view,
       description: description.value,
-      basemap: basemap.value || BASEMAP_CATALOG[0].id,
+      basemap: basemap.value || basemapCatalog.value[0].id,
     }
     if (accessType.value === 'password' && accessPassword.value) {
       payload.access_password = accessPassword.value
@@ -1169,11 +1189,14 @@ async function handlePublish() {
      editor's theme tokens (which flip under html.dark) so it matches the published portal. -->
 <style>
 .gd-basemap-ctrl { position: relative; }
-.gd-basemap-btn {
+/* Selector is intentionally specific (.gd-basemap-ctrl .gd-basemap-btn) so it beats MapLibre's own
+   `.maplibregl-ctrl-group button` rule — otherwise its display/box-model wins and the child SVG
+   isn't centered. */
+.gd-basemap-ctrl .gd-basemap-btn {
   width: 29px; height: 29px; display: flex; align-items: center; justify-content: center;
-  background: transparent; border: none; cursor: pointer; color: hsl(var(--foreground));
+  padding: 0; background: transparent; border: none; cursor: pointer; color: hsl(var(--foreground));
 }
-.gd-basemap-btn svg { width: 18px; height: 18px; }
+.gd-basemap-ctrl .gd-basemap-btn svg { width: 18px; height: 18px; display: block; }
 .gd-basemap-menu {
   display: none; position: absolute; top: 0; right: 40px; width: 250px;
   background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: 12px;
