@@ -170,6 +170,7 @@ class Portal(Base):
     slug: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     template_id: Mapped[str] = mapped_column(String(128), default="minimal")
+    basemap: Mapped[str | None] = mapped_column(String(64))  # basemap catalog id (BASEMAP_CATALOG)
     layer_configs: Mapped[str] = mapped_column(Text, default="[]")  # JSON
     initial_view: Mapped[str | None] = mapped_column(Text)  # JSON {center:[lng,lat], zoom, bearing, pitch} — published portal's start view
     access_type: Mapped[str] = mapped_column(String(16), default="public")  # public | password | private

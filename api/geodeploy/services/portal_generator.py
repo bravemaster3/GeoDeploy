@@ -9,6 +9,43 @@ from .titiler import get_tile_url as raster_tile_url
 from . import external_sources as ext_svc
 
 
+# Shared basemap catalog — KEEP IN SYNC with templates/shared/portal.js (BASEMAP_CATALOG) and
+# ui/src/views/PortalEditor.vue (BASEMAP_CATALOG). All are no-API-key raster basemaps. The first
+# entry is the default when a portal has none set. The published bundle repoints the template's base
+# raster source at the chosen basemap and records its id in geodeploy.defaultBasemap.
+BASEMAP_CATALOG = [
+    {"id": "positron", "name": "Positron",
+     "tiles": ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png",
+               "https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png",
+               "https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png"],
+     "attribution": "© OpenStreetMap © CARTO"},
+    {"id": "voyager", "name": "Voyager",
+     "tiles": ["https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
+               "https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
+               "https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png"],
+     "attribution": "© OpenStreetMap © CARTO"},
+    {"id": "dark", "name": "Dark Matter",
+     "tiles": ["https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
+               "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png"],
+     "attribution": "© OpenStreetMap © CARTO"},
+    {"id": "osm", "name": "OpenStreetMap",
+     "tiles": ["https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
+               "https://b.tile.openstreetmap.org/{z}/{x}/{y}.png"],
+     "attribution": "© OpenStreetMap contributors"},
+    {"id": "topo", "name": "OpenTopoMap",
+     "tiles": ["https://a.tile.opentopomap.org/{z}/{x}/{y}.png",
+               "https://b.tile.opentopomap.org/{z}/{x}/{y}.png"],
+     "attribution": "© OpenStreetMap, SRTM | © OpenTopoMap (CC-BY-SA)"},
+    {"id": "satellite", "name": "Satellite",
+     "tiles": ["https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+     "attribution": "Imagery © Esri, Maxar, Earthstar Geographics"},
+    {"id": "esri-topo", "name": "Esri Topographic",
+     "tiles": ["https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"],
+     "attribution": "© Esri"},
+]
+_BASEMAP_BY_ID = {b["id"]: b for b in BASEMAP_CATALOG}
+
+
 def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers: list,
                    external_sources: list | None = None) -> dict:
     """
@@ -216,7 +253,8 @@ def _layer_info(layer, kind: str) -> dict:
 
 def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str, layer_configs: list[dict],
                         access_type: str = "public", password_sha256: str | None = None,
-                        initial_view: dict | None = None, description: str | None = None) -> str:
+                        initial_view: dict | None = None, description: str | None = None,
+                        basemap: str | None = None) -> str:
     """
     Merge basemap + user data into a complete style, inject into layout.html,
     write to data/portals/{slug}/index.html.
@@ -256,6 +294,19 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
             "aboutPage": False,  # set below once the page is written
         },
     }
+
+    # Repoint the template's base raster source at the admin-chosen basemap (so the published portal
+    # OPENS on it, no flash) and record the id so portal.js marks the matching switcher option active.
+    bm = _BASEMAP_BY_ID.get(basemap)
+    if bm:
+        base_src_id = next((lyr.get("source") for lyr in basemap_style.get("layers", [])
+                            if lyr.get("type") == "raster"), None)
+        if base_src_id is None and "basemap" in full_style["sources"]:
+            base_src_id = "basemap"
+        if base_src_id and base_src_id in full_style["sources"]:
+            full_style["sources"][base_src_id]["tiles"] = bm["tiles"]
+            full_style["sources"][base_src_id]["attribution"] = bm["attribution"]
+        full_style["geodeploy"]["defaultBasemap"] = bm["id"]
 
     # Standalone documentation page (GeoNode-style "full page that links to the map") — written
     # BEFORE the style is baked so the aboutPage flag lands in the HTML.

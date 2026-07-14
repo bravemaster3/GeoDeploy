@@ -20,8 +20,9 @@ router = APIRouter(prefix="/portals", tags=["portals"])
 
 
 async def _unique_slug(title: str, db: AsyncSession, exclude_id: int | None = None) -> str:
-    """A URL slug from the title, made unique across portals (skipping `exclude_id`, so a portal
-    keeping its own slug on rename doesn't collide with itself)."""
+    """A URL slug from the title, made unique across portals. Generated ONCE at creation; a portal's
+    slug is immutable afterwards so its public URL stays stable across renames. `exclude_id` is kept
+    for callers that need to ignore a specific row."""
     base_slug = slugify(title, separator="-") or "portal"
     slug = base_slug
     suffix = 0
@@ -64,6 +65,7 @@ async def _rebuild_bundle(portal: Portal, db: AsyncSession) -> None:
         password_sha256=portal.access_password_sha256,
         initial_view=initial_view,
         description=portal.description,
+        basemap=portal.basemap,
     )
 
 
@@ -75,12 +77,7 @@ async def list_portals(user: User = Depends(get_current_user), db: AsyncSession 
 
 @router.post("", response_model=PortalOut, status_code=201)
 async def create_portal(req: PortalCreate, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    base_slug = slugify(req.title, separator="-")
-    slug = base_slug
-    suffix = 0
-    while (await db.execute(select(Portal).where(Portal.slug == slug))).scalar_one_or_none():
-        suffix += 1
-        slug = f"{base_slug}-{suffix}"
+    slug = await _unique_slug(req.title, db)  # stable for the life of the portal
 
     portal = Portal(
         user_id=user.id,
@@ -112,15 +109,16 @@ async def get_portal(portal_id: int, user: User = Depends(get_current_user), db:
 @router.put("/{portal_id}", response_model=PortalOut)
 async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     portal = await _get_owned(portal_id, user.id, db)
-    old_slug = portal.slug
-    if req.title is not None and req.title != portal.title:
+    if req.title is not None:
+        # The slug (URL) is STABLE — set once at creation, never changed by a rename, so a portal's
+        # public URL never breaks when its title changes. Only the display title updates here.
         portal.title = req.title
-        # Renaming updates the URL slug too (the user's ask). Keep it unique across portals.
-        portal.slug = await _unique_slug(req.title, db, exclude_id=portal.id)
     if req.description is not None:
         portal.description = req.description
     if req.template_id is not None:
         portal.template_id = req.template_id
+    if req.basemap is not None:
+        portal.basemap = req.basemap
     if req.layer_configs is not None:
         portal.layer_configs = json.dumps([lc.model_dump() for lc in req.layer_configs])
     if req.initial_view is not None:
@@ -133,18 +131,8 @@ async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(
         portal.access_password_hash = CryptContext(schemes=["bcrypt"], deprecated="auto").hash(req.access_password)
         portal.access_password_sha256 = sha256(req.access_password.encode()).hexdigest()
 
-    # If the slug changed on a PUBLISHED portal, move the published bundle to the new URL: rebuild
-    # under the new slug (the slug is baked into the bundle as {{SLUG}}) and drop the old directory
-    # so the old URL 404s. A draft (unpublished) portal just carries the new slug until it's published.
-    slug_changed = portal.slug != old_slug
-    if slug_changed and portal.published:
-        import shutil
-        settings = get_settings()
-        await _rebuild_bundle(portal, db)
-        old_dir = f"{settings.data_dir}/portals/{old_slug}"
-        if old_slug != portal.slug and os.path.exists(old_dir):
-            shutil.rmtree(old_dir, ignore_errors=True)
-
+    # The slug (and therefore the published URL) is immutable, so nothing to move here. Edits to a
+    # published portal (title/layers/basemap) take effect when the user re-publishes, as before.
     await db.commit()
     await db.refresh(portal)
     # A published portal's layer_configs may have changed which layers it exposes → refresh the

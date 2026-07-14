@@ -1769,22 +1769,44 @@
   }
 
   // ── Basemap switcher (top-right) ────────────────────────
-  const BASEMAPS = [
-    { id: 'default', name: 'Default', builtin: true,
+  // Shared catalog — KEEP IN SYNC with api/geodeploy/services/portal_generator.py (BASEMAP_CATALOG)
+  // and ui/src/views/PortalEditor.vue (BASEMAP_CATALOG). All no-API-key raster basemaps. The published
+  // bundle repoints the template's baked base layer at the admin's chosen basemap (STYLE.geodeploy
+  // .defaultBasemap); the switcher lets the viewer flip among all catalog entries at view time.
+  const BASEMAP_CATALOG = [
+    { id: 'positron', name: 'Positron',
+      tiles: ['https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png'],
+      attribution: '© OpenStreetMap © CARTO',
       thumb: 'https://a.basemaps.cartocdn.com/light_all/4/8/5.png' },
+    { id: 'voyager', name: 'Voyager',
+      tiles: ['https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png', 'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png'],
+      attribution: '© OpenStreetMap © CARTO',
+      thumb: 'https://a.basemaps.cartocdn.com/rastertiles/voyager/4/8/5.png' },
+    { id: 'dark', name: 'Dark Matter',
+      tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'],
+      attribution: '© OpenStreetMap © CARTO',
+      thumb: 'https://a.basemaps.cartocdn.com/dark_all/4/8/5.png' },
     { id: 'osm', name: 'OpenStreetMap',
       tiles: ['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png', 'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png'],
       attribution: '© OpenStreetMap contributors',
       thumb: 'https://a.tile.openstreetmap.org/4/8/5.png' },
-    { id: 'dark', name: 'Dark',
-      tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'],
-      attribution: '© OpenStreetMap © CARTO',
-      thumb: 'https://a.basemaps.cartocdn.com/dark_all/4/8/5.png' },
+    { id: 'topo', name: 'OpenTopoMap',
+      tiles: ['https://a.tile.opentopomap.org/{z}/{x}/{y}.png', 'https://b.tile.opentopomap.org/{z}/{x}/{y}.png'],
+      attribution: '© OpenStreetMap, SRTM | © OpenTopoMap (CC-BY-SA)',
+      thumb: 'https://a.tile.opentopomap.org/4/8/5.png' },
     { id: 'satellite', name: 'Satellite',
       tiles: ['https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-      attribution: 'Imagery © Esri',
+      attribution: 'Imagery © Esri, Maxar, Earthstar Geographics',
       thumb: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/4/5/8' },
+    { id: 'esri-topo', name: 'Esri Topographic',
+      tiles: ['https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}'],
+      attribution: '© Esri',
+      thumb: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/4/5/8' },
   ];
+  const BASEMAPS = BASEMAP_CATALOG;
+  // The admin's chosen basemap (baked into the base layer). Fall back to the first catalog entry so
+  // pre-basemap portals still get a valid switcher selection ≈ their original Carto-light base.
+  const DEFAULT_BASEMAP = ((STYLE.geodeploy || {}).defaultBasemap) || BASEMAPS[0].id;
 
   function builtinBasemapIds() {
     return STYLE.layers.filter(l => !(l.metadata && l.metadata['geodeploy:name'])).map(l => l.id);
@@ -1793,7 +1815,6 @@
   function setupBasemaps() {
     const firstId = (map.getStyle().layers[0] || {}).id;
     BASEMAPS.forEach(bm => {
-      if (bm.builtin) return;
       const srcId = 'gd-basemap-' + bm.id;
       if (!map.getSource(srcId)) {
         map.addSource(srcId, { type: 'raster', tiles: bm.tiles, tileSize: 256, attribution: bm.attribution || '' });
@@ -1802,6 +1823,7 @@
         map.addLayer({ id: srcId, type: 'raster', source: srcId, layout: { visibility: 'none' } }, firstId);
       }
     });
+    selectBasemap(DEFAULT_BASEMAP);  // drive the switcher layer, hide the baked builtin base
     map.addControl(new BasemapControl(), 'top-right');
     map.addControl(new ToolsControl(), 'top-right');
   }
@@ -2008,19 +2030,12 @@
   }
 
   function selectBasemap(id) {
-    const builtin = builtinBasemapIds();
+    // Hide the template's baked base layer(s) — the switcher owns the basemap once it's wired.
+    builtinBasemapIds().forEach(lid => { if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', 'none'); });
     BASEMAPS.forEach(bm => {
-      if (bm.builtin) return;
       const lid = 'gd-basemap-' + bm.id;
-      if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', 'none');
+      if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', bm.id === id ? 'visible' : 'none');
     });
-    if (id === 'default') {
-      builtin.forEach(lid => { if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', 'visible'); });
-    } else {
-      builtin.forEach(lid => { if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', 'none'); });
-      const lid = 'gd-basemap-' + id;
-      if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', 'visible');
-    }
   }
 
   function basemapIcon() {
@@ -2041,9 +2056,9 @@
         '<button type="button" class="gd-basemap-btn" title="Basemaps" aria-label="Choose basemap">' + basemapIcon() + '</button>' +
         '<div class="gd-basemap-menu">' +
           '<div class="gd-basemap-title">Basemap</div>' +
-          BASEMAPS.map((bm, i) =>
+          BASEMAPS.map((bm) =>
             '<label class="gd-basemap-opt"><input type="radio" name="gd-basemap" value="' + bm.id + '"' +
-            (i === 0 ? ' checked' : '') + '>' +
+            (bm.id === DEFAULT_BASEMAP ? ' checked' : '') + '>' +
             '<img class="gd-basemap-thumb" src="' + bm.thumb + '" alt="" loading="lazy">' +
             '<span class="gd-basemap-name">' + escHtml(bm.name) + '</span>' +
             '<span class="gd-basemap-check">' + checkSvg + '</span></label>').join('') +

@@ -1,7 +1,9 @@
 <template>
   <div class="flex h-screen">
-    <!-- Left panel -->
-    <div class="w-80 flex-shrink-0 bg-card border-r border-border flex flex-col overflow-hidden">
+    <!-- Left panel. Wider than a normal page's sidebar: the main nav auto-collapses (60px) when the
+         editor opens, and that freed ~164px is handed to these portal controls so the combined
+         nav + panel width is unchanged — more room to work without eating the map. -->
+    <div class="w-[484px] flex-shrink-0 bg-card border-r border-border flex flex-col overflow-hidden">
 
       <!-- Top bar -->
       <div class="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
@@ -12,7 +14,7 @@
           class="text-sm font-semibold flex-1 min-w-0 text-center bg-transparent border-b border-primary text-foreground focus:outline-none" />
         <button v-else @click="startRename" :disabled="!portal"
           class="text-sm font-semibold truncate flex-1 text-center hover:text-primary transition-colors"
-          title="Rename portal (also updates the published URL)">
+          title="Rename portal (the public URL stays the same)">
           {{ portal?.title }}
         </button>
         <button @click="handlePublish" :disabled="busy || !portal"
@@ -201,6 +203,33 @@
         Zoom to all
       </button>
 
+      <!-- Basemap picker (top-right). Same catalog as the published portal, so the choice carries. -->
+      <div class="absolute top-3 right-3 z-10">
+        <button @click="basemapMenuOpen = !basemapMenuOpen"
+          class="flex items-center gap-2 bg-card/95 hover:bg-card shadow-md border border-border rounded-lg pl-1.5 pr-2.5 py-1.5 text-xs font-medium text-foreground/85"
+          title="Choose the portal basemap">
+          <img :src="currentBasemap().thumb" alt=""
+            class="w-6 h-6 rounded object-cover border border-border/70" />
+          <span>{{ currentBasemap().name }}</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+            stroke-linecap="round" stroke-linejoin="round" class="transition-transform"
+            :class="basemapMenuOpen ? 'rotate-180' : ''"><path d="M6 9l6 6 6-6" /></svg>
+        </button>
+        <div v-if="basemapMenuOpen"
+          class="absolute top-full right-0 mt-1.5 w-56 bg-card border border-border rounded-lg shadow-xl p-1.5 grid grid-cols-2 gap-1.5">
+          <button v-for="bm in BASEMAP_CATALOG" :key="bm.id"
+            @click="basemap = bm.id; basemapMenuOpen = false"
+            class="group relative rounded-md overflow-hidden border-2 transition-colors"
+            :class="currentBasemap().id === bm.id ? 'border-primary' : 'border-transparent hover:border-border'"
+            :title="bm.name">
+            <img :src="bm.thumb" alt="" class="w-full h-14 object-cover" />
+            <span class="absolute inset-x-0 bottom-0 bg-black/55 text-white text-[10px] font-medium px-1 py-0.5 truncate text-left">
+              {{ bm.name }}
+            </span>
+          </button>
+        </div>
+      </div>
+
       <div v-if="!layerConfigs.length"
         class="absolute inset-0 flex items-center justify-center pointer-events-none">
         <span class="text-xs text-muted-foreground/70 bg-card/80 px-3 py-1.5 rounded-full">
@@ -240,6 +269,8 @@ const templates = ref([])
 const showAddLayer = ref(false)
 const lastAddedKey = ref(null)
 const accessType = ref('public')
+const basemap = ref(null)  // chosen basemap catalog id; null → BASEMAP_CATALOG[0] (see below)
+const basemapMenuOpen = ref(false)
 
 // Drag-to-reorder layers (top of list = top of map)
 const dragIndex = ref(null)
@@ -257,9 +288,8 @@ const busy = ref(false)
 const saveMsg = ref(null)
 
 // ── Rename the portal (click the title) ─────────────────────────────────────
-// Renaming also changes the URL slug (server-side); if the portal is published it's re-published
-// under the new slug and the old URL is removed. The editor route uses the portal id, so this
-// page's own URL doesn't change — but the published /portals/{slug}/ link updates live.
+// The slug (and therefore the public /portals/{slug}/ URL) is fixed at creation and never changes,
+// so a rename only updates the display title. The editor route uses the portal id, unaffected either way.
 const renaming = ref(false)
 const renameTitle = ref('')
 const renameInput = ref(null)
@@ -371,6 +401,7 @@ onMounted(async () => {
     layerConfigs.value = portal.value.layer_configs || []
     selectedTemplate.value = portal.value.template_id
     accessType.value = portal.value.access_type || 'public'
+    basemap.value = portal.value.basemap || BASEMAP_CATALOG[0].id
     savedView.value = portal.value.initial_view || null
     description.value = portal.value.description || ''
   }
@@ -673,7 +704,7 @@ async function onPreviewClick(e) {
 // the FIRST build (restore the saved view, else fit to all layers). After that, style
 // edits (band/colour/etc.) must NOT yank the view — setStyle keeps the current camera.
 let viewInitialized = false
-watch([layerConfigs, loaded], () => {
+watch([layerConfigs, loaded, basemap], () => {
   if (!loaded.value) return
   const { style, bounds } = buildPreviewStyle()
   applyStyle(style)
@@ -764,19 +795,55 @@ function markerImage(shape, color, size) {
   return { width: dim * dpr, height: dim * dpr, data: d.data, pixelRatio: dpr }
 }
 
+// Shared basemap catalog — KEEP IN SYNC with api/geodeploy/services/portal_generator.py
+// (BASEMAP_CATALOG) and templates/shared/portal.js (BASEMAP_CATALOG). All no-API-key raster
+// basemaps; the first is the default. The editor preview and the published portal draw from the
+// same list so what the admin picks here is exactly what visitors see.
+const BASEMAP_CATALOG = [
+  { id: 'positron', name: 'Positron',
+    tiles: ['https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png'],
+    attribution: '© OpenStreetMap © CARTO',
+    thumb: 'https://a.basemaps.cartocdn.com/light_all/4/8/5.png' },
+  { id: 'voyager', name: 'Voyager',
+    tiles: ['https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png', 'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png'],
+    attribution: '© OpenStreetMap © CARTO',
+    thumb: 'https://a.basemaps.cartocdn.com/rastertiles/voyager/4/8/5.png' },
+  { id: 'dark', name: 'Dark Matter',
+    tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'],
+    attribution: '© OpenStreetMap © CARTO',
+    thumb: 'https://a.basemaps.cartocdn.com/dark_all/4/8/5.png' },
+  { id: 'osm', name: 'OpenStreetMap',
+    tiles: ['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png', 'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png'],
+    attribution: '© OpenStreetMap contributors',
+    thumb: 'https://a.tile.openstreetmap.org/4/8/5.png' },
+  { id: 'topo', name: 'OpenTopoMap',
+    tiles: ['https://a.tile.opentopomap.org/{z}/{x}/{y}.png', 'https://b.tile.opentopomap.org/{z}/{x}/{y}.png'],
+    attribution: '© OpenStreetMap, SRTM | © OpenTopoMap (CC-BY-SA)',
+    thumb: 'https://a.tile.opentopomap.org/4/8/5.png' },
+  { id: 'satellite', name: 'Satellite',
+    tiles: ['https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+    attribution: 'Imagery © Esri, Maxar, Earthstar Geographics',
+    thumb: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/4/5/8' },
+  { id: 'esri-topo', name: 'Esri Topographic',
+    tiles: ['https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}'],
+    attribution: '© Esri',
+    thumb: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/4/5/8' },
+]
+function currentBasemap() {
+  return BASEMAP_CATALOG.find(b => b.id === basemap.value) || BASEMAP_CATALOG[0]
+}
+
 function buildPreviewStyle() {
+  const bm = currentBasemap()
   const style = {
     version: 8,
     glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
     sources: {
       basemap: {
         type: 'raster',
-        tiles: [
-          'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png',
-          'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png',
-        ],
+        tiles: bm.tiles,
         tileSize: 256,
-        attribution: '© OpenStreetMap contributors © CARTO',
+        attribution: bm.attribution,
       },
     },
     layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }],
@@ -1025,6 +1092,7 @@ async function save() {
       access_type: accessType.value,
       initial_view: view,
       description: description.value,
+      basemap: basemap.value || BASEMAP_CATALOG[0].id,
     }
     if (accessType.value === 'password' && accessPassword.value) {
       payload.access_password = accessPassword.value

@@ -32,6 +32,7 @@ def _apply_schema_migrations(conn) -> None:
     pending = [
         "ALTER TABLE portals ADD COLUMN access_password_sha256 VARCHAR(64)",
         "ALTER TABLE portals ADD COLUMN initial_view TEXT",
+        "ALTER TABLE portals ADD COLUMN basemap VARCHAR(64)",
         "ALTER TABLE vector_layers ADD COLUMN default_style TEXT",
         "ALTER TABLE vector_layers ADD COLUMN geometry_column VARCHAR(128)",
         "ALTER TABLE vector_layers ADD COLUMN id_column VARCHAR(128)",

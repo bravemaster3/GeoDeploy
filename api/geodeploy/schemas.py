@@ -241,6 +241,7 @@ class PortalUpdate(BaseModel):
     initial_view: dict[str, Any] | None = None  # {center:[lng,lat], zoom, bearing, pitch}
     access_type: str | None = None
     access_password: str | None = None
+    basemap: str | None = None  # basemap catalog id (see BASEMAP_CATALOG); default = first entry
 
 
 class PortalOut(BaseModel):
@@ -252,6 +253,7 @@ class PortalOut(BaseModel):
     layer_configs: list[LayerConfig]
     initial_view: dict[str, Any] | None = None
     access_type: str
+    basemap: str | None = None
     published: bool
     published_at: datetime | None
     created_at: datetime
