@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFil
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from slugify import slugify
 
 from ..config import get_settings
 from ..database import get_db
@@ -19,21 +18,14 @@ from .data.vector import invalidate_public_layers
 router = APIRouter(prefix="/portals", tags=["portals"])
 
 
-async def _unique_slug(title: str, db: AsyncSession, exclude_id: int | None = None) -> str:
-    """A URL slug from the title, made unique across portals. Generated ONCE at creation; a portal's
-    slug is immutable afterwards so its public URL stays stable across renames. `exclude_id` is kept
-    for callers that need to ignore a specific row."""
-    base_slug = slugify(title, separator="-") or "portal"
-    slug = base_slug
-    suffix = 0
+async def _new_slug(db: AsyncSession) -> str:
+    """A short, opaque, unique URL slug for a portal — an id, NOT derived from the title. Generated
+    once at creation and immutable, so the public /portals/{slug}/ URL stays stable across renames
+    and never leaks/depends on the title. Collision-checked against existing portals."""
     while True:
-        q = select(Portal).where(Portal.slug == slug)
-        if exclude_id is not None:
-            q = q.where(Portal.id != exclude_id)
-        if (await db.execute(q)).scalar_one_or_none() is None:
+        slug = uuid.uuid4().hex[:10]
+        if (await db.execute(select(Portal).where(Portal.slug == slug))).scalar_one_or_none() is None:
             return slug
-        suffix += 1
-        slug = f"{base_slug}-{suffix}"
 
 
 async def _rebuild_bundle(portal: Portal, db: AsyncSession) -> None:
@@ -77,7 +69,7 @@ async def list_portals(user: User = Depends(get_current_user), db: AsyncSession 
 
 @router.post("", response_model=PortalOut, status_code=201)
 async def create_portal(req: PortalCreate, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    slug = await _unique_slug(req.title, db)  # stable for the life of the portal
+    slug = await _new_slug(db)  # opaque id, stable for the life of the portal
 
     portal = Portal(
         user_id=user.id,
