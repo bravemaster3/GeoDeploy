@@ -535,7 +535,7 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
     color: var(--primary); margin-bottom: 10px;
   }}
   h1 {{ font-size: 40px; font-weight: 750; letter-spacing: -.02em; margin-bottom: 26px; }}
-  .doc {{ max-width: 68ch; color: var(--doc-fg); }}
+  .doc {{ color: var(--doc-fg); }}
   .doc h2 {{ font-size: 23px; font-weight: 650; margin: 34px 0 10px; color: var(--fg); }}
   .doc h3, .doc h4 {{ font-size: 18px; font-weight: 600; margin: 24px 0 8px; color: var(--fg); }}
   .doc p {{ margin: 10px 0; }}
