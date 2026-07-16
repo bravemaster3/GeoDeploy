@@ -59,6 +59,61 @@ class UserOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ── Users & invitations (RBAC, A-01) ─────────────────────────────────────────
+
+class UserAdminOut(UserOut):
+    """User row for the admin Users screen — adds creation counts so an admin can
+    review what a member owns before changing their role / deleting them."""
+    vector_count: int = 0
+    raster_count: int = 0
+    portal_count: int = 0
+    source_count: int = 0
+
+
+class InviteCreate(BaseModel):
+    email: EmailStr
+    role: str = Field(pattern="^(viewer|editor|admin)$")  # owner only via ownership transfer
+
+
+class InvitationOut(BaseModel):
+    id: int
+    purpose: str
+    email: str
+    role: str | None
+    expires_at: datetime
+    created_at: datetime
+    # The RAW token — present ONLY in the response that creates/regenerates it (never stored,
+    # never listed). The UI turns it into the copyable accept/reset link.
+    token: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class InvitePublicOut(BaseModel):
+    """What the public accept/reset page may learn from a valid token."""
+    email: str
+    role: str | None
+    purpose: str
+
+
+class AcceptInviteRequest(BaseModel):
+    name: str
+    password: str = Field(min_length=8)
+
+
+class RoleUpdate(BaseModel):
+    role: str = Field(pattern="^(viewer|editor|admin)$")  # owner only via ownership transfer
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
+
+
+class PasswordResetRequest(BaseModel):
+    password: str = Field(min_length=8)
+
+
 # ── Vector Layers ─────────────────────────────────────────────────────────────
 
 class DefaultStyle(BaseModel):
