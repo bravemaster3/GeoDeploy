@@ -167,6 +167,7 @@ async def create_admin(req: CreateAdminRequest, db: AsyncSession = Depends(get_d
         name=req.name,
         hashed_password=pwd_ctx.hash(req.password),
         is_admin=True,
+        role="owner",
     )
     db.add(user)
 

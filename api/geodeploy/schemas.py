@@ -52,7 +52,8 @@ class UserOut(BaseModel):
     id: int
     email: str
     name: str
-    is_admin: bool
+    is_admin: bool  # deprecated — read `role` instead
+    role: str
     created_at: datetime
 
     model_config = {"from_attributes": True}

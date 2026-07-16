@@ -56,6 +56,17 @@ def _apply_schema_migrations(conn) -> None:
         "ALTER TABLE raster_layers ADD COLUMN keywords VARCHAR(512)",
         "ALTER TABLE raster_layers ADD COLUMN license VARCHAR(128)",
         "ALTER TABLE raster_layers ADD COLUMN attribution VARCHAR(256)",
+        # RBAC (A-01): role column + backfill. SQLite ADD COLUMN can't be NOT NULL
+        # without a constant default, so the column is nullable on migrated DBs —
+        # the guarded UPDATEs below fill it, and every user-creating code path sets
+        # role explicitly. Pre-RBAC non-admins had full CRUD on their data → editor;
+        # the earliest admin becomes the single workspace owner.
+        "ALTER TABLE users ADD COLUMN role VARCHAR(16)",
+        "UPDATE users SET role = CASE WHEN is_admin THEN 'admin' ELSE 'editor' END WHERE role IS NULL",
+        "UPDATE users SET role = 'owner' WHERE id = (SELECT MIN(id) FROM users WHERE is_admin) "
+        "AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'owner')",
+        # DB-level single-owner invariant (SQLite partial unique index)
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_single_owner ON users(role) WHERE role = 'owner'",
     ]
     for sql in pending:
         try:

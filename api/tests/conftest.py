@@ -62,7 +62,7 @@ async def _isolate(setup_db):
     from sqlalchemy import text
     async with AsyncSessionLocal() as s:
         for tbl in ("portals", "vector_layers", "raster_layers", "external_sources",
-                    "upload_jobs", "users", "setup_config"):
+                    "upload_jobs", "invitations", "users", "setup_config"):
             try:
                 await s.execute(text(f"DELETE FROM {tbl}"))
             except Exception:

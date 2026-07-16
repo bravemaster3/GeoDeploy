@@ -38,12 +38,37 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(256), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(256), nullable=False)
+    # DEPRECATED: superseded by `role`. Never read; kept in sync on write
+    # (is_admin = role in ("admin", "owner")) so a rollback stays safe.
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # owner | admin | editor | viewer — exactly one owner per install
+    # (enforced by the uq_users_single_owner partial index + the transfer endpoint).
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="viewer")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     vector_layers: Mapped[list["VectorLayer"]] = relationship(back_populates="user")
     raster_layers: Mapped[list["RasterLayer"]] = relationship(back_populates="user")
     portals: Mapped[list["Portal"]] = relationship(back_populates="user")
+
+
+class Invitation(Base):
+    """Single-use signup invitation or password-reset link.
+
+    Only the sha256 hash of the token is stored — the raw token is returned once at
+    creation/regeneration and cannot be recovered (regenerate mints a fresh one).
+    """
+    __tablename__ = "invitations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    purpose: Mapped[str] = mapped_column(String(16), nullable=False, default="invite")  # invite | password_reset
+    email: Mapped[str] = mapped_column(String(256), nullable=False)
+    role: Mapped[str | None] = mapped_column(String(16))          # invite only: role granted on accept
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))  # password_reset only: target user
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    invited_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class VectorLayer(Base):

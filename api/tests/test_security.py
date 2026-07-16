@@ -22,8 +22,10 @@ from geodeploy.services.portal_generator import _esc, _json_for_html
 _pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
-async def _seed_admin(db, uid=1, email="admin@example.com", pw="s3cret-pw", is_admin=True):
-    db.add(User(id=uid, email=email, name="Admin", hashed_password=_pwd.hash(pw), is_admin=is_admin))
+async def _seed_admin(db, uid=1, email="admin@example.com", pw="s3cret-pw", is_admin=True, role=None):
+    role = role or ("owner" if is_admin else "editor")
+    db.add(User(id=uid, email=email, name="Admin", hashed_password=_pwd.hash(pw),
+                is_admin=is_admin, role=role))
     await db.commit()
     return uid, email, pw
 
@@ -146,7 +148,26 @@ async def test_login_and_protected_route(client, db):
     r = await client.post("/api/auth/login", data={"username": email, "password": pw})
     assert r.status_code == 200
     token = r.json()["access_token"]
-    assert (await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})).status_code == 200
+    me = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert me.status_code == 200
+    assert me.json()["role"] == "owner"
     assert (await client.get("/api/auth/me")).status_code == 401
     assert (await client.post("/api/auth/login",
                               data={"username": email, "password": "wrong"})).status_code == 401
+
+
+async def test_create_admin_mints_owner(client, db, monkeypatch):
+    # Don't touch .env / docker from the test run.
+    monkeypatch.setattr("geodeploy.routers.setup._write_env", lambda config: None)
+    monkeypatch.setattr("geodeploy.routers.setup._apply_to_process", lambda config: None)
+    db.add(SetupConfig(id=1, completed=False, postgis_host="db", storage_endpoint="http://s3"))
+    await db.commit()
+    r = await client.post("/api/setup/create-admin",
+                          json={"name": "Root", "email": "root@example.com", "password": "s3cret-pw"})
+    assert r.status_code == 200
+    login = await client.post("/api/auth/login",
+                              data={"username": "root@example.com", "password": "s3cret-pw"})
+    token = login.json()["access_token"]
+    me = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert me.json()["role"] == "owner"
+    assert me.json()["is_admin"] is True
