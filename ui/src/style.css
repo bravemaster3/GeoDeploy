@@ -29,8 +29,29 @@
     --primary-foreground: 144.9 80.4% 10%;
   }
 
+  /* Tell the browser which scheme is active so NATIVE widget chrome follows the theme —
+     the select's dropdown LIST, number spinners, checkboxes, scrollbars — none of which
+     plain CSS can restyle. Without this, dark mode gets glaring white popups/controls. */
+  :root {
+    color-scheme: light;
+  }
+  .dark {
+    color-scheme: dark;
+  }
+
   body {
     @apply bg-background text-foreground antialiased;
+  }
+
+  /* Themed defaults for RAW form controls (fields written without the .input class —
+     e.g. the symbology popover's line-width/line-style/marker fields, which rendered as
+     white-on-white boxes in dark mode). Text-like controls only: range/checkbox/radio/
+     color/file keep their native rendering (color-scheme above themes their chrome).
+     Anything using .input / explicit bg-* utilities still wins (components > base). */
+  select,
+  textarea,
+  input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]):not([type="submit"]):not([type="button"]) {
+    @apply bg-background text-foreground;
   }
 }
 

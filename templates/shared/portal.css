@@ -29,7 +29,22 @@
       --shadow-lg: 0 6px 22px rgba(0,0,0,.55);
     }
 
+    /* Native widget chrome (select dropdown lists, spinners, checkboxes, scrollbars) follows
+       the active theme — CSS can't reach those parts, only color-scheme can. Twin of the
+       dashboard fix in ui/src/style.css (keep in sync). */
+    :root { color-scheme: light; }
+    html[data-theme="dark"] { color-scheme: dark; }
+
     html, body { height: 100%; overflow: hidden; font-family: system-ui, -apple-system, sans-serif; color: var(--text); }
+
+    /* Themed defaults for raw form controls (viewer symbology/band/download selects & fields):
+       without these, dark mode shows browser-default white boxes with unreadable text.
+       Specific styled controls (e.g. #access-gate-input) override via higher specificity. */
+    select, textarea,
+    input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]) {
+      background: var(--surface);
+      color: var(--text);
+    }
 
     /* ── Header ─────────────────────────────────────────── */
     #header {
