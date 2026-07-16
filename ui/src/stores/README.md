@@ -4,7 +4,13 @@
 Pinia stores — client-side state, all using the composition (setup) style.
 
 ## Contents
-- `auth.js` — `user`, `fetchMe`, `loginUser` (stores JWT in `localStorage` as `geodeploy_token`), `logout`.
+- `auth.js` — `user`, `fetchMe`, `loginUser` (stores JWT in `localStorage` as `geodeploy_token`),
+  `logout`, and the **RBAC affordance computeds (A-01): `role`, `isAdmin` (admin|owner), `isOwner`,
+  `canEdit` (editor|admin|owner)** — the single source of truth for every `v-if` that hides a
+  mutating control (backend enforces regardless).
+- `users.js` — admin Users screen state: `users` (with per-user resource counts), `invites`;
+  `fetchAll`, `invite`/`regenerate` (return the raw one-time token for the copyable link),
+  `revoke`, `setRole`, `transferTo`, `remove`, `resetLink`.
 - `data.js` — `vectorLayers`, `rasterLayers`, `externalSources` (WMS/XYZ/WFS connections); `refresh()` loads all three; `pollJob(jobId, type, layerId)` polls every 2s until `ready`/`error` and refreshes (**tolerates transient failures — up to 8 consecutive before giving up — so a multi-minute convert/prep job's progress doesn't freeze on one blip**); **`watchProcessing()` (auto-run at the end of every `refresh()`) re-fetches the whole list every 3s while any layer is `processing`/`queued`** — the safety net that advances the UI processing→ready without a manual page refresh, and resumes after a reload (independent of the per-job poll); `reprocessVector(id)` (**restart a stalled/failed GeoParquet layer's
 convert/prep** — flips it to `processing` optimistically, POSTs `/data/vector/{id}/reprocess`, then polls
 the fresh job); `removeVector`/`removeRaster`/`removeExternal`/`addExternal`.
@@ -23,4 +29,5 @@ the fresh job); `removeVector`/`removeRaster`/`removeExternal`/`addExternal`.
 - **UI bundle caching (see `ui/nginx.conf`):** content-hashed `/assets/*` are cached `immutable`; `index.html` is served `Cache-Control: no-cache` so a rebuild's new bundle loads immediately (a cached `index.html` used to keep the browser on a stale bundle — the page looked "stuck", live search felt non-live — until a manual hard-refresh).
 
 ## Last updated
+2026-07-16 (RBAC A-01: auth store role computeds; new users.js store)
 2026-07-11 (resilient pollJob + watchProcessing live-update backstop; nginx no-cache index.html; reprocessVector — restart a stalled GeoParquet convert/prep)

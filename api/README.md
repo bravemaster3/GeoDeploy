@@ -7,15 +7,29 @@ FastAPI backend — GeoDeploy's control plane: auth, setup wizard, data ingestio
 - `geodeploy/main.py` — FastAPI app factory, lifespan (creates SQLite tables via `Base.metadata.create_all`, runs ad-hoc `_apply_schema_migrations`, writes an empty Martin config on first boot), mounts `/portals` static dir and `/templates-static`, registers all routers under `/api`.
 - `geodeploy/config.py` — `Settings` (pydantic-settings) loaded from `.env`; `get_settings()` is `@lru_cache`d and `.cache_clear()`d after the setup wizard writes new creds. Exposes `sqlite_url`, `postgis_dsn`/`postgis_sync_dsn`, etc.
 - `geodeploy/database.py` — async SQLAlchemy engine + `AsyncSessionLocal`; `get_db()` dependency. SQLite only (internal state — never user spatial data).
-- `geodeploy/deps.py` — `get_current_user` (JWT/HS256 via python-jose) and `require_admin`.
-- `geodeploy/models.py` — ORM: `SetupConfig`, `User`, `VectorLayer`, `RasterLayer`, `UploadJob`, `Portal`. JSON-ish fields (`bbox`, `columns`, `layer_configs`, `default_style`) stored as `Text`.
+- `geodeploy/deps.py` — `get_current_user` (JWT/HS256 via python-jose; token carries only sub+exp,
+  the User row — incl. `role` — is re-read per request) + **RBAC (A-01)**: `ROLE_ORDER`
+  (viewer<editor<admin<owner), `require_role()` factory, `require_editor`/`require_admin`/
+  `require_owner`, and `resolve_bearer_user` (raw-header resolution for conditionally-open guards
+  like setup first-run). See `routers/README.md` for the permission model.
+- `geodeploy/models.py` — ORM: `SetupConfig`, `User` (with `role`; `is_admin` deprecated,
+  write-only-synced), `Invitation` (invite + password-reset tokens, sha256-hashed),
+  `VectorLayer`, `RasterLayer`, `UploadJob`, `Portal`. JSON-ish fields (`bbox`, `columns`,
+  `layer_configs`, `default_style`) stored as `Text`.
 - `geodeploy/schemas.py` — Pydantic request/response models; `*Out.from_orm_json()` helpers parse the Text-encoded JSON columns.
 - `geodeploy/celery_app.py` — Celery app (broker+backend = Redis), single queue `ingest`.
 - `geodeploy/routers/` — HTTP endpoints. See `routers/README.md`.
 - `geodeploy/services/` — provisioning + tile-URL + storage helpers. See `services/README.md`.
 - `geodeploy/tasks/` — Celery ingest pipelines. See `tasks/README.md`.
 - `alembic/`, `alembic.ini` — present but **effectively unused**: `versions/` holds only `.gitkeep`. Real schema management is `Base.metadata.create_all` + the hand-written `ALTER TABLE` list in `main.py::_apply_schema_migrations`. Add new columns there, not via Alembic, unless you intend to wire Alembic up properly.
-- `tests/` — pytest-asyncio; `conftest.py` builds an ASGI test client over an in-memory-ish SQLite; `test_health.py` covers `/health` and initial `/api/setup/status`.
+- `tests/` — pytest-asyncio; `conftest.py` builds an ASGI test client over a throwaway SQLite at
+  `/tmp/geodeploy-test` (HARD-set env + import-time guard — NEVER weaken; see notes_for_future.md
+  top section). Suites: `test_health.py`, `test_security.py` (2026-07 audit regressions + role
+  ladder), `test_migrations.py` (role backfill on a pre-RBAC scratch schema), `test_rbac.py`
+  (shared-workspace/editor-gating matrix), `test_users.py` (invites/roles/transfer/delete/passwords).
+  Run WITHOUT touching prod: `docker run --rm -e GEODEPLOY_DATA_DIR=/tmp/geodeploy-test
+  -v <repo>/api:/src:ro -w /src geodeploy/api:latest sh -c "pip install -q -r requirements-dev.txt;
+  python -m pytest tests -q"`.
 - `Dockerfile` — multi-stage (has a `development` target used by `docker-compose.dev.yml`).
 - `requirements.txt`, `pytest.ini`.
 
@@ -35,4 +49,5 @@ FastAPI backend — GeoDeploy's control plane: auth, setup wizard, data ingestio
 - Setup-wizard credential changes restart the `celery` container so it picks up new env; this relies on the docker.sock mount.
 
 ## Last updated
-2026-06-04
+2026-07-16 (RBAC A-01: role ladder in deps.py, Invitation model, users router, shared-workspace
+permission model — details in routers/README.md; test-suite inventory refreshed)

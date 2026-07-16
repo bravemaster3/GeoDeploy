@@ -15,6 +15,8 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
 - `portal/PortalCard.vue` — portal tile in the builder grid (edit/publish/view/unpublish/delete).
 - `shared/StatusBadge.vue` — colored processing/ready/error pill.
 - `shared/StorageBar.vue` — used/total storage bar (Settings).
+- `users/` — admin Users screen components (RBAC A-01): UserRow / InviteRow / InviteModal /
+  CopyLink. See `users/README.md`.
 
 ## Dependencies / relationships
 - Read/write through `../../stores/` (mostly `data` and `portals`) and call the backend via `../../api`.
@@ -34,4 +36,7 @@ All dialogs (`UploadModal`, `AddSourceModal`, `DiscoverModal`, `portal/CreatePor
   icon logic in `views/PortalEditor.vue` + `templates/shared/portal.js` — change all three together.
 
 ## Last updated
+2026-07-16 (RBAC A-01: new `users/` folder; VectorRow/RasterRow/SourceRow/PortalCard mutating
+actions hidden for viewers via `v-if auth.canEdit` — hide, don't disable, backend enforces; rows
+show a "by {creator}" chip from the new `created_by` field)
 2026-07-11 (VectorRow: manual Tile button → `dataStore.tileVector` → `POST /{id}/tile`, re-runnable PMTiles tiling for heavy GeoParquet)

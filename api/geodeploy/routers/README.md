@@ -3,9 +3,40 @@
 ## Purpose
 All HTTP endpoints. Every router is registered in `main.py` under the `/api` prefix.
 
+## Permission model (RBAC, A-01 — 2026-07-16)
+**Shared workspace:** every member SEES all data and portals; the ROLE decides what they may do.
+`user_id` on resources is "created by" provenance, not an access boundary. Roles (deps.py
+`ROLE_ORDER`): `viewer` (0, read-only) < `editor` (1) < `admin` (2) < `owner` (3, exactly one).
+- **Reads** (list GETs, portal detail, stats, jobs) → `get_current_user` (any role). List queries
+  use `common.visible_to(user)` — currently `TRUE`; **this is the A-02 per-resource-sharing seam**.
+- **Mutations** on data/portals → `require_editor`; id-only lookups (the role 403 fires BEFORE the
+  404 lookup — deliberate, pinned in test_rbac.py).
+- **/admin/***, setup reconfiguration, **/users/*** → `require_admin` (admin or owner);
+  ownership transfer → `require_owner`.
+- **PUBLIC surface unchanged**: portal assets/export, vector features.*/identify/pmtiles/parquet
+  (`_publicly_readable`), raster /cog + /colormaps, sources features.geojson, stac/templates/basemaps.
+- List responses carry `user_id` + `created_by` (one `common.creator_names` query per list call);
+  the creator filter in the UI is client-side — do NOT add a `?created_by=` API param.
+
 ## Contents
+- `users.py` — **user management (admin-gated)**: `GET /users` (members + per-user resource counts),
+  invitations (`POST/GET /users/invitations`, `POST .../{id}/regenerate`, `DELETE .../{id}`) with
+  **sha256-hashed single-use tokens** (raw token returned ONCE on create/regenerate; "regenerate" is
+  the only way to get a link again), `PUT /users/{id}/role` (owner untouchable, no self-change,
+  `is_admin` write-synced), `POST /users/{id}/transfer-ownership` (**owner only**; demotes the caller
+  to admin FIRST — the partial unique index `uq_users_single_owner` forbids two owners),
+  `DELETE /users/{id}` (**reassigns** the member's layers/portals/sources to the owner — nothing is
+  destroyed; S3 keys/schema names are stored full-string so nothing physical moves), and
+  `POST /users/{id}/reset-password-link` (24 h reset token; owner target requires owner caller).
+  Invite links are COPY-delivered (no email — `services/notifications.py` is the C-08 hook).
+- `common.py` — `visible_to()` (the A-02 seam) + `creator_names()` shared by the resource routers.
 - `setup.py` — first-run wizard: `/setup/status`, `/setup/configure-db`, `/setup/configure-storage`, `/setup/create-admin`. Provisions PostGIS/MinIO (via `services.postgis`/`services.minio`), then `_write_env()` persists creds to `.env` and `_apply_to_process()` pushes them into `os.environ`, clears the settings cache, and restarts the celery container. **`_write_env` also writes `TITILER_S3_ENDPOINT`** (scheme-stripped), **`TITILER_AWS_HTTPS`** (YES for an https/external S3, NO for local MinIO), and **`POSTGIS_SSLMODE`** (`prefer` for external DB, empty for local). External storage recreates TiTiler via `minio.restart_titiler`; Martin is a core always-on service so external DB needs nothing special at setup. `_write_env` also persists **`COMPOSE_PROFILES`** (`local-db`/`local-storage`) so `docker compose up` (install/update) keeps the wizard-provisioned local postgres/minio managed instead of orphan-removing them.
-- `auth.py` — `/auth/login` (OAuth2 password form → JWT, 7-day expiry) and `/auth/me`. Bcrypt via passlib.
+- `auth.py` — `/auth/login` (OAuth2 password form → JWT, 7-day expiry) and `/auth/me` (now returns
+  `role`). Bcrypt via passlib. **RBAC additions (2026-07-16):** PUBLIC `GET /auth/invitations/{token}`
+  (info for the accept/reset pages; 410 when used/expired), PUBLIC `POST .../{token}/accept`
+  (redeem invite → create user with the invited role → auto-login TokenResponse; 409 if the email
+  registered meanwhile), PUBLIC `POST /auth/password-reset/{token}`, and authed `PUT /auth/password`
+  (verify current, set new — does NOT revoke outstanding 7-day JWTs; that's A-04).
 - `portals.py` — portal CRUD + `/portals/{id}/publish` and `/unpublish`. Publish loads ready layers, calls `services.portal_generator.generate_style` + `build_portal_bundle` (via the shared `_rebuild_bundle` helper) to write the static site. Slugs are auto-deduped (`_unique_slug`). Passwords stored as both bcrypt (future server-side) and SHA-256 (embedded in the published HTML gate). **Rename (2026-07-11): `PUT /portals/{id}` regenerates the slug when `title` changes** (unique, excluding self); if the slug changes on a **published** portal it re-bakes the bundle under the new slug (the slug is baked as `{{SLUG}}`) and removes the old `data/portals/{old_slug}/` dir so the old URL 404s — a draft just carries the new slug until published.
 - `templates.py` — `/templates` lists template folders from `/templates` that have `template.json` + `style.json` (layout.html is optional — shared skeleton fallback).
 - `portals.py` area-select export (all **public**, queued via Celery so heavy clips never block the API):
@@ -46,6 +77,10 @@ All HTTP endpoints. Every router is registered in `main.py` under the `/api` pre
 - No rate limiting beyond nginx; no pagination on list endpoints (fine at current scale).
 
 ## Last updated
+2026-07-16 (RBAC A-01: shared-workspace permission model — see the section above. New `users.py` +
+`common.py`; auth.py invitation/password flows; all mutating routes editor-gated with id-only
+lookups; discover de-dup made instance-wide; vector delete's Martin regen now includes ALL members'
+ready postgis layers, not just the deleter's. Tests: test_rbac.py, test_users.py, test_migrations.py.)
 2026-07-14 (SECURITY: `setup.configure-db/-storage` now require an admin token once setup is
 completed — `_guard_setup_mutation` — closing an unauthenticated config-tampering hole. Vector
 display endpoints — `features.arrow/.geojson`, `identify`, `pmtiles`, `parquet/{path}` — now serve a

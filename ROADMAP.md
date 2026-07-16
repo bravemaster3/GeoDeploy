@@ -11,11 +11,14 @@ features that drive adoption and differentiation.
 - **Source of truth:** the JSON embedded in that file (`<script id="roadmap-data">`). This Markdown is
   the narrative + schema + workflow around it.
 
-## ▶ Next logical step: **Multi-user & RBAC** (`A-01`)
+## ▶ Frontier: **Multi-user & RBAC** (`A-01`) — **building** (code complete 2026-07-16, in verification)
 
-Today, onboarding creates exactly **one admin** and stops — there is no way to add teammates or scope
-what anyone can do. The next step is **user management with roles** (owner / admin / editor / viewer):
-an invite flow, user CRUD screens, and a permission check on every mutating route.
+GeoDeploy is now a **shared workspace** (ArcGIS-organization style): every member sees all data and
+portals; the **role** — owner / admin / editor / viewer — gates what they can do. Built: a role
+ladder with a single, transferable owner; copy-link invitations (single-use hashed tokens, no email
+dependency); user CRUD with delete-reassign-to-owner; password change + admin reset links;
+role-aware UI (Users screen, viewer read-only affordances, creator filters for bulk review).
+Per-resource private/org sharing is deliberately `A-02` — the query seam (`visible_to()`) is in place.
 
 **Why this first:** it's the smallest change that (a) makes GeoDeploy usable by teams *now* and (b) is
 the load-bearing prerequisite for **everything in Phase 02 (Cloud)** — workspaces, tenant isolation,
@@ -27,7 +30,7 @@ sharing, and billing all assume real users and roles. Ownership/sharing (`A-02`)
 | # | Phase | Theme | State |
 |---|-------|-------|-------|
 | 00 | **Foundation** | The platform, shipped | 11 items — 10 shipped incl. security hardening; automated tests in progress |
-| 01 | **Multi-user & Access** | The bridge to Cloud | `A-01` **next**, then planned |
+| 01 | **Multi-user & Access** | The bridge to Cloud | `A-01` **building** (code complete), then planned |
 | 02 | **GeoDeploy Cloud** | Managed, multi-tenant | planned / future |
 | 03 | **Ecosystem & Interop** | Adoption engine (GeoLibre, QGIS, standards) | planned / future |
 | 04 | **Advanced Capabilities** | Differentiators | future / idea |
@@ -110,6 +113,10 @@ When an item is delivered, the corresponding folder `README.md` gets the impleme
 roadmap only tracks *state*, not *how*.
 
 ## Last updated
+2026-07-16 — `A-01` Multi-user & RBAC flipped `next` → `building`: all 7 implementation phases
+committed (role ladder + single transferable owner, shared workspace, copy-link invitations, user
+CRUD with delete-reassign, password flows, role-aware UI; 45 backend tests pass). Frontier stays on
+`A-01` until verified on the live instance and shipped.
 2026-07-14 — added `V-11` Structural layout templates (configurable portal regions — floating layer
 list, panel placement, sidebar side; Experience-Builder-style layout variety) and refocused `V-10` on
 the gallery + brand look-and-feel. 43 items; frontier = `A-01`.
