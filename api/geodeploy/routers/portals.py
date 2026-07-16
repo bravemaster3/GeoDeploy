@@ -13,7 +13,7 @@ from ..deps import get_current_user, require_editor
 from ..models import ExternalSource, Portal, RasterLayer, User, VectorLayer
 from ..schemas import PortalCreate, PortalOut, PortalUpdate
 from ..services.portal_generator import build_portal_bundle, generate_style
-from .common import creator_names, visible_to
+from .common import creator_names
 from .data.vector import invalidate_public_layers
 
 router = APIRouter(prefix="/portals", tags=["portals"])
@@ -56,6 +56,7 @@ async def _rebuild_bundle(portal: Portal, db: AsyncSession) -> None:
         portal.slug, portal.title, user_data, portal.template_id, layer_configs,
         access_type=portal.access_type,
         password_sha256=portal.access_password_sha256,
+        owner_id=portal.user_id,   # baked so the 'owner' gate can check the viewer is the creator
         initial_view=initial_view,
         description=portal.description,
         basemap=portal.basemap,
@@ -64,8 +65,9 @@ async def _rebuild_bundle(portal: Portal, db: AsyncSession) -> None:
 
 @router.get("", response_model=list[PortalOut])
 async def list_portals(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    # Shared workspace: all members see all portals (role gates WRITES, not reads).
-    result = await db.execute(select(Portal).where(visible_to(user, Portal)).order_by(Portal.created_at.desc()))
+    # Shared workspace: all members see all portals (role gates WRITES, not reads). Portals have no
+    # per-resource visibility — a portal's audience is its published access_type, not a workspace flag.
+    result = await db.execute(select(Portal).order_by(Portal.created_at.desc()))
     portals = result.scalars().all()
     names = await creator_names(db, portals)
     out = []
@@ -87,7 +89,6 @@ async def create_portal(req: PortalCreate, user: User = Depends(require_editor),
         description=req.description,
         template_id=req.template_id,
         layer_configs=json.dumps([lc.model_dump() for lc in req.layer_configs]),
-        visibility=req.visibility,
         access_type=req.access_type,
     )
     if req.access_password:
@@ -104,13 +105,13 @@ async def create_portal(req: PortalCreate, user: User = Depends(require_editor),
 
 @router.get("/{portal_id}", response_model=PortalOut)
 async def get_portal(portal_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    portal = await _get_portal(portal_id, db, user)
+    portal = await _get_portal(portal_id, db)
     return PortalOut.from_orm_json(portal)
 
 
 @router.put("/{portal_id}", response_model=PortalOut)
 async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
-    portal = await _get_portal(portal_id, db, user)
+    portal = await _get_portal(portal_id, db)
     if req.title is not None:
         # The slug (URL) is STABLE — set once at creation, never changed by a rename, so a portal's
         # public URL never breaks when its title changes. Only the display title updates here.
@@ -125,10 +126,6 @@ async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(
         portal.layer_configs = json.dumps([lc.model_dump() for lc in req.layer_configs])
     if req.initial_view is not None:
         portal.initial_view = json.dumps(req.initial_view)
-    if req.visibility is not None:
-        # Any editor+ may re-share a portal they can SEE; a private portal they don't own already
-        # 404'd in _get_portal above (workspace model — an editor who can edit/delete it can re-share).
-        portal.visibility = req.visibility
     if req.access_type is not None:
         portal.access_type = req.access_type
     if req.access_password is not None:
@@ -150,7 +147,7 @@ async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(
 
 @router.post("/{portal_id}/publish", response_model=PortalOut)
 async def publish_portal(portal_id: int, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
-    portal = await _get_portal(portal_id, db, user)
+    portal = await _get_portal(portal_id, db)
     await _rebuild_bundle(portal, db)
 
     portal.published = True
@@ -176,7 +173,7 @@ async def upload_portal_asset(
     db: AsyncSession = Depends(get_db),
 ):
     """Upload an image for the portal's About documentation. Returns the public URL to embed."""
-    portal = await _get_portal(portal_id, db, user)
+    portal = await _get_portal(portal_id, db)
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in _ASSET_EXTENSIONS:
         raise HTTPException(400, f"Unsupported image type ({ext or 'no extension'}). "
@@ -213,7 +210,7 @@ async def portal_asset(portal_id: int, filename: str):
 async def unpublish_portal(portal_id: int, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
     import shutil, os
     settings = get_settings()
-    portal = await _get_portal(portal_id, db, user)
+    portal = await _get_portal(portal_id, db)
     portal_dir = f"{settings.data_dir}/portals/{portal.slug}"
     if os.path.exists(portal_dir):
         shutil.rmtree(portal_dir)
@@ -229,7 +226,7 @@ async def unpublish_portal(portal_id: int, user: User = Depends(require_editor),
 async def delete_portal(portal_id: int, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
     import shutil, os
     settings = get_settings()
-    portal = await _get_portal(portal_id, db, user)
+    portal = await _get_portal(portal_id, db)
     portal_dir = f"{settings.data_dir}/portals/{portal.slug}"
     if os.path.exists(portal_dir):
         shutil.rmtree(portal_dir)
@@ -340,11 +337,10 @@ async def export_download(slug: str, job_id: str):
     return FileResponse(path, media_type="application/zip", filename="selection.zip")
 
 
-async def _get_portal(portal_id: int, db: AsyncSession, user: User) -> Portal:
-    """Id-only lookup honoring A-02 visibility: a member sees organization/public portals plus their
-    OWN private ones; admins/owner see all. A private portal owned by someone else 404s (no leak —
-    the caller can't tell it exists). The ROLE dependency already gated whether the caller may act."""
-    result = await db.execute(select(Portal).where(Portal.id == portal_id, visible_to(user, Portal)))
+async def _get_portal(portal_id: int, db: AsyncSession) -> Portal:
+    """Id-only lookup (shared workspace: every member sees every portal; the ROLE dependency already
+    gated whether the caller may act, and a portal's audience is its published access_type)."""
+    result = await db.execute(select(Portal).where(Portal.id == portal_id))
     portal = result.scalar_one_or_none()
     if not portal:
         raise HTTPException(404, "Portal not found.")

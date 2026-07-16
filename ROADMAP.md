@@ -11,26 +11,31 @@ features that drive adoption and differentiation.
 - **Source of truth:** the JSON embedded in that file (`<script id="roadmap-data">`). This Markdown is
   the narrative + schema + workflow around it.
 
-## ▶ Frontier: **Multi-user & RBAC** (`A-01`) — **building** (code complete 2026-07-16, in verification)
+## ▶ Frontier: **Resource ownership & sharing** (`A-02`) — **building** (code complete 2026-07-16, in verification)
 
-GeoDeploy is now a **shared workspace** (ArcGIS-organization style): every member sees all data and
-portals; the **role** — owner / admin / editor / viewer — gates what they can do. Built: a role
-ladder with a single, transferable owner; copy-link invitations (single-use hashed tokens, no email
-dependency); user CRUD with delete-reassign-to-owner; password change + admin reset links;
-role-aware UI (Users screen, viewer read-only affordances, creator filters for bulk review).
-Per-resource private/org sharing is deliberately `A-02` — the query seam (`visible_to()`) is in place.
+`A-01` **Multi-user & RBAC is shipped**: a **shared workspace** (ArcGIS-organization style) where
+every member sees all data and portals and the **role** — owner / admin / editor / viewer — gates
+what they can do (single transferable owner, copy-link invitations, user CRUD with
+delete-reassign-to-owner, password flows, role-aware UI).
 
-**Why this first:** it's the smallest change that (a) makes GeoDeploy usable by teams *now* and (b) is
-the load-bearing prerequisite for **everything in Phase 02 (Cloud)** — workspaces, tenant isolation,
-sharing, and billing all assume real users and roles. Ownership/sharing (`A-02`) and API tokens
-(`A-03`) follow immediately after.
+`A-02` builds per-resource sharing on top: a **visibility axis** — `private` (creator + admins) ⊂
+`organization` (all members) ⊂ `public` (STAC data catalog + raw assets) — on vector/raster layers and
+external sources, enforced by the `visible_to()` seam across every list + authenticated by-id lookup
+(public-by-id portal display endpoints untouched). **Portals** instead get a clearer **4-tier
+published-access** model — public / password / organization (any signed-in member) / private (creator
++ admins). Those portal gates are currently **client-side**; **server-side enforcement is the next
+task**.
+
+**Why this matters:** ownership + sharing is the access primitive that collaboration and
+**Phase 02 (Cloud)** — workspaces, tenant isolation, billing — all build on. API tokens (`A-03`) and
+auth hardening (`A-04`) follow.
 
 ## Phases
 
 | # | Phase | Theme | State |
 |---|-------|-------|-------|
 | 00 | **Foundation** | The platform, shipped | 11 items — 10 shipped incl. security hardening; automated tests in progress |
-| 01 | **Multi-user & Access** | The bridge to Cloud | `A-01` + `A-02` **building** (code complete), then planned |
+| 01 | **Multi-user & Access** | The bridge to Cloud | `A-01` **shipped**; `A-02` **building** (frontier), then planned |
 | 02 | **GeoDeploy Cloud** | Managed, multi-tenant | planned / future |
 | 03 | **Ecosystem & Interop** | Adoption engine (GeoLibre, QGIS, standards) | planned / future |
 | 04 | **Advanced Capabilities** | Differentiators | future / idea |
@@ -115,6 +120,11 @@ When an item is delivered, the corresponding folder `README.md` gets the impleme
 roadmap only tracks *state*, not *how*.
 
 ## Last updated
+2026-07-16 — `A-01` Multi-user & RBAC flipped `building` → **shipped** (user sign-off); **frontier
+moves to `A-02`**. Portals dropped the confusing workspace-visibility control in favor of a 4-tier
+published-access model (public / password / organization / private = creator + admins); the legacy
+`private` access value maps to `organization`. Portal access gates are client-side today —
+**server-side enforcement is the next task**.
 2026-07-16 — `A-02` Resource ownership & sharing flipped `planned` → `building` (code complete, in
 verification): a per-resource visibility axis — private (creator + admins) / organization (all
 members) / public (STAC data catalog + raw assets) — on vector + raster layers, external sources, and

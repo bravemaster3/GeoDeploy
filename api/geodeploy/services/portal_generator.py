@@ -261,6 +261,7 @@ def _layer_info(layer, kind: str) -> dict:
 
 def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str, layer_configs: list[dict],
                         access_type: str = "public", password_sha256: str | None = None,
+                        owner_id: int | None = None,
                         initial_view: dict | None = None, description: str | None = None,
                         basemap: str | None = None) -> str:
     """
@@ -344,6 +345,8 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
     html = html.replace("{{POPUP_CONFIG}}", _json_for_html(popup_configs))
     html = html.replace("{{ACCESS_TYPE}}", access_type)
     html = html.replace("{{PASSWORD_SHA256}}", password_sha256 or "")
+    # Owner id for the 'owner' access tier's client gate (JSON literal — 0 is falsy but never a real id).
+    html = html.replace("{{OWNER_ID}}", str(owner_id or 0))
     html = html.replace("{{SLUG}}", slug)
     # TITLE lands in both HTML text (<title>, header) and a JS string; escaping it for HTML also
     # makes the JS-string context safe (no raw " or < survives to break out).

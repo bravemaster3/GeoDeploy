@@ -30,7 +30,6 @@
         @publish="handlePublish(portal)"
         @unpublish="portalsStore.unpublish(portal.id)"
         @delete="portalsStore.remove(portal.id)"
-        @visibility="portalsStore.update(portal.id, { visibility: $event })"
       />
     </div>
 

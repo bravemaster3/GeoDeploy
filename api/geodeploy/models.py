@@ -218,12 +218,15 @@ class Portal(Base):
     basemap: Mapped[str | None] = mapped_column(String(64))  # basemap catalog id (BASEMAP_CATALOG)
     layer_configs: Mapped[str] = mapped_column(Text, default="[]")  # JSON
     initial_view: Mapped[str | None] = mapped_column(Text)  # JSON {center:[lng,lat], zoom, bearing, pitch} — published portal's start view
-    # A-02 WORKSPACE visibility — private | organization — who among your teammates sees this portal
-    # in the dashboard. ORTHOGONAL to access_type below (which gates the PUBLISHED viewer). A draft
-    # portal can be private (creator + admins only) while unpublished; no public tier (publishing is
-    # the public act). See VectorLayer.visibility and routers/common.py::visible_to.
+    # DORMANT: portals dropped the separate workspace-visibility control (it duplicated access_type
+    # confusingly — a portal's audience is its published access_type, below). Kept at 'organization'
+    # for every portal (reset by a migration); never written by the API. Data layers/sources still use
+    # visibility. Column retained to avoid a destructive drop on SQLite.
     visibility: Mapped[str] = mapped_column(String(16), nullable=False, default="organization")
-    access_type: Mapped[str] = mapped_column(String(16), default="public")  # public | password | private
+    # Who can VIEW the published portal: public (anyone) | password | organization (any signed-in
+    # workspace member) | owner (only the creator + admins). Client-side gate in templates/shared/
+    # portal.js. Legacy 'private' == organization (members-only), migrated away in main.py.
+    access_type: Mapped[str] = mapped_column(String(16), default="public")
     access_password_hash: Mapped[str | None] = mapped_column(String(256))    # bcrypt — for future server-side auth
     access_password_sha256: Mapped[str | None] = mapped_column(String(64))   # SHA-256 hex — embedded in published portal
     published: Mapped[bool] = mapped_column(Boolean, default=False)

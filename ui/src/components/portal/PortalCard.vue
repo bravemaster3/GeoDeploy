@@ -18,17 +18,15 @@
       <div class="text-xs text-muted-foreground/70 flex gap-3 flex-wrap items-center">
         <span>{{ portal.layer_configs?.length || 0 }} layer{{ portal.layer_configs?.length !== 1 ? 's' : '' }}</span>
         <span>{{ portal.template_id }}</span>
-        <span>{{ portal.access_type }}</span>
         <span v-if="portal.created_by">by {{ portal.created_by }}</span>
       </div>
 
-      <!-- Workspace visibility (who among teammates sees this portal) — distinct from the published
-           viewer's access_type above. Editors get the picker; others just see a Private marker. -->
-      <div class="flex items-center gap-2">
-        <VisibilitySelect v-if="auth.canEdit" :model-value="portal.visibility || 'organization'"
-          @change="$emit('visibility', $event)" />
-        <span v-else-if="portal.visibility === 'private'"
-          class="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400">Private</span>
+      <!-- Published access tier (who can VIEW the live portal), read-only — changed in the editor. -->
+      <div class="flex items-center">
+        <span class="inline-flex items-center gap-1.5 text-[11px] px-2 py-0.5 rounded-full" :class="access.class">
+          <component :is="access.icon" class="w-3 h-3" />
+          {{ access.label }}
+        </span>
       </div>
 
       <div class="flex gap-2 pt-1">
@@ -49,12 +47,22 @@
 </template>
 
 <script setup>
-import { GlobeIcon, TrashIcon, ExternalLinkIcon } from '@/views/icons'
+import { computed } from 'vue'
+import { GlobeIcon, TrashIcon, ExternalLinkIcon, KeyIcon, UsersIcon, UserIcon } from '@/views/icons'
 import { useAuthStore } from '@/stores/auth'
-import VisibilitySelect from '@/components/shared/VisibilitySelect.vue'
 
-defineProps({ portal: Object })
-defineEmits(['edit', 'publish', 'unpublish', 'delete', 'visibility'])
+const props = defineProps({ portal: Object })
+defineEmits(['edit', 'publish', 'unpublish', 'delete'])
 
 const auth = useAuthStore()
+
+// Published access tier → badge. 'private' is the legacy value for organization (members-only).
+const ACCESS = {
+  public: { label: 'Public', icon: GlobeIcon, class: 'bg-emerald-500/15 text-emerald-400' },
+  password: { label: 'Password', icon: KeyIcon, class: 'bg-violet-500/15 text-violet-400' },
+  organization: { label: 'Organization', icon: UsersIcon, class: 'bg-sky-500/15 text-sky-400' },
+  private: { label: 'Organization', icon: UsersIcon, class: 'bg-sky-500/15 text-sky-400' },
+  owner: { label: 'Private', icon: UserIcon, class: 'bg-amber-500/15 text-amber-400' },
+}
+const access = computed(() => ACCESS[props.portal.access_type] || ACCESS.public)
 </script>

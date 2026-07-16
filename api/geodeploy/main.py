@@ -81,6 +81,15 @@ def _apply_schema_migrations(conn) -> None:
         "UPDATE external_sources SET visibility = 'organization' WHERE visibility IS NULL",
         "ALTER TABLE portals ADD COLUMN visibility VARCHAR(16)",
         "UPDATE portals SET visibility = 'organization' WHERE visibility IS NULL",
+        # Portals dropped the separate workspace-visibility control (it duplicated access_type
+        # confusingly): reset any card-set 'private' back to organization. Safe to repeat — the API
+        # never writes portals.visibility anymore.
+        "UPDATE portals SET visibility = 'organization' WHERE visibility = 'private'",
+        # Published-access tiers gained 'organization' (members-only) + 'owner' (creator+admins).
+        # The legacy 'private' value already meant "any signed-in member" → migrate it to
+        # 'organization'. Safe to repeat: the API now only ever writes organization/owner, never
+        # 'private', so no genuine 'owner'-tier portal is ever clobbered by this.
+        "UPDATE portals SET access_type = 'organization' WHERE access_type = 'private'",
         # Outgoing email via generic SMTP (C-08a)
         "ALTER TABLE setup_config ADD COLUMN smtp_host VARCHAR(256)",
         "ALTER TABLE setup_config ADD COLUMN smtp_port INTEGER DEFAULT 587",

@@ -394,9 +394,10 @@ const toolbarButtons = [
 ]
 
 const accessOptions = [
-  { value: 'public',   label: 'Public',   desc: 'Anyone with the URL can view' },
-  { value: 'password', label: 'Password', desc: 'Require a password to view' },
-  { value: 'private',  label: 'Private',  desc: 'Only signed-in users can view' },
+  { value: 'public',       label: 'Public',       desc: 'Anyone with the URL can view' },
+  { value: 'password',     label: 'Password',     desc: 'Require a password to view' },
+  { value: 'organization', label: 'Organization', desc: 'Only signed-in members of your workspace can view' },
+  { value: 'owner',        label: 'Private',      desc: 'Only you (the creator) and workspace admins can view' },
 ]
 
 const { map, loaded, applyStyle, fitToBbox, jumpTo, addTopRightControlFirst } = useMaplibre('portal-preview-map')
@@ -416,7 +417,10 @@ onMounted(async () => {
   if (portal.value) {
     layerConfigs.value = portal.value.layer_configs || []
     selectedTemplate.value = portal.value.template_id
-    accessType.value = portal.value.access_type || 'public'
+    // Legacy 'private' == organization (members-only) — show it as the Organization option.
+    accessType.value = portal.value.access_type === 'private'
+      ? 'organization'
+      : (portal.value.access_type || 'public')
     basemap.value = portal.value.basemap || basemapCatalog.value[0].id
     savedView.value = portal.value.initial_view || null
     description.value = portal.value.description || ''

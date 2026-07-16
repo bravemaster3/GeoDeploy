@@ -6,24 +6,32 @@
   const gate = document.getElementById('access-gate');
   const sub  = document.getElementById('access-gate-sub');
 
-  if (ACCESS_TYPE === 'private') {
+  // Auth-gated tiers: 'organization' (any signed-in workspace member) and 'owner' (only the
+  // creator + admins). 'private' is the LEGACY value for members-only — treat it as 'organization'
+  // (the migration rewrites stored 'private' → 'organization'; this keeps a stale bundle working).
+  const OWNER_ID = window.GEODEPLOY.ownerId;
+  if (ACCESS_TYPE === 'owner' || ACCESS_TYPE === 'organization' || ACCESS_TYPE === 'private') {
+    const ownerOnly = ACCESS_TYPE === 'owner';
     const token = localStorage.getItem('geodeploy_token');
-    if (token) {
-      fetch('/api/auth/me', { headers: { Authorization: 'Bearer ' + token } })
-        .then(r => {
-          if (!r.ok) throw new Error('unauthorized');
-          // Authenticated — portal stays visible, nothing to do
-        })
-        .catch(() => showPrivateGate());
-    } else {
-      showPrivateGate();
-    }
-    function showPrivateGate() {
+    function showAuthGate() {
       gate.style.display = 'flex';
       document.getElementById('access-gate-input').style.display = 'none';
       document.getElementById('access-gate-btn').style.display = 'none';
-      sub.innerHTML = 'This portal is private. <a href="/" style="color:var(--accent)">Sign in</a> to view.';
+      sub.innerHTML = (ownerOnly
+        ? 'This portal is private to its owner. <a href="/" style="color:var(--accent)">Sign in</a> as the owner or an admin to view.'
+        : 'This portal is restricted to your organization. <a href="/" style="color:var(--accent)">Sign in</a> to view.');
     }
+    if (!token) { showAuthGate(); return; }
+    fetch('/api/auth/me', { headers: { Authorization: 'Bearer ' + token } })
+      .then(r => { if (!r.ok) throw new Error('unauthorized'); return r.json(); })
+      .then(u => {
+        // Members tier: any signed-in user passes. Owner tier: only the creator or an admin/owner.
+        const allowed = ownerOnly
+          ? (u.id === OWNER_ID || u.role === 'admin' || u.role === 'owner')
+          : true;
+        if (!allowed) showAuthGate();
+      })
+      .catch(showAuthGate);
     return;
   }
 

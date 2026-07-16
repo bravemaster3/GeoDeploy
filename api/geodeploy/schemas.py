@@ -329,15 +329,18 @@ class LayerConfig(BaseModel):
     popup_fields: list[str] = Field(default_factory=list)
 
 
+# Published-portal access tiers (who can VIEW the live portal): public (anyone) | password |
+# organization (any signed-in workspace member) | owner (only the creator + admins). The legacy value
+# 'private' == organization (members-only); it is migrated to 'organization' and never written again.
+_ACCESS_TYPE = "^(public|password|organization|owner)$"
+
+
 class PortalCreate(BaseModel):
     title: str
     description: str | None = None
     template_id: str = "minimal"
     layer_configs: list[LayerConfig] = Field(default_factory=list)
-    # WORKSPACE visibility (who among teammates sees the portal) — distinct from access_type below
-    # (the published viewer gate). private | organization only; publishing is the public act.
-    visibility: str = Field(default="organization", pattern="^(private|organization)$")
-    access_type: str = Field(default="public", pattern="^(public|password|private)$")
+    access_type: str = Field(default="public", pattern=_ACCESS_TYPE)
     access_password: str | None = None
 
 
@@ -347,8 +350,7 @@ class PortalUpdate(BaseModel):
     template_id: str | None = None
     layer_configs: list[LayerConfig] | None = None
     initial_view: dict[str, Any] | None = None  # {center:[lng,lat], zoom, bearing, pitch}
-    visibility: str | None = Field(default=None, pattern="^(private|organization)$")
-    access_type: str | None = None
+    access_type: str | None = Field(default=None, pattern=_ACCESS_TYPE)
     access_password: str | None = None
     basemap: str | None = None  # basemap catalog id (see BASEMAP_CATALOG); default = first entry
 
@@ -363,7 +365,6 @@ class PortalOut(BaseModel):
     template_id: str
     layer_configs: list[LayerConfig]
     initial_view: dict[str, Any] | None = None
-    visibility: str = "organization"
     access_type: str
     basemap: str | None = None
     published: bool

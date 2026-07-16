@@ -10,13 +10,15 @@ All HTTP endpoints. Every router is registered in `main.py` under the `/api` pre
 - **Reads** (list GETs, portal detail, stats, jobs) → `get_current_user` (any role). List queries
   AND authenticated by-id lookups use `common.visible_to(user, Model)` — **the A-02 sharing seam**
   (see the visibility model below): admins/owner see all; others see non-private + their own.
-- **Mutations** on data/portals → `require_editor`; id-only lookups now carry the `visible_to` filter,
-  so a private resource the caller can't see 404s (the role 403 still fires BEFORE the lookup — pinned
-  in test_rbac.py). `_get_portal` gained a `user` param for this.
+- **Mutations** on data → `require_editor`; the by-id lookups for vector/raster/sources carry the
+  `visible_to` filter, so a private resource the caller can't see 404s (the role 403 still fires BEFORE
+  the lookup — pinned in test_rbac.py). Portals are NOT visibility-filtered (`_get_portal` is id-only).
 
-**A-02 per-resource sharing (2026-07-16):** each vector/raster layer, external source, and portal has a
+**A-02 per-resource sharing (2026-07-16):** each vector/raster layer and external source has a
 `visibility` — `private` (creator + admins/owner) ⊂ `organization` (all members; the default) ⊂
-`public` (layers only: STAC catalog + raw assets). `is_public` is now DERIVED / write-only-synced
+`public` (layers only: STAC catalog + raw assets). **Portals do NOT** — a portal's audience is its
+published `access_type` (see the portals entry: public / password / organization / owner). `is_public`
+is now DERIVED / write-only-synced
 (`= visibility == "public"`) via `common.apply_sharing`; STAC / `_publicly_readable` / `/cog` /
 portal_generator keep reading it unchanged. Re-sharing is an editor+ power over resources they can SEE
 (NOT creator-only — an editor can already delete an org resource). PUBLIC-by-id display endpoints are
@@ -78,10 +80,16 @@ deliberately NOT visibility-filtered (published portals depend on them).
   Consumers: QGIS (native STAC 3.40+/plugin), stac-browser, pystac-client — see `docs/data-access.md`.
 - **Sharing endpoints** (authed, editor+): `PUT /data/vector/{id}/sharing` + `PUT /data/raster/{id}/sharing`
   (`SharingUpdate`: partial `{visibility, abstract, keywords, license, attribution}` — legacy
-  `is_public` bool still accepted, mapped to visibility). `PUT /data/sources/{id}/sharing` +
-  portal `visibility` via `PUT /portals/{id}` take `VisibilityUpdate` (private|organization — no public
-  tier). `visibility=='public'` is the opt-IN to the STAC catalog + raw-COG route; nothing is public by
-  default; portal display endpoints stay public-by-id regardless (published portals need them).
+  `is_public` bool still accepted, mapped to visibility). `PUT /data/sources/{id}/sharing` takes
+  `VisibilityUpdate` (private|organization — no public tier). `visibility=='public'` is the opt-IN to
+  the STAC catalog + raw-COG route; nothing is public by default; portal display endpoints stay
+  public-by-id regardless (published portals need them).
+- **Portal published access** (`PUT /portals/{id}` `access_type`): `public` | `password` |
+  `organization` (any signed-in member) | `owner` (creator + admins). Legacy `private`==organization,
+  migrated away in main.py. The gate lives CLIENT-SIDE in `templates/shared/portal.js` (checks
+  `/api/auth/me`; `owner` tier also checks the baked `OWNER_ID`/role) — **server-side enforcement is a
+  queued follow-up**. Portals have NO workspace `visibility` (dropped 2026-07-16; `_get_portal` is
+  id-only, all portals workspace-visible).
 - `data/raster.py` also: **`GET /{layer_id}/cog`** — **PUBLIC** HTTP-Range proxy for the layer's COG,
   **only when `is_public`** (404 otherwise). This is the "WCS replacement": full pixel access in
   QGIS/GDAL via `/vsicurl/https://host/api/data/raster/{id}/cog`, and a direct-download URL.
