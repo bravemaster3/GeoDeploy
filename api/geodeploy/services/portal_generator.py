@@ -55,17 +55,26 @@ _BASEMAP_BY_ID = {b["id"]: b for b in BASEMAP_CATALOG}
 
 
 def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers: list,
-                   external_sources: list | None = None) -> dict:
+                   external_sources: list | None = None,
+                   deck_core_bounds: dict[int, list] | None = None) -> dict:
     """
     Return user data sources and layers only.
     The basemap is provided by the template's style.json and merged in build_portal_bundle.
     Each layer gets geodeploy:name metadata so the switcher can display it.
+
+    `deck_core_bounds` maps a GeoParquet layer id → its manifest grid extent (the percentile CORE
+    of the data). For a deck-only portal (no MapLibre layers) with no admin-pinned view, portal.js
+    otherwise fits the FULL extent then snaps once to this core extent when the manifest loads — a
+    visible flash. Baking the core extent into `bounds` here makes the FIRST fit already correct, and
+    the returned `core_fitted` flag tells portal.js to skip its now-redundant refit.
     """
     sources = {}
     layers = []
     deck_layers = []  # GeoParquet layers rendered by the deck.gl overlay (not MapLibre layers)
     layers_info = []  # per-layer documentation for the portal About panel (name, abstract, links)
     bounds = [180, 90, -180, -90]  # expanded below
+    core_bounds = [180, 90, -180, -90]  # deck layers' merged CORE extent (see deck_core_bounds)
+    deck_core_seen = False              # ≥1 deck layer contributed a real manifest core extent
 
     # layer_configs[0] is the TOP of the layer list and should draw on TOP of the map.
     # MapLibre draws later layers on top, so build them in reverse (config[0] added last).
@@ -106,8 +115,15 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                         } if (layer.s3_key
                               and not layer.s3_key.rstrip("/").endswith(".parquet")) else None),
                     })
-                    if layer.bbox:
-                        _expand_bounds(bounds, json.loads(layer.bbox))
+                    lb = json.loads(layer.bbox) if layer.bbox else None
+                    if lb:
+                        _expand_bounds(bounds, lb)
+                    core_bbox = (deck_core_bounds or {}).get(layer.id)
+                    if core_bbox:
+                        _expand_bounds(core_bounds, core_bbox)
+                        deck_core_seen = True
+                    elif lb:  # no manifest core for this layer → keep its full extent in the core set
+                        _expand_bounds(core_bounds, lb)
                     continue
                 sources[source_id] = {
                     "type": "vector",
@@ -225,8 +241,15 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 _expand_bounds(bounds, src_bbox)
 
     valid_bounds = bounds if bounds[0] < bounds[2] else None
+    # Deck-only portal (every user layer is a deck.gl GeoParquet overlay, no MapLibre layers): open on
+    # the merged CORE extent instead of the full extent so portal.js needn't snap to it after load.
+    # Mirrors portal.js's refit gate (`!userMapLayers.length`); coreFitted then suppresses that refit.
+    core_fitted = False
+    if deck_layers and not layers and deck_core_seen and core_bounds[0] < core_bounds[2]:
+        valid_bounds = core_bounds
+        core_fitted = True
     layers_info.reverse()  # the loop runs over reversed configs; the About panel shows list order
-    return {"sources": sources, "layers": layers, "bounds": valid_bounds,
+    return {"sources": sources, "layers": layers, "bounds": valid_bounds, "core_fitted": core_fitted,
             "deck_layers": deck_layers, "layers_info": layers_info}
 
 
@@ -296,6 +319,8 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
         # Custom key — MapLibre ignores unknown top-level keys
         "geodeploy": {
             "bounds": user_data.get("bounds"),
+            # bounds already == the deck CORE extent → portal.js skips its post-load refit (no flash).
+            "coreFitted": user_data.get("core_fitted", False),
             "view": initial_view,  # admin-set center/zoom; portal.js prefers this over fitBounds
             "title": title,
             "deckLayers": user_data.get("deck_layers", []),  # GeoParquet layers → deck.gl overlay
@@ -748,6 +773,34 @@ def _expand_bounds(bounds: list, bbox: list) -> None:
     bounds[1] = min(bounds[1], bbox[1])
     bounds[2] = max(bounds[2], bbox[2])
     bounds[3] = max(bounds[3], bbox[3])
+
+
+def read_deck_core_bbox(s3_key: str | None) -> list | None:
+    """Best-effort read of a prepared GeoParquet layer's manifest grid extent — the percentile CORE
+    of the data (PREP_EXTENT_QUANTILE), as a lon/lat bbox [minx, miny, maxx, maxy]. This is exactly
+    the extent portal.js refits to after the manifest loads; baking it into the portal bounds lets
+    `generate_style` open the map there directly (no on-load snap). Returns None on any failure or a
+    non-lon/lat grid, in which case the caller falls back to the layer's full bbox (today's behaviour).
+
+    A single small S3 GET per deck layer, run only at publish (a rare admin action)."""
+    if not s3_key or s3_key.rstrip("/").endswith(".parquet"):  # unprepped single file: no manifest
+        return None
+    try:
+        from .minio import get_s3_client
+        s3 = get_s3_client()
+        obj = s3.get_object(Bucket=get_settings().storage_bucket,
+                            Key=f"{s3_key.rstrip('/')}/manifest.json")
+        grid = (json.loads(obj["Body"].read()) or {}).get("grid")
+        if not isinstance(grid, dict):
+            return None
+        minx, miny = float(grid["minx"]), float(grid["miny"])
+        maxx, maxy = minx + float(grid["spanx"]), miny + float(grid["spany"])
+        # Mirror portal.js validLonLatBounds — a non-4326 grid is not a lon/lat extent.
+        if -180 <= minx < maxx <= 180 and -90 <= miny < maxy <= 90:
+            return [minx, miny, maxx, maxy]
+    except Exception:
+        pass
+    return None
 
 
 def _load_basemap(template_dir: Path) -> dict:

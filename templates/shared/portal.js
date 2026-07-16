@@ -732,7 +732,11 @@
       return l.metadata && l.metadata['geodeploy:name'];
     });
     const manifested = DECK_LAYERS.filter(function (d) { return d.parquet && d.parquet.manifest; });
-    const refit = (!savedView && !userMapLayers.length && manifested.length)
+    // When the server baked the core extent into geodeploy.bounds, the initial fitBounds ABOVE already
+    // opened here — skip the refit entirely (no on-load snap). Only older/unbaked bundles reach the
+    // client-side refit below, and it now glides instead of snapping.
+    const coreFitted = !!(STYLE.geodeploy && STYLE.geodeploy.coreFitted);
+    const refit = (!savedView && !userMapLayers.length && manifested.length && !coreFitted)
       ? Promise.all(manifested.map(getManifest)).then(function (ms) {
           let u = null;
           ms.forEach(function (m) {
@@ -741,12 +745,19 @@
             u = u ? [Math.min(u[0], e[0]), Math.min(u[1], e[1]),
                      Math.max(u[2], e[2]), Math.max(u[3], e[3])] : e;
           });
-          if (u && validLonLatBounds(u)) {
+          if (!(u && validLonLatBounds(u))) return;
+          // Glide (not a hard snap) to the core extent, and resolve only once the camera SETTLES so the
+          // moveend/first-fetch below aren't armed mid-animation (which would fire a second fetch).
+          return new Promise(function (resolve) {
+            let done = false;
+            const finish = function () { if (done) return; done = true; resolve(); };
+            map.once('moveend', finish);
             map.fitBounds([[u[0], u[1]], [u[2], u[3]]], {
               padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 },
-              duration: 0,
+              duration: 650,
             });
-          }
+            setTimeout(finish, 900);  // safety: a barely-moving camera may not emit moveend
+          });
         }).catch(function () {})
       : Promise.resolve();
     refit.then(function () {

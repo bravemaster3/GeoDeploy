@@ -7,6 +7,7 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
 
 ## Architecture (read this before touching templates)
 - **`shared/`** — the runtime, edited ONCE, inherited by every template:
+  - **Anti-flash on load (2026-07-16):** a deck-only portal used to `fitBounds` the full extent then hard-snap (`duration:0`) to the manifest core extent once it loaded — a visible flash. When the server baked the core extent (`STYLE.geodeploy.coreFitted`, see `portal_generator.read_deck_core_bbox`), portal.js now **skips the refit** (the initial fit already opened on the core). Only unbaked/older bundles still refit, and it now **glides** (`duration:650`) and resolves on `moveend` before arming the `moveend`/first-fetch handlers, so it neither snaps nor double-fetches.
   - `portal.js` — all portal behaviour (access gate, map init, **thin layer list**: drag-to-reorder ·
     eye/eye-off visibility · symbol swatch that opens a **symbology popover** (opacity, colour, line
     type, size; **point marker shape** circle/square/triangle/diamond/star/cross; raster:

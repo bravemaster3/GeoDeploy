@@ -89,21 +89,36 @@
         <!-- Access control section -->
         <section class="p-4">
           <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Access</h3>
-          <div class="space-y-1.5">
-            <label v-for="opt in accessOptions" :key="opt.value"
-              class="flex items-start gap-2.5 p-2 rounded-lg border cursor-pointer transition-colors"
-              :class="accessType === opt.value
-                ? 'border-primary bg-primary/10'
-                : 'border-border hover:border-muted-foreground/40'"
-            >
-              <input type="radio" :value="opt.value" v-model="accessType" class="mt-0.5 accent-primary flex-shrink-0" />
-              <div>
-                <div class="text-xs font-medium" :class="accessType === opt.value ? 'text-primary' : 'text-foreground/85'">
-                  {{ opt.label }}
-                </div>
-                <div class="text-[10px] text-muted-foreground/70 mt-0.5">{{ opt.desc }}</div>
+          <div ref="accessRoot">
+            <button type="button" ref="accessBtn" @click="toggleAccess"
+              class="w-full flex items-center gap-2 p-2 rounded-lg border transition-colors text-left"
+              :class="accessOpen ? 'border-primary bg-primary/10' : 'border-border hover:border-muted-foreground/40'">
+              <component :is="currentAccess.icon" class="w-4 h-4 flex-shrink-0" :class="currentAccess.color" />
+              <span class="flex-1 min-w-0">
+                <span class="block text-xs font-medium text-foreground/90">{{ currentAccess.label }}</span>
+                <span class="block text-[10px] text-muted-foreground/70 leading-snug truncate">{{ currentAccess.desc }}</span>
+              </span>
+              <svg class="w-3.5 h-3.5 opacity-60 flex-shrink-0 transition-transform" :class="accessOpen ? 'rotate-180' : ''"
+                viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+
+            <!-- Teleported to body + fixed so the scrolling sidebar's overflow can't clip it. -->
+            <Teleport to="body">
+              <div v-if="accessOpen" ref="accessMenu"
+                class="fixed z-[60] rounded-lg border border-border bg-card shadow-xl py-1"
+                :style="accessMenuStyle">
+                <button v-for="opt in accessOptions" :key="opt.value" type="button" @click="chooseAccess(opt.value)"
+                  class="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-muted transition-colors"
+                  :class="opt.value === accessType ? 'bg-muted/50' : ''">
+                  <component :is="opt.icon" class="w-4 h-4 mt-0.5 flex-shrink-0" :class="opt.color" />
+                  <span class="flex-1 min-w-0">
+                    <span class="block text-xs font-medium">{{ opt.label }}</span>
+                    <span class="block text-[11px] text-muted-foreground leading-snug">{{ opt.desc }}</span>
+                  </span>
+                  <CheckIcon v-if="opt.value === accessType" class="w-3.5 h-3.5 text-primary mt-0.5 flex-shrink-0" />
+                </button>
               </div>
-            </label>
+            </Teleport>
           </div>
           <div v-if="accessType === 'password'" class="mt-3">
             <label class="text-xs text-muted-foreground block mb-1">Password</label>
@@ -217,7 +232,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { useEditor, EditorContent } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
@@ -231,7 +246,7 @@ import { useMaplibre } from '@/composables/useMaplibre'
 import maplibregl from 'maplibre-gl'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { GeoJsonLayer } from '@deck.gl/layers'
-import { ExternalLinkIcon } from '@/views/icons'
+import { ExternalLinkIcon, GlobeIcon, KeyIcon, UsersIcon, UserIcon, CheckIcon } from '@/views/icons'
 import LayerPanel from '@/components/portal/LayerPanel.vue'
 
 const route = useRoute()
@@ -394,11 +409,51 @@ const toolbarButtons = [
 ]
 
 const accessOptions = [
-  { value: 'public',       label: 'Public',       desc: 'Anyone with the URL can view' },
-  { value: 'password',     label: 'Password',     desc: 'Require a password to view' },
-  { value: 'organization', label: 'Organization', desc: 'Only signed-in members of your workspace can view' },
-  { value: 'owner',        label: 'Private',      desc: 'Only you (the creator) and workspace admins can view' },
+  { value: 'public',       label: 'Public',       icon: GlobeIcon, color: 'text-emerald-400', desc: 'Anyone with the URL can view' },
+  { value: 'password',     label: 'Password',     icon: KeyIcon,   color: 'text-violet-400',  desc: 'Require a password to view' },
+  { value: 'organization', label: 'Organization', icon: UsersIcon, color: 'text-sky-400',     desc: 'Only signed-in members of your workspace can view' },
+  { value: 'owner',        label: 'Private',      icon: UserIcon,  color: 'text-amber-400',   desc: 'Only you (the creator) and workspace admins can view' },
 ]
+const currentAccess = computed(() => accessOptions.find(o => o.value === accessType.value) || accessOptions[0])
+
+// Access dropdown (icon picker, teleported + fixed so the scrolling sidebar can't clip it).
+const ACCESS_MENU_W = 256  // w-64
+const accessOpen = ref(false)
+const accessRoot = ref(null)
+const accessBtn = ref(null)
+const accessMenu = ref(null)
+const accessMenuStyle = ref({})
+
+function placeAccessMenu() {
+  const r = accessBtn.value?.getBoundingClientRect()
+  if (!r) return
+  const left = Math.max(8, Math.min(r.left, window.innerWidth - ACCESS_MENU_W - 8))
+  accessMenuStyle.value = { top: `${r.bottom + 4}px`, left: `${left}px`, width: `${r.width}px` }
+}
+function toggleAccess() { accessOpen.value ? closeAccess() : openAccess() }
+function openAccess() {
+  accessOpen.value = true
+  nextTick(placeAccessMenu)
+  document.addEventListener('click', onAccessDocClick, true)
+  window.addEventListener('scroll', closeAccess, true)
+  window.addEventListener('resize', closeAccess, true)
+}
+function closeAccess() {
+  if (!accessOpen.value) return
+  accessOpen.value = false
+  document.removeEventListener('click', onAccessDocClick, true)
+  window.removeEventListener('scroll', closeAccess, true)
+  window.removeEventListener('resize', closeAccess, true)
+}
+function chooseAccess(v) {
+  closeAccess()
+  accessType.value = v
+}
+function onAccessDocClick(e) {
+  if (accessRoot.value?.contains(e.target) || accessMenu.value?.contains(e.target)) return
+  closeAccess()
+}
+onBeforeUnmount(closeAccess)
 
 const { map, loaded, applyStyle, fitToBbox, jumpTo, addTopRightControlFirst } = useMaplibre('portal-preview-map')
 

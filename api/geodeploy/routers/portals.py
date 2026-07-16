@@ -14,7 +14,7 @@ from ..database import get_db
 from ..deps import get_current_user, require_editor, resolve_cookie_user
 from ..models import ExternalSource, Portal, RasterLayer, User, VectorLayer
 from ..schemas import PortalCreate, PortalOut, PortalUpdate
-from ..services.portal_generator import build_portal_bundle, generate_style
+from ..services.portal_generator import build_portal_bundle, generate_style, read_deck_core_bbox
 from .common import creator_names
 from .data.vector import invalidate_public_layers
 
@@ -74,7 +74,19 @@ async def _rebuild_bundle(portal: Portal, db: AsyncSession) -> None:
         r = await db.execute(select(ExternalSource).where(ExternalSource.id.in_(external_ids)))
         external_sources = r.scalars().all()
 
-    user_data = generate_style(layer_configs, vector_layers, raster_layers, external_sources)
+    # Bake each deck (GeoParquet) layer's manifest CORE extent so the published map opens there and
+    # doesn't snap once on load. Best-effort + off the event loop; a miss falls back to the full bbox.
+    from starlette.concurrency import run_in_threadpool
+    deck_core_bounds: dict[int, list] = {}
+    for l in vector_layers:
+        if (getattr(l, "storage_backend", "postgis") == "geoparquet"
+                and not (l.tile_status == "ready" and l.pmtiles_key)):  # PMTiles-tiled = not a deck layer
+            bbox = await run_in_threadpool(read_deck_core_bbox, l.s3_key)
+            if bbox:
+                deck_core_bounds[l.id] = bbox
+
+    user_data = generate_style(layer_configs, vector_layers, raster_layers, external_sources,
+                               deck_core_bounds=deck_core_bounds)
     initial_view = json.loads(portal.initial_view) if portal.initial_view else None
     build_portal_bundle(
         portal.slug, portal.title, user_data, portal.template_id, layer_configs,
