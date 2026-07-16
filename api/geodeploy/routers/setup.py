@@ -3,6 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
+from ..deps import ROLE_ORDER, resolve_bearer_user
 from ..models import SetupConfig, User
 from ..schemas import (
     ConfigureDBRequest, ConfigureStorageRequest, CreateAdminRequest, SetupStatus
@@ -34,18 +35,10 @@ async def _guard_setup_mutation(request: Request, db: AsyncSession) -> None:
     if not config.completed and not has_admin:
         return  # first-run: setup is still open
 
-    auth = request.headers.get("Authorization", "")
-    token = auth[7:].strip() if auth[:7].lower() == "bearer " else None
-    if not token:
+    user = await resolve_bearer_user(request, db)
+    if user is None:
         raise HTTPException(403, "Setup is already complete. Sign in as an admin to reconfigure.")
-    from jose import jwt, JWTError
-    try:
-        payload = jwt.decode(token, get_settings().secret_key, algorithms=["HS256"])
-        uid = int(payload.get("sub"))
-    except (JWTError, TypeError, ValueError):
-        raise HTTPException(403, "Invalid credentials.")
-    user = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
-    if not user or not user.is_admin:
+    if ROLE_ORDER.get(user.role, -1) < ROLE_ORDER["admin"]:
         raise HTTPException(403, "Admin access required to reconfigure a running instance.")
 
 

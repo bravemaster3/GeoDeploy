@@ -134,6 +134,50 @@ async def test_setup_rejects_nonadmin_token(db):
     assert getattr(ei.value, "status_code", None) == 403
 
 
+# ── RBAC (A-01): require_role ladder ──────────────────────────────────────────────────────────
+
+def _token(uid):
+    return jwt.encode({"sub": str(uid)}, get_settings().secret_key, algorithm="HS256")
+
+
+async def _seed_user(db, uid, role, email=None):
+    db.add(User(id=uid, email=email or f"{role}{uid}@example.com", name=role.capitalize(),
+                hashed_password=_pwd.hash("s3cret-pw"),
+                is_admin=role in ("admin", "owner"), role=role))
+    await db.commit()
+    return uid
+
+
+@pytest.mark.parametrize("role,expected", [
+    ("owner", 200), ("admin", 200), ("editor", 403), ("viewer", 403),
+])
+async def test_admin_routes_by_role(client, db, role, expected):
+    uid = await _seed_user(db, 10, role)
+    r = await client.get("/api/admin/health", headers={"Authorization": f"Bearer {_token(uid)}"})
+    assert r.status_code == expected
+
+
+async def test_unknown_role_is_denied(client, db):
+    # A corrupted/unknown role value must never grant anything.
+    uid = await _seed_user(db, 11, "superuser")
+    r = await client.get("/api/admin/health", headers={"Authorization": f"Bearer {_token(uid)}"})
+    assert r.status_code == 403
+
+
+async def test_setup_rejects_editor_token(db):
+    db.add(SetupConfig(id=1, completed=True))
+    uid = await _seed_user(db, 12, "editor")
+    with pytest.raises(Exception) as ei:
+        await _guard_setup_mutation(_req(f"Bearer {_token(uid)}"), db)
+    assert getattr(ei.value, "status_code", None) == 403
+
+
+async def test_setup_allows_owner_token(db):
+    db.add(SetupConfig(id=1, completed=True))
+    uid = await _seed_user(db, 13, "owner")
+    await _guard_setup_mutation(_req(f"Bearer {_token(uid)}"), db)  # must not raise
+
+
 # ── #1 over HTTP + baseline auth ──────────────────────────────────────────────────────────────
 
 async def test_setup_endpoints_locked_over_http(client, db):
