@@ -79,6 +79,8 @@ class SharingUpdate(BaseModel):
 
 class VectorLayerOut(BaseModel):
     id: int
+    user_id: int | None = None          # creator ("created by" provenance — shared workspace)
+    created_by: str | None = None       # creator display name, populated by the list endpoints
     name: str
     table_name: str
     schema_name: str
@@ -130,6 +132,8 @@ class RasterDefaultStyle(BaseModel):
 
 class RasterLayerOut(BaseModel):
     id: int
+    user_id: int | None = None
+    created_by: str | None = None
     name: str
     s3_key: str
     crs: str | None
@@ -174,6 +178,8 @@ class ExternalSourceCreate(BaseModel):
 
 class ExternalSourceOut(BaseModel):
     id: int
+    user_id: int | None = None
+    created_by: str | None = None
     name: str
     source_type: str
     kind: str                         # raster | vector
@@ -247,6 +253,8 @@ class PortalUpdate(BaseModel):
 
 class PortalOut(BaseModel):
     id: int
+    user_id: int | None = None
+    created_by: str | None = None
     title: str
     slug: str
     description: str | None
@@ -268,7 +276,6 @@ class PortalOut(BaseModel):
         data["layer_configs"] = json.loads(obj.layer_configs) if obj.layer_configs else []
         data["initial_view"] = json.loads(obj.initial_view) if obj.initial_view else None
         data.pop("access_password_hash", None)
-        data.pop("user_id", None)
         return cls(**data)
 
 

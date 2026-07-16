@@ -11,11 +11,12 @@ from slugify import slugify
 
 from ...config import get_settings
 from ...database import get_db
-from ...deps import get_current_user
+from ...deps import get_current_user, require_editor
 from ...models import Portal, UploadJob, User, VectorLayer
 from ...schemas import DefaultStyle, JobStatus, SharingUpdate, VectorLayerOut
 from ...services import martin as martin_svc
 from ...tasks.vector_ingest import ingest_vector
+from ..common import creator_names, visible_to
 
 router = APIRouter(prefix="/data/vector", tags=["vector"])
 
@@ -83,15 +84,23 @@ async def list_layers(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(VectorLayer).where(VectorLayer.user_id == user.id).order_by(VectorLayer.created_at.desc()))
+    # Shared workspace: every member sees all layers (role gates WRITES, not reads).
+    result = await db.execute(
+        select(VectorLayer).where(visible_to(user)).order_by(VectorLayer.created_at.desc()))
     layers = result.scalars().all()
-    return [VectorLayerOut.from_orm_json(l) for l in layers]
+    names = await creator_names(db, layers)
+    out = []
+    for l in layers:
+        o = VectorLayerOut.from_orm_json(l)
+        o.created_by = names.get(l.user_id)
+        out.append(o)
+    return out
 
 
 @router.post("/upload", response_model=JobStatus, status_code=202)
 async def upload_vector(
     file: UploadFile = File(...),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
     settings = get_settings()
@@ -155,7 +164,7 @@ async def upload_csv(
     srid: int = Form(4326),
     name: str | None = Form(None),
     delimiter: str = Form("comma"),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
     """Upload a CSV and build a PostGIS layer from it (queued, Celery): points from X/Y columns,
@@ -220,7 +229,7 @@ class GeoParquetComplete(BaseModel):
 @router.post("/geoparquet/presign")
 async def geoparquet_presign(
     body: GeoParquetPresign,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
 ):
     """Step 1 of the GeoParquet upload: hand the browser a presigned PUT URL so it uploads the
     file DIRECTLY to object storage (no multi-GB passthrough of the API process/disk). The key
@@ -242,7 +251,7 @@ async def geoparquet_presign(
 @router.post("/geoparquet/complete", response_model=JobStatus, status_code=202)
 async def geoparquet_complete(
     body: GeoParquetComplete,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
     """Step 2: the browser has PUT the file to `s3_key`; register the layer and queue inspection
@@ -297,7 +306,7 @@ class LargeVectorComplete(BaseModel):
 @router.post("/large/presign")
 async def large_vector_presign(
     body: LargeVectorPresign,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
 ):
     """Step 1 of the LARGE-vector upload (CSV / GeoJSON / GeoPackage / shapefile-zip too big to POST
     through the API): hand the browser a presigned PUT URL so it uploads the file DIRECTLY to
@@ -319,7 +328,7 @@ async def large_vector_presign(
 @router.post("/large/complete", response_model=JobStatus, status_code=202)
 async def large_vector_complete(
     body: LargeVectorComplete,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
     """Step 2: the browser has PUT the large file to `s3_key`; register a processing layer and queue
@@ -420,7 +429,7 @@ async def vector_features(
     db: AsyncSession = Depends(get_db),
 ):
     """Authed viewport query for the editor preview's deck.gl overlay."""
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id, VectorLayer.user_id == user.id))
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
     return await _viewport_geojson(result.scalar_one_or_none(), bbox, limit)
 
 
@@ -502,13 +511,13 @@ async def vector_identify(
 @router.post("/{layer_id}/tile", response_model=VectorLayerOut)
 async def tile_layer(
     layer_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
     """(Re)generate the PMTiles archive for a GeoParquet layer — used to tile a file uploaded
     before tiling existed, or to retry after an error."""
     from ...tasks.pmtiles_tile import tile_geoparquet
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id, VectorLayer.user_id == user.id))
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
@@ -526,14 +535,14 @@ async def tile_layer(
 @router.post("/{layer_id}/prepare", response_model=VectorLayerOut)
 async def prepare_layer(
     layer_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
     """Spatially prepare a GeoParquet layer: rewrite it Z-order-sorted with a GeoParquet 1.1 bbox
     covering column so DuckDB prunes row-groups on a bbox filter (fast analysis + viewport display).
     Idempotent — overwrites the object in place. The file stays GeoParquet (no PostGIS, no PMTiles)."""
     from ...tasks.geoparquet_prep import prepare_geoparquet
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id, VectorLayer.user_id == user.id))
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
@@ -550,7 +559,7 @@ async def prepare_layer(
 @router.post("/{layer_id}/reprocess", response_model=JobStatus, status_code=202)
 async def reprocess_layer(
     layer_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
     """Restart the background processing of a file-backed (GeoParquet) layer whose job stalled or
@@ -563,7 +572,7 @@ async def reprocess_layer(
     A fresh UploadJob is created so the UI's progress resets and can be polled to completion."""
     from ...tasks.convert_upload import convert_to_geoparquet
     from ...tasks.geoparquet_prep import prepare_geoparquet
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id, VectorLayer.user_id == user.id))
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
@@ -734,14 +743,14 @@ async def vector_parquet_object(layer_id: int, path: str, request: Request,
 async def save_sharing(
     layer_id: int,
     body: SharingUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
     """Data-sharing settings: opt the layer into the public STAC catalog (`/api/stac`) plus its
     catalog metadata, and set `is_public`. A layer's file-backed display endpoints are readable by
     an unauthenticated caller when `is_public` OR it is shown by a published portal (see
     `_publicly_readable`); toggling `is_public` here changes that, so we drop the exposure cache."""
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id, VectorLayer.user_id == user.id))
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
@@ -757,11 +766,11 @@ async def save_sharing(
 async def save_default_style(
     layer_id: int,
     body: DefaultStyle,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
     import json
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id, VectorLayer.user_id == user.id))
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
@@ -774,10 +783,10 @@ async def save_default_style(
 @router.delete("/{layer_id}", status_code=204)
 async def delete_layer(
     layer_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id, VectorLayer.user_id == user.id))
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
@@ -830,10 +839,11 @@ async def delete_layer(
     await db.commit()
     invalidate_public_layers()  # drop cached exposure/key entries for the removed layer
 
-    # Regenerate Martin config without the deleted layer
+    # Regenerate Martin config without the deleted layer. ALL members' ready postgis layers
+    # are included — the config is instance-wide (shared workspace), not per-creator; filtering
+    # by the deleting user here would silently drop everyone else's tiles.
     remaining = await db.execute(
         select(VectorLayer).where(
-            VectorLayer.user_id == user.id,
             VectorLayer.status == "ready",
             VectorLayer.storage_backend == "postgis",
         )

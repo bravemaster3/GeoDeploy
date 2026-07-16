@@ -15,7 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
 from ...database import get_db
-from ...deps import get_current_user
+# Discover/import mutates the catalog (and can LOAD data via the CSV path) and exposes raw
+# DB/bucket listings — editor-gated across the board, not viewer material.
+from ...deps import require_editor
 from ...models import RasterLayer, UploadJob, User, VectorLayer
 from ...schemas import JobStatus
 from ...services import martin as martin_svc
@@ -54,7 +56,7 @@ class ImportDbRequest(BaseModel):
 
 
 @router.get("/database")
-async def discover_database(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def discover_database(user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
     """List spatial tables in the connected PostGIS (any non-system schema).
 
     GeoDeploy's OWN per-user schemas (`geodeploy_u{id}`) are excluded: tables there are created
@@ -91,8 +93,10 @@ async def discover_database(user: User = Depends(get_current_user), db: AsyncSes
     finally:
         await conn.close()
 
+    # "Already imported" is instance-wide (shared workspace): if ANY member registered the
+    # table, it's in the catalog — don't offer it again per-user.
     existing = await db.execute(
-        select(VectorLayer.schema_name, VectorLayer.table_name).where(VectorLayer.user_id == user.id)
+        select(VectorLayer.schema_name, VectorLayer.table_name)
     )
     have = {(s, t) for s, t in existing.all()}
     return [
@@ -151,7 +155,7 @@ async def _primary_key(conn, schema, table) -> str | None:
 @router.post("/database", status_code=201)
 async def import_database(
     req: ImportDbRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
     """Register selected existing PostGIS tables as vector layers (no data copy)."""
@@ -164,7 +168,6 @@ async def import_database(
     try:
         for t in req.tables:
             dup = (await db.execute(select(VectorLayer).where(
-                VectorLayer.user_id == user.id,
                 VectorLayer.schema_name == t.schema_name,
                 VectorLayer.table_name == t.table_name,
             ))).scalar_one_or_none()
@@ -232,7 +235,7 @@ class ImportStorageRequest(BaseModel):
 
 
 @router.get("/storage")
-async def discover_storage(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def discover_storage(user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
     """List spatial objects already in the configured bucket (GeoTIFF, GeoParquet, CSV)."""
     from ...services.minio import get_s3_client
     settings = get_settings()
@@ -264,10 +267,10 @@ async def discover_storage(user: User = Depends(get_current_user), db: AsyncSess
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"Could not list storage: {exc}") from exc
 
-    existing = await db.execute(select(RasterLayer.s3_key).where(RasterLayer.user_id == user.id))
+    # Instance-wide "already imported" check (shared workspace) — see the database twin above.
+    existing = await db.execute(select(RasterLayer.s3_key))
     have = {row[0] for row in existing.all()}
-    vec = await db.execute(select(VectorLayer.s3_key, VectorLayer.source_s3_key)
-                           .where(VectorLayer.user_id == user.id))
+    vec = await db.execute(select(VectorLayer.s3_key, VectorLayer.source_s3_key))
     # source_s3_key is the attached original — s3_key alone stops matching once the spatial prep
     # repoints the layer at its prepped copy under vectors/.
     have_vec = {k for row in vec.all() for k in row if k}
@@ -282,7 +285,7 @@ async def discover_storage(user: User = Depends(get_current_user), db: AsyncSess
 @router.post("/storage", status_code=201)
 async def import_storage(
     req: ImportStorageRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
     """Register selected existing storage objects (no data copy): GeoTIFFs become raster layers
@@ -303,7 +306,6 @@ async def import_storage(
 
         if low.endswith((".parquet", ".geoparquet")):
             dup = (await db.execute(select(VectorLayer).where(
-                VectorLayer.user_id == user.id,
                 (VectorLayer.s3_key == key) | (VectorLayer.source_s3_key == key),
             ))).scalars().first()
             if dup:
@@ -328,7 +330,7 @@ async def import_storage(
             continue
 
         dup = (await db.execute(select(RasterLayer).where(
-            RasterLayer.user_id == user.id, RasterLayer.s3_key == key))).scalar_one_or_none()
+            RasterLayer.s3_key == key))).scalar_one_or_none()
         if dup:
             continue
         try:
@@ -360,7 +362,7 @@ class ImportCsvRequest(BaseModel):
 
 
 @router.get("/storage/csv-columns")
-async def csv_columns(key: str, delimiter: str = "comma", _: User = Depends(get_current_user)):
+async def csv_columns(key: str, delimiter: str = "comma", _: User = Depends(require_editor)):
     """Read a CSV's header so the UI can offer X/Y column pickers."""
     from ...tasks import csv_import
     settings = get_settings()
@@ -374,7 +376,7 @@ async def csv_columns(key: str, delimiter: str = "comma", _: User = Depends(get_
 @router.post("/storage/csv", response_model=JobStatus, status_code=202)
 async def import_csv(
     req: ImportCsvRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
     """Queue a CSV → PostGIS layer import: points from X/Y columns, or any geometry (e.g.

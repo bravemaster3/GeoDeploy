@@ -12,10 +12,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...database import get_db
-from ...deps import get_current_user
+from ...deps import get_current_user, require_editor
 from ...models import ExternalSource, User
 from ...schemas import ExternalSourceCreate, ExternalSourceOut
 from ...services import external_sources as ext
+from ..common import creator_names, visible_to
 
 router = APIRouter(prefix="/data/sources", tags=["sources"])
 
@@ -30,15 +31,22 @@ def _to_out(src: ExternalSource) -> ExternalSourceOut:
 @router.get("", response_model=list[ExternalSourceOut])
 async def list_sources(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(ExternalSource).where(ExternalSource.user_id == user.id).order_by(ExternalSource.created_at.desc())
+        select(ExternalSource).where(visible_to(user)).order_by(ExternalSource.created_at.desc())
     )
-    return [_to_out(s) for s in result.scalars().all()]
+    sources = result.scalars().all()
+    names = await creator_names(db, sources)
+    out = []
+    for s in sources:
+        o = _to_out(s)
+        o.created_by = names.get(s.user_id)
+        out.append(o)
+    return out
 
 
 @router.post("", response_model=ExternalSourceOut, status_code=201)
 async def create_source(
     req: ExternalSourceCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
     url = (req.url or "").strip()
@@ -83,9 +91,9 @@ async def create_source(
 
 
 @router.delete("/{source_id}", status_code=204)
-async def delete_source(source_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def delete_source(source_id: int, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
     src = (await db.execute(
-        select(ExternalSource).where(ExternalSource.id == source_id, ExternalSource.user_id == user.id)
+        select(ExternalSource).where(ExternalSource.id == source_id)
     )).scalar_one_or_none()
     if not src:
         raise HTTPException(404, "Source not found.")

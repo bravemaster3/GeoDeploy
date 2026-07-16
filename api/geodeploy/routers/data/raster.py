@@ -6,11 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
 from ...database import get_db
-from ...deps import get_current_user
+from ...deps import get_current_user, require_editor
 from ...models import RasterLayer, UploadJob, User
 from ...schemas import JobStatus, RasterDefaultStyle, RasterLayerOut, SharingUpdate
 from ...services.titiler import get_tile_url as raster_tile_url, COLORMAPS
 from ...tasks.raster_ingest import ingest_raster
+from ..common import creator_names, visible_to
 
 router = APIRouter(prefix="/data/raster", tags=["raster"])
 
@@ -27,12 +28,14 @@ async def list_colormaps():
 async def list_layers(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     import json
     result = await db.execute(
-        select(RasterLayer).where(RasterLayer.user_id == user.id).order_by(RasterLayer.created_at.desc())
+        select(RasterLayer).where(visible_to(user)).order_by(RasterLayer.created_at.desc())
     )
     layers = result.scalars().all()
+    names = await creator_names(db, layers)
     out = []
     for l in layers:
         obj = RasterLayerOut.from_orm_json(l)
+        obj.created_by = names.get(l.user_id)
         if l.status == "ready":
             ds = json.loads(l.default_style) if l.default_style else {}
             obj.tile_url = raster_tile_url(
@@ -50,7 +53,7 @@ async def list_layers(user: User = Depends(get_current_user), db: AsyncSession =
 @router.get("/{layer_id}/stats")
 async def raster_stats(layer_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Suggested stretch (min,max) from TiTiler band statistics (2nd–98th percentile)."""
-    result = await db.execute(select(RasterLayer).where(RasterLayer.id == layer_id, RasterLayer.user_id == user.id))
+    result = await db.execute(select(RasterLayer).where(RasterLayer.id == layer_id))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
@@ -86,7 +89,7 @@ async def raster_stats(layer_id: int, user: User = Depends(get_current_user), db
 @router.post("/upload", response_model=JobStatus, status_code=202)
 async def upload_raster(
     file: UploadFile = File(...),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
     settings = get_settings()
@@ -146,12 +149,12 @@ async def job_status(job_id: str, db: AsyncSession = Depends(get_db), user: User
 async def save_sharing(
     layer_id: int,
     body: SharingUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
     """Data-sharing settings: opt the layer into the public STAC catalog (`/api/stac`) and the
     public raw-COG route, plus its catalog metadata (abstract/keywords/license/attribution)."""
-    result = await db.execute(select(RasterLayer).where(RasterLayer.id == layer_id, RasterLayer.user_id == user.id))
+    result = await db.execute(select(RasterLayer).where(RasterLayer.id == layer_id))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
@@ -202,11 +205,11 @@ async def raster_cog(layer_id: int, request: Request, db: AsyncSession = Depends
 async def save_default_style(
     layer_id: int,
     body: RasterDefaultStyle,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
     import json
-    result = await db.execute(select(RasterLayer).where(RasterLayer.id == layer_id, RasterLayer.user_id == user.id))
+    result = await db.execute(select(RasterLayer).where(RasterLayer.id == layer_id))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
@@ -217,8 +220,8 @@ async def save_default_style(
 
 
 @router.delete("/{layer_id}", status_code=204)
-async def delete_layer(layer_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(RasterLayer).where(RasterLayer.id == layer_id, RasterLayer.user_id == user.id))
+async def delete_layer(layer_id: int, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(RasterLayer).where(RasterLayer.id == layer_id))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")

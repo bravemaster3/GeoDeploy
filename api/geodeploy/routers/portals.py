@@ -9,10 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..database import get_db
-from ..deps import get_current_user
+from ..deps import get_current_user, require_editor
 from ..models import ExternalSource, Portal, RasterLayer, User, VectorLayer
 from ..schemas import PortalCreate, PortalOut, PortalUpdate
 from ..services.portal_generator import build_portal_bundle, generate_style
+from .common import creator_names, visible_to
 from .data.vector import invalidate_public_layers
 
 router = APIRouter(prefix="/portals", tags=["portals"])
@@ -63,12 +64,20 @@ async def _rebuild_bundle(portal: Portal, db: AsyncSession) -> None:
 
 @router.get("", response_model=list[PortalOut])
 async def list_portals(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Portal).where(Portal.user_id == user.id).order_by(Portal.created_at.desc()))
-    return [PortalOut.from_orm_json(p) for p in result.scalars().all()]
+    # Shared workspace: all members see all portals (role gates WRITES, not reads).
+    result = await db.execute(select(Portal).where(visible_to(user)).order_by(Portal.created_at.desc()))
+    portals = result.scalars().all()
+    names = await creator_names(db, portals)
+    out = []
+    for p in portals:
+        o = PortalOut.from_orm_json(p)
+        o.created_by = names.get(p.user_id)
+        out.append(o)
+    return out
 
 
 @router.post("", response_model=PortalOut, status_code=201)
-async def create_portal(req: PortalCreate, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def create_portal(req: PortalCreate, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
     slug = await _new_slug(db)  # opaque id, stable for the life of the portal
 
     portal = Portal(
@@ -94,13 +103,13 @@ async def create_portal(req: PortalCreate, user: User = Depends(get_current_user
 
 @router.get("/{portal_id}", response_model=PortalOut)
 async def get_portal(portal_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    portal = await _get_owned(portal_id, user.id, db)
+    portal = await _get_portal(portal_id, db)
     return PortalOut.from_orm_json(portal)
 
 
 @router.put("/{portal_id}", response_model=PortalOut)
-async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    portal = await _get_owned(portal_id, user.id, db)
+async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
+    portal = await _get_portal(portal_id, db)
     if req.title is not None:
         # The slug (URL) is STABLE — set once at creation, never changed by a rename, so a portal's
         # public URL never breaks when its title changes. Only the display title updates here.
@@ -135,8 +144,8 @@ async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(
 
 
 @router.post("/{portal_id}/publish", response_model=PortalOut)
-async def publish_portal(portal_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    portal = await _get_owned(portal_id, user.id, db)
+async def publish_portal(portal_id: int, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
+    portal = await _get_portal(portal_id, db)
     await _rebuild_bundle(portal, db)
 
     portal.published = True
@@ -158,11 +167,11 @@ _MAX_ASSET_SIZE = 10 * 1024 * 1024  # 10 MB
 async def upload_portal_asset(
     portal_id: int,
     file: UploadFile = File(...),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
     """Upload an image for the portal's About documentation. Returns the public URL to embed."""
-    portal = await _get_owned(portal_id, user.id, db)
+    portal = await _get_portal(portal_id, db)
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in _ASSET_EXTENSIONS:
         raise HTTPException(400, f"Unsupported image type ({ext or 'no extension'}). "
@@ -196,10 +205,10 @@ async def portal_asset(portal_id: int, filename: str):
 
 
 @router.post("/{portal_id}/unpublish", response_model=PortalOut)
-async def unpublish_portal(portal_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def unpublish_portal(portal_id: int, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
     import shutil, os
     settings = get_settings()
-    portal = await _get_owned(portal_id, user.id, db)
+    portal = await _get_portal(portal_id, db)
     portal_dir = f"{settings.data_dir}/portals/{portal.slug}"
     if os.path.exists(portal_dir):
         shutil.rmtree(portal_dir)
@@ -212,10 +221,10 @@ async def unpublish_portal(portal_id: int, user: User = Depends(get_current_user
 
 
 @router.delete("/{portal_id}", status_code=204)
-async def delete_portal(portal_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def delete_portal(portal_id: int, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
     import shutil, os
     settings = get_settings()
-    portal = await _get_owned(portal_id, user.id, db)
+    portal = await _get_portal(portal_id, db)
     portal_dir = f"{settings.data_dir}/portals/{portal.slug}"
     if os.path.exists(portal_dir):
         shutil.rmtree(portal_dir)
@@ -322,8 +331,10 @@ async def export_download(slug: str, job_id: str):
     return FileResponse(path, media_type="application/zip", filename="selection.zip")
 
 
-async def _get_owned(portal_id: int, user_id: int, db: AsyncSession) -> Portal:
-    result = await db.execute(select(Portal).where(Portal.id == portal_id, Portal.user_id == user_id))
+async def _get_portal(portal_id: int, db: AsyncSession) -> Portal:
+    """Id-only lookup (shared workspace: the whole catalog is visible to every member, so a
+    plain 404 for a missing id leaks nothing; the ROLE dependency already gated the caller)."""
+    result = await db.execute(select(Portal).where(Portal.id == portal_id))
     portal = result.scalar_one_or_none()
     if not portal:
         raise HTTPException(404, "Portal not found.")
