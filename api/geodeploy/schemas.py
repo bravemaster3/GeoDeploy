@@ -389,8 +389,14 @@ class ServiceHealth(BaseModel):
 
 
 class StorageStats(BaseModel):
-    used_bytes: int
-    total_bytes: int | None
+    used_bytes: int                     # total across all measurable stores below
+    total_bytes: int | None             # capacity — unknown for external PG/S3, kept for the bar
     vector_layers: int
     raster_layers: int
     portals: int
+    # Per-store breakdown (None = that store could not be measured, e.g. DB unreachable —
+    # distinct from 0, which means "measured, empty"). used_bytes sums the measurable ones.
+    postgis_bytes: int | None = None      # pg_total_relation_size over catalog postgis tables
+    raster_bytes: int | None = None       # COG objects on S3 (per-layer)
+    geoparquet_bytes: int | None = None   # .parquet files/prefixes + .pmtiles on S3 (per-layer)
+    portal_bundle_bytes: int | None = None  # published static bundles under data/portals/

@@ -61,7 +61,28 @@
           </div>
         </header>
         <div class="p-5 space-y-4">
-          <StorageBar :used="systemStore.stats.used_bytes" :total="systemStore.stats.total_bytes" />
+          <!-- Total + stacked proportion bar (PostGIS / rasters / GeoParquet / portal pages) -->
+          <div>
+            <div class="flex justify-between text-xs text-muted-foreground mb-1">
+              <span>Data storage</span>
+              <span class="font-semibold text-foreground">{{ formatBytes(systemStore.stats.used_bytes) }} total</span>
+            </div>
+            <div class="h-2 bg-muted rounded-full overflow-hidden flex">
+              <div v-for="seg in storageSegments" :key="seg.label" :class="seg.bar"
+                :style="{ width: seg.pct + '%' }" :title="`${seg.label}: ${formatBytes(seg.bytes)}`" />
+            </div>
+          </div>
+          <!-- Per-store breakdown ('—' = that store couldn't be measured, e.g. DB unreachable) -->
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div v-for="seg in storageTiles" :key="seg.label" class="rounded-lg border border-border/60 bg-muted/40 p-3">
+              <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span class="w-2 h-2 rounded-full flex-shrink-0" :class="seg.dot" />{{ seg.label }}
+              </div>
+              <div class="text-lg font-bold text-foreground mt-0.5">
+                {{ seg.bytes === null ? '—' : formatBytes(seg.bytes) }}
+              </div>
+            </div>
+          </div>
           <div class="grid grid-cols-3 gap-3">
             <div v-for="tile in statTiles" :key="tile.label" class="rounded-lg border border-border/60 bg-muted/40 p-4 text-center">
               <div class="text-2xl font-bold text-foreground">{{ tile.value }}</div>
@@ -195,7 +216,6 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSystemStore } from '@/stores/system'
 import { useAuthStore } from '@/stores/auth'
-import StorageBar from '@/components/shared/StorageBar.vue'
 import { ServerIcon, HardDriveIcon, UserIcon, RefreshIcon, MailIcon } from './icons'
 import api, { changePassword, controlService, getEmailSettings, sendTestEmail, updateEmailSettings } from '@/api'
 
@@ -251,6 +271,30 @@ const statTiles = computed(() => [
   { label: 'Raster files', value: systemStore.stats?.raster_layers ?? 0 },
   { label: 'Portals', value: systemStore.stats?.portals ?? 0 },
 ])
+
+// Storage breakdown — colors follow the data-type idiom used across the app
+// (vector/PostGIS blue, raster amber, GeoParquet violet, published pages emerald).
+const STORES = [
+  { key: 'postgis_bytes', label: 'PostGIS', dot: 'bg-blue-400', bar: 'bg-blue-500/80' },
+  { key: 'raster_bytes', label: 'Rasters (COG)', dot: 'bg-amber-400', bar: 'bg-amber-500/80' },
+  { key: 'geoparquet_bytes', label: 'GeoParquet', dot: 'bg-violet-400', bar: 'bg-violet-500/80' },
+  { key: 'portal_bundle_bytes', label: 'Portal pages', dot: 'bg-emerald-400', bar: 'bg-emerald-500/80' },
+]
+const storageTiles = computed(() => STORES.map((s) => ({
+  ...s, bytes: systemStore.stats?.[s.key] ?? null,
+})))
+const storageSegments = computed(() => {
+  const total = systemStore.stats?.used_bytes || 0
+  if (!total) return []
+  return storageTiles.value
+    .filter((s) => s.bytes)
+    .map((s) => ({ ...s, pct: (s.bytes / total) * 100 }))
+})
+
+const formatBytes = (b) => !b ? '0 B'
+  : b > 1e9 ? `${(b / 1e9).toFixed(1)} GB`
+  : b > 1e6 ? `${(b / 1e6).toFixed(1)} MB`
+  : `${(b / 1e3).toFixed(0)} KB`
 
 function dotClass(s) {
   if (['running', 'healthy'].includes(s)) return 'bg-green-500'

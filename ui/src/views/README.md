@@ -34,6 +34,9 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 - Raster layer `bbox` from the API is in source CRS (not lon/lat) — using it directly for `fitToBbox` can throw "Invalid LngLat" (see tasks/raster notes). Prefer zooming via vector bounds or TiTiler TileJSON.
 
 ## Last updated
+2026-07-16 (Settings Storage: real per-store breakdown — stacked proportion bar + PostGIS/raster/
+GeoParquet/portal-pages tiles from the new storage-stats fields; '—' = unmeasurable, not zero;
+StorageBar.vue no longer used here)
 2026-07-16 (C-08a: Login forgot-password; Settings → Email section — optional generic SMTP with
 provider recipes + test-send; email is additive, copy links always remain)
 2026-07-16 (RBAC A-01: Users/AcceptInvite/ResetPassword views; role-aware nav + router guards

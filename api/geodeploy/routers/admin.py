@@ -102,26 +102,111 @@ async def reload_martin(_: User = Depends(require_admin), db: AsyncSession = Dep
     return {"status": "ok", "tables": len(layers)}
 
 
+async def _postgis_bytes(layers) -> int | None:
+    """Sum pg_total_relation_size (data + indexes + TOAST) over the catalog's PostGIS tables.
+    None when the DB can't be reached; a missing table just contributes nothing."""
+    if not layers:
+        return 0
+    import asyncpg
+    settings = get_settings()
+    try:
+        conn = await asyncpg.connect(settings.postgis_sync_dsn)
+    except Exception:
+        return None
+    total = 0
+    try:
+        for l in layers:
+            try:
+                size = await conn.fetchval(
+                    "SELECT pg_total_relation_size($1::regclass)",
+                    f'"{l.schema_name}"."{l.table_name}"')
+                total += size or 0
+            except Exception:
+                pass  # dropped/renamed table — the row is stale, not a reason to fail the panel
+    finally:
+        await conn.close()
+    return total
+
+
+def _s3_bytes(raster_layers, gpq_layers) -> tuple[int | None, int | None]:
+    """(raster_bytes, geoparquet_bytes) from object storage — per-layer, so ATTACHED data
+    (import-existing, keys outside rasters/ / vectors/) is counted too. Blocking (boto3);
+    call via run_in_threadpool."""
+    from ..services.minio import get_s3_client
+    settings = get_settings()
+    try:
+        s3 = get_s3_client()
+        bucket = settings.storage_bucket
+
+        def key_size(key: str) -> int:
+            try:
+                return s3.head_object(Bucket=bucket, Key=key)["ContentLength"]
+            except Exception:
+                return 0
+
+        def prefix_size(prefix: str) -> int:
+            total = 0
+            for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+                for obj in page.get("Contents", []):
+                    total += obj["Size"]
+            return total
+
+        raster_total = sum(key_size(l.s3_key) for l in raster_layers if l.s3_key)
+
+        gpq_total = 0
+        for l in gpq_layers:
+            key = (l.s3_key or "").rstrip("/")
+            if key:
+                # A prepped layer is a partitioned PREFIX (parts-<hex>/); before prep (or for a
+                # raw large upload awaiting conversion) it's a single object with an extension.
+                if "." in key.rsplit("/", 1)[-1]:
+                    gpq_total += key_size(key)
+                else:
+                    gpq_total += prefix_size(key + "/")
+            if l.pmtiles_key:
+                gpq_total += key_size(l.pmtiles_key)
+        return raster_total, gpq_total
+    except Exception:
+        return None, None
+
+
 @router.get("/storage-stats", response_model=StorageStats)
 async def storage_stats(_: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    """Instance-wide storage breakdown: PostGIS tables + S3 objects (rasters, GeoParquet incl.
+    PMTiles) + published portal bundles. Measured per catalog layer — accurate for attached
+    (import-existing) data too, and never counts orphans the catalog doesn't know about."""
+    from starlette.concurrency import run_in_threadpool
+
     settings = get_settings()
     portals_dir = f"{settings.data_dir}/portals"
-    used = sum(
+    bundle_bytes = sum(
         os.path.getsize(os.path.join(dp, f))
-        for dp, _, files in os.walk(portals_dir)
+        for dp, _dirs, files in os.walk(portals_dir)
         for f in files
     ) if os.path.exists(portals_dir) else 0
 
-    vector_count = (await db.execute(select(func.count()).select_from(VectorLayer))).scalar()
-    raster_count = (await db.execute(select(func.count()).select_from(RasterLayer))).scalar()
+    vectors = (await db.execute(select(VectorLayer))).scalars().all()
+    rasters = (await db.execute(select(RasterLayer))).scalars().all()
     portal_count = (await db.execute(select(func.count()).select_from(Portal))).scalar()
 
+    postgis_layers = [l for l in vectors
+                      if l.storage_backend == "postgis" and l.schema_name and l.table_name]
+    gpq_layers = [l for l in vectors if l.storage_backend == "geoparquet"]
+
+    pg_bytes = await _postgis_bytes(postgis_layers)
+    raster_bytes, gpq_bytes = await run_in_threadpool(_s3_bytes, rasters, gpq_layers)
+
+    used = sum(v for v in (pg_bytes, raster_bytes, gpq_bytes, bundle_bytes) if v)
     return StorageStats(
         used_bytes=used,
         total_bytes=None,
-        vector_layers=vector_count,
-        raster_layers=raster_count,
+        vector_layers=len(vectors),
+        raster_layers=len(rasters),
         portals=portal_count,
+        postgis_bytes=pg_bytes,
+        raster_bytes=raster_bytes,
+        geoparquet_bytes=gpq_bytes,
+        portal_bundle_bytes=bundle_bytes,
     )
 
 
