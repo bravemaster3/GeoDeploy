@@ -107,7 +107,7 @@
             {{ emailConfigured ? 'configured' : 'not configured' }}
           </span>
         </header>
-        <div v-if="emailForm" class="p-5 space-y-3 max-w-lg">
+        <div v-if="emailForm" class="p-5 space-y-4">
           <p class="text-xs text-muted-foreground">
             Optional — without it, invite and reset links are copy-and-send. Works with any provider:
             <span class="font-medium text-foreground/80">Resend</span> (host <code class="font-mono">smtp.resend.com</code>,
@@ -115,40 +115,48 @@
             <span class="font-medium text-foreground/80">Brevo</span> (host <code class="font-mono">smtp-relay.brevo.com</code>,
             port 587 STARTTLS, ~300 free emails/day) · or your organisation's mail server.
           </p>
-          <div class="grid grid-cols-3 gap-3">
-            <div class="col-span-2">
-              <label class="text-xs text-muted-foreground block mb-1">SMTP host</label>
-              <input v-model="emailForm.smtp_host" type="text" placeholder="smtp.example.com" class="input w-full text-sm font-mono" />
+          <div class="grid gap-x-6 gap-y-3 lg:grid-cols-2">
+            <!-- Left: server connection -->
+            <div class="space-y-3">
+              <div class="grid grid-cols-3 gap-3">
+                <div class="col-span-2">
+                  <label class="text-xs text-muted-foreground block mb-1">SMTP host</label>
+                  <input v-model="emailForm.smtp_host" type="text" placeholder="smtp.example.com" class="input w-full text-sm font-mono" />
+                </div>
+                <div>
+                  <label class="text-xs text-muted-foreground block mb-1">Port</label>
+                  <input v-model.number="emailForm.smtp_port" type="number" class="input w-full text-sm" />
+                </div>
+              </div>
+              <div>
+                <label class="text-xs text-muted-foreground block mb-1">Security</label>
+                <div class="grid grid-cols-3 gap-2">
+                  <button v-for="s in ['starttls', 'tls', 'none']" :key="s" type="button"
+                    class="p-2 rounded-lg border text-xs font-medium transition-colors"
+                    :class="emailForm.smtp_security === s ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-muted-foreground/40 text-foreground/85'"
+                    @click="emailForm.smtp_security = s">{{ s === 'tls' ? 'TLS (465)' : s === 'starttls' ? 'STARTTLS (587)' : 'None' }}</button>
+                </div>
+              </div>
             </div>
-            <div>
-              <label class="text-xs text-muted-foreground block mb-1">Port</label>
-              <input v-model.number="emailForm.smtp_port" type="number" class="input w-full text-sm" />
+            <!-- Right: credentials + sender -->
+            <div class="space-y-3">
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="text-xs text-muted-foreground block mb-1">Username</label>
+                  <input v-model="emailForm.smtp_username" type="text" class="input w-full text-sm font-mono" />
+                </div>
+                <div>
+                  <label class="text-xs text-muted-foreground block mb-1">
+                    Password {{ emailHasPassword ? '(saved — blank keeps it)' : '' }}
+                  </label>
+                  <input v-model="emailForm.smtp_password" type="password" autocomplete="new-password" class="input w-full text-sm" />
+                </div>
+              </div>
+              <div>
+                <label class="text-xs text-muted-foreground block mb-1">From address</label>
+                <input v-model="emailForm.email_from" type="email" placeholder="geodeploy@your-domain.org" class="input w-full text-sm" />
+              </div>
             </div>
-          </div>
-          <div>
-            <label class="text-xs text-muted-foreground block mb-1">Security</label>
-            <div class="grid grid-cols-3 gap-2">
-              <button v-for="s in ['starttls', 'tls', 'none']" :key="s" type="button"
-                class="p-2 rounded-lg border text-xs font-medium transition-colors"
-                :class="emailForm.smtp_security === s ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-muted-foreground/40 text-foreground/85'"
-                @click="emailForm.smtp_security = s">{{ s === 'tls' ? 'TLS (465)' : s === 'starttls' ? 'STARTTLS (587)' : 'None' }}</button>
-            </div>
-          </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div>
-              <label class="text-xs text-muted-foreground block mb-1">Username</label>
-              <input v-model="emailForm.smtp_username" type="text" class="input w-full text-sm font-mono" />
-            </div>
-            <div>
-              <label class="text-xs text-muted-foreground block mb-1">
-                Password {{ emailHasPassword ? '(saved — blank keeps it)' : '' }}
-              </label>
-              <input v-model="emailForm.smtp_password" type="password" autocomplete="new-password" class="input w-full text-sm" />
-            </div>
-          </div>
-          <div>
-            <label class="text-xs text-muted-foreground block mb-1">From address</label>
-            <input v-model="emailForm.email_from" type="email" placeholder="geodeploy@your-domain.org" class="input w-full text-sm" />
           </div>
           <p v-if="emailMsg" class="text-xs" :class="emailMsg.ok ? 'text-green-400' : 'text-red-400'">{{ emailMsg.text }}</p>
           <div class="flex gap-2">
@@ -188,18 +196,20 @@
           <button @click="signOut" class="btn-secondary text-xs px-3 py-1.5">Sign out</button>
         </div>
         <!-- Change password (any role) -->
-        <div v-if="showPwForm" class="px-5 pb-5 border-t border-border/60 pt-4 space-y-3 max-w-sm">
-          <div>
-            <label class="text-xs text-muted-foreground block mb-1">Current password</label>
-            <input v-model="pwCurrent" type="password" class="input w-full text-sm" />
-          </div>
-          <div>
-            <label class="text-xs text-muted-foreground block mb-1">New password (min 8 characters)</label>
-            <input v-model="pwNew" type="password" class="input w-full text-sm" />
-          </div>
-          <div>
-            <label class="text-xs text-muted-foreground block mb-1">Confirm new password</label>
-            <input v-model="pwConfirm" type="password" class="input w-full text-sm" @keydown.enter="submitPassword" />
+        <div v-if="showPwForm" class="px-5 pb-5 border-t border-border/60 pt-4 space-y-3">
+          <div class="grid gap-3 sm:grid-cols-3">
+            <div>
+              <label class="text-xs text-muted-foreground block mb-1">Current password</label>
+              <input v-model="pwCurrent" type="password" class="input w-full text-sm" />
+            </div>
+            <div>
+              <label class="text-xs text-muted-foreground block mb-1">New password (min 8 characters)</label>
+              <input v-model="pwNew" type="password" class="input w-full text-sm" />
+            </div>
+            <div>
+              <label class="text-xs text-muted-foreground block mb-1">Confirm new password</label>
+              <input v-model="pwConfirm" type="password" class="input w-full text-sm" @keydown.enter="submitPassword" />
+            </div>
           </div>
           <p v-if="pwMsg" class="text-xs" :class="pwMsg.ok ? 'text-green-400' : 'text-red-400'">{{ pwMsg.text }}</p>
           <button @click="submitPassword" :disabled="!pwCanSubmit || pwBusy" class="btn-primary text-xs px-3 py-1.5">
