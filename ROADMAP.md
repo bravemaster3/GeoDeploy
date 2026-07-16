@@ -30,7 +30,7 @@ sharing, and billing all assume real users and roles. Ownership/sharing (`A-02`)
 | # | Phase | Theme | State |
 |---|-------|-------|-------|
 | 00 | **Foundation** | The platform, shipped | 11 items — 10 shipped incl. security hardening; automated tests in progress |
-| 01 | **Multi-user & Access** | The bridge to Cloud | `A-01` **building** (code complete), then planned |
+| 01 | **Multi-user & Access** | The bridge to Cloud | `A-01` + `A-02` **building** (code complete), then planned |
 | 02 | **GeoDeploy Cloud** | Managed, multi-tenant | planned / future |
 | 03 | **Ecosystem & Interop** | Adoption engine (GeoLibre, QGIS, standards) | planned / future |
 | 04 | **Advanced Capabilities** | Differentiators | future / idea |
@@ -115,6 +115,12 @@ When an item is delivered, the corresponding folder `README.md` gets the impleme
 roadmap only tracks *state*, not *how*.
 
 ## Last updated
+2026-07-16 — `A-02` Resource ownership & sharing flipped `planned` → `building` (code complete, in
+verification): a per-resource visibility axis — private (creator + admins) / organization (all
+members) / public (STAC data catalog + raw assets) — on vector + raster layers, external sources, and
+portals. Folds the earlier `is_public` STAC flag into the axis (kept write-only-synced); the
+`visible_to()` seam enforces it across every list + authenticated by-id lookup while public-by-id
+portal display endpoints stay untouched (published portals unaffected). 72 backend tests pass.
 2026-07-16 — `C-08` flipped `future` → `building`: invite + password-reset email delivery shipped
 as optional generic SMTP (self-service "Forgot password?" included); export notifications remain.
 2026-07-16 — `A-01` Multi-user & RBAC flipped `next` → `building`: all 7 implementation phases

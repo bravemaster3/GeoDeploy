@@ -144,6 +144,8 @@ export const importCsv = (data) => api.post('/data/discover/storage/csv', data)
 // External sources (WMS / XYZ raster, WFS vector — displayed without ingesting)
 export const listExternalSources = () => api.get('/data/sources')
 export const createExternalSource = (data) => api.post('/data/sources', data)
+// Workspace visibility (private | organization — no public tier for external sources)
+export const setSourceSharing = (id, visibility) => api.put(`/data/sources/${id}/sharing`, { visibility })
 export const deleteExternalSource = (id) => api.delete(`/data/sources/${id}`)
 
 // Portals

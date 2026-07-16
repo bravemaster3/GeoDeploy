@@ -11,7 +11,7 @@ from ...models import RasterLayer, UploadJob, User
 from ...schemas import JobStatus, RasterDefaultStyle, RasterLayerOut, SharingUpdate
 from ...services.titiler import get_tile_url as raster_tile_url, COLORMAPS
 from ...tasks.raster_ingest import ingest_raster
-from ..common import creator_names, visible_to
+from ..common import apply_sharing, creator_names, visible_to
 
 router = APIRouter(prefix="/data/raster", tags=["raster"])
 
@@ -28,7 +28,7 @@ async def list_colormaps():
 async def list_layers(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     import json
     result = await db.execute(
-        select(RasterLayer).where(visible_to(user)).order_by(RasterLayer.created_at.desc())
+        select(RasterLayer).where(visible_to(user, RasterLayer)).order_by(RasterLayer.created_at.desc())
     )
     layers = result.scalars().all()
     names = await creator_names(db, layers)
@@ -53,7 +53,8 @@ async def list_layers(user: User = Depends(get_current_user), db: AsyncSession =
 @router.get("/{layer_id}/stats")
 async def raster_stats(layer_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     """Suggested stretch (min,max) from TiTiler band statistics (2nd–98th percentile)."""
-    result = await db.execute(select(RasterLayer).where(RasterLayer.id == layer_id))
+    result = await db.execute(
+        select(RasterLayer).where(RasterLayer.id == layer_id, visible_to(user, RasterLayer)))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
@@ -152,14 +153,16 @@ async def save_sharing(
     user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
-    """Data-sharing settings: opt the layer into the public STAC catalog (`/api/stac`) and the
-    public raw-COG route, plus its catalog metadata (abstract/keywords/license/attribution)."""
-    result = await db.execute(select(RasterLayer).where(RasterLayer.id == layer_id))
+    """Data-sharing settings: set the workspace `visibility` (private | organization | public) plus
+    catalog metadata. `public` opts the layer into the STAC catalog (`/api/stac`) + the public
+    raw-COG route and syncs the derived `is_public`. Any editor+ may re-share a resource they can
+    SEE (a private layer they don't own 404s via the filter below)."""
+    result = await db.execute(
+        select(RasterLayer).where(RasterLayer.id == layer_id, visible_to(user, RasterLayer)))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
-    for field, value in body.model_dump(exclude_unset=True).items():
-        setattr(layer, field, value)
+    apply_sharing(layer, body)
     await db.commit()
     await db.refresh(layer)
     return RasterLayerOut.from_orm_json(layer)
@@ -209,7 +212,8 @@ async def save_default_style(
     db: AsyncSession = Depends(get_db),
 ):
     import json
-    result = await db.execute(select(RasterLayer).where(RasterLayer.id == layer_id))
+    result = await db.execute(
+        select(RasterLayer).where(RasterLayer.id == layer_id, visible_to(user, RasterLayer)))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
@@ -221,7 +225,8 @@ async def save_default_style(
 
 @router.delete("/{layer_id}", status_code=204)
 async def delete_layer(layer_id: int, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(RasterLayer).where(RasterLayer.id == layer_id))
+    result = await db.execute(
+        select(RasterLayer).where(RasterLayer.id == layer_id, visible_to(user, RasterLayer)))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")

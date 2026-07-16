@@ -117,9 +117,15 @@ class VectorLayer(Base):
     status: Mapped[str] = mapped_column(String(16), default="processing")  # processing | ready | error
     error_message: Mapped[str | None] = mapped_column(Text)
     default_style: Mapped[str | None] = mapped_column(Text)  # JSON {opacity, style, popup_fields}
-    # Data sharing (STAC catalog + raw-asset access): the admin opts a layer INTO the public
-    # catalog. Display endpoints that published portals need (tiles, viewport features) stay
-    # public-by-id regardless — this flag governs DISCOVERY + raw data assets.
+    # A-02 per-resource sharing — the workspace visibility axis (private ⊂ organization ⊂ public):
+    #   private      = only the creator + admins/owner see it (WRITES too); hidden from peers.
+    #   organization = every workspace member sees it (the default; pre-A-02 behavior).
+    #   public       = organization + exposed to the internet (STAC catalog + raw asset download).
+    # THE seam is routers/common.py::visible_to. Display endpoints published portals need (tiles,
+    # viewport features) stay public-by-id regardless — visibility governs the workspace + DISCOVERY.
+    visibility: Mapped[str] = mapped_column(String(16), nullable=False, default="organization")
+    # DEPRECATED/derived: kept write-only-synced (is_public = visibility == "public") so STAC /
+    # _publicly_readable / portal_generator keep reading it unchanged. Never set it directly.
     is_public: Mapped[bool] = mapped_column(Boolean, default=False)
     # Catalog metadata (STAC common metadata / the GeoNode-parity fields — see notes §0h-addendum).
     abstract: Mapped[str | None] = mapped_column(Text)
@@ -148,6 +154,7 @@ class RasterLayer(Base):
     error_message: Mapped[str | None] = mapped_column(Text)
     default_style: Mapped[str | None] = mapped_column(Text)  # JSON {opacity}
     # Data sharing + catalog metadata — see the VectorLayer twin fields.
+    visibility: Mapped[str] = mapped_column(String(16), nullable=False, default="organization")
     is_public: Mapped[bool] = mapped_column(Boolean, default=False)
     abstract: Mapped[str | None] = mapped_column(Text)
     keywords: Mapped[str | None] = mapped_column(String(512))
@@ -176,6 +183,9 @@ class ExternalSource(Base):
     attribution: Mapped[str | None] = mapped_column(Text)               # required credit string
     geometry_type: Mapped[str | None] = mapped_column(String(32))        # WFS: point|line|polygon (probed)
     bbox: Mapped[str | None] = mapped_column(Text)                       # JSON [minx,miny,maxx,maxy] EPSG:4326
+    # A-02 visibility (see VectorLayer). External sources reference third-party services and are not
+    # in STAC / raw-asset endpoints, so only private | organization are meaningful (no public tier).
+    visibility: Mapped[str] = mapped_column(String(16), nullable=False, default="organization")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     user: Mapped["User"] = relationship()
@@ -208,6 +218,11 @@ class Portal(Base):
     basemap: Mapped[str | None] = mapped_column(String(64))  # basemap catalog id (BASEMAP_CATALOG)
     layer_configs: Mapped[str] = mapped_column(Text, default="[]")  # JSON
     initial_view: Mapped[str | None] = mapped_column(Text)  # JSON {center:[lng,lat], zoom, bearing, pitch} — published portal's start view
+    # A-02 WORKSPACE visibility — private | organization — who among your teammates sees this portal
+    # in the dashboard. ORTHOGONAL to access_type below (which gates the PUBLISHED viewer). A draft
+    # portal can be private (creator + admins only) while unpublished; no public tier (publishing is
+    # the public act). See VectorLayer.visibility and routers/common.py::visible_to.
+    visibility: Mapped[str] = mapped_column(String(16), nullable=False, default="organization")
     access_type: Mapped[str] = mapped_column(String(16), default="public")  # public | password | private
     access_password_hash: Mapped[str | None] = mapped_column(String(256))    # bcrypt — for future server-side auth
     access_password_sha256: Mapped[str | None] = mapped_column(String(64))   # SHA-256 hex — embedded in published portal

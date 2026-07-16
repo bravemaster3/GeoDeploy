@@ -8,9 +8,19 @@ All HTTP endpoints. Every router is registered in `main.py` under the `/api` pre
 `user_id` on resources is "created by" provenance, not an access boundary. Roles (deps.py
 `ROLE_ORDER`): `viewer` (0, read-only) < `editor` (1) < `admin` (2) < `owner` (3, exactly one).
 - **Reads** (list GETs, portal detail, stats, jobs) → `get_current_user` (any role). List queries
-  use `common.visible_to(user)` — currently `TRUE`; **this is the A-02 per-resource-sharing seam**.
-- **Mutations** on data/portals → `require_editor`; id-only lookups (the role 403 fires BEFORE the
-  404 lookup — deliberate, pinned in test_rbac.py).
+  AND authenticated by-id lookups use `common.visible_to(user, Model)` — **the A-02 sharing seam**
+  (see the visibility model below): admins/owner see all; others see non-private + their own.
+- **Mutations** on data/portals → `require_editor`; id-only lookups now carry the `visible_to` filter,
+  so a private resource the caller can't see 404s (the role 403 still fires BEFORE the lookup — pinned
+  in test_rbac.py). `_get_portal` gained a `user` param for this.
+
+**A-02 per-resource sharing (2026-07-16):** each vector/raster layer, external source, and portal has a
+`visibility` — `private` (creator + admins/owner) ⊂ `organization` (all members; the default) ⊂
+`public` (layers only: STAC catalog + raw assets). `is_public` is now DERIVED / write-only-synced
+(`= visibility == "public"`) via `common.apply_sharing`; STAC / `_publicly_readable` / `/cog` /
+portal_generator keep reading it unchanged. Re-sharing is an editor+ power over resources they can SEE
+(NOT creator-only — an editor can already delete an org resource). PUBLIC-by-id display endpoints are
+deliberately NOT visibility-filtered (published portals depend on them).
 - **/admin/***, setup reconfiguration, **/users/*** → `require_admin` (admin or owner);
   ownership transfer → `require_owner`.
 - **PUBLIC surface unchanged**: portal assets/export, vector features.*/identify/pmtiles/parquet
@@ -66,10 +76,12 @@ All HTTP endpoints. Every router is registered in `main.py` under the `/api` pre
   XYZ `tiles`; postgis vector → Martin XYZ `vector-tiles`; geoparquet → `manifest` + `features-geojson`
   + `features-arrow` (+ `pmtiles` when tiled). Absolute hrefs from the forwarded Host/X-Forwarded-Proto.
   Consumers: QGIS (native STAC 3.40+/plugin), stac-browser, pystac-client — see `docs/data-access.md`.
-- **Sharing endpoints** (authed): `PUT /data/vector/{id}/sharing` + `PUT /data/raster/{id}/sharing`
-  (`SharingUpdate`: partial `{is_public, abstract, keywords, license, attribution}`) — the admin's
-  opt-IN to the catalog; nothing is listed by default. `is_public` also gates the raster raw-COG
-  route; portal display endpoints stay public-by-id regardless (published portals need them).
+- **Sharing endpoints** (authed, editor+): `PUT /data/vector/{id}/sharing` + `PUT /data/raster/{id}/sharing`
+  (`SharingUpdate`: partial `{visibility, abstract, keywords, license, attribution}` — legacy
+  `is_public` bool still accepted, mapped to visibility). `PUT /data/sources/{id}/sharing` +
+  portal `visibility` via `PUT /portals/{id}` take `VisibilityUpdate` (private|organization — no public
+  tier). `visibility=='public'` is the opt-IN to the STAC catalog + raw-COG route; nothing is public by
+  default; portal display endpoints stay public-by-id regardless (published portals need them).
 - `data/raster.py` also: **`GET /{layer_id}/cog`** — **PUBLIC** HTTP-Range proxy for the layer's COG,
   **only when `is_public`** (404 otherwise). This is the "WCS replacement": full pixel access in
   QGIS/GDAL via `/vsicurl/https://host/api/data/raster/{id}/cog`, and a direct-download URL.
@@ -85,6 +97,11 @@ All HTTP endpoints. Every router is registered in `main.py` under the `/api` pre
 - No rate limiting beyond nginx; no pagination on list endpoints (fine at current scale).
 
 ## Last updated
+2026-07-16 (A-02 per-resource sharing: `visibility` axis private/organization/public on layers +
+sources + portals; `common.visible_to(user, Model)` now enforces it in lists + authed by-id lookups;
+`is_public` folded in as a derived write-only-synced flag via `common.apply_sharing`; new source +
+portal sharing endpoints; `_get_portal` takes `user`. Tests: test_sharing.py + test_migrations
+visibility cases. Public display surface untouched.)
 2026-07-16 (RBAC A-01: shared-workspace permission model — see the section above. New `users.py` +
 `common.py`; auth.py invitation/password flows; all mutating routes editor-gated with id-only
 lookups; discover de-dup made instance-wide; vector delete's Martin regen now includes ALL members'

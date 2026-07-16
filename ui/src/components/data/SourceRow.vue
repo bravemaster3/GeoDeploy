@@ -13,6 +13,10 @@
     </div>
     <span v-if="source.created_by" class="text-xs text-muted-foreground/70 flex-shrink-0">by {{ source.created_by }}</span>
     <span class="text-[10px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground flex-shrink-0">external</span>
+    <VisibilitySelect v-if="auth.canEdit" :model-value="source.visibility || 'organization'"
+      :disabled="savingVis" @change="onVisibility" class="flex-shrink-0" />
+    <span v-else-if="source.visibility === 'private'"
+      class="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 flex-shrink-0">Private</span>
     <button v-if="auth.canEdit" @click="$emit('delete')"
       class="opacity-0 group-hover:opacity-100 p-1.5 text-muted-foreground/70 hover:text-red-500 rounded transition-all"
       title="Remove source"
@@ -23,14 +27,29 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { TrashIcon } from '@/views/icons'
 import { useAuthStore } from '@/stores/auth'
+import { setSourceSharing } from '@/api'
+import VisibilitySelect from '@/components/shared/VisibilitySelect.vue'
 
 const props = defineProps({ source: Object })
 defineEmits(['delete'])
 
 const auth = useAuthStore()
+const savingVis = ref(false)
+
+async function onVisibility(v) {
+  savingVis.value = true
+  try {
+    const { data } = await setSourceSharing(props.source.id, v)
+    Object.assign(props.source, data)
+  } catch (e) {
+    alert(e.response?.data?.detail || 'Could not change sharing.')
+  } finally {
+    savingVis.value = false
+  }
+}
 
 const badgeClass = computed(() => props.source.kind === 'vector'
   ? 'bg-emerald-500/15 text-emerald-400'

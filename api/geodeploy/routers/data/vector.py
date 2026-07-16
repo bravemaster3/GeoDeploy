@@ -16,7 +16,7 @@ from ...models import Portal, UploadJob, User, VectorLayer
 from ...schemas import DefaultStyle, JobStatus, SharingUpdate, VectorLayerOut
 from ...services import martin as martin_svc
 from ...tasks.vector_ingest import ingest_vector
-from ..common import creator_names, visible_to
+from ..common import apply_sharing, creator_names, visible_to
 
 router = APIRouter(prefix="/data/vector", tags=["vector"])
 
@@ -86,7 +86,7 @@ async def list_layers(
 ):
     # Shared workspace: every member sees all layers (role gates WRITES, not reads).
     result = await db.execute(
-        select(VectorLayer).where(visible_to(user)).order_by(VectorLayer.created_at.desc()))
+        select(VectorLayer).where(visible_to(user, VectorLayer)).order_by(VectorLayer.created_at.desc()))
     layers = result.scalars().all()
     names = await creator_names(db, layers)
     out = []
@@ -429,7 +429,8 @@ async def vector_features(
     db: AsyncSession = Depends(get_db),
 ):
     """Authed viewport query for the editor preview's deck.gl overlay."""
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    result = await db.execute(
+        select(VectorLayer).where(VectorLayer.id == layer_id, visible_to(user, VectorLayer)))
     return await _viewport_geojson(result.scalar_one_or_none(), bbox, limit)
 
 
@@ -517,7 +518,8 @@ async def tile_layer(
     """(Re)generate the PMTiles archive for a GeoParquet layer — used to tile a file uploaded
     before tiling existed, or to retry after an error."""
     from ...tasks.pmtiles_tile import tile_geoparquet
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    result = await db.execute(
+        select(VectorLayer).where(VectorLayer.id == layer_id, visible_to(user, VectorLayer)))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
@@ -542,7 +544,8 @@ async def prepare_layer(
     covering column so DuckDB prunes row-groups on a bbox filter (fast analysis + viewport display).
     Idempotent — overwrites the object in place. The file stays GeoParquet (no PostGIS, no PMTiles)."""
     from ...tasks.geoparquet_prep import prepare_geoparquet
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    result = await db.execute(
+        select(VectorLayer).where(VectorLayer.id == layer_id, visible_to(user, VectorLayer)))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
@@ -572,7 +575,8 @@ async def reprocess_layer(
     A fresh UploadJob is created so the UI's progress resets and can be polled to completion."""
     from ...tasks.convert_upload import convert_to_geoparquet
     from ...tasks.geoparquet_prep import prepare_geoparquet
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    result = await db.execute(
+        select(VectorLayer).where(VectorLayer.id == layer_id, visible_to(user, VectorLayer)))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
@@ -746,16 +750,19 @@ async def save_sharing(
     user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
-    """Data-sharing settings: opt the layer into the public STAC catalog (`/api/stac`) plus its
-    catalog metadata, and set `is_public`. A layer's file-backed display endpoints are readable by
-    an unauthenticated caller when `is_public` OR it is shown by a published portal (see
-    `_publicly_readable`); toggling `is_public` here changes that, so we drop the exposure cache."""
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    """Data-sharing settings: set the workspace `visibility` (private | organization | public) plus
+    catalog metadata. `public` opts the layer into the STAC catalog (`/api/stac`) + raw-asset access
+    and syncs the derived `is_public`. Any editor+ may re-share a resource they can SEE (a private
+    layer they don't own is a 404 via the filter below — hidden, not just uneditable).
+    A layer's file-backed display endpoints are readable by an unauthenticated caller when public OR
+    it is shown by a published portal (see `_publicly_readable`); this can change the exposure, so we
+    drop the exposure cache."""
+    result = await db.execute(
+        select(VectorLayer).where(VectorLayer.id == layer_id, visible_to(user, VectorLayer)))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
-    for field, value in body.model_dump(exclude_unset=True).items():
-        setattr(layer, field, value)
+    apply_sharing(layer, body)
     await db.commit()
     await db.refresh(layer)
     invalidate_public_layers()
@@ -770,7 +777,8 @@ async def save_default_style(
     db: AsyncSession = Depends(get_db),
 ):
     import json
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    result = await db.execute(
+        select(VectorLayer).where(VectorLayer.id == layer_id, visible_to(user, VectorLayer)))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
@@ -786,7 +794,8 @@ async def delete_layer(
     user: User = Depends(require_editor),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    result = await db.execute(
+        select(VectorLayer).where(VectorLayer.id == layer_id, visible_to(user, VectorLayer)))
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")

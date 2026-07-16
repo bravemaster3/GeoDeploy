@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...database import get_db
 from ...deps import get_current_user, require_editor
 from ...models import ExternalSource, User
-from ...schemas import ExternalSourceCreate, ExternalSourceOut
+from ...schemas import ExternalSourceCreate, ExternalSourceOut, VisibilityUpdate
 from ...services import external_sources as ext
 from ..common import creator_names, visible_to
 
@@ -31,7 +31,7 @@ def _to_out(src: ExternalSource) -> ExternalSourceOut:
 @router.get("", response_model=list[ExternalSourceOut])
 async def list_sources(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(ExternalSource).where(visible_to(user)).order_by(ExternalSource.created_at.desc())
+        select(ExternalSource).where(visible_to(user, ExternalSource)).order_by(ExternalSource.created_at.desc())
     )
     sources = result.scalars().all()
     names = await creator_names(db, sources)
@@ -90,10 +90,31 @@ async def create_source(
     return _to_out(src)
 
 
+@router.put("/{source_id}/sharing", response_model=ExternalSourceOut)
+async def save_sharing(
+    source_id: int,
+    body: VisibilityUpdate,
+    user: User = Depends(require_editor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Workspace visibility for an external source: private (creator + admins) | organization (all
+    members). No public tier — sources reference third-party services and aren't in STAC. Any editor+
+    may re-share a source they can SEE (a private source they don't own 404s via the filter)."""
+    src = (await db.execute(
+        select(ExternalSource).where(ExternalSource.id == source_id, visible_to(user, ExternalSource))
+    )).scalar_one_or_none()
+    if not src:
+        raise HTTPException(404, "Source not found.")
+    src.visibility = body.visibility
+    await db.commit()
+    await db.refresh(src)
+    return _to_out(src)
+
+
 @router.delete("/{source_id}", status_code=204)
 async def delete_source(source_id: int, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
     src = (await db.execute(
-        select(ExternalSource).where(ExternalSource.id == source_id)
+        select(ExternalSource).where(ExternalSource.id == source_id, visible_to(user, ExternalSource))
     )).scalar_one_or_none()
     if not src:
         raise HTTPException(404, "Source not found.")

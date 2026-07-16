@@ -15,11 +15,20 @@
         <p v-if="portal.description" class="text-xs text-muted-foreground mt-0.5 line-clamp-2">{{ portal.description }}</p>
       </div>
 
-      <div class="text-xs text-muted-foreground/70 flex gap-3 flex-wrap">
+      <div class="text-xs text-muted-foreground/70 flex gap-3 flex-wrap items-center">
         <span>{{ portal.layer_configs?.length || 0 }} layer{{ portal.layer_configs?.length !== 1 ? 's' : '' }}</span>
         <span>{{ portal.template_id }}</span>
         <span>{{ portal.access_type }}</span>
         <span v-if="portal.created_by">by {{ portal.created_by }}</span>
+      </div>
+
+      <!-- Workspace visibility (who among teammates sees this portal) — distinct from the published
+           viewer's access_type above. Editors get the picker; others just see a Private marker. -->
+      <div class="flex items-center gap-2">
+        <VisibilitySelect v-if="auth.canEdit" :model-value="portal.visibility || 'organization'"
+          @change="$emit('visibility', $event)" />
+        <span v-else-if="portal.visibility === 'private'"
+          class="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400">Private</span>
       </div>
 
       <div class="flex gap-2 pt-1">
@@ -42,9 +51,10 @@
 <script setup>
 import { GlobeIcon, TrashIcon, ExternalLinkIcon } from '@/views/icons'
 import { useAuthStore } from '@/stores/auth'
+import VisibilitySelect from '@/components/shared/VisibilitySelect.vue'
 
 defineProps({ portal: Object })
-defineEmits(['edit', 'publish', 'unpublish', 'delete'])
+defineEmits(['edit', 'publish', 'unpublish', 'delete', 'visibility'])
 
 const auth = useAuthStore()
 </script>

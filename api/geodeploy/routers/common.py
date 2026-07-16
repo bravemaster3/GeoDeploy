@@ -1,24 +1,50 @@
-"""Shared helpers for the resource routers (A-01 shared-workspace model).
+"""Shared helpers for the resource routers (A-01 shared-workspace + A-02 per-resource sharing).
 
-Since A-01, GeoDeploy is a single shared workspace: every member SEES all data and
-portals; the ROLE (viewer/editor/admin/owner) controls what they may do. `user_id`
-on a resource is "created by" provenance, not an access boundary.
+Since A-01, GeoDeploy is a single shared workspace and the ROLE (viewer/editor/admin/owner)
+controls what a member may DO. A-02 adds a per-resource `visibility` axis on top:
+`private` (creator + admins only) ⊂ `organization` (every member) ⊂ `public` (organization +
+exposed to the internet via STAC / raw assets). `user_id` is "created by" provenance AND the
+owner-check for a private resource.
 """
-from sqlalchemy import select, true
+from sqlalchemy import or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import User
 
+# Roles that see + act on EVERY resource regardless of its visibility (workspace governance:
+# bulk review, delete-reassign, sharing changes). Keep in sync with deps.ROLE_ORDER's top tiers.
+_GOVERNANCE_ROLES = ("admin", "owner")
 
-def visible_to(user: User):
-    """Workspace visibility filter for list queries — THE A-02 SEAM.
 
-    Currently every member sees every resource (`TRUE`). When per-resource sharing
-    (A-02: private / organization / public) lands, this becomes something like
-    `or_(X.visibility == "org", X.user_id == user.id)` — change it HERE, not in the
-    individual list endpoints.
+def visible_to(user: User, model):
+    """Workspace visibility filter for a resource `model`'s list / by-id lookups — THE A-02 SEAM.
+
+    Admins/owner see everything (governance). Everyone else sees resources that are not private,
+    plus their OWN private resources. `model` is the mapped class (VectorLayer / RasterLayer /
+    ExternalSource / Portal) — all four carry `visibility` + `user_id`.
+
+    Public-by-id display endpoints (tiles, viewport features, COG) that published portals depend on
+    do NOT use this filter — they gate on `_publicly_readable` / portal membership instead.
     """
-    return true()
+    if user.role in _GOVERNANCE_ROLES:
+        return true()
+    return or_(model.visibility != "private", model.user_id == user.id)
+
+
+def apply_sharing(resource, body) -> None:
+    """Apply a SharingUpdate to a layer: resolve the visibility axis (an explicit `visibility` wins;
+    otherwise the legacy `is_public` bool maps True→public / False→organization), keep the derived
+    `is_public` column in sync, and set whichever catalog-metadata fields were provided."""
+    data = body.model_dump(exclude_unset=True)
+    vis = data.pop("visibility", None)
+    is_pub = data.pop("is_public", None)
+    if vis is None and is_pub is not None:
+        vis = "public" if is_pub else "organization"
+    if vis is not None:
+        resource.visibility = vis
+        resource.is_public = (vis == "public")
+    for field, value in data.items():   # abstract / keywords / license / attribution
+        setattr(resource, field, value)
 
 
 async def creator_names(db: AsyncSession, rows) -> dict[int, str]:

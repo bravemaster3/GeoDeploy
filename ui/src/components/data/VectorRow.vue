@@ -20,8 +20,10 @@
         <span v-if="layer.feature_count">{{ layer.feature_count?.toLocaleString() }} features</span>
         <span v-if="layer.geometry_type">{{ layer.geometry_type }}</span>
         <span v-if="layer.file_size">{{ formatBytes(layer.file_size) }}</span>
-        <span v-if="layer.is_public"
+        <span v-if="layer.visibility === 'public'"
           class="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-medium text-[10px] uppercase tracking-wide">Public data</span>
+        <span v-else-if="layer.visibility === 'private'"
+          class="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 font-medium text-[10px] uppercase tracking-wide">Private</span>
         <span v-if="layer.created_by" class="text-muted-foreground/70">by {{ layer.created_by }}</span>
       </div>
     </div>
@@ -51,11 +53,11 @@
       <RefreshIcon class="w-4 h-4" :class="restarting ? 'animate-spin' : ''" />
     </button>
     <StatusBadge :status="layer.status" :progress="layer._job?.progress" :step="layer._job?.current_step" />
-    <!-- Data sharing: public catalog (STAC) listing + metadata -->
+    <!-- Sharing: workspace visibility (private / organization / public catalog) -->
     <button v-if="auth.canEdit && layer.status === 'ready'" @click="showSharing = true"
       class="p-1.5 rounded transition-all"
-      :class="layer.is_public ? 'text-emerald-400' : 'opacity-0 group-hover:opacity-100 text-muted-foreground/70 hover:text-emerald-400'"
-      :title="layer.is_public ? 'Shared in the public data catalog — edit sharing & metadata' : 'Data sharing & catalog metadata'"
+      :class="sharingBtn.class"
+      :title="sharingBtn.title"
     >
       <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
     </button>
@@ -70,7 +72,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { TrashIcon, RefreshIcon } from '@/views/icons'
 import { useAuthStore } from '@/stores/auth'
 import { useDataStore } from '@/stores/data'
@@ -81,6 +83,14 @@ const props = defineProps({ layer: Object })
 defineEmits(['delete'])
 
 const auth = useAuthStore()
+// Sharing-button affordance follows the layer's workspace visibility (public/private stay lit;
+// the default 'organization' hides until row hover, like the other secondary actions).
+const sharingBtn = computed(() => {
+  const v = props.layer.visibility
+  if (v === 'public') return { class: 'text-emerald-400', title: 'Public — in the data catalog; edit sharing & metadata' }
+  if (v === 'private') return { class: 'text-amber-400', title: 'Private — only you and admins; change sharing' }
+  return { class: 'opacity-0 group-hover:opacity-100 text-muted-foreground/70 hover:text-sky-400', title: 'Sharing (organization / private / public)' }
+})
 const dataStore = useDataStore()
 const showSharing = ref(false)
 const restarting = ref(false)

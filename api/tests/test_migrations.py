@@ -87,3 +87,41 @@ def test_no_owner_when_no_admin_exists(tmp_path):
         _apply_schema_migrations(conn)
     with eng.connect() as conn:
         assert _roles(conn) == {2: "editor"}
+
+
+# ── A-02 visibility backfill ──────────────────────────────────────────────────
+
+def _pre_a02_layers_engine(tmp_path):
+    """A scratch DB with a pre-A-02 vector_layers table (has is_public, no visibility)."""
+    eng = create_engine(f"sqlite:///{tmp_path}/pre_a02.db")
+    with eng.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE vector_layers (id INTEGER PRIMARY KEY, is_public BOOLEAN)"
+        ))
+        conn.execute(text("INSERT INTO vector_layers (id, is_public) VALUES (1, 1)"))  # → public
+        conn.execute(text("INSERT INTO vector_layers (id, is_public) VALUES (2, 0)"))  # → organization
+    return eng
+
+
+def test_visibility_backfill_maps_is_public(tmp_path):
+    eng = _pre_a02_layers_engine(tmp_path)
+    with eng.begin() as conn:
+        _apply_schema_migrations(conn)
+    with eng.connect() as conn:
+        rows = conn.execute(text("SELECT id, visibility FROM vector_layers ORDER BY id")).fetchall()
+        assert {r[0]: r[1] for r in rows} == {1: "public", 2: "organization"}
+
+
+def test_visibility_backfill_is_idempotent(tmp_path):
+    eng = _pre_a02_layers_engine(tmp_path)
+    for _ in range(2):
+        with eng.begin() as conn:
+            _apply_schema_migrations(conn)
+    with eng.begin() as conn:
+        # a second run must not overwrite an already-set visibility (guarded by WHERE ... IS NULL)
+        conn.execute(text("UPDATE vector_layers SET visibility = 'private' WHERE id = 2"))
+    with eng.begin() as conn:
+        _apply_schema_migrations(conn)
+    with eng.connect() as conn:
+        rows = conn.execute(text("SELECT id, visibility FROM vector_layers ORDER BY id")).fetchall()
+        assert {r[0]: r[1] for r in rows} == {1: "public", 2: "private"}

@@ -67,6 +67,20 @@ def _apply_schema_migrations(conn) -> None:
         "AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'owner')",
         # DB-level single-owner invariant (SQLite partial unique index)
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_single_owner ON users(role) WHERE role = 'owner'",
+        # A-02 per-resource sharing — workspace visibility axis (private | organization | public).
+        # Nullable ADD + guarded backfill (SQLite can't ADD NOT NULL without a constant default;
+        # every create path sets it, model default is 'organization'). Existing data: public IFF it
+        # was already is_public (the pre-A-02 STAC opt-in), else organization (the shared-workspace
+        # default). Sources/portals have no is_public → organization. is_public stays as the derived,
+        # write-only-synced column (visibility == 'public'); never read visibility from it.
+        "ALTER TABLE vector_layers ADD COLUMN visibility VARCHAR(16)",
+        "UPDATE vector_layers SET visibility = CASE WHEN is_public THEN 'public' ELSE 'organization' END WHERE visibility IS NULL",
+        "ALTER TABLE raster_layers ADD COLUMN visibility VARCHAR(16)",
+        "UPDATE raster_layers SET visibility = CASE WHEN is_public THEN 'public' ELSE 'organization' END WHERE visibility IS NULL",
+        "ALTER TABLE external_sources ADD COLUMN visibility VARCHAR(16)",
+        "UPDATE external_sources SET visibility = 'organization' WHERE visibility IS NULL",
+        "ALTER TABLE portals ADD COLUMN visibility VARCHAR(16)",
+        "UPDATE portals SET visibility = 'organization' WHERE visibility IS NULL",
         # Outgoing email via generic SMTP (C-08a)
         "ALTER TABLE setup_config ADD COLUMN smtp_host VARCHAR(256)",
         "ALTER TABLE setup_config ADD COLUMN smtp_port INTEGER DEFAULT 587",

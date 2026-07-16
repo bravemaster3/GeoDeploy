@@ -152,13 +152,24 @@ class DefaultStyle(BaseModel):
 
 
 class SharingUpdate(BaseModel):
-    """Data-sharing settings (STAC catalog opt-in + catalog metadata). Partial update:
-    only the fields present in the request body are applied."""
+    """Data-sharing settings (A-02 workspace visibility + STAC catalog metadata). Partial update:
+    only the fields present in the request body are applied.
+
+    `visibility` is the axis (private | organization | public); `public` opts the layer into the
+    STAC catalog + raw-asset access. `is_public` is accepted for backward compatibility and mapped
+    to visibility (True → public, False → organization) when `visibility` is not given."""
+    visibility: str | None = Field(default=None, pattern="^(private|organization|public)$")
     is_public: bool | None = None
     abstract: str | None = None
     keywords: str | None = None    # comma-separated
     license: str | None = None
     attribution: str | None = None
+
+
+class VisibilityUpdate(BaseModel):
+    """Workspace visibility for resources with NO public/internet tier (external sources, portals):
+    private | organization only. (Layers use SharingUpdate, which adds the `public` STAC tier.)"""
+    visibility: str = Field(pattern="^(private|organization)$")
 
 
 class VectorLayerOut(BaseModel):
@@ -181,6 +192,7 @@ class VectorLayerOut(BaseModel):
     status: str
     error_message: str | None
     default_style: DefaultStyle | None
+    visibility: str = "organization"
     is_public: bool = False
     abstract: str | None = None
     keywords: str | None = None
@@ -228,6 +240,7 @@ class RasterLayerOut(BaseModel):
     status: str
     error_message: str | None
     default_style: RasterDefaultStyle | None
+    visibility: str = "organization"
     is_public: bool = False
     abstract: str | None = None
     keywords: str | None = None
@@ -274,6 +287,7 @@ class ExternalSourceOut(BaseModel):
     attribution: str | None
     geometry_type: str | None
     bbox: list[float] | None
+    visibility: str = "organization"
     created_at: datetime
     tile_url: str | None = None       # raster sources: MapLibre tiles[] template
     data_url: str | None = None       # vector sources: GeoJSON proxy path
@@ -320,6 +334,9 @@ class PortalCreate(BaseModel):
     description: str | None = None
     template_id: str = "minimal"
     layer_configs: list[LayerConfig] = Field(default_factory=list)
+    # WORKSPACE visibility (who among teammates sees the portal) — distinct from access_type below
+    # (the published viewer gate). private | organization only; publishing is the public act.
+    visibility: str = Field(default="organization", pattern="^(private|organization)$")
     access_type: str = Field(default="public", pattern="^(public|password|private)$")
     access_password: str | None = None
 
@@ -330,6 +347,7 @@ class PortalUpdate(BaseModel):
     template_id: str | None = None
     layer_configs: list[LayerConfig] | None = None
     initial_view: dict[str, Any] | None = None  # {center:[lng,lat], zoom, bearing, pitch}
+    visibility: str | None = Field(default=None, pattern="^(private|organization)$")
     access_type: str | None = None
     access_password: str | None = None
     basemap: str | None = None  # basemap catalog id (see BASEMAP_CATALOG); default = first entry
@@ -345,6 +363,7 @@ class PortalOut(BaseModel):
     template_id: str
     layer_configs: list[LayerConfig]
     initial_view: dict[str, Any] | None = None
+    visibility: str = "organization"
     access_type: str
     basemap: str | None = None
     published: bool
