@@ -33,6 +33,24 @@ export const login = (email, password) =>
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
   })
 export const getMe = () => api.get('/auth/me')
+export const changePassword = (data) => api.put('/auth/password', data)
+// Public invitation/reset flows (token IS the credential — no auth header needed)
+export const getInvitation = (token) => api.get(`/auth/invitations/${encodeURIComponent(token)}`)
+export const acceptInvitation = (token, data) =>
+  api.post(`/auth/invitations/${encodeURIComponent(token)}/accept`, data)
+export const resetPassword = (token, data) =>
+  api.post(`/auth/password-reset/${encodeURIComponent(token)}`, data)
+
+// Users & invitations (RBAC — admin screens)
+export const listUsers = () => api.get('/users')
+export const updateUserRole = (id, role) => api.put(`/users/${id}/role`, { role })
+export const transferOwnership = (id) => api.post(`/users/${id}/transfer-ownership`)
+export const deleteUser = (id) => api.delete(`/users/${id}`)
+export const createPasswordResetLink = (id) => api.post(`/users/${id}/reset-password-link`)
+export const listInvites = () => api.get('/users/invitations')
+export const createInvite = (data) => api.post('/users/invitations', data)
+export const regenerateInvite = (id) => api.post(`/users/invitations/${id}/regenerate`)
+export const revokeInvite = (id) => api.delete(`/users/invitations/${id}`)
 
 // Vector layers
 export const listVectorLayers = () => api.get('/data/vector')

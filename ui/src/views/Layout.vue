@@ -68,7 +68,7 @@
 import { ref, computed, watch } from 'vue'
 import { useRoute, RouterLink, RouterView } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { DatabaseIcon, GlobeIcon, LayoutIcon, SettingsIcon } from './icons'
+import { DatabaseIcon, GlobeIcon, LayoutIcon, SettingsIcon, UsersIcon } from './icons'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -102,12 +102,14 @@ function toggle() {
   }
 }
 
-const nav = [
+const nav = computed(() => [
   { to: '/data', label: 'nav.data', icon: DatabaseIcon },
   { to: '/portals', label: 'nav.portals', icon: GlobeIcon },
   { to: '/templates', label: 'nav.templates', icon: LayoutIcon },
+  // Users management is admin/owner only — hidden (not disabled) for editors/viewers.
+  ...(auth.isAdmin ? [{ to: '/users', label: 'nav.users', icon: UsersIcon }] : []),
   { to: '/settings', label: 'nav.settings', icon: SettingsIcon },
-]
+])
 
 const isActive = (to) => route.path.startsWith(to)
 </script>
