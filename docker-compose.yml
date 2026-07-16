@@ -10,6 +10,9 @@ services:
       - ./.env:/geodeploy/.env
       - ./data/sqlite:/data/sqlite
       - ./data/portals:/data/portals
+      # About-page images (TipTap uploads) — MUST be mounted or they live in the container's
+      # writable layer and vanish on every --force-recreate (bug found 2026-07-16).
+      - ./data/portal_assets:/data/portal_assets
       - ./data/temp:/data/temp
       - ./data/martin:/data/martin
       - ./templates:/templates:ro

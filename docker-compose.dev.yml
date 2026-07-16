@@ -7,6 +7,7 @@ services:
       - ./api:/app
       - ./data/sqlite:/data/sqlite
       - ./data/portals:/data/portals
+      - ./data/portal_assets:/data/portal_assets
       - ./data/temp:/data/temp
       - ./data/martin:/data/martin
       - ./templates:/templates:ro

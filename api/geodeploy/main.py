@@ -13,7 +13,7 @@ from .routers.data import vector, raster, sources, discover
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    for subdir in ("sqlite", "portals", "temp", "martin"):
+    for subdir in ("sqlite", "portals", "portal_assets", "temp", "martin"):
         os.makedirs(f"{settings.data_dir}/{subdir}", exist_ok=True)
 
     async with engine.begin() as conn:
