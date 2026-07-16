@@ -34,6 +34,7 @@ export const login = (email, password) =>
   })
 export const getMe = () => api.get('/auth/me')
 export const changePassword = (data) => api.put('/auth/password', data)
+export const forgotPassword = (email) => api.post('/auth/forgot-password', { email })
 // Public invitation/reset flows (token IS the credential — no auth header needed)
 export const getInvitation = (token) => api.get(`/auth/invitations/${encodeURIComponent(token)}`)
 export const acceptInvitation = (token, data) =>
@@ -51,6 +52,11 @@ export const listInvites = () => api.get('/users/invitations')
 export const createInvite = (data) => api.post('/users/invitations', data)
 export const regenerateInvite = (id) => api.post(`/users/invitations/${id}/regenerate`)
 export const revokeInvite = (id) => api.delete(`/users/invitations/${id}`)
+
+// Outgoing email (admin Settings → Email; generic SMTP)
+export const getEmailSettings = () => api.get('/admin/email-settings')
+export const updateEmailSettings = (data) => api.put('/admin/email-settings', data)
+export const sendTestEmail = () => api.post('/admin/email-settings/test')
 
 // Vector layers
 export const listVectorLayers = () => api.get('/data/vector')

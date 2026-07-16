@@ -10,6 +10,9 @@ class SetupStatus(BaseModel):
     postgis_configured: bool
     storage_configured: bool
     admin_created: bool
+    # Outgoing email configured (C-08a) — the login page uses this to decide whether to
+    # offer "Forgot password?" (without email, self-service reset can't deliver anything).
+    email_enabled: bool = False
 
 
 class ConfigureDBRequest(BaseModel):
@@ -85,8 +88,34 @@ class InvitationOut(BaseModel):
     # The RAW token — present ONLY in the response that creates/regenerates it (never stored,
     # never listed). The UI turns it into the copyable accept/reset link.
     token: str | None = None
+    # True when the link was ALSO delivered by email (SMTP configured + relay accepted it).
+    email_sent: bool = False
 
     model_config = {"from_attributes": True}
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class EmailSettings(BaseModel):
+    """Admin Settings → Email (partial update; smtp_password only written when provided)."""
+    smtp_host: str | None = None
+    smtp_port: int | None = None
+    smtp_security: str | None = Field(default=None, pattern="^(tls|starttls|none)$")
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    email_from: str | None = None
+
+
+class EmailSettingsOut(BaseModel):
+    smtp_host: str | None
+    smtp_port: int | None
+    smtp_security: str | None
+    smtp_username: str | None
+    email_from: str | None
+    has_password: bool = False  # the password itself is never returned
+    configured: bool = False
 
 
 class InvitePublicOut(BaseModel):

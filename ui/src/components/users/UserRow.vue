@@ -57,7 +57,8 @@
       <button @click="onTransfer" class="btn-primary text-xs px-2 py-1">{{ $t('users.transfer') }}</button>
       <button @click="confirmTransfer = false" class="btn-secondary text-xs px-2 py-1">{{ $t('users.cancel') }}</button>
     </div>
-    <div v-if="resetUrl" class="mt-2">
+    <div v-if="resetUrl" class="mt-2 space-y-1">
+      <p v-if="resetEmailSent" class="text-xs text-green-400">{{ $t('users.email_sent', { email: user.email }) }}</p>
       <CopyLink :url="resetUrl" :hint="$t('users.reset_link_once')" />
     </div>
     <div v-if="error" class="mt-2 text-xs text-red-400">{{ error }}</div>
@@ -79,6 +80,7 @@ const error = ref('')
 const confirmDelete = ref(false)
 const confirmTransfer = ref(false)
 const resetUrl = ref('')
+const resetEmailSent = ref(false)
 
 const isSelf = computed(() => props.user.id === auth.user?.id)
 const isOwnerRow = computed(() => props.user.role === 'owner')
@@ -125,5 +127,6 @@ const onTransfer = () => run(async () => { await store.transferTo(props.user.id)
 const onResetLink = () => run(async () => {
   const inv = await store.resetLink(props.user.id)
   resetUrl.value = `${window.location.origin}/reset-password?token=${inv.token}`
+  resetEmailSent.value = !!inv.email_sent
 })
 </script>

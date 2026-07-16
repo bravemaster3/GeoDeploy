@@ -71,6 +71,77 @@
         </div>
       </section>
 
+      <!-- Outgoing email (generic SMTP — admin/owner) -->
+      <section v-if="auth.isAdmin" class="card overflow-hidden">
+        <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
+          <span class="w-9 h-9 rounded-lg bg-sky-500/15 text-sky-400 flex items-center justify-center flex-shrink-0">
+            <MailIcon class="w-5 h-5" />
+          </span>
+          <div class="flex-1 min-w-0">
+            <h2 class="text-sm font-semibold text-foreground">Email</h2>
+            <p class="text-xs text-muted-foreground/70">Invites, password resets — any SMTP provider</p>
+          </div>
+          <span v-if="emailForm" class="text-[11px] font-medium px-2 py-0.5 rounded-full"
+            :class="emailConfigured ? 'bg-green-500/15 text-green-400' : 'bg-muted text-muted-foreground'">
+            {{ emailConfigured ? 'configured' : 'not configured' }}
+          </span>
+        </header>
+        <div v-if="emailForm" class="p-5 space-y-3 max-w-lg">
+          <p class="text-xs text-muted-foreground">
+            Optional — without it, invite and reset links are copy-and-send. Works with any provider:
+            <span class="font-medium text-foreground/80">Resend</span> (host <code class="font-mono">smtp.resend.com</code>,
+            port 465 TLS, user <code class="font-mono">resend</code>, password = API key) ·
+            <span class="font-medium text-foreground/80">Brevo</span> (host <code class="font-mono">smtp-relay.brevo.com</code>,
+            port 587 STARTTLS, ~300 free emails/day) · or your organisation's mail server.
+          </p>
+          <div class="grid grid-cols-3 gap-3">
+            <div class="col-span-2">
+              <label class="text-xs text-muted-foreground block mb-1">SMTP host</label>
+              <input v-model="emailForm.smtp_host" type="text" placeholder="smtp.example.com" class="input w-full text-sm font-mono" />
+            </div>
+            <div>
+              <label class="text-xs text-muted-foreground block mb-1">Port</label>
+              <input v-model.number="emailForm.smtp_port" type="number" class="input w-full text-sm" />
+            </div>
+          </div>
+          <div>
+            <label class="text-xs text-muted-foreground block mb-1">Security</label>
+            <div class="grid grid-cols-3 gap-2">
+              <button v-for="s in ['starttls', 'tls', 'none']" :key="s" type="button"
+                class="p-2 rounded-lg border text-xs font-medium transition-colors"
+                :class="emailForm.smtp_security === s ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-muted-foreground/40 text-foreground/85'"
+                @click="emailForm.smtp_security = s">{{ s === 'tls' ? 'TLS (465)' : s === 'starttls' ? 'STARTTLS (587)' : 'None' }}</button>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-xs text-muted-foreground block mb-1">Username</label>
+              <input v-model="emailForm.smtp_username" type="text" class="input w-full text-sm font-mono" />
+            </div>
+            <div>
+              <label class="text-xs text-muted-foreground block mb-1">
+                Password {{ emailHasPassword ? '(saved — blank keeps it)' : '' }}
+              </label>
+              <input v-model="emailForm.smtp_password" type="password" autocomplete="new-password" class="input w-full text-sm" />
+            </div>
+          </div>
+          <div>
+            <label class="text-xs text-muted-foreground block mb-1">From address</label>
+            <input v-model="emailForm.email_from" type="email" placeholder="geodeploy@your-domain.org" class="input w-full text-sm" />
+          </div>
+          <p v-if="emailMsg" class="text-xs" :class="emailMsg.ok ? 'text-green-400' : 'text-red-400'">{{ emailMsg.text }}</p>
+          <div class="flex gap-2">
+            <button @click="saveEmail" :disabled="emailBusy" class="btn-primary text-xs px-3 py-1.5">
+              {{ emailBusy === 'save' ? 'Saving…' : 'Save' }}
+            </button>
+            <button @click="testEmail" :disabled="emailBusy || !emailConfigured" class="btn-secondary text-xs px-3 py-1.5"
+              title="Sends a test email to your own address">
+              {{ emailBusy === 'test' ? 'Sending…' : 'Send test email' }}
+            </button>
+          </div>
+        </div>
+      </section>
+
       <!-- Account -->
       <section class="card overflow-hidden">
         <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
@@ -125,8 +196,8 @@ import { useRouter } from 'vue-router'
 import { useSystemStore } from '@/stores/system'
 import { useAuthStore } from '@/stores/auth'
 import StorageBar from '@/components/shared/StorageBar.vue'
-import { ServerIcon, HardDriveIcon, UserIcon, RefreshIcon } from './icons'
-import api, { changePassword, controlService } from '@/api'
+import { ServerIcon, HardDriveIcon, UserIcon, RefreshIcon, MailIcon } from './icons'
+import api, { changePassword, controlService, getEmailSettings, sendTestEmail, updateEmailSettings } from '@/api'
 
 const systemStore = useSystemStore()
 const auth = useAuthStore()
@@ -216,12 +287,66 @@ async function svcAction(name, action) {
 }
 
 onMounted(() => {
-  // Health/stats endpoints are admin-only server-side — don't fire doomed requests as editor/viewer.
+  // Health/stats/email endpoints are admin-only server-side — don't fire doomed requests as editor/viewer.
   if (auth.isAdmin) {
     systemStore.refreshHealth()
     systemStore.refreshStats()
+    loadEmail()
   }
 })
+
+// Outgoing email (generic SMTP, C-08a)
+const emailForm = ref(null)
+const emailHasPassword = ref(false)
+const emailConfigured = ref(false)
+const emailBusy = ref(null)   // null | 'save' | 'test'
+const emailMsg = ref(null)
+
+async function loadEmail() {
+  try {
+    const { data } = await getEmailSettings()
+    emailHasPassword.value = data.has_password
+    emailConfigured.value = data.configured
+    emailForm.value = {
+      smtp_host: data.smtp_host || '',
+      smtp_port: data.smtp_port || 587,
+      smtp_security: data.smtp_security || 'starttls',
+      smtp_username: data.smtp_username || '',
+      smtp_password: '',   // blank = keep the stored secret
+      email_from: data.email_from || '',
+    }
+  } catch { /* section simply stays in loading state */ }
+}
+
+async function saveEmail() {
+  emailBusy.value = 'save'
+  emailMsg.value = null
+  try {
+    const { data } = await updateEmailSettings(emailForm.value)
+    emailHasPassword.value = data.has_password
+    emailConfigured.value = data.configured
+    emailForm.value.smtp_password = ''
+    emailMsg.value = { ok: true, text: data.configured ? 'Saved — email is enabled.' : 'Saved (host + from address required to enable).' }
+  } catch (err) {
+    emailMsg.value = { ok: false, text: err.response?.data?.detail || err.message }
+  } finally {
+    emailBusy.value = null
+    setTimeout(() => { emailMsg.value = null }, 6000)
+  }
+}
+
+async function testEmail() {
+  emailBusy.value = 'test'
+  emailMsg.value = null
+  try {
+    const { data } = await sendTestEmail()
+    emailMsg.value = { ok: true, text: `Test email sent to ${data.to} — check the inbox.` }
+  } catch (err) {
+    emailMsg.value = { ok: false, text: err.response?.data?.detail || err.message }
+  } finally {
+    emailBusy.value = null
+  }
+}
 
 async function reloadMartin() {
   martinBusy.value = true

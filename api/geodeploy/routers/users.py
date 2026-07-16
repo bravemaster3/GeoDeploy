@@ -9,7 +9,7 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import delete as sa_delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +20,14 @@ from ..schemas import InvitationOut, InviteCreate, RoleUpdate, UserAdminOut
 from ..services import notifications
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+def request_origin(request: Request) -> str:
+    """Absolute origin for links baked into emails (same pattern as stac._base):
+    Host from the header nginx forwards; scheme from X-Forwarded-Proto when present."""
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("host") or request.url.netloc
+    return f"{proto}://{host}"
 
 INVITE_TTL = timedelta(days=7)
 RESET_TTL = timedelta(hours=24)
@@ -151,7 +159,7 @@ async def list_invitations(_: User = Depends(require_admin), db: AsyncSession = 
 
 
 @router.post("/invitations", response_model=InvitationOut, status_code=201)
-async def create_invitation(body: InviteCreate,
+async def create_invitation(body: InviteCreate, request: Request,
                             caller: User = Depends(require_admin),
                             db: AsyncSession = Depends(get_db)):
     email = body.email.lower().strip()
@@ -167,9 +175,11 @@ async def create_invitation(body: InviteCreate,
     db.add(inv)
     await db.commit()
     await db.refresh(inv)
-    notifications.send_invitation_email(email, f"/accept-invite?token={raw}", body.role)
     out = InvitationOut.model_validate(inv)
     out.token = raw  # shown ONCE — the UI builds the copyable link from this
+    # Best-effort email (SMTP configured in Settings → Email); the copyable link is the fallback.
+    out.email_sent = await notifications.send_invitation_email(
+        db, email, f"{request_origin(request)}/accept-invite?token={raw}", body.role)
     return out
 
 
@@ -206,7 +216,7 @@ async def revoke_invitation(invitation_id: int,
 # ── Password reset (admin-minted link) ────────────────────────────────────────────────────────
 
 @router.post("/{user_id}/reset-password-link", response_model=InvitationOut)
-async def create_reset_link(user_id: int,
+async def create_reset_link(user_id: int, request: Request,
                             caller: User = Depends(require_admin),
                             db: AsyncSession = Depends(get_db)):
     target = await _get_user(user_id, db)
@@ -223,7 +233,8 @@ async def create_reset_link(user_id: int,
     db.add(inv)
     await db.commit()
     await db.refresh(inv)
-    notifications.send_password_reset_email(target.email, f"/reset-password?token={raw}")
     out = InvitationOut.model_validate(inv)
     out.token = raw
+    out.email_sent = await notifications.send_password_reset_email(
+        db, target.email, f"{request_origin(request)}/reset-password?token={raw}")
     return out

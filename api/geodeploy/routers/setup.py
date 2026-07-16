@@ -51,6 +51,7 @@ async def setup_status(db: AsyncSession = Depends(get_db)):
         postgis_configured=bool(config.postgis_host),
         storage_configured=bool(config.storage_endpoint),
         admin_created=has_admin,
+        email_enabled=bool((config.smtp_host or "").strip() and (config.email_from or "").strip()),
     )
 
 

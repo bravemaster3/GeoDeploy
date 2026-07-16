@@ -6,8 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_settings
 from ..database import get_db
 from ..deps import require_admin
-from ..models import Portal, RasterLayer, User, VectorLayer
-from ..schemas import ServiceHealth, StorageStats
+from ..models import Portal, RasterLayer, SetupConfig, User, VectorLayer
+from ..schemas import EmailSettings, EmailSettingsOut, ServiceHealth, StorageStats
+from ..services import notifications
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -122,3 +123,57 @@ async def storage_stats(_: User = Depends(require_admin), db: AsyncSession = Dep
         raster_layers=raster_count,
         portals=portal_count,
     )
+
+
+# ── Outgoing email (generic SMTP, C-08a) ─────────────────────────────────────────────────────
+
+async def _get_config(db: AsyncSession) -> SetupConfig:
+    cfg = (await db.execute(select(SetupConfig).where(SetupConfig.id == 1))).scalar_one_or_none()
+    if cfg is None:
+        cfg = SetupConfig(id=1)
+        db.add(cfg)
+        await db.commit()
+        await db.refresh(cfg)
+    return cfg
+
+
+def _email_out(cfg: SetupConfig) -> EmailSettingsOut:
+    return EmailSettingsOut(
+        smtp_host=cfg.smtp_host, smtp_port=cfg.smtp_port, smtp_security=cfg.smtp_security,
+        smtp_username=cfg.smtp_username, email_from=cfg.email_from,
+        has_password=bool(cfg.smtp_password),
+        configured=bool((cfg.smtp_host or "").strip() and (cfg.email_from or "").strip()),
+    )
+
+
+@router.get("/email-settings", response_model=EmailSettingsOut)
+async def get_email_settings(_: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    return _email_out(await _get_config(db))
+
+
+@router.put("/email-settings", response_model=EmailSettingsOut)
+async def update_email_settings(body: EmailSettings,
+                                _: User = Depends(require_admin),
+                                db: AsyncSession = Depends(get_db)):
+    """Partial update. The password is only overwritten when a non-empty value is sent (the UI
+    leaves the field blank to keep the stored one); clearing smtp_host disables email entirely."""
+    cfg = await _get_config(db)
+    data = body.model_dump(exclude_unset=True)
+    if data.get("smtp_password") == "":
+        data.pop("smtp_password")  # blank = keep the stored secret
+    for field, value in data.items():
+        setattr(cfg, field, value)
+    await db.commit()
+    await db.refresh(cfg)
+    return _email_out(cfg)
+
+
+@router.post("/email-settings/test")
+async def test_email(user: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    """Send a test email to the calling admin. Raises the relay's actual error back to the UI —
+    this is the one email path that is NOT best-effort, because the admin is debugging."""
+    try:
+        await notifications.send_test_email(db, user.email)
+    except Exception as exc:  # noqa: BLE001 — surface whatever the relay said
+        raise HTTPException(502, f"Test email failed: {exc}") from exc
+    return {"status": "ok", "to": user.email}

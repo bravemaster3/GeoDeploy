@@ -1,9 +1,9 @@
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
 from jose import jwt
 from passlib.context import CryptContext
-from sqlalchemy import select
+from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
@@ -11,9 +11,10 @@ from ..database import get_db
 from ..deps import get_current_user
 from ..models import Invitation, User
 from ..schemas import (
-    AcceptInviteRequest, InvitePublicOut, PasswordChangeRequest, PasswordResetRequest,
-    TokenResponse, UserOut,
+    AcceptInviteRequest, ForgotPasswordRequest, InvitePublicOut, PasswordChangeRequest,
+    PasswordResetRequest, TokenResponse, UserOut,
 )
+from ..services import notifications
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 _pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -89,6 +90,29 @@ async def accept_invitation(token: str, body: AcceptInviteRequest,
     await db.commit()
     await db.refresh(user)
     return TokenResponse(access_token=_create_token(user.id))
+
+
+@router.post("/forgot-password", status_code=202)
+async def forgot_password(body: ForgotPasswordRequest, request: Request,
+                          db: AsyncSession = Depends(get_db)):
+    """PUBLIC self-service reset (C-08a): emails a single-use reset link. ALWAYS answers 202
+    with the same body — whether the email exists, whether SMTP is configured, whether the send
+    worked — so the endpoint can't be used to enumerate accounts. Rate-limited in nginx
+    (zone pwreset). The owner may use this too: proving inbox control is the trust anchor,
+    unlike admin-minted links (which are owner-guarded in users.py)."""
+    from .users import hash_token, new_token, request_origin, utcnow, RESET_TTL
+    email = body.email.lower().strip()
+    user = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
+    if user and await notifications.get_email_config(db):
+        await db.execute(sa_delete(Invitation).where(Invitation.purpose == "password_reset",
+                                                     Invitation.user_id == user.id))
+        raw = new_token()
+        db.add(Invitation(purpose="password_reset", email=user.email, user_id=user.id,
+                          token_hash=hash_token(raw), expires_at=utcnow() + RESET_TTL))
+        await db.commit()
+        await notifications.send_password_reset_email(
+            db, user.email, f"{request_origin(request)}/reset-password?token={raw}")
+    return {"status": "ok"}
 
 
 @router.post("/password-reset/{token}", status_code=204)

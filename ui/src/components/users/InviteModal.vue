@@ -10,6 +10,7 @@
       <!-- Success state: the copyable link (shown once) -->
       <template v-if="createdUrl">
         <p class="text-sm text-foreground/85">{{ $t('users.link_ready') }} — {{ form.email }}</p>
+        <p v-if="emailSent" class="text-xs text-green-400">{{ $t('users.email_sent', { email: form.email }) }}</p>
         <CopyLink :url="createdUrl" :hint="$t('users.link_once')" />
         <div class="flex justify-end pt-1">
           <button @click="$emit('close')" class="btn-primary text-sm">{{ $t('users.done') }}</button>
@@ -64,6 +65,7 @@ const form = ref({ email: '', role: 'editor' })
 const saving = ref(false)
 const error = ref('')
 const createdUrl = ref('')
+const emailSent = ref(false)
 
 const canSubmit = computed(() => /.+@.+\..+/.test(form.value.email.trim()))
 
@@ -74,6 +76,7 @@ async function submit() {
   try {
     const inv = await store.invite(form.value.email.trim().toLowerCase(), form.value.role)
     createdUrl.value = `${window.location.origin}/accept-invite?token=${inv.token}`
+    emailSent.value = !!inv.email_sent
   } catch (err) {
     error.value = err.response?.data?.detail || err.message
   } finally {

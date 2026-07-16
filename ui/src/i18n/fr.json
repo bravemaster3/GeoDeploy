@@ -18,6 +18,7 @@
     "invite_hint": "L'invitation est un lien à usage unique — copiez-le et envoyez-le vous-même (aucun e-mail n'est envoyé).",
     "link_ready": "Lien d'invitation créé",
     "link_once": "Ce lien n'est affiché qu'une seule fois — copiez-le maintenant. Il expire dans 7 jours.",
+    "email_sent": "Également envoyé par e-mail à {email}.",
     "reset_link_once": "Lien de réinitialisation — affiché une seule fois, expire dans 24 heures.",
     "copy": "Copier",
     "copied": "Copié !",

@@ -67,6 +67,13 @@ def _apply_schema_migrations(conn) -> None:
         "AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'owner')",
         # DB-level single-owner invariant (SQLite partial unique index)
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_single_owner ON users(role) WHERE role = 'owner'",
+        # Outgoing email via generic SMTP (C-08a)
+        "ALTER TABLE setup_config ADD COLUMN smtp_host VARCHAR(256)",
+        "ALTER TABLE setup_config ADD COLUMN smtp_port INTEGER DEFAULT 587",
+        "ALTER TABLE setup_config ADD COLUMN smtp_security VARCHAR(16) DEFAULT 'starttls'",
+        "ALTER TABLE setup_config ADD COLUMN smtp_username VARCHAR(256)",
+        "ALTER TABLE setup_config ADD COLUMN smtp_password TEXT",
+        "ALTER TABLE setup_config ADD COLUMN email_from VARCHAR(256)",
     ]
     for sql in pending:
         try:

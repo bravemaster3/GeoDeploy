@@ -27,6 +27,16 @@ class SetupConfig(Base):
     storage_secret_key: Mapped[str | None] = mapped_column(Text)   # encrypted at rest
     storage_region: Mapped[str | None] = mapped_column(String(64), default="us-east-1")
 
+    # Outgoing email (C-08a): generic SMTP so ANY provider works (Resend/Brevo/institutional
+    # relay — they all expose SMTP). Unconfigured (no host/from) = invite & reset links are
+    # copy-delivered only. Admin-editable in Settings → Email; never required.
+    smtp_host: Mapped[str | None] = mapped_column(String(256))
+    smtp_port: Mapped[int | None] = mapped_column(Integer, default=587)
+    smtp_security: Mapped[str | None] = mapped_column(String(16), default="starttls")  # tls | starttls | none
+    smtp_username: Mapped[str | None] = mapped_column(String(256))
+    smtp_password: Mapped[str | None] = mapped_column(Text)
+    email_from: Mapped[str | None] = mapped_column(String(256))
+
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

@@ -18,6 +18,7 @@
     "invite_hint": "The invite is a single-use link — copy it and send it yourself (no email is sent).",
     "link_ready": "Invitation link created",
     "link_once": "This link is shown once — copy it now. It expires in 7 days.",
+    "email_sent": "Also emailed to {email}.",
     "reset_link_once": "Password-reset link — shown once, expires in 24 hours.",
     "copy": "Copy",
     "copied": "Copied!",
