@@ -7,9 +7,18 @@
           <h1 class="text-2xl font-semibold tracking-tight text-foreground">My Data</h1>
           <p class="text-sm text-muted-foreground mt-1">Upload, connect, and manage the spatial layers behind your portals.</p>
         </div>
-        <button @click="showDiscover = true" class="btn-secondary">
-          <DownloadIcon class="w-4 h-4" /> Import existing
-        </button>
+        <div class="flex items-center gap-2">
+          <!-- Creator filter (shared workspace): admins use this to review a member's
+               uploads in bulk, e.g. before deleting the account. Client-side only. -->
+          <select v-if="creators.length > 1" v-model="creatorFilter"
+            class="text-xs bg-background text-foreground border border-border rounded-lg px-2.5 py-2 focus:outline-none focus:ring-1 focus:ring-primary/60">
+            <option value="">Everyone</option>
+            <option v-for="c in creators" :key="c" :value="c">{{ c }}</option>
+          </select>
+          <button v-if="auth.canEdit" @click="showDiscover = true" class="btn-secondary">
+            <DownloadIcon class="w-4 h-4" /> Import existing
+          </button>
+        </div>
       </div>
 
       <!-- Vector layers -->
@@ -26,7 +35,7 @@
             id="vector-search" name="vector-search" placeholder="Search…"
             class="w-36 text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
           <span class="text-xs font-medium text-muted-foreground bg-muted rounded-full px-2 py-0.5">{{ dataStore.vectorLayers.length }}</span>
-          <button @click="showVectorUpload = true" class="btn-primary text-xs px-3 py-1.5">
+          <button v-if="auth.canEdit" @click="showVectorUpload = true" class="btn-primary text-xs px-3 py-1.5">
             <UploadIcon class="w-3.5 h-3.5" /> Upload
           </button>
         </header>
@@ -58,7 +67,7 @@
             id="raster-search" name="raster-search" placeholder="Search…"
             class="w-36 text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
           <span class="text-xs font-medium text-muted-foreground bg-muted rounded-full px-2 py-0.5">{{ dataStore.rasterLayers.length }}</span>
-          <button @click="showRasterUpload = true" class="btn-primary text-xs px-3 py-1.5">
+          <button v-if="auth.canEdit" @click="showRasterUpload = true" class="btn-primary text-xs px-3 py-1.5">
             <UploadIcon class="w-3.5 h-3.5" /> Upload
           </button>
         </header>
@@ -87,7 +96,7 @@
             <p class="text-xs text-muted-foreground/70">WMS · XYZ · WFS — shown in portals without importing</p>
           </div>
           <span class="text-xs font-medium text-muted-foreground bg-muted rounded-full px-2 py-0.5">{{ dataStore.externalSources.length }}</span>
-          <button @click="showAddSource = true" class="btn-secondary text-xs px-3 py-1.5">
+          <button v-if="auth.canEdit" @click="showAddSource = true" class="btn-secondary text-xs px-3 py-1.5">
             <PlusIcon class="w-3.5 h-3.5" /> Connect
           </button>
         </header>
@@ -97,7 +106,7 @@
           <p class="text-xs text-muted-foreground/70 mt-0.5">Connect a WMS, XYZ/WMTS, or WFS service to show it in portals.</p>
         </div>
         <div v-else class="divide-y divide-border/60">
-          <SourceRow v-for="src in dataStore.externalSources" :key="src.id" :source="src"
+          <SourceRow v-for="src in filteredSources" :key="src.id" :source="src"
             @delete="dataStore.removeExternal(src.id)" />
         </div>
       </section>
@@ -113,6 +122,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useAuthStore } from '@/stores/auth'
 import { useDataStore } from '@/stores/data'
 import { UploadIcon, DatabaseIcon, ImageIcon, LinkIcon, DownloadIcon, PlusIcon } from './icons'
 import VectorRow from '@/components/data/VectorRow.vue'
@@ -122,6 +132,7 @@ import SourceRow from '@/components/data/SourceRow.vue'
 import AddSourceModal from '@/components/data/AddSourceModal.vue'
 import DiscoverModal from '@/components/data/DiscoverModal.vue'
 
+const auth = useAuthStore()
 const dataStore = useDataStore()
 
 // Per-section search (shown once a section holds more than a handful of layers) — matches on
@@ -134,8 +145,23 @@ const matches = (layer, q) => {
   return [layer.name, layer.keywords, layer.abstract, layer.geometry_type]
     .some((v) => v && String(v).toLowerCase().includes(needle))
 }
-const filteredVectors = computed(() => dataStore.vectorLayers.filter((l) => matches(l, vectorSearch.value)))
-const filteredRasters = computed(() => dataStore.rasterLayers.filter((l) => matches(l, rasterSearch.value)))
+
+// Creator filter (shared workspace): client-side over the loaded lists — no API param needed
+// since lists are fetched whole. Rendered only when more than one creator exists.
+const creatorFilter = ref('')
+const creators = computed(() => {
+  const names = new Set()
+  for (const list of [dataStore.vectorLayers, dataStore.rasterLayers, dataStore.externalSources])
+    for (const item of list) if (item.created_by) names.add(item.created_by)
+  return [...names].sort()
+})
+const byCreator = (item) => !creatorFilter.value || item.created_by === creatorFilter.value
+
+const filteredVectors = computed(() =>
+  dataStore.vectorLayers.filter((l) => matches(l, vectorSearch.value) && byCreator(l)))
+const filteredRasters = computed(() =>
+  dataStore.rasterLayers.filter((l) => matches(l, rasterSearch.value) && byCreator(l)))
+const filteredSources = computed(() => dataStore.externalSources.filter(byCreator))
 
 const showVectorUpload = ref(false)
 const showRasterUpload = ref(false)

@@ -22,12 +22,13 @@
         <span v-if="layer.file_size">{{ formatBytes(layer.file_size) }}</span>
         <span v-if="layer.is_public"
           class="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-medium text-[10px] uppercase tracking-wide">Public data</span>
+        <span v-if="layer.created_by" class="text-muted-foreground/70">by {{ layer.created_by }}</span>
       </div>
     </div>
     <!-- Re-tile to PMTiles: tiling now runs automatically after prep, but this stays for a manual
          re-tile (e.g. after a workflow change). Placed to the LEFT of the status badge so every
          "Ready" badge lines up at the same right-hand position regardless of storage backend. -->
-    <button v-if="layer.storage_backend === 'geoparquet' && layer.status === 'ready'"
+    <button v-if="auth.canEdit && layer.storage_backend === 'geoparquet' && layer.status === 'ready'"
       @click="onTile" :disabled="tiling || layer.tile_status === 'tiling'"
       class="p-1.5 rounded transition-all text-muted-foreground/70 hover:text-violet-400 disabled:opacity-40"
       :class="layer.tile_status === 'tiling' ? '' : 'opacity-0 group-hover:opacity-100'"
@@ -41,7 +42,7 @@
     <!-- Restart processing: a file-backed (GeoParquet) layer whose convert/prep stalled or failed —
          re-runs the right stage without a re-upload (e.g. the worker was restarted mid-job). Left of
          the badge too (only shows for error/processing, so it never shifts a "Ready" badge). -->
-    <button v-if="layer.storage_backend === 'geoparquet' && (layer.status === 'error' || layer.status === 'processing')"
+    <button v-if="auth.canEdit && layer.storage_backend === 'geoparquet' && (layer.status === 'error' || layer.status === 'processing')"
       @click="onReprocess" :disabled="restarting"
       class="p-1.5 rounded transition-all text-muted-foreground/70 hover:text-primary disabled:opacity-40"
       :class="layer.status === 'error' ? 'text-amber-400' : 'opacity-0 group-hover:opacity-100'"
@@ -51,14 +52,14 @@
     </button>
     <StatusBadge :status="layer.status" :progress="layer._job?.progress" :step="layer._job?.current_step" />
     <!-- Data sharing: public catalog (STAC) listing + metadata -->
-    <button v-if="layer.status === 'ready'" @click="showSharing = true"
+    <button v-if="auth.canEdit && layer.status === 'ready'" @click="showSharing = true"
       class="p-1.5 rounded transition-all"
       :class="layer.is_public ? 'text-emerald-400' : 'opacity-0 group-hover:opacity-100 text-muted-foreground/70 hover:text-emerald-400'"
       :title="layer.is_public ? 'Shared in the public data catalog — edit sharing & metadata' : 'Data sharing & catalog metadata'"
     >
       <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
     </button>
-    <button @click="$emit('delete')"
+    <button v-if="auth.canEdit" @click="$emit('delete')"
       class="opacity-0 group-hover:opacity-100 p-1.5 text-muted-foreground/70 hover:text-red-500 rounded transition-all"
       title="Delete layer"
     >
@@ -71,6 +72,7 @@
 <script setup>
 import { ref } from 'vue'
 import { TrashIcon, RefreshIcon } from '@/views/icons'
+import { useAuthStore } from '@/stores/auth'
 import { useDataStore } from '@/stores/data'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import SharingModal from '@/components/data/SharingModal.vue'
@@ -78,6 +80,7 @@ import SharingModal from '@/components/data/SharingModal.vue'
 const props = defineProps({ layer: Object })
 defineEmits(['delete'])
 
+const auth = useAuthStore()
 const dataStore = useDataStore()
 const showSharing = ref(false)
 const restarting = ref(false)

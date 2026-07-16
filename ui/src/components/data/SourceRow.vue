@@ -11,8 +11,9 @@
       </div>
       <div class="text-[10px] text-muted-foreground/70 truncate font-mono">{{ source.url }}</div>
     </div>
+    <span v-if="source.created_by" class="text-xs text-muted-foreground/70 flex-shrink-0">by {{ source.created_by }}</span>
     <span class="text-[10px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground flex-shrink-0">external</span>
-    <button @click="$emit('delete')"
+    <button v-if="auth.canEdit" @click="$emit('delete')"
       class="opacity-0 group-hover:opacity-100 p-1.5 text-muted-foreground/70 hover:text-red-500 rounded transition-all"
       title="Remove source"
     >
@@ -24,9 +25,12 @@
 <script setup>
 import { computed } from 'vue'
 import { TrashIcon } from '@/views/icons'
+import { useAuthStore } from '@/stores/auth'
 
 const props = defineProps({ source: Object })
 defineEmits(['delete'])
+
+const auth = useAuthStore()
 
 const badgeClass = computed(() => props.source.kind === 'vector'
   ? 'bg-emerald-500/15 text-emerald-400'

@@ -6,8 +6,8 @@
         <p class="text-sm text-muted-foreground mt-1">Manage infrastructure, storage, and your account.</p>
       </div>
 
-      <!-- Infrastructure health -->
-      <section class="card overflow-hidden">
+      <!-- Infrastructure health (admin/owner — service control is require_admin server-side) -->
+      <section v-if="auth.isAdmin" class="card overflow-hidden">
         <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
           <span class="w-9 h-9 rounded-lg bg-indigo-500/15 text-indigo-400 flex items-center justify-center flex-shrink-0">
             <ServerIcon class="w-5 h-5" />
@@ -49,8 +49,8 @@
         </div>
       </section>
 
-      <!-- Storage -->
-      <section v-if="systemStore.stats" class="card overflow-hidden">
+      <!-- Storage (admin/owner — storage-stats is require_admin server-side) -->
+      <section v-if="auth.isAdmin && systemStore.stats" class="card overflow-hidden">
         <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
           <span class="w-9 h-9 rounded-lg bg-amber-500/15 text-amber-400 flex items-center justify-center flex-shrink-0">
             <HardDriveIcon class="w-5 h-5" />
@@ -84,10 +84,35 @@
             {{ initials }}
           </span>
           <div class="flex-1 min-w-0">
-            <div class="text-sm font-medium text-foreground truncate">{{ auth.user?.name }}</div>
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="text-sm font-medium text-foreground truncate">{{ auth.user?.name }}</span>
+              <span v-if="auth.role" class="text-[10px] px-1.5 py-0.5 rounded font-medium flex-shrink-0" :class="roleBadge">
+                {{ auth.role }}
+              </span>
+            </div>
             <div class="text-sm text-muted-foreground/70 truncate">{{ auth.user?.email }}</div>
           </div>
+          <button @click="showPwForm = !showPwForm" class="btn-secondary text-xs px-3 py-1.5">Change password</button>
           <button @click="signOut" class="btn-secondary text-xs px-3 py-1.5">Sign out</button>
+        </div>
+        <!-- Change password (any role) -->
+        <div v-if="showPwForm" class="px-5 pb-5 border-t border-border/60 pt-4 space-y-3 max-w-sm">
+          <div>
+            <label class="text-xs text-muted-foreground block mb-1">Current password</label>
+            <input v-model="pwCurrent" type="password" class="input w-full text-sm" />
+          </div>
+          <div>
+            <label class="text-xs text-muted-foreground block mb-1">New password (min 8 characters)</label>
+            <input v-model="pwNew" type="password" class="input w-full text-sm" />
+          </div>
+          <div>
+            <label class="text-xs text-muted-foreground block mb-1">Confirm new password</label>
+            <input v-model="pwConfirm" type="password" class="input w-full text-sm" @keydown.enter="submitPassword" />
+          </div>
+          <p v-if="pwMsg" class="text-xs" :class="pwMsg.ok ? 'text-green-400' : 'text-red-400'">{{ pwMsg.text }}</p>
+          <button @click="submitPassword" :disabled="!pwCanSubmit || pwBusy" class="btn-primary text-xs px-3 py-1.5">
+            {{ pwBusy ? 'Saving…' : 'Save password' }}
+          </button>
         </div>
       </section>
     </div>
@@ -101,7 +126,7 @@ import { useSystemStore } from '@/stores/system'
 import { useAuthStore } from '@/stores/auth'
 import StorageBar from '@/components/shared/StorageBar.vue'
 import { ServerIcon, HardDriveIcon, UserIcon, RefreshIcon } from './icons'
-import api, { controlService } from '@/api'
+import api, { changePassword, controlService } from '@/api'
 
 const systemStore = useSystemStore()
 const auth = useAuthStore()
@@ -112,6 +137,43 @@ const busySvc = ref(null)
 
 const initials = computed(() =>
   (auth.user?.name || '?').split(' ').map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase())
+
+const roleBadge = computed(() => ({
+  owner: 'bg-amber-500/15 text-amber-400',
+  admin: 'bg-violet-500/15 text-violet-400',
+  editor: 'bg-blue-500/15 text-blue-400',
+  viewer: 'bg-muted text-muted-foreground',
+}[auth.role] || 'bg-muted text-muted-foreground'))
+
+// Change password — martinMsg-style transient feedback (no toast system by convention)
+const showPwForm = ref(false)
+const pwCurrent = ref('')
+const pwNew = ref('')
+const pwConfirm = ref('')
+const pwBusy = ref(false)
+const pwMsg = ref(null)
+const pwCanSubmit = computed(() =>
+  pwCurrent.value && pwNew.value.length >= 8 && pwNew.value === pwConfirm.value)
+
+async function submitPassword() {
+  if (!pwCanSubmit.value || pwBusy.value) {
+    if (pwNew.value && pwNew.value.length < 8) pwMsg.value = { ok: false, text: 'New password must be at least 8 characters.' }
+    else if (pwConfirm.value && pwNew.value !== pwConfirm.value) pwMsg.value = { ok: false, text: 'Passwords do not match.' }
+    return
+  }
+  pwBusy.value = true
+  pwMsg.value = null
+  try {
+    await changePassword({ current_password: pwCurrent.value, new_password: pwNew.value })
+    pwMsg.value = { ok: true, text: 'Password updated.' }
+    pwCurrent.value = pwNew.value = pwConfirm.value = ''
+    setTimeout(() => { pwMsg.value = null; showPwForm.value = false }, 2500)
+  } catch (err) {
+    pwMsg.value = { ok: false, text: err.response?.data?.detail || err.message }
+  } finally {
+    pwBusy.value = false
+  }
+}
 
 const statTiles = computed(() => [
   { label: 'Vector layers', value: systemStore.stats?.vector_layers ?? 0 },
@@ -154,8 +216,11 @@ async function svcAction(name, action) {
 }
 
 onMounted(() => {
-  systemStore.refreshHealth()
-  systemStore.refreshStats()
+  // Health/stats endpoints are admin-only server-side — don't fire doomed requests as editor/viewer.
+  if (auth.isAdmin) {
+    systemStore.refreshHealth()
+    systemStore.refreshStats()
+  }
 })
 
 async function reloadMartin() {
