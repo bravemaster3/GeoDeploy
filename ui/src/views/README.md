@@ -7,7 +7,9 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 - `Layout.vue` — authenticated shell: dark sidebar nav (Data / Portals / Templates / [Users] /
   Settings — the Users entry appears only for admin/owner via the `nav` computed), logout,
   `<RouterView>` for the page body.
-- `Login.vue` — email/password → `auth.loginUser`.
+- `Login.vue` — email/password → `auth.loginUser`; offers **"Forgot password?"** (inline email form
+  → `POST /auth/forgot-password`, always the same "if it exists, a link was sent" outcome) ONLY when
+  `/setup/status` reports `email_enabled` (C-08a).
 - `Users.vue` — **admin Users screen (RBAC A-01, route `/users`, `meta.requiresAdmin`)**: Members +
   Pending invitations section cards; invite modal. Components in `components/users/` (see its README).
 - `AcceptInvite.vue` / `ResetPassword.vue` — PUBLIC token-link pages (`/accept-invite?token=`,
@@ -32,6 +34,8 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 - Raster layer `bbox` from the API is in source CRS (not lon/lat) — using it directly for `fitToBbox` can throw "Invalid LngLat" (see tasks/raster notes). Prefer zooming via vector bounds or TiTiler TileJSON.
 
 ## Last updated
+2026-07-16 (C-08a: Login forgot-password; Settings → Email section — optional generic SMTP with
+provider recipes + test-send; email is additive, copy links always remain)
 2026-07-16 (RBAC A-01: Users/AcceptInvite/ResetPassword views; role-aware nav + router guards
 (`requiresAdmin` on /users, `requiresEditor` on the portal editor); `v-if auth.canEdit` sweep on
 mutating controls in DataManager/PortalBuilder; created-by chips + client-side creator filter;

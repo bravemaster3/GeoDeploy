@@ -53,8 +53,10 @@ Highlights beyond the Cloud spine, captured as tracked items:
   print, download, swipe, share, filter, geolocate, saved views…), with the build-heavier measure +
   print/PDF tools broken out as `V-09`. The shipped area-clip download (`F-06`) becomes the first
   registered tool.
-- **Transactional email & export notifications** (`C-08`) — Resend-powered "your download is ready"
-  emails for queued exports once usage grows, reusing the same channel for invites, resets and receipts.
+- **Transactional email & export notifications** (`C-08`) — **building**: the invite/password-reset
+  half shipped 2026-07-16 as **optional generic SMTP** (any provider — Resend, Brevo, an institutional
+  relay; copy-link delivery always remains the fallback), including login-page "Forgot password?".
+  Remaining: "your download is ready" emails for queued exports and receipts.
 - **Template gallery & branding** (`V-10`) — visual template gallery + per-portal brand colours/logo
   (the look-and-feel half), with **structural layout templates** (`V-11`) as the separate,
   build-heavier half: floating right-hand layer list, basemap-picker placement, sidebar side,
@@ -113,6 +115,8 @@ When an item is delivered, the corresponding folder `README.md` gets the impleme
 roadmap only tracks *state*, not *how*.
 
 ## Last updated
+2026-07-16 — `C-08` flipped `future` → `building`: invite + password-reset email delivery shipped
+as optional generic SMTP (self-service "Forgot password?" included); export notifications remain.
 2026-07-16 — `A-01` Multi-user & RBAC flipped `next` → `building`: all 7 implementation phases
 committed (role ladder + single transferable owner, shared workspace, copy-link invitations, user
 CRUD with delete-reassign, password flows, role-aware UI; 45 backend tests pass). Frontier stays on

@@ -28,8 +28,16 @@ All HTTP endpoints. Every router is registered in `main.py` under the `/api` pre
   `DELETE /users/{id}` (**reassigns** the member's layers/portals/sources to the owner — nothing is
   destroyed; S3 keys/schema names are stored full-string so nothing physical moves), and
   `POST /users/{id}/reset-password-link` (24 h reset token; owner target requires owner caller).
-  Invite links are COPY-delivered (no email — `services/notifications.py` is the C-08 hook).
+  Invite/reset links are ALWAYS copy-deliverable; when SMTP is configured (C-08a) they are ALSO
+  emailed best-effort (`email_sent` flag in the response; a relay failure never fails the operation).
 - `common.py` — `visible_to()` (the A-02 seam) + `creator_names()` shared by the resource routers.
+- **Outgoing email (C-08a, 2026-07-16)** — generic SMTP via `services/notifications.py` (stdlib,
+  any provider incl. Resend/Brevo through their SMTP endpoints), **strictly optional**: admin.py
+  `GET/PUT /admin/email-settings` (password write-only, never returned; blank keeps stored) +
+  `POST /admin/email-settings/test` (surfaces the relay's real error). PUBLIC
+  `POST /auth/forgot-password` always answers 202 identically (anti-enumeration; acts only when the
+  user exists AND email is configured; nginx zone `pwreset` 3r/m); `/setup/status` exposes
+  `email_enabled` so the login page knows whether to offer "Forgot password?".
 - `setup.py` — first-run wizard: `/setup/status`, `/setup/configure-db`, `/setup/configure-storage`, `/setup/create-admin`. Provisions PostGIS/MinIO (via `services.postgis`/`services.minio`), then `_write_env()` persists creds to `.env` and `_apply_to_process()` pushes them into `os.environ`, clears the settings cache, and restarts the celery container. **`_write_env` also writes `TITILER_S3_ENDPOINT`** (scheme-stripped), **`TITILER_AWS_HTTPS`** (YES for an https/external S3, NO for local MinIO), and **`POSTGIS_SSLMODE`** (`prefer` for external DB, empty for local). External storage recreates TiTiler via `minio.restart_titiler`; Martin is a core always-on service so external DB needs nothing special at setup. `_write_env` also persists **`COMPOSE_PROFILES`** (`local-db`/`local-storage`) so `docker compose up` (install/update) keeps the wizard-provisioned local postgres/minio managed instead of orphan-removing them.
 - `auth.py` — `/auth/login` (OAuth2 password form → JWT, 7-day expiry) and `/auth/me` (now returns
   `role`). Bcrypt via passlib. **RBAC additions (2026-07-16):** PUBLIC `GET /auth/invitations/{token}`
