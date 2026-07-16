@@ -35,40 +35,10 @@
     return;
   }
 
-  if (ACCESS_TYPE !== 'password' || !PASSWORD_SHA256) return;
-
-  // Check session storage for already-verified session
-  const CACHE_KEY = 'gd_auth_' + location.pathname;
-  if (sessionStorage.getItem(CACHE_KEY) === PASSWORD_SHA256) return;
-
-  gate.style.display = 'flex';
-  sub.textContent = 'Enter the password to view this portal.';
-
-  async function sha256hex(str) {
-    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
-    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
-  }
-
-  async function tryUnlock() {
-    const val = document.getElementById('access-gate-input').value;
-    if (!val) return;
-    const hash = await sha256hex(val);
-    if (hash === PASSWORD_SHA256) {
-      sessionStorage.setItem(CACHE_KEY, hash);
-      gate.style.display = 'none';
-    } else {
-      const err = document.getElementById('access-gate-error');
-      err.textContent = 'Incorrect password.';
-      setTimeout(() => { err.textContent = ''; }, 3000);
-    }
-  }
-
-  document.getElementById('access-gate-btn').addEventListener('click', tryUnlock);
-  document.getElementById('access-gate-input').addEventListener('keydown', e => {
-    if (e.key === 'Enter') tryUnlock();
-  });
-  // Auto-focus after next tick so the gate is visible
-  setTimeout(() => document.getElementById('access-gate-input').focus(), 50);
+  // 'password' portals are enforced SERVER-SIDE now: nginx won't serve this bundle at all until the
+  // visitor entered the password on /portal-gate (which set the per-portal unlock cookie). So by the
+  // time this runs, access is already granted — nothing to do. (The old client-side sha256 gate was
+  // bypassable via view-source and is gone; PASSWORD_SHA256 is retained only for older bundles.)
 })();
 
 // ──────────────────────────────────────────────────────────

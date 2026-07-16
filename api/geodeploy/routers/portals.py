@@ -1,8 +1,10 @@
 import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
+from jose import JWTError, jwt
+from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +19,28 @@ from .common import creator_names
 from .data.vector import invalidate_public_layers
 
 router = APIRouter(prefix="/portals", tags=["portals"])
+_pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+def _unlock_cookie_name(portal_id: int) -> str:
+    return f"gd_pu_{portal_id}"  # per-portal so unlocking one doesn't clobber another
+
+
+def _make_unlock_token(portal_id: int) -> str:
+    """Signed proof that the correct password was entered for this portal (7-day expiry)."""
+    payload = {"pu": portal_id, "exp": datetime.now(timezone.utc) + timedelta(days=7)}
+    return jwt.encode(payload, get_settings().secret_key, algorithm="HS256")
+
+
+def _is_unlocked(request: Request, portal_id: int) -> bool:
+    token = request.cookies.get(_unlock_cookie_name(portal_id))
+    if not token:
+        return False
+    try:
+        payload = jwt.decode(token, get_settings().secret_key, algorithms=["HS256"])
+        return int(payload.get("pu")) == portal_id
+    except (JWTError, TypeError, ValueError):
+        return False
 
 
 async def _new_slug(db: AsyncSession) -> str:
@@ -121,8 +145,11 @@ async def portal_authz(request: Request, db: AsyncSession = Depends(get_db)):
     portal = (await db.execute(select(Portal).where(Portal.slug == slug))).scalar_one_or_none()
     if not portal or not portal.published:
         return Response(status_code=200)  # SPA route (by numeric id) or a missing bundle → nginx 404s
-    if portal.access_type in ("public", "password"):
-        return Response(status_code=200)  # public served; password verified client-side (see above)
+    if portal.access_type == "public":
+        return Response(status_code=200)
+    if portal.access_type == "password":
+        # Served only once the correct password minted the per-portal unlock cookie (POST /unlock).
+        return Response(status_code=200 if _is_unlocked(request, portal.id) else 401)
     # Login-based tiers: organization (any member) | owner (creator + admins). Legacy 'private' == org.
     user = await resolve_cookie_user(request, db)
     if user is None:
@@ -131,6 +158,37 @@ async def portal_authz(request: Request, db: AsyncSession = Depends(get_db)):
             user.id == portal.user_id or user.role in ("admin", "owner")):
         return Response(status_code=403)
     return Response(status_code=200)
+
+
+class PortalUnlock(BaseModel):
+    password: str
+
+
+@router.get("/{slug}/gate")
+async def portal_gate_info(slug: str, db: AsyncSession = Depends(get_db)):
+    """PUBLIC: minimal info the /portal-gate page needs to render the right prompt (a password box
+    for a password portal, or a 'sign in' hand-off for the login tiers). By slug like the bundle."""
+    portal = (await db.execute(select(Portal).where(Portal.slug == slug))).scalar_one_or_none()
+    if not portal or not portal.published:
+        raise HTTPException(404, "Portal not found.")
+    return {"access_type": portal.access_type, "title": portal.title}
+
+
+@router.post("/{slug}/unlock", status_code=204)
+async def portal_unlock(slug: str, body: PortalUnlock, request: Request,
+                        db: AsyncSession = Depends(get_db)):
+    """PUBLIC: verify a password portal's password server-side and mint the per-portal unlock cookie
+    that the access gate (authz) checks. Wrong password → 401. Only valid for password portals."""
+    portal = (await db.execute(select(Portal).where(Portal.slug == slug))).scalar_one_or_none()
+    if not portal or not portal.published or portal.access_type != "password":
+        raise HTTPException(404, "Portal not found.")
+    if not portal.access_password_hash or not _pwd.verify(body.password, portal.access_password_hash):
+        raise HTTPException(401, "Incorrect password.")
+    resp = Response(status_code=204)
+    secure = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+    resp.set_cookie(_unlock_cookie_name(portal.id), _make_unlock_token(portal.id),
+                    max_age=7 * 24 * 3600, httponly=True, samesite="lax", secure=secure, path="/")
+    return resp
 
 
 @router.get("/{portal_id}", response_model=PortalOut)

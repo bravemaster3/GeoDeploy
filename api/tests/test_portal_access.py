@@ -25,6 +25,9 @@ def _token(uid):
     return jwt.encode({"sub": str(uid)}, get_settings().secret_key, algorithm="HS256")
 
 
+PORTAL_PASSWORD = "s3cret"
+
+
 async def _seed(db):
     for uid, role in _ROLE.items():
         db.add(User(id=uid, email=f"u{uid}@example.com", name=f"U{uid}",
@@ -33,7 +36,8 @@ async def _seed(db):
     for pid, slug, access in ((10, "pubp", "public"), (11, "pwdp", "password"),
                               (12, "orgp", "organization"), (13, "ownp", "owner")):
         db.add(Portal(id=pid, user_id=EDITOR, title=slug, slug=slug, access_type=access,
-                      published=True, layer_configs=json.dumps([])))
+                      published=True, layer_configs=json.dumps([]),
+                      access_password_hash=_pwd.hash(PORTAL_PASSWORD) if access == "password" else None))
     await db.commit()
 
 
@@ -43,12 +47,17 @@ async def _authz(client, uri, token=None):
     return await client.get("/api/portals/authz", headers=headers, cookies=cookies)
 
 
-# ── Open tiers + non-portal paths always allow ────────────────────────────────────────────────
+# ── Open + non-portal paths allow; password is now gated ──────────────────────────────────────
 
-@pytest.mark.parametrize("slug", ["pubp", "pwdp"])
-async def test_public_and_password_allow_without_cookie(client, db, slug):
+async def test_public_allows_without_cookie(client, db):
     await _seed(db)
-    assert (await _authz(client, f"/portals/{slug}/")).status_code == 200
+    assert (await _authz(client, "/portals/pubp/")).status_code == 200
+
+
+async def test_password_denied_until_unlocked(client, db):
+    await _seed(db)
+    # Server-side now: a password portal is NOT served without the unlock cookie.
+    assert (await _authz(client, "/portals/pwdp/")).status_code == 401
 
 
 async def test_unknown_and_spa_paths_allow(client, db):
@@ -107,3 +116,38 @@ async def test_logout_clears_session_cookie(client, db):
     assert r.status_code == 204
     # Set-Cookie with an empty/expired value
     assert SESSION_COOKIE in r.headers.get("set-cookie", "")
+
+
+# ── Password portals: server-side unlock (password → per-portal cookie) ────────────────────────
+
+async def test_gate_info_is_public(client, db):
+    await _seed(db)
+    r = await client.get("/api/portals/pwdp/gate")
+    assert r.status_code == 200 and r.json()["access_type"] == "password"
+    assert (await client.get("/api/portals/nope/gate")).status_code == 404
+
+
+async def test_unlock_wrong_password_401(client, db):
+    await _seed(db)
+    r = await client.post("/api/portals/pwdp/unlock", json={"password": "nope"})
+    assert r.status_code == 401
+
+
+async def test_unlock_then_authz_allows(client, db):
+    await _seed(db)
+    r = await client.post("/api/portals/pwdp/unlock", json={"password": PORTAL_PASSWORD})
+    assert r.status_code == 204
+    assert r.cookies.get("gd_pu_11")   # per-portal unlock cookie (portal id 11)
+
+    async def authz():   # the client now carries the unlock cookie in its jar
+        return await client.get("/api/portals/authz", headers={"X-Original-URI": "/portals/pwdp/"})
+
+    assert (await authz()).status_code == 200      # unlocked → allowed
+    client.cookies.clear()
+    assert (await authz()).status_code == 401      # without the cookie → denied again
+
+
+async def test_unlock_rejects_non_password_portal(client, db):
+    await _seed(db)
+    assert (await client.post("/api/portals/orgp/unlock",
+                              json={"password": "x"})).status_code == 404

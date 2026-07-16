@@ -7,6 +7,7 @@ const routes = [
   { path: '/login', component: () => import('@/views/Login.vue'), meta: { public: true } },
   { path: '/accept-invite', component: () => import('@/views/AcceptInvite.vue'), meta: { public: true } },
   { path: '/reset-password', component: () => import('@/views/ResetPassword.vue'), meta: { public: true } },
+  { path: '/portal-gate', component: () => import('@/views/PortalGate.vue'), meta: { public: true } },
   {
     path: '/',
     component: () => import('@/views/Layout.vue'),
