@@ -2,14 +2,14 @@ import json
 import os
 import uuid
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..database import get_db
-from ..deps import get_current_user, require_editor
+from ..deps import get_current_user, require_editor, resolve_cookie_user
 from ..models import ExternalSource, Portal, RasterLayer, User, VectorLayer
 from ..schemas import PortalCreate, PortalOut, PortalUpdate
 from ..services.portal_generator import build_portal_bundle, generate_style
@@ -101,6 +101,36 @@ async def create_portal(req: PortalCreate, user: User = Depends(require_editor),
     await db.commit()
     await db.refresh(portal)
     return PortalOut.from_orm_json(portal)
+
+
+@router.get("/authz")
+async def portal_authz(request: Request, db: AsyncSession = Depends(get_db)):
+    """nginx `auth_request` target for the SERVER-SIDE published-portal access gate. Returns 200
+    (allow) or 401/403 (deny) — nginx serves the static bundle only on a 2xx. Allows public/password
+    portals, SPA routes, and unknown slugs; enforces the login-based tiers (organization / owner)
+    against the session COOKIE. Declared before `/{portal_id}` so this static path wins the match.
+
+    Password stays a client-side gate for now (there's no login for a password visitor — a
+    server-side version needs a password→cookie unlock flow; tracked as a follow-up)."""
+    # nginx forwards the ORIGINAL request path as X-Original-URI; fall back to our own path in tests.
+    uri = request.headers.get("x-original-uri") or request.url.path
+    parts = [p for p in uri.split("?", 1)[0].split("/") if p]  # ['portals', <slug>, ...]
+    slug = parts[1] if len(parts) >= 2 and parts[0] == "portals" else None
+    if not slug:
+        return Response(status_code=200)  # /portals/ list route — the SPA handles it
+    portal = (await db.execute(select(Portal).where(Portal.slug == slug))).scalar_one_or_none()
+    if not portal or not portal.published:
+        return Response(status_code=200)  # SPA route (by numeric id) or a missing bundle → nginx 404s
+    if portal.access_type in ("public", "password"):
+        return Response(status_code=200)  # public served; password verified client-side (see above)
+    # Login-based tiers: organization (any member) | owner (creator + admins). Legacy 'private' == org.
+    user = await resolve_cookie_user(request, db)
+    if user is None:
+        return Response(status_code=401)
+    if portal.access_type == "owner" and not (
+            user.id == portal.user_id or user.role in ("admin", "owner")):
+        return Response(status_code=403)
+    return Response(status_code=200)
 
 
 @router.get("/{portal_id}", response_model=PortalOut)

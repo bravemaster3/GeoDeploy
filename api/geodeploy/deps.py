@@ -55,6 +55,24 @@ require_admin = require_role("admin")   # admin OR owner
 require_owner = require_role("owner")
 
 
+# Name of the HttpOnly session cookie set at login (in ADDITION to the localStorage token the SPA
+# uses for its XHR Authorization header). The cookie exists solely so a top-level browser navigation
+# to a published portal carries credentials — an <a href="/portals/…"> GET can't send an Authorization
+# header, but it does send cookies. Consumed by the portal `auth_request` (server-side access gate).
+SESSION_COOKIE = "gd_session"
+
+
+async def _user_from_token(token: str | None, db: AsyncSession) -> User | None:
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, get_settings().secret_key, algorithms=["HS256"])
+        uid = int(payload.get("sub"))
+    except (JWTError, TypeError, ValueError):
+        return None
+    return (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+
+
 async def resolve_bearer_user(request: Request, db: AsyncSession) -> User | None:
     """Best-effort user resolution from a raw Authorization header (no dependency wiring).
 
@@ -64,11 +82,10 @@ async def resolve_bearer_user(request: Request, db: AsyncSession) -> User | None
     """
     auth = request.headers.get("Authorization", "")
     token = auth[7:].strip() if auth[:7].lower() == "bearer " else None
-    if not token:
-        return None
-    try:
-        payload = jwt.decode(token, get_settings().secret_key, algorithms=["HS256"])
-        uid = int(payload.get("sub"))
-    except (JWTError, TypeError, ValueError):
-        return None
-    return (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
+    return await _user_from_token(token, db)
+
+
+async def resolve_cookie_user(request: Request, db: AsyncSession) -> User | None:
+    """Best-effort user resolution from the session COOKIE (see SESSION_COOKIE). Powers the portal
+    access gate's nginx auth_request, where the credential arrives as a cookie, not a header."""
+    return await _user_from_token(request.cookies.get(SESSION_COOKIE), db)

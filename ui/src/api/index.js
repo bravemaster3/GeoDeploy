@@ -33,6 +33,10 @@ export const login = (email, password) =>
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
   })
 export const getMe = () => api.get('/auth/me')
+// Mirror the Bearer token into the HttpOnly session cookie the published-portal access gate reads
+// (top-level portal navigations can't send an Authorization header). Idempotent; cleared on logout.
+export const syncSession = () => api.post('/auth/session')
+export const logoutSession = () => api.post('/auth/logout')
 export const changePassword = (data) => api.put('/auth/password', data)
 export const forgotPassword = (email) => api.post('/auth/forgot-password', { email })
 // Public invitation/reset flows (token IS the credential — no auth header needed)

@@ -86,10 +86,17 @@ deliberately NOT visibility-filtered (published portals depend on them).
   public-by-id regardless (published portals need them).
 - **Portal published access** (`PUT /portals/{id}` `access_type`): `public` | `password` |
   `organization` (any signed-in member) | `owner` (creator + admins). Legacy `private`==organization,
-  migrated away in main.py. The gate lives CLIENT-SIDE in `templates/shared/portal.js` (checks
-  `/api/auth/me`; `owner` tier also checks the baked `OWNER_ID`/role) — **server-side enforcement is a
-  queued follow-up**. Portals have NO workspace `visibility` (dropped 2026-07-16; `_get_portal` is
-  id-only, all portals workspace-visible).
+  migrated away in main.py. Portals have NO workspace `visibility` (dropped 2026-07-16; `_get_portal`
+  is id-only, all portals workspace-visible).
+- **Server-side portal gate** (`GET /portals/authz`, declared BEFORE `/{portal_id}`): the nginx
+  `auth_request` target for `location /portals/`. Returns 200 (allow) / 401 / 403 from the portal's
+  `access_type` + the **session cookie** (`deps.SESSION_COOKIE` = `gd_session`, resolved by
+  `resolve_cookie_user`): public/password/SPA-routes/unknown-slugs → 200; organization → any member;
+  owner → creator or admin/owner. nginx bounces a deny to `/login?next=…`. The cookie is set by
+  `/auth/login` + `/auth/invitations/{token}/accept`, mirrored for existing sessions by
+  `POST /auth/session` (the SPA calls it in `fetchMe`), and cleared by `POST /auth/logout`. Password
+  is still verified client-side (no login for a password visitor — a password→cookie unlock is a
+  possible follow-up). `portal.js`'s gate remains as a friendly fallback.
 - `data/raster.py` also: **`GET /{layer_id}/cog`** — **PUBLIC** HTTP-Range proxy for the layer's COG,
   **only when `is_public`** (404 otherwise). This is the "WCS replacement": full pixel access in
   QGIS/GDAL via `/vsicurl/https://host/api/data/raster/{id}/cog`, and a direct-download URL.

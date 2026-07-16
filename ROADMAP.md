@@ -120,6 +120,12 @@ When an item is delivered, the corresponding folder `README.md` gets the impleme
 roadmap only tracks *state*, not *how*.
 
 ## Last updated
+2026-07-16 — **portal access enforced SERVER-SIDE** (was client-side): nginx `auth_request` →
+`GET /api/portals/authz` validates a `gd_session` HttpOnly cookie against the portal's `access_type`
+before the static bundle is served (organization = any member, owner = creator + admins; a deny
+bounces to `/login?next=`). Login/accept set the cookie; the SPA mirrors existing sessions via
+`POST /auth/session`. Password stays a client-side gate. Also added `V-12` **Responsive layouts
+(mobile/tablet)** (planned). 80 backend tests pass.
 2026-07-16 — `A-01` Multi-user & RBAC flipped `building` → **shipped** (user sign-off); **frontier
 moves to `A-02`**. Portals dropped the confusing workspace-visibility control in favor of a 4-tier
 published-access model (public / password / organization / private = creator + admins); the legacy

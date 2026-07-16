@@ -55,11 +55,12 @@
 
 <script setup>
 import { onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { forgotPassword, getSetupStatus } from '@/api'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
 const email = ref('')
 const password = ref('')
@@ -81,7 +82,15 @@ async function submit() {
   busy.value = true
   try {
     await auth.loginUser(email.value, password.value)
-    router.push('/data')
+    // A gated portal bounced the visitor here with ?next=/portals/…; send them back with a FULL
+    // navigation (the portal is a static bundle, not an SPA route) now that the cookie is set.
+    // Only same-origin /portals/ paths are honored (no open redirect).
+    const next = route.query.next
+    if (typeof next === 'string' && next.startsWith('/portals/')) {
+      window.location.assign(next)
+    } else {
+      router.push('/data')
+    }
   } catch {
     error.value = 'Invalid email or password.'
   } finally {
