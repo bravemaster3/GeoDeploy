@@ -16,7 +16,7 @@ Examples:
     python geodeploy_cli.py layers
     python geodeploy_cli.py upload roads.gpkg --poll
     python geodeploy_cli.py portals
-    python geodeploy_cli.py portal-get 3 > portal3.json   # dump editable config (incl. layer_configs styles)
+    python geodeploy_cli.py portal-get 3 portal3.json     # dump editable config (incl. layer_configs styles)
     python geodeploy_cli.py portal-set 3 portal3.json      # push edits back
     python geodeploy_cli.py publish 3
 
@@ -67,11 +67,17 @@ def portals(_):
 
 
 def portal_get(args):
-    _print(_call("GET", f"/portals/{args.id}").json())
+    data = _call("GET", f"/portals/{args.id}").json()
+    if args.out:  # write clean UTF-8 ourselves (PowerShell's `>` writes UTF-16+BOM, which breaks portal-set)
+        with open(args.out, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        print(f"wrote {args.out}", file=sys.stderr)
+    else:
+        _print(data)  # stdout — capture with `> file.json` on bash/WSL (UTF-8), or pass an outfile above
 
 
 def portal_set(args):
-    with open(args.config, encoding="utf-8") as f:
+    with open(args.config, encoding="utf-8-sig") as f:  # utf-8-sig tolerates a BOM from any editor/shell
         body = json.load(f)
     _print(_call("PUT", f"/portals/{args.id}", json=body).json())
 
@@ -116,8 +122,9 @@ def main():
     lp.set_defaults(func=layers)
     sub.add_parser("portals", help="list portals").set_defaults(func=portals)
 
-    gp = sub.add_parser("portal-get", help="dump a portal's editable config")
+    gp = sub.add_parser("portal-get", help="dump a portal's editable config (to stdout, or to a file)")
     gp.add_argument("id", type=int)
+    gp.add_argument("out", nargs="?", help="optional output file (written as UTF-8); omit to print to stdout")
     gp.set_defaults(func=portal_get)
     spp = sub.add_parser("portal-set", help="PUT a portal config from a JSON file")
     spp.add_argument("id", type=int)

@@ -28,7 +28,7 @@ create / edit / publish portals — the same API the dashboard uses, no browser 
    python geodeploy_cli.py whoami
    python geodeploy_cli.py upload roads.gpkg --poll     # needs data:write
    python geodeploy_cli.py portals
-   python geodeploy_cli.py portal-get 3 > portal3.json  # editable config incl. layer_configs styles
+   python geodeploy_cli.py portal-get 3 portal3.json    # editable config incl. layer_configs styles
    #   …edit portal3.json (layers, symbology, template, access_type)…
    python geodeploy_cli.py portal-set 3 portal3.json    # needs portal:write
    python geodeploy_cli.py publish 3                    # needs portal:publish
