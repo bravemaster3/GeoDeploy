@@ -343,6 +343,9 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
         if base_src_id and base_src_id in full_style["sources"]:
             full_style["sources"][base_src_id]["tiles"] = bm["tiles"]
             full_style["sources"][base_src_id]["attribution"] = bm["attribution"]
+            # The builtin base layer NOW shows the chosen basemap, so portal.js must NOT swap it for the
+            # catalog copy on load (that redundant swap is a visible flash). See setupBasemaps.
+            full_style["geodeploy"]["baseRepointed"] = True
         full_style["geodeploy"]["defaultBasemap"] = bm["id"]
 
     # Standalone documentation page (GeoNode-style "full page that links to the map") — written

@@ -1774,6 +1774,9 @@
   const RAW_DEFAULT = ((STYLE.geodeploy || {}).defaultBasemap) || null;
   const HAS_DEFAULT_ENTRY = !RAW_DEFAULT;           // show a "Default" (template) option for old portals
   const DEFAULT_BASEMAP = RAW_DEFAULT || '__default__';
+  // When publish repointed the builtin base layer to the chosen basemap, it ALREADY shows it on load —
+  // swapping to the catalog copy in setupBasemaps would just flash. Skip that initial swap then.
+  const BASE_REPOINTED = !!((STYLE.geodeploy || {}).baseRepointed);
   // Switcher options: catalog entries, plus a leading "Default" (the template's baked base) when the
   // portal didn't pick a basemap.
   const BASEMAP_OPTS = HAS_DEFAULT_ENTRY
@@ -1795,7 +1798,10 @@
         map.addLayer({ id: srcId, type: 'raster', source: srcId, layout: { visibility: 'none' } }, firstId);
       }
     });
-    selectBasemap(DEFAULT_BASEMAP);  // drive the switcher layer (or keep the baked builtin for '__default__')
+    // The builtin already shows the right basemap when publish repointed it — swapping to the catalog
+    // copy here is a redundant, visible flash. Only drive selectBasemap when NOT repointed (a vector
+    // template whose base couldn't be repointed, or the '__default__' no-op for pre-basemap portals).
+    if (!BASE_REPOINTED) selectBasemap(DEFAULT_BASEMAP);
     map.addControl(new BasemapControl(), 'top-right');
     map.addControl(new ToolsControl(), 'top-right');
   }

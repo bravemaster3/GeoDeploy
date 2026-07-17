@@ -455,19 +455,28 @@ function onAccessDocClick(e) {
 }
 onBeforeUnmount(closeAccess)
 
-const { map, loaded, applyStyle, fitToBbox, jumpTo, addTopRightControlFirst } = useMaplibre('portal-preview-map')
+// Mount BLANK (no basemap) so the preview never shows the OSM default before the chosen basemap —
+// the first paint (gated on `ready` below) is already the chosen basemap + layers.
+const { map, loaded, applyStyle, fitToBbox, jumpTo, addTopRightControlFirst } =
+  useMaplibre('portal-preview-map', { version: 8, sources: {}, layers: [] })
 
 // Admin-pinned view (center/zoom) for the published portal; null = fit to all layers.
 const savedView = ref(null)
+// Gates the first preview build until the portal + its data + the basemap catalog are all loaded, so
+// the map paints ONCE (chosen basemap + layers) instead of flashing through several applyStyle calls.
+const ready = ref(false)
 
 onMounted(async () => {
-  // Fetch the shared basemap catalog (single source of truth); replaces the inline bootstrap list.
-  // Non-fatal — the bootstrap list keeps the picker working if this fails.
-  listBasemaps().then(({ data }) => {
-    if (Array.isArray(data) && data.length) basemapCatalog.value = data
-  }).catch(() => { /* keep the bootstrap fallback */ })
-
-  await Promise.all([portalsStore.refresh(), dataStore.refresh()])
+  // Load the portal, its data, AND the basemap catalog (single source of truth — replaces the inline
+  // bootstrap list) BEFORE flipping `ready`, so the first preview build already knows the chosen
+  // basemap's final tiles. Catalog fetch is non-fatal — the bootstrap list keeps the picker working.
+  await Promise.all([
+    portalsStore.refresh(),
+    dataStore.refresh(),
+    listBasemaps().then(({ data }) => {
+      if (Array.isArray(data) && data.length) basemapCatalog.value = data
+    }).catch(() => { /* keep the bootstrap fallback */ }),
+  ])
   portal.value = portalsStore.portals.find(p => p.id === parseInt(route.params.id))
   if (portal.value) {
     layerConfigs.value = portal.value.layer_configs || []
@@ -480,6 +489,7 @@ onMounted(async () => {
     savedView.value = portal.value.initial_view || null
     description.value = portal.value.description || ''
   }
+  ready.value = true  // inputs set → the watcher may now build the preview (once, on the chosen basemap)
   const { data } = await listTemplates()
   templates.value = data
 })
@@ -780,14 +790,19 @@ async function onPreviewClick(e) {
 // the FIRST build (restore the saved view, else fit to all layers). After that, style
 // edits (band/colour/etc.) must NOT yank the view — setStyle keeps the current camera.
 let viewInitialized = false
+let lastStyleJson = ''  // last applied MapLibre style → skip redundant setStyle repaints (each = a flash)
 // When the catalog arrives from /api/basemaps (or changes), refresh the picker's list and, if the
 // chosen basemap's tiles differ, rebuild the preview.
 watch(basemapCatalog, () => basemapControl?.refresh())
 
-watch([layerConfigs, loaded, basemap, basemapCatalog], () => {
-  if (!loaded.value) return
+watch([layerConfigs, loaded, basemap, basemapCatalog, ready], () => {
+  if (!loaded.value || !ready.value) return
   const { style, bounds } = buildPreviewStyle()
-  applyStyle(style)
+  // A setStyle repaint is a visible flash; only apply when the style actually changed (e.g. the
+  // /api/basemaps catalog resolving to the same tiles produces an identical style — skip it). Deck
+  // layers live outside the MapLibre style, so refreshDeck runs regardless.
+  const json = JSON.stringify(style)
+  if (json !== lastStyleJson) { lastStyleJson = json; applyStyle(style) }
   refreshDeck(false)  // rebuild deck layers (fetch only newly-appeared geoparquet layers)
   if (!viewInitialized) {
     if (savedView.value) { jumpTo(savedView.value); viewInitialized = true }
