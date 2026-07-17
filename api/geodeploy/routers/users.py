@@ -14,8 +14,8 @@ from sqlalchemy import delete as sa_delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..deps import require_admin, require_owner
-from ..models import ExternalSource, Invitation, Portal, RasterLayer, User, VectorLayer
+from ..deps import require_owner, require_scope
+from ..models import ApiToken, ExternalSource, Invitation, Portal, RasterLayer, User, VectorLayer
 from ..schemas import InvitationOut, InviteCreate, RoleUpdate, UserAdminOut
 from ..services import notifications
 
@@ -61,7 +61,7 @@ async def _get_user(user_id: int, db: AsyncSession) -> User:
 # ── Members ───────────────────────────────────────────────────────────────────────────────────
 
 @router.get("", response_model=list[UserAdminOut])
-async def list_users(_: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+async def list_users(_: User = Depends(require_scope("users:admin")), db: AsyncSession = Depends(get_db)):
     users = (await db.execute(select(User).order_by(User.created_at))).scalars().all()
 
     async def _counts(model):
@@ -84,7 +84,7 @@ async def list_users(_: User = Depends(require_admin), db: AsyncSession = Depend
 
 @router.put("/{user_id}/role", response_model=UserAdminOut)
 async def update_role(user_id: int, body: RoleUpdate,
-                      caller: User = Depends(require_admin),
+                      caller: User = Depends(require_scope("users:admin")),
                       db: AsyncSession = Depends(get_db)):
     target = await _get_user(user_id, db)
     if target.role == "owner":
@@ -120,7 +120,7 @@ async def transfer_ownership(user_id: int,
 
 @router.delete("/{user_id}", status_code=204)
 async def delete_user(user_id: int,
-                      caller: User = Depends(require_admin),
+                      caller: User = Depends(require_scope("users:admin")),
                       db: AsyncSession = Depends(get_db)):
     """Delete a member. Their layers/portals/sources are REASSIGNED to the workspace owner —
     nothing is destroyed and published portals keep working (S3 keys + schema names are stored
@@ -140,6 +140,8 @@ async def delete_user(user_id: int,
                      .values(invited_by=heir.id))
     # Their pending password-reset links must die with the account.
     await db.execute(sa_delete(Invitation).where(Invitation.user_id == target.id))
+    # Their API tokens (A-03) must die too — the FK to users.id would otherwise block the delete.
+    await db.execute(sa_delete(ApiToken).where(ApiToken.user_id == target.id))
     await db.delete(target)
     await db.commit()
 
@@ -147,7 +149,7 @@ async def delete_user(user_id: int,
 # ── Invitations ───────────────────────────────────────────────────────────────────────────────
 
 @router.get("/invitations", response_model=list[InvitationOut])
-async def list_invitations(_: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+async def list_invitations(_: User = Depends(require_scope("users:admin")), db: AsyncSession = Depends(get_db)):
     """Pending (unused, unexpired) signup invitations. Tokens are hashes server-side and are
     NOT recoverable here — use regenerate to mint a fresh link."""
     rows = (await db.execute(
@@ -160,7 +162,7 @@ async def list_invitations(_: User = Depends(require_admin), db: AsyncSession = 
 
 @router.post("/invitations", response_model=InvitationOut, status_code=201)
 async def create_invitation(body: InviteCreate, request: Request,
-                            caller: User = Depends(require_admin),
+                            caller: User = Depends(require_scope("users:admin")),
                             db: AsyncSession = Depends(get_db)):
     email = body.email.lower().strip()
     existing = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
@@ -185,7 +187,7 @@ async def create_invitation(body: InviteCreate, request: Request,
 
 @router.post("/invitations/{invitation_id}/regenerate", response_model=InvitationOut)
 async def regenerate_invitation(invitation_id: int,
-                                _: User = Depends(require_admin),
+                                _: User = Depends(require_scope("users:admin")),
                                 db: AsyncSession = Depends(get_db)):
     inv = (await db.execute(select(Invitation).where(
         Invitation.id == invitation_id, Invitation.purpose == "invite"))).scalar_one_or_none()
@@ -203,7 +205,7 @@ async def regenerate_invitation(invitation_id: int,
 
 @router.delete("/invitations/{invitation_id}", status_code=204)
 async def revoke_invitation(invitation_id: int,
-                            _: User = Depends(require_admin),
+                            _: User = Depends(require_scope("users:admin")),
                             db: AsyncSession = Depends(get_db)):
     inv = (await db.execute(select(Invitation).where(
         Invitation.id == invitation_id))).scalar_one_or_none()
@@ -217,7 +219,7 @@ async def revoke_invitation(invitation_id: int,
 
 @router.post("/{user_id}/reset-password-link", response_model=InvitationOut)
 async def create_reset_link(user_id: int, request: Request,
-                            caller: User = Depends(require_admin),
+                            caller: User = Depends(require_scope("users:admin")),
                             db: AsyncSession = Depends(get_db)):
     target = await _get_user(user_id, db)
     if target.role == "owner" and caller.role != "owner":

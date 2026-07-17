@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...database import get_db
-from ...deps import get_current_user, require_editor
+from ...deps import require_scope
 from ...models import ExternalSource, User
 from ...schemas import ExternalSourceCreate, ExternalSourceOut, VisibilityUpdate
 from ...services import external_sources as ext
@@ -29,7 +29,7 @@ def _to_out(src: ExternalSource) -> ExternalSourceOut:
 
 
 @router.get("", response_model=list[ExternalSourceOut])
-async def list_sources(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def list_sources(user: User = Depends(require_scope("data:read")), db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(ExternalSource).where(visible_to(user, ExternalSource)).order_by(ExternalSource.created_at.desc())
     )
@@ -46,7 +46,7 @@ async def list_sources(user: User = Depends(get_current_user), db: AsyncSession 
 @router.post("", response_model=ExternalSourceOut, status_code=201)
 async def create_source(
     req: ExternalSourceCreate,
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     url = (req.url or "").strip()
@@ -94,7 +94,7 @@ async def create_source(
 async def save_sharing(
     source_id: int,
     body: VisibilityUpdate,
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     """Workspace visibility for an external source: private (creator + admins) | organization (all
@@ -112,7 +112,7 @@ async def save_sharing(
 
 
 @router.delete("/{source_id}", status_code=204)
-async def delete_source(source_id: int, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
+async def delete_source(source_id: int, user: User = Depends(require_scope("data:write")), db: AsyncSession = Depends(get_db)):
     src = (await db.execute(
         select(ExternalSource).where(ExternalSource.id == source_id, visible_to(user, ExternalSource))
     )).scalar_one_or_none()

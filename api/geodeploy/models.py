@@ -81,6 +81,31 @@ class Invitation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class ApiToken(Base):
+    """Scoped personal access token (A-03) — headless API access for scripts and the
+    GeoLibre/QGIS plugins.
+
+    Only the sha256 hash of the token is stored; the raw `gdp_…` string is returned once at
+    creation and cannot be recovered. The token authenticates as `user_id` (via the Bearer path
+    in deps.get_current_user), capped by `scopes` (space-separated; see deps.SCOPES) and never
+    above the owner's LIVE role — the role is re-read per request, so demotion/deletion applies
+    immediately. `prefix` (first 12 chars, e.g. `gdp_a1b2c3d4`) is shown in the UI for
+    identification. This is a NEW table → created by Base.metadata.create_all, no migration entry.
+    """
+    __tablename__ = "api_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    prefix: Mapped[str] = mapped_column(String(16), nullable=False)  # gdp_ + 8 chars, display only
+    scopes: Mapped[str] = mapped_column(Text, nullable=False, default="")  # space-separated
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)  # mandatory, ≤365d
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class VectorLayer(Base):
     __tablename__ = "vector_layers"
 

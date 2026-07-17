@@ -11,7 +11,7 @@ from slugify import slugify
 
 from ...config import get_settings
 from ...database import get_db
-from ...deps import get_current_user, require_editor
+from ...deps import require_scope
 from ...models import Portal, UploadJob, User, VectorLayer
 from ...schemas import DefaultStyle, JobStatus, SharingUpdate, VectorLayerOut
 from ...services import martin as martin_svc
@@ -81,7 +81,7 @@ async def _publicly_readable(layer, db: AsyncSession) -> bool:
 
 @router.get("", response_model=list[VectorLayerOut])
 async def list_layers(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("data:read")),
     db: AsyncSession = Depends(get_db),
 ):
     # Shared workspace: every member sees all layers (role gates WRITES, not reads).
@@ -100,7 +100,7 @@ async def list_layers(
 @router.post("/upload", response_model=JobStatus, status_code=202)
 async def upload_vector(
     file: UploadFile = File(...),
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     settings = get_settings()
@@ -164,7 +164,7 @@ async def upload_csv(
     srid: int = Form(4326),
     name: str | None = Form(None),
     delimiter: str = Form("comma"),
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     """Upload a CSV and build a PostGIS layer from it (queued, Celery): points from X/Y columns,
@@ -229,7 +229,7 @@ class GeoParquetComplete(BaseModel):
 @router.post("/geoparquet/presign")
 async def geoparquet_presign(
     body: GeoParquetPresign,
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
 ):
     """Step 1 of the GeoParquet upload: hand the browser a presigned PUT URL so it uploads the
     file DIRECTLY to object storage (no multi-GB passthrough of the API process/disk). The key
@@ -251,7 +251,7 @@ async def geoparquet_presign(
 @router.post("/geoparquet/complete", response_model=JobStatus, status_code=202)
 async def geoparquet_complete(
     body: GeoParquetComplete,
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     """Step 2: the browser has PUT the file to `s3_key`; register the layer and queue inspection
@@ -306,7 +306,7 @@ class LargeVectorComplete(BaseModel):
 @router.post("/large/presign")
 async def large_vector_presign(
     body: LargeVectorPresign,
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
 ):
     """Step 1 of the LARGE-vector upload (CSV / GeoJSON / GeoPackage / shapefile-zip too big to POST
     through the API): hand the browser a presigned PUT URL so it uploads the file DIRECTLY to
@@ -328,7 +328,7 @@ async def large_vector_presign(
 @router.post("/large/complete", response_model=JobStatus, status_code=202)
 async def large_vector_complete(
     body: LargeVectorComplete,
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     """Step 2: the browser has PUT the large file to `s3_key`; register a processing layer and queue
@@ -375,7 +375,7 @@ async def large_vector_complete(
 
 
 @router.get("/jobs/{job_id}", response_model=JobStatus)
-async def job_status(job_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+async def job_status(job_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(require_scope("data:read"))):
     result = await db.execute(select(UploadJob).where(UploadJob.id == job_id))
     job = result.scalar_one_or_none()
     if not job:
@@ -425,7 +425,7 @@ async def vector_features(
     layer_id: int,
     bbox: str | None = None,
     limit: int = 50000,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope("data:read")),
     db: AsyncSession = Depends(get_db),
 ):
     """Authed viewport query for the editor preview's deck.gl overlay."""
@@ -512,7 +512,7 @@ async def vector_identify(
 @router.post("/{layer_id}/tile", response_model=VectorLayerOut)
 async def tile_layer(
     layer_id: int,
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     """(Re)generate the PMTiles archive for a GeoParquet layer — used to tile a file uploaded
@@ -537,7 +537,7 @@ async def tile_layer(
 @router.post("/{layer_id}/prepare", response_model=VectorLayerOut)
 async def prepare_layer(
     layer_id: int,
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     """Spatially prepare a GeoParquet layer: rewrite it Z-order-sorted with a GeoParquet 1.1 bbox
@@ -562,7 +562,7 @@ async def prepare_layer(
 @router.post("/{layer_id}/reprocess", response_model=JobStatus, status_code=202)
 async def reprocess_layer(
     layer_id: int,
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     """Restart the background processing of a file-backed (GeoParquet) layer whose job stalled or
@@ -747,7 +747,7 @@ async def vector_parquet_object(layer_id: int, path: str, request: Request,
 async def save_sharing(
     layer_id: int,
     body: SharingUpdate,
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     """Data-sharing settings: set the workspace `visibility` (private | organization | public) plus
@@ -773,7 +773,7 @@ async def save_sharing(
 async def save_default_style(
     layer_id: int,
     body: DefaultStyle,
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     import json
@@ -791,7 +791,7 @@ async def save_default_style(
 @router.delete("/{layer_id}", status_code=204)
 async def delete_layer(
     layer_id: int,
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(

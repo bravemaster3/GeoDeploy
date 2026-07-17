@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Any
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 # ── Setup ────────────────────────────────────────────────────────────────────
@@ -92,6 +92,37 @@ class InvitationOut(BaseModel):
     email_sent: bool = False
 
     model_config = {"from_attributes": True}
+
+
+# ── API tokens (A-03) ────────────────────────────────────────────────────────
+
+class ApiTokenCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    scopes: list[str] = Field(min_length=1)   # validated against deps.SCOPES + role in the router
+    expires_in_days: int = 90                  # clamped to {30, 90, 365} in the router
+
+
+class ApiTokenOut(BaseModel):
+    id: int
+    name: str
+    prefix: str                # gdp_ + 8 chars — identifies the token; the secret is never returned
+    scopes: list[str]
+    expires_at: datetime
+    last_used_at: datetime | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+    @field_validator("scopes", mode="before")
+    @classmethod
+    def _split_scopes(cls, v):
+        # Stored space-separated on the model; expose as a list.
+        return v.split() if isinstance(v, str) else v
+
+
+class ApiTokenCreated(ApiTokenOut):
+    """Returned ONCE at creation — carries the raw `gdp_…` secret, which is never stored or listed."""
+    token: str
 
 
 class ForgotPasswordRequest(BaseModel):

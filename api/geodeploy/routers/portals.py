@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..database import get_db
-from ..deps import get_current_user, require_editor, resolve_cookie_user
+from ..deps import require_scope, resolve_cookie_user
 from ..models import ExternalSource, Portal, RasterLayer, User, VectorLayer
 from ..schemas import PortalCreate, PortalOut, PortalUpdate
 from ..services.portal_generator import build_portal_bundle, generate_style, read_deck_core_bbox
@@ -100,7 +100,7 @@ async def _rebuild_bundle(portal: Portal, db: AsyncSession) -> None:
 
 
 @router.get("", response_model=list[PortalOut])
-async def list_portals(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def list_portals(user: User = Depends(require_scope("portal:read")), db: AsyncSession = Depends(get_db)):
     # Shared workspace: all members see all portals (role gates WRITES, not reads). Portals have no
     # per-resource visibility — a portal's audience is its published access_type, not a workspace flag.
     result = await db.execute(select(Portal).order_by(Portal.created_at.desc()))
@@ -115,7 +115,7 @@ async def list_portals(user: User = Depends(get_current_user), db: AsyncSession 
 
 
 @router.post("", response_model=PortalOut, status_code=201)
-async def create_portal(req: PortalCreate, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
+async def create_portal(req: PortalCreate, user: User = Depends(require_scope("portal:write")), db: AsyncSession = Depends(get_db)):
     slug = await _new_slug(db)  # opaque id, stable for the life of the portal
 
     portal = Portal(
@@ -204,13 +204,13 @@ async def portal_unlock(slug: str, body: PortalUnlock, request: Request,
 
 
 @router.get("/{portal_id}", response_model=PortalOut)
-async def get_portal(portal_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def get_portal(portal_id: int, user: User = Depends(require_scope("portal:read")), db: AsyncSession = Depends(get_db)):
     portal = await _get_portal(portal_id, db)
     return PortalOut.from_orm_json(portal)
 
 
 @router.put("/{portal_id}", response_model=PortalOut)
-async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
+async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(require_scope("portal:write")), db: AsyncSession = Depends(get_db)):
     portal = await _get_portal(portal_id, db)
     if req.title is not None:
         # The slug (URL) is STABLE — set once at creation, never changed by a rename, so a portal's
@@ -246,7 +246,7 @@ async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(
 
 
 @router.post("/{portal_id}/publish", response_model=PortalOut)
-async def publish_portal(portal_id: int, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
+async def publish_portal(portal_id: int, user: User = Depends(require_scope("portal:publish")), db: AsyncSession = Depends(get_db)):
     portal = await _get_portal(portal_id, db)
     await _rebuild_bundle(portal, db)
 
@@ -269,7 +269,7 @@ _MAX_ASSET_SIZE = 10 * 1024 * 1024  # 10 MB
 async def upload_portal_asset(
     portal_id: int,
     file: UploadFile = File(...),
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("portal:publish")),
     db: AsyncSession = Depends(get_db),
 ):
     """Upload an image for the portal's About documentation. Returns the public URL to embed."""
@@ -307,7 +307,7 @@ async def portal_asset(portal_id: int, filename: str):
 
 
 @router.post("/{portal_id}/unpublish", response_model=PortalOut)
-async def unpublish_portal(portal_id: int, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
+async def unpublish_portal(portal_id: int, user: User = Depends(require_scope("portal:publish")), db: AsyncSession = Depends(get_db)):
     import shutil, os
     settings = get_settings()
     portal = await _get_portal(portal_id, db)
@@ -323,7 +323,7 @@ async def unpublish_portal(portal_id: int, user: User = Depends(require_editor),
 
 
 @router.delete("/{portal_id}", status_code=204)
-async def delete_portal(portal_id: int, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
+async def delete_portal(portal_id: int, user: User = Depends(require_scope("portal:write")), db: AsyncSession = Depends(get_db)):
     import shutil, os
     settings = get_settings()
     portal = await _get_portal(portal_id, db)

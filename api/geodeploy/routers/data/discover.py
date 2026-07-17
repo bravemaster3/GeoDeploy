@@ -17,7 +17,7 @@ from ...config import get_settings
 from ...database import get_db
 # Discover/import mutates the catalog (and can LOAD data via the CSV path) and exposes raw
 # DB/bucket listings — editor-gated across the board, not viewer material.
-from ...deps import require_editor
+from ...deps import require_scope
 from ...models import RasterLayer, UploadJob, User, VectorLayer
 from ...schemas import JobStatus
 from ...services import martin as martin_svc
@@ -56,7 +56,7 @@ class ImportDbRequest(BaseModel):
 
 
 @router.get("/database")
-async def discover_database(user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
+async def discover_database(user: User = Depends(require_scope("data:write")), db: AsyncSession = Depends(get_db)):
     """List spatial tables in the connected PostGIS (any non-system schema).
 
     GeoDeploy's OWN per-user schemas (`geodeploy_u{id}`) are excluded: tables there are created
@@ -155,7 +155,7 @@ async def _primary_key(conn, schema, table) -> str | None:
 @router.post("/database", status_code=201)
 async def import_database(
     req: ImportDbRequest,
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     """Register selected existing PostGIS tables as vector layers (no data copy)."""
@@ -235,7 +235,7 @@ class ImportStorageRequest(BaseModel):
 
 
 @router.get("/storage")
-async def discover_storage(user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
+async def discover_storage(user: User = Depends(require_scope("data:write")), db: AsyncSession = Depends(get_db)):
     """List spatial objects already in the configured bucket (GeoTIFF, GeoParquet, CSV)."""
     from ...services.minio import get_s3_client
     settings = get_settings()
@@ -285,7 +285,7 @@ async def discover_storage(user: User = Depends(require_editor), db: AsyncSessio
 @router.post("/storage", status_code=201)
 async def import_storage(
     req: ImportStorageRequest,
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     """Register selected existing storage objects (no data copy): GeoTIFFs become raster layers
@@ -362,7 +362,7 @@ class ImportCsvRequest(BaseModel):
 
 
 @router.get("/storage/csv-columns")
-async def csv_columns(key: str, delimiter: str = "comma", _: User = Depends(require_editor)):
+async def csv_columns(key: str, delimiter: str = "comma", _: User = Depends(require_scope("data:write"))):
     """Read a CSV's header so the UI can offer X/Y column pickers."""
     from ...tasks import csv_import
     settings = get_settings()
@@ -376,7 +376,7 @@ async def csv_columns(key: str, delimiter: str = "comma", _: User = Depends(requ
 @router.post("/storage/csv", response_model=JobStatus, status_code=202)
 async def import_csv(
     req: ImportCsvRequest,
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     """Queue a CSV → PostGIS layer import: points from X/Y columns, or any geometry (e.g.

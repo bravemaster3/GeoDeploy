@@ -3,16 +3,30 @@
 ## Purpose
 All HTTP endpoints. Every router is registered in `main.py` under the `/api` prefix.
 
-## Permission model (RBAC, A-01 — 2026-07-16)
+## Permission model (RBAC A-01; API tokens A-03 — 2026-07-17)
 **Shared workspace:** every member SEES all data and portals; the ROLE decides what they may do.
 `user_id` on resources is "created by" provenance, not an access boundary. Roles (deps.py
 `ROLE_ORDER`): `viewer` (0, read-only) < `editor` (1) < `admin` (2) < `owner` (3, exactly one).
-- **Reads** (list GETs, portal detail, stats, jobs) → `get_current_user` (any role). List queries
-  AND authenticated by-id lookups use `common.visible_to(user, Model)` — **the A-02 sharing seam**
-  (see the visibility model below): admins/owner see all; others see non-private + their own.
-- **Mutations** on data → `require_editor`; the by-id lookups for vector/raster/sources carry the
-  `visible_to` filter, so a private resource the caller can't see 404s (the role 403 still fires BEFORE
-  the lookup — pinned in test_rbac.py). Portals are NOT visibility-filtered (`_get_portal` is id-only).
+
+**A-03 scoped API tokens** thread through the SAME dependencies. `get_current_user` now also accepts a
+`gdp_…` bearer (→ `deps.authenticate_api_token`, stashed on `request.state.api_token`). Enforcement is a
+single factory **`deps.require_scope(scope)`** that checks the scope's ROLE FLOOR (`deps.SCOPES`:
+`data:read`/`portal:read`=viewer, `data:write`/`portal:write`/`portal:publish`=editor,
+`users:admin`=admin) AND — only when the request is token-authed — that the token carries the scope
+(else 403 `Token missing scope: …`). For a browser (JWT/cookie) session the scope check is a **no-op**,
+so behaviour is identical to A-01. **Deny-by-default:** `require_role`/`require_editor`/`require_admin`
+now REJECT token requests, so any route not explicitly `require_scope`-annotated (e.g. all of
+`admin.py`, ownership transfer) is browser-only for tokens.
+- **Reads** (list GETs, portal detail, stats, jobs) → `require_scope("data:read"|"portal:read")`. List
+  queries AND authenticated by-id lookups use `common.visible_to(user, Model)` — **the A-02 sharing
+  seam** (below): admins/owner see all; others see non-private + their own.
+- **Mutations** on data → `require_scope("data:write")`; portals → `require_scope("portal:write")`
+  (create/edit/delete draft) or `require_scope("portal:publish")` (publish/unpublish/assets). The
+  by-id lookups for vector/raster/sources carry the `visible_to` filter, so a private resource the
+  caller can't see 404s (the role 403 still fires BEFORE the lookup — pinned in test_rbac.py).
+- **Token management** (`tokens.py`, `/tokens`): each user manages their OWN tokens via a browser
+  session; a token can't mint/manage tokens (anti-escalation); scope ≤ owner role at mint; mandatory
+  expiry 30/90/365d (default 90). Only the sha256 hash is stored; the raw `gdp_…` shown once.
 
 **A-02 per-resource sharing (2026-07-16):** each vector/raster layer and external source has a
 `visibility` — `private` (creator + admins/owner) ⊂ `organization` (all members; the default) ⊂
@@ -23,8 +37,8 @@ is now DERIVED / write-only-synced
 portal_generator keep reading it unchanged. Re-sharing is an editor+ power over resources they can SEE
 (NOT creator-only — an editor can already delete an org resource). PUBLIC-by-id display endpoints are
 deliberately NOT visibility-filtered (published portals depend on them).
-- **/admin/***, setup reconfiguration, **/users/*** → `require_admin` (admin or owner);
-  ownership transfer → `require_owner`.
+- **/admin/*** + setup reconfiguration → `require_admin` (browser-only for tokens). **/users/*** →
+  `require_scope("users:admin")`; ownership transfer → `require_owner` (browser-only).
 - **PUBLIC surface unchanged**: portal assets/export, vector features.*/identify/pmtiles/parquet
   (`_publicly_readable`), raster /cog + /colormaps, sources features.geojson, stac/templates/basemaps.
 - List responses carry `user_id` + `created_by` (one `common.creator_names` query per list call);

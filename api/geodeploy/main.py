@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
 from .database import engine, Base
-from .routers import setup, auth, portals, stac, templates, admin, basemaps, users
+from .routers import setup, auth, portals, stac, templates, admin, basemaps, users, tokens
 from .routers.data import vector, raster, sources, discover
 
 
@@ -154,9 +154,9 @@ app.add_middleware(
 )
 
 # API routes
-for router in [setup.router, auth.router, users.router, portals.router, templates.router,
-               admin.router, basemaps.router, vector.router, raster.router, sources.router,
-               discover.router, stac.router]:
+for router in [setup.router, auth.router, users.router, tokens.router, portals.router,
+               templates.router, admin.router, basemaps.router, vector.router, raster.router,
+               sources.router, discover.router, stac.router]:
     app.include_router(router, prefix="/api")
 
 # Serve published portals as static files

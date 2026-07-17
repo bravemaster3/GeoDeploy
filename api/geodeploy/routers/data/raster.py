@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
 from ...database import get_db
-from ...deps import get_current_user, require_editor
+from ...deps import require_scope
 from ...models import RasterLayer, UploadJob, User
 from ...schemas import JobStatus, RasterDefaultStyle, RasterLayerOut, SharingUpdate
 from ...services.titiler import get_tile_url as raster_tile_url, COLORMAPS
@@ -25,7 +25,7 @@ async def list_colormaps():
 
 
 @router.get("", response_model=list[RasterLayerOut])
-async def list_layers(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def list_layers(user: User = Depends(require_scope("data:read")), db: AsyncSession = Depends(get_db)):
     import json
     result = await db.execute(
         select(RasterLayer).where(visible_to(user, RasterLayer)).order_by(RasterLayer.created_at.desc())
@@ -51,7 +51,7 @@ async def list_layers(user: User = Depends(get_current_user), db: AsyncSession =
 
 
 @router.get("/{layer_id}/stats")
-async def raster_stats(layer_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def raster_stats(layer_id: int, user: User = Depends(require_scope("data:read")), db: AsyncSession = Depends(get_db)):
     """Suggested stretch (min,max) from TiTiler band statistics (2nd–98th percentile)."""
     result = await db.execute(
         select(RasterLayer).where(RasterLayer.id == layer_id, visible_to(user, RasterLayer)))
@@ -90,7 +90,7 @@ async def raster_stats(layer_id: int, user: User = Depends(get_current_user), db
 @router.post("/upload", response_model=JobStatus, status_code=202)
 async def upload_raster(
     file: UploadFile = File(...),
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     settings = get_settings()
@@ -138,7 +138,7 @@ async def upload_raster(
 
 
 @router.get("/jobs/{job_id}", response_model=JobStatus)
-async def job_status(job_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(get_current_user)):
+async def job_status(job_id: str, db: AsyncSession = Depends(get_db), user: User = Depends(require_scope("data:read"))):
     result = await db.execute(select(UploadJob).where(UploadJob.id == job_id))
     job = result.scalar_one_or_none()
     if not job:
@@ -150,7 +150,7 @@ async def job_status(job_id: str, db: AsyncSession = Depends(get_db), user: User
 async def save_sharing(
     layer_id: int,
     body: SharingUpdate,
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     """Data-sharing settings: set the workspace `visibility` (private | organization | public) plus
@@ -208,7 +208,7 @@ async def raster_cog(layer_id: int, request: Request, db: AsyncSession = Depends
 async def save_default_style(
     layer_id: int,
     body: RasterDefaultStyle,
-    user: User = Depends(require_editor),
+    user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     import json
@@ -224,7 +224,7 @@ async def save_default_style(
 
 
 @router.delete("/{layer_id}", status_code=204)
-async def delete_layer(layer_id: int, user: User = Depends(require_editor), db: AsyncSession = Depends(get_db)):
+async def delete_layer(layer_id: int, user: User = Depends(require_scope("data:write")), db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(RasterLayer).where(RasterLayer.id == layer_id, visible_to(user, RasterLayer)))
     layer = result.scalar_one_or_none()
