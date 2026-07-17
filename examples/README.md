@@ -16,9 +16,13 @@ create / edit / publish portals — the same API the dashboard uses, no browser 
 2. Configure the client:
    ```bash
    pip install requests
-   export GEODEPLOY_URL=http://localhost           # your instance origin
+   export GEODEPLOY_URL=http://127.0.0.1            # your instance origin
    export GEODEPLOY_TOKEN=gdp_xxxxxxxxxxxxxxxxxxxx
    ```
+   > **Tip — use `127.0.0.1`, not `localhost`.** On Windows + WSL2 Docker, `localhost` resolves to
+   > IPv6 (`::1`) first, but the published port usually binds only IPv4, so each request stalls on the
+   > `::1` attempt before falling back — requests "work but feel slow". `http://127.0.0.1` skips it.
+   > (PowerShell sets env vars with `$env:GEODEPLOY_URL = "http://127.0.0.1"`.)
 3. End-to-end flow (prepare a dataset → build/edit → publish):
    ```bash
    python geodeploy_cli.py whoami

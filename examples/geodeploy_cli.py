@@ -7,7 +7,8 @@ Deliberately dependency-light (just `requests`) so it's easy to lift into a plug
 
 Setup:
     pip install requests
-    export GEODEPLOY_URL=http://localhost           # your instance origin
+    export GEODEPLOY_URL=http://127.0.0.1            # your instance origin (use 127.0.0.1, not
+                                                     # localhost: on Windows/WSL2 localhost stalls on IPv6)
     export GEODEPLOY_TOKEN=gdp_xxxxxxxxxxxxxxxxxxxx  # mint one in Settings -> API tokens
 
 Examples:
