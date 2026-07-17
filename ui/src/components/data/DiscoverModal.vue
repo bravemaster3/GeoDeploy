@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
   <div class="fixed inset-0 bg-gray-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-    <div class="card w-full max-w-lg p-6 space-y-4 shadow-2xl">
+    <div class="card w-full max-w-lg p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
       <div class="flex items-center justify-between">
         <h2 class="text-lg font-semibold">Import existing data</h2>
         <button @click="$emit('close')" class="text-muted-foreground/70 hover:text-foreground text-xl leading-none">&times;</button>
