@@ -73,7 +73,7 @@
 
         <div class="flex justify-end gap-2 pt-1">
           <button @click="$emit('close')" class="btn-secondary text-sm">Cancel</button>
-          <button @click="submit" :disabled="!canSubmit || saving" class="btn-primary text-sm">
+          <button @click="submit" :disabled="saving" class="btn-primary text-sm">
             {{ saving ? '…' : 'Create token' }}
           </button>
         </div>
@@ -114,13 +114,14 @@ const saving = ref(false)
 const error = ref('')
 const created = ref(null)
 
-const canSubmit = computed(() => form.value.name.trim() && form.value.scopes.length > 0)
 const sameSet = (a, b) => a.length === b.length && a.every(x => b.includes(x))
 const isPreset = (p) => sameSet(form.value.scopes, p.scopes)
 function applyPreset(p) { form.value.scopes = [...p.scopes] }
 
 async function submit() {
-  if (!canSubmit.value || saving.value) return
+  if (saving.value) return
+  if (!form.value.name.trim()) { error.value = 'Give the token a name.'; return }
+  if (!form.value.scopes.length) { error.value = 'Select at least one scope.'; return }
   saving.value = true
   error.value = ''
   try {
