@@ -34,7 +34,7 @@ GeoLibre, `E-05` Connect from QGIS) — the adoption funnel — and under CI/scr
 
 | # | Phase | Theme | State |
 |---|-------|-------|-------|
-| 00 | **Foundation** | The platform, shipped | 11 items — 10 shipped incl. security hardening; automated tests in progress |
+| 00 | **Foundation** | The platform, shipped | 12 items — 10 shipped incl. security hardening; tests building; service logs/console planned |
 | 01 | **Multi-user & Access** | The bridge to Cloud | `A-01`, `A-02` **shipped**; `A-03` **building** (frontier), then planned |
 | 02 | **GeoDeploy Cloud** | Managed, multi-tenant | planned / future |
 | 03 | **Ecosystem & Interop** | Adoption engine (GeoLibre, QGIS, standards) | planned / future |
@@ -126,6 +126,9 @@ before the static bundle is served (organization = any member, owner = creator +
 bounces to `/login?next=`). Login/accept set the cookie; the SPA mirrors existing sessions via
 `POST /auth/session`. Password stays a client-side gate. Also added `V-12` **Responsive layouts
 (mobile/tablet)** (planned). 80 backend tests pass.
+2026-07-17 — Added `F-12` **Service logs & console** (Foundation, planned): per-service live log
+streaming in Settings → Infrastructure, plus a security-gated (owner-only, opt-in) in-browser
+container console — extends the existing service start/stop/restart controls.
 2026-07-17 — `A-02` Resource ownership & sharing flipped `building` → **shipped** (server-side portal
 access + password unlock landed and verified; user sign-off). **Frontier moves to `A-03` API
 tokens.** Also fixed the portal/preview on-load map flash (three causes: deck two-stage fit, preview
