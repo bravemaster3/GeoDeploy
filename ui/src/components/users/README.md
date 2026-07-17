@@ -16,7 +16,13 @@ workspace members, roles, and invitations (RBAC, roadmap A-01).
   (viewer/editor/admin; owner is only reachable via transfer). On success it switches to a
   "link created" state showing the accept URL ONCE with a copy button.
 - `CopyLink.vue` — shared read-only URL + copy-to-clipboard widget (clipboard API with
-  execCommand fallback) used by the three above for invite/reset links.
+  execCommand fallback) used by the invite/reset flows AND the token secret display.
+- `TokenModal.vue` (A-03, 2026-07-17) — create an **API token** from Settings → API tokens (this
+  component lives here but is used by `views/Settings.vue`, not Users). Name + scope preset buttons
+  (Read-only / Publish / Full editor) that fill a scope-checkbox list (mirrors `deps.SCOPES`;
+  `users:admin` shown only to admins) + expiry select (30/90/365, default 90). Calls `createToken`
+  directly; on success shows the raw `gdp_…` secret ONCE via `CopyLink`. Plain strings (matches
+  Settings.vue), not i18n.
 
 ## Dependencies / relationships
 - `stores/users.js` (fetch/mutate wrappers over the `/api/users/*` endpoints in
@@ -30,4 +36,4 @@ workspace members, roles, and invitations (RBAC, roadmap A-01).
 - Raw tokens appear exactly once per create/regenerate response — never listed.
 
 ## Last updated
-2026-07-16 (A-01 phase 5)
+2026-07-17 (A-03: TokenModal.vue)

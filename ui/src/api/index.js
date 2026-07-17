@@ -57,6 +57,11 @@ export const createInvite = (data) => api.post('/users/invitations', data)
 export const regenerateInvite = (id) => api.post(`/users/invitations/${id}/regenerate`)
 export const revokeInvite = (id) => api.delete(`/users/invitations/${id}`)
 
+// API tokens (A-03 — Settings → API; each user manages their own)
+export const listTokens = () => api.get('/tokens')
+export const createToken = (data) => api.post('/tokens', data)
+export const revokeToken = (id) => api.delete(`/tokens/${id}`)
+
 // Outgoing email (admin Settings → Email; generic SMTP)
 export const getEmailSettings = () => api.get('/admin/email-settings')
 export const updateEmailSettings = (data) => api.put('/admin/email-settings', data)

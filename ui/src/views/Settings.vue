@@ -6,6 +6,17 @@
         <p class="text-sm text-muted-foreground mt-1">Manage infrastructure, storage, and your account.</p>
       </div>
 
+      <!-- Tabs -->
+      <nav class="flex gap-1 border-b border-border overflow-x-auto">
+        <button v-for="t in tabs" :key="t.id" type="button" @click="activeTab = t.id"
+          class="px-3 py-2 text-sm font-medium border-b-2 -mb-px whitespace-nowrap transition-colors"
+          :class="activeTab === t.id ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'">
+          {{ t.label }}
+        </button>
+      </nav>
+
+      <!-- Infrastructure + Storage tab (admin) -->
+      <div v-if="activeTab === 'infra'" class="space-y-6">
       <!-- Infrastructure health (admin/owner — service control is require_admin server-side) -->
       <section v-if="auth.isAdmin" class="card overflow-hidden">
         <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
@@ -91,7 +102,10 @@
           </div>
         </div>
       </section>
+      </div>
 
+      <!-- Email tab (admin) -->
+      <div v-if="activeTab === 'email'" class="space-y-6">
       <!-- Outgoing email (generic SMTP — admin/owner) -->
       <section v-if="auth.isAdmin" class="card overflow-hidden">
         <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
@@ -170,7 +184,10 @@
           </div>
         </div>
       </section>
+      </div>
 
+      <!-- Account tab (everyone) -->
+      <div v-if="activeTab === 'account'" class="space-y-6">
       <!-- Account -->
       <section class="card overflow-hidden">
         <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
@@ -217,8 +234,60 @@
           </button>
         </div>
       </section>
+      </div>
+
+      <!-- API tokens tab (everyone) -->
+      <div v-if="activeTab === 'api'" class="space-y-6">
+        <section class="card overflow-hidden">
+          <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
+            <span class="w-9 h-9 rounded-lg bg-violet-500/15 text-violet-400 flex items-center justify-center flex-shrink-0">
+              <KeyIcon class="w-5 h-5" />
+            </span>
+            <div class="flex-1 min-w-0">
+              <h2 class="text-sm font-semibold text-foreground">API tokens</h2>
+              <p class="text-xs text-muted-foreground/70">Headless access for scripts and the GeoLibre/QGIS plugins</p>
+            </div>
+            <button @click="showTokenModal = true" class="btn-primary text-xs px-3 py-1.5">Create token</button>
+          </header>
+          <div class="p-2">
+            <div v-if="tokensLoading" class="px-3 py-6 text-sm text-muted-foreground/70 text-center">Loading…</div>
+            <div v-else-if="!tokens.length" class="px-3 py-8 text-sm text-muted-foreground/70 text-center">
+              No tokens yet. Create one to drive the API from a script or the GeoLibre/QGIS plugins.
+            </div>
+            <div v-for="t in tokens" :key="t.id" class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-muted/60">
+              <span class="w-9 h-9 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
+                <KeyIcon class="w-4 h-4 text-muted-foreground" />
+              </span>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-medium text-foreground/85 truncate">{{ t.name }}</div>
+                <div class="flex items-center gap-1.5 flex-wrap mt-0.5">
+                  <span class="font-mono text-[10px] text-muted-foreground/70">{{ t.prefix }}…</span>
+                  <span v-for="s in t.scopes" :key="s"
+                    class="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-mono">{{ s }}</span>
+                </div>
+              </div>
+              <div class="text-[11px] text-muted-foreground/70 text-right flex-shrink-0 hidden sm:block">
+                <div>{{ t.last_used_at ? 'Used ' + fmtDate(t.last_used_at) : 'Never used' }}</div>
+                <div>Expires {{ fmtDate(t.expires_at) }}</div>
+              </div>
+              <button v-if="revokeId === t.id" @click="confirmRevoke(t.id)"
+                class="text-xs text-red-500 font-medium px-2 flex-shrink-0">Confirm</button>
+              <button v-else @click="revokeId = t.id"
+                class="px-2 text-muted-foreground/70 hover:text-red-500 transition-colors flex-shrink-0" title="Revoke">
+                <TrashIcon class="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </section>
+        <p class="text-[11px] text-muted-foreground/70 px-1">
+          Tokens act as you, limited to their scopes and never above your role. Send as
+          <code class="font-mono">Authorization: Bearer &lt;token&gt;</code>. Secrets are shown once.
+        </p>
+      </div>
     </div>
   </div>
+
+  <TokenModal v-if="showTokenModal" @close="showTokenModal = false" @created="loadTokens" />
 </template>
 
 <script setup>
@@ -226,8 +295,10 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSystemStore } from '@/stores/system'
 import { useAuthStore } from '@/stores/auth'
-import { ServerIcon, HardDriveIcon, UserIcon, RefreshIcon, MailIcon } from './icons'
-import api, { changePassword, controlService, getEmailSettings, sendTestEmail, updateEmailSettings } from '@/api'
+import { ServerIcon, HardDriveIcon, UserIcon, RefreshIcon, MailIcon, KeyIcon, TrashIcon } from './icons'
+import api, { changePassword, controlService, getEmailSettings, sendTestEmail, updateEmailSettings,
+              listTokens, revokeToken } from '@/api'
+import TokenModal from '@/components/users/TokenModal.vue'
 
 const systemStore = useSystemStore()
 const auth = useAuthStore()
@@ -235,6 +306,33 @@ const router = useRouter()
 const martinBusy = ref(false)
 const martinMsg = ref(null)
 const busySvc = ref(null)
+
+// ── Tabs — group Settings so it doesn't sprawl. Admin-only tabs are filtered out for editors/viewers.
+const TABS = [
+  { id: 'account', label: 'Account' },
+  { id: 'api', label: 'API tokens' },
+  { id: 'infra', label: 'Infrastructure', admin: true },
+  { id: 'email', label: 'Email', admin: true },
+]
+const tabs = computed(() => TABS.filter(t => !t.admin || auth.isAdmin))
+const activeTab = ref('account')
+
+// ── API tokens (A-03) — each user manages their own ──
+const tokens = ref([])
+const tokensLoading = ref(true)
+const showTokenModal = ref(false)
+const revokeId = ref(null)  // two-step inline confirm
+
+async function loadTokens() {
+  tokensLoading.value = true
+  try { tokens.value = (await listTokens()).data } catch { tokens.value = [] }
+  finally { tokensLoading.value = false }
+}
+async function confirmRevoke(id) {
+  try { await revokeToken(id); await loadTokens() } catch { /* ignore */ }
+  revokeId.value = null
+}
+function fmtDate(s) { return s ? new Date(s).toLocaleDateString() : '' }
 
 const initials = computed(() =>
   (auth.user?.name || '?').split(' ').map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase())
@@ -341,6 +439,7 @@ async function svcAction(name, action) {
 }
 
 onMounted(() => {
+  loadTokens()  // per-user — everyone has an API tokens tab
   // Health/stats/email endpoints are admin-only server-side — don't fire doomed requests as editor/viewer.
   if (auth.isAdmin) {
     systemStore.refreshHealth()
