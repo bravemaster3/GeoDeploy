@@ -11,31 +11,31 @@ features that drive adoption and differentiation.
 - **Source of truth:** the JSON embedded in that file (`<script id="roadmap-data">`). This Markdown is
   the narrative + schema + workflow around it.
 
-## ▶ Frontier: **Resource ownership & sharing** (`A-02`) — **building** (code complete 2026-07-16, in verification)
+## ▶ Frontier: **API tokens** (`A-03`) — **building**
 
-`A-01` **Multi-user & RBAC is shipped**: a **shared workspace** (ArcGIS-organization style) where
-every member sees all data and portals and the **role** — owner / admin / editor / viewer — gates
-what they can do (single transferable owner, copy-link invitations, user CRUD with
-delete-reassign-to-owner, password flows, role-aware UI).
+`A-01` **Multi-user & RBAC** and `A-02` **Resource ownership & sharing** are **shipped**: a **shared
+workspace** with a role ladder (owner / admin / editor / viewer), a per-resource **visibility axis**
+(`private` ⊂ `organization` ⊂ `public`) on layers + sources enforced by the `visible_to()` seam, and a
+**server-side-enforced 4-tier published-access** model for portals (public / password / organization /
+private, via nginx `auth_request` + a session cookie, password portals via a per-portal unlock cookie).
 
-`A-02` builds per-resource sharing on top: a **visibility axis** — `private` (creator + admins) ⊂
-`organization` (all members) ⊂ `public` (STAC data catalog + raw assets) — on vector/raster layers and
-external sources, enforced by the `visible_to()` seam across every list + authenticated by-id lookup
-(public-by-id portal display endpoints untouched). **Portals** instead get a clearer **4-tier
-published-access** model — public / password / organization (any signed-in member) / private (creator
-+ admins). Those portal gates are currently **client-side**; **server-side enforcement is the next
-task**.
+`A-03` adds **scoped personal access tokens** so an editor can drive the SAME API headlessly — from a
+GeoLibre or QGIS plugin — to upload data, prepare/tile, and **publish a portal**, or **open a portal in
+edit mode** (GET its config → edit → PUT). Tokens are opaque, shown once, stored hashed; each
+authenticates as its owner through the existing Bearer path, **capped at a chosen role tier** (never
+above the owner's live role) so enforcement reuses the RBAC ladder with no new per-route checks.
+Managed per-user in Settings; revocable; optionally auto-expiring; dies with the owner.
 
-**Why this matters:** ownership + sharing is the access primitive that collaboration and
-**Phase 02 (Cloud)** — workspaces, tenant isolation, billing — all build on. API tokens (`A-03`) and
-auth hardening (`A-04`) follow.
+**Why this matters:** API tokens are the foundation under the desktop plugins (`E-02` Push from
+GeoLibre, `E-05` Connect from QGIS) — the adoption funnel — and under CI/scripting. Auth hardening
+(`A-04`) follows.
 
 ## Phases
 
 | # | Phase | Theme | State |
 |---|-------|-------|-------|
 | 00 | **Foundation** | The platform, shipped | 11 items — 10 shipped incl. security hardening; automated tests in progress |
-| 01 | **Multi-user & Access** | The bridge to Cloud | `A-01` **shipped**; `A-02` **building** (frontier), then planned |
+| 01 | **Multi-user & Access** | The bridge to Cloud | `A-01`, `A-02` **shipped**; `A-03` **building** (frontier), then planned |
 | 02 | **GeoDeploy Cloud** | Managed, multi-tenant | planned / future |
 | 03 | **Ecosystem & Interop** | Adoption engine (GeoLibre, QGIS, standards) | planned / future |
 | 04 | **Advanced Capabilities** | Differentiators | future / idea |
@@ -126,6 +126,10 @@ before the static bundle is served (organization = any member, owner = creator +
 bounces to `/login?next=`). Login/accept set the cookie; the SPA mirrors existing sessions via
 `POST /auth/session`. Password stays a client-side gate. Also added `V-12` **Responsive layouts
 (mobile/tablet)** (planned). 80 backend tests pass.
+2026-07-17 — `A-02` Resource ownership & sharing flipped `building` → **shipped** (server-side portal
+access + password unlock landed and verified; user sign-off). **Frontier moves to `A-03` API
+tokens.** Also fixed the portal/preview on-load map flash (three causes: deck two-stage fit, preview
+multi-`applyStyle`, redundant basemap swap) and made the portal-editor access picker an icon dropdown.
 2026-07-16 — `A-01` Multi-user & RBAC flipped `building` → **shipped** (user sign-off); **frontier
 moves to `A-02`**. Portals dropped the confusing workspace-visibility control in favor of a 4-tier
 published-access model (public / password / organization / private = creator + admins); the legacy
