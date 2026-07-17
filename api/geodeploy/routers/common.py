@@ -9,7 +9,7 @@ owner-check for a private resource.
 from sqlalchemy import or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import User
+from ..models import UploadJob, User
 
 # Roles that see + act on EVERY resource regardless of its visibility (workspace governance:
 # bulk review, delete-reassign, sharing changes). Keep in sync with deps.ROLE_ORDER's top tiers.
@@ -45,6 +45,24 @@ def apply_sharing(resource, body) -> None:
         resource.is_public = (vis == "public")
     for field, value in data.items():   # abstract / keywords / license / attribution
         setattr(resource, field, value)
+
+
+async def busy_job_progress(db: AsyncSession, layers, layer_type: str) -> dict[int, tuple[int, str | None]]:
+    """`{layer_id: (progress, current_step)}` for layers still `queued`/`processing`, read from each
+    layer's LATEST UploadJob (ONE query). Lets the list response carry live ingest progress even for
+    CLI uploads or after a page reload — the browser's per-session `pollJob` only covers uploads made
+    in that tab. Returns {} when nothing is busy (the common case → no extra query)."""
+    busy = [l.id for l in layers if l.status in ("queued", "processing")]
+    if not busy:
+        return {}
+    rows = (await db.execute(
+        select(UploadJob.layer_id, UploadJob.progress, UploadJob.current_step)
+        .where(UploadJob.layer_type == layer_type, UploadJob.layer_id.in_(busy))
+        .order_by(UploadJob.layer_id, UploadJob.created_at.desc()))).all()
+    out: dict[int, tuple[int, str | None]] = {}
+    for lid, progress, step in rows:
+        out.setdefault(lid, (progress, step))  # first per layer = latest (created_at desc)
+    return out
 
 
 async def creator_names(db: AsyncSession, rows) -> dict[int, str]:

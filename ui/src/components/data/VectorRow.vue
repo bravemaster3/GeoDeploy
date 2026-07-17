@@ -52,7 +52,7 @@
     >
       <RefreshIcon class="w-4 h-4" :class="restarting ? 'animate-spin' : ''" />
     </button>
-    <StatusBadge :status="layer.status" :progress="layer._job?.progress" :step="layer._job?.current_step" />
+    <StatusBadge :status="layer.status" :progress="layer._job?.progress ?? layer.progress" :step="layer._job?.current_step ?? layer.current_step" />
     <!-- Sharing: workspace visibility (private / organization / public catalog) -->
     <button v-if="auth.canEdit && layer.status === 'ready'" @click="showSharing = true"
       class="p-1.5 rounded transition-all"

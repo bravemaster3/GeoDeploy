@@ -11,7 +11,7 @@ from ...models import RasterLayer, UploadJob, User
 from ...schemas import JobStatus, RasterDefaultStyle, RasterLayerOut, SharingUpdate
 from ...services.titiler import get_tile_url as raster_tile_url, COLORMAPS
 from ...tasks.raster_ingest import ingest_raster
-from ..common import apply_sharing, creator_names, visible_to
+from ..common import apply_sharing, busy_job_progress, creator_names, visible_to
 
 router = APIRouter(prefix="/data/raster", tags=["raster"])
 
@@ -32,10 +32,13 @@ async def list_layers(user: User = Depends(require_scope("data:read")), db: Asyn
     )
     layers = result.scalars().all()
     names = await creator_names(db, layers)
+    jobs = await busy_job_progress(db, layers, "raster")
     out = []
     for l in layers:
         obj = RasterLayerOut.from_orm_json(l)
         obj.created_by = names.get(l.user_id)
+        if l.id in jobs:
+            obj.progress, obj.current_step = jobs[l.id]
         if l.status == "ready":
             ds = json.loads(l.default_style) if l.default_style else {}
             obj.tile_url = raster_tile_url(

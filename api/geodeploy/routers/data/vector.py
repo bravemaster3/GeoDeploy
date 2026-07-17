@@ -16,7 +16,7 @@ from ...models import Portal, UploadJob, User, VectorLayer
 from ...schemas import DefaultStyle, JobStatus, SharingUpdate, VectorLayerOut
 from ...services import martin as martin_svc
 from ...tasks.vector_ingest import ingest_vector
-from ..common import apply_sharing, creator_names, visible_to
+from ..common import apply_sharing, busy_job_progress, creator_names, visible_to
 
 router = APIRouter(prefix="/data/vector", tags=["vector"])
 
@@ -89,10 +89,13 @@ async def list_layers(
         select(VectorLayer).where(visible_to(user, VectorLayer)).order_by(VectorLayer.created_at.desc()))
     layers = result.scalars().all()
     names = await creator_names(db, layers)
+    jobs = await busy_job_progress(db, layers, "vector")
     out = []
     for l in layers:
         o = VectorLayerOut.from_orm_json(l)
         o.created_by = names.get(l.user_id)
+        if l.id in jobs:
+            o.progress, o.current_step = jobs[l.id]
         out.append(o)
     return out
 

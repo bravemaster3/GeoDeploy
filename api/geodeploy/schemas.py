@@ -222,6 +222,10 @@ class VectorLayerOut(BaseModel):
     tile_status: str | None = None
     status: str
     error_message: str | None
+    # Live ingest progress for a queued/processing layer (from its latest UploadJob; None when ready)
+    # — populated by the list endpoint so My Data shows "Processing NN%" for CLI uploads / after reload.
+    progress: int | None = None
+    current_step: str | None = None
     default_style: DefaultStyle | None
     visibility: str = "organization"
     is_public: bool = False
@@ -270,6 +274,8 @@ class RasterLayerOut(BaseModel):
     file_size: int | None
     status: str
     error_message: str | None
+    progress: int | None = None       # live ingest progress (see VectorLayerOut)
+    current_step: str | None = None
     default_style: RasterDefaultStyle | None
     visibility: str = "organization"
     is_public: bool = False

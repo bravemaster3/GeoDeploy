@@ -56,7 +56,11 @@ deliberately NOT visibility-filtered (published portals depend on them).
   `POST /users/{id}/reset-password-link` (24 h reset token; owner target requires owner caller).
   Invite/reset links are ALWAYS copy-deliverable; when SMTP is configured (C-08a) they are ALSO
   emailed best-effort (`email_sent` flag in the response; a relay failure never fails the operation).
-- `common.py` — `visible_to()` (the A-02 seam) + `creator_names()` shared by the resource routers.
+- `common.py` — `visible_to()` (the A-02 seam), `creator_names()`, and `busy_job_progress()` (2026-07-17:
+  `{layer_id: (progress, current_step)}` from each queued/processing layer's latest UploadJob, in ONE
+  query) shared by the resource routers. The vector/raster list endpoints attach it to `*LayerOut`
+  (`progress`/`current_step`) so My Data shows "Processing NN%" for CLI uploads / after a reload — the
+  browser's per-session `pollJob` only covers uploads made in that tab.
 - **Outgoing email (C-08a, 2026-07-16)** — generic SMTP via `services/notifications.py` (stdlib,
   any provider incl. Resend/Brevo through their SMTP endpoints), **strictly optional**: admin.py
   `GET/PUT /admin/email-settings` (password write-only, never returned; blank keeps stored) +
