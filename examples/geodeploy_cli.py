@@ -91,11 +91,17 @@ def upload(args):
     if not args.poll:
         return
     job_id = job.get("job_id") or job.get("id")
+    last = None
     while True:
-        time.sleep(3)
+        time.sleep(2)
         st = _call("GET", f"/data/vector/jobs/{job_id}").json()
-        print(f"  status: {st.get('status')}  {st.get('message', '')}", file=sys.stderr)
+        line = f"  {st.get('progress', 0):3d}%  {st.get('current_step') or st.get('status')}"
+        if line != last:  # only print when progress or step changes — no wall of repeats
+            print(line, file=sys.stderr)
+            last = line
         if st.get("status") in ("ready", "completed", "failed", "error"):
+            if st.get("error_message"):
+                print(f"  error: {st['error_message']}", file=sys.stderr)
             _print(st)
             break
 
