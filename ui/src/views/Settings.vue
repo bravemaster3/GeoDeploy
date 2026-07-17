@@ -7,7 +7,7 @@
       </div>
 
       <!-- Tabs -->
-      <nav class="flex gap-1 border-b border-border overflow-x-auto">
+      <nav class="flex flex-wrap gap-1 border-b border-border">
         <button v-for="t in tabs" :key="t.id" type="button" @click="activeTab = t.id"
           class="px-3 py-2 text-sm font-medium border-b-2 -mb-px whitespace-nowrap transition-colors"
           :class="activeTab === t.id ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'">
