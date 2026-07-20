@@ -19,6 +19,7 @@ Examples:
     python geodeploy_cli.py portal-get 3 portal3.json     # dump editable config (incl. layer_configs styles)
     python geodeploy_cli.py portal-set 3 portal3.json      # push edits back
     python geodeploy_cli.py portal-add-layer 3 6           # add layer 6 to portal 3 (type auto-detected)
+    python geodeploy_cli.py portal-add-layer 3 6 --color "#e11d48" --radius 4 --opacity 0.8   # with styling
     python geodeploy_cli.py portal-remove-layer 3 6        # remove it again
     python geodeploy_cli.py publish 3                      # (re)publish to make edits live
 
@@ -111,12 +112,23 @@ def portal_add_layer(args):
     if not ltype:
         sys.exit(f"Layer {args.layer_id} not found among vector/raster layers — pass --type explicitly "
                  "(needs a token with data:read to auto-detect).")
+    # Fold only the formatting flags the user actually set into the layer_config's `style` dict; any
+    # key left out keeps the layer's default styling. (arg name -> style key; argparse turns the
+    # hyphenated flags into underscored attributes, e.g. --fill-opacity -> args.fill_opacity.)
+    style = {}
+    for attr, key in (("color", "color"), ("fill_opacity", "fill_opacity"),
+                      ("outline_color", "outline_color"), ("line_width", "line_width"),
+                      ("radius", "radius"), ("marker", "marker"), ("line_type", "lineType"),
+                      ("colormap", "colormap"), ("rescale", "rescale")):
+        val = getattr(args, attr, None)
+        if val is not None:
+            style[key] = val
     portal = _call("GET", f"/portals/{args.portal_id}").json()
     configs = portal.get("layer_configs", [])
     if any(c["layer_id"] == args.layer_id and c["layer_type"] == ltype for c in configs):
         sys.exit(f"Layer {args.layer_id} ({ltype}) is already in portal {args.portal_id}.")
     entry = {"layer_id": args.layer_id, "layer_type": ltype,
-             "visible": True, "opacity": 1.0, "style": {}, "popup_fields": []}
+             "visible": not args.hidden, "opacity": args.opacity, "style": style, "popup_fields": []}
     configs = configs + [entry] if args.bottom else [entry] + configs  # default: top of the layer list
     out = _call("PUT", f"/portals/{args.portal_id}", json={"layer_configs": configs}).json()
     print(f"Added layer {args.layer_id} ({ltype}) to portal {args.portal_id} — publish to make it live:\n"
@@ -191,6 +203,19 @@ def main():
     al.add_argument("--type", choices=["vector", "raster", "external"],
                     help="layer type (auto-detected from your layers if omitted)")
     al.add_argument("--bottom", action="store_true", help="add at the bottom of the layer list, not the top")
+    # ── Formatting (only the flags you pass are set; the rest keep their defaults) ──
+    al.add_argument("--opacity", type=float, default=1.0, help="layer opacity 0-1 (default 1.0)")
+    al.add_argument("--hidden", action="store_true", help="start the layer hidden")
+    al.add_argument("--color", help="main colour, hex e.g. #e11d48 (polygon fill / line / point)")
+    al.add_argument("--fill-opacity", type=float, help="polygon fill opacity 0-1")
+    al.add_argument("--outline-color", help="polygon/line outline colour, hex")
+    al.add_argument("--line-width", type=float, help="line width in px")
+    al.add_argument("--radius", type=float, help="point radius in px")
+    al.add_argument("--marker", choices=["circle", "square", "triangle", "diamond", "star", "cross"],
+                    help="point marker shape")
+    al.add_argument("--line-type", choices=["solid", "dashed", "dotted"], help="line style")
+    al.add_argument("--colormap", help="raster colormap name, e.g. viridis")
+    al.add_argument("--rescale", help="raster stretch 'min,max'")
     al.set_defaults(func=portal_add_layer)
 
     rl = sub.add_parser("portal-remove-layer", help="remove a layer from a portal")
