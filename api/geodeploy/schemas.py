@@ -430,6 +430,7 @@ class PortalCreate(BaseModel):
     description: str | None = None
     template_id: str = "minimal"
     layer_configs: list[LayerConfig] = Field(default_factory=list)
+    layer_groups: list[dict[str, Any]] | None = None  # V-13: nested folder tree over the layers
     access_type: str = Field(default="public", pattern=_ACCESS_TYPE)
     access_password: str | None = None
 
@@ -439,6 +440,7 @@ class PortalUpdate(BaseModel):
     description: str | None = None
     template_id: str | None = None
     layer_configs: list[LayerConfig] | None = None
+    layer_groups: list[dict[str, Any]] | None = None  # V-13: nested folder tree (null = leave as-is)
     initial_view: dict[str, Any] | None = None  # {center:[lng,lat], zoom, bearing, pitch}
     access_type: str | None = Field(default=None, pattern=_ACCESS_TYPE)
     access_password: str | None = None
@@ -454,6 +456,7 @@ class PortalOut(BaseModel):
     description: str | None
     template_id: str
     layer_configs: list[LayerConfig]
+    layer_groups: list[dict[str, Any]] | None = None
     initial_view: dict[str, Any] | None = None
     access_type: str
     basemap: str | None = None
@@ -468,6 +471,7 @@ class PortalOut(BaseModel):
         import json
         data = {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
         data["layer_configs"] = json.loads(obj.layer_configs) if obj.layer_configs else []
+        data["layer_groups"] = json.loads(obj.layer_groups) if obj.layer_groups else None
         data["initial_view"] = json.loads(obj.initial_view) if obj.initial_view else None
         data.pop("access_password_hash", None)
         return cls(**data)

@@ -85,8 +85,9 @@ async def _rebuild_bundle(portal: Portal, db: AsyncSession) -> None:
             if bbox:
                 deck_core_bounds[l.id] = bbox
 
+    layer_groups = json.loads(portal.layer_groups) if portal.layer_groups else None
     user_data = generate_style(layer_configs, vector_layers, raster_layers, external_sources,
-                               deck_core_bounds=deck_core_bounds)
+                               deck_core_bounds=deck_core_bounds, layer_groups=layer_groups)
     initial_view = json.loads(portal.initial_view) if portal.initial_view else None
     build_portal_bundle(
         portal.slug, portal.title, user_data, portal.template_id, layer_configs,
@@ -125,6 +126,7 @@ async def create_portal(req: PortalCreate, user: User = Depends(require_scope("p
         description=req.description,
         template_id=req.template_id,
         layer_configs=json.dumps([lc.model_dump() for lc in req.layer_configs]),
+        layer_groups=json.dumps(req.layer_groups) if req.layer_groups else None,
         access_type=req.access_type,
     )
     if req.access_password:
@@ -225,6 +227,9 @@ async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(
         portal.basemap = req.basemap
     if req.layer_configs is not None:
         portal.layer_configs = json.dumps([lc.model_dump() for lc in req.layer_configs])
+    if req.layer_groups is not None:
+        # An empty list clears the tree back to a flat list; a populated list sets the folder tree.
+        portal.layer_groups = json.dumps(req.layer_groups) if req.layer_groups else None
     if req.initial_view is not None:
         portal.initial_view = json.dumps(req.initial_view)
     if req.access_type is not None:

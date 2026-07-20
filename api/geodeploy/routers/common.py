@@ -44,6 +44,9 @@ async def prune_layer_from_portals(db: AsyncSession, layer_type: str, layer_id: 
         configs = [c for c in json.loads(p.layer_configs or "[]")
                    if not (c.get("layer_type") == layer_type and c.get("layer_id") == layer_id)]
         p.layer_configs = json.dumps(configs)
+        if p.layer_groups:  # V-13: also drop the layer node from the folder tree
+            tree = _strip_layer_from_tree(json.loads(p.layer_groups), layer_type, layer_id)
+            p.layer_groups = json.dumps(tree) if tree else None
     await db.commit()
     from .portals import _rebuild_bundle  # lazy import avoids a circular import at module load
     for p in affected:
@@ -53,6 +56,22 @@ async def prune_layer_from_portals(db: AsyncSession, layer_type: str, layer_id: 
             except Exception:  # noqa: BLE001 — a re-publish failure must not fail the delete
                 logger.warning("re-publish after layer prune failed for portal %s", p.id, exc_info=True)
     return affected
+
+
+def _strip_layer_from_tree(nodes: list, layer_type: str, layer_id: int) -> list:
+    """Recursively remove a layer node (matching layer_type+layer_id) from a V-13 folder tree,
+    keeping the group structure intact."""
+    out = []
+    for n in nodes or []:
+        if "layer_id" in n:
+            if n.get("layer_type") == layer_type and n.get("layer_id") == layer_id:
+                continue
+            out.append(n)
+        elif "children" in n:
+            out.append({**n, "children": _strip_layer_from_tree(n.get("children") or [], layer_type, layer_id)})
+        else:
+            out.append(n)
+    return out
 
 
 async def record_audit(db: AsyncSession, actor, action: str, resource_type: str | None = None,

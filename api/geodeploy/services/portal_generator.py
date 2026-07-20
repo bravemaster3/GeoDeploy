@@ -56,7 +56,8 @@ _BASEMAP_BY_ID = {b["id"]: b for b in BASEMAP_CATALOG}
 
 def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers: list,
                    external_sources: list | None = None,
-                   deck_core_bounds: dict[int, list] | None = None) -> dict:
+                   deck_core_bounds: dict[int, list] | None = None,
+                   layer_groups: list[dict] | None = None) -> dict:
     """
     Return user data sources and layers only.
     The basemap is provided by the template's style.json and merged in build_portal_bundle.
@@ -67,6 +68,11 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
     otherwise fits the FULL extent then snaps once to this core extent when the manifest loads — a
     visible flash. Baking the core extent into `bounds` here makes the FIRST fit already correct, and
     the returned `core_fitted` flag tells portal.js to skip its now-redundant refit.
+
+    `layer_groups` (V-13): an optional nested folder TREE (layer + group nodes) over the layers. When
+    present, the DRAW ORDER is the depth-first flatten of the reconciled tree (not `layer_configs`
+    order), and the reconciled tree is returned as `layer_tree` to bake for portal.js's grouped
+    switcher. Absent → flat `layer_configs` order (renders exactly like before).
     """
     sources = {}
     layers = []
@@ -76,9 +82,17 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
     core_bounds = [180, 90, -180, -90]  # deck layers' merged CORE extent (see deck_core_bounds)
     deck_core_seen = False              # ≥1 deck layer contributed a real manifest core extent
 
-    # layer_configs[0] is the TOP of the layer list and should draw on TOP of the map.
+    # V-13: order layers by the folder tree (depth-first) when one exists, else by layer_configs order.
+    layer_tree = _reconcile_layer_tree(layer_groups, layer_configs) if layer_groups else None
+    if layer_tree is not None:
+        _cfg_by_ref = {(c["layer_type"], c["layer_id"]): c for c in layer_configs}
+        ordered_configs = [_cfg_by_ref[(n["layer_type"], n["layer_id"])] for n in _flatten_layer_tree(layer_tree)]
+    else:
+        ordered_configs = layer_configs
+
+    # ordered_configs[0] is the TOP of the layer list and should draw on TOP of the map.
     # MapLibre draws later layers on top, so build them in reverse (config[0] added last).
-    for cfg in reversed(layer_configs):
+    for cfg in reversed(ordered_configs):
         if cfg["layer_type"] == "vector":
             layer = next((l for l in vector_layers if l.id == cfg["layer_id"]), None)
             if not layer:
@@ -250,7 +264,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
         core_fitted = True
     layers_info.reverse()  # the loop runs over reversed configs; the About panel shows list order
     return {"sources": sources, "layers": layers, "bounds": valid_bounds, "core_fitted": core_fitted,
-            "deck_layers": deck_layers, "layers_info": layers_info}
+            "deck_layers": deck_layers, "layers_info": layers_info, "layer_tree": layer_tree}
 
 
 def _layer_info(layer, kind: str) -> dict:
@@ -324,6 +338,8 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
             "view": initial_view,  # admin-set center/zoom; portal.js prefers this over fitBounds
             "title": title,
             "deckLayers": user_data.get("deck_layers", []),  # GeoParquet layers → deck.gl overlay
+            # V-13: nested folder tree for the grouped layer switcher (None → portal.js flat list).
+            "layerTree": user_data.get("layer_tree"),
             # The full basemap catalog, baked in so portal.js builds the switcher from the SAME source
             # as the editor (GET /api/basemaps) — one place to add a basemap.
             "basemaps": BASEMAP_CATALOG,
@@ -776,6 +792,51 @@ def _expand_bounds(bounds: list, bbox: list) -> None:
     bounds[1] = min(bounds[1], bbox[1])
     bounds[2] = max(bounds[2], bbox[2])
     bounds[3] = max(bounds[3], bbox[3])
+
+
+def _flatten_layer_tree(tree: list) -> list[dict]:
+    """Depth-first list of layer-ref nodes ({layer_type, layer_id}) in top→bottom (= draw) order."""
+    out = []
+    for node in tree or []:
+        if "layer_id" in node:
+            out.append({"layer_type": node.get("layer_type"), "layer_id": node.get("layer_id")})
+        elif "children" in node:
+            out.extend(_flatten_layer_tree(node.get("children") or []))
+    return out
+
+
+_GROUP_PROPS = ("id", "name", "collapsed", "exclusive", "description")
+
+
+def _reconcile_layer_tree(tree: list, layer_configs: list[dict]) -> list:
+    """Return a copy of the folder tree that references EXACTLY the current layer_configs: drop layer
+    nodes whose config is gone (or duplicated), keep the group structure, then append any configs not
+    referenced anywhere as root-level layer nodes (at the bottom). Keeps the tree ↔ configs invariant
+    so no layer is lost and no node dangles — the same reconciled tree drives draw order + the switcher."""
+    cfg_keys = {(c["layer_type"], c["layer_id"]) for c in layer_configs}
+    seen: set = set()
+
+    def clean(nodes: list) -> list:
+        out = []
+        for n in nodes or []:
+            if "layer_id" in n:
+                key = (n.get("layer_type"), n.get("layer_id"))
+                if key in cfg_keys and key not in seen:
+                    seen.add(key)
+                    out.append({"layer_type": n["layer_type"], "layer_id": n["layer_id"]})
+            elif "children" in n:
+                group = {k: n.get(k) for k in _GROUP_PROPS if k in n}
+                group["children"] = clean(n.get("children") or [])
+                out.append(group)
+        return out
+
+    cleaned = clean(tree)
+    for c in layer_configs:  # configs missing from the tree → appended at root, bottom (layer_configs order)
+        key = (c["layer_type"], c["layer_id"])
+        if key not in seen:
+            seen.add(key)
+            cleaned.append({"layer_type": c["layer_type"], "layer_id": c["layer_id"]})
+    return cleaned
 
 
 def read_deck_core_bbox(s3_key: str | None) -> list | None:

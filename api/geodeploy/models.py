@@ -278,7 +278,10 @@ class Portal(Base):
     description: Mapped[str | None] = mapped_column(Text)
     template_id: Mapped[str] = mapped_column(String(128), default="minimal")
     basemap: Mapped[str | None] = mapped_column(String(64))  # basemap catalog id (BASEMAP_CATALOG)
-    layer_configs: Mapped[str] = mapped_column(Text, default="[]")  # JSON
+    layer_configs: Mapped[str] = mapped_column(Text, default="[]")  # JSON — flat per-layer STYLE
+    # V-13 catalog: optional nested folder TREE over the layers (JSON list of layer/group nodes).
+    # NULL = flat list (renders like before). Structure lives here; per-layer style stays in layer_configs.
+    layer_groups: Mapped[str | None] = mapped_column(Text)
     initial_view: Mapped[str | None] = mapped_column(Text)  # JSON {center:[lng,lat], zoom, bearing, pitch} — published portal's start view
     # DORMANT: portals dropped the separate workspace-visibility control (it duplicated access_type
     # confusingly — a portal's audience is its published access_type, below). Kept at 'organization'

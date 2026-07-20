@@ -111,6 +111,8 @@ def _apply_schema_migrations(conn) -> None:
         "ALTER TABLE setup_config ADD COLUMN oidc_allowed_domains VARCHAR(512)",
         "ALTER TABLE setup_config ADD COLUMN oidc_default_role VARCHAR(16) DEFAULT 'viewer'",
         "ALTER TABLE users ADD COLUMN oidc_sub VARCHAR(255)",
+        # V-13 layer catalog: optional nested folder tree over a portal's layers
+        "ALTER TABLE portals ADD COLUMN layer_groups TEXT",
     ]
     for sql in pending:
         try:
