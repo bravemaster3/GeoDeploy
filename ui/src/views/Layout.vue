@@ -68,7 +68,7 @@
 import { ref, computed, watch } from 'vue'
 import { useRoute, RouterLink, RouterView } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { DatabaseIcon, GlobeIcon, LayoutIcon, SettingsIcon, UsersIcon } from './icons'
+import { DatabaseIcon, GlobeIcon, LayoutIcon, SettingsIcon, UsersIcon, ActivityIcon } from './icons'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -106,8 +106,9 @@ const nav = computed(() => [
   { to: '/data', label: 'nav.data', icon: DatabaseIcon },
   { to: '/portals', label: 'nav.portals', icon: GlobeIcon },
   { to: '/templates', label: 'nav.templates', icon: LayoutIcon },
-  // Users management is admin/owner only — hidden (not disabled) for editors/viewers.
-  ...(auth.isAdmin ? [{ to: '/users', label: 'nav.users', icon: UsersIcon }] : []),
+  // Users management + Activity log are admin/owner only — hidden (not disabled) for editors/viewers.
+  ...(auth.isAdmin ? [{ to: '/users', label: 'nav.users', icon: UsersIcon },
+                      { to: '/activity', label: 'nav.activity', icon: ActivityIcon }] : []),
   { to: '/settings', label: 'nav.settings', icon: SettingsIcon },
 ])
 

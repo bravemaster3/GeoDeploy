@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from typing import Any
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -171,6 +172,25 @@ class OidcSettingsOut(BaseModel):
     oidc_default_role: str
     has_client_secret: bool  # the secret itself is never returned
     redirect_uri: str        # computed — the admin registers this with their provider
+
+
+class AuditLogOut(BaseModel):
+    """One activity-log entry (A-05)."""
+    id: int
+    actor_id: int | None
+    actor_name: str | None
+    action: str
+    resource_type: str | None
+    resource_id: str | None
+    detail: dict | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+    @field_validator("detail", mode="before")
+    @classmethod
+    def _parse_detail(cls, v):
+        return json.loads(v) if isinstance(v, str) else v
 
 
 class InvitePublicOut(BaseModel):

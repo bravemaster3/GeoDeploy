@@ -18,6 +18,7 @@ from ..deps import require_owner, require_scope
 from ..models import ApiToken, ExternalSource, Invitation, Portal, RasterLayer, User, VectorLayer
 from ..schemas import InvitationOut, InviteCreate, RoleUpdate, UserAdminOut
 from ..services import notifications
+from .common import record_audit
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -91,10 +92,13 @@ async def update_role(user_id: int, body: RoleUpdate,
         raise HTTPException(403, "The owner's role cannot be changed. Use ownership transfer.")
     if target.id == caller.id:
         raise HTTPException(400, "You cannot change your own role.")
+    old_role = target.role
     target.role = body.role  # schema pattern already excludes "owner"
     _sync_is_admin(target)
     await db.commit()
     await db.refresh(target)
+    await record_audit(db, caller, "user.role_change", "user", target.id,
+                       {"name": target.name, "from": old_role, "to": body.role})
     return UserAdminOut.model_validate(target)
 
 
@@ -115,6 +119,7 @@ async def transfer_ownership(user_id: int,
     _sync_is_admin(target)
     await db.commit()
     await db.refresh(target)
+    await record_audit(db, caller, "user.ownership_transfer", "user", target.id, {"to": target.name})
     return UserAdminOut.model_validate(target)
 
 
@@ -132,6 +137,7 @@ async def delete_user(user_id: int,
     if target.id == caller.id:
         raise HTTPException(400, "You cannot delete your own account — ask another admin.")
 
+    target_name, target_email = target.name, target.email  # capture before the row is deleted
     owner = (await db.execute(select(User).where(User.role == "owner"))).scalar_one_or_none()
     heir = owner or caller  # owner always exists by construction; caller is the safe fallback
     for model in (VectorLayer, RasterLayer, ExternalSource, Portal):
@@ -144,6 +150,8 @@ async def delete_user(user_id: int,
     await db.execute(sa_delete(ApiToken).where(ApiToken.user_id == target.id))
     await db.delete(target)
     await db.commit()
+    await record_audit(db, caller, "user.delete", "user", user_id,
+                       {"name": target_name, "email": target_email, "reassigned_to": heir.name})
 
 
 # ── Invitations ───────────────────────────────────────────────────────────────────────────────
@@ -177,6 +185,7 @@ async def create_invitation(body: InviteCreate, request: Request,
     db.add(inv)
     await db.commit()
     await db.refresh(inv)
+    await record_audit(db, caller, "user.invite", "user", None, {"email": email, "role": body.role})
     out = InvitationOut.model_validate(inv)
     out.token = raw  # shown ONCE — the UI builds the copyable link from this
     # Best-effort email (SMTP configured in Settings → Email); the copyable link is the fallback.

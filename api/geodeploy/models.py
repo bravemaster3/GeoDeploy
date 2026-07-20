@@ -249,6 +249,25 @@ class UploadJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class AuditLog(Base):
+    """Append-only activity log (A-05) — who did what, when, for operator trust + support.
+
+    New table → created by `Base.metadata.create_all`, no migration entry. `actor_id` is NOT a hard FK
+    (the log must survive a user deletion), and `actor_name` is denormalized so an entry stays readable
+    afterwards. `detail` is small JSON context. Written best-effort via `routers/common.record_audit`.
+    """
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    actor_id: Mapped[int | None] = mapped_column(Integer, index=True)   # not a FK — survives user delete
+    actor_name: Mapped[str | None] = mapped_column(String(256))
+    action: Mapped[str] = mapped_column(String(64), nullable=False, index=True)   # e.g. portal.publish
+    resource_type: Mapped[str | None] = mapped_column(String(32), index=True)     # vector|raster|portal|user|…
+    resource_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    detail: Mapped[str | None] = mapped_column(Text)   # JSON context (small)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
 class Portal(Base):
     __tablename__ = "portals"
 

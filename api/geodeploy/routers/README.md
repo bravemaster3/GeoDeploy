@@ -31,6 +31,14 @@ now REJECT token requests, so any route not explicitly `require_scope`-annotated
   rejects a stale tv. `auth.py` bumps tv on password change/reset + `POST /auth/logout-all` (each
   re-issues a fresh token for the acting session). Pre-A-04 tv-less tokens read as tv=0 (no forced
   re-login). `GET /auth/session-token` returns the JWT from the `gd_session` cookie (for the SSO handoff).
+- **A-05 audit log** (`audit.py`, `GET /audit`, admin-only + filterable): reads the append-only
+  `AuditLog`. Mutations write via **`common.record_audit(db, actor, action, resource_type, resource_id,
+  detail)`** — BEST-EFFORT + self-committing (never fails the real op), called AFTER the mutation
+  commits. Instrumented: users (role_change/ownership_transfer/delete/invite), portals
+  (create/publish/unpublish/delete), tokens (create/revoke), auth (login/password_change/logout_all +
+  oidc login), data (vector/raster upload/share/delete, source create/share/delete). `actor_id` is not
+  a FK (log survives user deletion); `actor_name` denormalized. To audit a new mutation: one
+  `record_audit(...)` after its commit.
 - **A-04 OIDC SSO** (`auth_oidc.py`, `/auth/oidc/*`): public `status`; `login`→ Authlib redirect;
   `callback`→ validate id_token → `services.oidc.resolve_user` (link by sub/verified-email; provision
   only if allow-listed) → mint JWT + `gd_session` cookie → 302 `/sso-callback`. Admin config CRUD is

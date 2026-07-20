@@ -51,7 +51,7 @@ GeoLibre, `E-05` Connect from QGIS) — the adoption funnel — and under CI/scr
 | # | Phase | Theme | State |
 |---|-------|-------|-------|
 | 00 | **Foundation** | The platform, shipped | 12 items — 10 shipped incl. security hardening; tests building; service logs/console planned |
-| 01 | **Multi-user & Access** | The bridge to Cloud | `A-01`, `A-02`, `A-03` **shipped**; `A-04` **building** (frontier); `A-05` next |
+| 01 | **Multi-user & Access** | The bridge to Cloud | `A-01`, `A-02`, `A-03` **shipped**; `A-04` (frontier) + `A-05` **building** |
 | 02 | **GeoDeploy Cloud** | Managed, multi-tenant | planned / future |
 | 03 | **Ecosystem & Interop** | Adoption engine (GeoLibre, QGIS, standards) | planned / future |
 | 04 | **Advanced Capabilities** | Differentiators | future / idea |
@@ -142,6 +142,9 @@ before the static bundle is served (organization = any member, owner = creator +
 bounces to `/login?next=`). Login/accept set the cookie; the SPA mirrors existing sessions via
 `POST /auth/session`. Password stays a client-side gate. Also added `V-12` **Responsive layouts
 (mobile/tablet)** (planned). 80 backend tests pass.
+2026-07-20 — `A-05` **Activity & audit log** flipped `future` → **building**: append-only `AuditLog` +
+`record_audit()` wired into the key mutations (user/portal/token/auth/data), admin-only filterable
+`GET /audit` + an **Activity** view. Entries survive user deletion. 123 backend tests pass.
 2026-07-20 — `A-03` API tokens flipped → **shipped** (scoped tokens + CLI in use). **Frontier → `A-04`
 Auth hardening**, now **building**: secrets encrypted at rest (Fernet); session/token revocation
 (JWT `token_version` + "log out other sessions"); **OIDC SSO** via Authlib (admin-configured provider,

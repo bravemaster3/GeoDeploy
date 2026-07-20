@@ -16,7 +16,7 @@ from ...models import Portal, UploadJob, User, VectorLayer
 from ...schemas import DefaultStyle, JobStatus, SharingUpdate, VectorLayerOut
 from ...services import martin as martin_svc
 from ...tasks.vector_ingest import ingest_vector
-from ..common import apply_sharing, busy_job_progress, creator_names, visible_to
+from ..common import apply_sharing, busy_job_progress, creator_names, record_audit, visible_to
 
 router = APIRouter(prefix="/data/vector", tags=["vector"])
 
@@ -144,6 +144,8 @@ async def upload_vector(
     db.add(job)
     await db.commit()
     await db.refresh(layer)
+    await record_audit(db, user, "vector.upload", "vector", layer.id,
+                       {"name": base_name, "file": file.filename})
 
     ingest_vector.delay(job_id, layer.id, tmp_path, layer_name, schema_name, table_name)
 
@@ -769,6 +771,8 @@ async def save_sharing(
     await db.commit()
     await db.refresh(layer)
     invalidate_public_layers()
+    await record_audit(db, user, "vector.share", "vector", layer.id,
+                       {"name": layer.name, "visibility": layer.visibility})
     return VectorLayerOut.from_orm_json(layer)
 
 
@@ -802,6 +806,7 @@ async def delete_layer(
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
+    layer_name = layer.name  # capture before deletion for the audit entry
 
     settings = get_settings()
     if layer.storage_backend == "geoparquet":
@@ -850,6 +855,7 @@ async def delete_layer(
     await db.delete(layer)
     await db.commit()
     invalidate_public_layers()  # drop cached exposure/key entries for the removed layer
+    await record_audit(db, user, "vector.delete", "vector", layer_id, {"name": layer_name})
 
     # Regenerate Martin config without the deleted layer. ALL members' ready postgis layers
     # are included — the config is instance-wide (shared workspace), not per-creator; filtering

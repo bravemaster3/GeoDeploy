@@ -6,10 +6,38 @@ controls what a member may DO. A-02 adds a per-resource `visibility` axis on top
 exposed to the internet via STAC / raw assets). `user_id` is "created by" provenance AND the
 owner-check for a private resource.
 """
+import json
+import logging
+
 from sqlalchemy import or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import UploadJob, User
+from ..models import AuditLog, UploadJob, User
+
+logger = logging.getLogger(__name__)
+
+
+async def record_audit(db: AsyncSession, actor, action: str, resource_type: str | None = None,
+                       resource_id=None, detail: dict | None = None) -> None:
+    """Append an audit entry (A-05). BEST-EFFORT + self-committing — a failed audit write must NEVER
+    break the operation being logged, so call this AFTER the mutation has committed. `actor` is the
+    acting User (or None for system/anonymous)."""
+    try:
+        db.add(AuditLog(
+            actor_id=getattr(actor, "id", None),
+            actor_name=(getattr(actor, "name", None) or getattr(actor, "email", None)),
+            action=action,
+            resource_type=resource_type,
+            resource_id=None if resource_id is None else str(resource_id),
+            detail=json.dumps(detail) if detail else None,
+        ))
+        await db.commit()
+    except Exception:  # noqa: BLE001 — auditing is never allowed to fail the real operation
+        logger.warning("audit write failed for action=%s", action, exc_info=True)
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
 
 # Roles that see + act on EVERY resource regardless of its visibility (workspace governance:
 # bulk review, delete-reassign, sharing changes). Keep in sync with deps.ROLE_ORDER's top tiers.

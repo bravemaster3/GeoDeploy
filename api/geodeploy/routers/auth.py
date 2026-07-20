@@ -15,6 +15,7 @@ from ..schemas import (
     PasswordResetRequest, TokenResponse, UserOut,
 )
 from ..services import notifications
+from .common import record_audit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 _pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -54,6 +55,7 @@ async def login(request: Request, response: Response,
         )
     token = _create_token(user)
     _set_session_cookie(response, token, request)
+    await record_audit(db, user, "auth.login", "user", user.id, {"method": "password"})
     return TokenResponse(access_token=token)
 
 
@@ -193,6 +195,7 @@ async def change_password(body: PasswordChangeRequest, request: Request, respons
     user.token_version += 1
     await db.commit()
     await db.refresh(user)
+    await record_audit(db, user, "auth.password_change", "user", user.id)
     token = _create_token(user)
     _set_session_cookie(response, token, request)
     return TokenResponse(access_token=token)
@@ -207,6 +210,7 @@ async def logout_all(request: Request, response: Response,
     user.token_version += 1
     await db.commit()
     await db.refresh(user)
+    await record_audit(db, user, "auth.logout_all", "user", user.id)
     token = _create_token(user)
     _set_session_cookie(response, token, request)
     return TokenResponse(access_token=token)

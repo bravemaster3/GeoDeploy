@@ -20,6 +20,7 @@ const routes = [
       { path: 'templates', component: () => import('@/views/TemplateGallery.vue') },
       { path: 'settings', component: () => import('@/views/Settings.vue') },
       { path: 'users', component: () => import('@/views/Users.vue'), meta: { requiresAdmin: true } },
+      { path: 'activity', component: () => import('@/views/Activity.vue'), meta: { requiresAdmin: true } },
     ],
   },
 ]

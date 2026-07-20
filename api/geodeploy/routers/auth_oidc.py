@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..services.oidc import OidcError, build_oauth, get_oidc_config, resolve_user
 from .auth import _create_token, _set_session_cookie
+from .common import record_audit
 from .users import request_origin
 
 router = APIRouter(prefix="/auth/oidc", tags=["auth"])
@@ -50,6 +51,7 @@ async def oidc_callback(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:  # noqa: BLE001 — any protocol/network failure → a generic, safe message
         return RedirectResponse("/login?sso_error=" + quote("Single sign-on failed. Please try again."))
 
+    await record_audit(db, user, "auth.login", "user", user.id, {"method": "oidc"})
     jwt_token = _create_token(user)
     resp = RedirectResponse("/sso-callback", status_code=302)
     _set_session_cookie(resp, jwt_token, request)  # SPA reads it back via /auth/session-token

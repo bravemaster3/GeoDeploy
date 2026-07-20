@@ -11,7 +11,7 @@ from ...models import RasterLayer, UploadJob, User
 from ...schemas import JobStatus, RasterDefaultStyle, RasterLayerOut, SharingUpdate
 from ...services.titiler import get_tile_url as raster_tile_url, COLORMAPS
 from ...tasks.raster_ingest import ingest_raster
-from ..common import apply_sharing, busy_job_progress, creator_names, visible_to
+from ..common import apply_sharing, busy_job_progress, creator_names, record_audit, visible_to
 
 router = APIRouter(prefix="/data/raster", tags=["raster"])
 
@@ -131,6 +131,8 @@ async def upload_raster(
     db.add(job)
     await db.commit()
     await db.refresh(layer)
+    await record_audit(db, user, "raster.upload", "raster", layer.id,
+                       {"name": base_name, "file": file.filename})
 
     ingest_raster.delay(job_id, layer.id, tmp_path, s3_key)
 
@@ -168,6 +170,8 @@ async def save_sharing(
     apply_sharing(layer, body)
     await db.commit()
     await db.refresh(layer)
+    await record_audit(db, user, "raster.share", "raster", layer.id,
+                       {"name": layer.name, "visibility": layer.visibility})
     return RasterLayerOut.from_orm_json(layer)
 
 
@@ -233,6 +237,7 @@ async def delete_layer(layer_id: int, user: User = Depends(require_scope("data:w
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
+    layer_name = layer.name  # capture before deletion for the audit entry
 
     settings = get_settings()
     # DETACH vs DELETE: only objects under GeoDeploy's OWN `rasters/` upload area are removed.
@@ -249,3 +254,4 @@ async def delete_layer(layer_id: int, user: User = Depends(require_scope("data:w
 
     await db.delete(layer)
     await db.commit()
+    await record_audit(db, user, "raster.delete", "raster", layer_id, {"name": layer_name})

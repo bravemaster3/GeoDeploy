@@ -68,6 +68,9 @@ export const listTokens = () => api.get('/tokens')
 export const createToken = (data) => api.post('/tokens', data)
 export const revokeToken = (id) => api.delete(`/tokens/${id}`)
 
+// Activity & audit log (A-05, admin)
+export const listAudit = (params) => api.get('/audit', { params })
+
 // Outgoing email (admin Settings → Email; generic SMTP)
 export const getEmailSettings = () => api.get('/admin/email-settings')
 export const updateEmailSettings = (data) => api.put('/admin/email-settings', data)

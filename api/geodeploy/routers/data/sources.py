@@ -16,7 +16,7 @@ from ...deps import require_scope
 from ...models import ExternalSource, User
 from ...schemas import ExternalSourceCreate, ExternalSourceOut, VisibilityUpdate
 from ...services import external_sources as ext
-from ..common import creator_names, visible_to
+from ..common import creator_names, record_audit, visible_to
 
 router = APIRouter(prefix="/data/sources", tags=["sources"])
 
@@ -87,6 +87,7 @@ async def create_source(
     db.add(src)
     await db.commit()
     await db.refresh(src)
+    await record_audit(db, user, "source.create", "source", src.id, {"name": src.name, "kind": src.kind})
     return _to_out(src)
 
 
@@ -108,6 +109,8 @@ async def save_sharing(
     src.visibility = body.visibility
     await db.commit()
     await db.refresh(src)
+    await record_audit(db, user, "source.share", "source", src.id,
+                       {"name": src.name, "visibility": src.visibility})
     return _to_out(src)
 
 
@@ -118,8 +121,10 @@ async def delete_source(source_id: int, user: User = Depends(require_scope("data
     )).scalar_one_or_none()
     if not src:
         raise HTTPException(404, "Source not found.")
+    source_name = src.name
     await db.delete(src)
     await db.commit()
+    await record_audit(db, user, "source.delete", "source", source_id, {"name": source_name})
 
 
 @router.get("/{source_id}/features.geojson")

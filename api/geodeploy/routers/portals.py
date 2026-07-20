@@ -15,7 +15,7 @@ from ..deps import require_scope, resolve_cookie_user
 from ..models import ExternalSource, Portal, RasterLayer, User, VectorLayer
 from ..schemas import PortalCreate, PortalOut, PortalUpdate
 from ..services.portal_generator import build_portal_bundle, generate_style, read_deck_core_bbox
-from .common import creator_names
+from .common import creator_names, record_audit
 from .data.vector import invalidate_public_layers
 
 router = APIRouter(prefix="/portals", tags=["portals"])
@@ -136,6 +136,7 @@ async def create_portal(req: PortalCreate, user: User = Depends(require_scope("p
     db.add(portal)
     await db.commit()
     await db.refresh(portal)
+    await record_audit(db, user, "portal.create", "portal", portal.id, {"title": portal.title})
     return PortalOut.from_orm_json(portal)
 
 
@@ -255,6 +256,8 @@ async def publish_portal(portal_id: int, user: User = Depends(require_scope("por
     await db.commit()
     await db.refresh(portal)
     invalidate_public_layers()  # this portal's layers are now publicly readable
+    await record_audit(db, user, "portal.publish", "portal", portal.id,
+                       {"title": portal.title, "slug": portal.slug, "access": portal.access_type})
     return PortalOut.from_orm_json(portal)
 
 
@@ -319,6 +322,7 @@ async def unpublish_portal(portal_id: int, user: User = Depends(require_scope("p
     await db.commit()
     await db.refresh(portal)
     invalidate_public_layers()  # its layers are no longer publicly readable (unless shared/in another portal)
+    await record_audit(db, user, "portal.unpublish", "portal", portal.id, {"title": portal.title})
     return PortalOut.from_orm_json(portal)
 
 
@@ -335,10 +339,12 @@ async def delete_portal(portal_id: int, user: User = Depends(require_scope("port
     if os.path.exists(assets_dir):
         shutil.rmtree(assets_dir, ignore_errors=True)
     was_published = portal.published
+    portal_title = portal.title
     await db.delete(portal)
     await db.commit()
     if was_published:
         invalidate_public_layers()  # its layers are no longer exposed via this portal
+    await record_audit(db, user, "portal.delete", "portal", portal_id, {"title": portal_title})
 
 
 # ── Area-select export (offloaded to Celery) ─────────────────────────────────

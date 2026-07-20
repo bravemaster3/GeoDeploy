@@ -5,6 +5,7 @@
     "templates": "Templates",
     "settings": "Settings",
     "users": "Users",
+    "activity": "Activity",
     "logout": "Sign out"
   },
   "users": {

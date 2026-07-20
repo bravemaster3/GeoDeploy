@@ -18,6 +18,7 @@ from ..database import get_db
 from ..deps import ROLE_ORDER, SCOPES, TOKEN_PREFIX, _naive_utcnow, get_current_user
 from ..models import ApiToken, User
 from ..schemas import ApiTokenCreate, ApiTokenCreated, ApiTokenOut
+from .common import record_audit
 
 router = APIRouter(prefix="/tokens", tags=["tokens"])
 
@@ -62,6 +63,7 @@ async def create_token(body: ApiTokenCreate, request: Request,
     db.add(tok)
     await db.commit()
     await db.refresh(tok)
+    await record_audit(db, user, "token.create", "token", tok.id, {"name": tok.name, "scopes": scopes})
     # ApiTokenCreated = ApiTokenOut + the raw secret (shown ONCE, never stored/listed).
     return ApiTokenCreated(**ApiTokenOut.model_validate(tok).model_dump(), token=raw)
 
@@ -77,3 +79,4 @@ async def revoke_token(token_id: int, request: Request,
         raise HTTPException(404, "Token not found.")
     tok.revoked_at = _naive_utcnow()
     await db.commit()
+    await record_audit(db, user, "token.revoke", "token", tok.id, {"name": tok.name})
