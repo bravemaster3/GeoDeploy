@@ -4,6 +4,7 @@ from sqlalchemy import (
     Integer, String, Text, func
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from .crypto import EncryptedText
 from .database import Base
 
 
@@ -34,7 +35,7 @@ class SetupConfig(Base):
     smtp_port: Mapped[int | None] = mapped_column(Integer, default=587)
     smtp_security: Mapped[str | None] = mapped_column(String(16), default="starttls")  # tls | starttls | none
     smtp_username: Mapped[str | None] = mapped_column(String(256))
-    smtp_password: Mapped[str | None] = mapped_column(Text)
+    smtp_password: Mapped[str | None] = mapped_column(EncryptedText)  # Fernet-encrypted at rest (crypto.py)
     email_from: Mapped[str | None] = mapped_column(String(256))
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
