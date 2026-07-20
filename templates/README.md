@@ -7,6 +7,12 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
 
 ## Architecture (read this before touching templates)
 - **`shared/`** — the runtime, edited ONCE, inherited by every template:
+  - **Layer catalog / folder groups (V-13, 2026-07-20):** when `STYLE.geodeploy.layerTree` is baked,
+    `applyLayerGroups(tree)` (run in `map.on('load')` after `buildLayerSwitcher` + `appendDeckRows`)
+    REORGANIZES the flat layer cards into a nested folder tree by `data-ref` (`type:id`, tagged on both
+    MapLibre + deck cards) — moving each card keeps its handlers. Group behaviors: collapse/expand,
+    toggle-all (clicks descendant `.layer-eye`s), exclusive/radio (showing one hides its siblings),
+    per-group description. `portal.css` styles group headers/indentation. No tree → flat list.
   - **Anti-flash on load (2026-07-16):** a deck-only portal used to `fitBounds` the full extent then hard-snap (`duration:0`) to the manifest core extent once it loaded — a visible flash. When the server baked the core extent (`STYLE.geodeploy.coreFitted`, see `portal_generator.read_deck_core_bbox`), portal.js now **skips the refit** (the initial fit already opened on the core). Only unbaked/older bundles still refit, and it now **glides** (`duration:650`) and resolves on `moveend` before arming the `moveend`/first-fetch handlers, so it neither snaps nor double-fetches. **Basemap no-swap (2026-07-17):** publish repoints the builtin base layer to the chosen basemap so the portal OPENS on it; `setupBasemaps` used to then `selectBasemap(DEFAULT_BASEMAP)` on load, hiding that builtin and showing the catalog copy of the SAME basemap — a redundant repaint flash. It now skips that initial swap when `STYLE.geodeploy.baseRepointed` is set (only swaps for a vector template whose base couldn't be repointed, or the `'__default__'` no-op).
   - `portal.js` — all portal behaviour (access gate, map init, **thin layer list**: drag-to-reorder ·
     eye/eye-off visibility · symbol swatch that opens a **symbology popover** (opacity, colour, line

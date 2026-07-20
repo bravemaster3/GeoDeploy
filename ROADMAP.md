@@ -142,6 +142,11 @@ before the static bundle is served (organization = any member, owner = creator +
 bounces to `/login?next=`). Login/accept set the cookie; the SPA mirrors existing sessions via
 `POST /auth/session`. Password stays a client-side gate. Also added `V-12` **Responsive layouts
 (mobile/tablet)** (planned). 80 backend tests pass.
+2026-07-20 — `V-13` **Layer groups & catalog panel** flipped `planned` → **building** (now the active
+frontier): a portal's flat layer list becomes a NESTED FOLDER TREE (collapse, toggle-all, exclusive/
+radio groups, per-group description) built in the editor (`LayerTree.vue`) and browsed in the published
+portal (`portal.js applyLayerGroups`). New `Portal.layer_groups` tree alongside flat `layer_configs`;
+no tree → flat list (back-compat). A-04/A-05 stay `building` (code-complete, awaiting deploy+verify).
 2026-07-20 — Roadmap gained an **`"unverified": true`** flag → a "⚠ needs testing" pill + amber
 accent on code-complete-but-unverified items (search "untested"). Tagged `A-04` (SSO/OIDC live flow)
 and `C-08` (email SMTP). Added **`V-13` Layer groups & catalog panel** (planned — folder/group catalog

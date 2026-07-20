@@ -55,21 +55,14 @@
           </div>
 
           <div v-if="!layerConfigs.length" class="text-xs text-muted-foreground/70 py-1">No layers added yet.</div>
-          <div v-for="(cfg, i) in layerConfigs" :key="`${cfg.layer_type}-${cfg.layer_id}`"
-            draggable="true"
-            @dragstart="onDragStart(i)"
-            @dragover.prevent="onDragOver(i)"
-            @drop="onDragEnd"
-            @dragend="onDragEnd"
-            :class="{ 'opacity-40': dragIndex === i }"
-          >
-            <LayerPanel
-              :config="cfg"
-              @remove="layerConfigs.splice(i, 1)"
-              @update="layerConfigs[i] = { ...layerConfigs[i], ...$event }"
-              @zoom="zoomToLayer(cfg)"
-            />
-          </div>
+          <template v-else>
+            <div class="flex justify-end mb-1">
+              <button @click="addRootFolder" class="text-[11px] text-muted-foreground/70 hover:text-primary">＋ Add folder</button>
+            </div>
+            <LayerTree :nodes="layerTree" :configs="layerConfigs" :all-groups="allGroups"
+              @layer-remove="removeLayerNode" @layer-update="onLayerUpdate"
+              @layer-zoom="n => zoomToLayer(configForNode(n))" @move-to="moveNodeToGroup" />
+          </template>
         </section>
 
         <!-- Template section -->
@@ -247,14 +240,77 @@ import maplibregl from 'maplibre-gl'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { GeoJsonLayer } from '@deck.gl/layers'
 import { ExternalLinkIcon, GlobeIcon, KeyIcon, UsersIcon, UserIcon, CheckIcon } from '@/views/icons'
-import LayerPanel from '@/components/portal/LayerPanel.vue'
+import LayerTree from '@/components/portal/LayerTree.vue'
 
 const route = useRoute()
 const portalsStore = usePortalsStore()
 const dataStore = useDataStore()
 
 const portal = ref(null)
-const layerConfigs = ref([])
+const layerConfigs = ref([])   // flat per-layer STYLE (edited by LayerPanel)
+const layerTree = ref([])      // V-13: folder tree over the layers (structure + order)
+
+const _gid = () => 'g' + Math.random().toString(36).slice(2, 9)
+const _key = (n) => `${n.layer_type}:${n.layer_id}`
+function configForNode(n) {
+  return layerConfigs.value.find(c => c.layer_type === n.layer_type && c.layer_id === n.layer_id)
+}
+function flattenTreeRefs(nodes, out = []) {
+  for (const n of nodes) { if (n.children) flattenTreeRefs(n.children, out); else out.push(n) }
+  return out
+}
+// Reconcile a saved tree with the current configs (drop dangling layer nodes, append missing configs
+// at root) — mirrors portal_generator._reconcile_layer_tree so editor + published agree.
+function reconcileTree(tree, configs) {
+  const cfgKeys = new Set(configs.map(_key)), seen = new Set()
+  const clean = (nodes) => (nodes || []).reduce((out, n) => {
+    if (n.children) out.push({ ...n, children: clean(n.children) })
+    else if (cfgKeys.has(_key(n)) && !seen.has(_key(n))) { seen.add(_key(n)); out.push({ layer_type: n.layer_type, layer_id: n.layer_id }) }
+    return out
+  }, [])
+  const cleaned = (tree && tree.length) ? clean(tree) : []
+  for (const c of configs) if (!seen.has(_key(c))) { seen.add(_key(c)); cleaned.push({ layer_type: c.layer_type, layer_id: c.layer_id }) }
+  return cleaned
+}
+function _removeFromTree(nodes, node) {
+  for (let i = 0; i < nodes.length; i++) {
+    if (nodes[i].children) { if (_removeFromTree(nodes[i].children, node)) return true }
+    else if (nodes[i].layer_type === node.layer_type && nodes[i].layer_id === node.layer_id) { nodes.splice(i, 1); return true }
+  }
+  return false
+}
+function _findGroup(nodes, id) {
+  for (const n of nodes) if (n.children) { if (n.id === id) return n; const f = _findGroup(n.children, id); if (f) return f }
+  return null
+}
+
+const allGroups = computed(() => {
+  const out = []
+  const walk = (nodes, prefix) => nodes.forEach(n => {
+    if (n.children) { const path = prefix ? `${prefix} / ${n.name || 'Folder'}` : (n.name || 'Folder'); out.push({ id: n.id, path }); walk(n.children, path) }
+  })
+  walk(layerTree.value, '')
+  return out
+})
+
+function addRootFolder() {
+  layerTree.value.unshift({ id: _gid(), name: 'New folder', collapsed: false, exclusive: false, description: '', children: [] })
+}
+function removeLayerNode(node) {
+  _removeFromTree(layerTree.value, node)
+  const idx = layerConfigs.value.findIndex(c => c.layer_type === node.layer_type && c.layer_id === node.layer_id)
+  if (idx !== -1) layerConfigs.value.splice(idx, 1)
+}
+function onLayerUpdate({ node, patch }) {
+  const idx = layerConfigs.value.findIndex(c => c.layer_type === node.layer_type && c.layer_id === node.layer_id)
+  if (idx !== -1) layerConfigs.value[idx] = { ...layerConfigs.value[idx], ...patch }
+}
+function moveNodeToGroup({ node, groupId }) {
+  const detached = { layer_type: node.layer_type, layer_id: node.layer_id }
+  _removeFromTree(layerTree.value, node)
+  const grp = groupId === 'root' ? null : _findGroup(layerTree.value, groupId)
+  ;(grp ? grp.children : layerTree.value).push(detached)
+}
 const selectedTemplate = ref('minimal')
 const templates = ref([])
 const showAddLayer = ref(false)
@@ -480,6 +536,8 @@ onMounted(async () => {
   portal.value = portalsStore.portals.find(p => p.id === parseInt(route.params.id))
   if (portal.value) {
     layerConfigs.value = portal.value.layer_configs || []
+    // V-13: build the folder tree from the saved groups (reconciled against configs), else a flat tree.
+    layerTree.value = reconcileTree(portal.value.layer_groups, layerConfigs.value)
     selectedTemplate.value = portal.value.template_id
     // Legacy 'private' == organization (members-only) — show it as the Organization option.
     accessType.value = portal.value.access_type === 'private'
@@ -795,7 +853,7 @@ let lastStyleJson = ''  // last applied MapLibre style → skip redundant setSty
 // chosen basemap's tiles differ, rebuild the preview.
 watch(basemapCatalog, () => basemapControl?.refresh())
 
-watch([layerConfigs, loaded, basemap, basemapCatalog, ready], () => {
+watch([layerConfigs, layerTree, loaded, basemap, basemapCatalog, ready], () => {
   if (!loaded.value || !ready.value) return
   const { style, bounds } = buildPreviewStyle()
   // A setStyle repaint is a visible flash; only apply when the style actually changed (e.g. the
@@ -981,8 +1039,10 @@ function buildPreviewStyle() {
       : b.slice()
   }
 
-  // config[0] is the top of the list → draw it on top → build in reverse.
-  for (const cfg of [...layerConfigs.value].reverse()) {
+  // Draw order follows the folder tree (flattened, top→bottom); top of the list draws on top → reverse.
+  // Parity with portal_generator.generate_style. Falls back to config order if a node lacks a config.
+  const orderedForDraw = flattenTreeRefs(layerTree.value).map(configForNode).filter(Boolean)
+  for (const cfg of [...(orderedForDraw.length ? orderedForDraw : layerConfigs.value)].reverse()) {
     if (cfg.visible === false) continue
     if (cfg.layer_type === 'vector') {
       const layer = dataStore.vectorLayers.find(l => l.id === cfg.layer_id)
@@ -1150,6 +1210,7 @@ async function addLayer(layer) {
     style,
     popup_fields: ds?.popup_fields ?? [],
   })
+  layerTree.value.unshift({ layer_type: layer.type, layer_id: layer.id })  // V-13: mirror into the tree (root, top)
   lastAddedKey.value = `${layer.type}-${layer.id}`
   showAddLayer.value = false
 
@@ -1208,6 +1269,7 @@ async function save() {
     if (view) savedView.value = view
     const payload = {
       layer_configs: layerConfigs.value,
+      layer_groups: layerTree.value,   // V-13: the folder tree (structure + order)
       template_id: selectedTemplate.value,
       access_type: accessType.value,
       initial_view: view,
