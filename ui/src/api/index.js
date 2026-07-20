@@ -37,7 +37,8 @@ export const getMe = () => api.get('/auth/me')
 // (top-level portal navigations can't send an Authorization header). Idempotent; cleared on logout.
 export const syncSession = () => api.post('/auth/session')
 export const logoutSession = () => api.post('/auth/logout')
-export const changePassword = (data) => api.put('/auth/password', data)
+export const changePassword = (data) => api.put('/auth/password', data)   // A-04: returns a fresh token
+export const logoutAll = () => api.post('/auth/logout-all')                // A-04: revoke other sessions
 export const forgotPassword = (email) => api.post('/auth/forgot-password', { email })
 // Public invitation/reset flows (token IS the credential — no auth header needed)
 export const getInvitation = (token) => api.get(`/auth/invitations/${encodeURIComponent(token)}`)

@@ -55,6 +55,10 @@ class User(Base):
     # owner | admin | editor | viewer — exactly one owner per install
     # (enforced by the uq_users_single_owner partial index + the transfer endpoint).
     role: Mapped[str] = mapped_column(String(16), nullable=False, default="viewer")
+    # A-04 session revocation: embedded in the browser JWT as `tv`; get_current_user rejects a token
+    # whose tv != this. Bumped on password change/reset + "log out everywhere" to kill outstanding
+    # JWTs. (API tokens are revoked individually — this is only the stateless browser JWT.)
+    token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     vector_layers: Mapped[list["VectorLayer"]] = relationship(back_populates="user")

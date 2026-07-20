@@ -67,6 +67,8 @@ def _apply_schema_migrations(conn) -> None:
         "AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'owner')",
         # DB-level single-owner invariant (SQLite partial unique index)
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_single_owner ON users(role) WHERE role = 'owner'",
+        # A-04 session revocation: per-user JWT version (default 0 → existing tv-less tokens stay valid).
+        "ALTER TABLE users ADD COLUMN token_version INTEGER DEFAULT 0",
         # A-02 per-resource sharing — workspace visibility axis (private | organization | public).
         # Nullable ADD + guarded backfill (SQLite can't ADD NOT NULL without a constant default;
         # every create path sets it, model default is 'organization'). Existing data: public IFF it

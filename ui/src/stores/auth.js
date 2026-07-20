@@ -32,5 +32,11 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
   }
 
-  return { user, role, isAdmin, isOwner, canEdit, fetchMe, loginUser, logout }
+  // A-04: adopt a re-issued token (after a password change or "log out other sessions") so THIS tab
+  // stays authorized while the old token_version is revoked everywhere else.
+  function setToken(token) {
+    if (token) localStorage.setItem('geodeploy_token', token)
+  }
+
+  return { user, role, isAdmin, isOwner, canEdit, fetchMe, loginUser, logout, setToken }
 })

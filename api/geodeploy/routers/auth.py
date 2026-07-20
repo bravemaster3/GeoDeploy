@@ -20,10 +20,11 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 _pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
-def _create_token(user_id: int, expires_delta: timedelta = timedelta(days=7)) -> str:
+def _create_token(user: User, expires_delta: timedelta = timedelta(days=7)) -> str:
     settings = get_settings()
     payload = {
-        "sub": str(user_id),
+        "sub": str(user.id),
+        "tv": user.token_version,  # A-04: revocation — get_current_user rejects a stale tv
         "exp": datetime.now(timezone.utc) + expires_delta,
     }
     return jwt.encode(payload, settings.secret_key, algorithm="HS256")
@@ -51,7 +52,7 @@ async def login(request: Request, response: Response,
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    token = _create_token(user.id)
+    token = _create_token(user)
     _set_session_cookie(response, token, request)
     return TokenResponse(access_token=token)
 
@@ -124,7 +125,7 @@ async def accept_invitation(token: str, body: AcceptInviteRequest, request: Requ
     inv.used_at = utcnow()
     await db.commit()
     await db.refresh(user)
-    token_str = _create_token(user.id)
+    token_str = _create_token(user)
     _set_session_cookie(response, token_str, request)
     return TokenResponse(access_token=token_str)
 
@@ -164,17 +165,38 @@ async def reset_password(token: str, body: PasswordResetRequest,
     if not target:
         raise HTTPException(404, "User not found.")
     target.hashed_password = _pwd.hash(body.password)
+    target.token_version += 1  # A-04: a reset invalidates every outstanding session for that user
     inv.used_at = utcnow()
     await db.commit()
 
 
-@router.put("/password", status_code=204)
-async def change_password(body: PasswordChangeRequest,
+@router.put("/password", response_model=TokenResponse)
+async def change_password(body: PasswordChangeRequest, request: Request, response: Response,
                           user: User = Depends(get_current_user),
                           db: AsyncSession = Depends(get_db)):
-    """Self-service password change (any role). NOTE: outstanding 7-day JWTs are NOT revoked
-    (no session store yet — planned with A-04 auth hardening)."""
+    """Self-service password change (any role). A-04: bumps token_version so OTHER sessions/old JWTs
+    are revoked, then re-issues a fresh token for THIS session (returned + set as the cookie) so the
+    caller isn't logged out of the tab they're using."""
     if not _pwd.verify(body.current_password, user.hashed_password):
         raise HTTPException(403, "Current password is incorrect.")
     user.hashed_password = _pwd.hash(body.new_password)
+    user.token_version += 1
     await db.commit()
+    await db.refresh(user)
+    token = _create_token(user)
+    _set_session_cookie(response, token, request)
+    return TokenResponse(access_token=token)
+
+
+@router.post("/logout-all", response_model=TokenResponse)
+async def logout_all(request: Request, response: Response,
+                     user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """A-04: revoke every OTHER browser session (bump token_version → all outstanding JWTs die), and
+    re-issue a fresh token for THIS session so the caller stays signed in here. (API tokens are
+    unaffected — revoke those individually in Settings → API tokens.)"""
+    user.token_version += 1
+    await db.commit()
+    await db.refresh(user)
+    token = _create_token(user)
+    _set_session_cookie(response, token, request)
+    return TokenResponse(access_token=token)

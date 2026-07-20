@@ -210,8 +210,13 @@
             <div class="text-sm text-muted-foreground/70 truncate">{{ auth.user?.email }}</div>
           </div>
           <button @click="showPwForm = !showPwForm" class="btn-secondary text-xs px-3 py-1.5">Change password</button>
+          <button @click="logoutOthers" :disabled="logoutOthersBusy" class="btn-secondary text-xs px-3 py-1.5"
+            title="Revoke every other browser session (this tab stays signed in)">
+            {{ logoutOthersBusy ? '…' : 'Log out other sessions' }}
+          </button>
           <button @click="signOut" class="btn-secondary text-xs px-3 py-1.5">Sign out</button>
         </div>
+        <p v-if="logoutOthersMsg" class="px-5 pb-3 text-xs text-green-400">{{ logoutOthersMsg }}</p>
         <!-- Change password (any role) -->
         <div v-if="showPwForm" class="px-5 pb-5 border-t border-border/60 pt-4 space-y-3">
           <div class="grid gap-3 sm:grid-cols-3">
@@ -296,8 +301,8 @@ import { useRouter } from 'vue-router'
 import { useSystemStore } from '@/stores/system'
 import { useAuthStore } from '@/stores/auth'
 import { ServerIcon, HardDriveIcon, UserIcon, RefreshIcon, MailIcon, KeyIcon, TrashIcon } from './icons'
-import api, { changePassword, controlService, getEmailSettings, sendTestEmail, updateEmailSettings,
-              listTokens, revokeToken } from '@/api'
+import api, { changePassword, logoutAll, controlService, getEmailSettings, sendTestEmail,
+              updateEmailSettings, listTokens, revokeToken } from '@/api'
 import TokenModal from '@/components/users/TokenModal.vue'
 
 const systemStore = useSystemStore()
@@ -363,8 +368,9 @@ async function submitPassword() {
   pwBusy.value = true
   pwMsg.value = null
   try {
-    await changePassword({ current_password: pwCurrent.value, new_password: pwNew.value })
-    pwMsg.value = { ok: true, text: 'Password updated.' }
+    const { data } = await changePassword({ current_password: pwCurrent.value, new_password: pwNew.value })
+    auth.setToken(data.access_token)  // A-04: adopt the re-issued token; other sessions are revoked
+    pwMsg.value = { ok: true, text: 'Password updated. Other sessions were signed out.' }
     pwCurrent.value = pwNew.value = pwConfirm.value = ''
     setTimeout(() => { pwMsg.value = null; showPwForm.value = false }, 2500)
   } catch (err) {
@@ -418,6 +424,20 @@ function pillClass(s) {
 function signOut() {
   auth.logout()
   router.push('/login')
+}
+
+// A-04: revoke every OTHER session; this tab adopts the re-issued token and stays signed in.
+const logoutOthersBusy = ref(false)
+const logoutOthersMsg = ref('')
+async function logoutOthers() {
+  logoutOthersBusy.value = true
+  try {
+    const { data } = await logoutAll()
+    auth.setToken(data.access_token)
+    logoutOthersMsg.value = 'Other sessions signed out.'
+    setTimeout(() => { logoutOthersMsg.value = '' }, 3000)
+  } catch { /* 401 interceptor handles an expired session */ }
+  finally { logoutOthersBusy.value = false }
 }
 
 async function svcAction(name, action) {

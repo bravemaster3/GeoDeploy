@@ -92,6 +92,11 @@ async def get_current_user(
     user = result.scalar_one_or_none()
     if user is None:
         raise credentials_error
+    # A-04 session revocation: reject a JWT minted before the user's tokens were rotated (password
+    # change / reset / "log out everywhere"). Pre-A-04 tokens carry no `tv` → read as 0, which matches
+    # the column default, so nobody is force-logged-out on deploy.
+    if payload.get("tv", 0) != user.token_version:
+        raise credentials_error
     return user
 
 

@@ -203,7 +203,7 @@ async def test_change_password(client, db):
     assert r.status_code == 403
     r = await client.put("/api/auth/password",
                          json={"current_password": "pw", "new_password": "new-s3cret"}, headers=h)
-    assert r.status_code == 204
+    assert r.status_code == 200 and r.json()["access_token"]  # A-04: re-issued token for this session
     r = await client.post("/api/auth/login",
                           data={"username": "viewer@example.com", "password": "new-s3cret"})
     assert r.status_code == 200
