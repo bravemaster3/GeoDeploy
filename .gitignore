@@ -48,3 +48,7 @@ Thumbs.db
 
 # External reference repos (local clones, not part of GeoDeploy)
 GeoLibre/
+
+# Scratch portal-config dumps written by examples/geodeploy_cli.py (portal-get)
+examples/*.json
+examples/.venv/
