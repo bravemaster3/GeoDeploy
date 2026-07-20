@@ -49,7 +49,7 @@
         </div>
         <div v-else class="divide-y divide-border/60">
           <VectorRow v-for="layer in filteredVectors" :key="layer.id" :layer="layer"
-            @delete="dataStore.removeVector(layer.id)" />
+            @delete="askDelete('vector', layer)" />
         </div>
       </section>
 
@@ -81,7 +81,7 @@
         </div>
         <div v-else class="divide-y divide-border/60">
           <RasterRow v-for="layer in filteredRasters" :key="layer.id" :layer="layer"
-            @delete="dataStore.removeRaster(layer.id)" />
+            @delete="askDelete('raster', layer)" />
         </div>
       </section>
 
@@ -107,7 +107,7 @@
         </div>
         <div v-else class="divide-y divide-border/60">
           <SourceRow v-for="src in filteredSources" :key="src.id" :source="src"
-            @delete="dataStore.removeExternal(src.id)" />
+            @delete="askDelete('source', src)" />
         </div>
       </section>
     </div>
@@ -117,6 +117,9 @@
     <UploadModal v-if="showRasterUpload" type="raster" @close="showRasterUpload = false" />
     <AddSourceModal v-if="showAddSource" @close="showAddSource = false" />
     <DiscoverModal v-if="showDiscover" @close="showDiscover = false" />
+    <ConfirmDeleteModal v-if="del" :name="del.name" :usage="del.usage"
+      :loading-usage="del.loadingUsage" :busy="del.busy"
+      @confirm="confirmDelete" @cancel="del = null" />
   </div>
 </template>
 
@@ -131,9 +134,38 @@ import UploadModal from '@/components/data/UploadModal.vue'
 import SourceRow from '@/components/data/SourceRow.vue'
 import AddSourceModal from '@/components/data/AddSourceModal.vue'
 import DiscoverModal from '@/components/data/DiscoverModal.vue'
+import ConfirmDeleteModal from '@/components/data/ConfirmDeleteModal.vue'
+import { getVectorUsage, getRasterUsage, getSourceUsage } from '@/api'
 
 const auth = useAuthStore()
 const dataStore = useDataStore()
+
+// ── Delete confirmation (irreversible; warns which portals use the layer, then prunes + re-publishes)
+const del = ref(null)  // { type, id, name, usage:[], loadingUsage, busy }
+const _usageApi = { vector: getVectorUsage, raster: getRasterUsage, source: getSourceUsage }
+const _removeFn = {
+  vector: (id) => dataStore.removeVector(id),
+  raster: (id) => dataStore.removeRaster(id),
+  source: (id) => dataStore.removeExternal(id),
+}
+
+async function askDelete(type, item) {
+  del.value = { type, id: item.id, name: item.name, usage: [], loadingUsage: true, busy: false }
+  try {
+    del.value.usage = (await _usageApi[type](item.id)).data
+  } catch { /* show the confirm without usage if the check fails */ }
+  finally { if (del.value) del.value.loadingUsage = false }
+}
+
+async function confirmDelete() {
+  if (!del.value || del.value.busy) return  // guard: one delete, no double-fire race
+  del.value.busy = true
+  try {
+    await _removeFn[del.value.type](del.value.id)
+  } finally {
+    del.value = null
+  }
+}
 
 // Per-section search (shown once a section holds more than a handful of layers) — matches on
 // name plus catalog keywords/abstract so shared metadata makes layers findable.

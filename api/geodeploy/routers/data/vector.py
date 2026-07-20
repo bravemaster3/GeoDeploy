@@ -13,10 +13,11 @@ from ...config import get_settings
 from ...database import get_db
 from ...deps import require_scope
 from ...models import Portal, UploadJob, User, VectorLayer
-from ...schemas import DefaultStyle, JobStatus, SharingUpdate, VectorLayerOut
+from ...schemas import DefaultStyle, JobStatus, PortalRefOut, SharingUpdate, VectorLayerOut
 from ...services import martin as martin_svc
 from ...tasks.vector_ingest import ingest_vector
-from ..common import apply_sharing, busy_job_progress, creator_names, record_audit, visible_to
+from ..common import (apply_sharing, busy_job_progress, creator_names, portals_using,
+                      prune_layer_from_portals, record_audit, visible_to)
 
 router = APIRouter(prefix="/data/vector", tags=["vector"])
 
@@ -98,6 +99,14 @@ async def list_layers(
             o.progress, o.current_step = jobs[l.id]
         out.append(o)
     return out
+
+
+@router.get("/{layer_id}/usage", response_model=list[PortalRefOut])
+async def layer_usage(layer_id: int, user: User = Depends(require_scope("data:read")),
+                      db: AsyncSession = Depends(get_db)):
+    """Portals that include this layer — shown in the delete-confirmation dialog so the user knows
+    what a deletion will affect (the layer is pruned from these portals + re-published on delete)."""
+    return [PortalRefOut.model_validate(p) for p in await portals_using(db, "vector", layer_id)]
 
 
 @router.post("/upload", response_model=JobStatus, status_code=202)
@@ -855,7 +864,9 @@ async def delete_layer(
     await db.delete(layer)
     await db.commit()
     invalidate_public_layers()  # drop cached exposure/key entries for the removed layer
-    await record_audit(db, user, "vector.delete", "vector", layer_id, {"name": layer_name})
+    pruned = await prune_layer_from_portals(db, "vector", layer_id)  # drop the ghost from portals + re-publish
+    await record_audit(db, user, "vector.delete", "vector", layer_id,
+                       {"name": layer_name, "portals_updated": [p.title for p in pruned]})
 
     # Regenerate Martin config without the deleted layer. ALL members' ready postgis layers
     # are included — the config is instance-wide (shared workspace), not per-creator; filtering

@@ -12,9 +12,47 @@ import logging
 from sqlalchemy import or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import AuditLog, UploadJob, User
+from ..models import AuditLog, Portal, UploadJob, User
 
 logger = logging.getLogger(__name__)
+
+
+async def portals_using(db: AsyncSession, layer_type: str, layer_id: int) -> list[Portal]:
+    """Portals whose `layer_configs` reference (layer_type, layer_id). Powers the delete-confirmation
+    'used in these portals' warning AND the prune-on-delete. Portals are few, so a full scan + JSON
+    parse is fine."""
+    portals = (await db.execute(select(Portal))).scalars().all()
+    hits = []
+    for p in portals:
+        try:
+            configs = json.loads(p.layer_configs or "[]")
+        except Exception:  # noqa: BLE001
+            configs = []
+        if any(c.get("layer_type") == layer_type and c.get("layer_id") == layer_id for c in configs):
+            hits.append(p)
+    return hits
+
+
+async def prune_layer_from_portals(db: AsyncSession, layer_type: str, layer_id: int) -> list[Portal]:
+    """Remove a (now-deleted) layer from every portal's `layer_configs` and re-publish the PUBLISHED
+    ones so the live map + editor stop showing a dangling 'ghost' layer. Best-effort re-publish (a
+    failure never blocks the delete). Returns the affected portals. Call AFTER the layer row is gone."""
+    affected = await portals_using(db, layer_type, layer_id)
+    if not affected:
+        return []
+    for p in affected:
+        configs = [c for c in json.loads(p.layer_configs or "[]")
+                   if not (c.get("layer_type") == layer_type and c.get("layer_id") == layer_id)]
+        p.layer_configs = json.dumps(configs)
+    await db.commit()
+    from .portals import _rebuild_bundle  # lazy import avoids a circular import at module load
+    for p in affected:
+        if p.published:
+            try:
+                await _rebuild_bundle(p, db)
+            except Exception:  # noqa: BLE001 — a re-publish failure must not fail the delete
+                logger.warning("re-publish after layer prune failed for portal %s", p.id, exc_info=True)
+    return affected
 
 
 async def record_audit(db: AsyncSession, actor, action: str, resource_type: str | None = None,

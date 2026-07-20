@@ -193,6 +193,15 @@ class AuditLogOut(BaseModel):
         return json.loads(v) if isinstance(v, str) else v
 
 
+class PortalRefOut(BaseModel):
+    """A lightweight portal reference — powers the 'this layer is used in these portals' delete warning."""
+    id: int
+    title: str
+    published: bool
+
+    model_config = {"from_attributes": True}
+
+
 class InvitePublicOut(BaseModel):
     """What the public accept/reset page may learn from a valid token."""
     email: str

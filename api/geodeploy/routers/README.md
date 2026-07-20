@@ -31,6 +31,11 @@ now REJECT token requests, so any route not explicitly `require_scope`-annotated
   rejects a stale tv. `auth.py` bumps tv on password change/reset + `POST /auth/logout-all` (each
   re-issues a fresh token for the acting session). Pre-A-04 tv-less tokens read as tv=0 (no forced
   re-login). `GET /auth/session-token` returns the JWT from the `gd_session` cookie (for the SSO handoff).
+- **Delete safety (2026-07-20):** `GET /data/{vector,raster,sources}/{id}/usage` → the portals that
+  include a layer (`common.portals_using`), shown in the UI's delete-confirmation dialog. On delete,
+  `common.prune_layer_from_portals` removes the (now-dangling) layer from every portal's `layer_configs`
+  and RE-PUBLISHES the published ones (best-effort, lazy-imports `_rebuild_bundle`) so no "ghost" layer
+  lingers in the live map/editor. The delete audit detail records `portals_updated`.
 - **A-05 audit log** (`audit.py`, `GET /audit`, admin-only + filterable): reads the append-only
   `AuditLog`. Mutations write via **`common.record_audit(db, actor, action, resource_type, resource_id,
   detail)`** — BEST-EFFORT + self-committing (never fails the real op), called AFTER the mutation

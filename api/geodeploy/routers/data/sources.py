@@ -14,9 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...database import get_db
 from ...deps import require_scope
 from ...models import ExternalSource, User
-from ...schemas import ExternalSourceCreate, ExternalSourceOut, VisibilityUpdate
+from ...schemas import ExternalSourceCreate, ExternalSourceOut, PortalRefOut, VisibilityUpdate
 from ...services import external_sources as ext
-from ..common import creator_names, record_audit, visible_to
+from ..common import (creator_names, portals_using, prune_layer_from_portals, record_audit, visible_to)
 
 router = APIRouter(prefix="/data/sources", tags=["sources"])
 
@@ -41,6 +41,13 @@ async def list_sources(user: User = Depends(require_scope("data:read")), db: Asy
         o.created_by = names.get(s.user_id)
         out.append(o)
     return out
+
+
+@router.get("/{source_id}/usage", response_model=list[PortalRefOut])
+async def source_usage(source_id: int, user: User = Depends(require_scope("data:read")),
+                       db: AsyncSession = Depends(get_db)):
+    """Portals that include this external source — shown in the delete-confirmation dialog."""
+    return [PortalRefOut.model_validate(p) for p in await portals_using(db, "external", source_id)]
 
 
 @router.post("", response_model=ExternalSourceOut, status_code=201)
@@ -124,7 +131,9 @@ async def delete_source(source_id: int, user: User = Depends(require_scope("data
     source_name = src.name
     await db.delete(src)
     await db.commit()
-    await record_audit(db, user, "source.delete", "source", source_id, {"name": source_name})
+    pruned = await prune_layer_from_portals(db, "external", source_id)  # sources are layer_type 'external'
+    await record_audit(db, user, "source.delete", "source", source_id,
+                       {"name": source_name, "portals_updated": [p.title for p in pruned]})
 
 
 @router.get("/{source_id}/features.geojson")

@@ -128,6 +128,10 @@ export const saveVectorDefaultStyle = (id, style) => api.put(`/data/vector/${id}
 // Data sharing: opt a layer into the public STAC catalog (/api/stac) + set catalog metadata
 export const setVectorSharing = (id, data) => api.put(`/data/vector/${id}/sharing`, data)
 export const deleteVectorLayer = (id) => api.delete(`/data/vector/${id}`)
+// Portals that include a layer/source — shown in the delete-confirmation dialog (A-05 follow-up)
+export const getVectorUsage = (id) => api.get(`/data/vector/${id}/usage`)
+export const getRasterUsage = (id) => api.get(`/data/raster/${id}/usage`)
+export const getSourceUsage = (id) => api.get(`/data/sources/${id}/usage`)
 // Restart a stalled/failed GeoParquet layer's background processing (re-convert or re-prep) without
 // re-uploading. Returns a fresh JobStatus to poll.
 export const reprocessVectorLayer = (id) => api.post(`/data/vector/${id}/reprocess`)

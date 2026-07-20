@@ -8,10 +8,11 @@ from ...config import get_settings
 from ...database import get_db
 from ...deps import require_scope
 from ...models import RasterLayer, UploadJob, User
-from ...schemas import JobStatus, RasterDefaultStyle, RasterLayerOut, SharingUpdate
+from ...schemas import JobStatus, PortalRefOut, RasterDefaultStyle, RasterLayerOut, SharingUpdate
 from ...services.titiler import get_tile_url as raster_tile_url, COLORMAPS
 from ...tasks.raster_ingest import ingest_raster
-from ..common import apply_sharing, busy_job_progress, creator_names, record_audit, visible_to
+from ..common import (apply_sharing, busy_job_progress, creator_names, portals_using,
+                      prune_layer_from_portals, record_audit, visible_to)
 
 router = APIRouter(prefix="/data/raster", tags=["raster"])
 
@@ -51,6 +52,13 @@ async def list_layers(user: User = Depends(require_scope("data:read")), db: Asyn
             )
         out.append(obj)
     return out
+
+
+@router.get("/{layer_id}/usage", response_model=list[PortalRefOut])
+async def layer_usage(layer_id: int, user: User = Depends(require_scope("data:read")),
+                      db: AsyncSession = Depends(get_db)):
+    """Portals that include this raster — shown in the delete-confirmation dialog."""
+    return [PortalRefOut.model_validate(p) for p in await portals_using(db, "raster", layer_id)]
 
 
 @router.get("/{layer_id}/stats")
@@ -254,4 +262,6 @@ async def delete_layer(layer_id: int, user: User = Depends(require_scope("data:w
 
     await db.delete(layer)
     await db.commit()
-    await record_audit(db, user, "raster.delete", "raster", layer_id, {"name": layer_name})
+    pruned = await prune_layer_from_portals(db, "raster", layer_id)  # drop the ghost from portals + re-publish
+    await record_audit(db, user, "raster.delete", "raster", layer_id,
+                       {"name": layer_name, "portals_updated": [p.title for p in pruned]})
