@@ -808,6 +808,7 @@
       const canZoom = validLonLatBounds(d.bbox);
       const card = document.createElement('div');
       card.className = 'layer-card';
+      card.dataset.ref = 'vector:' + d.layer_id;  // V-13: match to the folder tree (deck layers are vector)
       card.innerHTML =
         '<div class="layer-row">' +
           '<span class="layer-drag" style="visibility:hidden">' + dragIcon() + '</span>' +
@@ -869,6 +870,11 @@
     const userLayers = STYLE.layers.filter(l => l.metadata && l.metadata['geodeploy:name']).reverse();
     buildLayerSwitcher(userLayers);
     appendDeckRows();
+    // V-13: if the portal has a folder tree, reorganize the flat cards into groups (after both
+    // MapLibre + deck cards exist, so every card is available to move).
+    if (STYLE.geodeploy && STYLE.geodeploy.layerTree) {
+      try { applyLayerGroups(STYLE.geodeploy.layerTree); } catch (e) { console.warn('[geodeploy] layer groups failed', e); }
+    }
     initDeck();
     try { buildAboutPanel(); } catch (e) { console.warn('[geodeploy] About panel failed', e); }
     setupBasemaps();  // adds the basemap + tools controls (top-right)
@@ -992,6 +998,7 @@
       const card = document.createElement('div');
       card.className = 'layer-card';
       card.dataset.layerId = layer.id;
+      card.dataset.ref = type + ':' + meta['geodeploy:layer_id'];  // V-13: match to the folder tree
       card.setAttribute('draggable', 'true');
       const dash = dashKind(layer.paint);
       const shape = meta['geodeploy:marker'] || 'circle';
@@ -1087,6 +1094,96 @@
     const ids = Array.prototype.slice.call(container.querySelectorAll('.layer-card')).map(c => c.dataset.layerId);
     for (let i = ids.length - 1; i >= 0; i--) {
       try { if (map.getLayer(ids[i])) map.moveLayer(ids[i]); } catch (e) { /* ignore */ }
+    }
+  }
+
+  // ── V-13: reorganize the flat cards into the folder tree (STYLE.geodeploy.layerTree) ──────────
+  function lgCaret() {
+    return '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>';
+  }
+  function applyLayerGroups(tree) {
+    const container = document.getElementById('layer-list');
+    if (!container || !tree || !tree.length) return;
+    const cardByRef = {};
+    container.querySelectorAll('.layer-card').forEach(function (c) {
+      if (c.dataset.ref) cardByRef[c.dataset.ref] = c;
+    });
+
+    function render(nodes, parent) {
+      nodes.forEach(function (node) {
+        if (node.layer_id != null && node.layer_type) {
+          const card = cardByRef[node.layer_type + ':' + node.layer_id];
+          if (card) parent.appendChild(card);   // MOVE the existing card — its handlers stay intact
+          return;
+        }
+        if (!node.children) return;
+        const grp = document.createElement('div');
+        grp.className = 'layer-group' + (node.exclusive ? ' exclusive' : '');
+        const collapsed = !!node.collapsed;
+        const header = document.createElement('div');
+        header.className = 'layer-group-header';
+        header.innerHTML =
+          '<span class="lg-caret' + (collapsed ? ' collapsed' : '') + '">' + lgCaret() + '</span>' +
+          '<span class="lg-name" title="' + escHtml(node.name || 'Group') + '">' + escHtml(node.name || 'Group') + '</span>' +
+          (node.exclusive ? '' : '<button class="lg-toggle-all layer-eye" title="Show / hide all">' + eyeIcon(true) + '</button>');
+        grp.appendChild(header);
+        const body = document.createElement('div');
+        body.className = 'layer-group-body';
+        if (collapsed) body.style.display = 'none';
+        if (node.description) {
+          const desc = document.createElement('div');
+          desc.className = 'lg-desc';
+          desc.textContent = node.description;
+          body.appendChild(desc);
+        }
+        grp.appendChild(body);
+        parent.appendChild(grp);
+        render(node.children, body);
+        wireGroup(header, body, node);
+      });
+    }
+    const frag = document.createDocumentFragment();
+    render(tree, frag);
+    container.innerHTML = '';
+    container.appendChild(frag);
+  }
+  function wireGroup(header, body, node) {
+    const caret = header.querySelector('.lg-caret');
+    header.addEventListener('click', function (e) {
+      if (e.target.closest('.lg-toggle-all')) return;   // the eye button handles its own click
+      const hidden = body.style.display === 'none';
+      body.style.display = hidden ? '' : 'none';
+      caret.classList.toggle('collapsed', !hidden);
+    });
+    const toggleAll = header.querySelector('.lg-toggle-all');
+    if (toggleAll) {
+      toggleAll.addEventListener('click', function (e) {
+        e.stopPropagation();
+        // Descendant LAYER eyes only (group toggle-all eyes live in .layer-group-header, not .layer-card).
+        const eyes = Array.prototype.slice.call(body.querySelectorAll('.layer-card .layer-eye'));
+        const anyOff = eyes.some(function (x) { return x.classList.contains('off'); });
+        eyes.forEach(function (x) {
+          const isOff = x.classList.contains('off');
+          if (anyOff && isOff) x.click(); else if (!anyOff && !isOff) x.click();
+        });
+        toggleAll.innerHTML = eyeIcon(anyOff);
+        toggleAll.classList.toggle('off', !anyOff);
+      });
+    }
+    if (node.exclusive) {   // showing one direct-child layer hides its siblings (radio behavior)
+      const directEyes = Array.prototype.slice.call(body.children)
+        .filter(function (el) { return el.classList.contains('layer-card'); })
+        .map(function (el) { return el.querySelector('.layer-eye'); })
+        .filter(Boolean);
+      directEyes.forEach(function (eye) {
+        eye.addEventListener('click', function () {
+          setTimeout(function () {
+            if (!eye.classList.contains('off')) {
+              directEyes.forEach(function (o) { if (o !== eye && !o.classList.contains('off')) o.click(); });
+            }
+          }, 0);
+        });
+      });
     }
   }
 

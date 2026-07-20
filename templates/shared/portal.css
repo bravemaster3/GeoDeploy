@@ -100,6 +100,21 @@
     }
     .layer-card:hover { background: var(--surface); }
     .layer-card.dragging { opacity: .4; }
+    /* V-13 layer catalog: folder groups */
+    .layer-group { margin: 1px 0; }
+    .layer-group-header {
+      display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 6px;
+      cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--text);
+    }
+    .layer-group-header:hover { background: var(--surface); }
+    .lg-caret { display: inline-flex; flex-shrink: 0; color: var(--text-muted); transform: rotate(90deg); transition: transform .15s; }
+    .lg-caret.collapsed { transform: rotate(0deg); }
+    .lg-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lg-toggle-all { margin-left: auto; flex-shrink: 0; }
+    .layer-group-body { padding-left: 12px; margin-left: 9px; border-left: 1px solid var(--border); }
+    .lg-desc { font-size: 11px; color: var(--text-muted); padding: 1px 4px 4px; line-height: 1.35; }
+    /* Exclusive (radio) group: the eye reads as a single-choice control */
+    .layer-group.exclusive > .layer-group-body > .layer-card .layer-eye { border-radius: 50%; }
     .layer-row { display: flex; align-items: center; gap: 7px; }
     .layer-drag {
       flex-shrink: 0; width: 14px; color: var(--text-muted); cursor: grab;
