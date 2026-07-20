@@ -5,12 +5,6 @@
          nav + panel width is unchanged — more room to work without eating the map. -->
     <div class="w-[484px] flex-shrink-0 bg-card border-r border-border flex flex-col overflow-hidden">
 
-      <!-- Deleted-layer cleanup notice -->
-      <div v-if="orphanNotice" class="px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 flex items-start gap-2">
-        <p class="text-xs text-amber-300/90 flex-1">{{ orphanNotice }}</p>
-        <button @click="orphanNotice = ''" class="text-amber-400/70 hover:text-amber-300 text-sm leading-none flex-shrink-0">&times;</button>
-      </div>
-
       <!-- Top bar -->
       <div class="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
         <button @click="$router.push('/portals')" class="text-sm text-muted-foreground hover:text-foreground flex-shrink-0">← Back</button>
@@ -260,7 +254,6 @@ const portalsStore = usePortalsStore()
 const dataStore = useDataStore()
 
 const portal = ref(null)
-const orphanNotice = ref('')  // set when deleted 'ghost' layers were auto-removed on load
 const layerConfigs = ref([])
 const selectedTemplate = ref('minimal')
 const templates = ref([])
@@ -487,18 +480,6 @@ onMounted(async () => {
   portal.value = portalsStore.portals.find(p => p.id === parseInt(route.params.id))
   if (portal.value) {
     layerConfigs.value = portal.value.layer_configs || []
-    // Drop 'ghost' configs whose underlying layer was deleted (before portal-prune existed) so they
-    // stop showing in the editor + published layer list. Saving/publishing makes the cleanup stick.
-    const layerExists = (c) => c.layer_type === 'raster'
-      ? dataStore.rasterLayers.some(l => l.id === c.layer_id)
-      : c.layer_type === 'external'
-        ? dataStore.externalSources.some(s => s.id === c.layer_id)
-        : dataStore.vectorLayers.some(l => l.id === c.layer_id)
-    const orphans = layerConfigs.value.filter(c => !layerExists(c)).length
-    if (orphans) {
-      layerConfigs.value = layerConfigs.value.filter(layerExists)
-      orphanNotice.value = `${orphans} deleted layer${orphans > 1 ? 's were' : ' was'} removed from this portal — Save or Publish to keep the change.`
-    }
     selectedTemplate.value = portal.value.template_id
     // Legacy 'private' == organization (members-only) — show it as the Organization option.
     accessType.value = portal.value.access_type === 'private'
