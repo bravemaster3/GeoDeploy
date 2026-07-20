@@ -21,6 +21,8 @@ Examples:
     python geodeploy_cli.py portal-add-layer 3 6           # add layer 6 to portal 3 (type auto-detected)
     python geodeploy_cli.py portal-add-layer 3 6 --color "#e11d48" --radius 4 --opacity 0.8   # with styling
     python geodeploy_cli.py portal-remove-layer 3 6        # remove it again
+    python geodeploy_cli.py set-description 3 "About this map…"   # or @about.md — drives the About page
+    python geodeploy_cli.py layer-set-sharing 6 --visibility public --license "CC-BY-4.0"
     python geodeploy_cli.py publish 3                      # (re)publish to make edits live
 
 The token's scopes gate what works: e.g. a `portal:publish`-only token can `publish` but not `upload`
@@ -148,6 +150,34 @@ def portal_remove_layer(args):
     _print(_layer_summary(out.get("layer_configs", [])))
 
 
+def set_description(args):
+    text = args.text
+    if text.startswith("@"):  # @file → read the About text (markdown ok) from a file
+        with open(text[1:], encoding="utf-8-sig") as f:
+            text = f.read()
+    out = _call("PUT", f"/portals/{args.portal_id}", json={"description": text}).json()
+    print(f"Set description on portal {args.portal_id} ({len(text)} chars) — publish to update the About page:\n"
+          f"    python geodeploy_cli.py publish {args.portal_id}", file=sys.stderr)
+    _print({"id": out["id"], "title": out["title"], "description": out.get("description")})
+
+
+def layer_set_sharing(args):
+    ltype = args.type or _detect_layer_type(args.layer_id)
+    if not ltype:
+        sys.exit(f"Layer {args.layer_id} not found — pass --type (needs data:read to auto-detect).")
+    body = {attr: getattr(args, attr) for attr in
+            ("visibility", "abstract", "license", "attribution", "keywords")
+            if getattr(args, attr, None) is not None}
+    if not body:
+        sys.exit("Nothing to set — pass --visibility and/or a metadata flag "
+                 "(--abstract/--license/--attribution/--keywords).")
+    out = _call("PUT", f"/data/{ltype}/{args.layer_id}/sharing", json=body).json()
+    print(f"Updated sharing on {ltype} layer {args.layer_id} — re-publish any portal using it to apply.",
+          file=sys.stderr)
+    _print({k: out.get(k) for k in
+            ("id", "name", "visibility", "is_public", "abstract", "license", "attribution", "keywords")})
+
+
 def publish(args):
     _print(_call("POST", f"/portals/{args.id}/publish").json())
 
@@ -223,6 +253,22 @@ def main():
     rl.add_argument("layer_id", type=int)
     rl.add_argument("--type", choices=["vector", "raster", "external"])
     rl.set_defaults(func=portal_remove_layer)
+
+    sd = sub.add_parser("set-description", help="set a portal's About text (drives the published About page)")
+    sd.add_argument("portal_id", type=int)
+    sd.add_argument("text", help="the About text, or @file.md to read it from a file (markdown ok)")
+    sd.set_defaults(func=set_description)
+
+    ss = sub.add_parser("layer-set-sharing", help="set a layer's visibility + catalog metadata")
+    ss.add_argument("layer_id", type=int)
+    ss.add_argument("--type", choices=["vector", "raster"], help="auto-detected if omitted")
+    ss.add_argument("--visibility", choices=["private", "organization", "public"],
+                    help="public opts the layer into the STAC catalog + data links (shows on the About page)")
+    ss.add_argument("--abstract")
+    ss.add_argument("--license")
+    ss.add_argument("--attribution")
+    ss.add_argument("--keywords", help="comma-separated")
+    ss.set_defaults(func=layer_set_sharing)
 
     for name, fn in (("publish", publish), ("unpublish", unpublish)):
         ap = sub.add_parser(name, help=f"{name} a portal")
