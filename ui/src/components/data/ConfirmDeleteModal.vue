@@ -23,7 +23,8 @@
           </li>
         </ul>
         <p class="text-amber-300/70 pt-0.5">
-          It will be removed from these portals; published ones are re-published automatically.
+          Deleting it removes it from these portals. The ones marked <span class="font-medium">published</span>
+          are re-published immediately, so it also disappears from their <span class="font-medium">live</span> maps.
         </p>
       </div>
 
