@@ -7,6 +7,13 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
 
 ## Architecture (read this before touching templates)
 - **`shared/`** — the runtime, edited ONCE, inherited by every template:
+  - **Layer catalog search (V-13, 2026-07-20):** `setupLayerSearch()` (run in `map.on('load')` after
+    the switcher + groups are built) inserts a search box above `#layer-list` when there are ≥2 layers;
+    `filterLayers(q)` matches `.layer-card` `.layer-name` text, hides non-matches and any folder left
+    with no visible card, force-expands folders holding a match, and shows a "No matching layers" note.
+    Clearing restores the pre-search collapse state (captured on first keystroke). Purely a list filter
+    (no map visibility change). `resetStyling` now re-applies the folder groups (was flattening them) and
+    clears the filter. Styled via `.layer-search*` in `portal.css`.
   - **Layer catalog / folder groups (V-13, 2026-07-20):** when `STYLE.geodeploy.layerTree` is baked,
     `applyLayerGroups(tree)` (run in `map.on('load')` after `buildLayerSwitcher` + `appendDeckRows`)
     REORGANIZES the flat layer cards into a nested folder tree by `data-ref` (`type:id`, tagged on both
@@ -79,5 +86,7 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-07-20 (V-13 layer catalog: grouped folder switcher + layer-list search/filter; `resetStyling` now
+re-applies groups)
 2026-07-14 (removed the research template; added satellite-dark, editorial, humanitarian; fixed the
 listing requirement note to `style.json`; basemap now chosen separately from the template)

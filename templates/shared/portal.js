@@ -875,6 +875,7 @@
     if (STYLE.geodeploy && STYLE.geodeploy.layerTree) {
       try { applyLayerGroups(STYLE.geodeploy.layerTree); } catch (e) { console.warn('[geodeploy] layer groups failed', e); }
     }
+    try { setupLayerSearch(); } catch (e) { console.warn('[geodeploy] layer search failed', e); }
     initDeck();
     try { buildAboutPanel(); } catch (e) { console.warn('[geodeploy] About panel failed', e); }
     setupBasemaps();  // adds the basemap + tools controls (top-right)
@@ -909,6 +910,14 @@
     ensurePointImages();  // restore original marker icons (shape/colour/size)
     buildLayerSwitcher(STYLE.layers.filter(l => l.metadata && l.metadata['geodeploy:name']).reverse());
     appendDeckRows();  // re-add the GeoParquet deck-layer rows (not in STYLE.layers)
+    // Rebuilding the cards flattens the list — restore the folder tree, then clear any active filter.
+    if (STYLE.geodeploy && STYLE.geodeploy.layerTree) {
+      try { applyLayerGroups(STYLE.geodeploy.layerTree); } catch (e) { /* ignore */ }
+    }
+    _searchActive = false;
+    const si = document.querySelector('.layer-search-input');
+    if (si) si.value = '';
+    showNoResults(document.getElementById('layer-list'), false);
   }
 
   // ---- Point marker shapes -------------------------------------------------
@@ -1184,6 +1193,87 @@
           }, 0);
         });
       });
+    }
+  }
+
+  // ── V-13: search / filter the layer list ─────────────────────────────────
+  // A thin client-side filter over the rendered cards (name match). Hides
+  // non-matching layers and any folder left with no visible layer; while a
+  // query is active, matching folders are force-expanded so hits are visible.
+  let _searchActive = false;
+  function setupLayerSearch() {
+    const container = document.getElementById('layer-list');
+    if (!container) return;
+    const parent = container.parentNode;
+    if (!parent || parent.querySelector('.layer-search')) return;   // already added
+    // Not worth a search box for 0–1 layers.
+    if (container.querySelectorAll('.layer-card').length < 2) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'layer-search';
+    wrap.innerHTML =
+      '<svg class="layer-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>' +
+      '<input type="search" class="layer-search-input" placeholder="Search layers…" aria-label="Search layers" autocomplete="off">';
+    parent.insertBefore(wrap, container);
+    const input = wrap.querySelector('.layer-search-input');
+    input.addEventListener('input', function () { filterLayers(input.value); });
+  }
+  function filterLayers(raw) {
+    const container = document.getElementById('layer-list');
+    if (!container) return;
+    const q = (raw || '').trim().toLowerCase();
+    const groups = Array.prototype.slice.call(container.querySelectorAll('.layer-group'));
+    if (!q) {   // cleared — restore everything to its pre-search state
+      container.querySelectorAll('.layer-card').forEach(function (c) { c.style.display = ''; });
+      groups.forEach(function (g) {
+        g.style.display = '';
+        if (g._savedBodyDisp !== undefined) {
+          const body = g.querySelector(':scope > .layer-group-body');
+          const caret = g.querySelector(':scope > .layer-group-header .lg-caret');
+          if (body) body.style.display = g._savedBodyDisp;
+          if (caret) caret.classList.toggle('collapsed', g._savedBodyDisp === 'none');
+          delete g._savedBodyDisp;
+        }
+      });
+      _searchActive = false;
+      showNoResults(container, false);
+      return;
+    }
+    if (!_searchActive) {   // entering search — remember collapse state to restore on clear
+      groups.forEach(function (g) {
+        const body = g.querySelector(':scope > .layer-group-body');
+        g._savedBodyDisp = body ? body.style.display : '';
+      });
+      _searchActive = true;
+    }
+    let anyVisible = false;
+    container.querySelectorAll('.layer-card').forEach(function (c) {
+      const nameEl = c.querySelector('.layer-name');
+      const match = (nameEl ? nameEl.textContent : '').toLowerCase().indexOf(q) !== -1;
+      c.style.display = match ? '' : 'none';
+      if (match) anyVisible = true;
+    });
+    groups.forEach(function (g) {   // show + expand a group iff it holds a match (querySelectorAll is recursive → parents stay open for nested hits)
+      const hasMatch = Array.prototype.slice.call(g.querySelectorAll('.layer-card'))
+        .some(function (c) { return c.style.display !== 'none'; });
+      g.style.display = hasMatch ? '' : 'none';
+      if (hasMatch) {
+        const body = g.querySelector(':scope > .layer-group-body');
+        const caret = g.querySelector(':scope > .layer-group-header .lg-caret');
+        if (body) body.style.display = '';
+        if (caret) caret.classList.remove('collapsed');
+      }
+    });
+    showNoResults(container, !anyVisible);
+  }
+  function showNoResults(container, on) {
+    let note = container.querySelector('.layer-search-empty');
+    if (on && !note) {
+      note = document.createElement('p');
+      note.className = 'layer-search-empty';
+      note.textContent = 'No matching layers';
+      container.appendChild(note);
+    } else if (!on && note) {
+      note.remove();
     }
   }
 
