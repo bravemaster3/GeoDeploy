@@ -11,6 +11,20 @@ features that drive adoption and differentiation.
 - **Source of truth:** the JSON embedded in that file (`<script id="roadmap-data">`). This Markdown is
   the narrative + schema + workflow around it.
 
+## ▶ Frontier: **Auth hardening** (`A-04`) — **building**
+
+`A-01`, `A-02`, `A-03` are **shipped** (RBAC + shared workspace; per-resource sharing + server-side
+portal access; scoped API tokens driving the headless CLI). `A-04` rounds out identity so the platform
+is safe to open beyond a trusted operator: **(0)** app-managed DB secrets (SMTP, OIDC) encrypted at
+rest (Fernet); **(1)** session/token revocation — browser JWTs carry a `token_version`, so a password
+change/reset and a "log out other sessions" action revoke outstanding tokens while the acting tab
+stays signed in; **(2)** **OIDC single sign-on** via Authlib — an admin-configured generic provider
+(Google / Microsoft / Keycloak / institutional), account linking by verified email, and opt-in
+domain-allow-listed auto-provisioning with a default role. Password reset already shipped (A-01 + C-08).
+Next: **A-05** activity & audit log.
+
+<details><summary>Previous frontier — API tokens (A-03), shipped</summary>
+
 ## ▶ Frontier: **API tokens** (`A-03`) — **building**
 
 `A-01` **Multi-user & RBAC** and `A-02` **Resource ownership & sharing** are **shipped**: a **shared
@@ -30,12 +44,14 @@ Managed per-user in Settings; revocable; optionally auto-expiring; dies with the
 GeoLibre, `E-05` Connect from QGIS) — the adoption funnel — and under CI/scripting. Auth hardening
 (`A-04`) follows.
 
+</details>
+
 ## Phases
 
 | # | Phase | Theme | State |
 |---|-------|-------|-------|
 | 00 | **Foundation** | The platform, shipped | 12 items — 10 shipped incl. security hardening; tests building; service logs/console planned |
-| 01 | **Multi-user & Access** | The bridge to Cloud | `A-01`, `A-02` **shipped**; `A-03` **building** (frontier), then planned |
+| 01 | **Multi-user & Access** | The bridge to Cloud | `A-01`, `A-02`, `A-03` **shipped**; `A-04` **building** (frontier); `A-05` next |
 | 02 | **GeoDeploy Cloud** | Managed, multi-tenant | planned / future |
 | 03 | **Ecosystem & Interop** | Adoption engine (GeoLibre, QGIS, standards) | planned / future |
 | 04 | **Advanced Capabilities** | Differentiators | future / idea |
@@ -126,6 +142,10 @@ before the static bundle is served (organization = any member, owner = creator +
 bounces to `/login?next=`). Login/accept set the cookie; the SPA mirrors existing sessions via
 `POST /auth/session`. Password stays a client-side gate. Also added `V-12` **Responsive layouts
 (mobile/tablet)** (planned). 80 backend tests pass.
+2026-07-20 — `A-03` API tokens flipped → **shipped** (scoped tokens + CLI in use). **Frontier → `A-04`
+Auth hardening**, now **building**: secrets encrypted at rest (Fernet); session/token revocation
+(JWT `token_version` + "log out other sessions"); **OIDC SSO** via Authlib (admin-configured provider,
+verified-email linking, opt-in domain-allow-listed auto-provisioning). 118 backend tests pass.
 2026-07-17 — Added `F-12` **Service logs & console** (Foundation, planned): per-service live log
 streaming in Settings → Infrastructure, plus a security-gated (owner-only, opt-in) in-browser
 container console — extends the existing service start/stop/restart controls.
