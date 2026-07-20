@@ -142,6 +142,12 @@ before the static bundle is served (organization = any member, owner = creator +
 bounces to `/login?next=`). Login/accept set the cookie; the SPA mirrors existing sessions via
 `POST /auth/session`. Password stays a client-side gate. Also added `V-12` **Responsive layouts
 (mobile/tablet)** (planned). 80 backend tests pass.
+2026-07-20 — Roadmap gained an **`"unverified": true`** flag → a "⚠ needs testing" pill + amber
+accent on code-complete-but-unverified items (search "untested"). Tagged `A-04` (SSO/OIDC live flow)
+and `C-08` (email SMTP). Added **`V-13` Layer groups & catalog panel** (planned — folder/group catalog
+tree as a per-template portal element) and bumped **`V-11` Structural layout templates** `future` →
+`planned` (configurable regions so templates differ in LAYOUT, not just colour). These two are the
+near-term portal focus after A-04/A-05 verify.
 2026-07-20 — `A-05` **Activity & audit log** flipped `future` → **building**: append-only `AuditLog` +
 `record_audit()` wired into the key mutations (user/portal/token/auth/data), admin-only filterable
 `GET /audit` + an **Activity** view. Entries survive user deletion. 123 backend tests pass.
