@@ -8,6 +8,7 @@ const routes = [
   { path: '/accept-invite', component: () => import('@/views/AcceptInvite.vue'), meta: { public: true } },
   { path: '/reset-password', component: () => import('@/views/ResetPassword.vue'), meta: { public: true } },
   { path: '/portal-gate', component: () => import('@/views/PortalGate.vue'), meta: { public: true } },
+  { path: '/sso-callback', component: () => import('@/views/SsoCallback.vue'), meta: { public: true } },
   {
     path: '/',
     component: () => import('@/views/Layout.vue'),

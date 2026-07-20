@@ -27,6 +27,15 @@ now REJECT token requests, so any route not explicitly `require_scope`-annotated
 - **Token management** (`tokens.py`, `/tokens`): each user manages their OWN tokens via a browser
   session; a token can't mint/manage tokens (anti-escalation); scope ≤ owner role at mint; mandatory
   expiry 30/90/365d (default 90). Only the sha256 hash is stored; the raw `gdp_…` shown once.
+- **A-04 session revocation:** browser JWTs carry `tv` (= `User.token_version`); `get_current_user`
+  rejects a stale tv. `auth.py` bumps tv on password change/reset + `POST /auth/logout-all` (each
+  re-issues a fresh token for the acting session). Pre-A-04 tv-less tokens read as tv=0 (no forced
+  re-login). `GET /auth/session-token` returns the JWT from the `gd_session` cookie (for the SSO handoff).
+- **A-04 OIDC SSO** (`auth_oidc.py`, `/auth/oidc/*`): public `status`; `login`→ Authlib redirect;
+  `callback`→ validate id_token → `services.oidc.resolve_user` (link by sub/verified-email; provision
+  only if allow-listed) → mint JWT + `gd_session` cookie → 302 `/sso-callback`. Admin config CRUD is
+  `admin.py` `/admin/oidc-settings` (client secret write-only + EncryptedText). Needs Starlette
+  `SessionMiddleware` (state/nonce) — added in `main.py`.
 
 **A-02 per-resource sharing (2026-07-16):** each vector/raster layer and external source has a
 `visibility` — `private` (creator + admins/owner) ⊂ `organization` (all members; the default) ⊂

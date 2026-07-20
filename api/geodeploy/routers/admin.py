@@ -1,5 +1,5 @@
 import os
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -7,8 +7,10 @@ from ..config import get_settings
 from ..database import get_db
 from ..deps import require_admin
 from ..models import Portal, RasterLayer, SetupConfig, User, VectorLayer
-from ..schemas import EmailSettings, EmailSettingsOut, ServiceHealth, StorageStats
+from ..schemas import (EmailSettings, EmailSettingsOut, OidcSettings, OidcSettingsOut,
+                       ServiceHealth, StorageStats)
 from ..services import notifications
+from .users import request_origin
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -262,3 +264,41 @@ async def test_email(user: User = Depends(require_admin), db: AsyncSession = Dep
     except Exception as exc:  # noqa: BLE001 — surface whatever the relay said
         raise HTTPException(502, f"Test email failed: {exc}") from exc
     return {"status": "ok", "to": user.email}
+
+
+# ── OIDC SSO settings (A-04) ─────────────────────────────────────────────────────────────────────
+
+def _oidc_out(cfg: SetupConfig, request: Request) -> OidcSettingsOut:
+    return OidcSettingsOut(
+        oidc_enabled=bool(cfg.oidc_enabled),
+        oidc_issuer=cfg.oidc_issuer,
+        oidc_client_id=cfg.oidc_client_id,
+        oidc_label=cfg.oidc_label,
+        oidc_auto_provision=bool(cfg.oidc_auto_provision),
+        oidc_allowed_domains=cfg.oidc_allowed_domains,
+        oidc_default_role=cfg.oidc_default_role or "viewer",
+        has_client_secret=bool(cfg.oidc_client_secret),  # never return the secret itself
+        redirect_uri=request_origin(request) + "/api/auth/oidc/callback",
+    )
+
+
+@router.get("/oidc-settings", response_model=OidcSettingsOut)
+async def get_oidc_settings(request: Request, _: User = Depends(require_admin),
+                            db: AsyncSession = Depends(get_db)):
+    return _oidc_out(await _get_config(db), request)
+
+
+@router.put("/oidc-settings", response_model=OidcSettingsOut)
+async def update_oidc_settings(body: OidcSettings, request: Request,
+                               _: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    """Partial update. The client secret is only overwritten when a non-empty value is sent (the UI
+    leaves it blank to keep the stored one). The secret is encrypted at rest via EncryptedText."""
+    cfg = await _get_config(db)
+    data = body.model_dump(exclude_unset=True)
+    if data.get("oidc_client_secret") == "":
+        data.pop("oidc_client_secret")  # blank = keep the stored secret
+    for field, value in data.items():
+        setattr(cfg, field, value)
+    await db.commit()
+    await db.refresh(cfg)
+    return _oidc_out(cfg, request)

@@ -3,10 +3,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
 
 from .config import get_settings
 from .database import engine, Base
-from .routers import setup, auth, portals, stac, templates, admin, basemaps, users, tokens
+from .routers import setup, auth, auth_oidc, portals, stac, templates, admin, basemaps, users, tokens
 from .routers.data import vector, raster, sources, discover
 
 
@@ -99,6 +100,16 @@ def _apply_schema_migrations(conn) -> None:
         "ALTER TABLE setup_config ADD COLUMN smtp_username VARCHAR(256)",
         "ALTER TABLE setup_config ADD COLUMN smtp_password TEXT",
         "ALTER TABLE setup_config ADD COLUMN email_from VARCHAR(256)",
+        # A-04 OIDC SSO config + per-user provider subject
+        "ALTER TABLE setup_config ADD COLUMN oidc_enabled BOOLEAN DEFAULT 0",
+        "ALTER TABLE setup_config ADD COLUMN oidc_issuer VARCHAR(512)",
+        "ALTER TABLE setup_config ADD COLUMN oidc_client_id VARCHAR(512)",
+        "ALTER TABLE setup_config ADD COLUMN oidc_client_secret TEXT",
+        "ALTER TABLE setup_config ADD COLUMN oidc_label VARCHAR(128)",
+        "ALTER TABLE setup_config ADD COLUMN oidc_auto_provision BOOLEAN DEFAULT 0",
+        "ALTER TABLE setup_config ADD COLUMN oidc_allowed_domains VARCHAR(512)",
+        "ALTER TABLE setup_config ADD COLUMN oidc_default_role VARCHAR(16) DEFAULT 'viewer'",
+        "ALTER TABLE users ADD COLUMN oidc_sub VARCHAR(255)",
     ]
     for sql in pending:
         try:
@@ -155,10 +166,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# A-04 OIDC: Authlib stores the transient login state/nonce/PKCE in request.session. This signed
+# cookie is short-lived and used ONLY during the SSO redirect dance; it doesn't touch the gd_session
+# auth cookie. SameSite=Lax so it survives the top-level redirect back from the identity provider.
+app.add_middleware(
+    SessionMiddleware, secret_key=settings.secret_key, session_cookie="gd_oidc_state",
+    max_age=600, same_site="lax", https_only=False,
+)
+
 # API routes
-for router in [setup.router, auth.router, users.router, tokens.router, portals.router,
-               templates.router, admin.router, basemaps.router, vector.router, raster.router,
-               sources.router, discover.router, stac.router]:
+for router in [setup.router, auth.router, auth_oidc.router, users.router, tokens.router,
+               portals.router, templates.router, admin.router, basemaps.router, vector.router,
+               raster.router, sources.router, discover.router, stac.router]:
     app.include_router(router, prefix="/api")
 
 # Serve published portals as static files

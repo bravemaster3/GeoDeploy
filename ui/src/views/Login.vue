@@ -48,6 +48,15 @@
           class="text-xs text-muted-foreground hover:text-foreground w-full text-center">
           Forgot password?
         </button>
+
+        <!-- SSO (A-04) — shown only when an OIDC provider is configured -->
+        <template v-if="ssoEnabled">
+          <div class="relative py-1 text-center">
+            <span class="absolute inset-x-0 top-1/2 border-t border-border" />
+            <span class="relative z-10 text-[11px] text-muted-foreground/70 bg-card px-2">or</span>
+          </div>
+          <button @click="ssoLogin" class="btn-secondary w-full justify-center">{{ ssoLabel }}</button>
+        </template>
       </div>
     </div>
   </div>
@@ -57,7 +66,7 @@
 import { onMounted, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { forgotPassword, getSetupStatus } from '@/api'
+import { forgotPassword, getSetupStatus, oidcStatus } from '@/api'
 
 const router = useRouter()
 const route = useRoute()
@@ -69,13 +78,26 @@ const busy = ref(false)
 const mode = ref('login')
 const forgotDone = ref(false)
 const emailEnabled = ref(false)
+const ssoEnabled = ref(false)
+const ssoLabel = ref('Single sign-on')
 
 onMounted(async () => {
+  // An SSO refusal (unknown account, blocked domain, provider error) bounces here with ?sso_error=.
+  if (typeof route.query.sso_error === 'string') error.value = route.query.sso_error
   try {
     const { data } = await getSetupStatus()
     emailEnabled.value = !!data.email_enabled
   } catch { /* no link shown if the check fails */ }
+  try {
+    const { data } = await oidcStatus()
+    ssoEnabled.value = !!data.enabled
+    ssoLabel.value = data.label || 'Single sign-on'
+  } catch { /* no SSO button if the check fails */ }
 })
+
+function ssoLogin() {
+  window.location.assign('/api/auth/oidc/login')  // top-level nav → provider → /auth/oidc/callback
+}
 
 async function submit() {
   error.value = ''

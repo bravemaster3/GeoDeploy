@@ -149,6 +149,30 @@ class EmailSettingsOut(BaseModel):
     configured: bool = False
 
 
+class OidcSettings(BaseModel):
+    """Admin Settings → Authentication (A-04; partial update; client_secret only written when provided)."""
+    oidc_enabled: bool | None = None
+    oidc_issuer: str | None = None
+    oidc_client_id: str | None = None
+    oidc_client_secret: str | None = None
+    oidc_label: str | None = None
+    oidc_auto_provision: bool | None = None
+    oidc_allowed_domains: str | None = None
+    oidc_default_role: str | None = Field(default=None, pattern="^(viewer|editor|admin)$")
+
+
+class OidcSettingsOut(BaseModel):
+    oidc_enabled: bool
+    oidc_issuer: str | None
+    oidc_client_id: str | None
+    oidc_label: str | None
+    oidc_auto_provision: bool
+    oidc_allowed_domains: str | None
+    oidc_default_role: str
+    has_client_secret: bool  # the secret itself is never returned
+    redirect_uri: str        # computed — the admin registers this with their provider
+
+
 class InvitePublicOut(BaseModel):
     """What the public accept/reset page may learn from a valid token."""
     email: str

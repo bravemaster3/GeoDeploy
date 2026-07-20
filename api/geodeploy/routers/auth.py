@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..database import get_db
-from ..deps import SESSION_COOKIE, get_current_user
+from ..deps import SESSION_COOKIE, get_current_user, resolve_cookie_user
 from ..models import Invitation, User
 from ..schemas import (
     AcceptInviteRequest, ForgotPasswordRequest, InvitePublicOut, PasswordChangeRequest,
@@ -81,6 +81,16 @@ async def logout():
 @router.get("/me", response_model=UserOut)
 async def me(user: User = Depends(get_current_user)):
     return user
+
+
+@router.get("/session-token", response_model=TokenResponse)
+async def session_token(request: Request, db: AsyncSession = Depends(get_db)):
+    """Return the JWT held in the HttpOnly session cookie so the SPA can load it into localStorage
+    after an OIDC redirect (a top-level redirect can't populate localStorage). 401 if no valid cookie."""
+    user = await resolve_cookie_user(request, db)
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "No active session.")
+    return TokenResponse(access_token=request.cookies.get(SESSION_COOKIE))
 
 
 # ── Invitation accept + password flows (RBAC, A-01) ──────────────────────────────────────────

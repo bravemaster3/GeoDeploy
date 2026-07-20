@@ -186,6 +186,86 @@
       </section>
       </div>
 
+      <!-- Authentication (SSO) tab (admin) -->
+      <div v-if="activeTab === 'auth'" class="space-y-6">
+        <section class="card overflow-hidden">
+          <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
+            <span class="w-9 h-9 rounded-lg bg-teal-500/15 text-teal-400 flex items-center justify-center flex-shrink-0">
+              <KeyIcon class="w-5 h-5" />
+            </span>
+            <div class="flex-1 min-w-0">
+              <h2 class="text-sm font-semibold text-foreground">Single sign-on (OIDC)</h2>
+              <p class="text-xs text-muted-foreground/70">Let members sign in with your identity provider</p>
+            </div>
+            <span v-if="oidcForm" class="text-[11px] font-medium px-2 py-0.5 rounded-full"
+              :class="oidcForm.oidc_enabled ? 'bg-green-500/15 text-green-400' : 'bg-muted text-muted-foreground'">
+              {{ oidcForm.oidc_enabled ? 'enabled' : 'disabled' }}
+            </span>
+          </header>
+          <div v-if="oidcForm" class="p-5 space-y-4">
+            <p class="text-xs text-muted-foreground">
+              Generic OpenID Connect (Google, Microsoft, Keycloak, Authentik, an institutional IdP…).
+              Register this <span class="font-medium text-foreground/80">redirect URI</span> with your provider:
+            </p>
+            <input :value="oidcRedirectUri" readonly class="input w-full text-xs font-mono"
+              @focus="$event.target.select()" />
+            <label class="flex items-center gap-2 text-sm">
+              <input type="checkbox" v-model="oidcForm.oidc_enabled" class="accent-primary" />
+              <span class="text-foreground/85">Enable single sign-on</span>
+            </label>
+            <div class="grid gap-x-6 gap-y-3 lg:grid-cols-2">
+              <div>
+                <label class="text-xs text-muted-foreground block mb-1">Issuer URL (discovery)</label>
+                <input v-model="oidcForm.oidc_issuer" placeholder="https://accounts.google.com" class="input w-full text-sm font-mono" />
+              </div>
+              <div>
+                <label class="text-xs text-muted-foreground block mb-1">Button label</label>
+                <input v-model="oidcForm.oidc_label" placeholder="Sign in with Google" class="input w-full text-sm" />
+              </div>
+              <div>
+                <label class="text-xs text-muted-foreground block mb-1">Client ID</label>
+                <input v-model="oidcForm.oidc_client_id" class="input w-full text-sm font-mono" />
+              </div>
+              <div>
+                <label class="text-xs text-muted-foreground block mb-1">
+                  Client secret {{ oidcHasSecret ? '(saved — blank keeps it)' : '' }}
+                </label>
+                <input v-model="oidcForm.oidc_client_secret" type="password" autocomplete="new-password" class="input w-full text-sm" />
+              </div>
+            </div>
+            <div class="border-t border-border/60 pt-3 space-y-3">
+              <label class="flex items-center gap-2 text-sm">
+                <input type="checkbox" v-model="oidcForm.oidc_auto_provision" class="accent-primary" />
+                <span class="text-foreground/85">Auto-create accounts on first sign-in</span>
+              </label>
+              <p class="text-[11px] text-muted-foreground/70 -mt-1">
+                Off (recommended): only people you've already invited can sign in via SSO. On: anyone
+                whose email domain is allow-listed gets an account with the default role.
+              </p>
+              <div v-if="oidcForm.oidc_auto_provision" class="grid gap-x-6 gap-y-3 lg:grid-cols-2">
+                <div>
+                  <label class="text-xs text-muted-foreground block mb-1">Allowed email domains (comma-separated)</label>
+                  <input v-model="oidcForm.oidc_allowed_domains" placeholder="example.org, dept.example.org" class="input w-full text-sm font-mono" />
+                </div>
+                <div>
+                  <label class="text-xs text-muted-foreground block mb-1">Default role for new accounts</label>
+                  <select v-model="oidcForm.oidc_default_role" class="input w-full text-sm">
+                    <option value="viewer">viewer</option>
+                    <option value="editor">editor</option>
+                    <option value="admin">admin</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <p v-if="oidcMsg" class="text-xs" :class="oidcMsg.ok ? 'text-green-400' : 'text-red-400'">{{ oidcMsg.text }}</p>
+            <button @click="saveOidc" :disabled="oidcBusy" class="btn-primary text-xs px-3 py-1.5">
+              {{ oidcBusy ? 'Saving…' : 'Save' }}
+            </button>
+          </div>
+          <div v-else class="p-5 text-sm text-muted-foreground/70">Loading…</div>
+        </section>
+      </div>
+
       <!-- Account tab (everyone) -->
       <div v-if="activeTab === 'account'" class="space-y-6">
       <!-- Account -->
@@ -302,7 +382,7 @@ import { useSystemStore } from '@/stores/system'
 import { useAuthStore } from '@/stores/auth'
 import { ServerIcon, HardDriveIcon, UserIcon, RefreshIcon, MailIcon, KeyIcon, TrashIcon } from './icons'
 import api, { changePassword, logoutAll, controlService, getEmailSettings, sendTestEmail,
-              updateEmailSettings, listTokens, revokeToken } from '@/api'
+              updateEmailSettings, listTokens, revokeToken, getOidcSettings, updateOidcSettings } from '@/api'
 import TokenModal from '@/components/users/TokenModal.vue'
 
 const systemStore = useSystemStore()
@@ -318,6 +398,7 @@ const TABS = [
   { id: 'api', label: 'API tokens' },
   { id: 'infra', label: 'Infrastructure', admin: true },
   { id: 'email', label: 'Email', admin: true },
+  { id: 'auth', label: 'Authentication', admin: true },
 ]
 const tabs = computed(() => TABS.filter(t => !t.admin || auth.isAdmin))
 const activeTab = ref('account')
@@ -338,6 +419,45 @@ async function confirmRevoke(id) {
   revokeId.value = null
 }
 function fmtDate(s) { return s ? new Date(s).toLocaleDateString() : '' }
+
+// ── OIDC SSO (A-04, admin) ──
+const oidcForm = ref(null)
+const oidcHasSecret = ref(false)
+const oidcRedirectUri = ref('')
+const oidcBusy = ref(false)
+const oidcMsg = ref(null)
+async function loadOidc() {
+  try {
+    const { data } = await getOidcSettings()
+    oidcHasSecret.value = data.has_client_secret
+    oidcRedirectUri.value = data.redirect_uri
+    oidcForm.value = {
+      oidc_enabled: data.oidc_enabled,
+      oidc_issuer: data.oidc_issuer || '',
+      oidc_client_id: data.oidc_client_id || '',
+      oidc_client_secret: '',  // blank = keep the stored secret
+      oidc_label: data.oidc_label || '',
+      oidc_auto_provision: data.oidc_auto_provision,
+      oidc_allowed_domains: data.oidc_allowed_domains || '',
+      oidc_default_role: data.oidc_default_role || 'viewer',
+    }
+  } catch { /* stays in loading state */ }
+}
+async function saveOidc() {
+  oidcBusy.value = true
+  oidcMsg.value = null
+  try {
+    const { data } = await updateOidcSettings(oidcForm.value)
+    oidcHasSecret.value = data.has_client_secret
+    oidcForm.value.oidc_client_secret = ''
+    oidcMsg.value = { ok: true, text: 'Saved.' }
+    setTimeout(() => { oidcMsg.value = null }, 2500)
+  } catch (e) {
+    oidcMsg.value = { ok: false, text: e.response?.data?.detail || e.message }
+  } finally {
+    oidcBusy.value = false
+  }
+}
 
 const initials = computed(() =>
   (auth.user?.name || '?').split(' ').map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase())
@@ -465,6 +585,7 @@ onMounted(() => {
     systemStore.refreshHealth()
     systemStore.refreshStats()
     loadEmail()
+    loadOidc()
   }
 })
 

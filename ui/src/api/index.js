@@ -39,6 +39,11 @@ export const syncSession = () => api.post('/auth/session')
 export const logoutSession = () => api.post('/auth/logout')
 export const changePassword = (data) => api.put('/auth/password', data)   // A-04: returns a fresh token
 export const logoutAll = () => api.post('/auth/logout-all')                // A-04: revoke other sessions
+// A-04 OIDC SSO
+export const oidcStatus = () => api.get('/auth/oidc/status')               // public: {enabled, label}
+export const sessionToken = () => api.get('/auth/session-token')           // JWT from the session cookie
+export const getOidcSettings = () => api.get('/admin/oidc-settings')
+export const updateOidcSettings = (data) => api.put('/admin/oidc-settings', data)
 export const forgotPassword = (email) => api.post('/auth/forgot-password', { email })
 // Public invitation/reset flows (token IS the credential — no auth header needed)
 export const getInvitation = (token) => api.get(`/auth/invitations/${encodeURIComponent(token)}`)

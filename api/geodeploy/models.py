@@ -38,6 +38,17 @@ class SetupConfig(Base):
     smtp_password: Mapped[str | None] = mapped_column(EncryptedText)  # Fernet-encrypted at rest (crypto.py)
     email_from: Mapped[str | None] = mapped_column(String(256))
 
+    # A-04 OIDC SSO (generic OpenID Connect provider; admin-configured). client_secret is
+    # Fernet-encrypted at rest + write-only via the API (never returned).
+    oidc_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    oidc_issuer: Mapped[str | None] = mapped_column(String(512))          # discovery base URL
+    oidc_client_id: Mapped[str | None] = mapped_column(String(512))
+    oidc_client_secret: Mapped[str | None] = mapped_column(EncryptedText)
+    oidc_label: Mapped[str | None] = mapped_column(String(128))           # sign-in button text
+    oidc_auto_provision: Mapped[bool] = mapped_column(Boolean, default=False)
+    oidc_allowed_domains: Mapped[str | None] = mapped_column(String(512))  # comma-separated
+    oidc_default_role: Mapped[str] = mapped_column(String(16), default="viewer")
+
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -59,6 +70,8 @@ class User(Base):
     # whose tv != this. Bumped on password change/reset + "log out everywhere" to kill outstanding
     # JWTs. (API tokens are revoked individually — this is only the stateless browser JWT.)
     token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # A-04 OIDC: provider subject, pinned on first SSO link so future logins match by sub not just email.
+    oidc_sub: Mapped[str | None] = mapped_column(String(255), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     vector_layers: Mapped[list["VectorLayer"]] = relationship(back_populates="user")
