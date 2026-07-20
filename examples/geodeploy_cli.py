@@ -18,7 +18,9 @@ Examples:
     python geodeploy_cli.py portals
     python geodeploy_cli.py portal-get 3 portal3.json     # dump editable config (incl. layer_configs styles)
     python geodeploy_cli.py portal-set 3 portal3.json      # push edits back
-    python geodeploy_cli.py publish 3
+    python geodeploy_cli.py portal-add-layer 3 6           # add layer 6 to portal 3 (type auto-detected)
+    python geodeploy_cli.py portal-remove-layer 3 6        # remove it again
+    python geodeploy_cli.py publish 3                      # (re)publish to make edits live
 
 The token's scopes gate what works: e.g. a `portal:publish`-only token can `publish` but not `upload`
 (the API returns 403 "Token missing scope: data:write").
@@ -49,8 +51,30 @@ def _call(method, path, **kw):
     return r
 
 
+def _get_json(path):
+    """Best-effort GET → parsed JSON, or None on any error (for lookups that shouldn't hard-fail)."""
+    try:
+        r = requests.get(f"{BASE}/api{path}", headers=_headers(), timeout=120)
+        return r.json() if r.status_code < 400 else None
+    except Exception:
+        return None
+
+
+def _detect_layer_type(layer_id):
+    for path, kind in (("/data/vector", "vector"), ("/data/raster", "raster")):
+        for layer in (_get_json(path) or []):
+            if layer.get("id") == layer_id:
+                return kind
+    return None
+
+
 def _print(obj):
     print(json.dumps(obj, indent=2, ensure_ascii=False))
+
+
+def _layer_summary(configs):
+    # Top of the list = drawn on top (layer_configs[0]).
+    return [{"layer_id": c["layer_id"], "layer_type": c["layer_type"]} for c in configs]
 
 
 def whoami(_):
@@ -80,6 +104,36 @@ def portal_set(args):
     with open(args.config, encoding="utf-8-sig") as f:  # utf-8-sig tolerates a BOM from any editor/shell
         body = json.load(f)
     _print(_call("PUT", f"/portals/{args.id}", json=body).json())
+
+
+def portal_add_layer(args):
+    ltype = args.type or _detect_layer_type(args.layer_id)
+    if not ltype:
+        sys.exit(f"Layer {args.layer_id} not found among vector/raster layers — pass --type explicitly "
+                 "(needs a token with data:read to auto-detect).")
+    portal = _call("GET", f"/portals/{args.portal_id}").json()
+    configs = portal.get("layer_configs", [])
+    if any(c["layer_id"] == args.layer_id and c["layer_type"] == ltype for c in configs):
+        sys.exit(f"Layer {args.layer_id} ({ltype}) is already in portal {args.portal_id}.")
+    entry = {"layer_id": args.layer_id, "layer_type": ltype,
+             "visible": True, "opacity": 1.0, "style": {}, "popup_fields": []}
+    configs = configs + [entry] if args.bottom else [entry] + configs  # default: top of the layer list
+    out = _call("PUT", f"/portals/{args.portal_id}", json={"layer_configs": configs}).json()
+    print(f"Added layer {args.layer_id} ({ltype}) to portal {args.portal_id} — publish to make it live:\n"
+          f"    python geodeploy_cli.py publish {args.portal_id}", file=sys.stderr)
+    _print(_layer_summary(out.get("layer_configs", [])))
+
+
+def portal_remove_layer(args):
+    portal = _call("GET", f"/portals/{args.portal_id}").json()
+    configs = portal.get("layer_configs", [])
+    kept = [c for c in configs
+            if not (c["layer_id"] == args.layer_id and (not args.type or c["layer_type"] == args.type))]
+    if len(kept) == len(configs):
+        sys.exit(f"Layer {args.layer_id} not in portal {args.portal_id}.")
+    out = _call("PUT", f"/portals/{args.portal_id}", json={"layer_configs": kept}).json()
+    print(f"Removed layer {args.layer_id} from portal {args.portal_id} — publish to apply.", file=sys.stderr)
+    _print(_layer_summary(out.get("layer_configs", [])))
 
 
 def publish(args):
@@ -130,6 +184,20 @@ def main():
     spp.add_argument("id", type=int)
     spp.add_argument("config")
     spp.set_defaults(func=portal_set)
+
+    al = sub.add_parser("portal-add-layer", help="add a data layer to a portal (top of the list)")
+    al.add_argument("portal_id", type=int)
+    al.add_argument("layer_id", type=int)
+    al.add_argument("--type", choices=["vector", "raster", "external"],
+                    help="layer type (auto-detected from your layers if omitted)")
+    al.add_argument("--bottom", action="store_true", help="add at the bottom of the layer list, not the top")
+    al.set_defaults(func=portal_add_layer)
+
+    rl = sub.add_parser("portal-remove-layer", help="remove a layer from a portal")
+    rl.add_argument("portal_id", type=int)
+    rl.add_argument("layer_id", type=int)
+    rl.add_argument("--type", choices=["vector", "raster", "external"])
+    rl.set_defaults(func=portal_remove_layer)
 
     for name, fn in (("publish", publish), ("unpublish", unpublish)):
         ap = sub.add_parser(name, help=f"{name} a portal")

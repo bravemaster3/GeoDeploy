@@ -7,8 +7,10 @@ create / edit / publish portals — the same API the dashboard uses, no browser 
 
 ## Contents
 - `geodeploy_cli.py` — a thin `requests`-based CLI. Commands: `whoami`, `layers [--raster]`,
-  `upload <file> [--poll]`, `portals`, `portal-get <id>`, `portal-set <id> <config.json>`,
-  `publish <id>`, `unpublish <id>`. Reads `GEODEPLOY_URL` + `GEODEPLOY_TOKEN` from the environment.
+  `upload <file> [--poll]`, `portals`, `portal-get <id> [outfile]`, `portal-set <id> <config.json>`,
+  `portal-add-layer <portal_id> <layer_id> [--type] [--bottom]`,
+  `portal-remove-layer <portal_id> <layer_id> [--type]`, `publish <id>`, `unpublish <id>`.
+  Reads `GEODEPLOY_URL` + `GEODEPLOY_TOKEN` from the environment.
 
 ## Quick start
 1. In the dashboard: **Settings → API tokens → Create token** (pick scopes + expiry). Copy the
