@@ -64,11 +64,16 @@
                 <input v-model="layerFilter" type="search" placeholder="Search layers…"
                   class="w-full text-xs bg-background border border-border rounded pl-7 pr-2 py-1 focus:outline-none focus:border-primary/60" />
               </div>
-              <button v-if="hasGroups" @click="setAllCollapsed(false)" title="Expand all folders"
-                class="text-[11px] text-muted-foreground/70 hover:text-foreground whitespace-nowrap">Expand all</button>
-              <span v-if="hasGroups" class="text-muted-foreground/30">·</span>
-              <button v-if="hasGroups" @click="setAllCollapsed(true)" title="Collapse all folders"
-                class="text-[11px] text-muted-foreground/70 hover:text-foreground whitespace-nowrap">Collapse all</button>
+              <template v-if="hasGroups">
+                <button @click="setAllCollapsed(false)" title="Expand all folders"
+                  class="w-6 h-6 flex items-center justify-center rounded text-muted-foreground/70 hover:text-foreground hover:bg-muted flex-shrink-0">
+                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 13 12 18 17 13"/><polyline points="7 6 12 11 17 6"/></svg>
+                </button>
+                <button @click="setAllCollapsed(true)" title="Collapse all folders"
+                  class="w-6 h-6 flex items-center justify-center rounded text-muted-foreground/70 hover:text-foreground hover:bg-muted flex-shrink-0">
+                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/></svg>
+                </button>
+              </template>
             </div>
             <div class="flex justify-end mb-1">
               <button @click="addRootFolder" class="text-[11px] text-muted-foreground/70 hover:text-primary">＋ Add folder</button>

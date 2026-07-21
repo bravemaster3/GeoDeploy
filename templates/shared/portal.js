@@ -1304,9 +1304,8 @@
       const acts = document.createElement('div');
       acts.className = 'layer-group-actions';
       acts.innerHTML =
-        '<button type="button" class="lg-expand-all">Expand all</button>' +
-        '<span aria-hidden="true">·</span>' +
-        '<button type="button" class="lg-collapse-all">Collapse all</button>';
+        '<button type="button" class="lg-expand-all" title="Expand all" aria-label="Expand all folders"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 13 12 18 17 13"/><polyline points="7 6 12 11 17 6"/></svg></button>' +
+        '<button type="button" class="lg-collapse-all" title="Collapse all" aria-label="Collapse all folders"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/></svg></button>';
       parent.insertBefore(acts, container);
       acts.querySelector('.lg-expand-all').addEventListener('click', function () { setAllGroups(false); });
       acts.querySelector('.lg-collapse-all').addEventListener('click', function () { setAllGroups(true); });

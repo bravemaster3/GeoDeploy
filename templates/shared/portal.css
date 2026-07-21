@@ -107,14 +107,14 @@
     .layer-search-input:focus { border-color: var(--accent); }
     .layer-search-input::placeholder { color: var(--text-muted); }
     .layer-search-empty { font-size: 12px; color: var(--text-muted); padding: 4px 6px; }
-    /* Expand / collapse all folders */
-    .layer-group-actions { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 11px; }
-    .layer-group-actions span { color: var(--text-muted); opacity: .5; }
+    /* Expand / collapse all folders (icon buttons; label shows as a native tooltip on hover) */
+    .layer-group-actions { display: flex; align-items: center; gap: 2px; margin-bottom: 6px; }
     .layer-group-actions button {
-      background: none; border: none; padding: 0; cursor: pointer; font-size: 11px;
-      color: var(--text-muted);
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 24px; height: 24px; background: none; border: none; padding: 0; cursor: pointer;
+      color: var(--text-muted); border-radius: 5px; transition: background .12s, color .12s;
     }
-    .layer-group-actions button:hover { color: var(--text); }
+    .layer-group-actions button:hover { color: var(--text); background: var(--surface); }
     /* Drag & drop: folder headers are a drag handle; drop indicators */
     .layer-group-header { cursor: grab; }
     .layer-group.dragging, .layer-card.dragging { opacity: .4; }
