@@ -296,11 +296,69 @@ def _layer_info(layer, kind: str) -> dict:
     return info
 
 
+# ── V-11 Template Experiences: layout manifest ────────────────────────────────
+# The PARITY CONTRACT. This same archetype→defaults table + override merge is mirrored in
+# templates/shared/portal.js (resolveLayout) and ui/src/views/PortalEditor.vue (resolveLayout) so the
+# published runtime, the editor, and the server all agree on the resolved manifest. Change all three
+# together (CLAUDE.md 3-surface rule). Absent config → 'webmap' → the pre-V-11 fixed shell.
+_LAYOUT_ARCHETYPES = {
+    # map-first, thin left layer list — identical to the pre-V-11 portal.
+    "webmap": {
+        "regions": {"sidebar": {"side": "left", "collapsed": False},
+                    "layerList": {"mode": "docked"}, "tools": {"placement": "top-right"},
+                    "header": {"style": "bar"}},
+        "panels": {"layerCatalog": True, "legend": True, "basemap": True, "about": True, "story": False},
+    },
+    # map + a foregrounded catalog/browse panel (wider sidebar; emphasis via CSS on data-archetype).
+    "webmap+catalog": {
+        "regions": {"sidebar": {"side": "left", "collapsed": False},
+                    "layerList": {"mode": "docked"}, "tools": {"placement": "top-right"},
+                    "header": {"style": "bar"}},
+        "panels": {"layerCatalog": True, "legend": True, "basemap": True, "about": True, "story": False},
+    },
+    # catalog-FIRST: the layer catalog dominates, the map is secondary/preview.
+    "catalog": {
+        "regions": {"sidebar": {"side": "left", "collapsed": False},
+                    "layerList": {"mode": "docked"}, "tools": {"placement": "sidebar"},
+                    "header": {"style": "bar"}},
+        "panels": {"layerCatalog": True, "legend": True, "basemap": True, "about": True, "story": False},
+    },
+    # scrollytelling: a narrative story column drives the map camera; layer list hidden by default.
+    "storymap": {
+        "regions": {"sidebar": {"side": "left", "collapsed": False},
+                    "layerList": {"mode": "docked"}, "tools": {"placement": "top-right"},
+                    "header": {"style": "minimal"}},
+        "panels": {"layerCatalog": False, "legend": True, "basemap": True, "about": False, "story": True},
+    },
+}
+_DEFAULT_ARCHETYPE = "webmap"
+
+
+def resolve_layout(config: dict | None) -> dict:
+    """Resolve a (possibly partial / None) layout_config into a full manifest: archetype defaults
+    deep-merged with per-portal region/panel overrides. None → the webmap default (today's shell)."""
+    import copy
+    arch = (config or {}).get("archetype") or _DEFAULT_ARCHETYPE
+    if arch not in _LAYOUT_ARCHETYPES:
+        arch = _DEFAULT_ARCHETYPE
+    base = copy.deepcopy(_LAYOUT_ARCHETYPES[arch])
+    resolved = {"archetype": arch, "regions": base["regions"], "panels": base["panels"]}
+    if config:
+        for group in ("regions", "panels"):
+            for key, val in (config.get(group) or {}).items():
+                if isinstance(val, dict) and isinstance(resolved[group].get(key), dict):
+                    resolved[group][key].update(val)
+                else:
+                    resolved[group][key] = val
+    return resolved
+
+
 def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str, layer_configs: list[dict],
                         access_type: str = "public", password_sha256: str | None = None,
                         owner_id: int | None = None,
                         initial_view: dict | None = None, description: str | None = None,
-                        basemap: str | None = None) -> str:
+                        basemap: str | None = None,
+                        layout_config: dict | None = None, story: dict | None = None) -> str:
     """
     Merge basemap + user data into a complete style, inject into layout.html,
     write to data/portals/{slug}/index.html.
@@ -340,6 +398,11 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
             "deckLayers": user_data.get("deck_layers", []),  # GeoParquet layers → deck.gl overlay
             # V-13: nested folder tree for the grouped layer switcher (None → portal.js flat list).
             "layerTree": user_data.get("layer_tree"),
+            # V-11: resolved layout manifest {archetype, regions, panels}. Always present (webmap
+            # default) so portal.js has one source of truth; the editor mirrors resolveLayout().
+            "layout": resolve_layout(layout_config),
+            # V-11 storymap: narrative sections (only rendered when archetype == 'storymap').
+            "story": story if (story and story.get("sections")) else None,
             # The full basemap catalog, baked in so portal.js builds the switcher from the SAME source
             # as the editor (GET /api/basemaps) — one place to add a basemap.
             "basemaps": BASEMAP_CATALOG,

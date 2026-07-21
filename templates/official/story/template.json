@@ -1,0 +1,12 @@
+{
+  "name": "Story",
+  "author": "GeoDeploy",
+  "description": "A scrollytelling geoportal: a narrative of sections, each pinned to a map camera and layer state, the map animating as the reader scrolls. Add sections in the Experience panel.",
+  "tags": ["story", "storymap", "narrative", "scrollytelling", "official"],
+  "language": "en",
+  "basemap": "voyager",
+  "preview": "preview.png",
+  "version": "1.0.0",
+  "license": "MIT",
+  "archetype": "storymap"
+}

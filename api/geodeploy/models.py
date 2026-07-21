@@ -283,6 +283,12 @@ class Portal(Base):
     # NULL = flat list (renders like before). Structure lives here; per-layer style stays in layer_configs.
     layer_groups: Mapped[str | None] = mapped_column(Text)
     initial_view: Mapped[str | None] = mapped_column(Text)  # JSON {center:[lng,lat], zoom, bearing, pitch} — published portal's start view
+    # V-11 Template Experiences: optional layout manifest {archetype, regions, panels}. NULL = webmap
+    # (identical to the pre-V-11 fixed shell). Resolved at publish via portal_generator.resolve_layout.
+    layout_config: Mapped[str | None] = mapped_column(Text)
+    # V-11 story-map archetype: {sections:[{id, html, view, layers}]}. NULL = no story. Only consumed
+    # when the resolved layout archetype is 'storymap'.
+    story: Mapped[str | None] = mapped_column(Text)
     # DORMANT: portals dropped the separate workspace-visibility control (it duplicated access_type
     # confusingly — a portal's audience is its published access_type, below). Kept at 'organization'
     # for every portal (reset by a migration); never written by the API. Data layers/sources still use

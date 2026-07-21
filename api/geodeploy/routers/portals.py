@@ -89,6 +89,8 @@ async def _rebuild_bundle(portal: Portal, db: AsyncSession) -> None:
     user_data = generate_style(layer_configs, vector_layers, raster_layers, external_sources,
                                deck_core_bounds=deck_core_bounds, layer_groups=layer_groups)
     initial_view = json.loads(portal.initial_view) if portal.initial_view else None
+    layout_config = json.loads(portal.layout_config) if portal.layout_config else None
+    story = json.loads(portal.story) if portal.story else None
     build_portal_bundle(
         portal.slug, portal.title, user_data, portal.template_id, layer_configs,
         access_type=portal.access_type,
@@ -97,6 +99,8 @@ async def _rebuild_bundle(portal: Portal, db: AsyncSession) -> None:
         initial_view=initial_view,
         description=portal.description,
         basemap=portal.basemap,
+        layout_config=layout_config,   # V-11: resolved into style.geodeploy.layout
+        story=story,                   # V-11: storymap sections baked when archetype == storymap
     )
 
 
@@ -127,6 +131,8 @@ async def create_portal(req: PortalCreate, user: User = Depends(require_scope("p
         template_id=req.template_id,
         layer_configs=json.dumps([lc.model_dump() for lc in req.layer_configs]),
         layer_groups=json.dumps(req.layer_groups) if req.layer_groups else None,
+        layout_config=json.dumps(req.layout_config) if req.layout_config else None,
+        story=json.dumps(req.story) if req.story else None,
         access_type=req.access_type,
     )
     if req.access_password:
@@ -230,6 +236,12 @@ async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(
     if req.layer_groups is not None:
         # An empty list clears the tree back to a flat list; a populated list sets the folder tree.
         portal.layer_groups = json.dumps(req.layer_groups) if req.layer_groups else None
+    if req.layout_config is not None:
+        # An empty dict clears back to the webmap default; a populated manifest sets the experience.
+        portal.layout_config = json.dumps(req.layout_config) if req.layout_config else None
+    if req.story is not None:
+        # An empty dict / no sections clears the story; a populated one sets the storymap content.
+        portal.story = json.dumps(req.story) if req.story else None
     if req.initial_view is not None:
         portal.initial_view = json.dumps(req.initial_view)
     if req.access_type is not None:

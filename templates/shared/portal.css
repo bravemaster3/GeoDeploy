@@ -88,6 +88,49 @@
     }
     #sidebar-inner { padding: 16px; min-width: var(--sidebar-w); }
 
+    /* ── V-11 Template Experiences: region-driven layout ───────────────────
+       portal.js sets data-* on <body> from the resolved manifest (style.geodeploy.layout).
+       No manifest ⇒ webmap defaults ⇒ these rules are inert and the shell is unchanged. */
+    /* Sidebar side (default left). Right = reverse the flex row + flip the divider. */
+    body[data-sidebar-side="right"] #layout { flex-direction: row-reverse; }
+    body[data-sidebar-side="right"] #sidebar { border-right: none; border-left: 1px solid var(--border); }
+    /* Archetype emphasis: widen the catalog for catalog-forward experiences. */
+    body[data-archetype="webmap+catalog"] { --sidebar-w: 340px; }
+    body[data-archetype="catalog"] { --sidebar-w: min(46vw, 560px); }
+    /* Floating layer list: the sidebar becomes an overlay card over the map. */
+    body[data-layerlist="floating"] #sidebar {
+      position: absolute; top: 12px; bottom: 12px; left: 12px; width: var(--sidebar-w);
+      z-index: 20; border: 1px solid var(--border); border-radius: var(--radius);
+      box-shadow: var(--shadow-lg); max-height: calc(100% - 24px);
+    }
+    body[data-layerlist="floating"][data-sidebar-side="right"] #sidebar { left: auto; right: 12px; }
+    /* Minimal header: transparent bar that floats over the map (used by storymap). */
+    body[data-header="minimal"] #header { background: transparent; border-bottom: none; box-shadow: none; }
+    body[data-header="minimal"] #portal-title { text-shadow: 0 1px 3px rgba(0,0,0,.45); }
+
+    /* ── Storymap archetype: scrollytelling narrative column over the map ──── */
+    body[data-archetype="storymap"] #sidebar { display: none; }
+    #story-panel {
+      position: absolute; top: 0; bottom: 0; left: 0; width: min(420px, 42vw);
+      z-index: 15; overflow-y: auto; padding: 42vh 22px 60vh;
+      background: linear-gradient(90deg, var(--bg) 62%, transparent);
+      pointer-events: none;  /* the map pans behind; cards re-enable pointer events */
+      scroll-behavior: smooth;
+    }
+    body[data-sidebar-side="right"][data-archetype="storymap"] #story-panel {
+      left: auto; right: 0; background: linear-gradient(270deg, var(--bg) 62%, transparent);
+    }
+    .story-section {
+      pointer-events: auto; background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 20px 22px;
+      margin-bottom: 55vh; opacity: .35; transition: opacity .35s ease;
+    }
+    .story-section:last-child { margin-bottom: 0; }
+    .story-section.active { opacity: 1; }
+    .story-section h1, .story-section h2, .story-section h3 { margin-bottom: 8px; }
+    .story-section p { margin-bottom: 10px; line-height: 1.55; }
+    .story-section img { max-width: 100%; border-radius: 6px; margin: 6px 0; }
+
     .sidebar-section-title {
       font-size: 11px; font-weight: 600; text-transform: uppercase;
       letter-spacing: .06em; color: var(--text-muted); margin-bottom: 10px;

@@ -49,6 +49,39 @@
   const STYLE = window.GEODEPLOY.style;
   const POPUP_CONFIG = window.GEODEPLOY.popupConfig;
 
+  // ── V-11 Template Experiences: layout manifest ──────────────────────────
+  // Mirror of portal_generator.resolve_layout (PARITY: also mirrored in PortalEditor.vue). The server
+  // already bakes a resolved manifest into style.geodeploy.layout, so this is normally a pass-through;
+  // resolveLayout stays defensive (older bundles / partial configs). Absent → webmap = pre-V-11 shell.
+  const LAYOUT_ARCHETYPES = {
+    webmap:          { regions: { sidebar: { side: 'left', collapsed: false }, layerList: { mode: 'docked' },  tools: { placement: 'top-right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
+    'webmap+catalog':{ regions: { sidebar: { side: 'left', collapsed: false }, layerList: { mode: 'docked' },  tools: { placement: 'top-right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
+    catalog:         { regions: { sidebar: { side: 'left', collapsed: false }, layerList: { mode: 'docked' },  tools: { placement: 'sidebar' },   header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
+    storymap:        { regions: { sidebar: { side: 'left', collapsed: false }, layerList: { mode: 'docked' },  tools: { placement: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: false, legend: true, basemap: true, about: false, story: true } },
+  };
+  function resolveLayout(config) {
+    const arch = (config && config.archetype && LAYOUT_ARCHETYPES[config.archetype]) ? config.archetype : 'webmap';
+    const base = LAYOUT_ARCHETYPES[arch];
+    const out = { archetype: arch, regions: JSON.parse(JSON.stringify(base.regions)), panels: JSON.parse(JSON.stringify(base.panels)) };
+    if (config) ['regions', 'panels'].forEach(function (g) {
+      const src = config[g] || {};
+      Object.keys(src).forEach(function (k) {
+        if (src[k] && typeof src[k] === 'object' && out[g][k] && typeof out[g][k] === 'object') Object.assign(out[g][k], src[k]);
+        else out[g][k] = src[k];
+      });
+    });
+    return out;
+  }
+  function applyLayoutAttrs(L) {
+    const b = document.body;
+    b.dataset.archetype = L.archetype;
+    b.dataset.sidebarSide = L.regions.sidebar.side;      // → data-sidebar-side
+    b.dataset.layerlist = L.regions.layerList.mode;       // → data-layerlist
+    b.dataset.header = L.regions.header.style;            // → data-header
+  }
+  const LAYOUT = resolveLayout(STYLE.geodeploy && STYLE.geodeploy.layout);
+  applyLayoutAttrs(LAYOUT);
+
   // ── Theme (light/dark) ──────────────────────────────────
   // Dark = html[data-theme=dark] variable overrides in portal.css (template theme.css restyles
   // the LIGHT theme via :root and never clobbers dark). Default follows the visitor's OS color
@@ -114,6 +147,8 @@
 
   // ── Sidebar toggle ──────────────────────────────────────
   const sidebar = document.getElementById('sidebar');
+  // V-11: honour the manifest's start-collapsed region option.
+  if (LAYOUT.regions.sidebar.collapsed) sidebar.classList.add('collapsed');
   document.getElementById('sidebar-toggle').addEventListener('click', () => {
     sidebar.classList.toggle('collapsed');
     setTimeout(() => map.resize(), 220);
@@ -867,24 +902,30 @@
   // ── Layer switcher ──────────────────────────────────────
   map.on('load', function () {
     ensurePointImages();  // register canvas icons before the symbol layers paint
-    // Reverse so the list shows config[0] (drawn on top) at the top of the list.
-    const userLayers = STYLE.layers.filter(l => l.metadata && l.metadata['geodeploy:name']).reverse();
-    buildLayerSwitcher(userLayers);
-    appendDeckRows();
-    // V-13: if the portal has a folder tree, reorganize the flat cards into groups (after both
-    // MapLibre + deck cards exist, so every card is available to move).
-    if (STYLE.geodeploy && STYLE.geodeploy.layerTree) {
-      try { applyLayerGroups(STYLE.geodeploy.layerTree); } catch (e) { console.warn('[geodeploy] layer groups failed', e); }
+    // V-11: the layer catalog panel is mounted only when the archetype enables it (storymap hides it).
+    // The map LAYERS themselves render from STYLE regardless — this only gates the sidebar UI.
+    if (LAYOUT.panels.layerCatalog) {
+      // Reverse so the list shows config[0] (drawn on top) at the top of the list.
+      const userLayers = STYLE.layers.filter(l => l.metadata && l.metadata['geodeploy:name']).reverse();
+      buildLayerSwitcher(userLayers);
+      appendDeckRows();
+      // V-13: if the portal has a folder tree, reorganize the flat cards into groups (after both
+      // MapLibre + deck cards exist, so every card is available to move).
+      if (STYLE.geodeploy && STYLE.geodeploy.layerTree) {
+        try { applyLayerGroups(STYLE.geodeploy.layerTree); } catch (e) { console.warn('[geodeploy] layer groups failed', e); }
+      }
+      try { setupLayerSearch(); } catch (e) { console.warn('[geodeploy] layer search failed', e); }
+      enableLayerDrag(document.getElementById('layer-list'));  // after cards + deck rows + groups exist
     }
-    try { setupLayerSearch(); } catch (e) { console.warn('[geodeploy] layer search failed', e); }
-    enableLayerDrag(document.getElementById('layer-list'));  // after cards + deck rows + groups exist
-    initDeck();
-    try { buildAboutPanel(); } catch (e) { console.warn('[geodeploy] About panel failed', e); }
-    setupBasemaps();  // adds the basemap + tools controls (top-right)
+    initDeck();  // always — GeoParquet deck layers must paint even without the catalog panel
+    if (LAYOUT.panels.about) { try { buildAboutPanel(); } catch (e) { console.warn('[geodeploy] About panel failed', e); } }
+    if (LAYOUT.panels.basemap) setupBasemaps();  // adds the basemap + tools controls (top-right)
     // Globe/2D projection toggle (MapLibre v5 native — no Cesium, no token). Guarded so a
     // cached v4 script can't crash the portal.
     if (maplibregl.GlobeControl) map.addControl(new maplibregl.GlobeControl(), 'top-right');
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');  // zoom below them
+    // V-11 storymap: build the scrollytelling narrative that drives the camera + layer state.
+    if (LAYOUT.archetype === 'storymap') { try { setupStory(); } catch (e) { console.warn('[geodeploy] story failed', e); } }
   });
 
   const resetBtn = document.getElementById('reset-styling');
@@ -910,6 +951,7 @@
       }
     });
     ensurePointImages();  // restore original marker icons (shape/colour/size)
+    if (!LAYOUT.panels.layerCatalog) return;  // no sidebar catalog to rebuild (e.g. storymap)
     buildLayerSwitcher(STYLE.layers.filter(l => l.metadata && l.metadata['geodeploy:name']).reverse());
     appendDeckRows();  // re-add the GeoParquet deck-layer rows (not in STYLE.layers)
     // Rebuilding the cards flattens the list — restore the folder tree, then clear any active filter.
@@ -921,6 +963,84 @@
     const si = document.querySelector('.layer-search-input');
     if (si) si.value = '';
     showNoResults(document.getElementById('layer-list'), false);
+  }
+
+  // ── V-11 Story map: scrollytelling narrative that drives the camera + layers ──
+  // A layer ref is 'type:layer_id' (matches card.dataset.ref). Resolve a layer's ref-type the same
+  // way the switcher does so 'vector:5' never toggles a raster that happens to share id 5.
+  function layerRefType(l) {
+    const m = l.metadata || {};
+    if (m['geodeploy:external']) return 'external';
+    if (l.type === 'raster') return 'raster';
+    return 'vector';
+  }
+  function setLayerVisByRef(ref, visible) {
+    const parts = String(ref).split(':'), type = parts[0], lid = parts[1];
+    // GeoParquet deck layers live in deckState (keyed by numeric layer_id; refs tag them 'vector').
+    if (type === 'vector' && deckState[lid] !== undefined) {
+      const st = deckState[lid];
+      st.visible = !!visible;
+      if (st.visible && !st.data) fetchDeck(false); else rebuildDeck();
+      return;
+    }
+    (STYLE.layers || []).forEach(function (l) {
+      const m = l.metadata || {};
+      if (layerRefType(l) === type && String(m['geodeploy:layer_id']) === String(lid)) {
+        try { map.setLayoutProperty(l.id, 'visibility', visible ? 'visible' : 'none'); } catch (e) {}
+      }
+    });
+  }
+  function applyStoryLayers(layerMap) {
+    if (!layerMap) return;
+    Object.keys(layerMap).forEach(function (ref) { setLayerVisByRef(ref, layerMap[ref]); });
+  }
+  // Section content is title + body (plain text, XSS-escaped here). s.html is reserved for a future
+  // rich-text editor (V-15) and passed through when present.
+  function renderStoryHtml(s) {
+    if (s.html) return s.html;
+    var out = '';
+    if (s.title) out += '<h2>' + escHtml(s.title) + '</h2>';
+    if (s.body) String(s.body).split(/\n{2,}/).forEach(function (p) {
+      if (p.trim()) out += '<p>' + escHtml(p.trim()).replace(/\n/g, '<br>') + '</p>';
+    });
+    return out;
+  }
+  function setupStory() {
+    const data = STYLE.geodeploy && STYLE.geodeploy.story;
+    const panel = document.getElementById('story-panel');
+    if (!panel || !data || !Array.isArray(data.sections) || !data.sections.length) return;
+    panel.style.display = '';
+    panel.innerHTML = '';
+    data.sections.forEach(function (s, i) {
+      const sec = document.createElement('section');
+      sec.className = 'story-section';
+      sec.dataset.idx = i;
+      sec.innerHTML = renderStoryHtml(s);
+      panel.appendChild(sec);
+    });
+    const sections = Array.prototype.slice.call(panel.querySelectorAll('.story-section'));
+    let current = -1;
+    function activate(i) {
+      if (i === current) return;
+      current = i;
+      sections.forEach(function (el, j) { el.classList.toggle('active', j === i); });
+      const s = data.sections[i];
+      if (s && s.view && Array.isArray(s.view.center) && s.view.center.length === 2) {
+        try {
+          map.flyTo({ center: s.view.center, zoom: s.view.zoom != null ? s.view.zoom : map.getZoom(),
+            bearing: s.view.bearing || 0, pitch: s.view.pitch || 0, duration: 1200, essential: true });
+        } catch (e) {}
+      }
+      if (s && s.layers) applyStoryLayers(s.layers);
+    }
+    const io = new IntersectionObserver(function (entries) {
+      // Pick the most-centered intersecting section (rootMargin narrows the trigger band to mid-screen).
+      let best = null;
+      entries.forEach(function (en) { if (en.isIntersecting && (!best || en.intersectionRatio > best.intersectionRatio)) best = en; });
+      if (best) activate(parseInt(best.target.dataset.idx, 10));
+    }, { rootMargin: '-45% 0px -45% 0px', threshold: [0, 0.5, 1] });
+    sections.forEach(function (el) { io.observe(el); });
+    activate(0);  // open on the first section's camera + layer state
   }
 
   // ---- Point marker shapes -------------------------------------------------

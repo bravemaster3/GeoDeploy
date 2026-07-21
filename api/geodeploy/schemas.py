@@ -437,6 +437,8 @@ class PortalCreate(BaseModel):
     template_id: str = "minimal"
     layer_configs: list[LayerConfig] = Field(default_factory=list)
     layer_groups: list[dict[str, Any]] | None = None  # V-13: nested folder tree over the layers
+    layout_config: dict[str, Any] | None = None  # V-11: {archetype, regions, panels}
+    story: dict[str, Any] | None = None  # V-11: {sections:[...]} for the storymap archetype
     access_type: str = Field(default="public", pattern=_ACCESS_TYPE)
     access_password: str | None = None
 
@@ -447,6 +449,8 @@ class PortalUpdate(BaseModel):
     template_id: str | None = None
     layer_configs: list[LayerConfig] | None = None
     layer_groups: list[dict[str, Any]] | None = None  # V-13: nested folder tree (null = leave as-is)
+    layout_config: dict[str, Any] | None = None  # V-11: {archetype, regions, panels} (null = leave as-is)
+    story: dict[str, Any] | None = None  # V-11: storymap sections (null = leave as-is)
     initial_view: dict[str, Any] | None = None  # {center:[lng,lat], zoom, bearing, pitch}
     access_type: str | None = Field(default=None, pattern=_ACCESS_TYPE)
     access_password: str | None = None
@@ -463,6 +467,8 @@ class PortalOut(BaseModel):
     template_id: str
     layer_configs: list[LayerConfig]
     layer_groups: list[dict[str, Any]] | None = None
+    layout_config: dict[str, Any] | None = None  # V-11: {archetype, regions, panels}
+    story: dict[str, Any] | None = None  # V-11: storymap sections
     initial_view: dict[str, Any] | None = None
     access_type: str
     basemap: str | None = None
@@ -478,6 +484,8 @@ class PortalOut(BaseModel):
         data = {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
         data["layer_configs"] = json.loads(obj.layer_configs) if obj.layer_configs else []
         data["layer_groups"] = json.loads(obj.layer_groups) if obj.layer_groups else None
+        data["layout_config"] = json.loads(obj.layout_config) if obj.layout_config else None
+        data["story"] = json.loads(obj.story) if obj.story else None
         data["initial_view"] = json.loads(obj.initial_view) if obj.initial_view else None
         data.pop("access_password_hash", None)
         return cls(**data)
@@ -497,6 +505,11 @@ class TemplateOut(BaseModel):
     version: str
     license: str
     is_official: bool
+    # V-11: the experience archetype this template presets (webmap | webmap+catalog | catalog |
+    # storymap). Selecting the template seeds the portal's layout_config.archetype. None → webmap.
+    archetype: str | None = None
+    # V-11: optional layout region/panel overrides shipped with the preset (merged onto the archetype).
+    layout: dict[str, Any] | None = None
 
 
 # ── Admin ─────────────────────────────────────────────────────────────────────

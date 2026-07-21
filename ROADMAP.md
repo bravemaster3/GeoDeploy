@@ -136,6 +136,17 @@ When an item is delivered, the corresponding folder `README.md` gets the impleme
 roadmap only tracks *state*, not *how*.
 
 ## Last updated
+2026-07-21 — `V-11` **Template experiences** flipped `next` → **building** (frontier, code-complete /
+unverified). Phase 1 landed: a `Portal.layout_config` manifest `{archetype, regions, panels}` resolved
+by `portal_generator.resolve_layout` and baked into `style.geodeploy.layout`, a **region-driven shell**
+(`portal.js` sets `data-*` on `<body>`; `portal.css` grid/overlay rules) with 3 reuse-only archetypes
+(webmap · webmap+catalog · catalog), a **PortalEditor "Experience" panel** (archetype cards + placement
+toggles + a schematic wireframe). Phase 2 START: a **storymap** archetype MVP — a `Portal.story`
+`{sections:[{title,body,view,layers}]}`, a scroll-driven `StoryPanel` (IntersectionObserver → `flyTo` +
+per-section layer visibility), a story-section editor (capture map view), and a dedicated **Story**
+template (`official/story`, `archetype:storymap`); `humanitarian` presets `webmap+catalog`. Parity held
+across all three surfaces (resolveLayout mirrored). Back-compat: no manifest ⇒ webmap ⇒ unchanged. New
+`test_portal_experiences.py`. Full rich-text/media story editor + scroll polish stays as `V-15`.
 2026-07-16 — **portal access enforced SERVER-SIDE** (was client-side): nginx `auth_request` →
 `GET /api/portals/authz` validates a `gd_session` HttpOnly cookie against the portal's `access_type`
 before the static bundle is served (organization = any member, owner = creator + admins; a deny

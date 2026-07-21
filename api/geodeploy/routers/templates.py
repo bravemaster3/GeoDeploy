@@ -37,6 +37,8 @@ def _load_templates() -> list[TemplateOut]:
                     version=meta.get("version", "1.0.0"),
                     license=meta.get("license", "MIT"),
                     is_official=is_official,
+                    archetype=meta.get("archetype"),   # V-11 preset experience (None → webmap)
+                    layout=meta.get("layout"),          # V-11 optional region/panel overrides
                 ))
             except Exception:
                 continue

@@ -93,8 +93,108 @@
               :class="selectedTemplate === t.id
                 ? 'border-primary bg-primary/10 text-primary'
                 : 'border-border hover:border-muted-foreground/40 text-foreground/85'"
-              @click="selectedTemplate = t.id"
+              @click="onSelectTemplate(t)"
             >{{ t.name }}</button>
+          </div>
+        </section>
+
+        <!-- Experience / Layout section (V-11) -->
+        <section class="p-4 border-b border-border/60">
+          <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Experience</h3>
+          <div class="grid grid-cols-2 gap-2 mb-3">
+            <button v-for="a in ARCHETYPES" :key="a.id"
+              class="p-2 rounded-lg border text-left transition-colors"
+              :class="resolvedLayout.archetype === a.id ? 'border-primary bg-primary/10' : 'border-border hover:border-muted-foreground/40'"
+              @click="pickArchetype(a.id)">
+              <span class="block text-xs font-medium" :class="resolvedLayout.archetype === a.id ? 'text-primary' : 'text-foreground/85'">{{ a.name }}</span>
+              <span class="block text-[10px] text-muted-foreground/70 leading-snug">{{ a.desc }}</span>
+            </button>
+          </div>
+
+          <!-- Schematic wireframe of the resolved layout -->
+          <div class="rounded-md border border-border bg-muted/30 overflow-hidden" style="height:96px">
+            <div class="border-b border-border/70" style="height:12px"
+              :class="resolvedLayout.regions.header.style === 'minimal' ? 'bg-transparent' : 'bg-card'"></div>
+            <div class="flex" style="height:84px"
+              :class="resolvedLayout.regions.sidebar.side === 'right' ? 'flex-row-reverse' : ''">
+              <div v-if="!isStory && resolvedLayout.panels.layerCatalog"
+                class="bg-card/80 flex-shrink-0"
+                :class="[resolvedLayout.regions.sidebar.side === 'right' ? 'border-l border-border/70' : 'border-r border-border/70',
+                         resolvedLayout.regions.layerList.mode === 'floating' ? 'm-1.5 rounded border border-border shadow-sm' : '']"
+                :style="{ width: sidebarWireWidth }"></div>
+              <div class="flex-1 relative bg-gradient-to-br from-blue-500/10 to-emerald-500/10">
+                <div v-if="isStory" class="absolute inset-y-1.5 rounded bg-card/85 shadow-sm" style="width:34%"
+                  :class="resolvedLayout.regions.sidebar.side === 'right' ? 'right-1.5' : 'left-1.5'"></div>
+              </div>
+            </div>
+          </div>
+          <p class="text-[10px] text-muted-foreground/60 mt-1 mb-3">Schematic — the exact look renders on the published portal.</p>
+
+          <!-- Placement toggles -->
+          <div class="space-y-2 text-xs">
+            <div class="flex items-center justify-between">
+              <span class="text-muted-foreground">Sidebar side</span>
+              <div class="flex gap-1">
+                <button v-for="s in ['left','right']" :key="s" @click="setRegionOpt('sidebar', { side: s })"
+                  class="px-2 py-0.5 rounded border capitalize"
+                  :class="resolvedLayout.regions.sidebar.side === s ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ s }}</button>
+              </div>
+            </div>
+            <div v-if="!isStory" class="flex items-center justify-between">
+              <span class="text-muted-foreground">Layer list</span>
+              <div class="flex gap-1">
+                <button v-for="m in [['docked','Docked'],['floating','Floating']]" :key="m[0]" @click="setRegionOpt('layerList', { mode: m[0] })"
+                  class="px-2 py-0.5 rounded border"
+                  :class="resolvedLayout.regions.layerList.mode === m[0] ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ m[1] }}</button>
+              </div>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-muted-foreground">Header</span>
+              <div class="flex gap-1">
+                <button v-for="h in [['bar','Bar'],['minimal','Minimal']]" :key="h[0]" @click="setRegionOpt('header', { style: h[0] })"
+                  class="px-2 py-0.5 rounded border"
+                  :class="resolvedLayout.regions.header.style === h[0] ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ h[1] }}</button>
+              </div>
+            </div>
+            <label v-if="!isStory" class="flex items-center justify-between cursor-pointer">
+              <span class="text-muted-foreground">Start collapsed</span>
+              <input type="checkbox" :checked="resolvedLayout.regions.sidebar.collapsed"
+                @change="e => setRegionOpt('sidebar', { collapsed: e.target.checked })" />
+            </label>
+          </div>
+
+          <!-- Story sections editor (storymap archetype) -->
+          <div v-if="isStory" class="mt-3 pt-3 border-t border-border/60">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Story sections</span>
+              <button @click="addStorySection" class="text-xs text-primary hover:text-primary/80 font-medium">+ Add section</button>
+            </div>
+            <p v-if="!story.sections.length" class="text-[11px] text-muted-foreground/70 mb-1">
+              Position the map + toggle layers, then “Add section” to pin that camera and layer state to a narrative step.
+            </p>
+            <div v-for="(s, i) in story.sections" :key="s.id" class="mb-2 p-2 rounded-lg border border-border bg-muted/30">
+              <div class="flex items-center gap-1 mb-1.5">
+                <span class="text-[10px] text-muted-foreground/70 font-mono">#{{ i + 1 }}</span>
+                <input v-model="s.title" placeholder="Section title"
+                  class="flex-1 min-w-0 text-xs font-medium bg-transparent border-b border-border/60 focus:outline-none focus:border-primary/60 px-1 py-0.5" />
+                <button @click="moveStorySection(i, -1)" :disabled="i === 0" title="Move up"
+                  class="w-5 h-5 leading-none text-muted-foreground/70 hover:text-foreground disabled:opacity-30">▲</button>
+                <button @click="moveStorySection(i, 1)" :disabled="i === story.sections.length - 1" title="Move down"
+                  class="w-5 h-5 leading-none text-muted-foreground/70 hover:text-foreground disabled:opacity-30">▼</button>
+                <button @click="removeStorySection(i)" title="Remove section"
+                  class="w-5 h-5 leading-none text-red-400 hover:text-red-500">✕</button>
+              </div>
+              <textarea v-model="s.body" rows="3" placeholder="Narrative text for this step…"
+                class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60 resize-y"></textarea>
+              <div class="flex items-center justify-between mt-1.5">
+                <span class="text-[10px] text-muted-foreground/70">
+                  {{ s.view && s.view.center ? `Camera z${(s.view.zoom ?? 0).toFixed(1)}` : 'No camera pinned' }}
+                </span>
+                <button @click="captureStoryView(i)" class="text-[11px] text-primary hover:text-primary/80 font-medium">
+                  ⦿ Capture current map view
+                </button>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -301,6 +401,86 @@ function _removeFromTree(nodes, node) {
 function _findGroup(nodes, id) {
   for (const n of nodes) if (n.children) { if (n.id === id) return n; const f = _findGroup(n.children, id); if (f) return f }
   return null
+}
+
+// ── V-11 Template Experiences: layout manifest + story ──────────────────────
+const layoutConfig = ref({ archetype: 'webmap' })  // {archetype, regions?, panels?} — mirrors Portal.layout_config
+const story = ref({ sections: [] })                // {sections:[{id,title,body,view,layers}]} for the storymap archetype
+
+const ARCHETYPES = [
+  { id: 'webmap',         name: 'Web map',       desc: 'Map-first with a thin layer list.' },
+  { id: 'webmap+catalog', name: 'Map + catalog', desc: 'A foregrounded catalog beside the map.' },
+  { id: 'catalog',        name: 'Catalog',       desc: 'Browse-first — the map is a preview.' },
+  { id: 'storymap',       name: 'Story map',     desc: 'Scrollytelling — scroll drives the map.' },
+]
+// PARITY mirror of portal_generator.resolve_layout / portal.js resolveLayout — change all three together.
+const _ARCH_DEFAULTS = {
+  webmap:           { regions: { sidebar: { side: 'left', collapsed: false }, layerList: { mode: 'docked' }, tools: { placement: 'top-right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
+  'webmap+catalog': { regions: { sidebar: { side: 'left', collapsed: false }, layerList: { mode: 'docked' }, tools: { placement: 'top-right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
+  catalog:          { regions: { sidebar: { side: 'left', collapsed: false }, layerList: { mode: 'docked' }, tools: { placement: 'sidebar' },   header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
+  storymap:         { regions: { sidebar: { side: 'left', collapsed: false }, layerList: { mode: 'docked' }, tools: { placement: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: false, legend: true, basemap: true, about: false, story: true } },
+}
+function resolveLayout(config) {
+  const arch = (config && _ARCH_DEFAULTS[config.archetype]) ? config.archetype : 'webmap'
+  const base = _ARCH_DEFAULTS[arch]
+  const out = { archetype: arch, regions: JSON.parse(JSON.stringify(base.regions)), panels: JSON.parse(JSON.stringify(base.panels)) }
+  if (config) for (const g of ['regions', 'panels']) {
+    const src = config[g] || {}
+    for (const k of Object.keys(src)) {
+      if (src[k] && typeof src[k] === 'object' && out[g][k] && typeof out[g][k] === 'object') Object.assign(out[g][k], src[k])
+      else out[g][k] = src[k]
+    }
+  }
+  return out
+}
+const resolvedLayout = computed(() => resolveLayout(layoutConfig.value))
+const isStory = computed(() => resolvedLayout.value.archetype === 'storymap')
+const sidebarWireWidth = computed(() => {
+  const a = resolvedLayout.value.archetype
+  return a === 'catalog' ? '46%' : a === 'webmap+catalog' ? '34%' : '26%'
+})
+
+function pickArchetype(id) {
+  layoutConfig.value = { archetype: id }  // reset to the preset defaults; toggles below re-customize
+}
+function setRegionOpt(regionKey, patch) {
+  const c = JSON.parse(JSON.stringify(layoutConfig.value || {}))
+  c.regions = c.regions || {}
+  c.regions[regionKey] = Object.assign({}, c.regions[regionKey], patch)
+  layoutConfig.value = c
+}
+
+// Story editor (MVP: title + body + captured camera + layer visibility). Full rich-text + media = V-15.
+function captureLayerVis() {
+  const m = {}
+  for (const c of layerConfigs.value) m[`${c.layer_type}:${c.layer_id}`] = c.visible !== false
+  return m
+}
+function addStorySection() {
+  const s = { id: _gid(), title: '', body: '', view: currentView(), layers: captureLayerVis() }
+  story.value = { sections: [...(story.value.sections || []), s] }
+}
+function removeStorySection(i) {
+  const arr = (story.value.sections || []).slice(); arr.splice(i, 1)
+  story.value = { sections: arr }
+}
+function moveStorySection(i, dir) {
+  const arr = (story.value.sections || []).slice(); const j = i + dir
+  if (j < 0 || j >= arr.length) return
+  const [x] = arr.splice(i, 1); arr.splice(j, 0, x)
+  story.value = { sections: arr }
+}
+function captureStoryView(i) {
+  const arr = (story.value.sections || []).slice()
+  if (!arr[i]) return
+  arr[i] = { ...arr[i], view: currentView(), layers: captureLayerVis() }
+  story.value = { sections: arr }
+}
+function onSelectTemplate(t) {
+  selectedTemplate.value = t.id
+  // Template = curated preset: seed the archetype/layout when the template declares one (theme stays
+  // swappable). Templates without an archetype leave the current experience untouched.
+  if (t.archetype) layoutConfig.value = Object.assign({ archetype: t.archetype }, t.layout || {})
 }
 
 const allGroups = computed(() => {
@@ -620,6 +800,10 @@ onMounted(async () => {
     basemap.value = portal.value.basemap || basemapCatalog.value[0].id
     savedView.value = portal.value.initial_view || null
     description.value = portal.value.description || ''
+    // V-11: layout manifest + story sections (null → webmap default / empty story)
+    layoutConfig.value = portal.value.layout_config || { archetype: 'webmap' }
+    story.value = portal.value.story && Array.isArray(portal.value.story.sections)
+      ? portal.value.story : { sections: [] }
   }
   ready.value = true  // inputs set → the watcher may now build the preview (once, on the chosen basemap)
   const { data } = await listTemplates()
@@ -1368,6 +1552,8 @@ async function save() {
     const payload = {
       layer_configs: layerConfigs.value,
       layer_groups: layerTree.value,   // V-13: the folder tree (structure + order)
+      layout_config: layoutConfig.value,           // V-11: {archetype, regions, panels}
+      story: story.value,                          // V-11: storymap sections (baked only for storymap)
       template_id: selectedTemplate.value,
       access_type: accessType.value,
       initial_view: view,

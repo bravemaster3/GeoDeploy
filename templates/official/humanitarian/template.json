@@ -7,5 +7,6 @@
   "basemap": "osm",
   "preview": "preview.png",
   "version": "1.0.0",
-  "license": "MIT"
+  "license": "MIT",
+  "archetype": "webmap+catalog"
 }

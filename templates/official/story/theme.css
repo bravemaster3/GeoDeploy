@@ -1,0 +1,26 @@
+/* Story — a narrative, print-inspired identity tuned for the storymap archetype (V-11). Warm paper
+   story cards, serif headings, a minimal transparent masthead floating over the map. :root overrides
+   restyle the light theme; the shared portal.css/js drive all behaviour (scroll-driven camera). */
+:root {
+  --bg: #faf6ef;
+  --surface: #f2ebdd;
+  --border: #e4d9c6;
+  --text: #2b2320;
+  --text-muted: #7a6f63;
+  --accent: #b5502f;        /* terracotta */
+  --accent-light: #f4e2d8;
+  --radius: 6px;
+}
+body { font-family: Georgia, "Iowan Old Style", "Times New Roman", serif; }
+
+/* The storymap header is minimal (transparent) — keep the title legible over the map. */
+#portal-title { font-family: Georgia, "Iowan Old Style", serif; font-weight: 700; letter-spacing: .2px; }
+#header-badge a:hover { color: var(--accent); }
+
+/* Narrative story cards: generous serif body, a terracotta rule marking the active step. */
+.story-section { border-left: 3px solid var(--border); }
+.story-section.active { border-left-color: var(--accent); }
+.story-section h1, .story-section h2, .story-section h3 {
+  font-family: Georgia, "Iowan Old Style", serif; color: var(--text); letter-spacing: .2px;
+}
+.story-section p { font-size: 15px; color: var(--text); }

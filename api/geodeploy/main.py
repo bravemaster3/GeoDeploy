@@ -113,6 +113,9 @@ def _apply_schema_migrations(conn) -> None:
         "ALTER TABLE users ADD COLUMN oidc_sub VARCHAR(255)",
         # V-13 layer catalog: optional nested folder tree over a portal's layers
         "ALTER TABLE portals ADD COLUMN layer_groups TEXT",
+        # V-11 Template Experiences: layout manifest + story-map sections (both nullable → webmap default)
+        "ALTER TABLE portals ADD COLUMN layout_config TEXT",
+        "ALTER TABLE portals ADD COLUMN story TEXT",
     ]
     for sql in pending:
         try:

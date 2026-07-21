@@ -7,6 +7,29 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
 
 ## Architecture (read this before touching templates)
 - **`shared/`** — the runtime, edited ONCE, inherited by every template:
+  - **Template EXPERIENCES / region-driven layout (V-11, 2026-07-21):** a portal now has an **archetype**
+    (`webmap` · `webmap+catalog` · `catalog` · `storymap`) + **layout manifest** `{archetype, regions,
+    panels}`, not just a theme. The manifest lives in `Portal.layout_config` (nullable JSON), is resolved
+    server-side by `portal_generator.resolve_layout` (archetype defaults ⊕ per-portal overrides) and baked
+    into `style.geodeploy.layout`. `portal.js::resolveLayout` + `applyLayoutAttrs` set `data-*` on
+    `<body>` (`data-archetype`, `data-sidebar-side`, `data-layerlist`, `data-header`) and the
+    `map.on('load')` handler gates the existing mount calls (`buildLayerSwitcher`/`applyLayerGroups`/
+    `setupLayerSearch`/`enableLayerDrag`, `buildAboutPanel`, `setupBasemaps`) by `panels.*`. `portal.css` turns the flat
+    flex shell into region variants via `body[data-*]` rules (sidebar L/R, floating overlay layer list,
+    minimal transparent header, wider catalog sidebar). **PARITY: `resolveLayout` is mirrored in THREE
+    places** — `portal_generator.resolve_layout` (Python), `portal.js` `resolveLayout`, `PortalEditor.vue`
+    `resolveLayout`; the archetype-defaults table must match in all three. **Back-compat: no manifest ⇒
+    `webmap` ⇒ the pre-V-11 shell exactly** (every element ID is preserved; only classes/placement change).
+    A `template.json` may declare `"archetype"` (+ optional `"layout"`) to preset the experience on select
+    (`humanitarian` → `webmap+catalog`; new `official/story` → `storymap`).
+  - **Story map runtime (V-11 Phase 2 MVP, 2026-07-21):** when the archetype is `storymap`, `setupStory()`
+    fills `#story-panel` (an overlay narrative column, `layout.html`) from `style.geodeploy.story`
+    (`{sections:[{title,body,view,layers}]}`). An `IntersectionObserver` (mid-viewport band) drives
+    `map.flyTo` to each entering section's camera and applies its per-section layer visibility via
+    `setLayerVisByRef` (matches `type:layer_id`, handles MapLibre + deck layers). Section text is
+    title+body, XSS-escaped by `renderStoryHtml` (`s.html` reserved for the future rich editor, V-15).
+    The editor authors sections (title/body + "Capture current map view") in `PortalEditor`'s Experience
+    panel. Full rich-text/media + scroll polish = roadmap `V-15`.
   - **Layer catalog search (V-13, 2026-07-20):** `setupLayerSearch()` (run in `map.on('load')` after
     the switcher + groups are built) inserts a search box above `#layer-list` when there are ≥2 layers
     (or any folder); `filterLayers(q)` matches `.layer-card` `.layer-name` text, hides non-matches and any
@@ -72,7 +95,10 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   `#title` selector no longer exists, so it's effectively the shared portal.css look). Complete.
 - `official/satellite-dark/` — dark UI (dark `:root` overrides) over Esri satellite imagery; sky accent.
 - `official/editorial/` — warm cream + terracotta, serif headings, on CARTO Voyager. Print/story feel.
-- `official/humanitarian/` — OCHA-style cerulean header + red rule, high contrast, on OSM.
+- `official/humanitarian/` — OCHA-style cerulean header + red rule, high contrast, on OSM. Presets the
+  `webmap+catalog` archetype (V-11).
+- `official/story/` — warm serif narrative theme; presets the `storymap` archetype (V-11) — a
+  scrollytelling portal whose sections are authored in the editor's Experience panel.
 - `official/west-africa-fr/` — metadata-only stub (no `style.json` → not listed until completed;
   a French light theme is the intended finish).
 - `community/` — user submissions + `CONTRIBUTING.md` (CI-validated format).
@@ -99,6 +125,8 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-07-21 (V-11 Template Experiences: region-driven layout manifest + archetypes [webmap/webmap+catalog/
+catalog/storymap], editor Experience panel, storymap MVP + `official/story` template — see Architecture)
 2026-07-21 (V-13 catalog: tree-aware drag & drop — reorder · into-folder · drag whole folders — plus
 zoom-to-folder and expand/collapse-all on the published switcher)
 2026-07-20 (V-13 layer catalog: grouped folder switcher + layer-list search/filter; `resetStyling` now
