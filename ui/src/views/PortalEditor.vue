@@ -56,12 +56,26 @@
 
           <div v-if="!layerConfigs.length" class="text-xs text-muted-foreground/70 py-1">No layers added yet.</div>
           <template v-else>
+            <!-- Catalog toolbar: search · expand/collapse all · add folder -->
+            <div class="flex items-center gap-1.5 mb-1.5">
+              <div class="relative flex-1">
+                <svg class="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/60 pointer-events-none"
+                  viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
+                <input v-model="layerFilter" type="search" placeholder="Search layers…"
+                  class="w-full text-xs bg-background border border-border rounded pl-7 pr-2 py-1 focus:outline-none focus:border-primary/60" />
+              </div>
+              <button v-if="hasGroups" @click="setAllCollapsed(false)" title="Expand all folders"
+                class="text-[11px] text-muted-foreground/70 hover:text-foreground whitespace-nowrap">Expand all</button>
+              <span v-if="hasGroups" class="text-muted-foreground/30">·</span>
+              <button v-if="hasGroups" @click="setAllCollapsed(true)" title="Collapse all folders"
+                class="text-[11px] text-muted-foreground/70 hover:text-foreground whitespace-nowrap">Collapse all</button>
+            </div>
             <div class="flex justify-end mb-1">
               <button @click="addRootFolder" class="text-[11px] text-muted-foreground/70 hover:text-primary">＋ Add folder</button>
             </div>
-            <LayerTree :nodes="layerTree" :configs="layerConfigs" :all-groups="allGroups"
+            <LayerTree :nodes="layerTree" :configs="layerConfigs" :all-groups="allGroups" :dnd="dnd" :filter="layerFilter"
               @layer-remove="removeLayerNode" @layer-update="onLayerUpdate"
-              @layer-zoom="n => zoomToLayer(configForNode(n))" @move-to="moveNodeToGroup" />
+              @layer-zoom="n => zoomToLayer(configForNode(n))" @group-zoom="zoomToGroup" @move-to="moveNodeToGroup" />
           </template>
         </section>
 
@@ -225,7 +239,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { useEditor, EditorContent } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
@@ -311,6 +325,61 @@ function moveNodeToGroup({ node, groupId }) {
   const grp = groupId === 'root' ? null : _findGroup(layerTree.value, groupId)
   ;(grp ? grp.children : layerTree.value).push(detached)
 }
+
+// ── V-13 drag & drop — centralized so cross-level moves act on the single tree ──
+// LayerTree fires start/over/drop with a node reference + a position; the move is applied here by
+// relocating that exact node (identity match) within layerTree. Positions: before | after | into.
+const layerFilter = ref('')
+let _dragNode = null
+const dnd = {
+  state: reactive({ draggingKey: null, overKey: null, overPos: null }),
+  keyOf(n) { return n.children ? 'g:' + n.id : `${n.layer_type}:${n.layer_id}` },
+  start(node, ev) {
+    _dragNode = node
+    dnd.state.draggingKey = dnd.keyOf(node)
+    if (ev?.dataTransfer) { try { ev.dataTransfer.setData('text/plain', ''); ev.dataTransfer.effectAllowed = 'move' } catch (_) {} }
+  },
+  end() { _dragNode = null; dnd.state.draggingKey = null; dnd.state.overKey = null; dnd.state.overPos = null },
+  over(node, pos) {
+    if (!_dragNode || _dragNode === node) { dnd.state.overKey = null; return }
+    if (_dragNode.children && _isDescendantOrSelf(_dragNode, node)) { dnd.state.overKey = null; return }  // no folder into itself
+    dnd.state.overKey = dnd.keyOf(node); dnd.state.overPos = pos
+  },
+  drop(node, pos) {
+    const src = _dragNode
+    dnd.end()
+    if (!src || src === node) return
+    if (src.children && _isDescendantOrSelf(src, node)) return
+    _moveNode(src, node, pos)
+  },
+}
+function _isDescendantOrSelf(anc, node) {
+  if (anc === node) return true
+  return !!anc.children && anc.children.some(c => _isDescendantOrSelf(c, node))
+}
+function _locate(nodes, node) {
+  for (let i = 0; i < nodes.length; i++) {
+    if (nodes[i] === node) return { arr: nodes, index: i }
+    if (nodes[i].children) { const r = _locate(nodes[i].children, node); if (r) return r }
+  }
+  return null
+}
+function _moveNode(src, target, pos) {
+  const from = _locate(layerTree.value, src)
+  if (!from) return
+  from.arr.splice(from.index, 1)
+  if (pos === 'into' && target.children) { target.collapsed = false; target.children.push(src); return }
+  const to = _locate(layerTree.value, target)   // re-locate AFTER removal (indices may have shifted)
+  if (!to) { layerTree.value.push(src); return }
+  to.arr.splice(pos === 'after' ? to.index + 1 : to.index, 0, src)
+}
+
+// ── Collapse / expand every folder ──
+function setAllCollapsed(v) {
+  const walk = (nodes) => nodes.forEach(n => { if (n.children) { n.collapsed = v; walk(n.children) } })
+  walk(layerTree.value)
+}
+const hasGroups = computed(() => allGroups.value.length > 0)
 const selectedTemplate = ref('minimal')
 const templates = ref([])
 const showAddLayer = ref(false)
@@ -1236,6 +1305,30 @@ function zoomToLayer(cfg) {
     : cfg.layer_type === 'vector' ? dataStore.vectorLayers : dataStore.rasterLayers
   const layer = list.find(l => l.id === cfg.layer_id)
   if (layer?.bbox) fitToBbox(layer.bbox)
+}
+
+// Fit the preview to the merged extent of every layer inside a folder (recursively).
+function zoomToGroup(node) {
+  let bounds = null
+  const merge = (b) => {
+    const ok = Array.isArray(b) && b.length === 4 &&
+      b[0] >= -180 && b[2] <= 180 && b[0] < b[2] && b[1] >= -90 && b[3] <= 90 && b[1] < b[3]
+    if (!ok) return
+    bounds = bounds
+      ? [Math.min(bounds[0], b[0]), Math.min(bounds[1], b[1]), Math.max(bounds[2], b[2]), Math.max(bounds[3], b[3])]
+      : b.slice()
+  }
+  const walk = (nodes) => (nodes || []).forEach(n => {
+    if (n.children) return walk(n.children)
+    const cfg = configForNode(n)
+    if (!cfg) return
+    const list = cfg.layer_type === 'external' ? dataStore.externalSources
+      : cfg.layer_type === 'vector' ? dataStore.vectorLayers : dataStore.rasterLayers
+    const layer = list.find(l => l.id === cfg.layer_id)
+    if (layer?.bbox) merge(layer.bbox)
+  })
+  walk(node.children)
+  if (bounds) fitToBbox(bounds)
 }
 
 // Fit the preview to the merged extent of all (visible) layers.

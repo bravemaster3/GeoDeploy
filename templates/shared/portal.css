@@ -107,6 +107,20 @@
     .layer-search-input:focus { border-color: var(--accent); }
     .layer-search-input::placeholder { color: var(--text-muted); }
     .layer-search-empty { font-size: 12px; color: var(--text-muted); padding: 4px 6px; }
+    /* Expand / collapse all folders */
+    .layer-group-actions { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 11px; }
+    .layer-group-actions span { color: var(--text-muted); opacity: .5; }
+    .layer-group-actions button {
+      background: none; border: none; padding: 0; cursor: pointer; font-size: 11px;
+      color: var(--text-muted);
+    }
+    .layer-group-actions button:hover { color: var(--text); }
+    /* Drag & drop: folder headers are a drag handle; drop indicators */
+    .layer-group-header { cursor: grab; }
+    .layer-group.dragging, .layer-card.dragging { opacity: .4; }
+    .dnd-before { box-shadow: inset 0 2px 0 var(--accent); }
+    .dnd-after { box-shadow: inset 0 -2px 0 var(--accent); }
+    .dnd-into { box-shadow: inset 0 0 0 2px var(--accent); border-radius: 6px; }
 
     /* Layer cards */
     /* Thin layer row: drag · eye · swatch · name · zoom (+ inline legend for rasters) */
@@ -125,7 +139,15 @@
     .lg-caret { display: inline-flex; flex-shrink: 0; color: var(--text-muted); transform: rotate(90deg); transition: transform .15s; }
     .lg-caret.collapsed { transform: rotate(0deg); }
     .lg-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .lg-toggle-all { margin-left: auto; flex-shrink: 0; }
+    .lg-toggle-all { flex-shrink: 0; }
+    .lg-zoom {
+      margin-left: auto; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+      width: 22px; height: 22px; padding: 0; border: none; background: none; cursor: pointer;
+      color: var(--text-muted); border-radius: 4px; opacity: 0; transition: opacity .12s, color .12s;
+    }
+    .layer-group-header:hover .lg-zoom { opacity: 1; }
+    .lg-zoom:hover { color: var(--accent); }
+    .lg-zoom + .lg-toggle-all { margin-left: 0; }
     .layer-group-body { padding-left: 12px; margin-left: 9px; border-left: 1px solid var(--border); }
     .lg-desc { font-size: 11px; color: var(--text-muted); padding: 1px 4px 4px; line-height: 1.35; }
     /* Exclusive (radio) group: the eye reads as a single-choice control */

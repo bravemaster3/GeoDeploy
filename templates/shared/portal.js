@@ -809,6 +809,7 @@
       const card = document.createElement('div');
       card.className = 'layer-card';
       card.dataset.ref = 'vector:' + d.layer_id;  // V-13: match to the folder tree (deck layers are vector)
+      if (canZoom) card.dataset.bbox = JSON.stringify(d.bbox);  // V-13: for folder zoom-to-extent
       card.innerHTML =
         '<div class="layer-row">' +
           '<span class="layer-drag" style="visibility:hidden">' + dragIcon() + '</span>' +
@@ -876,6 +877,7 @@
       try { applyLayerGroups(STYLE.geodeploy.layerTree); } catch (e) { console.warn('[geodeploy] layer groups failed', e); }
     }
     try { setupLayerSearch(); } catch (e) { console.warn('[geodeploy] layer search failed', e); }
+    enableLayerDrag(document.getElementById('layer-list'));  // after cards + deck rows + groups exist
     initDeck();
     try { buildAboutPanel(); } catch (e) { console.warn('[geodeploy] About panel failed', e); }
     setupBasemaps();  // adds the basemap + tools controls (top-right)
@@ -914,6 +916,7 @@
     if (STYLE.geodeploy && STYLE.geodeploy.layerTree) {
       try { applyLayerGroups(STYLE.geodeploy.layerTree); } catch (e) { /* ignore */ }
     }
+    enableLayerDrag(document.getElementById('layer-list'));  // re-mark the rebuilt cards + headers
     _searchActive = false;
     const si = document.querySelector('.layer-search-input');
     if (si) si.value = '';
@@ -1008,6 +1011,7 @@
       card.className = 'layer-card';
       card.dataset.layerId = layer.id;
       card.dataset.ref = type + ':' + meta['geodeploy:layer_id'];  // V-13: match to the folder tree
+      if (canZoom) card.dataset.bbox = JSON.stringify(bbox);       // V-13: for folder zoom-to-extent
       card.setAttribute('draggable', 'true');
       const dash = dashKind(layer.paint);
       const shape = meta['geodeploy:marker'] || 'circle';
@@ -1058,7 +1062,7 @@
         if (layer) openSymbology(layer, e.currentTarget);
       });
     });
-    enableLayerDrag(container);
+    // Drag is wired at the end of the load/reset sequence (after deck rows + groups exist).
   }
 
   function dragIcon() {
@@ -1072,30 +1076,88 @@
       : '<svg ' + a + '><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a18.5 18.5 0 0 1 5.06-5.94M9.9 4.24A11 11 0 0 1 12 4c7 0 11 7 11 7a18.5 18.5 0 0 1-2.16 3.19M1 1l22 22"/></svg>';
   }
 
-  // ── Drag to reorder (changes map draw order; session only) ──
+  // ── Tree-aware drag to reorder (changes map draw order; session only) ──
+  // Drag a layer card to reorder it, or onto a folder header to move it in; drag a folder header to
+  // reorder the whole folder. Delegated on the container so it survives group re-org / reset. After a
+  // drop, applyLayerOrder re-reads the cards in DOM order (recursive) and reapplies map z-order.
+  let _dragEl = null, _treeDragWired = false;
+  function markDraggables(container) {
+    container.querySelectorAll('.layer-card').forEach(function (c) { c.setAttribute('draggable', 'true'); });
+    container.querySelectorAll('.layer-group > .layer-group-header').forEach(function (h) { h.setAttribute('draggable', 'true'); });
+  }
   function enableLayerDrag(container) {
-    container.querySelectorAll('.layer-card').forEach(card => {
-      card.addEventListener('dragstart', () => card.classList.add('dragging'));
-      card.addEventListener('dragend', () => { card.classList.remove('dragging'); applyLayerOrder(container); });
+    markDraggables(container);
+    if (_treeDragWired) return;   // delegated listeners attach once; re-marking is idempotent
+    _treeDragWired = true;
+    container.addEventListener('dragstart', function (e) {
+      const card = e.target.closest ? e.target.closest('.layer-card') : null;
+      const header = e.target.closest ? e.target.closest('.layer-group-header') : null;
+      _dragEl = card || (header ? header.parentNode : null);
+      if (!_dragEl) return;
+      _dragEl.classList.add('dragging');
+      try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', ''); } catch (_) {}
     });
-    container.addEventListener('dragover', e => {
+    container.addEventListener('dragend', function () {
+      if (_dragEl) _dragEl.classList.remove('dragging');
+      clearDropMarks(container);
+      _dragEl = null;
+      applyLayerOrder(container);
+    });
+    container.addEventListener('dragover', function (e) {
+      if (!_dragEl) return;
       e.preventDefault();
-      const cur = container.querySelector('.dragging');
-      if (!cur) return;
-      const after = dragAfter(container, e.clientY);
-      if (after == null) container.appendChild(cur);
-      else container.insertBefore(cur, after);
+      paintDrop(container, dropTarget(container, _dragEl, e));
+    });
+    container.addEventListener('drop', function (e) {
+      if (!_dragEl) return;
+      e.preventDefault();
+      performDrop(_dragEl, dropTarget(container, _dragEl, e));
+      clearDropMarks(container);
     });
   }
-  function dragAfter(container, y) {
-    const els = Array.prototype.slice.call(container.querySelectorAll('.layer-card:not(.dragging)'));
-    let best = null, bestOff = -Infinity;
-    els.forEach(child => {
-      const box = child.getBoundingClientRect();
-      const off = y - box.top - box.height / 2;
-      if (off < 0 && off > bestOff) { bestOff = off; best = child; }
+  function dropTarget(container, dragEl, e) {
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    if (!under || !under.closest) return null;
+    const header = under.closest('.layer-group-header');
+    if (header && !dragEl.contains(header)) {   // over a folder header (not our own / an ancestor)
+      const grp = header.parentNode, r = header.getBoundingClientRect(), y = (e.clientY - r.top) / (r.height || 1);
+      if (y < 0.3) return { el: grp, pos: 'before' };
+      if (y > 0.7) return { el: grp, pos: 'after' };
+      return { el: grp, pos: 'into' };
+    }
+    const card = under.closest('.layer-card');
+    if (card && card !== dragEl && !dragEl.contains(card)) {
+      const r = card.getBoundingClientRect(), y = (e.clientY - r.top) / (r.height || 1);
+      return { el: card, pos: y < 0.5 ? 'before' : 'after' };
+    }
+    return null;
+  }
+  function performDrop(dragEl, t) {
+    if (!t || !t.el) return;
+    if (t.pos === 'into') {
+      const body = t.el.querySelector(':scope > .layer-group-body');
+      if (!body) return;
+      body.appendChild(dragEl);
+      body.style.display = '';
+      const caret = t.el.querySelector(':scope > .layer-group-header .lg-caret');
+      if (caret) caret.classList.remove('collapsed');
+    } else if (t.pos === 'before') {
+      t.el.parentNode.insertBefore(dragEl, t.el);
+    } else {
+      t.el.parentNode.insertBefore(dragEl, t.el.nextSibling);
+    }
+  }
+  function clearDropMarks(container) {
+    container.querySelectorAll('.dnd-before,.dnd-after,.dnd-into').forEach(function (el) {
+      el.classList.remove('dnd-before', 'dnd-after', 'dnd-into');
     });
-    return best;
+  }
+  function paintDrop(container, t) {
+    clearDropMarks(container);
+    if (!t || !t.el) return;
+    let mark = t.el;   // group targets show the indicator on their header, not the whole subtree
+    if (t.el.classList.contains('layer-group')) mark = t.el.querySelector(':scope > .layer-group-header') || t.el;
+    mark.classList.add('dnd-' + t.pos);
   }
   function applyLayerOrder(container) {
     // Top of the list = topmost on the map. moveLayer(id) with no beforeId moves to top,
@@ -1109,6 +1171,24 @@
   // ── V-13: reorganize the flat cards into the folder tree (STYLE.geodeploy.layerTree) ──────────
   function lgCaret() {
     return '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>';
+  }
+  function lgZoomIcon() {
+    return '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>';
+  }
+  // Union the extents of every layer card inside a folder, then fit the map to it.
+  function zoomToGroup(body) {
+    let b = null;
+    body.querySelectorAll('.layer-card').forEach(function (card) {
+      if (!card.dataset.bbox) return;
+      let x; try { x = JSON.parse(card.dataset.bbox); } catch (e) { return; }
+      if (!validLonLatBounds(x)) return;
+      b = b ? [Math.min(b[0], x[0]), Math.min(b[1], x[1]), Math.max(b[2], x[2]), Math.max(b[3], x[3])] : x.slice();
+    });
+    if (!b) return;
+    try {
+      map.fitBounds([[b[0], b[1]], [b[2], b[3]]],
+        { padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 } });
+    } catch (e) { /* ignore */ }
   }
   function applyLayerGroups(tree) {
     const container = document.getElementById('layer-list');
@@ -1134,6 +1214,7 @@
         header.innerHTML =
           '<span class="lg-caret' + (collapsed ? ' collapsed' : '') + '">' + lgCaret() + '</span>' +
           '<span class="lg-name" title="' + escHtml(node.name || 'Group') + '">' + escHtml(node.name || 'Group') + '</span>' +
+          '<button class="lg-zoom" title="Zoom to this folder" aria-label="Zoom to folder">' + lgZoomIcon() + '</button>' +
           (node.exclusive ? '' : '<button class="lg-toggle-all layer-eye" title="Show / hide all">' + eyeIcon(true) + '</button>');
         grp.appendChild(header);
         const body = document.createElement('div');
@@ -1159,11 +1240,13 @@
   function wireGroup(header, body, node) {
     const caret = header.querySelector('.lg-caret');
     header.addEventListener('click', function (e) {
-      if (e.target.closest('.lg-toggle-all')) return;   // the eye button handles its own click
+      if (e.target.closest('.lg-toggle-all') || e.target.closest('.lg-zoom')) return;   // those buttons handle their own click
       const hidden = body.style.display === 'none';
       body.style.display = hidden ? '' : 'none';
       caret.classList.toggle('collapsed', !hidden);
     });
+    const zoomBtn = header.querySelector('.lg-zoom');
+    if (zoomBtn) zoomBtn.addEventListener('click', function (e) { e.stopPropagation(); zoomToGroup(body); });
     const toggleAll = header.querySelector('.lg-toggle-all');
     if (toggleAll) {
       toggleAll.addEventListener('click', function (e) {
@@ -1206,8 +1289,9 @@
     if (!container) return;
     const parent = container.parentNode;
     if (!parent || parent.querySelector('.layer-search')) return;   // already added
-    // Not worth a search box for 0–1 layers.
-    if (container.querySelectorAll('.layer-card').length < 2) return;
+    const hasGroups = !!container.querySelector('.layer-group');
+    // Not worth a search box for 0–1 layers (but keep it if there are folders).
+    if (container.querySelectorAll('.layer-card').length < 2 && !hasGroups) return;
     const wrap = document.createElement('div');
     wrap.className = 'layer-search';
     wrap.innerHTML =
@@ -1216,6 +1300,27 @@
     parent.insertBefore(wrap, container);
     const input = wrap.querySelector('.layer-search-input');
     input.addEventListener('input', function () { filterLayers(input.value); });
+    if (hasGroups) {   // expand / collapse all folders
+      const acts = document.createElement('div');
+      acts.className = 'layer-group-actions';
+      acts.innerHTML =
+        '<button type="button" class="lg-expand-all">Expand all</button>' +
+        '<span aria-hidden="true">·</span>' +
+        '<button type="button" class="lg-collapse-all">Collapse all</button>';
+      parent.insertBefore(acts, container);
+      acts.querySelector('.lg-expand-all').addEventListener('click', function () { setAllGroups(false); });
+      acts.querySelector('.lg-collapse-all').addEventListener('click', function () { setAllGroups(true); });
+    }
+  }
+  function setAllGroups(collapsed) {
+    const container = document.getElementById('layer-list');
+    if (!container) return;
+    container.querySelectorAll('.layer-group').forEach(function (g) {
+      const body = g.querySelector(':scope > .layer-group-body');
+      const caret = g.querySelector(':scope > .layer-group-header .lg-caret');
+      if (body) body.style.display = collapsed ? 'none' : '';
+      if (caret) caret.classList.toggle('collapsed', collapsed);
+    });
   }
   function filterLayers(raw) {
     const container = document.getElementById('layer-list');

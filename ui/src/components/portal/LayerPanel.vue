@@ -1,6 +1,8 @@
 <template>
   <div class="flex items-center gap-1.5 py-1 px-1 rounded hover:bg-muted/60">
-    <span class="text-muted-foreground/40 cursor-grab flex-shrink-0 flex items-center" title="Drag to reorder" v-html="dragSvg"></span>
+    <span class="text-muted-foreground/40 cursor-grab flex-shrink-0 flex items-center" draggable="true"
+      @dragstart="$emit('dragstart', $event)" @dragend="$emit('dragend', $event)"
+      title="Drag to reorder / into a folder" v-html="dragSvg"></span>
     <button @click="toggleVisible" class="text-muted-foreground/70 hover:text-foreground flex-shrink-0 flex items-center"
       :class="{ 'opacity-50': !visible }" :title="visible ? 'Hide' : 'Show'" v-html="visible ? eyeSvg : eyeOffSvg"></button>
     <button ref="swatchBtn" @click.stop="toggleStyle"
@@ -238,7 +240,7 @@ import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps, getRaste
 import { TrashIcon, LocateIcon } from '@/views/icons'
 
 const props = defineProps({ config: Object })
-const emit = defineEmits(['remove', 'update', 'zoom'])
+const emit = defineEmits(['remove', 'update', 'zoom', 'dragstart', 'dragend'])
 
 const dataStore = useDataStore()
 const savingDefault = ref(false)

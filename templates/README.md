@@ -8,12 +8,25 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
 ## Architecture (read this before touching templates)
 - **`shared/`** — the runtime, edited ONCE, inherited by every template:
   - **Layer catalog search (V-13, 2026-07-20):** `setupLayerSearch()` (run in `map.on('load')` after
-    the switcher + groups are built) inserts a search box above `#layer-list` when there are ≥2 layers;
-    `filterLayers(q)` matches `.layer-card` `.layer-name` text, hides non-matches and any folder left
-    with no visible card, force-expands folders holding a match, and shows a "No matching layers" note.
-    Clearing restores the pre-search collapse state (captured on first keystroke). Purely a list filter
-    (no map visibility change). `resetStyling` now re-applies the folder groups (was flattening them) and
-    clears the filter. Styled via `.layer-search*` in `portal.css`.
+    the switcher + groups are built) inserts a search box above `#layer-list` when there are ≥2 layers
+    (or any folder); `filterLayers(q)` matches `.layer-card` `.layer-name` text, hides non-matches and any
+    folder left with no visible card, force-expands folders holding a match, and shows a "No matching
+    layers" note. Clearing restores the pre-search collapse state (captured on first keystroke). Purely a
+    list filter (no map visibility change). When folders exist it also adds **Expand all / Collapse all**
+    links (`setAllGroups`). `resetStyling` now re-applies the folder groups (was flattening them) and
+    clears the filter. Styled via `.layer-search*` / `.layer-group-actions` in `portal.css`.
+  - **Layer catalog drag & drop (V-13, 2026-07-21):** `enableLayerDrag` is now **tree-aware** and
+    delegated on `#layer-list` (attach-once via `_treeDragWired`; `markDraggables` sets `draggable` on
+    every `.layer-card` + `.layer-group > .layer-group-header`, re-run after group re-org / reset).
+    `dropTarget` (via `elementFromPoint`) resolves before/after/into against the card or folder header
+    under the cursor; `performDrop` moves the DOM node (a card, or a whole `.layer-group` when its header
+    is grabbed) — into a folder body, or before/after a sibling. `applyLayerOrder` then re-reads
+    `.layer-card`s in DOM order (recursive) and reapplies map z-order. Guards: can't drop a folder into
+    itself/descendant (`dragEl.contains`). Indicators `.dnd-before/.dnd-after/.dnd-into` (in `portal.css`).
+    Session-only (not persisted). Wired at the END of the load/reset sequence (needs deck rows + groups).
+  - **Zoom to folder (V-13, 2026-07-21):** each folder header has a `.lg-zoom` button; `zoomToGroup(body)`
+    unions the `data-bbox` of every descendant `.layer-card` (baked onto both MapLibre + deck cards at
+    build) and `fitBounds` to it. Mirrored in the editor preview (`PortalEditor.zoomToGroup`).
   - **Layer catalog / folder groups (V-13, 2026-07-20):** when `STYLE.geodeploy.layerTree` is baked,
     `applyLayerGroups(tree)` (run in `map.on('load')` after `buildLayerSwitcher` + `appendDeckRows`)
     REORGANIZES the flat layer cards into a nested folder tree by `data-ref` (`type:id`, tagged on both
@@ -86,6 +99,8 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-07-21 (V-13 catalog: tree-aware drag & drop — reorder · into-folder · drag whole folders — plus
+zoom-to-folder and expand/collapse-all on the published switcher)
 2026-07-20 (V-13 layer catalog: grouped folder switcher + layer-list search/filter; `resetStyling` now
 re-applies groups)
 2026-07-14 (removed the research template; added satellite-dark, editorial, humanitarian; fixed the
