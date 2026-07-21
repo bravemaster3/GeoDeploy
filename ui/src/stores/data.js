@@ -4,6 +4,7 @@ import {
   listVectorLayers, listRasterLayers, listExternalSources,
   deleteVectorLayer, deleteRasterLayer, deleteExternalSource,
   getVectorJobStatus, getRasterJobStatus, reprocessVectorLayer, tileVectorLayer,
+  renameVectorLayer, renameRasterLayer,
 } from '@/api'
 
 export const useDataStore = defineStore('data', () => {
@@ -117,6 +118,18 @@ export const useDataStore = defineStore('data', () => {
     rasterLayers.value = rasterLayers.value.filter(l => l.id !== id)
   }
 
+  // Rename a layer's display name (cosmetic — published portals keep the baked name until re-published).
+  async function renameVector(id, name) {
+    const { data } = await renameVectorLayer(id, name)
+    const l = vectorLayers.value.find(x => x.id === id)
+    if (l) l.name = data.name
+  }
+  async function renameRaster(id, name) {
+    const { data } = await renameRasterLayer(id, name)
+    const l = rasterLayers.value.find(x => x.id === id)
+    if (l) l.name = data.name
+  }
+
   function addExternal(source) {
     externalSources.value = [source, ...externalSources.value]
   }
@@ -129,5 +142,6 @@ export const useDataStore = defineStore('data', () => {
   return {
     vectorLayers, rasterLayers, externalSources, loading,
     refresh, pollJob, removeVector, reprocessVector, tileVector, removeRaster, addExternal, removeExternal,
+    renameVector, renameRaster,
   }
 })

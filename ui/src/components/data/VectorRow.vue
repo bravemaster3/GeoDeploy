@@ -2,7 +2,18 @@
   <div class="flex items-center gap-4 px-4 py-3 hover:bg-muted/60 group">
     <div class="w-8 h-8 rounded-md bg-blue-500/15 text-blue-400 flex items-center justify-center text-xs font-bold flex-shrink-0">V</div>
     <div class="flex-1 min-w-0">
-      <div class="text-sm font-medium truncate">{{ layer.name }}</div>
+      <div class="flex items-center gap-1.5 min-w-0">
+        <input v-if="editing" ref="nameInput" v-model="draft"
+          @keyup.enter="saveName" @keyup.esc="cancelEdit" @blur="saveName"
+          class="text-sm font-medium bg-transparent border border-primary/60 rounded px-1 py-0.5 flex-1 min-w-0 focus:outline-none" />
+        <template v-else>
+          <span class="text-sm font-medium truncate">{{ layer.name }}</span>
+          <button v-if="auth.canEdit" @click="startEdit" title="Rename layer"
+            class="opacity-0 group-hover:opacity-100 text-muted-foreground/60 hover:text-foreground flex-shrink-0 transition-opacity">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+          </button>
+        </template>
+      </div>
       <div class="text-xs text-muted-foreground flex gap-3 mt-0.5 items-center">
         <span v-if="layer.storage_backend === 'geoparquet'"
           class="px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 font-medium text-[10px] uppercase tracking-wide">GeoParquet</span>
@@ -72,7 +83,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, nextTick } from 'vue'
 import { TrashIcon, RefreshIcon } from '@/views/icons'
 import { useAuthStore } from '@/stores/auth'
 import { useDataStore } from '@/stores/data'
@@ -95,6 +106,21 @@ const dataStore = useDataStore()
 const showSharing = ref(false)
 const restarting = ref(false)
 const tiling = ref(false)
+
+// Inline rename
+const editing = ref(false)
+const draft = ref('')
+const nameInput = ref(null)
+function startEdit() { draft.value = props.layer.name; editing.value = true; nextTick(() => nameInput.value?.focus()) }
+function cancelEdit() { editing.value = false }
+async function saveName() {
+  if (!editing.value) return       // guard against enter→blur double-fire / esc
+  const name = draft.value.trim()
+  editing.value = false
+  if (!name || name === props.layer.name) return
+  try { await dataStore.renameVector(props.layer.id, name) }
+  catch (e) { alert(e.response?.data?.detail || 'Could not rename layer.') }
+}
 async function onReprocess() {
   if (restarting.value) return
   restarting.value = true

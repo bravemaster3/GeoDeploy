@@ -8,7 +8,7 @@ from ...config import get_settings
 from ...database import get_db
 from ...deps import require_scope
 from ...models import RasterLayer, UploadJob, User
-from ...schemas import JobStatus, PortalRefOut, RasterDefaultStyle, RasterLayerOut, SharingUpdate
+from ...schemas import JobStatus, LayerRename, PortalRefOut, RasterDefaultStyle, RasterLayerOut, SharingUpdate
 from ...services.titiler import get_tile_url as raster_tile_url, COLORMAPS
 from ...tasks.raster_ingest import ingest_raster
 from ..common import (apply_sharing, busy_job_progress, creator_names, portals_using,
@@ -180,6 +180,29 @@ async def save_sharing(
     await db.refresh(layer)
     await record_audit(db, user, "raster.share", "raster", layer.id,
                        {"name": layer.name, "visibility": layer.visibility})
+    return RasterLayerOut.from_orm_json(layer)
+
+
+@router.put("/{layer_id}/rename", response_model=RasterLayerOut)
+async def rename_layer(
+    layer_id: int,
+    body: LayerRename,
+    user: User = Depends(require_scope("data:write")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rename a raster layer's display name. Cosmetic; already-published portals keep the baked name
+    until re-published."""
+    result = await db.execute(
+        select(RasterLayer).where(RasterLayer.id == layer_id, visible_to(user, RasterLayer)))
+    layer = result.scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not found.")
+    old_name = layer.name
+    layer.name = body.name.strip()
+    await db.commit()
+    await db.refresh(layer)
+    await record_audit(db, user, "raster.rename", "raster", layer.id,
+                       {"from": old_name, "to": layer.name})
     return RasterLayerOut.from_orm_json(layer)
 
 

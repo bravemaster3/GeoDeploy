@@ -235,6 +235,12 @@ class DefaultStyle(BaseModel):
     popup_fields: list[str] = Field(default_factory=list)
 
 
+class LayerRename(BaseModel):
+    """Rename a data layer's display name. Cosmetic — already-published portals keep the baked name
+    until re-published."""
+    name: str = Field(min_length=1, max_length=200)
+
+
 class SharingUpdate(BaseModel):
     """Data-sharing settings (A-02 workspace visibility + STAC catalog metadata). Partial update:
     only the fields present in the request body are applied.

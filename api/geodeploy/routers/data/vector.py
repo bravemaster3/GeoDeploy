@@ -13,7 +13,7 @@ from ...config import get_settings
 from ...database import get_db
 from ...deps import require_scope
 from ...models import Portal, UploadJob, User, VectorLayer
-from ...schemas import DefaultStyle, JobStatus, PortalRefOut, SharingUpdate, VectorLayerOut
+from ...schemas import DefaultStyle, JobStatus, LayerRename, PortalRefOut, SharingUpdate, VectorLayerOut
 from ...services import martin as martin_svc
 from ...tasks.vector_ingest import ingest_vector
 from ..common import (apply_sharing, busy_job_progress, creator_names, portals_using,
@@ -782,6 +782,30 @@ async def save_sharing(
     invalidate_public_layers()
     await record_audit(db, user, "vector.share", "vector", layer.id,
                        {"name": layer.name, "visibility": layer.visibility})
+    return VectorLayerOut.from_orm_json(layer)
+
+
+@router.put("/{layer_id}/rename", response_model=VectorLayerOut)
+async def rename_layer(
+    layer_id: int,
+    body: LayerRename,
+    user: User = Depends(require_scope("data:write")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rename a vector layer's display name. Cosmetic; already-published portals keep the baked name
+    until re-published."""
+    result = await db.execute(
+        select(VectorLayer).where(VectorLayer.id == layer_id, visible_to(user, VectorLayer)))
+    layer = result.scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not found.")
+    old_name = layer.name
+    layer.name = body.name.strip()
+    await db.commit()
+    await db.refresh(layer)
+    invalidate_public_layers()
+    await record_audit(db, user, "vector.rename", "vector", layer.id,
+                       {"from": old_name, "to": layer.name})
     return VectorLayerOut.from_orm_json(layer)
 
 
