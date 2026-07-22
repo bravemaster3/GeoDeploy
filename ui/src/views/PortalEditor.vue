@@ -96,6 +96,54 @@
               @click="onSelectTemplate(t)"
             >{{ t.name }}</button>
           </div>
+          <!-- Basemap (was a control on the old editor map; now chosen here since the preview is an iframe) -->
+          <div class="mt-3">
+            <label class="text-xs text-muted-foreground block mb-1">Basemap</label>
+            <select v-model="basemap"
+              class="w-full text-xs bg-background border border-border rounded px-2 py-1.5 focus:outline-none focus:border-primary/60">
+              <option v-for="b in basemapCatalog" :key="b.id" :value="b.id">{{ b.name || b.id }}</option>
+            </select>
+          </div>
+        </section>
+
+        <!-- Theme section (R3): colours + light/dark + font, layered over the template -->
+        <section class="p-4 border-b border-border/60">
+          <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Theme</h3>
+
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs text-muted-foreground">Mode</span>
+            <div class="flex gap-1">
+              <button v-for="m in [['auto','Auto'],['light','Light'],['dark','Dark']]" :key="m[0]"
+                @click="setTheme({ mode: m[0] })"
+                class="px-2 py-0.5 rounded border text-xs"
+                :class="theme.mode === m[0] ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ m[1] }}</button>
+            </div>
+          </div>
+
+          <label class="text-xs text-muted-foreground block mb-1">Accent colour</label>
+          <div class="flex items-center gap-1.5 flex-wrap mb-3">
+            <button v-for="c in ACCENT_PRESETS" :key="c" @click="setTheme({ accent: c })"
+              class="w-6 h-6 rounded-full border-2 transition-transform hover:scale-110"
+              :class="theme.accent === c ? 'border-foreground ring-2 ring-primary/40' : 'border-white/50 dark:border-black/30'"
+              :style="{ background: c }" :title="c"></button>
+            <label class="relative w-6 h-6 rounded-full border border-dashed border-muted-foreground/50 flex items-center justify-center cursor-pointer overflow-hidden" title="Custom colour">
+              <span class="text-[10px] text-muted-foreground">+</span>
+              <input type="color" :value="theme.accent || '#2563eb'" @input="e => setTheme({ accent: e.target.value })"
+                class="absolute inset-0 opacity-0 cursor-pointer" />
+            </label>
+            <button v-if="theme.accent" @click="setTheme({ accent: '' })"
+              class="text-[11px] text-muted-foreground/70 hover:text-foreground ml-1">reset</button>
+          </div>
+
+          <div class="flex items-center justify-between">
+            <span class="text-xs text-muted-foreground">Font</span>
+            <div class="flex gap-1">
+              <button v-for="f in [['sans','Sans'],['serif','Serif']]" :key="f[0]"
+                @click="setTheme({ font: f[0] })"
+                class="px-2 py-0.5 rounded border text-xs"
+                :class="theme.font === f[0] ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ f[1] }}</button>
+            </div>
+          </div>
         </section>
 
         <!-- Experience / Layout section (V-11) -->
@@ -111,33 +159,31 @@
             </button>
           </div>
 
-          <!-- Schematic wireframe of the resolved layout -->
-          <div class="rounded-md border border-border bg-muted/30 overflow-hidden" style="height:96px">
-            <div class="border-b border-border/70" style="height:12px"
-              :class="resolvedLayout.regions.header.style === 'minimal' ? 'bg-transparent' : 'bg-card'"></div>
-            <div class="flex" style="height:84px"
-              :class="resolvedLayout.regions.sidebar.side === 'right' ? 'flex-row-reverse' : ''">
-              <div v-if="!isStory && resolvedLayout.panels.layerCatalog"
-                class="bg-card/80 flex-shrink-0"
-                :class="[resolvedLayout.regions.sidebar.side === 'right' ? 'border-l border-border/70' : 'border-r border-border/70',
-                         resolvedLayout.regions.layerList.mode === 'floating' ? 'm-1.5 rounded border border-border shadow-sm' : '']"
-                :style="{ width: sidebarWireWidth }"></div>
-              <div class="flex-1 relative bg-gradient-to-br from-blue-500/10 to-emerald-500/10">
-                <div v-if="isStory" class="absolute inset-y-1.5 rounded bg-card/85 shadow-sm" style="width:34%"
-                  :class="resolvedLayout.regions.sidebar.side === 'right' ? 'right-1.5' : 'left-1.5'"></div>
-              </div>
+          <!-- Arrange on the live map: pick an element, then click a preset slot in the preview. -->
+          <div v-if="!isStory" class="mb-3">
+            <p class="text-[11px] text-muted-foreground/70 mb-1.5">Arrange on the map — click, then pick a spot in the preview:</p>
+            <div class="flex gap-2">
+              <button @click="placeOnMap('layerList')" :disabled="!previewUrl"
+                class="flex-1 text-xs font-medium border rounded px-2 py-1.5 disabled:opacity-40"
+                :class="placing === 'layerList' ? 'border-primary text-primary bg-primary/10' : 'border-border hover:border-primary/60'">
+                ◫ Place layer list
+              </button>
+              <button @click="placeOnMap('controls')" :disabled="!previewUrl"
+                class="flex-1 text-xs font-medium border rounded px-2 py-1.5 disabled:opacity-40"
+                :class="placing === 'controls' ? 'border-primary text-primary bg-primary/10' : 'border-border hover:border-primary/60'">
+                ⛭ Place controls
+              </button>
             </div>
           </div>
-          <p class="text-[10px] text-muted-foreground/60 mt-1 mb-3">Schematic — the exact look renders on the published portal.</p>
 
-          <!-- Placement toggles -->
+          <!-- Placement toggles (quick alternative to click-to-place) -->
           <div class="space-y-2 text-xs">
-            <div class="flex items-center justify-between">
-              <span class="text-muted-foreground">Sidebar side</span>
+            <div v-if="!isStory" class="flex items-center justify-between">
+              <span class="text-muted-foreground">Layer list side</span>
               <div class="flex gap-1">
-                <button v-for="s in ['left','right']" :key="s" @click="setRegionOpt('sidebar', { side: s })"
+                <button v-for="s in ['left','right']" :key="s" @click="setRegionOpt('layerList', { side: s })"
                   class="px-2 py-0.5 rounded border capitalize"
-                  :class="resolvedLayout.regions.sidebar.side === s ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ s }}</button>
+                  :class="resolvedLayout.regions.layerList.side === s ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ s }}</button>
               </div>
             </div>
             <div v-if="!isStory" class="flex items-center justify-between">
@@ -149,17 +195,17 @@
               </div>
             </div>
             <div class="flex items-center justify-between">
-              <span class="text-muted-foreground">Header</span>
+              <span class="text-muted-foreground">Controls side</span>
               <div class="flex gap-1">
-                <button v-for="h in [['bar','Bar'],['minimal','Minimal']]" :key="h[0]" @click="setRegionOpt('header', { style: h[0] })"
-                  class="px-2 py-0.5 rounded border"
-                  :class="resolvedLayout.regions.header.style === h[0] ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ h[1] }}</button>
+                <button v-for="s in ['left','right']" :key="s" @click="setRegionOpt('controls', { side: s })"
+                  class="px-2 py-0.5 rounded border capitalize"
+                  :class="resolvedLayout.regions.controls.side === s ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ s }}</button>
               </div>
             </div>
             <label v-if="!isStory" class="flex items-center justify-between cursor-pointer">
               <span class="text-muted-foreground">Start collapsed</span>
-              <input type="checkbox" :checked="resolvedLayout.regions.sidebar.collapsed"
-                @change="e => setRegionOpt('sidebar', { collapsed: e.target.checked })" />
+              <input type="checkbox" :checked="resolvedLayout.regions.layerList.collapsed"
+                @change="e => setRegionOpt('layerList', { collapsed: e.target.checked })" />
             </label>
           </div>
 
@@ -186,6 +232,15 @@
               </div>
               <textarea v-model="s.body" rows="3" placeholder="Narrative text for this step…"
                 class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60 resize-y"></textarea>
+              <!-- R4: per-section image -->
+              <div class="flex items-center gap-2 mt-1.5">
+                <img v-if="s.image" :src="s.image" alt="" class="w-10 h-10 rounded object-cover border border-border flex-shrink-0" />
+                <label class="text-[11px] text-primary hover:text-primary/80 font-medium cursor-pointer">
+                  {{ s.image ? 'Change image' : '+ Add image' }}
+                  <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" class="hidden" @change="e => uploadStoryImage(i, e)" />
+                </label>
+                <button v-if="s.image" @click="setStoryImage(i, '')" class="text-[11px] text-muted-foreground/70 hover:text-foreground">remove</button>
+              </div>
               <div class="flex items-center justify-between mt-1.5">
                 <span class="text-[10px] text-muted-foreground/70">
                   {{ s.view && s.view.center ? `Camera z${(s.view.zoom ?? 0).toFixed(1)}` : 'No camera pinned' }}
@@ -308,36 +363,32 @@
       </div>
     </div>
 
-    <!-- Map preview -->
+    <!-- Live preview (R2): the REAL portal runtime in a same-origin iframe = faithful WYSIWYG. The
+         legacy MapLibre editor map (#portal-preview-map) stays mounted invisibly behind it ONLY to keep
+         existing bindings valid; the build watch is neutered so it loads no data. -->
     <div class="flex-1 relative bg-muted">
-      <div id="portal-preview-map" class="w-full h-full" />
+      <div id="portal-preview-map" class="absolute inset-0 w-full h-full opacity-0 pointer-events-none" />
 
-      <!-- GeoParquet detail fetch in flight (mirrors the published portal's loading pill) -->
-      <div v-if="deckLoading > 0"
+      <iframe v-if="previewUrl" ref="previewFrame" :src="previewUrl" title="Portal preview"
+        class="absolute inset-0 w-full h-full border-0 z-10 bg-background" />
+
+      <!-- Preview (re)building -->
+      <div v-if="previewBusy"
         class="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-card/95 shadow-md border border-border rounded-full px-3.5 py-1.5 text-xs font-medium text-foreground/85 pointer-events-none">
         <span class="inline-block w-3 h-3 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
-        Loading features…
+        Updating preview…
       </div>
 
-      <!-- Zoom to all layers. The current view is saved on "Save changes" and becomes
-           the published portal's initial extent. -->
-      <button v-if="layerConfigs.length" @click="zoomToAll"
-        class="absolute top-3 left-3 z-10 flex items-center gap-1.5 bg-card/95 hover:bg-card shadow-md border border-border rounded-lg px-2.5 py-1.5 text-xs font-medium text-foreground/85"
-        title="Zoom to the full extent of all layers. The current view is saved on Save and becomes the published portal's starting view.">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3" />
-        </svg>
-        Zoom to all
-      </button>
+      <!-- Placement hint while arming a slot -->
+      <div v-if="placing"
+        class="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-primary text-primary-foreground shadow-md rounded-full px-3.5 py-1.5 text-xs font-medium">
+        Click a spot in the preview to place the {{ placing === 'controls' ? 'controls' : 'layer list' }} — or
+        <button class="underline" @click="cancelPlace">cancel</button>
+      </div>
 
-      <!-- Basemap picker: added imperatively as a MapLibre control (top-right, above the globe/zoom
-           controls) so it looks identical to the published portal. See BasemapControl below. -->
-
-      <div v-if="!layerConfigs.length"
-        class="absolute inset-0 flex items-center justify-center pointer-events-none">
-        <span class="text-xs text-muted-foreground/70 bg-card/80 px-3 py-1.5 rounded-full">
-          Add layers to see a preview
-        </span>
+      <div v-if="!previewUrl"
+        class="absolute inset-0 flex items-center justify-center pointer-events-none z-0">
+        <span class="text-xs text-muted-foreground/70 bg-card/80 px-3 py-1.5 rounded-full">Loading preview…</span>
       </div>
     </div>
   </div>
@@ -353,7 +404,7 @@ import TipTapImage from '@tiptap/extension-image'
 import { Markdown } from 'tiptap-markdown'
 import { usePortalsStore } from '@/stores/portals'
 import { useDataStore } from '@/stores/data'
-import { listTemplates, listBasemaps, getRasterStats, getVectorFeatures, identifyVectorFeatures, uploadPortalAsset } from '@/api'
+import { listTemplates, listBasemaps, getRasterStats, getVectorFeatures, identifyVectorFeatures, uploadPortalAsset, previewPortal, syncSession } from '@/api'
 import { useMaplibre } from '@/composables/useMaplibre'
 import maplibregl from 'maplibre-gl'
 import { MapboxOverlay } from '@deck.gl/mapbox'
@@ -406,22 +457,24 @@ function _findGroup(nodes, id) {
 // ── V-11 Template Experiences: layout manifest + story ──────────────────────
 const layoutConfig = ref({ archetype: 'webmap' })  // {archetype, regions?, panels?} — mirrors Portal.layout_config
 const story = ref({ sections: [] })                // {sections:[{id,title,body,view,layers}]} for the storymap archetype
+const theme = ref({ mode: 'auto', accent: '', font: 'sans' })  // R3: colour theme baked over the template
+const ACCENT_PRESETS = ['#2563eb', '#0ea5e9', '#059669', '#b5502f', '#7c3aed', '#db2777', '#d97706', '#334155']
+function setTheme(patch) { theme.value = Object.assign({}, theme.value, patch) }
 
 const ARCHETYPES = [
-  { id: 'webmap',         name: 'Web map',       desc: 'Map-first with a thin layer list.' },
-  { id: 'webmap+catalog', name: 'Map + catalog', desc: 'A foregrounded catalog beside the map.' },
-  { id: 'catalog',        name: 'Catalog',       desc: 'Browse-first — the map is a preview.' },
-  { id: 'storymap',       name: 'Story map',     desc: 'Scrollytelling — scroll drives the map.' },
+  { id: 'webmap',   name: 'Web map',   desc: 'Map-first with a layer list.' },
+  { id: 'storymap', name: 'Story map', desc: 'Scrollytelling — scroll drives the map.' },
 ]
 // PARITY mirror of portal_generator.resolve_layout / portal.js resolveLayout — change all three together.
 const _ARCH_DEFAULTS = {
-  webmap:           { regions: { sidebar: { side: 'left', collapsed: false }, layerList: { mode: 'docked' }, tools: { placement: 'top-right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
-  'webmap+catalog': { regions: { sidebar: { side: 'left', collapsed: false }, layerList: { mode: 'docked' }, tools: { placement: 'top-right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
-  catalog:          { regions: { sidebar: { side: 'left', collapsed: false }, layerList: { mode: 'docked' }, tools: { placement: 'sidebar' },   header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
-  storymap:         { regions: { sidebar: { side: 'left', collapsed: false }, layerList: { mode: 'docked' }, tools: { placement: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: false, legend: true, basemap: true, about: false, story: true } },
+  webmap:   { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { side: 'right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
+  storymap: { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { side: 'right' }, header: { style: 'minimal' } }, panels: { layerCatalog: false, legend: true, basemap: true, about: false, story: true } },
 }
+const _ARCH_ALIASES = { 'webmap+catalog': 'webmap', catalog: 'webmap' }
 function resolveLayout(config) {
-  const arch = (config && _ARCH_DEFAULTS[config.archetype]) ? config.archetype : 'webmap'
+  let arch = (config && config.archetype) || 'webmap'
+  arch = _ARCH_ALIASES[arch] || arch
+  if (!_ARCH_DEFAULTS[arch]) arch = 'webmap'
   const base = _ARCH_DEFAULTS[arch]
   const out = { archetype: arch, regions: JSON.parse(JSON.stringify(base.regions)), panels: JSON.parse(JSON.stringify(base.panels)) }
   if (config) for (const g of ['regions', 'panels']) {
@@ -435,10 +488,7 @@ function resolveLayout(config) {
 }
 const resolvedLayout = computed(() => resolveLayout(layoutConfig.value))
 const isStory = computed(() => resolvedLayout.value.archetype === 'storymap')
-const sidebarWireWidth = computed(() => {
-  const a = resolvedLayout.value.archetype
-  return a === 'catalog' ? '46%' : a === 'webmap+catalog' ? '34%' : '26%'
-})
+const sidebarWireWidth = computed(() => '28%')
 
 function pickArchetype(id) {
   layoutConfig.value = { archetype: id }  // reset to the preset defaults; toggles below re-customize
@@ -475,6 +525,22 @@ function captureStoryView(i) {
   if (!arr[i]) return
   arr[i] = { ...arr[i], view: currentView(), layers: captureLayerVis() }
   story.value = { sections: arr }
+}
+// R4: per-section image (reuses the About-page asset upload — a same-origin URL).
+function setStoryImage(i, url) {
+  const arr = (story.value.sections || []).slice()
+  if (!arr[i]) return
+  arr[i] = { ...arr[i], image: url }
+  story.value = { sections: arr }
+}
+async function uploadStoryImage(i, e) {
+  const file = e.target.files && e.target.files[0]
+  if (!file || !portal.value) { if (e.target) e.target.value = ''; return }
+  try {
+    const { data } = await uploadPortalAsset(portal.value.id, file)
+    if (data && data.url) setStoryImage(i, data.url)
+  } catch (err) { /* ignore upload error */ }
+  e.target.value = ''
 }
 function onSelectTemplate(t) {
   selectedTemplate.value = t.id
@@ -776,6 +842,13 @@ const savedView = ref(null)
 // the map paints ONCE (chosen basemap + layers) instead of flashing through several applyStyle calls.
 const ready = ref(false)
 
+// R2: faithful iframe preview (the REAL portal runtime) + click-to-place.
+const previewFrame = ref(null)
+const previewUrl = ref('')       // /portals/_preview/{id}/?edit=1&t=… (cache-busted per rebuild)
+const previewBusy = ref(false)
+const lastView = ref(null)       // camera reported by the iframe on moveend → used for save/story
+const placing = ref(null)        // 'layerList' | 'controls' while arming a click-to-place
+
 onMounted(async () => {
   // Load the portal, its data, AND the basemap catalog (single source of truth — replaces the inline
   // bootstrap list) BEFORE flipping `ready`, so the first preview build already knows the chosen
@@ -786,6 +859,8 @@ onMounted(async () => {
     listBasemaps().then(({ data }) => {
       if (Array.isArray(data) && data.length) basemapCatalog.value = data
     }).catch(() => { /* keep the bootstrap fallback */ }),
+    // R2: ensure the gd_session cookie exists so the same-origin preview iframe passes the nginx gate.
+    syncSession().catch(() => { /* best-effort */ }),
   ])
   portal.value = portalsStore.portals.find(p => p.id === parseInt(route.params.id))
   if (portal.value) {
@@ -804,11 +879,68 @@ onMounted(async () => {
     layoutConfig.value = portal.value.layout_config || { archetype: 'webmap' }
     story.value = portal.value.story && Array.isArray(portal.value.story.sections)
       ? portal.value.story : { sections: [] }
+    theme.value = Object.assign({ mode: 'auto', accent: '', font: 'sans' }, portal.value.theme || {})
   }
   ready.value = true  // inputs set → the watcher may now build the preview (once, on the chosen basemap)
   const { data } = await listTemplates()
   templates.value = data
 })
+
+// ── R2: iframe preview + click-to-place ─────────────────────────────────────
+let previewTimer = null
+function schedulePreview() {
+  clearTimeout(previewTimer)
+  previewTimer = setTimeout(refreshPreview, 350)
+}
+async function refreshPreview() {
+  if (!portal.value) return
+  previewBusy.value = true
+  try {
+    const payload = {
+      title: portal.value.title,
+      description: description.value,
+      template_id: selectedTemplate.value,
+      layer_configs: layerConfigs.value,
+      layer_groups: layerTree.value,
+      layout_config: layoutConfig.value,
+      story: story.value,
+      theme: theme.value,
+      initial_view: currentView() || savedView.value || undefined,
+      basemap: basemap.value || (basemapCatalog.value[0] && basemapCatalog.value[0].id),
+    }
+    const { data } = await previewPortal(portal.value.id, payload)
+    previewUrl.value = `${data.url}?edit=1&t=${Date.now()}`  // cache-bust → the iframe reloads
+  } catch (e) {
+    /* keep the previous preview on error */
+  } finally {
+    previewBusy.value = false
+  }
+}
+function postToFrame(msg) {
+  const w = previewFrame.value && previewFrame.value.contentWindow
+  if (w) { try { w.postMessage(Object.assign({ gd: 1 }, msg), location.origin) } catch (e) { /* ignore */ } }
+}
+function placeOnMap(element) {
+  if (placing.value === element) { cancelPlace(); return }
+  placing.value = element
+  postToFrame({ type: 'place', element })
+}
+function cancelPlace() { placing.value = null; postToFrame({ type: 'cancelPlace' }) }
+function onFrameMessage(e) {
+  if (e.origin !== location.origin || !e.data || e.data.gd == null) return
+  const d = e.data
+  if (d.type === 'view' && d.view) lastView.value = d.view
+  else if (d.type === 'placed' && d.element) {
+    placing.value = null
+    setRegionOpt(d.element, { side: d.side })   // → config watch → schedulePreview → iframe reloads
+  }
+}
+onMounted(() => window.addEventListener('message', onFrameMessage))
+onBeforeUnmount(() => { window.removeEventListener('message', onFrameMessage); clearTimeout(previewTimer) })
+
+// Rebuild the iframe preview whenever config that shapes the published bundle changes.
+watch([layoutConfig, story, theme, layerConfigs, layerTree, basemap, selectedTemplate, description, ready],
+  () => { if (ready.value) schedulePreview() }, { deep: true })
 
 // ── deck.gl overlay for GeoParquet layers ───────────────────────────────────
 // GeoParquet layers are too big for a MapLibre geojson source, so they render in a deck.gl
@@ -1493,7 +1625,7 @@ function zoomToLayer(cfg) {
   const list = cfg.layer_type === 'external' ? dataStore.externalSources
     : cfg.layer_type === 'vector' ? dataStore.vectorLayers : dataStore.rasterLayers
   const layer = list.find(l => l.id === cfg.layer_id)
-  if (layer?.bbox) fitToBbox(layer.bbox)
+  if (layer?.bbox) postToFrame({ type: 'fitbbox', bbox: layer.bbox })  // R2: fit the iframe preview
 }
 
 // Fit the preview to the merged extent of every layer inside a folder (recursively).
@@ -1517,26 +1649,19 @@ function zoomToGroup(node) {
     if (layer?.bbox) merge(layer.bbox)
   })
   walk(node.children)
-  if (bounds) fitToBbox(bounds)
+  if (bounds) postToFrame({ type: 'fitbbox', bbox: bounds })  // R2: fit the iframe preview
 }
 
-// Fit the preview to the merged extent of all (visible) layers.
+// Fit the preview to the merged extent of all layers (the iframe computes the union itself).
 function zoomToAll() {
-  const { bounds } = buildPreviewStyle()
-  if (bounds) fitToBbox(bounds)
+  postToFrame({ type: 'zoomall' })
 }
 
-// The map's current center/zoom — persisted so the published portal opens here.
+// The published portal's start view. R2: the iframe reports its live camera on every moveend
+// (lastView); prefer that, else the previously-saved view.
 function currentView() {
-  const m = map.value
-  if (!m) return null
-  const c = m.getCenter()
-  return {
-    center: [c.lng, c.lat],
-    zoom: m.getZoom(),
-    bearing: m.getBearing(),
-    pitch: m.getPitch(),
-  }
+  if (lastView.value && Array.isArray(lastView.value.center)) return { ...lastView.value }
+  return savedView.value || null
 }
 
 async function save() {
@@ -1554,6 +1679,7 @@ async function save() {
       layer_groups: layerTree.value,   // V-13: the folder tree (structure + order)
       layout_config: layoutConfig.value,           // V-11: {archetype, regions, panels}
       story: story.value,                          // V-11: storymap sections (baked only for storymap)
+      theme: theme.value,                          // V-11 R3: colour theme (mode/accent/font)
       template_id: selectedTemplate.value,
       access_type: accessType.value,
       initial_view: view,

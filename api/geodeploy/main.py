@@ -116,6 +116,8 @@ def _apply_schema_migrations(conn) -> None:
         # V-11 Template Experiences: layout manifest + story-map sections (both nullable → webmap default)
         "ALTER TABLE portals ADD COLUMN layout_config TEXT",
         "ALTER TABLE portals ADD COLUMN story TEXT",
+        # V-11 R3: per-portal colour theme (mode/accent/font) baked over the template theme.css
+        "ALTER TABLE portals ADD COLUMN theme TEXT",
     ]
     for sql in pending:
         try:

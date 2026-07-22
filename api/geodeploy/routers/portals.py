@@ -53,10 +53,11 @@ async def _new_slug(db: AsyncSession) -> str:
             return slug
 
 
-async def _rebuild_bundle(portal: Portal, db: AsyncSession) -> None:
-    """(Re)generate the published static bundle at data/portals/{portal.slug}/ from the portal's
-    current layer configs. Shared by publish (explicit) and rename (re-publish under the new slug)."""
-    layer_configs = json.loads(portal.layer_configs or "[]")
+async def _assemble_bundle(db: AsyncSession, *, slug: str, title: str, layer_configs: list[dict],
+                           layer_groups, layout_config, story, theme, initial_view, template_id: str,
+                           basemap, description, access_type: str, password_sha256, owner_id) -> None:
+    """Resolve the layers referenced by `layer_configs`, build the MapLibre style, and write the static
+    bundle to data/portals/{slug}/. Shared by publish (persisted values) and preview (unsaved values)."""
     vector_ids = [cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "vector"]
     raster_ids = [cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "raster"]
     external_ids = [cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "external"]
@@ -85,22 +86,37 @@ async def _rebuild_bundle(portal: Portal, db: AsyncSession) -> None:
             if bbox:
                 deck_core_bounds[l.id] = bbox
 
-    layer_groups = json.loads(portal.layer_groups) if portal.layer_groups else None
     user_data = generate_style(layer_configs, vector_layers, raster_layers, external_sources,
                                deck_core_bounds=deck_core_bounds, layer_groups=layer_groups)
-    initial_view = json.loads(portal.initial_view) if portal.initial_view else None
-    layout_config = json.loads(portal.layout_config) if portal.layout_config else None
-    story = json.loads(portal.story) if portal.story else None
     build_portal_bundle(
-        portal.slug, portal.title, user_data, portal.template_id, layer_configs,
-        access_type=portal.access_type,
-        password_sha256=portal.access_password_sha256,
-        owner_id=portal.user_id,   # baked so the 'owner' gate can check the viewer is the creator
+        slug, title, user_data, template_id, layer_configs,
+        access_type=access_type,
+        password_sha256=password_sha256,
+        owner_id=owner_id,   # baked so the 'owner' gate can check the viewer is the creator
         initial_view=initial_view,
-        description=portal.description,
-        basemap=portal.basemap,
+        description=description,
+        basemap=basemap,
         layout_config=layout_config,   # V-11: resolved into style.geodeploy.layout
         story=story,                   # V-11: storymap sections baked when archetype == storymap
+        theme=theme,                   # V-11 R3: colour theme → CSS-var overrides after theme.css
+    )
+
+
+def _pjson(val):  # portal JSON column → python (None-safe)
+    return json.loads(val) if val else None
+
+
+async def _rebuild_bundle(portal: Portal, db: AsyncSession) -> None:
+    """(Re)generate the published static bundle at data/portals/{portal.slug}/ from the portal's
+    persisted config. Shared by publish (explicit) and rename (re-publish under the new slug)."""
+    await _assemble_bundle(
+        db, slug=portal.slug, title=portal.title,
+        layer_configs=json.loads(portal.layer_configs or "[]"),
+        layer_groups=_pjson(portal.layer_groups), layout_config=_pjson(portal.layout_config),
+        story=_pjson(portal.story), theme=_pjson(portal.theme), initial_view=_pjson(portal.initial_view),
+        template_id=portal.template_id, basemap=portal.basemap, description=portal.description,
+        access_type=portal.access_type, password_sha256=portal.access_password_sha256,
+        owner_id=portal.user_id,
     )
 
 
@@ -133,6 +149,7 @@ async def create_portal(req: PortalCreate, user: User = Depends(require_scope("p
         layer_groups=json.dumps(req.layer_groups) if req.layer_groups else None,
         layout_config=json.dumps(req.layout_config) if req.layout_config else None,
         story=json.dumps(req.story) if req.story else None,
+        theme=json.dumps(req.theme) if req.theme else None,
         access_type=req.access_type,
     )
     if req.access_password:
@@ -179,6 +196,16 @@ async def portal_authz(request: Request, db: AsyncSession = Depends(get_db)):
             user.id == portal.user_id or user.role in ("admin", "owner")):
         return Response(status_code=403)
     return Response(status_code=200)
+
+
+@router.get("/preview-authz")
+async def preview_authz(request: Request, db: AsyncSession = Depends(get_db)):
+    """nginx `auth_request` target for the R2 editor PREVIEW bundles (served at /portals/_preview/{id}/).
+    These are unpublished, unlisted renders of a portal's CURRENT editor state — only a signed-in
+    workspace member may view them. 200 (allow) if a valid session cookie resolves to a user, else 401.
+    Declared before `/{portal_id}` so this static path wins the match."""
+    user = await resolve_cookie_user(request, db)
+    return Response(status_code=200 if user is not None else 401)
 
 
 class PortalUnlock(BaseModel):
@@ -242,6 +269,9 @@ async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(
     if req.story is not None:
         # An empty dict / no sections clears the story; a populated one sets the storymap content.
         portal.story = json.dumps(req.story) if req.story else None
+    if req.theme is not None:
+        # An empty dict clears back to the template's own theme; a populated one sets the colour theme.
+        portal.theme = json.dumps(req.theme) if req.theme else None
     if req.initial_view is not None:
         portal.initial_view = json.dumps(req.initial_view)
     if req.access_type is not None:
@@ -276,6 +306,46 @@ async def publish_portal(portal_id: int, user: User = Depends(require_scope("por
     await record_audit(db, user, "portal.publish", "portal", portal.id,
                        {"title": portal.title, "slug": portal.slug, "access": portal.access_type})
     return PortalOut.from_orm_json(portal)
+
+
+class PortalPreview(BaseModel):
+    # The editor's CURRENT (possibly unsaved) state — same shape as PortalUpdate, all optional. Any
+    # field left None falls back to the portal's persisted value, so a partial payload still renders.
+    title: str | None = None
+    description: str | None = None
+    template_id: str | None = None
+    layer_configs: list | None = None
+    layer_groups: list | None = None
+    layout_config: dict | None = None
+    story: dict | None = None
+    theme: dict | None = None
+    initial_view: dict | None = None
+    basemap: str | None = None
+
+
+@router.post("/{portal_id}/preview")
+async def preview_portal(portal_id: int, req: PortalPreview,
+                         user: User = Depends(require_scope("portal:write")), db: AsyncSession = Depends(get_db)):
+    """R2: render the portal's CURRENT editor state to an UNLISTED bundle at data/portals/_preview/{id}/
+    (served, logged-in-only, at /portals/_preview/{id}/) so the editor can iframe the REAL portal runtime
+    as a faithful WYSIWYG preview. Nothing is persisted; access_type is forced public (the nginx
+    preview gate does the auth). Returns the preview URL (the caller cache-busts on reload)."""
+    portal = await _get_portal(portal_id, db)
+    lc = req.layer_configs if req.layer_configs is not None else json.loads(portal.layer_configs or "[]")
+    await _assemble_bundle(
+        db, slug=f"_preview/{portal_id}", title=req.title or portal.title,
+        layer_configs=lc,
+        layer_groups=req.layer_groups if req.layer_groups is not None else _pjson(portal.layer_groups),
+        layout_config=req.layout_config if req.layout_config is not None else _pjson(portal.layout_config),
+        story=req.story if req.story is not None else _pjson(portal.story),
+        theme=req.theme if req.theme is not None else _pjson(portal.theme),
+        initial_view=req.initial_view if req.initial_view is not None else _pjson(portal.initial_view),
+        template_id=req.template_id or portal.template_id,
+        basemap=req.basemap if req.basemap is not None else portal.basemap,
+        description=req.description if req.description is not None else portal.description,
+        access_type="public", password_sha256=None, owner_id=portal.user_id,
+    )
+    return {"url": f"/portals/_preview/{portal_id}/"}
 
 
 # Images embedded in the About page (uploaded from the editor's WYSIWYG). Served by the public

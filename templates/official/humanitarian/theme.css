@@ -21,5 +21,4 @@ body { font-family: "Helvetica Neue", Arial, system-ui, sans-serif; }
 #header-badge a:hover { color: #ffffff; }
 
 .sidebar-section-title { color: #1f69b3; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
-.layer-card { border-left: 4px solid var(--accent); }
-.layer-card:hover { border-color: #1f69b3; }
+.layer-card:hover { border-color: var(--accent); }

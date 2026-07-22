@@ -7,21 +7,45 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
 
 ## Architecture (read this before touching templates)
 - **`shared/`** — the runtime, edited ONCE, inherited by every template:
-  - **Template EXPERIENCES / region-driven layout (V-11, 2026-07-21):** a portal now has an **archetype**
-    (`webmap` · `webmap+catalog` · `catalog` · `storymap`) + **layout manifest** `{archetype, regions,
-    panels}`, not just a theme. The manifest lives in `Portal.layout_config` (nullable JSON), is resolved
-    server-side by `portal_generator.resolve_layout` (archetype defaults ⊕ per-portal overrides) and baked
-    into `style.geodeploy.layout`. `portal.js::resolveLayout` + `applyLayoutAttrs` set `data-*` on
-    `<body>` (`data-archetype`, `data-sidebar-side`, `data-layerlist`, `data-header`) and the
-    `map.on('load')` handler gates the existing mount calls (`buildLayerSwitcher`/`applyLayerGroups`/
-    `setupLayerSearch`/`enableLayerDrag`, `buildAboutPanel`, `setupBasemaps`) by `panels.*`. `portal.css` turns the flat
-    flex shell into region variants via `body[data-*]` rules (sidebar L/R, floating overlay layer list,
-    minimal transparent header, wider catalog sidebar). **PARITY: `resolveLayout` is mirrored in THREE
-    places** — `portal_generator.resolve_layout` (Python), `portal.js` `resolveLayout`, `PortalEditor.vue`
-    `resolveLayout`; the archetype-defaults table must match in all three. **Back-compat: no manifest ⇒
-    `webmap` ⇒ the pre-V-11 shell exactly** (every element ID is preserved; only classes/placement change).
-    A `template.json` may declare `"archetype"` (+ optional `"layout"`) to preset the experience on select
-    (`humanitarian` → `webmap+catalog`; new `official/story` → `storymap`).
+  - **Template EXPERIENCES / region-driven layout (V-11; redesign R1, 2026-07-22):** a portal has an
+    **archetype** (now just `webmap` · `storymap` — the Phase-1 `webmap+catalog`/`catalog` were dropped as
+    meaningless and **alias to webmap**) + **layout manifest** `{archetype, regions, panels}`. `regions` =
+    `layerList {side:left|right, mode:docked|floating, collapsed, width, x, y}`, `controls {side:left|right}`
+    (the whole map-control cluster), `header {style}`. Lives in `Portal.layout_config` (nullable JSON),
+    resolved by `portal_generator.resolve_layout` (defaults ⊕ overrides), baked into `style.geodeploy.layout`.
+    `portal.js::applyLayoutAttrs` sets `data-*` on `<body>` (`data-archetype`, `data-layerlist-side`,
+    `data-layerlist` [docked/floating], `data-controls-side`, `data-header`, `data-collide` [1 when
+    list+controls share a side]); the `map.on('load')` handler gates mounts by `panels.*`. **PARITY:
+    `resolveLayout` mirrored in THREE places** — `portal_generator` (Python), `portal.js`, `PortalEditor.vue`
+    — the archetype-defaults table + alias map must match. **Back-compat: no manifest ⇒ webmap ⇒ pre-V-11
+    shell** (every element ID preserved; only classes/placement change). `template.json` may declare
+    `"archetype"`/`"layout"` to preset on select (`official/story` → `storymap`).
+  - **R1 runtime substrate (V-11 redesign, 2026-07-22):** the map-control cluster
+    (basemap/globe/zoom/tools + NEW **HomeControl** [default extent], **ZoomAllControl** [fit all layers],
+    **DrawZoomControl** [drag-box zoom, toggles back to pan]) is added at `CTRL_POS` derived from
+    `controls.side`. An **on-map layer-list toggle** (`#gd-list-toggle`, `setupListToggle`) is pinned to the
+    layer-list side ABOVE the panel — hides/shows a docked OR floating list, never covered by it. The
+    **floating list** now collapses (`#sidebar.collapsed` → `display:none`) and is **movable + resizable**
+    (`applyFloatingLayout` adds `.gd-float-move`/`.gd-float-resize`; box seeded from `layerList.width/x/y`).
+    `setupLayerSearch` always builds a `.layer-actions-row` and **relocates Reset styling + About into it**
+    (next to expand/collapse-all). Layer-card accent left-border removed from themes (default transparent =
+    the minimal feel). `data-collide="1"` drops the floating list + on-map toggle below the control stack.
+  - **R2 faithful iframe preview + click-to-place (V-11 redesign, 2026-07-22):** the editor's preview is now
+    a same-origin `<iframe>` of the REAL portal (built by `POST /portals/{id}/preview` into the unlisted,
+    logged-in-only `data/portals/_preview/{id}/`, served via nginx `location /portals/_preview/`). `portal.js`
+    gained an **edit shim** (`setupEditMode`, active only under `?edit=1`): a same-origin postMessage channel
+    that reports the live camera (`view`), runs click-to-place (`place` → left/right slot zones → `placed`),
+    and applies `zoomall`/`home`/`fitbbox`/`setview`. So the preview can't drift from the published portal.
+  - **R3 colour themes (V-11 redesign, 2026-07-22):** `Portal.theme` `{mode, accent, font}` →
+    `portal_generator.build_theme_css` renders CSS-var overrides (`--accent`/`--accent-light` + `body`
+    font) appended AFTER the template `theme.css` (so per-portal colours win). **Validated** (hex regex +
+    known font key — bad values dropped, never emitted into the `<style>`). `resolve_theme` bakes `.mode`
+    into `style.geodeploy.theme`; portal.js uses it as the default light/dark (visitor toggle still wins).
+    Editor: a **Theme** section (mode · accent presets/custom · font). Themes layer OVER templates → one
+    base template, many looks.
+  - **R4 story pictures (V-11 redesign, 2026-07-22):** story sections gained an optional `image`
+    (same-origin URL via `uploadPortalAsset`); `renderStoryHtml` emits `<img class="story-img">`
+    (URL escaped). Editor: **+ Add image / Change / remove** per section.
   - **Story map runtime (V-11 Phase 2 MVP, 2026-07-21):** when the archetype is `storymap`, `setupStory()`
     fills `#story-panel` (an overlay narrative column, `layout.html`) from `style.geodeploy.story`
     (`{sections:[{title,body,view,layers}]}`). An `IntersectionObserver` (mid-viewport band) drives
@@ -125,6 +149,11 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-07-22 (V-11 REDESIGN R1–R4 all built: R1 runtime substrate [archetypes → webmap/storymap; new
+controls; on-map list toggle; floating collapse/move/resize; actions-row Reset/About]; R2 faithful iframe
+editor preview + click-to-place [+ `POST /portals/{id}/preview`, nginx `/portals/_preview/`, portal.js
+edit shim]; R3 colour themes [`Portal.theme` → validated CSS-var overrides]; R4 story pictures. See
+Architecture. Follow-ups: remove hidden editor map, persist floating box — notes_for_future.md)
 2026-07-21 (V-11 Template Experiences: region-driven layout manifest + archetypes [webmap/webmap+catalog/
 catalog/storymap], editor Experience panel, storymap MVP + `official/story` template — see Architecture)
 2026-07-21 (V-13 catalog: tree-aware drag & drop — reorder · into-folder · drag whole folders — plus

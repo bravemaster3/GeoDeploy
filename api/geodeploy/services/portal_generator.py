@@ -302,35 +302,32 @@ def _layer_info(layer, kind: str) -> dict:
 # published runtime, the editor, and the server all agree on the resolved manifest. Change all three
 # together (CLAUDE.md 3-surface rule). Absent config → 'webmap' → the pre-V-11 fixed shell.
 _LAYOUT_ARCHETYPES = {
-    # map-first, thin left layer list — identical to the pre-V-11 portal.
+    # map-first web map — the default experience.
     "webmap": {
-        "regions": {"sidebar": {"side": "left", "collapsed": False},
-                    "layerList": {"mode": "docked"}, "tools": {"placement": "top-right"},
-                    "header": {"style": "bar"}},
+        "regions": {
+            # layerList: the catalog panel — which side, docked vs floating, its floating box.
+            "layerList": {"side": "left", "mode": "docked", "collapsed": False,
+                          "width": None, "x": None, "y": None},
+            # controls: the map-control cluster (basemap · globe · zoom · tools · home · zoom-all · draw-zoom).
+            "controls": {"side": "right"},
+            "header": {"style": "bar"},
+        },
         "panels": {"layerCatalog": True, "legend": True, "basemap": True, "about": True, "story": False},
     },
-    # map + a foregrounded catalog/browse panel (wider sidebar; emphasis via CSS on data-archetype).
-    "webmap+catalog": {
-        "regions": {"sidebar": {"side": "left", "collapsed": False},
-                    "layerList": {"mode": "docked"}, "tools": {"placement": "top-right"},
-                    "header": {"style": "bar"}},
-        "panels": {"layerCatalog": True, "legend": True, "basemap": True, "about": True, "story": False},
-    },
-    # catalog-FIRST: the layer catalog dominates, the map is secondary/preview.
-    "catalog": {
-        "regions": {"sidebar": {"side": "left", "collapsed": False},
-                    "layerList": {"mode": "docked"}, "tools": {"placement": "sidebar"},
-                    "header": {"style": "bar"}},
-        "panels": {"layerCatalog": True, "legend": True, "basemap": True, "about": True, "story": False},
-    },
-    # scrollytelling: a narrative story column drives the map camera; layer list hidden by default.
+    # scrollytelling — a narrative column drives the map camera; layer list hidden by default.
     "storymap": {
-        "regions": {"sidebar": {"side": "left", "collapsed": False},
-                    "layerList": {"mode": "docked"}, "tools": {"placement": "top-right"},
-                    "header": {"style": "minimal"}},
+        "regions": {
+            "layerList": {"side": "left", "mode": "docked", "collapsed": False,
+                          "width": None, "x": None, "y": None},
+            "controls": {"side": "right"},
+            "header": {"style": "minimal"},
+        },
         "panels": {"layerCatalog": False, "legend": True, "basemap": True, "about": False, "story": True},
     },
 }
+# Back-compat: the Phase-1 archetypes 'webmap+catalog'/'catalog' were dropped (their only difference was
+# a wider list — meaningless); they now resolve to webmap. Catalog prominence is just layer-list placement.
+_ARCHETYPE_ALIASES = {"webmap+catalog": "webmap", "catalog": "webmap"}
 _DEFAULT_ARCHETYPE = "webmap"
 
 
@@ -339,6 +336,7 @@ def resolve_layout(config: dict | None) -> dict:
     deep-merged with per-portal region/panel overrides. None → the webmap default (today's shell)."""
     import copy
     arch = (config or {}).get("archetype") or _DEFAULT_ARCHETYPE
+    arch = _ARCHETYPE_ALIASES.get(arch, arch)
     if arch not in _LAYOUT_ARCHETYPES:
         arch = _DEFAULT_ARCHETYPE
     base = copy.deepcopy(_LAYOUT_ARCHETYPES[arch])
@@ -353,12 +351,50 @@ def resolve_layout(config: dict | None) -> dict:
     return resolved
 
 
+# ── V-11 R3: per-portal colour theme → CSS-variable overrides ─────────────────
+import re as _re
+_HEX_COLOR = _re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+_FONT_STACKS = {
+    "sans": "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+    "serif": "Georgia, 'Iowan Old Style', 'Times New Roman', serif",
+    "mono": "'SF Mono', ui-monospace, 'Cascadia Code', Menlo, monospace",
+}
+
+
+def build_theme_css(theme: dict | None) -> str:
+    """Render a portal's colour theme as CSS-variable overrides, injected AFTER the template theme.css
+    (so it wins). Values are strictly validated (a hex colour / a known font key) since they land inside
+    a <style> block — a bad value is dropped, never emitted raw."""
+    if not theme:
+        return ""
+    out = []
+    root = []
+    accent = theme.get("accent")
+    if isinstance(accent, str) and _HEX_COLOR.match(accent.strip()):
+        root.append(f"--accent: {accent.strip()};")
+        root.append(f"--accent-light: color-mix(in srgb, {accent.strip()} 22%, transparent);")
+    if root:
+        out.append(":root { " + " ".join(root) + " }")
+    font = _FONT_STACKS.get(theme.get("font"))
+    if font:
+        out.append(f"body {{ font-family: {font}; }}")
+    return ("\n/* V-11 R3 per-portal theme overrides */\n" + "\n".join(out)) if out else ""
+
+
+def resolve_theme(theme: dict | None) -> dict:
+    """The theme metadata baked into style.geodeploy.theme (portal.js reads .mode for the initial
+    light/dark state). Colours/fonts are applied via CSS (build_theme_css), not here."""
+    mode = (theme or {}).get("mode")
+    return {"mode": mode if mode in ("light", "dark", "auto") else "auto"}
+
+
 def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str, layer_configs: list[dict],
                         access_type: str = "public", password_sha256: str | None = None,
                         owner_id: int | None = None,
                         initial_view: dict | None = None, description: str | None = None,
                         basemap: str | None = None,
-                        layout_config: dict | None = None, story: dict | None = None) -> str:
+                        layout_config: dict | None = None, story: dict | None = None,
+                        theme: dict | None = None) -> str:
     """
     Merge basemap + user data into a complete style, inject into layout.html,
     write to data/portals/{slug}/index.html.
@@ -376,7 +412,8 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
     # Load template files. A template only needs theme.css + style.json + template.json;
     # layout.html is optional and falls back to the shared skeleton.
     basemap_style = _load_basemap(template_dir)
-    theme_css = _read(template_dir / "theme.css", "")
+    # Template's own theme.css + the per-portal colour overrides (R3), which land AFTER it so they win.
+    theme_css = _read(template_dir / "theme.css", "") + build_theme_css(theme)
     layout_html = (_read(template_dir / "layout.html")
                    or _read(shared_dir / "layout.html")
                    or _default_layout())
@@ -403,6 +440,8 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
             "layout": resolve_layout(layout_config),
             # V-11 storymap: narrative sections (only rendered when archetype == 'storymap').
             "story": story if (story and story.get("sections")) else None,
+            # V-11 R3: colour-theme metadata (portal.js reads .mode for the initial light/dark state).
+            "theme": resolve_theme(theme),
             # The full basemap catalog, baked in so portal.js builds the switcher from the SAME source
             # as the editor (GET /api/basemaps) — one place to add a basemap.
             "basemaps": BASEMAP_CATALOG,

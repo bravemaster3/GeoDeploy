@@ -89,21 +89,89 @@
     #sidebar-inner { padding: 16px; min-width: var(--sidebar-w); }
 
     /* ── V-11 Template Experiences: region-driven layout ───────────────────
-       portal.js sets data-* on <body> from the resolved manifest (style.geodeploy.layout).
+       portal.js sets data-* on <body> from the resolved manifest (style.geodeploy.layout):
+       data-layerlist-side (L/R) · data-layerlist (docked/floating) · data-controls-side (L/R) ·
+       data-header · data-collide (1 when list + controls share a side).
        No manifest ⇒ webmap defaults ⇒ these rules are inert and the shell is unchanged. */
-    /* Sidebar side (default left). Right = reverse the flex row + flip the divider. */
-    body[data-sidebar-side="right"] #layout { flex-direction: row-reverse; }
-    body[data-sidebar-side="right"] #sidebar { border-right: none; border-left: 1px solid var(--border); }
-    /* Archetype emphasis: widen the catalog for catalog-forward experiences. */
-    body[data-archetype="webmap+catalog"] { --sidebar-w: 340px; }
-    body[data-archetype="catalog"] { --sidebar-w: min(46vw, 560px); }
+    /* Layer-list side (default left). Right = reverse the flex row + flip the divider. */
+    body[data-layerlist-side="right"] #layout { flex-direction: row-reverse; }
+    body[data-layerlist-side="right"] #sidebar { border-right: none; border-left: 1px solid var(--border); }
     /* Floating layer list: the sidebar becomes an overlay card over the map. */
     body[data-layerlist="floating"] #sidebar {
-      position: absolute; top: 12px; bottom: 12px; left: 12px; width: var(--sidebar-w);
-      z-index: 20; border: 1px solid var(--border); border-radius: var(--radius);
-      box-shadow: var(--shadow-lg); max-height: calc(100% - 24px);
+      position: absolute; top: 12px; bottom: auto; left: 12px; width: var(--sidebar-w);
+      max-height: calc(100% - 24px); z-index: 20; border: 1px solid var(--border);
+      border-radius: var(--radius); box-shadow: var(--shadow-lg); overflow: auto;
     }
-    body[data-layerlist="floating"][data-sidebar-side="right"] #sidebar { left: auto; right: 12px; }
+    body[data-layerlist="floating"][data-layerlist-side="right"] #sidebar { left: auto; right: 12px; }
+    /* Floating list CAN collapse (was impossible): hide it entirely — the on-map toggle restores it. */
+    body[data-layerlist="floating"] #sidebar.collapsed { display: none; }
+    /* Collision: list + controls on the SAME side → drop the floating list below the control stack. */
+    body[data-collide="1"][data-layerlist="floating"] #sidebar { top: 150px; max-height: calc(100% - 162px); }
+
+    /* On-map layer-list toggle — pinned to the layer-list side, always ABOVE the panel so a docked OR
+       floating list can be hidden/shown from the map, and never hidden by the panel itself. */
+    #gd-list-toggle {
+      position: absolute; top: 10px; z-index: 30; width: 34px; height: 34px; padding: 0;
+      display: flex; align-items: center; justify-content: center; cursor: pointer;
+      background: var(--bg); color: var(--text); border: 1px solid var(--border);
+      border-radius: 8px; box-shadow: var(--shadow);
+    }
+    #gd-list-toggle svg { width: 18px; height: 18px; }
+    #gd-list-toggle:hover { color: var(--accent); }
+    body[data-layerlist-side="left"] #gd-list-toggle { left: 10px; }
+    body[data-layerlist-side="right"] #gd-list-toggle { right: 10px; }
+    body[data-collide="1"] #gd-list-toggle { top: 150px; }   /* clear the control stack */
+    body[data-archetype="storymap"] #gd-list-toggle { display: none; }
+
+    /* Floating panel move + resize handles (portal.js applyFloatingLayout). */
+    .gd-float-move {
+      display: flex; align-items: center; justify-content: center; height: 16px; cursor: move;
+      color: var(--text-muted); opacity: .7; margin: -6px -6px 4px; border-radius: 4px;
+    }
+    .gd-float-move:hover { opacity: 1; background: var(--surface); }
+    body:not([data-layerlist="floating"]) .gd-float-move,
+    body:not([data-layerlist="floating"]) .gd-float-resize { display: none; }
+    .gd-float-resize {
+      position: absolute; right: 2px; bottom: 2px; width: 14px; height: 14px; cursor: nwse-resize;
+      background: linear-gradient(135deg, transparent 50%, var(--text-muted) 50%, var(--text-muted) 60%, transparent 60%, transparent 75%, var(--text-muted) 75%, var(--text-muted) 85%, transparent 85%);
+      opacity: .6;
+    }
+    .gd-float-resize:hover { opacity: 1; }
+
+    /* Layer-list actions row (setupLayerSearch): expand/collapse-all · Reset styling · About. */
+    .layer-actions-row { justify-content: space-between; }
+    .layer-actions-row .la-left, .layer-actions-row .la-right { display: flex; align-items: center; gap: 3px; }
+    .la-icon {
+      width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+      border: 1px solid transparent; border-radius: 6px; background: none; color: var(--text-muted);
+      cursor: pointer; text-decoration: none;
+    }
+    .la-icon:hover { background: var(--surface); color: var(--text); border-color: var(--border); }
+    .la-icon svg { width: 15px; height: 15px; }
+    /* Override the old full-width #reset-styling link styles now that it lives in the icon row. */
+    .layer-actions-row #reset-styling {
+      margin: 0; padding: 0; width: 26px; height: 26px; border: 1px solid transparent; border-radius: 6px;
+    }
+    .layer-actions-row #reset-styling:hover { background: var(--surface); color: var(--text); border-color: var(--border); }
+
+    /* New map controls (Home · Zoom-to-all · Draw-zoom) match the existing control button chrome. */
+    .gd-home-btn, .gd-zoomall-btn, .gd-drawzoom-btn { width: 29px; height: 29px; padding: 0; }
+    .gd-home-btn svg, .gd-zoomall-btn svg, .gd-drawzoom-btn svg { width: 18px; height: 18px; }
+    .gd-drawzoom-btn.active { color: #fff; background: var(--accent); }
+
+    /* R2 edit-mode: click-to-place slot overlay (only shown inside the editor iframe). */
+    .gd-place-overlay { position: absolute; inset: 0; z-index: 60; display: flex; }
+    .gd-place-zone {
+      flex: 1; display: flex; align-items: center; justify-content: center; cursor: pointer;
+      border: 2px dashed transparent; transition: background .12s ease;
+    }
+    .gd-place-zone[data-side="left"] { border-right: 1px dashed rgba(128,128,128,.4); }
+    .gd-place-zone:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: var(--accent); }
+    .gd-place-zone span {
+      pointer-events: none; background: var(--bg); color: var(--text); padding: 7px 14px;
+      border-radius: 999px; box-shadow: var(--shadow-lg); font-size: 13px; font-weight: 600;
+    }
+
     /* Minimal header: transparent bar that floats over the map (used by storymap). */
     body[data-header="minimal"] #header { background: transparent; border-bottom: none; box-shadow: none; }
     body[data-header="minimal"] #portal-title { text-shadow: 0 1px 3px rgba(0,0,0,.45); }
@@ -117,7 +185,7 @@
       pointer-events: none;  /* the map pans behind; cards re-enable pointer events */
       scroll-behavior: smooth;
     }
-    body[data-sidebar-side="right"][data-archetype="storymap"] #story-panel {
+    body[data-layerlist-side="right"][data-archetype="storymap"] #story-panel {
       left: auto; right: 0; background: linear-gradient(270deg, var(--bg) 62%, transparent);
     }
     .story-section {

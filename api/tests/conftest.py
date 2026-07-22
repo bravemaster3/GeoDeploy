@@ -22,6 +22,14 @@ TEST_DATA_DIR = "/tmp/geodeploy-test"
 os.environ["GEODEPLOY_DATA_DIR"] = TEST_DATA_DIR
 os.environ["GEODEPLOY_SECRET_KEY"] = "test-secret"
 os.environ["GEODEPLOY_ENV"] = "development"
+# CRITICAL: the Martin config path is its OWN env var (default /data/martin/martin-config.yaml) — it is
+# NOT derived from GEODEPLOY_DATA_DIR. Several tests (e.g. test_layer_delete) exercise the layer-delete
+# endpoint, which calls martin.regenerate_config → _write_config(settings.martin_config_path) + reload.
+# Without this override, running the suite via `docker compose run geodeploy-api pytest` (where /data is
+# the mounted PRODUCTION volume) would OVERWRITE the live Martin config from the empty test DB and
+# reload Martin, breaking real PostGIS vector-tile serving until the next real ingest. Redirect it to
+# the throwaway path so the suite can never touch the real Martin config.
+os.environ["GEODEPLOY_MARTIN_CONFIG_PATH"] = f"{TEST_DATA_DIR}/martin-config.yaml"
 os.makedirs(f"{TEST_DATA_DIR}/sqlite", exist_ok=True)
 
 from geodeploy.main import app
@@ -35,6 +43,17 @@ if TEST_DATA_DIR not in _ENGINE_URL:
         f"test database (expected a path under {TEST_DATA_DIR!r}). This suite drops/DELETEs "
         "every table. Do NOT run pytest inside the production api container without overriding "
         "GEODEPLOY_DATA_DIR to a scratch path."
+    )
+
+# Same fail-safe for the Martin config path (its own env var — see the override above).
+from geodeploy.config import get_settings as _get_settings
+_MARTIN_PATH = _get_settings().martin_config_path
+if TEST_DATA_DIR not in _MARTIN_PATH:
+    raise RuntimeError(
+        f"REFUSING to run the test suite: martin_config_path {_MARTIN_PATH!r} is not under the "
+        f"throwaway test dir {TEST_DATA_DIR!r}. The layer-delete tests rewrite + reload Martin; "
+        "against the production path this clobbers live tile serving. Set "
+        "GEODEPLOY_MARTIN_CONFIG_PATH to a scratch path."
     )
 
 

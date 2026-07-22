@@ -439,6 +439,7 @@ class PortalCreate(BaseModel):
     layer_groups: list[dict[str, Any]] | None = None  # V-13: nested folder tree over the layers
     layout_config: dict[str, Any] | None = None  # V-11: {archetype, regions, panels}
     story: dict[str, Any] | None = None  # V-11: {sections:[...]} for the storymap archetype
+    theme: dict[str, Any] | None = None  # V-11 R3: {mode, accent, font}
     access_type: str = Field(default="public", pattern=_ACCESS_TYPE)
     access_password: str | None = None
 
@@ -451,6 +452,7 @@ class PortalUpdate(BaseModel):
     layer_groups: list[dict[str, Any]] | None = None  # V-13: nested folder tree (null = leave as-is)
     layout_config: dict[str, Any] | None = None  # V-11: {archetype, regions, panels} (null = leave as-is)
     story: dict[str, Any] | None = None  # V-11: storymap sections (null = leave as-is)
+    theme: dict[str, Any] | None = None  # V-11 R3: {mode, accent, font} (null = leave as-is)
     initial_view: dict[str, Any] | None = None  # {center:[lng,lat], zoom, bearing, pitch}
     access_type: str | None = Field(default=None, pattern=_ACCESS_TYPE)
     access_password: str | None = None
@@ -469,6 +471,7 @@ class PortalOut(BaseModel):
     layer_groups: list[dict[str, Any]] | None = None
     layout_config: dict[str, Any] | None = None  # V-11: {archetype, regions, panels}
     story: dict[str, Any] | None = None  # V-11: storymap sections
+    theme: dict[str, Any] | None = None  # V-11 R3: {mode, accent, font}
     initial_view: dict[str, Any] | None = None
     access_type: str
     basemap: str | None = None
@@ -486,6 +489,7 @@ class PortalOut(BaseModel):
         data["layer_groups"] = json.loads(obj.layer_groups) if obj.layer_groups else None
         data["layout_config"] = json.loads(obj.layout_config) if obj.layout_config else None
         data["story"] = json.loads(obj.story) if obj.story else None
+        data["theme"] = json.loads(obj.theme) if obj.theme else None
         data["initial_view"] = json.loads(obj.initial_view) if obj.initial_view else None
         data.pop("access_password_hash", None)
         return cls(**data)

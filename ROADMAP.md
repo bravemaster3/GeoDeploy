@@ -136,6 +136,21 @@ When an item is delivered, the corresponding folder `README.md` gets the impleme
 roadmap only tracks *state*, not *how*.
 
 ## Last updated
+2026-07-22 — `V-11` **redesign** after user testing (stays **building**/frontier). New model: portal =
+Template (default minimal) + Theme (colors) + Experience (**webmap · storymap** only — the confusing
+catalog/webmap+catalog archetypes were dropped and alias→webmap) + Layout (placement). **R1 shipped**
+(runtime substrate): widened manifest (`layerList{side,mode,collapsed,width,x,y}` + `controls{side}`), new
+**Home / Zoom-to-all / draw-box-zoom** controls, an **on-map side-aware layer-list toggle**, floating list
+now collapses + moves + resizes, **Reset/About moved into the layer actions row**, transparent card border.
+**R2 shipped** (faithful editor preview): the editor preview is now a same-origin **iframe of the real
+portal** (`POST /portals/{id}/preview` → unlisted, logged-in-only bundle + nginx gate), with a portal.js
+**edit shim** for **click-to-place** (pick an element, click a spot on the live map) — the schematic is
+gone and the preview can't drift from the published portal. **R3 shipped** (colour themes): a per-portal
+`{mode, accent, font}` baked as validated CSS-var overrides over the template — so one base template yields
+many looks; editor gains a Theme section (light/dark · accent presets/custom · font). **R4 shipped** (story
+pictures): per-section images via the existing asset upload. V-11's redesign (R1–R4) is now feature-complete
+pending deploy+verify; follow-ups (remove the hidden editor map, persist the floating box, rich-text story
+editor = V-15) are logged in notes.
 2026-07-21 — `V-11` **Template experiences** flipped `next` → **building** (frontier, code-complete /
 unverified). Phase 1 landed: a `Portal.layout_config` manifest `{archetype, regions, panels}` resolved
 by `portal_generator.resolve_layout` and baked into `style.geodeploy.layout`, a **region-driven shell**

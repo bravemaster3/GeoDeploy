@@ -183,6 +183,7 @@ export const uploadPortalAsset = (id, file) => {
   return api.post(`/portals/${id}/assets`, form, { headers: { 'Content-Type': 'multipart/form-data' } })
 }
 export const publishPortal = (id) => api.post(`/portals/${id}/publish`)
+export const previewPortal = (id, data) => api.post(`/portals/${id}/preview`, data)  // R2: build the unlisted preview bundle
 export const unpublishPortal = (id) => api.post(`/portals/${id}/unpublish`)
 export const deletePortal = (id) => api.delete(`/portals/${id}`)
 

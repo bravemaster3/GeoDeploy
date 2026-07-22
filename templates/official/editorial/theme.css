@@ -22,4 +22,4 @@ body { font-family: Georgia, "Iowan Old Style", "Times New Roman", serif; }
 
 /* Uppercase, letter-spaced eyebrow section titles; ruled layer cards */
 .sidebar-section-title { color: var(--accent); text-transform: uppercase; letter-spacing: .08em; font-size: 11px; font-weight: 700; }
-.layer-card { background: var(--surface); border-left: 3px solid var(--accent); }
+.layer-card { background: var(--surface); }

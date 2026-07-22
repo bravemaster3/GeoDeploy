@@ -54,13 +54,14 @@
   // already bakes a resolved manifest into style.geodeploy.layout, so this is normally a pass-through;
   // resolveLayout stays defensive (older bundles / partial configs). Absent → webmap = pre-V-11 shell.
   const LAYOUT_ARCHETYPES = {
-    webmap:          { regions: { sidebar: { side: 'left', collapsed: false }, layerList: { mode: 'docked' },  tools: { placement: 'top-right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
-    'webmap+catalog':{ regions: { sidebar: { side: 'left', collapsed: false }, layerList: { mode: 'docked' },  tools: { placement: 'top-right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
-    catalog:         { regions: { sidebar: { side: 'left', collapsed: false }, layerList: { mode: 'docked' },  tools: { placement: 'sidebar' },   header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
-    storymap:        { regions: { sidebar: { side: 'left', collapsed: false }, layerList: { mode: 'docked' },  tools: { placement: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: false, legend: true, basemap: true, about: false, story: true } },
+    webmap:   { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { side: 'right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
+    storymap: { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { side: 'right' }, header: { style: 'minimal' } }, panels: { layerCatalog: false, legend: true, basemap: true, about: false, story: true } },
   };
+  const LAYOUT_ALIASES = { 'webmap+catalog': 'webmap', catalog: 'webmap' };  // dropped Phase-1 archetypes → webmap
   function resolveLayout(config) {
-    const arch = (config && config.archetype && LAYOUT_ARCHETYPES[config.archetype]) ? config.archetype : 'webmap';
+    let arch = (config && config.archetype) || 'webmap';
+    arch = LAYOUT_ALIASES[arch] || arch;
+    if (!LAYOUT_ARCHETYPES[arch]) arch = 'webmap';
     const base = LAYOUT_ARCHETYPES[arch];
     const out = { archetype: arch, regions: JSON.parse(JSON.stringify(base.regions)), panels: JSON.parse(JSON.stringify(base.panels)) };
     if (config) ['regions', 'panels'].forEach(function (g) {
@@ -75,12 +76,17 @@
   function applyLayoutAttrs(L) {
     const b = document.body;
     b.dataset.archetype = L.archetype;
-    b.dataset.sidebarSide = L.regions.sidebar.side;      // → data-sidebar-side
-    b.dataset.layerlist = L.regions.layerList.mode;       // → data-layerlist
+    b.dataset.layerlistSide = L.regions.layerList.side;   // → data-layerlist-side (L/R)
+    b.dataset.layerlist = L.regions.layerList.mode;       // → data-layerlist (docked/floating)
+    b.dataset.controlsSide = L.regions.controls.side;     // → data-controls-side (L/R)
     b.dataset.header = L.regions.header.style;            // → data-header
+    // Collision: layer list + controls share a side → the list stacks BESIDE the control column.
+    b.dataset.collide = (L.regions.layerList.side === L.regions.controls.side) ? '1' : '0';
   }
   const LAYOUT = resolveLayout(STYLE.geodeploy && STYLE.geodeploy.layout);
   applyLayoutAttrs(LAYOUT);
+  // Corner for the map-control cluster (basemap/globe/zoom/tools/home/zoom-all/draw-zoom).
+  const CTRL_POS = LAYOUT.regions.controls.side === 'left' ? 'top-left' : 'top-right';
 
   // ── Theme (light/dark) ──────────────────────────────────
   // Dark = html[data-theme=dark] variable overrides in portal.css (template theme.css restyles
@@ -88,8 +94,12 @@
   // scheme; an explicit toggle choice is persisted per browser.
   (function () {
     const saved = localStorage.getItem('gd-portal-theme');
+    // R3: the admin's baked default mode (light/dark/auto); the visitor's own toggle still wins.
+    const baked = (STYLE.geodeploy && STYLE.geodeploy.theme && STYLE.geodeploy.theme.mode) || 'auto';
     const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-    if (saved ? saved === 'dark' : prefersDark) {
+    const wantDark = saved ? (saved === 'dark')
+      : (baked === 'dark' ? true : baked === 'light' ? false : prefersDark);
+    if (wantDark) {
       document.documentElement.setAttribute('data-theme', 'dark');
     }
     const header = document.getElementById('header');
@@ -148,7 +158,7 @@
   // ── Sidebar toggle ──────────────────────────────────────
   const sidebar = document.getElementById('sidebar');
   // V-11: honour the manifest's start-collapsed region option.
-  if (LAYOUT.regions.sidebar.collapsed) sidebar.classList.add('collapsed');
+  if (LAYOUT.regions.layerList.collapsed) sidebar.classList.add('collapsed');
   document.getElementById('sidebar-toggle').addEventListener('click', () => {
     sidebar.classList.toggle('collapsed');
     setTimeout(() => map.resize(), 220);
@@ -891,12 +901,22 @@
       nav.textContent = 'About';
       if (badge) header.insertBefore(nav, badge); else header.appendChild(nav);
     }
+    // Prefer the layer-list actions row (built by setupLayerSearch, runs before this); fall back to
+    // the sidebar body when there's no list (so the About link still appears).
+    const row = document.querySelector('.layer-actions-row .la-right');
     const side = document.createElement('a');
     side.id = 'gd-about-btn';
     side.href = href;
-    side.innerHTML = '&#9432; About this portal';
-    const inner = document.getElementById('sidebar-inner') || sidebar;
-    if (inner) inner.appendChild(side);
+    if (row) {
+      side.classList.add('la-icon');
+      side.title = 'About this portal';
+      side.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16"/><circle cx="12" cy="7.5" r="0.6" fill="currentColor"/></svg>';
+      row.appendChild(side);
+    } else {
+      side.innerHTML = '&#9432; About this portal';
+      const inner = document.getElementById('sidebar-inner') || sidebar;
+      if (inner) inner.appendChild(side);
+    }
   }
 
   // ── Layer switcher ──────────────────────────────────────
@@ -916,16 +936,20 @@
       }
       try { setupLayerSearch(); } catch (e) { console.warn('[geodeploy] layer search failed', e); }
       enableLayerDrag(document.getElementById('layer-list'));  // after cards + deck rows + groups exist
+      try { setupListToggle(); } catch (e) { console.warn('[geodeploy] list toggle failed', e); }
+      try { applyFloatingLayout(); } catch (e) { console.warn('[geodeploy] floating layout failed', e); }
     }
     initDeck();  // always — GeoParquet deck layers must paint even without the catalog panel
     if (LAYOUT.panels.about) { try { buildAboutPanel(); } catch (e) { console.warn('[geodeploy] About panel failed', e); } }
-    if (LAYOUT.panels.basemap) setupBasemaps();  // adds the basemap + tools controls (top-right)
+    if (LAYOUT.panels.basemap) setupBasemaps();  // adds the basemap/home/zoom-all/draw-zoom/tools cluster (CTRL_POS)
     // Globe/2D projection toggle (MapLibre v5 native — no Cesium, no token). Guarded so a
     // cached v4 script can't crash the portal.
-    if (maplibregl.GlobeControl) map.addControl(new maplibregl.GlobeControl(), 'top-right');
-    map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');  // zoom below them
+    if (maplibregl.GlobeControl) map.addControl(new maplibregl.GlobeControl(), CTRL_POS);
+    map.addControl(new maplibregl.NavigationControl({ showCompass: true }), CTRL_POS);  // zoom below them
     // V-11 storymap: build the scrollytelling narrative that drives the camera + layer state.
     if (LAYOUT.archetype === 'storymap') { try { setupStory(); } catch (e) { console.warn('[geodeploy] story failed', e); } }
+    // R2: when rendered as the editor's preview (?edit=1), open the postMessage channel + click-to-place.
+    try { setupEditMode(); } catch (e) { console.warn('[geodeploy] edit mode failed', e); }
   });
 
   const resetBtn = document.getElementById('reset-styling');
@@ -1000,6 +1024,8 @@
     if (s.html) return s.html;
     var out = '';
     if (s.title) out += '<h2>' + escHtml(s.title) + '</h2>';
+    // R4: an optional per-section image (uploaded via the portal-assets endpoint; a same-origin URL).
+    if (s.image) out += '<img class="story-img" src="' + escHtml(String(s.image)) + '" alt="">';
     if (s.body) String(s.body).split(/\n{2,}/).forEach(function (p) {
       if (p.trim()) out += '<p>' + escHtml(p.trim()).replace(/\n/g, '<br>') + '</p>';
     });
@@ -1408,28 +1434,49 @@
     const container = document.getElementById('layer-list');
     if (!container) return;
     const parent = container.parentNode;
-    if (!parent || parent.querySelector('.layer-search')) return;   // already added
+    if (!parent || parent.querySelector('.layer-actions-row')) return;   // already added
     const hasGroups = !!container.querySelector('.layer-group');
-    // Not worth a search box for 0–1 layers (but keep it if there are folders).
-    if (container.querySelectorAll('.layer-card').length < 2 && !hasGroups) return;
-    const wrap = document.createElement('div');
-    wrap.className = 'layer-search';
-    wrap.innerHTML =
-      '<svg class="layer-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>' +
-      '<input type="search" class="layer-search-input" placeholder="Search layers…" aria-label="Search layers" autocomplete="off">';
-    parent.insertBefore(wrap, container);
-    const input = wrap.querySelector('.layer-search-input');
-    input.addEventListener('input', function () { filterLayers(input.value); });
-    if (hasGroups) {   // expand / collapse all folders
-      const acts = document.createElement('div');
-      acts.className = 'layer-group-actions';
-      acts.innerHTML =
-        '<button type="button" class="lg-expand-all" title="Expand all" aria-label="Expand all folders"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 13 12 18 17 13"/><polyline points="7 6 12 11 17 6"/></svg></button>' +
-        '<button type="button" class="lg-collapse-all" title="Collapse all" aria-label="Collapse all folders"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/></svg></button>';
-      parent.insertBefore(acts, container);
+    const nCards = container.querySelectorAll('.layer-card').length;
+
+    // Search box — only worth it for ≥2 layers (but keep it if there are folders).
+    if (nCards >= 2 || hasGroups) {
+      const wrap = document.createElement('div');
+      wrap.className = 'layer-search';
+      wrap.innerHTML =
+        '<svg class="layer-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>' +
+        '<input type="search" class="layer-search-input" placeholder="Search layers…" aria-label="Search layers" autocomplete="off">';
+      parent.insertBefore(wrap, container);
+      const input = wrap.querySelector('.layer-search-input');
+      input.addEventListener('input', function () { filterLayers(input.value); });
+    }
+
+    // Actions row: [expand/collapse all (folders only)] … [Reset styling] [About] — always present so
+    // Reset + About live here instead of dangling below the list.
+    const acts = document.createElement('div');
+    acts.className = 'layer-group-actions layer-actions-row';
+    const left = document.createElement('div'); left.className = 'la-left';
+    const right = document.createElement('div'); right.className = 'la-right';
+    if (hasGroups) {
+      left.innerHTML =
+        '<button type="button" class="lg-expand-all la-icon" title="Expand all" aria-label="Expand all folders"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 13 12 18 17 13"/><polyline points="7 6 12 11 17 6"/></svg></button>' +
+        '<button type="button" class="lg-collapse-all la-icon" title="Collapse all" aria-label="Collapse all folders"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/></svg></button>';
+    }
+    acts.appendChild(left);
+    acts.appendChild(right);
+    parent.insertBefore(acts, container);
+    if (hasGroups) {
       acts.querySelector('.lg-expand-all').addEventListener('click', function () { setAllGroups(false); });
       acts.querySelector('.lg-collapse-all').addEventListener('click', function () { setAllGroups(true); });
     }
+    // Relocate the Reset-styling button (from layout.html) into the row — moves the node + its handler.
+    const reset = document.getElementById('reset-styling');
+    if (reset) {
+      reset.classList.add('la-icon');
+      reset.title = 'Reset styling';
+      reset.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.5 15a9 9 0 1 0 2.1-9.4L1 10"/></svg>';
+      right.appendChild(reset);
+    }
+    // The About link is appended into `.la-right` by buildAboutPanel (runs after this).
   }
   function setAllGroups(collapsed) {
     const container = document.getElementById('layer-list');
@@ -2213,8 +2260,231 @@
     // copy here is a redundant, visible flash. Only drive selectBasemap when NOT repointed (a vector
     // template whose base couldn't be repointed, or the '__default__' no-op for pre-basemap portals).
     if (!BASE_REPOINTED) selectBasemap(DEFAULT_BASEMAP);
-    map.addControl(new BasemapControl(), 'top-right');
-    map.addControl(new ToolsControl(), 'top-right');
+    map.addControl(new BasemapControl(), CTRL_POS);
+    map.addControl(new HomeControl(), CTRL_POS);        // back to the published default extent
+    map.addControl(new ZoomAllControl(), CTRL_POS);     // fit all layers
+    map.addControl(new DrawZoomControl(), CTRL_POS);    // drag a box to zoom (toggle back to pan)
+    map.addControl(new ToolsControl(), CTRL_POS);
+  }
+
+  // ── Navigation helpers reused by the Home / Zoom-to-all controls ──────────────
+  function goHome() {
+    // The published default extent: the admin-pinned view, else the fit-to-data bounds.
+    if (savedView && Array.isArray(savedView.center) && savedView.center.length === 2) {
+      try { map.flyTo({ center: savedView.center, zoom: savedView.zoom != null ? savedView.zoom : 2,
+        bearing: savedView.bearing || 0, pitch: savedView.pitch || 0, duration: 800, essential: true }); } catch (e) {}
+    } else if (validLonLatBounds(bounds)) {
+      try { map.fitBounds([[bounds[0], bounds[1]], [bounds[2], bounds[3]]],
+        { padding: fitPadding(), duration: 800 }); } catch (e) {}
+    }
+  }
+  function unionBbox(a, b) {
+    if (!validLonLatBounds(b)) return a;
+    if (!a) return b.slice();
+    return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
+  }
+  function zoomToAllLayers() {
+    let bb = null;
+    (STYLE.layers || []).forEach(function (l) {
+      const m = l.metadata || {};
+      if (m['geodeploy:name']) bb = unionBbox(bb, m['geodeploy:bbox']);
+    });
+    (DECK_LAYERS || []).forEach(function (d) { bb = unionBbox(bb, d.bbox); });
+    if (validLonLatBounds(bb)) {
+      try { map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: fitPadding(), duration: 800 }); } catch (e) {}
+    } else { goHome(); }
+  }
+  // Padding that keeps the fit clear of a docked layer list on its side.
+  function fitPadding() {
+    const p = { top: 40, bottom: 40, left: 40, right: 40 };
+    const sb = document.getElementById('sidebar');
+    if (sb && LAYOUT.panels.layerCatalog && LAYOUT.regions.layerList.mode === 'docked' && !sb.classList.contains('collapsed')) {
+      p[LAYOUT.regions.layerList.side] = (sb.offsetWidth || 260) + 40;
+    }
+    return p;
+  }
+
+  function homeIcon() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9"/></svg>';
+  }
+  function zoomAllIcon() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/></svg>';
+  }
+  function drawZoomIcon() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="14" height="14" rx="1" stroke-dasharray="3 2"/><circle cx="16.5" cy="16.5" r="4.5"/><line x1="19.7" y1="19.7" x2="22" y2="22"/></svg>';
+  }
+  function ctrlButton(cls, title, icon, onClick) {
+    const c = document.createElement('div');
+    c.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+    c.innerHTML = '<button type="button" class="' + cls + '" title="' + title + '" aria-label="' + title + '">' + icon + '</button>';
+    c.querySelector('button').addEventListener('click', function (ev) { ev.stopPropagation(); onClick(c); });
+    return c;
+  }
+  class HomeControl {
+    onAdd() { this._c = ctrlButton('gd-home-btn', 'Home (default view)', homeIcon(), goHome); return this._c; }
+    onRemove() { if (this._c) this._c.remove(); }
+  }
+  class ZoomAllControl {
+    onAdd() { this._c = ctrlButton('gd-zoomall-btn', 'Zoom to all layers', zoomAllIcon(), zoomToAllLayers); return this._c; }
+    onRemove() { if (this._c) this._c.remove(); }
+  }
+  // Draw-a-box-to-zoom, as a TOGGLE: on → drag a box to zoom (repeatable); click again → back to pan.
+  let dzActive = false, dzStart = null, dzBtn = null;
+  function dzDown(e) { dzStart = e.lngLat; map.on('mousemove', dzMove); map.once('mouseup', dzUp); }
+  function dzMove(e) { if (dzStart) { ensureDrawLayers(); map.getSource('gd-draw').setData(rectFC(dzStart, e.lngLat)); } }
+  function dzUp(e) {
+    map.off('mousemove', dzMove);
+    const a = dzStart; dzStart = null; clearDraw();
+    if (a) {
+      const b = e.lngLat;
+      if (Math.abs(a.lng - b.lng) > 1e-7 && Math.abs(a.lat - b.lat) > 1e-7) {  // a real box, not a click
+        try { map.fitBounds([[Math.min(a.lng, b.lng), Math.min(a.lat, b.lat)], [Math.max(a.lng, b.lng), Math.max(a.lat, b.lat)]],
+          { padding: 20, duration: 600 }); } catch (err) {}
+      }
+    }
+    if (dzActive) map.once('mousedown', dzDown);  // stay armed for another box (even after a stray click)
+  }
+  function toggleDrawZoom() {
+    dzActive = !dzActive;
+    if (dzBtn) dzBtn.classList.toggle('active', dzActive);
+    if (dzActive) {
+      map.dragPan.disable();
+      map.getCanvas().style.cursor = 'crosshair';
+      map.once('mousedown', dzDown);
+    } else {
+      map.off('mousemove', dzMove); map.off('mousedown', dzDown);
+      dzStart = null; clearDraw();
+      map.dragPan.enable();
+      map.getCanvas().style.cursor = '';
+    }
+  }
+  class DrawZoomControl {
+    onAdd() {
+      this._c = ctrlButton('gd-drawzoom-btn', 'Draw a box to zoom (click again for pan)', drawZoomIcon(), toggleDrawZoom);
+      dzBtn = this._c.querySelector('button');
+      return this._c;
+    }
+    onRemove() { if (this._c) this._c.remove(); }
+  }
+
+  // On-map layer-list toggle: a floating button pinned to the layer-list side (CSS reads
+  // body[data-layerlist-side]). Always visible ABOVE the panel, so a docked OR floating list can be
+  // hidden/shown from the map. The header hamburger keeps working too.
+  function layersStackIcon() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>';
+  }
+  function setupListToggle() {
+    const wrap = document.getElementById('map-wrap');
+    const sb = document.getElementById('sidebar');
+    if (!wrap || !sb || document.getElementById('gd-list-toggle')) return;
+    const btn = document.createElement('button');
+    btn.id = 'gd-list-toggle';
+    btn.type = 'button';
+    btn.title = 'Show / hide layers';
+    btn.setAttribute('aria-label', 'Toggle layers panel');
+    btn.innerHTML = layersStackIcon();
+    btn.addEventListener('click', function () {
+      sb.classList.toggle('collapsed');
+      setTimeout(function () { map.resize(); }, 220);
+    });
+    wrap.appendChild(btn);
+  }
+
+  // Floating layer list: apply the manifest's box (width/x/y) and add move + resize handles so the
+  // visitor can reposition it (session-only; the editor persists the box into the manifest).
+  function applyFloatingLayout() {
+    const sb = document.getElementById('sidebar');
+    if (!sb || LAYOUT.regions.layerList.mode !== 'floating') return;
+    const ll = LAYOUT.regions.layerList;
+    if (ll.width) sb.style.width = ll.width + 'px';
+    if (ll.x != null && ll.y != null) {
+      sb.style.left = ll.x + 'px'; sb.style.right = 'auto';
+      sb.style.top = ll.y + 'px'; sb.style.bottom = 'auto';
+    }
+    // Move handle (grip at the top of the panel).
+    if (!sb.querySelector('.gd-float-move')) {
+      const h = document.createElement('div');
+      h.className = 'gd-float-move'; h.title = 'Drag to move';
+      h.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><circle cx="9" cy="6" r="1.3"/><circle cx="9" cy="12" r="1.3"/><circle cx="9" cy="18" r="1.3"/><circle cx="15" cy="6" r="1.3"/><circle cx="15" cy="12" r="1.3"/><circle cx="15" cy="18" r="1.3"/></svg>';
+      sb.insertBefore(h, sb.firstChild);
+      h.addEventListener('pointerdown', function (e) {
+        e.preventDefault();
+        const par = sb.offsetParent ? sb.offsetParent.getBoundingClientRect() : { left: 0, top: 0 };
+        const r = sb.getBoundingClientRect();
+        const ox = r.left - par.left, oy = r.top - par.top, sx = e.clientX, sy = e.clientY;
+        sb.style.right = 'auto'; sb.style.bottom = 'auto';
+        function mv(ev) { sb.style.left = (ox + ev.clientX - sx) + 'px'; sb.style.top = (oy + ev.clientY - sy) + 'px'; }
+        function up() { document.removeEventListener('pointermove', mv); document.removeEventListener('pointerup', up); }
+        document.addEventListener('pointermove', mv); document.addEventListener('pointerup', up);
+      });
+    }
+    // Resize handle (bottom-right corner).
+    if (!sb.querySelector('.gd-float-resize')) {
+      const h = document.createElement('div');
+      h.className = 'gd-float-resize'; h.title = 'Drag to resize';
+      sb.appendChild(h);
+      h.addEventListener('pointerdown', function (e) {
+        e.preventDefault();
+        const ow = sb.offsetWidth, oh = sb.offsetHeight, sx = e.clientX, sy = e.clientY;
+        sb.style.maxHeight = 'none';
+        function mv(ev) {
+          sb.style.width = Math.max(180, ow + ev.clientX - sx) + 'px';
+          sb.style.height = Math.max(120, oh + ev.clientY - sy) + 'px';
+        }
+        function up() { document.removeEventListener('pointermove', mv); document.removeEventListener('pointerup', up); }
+        document.addEventListener('pointermove', mv); document.addEventListener('pointerup', up);
+      });
+    }
+  }
+
+  // ── R2: editor edit-mode shim (only when iframed as a preview with ?edit=1) ────
+  // Same-origin postMessage channel with the editor: reports the live camera (for save / story capture),
+  // runs "click a preset slot to place an element", and applies view/zoom commands. The published portal
+  // never enters this (no ?edit=1), so it's inert there.
+  function currentViewObj() {
+    const c = map.getCenter();
+    return { center: [c.lng, c.lat], zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
+  }
+  function setupEditMode() {
+    if (new URLSearchParams(location.search).get('edit') !== '1') return;
+    const parent = window.parent;
+    if (!parent || parent === window) return;
+    function post(msg) { try { parent.postMessage(Object.assign({ gd: 1 }, msg), location.origin); } catch (e) {} }
+    document.body.classList.add('gd-edit');
+    post({ type: 'ready' });
+    post({ type: 'view', view: currentViewObj() });
+    map.on('moveend', function () { post({ type: 'view', view: currentViewObj() }); });
+
+    let placeOverlay = null;
+    function clearPlace() { if (placeOverlay) { placeOverlay.remove(); placeOverlay = null; } }
+    function showPlace(element) {
+      clearPlace();
+      const wrap = document.getElementById('map-wrap') || document.body;
+      const label = element === 'controls' ? 'controls' : 'layer list';
+      placeOverlay = document.createElement('div');
+      placeOverlay.className = 'gd-place-overlay';
+      placeOverlay.innerHTML =
+        '<div class="gd-place-zone" data-side="left"><span>Place ' + label + ' — Left</span></div>' +
+        '<div class="gd-place-zone" data-side="right"><span>Place ' + label + ' — Right</span></div>';
+      placeOverlay.querySelectorAll('.gd-place-zone').forEach(function (z) {
+        z.addEventListener('click', function () { post({ type: 'placed', element: element, side: z.dataset.side }); clearPlace(); });
+      });
+      wrap.appendChild(placeOverlay);
+    }
+    window.addEventListener('message', function (e) {
+      if (e.origin !== location.origin || !e.data || e.data.gd == null) return;
+      const d = e.data;
+      if (d.type === 'place') showPlace(d.element);
+      else if (d.type === 'cancelPlace') clearPlace();
+      else if (d.type === 'zoomall') zoomToAllLayers();
+      else if (d.type === 'home') goHome();
+      else if (d.type === 'fitbbox' && Array.isArray(d.bbox) && d.bbox.length === 4) {
+        try { map.fitBounds([[d.bbox[0], d.bbox[1]], [d.bbox[2], d.bbox[3]]], { padding: 30, duration: 500 }); } catch (err) {}
+      }
+      else if (d.type === 'setview' && d.view && Array.isArray(d.view.center)) {
+        try { map.jumpTo({ center: d.view.center, zoom: d.view.zoom, bearing: d.view.bearing || 0, pitch: d.view.pitch || 0 }); } catch (err) {}
+      }
+    });
   }
 
   // ── Tools: select an area and download the vector data inside it ──────────────
