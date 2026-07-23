@@ -421,7 +421,11 @@ async def delete_portal(portal_id: int, user: User = Depends(require_scope("port
     portal_dir = f"{settings.data_dir}/portals/{portal.slug}"
     if os.path.exists(portal_dir):
         shutil.rmtree(portal_dir)
-    # About-page images belong to this portal alone — remove them too (they'd leak otherwise).
+    # R2: the editor preview bundle for this portal (data/portals/_preview/{id}) — remove it too.
+    preview_dir = f"{settings.data_dir}/portals/_preview/{portal.id}"
+    if os.path.exists(preview_dir):
+        shutil.rmtree(preview_dir, ignore_errors=True)
+    # About-page + story images belong to this portal alone — remove them too (they'd leak otherwise).
     assets_dir = f"{settings.data_dir}/portal_assets/{portal.id}"
     if os.path.exists(assets_dir):
         shutil.rmtree(assets_dir, ignore_errors=True)

@@ -79,7 +79,7 @@
     /* ── Sidebar ─────────────────────────────────────────── */
     #sidebar {
       width: var(--sidebar-w); flex-shrink: 0; background: var(--bg);
-      border-right: 1px solid var(--border); overflow-y: auto;
+      border-right: 1px solid var(--border); overflow-y: auto; overflow-x: hidden;
       transition: transform .2s ease, width .2s ease;
       display: flex; flex-direction: column;
     }
@@ -100,13 +100,17 @@
     body[data-layerlist="floating"] #sidebar {
       position: absolute; top: 12px; bottom: auto; left: 12px; width: var(--sidebar-w);
       max-height: calc(100% - 24px); z-index: 20; border: 1px solid var(--border);
-      border-radius: var(--radius); box-shadow: var(--shadow-lg); overflow: auto;
+      border-radius: var(--radius); box-shadow: var(--shadow-lg); overflow-y: auto; overflow-x: hidden;
     }
+    /* Floating list keeps the content from forcing width so a narrow resize doesn't overflow (C4/C5). */
+    body[data-layerlist="floating"] #sidebar-inner { min-width: 0; }
     body[data-layerlist="floating"][data-layerlist-side="right"] #sidebar { left: auto; right: 12px; }
     /* Floating list CAN collapse (was impossible): hide it entirely — the on-map toggle restores it. */
     body[data-layerlist="floating"] #sidebar.collapsed { display: none; }
-    /* Collision: list + controls on the SAME side → drop the floating list below the control stack. */
-    body[data-collide="1"][data-layerlist="floating"] #sidebar { top: 150px; max-height: calc(100% - 162px); }
+    /* Collision (C2): list + controls share a side → the LIST stays on top and the control cluster is
+       pushed DOWN below it (offset set by portal.js updateCtrlOffset from the list's live height). */
+    body[data-collide="1"] .maplibregl-ctrl-top-left,
+    body[data-collide="1"] .maplibregl-ctrl-top-right { margin-top: var(--gd-ctrl-offset, 0px); transition: margin-top .15s ease; }
 
     /* On-map layer-list toggle — pinned to the layer-list side, always ABOVE the panel so a docked OR
        floating list can be hidden/shown from the map, and never hidden by the panel itself. */
@@ -120,7 +124,6 @@
     #gd-list-toggle:hover { color: var(--accent); }
     body[data-layerlist-side="left"] #gd-list-toggle { left: 10px; }
     body[data-layerlist-side="right"] #gd-list-toggle { right: 10px; }
-    body[data-collide="1"] #gd-list-toggle { top: 150px; }   /* clear the control stack */
     body[data-archetype="storymap"] #gd-list-toggle { display: none; }
 
     /* Floating panel move + resize handles (portal.js applyFloatingLayout). */
@@ -135,6 +138,11 @@
       position: absolute; right: 2px; bottom: 2px; width: 14px; height: 14px; cursor: nwse-resize;
       background: linear-gradient(135deg, transparent 50%, var(--text-muted) 50%, var(--text-muted) 60%, transparent 60%, transparent 75%, var(--text-muted) 75%, var(--text-muted) 85%, transparent 85%);
       opacity: .6;
+    }
+    /* Right-side list → grip on the bottom-LEFT, mirrored (C3). */
+    body[data-layerlist-side="right"] .gd-float-resize {
+      right: auto; left: 2px; cursor: nesw-resize;
+      background: linear-gradient(225deg, transparent 50%, var(--text-muted) 50%, var(--text-muted) 60%, transparent 60%, transparent 75%, var(--text-muted) 75%, var(--text-muted) 85%, transparent 85%);
     }
     .gd-float-resize:hover { opacity: 1; }
 
@@ -179,20 +187,38 @@
     /* ── Storymap archetype: scrollytelling narrative column over the map ──── */
     body[data-archetype="storymap"] #sidebar { display: none; }
     #story-panel {
-      position: absolute; top: 0; bottom: 0; left: 0; width: min(420px, 42vw);
+      position: absolute; top: 0; bottom: 0; left: 0; width: min(460px, 46vw);
       z-index: 15; overflow-y: auto; padding: 42vh 22px 60vh;
-      background: linear-gradient(90deg, var(--bg) 62%, transparent);
+      background: linear-gradient(90deg, var(--bg) 72%, transparent);
       pointer-events: none;  /* the map pans behind; cards re-enable pointer events */
       scroll-behavior: smooth;
+      scrollbar-width: none;  /* E1: hide the scrollbar — up/down chevrons signal more content */
     }
+    #story-panel::-webkit-scrollbar { display: none; }
     body[data-layerlist-side="right"][data-archetype="storymap"] #story-panel {
-      left: auto; right: 0; background: linear-gradient(270deg, var(--bg) 62%, transparent);
+      left: auto; right: 0; background: linear-gradient(270deg, var(--bg) 72%, transparent);
     }
     .story-section {
       pointer-events: auto; background: var(--bg); border: 1px solid var(--border);
       border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 20px 22px;
+      max-width: 300px;  /* E3: keep cards within the opaque part of the fade */
       margin-bottom: 55vh; opacity: .35; transition: opacity .35s ease;
     }
+    body[data-layerlist-side="right"][data-archetype="storymap"] .story-section { margin-left: auto; }
+
+    /* E1: up/down "more" chevrons, centred on the story column, shown when it can scroll further. */
+    .gd-story-more {
+      position: absolute; z-index: 16; display: none; width: 34px; height: 34px; padding: 0;
+      align-items: center; justify-content: center; cursor: pointer; pointer-events: auto;
+      background: var(--bg); color: var(--text); border: 1px solid var(--border);
+      border-radius: 999px; box-shadow: var(--shadow);
+      left: calc(min(460px, 46vw) / 2 - 17px);
+    }
+    body[data-layerlist-side="right"] .gd-story-more { left: auto; right: calc(min(460px, 46vw) / 2 - 17px); }
+    .gd-story-more.show { display: flex; }
+    .gd-story-up { top: 12px; }
+    .gd-story-down { bottom: 26px; }
+    .gd-story-more svg { width: 18px; height: 18px; }
     .story-section:last-child { margin-bottom: 0; }
     .story-section.active { opacity: 1; }
     .story-section h1, .story-section h2, .story-section h3 { margin-bottom: 8px; }
@@ -487,6 +513,8 @@
       box-shadow: var(--shadow-lg); padding: 8px;
     }
     .gd-basemap-ctrl.open .gd-basemap-menu { display: block; }
+    /* C1: when the control cluster is on the LEFT, open the flyout toward the map (to the right). */
+    body[data-controls-side="left"] .gd-basemap-menu { right: auto; left: 40px; }
     .gd-basemap-title {
       font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
       color: var(--text-muted); padding: 3px 6px 8px;

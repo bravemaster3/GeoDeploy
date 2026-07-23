@@ -87,6 +87,8 @@
   applyLayoutAttrs(LAYOUT);
   // Corner for the map-control cluster (basemap/globe/zoom/tools/home/zoom-all/draw-zoom).
   const CTRL_POS = LAYOUT.regions.controls.side === 'left' ? 'top-left' : 'top-right';
+  // True when this bundle is rendered inside the editor's preview iframe (?edit=1).
+  const EDIT_MODE = new URLSearchParams(location.search).get('edit') === '1';
 
   // ── Theme (light/dark) ──────────────────────────────────
   // Dark = html[data-theme=dark] variable overrides in portal.css (template theme.css restyles
@@ -1046,12 +1048,12 @@
     });
     const sections = Array.prototype.slice.call(panel.querySelectorAll('.story-section'));
     let current = -1;
-    function activate(i) {
+    function activate(i, fly) {
       if (i === current) return;
       current = i;
       sections.forEach(function (el, j) { el.classList.toggle('active', j === i); });
       const s = data.sections[i];
-      if (s && s.view && Array.isArray(s.view.center) && s.view.center.length === 2) {
+      if (fly && s && s.view && Array.isArray(s.view.center) && s.view.center.length === 2) {
         try {
           map.flyTo({ center: s.view.center, zoom: s.view.zoom != null ? s.view.zoom : map.getZoom(),
             bearing: s.view.bearing || 0, pitch: s.view.pitch || 0, duration: 1200, essential: true });
@@ -1063,10 +1065,43 @@
       // Pick the most-centered intersecting section (rootMargin narrows the trigger band to mid-screen).
       let best = null;
       entries.forEach(function (en) { if (en.isIntersecting && (!best || en.intersectionRatio > best.intersectionRatio)) best = en; });
-      if (best) activate(parseInt(best.target.dataset.idx, 10));
+      if (best) activate(parseInt(best.target.dataset.idx, 10), true);
     }, { rootMargin: '-45% 0px -45% 0px', threshold: [0, 0.5, 1] });
     sections.forEach(function (el) { io.observe(el); });
-    activate(0);  // open on the first section's camera + layer state
+    // E4: in the editor preview each edit reloads the iframe — DON'T fly to section 0 (it yanks the
+    // author's map away). Just mark it active; the baked initial_view keeps the author's camera.
+    activate(0, !EDIT_MODE);
+
+    // E2: a story must not zoom the map on wheel — repurpose wheel-over-map to scroll the narrative.
+    try { map.scrollZoom.disable(); } catch (e) {}
+    const mw = document.getElementById('map-wrap');
+    if (mw && !mw._storyWheel) {
+      mw._storyWheel = true;
+      mw.addEventListener('wheel', function (e) {
+        if (panel.contains(e.target)) return;  // already over the column → native scroll
+        panel.scrollTop += e.deltaY;
+        e.preventDefault();
+      }, { passive: false });
+    }
+
+    // E1: hidden scrollbar (CSS) + up/down "more" chevrons that appear when content is off-screen.
+    if (mw) {
+      const up = document.createElement('div'); up.className = 'gd-story-more gd-story-up'; up.innerHTML = chevron('up');
+      const down = document.createElement('div'); down.className = 'gd-story-more gd-story-down'; down.innerHTML = chevron('down');
+      mw.appendChild(up); mw.appendChild(down);
+      function updateArrows() {
+        up.classList.toggle('show', panel.scrollTop > 6);
+        down.classList.toggle('show', panel.scrollTop + panel.clientHeight < panel.scrollHeight - 6);
+      }
+      panel.addEventListener('scroll', updateArrows);
+      up.addEventListener('click', function () { panel.scrollBy({ top: -panel.clientHeight * 0.8, behavior: 'smooth' }); });
+      down.addEventListener('click', function () { panel.scrollBy({ top: panel.clientHeight * 0.8, behavior: 'smooth' }); });
+      setTimeout(updateArrows, 120);
+    }
+  }
+  function chevron(dir) {
+    const pts = dir === 'up' ? '6 15 12 9 18 15' : '6 9 12 15 18 9';
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="' + pts + '"/></svg>';
   }
 
   // ---- Point marker shapes -------------------------------------------------
@@ -2348,6 +2383,7 @@
     dzActive = !dzActive;
     if (dzBtn) dzBtn.classList.toggle('active', dzActive);
     if (dzActive) {
+      cancelAreaSelect();  // C8: only one map mode active at a time
       map.dragPan.disable();
       map.getCanvas().style.cursor = 'crosshair';
       map.once('mousedown', dzDown);
@@ -2385,6 +2421,7 @@
     btn.innerHTML = layersStackIcon();
     btn.addEventListener('click', function () {
       sb.classList.toggle('collapsed');
+      updateCtrlOffset();
       setTimeout(function () { map.resize(); }, 220);
     });
     wrap.appendChild(btn);
@@ -2418,23 +2455,58 @@
         document.addEventListener('pointermove', mv); document.addEventListener('pointerup', up);
       });
     }
-    // Resize handle (bottom-right corner).
+    // Resize handle — bottom-right for a LEFT list (grows right), bottom-left for a RIGHT list (grows
+    // left), so the grip is always on the map side, not jammed against the screen edge (C3/C5).
     if (!sb.querySelector('.gd-float-resize')) {
       const h = document.createElement('div');
       h.className = 'gd-float-resize'; h.title = 'Drag to resize';
       sb.appendChild(h);
       h.addEventListener('pointerdown', function (e) {
         e.preventDefault();
-        const ow = sb.offsetWidth, oh = sb.offsetHeight, sx = e.clientX, sy = e.clientY;
+        const side = document.body.dataset.layerlistSide || 'left';
+        const r0 = sb.getBoundingClientRect();
+        const par = sb.offsetParent ? sb.offsetParent.getBoundingClientRect() : { left: 0, top: 0 };
         sb.style.maxHeight = 'none';
         function mv(ev) {
-          sb.style.width = Math.max(180, ow + ev.clientX - sx) + 'px';
-          sb.style.height = Math.max(120, oh + ev.clientY - sy) + 'px';
+          if (side === 'right') {  // keep the right edge fixed; drag the left edge outward
+            const w = Math.max(180, r0.right - ev.clientX);
+            sb.style.right = 'auto';
+            sb.style.left = (r0.right - w - par.left) + 'px';
+            sb.style.width = w + 'px';
+          } else {                 // keep the left edge fixed; grow to the right
+            sb.style.width = Math.max(180, ev.clientX - r0.left) + 'px';
+          }
+          sb.style.height = Math.max(120, ev.clientY - r0.top) + 'px';
+          updateCtrlOffset();
         }
         function up() { document.removeEventListener('pointermove', mv); document.removeEventListener('pointerup', up); }
         document.addEventListener('pointermove', mv); document.addEventListener('pointerup', up);
       });
     }
+
+    // C11: click anywhere outside the floating list (except the on-map toggle) collapses it.
+    if (!applyFloatingLayout._outside) {
+      applyFloatingLayout._outside = true;
+      document.addEventListener('click', function (e) {
+        if (document.body.dataset.layerlist !== 'floating') return;
+        const s = document.getElementById('sidebar');
+        const t = document.getElementById('gd-list-toggle');
+        if (!s || s.classList.contains('collapsed')) return;
+        if (s.contains(e.target) || (t && t.contains(e.target))) return;
+        s.classList.add('collapsed');
+        updateCtrlOffset();
+      });
+    }
+    updateCtrlOffset();
+  }
+  // C2: when a FLOATING list shares its side with the controls, push the control cluster below it.
+  function updateCtrlOffset() {
+    const sb = document.getElementById('sidebar');
+    const collide = document.body.dataset.collide === '1';
+    const floating = document.body.dataset.layerlist === 'floating';
+    let off = 0;
+    if (collide && floating && sb && !sb.classList.contains('collapsed')) off = sb.offsetHeight + 24;
+    document.body.style.setProperty('--gd-ctrl-offset', off + 'px');
   }
 
   // ── R2: editor edit-mode shim (only when iframed as a preview with ?edit=1) ────
@@ -2529,6 +2601,7 @@
 
   function startAreaSelect() {
     if (drawing) return;
+    if (dzActive) toggleDrawZoom();  // C8: turn off draw-zoom before starting an area select
     drawing = true;
     ensureDrawLayers();
     clearDraw();
@@ -2536,6 +2609,13 @@
     map.dragPan.disable();
     showHint('Drag a box on the map to select an area');
     map.on('mousedown', onDrawDown);
+  }
+  // Cancel a pending area-select (e.g. when another map tool is chosen) — mirror of onDrawUp cleanup.
+  function cancelAreaSelect() {
+    if (!drawing) return;
+    map.off('mousemove', onDrawMove); map.off('mousedown', onDrawDown);
+    drawStart = null; drawing = false; clearDraw();
+    map.dragPan.enable(); map.getCanvas().style.cursor = ''; hideHint();
   }
 
   function onDrawDown(e) {
@@ -2727,7 +2807,8 @@
       const btn = c.querySelector('.gd-basemap-btn');
       const menu = c.querySelector('.gd-basemap-menu');
       btn.addEventListener('click', ev => { ev.stopPropagation(); c.classList.toggle('open'); });
-      menu.addEventListener('change', ev => selectBasemap(ev.target.value));
+      // Collapse the flyout after a choice (C6) — and on any outside click (below).
+      menu.addEventListener('change', ev => { selectBasemap(ev.target.value); c.classList.remove('open'); });
       menu.addEventListener('click', ev => ev.stopPropagation());
       document.addEventListener('click', () => c.classList.remove('open'));
       this._c = c;
