@@ -29,7 +29,11 @@ os.environ["GEODEPLOY_ENV"] = "development"
 # the mounted PRODUCTION volume) would OVERWRITE the live Martin config from the empty test DB and
 # reload Martin, breaking real PostGIS vector-tile serving until the next real ingest. Redirect it to
 # the throwaway path so the suite can never touch the real Martin config.
-os.environ["GEODEPLOY_MARTIN_CONFIG_PATH"] = f"{TEST_DATA_DIR}/martin-config.yaml"
+# NOTE: the Settings field is `martin_config_path` with NO prefix (config.py, case_sensitive=False), so
+# the env var is MARTIN_CONFIG_PATH — NOT GEODEPLOY_MARTIN_CONFIG_PATH (that has the geodeploy_ prefix
+# only because the FIELD is `geodeploy_data_dir`). Getting this name wrong = the override silently
+# no-ops and the guard below refuses (which is exactly what happened in CI).
+os.environ["MARTIN_CONFIG_PATH"] = f"{TEST_DATA_DIR}/martin-config.yaml"
 os.makedirs(f"{TEST_DATA_DIR}/sqlite", exist_ok=True)
 
 from geodeploy.main import app
@@ -53,7 +57,7 @@ if TEST_DATA_DIR not in _MARTIN_PATH:
         f"REFUSING to run the test suite: martin_config_path {_MARTIN_PATH!r} is not under the "
         f"throwaway test dir {TEST_DATA_DIR!r}. The layer-delete tests rewrite + reload Martin; "
         "against the production path this clobbers live tile serving. Set "
-        "GEODEPLOY_MARTIN_CONFIG_PATH to a scratch path."
+        "MARTIN_CONFIG_PATH to a scratch path."
     )
 
 
