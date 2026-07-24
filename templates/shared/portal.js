@@ -2636,48 +2636,45 @@
       this._map = m;
       const c = document.createElement('div');
       c.className = 'maplibregl-ctrl maplibregl-ctrl-group gd-tools-ctrl';
-      const drawSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="14" height="12" rx="1" stroke-dasharray="3 2"/><circle cx="18" cy="18" r="3.5"/><line x1="20.5" y1="20.5" x2="23" y2="23"/></svg>';
-      const numSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="4" x2="8" y2="20"/><line x1="16" y1="4" x2="14" y2="20"/></svg>';
+      const drawSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.5" stroke-dasharray="3 2.5"/></svg>';
+      const coordSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="3" x2="12" y2="21"/><line x1="3" y1="12" x2="21" y2="12"/><circle cx="12" cy="12" r="2.2"/></svg>';
+      const boxSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="5" y="6" width="14" height="12" rx="1" stroke-dasharray="2.5 2"/></svg>';
       c.innerHTML =
         '<button type="button" class="gd-tools-btn" title="Download data by area" aria-label="Download data by area">' + toolsIcon() + '</button>' +
         '<div class="gd-tools-menu">' +
           '<div class="gd-tools-title">Download by area</div>' +
-          '<div class="gd-tools-tabs">' +
-            '<button type="button" class="gd-tools-tab is-active" data-tab="draw">' + drawSvg + '<span>Draw a box</span></button>' +
-            '<button type="button" class="gd-tools-tab" data-tab="coords">' + numSvg + '<span>Coordinates</span></button>' +
+          '<div class="gd-tools-choice">' +
+            '<button type="button" class="gd-tools-opt" data-act="draw">' + drawSvg + '<span>Draw a box<small>drag on the map</small></span></button>' +
+            '<button type="button" class="gd-tools-opt" data-act="toggle-coords">' + coordSvg + '<span>Coordinates<small>type an extent</small></span></button>' +
           '</div>' +
-          '<div class="gd-tools-pane" data-pane="draw">' +
-            '<p class="gd-tools-hint">Drag a rectangle on the map to select the area to download.</p>' +
-            '<button type="button" class="gd-coords-go" data-act="draw">Draw on the map</button>' +
-          '</div>' +
-          '<div class="gd-tools-pane" data-pane="coords" hidden>' +
+          '<div class="gd-tools-coords" hidden>' +
             '<div class="gd-coords-cross">' +
-              '<input type="number" step="any" class="gd-c-in gd-c-n" data-k="n" placeholder="max Y / N" aria-label="North (max Y)">' +
-              '<input type="number" step="any" class="gd-c-in gd-c-w" data-k="w" placeholder="min X / W" aria-label="West (min X)">' +
-              '<span class="gd-c-mid">' + numSvg + '</span>' +
-              '<input type="number" step="any" class="gd-c-in gd-c-e" data-k="e" placeholder="max X / E" aria-label="East (max X)">' +
-              '<input type="number" step="any" class="gd-c-in gd-c-s" data-k="s" placeholder="min Y / S" aria-label="South (min Y)">' +
+              '<input type="number" step="any" inputmode="decimal" class="gd-c-in gd-c-n" placeholder="max Y (N)" aria-label="North — max Y">' +
+              '<input type="number" step="any" inputmode="decimal" class="gd-c-in gd-c-w" placeholder="min X (W)" aria-label="West — min X">' +
+              '<span class="gd-c-mid">' + boxSvg + '</span>' +
+              '<input type="number" step="any" inputmode="decimal" class="gd-c-in gd-c-e" placeholder="max X (E)" aria-label="East — max X">' +
+              '<input type="number" step="any" inputmode="decimal" class="gd-c-in gd-c-s" placeholder="min Y (S)" aria-label="South — min Y">' +
             '</div>' +
             '<button type="button" class="gd-coords-go" data-act="coords">Download this area</button>' +
           '</div>' +
         '</div>';
       const btn = c.querySelector('.gd-tools-btn');
       const menu = c.querySelector('.gd-tools-menu');
+      const coordsBox = c.querySelector('.gd-tools-coords');
       btn.addEventListener('click', ev => { ev.stopPropagation(); c.classList.toggle('open'); if (c.classList.contains('open')) collapseFloatingList(); });
       menu.addEventListener('click', ev => ev.stopPropagation());
       document.addEventListener('click', () => c.classList.remove('open'));
-      // Tab switch (Draw ⟷ Coordinates)
-      c.querySelectorAll('.gd-tools-tab').forEach(function (tab) {
-        tab.addEventListener('click', function () {
-          const which = tab.dataset.tab;
-          c.querySelectorAll('.gd-tools-tab').forEach(t => t.classList.toggle('is-active', t === tab));
-          c.querySelectorAll('.gd-tools-pane').forEach(p => { p.hidden = (p.dataset.pane !== which); });
-        });
-      });
+      // "Draw a box" → start drawing immediately (no extra confirm click).
       c.querySelector('[data-act="draw"]').addEventListener('click', () => { c.classList.remove('open'); startAreaSelect(); });
+      // "Coordinates" → reveal the N/W/E/S extent inputs inline.
+      c.querySelector('[data-act="toggle-coords"]').addEventListener('click', function () {
+        coordsBox.hidden = !coordsBox.hidden;
+        this.classList.toggle('is-active', !coordsBox.hidden);
+        if (!coordsBox.hidden) { const n = c.querySelector('.gd-c-n'); if (n) n.focus(); }
+      });
       c.querySelector('[data-act="coords"]').addEventListener('click', () => {
         const v = k => parseFloat(c.querySelector('.gd-c-' + k).value);
-        const n = v('n'), w = v('w'), e = v('e'), s = v('s');
+        const n = v('n'), w = v('w'), e = v('e'), s = v('s');  // type=number accepts negatives + decimals
         if ([n, w, e, s].some(x => isNaN(x))) { showHint('Fill in all four edges (N, S, E, W).'); return; }
         // bbox = [minX, minY, maxX, maxY]; N/S are Y, E/W are X.
         const bbox = [Math.min(w, e), Math.min(n, s), Math.max(w, e), Math.max(n, s)];

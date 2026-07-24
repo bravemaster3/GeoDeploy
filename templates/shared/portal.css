@@ -130,8 +130,12 @@
        MapLibre gives it the exact button box/radius/shadow/spacing of the other controls. We only size
        its icon + hover colour (like the basemap/tools buttons, which also use currentColor SVGs). */
     #gd-list-toggle { color: var(--text); }
+    .gd-list-toggle-ctrl button { width: 29px; height: 29px; }  /* pin MapLibre's button metrics */
     #gd-list-toggle svg { width: 18px; height: 18px; }
     #gd-list-toggle:hover { color: var(--accent); }
+    /* Nudge the toggle a few px toward the layer panel so it reads as belonging to it (user request). */
+    body[data-layerlist-side="right"] .gd-list-toggle-ctrl { margin-right: 6px; }
+    body[data-layerlist-side="left"] .gd-list-toggle-ctrl { margin-left: 6px; }
     body[data-archetype="storymap"] .gd-list-toggle-ctrl { display: none; }
 
     /* Floating panel move + resize handles (portal.js applyFloatingLayout). */
@@ -538,32 +542,35 @@
     .gd-tools-ctrl.open .gd-tools-menu { display: block; }
     body[data-controls-side="left"] .gd-tools-menu { right: auto; left: 40px; }
     .gd-tools-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); margin-bottom: 10px; }
-    /* Tabs: Draw ⟷ Coordinates */
-    .gd-tools-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
-    .gd-tools-tab {
-      flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
+    /* Two choices: Draw a box (starts immediately) · Coordinates (reveals the extent inputs). */
+    .gd-tools-choice { display: flex; flex-direction: column; gap: 6px; }
+    .gd-tools-opt {
+      display: flex; align-items: center; gap: 10px; text-align: left; width: 100%;
       background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-      color: var(--text-muted); font: inherit; font-size: 11px; padding: 8px 4px; cursor: pointer;
+      color: var(--text); font: inherit; font-size: 13px; padding: 9px 11px; cursor: pointer;
     }
-    .gd-tools-tab svg { width: 18px; height: 18px; }
-    .gd-tools-tab:hover { color: var(--text); }
-    .gd-tools-tab.is-active { color: var(--accent); border-color: var(--accent); background: var(--accent-light); }
-    .gd-tools-hint { font-size: 12px; color: var(--text-muted); line-height: 1.5; margin-bottom: 10px; }
+    .gd-tools-opt svg { width: 18px; height: 18px; flex-shrink: 0; color: var(--text-muted); }
+    .gd-tools-opt span { display: flex; flex-direction: column; line-height: 1.25; }
+    .gd-tools-opt small { font-size: 11px; color: var(--text-muted); font-weight: 400; }
+    .gd-tools-opt:hover { border-color: var(--accent); }
+    .gd-tools-opt.is-active { border-color: var(--accent); background: var(--accent-light); }
+    .gd-tools-opt.is-active svg { color: var(--accent); }
     /* N/W/E/S coordinate cross (min/max X & Y), like QGIS/GDAL extent widgets. */
+    .gd-tools-coords { margin-top: 10px; }
     .gd-coords-cross {
       display: grid; grid-template-columns: 1fr 1fr 1fr;
-      grid-template-areas: ". n ." "w mid e" ". s ."; gap: 6px; margin-bottom: 12px;
+      grid-template-areas: ". n ." "w mid e" ". s ."; gap: 6px; margin-bottom: 10px; align-items: center;
     }
     .gd-c-n { grid-area: n; } .gd-c-w { grid-area: w; } .gd-c-e { grid-area: e; }
     .gd-c-s { grid-area: s; } .gd-c-mid { grid-area: mid; }
-    .gd-c-mid { display: flex; align-items: center; justify-content: center; color: var(--text-muted); opacity: .6; }
-    .gd-c-mid svg { width: 20px; height: 20px; }
+    .gd-c-mid { display: flex; align-items: center; justify-content: center; color: var(--text-muted); opacity: .5; }
+    .gd-c-mid svg { width: 26px; height: 26px; }
     .gd-c-in {
       width: 100%; min-width: 0; font-size: 12px; text-align: center; padding: 6px 4px;
       border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text);
     }
     .gd-c-in:focus { outline: none; border-color: var(--accent); }
-    .gd-c-in::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    .gd-c-in::-webkit-inner-spin-button, .gd-c-in::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
     .gd-coords-go { width: 100%; font-size: 13px; font-weight: 600; padding: 8px; border: none; border-radius: 7px; background: var(--accent); color: #fff; cursor: pointer; }
     .gd-coords-go:hover { filter: brightness(1.05); }
     .gd-basemap-title {

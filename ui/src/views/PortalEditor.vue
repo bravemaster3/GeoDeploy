@@ -182,22 +182,6 @@
             </button>
           </div>
 
-          <!-- Arrange on the live map: pick an element, then click a preset slot in the preview. -->
-          <div v-if="!isStory" class="mb-3">
-            <p class="text-[11px] text-muted-foreground/70 mb-1.5">Arrange on the map — click, then pick a spot in the preview:</p>
-            <div class="flex gap-2">
-              <button @click="placeOnMap('layerList')" :disabled="!previewUrl"
-                class="flex-1 text-xs font-medium border rounded px-2 py-1.5 disabled:opacity-40"
-                :class="placing === 'layerList' ? 'border-primary text-primary bg-primary/10' : 'border-border hover:border-primary/60'">
-                ◫ Place layer list
-              </button>
-              <button @click="placeOnMap('controls')" :disabled="!previewUrl"
-                class="flex-1 text-xs font-medium border rounded px-2 py-1.5 disabled:opacity-40"
-                :class="placing === 'controls' ? 'border-primary text-primary bg-primary/10' : 'border-border hover:border-primary/60'">
-                ⛭ Place controls
-              </button>
-            </div>
-          </div>
 
           <!-- Placement toggles (quick alternative to click-to-place) -->
           <div class="space-y-2 text-xs">
@@ -407,12 +391,6 @@
         Updating preview…
       </div>
 
-      <!-- Placement hint while arming a slot -->
-      <div v-if="placing"
-        class="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-primary text-primary-foreground shadow-md rounded-full px-3.5 py-1.5 text-xs font-medium">
-        Click a spot in the preview to place the {{ placing === 'controls' ? 'controls' : 'layer list' }} — or
-        <button class="underline" @click="cancelPlace">cancel</button>
-      </div>
 
       <div v-if="!previewUrl"
         class="absolute inset-0 flex items-center justify-center pointer-events-none z-0">
@@ -889,7 +867,6 @@ const previewFrame = ref(null)
 const previewUrl = ref('')       // /portals/_preview/{id}/?edit=1&t=… (cache-busted per rebuild)
 const previewBusy = ref(false)
 const lastView = ref(null)       // camera reported by the iframe on moveend → used for save/story
-const placing = ref(null)        // 'layerList' | 'controls' while arming a click-to-place
 
 onMounted(async () => {
   // Load the portal, its data, AND the basemap catalog (single source of truth — replaces the inline
@@ -968,20 +945,10 @@ function postToFrame(msg) {
   try { payload = JSON.parse(JSON.stringify(Object.assign({ gd: 1 }, msg))) } catch (e) { return }
   try { w.postMessage(payload, location.origin) } catch (e) { /* ignore */ }
 }
-function placeOnMap(element) {
-  if (placing.value === element) { cancelPlace(); return }
-  placing.value = element
-  postToFrame({ type: 'place', element })
-}
-function cancelPlace() { placing.value = null; postToFrame({ type: 'cancelPlace' }) }
 function onFrameMessage(e) {
   if (e.origin !== location.origin || !e.data || e.data.gd == null) return
   const d = e.data
   if (d.type === 'view' && d.view) lastView.value = d.view
-  else if (d.type === 'placed' && d.element) {
-    placing.value = null
-    setRegionOpt(d.element, { side: d.side })   // → config watch → schedulePreview → iframe reloads
-  }
 }
 onMounted(() => window.addEventListener('message', onFrameMessage))
 onBeforeUnmount(() => { window.removeEventListener('message', onFrameMessage); clearTimeout(previewTimer) })
