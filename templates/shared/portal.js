@@ -2636,32 +2636,51 @@
       this._map = m;
       const c = document.createElement('div');
       c.className = 'maplibregl-ctrl maplibregl-ctrl-group gd-tools-ctrl';
+      const drawSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="14" height="12" rx="1" stroke-dasharray="3 2"/><circle cx="18" cy="18" r="3.5"/><line x1="20.5" y1="20.5" x2="23" y2="23"/></svg>';
+      const numSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="4" x2="8" y2="20"/><line x1="16" y1="4" x2="14" y2="20"/></svg>';
       c.innerHTML =
         '<button type="button" class="gd-tools-btn" title="Download data by area" aria-label="Download data by area">' + toolsIcon() + '</button>' +
         '<div class="gd-tools-menu">' +
           '<div class="gd-tools-title">Download by area</div>' +
-          '<button type="button" class="gd-tools-opt" data-act="draw">▭&nbsp; Draw a box on the map</button>' +
-          '<button type="button" class="gd-tools-opt" data-act="coords">⌗&nbsp; Enter coordinates…</button>' +
-          '<div class="gd-tools-coords" style="display:none">' +
-            '<input type="text" class="gd-coords-input" placeholder="minLng, minLat, maxLng, maxLat" aria-label="Bounding box coordinates">' +
-            '<button type="button" class="gd-coords-go">Download this area</button>' +
+          '<div class="gd-tools-tabs">' +
+            '<button type="button" class="gd-tools-tab is-active" data-tab="draw">' + drawSvg + '<span>Draw a box</span></button>' +
+            '<button type="button" class="gd-tools-tab" data-tab="coords">' + numSvg + '<span>Coordinates</span></button>' +
+          '</div>' +
+          '<div class="gd-tools-pane" data-pane="draw">' +
+            '<p class="gd-tools-hint">Drag a rectangle on the map to select the area to download.</p>' +
+            '<button type="button" class="gd-coords-go" data-act="draw">Draw on the map</button>' +
+          '</div>' +
+          '<div class="gd-tools-pane" data-pane="coords" hidden>' +
+            '<div class="gd-coords-cross">' +
+              '<input type="number" step="any" class="gd-c-in gd-c-n" data-k="n" placeholder="max Y / N" aria-label="North (max Y)">' +
+              '<input type="number" step="any" class="gd-c-in gd-c-w" data-k="w" placeholder="min X / W" aria-label="West (min X)">' +
+              '<span class="gd-c-mid">' + numSvg + '</span>' +
+              '<input type="number" step="any" class="gd-c-in gd-c-e" data-k="e" placeholder="max X / E" aria-label="East (max X)">' +
+              '<input type="number" step="any" class="gd-c-in gd-c-s" data-k="s" placeholder="min Y / S" aria-label="South (min Y)">' +
+            '</div>' +
+            '<button type="button" class="gd-coords-go" data-act="coords">Download this area</button>' +
           '</div>' +
         '</div>';
       const btn = c.querySelector('.gd-tools-btn');
       const menu = c.querySelector('.gd-tools-menu');
-      const coordsBox = c.querySelector('.gd-tools-coords');
       btn.addEventListener('click', ev => { ev.stopPropagation(); c.classList.toggle('open'); if (c.classList.contains('open')) collapseFloatingList(); });
       menu.addEventListener('click', ev => ev.stopPropagation());
       document.addEventListener('click', () => c.classList.remove('open'));
+      // Tab switch (Draw ⟷ Coordinates)
+      c.querySelectorAll('.gd-tools-tab').forEach(function (tab) {
+        tab.addEventListener('click', function () {
+          const which = tab.dataset.tab;
+          c.querySelectorAll('.gd-tools-tab').forEach(t => t.classList.toggle('is-active', t === tab));
+          c.querySelectorAll('.gd-tools-pane').forEach(p => { p.hidden = (p.dataset.pane !== which); });
+        });
+      });
       c.querySelector('[data-act="draw"]').addEventListener('click', () => { c.classList.remove('open'); startAreaSelect(); });
       c.querySelector('[data-act="coords"]').addEventListener('click', () => {
-        coordsBox.style.display = coordsBox.style.display === 'none' ? 'block' : 'none';
-      });
-      c.querySelector('.gd-coords-go').addEventListener('click', () => {
-        const raw = c.querySelector('.gd-coords-input').value.trim();
-        const nums = raw.split(/[,\s]+/).map(Number).filter(n => !isNaN(n));
-        if (nums.length !== 4) { showHint('Enter four numbers: minLng, minLat, maxLng, maxLat'); return; }
-        const bbox = [Math.min(nums[0], nums[2]), Math.min(nums[1], nums[3]), Math.max(nums[0], nums[2]), Math.max(nums[1], nums[3])];
+        const v = k => parseFloat(c.querySelector('.gd-c-' + k).value);
+        const n = v('n'), w = v('w'), e = v('e'), s = v('s');
+        if ([n, w, e, s].some(x => isNaN(x))) { showHint('Fill in all four edges (N, S, E, W).'); return; }
+        // bbox = [minX, minY, maxX, maxY]; N/S are Y, E/W are X.
+        const bbox = [Math.min(w, e), Math.min(n, s), Math.max(w, e), Math.max(n, s)];
         c.classList.remove('open');
         openDownloadForBbox(bbox);
       });

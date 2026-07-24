@@ -121,6 +121,9 @@ def _load_copy(path: str, schema: str, table: str, x_col: str | None, y_col: str
         used.add(s); safe[f] = s
 
     srid = int(srid) or 4326
+    # NATIVE-CRS STORAGE: store in the user-picked SRID. Only for 4326 do we apply the Web-Mercator
+    # pole-clamp + (no-op) transform; a projected SRID is stored as-is (Martin reprojects native→3857).
+    native = (srid != 4326)
     stg = f"{table}_stg"
 
     conn = psycopg2.connect(dsn)
@@ -151,8 +154,9 @@ def _load_copy(path: str, schema: str, table: str, x_col: str | None, y_col: str
                         else "date" if is_date else "text")
 
         typed = ", ".join(f"{q(safe[f])} {types[f]}" for f in fields)
-        # X/Y mode always yields points; WKT can hold any geometry type → generic column.
-        geom_ddl = "geometry(Geometry,4326)" if wkt_col else "geometry(Point,4326)"
+        # X/Y mode always yields points; WKT can hold any geometry type → generic column. SRID = the
+        # user-picked CRS (stored natively).
+        geom_ddl = (f"geometry(Geometry,{srid})" if wkt_col else f"geometry(Point,{srid})")
         cur.execute(f"CREATE TABLE {q(schema)}.{q(table)} "
                     f"(id serial primary key, {typed}, geom {geom_ddl})")
 
@@ -168,34 +172,46 @@ def _load_copy(path: str, schema: str, table: str, x_col: str | None, y_col: str
 
         if wkt_col:
             # A malformed WKT cell would abort the whole INSERT (ST_GeomFromText raises), so parse
-            # through a session-local pg_temp function that swallows errors → NULL row, load
-            # continues. It also clips geometry to the Web Mercator band (±85.0511°): Martin tiles
-            # in EPSG:3857, where polar coordinates transform to infinity and 500 every low-zoom
-            # tile (§0g) — the clip only runs on rows that actually cross the band.
-            cur.execute(f"""
-                CREATE FUNCTION pg_temp.gd_wkt_geom(t text, s int) RETURNS geometry AS $$
-                DECLARE g geometry;
-                BEGIN
-                    g := ST_Transform(ST_SetSRID(ST_GeomFromText(t), s), 4326);
-                    IF ST_YMax(g) > 85.05112878 OR ST_YMin(g) < -85.05112878 THEN
-                        g := ST_Intersection(g,
-                             ST_MakeEnvelope(-180, -85.05112878, 180, 85.05112878, 4326));
-                    END IF;
-                    RETURN CASE WHEN g IS NULL OR ST_IsEmpty(g) THEN NULL ELSE g END;
-                EXCEPTION WHEN OTHERS THEN RETURN NULL;
-                END $$ LANGUAGE plpgsql IMMUTABLE""")
+            # through a session-local pg_temp function that swallows errors → NULL row, load continues.
+            # For 4326 it also clips to the Web Mercator band (±85.0511°): Martin tiles in EPSG:3857,
+            # where polar coordinates transform to infinity and 500 every low-zoom tile (§0g). A NATIVE
+            # (projected) SRID is stored untransformed — no lat/lon pole concept, no clamp.
+            if native:
+                cur.execute(f"""
+                    CREATE FUNCTION pg_temp.gd_wkt_geom(t text, s int) RETURNS geometry AS $$
+                    DECLARE g geometry;
+                    BEGIN
+                        g := ST_SetSRID(ST_GeomFromText(t), s);
+                        RETURN CASE WHEN g IS NULL OR ST_IsEmpty(g) THEN NULL ELSE g END;
+                    EXCEPTION WHEN OTHERS THEN RETURN NULL;
+                    END $$ LANGUAGE plpgsql IMMUTABLE""")
+            else:
+                cur.execute(f"""
+                    CREATE FUNCTION pg_temp.gd_wkt_geom(t text, s int) RETURNS geometry AS $$
+                    DECLARE g geometry;
+                    BEGIN
+                        g := ST_Transform(ST_SetSRID(ST_GeomFromText(t), s), 4326);
+                        IF ST_YMax(g) > 85.05112878 OR ST_YMin(g) < -85.05112878 THEN
+                            g := ST_Intersection(g,
+                                 ST_MakeEnvelope(-180, -85.05112878, 180, 85.05112878, 4326));
+                        END IF;
+                        RETURN CASE WHEN g IS NULL OR ST_IsEmpty(g) THEN NULL ELSE g END;
+                    EXCEPTION WHEN OTHERS THEN RETURN NULL;
+                    END $$ LANGUAGE plpgsql IMMUTABLE""")
             wc = q(safe[wkt_col])
             geom = f"pg_temp.gd_wkt_geom(NULLIF(btrim({wc}), ''), {srid})"
             row_filter = f"NULLIF(btrim({wc}), '') IS NOT NULL"
         else:
             xc, yc = q(safe[x_col]), q(safe[y_col])
             make_point = f"ST_SetSRID(ST_MakePoint(btrim({xc})::double precision, btrim({yc})::double precision), {srid})"
-            g4326 = f"ST_Transform({make_point}, 4326)" if srid != 4326 else make_point
-            # Clamp latitude to the Web Mercator limit (±85.0511): Martin tiles in EPSG:3857, where a
-            # point at/near the poles transforms to infinity and breaks tile generation (HTTP 500). A
-            # sentinel/polar row (e.g. a lat=-90 "country") would otherwise blank out low-zoom tiles.
-            geom = (f"ST_SetSRID(ST_MakePoint(ST_X({g4326}), "
-                    f"GREATEST(-85.05112878, LEAST(85.05112878, ST_Y({g4326})))), 4326)")
+            if native:
+                geom = make_point  # store as-is in the projected SRID (no pole clamp)
+            else:
+                # Clamp latitude to the Web Mercator limit (±85.0511): Martin tiles in EPSG:3857, where a
+                # point at/near the poles transforms to infinity and breaks tile generation (HTTP 500). A
+                # sentinel/polar row (e.g. a lat=-90 "country") would otherwise blank out low-zoom tiles.
+                geom = (f"ST_SetSRID(ST_MakePoint(ST_X({make_point}), "
+                        f"GREATEST(-85.05112878, LEAST(85.05112878, ST_Y({make_point})))), 4326)")
             row_filter = f"btrim({xc}) ~ '{_FLOAT}' AND btrim({yc}) ~ '{_FLOAT}'"
         cur.execute(
             f"INSERT INTO {q(schema)}.{q(table)} ({copy_cols}, geom) "
@@ -219,12 +235,16 @@ def _load_copy(path: str, schema: str, table: str, x_col: str | None, y_col: str
             row = cur.fetchone()
             geom_kind = _GEOM_KIND.get((row[0] or "").upper(), "polygon") if row else "polygon"
         cur.execute(f"CREATE INDEX ON {q(schema)}.{q(table)} USING GIST (geom)")
+        # bbox is stored EPSG:4326 app-wide even for native geometry — transform the extent box only.
+        extent = (f"ST_Transform(ST_SetSRID(ST_Extent(geom)::geometry, {srid}), 4326)" if native
+                  else "ST_Extent(geom)")
         cur.execute(f"SELECT ST_XMin(e), ST_YMin(e), ST_XMax(e), ST_YMax(e) "
-                    f"FROM (SELECT ST_Extent(geom) e FROM {q(schema)}.{q(table)}) s")
+                    f"FROM (SELECT {extent} e FROM {q(schema)}.{q(table)}) s")
         b = cur.fetchone()
         bbox = [b[0], b[1], b[2], b[3]] if b and b[0] is not None else None
         conn.commit()
         return {"bbox": bbox, "feature_count": fc, "geometry_type": geom_kind,
+                "crs": f"EPSG:{srid}",
                 "columns": [{"name": safe[f], "type": types[f]} for f in fields]}
     except Exception:
         conn.rollback()
@@ -268,7 +288,7 @@ def import_csv(self, job_id, layer_id, source, schema, table, x_col, y_col, srid
         step("Saving metadata", 90)
         _update_layer(db_path, layer_id, status="ready", feature_count=res["feature_count"],
                       bbox=json.dumps(res["bbox"]) if res["bbox"] else None,
-                      columns=json.dumps(res["columns"]), crs="EPSG:4326",
+                      columns=json.dumps(res["columns"]), crs=res.get("crs", "EPSG:4326"),
                       geometry_type=res.get("geometry_type", "point"),
                       updated_at=datetime.now(timezone.utc).isoformat())
         _update_job(db_path, job_id, status="ready", progress=100,

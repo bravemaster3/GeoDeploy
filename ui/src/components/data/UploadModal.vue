@@ -67,11 +67,27 @@
               <option v-for="c in csvColumns" :key="c" :value="c">{{ c }}</option>
             </select>
           </div>
-          <div class="w-20 flex-shrink-0">
-            <label class="text-xs text-muted-foreground block mb-1">EPSG</label>
-            <input v-model.number="csvSrid" type="number" class="input w-full text-sm" />
+          <div class="w-32 flex-shrink-0">
+            <label class="text-xs text-muted-foreground block mb-1">Coordinate system</label>
+            <input v-model.number="csvSrid" type="number" list="gd-csv-epsg" placeholder="4326"
+              class="input w-full text-sm" title="EPSG code of the X/Y (or WKT) coordinates" />
+            <datalist id="gd-csv-epsg">
+              <option value="4326">WGS 84 (lon/lat)</option>
+              <option value="3857">Web Mercator</option>
+              <option value="4258">ETRS89</option>
+              <option value="3035">ETRS89 / LAEA Europe</option>
+              <option value="32630">WGS 84 / UTM 30N</option>
+              <option value="32633">WGS 84 / UTM 33N</option>
+              <option value="32733">WGS 84 / UTM 33S</option>
+              <option value="27700">OSGB36 / British National Grid</option>
+              <option value="2154">RGF93 / Lambert-93 (France)</option>
+            </datalist>
           </div>
         </div>
+        <p class="text-[11px] text-muted-foreground/70">
+          The EPSG of your coordinates (default <span class="font-mono">4326</span> = lon/lat). The layer is
+          stored in this CRS; the map reprojects for display.
+        </p>
         <p v-if="!csvColumns.length" class="text-xs text-amber-400">Couldn't read columns from the header — check the file.</p>
         <div class="flex justify-end gap-2 pt-1">
           <button @click="resetCsv" class="btn-secondary text-sm">Back</button>

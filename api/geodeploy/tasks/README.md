@@ -37,10 +37,14 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   staging table, each column's type is inferred **in SQL** (regex over the staged text → `bigint`/`double
   precision`/`date`/`text`; leading-zero ints stay text, ISO dates only, 18-digit int cap), then a single
   `INSERT…SELECT` with **guarded casts** (a bad cell → NULL, never aborts) + geometry fills the final
-  table; GiST index; staging dropped; temp file removed. X/Y path: `ST_MakePoint`→`ST_Transform` 4326 +
-  the ±85.0511 lat clamp (§0g). WKT path: a **`pg_temp.gd_wkt_geom` plpgsql function** parses
-  `ST_GeomFromText` with an EXCEPTION handler (malformed WKT → NULL row, never aborts the INSERT),
-  transforms to 4326 and **clips to the Web Mercator band** only when a row crosses it; NULL-geometry
+  table; GiST index; staging dropped; temp file removed. **NATIVE-CRS (2026-07-24):** the user-picked
+  `srid` (default 4326, from the upload dialog's Coordinate-system field) is stored NATIVELY —
+  `geometry(…,{srid})`, `ST_SetSRID` with NO transform for a projected SRID; `crs="EPSG:{srid}"` recorded;
+  bbox transformed to 4326. The **±85.0511 Web-Mercator lat clamp applies ONLY to srid=4326** (it's a
+  lon/lat pole artifact; a projected SRID has no such concept and Martin reprojects native→3857). X/Y
+  path: native = `ST_MakePoint`+`ST_SetSRID`; 4326 = the clamped form. WKT path: a **`pg_temp.gd_wkt_geom`
+  plpgsql function** parses `ST_GeomFromText` with an EXCEPTION handler (malformed WKT → NULL row, never
+  aborts the INSERT); native = `ST_SetSRID` only, 4326 = transform+clamp; NULL-geometry
   rows are deleted after the load; the real geometry type is sampled (`GeometryType`) and saved on the
   layer (the routers create the layer with `geometry_type=None` for WKT). Streams from disk, so no
   in-memory row cap. **All** CSV columns are kept (X/Y/WKT stay as attributes too). Dispatched from
@@ -182,6 +186,6 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
 resolvable non-4326 EPSG un-reprojected [PostGIS `geometry(…,{srid})`; GeoParquet footer PROJJSON via
 `_write_geo_footer`], `crs="EPSG:{srid}"` recorded, `bbox` stays 4326; Martin/duckdb read paths already
 reproject for display. `export.py` gained `target_crs` + CRS-correct clip envelope for lossless native
-GPKG/CSV downloads. `csv_import.py` deliberately stays 4326 [pole-clamping is 4326-coupled]. New uploads
-only. Tests: `test_native_crs.py`)
+GPKG/CSV downloads. `csv_import.py` ALSO stores native [picked srid; pole-clamp only for 4326]. New
+uploads only. Tests: `test_native_crs.py`)
 2026-07-12 (pmtiles_tile: **completeness over compression** — simplification OFF by default + `PMTILES_KEEP_ALL_FEATURES` (`--extend-zooms-if-still-dropping` `--no-tiny-polygon-reduction`) so no features disappear when zoomed in, even dense areas; escape hatches to trade back for speed. Earlier same day: native CONCURRENT stream feed replacing serialized FlatGeobuf; memory-bounded, adaptive zoom, per-run scratch cleanup)
