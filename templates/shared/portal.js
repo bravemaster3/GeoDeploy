@@ -83,9 +83,11 @@
     b.dataset.controlsSide = cside;                       // → data-controls-side (L/R, for flyout dir)
     b.dataset.controlsPos = pos;                          // → data-controls-pos (the full corner)
     b.dataset.header = L.regions.header.style;            // → data-header
-    // Collision only when the control cluster is at the TOP corner on the list's side (the on-map
-    // layer-list toggle lives there); a bottom cluster never collides with the top toggle.
+    // collide: control cluster at the TOP corner on the list's side → push controls below the on-map
+    // toggle. sameside: controls on the list's side at ANY corner → the floating list leaves the
+    // control column free (so it never covers the controls, top OR bottom).
     b.dataset.collide = (pos === 'top-' + L.regions.layerList.side) ? '1' : '0';
+    b.dataset.sameside = (cside === L.regions.layerList.side) ? '1' : '0';
   }
   const LAYOUT = resolveLayout(STYLE.geodeploy && STYLE.geodeploy.layout);
   applyLayoutAttrs(LAYOUT);
@@ -2532,6 +2534,14 @@
   // is a no-op kept only so its existing call sites stay valid.
   function updateCtrlOffset() {}
 
+  // Opening a control flyout (basemap/tools) collapses a FLOATING layer list, so the panel isn't
+  // hidden behind it (a control click stops propagation, so the click-outside handler won't fire).
+  function collapseFloatingList() {
+    if (document.body.dataset.layerlist !== 'floating') return;
+    const s = document.getElementById('sidebar');
+    if (s && !s.classList.contains('collapsed')) s.classList.add('collapsed');
+  }
+
   // ── R2: editor edit-mode shim (only when iframed as a preview with ?edit=1) ────
   // Same-origin postMessage channel with the editor: reports the live camera (for save / story capture),
   // runs "click a preset slot to place an element", and applies view/zoom commands. The published portal
@@ -2634,7 +2644,7 @@
       const btn = c.querySelector('.gd-tools-btn');
       const menu = c.querySelector('.gd-tools-menu');
       const coordsBox = c.querySelector('.gd-tools-coords');
-      btn.addEventListener('click', ev => { ev.stopPropagation(); c.classList.toggle('open'); });
+      btn.addEventListener('click', ev => { ev.stopPropagation(); c.classList.toggle('open'); if (c.classList.contains('open')) collapseFloatingList(); });
       menu.addEventListener('click', ev => ev.stopPropagation());
       document.addEventListener('click', () => c.classList.remove('open'));
       c.querySelector('[data-act="draw"]').addEventListener('click', () => { c.classList.remove('open'); startAreaSelect(); });
@@ -2902,7 +2912,7 @@
         '</div>';
       const btn = c.querySelector('.gd-basemap-btn');
       const menu = c.querySelector('.gd-basemap-menu');
-      btn.addEventListener('click', ev => { ev.stopPropagation(); c.classList.toggle('open'); });
+      btn.addEventListener('click', ev => { ev.stopPropagation(); c.classList.toggle('open'); if (c.classList.contains('open')) collapseFloatingList(); });
       // Collapse the flyout after a choice (C6) — and on any outside click (below).
       menu.addEventListener('change', ev => { selectBasemap(ev.target.value); c.classList.remove('open'); });
       menu.addEventListener('click', ev => ev.stopPropagation());
