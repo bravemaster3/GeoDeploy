@@ -6,17 +6,25 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
 ## Contents
 - `vector_ingest.py` — `ingest_vector(job_id, layer_id, file_path, layer_name, schema_name, table_name)`:
   **COPY-based** (`_ingest_via_copy`): stream Fiona features → temp CSV (attributes + geometry as **WKB
-  hex**) → `COPY` into an UNLOGGED staging `geometry` column → one `INSERT…SELECT` that **reprojects in
-  PostGIS** (`ST_Transform`, using the source EPSG; client-side pyproj only as a fallback when the EPSG
-  is unknown) into the final `geometry(Geometry,4326)` table → GiST index → `ST_Extent` bbox. Streams from
-  disk (no in-memory feature list), bulk-loads, set-based reprojection — fast on large files. Int columns
+  hex**) → `COPY` into an UNLOGGED staging `geometry` column → one `INSERT…SELECT` into the final table →
+  GiST index → bbox. **NATIVE-CRS STORAGE (2026-07-24):** a source with a **resolvable non-4326 EPSG** is
+  stored AS-IS in that SRID (final table `geometry(Geometry,{srid})`, `ST_SetSRID` with **NO** transform),
+  `crs="EPSG:{srid}"` recorded — Martin reprojects native→3857 per-tile for display (`martin.py` reads the
+  layer `crs`), and downloads can be lossless. Only an **UNRESOLVABLE** EPSG (a WKT with no EPSG code)
+  falls back to a client-side pyproj transform → 4326; a missing CRS is assumed 4326. **`bbox` is ALWAYS
+  stored EPSG:4326** even for native geometry (`ST_Transform(ST_Extent…, 4326)`) — the app-wide convention
+  (map fit / viewport / export clip). Streams from disk (no in-memory feature list), bulk-loads. Int columns
   use `BIGINT`. Updates `upload_jobs`/`vector_layers` via **raw sqlite3** (runs in the Celery process).
   **HEAVY files skip PostGIS (2026-07-11):** a source whose uncompressed size (`_source_size`, whole
   sidecar set for shapefiles) ≥ `VECTOR_GEOPARQUET_THRESHOLD_MB` (default **200**, env-tunable on celery,
   `0` disables) goes through `_ingest_as_geoparquet` instead — `_convert_to_geoparquet` streams Fiona →
-  **GeoParquet 1.1** (WKB, EPSG:4326, zstd, batched shapely conversion; `geo` footer attached at close
+  **GeoParquet 1.1** (WKB, zstd, batched shapely conversion; `geo` footer attached at close
   via `ParquetWriter.add_key_value_metadata`, **pyarrow ≥ 18** — guarded, absent footer falls back to
-  name-heuristics downstream) → upload to `vectors/{uid}/{uuid}/` → repoint the layer
+  name-heuristics downstream). **NATIVE-CRS (2026-07-24):** a resolvable non-4326 EPSG is written AS-IS
+  and its CRS goes into the `geo` footer as PROJJSON (`_write_geo_footer(crs_projjson=…)`; `duckdb_engine`
+  read paths already reproject the 4326 map-bbox → file CRS for pruning and back for display, so no read
+  changes); unresolvable EPSG → reproject to 4326 (no footer CRS). `bbox` returned in 4326. → upload to
+  `vectors/{uid}/{uuid}/` → repoint the layer
   (`storage_backend='geoparquet'`) → chain `geoparquet_prep` (which marks layer + job ready). Exactly
   the pipeline a direct `.parquet` upload takes; no PostGIS table, no Martin entry.
 - `raster_ingest.py` — `ingest_raster(job_id, layer_id, file_path, s3_key)`:
@@ -130,13 +138,18 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   and logs start / stream feature-count / total elapsed; `stream_geojsonseq` logs periodic feature throughput.
   So `docker compose logs -f celery` now shows live tiling progress (the stream's feature counter is the real
   signal — tippecanoe stays silent while blocked on stdin during the slow shapely-conversion phase).
-- `export.py` — `export_bundle(bbox, items)`: clips the chosen portal layers to a bbox and writes a
+- `export.py` — `export_bundle(bbox, items, target_crs='4326')`: clips the chosen portal layers to a bbox and writes a
   ZIP to `data/temp/exports/{task_id}.zip` (served by the API's `export-download`). Vector via
   psycopg2 (GeoJSON/CSV) + `ogr2ogr` (GeoPackage); **GeoParquet (2026-07-11) via DuckDB**
   (`_gpq_features`: the covering/partition-pruned `duckdb_engine.query_features_geojson` + an exact
   shapely intersects test for ST_Intersects parity; storage creds from SQLite §0f; same
   GeoJSON/CSV/GPKG formats, `geometry_wkt` column in CSV); raster via rasterio windowed read with an
-  output cap (`MAX_PIXELS`, downsamples huge selections via overviews). Offloads the heavy clip off the
+  output cap (`MAX_PIXELS`, downsamples huge selections via overviews). **CRS (2026-07-24, native-CRS
+  storage):** the clip bbox is always 4326 → for a PostGIS layer stored in a native SRID the envelope is
+  `ST_Transform`ed INTO that SRID (`_env_sql`) for the index-using `&&`/`ST_Intersects`, and output is
+  `ST_Transform`ed to `out_srid` (`_geom_out`). `target_crs='native'` makes **GeoPackage/CSV** carry each
+  layer's own CRS (lossless; `_gj_to_gpkg(srs=…)`, GeoParquet `query_features_geojson(keep_native=True)`);
+  **GeoJSON is ALWAYS 4326** (RFC 7946). Default `'4326'` = today's behaviour. Offloads the heavy clip off the
   API process. Routed to the `ingest` queue (the only one the worker consumes). **Writes to
   `{id}.zip.part` then `os.replace()`** to the final name — see known issues for why.
 - `__init__.py` — package marker.
@@ -165,4 +178,10 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
+2026-07-24 (**NATIVE-CRS vector storage**: `_ingest_via_copy` + `_convert_to_geoparquet` keep a
+resolvable non-4326 EPSG un-reprojected [PostGIS `geometry(…,{srid})`; GeoParquet footer PROJJSON via
+`_write_geo_footer`], `crs="EPSG:{srid}"` recorded, `bbox` stays 4326; Martin/duckdb read paths already
+reproject for display. `export.py` gained `target_crs` + CRS-correct clip envelope for lossless native
+GPKG/CSV downloads. `csv_import.py` deliberately stays 4326 [pole-clamping is 4326-coupled]. New uploads
+only. Tests: `test_native_crs.py`)
 2026-07-12 (pmtiles_tile: **completeness over compression** — simplification OFF by default + `PMTILES_KEEP_ALL_FEATURES` (`--extend-zooms-if-still-dropping` `--no-tiny-polygon-reduction`) so no features disappear when zoomed in, even dense areas; escape hatches to trade back for speed. Earlier same day: native CONCURRENT stream feed replacing serialized FlatGeobuf; memory-bounded, adaptive zoom, per-run scratch cleanup)

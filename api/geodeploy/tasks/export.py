@@ -18,7 +18,6 @@ log = logging.getLogger(__name__)
 
 FEATURE_CAP = 50000          # max features per vector layer
 MAX_PIXELS = 16_000_000      # raster output cap (~4000x4000) — bigger selections are downsampled
-_ENV = "ST_MakeEnvelope(%s,%s,%s,%s,4326)"
 
 
 def _safe(name: str) -> str:
@@ -26,15 +25,38 @@ def _safe(name: str) -> str:
     return slugify(name or "layer", separator="_") or "layer"
 
 
-def _vec_geojson(cur, schema: str, table: str, b) -> str:
+def _env_sql(srid: int) -> str:
+    """Clip envelope. The bbox is ALWAYS EPSG:4326 (the map view); transform it INTO the table's SRID so
+    the spatial index is used and the &&/ST_Intersects test happens in the geometry's own CRS. Required
+    even for a 4326 output, now that geometry may be stored natively."""
+    return (f"ST_Transform(ST_MakeEnvelope(%s,%s,%s,%s,4326), {int(srid)})" if int(srid) != 4326
+            else "ST_MakeEnvelope(%s,%s,%s,%s,4326)")
+
+
+def _table_srid(cur, schema: str, table: str) -> int:
+    """The stored SRID of the geom column (native since the native-CRS ingest change)."""
+    try:
+        cur.execute(f'SELECT ST_SRID(geom) FROM "{schema}"."{table}" WHERE geom IS NOT NULL LIMIT 1')
+        r = cur.fetchone()
+        return int(r[0]) if r and r[0] else 4326
+    except Exception:
+        return 4326
+
+
+def _geom_out(srid: int, out_srid: int) -> str:
+    return "geom" if int(srid) == int(out_srid) else f"ST_Transform(geom, {int(out_srid)})"
+
+
+def _vec_geojson(cur, schema: str, table: str, b, srid: int, out_srid: int) -> str:
+    env = _env_sql(srid)
     sql = (
         "SELECT jsonb_build_object('type','FeatureCollection','features',"
         "COALESCE(jsonb_agg(f.feat), '[]'::jsonb))::text FROM ("
         "  SELECT jsonb_build_object('type','Feature',"
-        "    'geometry', ST_AsGeoJSON(geom)::jsonb,"
+        f"    'geometry', ST_AsGeoJSON({_geom_out(srid, out_srid)})::jsonb,"
         "    'properties', to_jsonb(t) - 'geom') AS feat"
         f'  FROM "{schema}"."{table}" t'
-        f"  WHERE geom && {_ENV} AND ST_Intersects(geom, {_ENV})"
+        f"  WHERE geom && {env} AND ST_Intersects(geom, {env})"
         f"  LIMIT {FEATURE_CAP}"
         ") f"
     )
@@ -43,12 +65,13 @@ def _vec_geojson(cur, schema: str, table: str, b) -> str:
     return row[0] if row and row[0] else '{"type":"FeatureCollection","features":[]}'
 
 
-def _vec_csv(cur, schema: str, table: str, b) -> str:
+def _vec_csv(cur, schema: str, table: str, b, srid: int, out_srid: int) -> str:
     import csv
+    env = _env_sql(srid)
     sql = (
-        "SELECT (to_jsonb(t) - 'geom')::text AS props, ST_AsText(geom) AS wkt "
+        f"SELECT (to_jsonb(t) - 'geom')::text AS props, ST_AsText({_geom_out(srid, out_srid)}) AS wkt "
         f'FROM "{schema}"."{table}" t '
-        f"WHERE geom && {_ENV} AND ST_Intersects(geom, {_ENV}) LIMIT {FEATURE_CAP}"
+        f"WHERE geom && {env} AND ST_Intersects(geom, {env}) LIMIT {FEATURE_CAP}"
     )
     cur.execute(sql, (b[0], b[1], b[2], b[3], b[0], b[1], b[2], b[3]))
     cols, recs = [], []
@@ -67,19 +90,24 @@ def _vec_csv(cur, schema: str, table: str, b) -> str:
     return buf.getvalue()
 
 
-def _gpq_features(s3_key: str, b, settings) -> list[dict]:
-    """Clip a GeoParquet layer to the bbox via DuckDB (covering/partition-pruned viewport query),
-    then an exact shapely intersects test — parity with the PostGIS ST_Intersects path (the
-    covering filter alone is bbox-overlap, which can include near-misses)."""
+def _gpq_features(s3_key: str, b, settings, keep_native: bool = False) -> list[dict]:
+    """Clip a GeoParquet layer to the bbox via DuckDB (covering/partition-pruned viewport query).
+    `keep_native=True` → geometries come back in the file's OWN CRS (lossless download); the exact
+    4326-intersects refinement is then skipped (the covering prune, done in the file CRS, already
+    limits to the region — a few edge near-misses are acceptable for a download). Default (4326) keeps
+    the exact shapely intersects test for parity with the PostGIS path."""
     from shapely.geometry import box as shp_box, shape as gj_shape
     from ..services import duckdb_engine
     from .raster_ingest import _get_storage_creds
     # Storage creds from SQLite (§0f) — celery env is unreliable.
     creds = _get_storage_creds(f"{settings.data_dir}/sqlite/geodeploy.db")
-    fc = duckdb_engine.query_features_geojson(s3_key, list(b), FEATURE_CAP, creds)
+    fc = duckdb_engine.query_features_geojson(s3_key, list(b), FEATURE_CAP, creds, keep_native=keep_native)
+    feats = fc.get("features", [])
+    if keep_native:
+        return feats  # already pruned to the bbox in the file CRS; geometries are native
     sel = shp_box(b[0], b[1], b[2], b[3])
     kept = []
-    for f in fc.get("features", []):
+    for f in feats:
         try:
             if gj_shape(f["geometry"]).intersects(sel):
                 kept.append(f)
@@ -114,15 +142,16 @@ def _gpq_csv(feats: list[dict]) -> str:
     return buf.getvalue()
 
 
-def _gj_to_gpkg(geojson_text: str, layer_name: str) -> bytes:
+def _gj_to_gpkg(geojson_text: str, layer_name: str, srs: str = "EPSG:4326") -> bytes:
+    """The `geojson_text` carries coordinates in `srs` (native for a lossless download, else 4326);
+    label it with the matching `-a_srs` so the GeoPackage records the correct CRS."""
     with tempfile.TemporaryDirectory() as td:
         src = os.path.join(td, "in.geojson")
         out = os.path.join(td, "out.gpkg")
         with open(src, "w", encoding="utf-8") as f:
             f.write(geojson_text)
-        # ogr2ogr needs an explicit source SRS for GeoJSON (it is EPSG:4326 per spec / ST_AsGeoJSON).
         r = subprocess.run(
-            ["ogr2ogr", "-f", "GPKG", "-a_srs", "EPSG:4326", "-nln", layer_name, out, src],
+            ["ogr2ogr", "-f", "GPKG", "-a_srs", srs, "-nln", layer_name, out, src],
             capture_output=True,
         )
         if r.returncode != 0:
@@ -186,10 +215,13 @@ def _clip_raster(s3_key: str, b, settings) -> bytes:
 
 
 @celery_app.task(bind=True, name="geodeploy.tasks.export.export_bundle")
-def export_bundle(self, bbox: str, items: list[dict]) -> dict:
+def export_bundle(self, bbox: str, items: list[dict], target_crs: str = "4326") -> dict:
     """items: [{type:'vector', schema, table, name, format} |
-              {type:'geoparquet', s3_key, name, format} | {type:'raster', s3_key, name}]"""
+              {type:'geoparquet', s3_key, crs, name, format} | {type:'raster', s3_key, name}]
+    target_crs: '4326' (default) or 'native' → GeoPackage/CSV carry the layer's native CRS (lossless);
+    GeoJSON is always EPSG:4326 (RFC 7946)."""
     settings = get_settings()
+    native = (target_crs == "native")
     b = tuple(float(v) for v in bbox.split(","))
     exports_dir = f"{settings.data_dir}/temp/exports"
     os.makedirs(exports_dir, exist_ok=True)
@@ -228,30 +260,36 @@ def export_bundle(self, bbox: str, items: list[dict]) -> dict:
                 if it.get("type") == "vector":
                     base = _safe(it.get("name"))
                     fmt = it.get("format", "geojson")
+                    srid = _table_srid(cur, it["schema"], it["table"])
+                    # GeoJSON is ALWAYS 4326 (RFC 7946). CSV/GPKG carry the native SRID when requested.
+                    out_srid = srid if (native and fmt in ("csv", "gpkg")) else 4326
                     if fmt == "csv":
-                        z.writestr(fn(base, "csv"), _vec_csv(cur, it["schema"], it["table"], b))
+                        z.writestr(fn(base, "csv"), _vec_csv(cur, it["schema"], it["table"], b, srid, out_srid))
                     elif fmt == "gpkg":
-                        gj = _vec_geojson(cur, it["schema"], it["table"], b)
+                        gj = _vec_geojson(cur, it["schema"], it["table"], b, srid, out_srid)
                         try:
-                            z.writestr(fn(base, "gpkg"), _gj_to_gpkg(gj, base))
+                            z.writestr(fn(base, "gpkg"), _gj_to_gpkg(gj, base, f"EPSG:{out_srid}"))
                         except Exception as e:
                             log.warning("GeoPackage export failed for %s, falling back to GeoJSON: %s", base, e)
                             z.writestr(fn(base, "geojson"), gj)
                     else:
-                        z.writestr(fn(base, "geojson"), _vec_geojson(cur, it["schema"], it["table"], b))
+                        z.writestr(fn(base, "geojson"), _vec_geojson(cur, it["schema"], it["table"], b, srid, 4326))
                 elif it.get("type") == "geoparquet":
                     base = _safe(it.get("name"))
                     fmt = it.get("format", "geojson")
-                    feats = _gpq_features(it["s3_key"], b, settings)
+                    # native only for CSV/GPKG; GeoJSON must be 4326.
+                    keep_native = native and fmt in ("csv", "gpkg")
+                    feats = _gpq_features(it["s3_key"], b, settings, keep_native=keep_native)
+                    out_crs = (it.get("crs") or "EPSG:4326") if keep_native else "EPSG:4326"
                     if fmt == "csv":
                         z.writestr(fn(base, "csv"), _gpq_csv(feats))
                     elif fmt == "gpkg":
                         gj = _gpq_geojson(feats)
                         try:
-                            z.writestr(fn(base, "gpkg"), _gj_to_gpkg(gj, base))
+                            z.writestr(fn(base, "gpkg"), _gj_to_gpkg(gj, base, out_crs))
                         except Exception as e:
                             log.warning("GeoPackage export failed for %s, falling back to GeoJSON: %s", base, e)
-                            z.writestr(fn(base, "geojson"), gj)
+                            z.writestr(fn(base, "geojson"), _gpq_geojson(_gpq_features(it["s3_key"], b, settings)))
                     else:
                         z.writestr(fn(base, "geojson"), _gpq_geojson(feats))
                 else:  # raster

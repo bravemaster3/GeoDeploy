@@ -449,6 +449,7 @@ class ExportItem(BaseModel):
 class ExportBundleRequest(BaseModel):
     bbox: str                # "minx,miny,maxx,maxy" in EPSG:4326
     items: list[ExportItem]
+    target_crs: str = "4326"  # '4326' (default) | 'native' (GPKG/CSV keep each layer's own CRS)
 
 
 def _sweep_old_exports(settings, max_age: int = 3600) -> None:
@@ -490,6 +491,7 @@ async def start_export_bundle(slug: str, req: ExportBundleRequest, db: AsyncSess
             if layer and layer.storage_backend == "geoparquet" and layer.s3_key:
                 # File-backed layer: the clip runs on the GeoParquet via DuckDB, not PostGIS.
                 resolved.append({"type": "geoparquet", "s3_key": layer.s3_key,
+                                 "crs": layer.crs or "EPSG:4326",  # for a lossless native download
                                  "name": layer.name, "format": it.format})
             elif layer:
                 resolved.append({"type": "vector", "schema": layer.schema_name,
@@ -503,7 +505,7 @@ async def start_export_bundle(slug: str, req: ExportBundleRequest, db: AsyncSess
         raise HTTPException(400, "No exportable layers in the request.")
 
     _sweep_old_exports(get_settings())
-    task = export_task.delay(req.bbox, resolved)
+    task = export_task.delay(req.bbox, resolved, target_crs=req.target_crs)
     return {"job_id": task.id}
 
 

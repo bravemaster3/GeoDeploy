@@ -136,7 +136,7 @@ def ingest_vector(self, job_id: str, layer_id: int, file_path: str, layer_name: 
                       geometry_type=res["geom_type"],
                       geometry_column="geom",
                       id_column="id",
-                      crs="EPSG:4326",
+                      crs=res.get("crs", "EPSG:4326"),  # native SRID from _ingest_via_copy
                       updated_at=datetime.now(timezone.utc).isoformat())
 
         step("Updating tile server", 95)
@@ -242,16 +242,22 @@ def _bbox_struct_array(per):
         names=list(_BBOX_FIELDS))
 
 
-def _write_geo_footer(writer, geom_types, bbox, covering_col=None) -> None:
+def _write_geo_footer(writer, geom_types, bbox, covering_col=None, crs_projjson=None) -> None:
     """Attach GeoParquet 1.1 `geo` footer metadata. Needs pyarrow ≥ 18 (`add_key_value_metadata`);
     the image pins 18.1. Absent it, the file is still valid — every reader falls back to the
     geometry-column-name heuristic + a WKB scan when the footer is missing.
 
     `covering_col` (a struct column name with xmin/ymin/xmax/ymax fields) writes the GeoParquet 1.1
-    `covering` key so viewport queries and the spatial prep can filter/prune on plain numerics."""
+    `covering` key so viewport queries and the spatial prep can filter/prune on plain numerics.
+
+    `crs_projjson` (a PROJJSON dict/str): the geometry's real CRS when it's NOT lon/lat WGS84. Omitted
+    → per the GeoParquet spec the reader assumes OGC:CRS84 (4326). Written into the geometry column so
+    the native-CRS read/download paths (duckdb_engine `_crs_to_epsg`) recover the true CRS."""
     col = {"encoding": "WKB", "geometry_types": sorted(geom_types), "bbox": bbox}
     if covering_col:
         col["covering"] = {"bbox": {k: [covering_col, k] for k in _BBOX_FIELDS}}
+    if crs_projjson is not None:
+        col["crs"] = json.loads(crs_projjson) if isinstance(crs_projjson, str) else crs_projjson
     geo = {"version": "1.1.0", "primary_column": "geometry", "columns": {"geometry": col}}
     if hasattr(writer, "add_key_value_metadata"):
         writer.add_key_value_metadata({"geo": json.dumps(geo)})
@@ -293,7 +299,7 @@ def _ingest_as_geoparquet(db_path: str, job_id: str, layer_id: int, src_path: st
                   status="processing",
                   storage_backend="geoparquet", s3_key=s3_key,
                   geometry_type=res["geom_type"], geometry_column="geometry",
-                  crs="EPSG:4326", feature_count=res["count"],
+                  crs=res.get("crs", "EPSG:4326"), feature_count=res["count"],
                   bbox=json.dumps(res["bbox"]) if res["bbox"] else None,
                   columns=json.dumps(res["columns"]), tile_status="none",
                   updated_at=datetime.now(timezone.utc).isoformat())
@@ -321,8 +327,14 @@ def _convert_to_geoparquet(src_path: str, out_path: str, batch_size: int = 20_00
         crs_wkt = src.crs_wkt
         srid = _srid_of(crs_wkt)
 
+        # NATIVE-CRS STORAGE: a resolvable non-4326 EPSG is written AS-IS (no reprojection) with its CRS
+        # in the `geo` footer; the read/prune paths reproject on the fly. Only an UNRESOLVABLE EPSG
+        # (a WKT with no EPSG code) falls back to reprojecting to 4326 (nothing can round-trip it).
         reproject = None
-        if crs_wkt and srid != 4326:
+        store_epsg = 4326
+        if srid and srid != 4326:
+            store_epsg = srid  # native — do not reproject
+        elif srid is None and crs_wkt:
             from pyproj import CRS, Transformer
             _tr = Transformer.from_crs(CRS.from_wkt(crs_wkt), CRS.from_epsg(4326), always_xy=True)
 
@@ -394,15 +406,27 @@ def _convert_to_geoparquet(src_path: str, out_path: str, batch_size: int = 20_00
             _flush()
             if count == 0:
                 raise ValueError("No features with geometry found in the file.")
-            # CRS is omitted from the footer → OGC:CRS84 (lon/lat), which is what we wrote.
-            _write_geo_footer(writer, geom_types, bbox, covering_col=cov_name)
+            # Native storage → write the real CRS into the footer (else omit → reader assumes 4326).
+            crs_projjson = None
+            if store_epsg != 4326:
+                from pyproj import CRS as _CRS
+                crs_projjson = _CRS.from_epsg(store_epsg).to_json()
+            _write_geo_footer(writer, geom_types, bbox, covering_col=cov_name, crs_projjson=crs_projjson)
             logger.info("_convert_to_geoparquet: DONE %d features in %.0fs",
                         count, time.monotonic() - t0)
         finally:
             writer.close()
 
-    return {"count": count, "bbox": bbox if bbox[0] != float("inf") else None,
-            "geom_type": _kind_from_types(geom_types),
+    # `bbox` is accumulated in the STORED CRS; the catalog convention is EPSG:4326 → transform the box
+    # corners (cheap). The downstream spatial prep re-inspects and confirms a 4326 bbox regardless.
+    out_bbox = bbox if bbox[0] != float("inf") else None
+    if out_bbox and store_epsg != 4326:
+        from pyproj import Transformer as _Tr
+        _t = _Tr.from_crs(store_epsg, 4326, always_xy=True)
+        xs, ys = _t.transform([out_bbox[0], out_bbox[2]], [out_bbox[1], out_bbox[3]])
+        out_bbox = [min(xs), min(ys), max(xs), max(ys)]
+    return {"count": count, "bbox": out_bbox,
+            "geom_type": _kind_from_types(geom_types), "crs": f"EPSG:{store_epsg}",
             "columns": [{"name": c, "type": str(col_schema[c])} for c in cols]}
 
 
@@ -433,12 +457,14 @@ def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir:
             db_cols.append(name)
         srid = _srid_of(crs_wkt)
 
-        # Decide where reprojection happens. Known EPSG → reproject set-based in PostGIS (fastest).
-        # Unknown EPSG but a WKT is present → transform client-side (rare). No CRS → assume 4326.
+        # NATIVE-CRS STORAGE: a resolvable EPSG is stored AS-IS in that SRID (no reprojection) — Martin
+        # reprojects native→3857 per-tile for display, and downloads can stay lossless. Only when the CRS
+        # has NO resolvable EPSG (PostGIS/Martin can't tile an unknown SRID) do we fall back to 4326:
+        # transform client-side if a WKT is present, else assume the data is already 4326.
         client_tr = None
-        db_srid = 4326
+        store_srid = 4326  # the SRID the geometry is STORED in
         if srid and srid != 4326:
-            db_srid = srid
+            store_srid = srid
         elif srid is None and crs_wkt:
             from pyproj import CRS, Transformer
             from shapely.ops import transform as shp_transform
@@ -474,8 +500,9 @@ def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir:
             os.unlink(tmp_csv)
         raise ValueError("No features with geometry found in the file.")
 
-    geom_sql = (f"ST_Transform(ST_SetSRID(geom, {db_srid}), 4326)" if db_srid != 4326
-                else "ST_SetSRID(geom, 4326)")
+    # Store geometry in its native SRID — NO ST_Transform (client_tr already handled the unknown-EPSG
+    # fallback to 4326, so `store_srid` is always the CRS the WKB coordinates are already in).
+    geom_sql = f"ST_SetSRID(geom, {store_srid})"
     stg = f"{table}_stg"
     coldefs = ", ".join(f"{_q(db)} {_pg_type(col_schema[src])}" for src, db in zip(cols, db_cols))
     copycols = ", ".join(_q(db) for db in db_cols)
@@ -491,13 +518,16 @@ def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir:
             cur.copy_expert(
                 f"COPY {_q(schema)}.{_q(stg)} ({copycols}, geom) FROM STDIN WITH (FORMAT csv)", fh)
         cur.execute(f"CREATE TABLE {_q(schema)}.{_q(table)} "
-                    f"(id serial primary key, {coldefs}, geom geometry(Geometry,4326))")
+                    f"(id serial primary key, {coldefs}, geom geometry(Geometry,{store_srid}))")
         cur.execute(f"INSERT INTO {_q(schema)}.{_q(table)} ({copycols}, geom) "
                     f"SELECT {copycols}, {geom_sql} FROM {_q(schema)}.{_q(stg)}")
         cur.execute(f"DROP TABLE {_q(schema)}.{_q(stg)}")
         cur.execute(f"CREATE INDEX {_q(table + '_geom_idx')} ON {_q(schema)}.{_q(table)} USING GIST (geom)")
-        cur.execute(f"SELECT ST_XMin(e), ST_YMin(e), ST_XMax(e), ST_YMax(e) "
-                    f"FROM (SELECT ST_Extent(geom) e FROM {_q(schema)}.{_q(table)}) s")
+        # bbox is stored in EPSG:4326 app-wide (map fit / viewport), even when the geometry is native —
+        # transform the extent BOX only (cheap; a no-op when already 4326). Mirrors discover._table_bbox_4326.
+        cur.execute(f"SELECT ST_XMin(e), ST_YMin(e), ST_XMax(e), ST_YMax(e) FROM "
+                    f"(SELECT ST_Transform(ST_SetSRID(ST_Extent(geom)::geometry, {store_srid}), 4326) e "
+                    f"FROM {_q(schema)}.{_q(table)}) s")
         b = cur.fetchone()
         bbox = [b[0], b[1], b[2], b[3]] if b and b[0] is not None else None
         conn.commit()
@@ -511,5 +541,6 @@ def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir:
 
     return {
         "bbox": bbox, "count": count, "geom_type": geom_type,
+        "crs": f"EPSG:{store_srid}",  # native SRID (or 4326 fallback) — recorded by the caller
         "columns": [{"name": db, "type": str(col_schema[src])} for src, db in zip(cols, db_cols)],
     }

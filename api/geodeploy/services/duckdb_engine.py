@@ -131,6 +131,14 @@ def _crs_to_epsg(crs) -> str | None:
             return "EPSG:4326"
         if auth == "EPSG" and code is not None:
             return f"EPSG:{code}"
+    # Fallback: let pyproj resolve any other PROJJSON/WKT/string to an EPSG code.
+    try:
+        from pyproj import CRS
+        code = CRS(crs).to_epsg()
+        if code:
+            return f"EPSG:{code}"
+    except Exception:
+        pass
     return None
 
 
@@ -321,8 +329,12 @@ def _jsonable(v):
 
 
 def query_features_geojson(s3_key: str, bbox=None, limit: int = 50_000, creds: dict | None = None,
-                           bucket: str | None = None) -> dict:
+                           bucket: str | None = None, keep_native: bool = False) -> dict:
     """Viewport query for a GeoParquet layer → a GeoJSON FeatureCollection (geometries in EPSG:4326).
+
+    `keep_native=True` (download path) skips the output reprojection so geometries come back in the
+    file's OWN CRS — lossless native download. The bbox FILTER is still reprojected into the file CRS,
+    so pruning is unaffected. Default (display) reprojects output to 4326 as before.
 
     `bbox` is `[minx, miny, maxx, maxy]` in EPSG:4326 (the current map view) or None for "first N".
     Spatial filtering uses the GeoParquet **covering bbox** column when present — plain numeric
@@ -392,7 +404,7 @@ def query_features_geojson(s3_key: str, bbox=None, limit: int = 50_000, creds: d
         import numpy as np
         from shapely import from_wkb, to_geojson, transform as _shp_transform
         reproject = None
-        if src_epsg != "EPSG:4326":
+        if src_epsg != "EPSG:4326" and not keep_native:  # keep_native → lossless native download
             from pyproj import Transformer
             _tr = Transformer.from_crs(src_epsg, "EPSG:4326", always_xy=True)
             def _reproject_coords(coords):

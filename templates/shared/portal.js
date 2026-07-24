@@ -2816,7 +2816,16 @@
         '<div class="gd-download-body">' +
           (items.length ? items.map(rowHtml).join('') : '<p class="gd-download-empty">No layers intersect the selected area.</p>') +
         '</div>' +
-        (items.length ? '<div class="gd-download-foot"><span class="gd-dl-status"></span>' +
+        (items.length ?
+          '<div class="gd-download-crs">' +
+            '<label>Coordinate system</label>' +
+            '<select class="gd-dl-crs">' +
+              '<option value="4326">EPSG:4326 (lon/lat, uniform)</option>' +
+              '<option value="native">Native — each layer\'s own CRS</option>' +
+            '</select>' +
+            '<span class="gd-dl-crs-note">GeoJSON is always EPSG:4326; GeoPackage/CSV carry the chosen CRS.</span>' +
+          '</div>' +
+          '<div class="gd-download-foot"><span class="gd-dl-status"></span>' +
           '<button class="gd-dl-go">Download</button></div>' : '') +
       '</div>';
     document.body.appendChild(dlg);
@@ -2836,12 +2845,14 @@
       });
       if (!picks.length) return;
       const status = dlg.querySelector('.gd-dl-status');
+      const crsSel = dlg.querySelector('.gd-dl-crs');
+      const targetCrs = crsSel ? crsSel.value : '4326';
       const apiBase = '/api/portals/' + encodeURIComponent(slug);
       go.disabled = true; status.textContent = 'Queued…';
       try {
         const resp = await fetch(apiBase + '/export-bundle', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ bbox: bbox.join(','), items: picks }),
+          body: JSON.stringify({ bbox: bbox.join(','), items: picks, target_crs: targetCrs }),
         });
         if (!resp.ok) throw new Error('start failed');
         const { job_id } = await resp.json();
