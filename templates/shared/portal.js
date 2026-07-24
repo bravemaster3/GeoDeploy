@@ -54,8 +54,8 @@
   // already bakes a resolved manifest into style.geodeploy.layout, so this is normally a pass-through;
   // resolveLayout stays defensive (older bundles / partial configs). Absent → webmap = pre-V-11 shell.
   const LAYOUT_ARCHETYPES = {
-    webmap:   { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { side: 'right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
-    storymap: { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { side: 'right' }, header: { style: 'minimal' } }, panels: { layerCatalog: false, legend: true, basemap: true, about: false, story: true } },
+    webmap:   { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
+    storymap: { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: false, legend: true, basemap: true, about: false, story: true } },
   };
   const LAYOUT_ALIASES = { 'webmap+catalog': 'webmap', catalog: 'webmap' };  // dropped Phase-1 archetypes → webmap
   function resolveLayout(config) {
@@ -75,20 +75,49 @@
   }
   function applyLayoutAttrs(L) {
     const b = document.body;
+    const pos = L.regions.controls.position || 'top-right';
+    const cside = pos.indexOf('left') >= 0 ? 'left' : 'right';
     b.dataset.archetype = L.archetype;
     b.dataset.layerlistSide = L.regions.layerList.side;   // → data-layerlist-side (L/R)
     b.dataset.layerlist = L.regions.layerList.mode;       // → data-layerlist (docked/floating)
-    b.dataset.controlsSide = L.regions.controls.side;     // → data-controls-side (L/R)
+    b.dataset.controlsSide = cside;                       // → data-controls-side (L/R, for flyout dir)
+    b.dataset.controlsPos = pos;                          // → data-controls-pos (the full corner)
     b.dataset.header = L.regions.header.style;            // → data-header
-    // Collision: layer list + controls share a side → the list stacks BESIDE the control column.
-    b.dataset.collide = (L.regions.layerList.side === L.regions.controls.side) ? '1' : '0';
+    // Collision only when the control cluster is at the TOP corner on the list's side (the on-map
+    // layer-list toggle lives there); a bottom cluster never collides with the top toggle.
+    b.dataset.collide = (pos === 'top-' + L.regions.layerList.side) ? '1' : '0';
   }
   const LAYOUT = resolveLayout(STYLE.geodeploy && STYLE.geodeploy.layout);
   applyLayoutAttrs(LAYOUT);
   // Corner for the map-control cluster (basemap/globe/zoom/tools/home/zoom-all/draw-zoom).
-  const CTRL_POS = LAYOUT.regions.controls.side === 'left' ? 'top-left' : 'top-right';
+  const CTRL_CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+  const CTRL_POS = CTRL_CORNERS.indexOf(LAYOUT.regions.controls.position) >= 0 ? LAYOUT.regions.controls.position : 'top-right';
   // True when this bundle is rendered inside the editor's preview iframe (?edit=1).
   const EDIT_MODE = new URLSearchParams(location.search).get('edit') === '1';
+
+  // ── Header brand logo (R3/branding) ─────────────────────────────────────
+  const LOGO_PRESETS = {
+    layers:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>',
+    globe:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></svg>',
+    pin:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-6.5 7-12a7 7 0 1 0-14 0c0 5.5 7 12 7 12z"/><circle cx="12" cy="9" r="2.5"/></svg>',
+    compass: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>',
+  };
+  function buildHeaderLogo() {
+    const header = document.getElementById('header');
+    const title = document.getElementById('portal-title');
+    if (!header || !title || document.getElementById('gd-header-logo')) return;
+    const logo = (STYLE.geodeploy && STYLE.geodeploy.theme && STYLE.geodeploy.theme.logo) || { kind: 'preset', id: 'layers' };
+    if (logo.kind === 'none') return;
+    let el;
+    if (logo.kind === 'custom' && logo.url) {
+      el = document.createElement('img'); el.src = logo.url; el.alt = '';
+    } else {
+      el = document.createElement('span'); el.innerHTML = LOGO_PRESETS[logo.id] || LOGO_PRESETS.layers;
+    }
+    el.id = 'gd-header-logo';
+    header.insertBefore(el, title);
+  }
+  buildHeaderLogo();
 
   // ── Theme (light/dark) ──────────────────────────────────
   // Dark = html[data-theme=dark] variable overrides in portal.css (template theme.css restyles
@@ -2499,15 +2528,9 @@
     }
     updateCtrlOffset();
   }
-  // C2: when a FLOATING list shares its side with the controls, push the control cluster below it.
-  function updateCtrlOffset() {
-    const sb = document.getElementById('sidebar');
-    const collide = document.body.dataset.collide === '1';
-    const floating = document.body.dataset.layerlist === 'floating';
-    let off = 0;
-    if (collide && floating && sb && !sb.classList.contains('collapsed')) off = sb.offsetHeight + 24;
-    document.body.style.setProperty('--gd-ctrl-offset', off + 'px');
-  }
+  // C2 is now handled entirely in CSS (fixed control offset below the toggle + inward float), so this
+  // is a no-op kept only so its existing call sites stay valid.
+  function updateCtrlOffset() {}
 
   // ── R2: editor edit-mode shim (only when iframed as a preview with ?edit=1) ────
   // Same-origin postMessage channel with the editor: reports the live camera (for save / story capture),
@@ -2516,6 +2539,32 @@
   function currentViewObj() {
     const c = map.getCenter();
     return { center: [c.lng, c.lat], zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
+  }
+  // B (incremental preview): apply a colour theme live in the preview — no full iframe reload. Mirrors
+  // portal_generator.build_theme_css + resolve_theme (mode/logo). Only used in edit mode.
+  const LIVE_FONTS = { sans: "system-ui,-apple-system,'Segoe UI',Roboto,sans-serif", serif: "Georgia,'Iowan Old Style','Times New Roman',serif", mono: "'SF Mono',ui-monospace,'Cascadia Code',Menlo,monospace" };
+  function applyThemeLive(theme) {
+    theme = theme || {};
+    if (!localStorage.getItem('gd-portal-theme')) {  // the visitor's own toggle still wins
+      const mode = theme.mode || 'auto';
+      const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      const dark = mode === 'dark' ? true : mode === 'light' ? false : prefersDark;
+      if (dark) document.documentElement.setAttribute('data-theme', 'dark');
+      else document.documentElement.removeAttribute('data-theme');
+    }
+    let css = '';
+    const accent = (typeof theme.accent === 'string') ? theme.accent.trim() : '';
+    if (/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(accent)) {
+      css += ':root{--accent:' + accent + ';--accent-light:color-mix(in srgb,' + accent + ' 22%,transparent);}';
+    }
+    if (LIVE_FONTS[theme.font]) css += 'body{font-family:' + LIVE_FONTS[theme.font] + ';}';
+    let style = document.getElementById('gd-live-theme');
+    if (!style) { style = document.createElement('style'); style.id = 'gd-live-theme'; document.head.appendChild(style); }
+    style.textContent = css;
+    // Logo (rebuild the header brand).
+    if (STYLE.geodeploy) { STYLE.geodeploy.theme = STYLE.geodeploy.theme || {}; STYLE.geodeploy.theme.logo = theme.logo; }
+    const old = document.getElementById('gd-header-logo'); if (old) old.remove();
+    try { buildHeaderLogo(); } catch (e) {}
   }
   function setupEditMode() {
     if (new URLSearchParams(location.search).get('edit') !== '1') return;
@@ -2548,6 +2597,7 @@
       const d = e.data;
       if (d.type === 'place') showPlace(d.element);
       else if (d.type === 'cancelPlace') clearPlace();
+      else if (d.type === 'theme') applyThemeLive(d.theme);   // B: live theme, no reload
       else if (d.type === 'zoomall') zoomToAllLayers();
       else if (d.type === 'home') goHome();
       else if (d.type === 'fitbbox' && Array.isArray(d.bbox) && d.bbox.length === 4) {
@@ -2569,13 +2619,59 @@
     onAdd(m) {
       this._map = m;
       const c = document.createElement('div');
-      c.className = 'maplibregl-ctrl maplibregl-ctrl-group';
-      c.innerHTML = '<button type="button" class="gd-tools-btn" title="Select area & download" aria-label="Select area and download">' + toolsIcon() + '</button>';
-      c.querySelector('.gd-tools-btn').addEventListener('click', ev => { ev.stopPropagation(); startAreaSelect(); });
+      c.className = 'maplibregl-ctrl maplibregl-ctrl-group gd-tools-ctrl';
+      c.innerHTML =
+        '<button type="button" class="gd-tools-btn" title="Download data by area" aria-label="Download data by area">' + toolsIcon() + '</button>' +
+        '<div class="gd-tools-menu">' +
+          '<div class="gd-tools-title">Download by area</div>' +
+          '<button type="button" class="gd-tools-opt" data-act="draw">▭&nbsp; Draw a box on the map</button>' +
+          '<button type="button" class="gd-tools-opt" data-act="coords">⌗&nbsp; Enter coordinates…</button>' +
+          '<div class="gd-tools-coords" style="display:none">' +
+            '<input type="text" class="gd-coords-input" placeholder="minLng, minLat, maxLng, maxLat" aria-label="Bounding box coordinates">' +
+            '<button type="button" class="gd-coords-go">Download this area</button>' +
+          '</div>' +
+        '</div>';
+      const btn = c.querySelector('.gd-tools-btn');
+      const menu = c.querySelector('.gd-tools-menu');
+      const coordsBox = c.querySelector('.gd-tools-coords');
+      btn.addEventListener('click', ev => { ev.stopPropagation(); c.classList.toggle('open'); });
+      menu.addEventListener('click', ev => ev.stopPropagation());
+      document.addEventListener('click', () => c.classList.remove('open'));
+      c.querySelector('[data-act="draw"]').addEventListener('click', () => { c.classList.remove('open'); startAreaSelect(); });
+      c.querySelector('[data-act="coords"]').addEventListener('click', () => {
+        coordsBox.style.display = coordsBox.style.display === 'none' ? 'block' : 'none';
+      });
+      c.querySelector('.gd-coords-go').addEventListener('click', () => {
+        const raw = c.querySelector('.gd-coords-input').value.trim();
+        const nums = raw.split(/[,\s]+/).map(Number).filter(n => !isNaN(n));
+        if (nums.length !== 4) { showHint('Enter four numbers: minLng, minLat, maxLng, maxLat'); return; }
+        const bbox = [Math.min(nums[0], nums[2]), Math.min(nums[1], nums[3]), Math.max(nums[0], nums[2]), Math.max(nums[1], nums[3])];
+        c.classList.remove('open');
+        openDownloadForBbox(bbox);
+      });
       this._c = c;
       return c;
     }
     onRemove() { if (this._c) this._c.remove(); }
+  }
+
+  // C7: open the download dialog for a TYPED bbox (fit the map to it first so the in-viewport vector
+  // hit-test sees the features, then draw the box + open the dialog on moveend).
+  function openDownloadForBbox(bbox) {
+    if (!Array.isArray(bbox) || bbox.length !== 4) return;
+    function go() {
+      try {
+        const pa = map.project([bbox[0], bbox[1]]), pb = map.project([bbox[2], bbox[3]]);
+        const pixBox = [[Math.min(pa.x, pb.x), Math.min(pa.y, pb.y)], [Math.max(pa.x, pb.x), Math.max(pa.y, pb.y)]];
+        ensureDrawLayers();
+        map.getSource('gd-draw').setData(rectFC({ lng: bbox[0], lat: bbox[1] }, { lng: bbox[2], lat: bbox[3] }));
+        openDownloadDialog(bbox, pixBox);
+      } catch (e) {}
+    }
+    try {
+      map.once('moveend', go);
+      map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 60, duration: 500 });
+    } catch (e) { go(); }
   }
 
   function emptyFC() { return { type: 'FeatureCollection', features: [] }; }

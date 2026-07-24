@@ -107,10 +107,23 @@
     body[data-layerlist="floating"][data-layerlist-side="right"] #sidebar { left: auto; right: 12px; }
     /* Floating list CAN collapse (was impossible): hide it entirely — the on-map toggle restores it. */
     body[data-layerlist="floating"] #sidebar.collapsed { display: none; }
-    /* Collision (C2): list + controls share a side → the LIST stays on top and the control cluster is
-       pushed DOWN below it (offset set by portal.js updateCtrlOffset from the list's live height). */
-    body[data-collide="1"] .maplibregl-ctrl-top-left,
-    body[data-collide="1"] .maplibregl-ctrl-top-right { margin-top: var(--gd-ctrl-offset, 0px); transition: margin-top .15s ease; }
+    /* Collision (C2): the layer-list + controls share a side. The on-map list toggle sits at the very
+       corner, so the control cluster is pushed DOWN below it (fixed), and an OPEN floating list is shifted
+       INWARD past the controls — so the list never covers the controls, and the toggle never covers them
+       either. Only webmap has the list + toggle. */
+    body[data-collide="1"][data-archetype="webmap"] .maplibregl-ctrl-top-left,
+    body[data-collide="1"][data-archetype="webmap"] .maplibregl-ctrl-top-right { margin-top: 44px; }
+    body[data-collide="1"][data-layerlist="floating"][data-layerlist-side="left"] #sidebar { left: 52px; }
+    body[data-collide="1"][data-layerlist="floating"][data-layerlist-side="right"] #sidebar { right: 52px; }
+    /* The header hamburger is replaced by the on-map layer-list toggle — hide it (user request). */
+    #sidebar-toggle { display: none; }
+    /* Header brand logo (portal.js buildHeaderLogo). */
+    #gd-header-logo {
+      flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+      color: var(--accent); margin-right: 4px;
+    }
+    #gd-header-logo svg { width: 24px; height: 24px; }
+    img#gd-header-logo { width: auto; max-height: 30px; max-width: 150px; object-fit: contain; }
 
     /* On-map layer-list toggle — pinned to the layer-list side, always ABOVE the panel so a docked OR
        floating list can be hidden/shown from the map, and never hidden by the panel itself. */
@@ -515,6 +528,25 @@
     .gd-basemap-ctrl.open .gd-basemap-menu { display: block; }
     /* C1: when the control cluster is on the LEFT, open the flyout toward the map (to the right). */
     body[data-controls-side="left"] .gd-basemap-menu { right: auto; left: 40px; }
+
+    /* C7: download tool flyout (draw a box OR type coordinates). Mirrors the basemap flyout. */
+    .gd-tools-ctrl { position: relative; }
+    .gd-tools-menu {
+      display: none; position: absolute; top: 0; right: 40px; width: 240px;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+      box-shadow: var(--shadow-lg); padding: 8px;
+    }
+    .gd-tools-ctrl.open .gd-tools-menu { display: block; }
+    body[data-controls-side="left"] .gd-tools-menu { right: auto; left: 40px; }
+    .gd-tools-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); padding: 2px 6px 6px; }
+    .gd-tools-opt {
+      display: block; width: 100%; text-align: left; background: none; border: none; cursor: pointer;
+      color: var(--text); font: inherit; font-size: 13px; padding: 8px 8px; border-radius: 7px;
+    }
+    .gd-tools-opt:hover { background: var(--surface); }
+    .gd-tools-coords { padding: 6px; }
+    .gd-coords-input { width: 100%; font-size: 12px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); margin-bottom: 6px; }
+    .gd-coords-go { width: 100%; font-size: 12px; font-weight: 600; padding: 6px; border: none; border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; }
     .gd-basemap-title {
       font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
       color: var(--text-muted); padding: 3px 6px 8px;

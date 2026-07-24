@@ -271,15 +271,30 @@ def _layer_info(layer, kind: str) -> dict:
     """Documentation entry for the portal About panel: the layer's catalog metadata plus, when
     the admin shared the layer (`is_public`), its public data-access links (root-relative;
     portal.js absolutifies)."""
+    # A PRIVATE layer can still appear on a public portal's map, but its catalog/technical metadata must
+    # NOT be exposed on the public About page — list it as "Private" and bake nothing sensitive.
+    if getattr(layer, "visibility", "organization") == "private":
+        return {"name": layer.name, "kind": kind, "private": True}
     info = {
         "name": layer.name,
         "kind": kind,
+        "private": False,
         "abstract": getattr(layer, "abstract", None),
         "license": getattr(layer, "license", None),
         "attribution": getattr(layer, "attribution", None),
         "keywords": getattr(layer, "keywords", None),
         "is_public": bool(getattr(layer, "is_public", False)),
+        # A3: technical metadata auto-captured at ingest — shown for organization/public layers.
+        "crs": getattr(layer, "crs", None),
+        "geometry_type": getattr(layer, "geometry_type", None),
+        "feature_count": getattr(layer, "feature_count", None),
     }
+    _bbox = getattr(layer, "bbox", None)
+    if _bbox:
+        try:
+            info["bbox"] = json.loads(_bbox) if isinstance(_bbox, str) else _bbox
+        except Exception:
+            pass
     if info["is_public"]:
         if kind == "raster":
             info["links"] = {
@@ -309,7 +324,8 @@ _LAYOUT_ARCHETYPES = {
             "layerList": {"side": "left", "mode": "docked", "collapsed": False,
                           "width": None, "x": None, "y": None},
             # controls: the map-control cluster (basemap · globe · zoom · tools · home · zoom-all · draw-zoom).
-            "controls": {"side": "right"},
+            # position: any of the 4 corners (top-left | top-right | bottom-left | bottom-right).
+            "controls": {"position": "top-right"},
             "header": {"style": "bar"},
         },
         "panels": {"layerCatalog": True, "legend": True, "basemap": True, "about": True, "story": False},
@@ -383,9 +399,16 @@ def build_theme_css(theme: dict | None) -> str:
 
 def resolve_theme(theme: dict | None) -> dict:
     """The theme metadata baked into style.geodeploy.theme (portal.js reads .mode for the initial
-    light/dark state). Colours/fonts are applied via CSS (build_theme_css), not here."""
-    mode = (theme or {}).get("mode")
-    return {"mode": mode if mode in ("light", "dark", "auto") else "auto"}
+    light/dark state and .logo for the header brand). Colours/fonts are applied via CSS
+    (build_theme_css), not here."""
+    t = theme or {}
+    mode = t.get("mode")
+    out = {"mode": mode if mode in ("light", "dark", "auto") else "auto"}
+    # Header logo/brand: {kind:'preset'|'custom'|'none', id?, url?}. Custom url is a same-origin asset.
+    logo = t.get("logo")
+    if isinstance(logo, dict) and logo.get("kind") in ("preset", "custom", "none"):
+        out["logo"] = {"kind": logo["kind"], "id": logo.get("id"), "url": logo.get("url")}
+    return out
 
 
 def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str, layer_configs: list[dict],
@@ -603,12 +626,18 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
     'full page that links to the map', styled after GeoLibre's dark design tokens. Static HTML,
     rendered server-side at publish (no JS needed)."""
     has_layer_docs = any(i.get("abstract") or i.get("license") or i.get("attribution") or i.get("links")
+                         or i.get("crs") or i.get("bbox") or i.get("geometry_type")
                          for i in layers_info)
     if not description and not has_layer_docs:
         return None
 
     cards = []
     for i in layers_info:
+        # Private layer → just the name + a "Private" tag; none of its metadata is exposed publicly.
+        if i.get("private"):
+            cards.append('<div class="layer"><div class="layer-name">' + _esc(i.get("name"))
+                         + '<span class="badge badge-private">private</span></div></div>')
+            continue
         parts = ['<div class="layer"><div class="layer-name">' + _esc(i.get("name"))
                  + ('<span class="badge">public data</span>' if i.get("is_public") else "") + "</div>"]
         if i.get("abstract"):
@@ -620,6 +649,21 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
             meta.append(_esc(i["attribution"]))
         if meta:
             parts.append('<p class="meta">' + " · ".join(meta) + "</p>")
+        # A3: auto-captured technical metadata (geometry · features · CRS · extent).
+        tech = []
+        if i.get("geometry_type"):
+            tech.append("Geometry: " + _esc(str(i["geometry_type"])))
+        if i.get("feature_count") is not None:
+            tech.append(f'{i["feature_count"]:,} features')
+        if i.get("crs"):
+            tech.append("CRS: " + _esc(str(i["crs"])))
+        if isinstance(i.get("bbox"), list) and len(i["bbox"]) == 4:
+            try:
+                tech.append("Extent: " + ", ".join(f"{float(v):.4f}" for v in i["bbox"]))
+            except (TypeError, ValueError):
+                pass
+        if tech:
+            parts.append('<p class="meta tech">' + " · ".join(tech) + "</p>")
         if i.get("links"):
             links = "".join(f'<a class="pill" href="{_esc(url)}" target="_blank" rel="noopener">'
                             f"{_esc(label)} ↗</a>" for label, url in i["links"].items())
@@ -731,8 +775,10 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
     color: var(--badge-fg); background: var(--badge-bg); border: 1px solid var(--badge-border);
     border-radius: 999px; padding: 2.5px 9px; margin-left: 8px; vertical-align: 2px;
   }}
+  .badge-private {{ color: var(--muted); background: transparent; border-color: var(--border); }}
   .abstract {{ font-size: 13.5px; color: var(--abstract-fg); margin-top: 8px; }}
   .meta {{ font-size: 12px; color: var(--muted); margin-top: 8px; }}
+  .tech {{ font-variant-numeric: tabular-nums; margin-top: 4px; opacity: .9; }}
   .links {{ display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }}
   .pill {{
     font-size: 12px; font-weight: 600; text-decoration: none; padding: 5px 13px;

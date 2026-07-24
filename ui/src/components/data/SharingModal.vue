@@ -31,9 +31,11 @@
         </label>
       </div>
 
-      <!-- Catalog metadata — only relevant for a PUBLIC layer (this is what consumers see in /api/stac) -->
-      <div v-if="form.visibility === 'public'" class="space-y-3 pt-1 border-t border-border/60">
-        <p class="text-[11px] text-muted-foreground pt-2">Catalog metadata — shown to anyone who finds this layer.</p>
+      <!-- Metadata — for ALL layers now (shown on portals' About page; and, when public, in /api/stac). -->
+      <div class="space-y-3 pt-1 border-t border-border/60">
+        <p class="text-[11px] text-muted-foreground pt-2">
+          Metadata — shown on the About page of any portal using this layer<span v-if="form.visibility === 'public'"> and in the public catalog</span>.
+        </p>
         <div>
           <label class="text-xs text-muted-foreground block mb-1">Abstract</label>
           <textarea id="gd-share-abstract" name="gd-share-abstract" v-model="form.abstract" rows="3" class="input w-full text-sm"

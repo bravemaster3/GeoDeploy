@@ -144,6 +144,29 @@
                 :class="theme.font === f[0] ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ f[1] }}</button>
             </div>
           </div>
+
+          <!-- Header logo / brand -->
+          <label class="text-xs text-muted-foreground block mt-3 mb-1">Header logo</label>
+          <div class="flex items-center gap-1.5 flex-wrap">
+            <button v-for="id in LOGO_PRESET_IDS" :key="id" @click="setLogoPreset(id)" :title="id"
+              class="w-8 h-8 rounded border flex items-center justify-center"
+              :class="currentLogo().kind === 'preset' && currentLogo().id === id ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">
+              <svg v-if="id==='layers'" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+              <svg v-else-if="id==='globe'" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></svg>
+              <svg v-else-if="id==='pin'" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-6.5 7-12a7 7 0 1 0-14 0c0 5.5 7 12 7 12z"/><circle cx="12" cy="9" r="2.5"/></svg>
+              <svg v-else class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
+            </button>
+            <label class="w-8 h-8 rounded border border-dashed border-muted-foreground/50 flex items-center justify-center cursor-pointer text-muted-foreground"
+              :class="currentLogo().kind === 'custom' ? 'border-primary text-primary' : ''" title="Upload custom">
+              <img v-if="currentLogo().kind === 'custom' && currentLogo().url" :src="currentLogo().url" alt="" class="max-w-full max-h-full object-contain rounded" />
+              <span v-else class="text-sm">↑</span>
+              <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" class="hidden" @change="uploadLogo" />
+            </label>
+            <button @click="setLogoNone" title="No logo"
+              class="w-8 h-8 rounded border text-xs"
+              :class="currentLogo().kind === 'none' ? 'border-primary text-primary bg-primary/10' : 'border-border text-muted-foreground'">∅</button>
+          </div>
+          <p class="text-[10px] text-muted-foreground/60 mt-1">Recommended: a small square/wide mark, ~30px tall.</p>
         </section>
 
         <!-- Experience / Layout section (V-11) -->
@@ -195,11 +218,16 @@
               </div>
             </div>
             <div class="flex items-center justify-between">
-              <span class="text-muted-foreground">Controls side</span>
-              <div class="flex gap-1">
-                <button v-for="s in ['left','right']" :key="s" @click="setRegionOpt('controls', { side: s })"
-                  class="px-2 py-0.5 rounded border capitalize"
-                  :class="resolvedLayout.regions.controls.side === s ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ s }}</button>
+              <span class="text-muted-foreground">Controls corner</span>
+              <div class="grid grid-cols-2 gap-1" style="width:52px">
+                <button v-for="p in ['top-left','top-right','bottom-left','bottom-right']" :key="p"
+                  @click="setRegionOpt('controls', { position: p })" :title="p"
+                  class="relative w-6 h-6 rounded border"
+                  :class="resolvedLayout.regions.controls.position === p ? 'border-primary bg-primary/10' : 'border-border'">
+                  <span class="absolute w-1.5 h-1.5 rounded-sm"
+                    :class="[resolvedLayout.regions.controls.position === p ? 'bg-primary' : 'bg-muted-foreground/50',
+                             p==='top-left'?'top-1 left-1':p==='top-right'?'top-1 right-1':p==='bottom-left'?'bottom-1 left-1':'bottom-1 right-1']"></span>
+                </button>
               </div>
             </div>
             <label v-if="!isStory" class="flex items-center justify-between cursor-pointer">
@@ -460,6 +488,20 @@ const story = ref({ sections: [] })                // {sections:[{id,title,body,
 const theme = ref({ mode: 'auto', accent: '', font: 'sans' })  // R3: colour theme baked over the template
 const ACCENT_PRESETS = ['#2563eb', '#0ea5e9', '#059669', '#b5502f', '#7c3aed', '#db2777', '#d97706', '#334155']
 function setTheme(patch) { theme.value = Object.assign({}, theme.value, patch) }
+// Header logo/branding (R3)
+const LOGO_PRESET_IDS = ['layers', 'globe', 'pin', 'compass']
+function currentLogo() { return theme.value.logo || { kind: 'preset', id: 'layers' } }
+function setLogoPreset(id) { setTheme({ logo: { kind: 'preset', id } }) }
+function setLogoNone() { setTheme({ logo: { kind: 'none' } }) }
+async function uploadLogo(e) {
+  const file = e.target.files && e.target.files[0]
+  if (!file || !portal.value) { if (e.target) e.target.value = ''; return }
+  try {
+    const { data } = await uploadPortalAsset(portal.value.id, file)
+    if (data && data.url) setTheme({ logo: { kind: 'custom', url: data.url } })
+  } catch (err) { /* ignore */ }
+  e.target.value = ''
+}
 
 const ARCHETYPES = [
   { id: 'webmap',   name: 'Web map',   desc: 'Map-first with a layer list.' },
@@ -467,8 +509,8 @@ const ARCHETYPES = [
 ]
 // PARITY mirror of portal_generator.resolve_layout / portal.js resolveLayout — change all three together.
 const _ARCH_DEFAULTS = {
-  webmap:   { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { side: 'right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
-  storymap: { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { side: 'right' }, header: { style: 'minimal' } }, panels: { layerCatalog: false, legend: true, basemap: true, about: false, story: true } },
+  webmap:   { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
+  storymap: { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: false, legend: true, basemap: true, about: false, story: true } },
 }
 const _ARCH_ALIASES = { 'webmap+catalog': 'webmap', catalog: 'webmap' }
 function resolveLayout(config) {
@@ -918,7 +960,13 @@ async function refreshPreview() {
 }
 function postToFrame(msg) {
   const w = previewFrame.value && previewFrame.value.contentWindow
-  if (w) { try { w.postMessage(Object.assign({ gd: 1 }, msg), location.origin) } catch (e) { /* ignore */ } }
+  if (!w) return
+  // Strip Vue reactivity: a reactive Proxy array (e.g. a layer's bbox) fails structured-clone, so the
+  // postMessage throws and the action silently no-ops (that was the zoom-to-layer bug). JSON round-trip
+  // yields plain data. zoom-to-group worked only because it built a fresh plain array.
+  let payload
+  try { payload = JSON.parse(JSON.stringify(Object.assign({ gd: 1 }, msg))) } catch (e) { return }
+  try { w.postMessage(payload, location.origin) } catch (e) { /* ignore */ }
 }
 function placeOnMap(element) {
   if (placing.value === element) { cancelPlace(); return }
@@ -938,9 +986,19 @@ function onFrameMessage(e) {
 onMounted(() => window.addEventListener('message', onFrameMessage))
 onBeforeUnmount(() => { window.removeEventListener('message', onFrameMessage); clearTimeout(previewTimer) })
 
-// Rebuild the iframe preview whenever config that shapes the published bundle changes.
-watch([layoutConfig, story, theme, layerConfigs, layerTree, basemap, selectedTemplate, description, ready],
+// Rebuild the iframe preview whenever config that shapes the published bundle changes. THEME is NOT
+// here — it applies LIVE via postMessage (below), so colour/mode/font tweaks don't reload the iframe.
+watch([layoutConfig, story, layerConfigs, layerTree, basemap, selectedTemplate, description, ready],
   () => { if (ready.value) schedulePreview() }, { deep: true })
+
+// B: theme changes apply live in the preview (no reload). The theme is still baked on the next full
+// rebuild + on save/publish, so live and published stay consistent.
+let themeTimer = null
+watch(theme, () => {
+  if (!ready.value) return
+  clearTimeout(themeTimer)
+  themeTimer = setTimeout(() => postToFrame({ type: 'theme', theme: theme.value }), 100)
+}, { deep: true })
 
 // ── deck.gl overlay for GeoParquet layers ───────────────────────────────────
 // GeoParquet layers are too big for a MapLibre geojson source, so they render in a deck.gl
