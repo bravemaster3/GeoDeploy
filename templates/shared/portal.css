@@ -107,15 +107,12 @@
     body[data-layerlist="floating"][data-layerlist-side="right"] #sidebar { left: auto; right: 12px; }
     /* Floating list CAN collapse (was impossible): hide it entirely — the on-map toggle restores it. */
     body[data-layerlist="floating"] #sidebar.collapsed { display: none; }
-    /* Collision (C2): the layer-list + controls share a side. The on-map list toggle sits at the very
-       corner, so the control cluster is pushed DOWN below it (fixed), and an OPEN floating list is shifted
-       INWARD past the controls — so the list never covers the controls, and the toggle never covers them
-       either. Only webmap has the list + toggle. */
-    body[data-collide="1"][data-archetype="webmap"] .maplibregl-ctrl-top-left,
-    body[data-collide="1"][data-archetype="webmap"] .maplibregl-ctrl-top-right { margin-top: 34px; }
-    /* Floating list leaves the control column free whenever controls are on its side (top OR bottom). */
-    body[data-sameside="1"][data-layerlist="floating"][data-layerlist-side="left"] #sidebar { left: 51px; }
-    body[data-sameside="1"][data-layerlist="floating"][data-layerlist-side="right"] #sidebar { right: 51px; }
+    /* The on-map layer-list toggle is a REAL MapLibre control at the list's top corner, so it aligns
+       with (and, when the controls share that side, sits atop) the control stack automatically — no
+       manual offset needed. A FLOATING list is shifted INWARD on its side to clear that control column
+       (the toggle, plus the controls if same-side), so neither the panel nor its resize covers them. */
+    body[data-layerlist="floating"][data-layerlist-side="left"] #sidebar { left: 52px; }
+    body[data-layerlist="floating"][data-layerlist-side="right"] #sidebar { left: auto; right: 52px; }
     /* A control flyout opened from a BOTTOM cluster must open UPWARD, not off the bottom edge. */
     body[data-controls-pos^="bottom-"] .gd-basemap-menu,
     body[data-controls-pos^="bottom-"] .gd-tools-menu { top: auto; bottom: 0; }
@@ -129,21 +126,13 @@
     #gd-header-logo svg { width: 24px; height: 24px; }
     img#gd-header-logo { width: auto; max-height: 30px; max-width: 150px; object-fit: contain; }
 
-    /* On-map layer-list toggle — pinned to the layer-list side, always ABOVE the panel so a docked OR
-       floating list can be hidden/shown from the map, and never hidden by the panel itself. */
-    /* Same 29px box + 4px radius as the MapLibre control buttons, so the toggle aligns with the cluster. */
-    #gd-list-toggle {
-      position: absolute; top: 10px; z-index: 30; width: 29px; height: 29px; padding: 0;
-      display: flex; align-items: center; justify-content: center; cursor: pointer;
-      background: var(--bg); color: var(--text); border: none;
-      border-radius: 4px; box-shadow: 0 0 0 2px rgba(0,0,0,.1);
-    }
+    /* On-map layer-list toggle — a MapLibre control (ListToggleControl) at the list's top corner, so
+       MapLibre gives it the exact button box/radius/shadow/spacing of the other controls. We only size
+       its icon + hover colour (like the basemap/tools buttons, which also use currentColor SVGs). */
+    #gd-list-toggle { color: var(--text); }
     #gd-list-toggle svg { width: 18px; height: 18px; }
-    html[data-theme="dark"] #gd-list-toggle { background: var(--bg); box-shadow: 0 0 0 1px var(--border), var(--shadow); }
     #gd-list-toggle:hover { color: var(--accent); }
-    body[data-layerlist-side="left"] #gd-list-toggle { left: 10px; }
-    body[data-layerlist-side="right"] #gd-list-toggle { right: 10px; }
-    body[data-archetype="storymap"] #gd-list-toggle { display: none; }
+    body[data-archetype="storymap"] .gd-list-toggle-ctrl { display: none; }
 
     /* Floating panel move + resize handles (portal.js applyFloatingLayout). */
     .gd-float-move {

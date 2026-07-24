@@ -2434,28 +2434,34 @@
     onRemove() { if (this._c) this._c.remove(); }
   }
 
-  // On-map layer-list toggle: a floating button pinned to the layer-list side (CSS reads
-  // body[data-layerlist-side]). Always visible ABOVE the panel, so a docked OR floating list can be
-  // hidden/shown from the map. The header hamburger keeps working too.
+  // On-map layer-list toggle. It is a REAL MapLibre control added at the layer-list corner (top-left
+  // when the list is on the left, top-right when right) so it inherits MapLibre's exact button size,
+  // radius, shadow and stacking — perfectly aligned + evenly spaced with the other controls (which is
+  // why the old absolute-positioned button never lined up). Added BEFORE setupBasemaps so, when the
+  // list shares a side with the controls, it sits at the TOP of that stack.
   function layersStackIcon() {
     return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>';
   }
+  class ListToggleControl {
+    onAdd() {
+      const sb = document.getElementById('sidebar');
+      const c = document.createElement('div');
+      c.className = 'maplibregl-ctrl maplibregl-ctrl-group gd-list-toggle-ctrl';
+      c.innerHTML = '<button type="button" id="gd-list-toggle" title="Show / hide layers" aria-label="Toggle layers panel">' + layersStackIcon() + '</button>';
+      c.querySelector('button').addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        if (sb) sb.classList.toggle('collapsed');
+        setTimeout(function () { map.resize(); }, 220);
+      });
+      this._c = c;
+      return c;
+    }
+    onRemove() { if (this._c) this._c.remove(); }
+  }
   function setupListToggle() {
-    const wrap = document.getElementById('map-wrap');
-    const sb = document.getElementById('sidebar');
-    if (!wrap || !sb || document.getElementById('gd-list-toggle')) return;
-    const btn = document.createElement('button');
-    btn.id = 'gd-list-toggle';
-    btn.type = 'button';
-    btn.title = 'Show / hide layers';
-    btn.setAttribute('aria-label', 'Toggle layers panel');
-    btn.innerHTML = layersStackIcon();
-    btn.addEventListener('click', function () {
-      sb.classList.toggle('collapsed');
-      updateCtrlOffset();
-      setTimeout(function () { map.resize(); }, 220);
-    });
-    wrap.appendChild(btn);
+    if (document.getElementById('gd-list-toggle')) return;
+    const side = (LAYOUT.regions.layerList.side === 'right') ? 'right' : 'left';
+    map.addControl(new ListToggleControl(), 'top-' + side);
   }
 
   // Floating layer list: apply the manifest's box (width/x/y) and add move + resize handles so the
