@@ -335,7 +335,7 @@ _LAYOUT_ARCHETYPES = {
         "regions": {
             "layerList": {"side": "left", "mode": "docked", "collapsed": False,
                           "width": None, "x": None, "y": None},
-            "controls": {"side": "right"},
+            "controls": {"position": "top-right"},
             "header": {"style": "minimal"},
         },
         "panels": {"layerCatalog": False, "legend": True, "basemap": True, "about": False, "story": True},

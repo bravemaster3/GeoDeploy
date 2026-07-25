@@ -24,7 +24,7 @@ def test_resolve_layout_none_is_webmap():
     assert r["archetype"] == "webmap"
     assert r["regions"]["layerList"]["side"] == "left"
     assert r["regions"]["layerList"]["mode"] == "docked"
-    assert r["regions"]["controls"]["side"] == "right"
+    assert r["regions"]["controls"]["position"] == "top-right"
     assert r["panels"]["layerCatalog"] is True and r["panels"]["story"] is False
 
 
@@ -50,12 +50,12 @@ def test_resolve_layout_storymap_defaults():
 def test_resolve_layout_merges_overrides_onto_archetype():
     r = resolve_layout({"archetype": "webmap",
                         "regions": {"layerList": {"side": "right", "mode": "floating"},
-                                    "controls": {"side": "left"}},
+                                    "controls": {"position": "bottom-left"}},
                         "panels": {"about": False}})
     assert r["regions"]["layerList"]["side"] == "right"      # override applied
     assert r["regions"]["layerList"]["mode"] == "floating"   # override applied
     assert r["regions"]["layerList"]["collapsed"] is False   # untouched default preserved
-    assert r["regions"]["controls"]["side"] == "left"        # override applied
+    assert r["regions"]["controls"]["position"] == "bottom-left"  # override applied
     assert r["panels"]["about"] is False                     # override applied
     assert r["panels"]["basemap"] is True                    # untouched default preserved
 
