@@ -1103,16 +1103,26 @@
     // author's map away). Just mark it active; the baked initial_view keeps the author's camera.
     activate(0, !EDIT_MODE);
 
-    // E2: a story must not zoom the map on wheel — repurpose wheel-over-map to scroll the narrative.
-    try { map.scrollZoom.disable(); } catch (e) {}
+    // E2: the wheel scrolls the narrative ONLY when the cursor is over the story column; over the open
+    // map it zooms as normal. The panel is pointer-events:none (so the map drags behind it), so we can't
+    // rely on e.target — we hit-test the pointer against the panel's box. A capture-phase listener lets
+    // us stop the event before MapLibre's own wheel handler sees it (so the map doesn't also zoom).
+    try { map.scrollZoom.enable(); } catch (e) {}
     const mw = document.getElementById('map-wrap');
     if (mw && !mw._storyWheel) {
       mw._storyWheel = true;
+      const rightSide = document.body.dataset.layerlistSide === 'right';
       mw.addEventListener('wheel', function (e) {
-        if (panel.contains(e.target)) return;  // already over the column → native scroll
+        const r = panel.getBoundingClientRect();
+        // Only the OPAQUE part of the column (≈72%, matching the CSS fade) counts as "the story"; the
+        // see-through remainder reads as map, so the wheel zooms there.
+        const band = r.width * 0.72;
+        const inX = rightSide ? (e.clientX >= r.right - band) : (e.clientX <= r.left + band);
+        if (!inX || e.clientY < r.top || e.clientY > r.bottom) return;  // over the map → MapLibre zooms
         panel.scrollTop += e.deltaY;
         e.preventDefault();
-      }, { passive: false });
+        e.stopPropagation();                    // don't let the map zoom too
+      }, { passive: false, capture: true });
     }
 
     // E1: hidden scrollbar (CSS) + up/down "more" chevrons that appear when content is off-screen.

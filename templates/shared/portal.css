@@ -222,19 +222,22 @@
     }
     body[data-layerlist-side="right"][data-archetype="storymap"] .story-section { margin-left: auto; }
 
-    /* E1: up/down "more" chevrons, centred on the story column, shown when it can scroll further. */
+    /* E1: up/down "more" chevrons, centred on the VISIBLE card column (22px pad + card ≤300px), shown
+       when the narrative can scroll further. Filled accent so they read clearly over the story panel. */
     .gd-story-more {
-      position: absolute; z-index: 16; display: none; width: 34px; height: 34px; padding: 0;
+      position: absolute; z-index: 16; display: none; width: 42px; height: 42px; padding: 0;
       align-items: center; justify-content: center; cursor: pointer; pointer-events: auto;
-      background: var(--bg); color: var(--text); border: 1px solid var(--border);
-      border-radius: 999px; box-shadow: var(--shadow);
-      left: calc(min(460px, 46vw) / 2 - 17px);
+      background: var(--accent); color: #fff; border: none;
+      border-radius: 999px; box-shadow: var(--shadow-lg);
+      transition: transform .12s ease, filter .12s ease;
+      left: calc(22px + min(300px, 46vw - 44px) / 2 - 21px);
     }
-    body[data-layerlist-side="right"] .gd-story-more { left: auto; right: calc(min(460px, 46vw) / 2 - 17px); }
+    body[data-layerlist-side="right"] .gd-story-more { left: auto; right: calc(22px + min(300px, 46vw - 44px) / 2 - 21px); }
+    .gd-story-more:hover { filter: brightness(1.06); transform: scale(1.06); }
     .gd-story-more.show { display: flex; }
-    .gd-story-up { top: 12px; }
-    .gd-story-down { bottom: 26px; }
-    .gd-story-more svg { width: 18px; height: 18px; }
+    .gd-story-up { top: 14px; }
+    .gd-story-down { bottom: 28px; }
+    .gd-story-more svg { width: 24px; height: 24px; }
     .story-section:last-child { margin-bottom: 0; }
     .story-section.active { opacity: 1; }
     .story-section h1, .story-section h2, .story-section h3 { margin-bottom: 8px; }

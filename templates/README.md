@@ -163,6 +163,10 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-07-25 (V-11 polish, 2nd pass: story-map wheel now ZOOMS the map over the open map and only scrolls
+the narrative over the story column [`setupStory` hit-tests the pointer against the panel's opaque band in
+a capture-phase wheel listener; `scrollZoom` re-enabled]; the up/down "more" chevrons are bigger [42px,
+filled accent] and centred on the visible card column)
 2026-07-25 (V-11 polish: download flyout — Draw-a-box acts on first click, `#` glyphs replaced, download
 button no longer wraps [MapLibre `button{width:29px}` specificity trap]; on-map list toggle MOVED into the
 CTRL_POS cluster so it aligns with the other controls; story maps now expose a floating/collapsed layer
