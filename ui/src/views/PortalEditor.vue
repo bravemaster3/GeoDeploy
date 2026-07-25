@@ -145,6 +145,21 @@
             </div>
           </div>
 
+          <!-- Story panel colour (storymap only) -->
+          <div v-if="isStory" class="flex items-center justify-between mt-3">
+            <span class="text-xs text-muted-foreground">Story panel colour</span>
+            <div class="flex items-center gap-1.5">
+              <label class="relative w-6 h-6 rounded border border-dashed border-muted-foreground/50 flex items-center justify-center cursor-pointer overflow-hidden" title="Story panel colour"
+                :style="theme.storyBg ? { background: theme.storyBg } : {}">
+                <span v-if="!theme.storyBg" class="text-[10px] text-muted-foreground">+</span>
+                <input type="color" :value="theme.storyBg || '#0f172a'" @input="e => setTheme({ storyBg: e.target.value })"
+                  class="absolute inset-0 opacity-0 cursor-pointer" />
+              </label>
+              <button v-if="theme.storyBg" @click="setTheme({ storyBg: '' })"
+                class="text-[11px] text-muted-foreground/70 hover:text-foreground">reset</button>
+            </div>
+          </div>
+
           <!-- Header logo / brand -->
           <label class="text-xs text-muted-foreground block mt-3 mb-1">Header logo</label>
           <div class="flex items-center gap-1.5 flex-wrap">
@@ -488,7 +503,7 @@ const ARCHETYPES = [
 // PARITY mirror of portal_generator.resolve_layout / portal.js resolveLayout — change all three together.
 const _ARCH_DEFAULTS = {
   webmap:   { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
-  storymap: { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: false, legend: true, basemap: true, about: false, story: true } },
+  storymap: { regions: { layerList: { side: 'left', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: true, legend: true, basemap: true, about: false, story: true } },
 }
 const _ARCH_ALIASES = { 'webmap+catalog': 'webmap', catalog: 'webmap' }
 function resolveLayout(config) {

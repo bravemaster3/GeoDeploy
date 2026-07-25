@@ -129,10 +129,11 @@
     /* On-map layer-list toggle — a MapLibre control (ListToggleControl) at the list's top corner, so
        MapLibre gives it the exact button box/radius/shadow/spacing of the other controls. We only size
        its icon + hover colour (like the basemap/tools buttons, which also use currentColor SVGs). */
-    #gd-list-toggle { color: var(--text); }
+    /* Pin the toggle to the exact 29×29 box of the other custom controls so it can't drift out of
+       alignment with the zoom/basemap/tools cluster it now sits above. */
+    #gd-list-toggle { width: 29px; height: 29px; padding: 0; box-sizing: border-box; color: var(--text); }
     #gd-list-toggle svg { width: 18px; height: 18px; }
     #gd-list-toggle:hover { color: var(--accent); }
-    body[data-archetype="storymap"] .gd-list-toggle-ctrl { display: none; }
 
     /* Floating panel move + resize handles (portal.js applyFloatingLayout). */
     .gd-float-move {
@@ -196,21 +197,25 @@
     body[data-header="minimal"] #portal-title { text-shadow: 0 1px 3px rgba(0,0,0,.45); }
 
     /* ── Storymap archetype: scrollytelling narrative column over the map ──── */
-    body[data-archetype="storymap"] #sidebar { display: none; }
+    /* Only a DOCKED list is hidden in a story map; the (default) floating list stays available via the
+       toggle, and docks to the right so it clears the narrative column on the left. */
+    body[data-archetype="storymap"][data-layerlist="docked"] #sidebar { display: none; }
+    body[data-archetype="storymap"][data-layerlist="floating"] #sidebar { left: auto; right: 52px; }
+    /* --story-bg: the narrative column colour (editor "Story panel colour"; defaults to the page bg). */
     #story-panel {
       position: absolute; top: 0; bottom: 0; left: 0; width: min(460px, 46vw);
       z-index: 15; overflow-y: auto; padding: 42vh 22px 60vh;
-      background: linear-gradient(90deg, var(--bg) 72%, transparent);
+      background: linear-gradient(90deg, var(--story-bg, var(--bg)) 72%, transparent);
       pointer-events: none;  /* the map pans behind; cards re-enable pointer events */
       scroll-behavior: smooth;
       scrollbar-width: none;  /* E1: hide the scrollbar — up/down chevrons signal more content */
     }
     #story-panel::-webkit-scrollbar { display: none; }
     body[data-layerlist-side="right"][data-archetype="storymap"] #story-panel {
-      left: auto; right: 0; background: linear-gradient(270deg, var(--bg) 72%, transparent);
+      left: auto; right: 0; background: linear-gradient(270deg, var(--story-bg, var(--bg)) 72%, transparent);
     }
     .story-section {
-      pointer-events: auto; background: var(--bg); border: 1px solid var(--border);
+      pointer-events: auto; background: var(--story-bg, var(--bg)); border: 1px solid var(--border);
       border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 20px 22px;
       max-width: 300px;  /* E3: keep cards within the opaque part of the fade */
       margin-bottom: 55vh; opacity: .35; transition: opacity .35s ease;
@@ -564,7 +569,11 @@
     }
     .gd-c-in:focus { outline: none; border-color: var(--accent); }
     .gd-c-in::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-    .gd-coords-go { width: 100%; font-size: 13px; font-weight: 600; padding: 8px; border: none; border-radius: 7px; background: var(--accent); color: #fff; cursor: pointer; }
+    /* These buttons live inside a .maplibregl-ctrl-group, whose `button { width:29px;height:29px }` would
+       otherwise pin them to a 29px square (text wrapping to "Down/load/this/area"). Override to full-width. */
+    .gd-tools-menu .gd-tools-tab { width: auto; height: auto; }
+    .gd-tools-menu .gd-coords-go { width: 100%; height: auto; white-space: nowrap; text-align: center; }
+    .gd-coords-go { font-size: 13px; font-weight: 600; padding: 8px; border: none; border-radius: 7px; background: var(--accent); color: #fff; cursor: pointer; }
     .gd-coords-go:hover { filter: brightness(1.05); }
     .gd-basemap-title {
       font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;

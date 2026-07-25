@@ -43,7 +43,10 @@ def test_resolve_layout_storymap_defaults():
     r = resolve_layout({"archetype": "storymap"})
     assert r["archetype"] == "storymap"
     assert r["panels"]["story"] is True
-    assert r["panels"]["layerCatalog"] is False   # story hides the layer-list catalog
+    # The story map now exposes the layer list too — floating + collapsed, reachable from the toggle.
+    assert r["panels"]["layerCatalog"] is True
+    assert r["regions"]["layerList"]["mode"] == "floating"
+    assert r["regions"]["layerList"]["collapsed"] is True
     assert r["regions"]["header"]["style"] == "minimal"
 
 
@@ -69,8 +72,9 @@ def test_resolve_theme_defaults_to_auto():
 
 
 def test_build_theme_css_valid_accent_and_font():
-    css = build_theme_css({"accent": "#ff0000", "font": "serif"})
+    css = build_theme_css({"accent": "#ff0000", "font": "serif", "storyBg": "#123456"})
     assert "--accent: #ff0000;" in css
+    assert "--story-bg: #123456;" in css
     assert "font-family: Georgia" in css
 
 

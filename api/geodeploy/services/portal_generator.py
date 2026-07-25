@@ -330,15 +330,16 @@ _LAYOUT_ARCHETYPES = {
         },
         "panels": {"layerCatalog": True, "legend": True, "basemap": True, "about": True, "story": False},
     },
-    # scrollytelling — a narrative column drives the map camera; layer list hidden by default.
+    # scrollytelling — a narrative column drives the map camera; the layer list floats (collapsed by
+    # default), reachable from the toggle at the top of the control cluster, like a normal web map.
     "storymap": {
         "regions": {
-            "layerList": {"side": "left", "mode": "docked", "collapsed": False,
+            "layerList": {"side": "left", "mode": "floating", "collapsed": True,
                           "width": None, "x": None, "y": None},
             "controls": {"position": "top-right"},
             "header": {"style": "minimal"},
         },
-        "panels": {"layerCatalog": False, "legend": True, "basemap": True, "about": False, "story": True},
+        "panels": {"layerCatalog": True, "legend": True, "basemap": True, "about": False, "story": True},
     },
 }
 # Back-compat: the Phase-1 archetypes 'webmap+catalog'/'catalog' were dropped (their only difference was
@@ -389,6 +390,10 @@ def build_theme_css(theme: dict | None) -> str:
     if isinstance(accent, str) and _HEX_COLOR.match(accent.strip()):
         root.append(f"--accent: {accent.strip()};")
         root.append(f"--accent-light: color-mix(in srgb, {accent.strip()} 22%, transparent);")
+    # storyBg: the scrollytelling narrative-column colour (used only by the storymap archetype).
+    story_bg = theme.get("storyBg")
+    if isinstance(story_bg, str) and _HEX_COLOR.match(story_bg.strip()):
+        root.append(f"--story-bg: {story_bg.strip()};")
     if root:
         out.append(":root { " + " ".join(root) + " }")
     font = _FONT_STACKS.get(theme.get("font"))

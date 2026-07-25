@@ -23,8 +23,10 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
   - **R1 runtime substrate (V-11 redesign, 2026-07-22):** the map-control cluster
     (basemap/globe/zoom/tools + NEW **HomeControl** [default extent], **ZoomAllControl** [fit all layers],
     **DrawZoomControl** [drag-box zoom, toggles back to pan]) is added at `CTRL_POS` derived from
-    `controls.side`. An **on-map layer-list toggle** (`#gd-list-toggle`, `setupListToggle`) is pinned to the
-    layer-list side ABOVE the panel — hides/shows a docked OR floating list, never covered by it. The
+    `controls.side`. An **on-map layer-list toggle** (`#gd-list-toggle`, `setupListToggle`) is added into
+    the **CTRL_POS cluster** (same corner as the zoom/basemap/tools controls, first → TOP of the stack) so
+    MapLibre keeps it pixel-aligned with its siblings (it used to sit alone in the list's corner and drift);
+    pinned to a 29×29 box in CSS. Hides/shows a docked OR floating list. The
     **floating list** now collapses (`#sidebar.collapsed` → `display:none`) and is **movable + resizable**
     (`applyFloatingLayout` adds `.gd-float-move`/`.gd-float-resize`; box seeded from `layerList.width/x/y`).
     `setupLayerSearch` always builds a `.layer-actions-row` and **relocates Reset styling + About into it**
@@ -42,7 +44,19 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
     known font key — bad values dropped, never emitted into the `<style>`). `resolve_theme` bakes `.mode`
     into `style.geodeploy.theme`; portal.js uses it as the default light/dark (visitor toggle still wins).
     Editor: a **Theme** section (mode · accent presets/custom · font). Themes layer OVER templates → one
-    base template, many looks.
+    base template, many looks. **`storyBg` (2026-07-25):** an optional `Portal.theme.storyBg` hex →
+    `--story-bg`, the storymap narrative-column colour (editor "Story panel colour", storymap only;
+    defaults to `--bg`). `applyThemeLive` applies it for the live preview.
+  - **Download flyout + storymap layer list (2026-07-25):** the Tools "Download by area" flyout's
+    **Draw a box** tab now starts drawing on the FIRST click (no separate "Draw on the map" button);
+    **Coordinates** reveals the N/W/E/S cross (the confusing `#` glyphs replaced — a crosshair on the tab,
+    a dashed extent box in the centre). The "Download this area" button no longer wraps: MapLibre's
+    `.maplibregl-ctrl-group button { width:29px }` was clobbering it (higher specificity than
+    `.gd-coords-go`), fixed with `.gd-tools-menu .gd-coords-go { width:100% }`. **Story maps now expose the
+    layer list** — floating + collapsed by default (`storymap` archetype defaults changed to
+    `layerCatalog:true`, `layerList.mode:floating`, `collapsed:true`), reachable from the toggle at the top
+    of the controls; the floating list docks to the right (`right:52px`) so it clears the narrative column,
+    and only a DOCKED list is hidden in a story map.
   - **R4 story pictures (V-11 redesign, 2026-07-22):** story sections gained an optional `image`
     (same-origin URL via `uploadPortalAsset`); `renderStoryHtml` emits `<img class="story-img">`
     (URL escaped). Editor: **+ Add image / Change / remove** per section.
@@ -149,6 +163,10 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-07-25 (V-11 polish: download flyout — Draw-a-box acts on first click, `#` glyphs replaced, download
+button no longer wraps [MapLibre `button{width:29px}` specificity trap]; on-map list toggle MOVED into the
+CTRL_POS cluster so it aligns with the other controls; story maps now expose a floating/collapsed layer
+list + toggle; `theme.storyBg`/`--story-bg` narrative-column colour with an editor picker)
 2026-07-22 (V-11 REDESIGN R1–R4 all built: R1 runtime substrate [archetypes → webmap/storymap; new
 controls; on-map list toggle; floating collapse/move/resize; actions-row Reset/About]; R2 faithful iframe
 editor preview + click-to-place [+ `POST /portals/{id}/preview`, nginx `/portals/_preview/`, portal.js

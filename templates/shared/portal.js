@@ -55,7 +55,7 @@
   // resolveLayout stays defensive (older bundles / partial configs). Absent → webmap = pre-V-11 shell.
   const LAYOUT_ARCHETYPES = {
     webmap:   { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
-    storymap: { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: false, legend: true, basemap: true, about: false, story: true } },
+    storymap: { regions: { layerList: { side: 'left', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: true, legend: true, basemap: true, about: false, story: true } },
   };
   const LAYOUT_ALIASES = { 'webmap+catalog': 'webmap', catalog: 'webmap' };  // dropped Phase-1 archetypes → webmap
   function resolveLayout(config) {
@@ -2460,8 +2460,11 @@
   }
   function setupListToggle() {
     if (document.getElementById('gd-list-toggle')) return;
-    const side = (LAYOUT.regions.layerList.side === 'right') ? 'right' : 'left';
-    map.addControl(new ListToggleControl(), 'top-' + side);
+    // Put the toggle in the SAME corner as the other controls (CTRL_POS), added first so it sits at
+    // the TOP of the cluster. MapLibre then gives it the exact button box/spacing of its siblings —
+    // this is what keeps it pixel-aligned with the zoom/basemap/tools buttons (it used to live in the
+    // list's corner alone, which drifted out of alignment).
+    map.addControl(new ListToggleControl(), CTRL_POS);
   }
 
   // Floating layer list: apply the manifest's box (width/x/y) and add move + resize handles so the
@@ -2573,6 +2576,8 @@
     if (/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(accent)) {
       css += ':root{--accent:' + accent + ';--accent-light:color-mix(in srgb,' + accent + ' 22%,transparent);}';
     }
+    const storyBg = (typeof theme.storyBg === 'string') ? theme.storyBg.trim() : '';
+    if (/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(storyBg)) css += ':root{--story-bg:' + storyBg + ';}';
     if (LIVE_FONTS[theme.font]) css += 'body{font-family:' + LIVE_FONTS[theme.font] + ';}';
     let style = document.getElementById('gd-live-theme');
     if (!style) { style = document.createElement('style'); style.id = 'gd-live-theme'; document.head.appendChild(style); }
@@ -2637,24 +2642,24 @@
       const c = document.createElement('div');
       c.className = 'maplibregl-ctrl maplibregl-ctrl-group gd-tools-ctrl';
       const drawSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="14" height="12" rx="1" stroke-dasharray="3 2"/><circle cx="18" cy="18" r="3.5"/><line x1="20.5" y1="20.5" x2="23" y2="23"/></svg>';
-      const numSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="4" x2="8" y2="20"/><line x1="16" y1="4" x2="14" y2="20"/></svg>';
+      // Coordinates tab: a crosshair (position/coordinates), not the old "#" hash.
+      const coordSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.5"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/></svg>';
+      // Centre of the N/W/E/S cross: a subtle dashed extent box (represents the bbox being defined).
+      const bboxSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="6" width="14" height="12" rx="1.5" stroke-dasharray="3 2.5"/></svg>';
       c.innerHTML =
         '<button type="button" class="gd-tools-btn" title="Download data by area" aria-label="Download data by area">' + toolsIcon() + '</button>' +
         '<div class="gd-tools-menu">' +
           '<div class="gd-tools-title">Download by area</div>' +
           '<div class="gd-tools-tabs">' +
-            '<button type="button" class="gd-tools-tab is-active" data-tab="draw">' + drawSvg + '<span>Draw a box</span></button>' +
-            '<button type="button" class="gd-tools-tab" data-tab="coords">' + numSvg + '<span>Coordinates</span></button>' +
+            '<button type="button" class="gd-tools-tab" data-tab="draw">' + drawSvg + '<span>Draw a box</span></button>' +
+            '<button type="button" class="gd-tools-tab" data-tab="coords">' + coordSvg + '<span>Coordinates</span></button>' +
           '</div>' +
-          '<div class="gd-tools-pane" data-pane="draw">' +
-            '<p class="gd-tools-hint">Drag a rectangle on the map to select the area to download.</p>' +
-            '<button type="button" class="gd-coords-go" data-act="draw">Draw on the map</button>' +
-          '</div>' +
+          '<p class="gd-tools-hint" data-pane="hint">Click <b>Draw a box</b> to select an area on the map, or enter coordinates.</p>' +
           '<div class="gd-tools-pane" data-pane="coords" hidden>' +
             '<div class="gd-coords-cross">' +
               '<input type="number" step="any" class="gd-c-in gd-c-n" data-k="n" placeholder="max Y / N" aria-label="North (max Y)">' +
               '<input type="number" step="any" class="gd-c-in gd-c-w" data-k="w" placeholder="min X / W" aria-label="West (min X)">' +
-              '<span class="gd-c-mid">' + numSvg + '</span>' +
+              '<span class="gd-c-mid">' + bboxSvg + '</span>' +
               '<input type="number" step="any" class="gd-c-in gd-c-e" data-k="e" placeholder="max X / E" aria-label="East (max X)">' +
               '<input type="number" step="any" class="gd-c-in gd-c-s" data-k="s" placeholder="min Y / S" aria-label="South (min Y)">' +
             '</div>' +
@@ -2663,18 +2668,17 @@
         '</div>';
       const btn = c.querySelector('.gd-tools-btn');
       const menu = c.querySelector('.gd-tools-menu');
-      btn.addEventListener('click', ev => { ev.stopPropagation(); c.classList.toggle('open'); if (c.classList.contains('open')) collapseFloatingList(); });
+      const hint = c.querySelector('.gd-tools-hint');
+      const coordsPane = c.querySelector('.gd-tools-pane[data-pane="coords"]');
+      const coordsTab = c.querySelector('.gd-tools-tab[data-tab="coords"]');
+      // Each open resets to the initial hint state (the cross only appears after "Coordinates").
+      function resetPanes() { hint.hidden = false; coordsPane.hidden = true; coordsTab.classList.remove('is-active'); }
+      btn.addEventListener('click', ev => { ev.stopPropagation(); c.classList.toggle('open'); if (c.classList.contains('open')) { collapseFloatingList(); resetPanes(); } });
       menu.addEventListener('click', ev => ev.stopPropagation());
       document.addEventListener('click', () => c.classList.remove('open'));
-      // Tab switch (Draw ⟷ Coordinates)
-      c.querySelectorAll('.gd-tools-tab').forEach(function (tab) {
-        tab.addEventListener('click', function () {
-          const which = tab.dataset.tab;
-          c.querySelectorAll('.gd-tools-tab').forEach(t => t.classList.toggle('is-active', t === tab));
-          c.querySelectorAll('.gd-tools-pane').forEach(p => { p.hidden = (p.dataset.pane !== which); });
-        });
-      });
-      c.querySelector('[data-act="draw"]').addEventListener('click', () => { c.classList.remove('open'); startAreaSelect(); });
+      // "Draw a box" starts drawing immediately (no second click); "Coordinates" reveals the cross.
+      c.querySelector('.gd-tools-tab[data-tab="draw"]').addEventListener('click', () => { c.classList.remove('open'); startAreaSelect(); });
+      coordsTab.addEventListener('click', () => { hint.hidden = true; coordsPane.hidden = false; coordsTab.classList.add('is-active'); });
       c.querySelector('[data-act="coords"]').addEventListener('click', () => {
         const v = k => parseFloat(c.querySelector('.gd-c-' + k).value);
         const n = v('n'), w = v('w'), e = v('e'), s = v('s');
