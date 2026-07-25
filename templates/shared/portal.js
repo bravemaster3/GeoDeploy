@@ -1111,13 +1111,11 @@
     const mw = document.getElementById('map-wrap');
     if (mw && !mw._storyWheel) {
       mw._storyWheel = true;
-      const rightSide = document.body.dataset.layerlistSide === 'right';
       mw.addEventListener('wheel', function (e) {
         const r = panel.getBoundingClientRect();
-        // Only the OPAQUE part of the column (≈72%, matching the CSS fade) counts as "the story"; the
-        // see-through remainder reads as map, so the wheel zooms there.
-        const band = r.width * 0.72;
-        const inX = rightSide ? (e.clientX >= r.right - band) : (e.clientX <= r.left + band);
+        // The WHOLE left (or right) narrative column scrolls the story; only over the open map does the
+        // wheel zoom. The panel is pointer-events:none, so we hit-test the pointer against its box.
+        const inX = e.clientX >= r.left && e.clientX <= r.right;
         if (!inX || e.clientY < r.top || e.clientY > r.bottom) return;  // over the map → MapLibre zooms
         panel.scrollTop += e.deltaY;
         e.preventDefault();
