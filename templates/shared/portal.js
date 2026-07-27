@@ -991,7 +991,9 @@
   // Restore each user layer's original paint + visibility, then rebuild controls
   function resetStyling() {
     STYLE.layers.forEach(l => {
-      if (!l.metadata || !l.metadata['geodeploy:name']) return;
+      // Restore primaries AND raw-paint "parts" (a GeoLibre-imported layer can render as several
+      // sub-layers sharing a geodeploy:layer_id; only the first carries geodeploy:name).
+      if (!l.metadata || (!l.metadata['geodeploy:name'] && !l.metadata['geodeploy:part'])) return;
       const paint = l.paint || {};
       Object.keys(paint).forEach(prop => {
         try { map.setPaintProperty(l.id, prop, paint[prop]); } catch (e) {}
@@ -1205,6 +1207,23 @@
     });
   }
 
+  // All MapLibre layer ids that make up ONE catalog layer. Usually just the primary, but a
+  // GeoLibre-imported layer using the raw-paint passthrough renders as several sub-layers (fill +
+  // outline, …) that share a geodeploy:layer_id — the primary carries geodeploy:name/type, the rest
+  // carry geodeploy:part. Grouping them lets the eye toggle hide/show the whole layer at once.
+  function groupLayerIds(primaryId) {
+    const prim = STYLE.layers.find(function (l) { return l.id === primaryId; });
+    const m = prim && prim.metadata;
+    if (!m || m['geodeploy:layer_id'] == null) return [primaryId];
+    const lid = String(m['geodeploy:layer_id']), type = m['geodeploy:type'];
+    const ids = STYLE.layers.filter(function (l) {
+      const lm = l.metadata;
+      return lm && String(lm['geodeploy:layer_id']) === lid
+        && (lm['geodeploy:type'] === type || lm['geodeploy:part'] === true);
+    }).map(function (l) { return l.id; });
+    return ids.length ? ids : [primaryId];
+  }
+
   function buildLayerSwitcher(layers) {
     const container = document.getElementById('layer-list');
     container.innerHTML = '';
@@ -1259,7 +1278,11 @@
       btn.addEventListener('click', e => {
         const id = e.currentTarget.dataset.layerId;
         const vis = (map.getLayoutProperty(id, 'visibility') === 'none') ? 'visible' : 'none';
-        map.setLayoutProperty(id, 'visibility', vis);
+        // Toggle EVERY MapLibre sub-layer of this catalog layer together (a raw-paint import renders
+        // as fill + outline + …, all sharing one geodeploy:layer_id), not just the primary.
+        groupLayerIds(id).forEach(function (lid) {
+          try { map.setLayoutProperty(lid, 'visibility', vis); } catch (err) {}
+        });
         e.currentTarget.innerHTML = eyeIcon(vis === 'visible');
         e.currentTarget.classList.toggle('off', vis === 'none');
       });

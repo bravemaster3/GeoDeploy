@@ -1496,6 +1496,22 @@ function buildPreviewStyle() {
         }
         sourceLayer = `${layer.schema_name}.${layer.table_name}`
       }
+      // Raw-paint passthrough (GeoLibre-imported layers): emit one MapLibre layer per entry, wired to
+      // this layer's tile source/source-layer. Mirrors portal_generator._vector_layers so the editor
+      // preview matches the published portal. Distinct ids let fill + outline coexist.
+      const rawLayers = cfg.style?.maplibre?.layers
+      if (Array.isArray(rawLayers) && rawLayers.length) {
+        rawLayers.forEach((entry, i) => {
+          const ml = { id: `${srcId}-${entry.suffix || entry.type || i}`, type: entry.type,
+                       source: srcId, 'source-layer': sourceLayer }
+          if (entry.filter != null) ml.filter = entry.filter
+          if (entry.paint) ml.paint = entry.paint
+          if (entry.layout) ml.layout = { ...entry.layout }
+          style.layers.push(ml)
+        })
+        expandBounds(layer.bbox)
+        continue
+      }
       const color = cfg.style?.color || '#3b82f6'
       const opacity = cfg.opacity ?? 1.0
       const geom = (layer.geometry_type || '').toLowerCase()
@@ -1541,7 +1557,7 @@ function buildPreviewStyle() {
       style.sources[srcId] = { type: 'raster', tiles: [absTileUrl], tileSize: 256 }
       style.layers.push({
         id: srcId, type: 'raster', source: srcId,
-        paint: { 'raster-opacity': cfg.opacity ?? 1.0 },
+        paint: { 'raster-opacity': cfg.opacity ?? 1.0, ...(cfg.style?.paint || {}) },
       })
       expandBounds(layer.bbox)
 
