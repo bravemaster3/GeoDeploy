@@ -162,12 +162,14 @@ app = FastAPI(
 
 settings = get_settings()
 
+_extra_cors = [o.strip() for o in (settings.geodeploy_cors_origins or "").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if settings.is_dev else [
         "http://localhost",
         "https://localhost",
         os.getenv("GEODEPLOY_ORIGIN", ""),
+        *_extra_cors,   # e.g. a GeoLibre origin, so its publish plugin can reach /api/interop
     ],
     allow_credentials=True,
     allow_methods=["*"],

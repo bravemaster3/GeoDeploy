@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     geodeploy_port: int = 8000
     geodeploy_env: str = "production"
     geodeploy_data_dir: str = "/data"
+    # Extra CORS origins allowed to call the API cross-origin (comma-separated), IN ADDITION to
+    # localhost + GEODEPLOY_ORIGIN. Needed so a GeoLibre instance (e.g. https://web.geolibre.app, or a
+    # desktop origin) can reach /api/interop to publish. Auth there is a Bearer token, not a cookie,
+    # so listing an origin here does not expose cookie-authed endpoints to it.
+    geodeploy_cors_origins: str = ""
 
     postgis_host: str = ""
     postgis_port: int = 5432
