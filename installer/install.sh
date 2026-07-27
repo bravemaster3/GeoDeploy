@@ -53,6 +53,15 @@ fi
 # .env holds the JWT + DB + storage secrets — keep it owner-only.
 chmod 600 .env 2>/dev/null || true
 
+# Record the deployed commit in .env (env_file → the API reads GEODEPLOY_GIT_SHA at runtime) so the
+# admin "Updates" panel can tell how far behind GitHub the running code is.
+GD_SHA=$(git rev-parse HEAD 2>/dev/null || echo unknown)
+if grep -q '^GEODEPLOY_GIT_SHA=' .env 2>/dev/null; then
+  sed -i "s|^GEODEPLOY_GIT_SHA=.*|GEODEPLOY_GIT_SHA=${GD_SHA}|" .env
+else
+  echo "GEODEPLOY_GIT_SHA=${GD_SHA}" >> .env
+fi
+
 # ── Ensure the geodeploy network exists (persists across compose down/up) ────
 
 sudo docker network create geodeploy 2>/dev/null || true

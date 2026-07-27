@@ -17,6 +17,51 @@
 
       <!-- Infrastructure + Storage tab (admin) -->
       <div v-if="activeTab === 'infra'" class="space-y-6">
+      <!-- Software updates (admin) — read-only version check against GitHub main -->
+      <section v-if="auth.isAdmin" class="card overflow-hidden">
+        <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
+          <span class="w-9 h-9 rounded-lg bg-emerald-500/15 text-emerald-400 flex items-center justify-center flex-shrink-0">
+            <RefreshIcon class="w-5 h-5" />
+          </span>
+          <div class="flex-1 min-w-0">
+            <h2 class="text-sm font-semibold text-foreground">Updates</h2>
+            <p class="text-xs text-muted-foreground/70">Software version &amp; available updates</p>
+          </div>
+          <button @click="checkUpdates" :disabled="updates.loading" class="btn-secondary text-xs px-3 py-1.5">
+            <RefreshIcon class="w-3.5 h-3.5" /> {{ updates.loading ? 'Checking…' : 'Check' }}
+          </button>
+        </header>
+        <div class="p-5 space-y-3">
+          <div v-if="updates.loading && !updates.data" class="text-sm text-muted-foreground/70">Checking for updates…</div>
+          <template v-else-if="updates.data">
+            <div class="text-sm font-medium">
+              <span v-if="updates.data.up_to_date === true" class="text-green-400">✓ Up to date</span>
+              <span v-else-if="updates.data.behind > 0" class="text-amber-400">
+                Update available — {{ updates.data.behind }} commit{{ updates.data.behind === 1 ? '' : 's' }} behind
+              </span>
+              <span v-else-if="updates.data.status === 'offline'" class="text-muted-foreground/80">Couldn't reach GitHub to check for updates.</span>
+              <span v-else class="text-muted-foreground/80">Version check unavailable.</span>
+            </div>
+            <div class="text-xs text-muted-foreground/80 font-mono flex flex-wrap gap-x-5 gap-y-1">
+              <span>Running <b class="text-foreground">{{ updates.data.current }}</b></span>
+              <span v-if="updates.data.latest">Latest <b class="text-foreground">{{ updates.data.latest }}</b></span>
+            </div>
+            <div v-if="updates.data.commits && updates.data.commits.length"
+                 class="rounded-lg border border-border/60 bg-muted/20 divide-y divide-border/40 max-h-52 overflow-y-auto">
+              <div v-for="c in updates.data.commits" :key="c.sha" class="px-3 py-1.5 text-xs flex gap-2">
+                <span class="font-mono text-muted-foreground/60 flex-shrink-0">{{ c.sha }}</span>
+                <span class="text-foreground/85 truncate">{{ c.message }}</span>
+              </div>
+            </div>
+            <div v-if="updates.data.behind > 0" class="text-xs text-muted-foreground/80 space-y-1.5">
+              <p>To update, run this on the server (a one-click in-browser update is coming next):</p>
+              <code class="block bg-muted/40 rounded px-2.5 py-1.5 font-mono text-[11px] select-all overflow-x-auto">{{ updates.data.update_command }}</code>
+            </div>
+          </template>
+          <div v-else class="text-sm text-muted-foreground/70">Version check unavailable.</div>
+        </div>
+      </section>
+
       <!-- Infrastructure health (admin/owner — service control is require_admin server-side) -->
       <section v-if="auth.isAdmin" class="card overflow-hidden">
         <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
@@ -586,8 +631,23 @@ onMounted(() => {
     systemStore.refreshStats()
     loadEmail()
     loadOidc()
+    checkUpdates()
   }
 })
+
+// Software updates (read-only): compare the deployed commit to GitHub main.
+const updates = ref({ loading: false, data: null })
+async function checkUpdates() {
+  updates.value.loading = true
+  try {
+    const { data } = await api.get('/admin/updates')
+    updates.value.data = data
+  } catch {
+    updates.value.data = { status: 'offline', current: '—' }
+  } finally {
+    updates.value.loading = false
+  }
+}
 
 // Outgoing email (generic SMTP, C-08a)
 const emailForm = ref(null)

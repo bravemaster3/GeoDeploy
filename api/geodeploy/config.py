@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     # desktop origin) can reach /api/interop to publish. Auth there is a Bearer token, not a cookie,
     # so listing an origin here does not expose cookie-authed endpoints to it.
     geodeploy_cors_origins: str = ""
+    # The deployed git commit — written into .env by installer/{install,update}.sh so the admin
+    # "Updates" panel can tell how far behind GitHub the running code is. "unknown" until an installer
+    # writes it (e.g. a dev `docker compose up` without the script).
+    geodeploy_git_sha: str = "unknown"
 
     postgis_host: str = ""
     postgis_port: int = 5432

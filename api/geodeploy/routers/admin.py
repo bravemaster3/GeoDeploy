@@ -14,6 +14,72 @@ from .users import request_origin
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
+# ── Software updates (read-only check) ────────────────────────────────────────
+GEODEPLOY_REPO = "bravemaster3/geodeploy"
+_UPDATE_CACHE: dict = {"at": 0.0, "data": None}
+_UPDATE_TTL = 600  # seconds — GitHub's unauthenticated API allows 60 req/hr/IP, so cache the check
+
+
+@router.get("/updates")
+async def check_updates(_: User = Depends(require_admin)):
+    """Compare the DEPLOYED commit (GEODEPLOY_GIT_SHA, written to .env by the installer) against the
+    latest on GitHub `main`, so an admin can see whether an update is available — without SSH. Purely
+    informational (no writes); the one-click updater is a separate, deliberate action."""
+    import time
+
+    import httpx
+
+    now = time.time()
+    if _UPDATE_CACHE["data"] and now - _UPDATE_CACHE["at"] < _UPDATE_TTL:
+        return _UPDATE_CACHE["data"]
+
+    current = (get_settings().geodeploy_git_sha or "unknown").strip()
+    result: dict = {
+        "current": current[:7] if current and current != "unknown" else "unknown",
+        "current_full": current,
+        "latest": None, "latest_full": None, "latest_message": None, "latest_date": None,
+        "behind": None, "up_to_date": None, "commits": [],
+        "status": "ok",
+        "update_command": "cd ~/geodeploy && sudo bash installer/update.sh",
+    }
+    try:
+        headers = {"Accept": "application/vnd.github+json", "User-Agent": "GeoDeploy"}
+        async with httpx.AsyncClient(timeout=8, headers=headers) as client:
+            latest_r = await client.get(f"https://api.github.com/repos/{GEODEPLOY_REPO}/commits/main")
+            latest_r.raise_for_status()
+            latest = latest_r.json()
+            latest_sha = latest["sha"]
+            result["latest"] = latest_sha[:7]
+            result["latest_full"] = latest_sha
+            result["latest_message"] = latest["commit"]["message"].split("\n")[0]
+            result["latest_date"] = latest["commit"]["author"]["date"]
+
+            if current and current != "unknown":
+                if current == latest_sha:
+                    result["behind"] = 0
+                    result["up_to_date"] = True
+                else:
+                    cmp_r = await client.get(
+                        f"https://api.github.com/repos/{GEODEPLOY_REPO}/compare/{current}...{latest_sha}")
+                    if cmp_r.status_code == 200:
+                        d = cmp_r.json()
+                        result["behind"] = d.get("ahead_by")          # commits latest is ahead of us
+                        result["up_to_date"] = (d.get("ahead_by") == 0)
+                        result["commits"] = [
+                            {"sha": c["sha"][:7], "message": c["commit"]["message"].split("\n")[0]}
+                            for c in d.get("commits", [])
+                        ][-30:][::-1]  # newest first, capped
+                    else:
+                        result["up_to_date"] = False   # our commit isn't on GitHub's main (fork/dev)
+    except Exception as exc:  # network/rate-limit/parse — report gracefully, don't cache the failure
+        result["status"] = "offline"
+        result["error"] = str(exc)
+        return result
+
+    _UPDATE_CACHE["at"] = now
+    _UPDATE_CACHE["data"] = result
+    return result
+
 # Services shown on the Settings page, in display order.
 SERVICE_KEYS = ["postgres", "minio", "redis", "martin", "titiler", "nginx", "celery", "ui", "api"]
 # The API container serves this very request — don't let the panel stop/restart itself.
