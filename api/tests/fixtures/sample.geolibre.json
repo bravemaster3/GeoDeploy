@@ -1,0 +1,183 @@
+{
+  "version": "0.1.0",
+  "name": "Interop Spike Project",
+  "mapView": { "center": [12.57, 55.68], "zoom": 9, "bearing": 0, "pitch": 45 },
+  "basemapStyleUrl": "https://tiles.openfreemap.org/styles/liberty",
+  "basemapVisible": true,
+  "basemapOpacity": 1,
+  "layers": [
+    {
+      "id": "lyr-single-poly",
+      "name": "Districts (single)",
+      "type": "geojson",
+      "visible": true,
+      "opacity": 1,
+      "source": { "type": "geojson" },
+      "style": {
+        "fillColor": "#3b82f6",
+        "fillOpacity": 0.6,
+        "strokeColor": "#1e40af",
+        "strokeWidth": 2,
+        "vectorStyleMode": "single"
+      },
+      "geojson": {
+        "type": "FeatureCollection",
+        "features": [
+          { "type": "Feature", "properties": { "name": "A", "pop": 50 },
+            "geometry": { "type": "Polygon", "coordinates": [[[12.5,55.6],[12.6,55.6],[12.6,55.7],[12.5,55.7],[12.5,55.6]]] } }
+        ]
+      }
+    },
+    {
+      "id": "lyr-graduated-poly",
+      "name": "Population (graduated)",
+      "type": "geojson",
+      "visible": true,
+      "opacity": 0.9,
+      "source": { "type": "geojson" },
+      "style": {
+        "fillOpacity": 0.7,
+        "strokeColor": "#333333",
+        "strokeWidth": 1,
+        "vectorStyleMode": "graduated",
+        "vectorStyleProperty": "pop",
+        "vectorStyleStops": [
+          { "value": 0, "color": "#f7fbff" },
+          { "value": 100, "color": "#6baed6" },
+          { "value": 1000, "color": "#08306b" }
+        ]
+      },
+      "geojson": {
+        "type": "FeatureCollection",
+        "features": [
+          { "type": "Feature", "properties": { "pop": 250 },
+            "geometry": { "type": "Polygon", "coordinates": [[[12.6,55.6],[12.7,55.6],[12.7,55.7],[12.6,55.7],[12.6,55.6]]] } }
+        ]
+      }
+    },
+    {
+      "id": "lyr-cat-points",
+      "name": "Stations (categorized)",
+      "type": "geojson",
+      "visible": true,
+      "opacity": 1,
+      "source": { "type": "geojson" },
+      "style": {
+        "circleRadius": 6,
+        "fillColor": "#888888",
+        "vectorStyleMode": "categorized",
+        "vectorStyleProperty": "kind",
+        "vectorStyleStops": [
+          { "value": "bus", "color": "#e6194b" },
+          { "value": "rail", "color": "#3cb44b" }
+        ]
+      },
+      "geojson": {
+        "type": "FeatureCollection",
+        "features": [
+          { "type": "Feature", "properties": { "kind": "bus" },  "geometry": { "type": "Point", "coordinates": [12.55, 55.66] } },
+          { "type": "Feature", "properties": { "kind": "rail" }, "geometry": { "type": "Point", "coordinates": [12.58, 55.67] } }
+        ]
+      }
+    },
+    {
+      "id": "lyr-elev-track",
+      "name": "GPS track (3D-Z)",
+      "type": "geojson",
+      "visible": true,
+      "opacity": 1,
+      "source": { "type": "geojson" },
+      "style": {
+        "strokeColor": "#ff7800",
+        "strokeWidth": 3,
+        "elevation3dEnabled": true,
+        "elevation3dVerticalScale": 2,
+        "elevation3dOffset": 0
+      },
+      "geojson": {
+        "type": "FeatureCollection",
+        "features": [
+          { "type": "Feature", "properties": { "name": "hike" },
+            "geometry": { "type": "LineString", "coordinates": [[12.50,55.65,120],[12.52,55.66,240],[12.54,55.67,380]] } }
+        ]
+      }
+    },
+    {
+      "id": "lyr-extrude-buildings",
+      "name": "Buildings (extruded)",
+      "type": "geojson",
+      "visible": true,
+      "opacity": 1,
+      "source": { "type": "geojson" },
+      "style": {
+        "fillColor": "#aa8866",
+        "extrusionEnabled": true,
+        "extrusionColor": "#aa8866",
+        "extrusionOpacity": 0.95,
+        "extrusionHeightProperty": "height_m",
+        "extrusionHeightScale": 1,
+        "extrusionBase": 0
+      },
+      "geojson": {
+        "type": "FeatureCollection",
+        "features": [
+          { "type": "Feature", "properties": { "height_m": 30 },
+            "geometry": { "type": "Polygon", "coordinates": [[[12.56,55.675],[12.562,55.675],[12.562,55.677],[12.56,55.677],[12.56,55.675]]] } }
+        ]
+      }
+    },
+    {
+      "id": "lyr-cog-dem",
+      "name": "Elevation (COG)",
+      "type": "cog",
+      "visible": true,
+      "opacity": 0.8,
+      "source": {
+        "type": "cog",
+        "url": "https://example.com/dem.tif",
+        "bands": "1",
+        "colormap": "terrain",
+        "rescaleMin": 0,
+        "rescaleMax": 400,
+        "nodata": -9999
+      },
+      "style": {
+        "rasterBrightnessMin": 0,
+        "rasterBrightnessMax": 1,
+        "rasterContrast": 0.1,
+        "rasterSaturation": 0,
+        "rasterHueRotate": 0
+      }
+    },
+    {
+      "id": "lyr-xyz-aerial",
+      "name": "Aerial (XYZ)",
+      "type": "xyz",
+      "visible": true,
+      "opacity": 1,
+      "source": {
+        "type": "xyz",
+        "tiles": ["https://tiles.example.com/aerial/{z}/{x}/{y}.png"],
+        "tileSize": 256,
+        "attribution": "Example imagery",
+        "maxzoom": 20
+      },
+      "style": {}
+    }
+  ],
+  "styles": {},
+  "storymap": {
+    "title": "A tour",
+    "chapters": [
+      {
+        "id": "intro",
+        "title": "Copenhagen",
+        "description": "The start of the tour. <em>HTML allowed.</em>",
+        "location": { "center": [12.57, 55.68], "zoom": 11, "pitch": 40, "bearing": 0 },
+        "onChapterEnter": [{ "layerId": "lyr-graduated-poly", "opacity": 1 }],
+        "onChapterExit": [{ "layerId": "lyr-graduated-poly", "opacity": 0 }]
+      }
+    ]
+  },
+  "metadata": { "author": "spike" }
+}
