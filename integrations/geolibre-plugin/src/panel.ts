@@ -5,19 +5,28 @@
  */
 import type { GeoLibreAppAPI } from "./host-api";
 import {
+  type EditableLayer,
   type GeoDeploySettings,
   type PreviewResult,
   type PublishResult,
   canPublish,
+  collectProject,
+  findLayerGeojson,
+  listGeoDeployLayers,
+  loadGeoDeployLayer,
   portalUrl,
   previewProject,
   publishProject,
+  writeBackLayer,
 } from "./publish";
 
 export interface PanelContext {
   app: GeoLibreAppAPI;
   getSettings: () => GeoDeploySettings;
   setSettings: (patch: Partial<GeoDeploySettings>) => void;
+  /** Persisted map of GeoLibre layer id → GeoDeploy layer id (the round-trip links). */
+  getLinks: () => Record<string, number>;
+  setLink: (geolibreLayerId: string, geodeployLayerId: number) => void;
 }
 
 const C = "gdp"; // class prefix, to scope the injected CSS
@@ -124,9 +133,113 @@ export function renderPublishPanel(container: HTMLElement, ctx: PanelContext): (
     }
   });
 
+  // ── Round-trip: load a GeoDeploy layer, edit it in GeoLibre, write it back ──
+  container.appendChild(el("hr", `${C}-hr`));
+  renderRoundTrip(container, ctx);
+
   return () => {
     container.innerHTML = "";
   };
+}
+
+function renderRoundTrip(container: HTMLElement, ctx: PanelContext): void {
+  const app = ctx.app;
+  const wrap = el("div", `${C}-section`);
+  wrap.appendChild(el("h3", `${C}-h3`, "Round-trip a layer"));
+  wrap.appendChild(
+    el("p", `${C}-intro`,
+      "Load a GeoDeploy layer into GeoLibre, clean it, then save your edits back to the same layer."),
+  );
+
+  const select = el("select", `${C}-input`) as HTMLSelectElement;
+  const refreshBtn = el("button", `${C}-btn ${C}-btn-secondary`, "List layers") as HTMLButtonElement;
+  const loadBtn = el("button", `${C}-btn ${C}-btn-secondary`, "Load selected") as HTMLButtonElement;
+  const saveBtn = el("button", `${C}-btn ${C}-btn-primary`, "Save edits back") as HTMLButtonElement;
+  const status = el("div", `${C}-status`);
+
+  const row1 = el("div", `${C}-actions`);
+  row1.appendChild(refreshBtn);
+  row1.appendChild(loadBtn);
+  const row2 = el("div", `${C}-actions`);
+  row2.appendChild(saveBtn);
+  wrap.appendChild(select);
+  wrap.appendChild(row1);
+  wrap.appendChild(row2);
+  wrap.appendChild(status);
+  container.appendChild(wrap);
+
+  const canLoad = typeof app.addGeoJsonLayer === "function";
+  if (!canLoad) {
+    refreshBtn.disabled = loadBtn.disabled = select.disabled = true;
+    setStatus(status, "error", "This GeoLibre build can't add layers from a plugin (no addGeoJsonLayer).");
+  }
+  saveBtn.disabled = !canPublish(app);
+
+  refreshBtn.addEventListener("click", async () => {
+    setStatus(status, "info", "Loading layer list…");
+    try {
+      const layers: EditableLayer[] = await listGeoDeployLayers(ctx.getSettings());
+      select.innerHTML = "";
+      if (!layers.length) {
+        setStatus(status, "info", "No editable PostGIS layers on that instance.");
+        return;
+      }
+      for (const l of layers) {
+        const opt = document.createElement("option");
+        opt.value = String(l.id);
+        opt.textContent = `${l.name} (${l.geometry_type || "?"}, ${l.feature_count ?? "?"} feat)`;
+        select.appendChild(opt);
+      }
+      setStatus(status, "ok", `${layers.length} layer(s).`);
+    } catch (err) {
+      setStatus(status, "error", (err as Error).message);
+    }
+  });
+
+  loadBtn.addEventListener("click", async () => {
+    const id = Number(select.value);
+    if (!id) {
+      setStatus(status, "info", "List layers and pick one first.");
+      return;
+    }
+    const label = (select.options[select.selectedIndex]?.textContent || `GeoDeploy ${id}`).replace(/\s*\(.*$/, "");
+    setStatus(status, "info", "Loading features…");
+    try {
+      const gj = await loadGeoDeployLayer(ctx.getSettings(), id);
+      const glId = app.addGeoJsonLayer?.(label, gj);
+      if (glId) ctx.setLink(glId, id);
+      setStatus(status, "ok", "Loaded — edit it, then Save edits back.");
+    } catch (err) {
+      setStatus(status, "error", (err as Error).message);
+    }
+  });
+
+  saveBtn.addEventListener("click", async () => {
+    const entries = Object.entries(ctx.getLinks());
+    if (!entries.length) {
+      setStatus(status, "info", "No linked layers. Load one from GeoDeploy first.");
+      return;
+    }
+    setStatus(status, "info", "Saving edits…");
+    try {
+      const project = collectProject(app);
+      let saved = 0;
+      let missing = 0;
+      for (const [glId, gdId] of entries) {
+        const gj = findLayerGeojson(project, glId);
+        if (!gj) {
+          missing++;
+          continue;
+        }
+        await writeBackLayer(ctx.getSettings(), gdId, gj);
+        saved++;
+      }
+      setStatus(status, "ok",
+        `Saved ${saved} layer(s)${missing ? `, ${missing} no longer in the project` : ""}.`);
+    } catch (err) {
+      setStatus(status, "error", (err as Error).message);
+    }
+  });
 }
 
 function setStatus(node: HTMLElement, kind: "info" | "ok" | "error", msg: string): void {

@@ -65,6 +65,8 @@ export interface GeoLibreAppAPI {
   getMap?: () => GeoLibreMapLike | null;
   /** Upstream project-snapshot API — the full-fidelity source of the `.geolibre.json`. */
   getProjectSnapshot?: () => string;
+  /** Add a GeoJSON layer to the project; returns its new GeoLibre layer id (used by the round-trip). */
+  addGeoJsonLayer?: (name: string, data: unknown, sourcePath?: string) => string;
 }
 
 export interface GeoLibrePlugin {

@@ -15,16 +15,25 @@ import type { GeoDeploySettings } from "./publish";
 const PANEL_ID = "geodeploy-publish";
 const MENU_ID = "geodeploy-publish-menu";
 
+interface PluginState {
+  baseUrl?: string;
+  token?: string;
+  /** Round-trip links: GeoLibre layer id → GeoDeploy layer id. */
+  links?: Record<string, number>;
+}
+
 let settings: GeoDeploySettings = { baseUrl: "", token: "" };
+let links: Record<string, number> = {};
 let disposePanel: (() => void) | null = null;
 let disposeMenu: (() => void) | null = null;
 
-function isSettings(value: unknown): value is Partial<GeoDeploySettings> {
+function isPluginState(value: unknown): value is PluginState {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
   return (
     (v.baseUrl === undefined || typeof v.baseUrl === "string") &&
-    (v.token === undefined || typeof v.token === "string")
+    (v.token === undefined || typeof v.token === "string") &&
+    (v.links === undefined || (typeof v.links === "object" && v.links !== null))
   );
 }
 
@@ -46,6 +55,10 @@ export const plugin: GeoLibrePlugin = {
             getSettings: () => settings,
             setSettings: (patch) => {
               settings = { ...settings, ...patch };
+            },
+            getLinks: () => links,
+            setLink: (geolibreLayerId, geodeployLayerId) => {
+              links = { ...links, [geolibreLayerId]: geodeployLayerId };
             },
           });
         },
@@ -74,13 +87,15 @@ export const plugin: GeoLibrePlugin = {
     disposePanel = null;
   },
 
-  // Persist the connection settings with the project.
+  // Persist the connection settings + round-trip links with the project.
   getProjectState() {
-    return { ...settings };
+    return { ...settings, links };
   },
 
   applyProjectState(_app, state) {
-    if (isSettings(state)) settings = { baseUrl: "", token: "", ...state };
+    if (!isPluginState(state)) return false;
+    settings = { baseUrl: state.baseUrl ?? "", token: state.token ?? "" };
+    links = (state.links as Record<string, number>) ?? {};
   },
 };
 

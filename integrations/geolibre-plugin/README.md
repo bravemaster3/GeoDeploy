@@ -17,6 +17,20 @@ GeoLibre  ──(getProjectSnapshot → .geolibre.json)──▶  POST /api/inte
 - **Publish** → `POST /api/interop/geolibre/publish` — ingests each layer and builds the portal;
   returns the public portal URL.
 
+### Round-trip a layer (edit a GeoDeploy layer, save it back)
+
+The panel's **Round-trip a layer** section closes the loop for data cleaning etc.:
+
+- **List layers / Load selected** → `GET /api/interop/geodeploy/layers` then
+  `GET /api/interop/geodeploy/layers/{id}/features.geojson` — loads a GeoDeploy PostGIS layer into
+  GeoLibre as an editable GeoJSON layer (the plugin remembers GeoLibre-layer ↔ GeoDeploy-layer).
+- Edit it in GeoLibre (GeoEditor, attribute edits, processing tools).
+- **Save edits back** → `PUT /api/interop/geodeploy/layers/{id}/features` — writes the edited GeoJSON
+  back; GeoDeploy re-ingests it into the **same** table, so published portals using it update too.
+
+Loading needs the host's `addGeoJsonLayer` (present in the live app); saving needs `getProjectSnapshot`
+(the same upstream API as Publish). The links persist with the project.
+
 ## Prerequisites
 
 1. **A GeoDeploy instance** you can reach over HTTPS, and an **API token** with the `portal:write`
