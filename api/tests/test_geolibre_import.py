@@ -186,8 +186,22 @@ def test_plan_to_layer_configs_raster_and_external(plan):
 
 def test_plan_to_layer_configs_drops_unresolved_with_warning(plan):
     configs, warnings = plan_to_layer_configs(plan, {})  # nothing resolved
-    assert configs == []
-    assert len(warnings) == len(plan["layers"])
+    # Only the 3D-Z elevation layer survives — it's inline (deck.gl) and needs no ingested id.
+    assert all(c["layer_type"] == "elevation" for c in configs)
+    n_ingested = sum(1 for l in plan["layers"]
+                     if not (l["target"] == "vector" and l.get("render_mode") == "elevation3d"))
+    assert len(warnings) == n_ingested
+
+
+def test_elevation_layer_becomes_inline_deck_config(plan):
+    configs, _ = plan_to_layer_configs(plan, _id_map(plan))
+    elev = next(c for c in configs if c["layer_type"] == "elevation")
+    assert elev["name"] == "GPS track (3D-Z)"
+    assert elev["geometry"] == "line"
+    assert elev["elevation"]["vertical_scale"] == 2
+    assert elev["geojson"]["features"]                    # inline data carried (not ingested)
+    assert elev["bbox"] and elev["bbox"][0] < elev["bbox"][2]
+    assert "layer_id" not in elev                         # no DB layer
 
 
 def test_external_source_spec(plan):

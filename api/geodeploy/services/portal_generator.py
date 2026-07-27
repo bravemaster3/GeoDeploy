@@ -76,7 +76,8 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
     """
     sources = {}
     layers = []
-    deck_layers = []  # GeoParquet layers rendered by the deck.gl overlay (not MapLibre layers)
+    deck_layers = []  # GeoParquet + 3D-Z elevation layers rendered by the deck.gl overlay (not MapLibre)
+    elev_seq = 0      # counter for synthetic ids of inline elevation deck layers ("elev-0", …)
     layers_info = []  # per-layer documentation for the portal About panel (name, abstract, links)
     bounds = [180, 90, -180, -90]  # expanded below
     core_bounds = [180, 90, -180, -90]  # deck layers' merged CORE extent (see deck_core_bounds)
@@ -85,7 +86,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
     # V-13: order layers by the folder tree (depth-first) when one exists, else by layer_configs order.
     layer_tree = _reconcile_layer_tree(layer_groups, layer_configs) if layer_groups else None
     if layer_tree is not None:
-        _cfg_by_ref = {(c["layer_type"], c["layer_id"]): c for c in layer_configs}
+        _cfg_by_ref = {(c["layer_type"], c.get("layer_id")): c for c in layer_configs}
         ordered_configs = [_cfg_by_ref[(n["layer_type"], n["layer_id"])] for n in _flatten_layer_tree(layer_tree)]
     else:
         ordered_configs = layer_configs
@@ -264,6 +265,32 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
             layers.append(ext_layer)
             if src_bbox:
                 _expand_bounds(bounds, src_bbox)
+
+        elif cfg["layer_type"] == "elevation":
+            # 3D-Z: an INLINE deck.gl layer (no DB layer, no MapLibre layer). The geojson carries Z; the
+            # portal's deck overlay renders it at altitude. Synthetic string id (no collision with the
+            # numeric ids GeoParquet deck layers use).
+            estyle = cfg.get("style") or {}
+            e_bbox = cfg.get("bbox")
+            deck_layers.append({
+                "layer_id": f"elev-{elev_seq}",
+                "name": cfg.get("name", "3D layer"),
+                "geometry": cfg.get("geometry", "line"),
+                "elevation": cfg.get("elevation") or {"vertical_scale": 1, "offset": 0},
+                "geojson": cfg.get("geojson"),
+                "color": estyle.get("color", "#3b82f6"),
+                "outline_color": estyle.get("outline_color", "#1d4ed8"),
+                "fill_opacity": estyle.get("fill_opacity", 0.45),
+                "line_width": estyle.get("line_width", 2),
+                "radius": estyle.get("radius", 5),
+                "opacity": cfg.get("opacity", 1.0),
+                "visible": cfg.get("visible", True),
+                "bbox": e_bbox,
+            })
+            elev_seq += 1
+            layers_info.append({"name": cfg.get("name", "3D layer"), "kind": "elevation"})
+            if e_bbox:
+                _expand_bounds(bounds, e_bbox)
 
     valid_bounds = bounds if bounds[0] < bounds[2] else None
     # Deck-only portal (every user layer is a deck.gl GeoParquet overlay, no MapLibre layers): open on

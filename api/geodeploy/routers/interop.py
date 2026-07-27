@@ -83,6 +83,8 @@ async def publish_geolibre_project(
         target = lyr["target"]
 
         if target == "vector":
+            if lyr.get("render_mode") == "elevation3d":
+                continue  # 3D-Z: not ingested — rides inline as a deck elevation config (plan_to_layer_configs)
             gj = lyr.get("geojson")
             if not gj or not gj.get("features"):
                 warnings.append(f"[{lyr['name']}] skipped: no features to ingest.")

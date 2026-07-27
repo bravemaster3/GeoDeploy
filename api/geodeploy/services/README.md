@@ -33,10 +33,17 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   translated `layer_configs`, then hands off to `tasks/geolibre_publish.publish_geolibre_project`, which
   runs each `ingest_vector.apply()` synchronously and finalizes via the router's async `_rebuild_bundle`
   + `published=True`). **COG rasters** are wired too: the endpoint creates a RasterLayer + job, the
-  worker downloads the https COG URL (size-capped; SSRF: https-only, private-IP block TODO) → the
-  existing GeoTIFF→COG→MinIO `ingest_raster`. Layer z-order is REVERSED on import (GeoLibre
-  layers[0]=bottom → GeoDeploy top-first). Remaining Front-2 gap: true 3D-Z deck rendering (Z is
-  preserved in PostGIS but Martin MVT flattens it, so Z layers currently render flat).
+  worker downloads the https COG URL (size-capped; SSRF: https-only + private/loopback/link-local
+  block via `_assert_public_https`) → the existing GeoTIFF→COG→MinIO `ingest_raster`. Layer z-order is
+  REVERSED on import (GeoLibre layers[0]=bottom → GeoDeploy top-first).
+- **3D-Z rendering (Front 2, 2026-07-27):** a GeoLibre `elevation3d` layer is NOT ingested to PostGIS
+  (Martin MVT flattens Z); `geolibre_import._elevation_config` emits a `layer_type:"elevation"` config
+  carrying the geojson INLINE + `{vertical_scale, offset}`. `generate_style` turns it into a deck.gl
+  descriptor (`deckLayers[]` with `elevation`+`geojson`, synthetic `elev-N` id); `portal.js` preloads
+  it (Z transformed by scale·z+offset) and renders via the existing GeoJsonLayer, which draws 3D
+  coordinates at altitude — no viewport fetch. Mirrored in `PortalEditor.makeElevationDeckLayer`; the
+  portal opens tilted (initial_view pitch). Publish skips ingest for these. Inline geojson suits small
+  GeoLibre tracks (large = follow-up).
 - **`portal_generator.generate_style` raw-paint passthrough (GeoLibre interop, 2026-07-27):**
   `_vector_layers(source_id, layer, cfg)` emits N MapLibre layers when `cfg.style.maplibre.layers` is
   present (fill + outline, extrusion, …) wired to the layer's Martin source/source-layer, else the

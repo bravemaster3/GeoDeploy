@@ -419,6 +419,11 @@ def plan_to_layer_configs(plan: dict, id_map: dict) -> tuple[list[dict], list[st
     configs: list[dict] = []
     warnings: list[str] = []
     for lyr in plan.get("layers", []):
+        # 3D-Z layers are NOT ingested to PostGIS (Martin MVT would flatten the Z); they ride inline in
+        # the portal as a deck.gl elevation layer, so emit that config straight from the plan.
+        if lyr["target"] == "vector" and lyr.get("render_mode") == "elevation3d":
+            configs.append(_elevation_config(lyr))
+            continue
         gid = lyr["source_identity"]["geolibre_layer_id"]
         rid = id_map.get(gid)
         if rid is None:
@@ -492,6 +497,45 @@ def external_source_spec(plan_layer: dict) -> dict | None:
         return None
     return {"source_type": source_type, "kind": kind, "url": url,
             "attribution": src.get("attribution"), "layer_name": None}
+
+
+def _elevation_config(lyr: dict) -> dict:
+    """A 3D-Z layer as an INLINE deck.gl elevation layer_config (no DB layer). The geojson carries Z;
+    the portal's deck overlay renders it at altitude (vertical_scale · z + offset). Persisted inline in
+    Portal.layer_configs — fine for the small tracks/point clouds GeoLibre exports (large ones warn)."""
+    prof = _geometry_profile(lyr.get("geojson"))
+    geometry = "polygon" if prof["polygon"] else ("line" if prof["line"] else "point")
+    return {
+        "layer_type": "elevation",
+        "name": lyr["name"],
+        "opacity": lyr["opacity"],
+        "visible": lyr.get("visible", True),
+        "geometry": geometry,
+        "geojson": lyr.get("geojson"),
+        "elevation": lyr.get("elevation", {"vertical_scale": 1, "offset": 0}),
+        "style": _friendly_fallback(lyr),
+        "bbox": _geojson_bbox_2d(lyr.get("geojson")),
+    }
+
+
+def _geojson_bbox_2d(geojson: dict | None) -> list | None:
+    """2D [minx, miny, maxx, maxy] over a FeatureCollection's coordinates (Z ignored), for map fit."""
+    if not geojson:
+        return None
+    xs: list[float] = []
+    ys: list[float] = []
+
+    def walk(coords):
+        if isinstance(coords, (list, tuple)) and coords and isinstance(coords[0], (int, float)):
+            xs.append(coords[0])
+            ys.append(coords[1])
+        elif isinstance(coords, (list, tuple)):
+            for c in coords:
+                walk(c)
+
+    for feat in geojson.get("features", []):
+        walk(((feat or {}).get("geometry") or {}).get("coordinates"))
+    return [min(xs), min(ys), max(xs), max(ys)] if xs else None
 
 
 def _friendly_fallback(lyr: dict) -> dict:

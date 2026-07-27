@@ -1143,6 +1143,39 @@ function makeDeckLayer(cfg) {
   })
 }
 
+// 3D-Z: transform Z (scale·z+offset) so deck.gl's GeoJsonLayer draws at altitude (mirror portal.js).
+function transformElevationGeojson(geojson, elev) {
+  const scale = Number.isFinite(elev?.vertical_scale) ? elev.vertical_scale : 1
+  const offset = Number.isFinite(elev?.offset) ? elev.offset : 0
+  const tz = c => (Array.isArray(c) && c.length && typeof c[0] === 'number')
+    ? [c[0], c[1], (typeof c[2] === 'number' && Number.isFinite(c[2]) ? c[2] : 0) * scale + offset]
+    : (Array.isArray(c) ? c.map(tz) : c)
+  return { type: 'FeatureCollection', features: ((geojson?.features) || []).map(f => {
+    const g = f?.geometry
+    return g ? { ...f, geometry: { ...g, coordinates: tz(g.coordinates) } } : f
+  }) }
+}
+
+function makeElevationDeckLayer(cfg, idx) {
+  if (!cfg.geojson) return null
+  const data = transformElevationGeojson(cfg.geojson, cfg.elevation)
+  const geom = (cfg.geometry || 'line').toLowerCase()
+  const isPoly = geom.includes('polygon'), isLine = geom.includes('line')
+  const rgb = hexToRgb(cfg.style?.color || '#3b82f6')
+  const outline = hexToRgb(cfg.style?.outline_color || '#1d4ed8')
+  const opacity = cfg.opacity ?? 1.0
+  return new GeoJsonLayer({
+    id: `deck_elev_${idx}`, data, pickable: false, filled: !isLine, stroked: true,
+    getFillColor: [...rgb, Math.round(255 * opacity * (isPoly ? (cfg.style?.fill_opacity ?? 0.45) : 1))],
+    getLineColor: isPoly ? [...outline, Math.round(255 * opacity)] : [...rgb, Math.round(255 * opacity)],
+    lineWidthUnits: 'pixels',
+    getLineWidth: cfg.style?.line_width ?? (isLine ? 2 : 1),
+    lineWidthMinPixels: isLine ? (cfg.style?.line_width ?? 2) : 1,
+    pointType: 'circle', pointRadiusUnits: 'pixels',
+    getPointRadius: cfg.style?.radius ?? 5, pointRadiusMinPixels: 2,
+  })
+}
+
 async function refreshDeck(refetch) {
   if (!deckOverlay || !map.value) return
   const configs = deckConfigs()
@@ -1201,6 +1234,9 @@ async function refreshDeck(refetch) {
   }
   // config[0] = top of list → must draw on top → last in the deck layer array.
   const layers = [...configs].reverse().map(makeDeckLayer).filter(Boolean)
+  // 3D-Z inline elevation layers (no fetch): appended on top of the fetched GeoParquet layers.
+  layerConfigs.value.filter(c => c.layer_type === 'elevation' && c.visible !== false)
+    .slice().reverse().forEach((cfg, i) => { const l = makeElevationDeckLayer(cfg, i); if (l) layers.push(l) })
   deckOverlay.setProps({ layers })
 }
 
@@ -1474,6 +1510,7 @@ function buildPreviewStyle() {
   const orderedForDraw = flattenTreeRefs(layerTree.value).map(configForNode).filter(Boolean)
   for (const cfg of [...(orderedForDraw.length ? orderedForDraw : layerConfigs.value)].reverse()) {
     if (cfg.visible === false) continue
+    if (cfg.layer_type === 'elevation') { expandBounds(cfg.bbox); continue }  // deck-only (see refreshDeck)
     if (cfg.layer_type === 'vector') {
       const layer = dataStore.vectorLayers.find(l => l.id === cfg.layer_id)
       if (!layer || layer.status !== 'ready') continue

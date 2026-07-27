@@ -259,7 +259,29 @@
   // row (show/hide + zoom) but not the full symbology popover yet.
   const DECK_LAYERS = (STYLE.geodeploy && STYLE.geodeploy.deckLayers) || [];
   const deckState = {};  // layer_id → { visible, data }
-  DECK_LAYERS.forEach(function (d) { deckState[d.layer_id] = { visible: d.visible !== false, data: null }; });
+  // 3D-Z elevation layers carry their geojson inline; transform Z (scale·z+offset) once up front so
+  // deck.gl's GeoJsonLayer draws them at altitude. They never viewport-fetch (data is static).
+  function transformElevation(geojson, elev) {
+    const scale = (elev && isFinite(elev.vertical_scale)) ? elev.vertical_scale : 1;
+    const offset = (elev && isFinite(elev.offset)) ? elev.offset : 0;
+    function tz(c) {
+      if (Array.isArray(c) && c.length && typeof c[0] === 'number') {
+        const z = (typeof c[2] === 'number' && isFinite(c[2])) ? c[2] : 0;
+        return [c[0], c[1], z * scale + offset];
+      }
+      return Array.isArray(c) ? c.map(tz) : c;
+    }
+    return { type: 'FeatureCollection', features: ((geojson && geojson.features) || []).map(function (f) {
+      const g = f && f.geometry;
+      return g ? Object.assign({}, f, { geometry: Object.assign({}, g, { coordinates: tz(g.coordinates) }) }) : f;
+    }) };
+  }
+  DECK_LAYERS.forEach(function (d) {
+    deckState[d.layer_id] = {
+      visible: d.visible !== false,
+      data: (d.elevation && d.geojson) ? transformElevation(d.geojson, d.elevation) : null,
+    };
+  });
   let deckOverlay = null;
 
   // ── GeoArrow binary transport (detail) ──────────────────
@@ -762,6 +784,7 @@
     const pending = DECK_LAYERS.filter(function (d) {
       const st = deckState[d.layer_id];
       if (!st || !st.visible) return false;
+      if (d.elevation) return false;                   // 3D-Z: static inline data, never fetch
       if (!st.data) return true;                       // never loaded → fetch
       if (!refetch) return false;                      // style-only refresh → keep cache
       // Already loaded a buffered region covering this viewport at this zoom → nothing to do.
