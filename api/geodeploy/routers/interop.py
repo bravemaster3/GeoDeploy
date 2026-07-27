@@ -7,14 +7,23 @@ user, or POSTed by the GeoLibre publish plugin) and turn it into a portal.
 no writes. `POST /interop/geolibre/publish` commits it: create a layer per vector/tile source, kick the
 ingest+build orchestrator (`tasks.geolibre_publish`), and return the new portal. Both take the raw
 `.geolibre.json` as the JSON body (a manual upload, or the GeoLibre publish plugin).
+
+**Write-back round-trip (F5):** `GET /interop/geodeploy/layers` lists editable PostGIS vector layers;
+`GET /interop/geodeploy/layers/{id}/features.geojson` returns a layer as editable GeoJSON (load it into
+GeoLibre, clean it); `PUT /interop/geodeploy/layers/{id}/features` writes the edited GeoJSON back — a
+full REPLACE that re-ingests into the SAME table via `ingest_vector` (updates bbox/count, reloads
+Martin), so published portals using the layer reflect the change.
 """
 import json
 import os
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import Response
 from slugify import slugify
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from ..config import get_settings
 from ..database import get_db
@@ -24,6 +33,9 @@ from ..routers.portals import _new_slug
 from ..services import geolibre_import as gli
 
 router = APIRouter(prefix="/interop", tags=["interop"])
+
+# Editable-layer feature cap for the write-back round-trip (GeoLibre editing is for reasonable sizes).
+WRITEBACK_FEATURE_CAP = 100000
 
 
 @router.post("/geolibre/preview")
@@ -178,3 +190,118 @@ def _layer_summary(lyr: dict) -> dict:
         "source_identity": lyr.get("source_identity"),
         "warnings": lyr.get("warnings", []),
     }
+
+
+# ── Write-back round-trip (F5): GeoDeploy layer ⇄ GeoLibre edit ────────────────
+
+def _pg_dsn() -> str:
+    """The PostGIS DSN, from the SQLite-stored setup (same source the ingest/export tasks use)."""
+    from ..tasks.vector_ingest import _get_setup
+    s = get_settings()
+    setup = _get_setup(f"{s.data_dir}/sqlite/geodeploy.db")
+    dsn = (f"host={setup['postgis_host']} port={setup['postgis_port']} dbname={setup['postgis_db']} "
+           f"user={setup['postgis_user']} password={setup['postgis_password']}")
+    if s.postgis_sslmode:
+        dsn += f" sslmode={s.postgis_sslmode}"
+    return dsn
+
+
+def _read_layer_geojson(schema: str, table: str, cap: int) -> str:
+    """The whole PostGIS layer as a GeoJSON FeatureCollection string, reprojected to EPSG:4326 (RFC
+    7946 / what GeoLibre expects for GeoJSON). Z ordinates are preserved by ST_AsGeoJSON. Runs sync
+    (psycopg2) — call via run_in_threadpool."""
+    import psycopg2
+
+    from ..tasks.export import _geom_out, _table_srid
+    conn = psycopg2.connect(_pg_dsn())
+    try:
+        cur = conn.cursor()
+        srid = _table_srid(cur, schema, table)
+        sql = (
+            "SELECT jsonb_build_object('type','FeatureCollection','features',"
+            "COALESCE(jsonb_agg(f.feat), '[]'::jsonb))::text FROM ("
+            "  SELECT jsonb_build_object('type','Feature',"
+            f"    'geometry', ST_AsGeoJSON({_geom_out(srid, 4326)})::jsonb,"
+            "    'properties', to_jsonb(t) - 'geom' - 'id') AS feat"
+            f'  FROM "{schema}"."{table}" t'
+            f"  LIMIT {int(cap)}"
+            ") f"
+        )
+        cur.execute(sql)
+        row = cur.fetchone()
+        return row[0] if row and row[0] else '{"type":"FeatureCollection","features":[]}'
+    finally:
+        conn.close()
+
+
+async def _get_writable_layer(layer_id: int, db: AsyncSession) -> VectorLayer:
+    """Load a PostGIS vector layer or 404 (GeoParquet/file-backed layers aren't edit-in-place)."""
+    layer = await db.get(VectorLayer, layer_id)
+    if layer is None or getattr(layer, "storage_backend", "postgis") != "postgis":
+        raise HTTPException(status_code=404, detail="No editable PostGIS layer with that id.")
+    return layer
+
+
+@router.get("/geodeploy/layers")
+async def list_editable_layers(user: User = Depends(require_scope("data:read")),
+                               db: AsyncSession = Depends(get_db)):
+    """PostGIS vector layers that can be round-tripped (loaded into GeoLibre, edited, written back)."""
+    r = await db.execute(select(VectorLayer).where(
+        VectorLayer.storage_backend == "postgis", VectorLayer.status == "ready"))
+    return [{"id": l.id, "name": l.name, "geometry_type": l.geometry_type,
+             "feature_count": l.feature_count, "crs": l.crs} for l in r.scalars().all()]
+
+
+@router.get("/geodeploy/layers/{layer_id}/features.geojson")
+async def read_layer_features(layer_id: int, user: User = Depends(require_scope("data:read")),
+                              db: AsyncSession = Depends(get_db)):
+    """The layer as editable GeoJSON (EPSG:4326) — load this into GeoLibre, clean it, write it back."""
+    layer = await _get_writable_layer(layer_id, db)
+    if layer.status != "ready":
+        raise HTTPException(status_code=409, detail="Layer is not ready.")
+    gj = await run_in_threadpool(_read_layer_geojson, layer.schema_name, layer.table_name,
+                                 WRITEBACK_FEATURE_CAP)
+    return Response(content=gj, media_type="application/geo+json")
+
+
+@router.put("/geodeploy/layers/{layer_id}/features", status_code=202)
+async def writeback_layer_features(layer_id: int, request: Request,
+                                   user: User = Depends(require_scope("data:write")),
+                                   db: AsyncSession = Depends(get_db)):
+    """Replace a layer's features with edited GeoJSON (from GeoLibre). Re-ingests into the SAME table
+    via the normal vector ingest (DROP+CREATE), so bbox/count/geometry refresh, Martin reloads, and any
+    published portal using the layer reflects the edit. Only the owner (or an admin) may overwrite."""
+    layer = await _get_writable_layer(layer_id, db)
+    if layer.user_id != user.id and user.role not in ("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Only the layer's owner can overwrite it.")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Body is not valid JSON.")
+    if not isinstance(body, dict) or body.get("type") != "FeatureCollection":
+        raise HTTPException(status_code=400, detail="Expected a GeoJSON FeatureCollection.")
+    features = body.get("features") or []
+    if not isinstance(features, list) or not features:
+        raise HTTPException(status_code=400, detail="FeatureCollection has no features.")
+    if len(features) > WRITEBACK_FEATURE_CAP:
+        raise HTTPException(status_code=413,
+                            detail=f"Too many features (> {WRITEBACK_FEATURE_CAP}) for write-back.")
+
+    settings = get_settings()
+    os.makedirs(f"{settings.data_dir}/temp", exist_ok=True)
+    tmp_path = f"{settings.data_dir}/temp/{uuid.uuid4()}.geojson"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(body, fh)
+
+    layer.status = "processing"
+    job_id = str(uuid.uuid4())
+    db.add(UploadJob(id=job_id, layer_id=layer.id, layer_type="vector"))
+    await db.commit()
+
+    # Re-ingest into the SAME schema/table (the ingest DROPs + CREATEs → a full replace). GeoLibre
+    # GeoJSON is 4326, so the refreshed layer is stored 4326 even if it was native before (noted).
+    from ..tasks.vector_ingest import ingest_vector
+    ingest_vector.delay(job_id, layer.id, tmp_path, slugify(layer.name, separator="_") or "layer",
+                        layer.schema_name, layer.table_name)
+
+    return {"job_id": job_id, "layer_id": layer.id, "status": "processing", "features": len(features)}
