@@ -375,12 +375,13 @@ def import_project(source: str | bytes | dict) -> dict:
     """Parse a `.geolibre.json` and return a GeoDeploy import plan:
     `{portal: {...}, layers: [...], warnings: [...]}`.
 
-    NOTE: GeoLibre's `layers[]` order vs GeoDeploy's `layer_configs[0]=top`
-    convention still needs confirming against MapController.syncLayers; we
-    preserve order here and flag it, so a later step can reverse if needed.
+    Z-ORDER: GeoLibre draws `layers[0]` at the BOTTOM (its `MapController.syncLayers` inserts each
+    layer *before* the next, so later-in-array = higher on the map), while GeoDeploy's
+    `layer_configs[0]` is the TOP of the stack. So we REVERSE the array — then every downstream
+    consumer (layer_configs, the switcher, draw order) is correct with no further juggling.
     """
     project = parse_geolibre_project(source)
-    layers = [import_layer(lyr, project) for lyr in project.get("layers", [])]
+    layers = [import_layer(lyr, project) for lyr in reversed(project.get("layers", []))]
 
     view = project.get("mapView") or {}
     portal = {
@@ -399,7 +400,7 @@ def import_project(source: str | bytes | dict) -> dict:
         "story": _import_storymap(project.get("storymap")),
     }
 
-    warnings = ["Layer z-order (GeoLibre layers[] vs GeoDeploy top-first) not yet confirmed."]
+    warnings: list[str] = []
     for lyr in layers:
         warnings.extend(f"[{lyr['name']}] {w}" for w in lyr.get("warnings", []))
     return {"portal": portal, "layers": layers, "warnings": warnings}

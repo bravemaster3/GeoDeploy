@@ -148,10 +148,13 @@ def test_xyz_tiles_external(plan):
     assert lyr["source"]["tile_size"] == 256
 
 
-# ── warnings surface, never silently drop ─────────────────────────────────────
+# ── z-order: GeoLibre layers[0]=bottom → reversed to GeoDeploy top-first ──────
 
-def test_zorder_caveat_is_warned(plan):
-    assert any("z-order" in w.lower() for w in plan["warnings"])
+def test_layer_order_reversed_to_geodeploy_top_first(plan):
+    # GeoLibre draws layers[0] at the bottom; GeoDeploy layer_configs[0] is the top — so the LAST
+    # GeoLibre layer must lead the plan and the FIRST must trail it.
+    assert plan["layers"][0]["name"] == "Aerial (XYZ)"
+    assert plan["layers"][-1]["name"] == "Districts (single)"
 
 
 # ── plan → GeoDeploy layer_configs (post-ingestion mapping) ───────────────────

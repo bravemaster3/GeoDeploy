@@ -160,7 +160,8 @@ async def test_geolibre_preview_endpoint(client, db):
     assert by_name["GPS track (3D-Z)"]["render_mode"] == "elevation3d"
     assert by_name["Districts (single)"]["feature_count"] == 1
     assert "geojson" not in by_name["Districts (single)"]     # never echoed back
-    assert any("z-order" in w.lower() for w in body["warnings"])
+    # top-first order: GeoLibre's last layer (XYZ aerial) leads the returned list
+    assert body["layers"][0]["name"] == "Aerial (XYZ)"
 
 
 async def test_geolibre_preview_rejects_non_project(client, db):
