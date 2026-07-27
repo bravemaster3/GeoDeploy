@@ -18,8 +18,10 @@ it is wired against confirmed entry points but not yet exercised against a live 
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import os
+import socket
 import sqlite3
 import urllib.parse
 import urllib.request
@@ -32,9 +34,7 @@ from .vector_ingest import ingest_vector
 
 logger = logging.getLogger(__name__)
 
-# Cap on a downloaded COG so a runaway/huge URL can't fill the disk. SSRF NOTE: we allow only https
-# here; blocking loopback/private-network addresses is a follow-up (the caller is an authenticated
-# portal:write user importing their own project, so the risk is moderate, not nil).
+# Cap on a downloaded COG so a runaway/huge URL can't fill the disk.
 _MAX_COG_BYTES = 4 * 1024 * 1024 * 1024
 
 
@@ -69,11 +69,33 @@ def publish_geolibre_project(self, portal_id: int, ingest_jobs: list[list],
         raise
 
 
+def _assert_public_https(url: str) -> None:
+    """Reject anything but https to a PUBLIC host — a basic SSRF guard so an imported project can't
+    point the worker at internal services (metadata endpoints, the DB, localhost, private ranges).
+    Resolves the host and rejects if ANY resolved address is private/loopback/link-local/reserved.
+    (Residual TOCTOU: urllib re-resolves on connect; acceptable for an authenticated portal:write
+    caller. A fully airtight fix pins the connection to the vetted IP.)"""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https":
+        raise ValueError("Only https COG URLs are imported.")
+    host = parsed.hostname
+    if not host:
+        raise ValueError("COG URL has no host.")
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or 443, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        raise ValueError(f"Could not resolve COG host {host!r}.") from exc
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+                or ip.is_multicast or ip.is_unspecified):
+            raise ValueError(f"COG host {host!r} resolves to a non-public address ({ip}); blocked.")
+
+
 def _download_https_cog(url: str) -> str:
     """Stream an https COG to a temp file (size-capped). Returns the local path (ingest_raster deletes
     it after converting to COG + uploading to MinIO)."""
-    if urllib.parse.urlparse(url).scheme != "https":
-        raise ValueError("Only https COG URLs are imported.")
+    _assert_public_https(url)
     settings = get_settings()
     os.makedirs(f"{settings.data_dir}/temp", exist_ok=True)
     dest = f"{settings.data_dir}/temp/{uuid.uuid4()}.tif"
