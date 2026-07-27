@@ -53,15 +53,20 @@ GeoLibre, `E-05` Connect from QGIS) — the adoption funnel — and under CI/scr
 | 00 | **Foundation** | The platform, shipped | 12 items — 10 shipped incl. security hardening; tests building; service logs/console planned |
 | 01 | **Multi-user & Access** | The bridge to Cloud | `A-01`, `A-02`, `A-03` **shipped**; `A-04` (frontier) + `A-05` **building** |
 | 02 | **GeoDeploy Cloud** | Managed, multi-tenant | planned / future |
-| 03 | **Ecosystem & Interop** | Adoption engine (GeoLibre, QGIS, standards) | planned / future |
+| 03 | **Ecosystem & Interop** | Adoption engine (GeoLibre, QGIS, standards) | `E-02` (Push from GeoLibre) + `E-09` (round-trip) **building**; rest planned / future |
 | 04 | **Advanced Capabilities** | Differentiators | future / idea |
 
 Highlights beyond the Cloud spine, captured as tracked items:
 
-- **GeoLibre integration** — "Open in GeoLibre" hand-off (`E-01`) and **"Publish to GeoDeploy" from
-  GeoLibre** (`E-02`), turning GeoLibre into GeoDeploy's desktop companion and an adoption funnel.
-- **Style interchange** — MapLibre style JSON round-trip (`E-03`) and QGIS QML/SLD + GeoLibre style
-  import (`E-04`).
+- **GeoLibre integration (building)** — **"Publish to GeoDeploy" from GeoLibre** (`E-02`) is built: a
+  plugin (`integrations/geolibre-plugin`, from the opengeos template) + a GeoDeploy `.geolibre.json`
+  importer that translates GeoLibre styling → MapLibre paint, ingests vector/COG/tiles, does real 3D
+  (extrusion + coordinate-Z), and builds the portal. **`E-09` write-back / round-trip** closes the loop
+  (edit a GeoDeploy layer in GeoLibre, save it back to the same PostGIS table). Both pending stack
+  validation + a tiny upstream `getProjectSnapshot()` PR (patch documented). Plus "Open in GeoLibre"
+  hand-off (`E-01`, planned).
+- **Style interchange** — MapLibre style JSON round-trip (`E-03`) and QGIS QML/SLD import (`E-04`); the
+  **GeoLibre style import already landed with `E-02`** (LayerStyle → MapLibre paint passthrough).
 - **Connect from QGIS** (`E-05`), **Catalog/STAC** (`E-06`), optional **OGC API** (`E-07`, kept but
   deprioritized in favor of the lakehouse path).
 - **Multi-language (i18n)** (`E-08`, planned, near-term) — run the dashboard and published portals in
