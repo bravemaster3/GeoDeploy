@@ -19,16 +19,30 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import sqlite3
+import urllib.parse
+import urllib.request
+import uuid
 
 from ..celery_app import celery_app
+from ..config import get_settings
+from .raster_ingest import ingest_raster
 from .vector_ingest import ingest_vector
 
 logger = logging.getLogger(__name__)
 
+# Cap on a downloaded COG so a runaway/huge URL can't fill the disk. SSRF NOTE: we allow only https
+# here; blocking loopback/private-network addresses is a follow-up (the caller is an authenticated
+# portal:write user importing their own project, so the risk is moderate, not nil).
+_MAX_COG_BYTES = 4 * 1024 * 1024 * 1024
+
 
 @celery_app.task(bind=True, name="geodeploy.tasks.geolibre_publish.publish_geolibre_project")
-def publish_geolibre_project(self, portal_id: int, ingest_jobs: list[list]):
-    """`ingest_jobs`: list of [job_id, layer_id, tmp_path, layer_name, schema_name, table_name]."""
+def publish_geolibre_project(self, portal_id: int, ingest_jobs: list[list],
+                             raster_jobs: list[list] | None = None):
+    """`ingest_jobs`: [job_id, layer_id, tmp_path, layer_name, schema_name, table_name] per vector.
+    `raster_jobs`: [job_id, layer_id, cog_url, s3_key] per COG raster."""
     for job in ingest_jobs:
         try:
             # Synchronous, in-process. A failed ingest marks its own layer/job "error"; we continue so
@@ -37,11 +51,57 @@ def publish_geolibre_project(self, portal_id: int, ingest_jobs: list[list]):
         except Exception:  # defensive — .apply() usually captures rather than raises
             logger.exception("geolibre publish: vector ingest failed for job %s", job)
 
+    for job_id, layer_id, url, s3_key in (raster_jobs or []):
+        tmp_path = None
+        try:
+            tmp_path = _download_https_cog(url)
+            ingest_raster.apply(args=(job_id, layer_id, tmp_path, s3_key))
+        except Exception as exc:
+            logger.exception("geolibre publish: raster import failed for %s", url)
+            _mark_raster_error(layer_id, job_id, str(exc))
+            if tmp_path and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
     try:
         asyncio.run(_finalize_portal(portal_id))
     except Exception:
         logger.exception("geolibre publish: finalizing portal %s failed", portal_id)
         raise
+
+
+def _download_https_cog(url: str) -> str:
+    """Stream an https COG to a temp file (size-capped). Returns the local path (ingest_raster deletes
+    it after converting to COG + uploading to MinIO)."""
+    if urllib.parse.urlparse(url).scheme != "https":
+        raise ValueError("Only https COG URLs are imported.")
+    settings = get_settings()
+    os.makedirs(f"{settings.data_dir}/temp", exist_ok=True)
+    dest = f"{settings.data_dir}/temp/{uuid.uuid4()}.tif"
+    req = urllib.request.Request(url, headers={"User-Agent": "GeoDeploy"})
+    total = 0
+    with urllib.request.urlopen(req, timeout=60) as resp, open(dest, "wb") as fh:  # noqa: S310 (https-gated)
+        while chunk := resp.read(4 * 1024 * 1024):
+            total += len(chunk)
+            if total > _MAX_COG_BYTES:
+                raise ValueError("COG exceeds the import size limit.")
+            fh.write(chunk)
+    return dest
+
+
+def _mark_raster_error(layer_id: int, job_id: str, message: str) -> None:
+    """Flag the layer + job as failed (download error) so a failed COG doesn't linger 'processing';
+    the failed layer is then excluded from the built bundle (only 'ready' layers load)."""
+    db_path = f"{get_settings().data_dir}/sqlite/geodeploy.db"
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute("UPDATE raster_layers SET status = 'error', error_message = ? WHERE id = ?",
+                     (message, layer_id))
+        conn.execute("UPDATE upload_jobs SET status = 'error', error_message = ? WHERE id = ?",
+                     (message, job_id))
+        conn.commit()
+        conn.close()
+    except Exception:
+        logger.exception("geolibre publish: could not mark raster %s error", layer_id)
 
 
 async def _finalize_portal(portal_id: int) -> None:

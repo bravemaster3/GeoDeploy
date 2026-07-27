@@ -32,7 +32,11 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   layer with its geojson to a temp file, ExternalSource per xyz/wms tile layer, the Portal shell with
   translated `layer_configs`, then hands off to `tasks/geolibre_publish.publish_geolibre_project`, which
   runs each `ingest_vector.apply()` synchronously and finalizes via the router's async `_rebuild_bundle`
-  + `published=True`). COG raster URL→storage ingestion is the remaining gap (warned, not wired).
+  + `published=True`). **COG rasters** are wired too: the endpoint creates a RasterLayer + job, the
+  worker downloads the https COG URL (size-capped; SSRF: https-only, private-IP block TODO) → the
+  existing GeoTIFF→COG→MinIO `ingest_raster`. Layer z-order is REVERSED on import (GeoLibre
+  layers[0]=bottom → GeoDeploy top-first). Remaining Front-2 gap: true 3D-Z deck rendering (Z is
+  preserved in PostGIS but Martin MVT flattens it, so Z layers currently render flat).
 - **`portal_generator.generate_style` raw-paint passthrough (GeoLibre interop, 2026-07-27):**
   `_vector_layers(source_id, layer, cfg)` emits N MapLibre layers when `cfg.style.maplibre.layers` is
   present (fill + outline, extrusion, …) wired to the layer's Martin source/source-layer, else the

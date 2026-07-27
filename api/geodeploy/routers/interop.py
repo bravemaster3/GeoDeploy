@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_settings
 from ..database import get_db
 from ..deps import require_scope
-from ..models import ExternalSource, Portal, UploadJob, User, VectorLayer
+from ..models import ExternalSource, Portal, RasterLayer, UploadJob, User, VectorLayer
 from ..routers.portals import _new_slug
 from ..services import geolibre_import as gli
 
@@ -74,7 +74,8 @@ async def publish_geolibre_project(
     os.makedirs(f"{settings.data_dir}/temp", exist_ok=True)
     schema_name = f"geodeploy_u{user.id}"
     id_map: dict = {}
-    ingest_jobs: list[list] = []
+    ingest_jobs: list[list] = []      # vector: [job_id, layer_id, tmp_path, name, schema, table]
+    raster_jobs: list[list] = []      # raster: [job_id, layer_id, cog_url, s3_key]
     warnings: list[str] = list(plan["warnings"])
 
     for lyr in plan["layers"]:
@@ -111,10 +112,20 @@ async def publish_geolibre_project(
             await db.flush()
             id_map[gid] = src.id
 
-        else:  # raster (COG) — style is translated, but URL→storage ingestion isn't wired yet.
-            warnings.append(
-                f"[{lyr['name']}] COG/raster auto-import from a URL is not wired yet; "
-                "add the raster via the normal raster import, then include it manually.")
+        else:  # raster (COG): the worker downloads the URL → the existing GeoTIFF→COG→MinIO ingest.
+            url = (lyr.get("source") or {}).get("url")
+            if not url or not str(url).lower().startswith("https://"):
+                warnings.append(f"[{lyr['name']}] raster skipped: needs an https COG URL.")
+                continue
+            base = slugify(lyr["name"], separator="_") or "raster"
+            s3_key = f"rasters/{user.id}/{uuid.uuid4().hex}/{base}.tif"
+            rlayer = RasterLayer(user_id=user.id, name=lyr["name"], s3_key=s3_key, status="processing")
+            db.add(rlayer)
+            await db.flush()
+            job_id = str(uuid.uuid4())
+            db.add(UploadJob(id=job_id, layer_id=rlayer.id, layer_type="raster"))
+            raster_jobs.append([job_id, rlayer.id, url, s3_key])
+            id_map[gid] = rlayer.id
 
     layer_configs, cfg_warnings = gli.plan_to_layer_configs(plan, id_map)
     warnings.extend(cfg_warnings)
@@ -140,13 +151,13 @@ async def publish_geolibre_project(
 
     # Deferred import so the router module doesn't pull in Celery at load time.
     from ..tasks.geolibre_publish import publish_geolibre_project as publish_task
-    publish_task.delay(portal.id, ingest_jobs)
+    publish_task.delay(portal.id, ingest_jobs, raster_jobs)
 
     return {
         "portal_id": portal.id,
         "slug": slug,
         "layer_count": len(layer_configs),
-        "ingesting": len(ingest_jobs),
+        "ingesting": len(ingest_jobs) + len(raster_jobs),
         "warnings": warnings,
     }
 
