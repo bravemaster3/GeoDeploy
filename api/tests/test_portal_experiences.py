@@ -1,6 +1,7 @@
 """V-11 Template Experiences: the layout manifest resolves archetype defaults + per-portal overrides
 (back-compat: no config → webmap), and layout_config + story round-trip through the portal API."""
 import json
+from pathlib import Path
 
 from jose import jwt
 from passlib.context import CryptContext
@@ -140,6 +141,39 @@ async def test_preview_authz_denies_anonymous(client):
     target must 401 an anonymous (no session cookie) request."""
     r = await client.get("/api/portals/preview-authz")
     assert r.status_code == 401
+
+
+async def test_geolibre_preview_endpoint(client, db):
+    """POST /interop/geolibre/preview parses + translates a `.geolibre.json` and returns the import
+    plan preview (no ingestion, geojson never echoed back)."""
+    db.add(User(id=1, email="e@x", name="E", hashed_password=_pwd.hash("pw"), role="editor"))
+    await db.commit()
+    h = {"Authorization": f"Bearer {jwt.encode({'sub': '1'}, get_settings().secret_key, algorithm='HS256')}"}
+    project = json.loads((Path(__file__).parent / "fixtures" / "sample.geolibre.json").read_text(encoding="utf-8"))
+
+    r = await client.post("/api/interop/geolibre/preview", headers=h, json=project)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["portal"]["title"] == "Interop Spike Project"
+    by_name = {l["name"]: l for l in body["layers"]}
+    assert by_name["Elevation (COG)"]["target"] == "raster"
+    assert by_name["GPS track (3D-Z)"]["render_mode"] == "elevation3d"
+    assert by_name["Districts (single)"]["feature_count"] == 1
+    assert "geojson" not in by_name["Districts (single)"]     # never echoed back
+    assert any("z-order" in w.lower() for w in body["warnings"])
+
+
+async def test_geolibre_preview_rejects_non_project(client, db):
+    db.add(User(id=1, email="e@x", name="E", hashed_password=_pwd.hash("pw"), role="editor"))
+    await db.commit()
+    h = {"Authorization": f"Bearer {jwt.encode({'sub': '1'}, get_settings().secret_key, algorithm='HS256')}"}
+    r = await client.post("/api/interop/geolibre/preview", headers=h, json={"foo": "bar"})
+    assert r.status_code == 400
+
+
+async def test_geolibre_preview_requires_auth(client):
+    r = await client.post("/api/interop/geolibre/preview", json={"version": "0.1.0"})
+    assert r.status_code in (401, 403)
 
 
 async def test_portal_defaults_have_no_layout_or_story(client, db):
