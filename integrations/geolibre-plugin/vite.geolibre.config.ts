@@ -1,27 +1,34 @@
 import { defineConfig } from "vite";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
-/**
- * Builds the plugin as a single self-contained ESM bundle GeoLibre can load:
- *   geolibre-plugin/dist/index.js   (the plugin entry, referenced by plugin.json)
- *   geolibre-plugin/dist/style.css  (injected globally by the host; scoped .gdp-*)
- *
- * `package:geolibre` then zips the `geolibre-plugin/` folder (plugin.json + dist).
- */
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// Matches opengeos/geolibre-plugin-template: build the GeoLibre entry (src/geolibre.ts) as a single
+// self-contained ESM bundle into geolibre-plugin/dist/ (index.js + style.css), which plugin.json
+// references. `package:geolibre` then zips the geolibre-plugin/ folder.
 export default defineConfig({
+  resolve: {
+    alias: {
+      "@": resolve(__dirname, "src"),
+    },
+  },
   build: {
-    outDir: "geolibre-plugin/dist",
-    emptyOutDir: true,
-    cssCodeSplit: false,
     lib: {
-      entry: "src/index.ts",
+      entry: resolve(__dirname, "src/geolibre.ts"),
       formats: ["es"],
       fileName: () => "index.js",
     },
+    outDir: "geolibre-plugin/dist",
+    emptyOutDir: true,
     rollupOptions: {
+      external: [],
       output: {
-        // Emit the CSS as a stable name plugin.json can reference.
-        assetFileNames: (asset) => (asset.name?.endsWith(".css") ? "style.css" : "[name][extname]"),
+        assetFileNames: () => "style.css",
       },
     },
+    cssCodeSplit: false,
+    sourcemap: false,
+    minify: false,
   },
 });

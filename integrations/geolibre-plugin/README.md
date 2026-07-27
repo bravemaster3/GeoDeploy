@@ -47,23 +47,29 @@ Loading needs the host's `addGeoJsonLayer` (present in the live app); saving nee
    instance must allow the GeoLibre origin on `/api/interop/*`. Auth is a Bearer token (not cookies),
    so this is safe to enable. (Deployment-specific — configure it on the GeoDeploy side.)
 
-## Build
+## Build & install
+
+This is a standard **GeoLibre plugin** (npm + Vite + TypeScript, Node 22+) scaffolded from
+`opengeos/geolibre-plugin-template`; it uses that template's exact build/package/install/serve scripts
+(which are pure Node — no extra runtime deps). The GeoLibre entry is `src/geolibre.ts`; the build
+writes the loadable bundle to `geolibre-plugin/` (`plugin.json` + `dist/{index.js,style.css}`).
 
 ```bash
 npm install
-npm run build        # → geolibre-plugin/dist/{index.js,style.css}
-npm run typecheck    # optional: tsc --noEmit
+npm run build:geolibre     # → geolibre-plugin/dist/{index.js,style.css}
+npm run typecheck          # optional (tsc --noEmit)
 ```
 
-## Install into GeoLibre
+Install it into GeoLibre any of the documented ways — the npm scripts do the work:
 
-The build produces the loadable bundle under `geolibre-plugin/` (`plugin.json` + `dist/`). GeoLibre
-loads it any of the documented ways (see the GeoLibre plugin docs):
+```bash
+npm run package:geolibre   # build + zip → geolibre-plugin/<id>-<version>.zip  (Install from file)
+npm run install:geolibre   # build + copy into GeoLibre Desktop's app-data plugins dir (auto-loaded)
+npm run install:geolibre -- --web /path/to/GeoLibre   # bake into a GeoLibre repo's public/plugins
+npm run serve:geolibre     # serve geolibre-plugin/ → add its /plugin.json as a manifest URL
+```
 
-- **Unpacked directory** — point GeoLibre Desktop's Settings → Plugins at this `geolibre-plugin/` folder.
-- **Manifest URL** — host `geolibre-plugin/` and give GeoLibre the `plugin.json` URL.
-- **Zip** — zip the `geolibre-plugin/` folder (root `plugin.json`) and install from file.
-
+Or point GeoLibre Desktop's **Settings → Plugins** at the unpacked `geolibre-plugin/` folder directly.
 Then open **GeoDeploy → Publish to GeoDeploy…** from the toolbar (or the right-panel rail).
 
 ## Layout
