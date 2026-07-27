@@ -1,0 +1,8 @@
+{
+  "id": "geodeploy-publish",
+  "name": "Publish to GeoDeploy",
+  "version": "0.1.0",
+  "entry": "dist/index.js",
+  "description": "Publish the current GeoLibre project to a GeoDeploy instance as a hosted portal.",
+  "style": "dist/style.css"
+}

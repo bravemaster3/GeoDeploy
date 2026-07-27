@@ -1,0 +1,137 @@
+/* Scoped to .gdp-* so the globally-injected plugin stylesheet doesn't restyle the host. */
+.gdp-root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  font-size: 13px;
+  color: inherit;
+}
+.gdp-intro {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.75;
+  line-height: 1.5;
+}
+.gdp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.gdp-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+}
+.gdp-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 9px;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  border-radius: 6px;
+  background: rgba(128, 128, 128, 0.08);
+  color: inherit;
+  font: inherit;
+}
+.gdp-input:focus {
+  outline: none;
+  border-color: #2563eb;
+}
+.gdp-actions {
+  display: flex;
+  gap: 8px;
+}
+.gdp-btn {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.gdp-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.gdp-btn-primary {
+  background: #2563eb;
+  color: #fff;
+}
+.gdp-btn-primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.gdp-btn-secondary {
+  background: transparent;
+  border-color: rgba(128, 128, 128, 0.5);
+  color: inherit;
+}
+.gdp-btn-secondary:hover:not(:disabled) {
+  background: rgba(128, 128, 128, 0.12);
+}
+.gdp-status {
+  font-size: 12px;
+  line-height: 1.45;
+  min-height: 1em;
+}
+.gdp-status-info {
+  opacity: 0.8;
+}
+.gdp-status-ok {
+  color: #059669;
+}
+.gdp-status-error {
+  color: #dc2626;
+}
+.gdp-results {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.gdp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.gdp-table th,
+.gdp-table td {
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+}
+.gdp-table th {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.6;
+}
+.gdp-warnings {
+  border: 1px solid rgba(217, 119, 6, 0.4);
+  background: rgba(217, 119, 6, 0.08);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 11.5px;
+}
+.gdp-warnings-head {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.gdp-warnings ul {
+  margin: 0;
+  padding-left: 16px;
+}
+.gdp-warnings li {
+  margin: 2px 0;
+  line-height: 1.4;
+}
+.gdp-link {
+  color: #2563eb;
+  word-break: break-all;
+}
+.gdp-hint {
+  font-size: 11px;
+  opacity: 0.65;
+  margin: 4px 0 0;
+}
