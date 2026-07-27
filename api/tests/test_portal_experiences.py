@@ -7,7 +7,9 @@ from passlib.context import CryptContext
 
 from geodeploy.config import get_settings
 from geodeploy.models import Portal, User
-from geodeploy.services.portal_generator import resolve_layout, resolve_theme, build_theme_css
+from geodeploy.services.portal_generator import (
+    resolve_layout, resolve_theme, build_theme_css, _vector_layers,
+)
 
 _pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -83,6 +85,32 @@ def test_build_theme_css_rejects_unsafe_values():
     css = build_theme_css({"accent": "red; } body { display:none", "font": "comic"})
     assert "display:none" not in css and "--accent" not in css and "font-family" not in css
     assert build_theme_css(None) == "" and build_theme_css({}) == ""
+
+
+# ── raw-paint passthrough (GeoLibre import → generate_style) ──────────────────────────────────────
+
+def test_vector_layers_raw_paint_passthrough():
+    """style.maplibre.layers → one MapLibre layer per entry, each wired to the layer's Martin source
+    + source-layer, ids suffixed so several sub-layers (fill + outline) can coexist."""
+    from types import SimpleNamespace
+    layer = SimpleNamespace(id=5, schema_name="u1", table_name="roads", geometry_type="polygon")
+    cfg = {"opacity": 1.0, "style": {"maplibre": {"layers": [
+        {"suffix": "fill", "type": "fill",
+         "paint": {"fill-color": ["step", ["to-number", ["get", "x"], 0], "#000", 1, "#fff"]}},
+        {"suffix": "line", "type": "line", "paint": {"line-color": "#333", "line-width": 2}},
+    ]}}}
+    out = _vector_layers("vector_5", layer, cfg)
+    assert [l["type"] for l in out] == ["fill", "line"]
+    assert out[0]["id"] == "vector-5-fill"
+    assert out[0]["source"] == "vector_5" and out[0]["source-layer"] == "u1.roads"
+    assert out[0]["paint"]["fill-color"][0] == "step"        # data-driven expression preserved
+
+
+def test_vector_layers_without_passthrough_is_single():
+    from types import SimpleNamespace
+    layer = SimpleNamespace(id=6, schema_name="u1", table_name="pts", geometry_type="point")
+    out = _vector_layers("vector_6", layer, {"opacity": 1.0, "style": {"color": "#abcdef", "radius": 7}})
+    assert len(out) == 1 and out[0]["type"] == "symbol"      # falls back to the friendly-key builder
 
 
 # ── API round-trip ──────────────────────────────────────────────────────────────────────────────

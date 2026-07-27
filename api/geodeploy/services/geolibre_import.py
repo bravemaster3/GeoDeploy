@@ -342,19 +342,10 @@ def import_layer(layer: dict, project: dict) -> dict:
         }]
         return out
 
-    if style.get("elevation3dEnabled") and has_z:
-        # Deck.gl 3D-Z path — no flat MapLibre layers; the portal deck overlay
-        # renders coordinate Z. Params mirror GeoLibre's elevation3d style.
-        out["render_mode"] = "elevation3d"
-        out["maplibre_layers"] = []
-        out["elevation"] = {
-            "vertical_scale": _sv(style, "elevation3dVerticalScale", 1),
-            "offset": _sv(style, "elevation3dOffset", 0),
-        }
-        return out
-
-    # Plain 2D: geometry-filtered fill / line / circle, matching the live map.
-    out["render_mode"] = "2d"
+    # Plain 2D: geometry-filtered fill / line / circle, matching the live map. A 3D-Z layer renders
+    # flat THROUGH THESE TOO (so the data is visible now) and additionally carries its elevation params
+    # + render_mode="elevation3d" for the deck.gl elevation path (Front 2); the deck path will prefer
+    # elevation when it exists and drop these flat layers then.
     layers: list[dict] = []
     if prof["polygon"]:
         layers.append({"suffix": "fill", "type": "fill", "geometry": "polygon",
@@ -366,6 +357,15 @@ def import_layer(layer: dict, project: dict) -> dict:
         layers.append({"suffix": "circle", "type": "circle", "geometry": "point",
                        "paint": _circle_paint(style, opacity)})
     out["maplibre_layers"] = layers
+
+    if style.get("elevation3dEnabled") and has_z:
+        out["render_mode"] = "elevation3d"
+        out["elevation"] = {
+            "vertical_scale": _sv(style, "elevation3dVerticalScale", 1),
+            "offset": _sv(style, "elevation3dOffset", 0),
+        }
+    else:
+        out["render_mode"] = "2d"
     return out
 
 
@@ -403,6 +403,104 @@ def import_project(source: str | bytes | dict) -> dict:
     for lyr in layers:
         warnings.extend(f"[{lyr['name']}] {w}" for w in lyr.get("warnings", []))
     return {"portal": portal, "layers": layers, "warnings": warnings}
+
+
+# ── plan → GeoDeploy portal inputs ────────────────────────────────────────────
+# After the ingestion step resolves each GeoLibre layer to a GeoDeploy layer/source id, these turn
+# the import plan into the exact shapes `portal_generator.build_portal_bundle` consumes: a
+# `layer_configs` list (with the raw MapLibre paint carried in `style.maplibre`) and the portal
+# kwargs (title / initial_view / story / basemap). `id_map` maps geolibre_layer_id → resolved id.
+
+
+def plan_to_layer_configs(plan: dict, id_map: dict) -> tuple[list[dict], list[str]]:
+    """Build GeoDeploy `layer_configs` (top-first order) from the plan. Layers with no resolved id
+    (ingestion skipped/failed) are dropped with a warning."""
+    configs: list[dict] = []
+    warnings: list[str] = []
+    for lyr in plan.get("layers", []):
+        gid = lyr["source_identity"]["geolibre_layer_id"]
+        rid = id_map.get(gid)
+        if rid is None:
+            warnings.append(f"[{lyr['name']}] dropped: no resolved GeoDeploy id (ingestion skipped).")
+            continue
+        base = {"layer_id": rid, "opacity": lyr["opacity"], "visible": lyr.get("visible", True),
+                "popup_fields": lyr.get("popup_fields", [])}
+        target = lyr["target"]
+        if target == "vector":
+            base["layer_type"] = "vector"
+            # style.maplibre = the raw-paint passthrough generate_style renders; friendly keys are a
+            # fallback for the GeoDeploy editor + the point-marker metadata.
+            base["style"] = {"maplibre": {"layers": lyr.get("maplibre_layers", [])},
+                             **_friendly_fallback(lyr)}
+        elif target == "raster":
+            base["layer_type"] = "raster"
+            rs = lyr.get("raster_style", {})
+            base["style"] = {"colormap": rs.get("colormap"), "rescale": rs.get("rescale"),
+                             "bidx": _bidx_list(rs.get("bidx")), "nodata": rs.get("nodata"),
+                             "paint": rs.get("paint")}
+        else:  # external tiles
+            base["layer_type"] = "external"
+            base["style"] = {}
+        configs.append(base)
+    return configs, warnings
+
+
+def plan_to_portal_kwargs(plan: dict, id_map: dict) -> dict:
+    """The portal-level kwargs for build_portal_bundle: title, initial_view, story (its layer refs
+    remapped to `type:resolved_id`), and the GeoLibre basemap URL (mapping it to a GeoDeploy basemap
+    catalog id is a TODO — for now the template default is used)."""
+    portal = plan["portal"]
+    target_by_gid = {l["source_identity"]["geolibre_layer_id"]: l["target"] for l in plan["layers"]}
+    story = None
+    if portal.get("story") and portal["story"].get("sections"):
+        sections = []
+        for s in portal["story"]["sections"]:
+            refs = {}
+            for gid, vis in (s.get("layers") or {}).items():
+                rid, tgt = id_map.get(gid), target_by_gid.get(gid)
+                if rid is not None and tgt:
+                    refs[f"{tgt}:{rid}"] = vis
+            sections.append({**s, "layers": refs})
+        story = {"title": portal["story"].get("title"), "sections": sections}
+    view = portal.get("view") or {}
+    return {
+        "title": portal.get("title"),
+        "initial_view": view if view.get("center") else None,
+        "story": story,
+        # TODO: resolve GeoLibre basemapStyleUrl → a GeoDeploy basemap catalog id; None = template default.
+        "basemap": None,
+        "geolibre_basemap_url": portal.get("basemap", {}).get("style_url"),
+    }
+
+
+def _friendly_fallback(lyr: dict) -> dict:
+    """Best-effort friendly-key style (color/radius/line_width/marker) derived from the raw paint, so
+    the GeoDeploy editor and the point-marker metadata have sensible values (expressions → default)."""
+    out = {"color": "#3b82f6", "radius": 6, "line_width": 2, "fill_opacity": 0.45,
+           "outline_color": "#1d4ed8", "marker": "circle"}
+    for ml in lyr.get("maplibre_layers", []):
+        p = ml.get("paint", {})
+        if ml["type"] == "fill" and isinstance(p.get("fill-color"), str):
+            out["color"] = p["fill-color"]
+        elif ml["type"] == "circle":
+            if isinstance(p.get("circle-color"), str):
+                out["color"] = p["circle-color"]
+            if isinstance(p.get("circle-radius"), (int, float)):
+                out["radius"] = p["circle-radius"]
+        elif ml["type"] == "line" and isinstance(p.get("line-width"), (int, float)):
+            out["line_width"] = p["line-width"]
+    return out
+
+
+def _bidx_list(bands) -> list[int] | None:
+    """GeoLibre COG `bands` ('1' or '1,2,3') → GeoDeploy `bidx` list of 1-based ints (or None)."""
+    if not bands:
+        return None
+    try:
+        idx = [int(b) for b in str(bands).split(",") if str(b).strip()]
+    except ValueError:
+        return None
+    return idx or None
 
 
 def _import_storymap(storymap: dict | None) -> dict | None:

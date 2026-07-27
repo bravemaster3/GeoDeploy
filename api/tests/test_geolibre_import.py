@@ -13,6 +13,8 @@ import pytest
 from geodeploy.services.geolibre_import import (
     import_project,
     parse_geolibre_project,
+    plan_to_layer_configs,
+    plan_to_portal_kwargs,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample.geolibre.json"
@@ -116,8 +118,10 @@ def test_z_track_is_elevation3d(plan):
     lyr = _layer(plan, "GPS track (3D-Z)")
     assert lyr["render_mode"] == "elevation3d"
     assert lyr["has_z"] is True
-    assert lyr["maplibre_layers"] == []          # rendered by deck, not MapLibre
     assert lyr["elevation"]["vertical_scale"] == 2
+    # It ALSO carries a flat MapLibre fallback (a line) so the data shows in 2D until the deck
+    # elevation path (Front 2) lands — we don't hide the data in the meantime.
+    assert any(m["type"] == "line" for m in lyr["maplibre_layers"])
 
 
 # ── raster: COG → TiTiler style ───────────────────────────────────────────────
@@ -147,3 +151,47 @@ def test_xyz_tiles_external(plan):
 
 def test_zorder_caveat_is_warned(plan):
     assert any("z-order" in w.lower() for w in plan["warnings"])
+
+
+# ── plan → GeoDeploy layer_configs (post-ingestion mapping) ───────────────────
+
+def _id_map(plan):
+    """Simulate ingestion resolving each GeoLibre layer to a GeoDeploy id."""
+    return {l["source_identity"]["geolibre_layer_id"]: i + 100
+            for i, l in enumerate(plan["layers"])}
+
+
+def test_plan_to_layer_configs_vector_passthrough(plan):
+    configs, warnings = plan_to_layer_configs(plan, _id_map(plan))
+    assert warnings == []  # every layer resolved
+    grad = next(c for c in configs if c["style"].get("maplibre"))  # a vector config
+    raw = grad["style"]["maplibre"]["layers"]
+    assert any(m["type"] in ("fill", "line", "circle", "fill-extrusion") for m in raw)
+    # friendly fallback derived from the raw paint (a hex, never an expression)
+    assert grad["style"]["color"].startswith("#")
+
+
+def test_plan_to_layer_configs_raster_and_external(plan):
+    configs, _ = plan_to_layer_configs(plan, _id_map(plan))
+    rast = next(c for c in configs if c["layer_type"] == "raster")
+    assert rast["style"]["colormap"] == "terrain"
+    assert rast["style"]["bidx"] == [1]              # "1" → [1]
+    ext = next(c for c in configs if c["layer_type"] == "external")
+    assert ext["layer_id"] is not None
+
+
+def test_plan_to_layer_configs_drops_unresolved_with_warning(plan):
+    configs, warnings = plan_to_layer_configs(plan, {})  # nothing resolved
+    assert configs == []
+    assert len(warnings) == len(plan["layers"])
+
+
+def test_plan_to_portal_kwargs_remaps_story_refs(plan):
+    id_map = _id_map(plan)
+    kw = plan_to_portal_kwargs(plan, id_map)
+    assert kw["title"] == "Interop Spike Project"
+    assert kw["initial_view"]["pitch"] == 45
+    # storymap layer ref remapped from the GeoLibre id to "vector:<resolved id>"
+    refs = kw["story"]["sections"][0]["layers"]
+    expected = f"vector:{id_map['lyr-graduated-poly']}"
+    assert refs[expected] is True

@@ -20,9 +20,22 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   detects 3D-Z → `elevation3d` (deck), maps COG→raster style + XYZ/WMS/PMTiles→external tiles, and
   view/basemap/storymap. Each layer carries a `source_identity` for the future write-back round-trip.
   **Mirrors GeoLibre's own `style-mapper.ts`/`vector-color.ts`** (their `@geolibre/*` packages are
-  private, so we re-implement, not import). NEXT: wire the plan to real ingestion + a raw MapLibre
-  paint passthrough in `portal_generator.generate_style` + the publish/upload endpoints. Full plan:
-  `notes_temp/GEOLIBRE_INTEROP.md`. Tested by `api/tests/test_geolibre_import.py` (pure, DB-free).
+  private, so we re-implement, not import). Also `plan_to_layer_configs(plan, id_map)` +
+  `plan_to_portal_kwargs(plan, id_map)` (pure): once ingestion resolves each GeoLibre layer to a
+  GeoDeploy id, these emit the exact `layer_configs` (raw paint carried in `style.maplibre`) + portal
+  kwargs (title/initial_view/story with remapped `type:id` refs) that `build_portal_bundle` consumes.
+  3D-Z layers render **flat** now (data visible) and carry `render_mode:elevation3d` + params for
+  Front 2. NEXT: the ingestion orchestration (geojson→native-CRS ingest keeping Z→id; COG→MinIO/
+  TiTiler) + the upload/token-auth publish endpoints. Full plan: `notes_temp/GEOLIBRE_INTEROP.md`.
+  Tested by `api/tests/test_geolibre_import.py` (pure, DB-free).
+- **`portal_generator.generate_style` raw-paint passthrough (GeoLibre interop, 2026-07-27):**
+  `_vector_layers(source_id, layer, cfg)` emits N MapLibre layers when `cfg.style.maplibre.layers` is
+  present (fill + outline, extrusion, …) wired to the layer's Martin source/source-layer, else the
+  single friendly-key `_vector_layer`. The first sub-layer carries the `geodeploy:*` switcher metadata;
+  the rest carry only `geodeploy:layer_id` (+`geodeploy:part`). Raster block merges an optional
+  `style.paint` (GeoLibre brightness/contrast/etc.). **PARITY TODO:** mirror the passthrough in
+  `PortalEditor.vue::buildPreviewStyle` and make portal.js's visibility toggle target ALL layers
+  sharing a `geodeploy:layer_id`, not just the first. Tested in `api/tests/test_portal_experiences.py`.
 
 ## Dependencies / relationships
 - `postgis.py`/`minio.py` talk to the Docker daemon (`docker.from_env()`) and reuse each other's constants. They are called from `routers/setup.py`.
@@ -39,8 +52,10 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
 - All tile URLs returned are **root-relative** (`/tiles/...`, `/raster/...`); callers that feed MapLibre must make them absolute (MapLibre's web worker can't resolve relative URLs). Done in `portal_generator` output consumer (`layout.html`) and `PortalEditor.vue`.
 
 ## Last updated
-2026-07-27 (GeoLibre interop Front-1 spike: new `geolibre_import.py` — `.geolibre.json` → GeoDeploy
-import plan, LayerStyle→MapLibre paint incl. extrusion/3D-Z/raster/tiles; pure, 24/24 checks pass)
+2026-07-27 (GeoLibre interop Front-1: `geolibre_import.py` — `.geolibre.json` → import plan
+[LayerStyle→MapLibre paint incl. extrusion/3D-Z/raster/tiles] + `plan_to_layer_configs`/
+`plan_to_portal_kwargs`; `generate_style` gains a raw-paint passthrough via `_vector_layers`. Pure
+translation fully tested; ingestion orchestration + endpoints next. Parity TODO: PortalEditor + portal.js)
 2026-07-21 (V-11 Template Experiences: `portal_generator.resolve_layout` bakes the layout manifest +
 story into `style.geodeploy.layout`/`.story`; mirrored in portal.js + PortalEditor.vue — see the bullet)
 2026-07-14 (SECURITY: `portal_generator._json_for_html` HTML-escapes JSON embedded in the portal

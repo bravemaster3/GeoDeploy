@@ -150,8 +150,8 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                     "minzoom": 0,
                     "maxzoom": 22,
                 }
-            ml_layer = _vector_layer(source_id, layer, cfg)
-            ml_layer["metadata"] = {
+            ml_layers = _vector_layers(source_id, layer, cfg)
+            meta = {
                 "geodeploy:name": layer.name,
                 "geodeploy:type": "vector",
                 "geodeploy:layer_id": layer.id,
@@ -162,9 +162,15 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 "geodeploy:markerColor": (cfg.get("style") or {}).get("color", "#3b82f6"),
                 "geodeploy:markerSize": (cfg.get("style") or {}).get("radius", 5),
             }
-            if not cfg.get("visible", True):
-                ml_layer.setdefault("layout", {})["visibility"] = "none"
-            layers.append(ml_layer)
+            # A raw-paint passthrough can emit several sub-layers (fill + outline, …). Only the FIRST
+            # carries the full geodeploy:* metadata so the switcher lists the layer once; the rest carry
+            # just geodeploy:layer_id so the runtime can toggle every sub-layer together (portal.js
+            # visibility toggle should target all layers sharing geodeploy:layer_id — parity TODO).
+            for i, ml in enumerate(ml_layers):
+                ml["metadata"] = meta if i == 0 else {"geodeploy:layer_id": layer.id, "geodeploy:part": True}
+                if not cfg.get("visible", True):
+                    ml.setdefault("layout", {})["visibility"] = "none"
+            layers.extend(ml_layers)
 
             if layer.bbox:
                 _expand_bounds(bounds, json.loads(layer.bbox))
@@ -188,11 +194,16 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 )],
                 "tileSize": 256,
             }
+            # Base opacity + an optional raster-paint passthrough (GeoLibre import carries
+            # brightness/contrast/saturation/hue in style.paint; GeoDeploy's own UI sets none of these).
+            raster_paint = {"raster-opacity": cfg.get("opacity", 1.0)}
+            if isinstance(rstyle.get("paint"), dict):
+                raster_paint.update(rstyle["paint"])
             raster_layer = {
                 "id": f"raster-{layer.id}",
                 "type": "raster",
                 "source": source_id,
-                "paint": {"raster-opacity": cfg.get("opacity", 1.0)},
+                "paint": raster_paint,
                 "metadata": {
                     "geodeploy:name": layer.name,
                     "geodeploy:type": "raster",
@@ -868,14 +879,42 @@ def _external_vector_layer(source_id: str, src, geom: str, style: dict, opacity:
     }
 
 
+def _source_layer_name(layer) -> str:
+    """The MapLibre `source-layer` for a vector layer: PostGIS tiles by Martin under schema.table;
+    GeoParquet PMTiles use the tippecanoe layer name "geodeploy" (see tasks/pmtiles_tile.PMTILES_LAYER)."""
+    return ("geodeploy" if getattr(layer, "storage_backend", "postgis") == "geoparquet"
+            else f"{layer.schema_name}.{layer.table_name}")
+
+
+def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
+    """The MapLibre render layers for one vector layer — usually one, but a **raw-paint passthrough**
+    (`style.maplibre.layers`, used by the GeoLibre importer to carry data-driven/extrusion symbology
+    we can't express with the friendly keys) can emit several (e.g. fill + outline line). Each raw
+    entry supplies `type`/`paint`/`layout`/`filter`/`suffix`; we wire the layer id + source-layer."""
+    raw = ((cfg.get("style") or {}).get("maplibre") or {}).get("layers")
+    if not raw:
+        return [_vector_layer(source_id, layer, cfg)]
+    source_layer = _source_layer_name(layer)
+    out: list[dict] = []
+    for i, entry in enumerate(raw):
+        suffix = entry.get("suffix") or entry.get("type") or f"l{i}"
+        ml = {"id": f"vector-{layer.id}-{suffix}", "type": entry["type"],
+              "source": source_id, "source-layer": source_layer}
+        if entry.get("filter") is not None:
+            ml["filter"] = entry["filter"]
+        if entry.get("paint"):
+            ml["paint"] = entry["paint"]
+        if entry.get("layout"):
+            ml["layout"] = dict(entry["layout"])
+        out.append(ml)
+    return out or [_vector_layer(source_id, layer, cfg)]
+
+
 def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
     geom = (layer.geometry_type or "").lower()
     style = cfg.get("style", {})
     opacity = cfg.get("opacity", 1.0)
-    # PostGIS layers tile by Martin under schema.table; GeoParquet PMTiles use the tippecanoe
-    # layer name "geodeploy" (see tasks/pmtiles_tile.PMTILES_LAYER).
-    source_layer = ("geodeploy" if getattr(layer, "storage_backend", "postgis") == "geoparquet"
-                    else f"{layer.schema_name}.{layer.table_name}")
+    source_layer = _source_layer_name(layer)
 
     if "polygon" in geom:
         return {
