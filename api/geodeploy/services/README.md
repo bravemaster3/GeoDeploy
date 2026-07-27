@@ -25,9 +25,14 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   GeoDeploy id, these emit the exact `layer_configs` (raw paint carried in `style.maplibre`) + portal
   kwargs (title/initial_view/story with remapped `type:id` refs) that `build_portal_bundle` consumes.
   3D-Z layers render **flat** now (data visible) and carry `render_mode:elevation3d` + params for
-  Front 2. NEXT: the ingestion orchestration (geojson→native-CRS ingest keeping Z→id; COG→MinIO/
-  TiTiler) + the upload/token-auth publish endpoints. Full plan: `notes_temp/GEOLIBRE_INTEROP.md`.
-  Tested by `api/tests/test_geolibre_import.py` (pure, DB-free).
+  Front 2. `external_source_spec(plan_layer)` maps a tile layer → `ExternalSource` kwargs (xyz/wms;
+  others warn). Full plan: `notes_temp/GEOLIBRE_INTEROP.md`. Tested by `api/tests/test_geolibre_import.py`.
+  **Publish path (2026-07-27, needs stack validation):** `routers/interop.py` — `POST /interop/geolibre/
+  preview` (dry-run) + `POST /interop/geolibre/publish` (creates a VectorLayer/UploadJob per vector
+  layer with its geojson to a temp file, ExternalSource per xyz/wms tile layer, the Portal shell with
+  translated `layer_configs`, then hands off to `tasks/geolibre_publish.publish_geolibre_project`, which
+  runs each `ingest_vector.apply()` synchronously and finalizes via the router's async `_rebuild_bundle`
+  + `published=True`). COG raster URL→storage ingestion is the remaining gap (warned, not wired).
 - **`portal_generator.generate_style` raw-paint passthrough (GeoLibre interop, 2026-07-27):**
   `_vector_layers(source_id, layer, cfg)` emits N MapLibre layers when `cfg.style.maplibre.layers` is
   present (fill + outline, extrusion, …) wired to the layer's Martin source/source-layer, else the

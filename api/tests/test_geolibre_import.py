@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from geodeploy.services.geolibre_import import (
+    external_source_spec,
     import_project,
     parse_geolibre_project,
     plan_to_layer_configs,
@@ -184,6 +185,15 @@ def test_plan_to_layer_configs_drops_unresolved_with_warning(plan):
     configs, warnings = plan_to_layer_configs(plan, {})  # nothing resolved
     assert configs == []
     assert len(warnings) == len(plan["layers"])
+
+
+def test_external_source_spec(plan):
+    xyz = _layer(plan, "Aerial (XYZ)")
+    spec = external_source_spec(xyz)
+    assert spec["source_type"] == "xyz" and spec["kind"] == "raster"
+    assert spec["url"].startswith("https://tiles.example.com/aerial/")
+    # a vector layer has no external equivalent
+    assert external_source_spec(_layer(plan, "Districts (single)")) is None
 
 
 def test_plan_to_portal_kwargs_remaps_story_refs(plan):

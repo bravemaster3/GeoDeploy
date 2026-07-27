@@ -473,6 +473,26 @@ def plan_to_portal_kwargs(plan: dict, id_map: dict) -> dict:
     }
 
 
+# GeoLibre tile types GeoDeploy can host as an ExternalSource (no ingest): (source_type, kind).
+_EXTERNAL_SUPPORTED = {"xyz": ("xyz", "raster"), "wms": ("wms", "raster")}
+
+
+def external_source_spec(plan_layer: dict) -> dict | None:
+    """Map an external (tiles) plan layer → `ExternalSource` constructor kwargs, or None when GeoDeploy
+    has no external equivalent yet (WMTS / vector-tiles / PMTiles / ArcGIS — the caller warns)."""
+    gt = plan_layer.get("geolibre_type")
+    mapped = _EXTERNAL_SUPPORTED.get(gt)
+    if not mapped:
+        return None
+    source_type, kind = mapped
+    src = plan_layer.get("source") or {}
+    url = (src.get("tiles") or [None])[0] if gt == "xyz" else src.get("url")
+    if not url:
+        return None
+    return {"source_type": source_type, "kind": kind, "url": url,
+            "attribution": src.get("attribution"), "layer_name": None}
+
+
 def _friendly_fallback(lyr: dict) -> dict:
     """Best-effort friendly-key style (color/radius/line_width/marker) derived from the raw paint, so
     the GeoDeploy editor and the point-marker metadata have sensible values (expressions → default)."""
