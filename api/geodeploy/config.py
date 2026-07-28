@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     # "Updates" panel can tell how far behind GitHub the running code is. "unknown" until an installer
     # writes it (e.g. a dev `docker compose up` without the script).
     geodeploy_git_sha: str = "unknown"
+    # DANGER ZONE: the admin in-container command runner (Settings → Danger Zone). OFF by default; an
+    # operator must opt in (set true + redeploy). Even on, it's admin-only, whitelisted to leaf
+    # containers (never the socket-holding api/celery), time-bounded, and audited. Keep it off unless
+    # you need it — it runs shell commands inside a container.
+    geodeploy_enable_terminal: bool = False
 
     postgis_host: str = ""
     postgis_port: int = 5432

@@ -177,6 +177,45 @@
           </div>
         </div>
       </section>
+
+      <!-- Danger Zone (admin) — the opt-in, gated in-container terminal -->
+      <section v-if="auth.isAdmin" class="rounded-xl border border-red-500/40 bg-red-500/[0.03] overflow-hidden">
+        <header class="flex items-center gap-3 px-5 py-3.5 border-b border-red-500/30">
+          <span class="w-9 h-9 rounded-lg bg-red-500/15 text-red-400 flex items-center justify-center flex-shrink-0">
+            <TrashIcon class="w-5 h-5" />
+          </span>
+          <div class="flex-1 min-w-0">
+            <h2 class="text-sm font-semibold text-red-400">Danger Zone</h2>
+            <p class="text-xs text-muted-foreground/70">Powerful tools — use with care.</p>
+          </div>
+        </header>
+        <div class="p-5 space-y-3">
+          <div>
+            <h3 class="text-sm font-semibold text-foreground">Container terminal</h3>
+            <p class="text-xs text-muted-foreground/70 mt-0.5">
+              Run a shell command inside a service container (e.g. <code class="font-mono">psql -c "…"</code>,
+              <code class="font-mono">redis-cli INFO</code>). <b>Off by default</b> — enable with
+              <code class="font-mono">GEODEPLOY_ENABLE_TERMINAL=true</code> in <code class="font-mono">.env</code>, then redeploy.
+              It never touches the host or the api/celery containers, and every command is audited.
+            </p>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <select v-model="term.service"
+                    class="text-xs rounded-md border border-border bg-background text-foreground px-2 py-1.5">
+              <option v-for="s in TERMINAL_SERVICES" :key="s" :value="s">{{ s }}</option>
+            </select>
+            <input v-model="term.command" @keyup.enter="runExec" spellcheck="false"
+                   placeholder='e.g. redis-cli INFO server'
+                   class="flex-1 min-w-[12rem] text-xs font-mono rounded-md border border-border bg-background text-foreground px-2.5 py-1.5" />
+            <button @click="runExec" :disabled="term.loading || !term.command.trim()"
+                    class="text-xs px-3 py-1.5 rounded-md border border-red-500/50 text-red-400 hover:bg-red-500/10 disabled:opacity-50">
+              {{ term.loading ? 'Running…' : 'Run' }}
+            </button>
+          </div>
+          <pre v-if="term.output !== null"
+               class="text-[11px] leading-relaxed font-mono whitespace-pre-wrap break-words max-h-80 overflow-auto rounded-lg bg-[#0b0f14] text-slate-200 p-3 m-0">{{ term.output || '(no output)' }}</pre>
+        </div>
+      </section>
       </div>
 
       <!-- Email tab (admin) -->
@@ -677,6 +716,23 @@ async function fetchLogs() {
     logs.value.text = 'Failed to load logs: ' + (e?.response?.data?.detail || e.message)
   } finally {
     logs.value.loading = false
+  }
+}
+
+// Danger Zone — in-container command runner (opt-in server-side; never api/celery).
+const TERMINAL_SERVICES = ['postgres', 'redis', 'martin', 'titiler', 'minio', 'nginx', 'ui']
+const term = ref({ service: 'postgres', command: '', output: null, loading: false })
+async function runExec() {
+  if (!term.value.command.trim()) return
+  term.value.loading = true
+  term.value.output = null
+  try {
+    const { data } = await api.post(`/admin/services/${term.value.service}/exec`, { command: term.value.command })
+    term.value.output = (data.output || '') + (data.exit_code ? `\n[exit ${data.exit_code}]` : '')
+  } catch (e) {
+    term.value.output = 'Error: ' + (e?.response?.data?.detail || e.message)
+  } finally {
+    term.value.loading = false
   }
 }
 
