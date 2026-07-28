@@ -116,11 +116,14 @@ def _vector_assets(layer, base: str) -> dict:
                 "title": "PMTiles archive (vector tiles, HTTP Range)",
                 "roles": ["tiles"],
             }
-    else:  # PostGIS-backed → Martin XYZ vector tiles
+    else:  # PostGIS-backed → Martin vector (MVT) tiles
         assets["vector-tiles"] = {
             "href": base + martin_svc.get_tile_url(layer.schema_name, layer.table_name),
             "type": "application/vnd.mapbox-vector-tile",
-            "title": "XYZ vector tiles (paste as a Vector Tiles connection in QGIS)",
+            "title": "Vector tiles — MVT, {z}/{x}/{y}",
+            "description": "Add as a VECTOR-TILE source (QGIS 'Vector Tiles', or a MapLibre/GeoLibre "
+                           f"vector source) — NOT an 'XYZ tiles' raster layer. Source-layer name: "
+                           f"'{layer.schema_name}.{layer.table_name}'.",
             "roles": ["tiles"],
         }
     return assets
