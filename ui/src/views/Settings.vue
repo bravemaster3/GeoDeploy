@@ -39,6 +39,9 @@
               <span v-else-if="updates.data.behind > 0" class="text-amber-400">
                 Update available — {{ updates.data.behind }} commit{{ updates.data.behind === 1 ? '' : 's' }} behind
               </span>
+              <span v-else-if="updates.data.update_available" class="text-amber-400">
+                Update available — a newer version is on GitHub{{ updates.data.latest ? ' (' + updates.data.latest + ')' : '' }}
+              </span>
               <span v-else-if="updates.data.status === 'offline'" class="text-muted-foreground/80">Couldn't reach GitHub to check for updates.</span>
               <span v-else class="text-muted-foreground/80">Version check unavailable.</span>
             </div>
@@ -53,7 +56,7 @@
                 <span class="text-foreground/85 truncate">{{ c.message }}</span>
               </div>
             </div>
-            <div v-if="updates.data.behind > 0" class="space-y-2">
+            <div v-if="updates.data.behind > 0 || updates.data.update_available" class="space-y-2">
               <button @click="startUpdate" :disabled="updates.updating"
                       class="text-xs font-semibold px-3.5 py-2 rounded-md bg-primary text-primary-foreground hover:brightness-110 disabled:opacity-50">
                 {{ updates.updating ? 'Updating…' : 'Update now' }}

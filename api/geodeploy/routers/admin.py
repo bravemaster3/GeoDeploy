@@ -23,6 +23,22 @@ _UPDATE_CACHE: dict = {"at": 0.0, "data": None}
 _UPDATE_TTL = 600  # seconds — GitHub's unauthenticated API allows 60 req/hr/IP, so cache the check
 
 
+def _finalize_update_available(result: dict, current: str) -> None:
+    """Decide whether to offer an update, INDEPENDENTLY of the compare call.
+
+    `behind` needs GitHub's compare endpoint, which 404s on a diverged/rolled-back
+    deploy and returns nothing when we're rate-limited — leaving `behind` null and,
+    historically, hiding the Update button even when a newer commit clearly exists.
+    So: if we learned a latest SHA and it differs from what's deployed, the update IS
+    available. Only claim it's NOT available when we positively confirmed parity."""
+    if result.get("up_to_date") is True:
+        result["update_available"] = False
+        return
+    latest = result.get("latest_full")
+    if latest and current and current != "unknown":
+        result["update_available"] = (latest != current)
+
+
 @router.get("/updates")
 async def check_updates(_: User = Depends(require_admin)):
     """Compare the DEPLOYED commit (GEODEPLOY_GIT_SHA, written to .env by the installer) against the
@@ -41,7 +57,7 @@ async def check_updates(_: User = Depends(require_admin)):
         "current": current[:7] if current and current != "unknown" else "unknown",
         "current_full": current,
         "latest": None, "latest_full": None, "latest_message": None, "latest_date": None,
-        "behind": None, "up_to_date": None, "commits": [],
+        "behind": None, "up_to_date": None, "update_available": None, "commits": [],
         "status": "ok",
         # The rollback-capable updater (builds, health-checks, and reverts if the new version is
         # unhealthy) — safer than a plain pull+build.
@@ -79,8 +95,10 @@ async def check_updates(_: User = Depends(require_admin)):
     except Exception as exc:  # network/rate-limit/parse — report gracefully, don't cache the failure
         result["status"] = "offline"
         result["error"] = str(exc)
+        _finalize_update_available(result, current)
         return result
 
+    _finalize_update_available(result, current)
     _UPDATE_CACHE["at"] = now
     _UPDATE_CACHE["data"] = result
     return result
