@@ -3,12 +3,50 @@ import {
   uploadVectorFile, uploadRasterFile,
   presignGeoParquet, completeGeoParquet, putFileToUrl,
   presignLargeVector, completeLargeVector,
+  multipartInitiate, multipartComplete, multipartAbort, putPartToUrl,
 } from '@/api'
 import { useDataStore } from '@/stores/data'
 
 // Files at or above this size can't be POSTed through the API (its multipart cap); they upload
 // direct-to-storage and convert to GeoParquet in the background. Matches the API's MAX_FILE_SIZE.
 export const LARGE_UPLOAD_THRESHOLD = 2 * 1024 * 1024 * 1024  // 2 GB
+
+// Above this, the single-PUT direct upload gets reset behind a CDN (Cloudflare buffers/caps the
+// body), so we switch to chunked multipart. Must stay <= the backend PART_SIZE (48 MB) so parts
+// clear the ~100 MB CDN limit. Files under it keep the simpler single-PUT path.
+const CHUNK_THRESHOLD = 48 * 1024 * 1024   // 48 MB
+const CHUNK_CONCURRENCY = 4                // parts uploaded in parallel
+
+// Upload a file as presigned multipart parts (initiate → PUT each part → complete). Returns the
+// finished object's s3_key. `onProgress` gets a 0–100 percentage aggregated across all parts.
+async function uploadChunked(file, kind, onProgress) {
+  const { data: init } = await multipartInitiate({ filename: file.name, file_size: file.size, kind })
+  const { s3_key, upload_id, part_size, parts } = init
+  const loaded = new Array(parts.length).fill(0)
+  const results = new Array(parts.length)
+  const report = () => onProgress?.(Math.round((loaded.reduce((a, b) => a + b, 0) * 100) / file.size))
+
+  let next = 0
+  async function worker() {
+    while (next < parts.length) {
+      const i = next++
+      const { part_number, url } = parts[i]
+      const start = (part_number - 1) * part_size
+      const blob = file.slice(start, Math.min(start + part_size, file.size))
+      const etag = await putPartToUrl(url, blob, (bytes) => { loaded[i] = bytes; report() })
+      loaded[i] = blob.size; report()
+      results[i] = { part_number, etag }
+    }
+  }
+  try {
+    await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, parts.length) }, worker))
+    await multipartComplete({ s3_key, upload_id, parts: results })
+    return s3_key
+  } catch (err) {
+    multipartAbort({ s3_key, upload_id }).catch(() => {})
+    throw err
+  }
+}
 
 export function useUpload() {
   const uploading = ref(false)
@@ -48,9 +86,15 @@ export function useUpload() {
     uploadProgress.value = 0
     error.value = null
     try {
-      const { data: pre } = await presignGeoParquet({ filename: file.name, name, file_size: file.size })
-      await putFileToUrl(pre.upload_url, file, (p) => (uploadProgress.value = p))
-      const { data: job } = await completeGeoParquet({ s3_key: pre.s3_key, name, file_size: file.size })
+      let s3Key
+      if (file.size > CHUNK_THRESHOLD) {
+        s3Key = await uploadChunked(file, 'geoparquet', (p) => (uploadProgress.value = p))
+      } else {
+        const { data: pre } = await presignGeoParquet({ filename: file.name, name, file_size: file.size })
+        await putFileToUrl(pre.upload_url, file, (p) => (uploadProgress.value = p))
+        s3Key = pre.s3_key
+      }
+      const { data: job } = await completeGeoParquet({ s3_key: s3Key, name, file_size: file.size })
 
       dataStore.vectorLayers.unshift({ id: job.layer_id, name: name || file.name, status: 'processing', _job: job })
       dataStore.pollJob(job.id, 'vector', job.layer_id).catch(() => {})
@@ -71,10 +115,16 @@ export function useUpload() {
     uploadProgress.value = 0
     error.value = null
     try {
-      const { data: pre } = await presignLargeVector({ filename: file.name, name, file_size: file.size })
-      await putFileToUrl(pre.upload_url, file, (p) => (uploadProgress.value = p))
+      let s3Key
+      if (file.size > CHUNK_THRESHOLD) {
+        s3Key = await uploadChunked(file, 'large', (p) => (uploadProgress.value = p))
+      } else {
+        const { data: pre } = await presignLargeVector({ filename: file.name, name, file_size: file.size })
+        await putFileToUrl(pre.upload_url, file, (p) => (uploadProgress.value = p))
+        s3Key = pre.s3_key
+      }
       const { data: job } = await completeLargeVector({
-        s3_key: pre.s3_key, name, file_size: file.size, ...(csvOpts || {}),
+        s3_key: s3Key, name, file_size: file.size, ...(csvOpts || {}),
       })
       dataStore.vectorLayers.unshift({ id: job.layer_id, name: name || file.name, status: 'processing', _job: job })
       dataStore.pollJob(job.id, 'vector', job.layer_id).catch(() => {})

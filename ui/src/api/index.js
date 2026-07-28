@@ -116,6 +116,33 @@ export const putFileToUrl = (url, file, onProgress) =>
     onUploadProgress: (e) => onProgress?.(Math.round((e.loaded * 100) / (e.total || e.loaded || 1))),
   })
 
+// Chunked (multipart) upload — big files die as a single PUT behind Cloudflare, so they upload as
+// many small presigned parts and get assembled server-side. initiate → PUT each part → complete.
+export const multipartInitiate = (data) => api.post('/data/vector/upload/multipart/initiate', data)
+export const multipartComplete = (data) => api.post('/data/vector/upload/multipart/complete', data)
+export const multipartAbort = (data) => api.post('/data/vector/upload/multipart/abort', data)
+
+// PUT one part to its presigned /s3 URL; resolves with the part's ETag (needed to assemble). Uses
+// XHR (not axios) so we can read the ETag response header — legible because /s3 is same-origin.
+export const putPartToUrl = (url, blob, onProgress) =>
+  new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('PUT', url)
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(e.loaded) }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        const etag = xhr.getResponseHeader('ETag')
+        if (etag) resolve(etag)
+        else reject(new Error('Part upload succeeded but returned no ETag'))
+      } else {
+        reject(new Error('Part upload failed (HTTP ' + xhr.status + ')'))
+      }
+    }
+    xhr.onerror = () => reject(new Error('Network error during part upload'))
+    xhr.onabort = () => reject(new Error('Part upload aborted'))
+    xhr.send(blob)
+  })
+
 export const getVectorJobStatus = (jobId) => api.get(`/data/vector/jobs/${jobId}`)
 // Viewport query for a GeoParquet (file-backed) layer → GeoJSON in EPSG:4326 (rendered by deck.gl).
 export const getVectorFeatures = (id, bbox, limit = 50000, signal = undefined) =>

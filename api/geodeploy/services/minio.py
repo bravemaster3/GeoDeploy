@@ -203,13 +203,68 @@ def browser_upload_url(key: str, expires: int = 3600) -> str:
     verifies and, being same-origin, there's no CORS. For an external (public) S3 endpoint we
     return the full presigned URL (that bucket must allow cross-origin PUT from the dashboard).
     """
+    return _browser_reachable(presigned_upload_url(key, expires))
+
+
+def _browser_reachable(url: str) -> str:
+    """Rewrite a presigned MinIO URL to a same-origin `/s3/...` path the browser can reach.
+
+    The internal Docker hostname isn't resolvable client-side; nginx forwards /s3 to MinIO with
+    the signed Host preserved, so SigV4 still verifies and — being same-origin — there's no CORS
+    (the browser can also read the response ETag, which multipart needs). An external (public)
+    S3 endpoint is returned unchanged (that bucket must allow cross-origin PUT)."""
     settings = get_settings()
-    url = presigned_upload_url(key, expires)
     if "geodeploy-minio" in (settings.storage_endpoint or ""):
         from urllib.parse import urlsplit
-        parts = urlsplit(url)
-        return f"/s3{parts.path}?{parts.query}" if parts.query else f"/s3{parts.path}"
+        p = urlsplit(url)
+        return f"/s3{p.path}?{p.query}" if p.query else f"/s3{p.path}"
     return url
+
+
+# ── Multipart (chunked) upload ────────────────────────────────────────────────────────────────
+# A single multi-GB PUT dies behind Cloudflare (it buffers/caps the request body → ERR_CONNECTION
+# _RESET mid-stream). So big files upload as many small parts, each a separate presigned PUT well
+# under the CDN body limit, then get assembled server-side. Each part is same-origin /s3 → no CORS,
+# and the part response's ETag is readable by the browser to send back for assembly.
+
+def create_multipart(key: str) -> str:
+    """Open a multipart upload; returns the UploadId every part is tied to."""
+    s3 = get_s3_client()
+    return s3.create_multipart_upload(Bucket=get_settings().storage_bucket, Key=key)["UploadId"]
+
+
+def presign_parts(key: str, upload_id: str, num_parts: int, expires: int = 6 * 3600) -> list[dict]:
+    """Presign browser-reachable PUT URLs for parts 1..num_parts."""
+    s3 = get_s3_client()
+    bucket = get_settings().storage_bucket
+    out = []
+    for n in range(1, num_parts + 1):
+        url = s3.generate_presigned_url(
+            "upload_part",
+            Params={"Bucket": bucket, "Key": key, "UploadId": upload_id, "PartNumber": n},
+            ExpiresIn=expires,
+        )
+        out.append({"part_number": n, "url": _browser_reachable(url)})
+    return out
+
+
+def complete_multipart(key: str, upload_id: str, parts: list[dict]) -> None:
+    """Assemble the staged parts into the final object. `parts`: [{part_number, etag}]."""
+    s3 = get_s3_client()
+    ordered = sorted(parts, key=lambda p: p["part_number"])
+    s3.complete_multipart_upload(
+        Bucket=get_settings().storage_bucket, Key=key, UploadId=upload_id,
+        MultipartUpload={"Parts": [{"ETag": p["etag"], "PartNumber": p["part_number"]} for p in ordered]},
+    )
+
+
+def abort_multipart(key: str, upload_id: str) -> None:
+    """Discard a cancelled/failed multipart upload (best-effort — frees the staged parts)."""
+    try:
+        get_s3_client().abort_multipart_upload(
+            Bucket=get_settings().storage_bucket, Key=key, UploadId=upload_id)
+    except Exception:
+        pass
 
 
 def restart_titiler(endpoint: str, access_key: str, secret_key: str, region: str = "us-east-1") -> None:

@@ -299,6 +299,83 @@ async def geoparquet_complete(
                      status="queued", progress=0, current_step="Queued", error_message=None)
 
 
+# ── Multipart (chunked) upload ────────────────────────────────────────────────────────────────
+# A single multi-GB PUT gets reset behind a CDN (Cloudflare buffers/caps the body). So big files
+# upload in parts, each a presigned PUT well under the ~100 MB limit. The browser: initiate → PUT
+# every part → complete (assemble), then the usual /geoparquet|large/complete registers the key.
+PART_SIZE = 48 * 1024 * 1024  # 48 MB per part — safely under Cloudflare's request-body limit
+
+
+class MultipartInitiate(BaseModel):
+    filename: str
+    file_size: int
+    kind: str  # "geoparquet" | "large"
+
+
+class MultipartPart(BaseModel):
+    part_number: int
+    etag: str
+
+
+class MultipartComplete(BaseModel):
+    s3_key: str
+    upload_id: str
+    parts: list[MultipartPart] = []
+
+
+@router.post("/upload/multipart/initiate")
+async def multipart_initiate(body: MultipartInitiate, user: User = Depends(require_scope("data:write"))):
+    """Begin a chunked upload: validate, mint a key under the user's prefix, open the S3 multipart
+    upload, and return a presigned PUT URL for every part. The key convention matches the single-PUT
+    flows so /geoparquet/complete and /large/complete accept it unchanged."""
+    import math
+    from ...services import minio as minio_svc
+    ext = os.path.splitext(body.filename or "")[1].lower()
+    if body.kind == "geoparquet":
+        if ext not in GEOPARQUET_EXTENSIONS:
+            raise HTTPException(400, "Upload a .parquet / .geoparquet file.")
+        if body.file_size > MAX_GEOPARQUET_SIZE:
+            raise HTTPException(413, "File exceeds 10 GB limit.")
+    else:
+        if ext not in LARGE_VECTOR_EXTENSIONS:
+            raise HTTPException(400, f"Unsupported file type: {ext}.")
+        if body.file_size > MAX_LARGE_UPLOAD:
+            raise HTTPException(413, f"File exceeds the {MAX_LARGE_UPLOAD // (1024**3)} GB limit.")
+    if body.file_size <= 0:
+        raise HTTPException(400, "Empty file.")
+
+    base = slugify(os.path.splitext(os.path.basename(body.filename or "layer"))[0], separator="_") or "layer"
+    s3_key = f"vectors/{user.id}/{uuid.uuid4().hex}/{base}{ext}"
+    upload_id = await run_in_threadpool(minio_svc.create_multipart, s3_key)
+    num_parts = max(1, math.ceil(body.file_size / PART_SIZE))
+    parts = await run_in_threadpool(minio_svc.presign_parts, s3_key, upload_id, num_parts)
+    return {"s3_key": s3_key, "upload_id": upload_id, "part_size": PART_SIZE, "parts": parts}
+
+
+@router.post("/upload/multipart/complete")
+async def multipart_complete(body: MultipartComplete, user: User = Depends(require_scope("data:write"))):
+    """Assemble the uploaded parts into the final object. The key persists; registration is a
+    separate call to /geoparquet/complete or /large/complete (same as the single-PUT flows)."""
+    from ...services import minio as minio_svc
+    if not (body.s3_key or "").startswith(f"vectors/{user.id}/"):
+        raise HTTPException(400, "Invalid storage key.")
+    if not body.parts:
+        raise HTTPException(400, "No parts to complete.")
+    await run_in_threadpool(minio_svc.complete_multipart, body.s3_key, body.upload_id,
+                            [p.model_dump() for p in body.parts])
+    return {"s3_key": body.s3_key}
+
+
+@router.post("/upload/multipart/abort")
+async def multipart_abort(body: MultipartComplete, user: User = Depends(require_scope("data:write"))):
+    """Discard a cancelled/failed chunked upload (frees the staged parts)."""
+    from ...services import minio as minio_svc
+    if not (body.s3_key or "").startswith(f"vectors/{user.id}/"):
+        raise HTTPException(400, "Invalid storage key.")
+    await run_in_threadpool(minio_svc.abort_multipart, body.s3_key, body.upload_id)
+    return {"ok": True}
+
+
 class LargeVectorPresign(BaseModel):
     filename: str
     name: str | None = None

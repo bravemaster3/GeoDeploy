@@ -77,7 +77,6 @@ async def discover_database(user: User = Depends(require_scope("data:write")), d
                       f_geometry_column AS gcol, srid, type
                FROM geometry_columns
                WHERE f_table_schema <> ALL($1::text[])
-                 AND f_table_schema NOT LIKE 'geodeploy\\_u%'
                ORDER BY f_table_schema, f_table_name""",
             _SYS_SCHEMAS,
         )
@@ -99,6 +98,12 @@ async def discover_database(user: User = Depends(require_scope("data:write")), d
         select(VectorLayer.schema_name, VectorLayer.table_name)
     )
     have = {(s, t) for s, t in existing.all()}
+    # GeoDeploy's own per-user schemas (geodeploy_u{id}) are shown ONLY when the table is orphaned
+    # (in PostGIS but missing from the catalog — e.g. after a catalog wipe/reinstall against an
+    # existing DB), so you can RE-ADOPT it. Once it's in the catalog we hide it here so a user's
+    # normal uploads don't clutter this list. Foreign schemas always show (flagged already_imported).
+    def _hidden(schema, tbl):
+        return schema.startswith("geodeploy_u") and (schema, tbl) in have
     return [
         {
             "schema_name": r["schema"], "table_name": r["tbl"],
@@ -108,6 +113,7 @@ async def discover_database(user: User = Depends(require_scope("data:write")), d
             "already_imported": (r["schema"], r["tbl"]) in have,
         }
         for r in rows
+        if not _hidden(r["schema"], r["tbl"])
     ]
 
 
