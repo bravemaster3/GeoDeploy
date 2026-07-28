@@ -211,9 +211,13 @@ async def _public_data_cors(request, call_next):
         })
     response = await call_next(request)
     if public:
+        # Starlette's MutableHeaders has NO .pop()/.setdefault-safe pop — use setitem + guarded del so
+        # this never raises (a raise here 500s the STAC/data links, which is exactly what happened).
         response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers.pop("Access-Control-Allow-Credentials", None)
-        response.headers.setdefault("Access-Control-Expose-Headers", "*")
+        if "access-control-allow-credentials" in response.headers:
+            del response.headers["access-control-allow-credentials"]
+        if "access-control-expose-headers" not in response.headers:
+            response.headers["Access-Control-Expose-Headers"] = "*"
     return response
 
 
