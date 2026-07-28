@@ -75,7 +75,15 @@ write_status running "Fetching the latest version"
 if ! git fetch origin main >/dev/null 2>&1; then write_status error "git fetch failed (no network?)."; exit 1; fi
 if ! git reset --hard origin/main >/dev/null 2>&1; then write_status error "git update failed."; exit 1; fi
 NEW_SHA="$(git rev-parse HEAD)"
-if [ "$NEW_SHA" = "$OLD_SHA" ]; then write_status success "Already up to date (${OLD_SHA:0:7})."; exit 0; fi
+if [ "$NEW_SHA" = "$OLD_SHA" ]; then
+  # Keep the deployed-commit marker honest even on a no-op — a manual `git pull` moves HEAD but leaves
+  # GEODEPLOY_GIT_SHA stale, so the panel wrongly shows "behind". Sync + reload the API to pick it up.
+  if ! grep -q "^GEODEPLOY_GIT_SHA=${NEW_SHA}$" .env 2>/dev/null; then
+    sed -i "s|^GEODEPLOY_GIT_SHA=.*|GEODEPLOY_GIT_SHA=${NEW_SHA}|" .env 2>/dev/null || true
+    docker compose up -d --force-recreate geodeploy-api >/dev/null 2>&1 || true
+  fi
+  write_status success "Already up to date (${NEW_SHA:0:7})."; exit 0
+fi
 
 write_status running "Building the new version"
 if ! docker compose build; then rollback "$OLD_SHA" "Build failed"; exit 1; fi
