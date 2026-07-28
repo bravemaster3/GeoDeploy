@@ -53,9 +53,20 @@
                 <span class="text-foreground/85 truncate">{{ c.message }}</span>
               </div>
             </div>
-            <div v-if="updates.data.behind > 0" class="text-xs text-muted-foreground/80 space-y-1.5">
-              <p>To update, run this on the server (a one-click in-browser update is coming next):</p>
-              <code class="block bg-muted/40 rounded px-2.5 py-1.5 font-mono text-[11px] select-all overflow-x-auto">{{ updates.data.update_command }}</code>
+            <div v-if="updates.data.behind > 0" class="space-y-2">
+              <button @click="startUpdate" :disabled="updates.updating"
+                      class="text-xs font-semibold px-3.5 py-2 rounded-md bg-primary text-primary-foreground hover:brightness-110 disabled:opacity-50">
+                {{ updates.updating ? 'Updating…' : 'Update now' }}
+              </button>
+              <p class="text-[11px] text-muted-foreground/70">
+                Builds the new version, restarts services, and health-checks — <b>rolls back automatically</b> if it comes up unhealthy.
+                Or run manually: <code class="font-mono bg-muted/40 rounded px-1.5 py-0.5 select-all">{{ updates.data.update_command }}</code>
+              </p>
+            </div>
+            <!-- Live update progress -->
+            <div v-if="updates.progress" class="text-xs rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+              <span class="font-semibold uppercase tracking-wide" :class="updatePhaseClass(updates.progress.phase)">{{ updates.progress.phase }}</span>
+              <span class="text-foreground/85"> — {{ updates.progress.message }}</span>
             </div>
           </template>
           <div v-else class="text-sm text-muted-foreground/70">Version check unavailable.</div>
@@ -736,8 +747,8 @@ async function runExec() {
   }
 }
 
-// Software updates (read-only): compare the deployed commit to GitHub main.
-const updates = ref({ loading: false, data: null })
+// Software updates: check (read-only) + one-click update with live status.
+const updates = ref({ loading: false, data: null, updating: false, progress: null })
 async function checkUpdates() {
   updates.value.loading = true
   try {
@@ -748,6 +759,40 @@ async function checkUpdates() {
   } finally {
     updates.value.loading = false
   }
+}
+let updatePollTimer = null
+async function startUpdate() {
+  if (!confirm('Update GeoDeploy now? Services restart briefly. If the new version is unhealthy it rolls back automatically.')) return
+  updates.value.updating = true
+  updates.value.progress = { phase: 'running', message: 'Starting…' }
+  try {
+    await api.post('/admin/update')
+    pollUpdateStatus()
+  } catch (e) {
+    updates.value.progress = { phase: 'error', message: e?.response?.data?.detail || e.message }
+    updates.value.updating = false
+  }
+}
+async function pollUpdateStatus() {
+  try {
+    const { data } = await api.get('/admin/update/status')
+    updates.value.progress = data
+    if (['success', 'rolledback', 'error'].includes(data.phase)) {
+      updates.value.updating = false
+      clearTimeout(updatePollTimer)
+      setTimeout(checkUpdates, 2500)   // refresh the version once it settles
+      return
+    }
+  } catch {
+    // The API restarts mid-update — expected. Keep the last phase, note we're waiting, keep polling.
+    if (updates.value.progress) updates.value.progress = { ...updates.value.progress, message: 'Restarting services…' }
+  }
+  updatePollTimer = setTimeout(pollUpdateStatus, 3000)
+}
+function updatePhaseClass(phase) {
+  if (phase === 'success') return 'text-green-400'
+  if (['error', 'rolledback'].includes(phase)) return 'text-red-400'
+  return 'text-amber-400'
 }
 
 // Outgoing email (generic SMTP, C-08a)

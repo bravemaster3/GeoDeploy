@@ -9,7 +9,7 @@
 set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 1   # repo root (this script lives in installer/)
-STATUS_FILE="data/update-status.json"
+STATUS_FILE="data/temp/update-status.json"   # under data/temp (mounted into the API → the UI can poll it)
 HEALTH_URL="${GEODEPLOY_HEALTH_URL:-http://localhost/health}"
 HEALTH_TRIES="${GEODEPLOY_HEALTH_TRIES:-40}"   # × 3s ≈ 2 min for the stack to come back healthy
 # Recreate ONLY the Compose-owned code services — postgres/minio/titiler are wizard-provisioned via
@@ -17,7 +17,7 @@ HEALTH_TRIES="${GEODEPLOY_HEALTH_TRIES:-40}"   # × 3s ≈ 2 min for the stack t
 # update doesn't touch them anyway.
 CORE_SERVICES="geodeploy-api geodeploy-ui celery nginx redis"
 
-mkdir -p data
+mkdir -p data/temp
 _now() { date -u +%FT%TZ; }
 write_status() { # phase message
   printf '{"phase":"%s","message":"%s","at":"%s"}\n' "$1" "$(printf '%s' "$2" | sed 's/"/\\"/g')" "$(_now)" > "$STATUS_FILE"

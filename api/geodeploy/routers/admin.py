@@ -85,6 +85,99 @@ async def check_updates(_: User = Depends(require_admin)):
     _UPDATE_CACHE["data"] = result
     return result
 
+
+def _repo_host_dir(client):
+    """The repo's HOST path (needed to bind-mount it into the updater container). Derived by inspecting
+    THIS (api) container's own bind mounts — the `.env` mount's Source is `<repo>/.env` on the host —
+    so no extra env var is required."""
+    import socket
+    try:
+        me = client.containers.get(socket.gethostname())
+    except Exception:
+        return None
+    mounts = me.attrs.get("Mounts", [])
+    for m in mounts:
+        if m.get("Destination") == "/geodeploy/.env" and m.get("Source"):
+            return os.path.dirname(m["Source"])
+    for m in mounts:  # fallback via a data mount: <repo>/data/sqlite → <repo>
+        if m.get("Destination") == "/data/sqlite" and m.get("Source"):
+            return os.path.dirname(os.path.dirname(m["Source"]))
+    return None
+
+
+@router.post("/update", status_code=202)
+async def start_update(user: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    """One-click update. Launches a DETACHED helper container that runs `installer/self-update.sh`
+    (pull → build → recreate the core services → health-check → **roll back** if unhealthy), then
+    returns immediately; the UI polls `GET /admin/update/status`. The helper is `docker:cli` (bundles
+    the compose plugin) + git; it runs OUR committed script on OUR repo (no user input), mounts the
+    repo + docker socket, and joins the geodeploy network to hit the API health check. Admin + audited.
+    A bad update self-heals via the script's rollback, so the worst case is 'no change applied'."""
+    import docker
+    settings = get_settings()
+    try:
+        client = docker.from_env()
+    except Exception as exc:
+        raise HTTPException(500, f"Docker is not reachable: {exc}") from exc
+
+    existing = _resolve_container(client, "updater")
+    if existing is not None and existing.status in ("running", "created", "restarting"):
+        raise HTTPException(409, "An update is already running.")
+    if existing is not None:
+        try:
+            existing.remove(force=True)
+        except Exception:
+            pass
+
+    repo = _repo_host_dir(client)
+    if not repo:
+        raise HTTPException(500, "Could not resolve the host repo path for the updater.")
+
+    status_path = f"{settings.data_dir}/temp/update-status.json"
+    try:
+        os.makedirs(os.path.dirname(status_path), exist_ok=True)
+        with open(status_path, "w") as fh:
+            fh.write('{"phase":"running","message":"Starting update…","at":""}')
+    except Exception:
+        pass
+
+    try:
+        client.containers.run(
+            image="docker:cli",
+            command=["sh", "-c",
+                     "apk add --no-cache git bash >/dev/null 2>&1; cd /geodeploy && bash installer/self-update.sh"],
+            volumes={
+                repo: {"bind": "/geodeploy", "mode": "rw"},
+                "/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"},
+            },
+            environment={"GEODEPLOY_HEALTH_URL": "http://geodeploy-api:8000/health"},
+            network="geodeploy",
+            name="geodeploy-updater",
+            detach=True,
+            remove=True,
+        )
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to launch the updater: {exc}") from exc
+
+    await record_audit(db, user, "admin.update.start", "system", None, {})
+    return {"status": "started"}
+
+
+@router.get("/update/status")
+async def update_status(_: User = Depends(require_admin)):
+    """Progress the updater writes to `data/temp/update-status.json`. `phase` ∈ running | success |
+    rollingback | rolledback | error | idle. The API itself restarts mid-update, so the UI should
+    tolerate this endpoint being briefly unreachable while services come back."""
+    import json as _json
+    path = f"{get_settings().data_dir}/temp/update-status.json"
+    try:
+        with open(path) as fh:
+            return _json.load(fh)
+    except FileNotFoundError:
+        return {"phase": "idle", "message": "", "at": ""}
+    except Exception as exc:
+        return {"phase": "unknown", "message": str(exc), "at": ""}
+
 # Services shown on the Settings page, in display order.
 SERVICE_KEYS = ["postgres", "minio", "redis", "martin", "titiler", "nginx", "celery", "ui", "api"]
 # The API container serves this very request — don't let the panel stop/restart itself.
