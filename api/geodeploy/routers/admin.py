@@ -150,7 +150,9 @@ async def start_update(user: User = Depends(require_admin), db: AsyncSession = D
                 repo: {"bind": "/geodeploy", "mode": "rw"},
                 "/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"},
             },
-            environment={"GEODEPLOY_HEALTH_URL": "http://geodeploy-api:8000/health"},
+            # Health-check THROUGH nginx (the public ingress), not the API directly — so a broken/down
+            # nginx is caught and triggers a rollback, instead of a false "healthy".
+            environment={"GEODEPLOY_HEALTH_URL": "http://nginx/health"},
             network="geodeploy",
             name="geodeploy-updater",
             detach=True,

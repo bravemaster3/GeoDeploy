@@ -761,9 +761,11 @@ async function checkUpdates() {
   }
 }
 let updatePollTimer = null
+let updatePollCount = 0
 async function startUpdate() {
   if (!confirm('Update GeoDeploy now? Services restart briefly. If the new version is unhealthy it rolls back automatically.')) return
   updates.value.updating = true
+  updatePollCount = 0
   updates.value.progress = { phase: 'running', message: 'Starting…' }
   try {
     await api.post('/admin/update')
@@ -774,18 +776,31 @@ async function startUpdate() {
   }
 }
 async function pollUpdateStatus() {
+  updatePollCount++
   try {
     const { data } = await api.get('/admin/update/status')
     updates.value.progress = data
-    if (['success', 'rolledback', 'error'].includes(data.phase)) {
+    if (data.phase === 'success') {
+      // Update applied + healthy → reload the page to pick up the new UI + version display.
+      clearTimeout(updatePollTimer)
+      updates.value.progress = { ...data, message: (data.message || 'Updated.') + ' Reloading…' }
+      setTimeout(() => window.location.reload(), 2500)
+      return
+    }
+    if (['rolledback', 'error'].includes(data.phase)) {
       updates.value.updating = false
       clearTimeout(updatePollTimer)
-      setTimeout(checkUpdates, 2500)   // refresh the version once it settles
+      setTimeout(checkUpdates, 2000)
       return
     }
   } catch {
     // The API restarts mid-update — expected. Keep the last phase, note we're waiting, keep polling.
-    if (updates.value.progress) updates.value.progress = { ...updates.value.progress, message: 'Restarting services…' }
+    if (updates.value.progress) updates.value.progress = { ...updates.value.progress, message: 'Restarting services… (can take a minute)' }
+  }
+  if (updatePollCount > 100) {   // ~5 min safety net so it never spins forever
+    updates.value.updating = false
+    updates.value.progress = { phase: 'unknown', message: 'Taking longer than expected — reload the page to check the result.' }
+    return
   }
   updatePollTimer = setTimeout(pollUpdateStatus, 3000)
 }

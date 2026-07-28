@@ -12,10 +12,12 @@ cd "$(dirname "$0")/.." || exit 1   # repo root (this script lives in installer/
 STATUS_FILE="data/temp/update-status.json"   # under data/temp (mounted into the API → the UI can poll it)
 HEALTH_URL="${GEODEPLOY_HEALTH_URL:-http://localhost/health}"
 HEALTH_TRIES="${GEODEPLOY_HEALTH_TRIES:-40}"   # × 3s ≈ 2 min for the stack to come back healthy
-# Recreate ONLY the Compose-owned code services — postgres/minio/titiler are wizard-provisioned via
-# the Docker socket (fixed names outside Compose), so a blanket `up` collides on the name. A code
-# update doesn't touch them anyway.
-CORE_SERVICES="geodeploy-api geodeploy-ui celery nginx redis"
+# Recreate ONLY the code services. NGINX IS DELIBERATELY EXCLUDED: it's the single ingress, so
+# recreating it takes the whole site down for a few seconds (Cloudflare 521). Instead we leave it
+# running and RELOAD its config gracefully (nginx -s reload — zero-downtime, and if the new config is
+# invalid it keeps the old one). postgres/minio/titiler are wizard-provisioned outside Compose (fixed
+# names) and a blanket `up` would collide on them — and a code update doesn't touch any of these.
+CORE_SERVICES="geodeploy-api geodeploy-ui celery"
 
 mkdir -p data/temp
 _now() { date -u +%FT%TZ; }
@@ -24,6 +26,9 @@ write_status() { # phase message
   echo "[self-update] $1: $2"
 }
 _http_ok() { curl -fsS "$1" >/dev/null 2>&1 || wget -q -O- "$1" >/dev/null 2>&1; }
+# Graceful nginx config reload (picks up nginx.conf changes with NO downtime; a bad config is rejected
+# and the running config is kept). Never recreates the container.
+reload_nginx() { docker compose exec -T nginx nginx -t >/dev/null 2>&1 && docker compose exec -T nginx nginx -s reload >/dev/null 2>&1 || true; }
 
 healthy() {
   local i
@@ -37,7 +42,7 @@ healthy() {
 rollback() { # old_sha reason
   write_status rollingback "$2 — rolling back to ${1:0:7}"
   git reset --hard "$1" >/dev/null 2>&1
-  docker compose build && docker compose up -d $CORE_SERVICES
+  docker compose build && docker compose up -d $CORE_SERVICES && reload_nginx
   # restore the deployed-commit marker so the Updates panel reflects reality
   sed -i "s|^GEODEPLOY_GIT_SHA=.*|GEODEPLOY_GIT_SHA=${1}|" .env 2>/dev/null || true
   if healthy; then
@@ -61,6 +66,7 @@ if ! docker compose build; then rollback "$OLD_SHA" "Build failed"; exit 1; fi
 
 write_status running "Restarting services"
 if ! docker compose up -d $CORE_SERVICES; then rollback "$OLD_SHA" "Restart failed"; exit 1; fi
+reload_nginx   # apply any nginx.conf change without recreating (and without downtime)
 
 write_status running "Checking health"
 if ! healthy; then rollback "$OLD_SHA" "Unhealthy after update"; exit 1; fi
