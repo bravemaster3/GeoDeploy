@@ -40,7 +40,9 @@ async def check_updates(_: User = Depends(require_admin)):
         "latest": None, "latest_full": None, "latest_message": None, "latest_date": None,
         "behind": None, "up_to_date": None, "commits": [],
         "status": "ok",
-        "update_command": "cd ~/geodeploy && sudo bash installer/update.sh",
+        # The rollback-capable updater (builds, health-checks, and reverts if the new version is
+        # unhealthy) — safer than a plain pull+build.
+        "update_command": "cd ~/geodeploy && sudo bash installer/self-update.sh",
     }
     try:
         headers = {"Accept": "application/vnd.github+json", "User-Agent": "GeoDeploy"}
@@ -155,6 +157,30 @@ async def control_service(name: str, action: str, _: User = Depends(require_admi
     except Exception as exc:
         raise HTTPException(500, f"Failed to {action} {name}: {exc}") from exc
     return {"status": "ok", "service": name, "action": action}
+
+
+@router.get("/services/{name}/logs")
+async def service_logs(name: str, tail: int = 200, _: User = Depends(require_admin)):
+    """Recent container logs for a service (READ-ONLY, admin-only). Combined stdout+stderr with
+    timestamps; `tail` is capped so a huge log can't blow up the response. Admins can already read the
+    host, so this is an information view, not a new privilege — and it's the safe substitute for a
+    shell (no exec, no writes)."""
+    import docker
+    if name not in SERVICE_KEYS:
+        raise HTTPException(400, f"Unknown service '{name}'.")
+    tail = max(1, min(int(tail), 2000))
+    try:
+        client = docker.from_env()
+        c = _resolve_container(client, name)
+        if c is None:
+            raise HTTPException(404, f"Container for '{name}' not found.")
+        raw = c.logs(tail=tail, timestamps=True, stdout=True, stderr=True)
+        text = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to read logs for {name}: {exc}") from exc
+    return {"service": name, "tail": tail, "logs": text}
 
 
 @router.post("/reload-martin")

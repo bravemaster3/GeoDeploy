@@ -105,6 +105,36 @@
         </div>
       </section>
 
+      <!-- Logs (admin) — read-only container output; the safe alternative to a shell -->
+      <section v-if="auth.isAdmin" class="card overflow-hidden">
+        <header class="flex flex-wrap items-center gap-2 px-5 py-3.5 border-b border-border/60">
+          <span class="w-9 h-9 rounded-lg bg-sky-500/15 text-sky-400 flex items-center justify-center flex-shrink-0">
+            <ServerIcon class="w-5 h-5" />
+          </span>
+          <div class="flex-1 min-w-0">
+            <h2 class="text-sm font-semibold text-foreground">Logs</h2>
+            <p class="text-xs text-muted-foreground/70">Recent container output (read-only)</p>
+          </div>
+          <select v-model="logs.service" @change="fetchLogs"
+                  class="text-xs rounded-md border border-border bg-background text-foreground px-2 py-1.5">
+            <option v-for="s in LOG_SERVICES" :key="s" :value="s">{{ s }}</option>
+          </select>
+          <select v-model.number="logs.tail" @change="fetchLogs"
+                  class="text-xs rounded-md border border-border bg-background text-foreground px-2 py-1.5">
+            <option :value="100">100</option>
+            <option :value="200">200</option>
+            <option :value="500">500</option>
+            <option :value="2000">2000</option>
+          </select>
+          <button @click="fetchLogs" :disabled="logs.loading" class="btn-secondary text-xs px-3 py-1.5">
+            <RefreshIcon class="w-3.5 h-3.5" /> {{ logs.loading ? 'Loading…' : 'Refresh' }}
+          </button>
+        </header>
+        <div class="p-2">
+          <pre class="text-[11px] leading-relaxed font-mono whitespace-pre-wrap break-words max-h-96 overflow-auto rounded-lg bg-[#0b0f14] text-slate-200 p-3 m-0">{{ logs.text || 'Choose a service and press Refresh.' }}</pre>
+        </div>
+      </section>
+
       <!-- Storage (admin/owner — storage-stats is require_admin server-side) -->
       <section v-if="auth.isAdmin && systemStore.stats" class="card overflow-hidden">
         <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
@@ -634,6 +664,21 @@ onMounted(() => {
     checkUpdates()
   }
 })
+
+// Service logs (read-only). Admin-only server-side; a safe substitute for a shell.
+const LOG_SERVICES = ['celery', 'api', 'nginx', 'martin', 'titiler', 'postgres', 'minio', 'redis', 'ui']
+const logs = ref({ service: 'celery', tail: 200, text: '', loading: false })
+async function fetchLogs() {
+  logs.value.loading = true
+  try {
+    const { data } = await api.get(`/admin/services/${logs.value.service}/logs`, { params: { tail: logs.value.tail } })
+    logs.value.text = data.logs || '(no output)'
+  } catch (e) {
+    logs.value.text = 'Failed to load logs: ' + (e?.response?.data?.detail || e.message)
+  } finally {
+    logs.value.loading = false
+  }
+}
 
 // Software updates (read-only): compare the deployed commit to GitHub main.
 const updates = ref({ loading: false, data: null })
