@@ -162,10 +162,15 @@ async def start_update(user: User = Depends(require_admin), db: AsyncSession = D
     try:
         client.containers.run(
             image="docker:cli",
+            # CRITICAL: mount the repo at its REAL host path and cd there, so `docker compose` inside this
+            # helper resolves the compose file's RELATIVE bind mounts (./data/portals, ./data/sqlite) to the
+            # SAME host paths the running stack uses. Mounting at a DIFFERENT path (/geodeploy) made compose
+            # recreate the API against empty /geodeploy/data/* → blank portals + vanished layers after every
+            # update, and could leave nginx serving a diverged mount. The mount path MUST equal the host path.
             command=["sh", "-c",
-                     "apk add --no-cache git bash >/dev/null 2>&1; cd /geodeploy && bash installer/self-update.sh"],
+                     f'apk add --no-cache git bash >/dev/null 2>&1; cd "{repo}" && bash installer/self-update.sh'],
             volumes={
-                repo: {"bind": "/geodeploy", "mode": "rw"},
+                repo: {"bind": repo, "mode": "rw"},
                 "/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"},
             },
             # Health-check THROUGH nginx (the public ingress), not the API directly — so a broken/down
