@@ -12,6 +12,10 @@ cd "$(dirname "$0")/.." || exit 1   # repo root (this script lives in installer/
 STATUS_FILE="data/update-status.json"
 HEALTH_URL="${GEODEPLOY_HEALTH_URL:-http://localhost/health}"
 HEALTH_TRIES="${GEODEPLOY_HEALTH_TRIES:-40}"   # × 3s ≈ 2 min for the stack to come back healthy
+# Recreate ONLY the Compose-owned code services — postgres/minio/titiler are wizard-provisioned via
+# the Docker socket (fixed names outside Compose), so a blanket `up` collides on the name. A code
+# update doesn't touch them anyway.
+CORE_SERVICES="geodeploy-api geodeploy-ui celery nginx redis"
 
 mkdir -p data
 _now() { date -u +%FT%TZ; }
@@ -33,7 +37,7 @@ healthy() {
 rollback() { # old_sha reason
   write_status rollingback "$2 — rolling back to ${1:0:7}"
   git reset --hard "$1" >/dev/null 2>&1
-  docker compose build && docker compose up -d
+  docker compose build && docker compose up -d $CORE_SERVICES
   # restore the deployed-commit marker so the Updates panel reflects reality
   sed -i "s|^GEODEPLOY_GIT_SHA=.*|GEODEPLOY_GIT_SHA=${1}|" .env 2>/dev/null || true
   if healthy; then
@@ -56,7 +60,7 @@ write_status running "Building the new version"
 if ! docker compose build; then rollback "$OLD_SHA" "Build failed"; exit 1; fi
 
 write_status running "Restarting services"
-if ! docker compose up -d; then rollback "$OLD_SHA" "Restart failed"; exit 1; fi
+if ! docker compose up -d $CORE_SERVICES; then rollback "$OLD_SHA" "Restart failed"; exit 1; fi
 
 write_status running "Checking health"
 if ! healthy; then rollback "$OLD_SHA" "Unhealthy after update"; exit 1; fi
