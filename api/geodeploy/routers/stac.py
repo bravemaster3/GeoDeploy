@@ -117,6 +117,17 @@ def _vector_assets(layer, base: str) -> dict:
                 "roles": ["tiles"],
             }
     else:  # PostGIS-backed → Martin vector (MVT) tiles
+        # The consumable one-URL artifact: a TileJSON other tools add directly as a vector source.
+        assets["tilejson"] = {
+            "href": f"{base}/api/data/vector/{layer.id}/tilejson",
+            "type": "application/json",
+            "title": "TileJSON — add this URL directly as a vector-tile source (QGIS/GeoLibre/MapLibre)",
+            "description": "The easiest way to consume this layer: paste this URL into QGIS "
+                           "'Vector Tiles' (from TileJSON), or add it as a MapLibre/GeoLibre vector "
+                           "source. It carries the tile URL, bounds, and the source-layer name.",
+            "roles": ["metadata", "tiles"],
+        }
+        # The raw tile template (for tools that want it directly).
         assets["vector-tiles"] = {
             "href": base + martin_svc.get_tile_url(layer.schema_name, layer.table_name),
             "type": "application/vnd.mapbox-vector-tile",

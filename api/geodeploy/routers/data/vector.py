@@ -495,6 +495,51 @@ async def vector_features_public(
     return await _viewport_geojson(layer, bbox, limit)
 
 
+@router.get("/{layer_id}/tilejson")
+async def vector_tilejson(layer_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    """PUBLIC TileJSON (3.0.0) for a PostGIS vector layer — the ONE URL other tools add directly as a
+    vector-tile source (QGIS 'Vector Tiles' → from TileJSON, MapLibre/GeoLibre vector source, deck.gl).
+    It carries the absolute {z}/{x}/{y} tile URL (https-aware), bounds, and the `vector_layers` entry
+    with the source-layer name + fields — so the consumer doesn't have to know any of that. CORS-open
+    (public metadata), like /tiles/."""
+    from fastapi.responses import JSONResponse
+
+    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    layer = result.scalar_one_or_none()
+    if not await _publicly_readable(layer, db):
+        raise HTTPException(404, "Layer not found.")
+    if getattr(layer, "storage_backend", "postgis") != "postgis":
+        raise HTTPException(404, "No vector-tile TileJSON for this layer (file-backed — use the "
+                                 "GeoParquet or PMTiles asset).")
+
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("host") or request.url.netloc
+    base = f"{proto}://{host}"
+    src = f"{layer.schema_name}.{layer.table_name}"
+    fields = {}
+    if layer.columns:
+        try:
+            for c in json.loads(layer.columns):
+                fields[c["name"]] = c.get("type", "String")
+        except (ValueError, KeyError, TypeError):
+            pass
+    tj = {
+        "tilejson": "3.0.0",
+        "name": layer.name,
+        "scheme": "xyz",
+        "tiles": [f"{base}/tiles/{src}/{{z}}/{{x}}/{{y}}"],
+        "minzoom": 0,
+        "maxzoom": 22,
+        "vector_layers": [{"id": src, "fields": fields}],
+    }
+    bbox = json.loads(layer.bbox) if layer.bbox else None
+    if bbox:
+        tj["bounds"] = bbox
+        tj["center"] = [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2, 0]
+    return JSONResponse(tj, headers={"Access-Control-Allow-Origin": "*",
+                                     "Cache-Control": "public, max-age=300"})
+
+
 @router.get("/{layer_id}/identify")
 async def vector_identify(
     layer_id: int,
