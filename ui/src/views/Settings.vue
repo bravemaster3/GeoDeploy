@@ -800,9 +800,11 @@ async function pollUpdateStatus() {
     // The API restarts mid-update — expected. Keep the last phase, note we're waiting, keep polling.
     if (updates.value.progress) updates.value.progress = { ...updates.value.progress, message: 'Restarting services… (can take a minute)' }
   }
-  if (updatePollCount > 100) {   // ~5 min safety net so it never spins forever
-    updates.value.updating = false
-    updates.value.progress = { phase: 'unknown', message: 'Taking longer than expected — reload the page to check the result.' }
+  if (updatePollCount > 400) {   // ~20 min: a full rebuild (UI bundle + images) can outlast 5 min on a small host
+    // Don't strand the user on a dead-end "took too long" message while the update may have actually
+    // finished — reload so checkUpdates() reflects the REAL deployed state ("up to date" if it landed).
+    updates.value.progress = { phase: 'running', message: 'Still finishing — reloading to check…' }
+    setTimeout(() => window.location.reload(), 1500)
     return
   }
   updatePollTimer = setTimeout(pollUpdateStatus, 3000)

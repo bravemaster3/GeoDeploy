@@ -30,6 +30,22 @@ _http_ok() { curl -fsS "$1" >/dev/null 2>&1 || wget -q -O- "$1" >/dev/null 2>&1;
 # and the running config is kept). Never recreates the container.
 reload_nginx() { docker compose exec -T nginx nginx -t >/dev/null 2>&1 && docker compose exec -T nginx nginx -s reload >/dev/null 2>&1 || true; }
 
+# Bind-mount safety. The API WRITES portal bundles into data/portals; nginx READS + serves them. If the
+# mounted directory's inode ever shifts (a reinstall that recreated the folder, a stray delete), a
+# still-running nginx keeps the OLD mount and serves STALE/404 portals while the recreated API writes to
+# the fresh one — a `reload` can't re-attach a mount, only a recreate can. This is the class of bug that
+# made portals ghost/blank after updates. So: drop a sentinel through the API's mount and check nginx
+# sees it; recreate nginx ONLY when they've actually diverged (normal updates skip it → still zero-downtime).
+ensure_nginx_mount_synced() {
+  local token="mchk-$(date +%s)-$$"
+  docker compose exec -T geodeploy-api sh -c "echo $token > /data/portals/.mountcheck" >/dev/null 2>&1 || return 0
+  if ! docker compose exec -T nginx sh -c "grep -q $token /var/www/portals/.mountcheck" >/dev/null 2>&1; then
+    echo "[self-update] nginx's portals mount is stale (diverged) — recreating nginx to re-attach"
+    docker compose up -d --force-recreate nginx >/dev/null 2>&1 || true
+  fi
+  docker compose exec -T geodeploy-api sh -c "rm -f /data/portals/.mountcheck" >/dev/null 2>&1 || true
+}
+
 healthy() {
   local i
   for i in $(seq 1 "$HEALTH_TRIES"); do
@@ -42,7 +58,7 @@ healthy() {
 rollback() { # old_sha reason
   write_status rollingback "$2 — rolling back to ${1:0:7}"
   git reset --hard "$1" >/dev/null 2>&1
-  docker compose build && docker compose up -d $CORE_SERVICES && reload_nginx
+  docker compose build && docker compose up -d --force-recreate $CORE_SERVICES && reload_nginx
   # restore the deployed-commit marker so the Updates panel reflects reality
   sed -i "s|^GEODEPLOY_GIT_SHA=.*|GEODEPLOY_GIT_SHA=${1}|" .env 2>/dev/null || true
   if healthy; then
@@ -65,8 +81,9 @@ write_status running "Building the new version"
 if ! docker compose build; then rollback "$OLD_SHA" "Build failed"; exit 1; fi
 
 write_status running "Restarting services"
-if ! docker compose up -d $CORE_SERVICES; then rollback "$OLD_SHA" "Restart failed"; exit 1; fi
-reload_nginx   # apply any nginx.conf change without recreating (and without downtime)
+if ! docker compose up -d --force-recreate $CORE_SERVICES; then rollback "$OLD_SHA" "Restart failed"; exit 1; fi
+reload_nginx              # apply any nginx.conf change without recreating (and without downtime)
+ensure_nginx_mount_synced # …but recreate nginx if its data/portals mount diverged (else portals ghost/404)
 
 write_status running "Checking health"
 if ! healthy; then rollback "$OLD_SHA" "Unhealthy after update"; exit 1; fi
