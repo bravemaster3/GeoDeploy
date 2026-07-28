@@ -1,9 +1,11 @@
 import os
+import re
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.responses import Response
 
 from .config import get_settings
 from .database import engine, Base
@@ -183,6 +185,37 @@ app.add_middleware(
     SessionMiddleware, secret_key=settings.secret_key, session_cookie="gd_oidc_state",
     max_age=600, same_site="lax", https_only=False,
 )
+
+# Public, unauthenticated READ surfaces that ANY tool (QGIS, GeoLibre, MapLibre, deck.gl, browsers) must
+# be able to fetch cross-origin: the STAC catalog + the per-layer data artifacts (vector tiles/PMTiles/
+# features/TileJSON/identify, raster COG). They're already public-by-id, so we answer them (and their
+# OPTIONS preflight) with a single clean `Access-Control-Allow-Origin: *` and NO credentials — overriding
+# the credentialed CORSMiddleware (which only allows listed origins) for JUST these paths. Registered
+# LAST → it is the OUTERMOST middleware, so it sees the OPTIONS first and rewrites the response last.
+_PUBLIC_CORS = re.compile(
+    r"^/api/(stac(/.*)?"
+    r"|data/vector/\d+/(pmtiles|features\.geojson|features\.arrow|tilejson|identify)"
+    r"|data/raster/\d+/(cog|tilejson|statistics))$"
+)
+
+
+@app.middleware("http")
+async def _public_data_cors(request, call_next):
+    public = bool(_PUBLIC_CORS.match(request.url.path))
+    if public and request.method == "OPTIONS":
+        return Response(status_code=204, headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Max-Age": "86400",
+        })
+    response = await call_next(request)
+    if public:
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers.pop("Access-Control-Allow-Credentials", None)
+        response.headers.setdefault("Access-Control-Expose-Headers", "*")
+    return response
+
 
 # API routes
 for router in [setup.router, auth.router, auth_oidc.router, users.router, tokens.router,
