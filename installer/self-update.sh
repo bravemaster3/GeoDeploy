@@ -46,6 +46,23 @@ ensure_nginx_mount_synced() {
   docker compose exec -T geodeploy-api sh -c "rm -f /data/portals/.mountcheck" >/dev/null 2>&1 || true
 }
 
+# Apply an nginx.conf change. CRITICAL: nginx.conf is a SINGLE-FILE bind mount, and git rewrites it with a
+# NEW inode on update — but the running container stays bound to the OLD inode, so `nginx -s reload` reads
+# STALE config and the change silently never lands (this is why CORS/route fixes appeared "not deployed").
+# So: compare the running container's config to the host file; if they differ, RECREATE nginx to re-mount
+# the current file. If identical, a graceful zero-downtime reload is enough (or a no-op).
+apply_nginx() {
+  local host_sum cont_sum
+  host_sum=$(sha1sum nginx/nginx.conf 2>/dev/null | cut -d' ' -f1)
+  cont_sum=$(docker compose exec -T nginx sha1sum /etc/nginx/nginx.conf 2>/dev/null | tr -d '\r' | cut -d' ' -f1)
+  if [ -n "$host_sum" ] && [ "$host_sum" != "$cont_sum" ]; then
+    echo "[self-update] nginx.conf changed but the container is on a stale single-file mount — recreating nginx to apply it"
+    docker compose up -d --force-recreate nginx >/dev/null 2>&1 || true
+  else
+    reload_nginx
+  fi
+}
+
 healthy() {
   local i
   for i in $(seq 1 "$HEALTH_TRIES"); do
@@ -58,7 +75,7 @@ healthy() {
 rollback() { # old_sha reason
   write_status rollingback "$2 — rolling back to ${1:0:7}"
   git reset --hard "$1" >/dev/null 2>&1
-  docker compose build && docker compose up -d --force-recreate $CORE_SERVICES && reload_nginx
+  docker compose build && docker compose up -d --force-recreate $CORE_SERVICES && apply_nginx
   # restore the deployed-commit marker so the Updates panel reflects reality
   sed -i "s|^GEODEPLOY_GIT_SHA=.*|GEODEPLOY_GIT_SHA=${1}|" .env 2>/dev/null || true
   if healthy; then
@@ -90,8 +107,8 @@ if ! docker compose build; then rollback "$OLD_SHA" "Build failed"; exit 1; fi
 
 write_status running "Restarting services"
 if ! docker compose up -d --force-recreate $CORE_SERVICES; then rollback "$OLD_SHA" "Restart failed"; exit 1; fi
-reload_nginx              # apply any nginx.conf change without recreating (and without downtime)
-ensure_nginx_mount_synced # …but recreate nginx if its data/portals mount diverged (else portals ghost/404)
+apply_nginx               # recreate-or-reload nginx so an nginx.conf change ACTUALLY lands (stale single-file mount)
+ensure_nginx_mount_synced # …and recreate nginx if its data/portals mount diverged (else portals ghost/404)
 
 write_status running "Checking health"
 if ! healthy; then rollback "$OLD_SHA" "Unhealthy after update"; exit 1; fi
