@@ -46,6 +46,34 @@ def _update_layer(db_path: str, layer_id: int, **kwargs) -> None:
         conn.execute(f"UPDATE raster_layers SET {sets} WHERE id = ?", values)
 
 
+def _default_rescale(s3_key: str, settings) -> str | None:
+    """Best-effort default display stretch (2–98 percentile) from TiTiler stats. Non-8-bit rasters
+    (float/int) render BLACK on tile servers that assume 0–255, so we bake a stretch into the layer's
+    default_style — which the portal, the About page, AND the STAC 'tiles' URL all read. Returns
+    "min,max" or None. The COG is already in storage by the time this runs."""
+    import httpx
+    cog_url = f"s3://{settings.storage_bucket}/{s3_key}"
+    try:
+        r = httpx.get(f"{settings.titiler_url}/cog/statistics", params={"url": cog_url}, timeout=30)
+        r.raise_for_status()
+        stats = r.json()
+    except Exception:
+        return None
+    mins, maxs = [], []
+    for s in (stats.values() if isinstance(stats, dict) else []):
+        if not isinstance(s, dict):
+            continue
+        lo = s.get("percentile_2", s.get("min"))
+        hi = s.get("percentile_98", s.get("max"))
+        if lo is not None:
+            mins.append(lo)
+        if hi is not None:
+            maxs.append(hi)
+    if mins and maxs and max(maxs) > min(mins):
+        return f"{round(min(mins), 4)},{round(max(maxs), 4)}"
+    return None
+
+
 @celery_app.task(bind=True, name="geodeploy.tasks.raster_ingest.ingest_raster")
 def ingest_raster(self, job_id: str, layer_id: int, file_path: str, s3_key: str):
     settings = get_settings()
@@ -92,6 +120,13 @@ def ingest_raster(self, job_id: str, layer_id: int, file_path: str, s3_key: str)
         )
 
         step("Saving metadata", 90)
+        # Bake a default display stretch for non-8-bit rasters so they don't render black by default
+        # (portal / About page / STAC tiles URL all read default_style.rescale). 8-bit maps directly.
+        extra = {}
+        if (meta.get("dtype") or "").lower() not in ("uint8", "int8", "", "none"):
+            rescale = _default_rescale(s3_key, settings)
+            if rescale:
+                extra["default_style"] = json.dumps({"rescale": rescale})
         _update_layer(db_path, layer_id,
                       status="ready",
                       crs=meta["crs"],
@@ -99,7 +134,8 @@ def ingest_raster(self, job_id: str, layer_id: int, file_path: str, s3_key: str)
                       band_count=meta["band_count"],
                       nodata_value=meta["nodata_value"],
                       file_size=file_size,
-                      updated_at=datetime.now(timezone.utc).isoformat())
+                      updated_at=datetime.now(timezone.utc).isoformat(),
+                      **extra)
 
         _update_job(db_path, job_id, status="ready", progress=100,
                     completed_at=datetime.now(timezone.utc).isoformat())

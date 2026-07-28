@@ -97,6 +97,9 @@ def _read_meta(ds) -> dict:
         "nodata_value": float(nodata) if nodata is not None else None,
         "width": ds.width,
         "height": ds.height,
+        # dtype of band 1 — drives whether a default display rescale is needed (non-8-bit data renders
+        # black on tile servers that assume 0–255, so ingest computes a stretch for those).
+        "dtype": str(ds.dtypes[0]) if ds.dtypes else None,
     }
 
 
