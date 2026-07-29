@@ -26,6 +26,20 @@ write_status() { # phase message
   echo "[self-update] $1: $2"
 }
 _http_ok() { curl -fsS "$1" >/dev/null 2>&1 || wget -q -O- "$1" >/dev/null 2>&1; }
+# Record the DEPLOYED commit. Two places, deliberately:
+#   .env              — read by docker compose, so the API process gets GEODEPLOY_GIT_SHA in its env.
+#                       ONLY takes effect when the container is (re)created — hence the call ordering
+#                       below: record BEFORE `up -d`, never after.
+#   data/temp/…       — a bind-mounted file the RUNNING API re-reads per request (admin.py prefers it
+#                       over the env var). This is the belt: it makes the panel correct even if some
+#                       future path recreates in the wrong order, with no extra restart.
+# BUG THIS FIXES (2026-07-29): the success path seded .env AFTER recreating, so the new container was
+# born with the OLD sha and the Updates panel kept showing the previous version until the next update.
+record_sha() { # sha
+  sed -i "s|^GEODEPLOY_GIT_SHA=.*|GEODEPLOY_GIT_SHA=${1}|" .env 2>/dev/null || true
+  grep -q "^GEODEPLOY_GIT_SHA=" .env 2>/dev/null || echo "GEODEPLOY_GIT_SHA=${1}" >> .env
+  printf '%s' "$1" > data/temp/deployed-sha 2>/dev/null || true
+}
 # Graceful nginx config reload (picks up nginx.conf changes with NO downtime; a bad config is rejected
 # and the running config is kept). Never recreates the container.
 reload_nginx() { docker compose exec -T nginx nginx -t >/dev/null 2>&1 && docker compose exec -T nginx nginx -s reload >/dev/null 2>&1 || true; }
@@ -75,9 +89,10 @@ healthy() {
 rollback() { # old_sha reason
   write_status rollingback "$2 — rolling back to ${1:0:7}"
   git reset --hard "$1" >/dev/null 2>&1
+  # Restore the deployed-commit marker BEFORE recreating, so the restored container is born with the
+  # right sha (a post-recreate write only lands on the NEXT recreate — the bug fixed 2026-07-29).
+  record_sha "$1"
   docker compose build && docker compose up -d --force-recreate $CORE_SERVICES && apply_nginx
-  # restore the deployed-commit marker so the Updates panel reflects reality
-  sed -i "s|^GEODEPLOY_GIT_SHA=.*|GEODEPLOY_GIT_SHA=${1}|" .env 2>/dev/null || true
   if healthy; then
     write_status rolledback "Rolled back to ${1:0:7} ($2). No changes applied."
   else
@@ -96,7 +111,7 @@ if [ "$NEW_SHA" = "$OLD_SHA" ]; then
   # Keep the deployed-commit marker honest even on a no-op — a manual `git pull` moves HEAD but leaves
   # GEODEPLOY_GIT_SHA stale, so the panel wrongly shows "behind". Sync + reload the API to pick it up.
   if ! grep -q "^GEODEPLOY_GIT_SHA=${NEW_SHA}$" .env 2>/dev/null; then
-    sed -i "s|^GEODEPLOY_GIT_SHA=.*|GEODEPLOY_GIT_SHA=${NEW_SHA}|" .env 2>/dev/null || true
+    record_sha "$NEW_SHA"
     docker compose up -d --force-recreate geodeploy-api >/dev/null 2>&1 || true
   fi
   write_status success "Already up to date (${NEW_SHA:0:7})."; exit 0
@@ -106,6 +121,10 @@ write_status running "Building the new version"
 if ! docker compose build; then rollback "$OLD_SHA" "Build failed"; exit 1; fi
 
 write_status running "Restarting services"
+# Record the new sha BEFORE the recreate: .env is read by compose at container-create time, so a
+# post-recreate write would leave the running API reporting the PREVIOUS version. A failure here
+# falls into rollback(), which restores the old sha the same way.
+record_sha "$NEW_SHA"
 if ! docker compose up -d --force-recreate $CORE_SERVICES; then rollback "$OLD_SHA" "Restart failed"; exit 1; fi
 apply_nginx               # recreate-or-reload nginx so an nginx.conf change ACTUALLY lands (stale single-file mount)
 ensure_nginx_mount_synced # …and recreate nginx if its data/portals mount diverged (else portals ghost/404)
@@ -113,7 +132,7 @@ ensure_nginx_mount_synced # …and recreate nginx if its data/portals mount dive
 write_status running "Checking health"
 if ! healthy; then rollback "$OLD_SHA" "Unhealthy after update"; exit 1; fi
 
-# Success: record the now-deployed commit so the Updates panel shows the new version.
-sed -i "s|^GEODEPLOY_GIT_SHA=.*|GEODEPLOY_GIT_SHA=${NEW_SHA}|" .env 2>/dev/null || \
-  echo "GEODEPLOY_GIT_SHA=${NEW_SHA}" >> .env
+# Re-assert the marker (cheap, idempotent): the pre-recreate write above is the one that matters,
+# this just guarantees the file/env agree if anything in between rewrote .env.
+record_sha "$NEW_SHA"
 write_status success "Updated ${OLD_SHA:0:7} → ${NEW_SHA:0:7} and healthy."

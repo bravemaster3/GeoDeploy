@@ -23,6 +23,25 @@ _UPDATE_CACHE: dict = {"at": 0.0, "data": None}
 _UPDATE_TTL = 600  # seconds — GitHub's unauthenticated API allows 60 req/hr/IP, so cache the check
 
 
+def _deployed_sha() -> str:
+    """The commit this instance is actually running.
+
+    Prefers `data/temp/deployed-sha`, written by `installer/self-update.sh::record_sha` — a
+    bind-mounted file we re-read PER REQUEST. `GEODEPLOY_GIT_SHA` is only a fallback because it is
+    baked into the process environment when the container is created: if anything records the sha
+    after `docker compose up`, the running API reports the PREVIOUS version until the next recreate
+    (exactly the "update worked but the version is wrong" bug, fixed 2026-07-29). The file has no
+    such ordering trap, so the panel is right the moment the updater finishes."""
+    try:
+        with open(f"{get_settings().data_dir}/temp/deployed-sha") as fh:
+            sha = fh.read().strip()
+        if sha:
+            return sha
+    except OSError:
+        pass
+    return (get_settings().geodeploy_git_sha or "unknown").strip()
+
+
 def _finalize_update_available(result: dict, current: str) -> None:
     """Decide whether to offer an update, INDEPENDENTLY of the compare call.
 
@@ -41,18 +60,30 @@ def _finalize_update_available(result: dict, current: str) -> None:
 
 @router.get("/updates")
 async def check_updates(_: User = Depends(require_admin)):
-    """Compare the DEPLOYED commit (GEODEPLOY_GIT_SHA, written to .env by the installer) against the
-    latest on GitHub `main`, so an admin can see whether an update is available — without SSH. Purely
-    informational (no writes); the one-click updater is a separate, deliberate action."""
+    """Compare the DEPLOYED commit (see `_deployed_sha`) against the latest on GitHub `main`, so an
+    admin can see whether an update is available — without SSH. Purely informational (no writes);
+    the one-click updater is a separate, deliberate action."""
     import time
 
     import httpx
 
     now = time.time()
     if _UPDATE_CACHE["data"] and now - _UPDATE_CACHE["at"] < _UPDATE_TTL:
-        return _UPDATE_CACHE["data"]
+        # The 10-min TTL exists for GITHUB's rate limit, not for our own version — re-read the
+        # deployed sha on every call and re-derive from it, or the panel would keep showing the
+        # pre-update version for up to TTL seconds after a successful update.
+        cached = dict(_UPDATE_CACHE["data"])
+        current = _deployed_sha()
+        cached["current_full"] = current
+        cached["current"] = current[:7] if current and current != "unknown" else "unknown"
+        if current and current == cached.get("latest_full"):
+            # We just caught up with the commit this cache entry called "latest" — the cached
+            # behind/up_to_date came from BEFORE the update and would still advertise it.
+            cached["up_to_date"], cached["behind"] = True, 0
+        _finalize_update_available(cached, current)
+        return cached
 
-    current = (get_settings().geodeploy_git_sha or "unknown").strip()
+    current = _deployed_sha()
     result: dict = {
         "current": current[:7] if current and current != "unknown" else "unknown",
         "current_full": current,
