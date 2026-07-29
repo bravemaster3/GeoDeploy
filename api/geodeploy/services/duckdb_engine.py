@@ -329,8 +329,13 @@ def _jsonable(v):
 
 
 def query_features_geojson(s3_key: str, bbox=None, limit: int = 50_000, creds: dict | None = None,
-                           bucket: str | None = None, keep_native: bool = False) -> dict:
+                           bucket: str | None = None, keep_native: bool = False,
+                           offset: int = 0) -> dict:
     """Viewport query for a GeoParquet layer → a GeoJSON FeatureCollection (geometries in EPSG:4326).
+
+    `offset` skips rows for paged access (OGC API - Features `/items?offset=`). Ordering is the
+    parquet scan order — deterministic for the same filter, which is what paging needs; it is NOT a
+    snapshot, so a layer re-prepared mid-crawl can shift rows.
 
     `keep_native=True` (download path) skips the output reprojection so geometries come back in the
     file's OWN CRS — lossless native download. The bbox FILTER is still reprojected into the file CRS,
@@ -394,8 +399,9 @@ def query_features_geojson(s3_key: str, bbox=None, limit: int = 50_000, creds: d
 
         where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
         sel = ", ".join([f"{_q(geom_col)} AS __wkb"] + [_q(c) for c in prop_cols])
+        page = f"LIMIT {limit}" + (f" OFFSET {max(0, int(offset))}" if offset else "")
         rows = conn.execute(
-            f"SELECT {sel} FROM {read_src} {where} LIMIT {limit}").fetchall()
+            f"SELECT {sel} FROM {read_src} {where} {page}").fetchall()
 
         # Vectorised WKB→GeoJSON: from_wkb / reproject / to_geojson run ONCE over the whole result in
         # C (GIL released), not per feature. The old per-feature pyproj reprojection made even a few
@@ -503,6 +509,58 @@ def query_features_at_point(s3_key: str, lng: float, lat: float, tol: float = 1e
             if len(out) >= limit:
                 break
         return out
+    finally:
+        conn.close()
+
+
+def query_feature_by_id(s3_key: str, id_col: str, value: str, creds: dict | None = None,
+                        bucket: str | None = None) -> dict | None:
+    """One feature by the value of an id-like column → a GeoJSON Feature (EPSG:4326), or None.
+
+    Backs OGC API - Features `/collections/{id}/items/{featureId}` for file-backed layers. The
+    predicate compares as TEXT so an int/string/uuid id column all work through one code path; a
+    parquet file has no index, so this is a scan with an early LIMIT 1 — fine for the single-feature
+    permalink case it serves, NOT a substitute for the bbox queries."""
+    settings = get_settings()
+    bkt = bucket or settings.storage_bucket
+    meta_path, src = _parquet_paths(f"s3://{bkt}/{s3_key}")
+
+    conn = _connect_read(creds)
+    try:
+        meta = _read_geo_metadata(conn, meta_path)
+        all_cols = [r[0] for r in conn.execute(f"DESCRIBE SELECT * FROM {src}").fetchall()]
+        if id_col not in all_cols:
+            return None
+        geom_col = meta["column"] or next(
+            (c for c in all_cols if c.lower() in ("geometry", "geom", "wkb_geometry", "wkb")), None)
+        if not geom_col:
+            return None
+        src_epsg = meta["epsg"] or "EPSG:4326"
+        cov_col = meta["covering"][0] if meta.get("covering") else None
+        prop_cols = [c for c in all_cols if c != geom_col and c != cov_col]
+
+        sel = ", ".join([f"{_q(geom_col)} AS __wkb"] + [_q(c) for c in prop_cols])
+        row = conn.execute(
+            f"SELECT {sel} FROM {src} WHERE CAST({_q(id_col)} AS VARCHAR) = ? LIMIT 1",
+            [str(value)]).fetchone()
+        if not row or row[0] is None:
+            return None
+
+        from shapely import from_wkb, to_geojson
+        geom = from_wkb(bytes(row[0]), on_invalid="ignore")
+        if geom is None:
+            return None
+        if src_epsg != "EPSG:4326":
+            import numpy as np
+            from pyproj import Transformer
+            from shapely import transform as _shp_transform
+            _tr = Transformer.from_crs(src_epsg, "EPSG:4326", always_xy=True)
+            def _rc(coords):
+                x, y = _tr.transform(coords[:, 0], coords[:, 1])
+                return np.column_stack([x, y])
+            geom = _shp_transform(geom, _rc)
+        props = {prop_cols[j]: _jsonable(row[j + 1]) for j in range(len(prop_cols))}
+        return {"type": "Feature", "geometry": json.loads(to_geojson(geom)), "properties": props}
     finally:
         conn.close()
 

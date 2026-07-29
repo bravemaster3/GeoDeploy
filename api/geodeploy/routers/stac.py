@@ -71,6 +71,64 @@ def _dt(value) -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _parse_bbox(raw: str | None) -> list[float] | None:
+    if not raw:
+        return None
+    try:
+        parts = [float(v) for v in raw.split(",")]
+    except ValueError:
+        raise HTTPException(400, "Invalid bbox — expected minx,miny,maxx,maxy.")
+    if len(parts) == 6:      # 3D bbox: drop the elevation ordinates
+        parts = [parts[0], parts[1], parts[3], parts[4]]
+    if len(parts) != 4:
+        raise HTTPException(400, "Invalid bbox — expected 4 (or 6) numbers.")
+    return parts
+
+
+def _iso(raw: str):
+    """One end of a `datetime` parameter. `..`/empty means open-ended."""
+    if raw in ("", "..", None):
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, "Invalid datetime — expected RFC 3339, or start/end.")
+
+
+def _parse_datetime(raw: str | None):
+    """→ (lo, hi). A single instant becomes a closed [t, t] interval, per OGC API - Features."""
+    if not raw:
+        return None, None
+    if "/" in raw:
+        start, _, end = raw.partition("/")
+        return _iso(start), _iso(end)
+    t = _iso(raw)
+    return t, t
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _bbox_matches(layer, qb: list[float] | None) -> bool:
+    if not qb:
+        return True
+    b = _bbox(layer)
+    if not b:
+        return False   # a layer with no extent can't satisfy a spatial filter
+    return b[0] <= qb[2] and b[2] >= qb[0] and b[1] <= qb[3] and b[3] >= qb[1]
+
+
+def _datetime_matches(layer, lo, hi) -> bool:
+    if lo is None and hi is None:
+        return True
+    t = layer.updated_at or layer.created_at
+    if not isinstance(t, datetime):
+        return False
+    t = _aware(t)
+    return not ((lo and t < _aware(lo)) or (hi and t > _aware(hi)))
+
+
 def _common_properties(layer) -> dict:
     props = {"datetime": _dt(layer.updated_at or layer.created_at), "title": layer.name}
     if layer.abstract:
@@ -83,7 +141,20 @@ def _common_properties(layer) -> dict:
 
 
 def _vector_assets(layer, base: str) -> dict:
-    assets = {}
+    # The standards-based read surface, offered for EVERY vector layer regardless of backend —
+    # this is what QGIS/ArcGIS/FME/GDAL consume natively (routers/ogcapi.py). The backend-specific
+    # assets below are the fast/native paths for renderers.
+    assets = {
+        "ogc-features": {
+            "href": f"{base}/api/ogc/collections/vector-{layer.id}/items",
+            "type": "application/geo+json",
+            "title": "OGC API - Features items (?bbox=&limit=&offset=)",
+            "description": "Standards-based feature access — the collection is at "
+                           f"{base}/api/ogc/collections/vector-{layer.id}, the service at "
+                           f"{base}/api/ogc (QGIS: Add OGC API - Features Layer).",
+            "roles": ["data"],
+        },
+    }
     if layer.storage_backend == "geoparquet" and layer.s3_key:
         prefixed = not layer.s3_key.rstrip("/").endswith(".parquet")
         if prefixed:
@@ -181,6 +252,9 @@ def _item(layer, kind: str, base: str) -> dict:
              "type": "application/geo+json"},
             {"rel": "collection", "href": f"{base}/api/stac/collections/{kind}", "type": "application/json"},
             {"rel": "root", "href": f"{base}/api/stac", "type": "application/json"},
+            *([{"rel": "alternate", "type": "application/json",
+                "href": f"{base}/api/ogc/collections/vector-{layer.id}",
+                "title": "OGC API - Features collection"}] if kind == "vectors" else []),
         ],
     }
     return item
@@ -270,19 +344,46 @@ async def stac_collection(cid: str, request: Request, db: AsyncSession = Depends
 
 
 @router.get("/collections/{cid}/items")
-async def stac_items(cid: str, request: Request, db: AsyncSession = Depends(get_db)):
+async def stac_items(cid: str, request: Request, bbox: str | None = None,
+                     datetime: str | None = None, limit: int = 100, offset: int = 0,
+                     db: AsyncSession = Depends(get_db)):
+    """Items of a collection, with the query parameters OGC API - Features core mandates:
+    `bbox` (WGS84 minx,miny,maxx,maxy), `datetime` (instant or `start/end`, `..` open-ended),
+    `limit` + `offset` paging, and the `numberMatched`/`numberReturned`/`timeStamp` counters plus
+    `next`/`prev` links. Those (not just the item shape) are what the `ogcapi-features`
+    conformance classes in `CONFORMS` promise — a spec-driven client will exercise them."""
     if cid not in COLLECTIONS:
         raise HTTPException(404, "No such collection.")
     base = _base(request)
-    layers = await _public_layers(db, cid)
+    qb = _parse_bbox(bbox)
+    lo, hi = _parse_datetime(datetime)
+    limit = max(1, min(limit, 1000))
+    offset = max(0, offset)
+
+    matched = [l for l in await _public_layers(db, cid)
+               if _bbox_matches(l, qb) and _datetime_matches(l, lo, hi)]
+    page = matched[offset:offset + limit]
+    links = [
+        {"rel": "self", "href": f"{base}/api/stac/collections/{cid}/items",
+         "type": "application/geo+json"},
+        {"rel": "root", "href": f"{base}/api/stac", "type": "application/json"},
+        {"rel": "collection", "href": f"{base}/api/stac/collections/{cid}",
+         "type": "application/json"},
+    ]
+    items_url = f"{base}/api/stac/collections/{cid}/items"
+    if offset + limit < len(matched):
+        links.append({"rel": "next", "type": "application/geo+json",
+                      "href": f"{items_url}?limit={limit}&offset={offset + limit}"})
+    if offset:
+        links.append({"rel": "prev", "type": "application/geo+json",
+                      "href": f"{items_url}?limit={limit}&offset={max(0, offset - limit)}"})
     return {
         "type": "FeatureCollection",
-        "features": [_item(l, cid, base) for l in layers],
-        "links": [
-            {"rel": "self", "href": f"{base}/api/stac/collections/{cid}/items",
-             "type": "application/geo+json"},
-            {"rel": "root", "href": f"{base}/api/stac", "type": "application/json"},
-        ],
+        "features": [_item(l, cid, base) for l in page],
+        "numberMatched": len(matched),
+        "numberReturned": len(page),
+        "timeStamp": _dt(None),
+        "links": links,
     }
 
 
@@ -302,28 +403,57 @@ async def stac_item(cid: str, item_id: str, request: Request, db: AsyncSession =
     return _item(layer, cid, _base(request))
 
 
+async def _search(db: AsyncSession, base: str, bbox, collections, datetime_, ids, limit: int) -> dict:
+    wanted = [c for c in (collections or list(COLLECTIONS)) if c in COLLECTIONS]
+    qb = bbox if isinstance(bbox, list) else _parse_bbox(bbox)
+    lo, hi = _parse_datetime(datetime_)
+    limit = max(1, min(limit, 1000))
+    wanted_ids = set(ids or [])
+    matched = []
+    for cid in wanted:
+        for layer in await _public_layers(db, cid):
+            if wanted_ids and f"{cid[:-1]}-{layer.id}" not in wanted_ids:
+                continue
+            if _bbox_matches(layer, qb) and _datetime_matches(layer, lo, hi):
+                matched.append((layer, cid))
+    page = matched[:limit]
+    return {
+        "type": "FeatureCollection",
+        "features": [_item(l, cid, base) for l, cid in page],
+        "numberMatched": len(matched),
+        "numberReturned": len(page),
+        "timeStamp": _dt(None),
+        "links": [{"rel": "root", "href": f"{base}/api/stac", "type": "application/json"},
+                  {"rel": "self", "href": f"{base}/api/stac/search",
+                   "type": "application/geo+json"}],
+    }
+
+
 @router.get("/search")
 async def stac_search(request: Request, bbox: str | None = None, collections: str | None = None,
-                      limit: int = 100, db: AsyncSession = Depends(get_db)):
-    """Minimal GET item search (bbox + collections + limit) — enough for QGIS's STAC client."""
-    base = _base(request)
-    wanted = [c.strip() for c in collections.split(",")] if collections else list(COLLECTIONS)
-    qb = None
-    if bbox:
-        try:
-            qb = [float(v) for v in bbox.split(",")][:4]
-        except ValueError:
-            raise HTTPException(400, "Invalid bbox.")
-    features = []
-    for cid in wanted:
-        if cid not in COLLECTIONS:
-            continue
-        for layer in await _public_layers(db, cid):
-            b = _bbox(layer)
-            if qb and b and not (b[0] <= qb[2] and b[2] >= qb[0] and b[1] <= qb[3] and b[3] >= qb[1]):
-                continue
-            features.append(_item(layer, cid, base))
-            if len(features) >= max(1, min(limit, 1000)):
-                break
-    return {"type": "FeatureCollection", "features": features,
-            "links": [{"rel": "root", "href": f"{base}/api/stac", "type": "application/json"}]}
+                      datetime: str | None = None, ids: str | None = None, limit: int = 100,
+                      db: AsyncSession = Depends(get_db)):
+    """GET item search — bbox + collections + datetime + ids + limit (what QGIS's STAC client and
+    pystac-client send)."""
+    return await _search(
+        db, _base(request), bbox,
+        [c.strip() for c in collections.split(",")] if collections else None,
+        datetime, [i.strip() for i in ids.split(",")] if ids else None, limit)
+
+
+@router.post("/search")
+async def stac_search_post(request: Request, db: AsyncSession = Depends(get_db)):
+    """POST item search — same filters as GET, JSON body (pystac-client prefers this). An empty or
+    unparseable body means "everything", like a bare GET."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    cols = body.get("collections")
+    ids = body.get("ids")
+    return await _search(db, _base(request), body.get("bbox"),
+                         cols if isinstance(cols, list) else None,
+                         body.get("datetime"), ids if isinstance(ids, list) else None,
+                         int(body.get("limit") or 100))

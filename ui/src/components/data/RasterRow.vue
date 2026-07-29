@@ -27,6 +27,13 @@
       </div>
     </div>
     <StatusBadge :status="layer.status" :progress="layer._job?.progress ?? layer.progress" :step="layer._job?.current_step ?? layer.current_step" />
+    <!-- Share links: TileJSON / XYZ / /vsicurl/ COG / STAC — every role, consuming isn't editing. -->
+    <button v-if="layer.status === 'ready'" @click="showLinks = true"
+      class="p-1.5 rounded transition-all opacity-0 group-hover:opacity-100 text-muted-foreground/70 hover:text-primary"
+      title="Share links — use this layer in QGIS, GeoLibre, GDAL…"
+    >
+      <LinkIcon class="w-4 h-4" />
+    </button>
     <!-- Sharing: workspace visibility (private / organization / public catalog + raw COG) -->
     <button v-if="auth.canEdit && layer.status === 'ready'" @click="showSharing = true"
       class="p-1.5 rounded transition-all"
@@ -41,16 +48,18 @@
       <TrashIcon class="w-4 h-4" />
     </button>
     <SharingModal v-if="showSharing" :layer="layer" layer-type="raster" @close="showSharing = false" />
+    <ShareLinksModal v-if="showLinks" :layer="layer" layer-type="raster" @close="showLinks = false" />
   </div>
 </template>
 
 <script setup>
 import { computed, ref, nextTick } from 'vue'
-import { TrashIcon } from '@/views/icons'
+import { TrashIcon, LinkIcon } from '@/views/icons'
 import { useAuthStore } from '@/stores/auth'
 import { useDataStore } from '@/stores/data'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import SharingModal from '@/components/data/SharingModal.vue'
+import ShareLinksModal from '@/components/data/ShareLinksModal.vue'
 
 const props = defineProps({ layer: Object })
 defineEmits(['delete'])
@@ -58,6 +67,7 @@ defineEmits(['delete'])
 const auth = useAuthStore()
 const dataStore = useDataStore()
 const showSharing = ref(false)
+const showLinks = ref(false)
 
 // Inline rename
 const editing = ref(false)

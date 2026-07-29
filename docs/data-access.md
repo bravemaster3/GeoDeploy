@@ -1,8 +1,21 @@
 # Accessing GeoDeploy data from outside (QGIS, DuckDB, scripts)
 
-GeoDeploy is cloud-native: instead of running heavy OGC servers (WMS/WFS/WCS à la GeoServer),
-it shares data through formats that clients read **directly over HTTP** — Cloud-Optimized
-GeoTIFF, XYZ tiles, and GeoParquet — discovered through a built-in **STAC catalog**.
+GeoDeploy is cloud-native: instead of running heavy XML-era OGC servers (WMS/WFS/WCS à la
+GeoServer), it shares data through formats clients read **directly over HTTP** — Cloud-Optimized
+GeoTIFF, XYZ tiles, and GeoParquet — discovered through a built-in **STAC catalog**, plus a
+standards-based **OGC API - Features** service (the WFS successor) so any GIS can read a layer
+with no GeoDeploy-specific knowledge.
+
+Three surfaces, three jobs:
+
+| Surface | For | Start at |
+|---|---|---|
+| **OGC API - Features** | reading features in any GIS (QGIS, ArcGIS, FME, GDAL) | `/api/ogc` |
+| **STAC** | discovering what an instance holds, and where each asset lives | `/api/stac` |
+| **Tiles** (XYZ · TileJSON · PMTiles · COG) | drawing big layers fast | per-layer, see below |
+
+In the app, the **Share links** panel (link icon on any ready layer in *My Data*) hands you the
+right URL for each of these, labelled with the exact menu path in each tool.
 
 ## Sharing a layer (admin)
 
@@ -41,6 +54,48 @@ for item in cat.search(bbox=[-5, 42, 9, 51]).items():
     print(item.id, list(item.assets))
 ```
 
+## OGC API - Features — the one that works everywhere
+
+Entry point: `https://YOUR-HOST/api/ogc`
+
+If you only read one section, read this one. **OGC API - Features** is the standard every modern
+GIS speaks natively, so it is the shortest path from a GeoDeploy layer to somebody else's tool.
+Every layer you share as **Public** becomes a collection, whatever it is stored as (PostGIS or
+GeoParquet) — same URLs, same GeoJSON, EPSG:4326.
+
+- `GET /api/ogc` — landing page · `GET /api/ogc/conformance` — conformance classes
+- `GET /api/ogc/collections` — one collection per shared vector layer (`vector-{layer id}`)
+- `GET /api/ogc/collections/{cid}/items?bbox=minx,miny,maxx,maxy&limit=1000&offset=0`
+- `GET /api/ogc/collections/{cid}/items/{featureId}`
+
+Responses carry `numberReturned`, `numberMatched` (when it is known), and `next`/`prev` links —
+follow `next` to walk a whole layer.
+
+**QGIS** — *Layer ▸ Add Layer ▸ Add OGC API - Features Layer ▸ New*, URL `https://YOUR-HOST/api/ogc`,
+then pick the layer from the list. Attributes, the attribute table, and identify all work; QGIS
+requests only your current extent.
+
+**GDAL / ogr2ogr** — the `OAPIF` driver takes the collection URL directly:
+
+```bash
+ogr2ogr -f GPKG roads.gpkg \
+  "OAPIF:https://YOUR-HOST/api/ogc/collections/vector-5"
+```
+
+**Anything else** (Python, R, a browser) — `…/items?bbox=…` is plain GeoJSON over HTTP.
+
+Also works in: **ArcGIS Pro** (OGC API server connection) and **FME**.
+
+What it deliberately does *not* do: no CRS negotiation (everything is CRS84/EPSG:4326), no CQL2
+filtering, no transactions, no OGC API - Tiles or Records — and `/api/ogc/conformance` claims
+**only** Core + GeoJSON, so a spec-driven client is never misled.
+
+> **Rendering vs. reading.** Use OGC API - Features to *get the data*. For drawing a very large
+> layer quickly, use the tile links below (TileJSON / PMTiles) — they are generalized per zoom and
+> have no attribute queries. GeoLibre reads TileJSON under *Add data ▸ OGC API - Tiles (vector)*.
+> The **Share links** panel in My Data (link icon on any ready layer) gives you every one of these
+> URLs for a layer, already labelled with the menu path for each tool.
+
 ## Consuming the assets
 
 ### Rasters (Cloud-Optimized GeoTIFF)
@@ -51,6 +106,8 @@ for item in cat.search(bbox=[-5, 42, 9, 51]).items():
 - **Download:** the same URL fetched normally returns the whole GeoTIFF.
 - **XYZ tiles (display only):** the item's `tiles` asset is a TiTiler tile template — paste it
   into a QGIS *XYZ Tiles* connection or any web map.
+- **TileJSON (preferred over raw XYZ):** `…/api/data/raster/{id}/tilejson` wraps that template with
+  the layer's **bounds** and saved styling, so clients can *zoom to layer* — a bare XYZ URL cannot.
 
 ### Vector layers served from PostGIS
 
@@ -96,12 +153,14 @@ FROM read_parquet([
 | Raster data access | WCS (GeoServer) | COG over HTTP Range (`/vsicurl/`) |
 | Raster display | WMS/WMTS | TiTiler XYZ |
 | Vector display | WMS | Martin XYZ vector tiles / PMTiles |
-| Vector data access | WFS | GeoParquet over HTTP Range + GeoJSON/GeoArrow viewport queries |
+| Vector data access | WFS | **OGC API - Features** (the WFS successor) + GeoParquet over HTTP Range + GeoJSON/GeoArrow viewport queries |
 | Server weight | GeoServer (~1–2 GB JVM) | zero additional services |
 
-Legacy OGC endpoints (WMS/WFS/CSW) are deliberately **not** provided — clients that require
-them (rather than the cloud-native equivalents above) are out of scope for GeoDeploy's
-cheap-VPS design. See `notes_temp/notes_for_future.md` §0 / §0h for the full reasoning.
+The **XML-era** OGC endpoints (WMS/WFS/CSW) are deliberately **not** provided — they need a
+GeoServer-class stack, and their modern replacements are here: OGC API - Features instead of WFS,
+COG over Range instead of WCS, XYZ/TileJSON instead of WMS. Clients that specifically require the
+old protocols are out of scope for GeoDeploy's cheap-VPS design. See
+`notes_temp/notes_for_future.md` §0 / §0h for the full reasoning.
 
 ## Not yet implemented
 
@@ -109,3 +168,8 @@ cheap-VPS design. See `notes_temp/notes_for_future.md` §0 / §0h for the full r
   not listed).
 - A GeoNode-style QGIS plugin (browse + one-click add). The STAC connection covers most of it.
 - Single-file GeoParquet download of a partitioned dataset (merge-on-demand).
+- OGC API - Features extensions: CRS negotiation (Part 2), CQL2 filtering (Part 3), transactions,
+  and property filters/queryables. Core + GeoJSON only, as `/api/ogc/conformance` states.
+- OGC API - Tiles and OGC API - Records (tiles are TileJSON/PMTiles; the catalog is STAC).
+- Single-feature access (`/items/{featureId}`) for a GeoParquet layer whose dataset has no
+  id-like column (`id`/`fid`/`gid`/`objectid`/…) — the collection still pages normally.

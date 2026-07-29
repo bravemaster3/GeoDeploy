@@ -10,7 +10,7 @@ from starlette.responses import Response
 from .config import get_settings
 from .database import engine, Base
 from .routers import (setup, auth, auth_oidc, portals, stac, templates, admin, basemaps, users,
-                      tokens, audit, interop)
+                      tokens, audit, interop, ogcapi)
 from .routers.data import vector, raster, sources, discover
 
 
@@ -194,6 +194,8 @@ app.add_middleware(
 # LAST → it is the OUTERMOST middleware, so it sees the OPTIONS first and rewrites the response last.
 _PUBLIC_CORS = re.compile(
     r"^/api/(stac(/.*)?"
+    r"|ogc(/.*)?"        # OGC API - Features: the whole tree is public, unauthenticated read
+
     r"|data/vector/\d+/(pmtiles|features\.geojson|features\.arrow|tilejson|identify)"
     r"|data/raster/\d+/(cog|tilejson|statistics))$"
 )
@@ -205,7 +207,8 @@ async def _public_data_cors(request, call_next):
     if public and request.method == "OPTIONS":
         return Response(status_code=204, headers={
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            # POST is for STAC item-search (`POST /api/stac/search`) — pystac-client's default.
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
             "Access-Control-Allow-Headers": "*",
             "Access-Control-Max-Age": "86400",
         })
@@ -225,7 +228,7 @@ async def _public_data_cors(request, call_next):
 for router in [setup.router, auth.router, auth_oidc.router, users.router, tokens.router,
                audit.router, portals.router, templates.router, admin.router, basemaps.router,
                vector.router, raster.router, sources.router, discover.router, stac.router,
-               interop.router]:
+               ogcapi.router, interop.router]:
     app.include_router(router, prefix="/api")
 
 # Serve published portals as static files

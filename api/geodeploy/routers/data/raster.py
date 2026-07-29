@@ -9,6 +9,7 @@ from ...database import get_db
 from ...deps import require_scope
 from ...models import RasterLayer, UploadJob, User
 from ...schemas import JobStatus, LayerRename, PortalRefOut, RasterDefaultStyle, RasterLayerOut, SharingUpdate
+from ...services import share_links
 from ...services.titiler import get_tile_url as raster_tile_url, COLORMAPS
 from ...tasks.raster_ingest import ingest_raster
 from ..common import (apply_sharing, busy_job_progress, creator_names, portals_using,
@@ -240,6 +241,97 @@ async def raster_cog(layer_id: int, request: Request, db: AsyncSession = Depends
         headers["Content-Length"] = str(obj["ContentLength"])
     return StreamingResponse(obj["Body"].iter_chunks(256 * 1024), status_code=status,
                              media_type="image/tiff", headers=headers)
+
+
+@router.get("/{layer_id}/tilejson")
+async def raster_tilejson(layer_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    """PUBLIC TileJSON (3.0.0) for a shared raster — the ONE URL other tools add directly.
+
+    Why not TiTiler's own `/cog/…/tilejson.json`? Its self-referencing tile URL is built from the
+    container's internal origin: `http://titiler:8000/cog/tiles/…` — wrong host, wrong scheme, and
+    missing nginx's `/raster` prefix. So we emit our own, with the same styling TiTiler would get
+    (band/colormap/stretch from `default_style`) baked into the tile template.
+
+    Crucially it carries `bounds`, which a bare XYZ template cannot — that is what makes "zoom to
+    layer" work in GeoLibre/QGIS. Bounds come from the stored EPSG:4326 bbox (see
+    `cog_converter.inspect` — it reprojects); when a legacy row has none we ask TiTiler once."""
+    import json
+    from fastapi.responses import JSONResponse
+
+    result = await db.execute(select(RasterLayer).where(RasterLayer.id == layer_id))
+    layer = result.scalar_one_or_none()
+    if not layer or layer.status != "ready" or not layer.is_public or not layer.s3_key:
+        raise HTTPException(404, "No shared raster for this layer.")
+
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("host") or request.url.netloc
+    base = f"{proto}://{host}"
+    ds = json.loads(layer.default_style) if layer.default_style else {}
+    tj = {
+        "tilejson": "3.0.0",
+        "name": layer.name,
+        "scheme": "xyz",
+        "tiles": [base + raster_tile_url(
+            layer.s3_key, colormap=ds.get("colormap"), rescale=ds.get("rescale"),
+            algorithm=ds.get("algorithm"), zfactor=ds.get("zfactor"), bidx=ds.get("bidx"))],
+        "minzoom": 0,
+        "maxzoom": 22,
+    }
+    if layer.abstract:
+        tj["description"] = layer.abstract
+    if layer.attribution:
+        tj["attribution"] = layer.attribution
+
+    bbox = None
+    try:
+        bbox = json.loads(layer.bbox) if layer.bbox else None
+    except ValueError:
+        bbox = None
+    if not (isinstance(bbox, list) and len(bbox) == 4):
+        bbox = await _titiler_bounds(layer.s3_key)
+    if bbox:
+        tj["bounds"] = bbox
+        tj["center"] = [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2, 0]
+    return JSONResponse(tj, headers={"Access-Control-Allow-Origin": "*",
+                                     "Cache-Control": "public, max-age=300"})
+
+
+async def _titiler_bounds(s3_key: str) -> list[float] | None:
+    """Best-effort WGS84 bounds from TiTiler `/cog/info` — only for rows whose bbox was never
+    stored (pre-`inspect` imports). Never raises: no bounds is better than a failed TileJSON."""
+    import httpx
+    settings = get_settings()
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(f"{settings.titiler_url}/cog/info",
+                                 params={"url": f"s3://{settings.storage_bucket}/{s3_key}"})
+            r.raise_for_status()
+            b = r.json().get("bounds")
+        return [float(v) for v in b][:4] if b and len(b) >= 4 else None
+    except Exception:
+        return None
+
+
+@router.get("/{layer_id}/links")
+async def raster_share_links(layer_id: int, request: Request,
+                             user: User = Depends(require_scope("data:read")),
+                             db: AsyncSession = Depends(get_db)):
+    """The "Share links" panel feed: every tool-ready URL for this raster. Authed (it is layer
+    metadata), but the URLs themselves only RESOLVE while the layer is shared `public` — hence
+    the `public` flag, which the UI turns into a "make it public first" notice."""
+    import json
+    result = await db.execute(
+        select(RasterLayer).where(RasterLayer.id == layer_id, visible_to(user, RasterLayer)))
+    layer = result.scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not found.")
+    if layer.status != "ready":
+        raise HTTPException(409, "Layer is not ready yet.")
+    ds = json.loads(layer.default_style) if layer.default_style else {}
+    base = share_links.request_base(request)
+    return {"public": bool(layer.is_public), "name": layer.name,
+            "catalog": f"{base}/api/stac",
+            "links": share_links.raster_links(layer, base, ds)}
 
 
 @router.put("/{layer_id}/default-style", response_model=RasterLayerOut)

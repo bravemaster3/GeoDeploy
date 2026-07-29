@@ -109,6 +109,25 @@ deliberately NOT visibility-filtered (published portals depend on them).
 - `data/raster.py` — raster equivalent; list endpoint attaches a computed `tile_url` for ready layers; `/colormaps` lists TiTiler colormaps; `/{id}/stats` proxies TiTiler `/cog/statistics` and returns a suggested `rescale` ("min,max", 2–98th percentile) for auto-stretch. Dispatches `tasks.raster_ingest`.
 - `data/sources.py` — **external sources** (WMS/XYZ raster, WFS vector) shown in portals without ingesting. Authed CRUD (`GET/POST/DELETE /data/sources`); POST probes a WFS to learn geometry + bbox. **Public** `GET /data/sources/{id}/features.geojson` proxies a WFS to GeoJSON (same-origin → no CORS; published portals are unauthenticated). Rendering helpers live in `services/external_sources.py`; `portal_generator` bakes them into the published style.
 - `data/discover.py` — **import existing data** (mostly no copy): `GET /data/discover/database` lists spatial tables from PostGIS `geometry_columns` (any non-system schema, flags already-imported); `POST` registers selected tables as `VectorLayer` rows (introspects bbox→EPSG:4326, columns, PK→`id_column`, geometry column, SRID, est. feature count) then regenerates Martin. `GET /data/discover/storage` lists `.tif/.tiff` (kind `raster`) + **`.parquet`/`.geoparquet` (kind `geoparquet`, 2026-07-11)** + `.csv` (kind `csv`) in the bucket; `POST /storage` registers rasters as `RasterLayer` rows (`cog_converter.inspect_s3`, header-only) and **GeoParquet files as `storage_backend='geoparquet'` `VectorLayer`s via a queued `import_geoparquet` job** (inspect + spatial prep; response carries `jobs` the UI polls). The attached key is kept in `source_s3_key` (de-dup survives the prep repointing `s3_key`); the prep writes its partitioned copy under `vectors/` and never touches the source (attach ≠ copy/destroy). **CSV** is the exception (a CSV isn't tile-servable): `GET /storage/csv-columns` returns the header, `POST /storage/csv` (key, name, x/y columns **or `wkt_column` — WKT geometry of any type, e.g. polygon footprints (2026-07-11)**, srid) **queues a Celery job** (`tasks/csv_import.py`) that loads the geometry into PostGIS with column **type inference**, returning a `JobStatus` the UI polls. All import endpoints accept a per-item `name` override. Identifiers are quote-escaped (`_q`) — no SQL-identifier injection.
+- `ogcapi.py` — **PUBLIC OGC API - Features (Part 1: Core)** at `/api/ogc` (2026-07-29). The
+  **widest-reach read surface we have**: QGIS ("Add OGC API - Features Layer"), ArcGIS Pro, FME and
+  anything on GDAL's `OAPIF` driver consume it natively — unlike TileJSON/PMTiles, which only the
+  MapLibre family reads (in GeoLibre it is buried under "Add data ▸ OGC API - Tiles (vector)"), and
+  unlike STAC, which describes layers rather than serving features. Landing page + `/conformance` +
+  `/collections` + `/collections/{cid}` + `/collections/{cid}/items` + `/items/{featureId}`.
+  - **One collection per PUBLIC ready vector layer**; ids mirror the STAC item ids (`vector-<id>`),
+    so `/api/stac` items carry an `ogc-features` asset + `alternate` link and the two cross-reference.
+    Same `is_public` opt-in as STAC — nothing is exposed by default; non-public/non-ready → 404.
+  - **Both storage backends.** PostGIS: `ST_AsGeoJSON` + an **index-usable** `geom && ST_MakeEnvelope(…)`
+    filter transformed into the TABLE's SRID once (a per-row `ST_Transform(geom)` would drop the GIST
+    index), ordered by the id column so offset paging is stable. GeoParquet: `duckdb_engine`
+    covering-column + partition pruning, `offset` paging, `query_feature_by_id` for single features.
+  - `bbox` (4 or 6 numbers) / `limit` (capped `MAX_LIMIT`) / `offset`, plus `numberReturned`,
+    `timeStamp`, `next`/`prev` links. `numberMatched` is **best-effort and omitted when unknown** —
+    exact for a bbox query, the stored `feature_count` unfiltered — a wrong count is worse than none.
+  - **`CONFORMS` claims Core + GeoJSON ONLY.** No CRS negotiation (everything is CRS84), no CQL2, no
+    transactions, no OGC API - Tiles/Records. `test_ogcapi.py` asserts the list EXACTLY: over-claiming
+    conformance is the bug this module was written to stop — spec-driven clients trust it and break.
 - `stac.py` — **PUBLIC STAC 1.0.0 catalog** (`/api/stac`, + `/conformance`, `/collections`,
   `/collections/{vectors|rasters}/items[/{item}]`, GET `/search?bbox=&collections=&limit=`) — the
   discovery half of the data-access story (notes §0h-addendum; GeoNode-catalog equivalent with zero
@@ -118,6 +137,23 @@ deliberately NOT visibility-filtered (published portals depend on them).
   XYZ `tiles`; postgis vector → Martin XYZ `vector-tiles`; geoparquet → `manifest` + `features-geojson`
   + `features-arrow` (+ `pmtiles` when tiled). Absolute hrefs from the forwarded Host/X-Forwarded-Proto.
   Consumers: QGIS (native STAC 3.40+/plugin), stac-browser, pystac-client — see `docs/data-access.md`.
+  **Hardened 2026-07-29 to back the `ogcapi-features` conformance it claims:** `/collections/{cid}/items`
+  now honours `bbox` (4 or 6 numbers), `datetime` (instant or `start/end`, `..` open-ended), `limit`
+  + `offset`, and returns `numberMatched`/`numberReturned`/`timeStamp` + `next`/`prev`. `/search`
+  gained `datetime` + `ids` and a **POST** twin (pystac-client's default verb — hence `POST` in the
+  public-CORS preflight's `Allow-Methods` in `main.py`); its old `break`-inside-inner-loop let a
+  multi-collection search overrun `limit`. Every vector item also advertises the OGC API - Features
+  collection (`ogc-features` asset + `alternate` link).
+- **Per-layer share links** (authed, `data:read`): `GET /data/{vector,raster}/{id}/links` → the
+  tool-labelled URL list behind My Data's **Share links** panel, built by `services/share_links.py`.
+  Returns `{public, name, catalog, links[]}`; `public` is `is_public`, which the UI turns into a
+  "make it Public first" notice — the URLs themselves are the public surface and 404 until then.
+- **`GET /data/raster/{id}/tilejson`** — **PUBLIC** TileJSON 3.0 for a shared raster (`is_public`,
+  like `/cog`). We emit it ourselves rather than proxy TiTiler's `/cog/…/tilejson.json`, whose
+  self-URL is built from the container origin (`http://titiler:8000/cog/tiles/…` — wrong host/scheme,
+  missing nginx's `/raster` prefix). Bakes the layer's saved styling into the tile template and
+  carries **`bounds`** (from the stored EPSG:4326 bbox; TiTiler `/cog/info` only as a fallback for
+  legacy rows) — bounds are the whole point: a bare XYZ URL has none, so "zoom to layer" fails.
 - **Sharing endpoints** (authed, editor+): `PUT /data/vector/{id}/sharing` + `PUT /data/raster/{id}/sharing`
   (`SharingUpdate`: partial `{visibility, abstract, keywords, license, attribution}` — legacy
   `is_public` bool still accepted, mapped to visibility). `PUT /data/sources/{id}/sharing` takes
@@ -155,6 +191,10 @@ deliberately NOT visibility-filtered (published portals depend on them).
 - No rate limiting beyond nginx; no pagination on list endpoints (fine at current scale).
 
 ## Last updated
+2026-07-29 (INTEROP: new `ogcapi.py` = OGC API - Features Core/GeoJSON at `/api/ogc`; raster
+TileJSON; per-layer `/links` (share links) via the new `services/share_links.py`; STAC items +
+`/search` brought up to the conformance they claim, + POST search. `main.py`'s `_PUBLIC_CORS` regex
+now covers `/api/ogc/*` and its preflight allows POST. Tests: `test_ogcapi.py`.)
 2026-07-16 (A-02 per-resource sharing: `visibility` axis private/organization/public on layers +
 sources + portals; `common.visible_to(user, Model)` now enforces it in lists + authed by-id lookups;
 `is_public` folded in as a derived write-only-synced flag via `common.apply_sharing`; new source +

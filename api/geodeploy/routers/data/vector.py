@@ -617,6 +617,28 @@ async def vector_tilejson(layer_id: int, request: Request, db: AsyncSession = De
                                      "Cache-Control": "public, max-age=300"})
 
 
+@router.get("/{layer_id}/links")
+async def vector_share_links(layer_id: int, request: Request,
+                             user: User = Depends(require_scope("data:read")),
+                             db: AsyncSession = Depends(get_db)):
+    """The "Share links" panel feed: every tool-ready URL for this layer (TileJSON / PMTiles /
+    GeoJSON / GeoArrow / manifest / STAC), each labelled with the tools it is meant for. Authed —
+    it is layer metadata — but the URLs only RESOLVE for a publicly-readable layer (`public` flag
+    below), so the UI can prompt for a Public share first."""
+    result = await db.execute(
+        select(VectorLayer).where(VectorLayer.id == layer_id, visible_to(user, VectorLayer)))
+    layer = result.scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not found.")
+    if layer.status != "ready":
+        raise HTTPException(409, "Layer is not ready yet.")
+    from ...services import share_links
+    base = share_links.request_base(request)
+    return {"public": bool(layer.is_public), "name": layer.name,
+            "catalog": f"{base}/api/stac",
+            "links": share_links.vector_links(layer, base)}
+
+
 @router.get("/{layer_id}/identify")
 async def vector_identify(
     layer_id: int,

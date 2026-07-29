@@ -166,6 +166,10 @@ export const reprocessVectorLayer = (id) => api.post(`/data/vector/${id}/reproce
 // (Re)generate the PMTiles archive for a GeoParquet layer — fast seamless display for heavy layers.
 // Runs tippecanoe in the background; returns the layer with tile_status='tiling'. Poll for 'ready'.
 export const tileVectorLayer = (id) => api.post(`/data/vector/${id}/tile`)
+// "Share links" panel: the tool-ready URLs for a layer (TileJSON / PMTiles / GeoJSON / COG / STAC).
+// Built server-side (services/share_links.py) so the UI never has to know which artifact fits which
+// storage backend. `public` says whether those URLs actually resolve yet.
+export const getVectorLinks = (id) => api.get(`/data/vector/${id}/links`)
 
 // Raster layers
 export const listRasterLayers = () => api.get('/data/raster')
@@ -183,6 +187,7 @@ export const renameRasterLayer = (id, name) => api.put(`/data/raster/${id}/renam
 export const deleteRasterLayer = (id) => api.delete(`/data/raster/${id}`)
 export const listColormaps = () => api.get('/data/raster/colormaps')
 export const getRasterStats = (id) => api.get(`/data/raster/${id}/stats`)
+export const getRasterLinks = (id) => api.get(`/data/raster/${id}/links`)
 
 // Discover + import data already in the connected DB / storage (registers catalog entries, no copy)
 export const discoverDatabase = () => api.get('/data/discover/database')
