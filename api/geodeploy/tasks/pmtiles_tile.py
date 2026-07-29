@@ -108,7 +108,7 @@ def _layer_feature_count(db_path: str, layer_id) -> int:
     """Read a layer's stored feature_count (0 if unknown) to drive {@link _resolve_maxzoom}."""
     import sqlite3
     try:
-        con = sqlite3.connect(db_path)
+        con = sqlite3.connect(db_path, timeout=30)
         try:
             row = con.execute(
                 "SELECT feature_count FROM vector_layers WHERE id=?", (layer_id,)).fetchone()

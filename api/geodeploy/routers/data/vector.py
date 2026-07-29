@@ -16,7 +16,7 @@ from ...models import Portal, UploadJob, User, VectorLayer
 from ...schemas import DefaultStyle, JobStatus, LayerRename, PortalRefOut, SharingUpdate, VectorLayerOut
 from ...services import martin as martin_svc
 from ...tasks.vector_ingest import ingest_vector
-from ..common import (apply_sharing, busy_job_progress, creator_names, portals_using,
+from ..common import (apply_sharing, busy_job_progress, by_ref, creator_names, portals_using,
                       prune_layer_from_portals, record_audit, visible_to)
 
 router = APIRouter(prefix="/data/vector", tags=["vector"])
@@ -525,9 +525,9 @@ async def vector_features(
     return await _viewport_geojson(result.scalar_one_or_none(), bbox, limit)
 
 
-@router.get("/{layer_id}/features.arrow")
+@router.get("/{layer_ref}/features.arrow")
 async def vector_features_arrow(
-    layer_id: int,
+    layer_ref: str,
     bbox: str | None = None,
     limit: int = 50000,
     db: AsyncSession = Depends(get_db),
@@ -539,7 +539,7 @@ async def vector_features_arrow(
     GeoJSON transport."""
     from starlette.concurrency import run_in_threadpool
     from ...services import duckdb_engine
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    result = await db.execute(select(VectorLayer).where(by_ref(VectorLayer, layer_ref)))
     layer = result.scalar_one_or_none()
     if not await _publicly_readable(layer, db):
         raise HTTPException(404, "Layer not found.")
@@ -553,9 +553,9 @@ async def vector_features_arrow(
     return Response(content=body, media_type="application/vnd.apache.arrow.stream")
 
 
-@router.get("/{layer_id}/features.geojson")
+@router.get("/{layer_ref}/features.geojson")
 async def vector_features_public(
-    layer_id: int,
+    layer_ref: str,
     bbox: str | None = None,
     limit: int = 50000,
     db: AsyncSession = Depends(get_db),
@@ -565,15 +565,15 @@ async def vector_features_public(
     caller can only address a DB row by id (not arbitrary keys), and bucket creds stay server-side.
     (Single-admin self-hosted assumption — for multi-tenant cloud this needs portal scoping + auth,
     same open question as the rest of the public-portal surface; see notes §0h-addendum.)"""
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    result = await db.execute(select(VectorLayer).where(by_ref(VectorLayer, layer_ref)))
     layer = result.scalar_one_or_none()
     if not await _publicly_readable(layer, db):
         raise HTTPException(404, "Layer not found.")
     return await _viewport_geojson(layer, bbox, limit)
 
 
-@router.get("/{layer_id}/tilejson")
-async def vector_tilejson(layer_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+@router.get("/{layer_ref}/tilejson")
+async def vector_tilejson(layer_ref: str, request: Request, db: AsyncSession = Depends(get_db)):
     """PUBLIC TileJSON (3.0.0) for a PostGIS vector layer — the ONE URL other tools add directly as a
     vector-tile source (QGIS 'Vector Tiles' → from TileJSON, MapLibre/GeoLibre vector source, deck.gl).
     It carries the absolute {z}/{x}/{y} tile URL (https-aware), bounds, and the `vector_layers` entry
@@ -581,7 +581,7 @@ async def vector_tilejson(layer_id: int, request: Request, db: AsyncSession = De
     (public metadata), like /tiles/."""
     from fastapi.responses import JSONResponse
 
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    result = await db.execute(select(VectorLayer).where(by_ref(VectorLayer, layer_ref)))
     layer = result.scalar_one_or_none()
     if not await _publicly_readable(layer, db):
         raise HTTPException(404, "Layer not found.")
@@ -639,9 +639,9 @@ async def vector_share_links(layer_id: int, request: Request,
             "links": share_links.vector_links(layer, base)}
 
 
-@router.get("/{layer_id}/identify")
+@router.get("/{layer_ref}/identify")
 async def vector_identify(
-    layer_id: int,
+    layer_ref: str,
     lng: float,
     lat: float,
     tol: float = 1e-4,
@@ -654,7 +654,7 @@ async def vector_identify(
     features.geojson (published portals are unauthenticated); the tiny bbox + covering pruning
     keeps it cheap. `tol` = half-width of the click box in degrees (client scales it by zoom)."""
     from ...services import duckdb_engine
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    result = await db.execute(select(VectorLayer).where(by_ref(VectorLayer, layer_ref)))
     layer = result.scalar_one_or_none()
     if not await _publicly_readable(layer, db):
         raise HTTPException(404, "Layer not found.")
@@ -768,30 +768,33 @@ async def reprocess_layer(
 # (the same problem the parquet range proxy caches for). The key is deterministic and stable across
 # re-tiles (overwritten in place); a re-PREP mints a new key, so a stale entry self-heals on the S3
 # miss below (fetch fails → drop entry → re-read from the DB next request).
-_PMTILES_KEY_CACHE: dict[int, str] = {}
+# Keyed by the REF THE CALLER USED (uid or legacy id) rather than the row id, so the cache still
+# answers without a DB round-trip whichever form the URL carries.
+_PMTILES_KEY_CACHE: dict[str, str] = {}
 
 
-async def _pmtiles_key(layer_id: int, db: AsyncSession) -> str | None:
-    cached = _PMTILES_KEY_CACHE.get(layer_id)
+async def _pmtiles_key(layer_ref: str, db: AsyncSession) -> str | None:
+    cached = _PMTILES_KEY_CACHE.get(layer_ref)
     if cached is not None:
         return cached
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    result = await db.execute(select(VectorLayer).where(by_ref(VectorLayer, layer_ref)))
     layer = result.scalar_one_or_none()
     if not layer or layer.storage_backend != "geoparquet" or not layer.pmtiles_key:
         return None
     if not await _publicly_readable(layer, db):  # private layer, not in any published portal
         return None
-    _PMTILES_KEY_CACHE[layer_id] = layer.pmtiles_key
+    _PMTILES_KEY_CACHE[layer_ref] = layer.pmtiles_key
     return layer.pmtiles_key
 
 
-@router.get("/{layer_id}/pmtiles")
-async def vector_pmtiles(layer_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+@router.get("/{layer_ref}/pmtiles")
+async def vector_pmtiles(layer_ref: str, request: Request, db: AsyncSession = Depends(get_db)):
     """PUBLIC range proxy for a GeoParquet layer's PMTiles archive — MapLibre's pmtiles protocol
     streams the tiles via HTTP Range requests. Public like Martin vector tiles (`/tiles/`), since
     published portals are unauthenticated; same-origin so no CORS, and the bucket creds stay
-    server-side. The DB row is the only thing the caller can address (by id), not arbitrary keys."""
-    key = await _pmtiles_key(layer_id, db)
+    server-side. The DB row is the only thing the caller can address (by uid/id), not arbitrary
+    keys."""
+    key = await _pmtiles_key(layer_ref, db)
     if not key:
         raise HTTPException(404, "No tiles for this layer.")
 
@@ -805,7 +808,7 @@ async def vector_pmtiles(layer_id: int, request: Request, db: AsyncSession = Dep
     try:
         obj = await run_in_threadpool(lambda: s3.get_object(**params))
     except Exception:
-        _PMTILES_KEY_CACHE.pop(layer_id, None)  # stale key (e.g. a re-prep) — re-read next request
+        _PMTILES_KEY_CACHE.pop(layer_ref, None)  # stale key (e.g. a re-prep) — re-read next request
         raise HTTPException(404, "Tiles not found.")
 
     headers = {"Accept-Ranges": "bytes", "Cache-Control": "public, max-age=3600"}
@@ -825,14 +828,14 @@ async def vector_pmtiles(layer_id: int, request: Request, db: AsyncSession = Dep
 # small range requests per map pan and an ORM SELECT per request starved the api. A re-prep
 # repoints s3_key to a NEW parts-<hex> prefix — handled by the miss-refresh in the route (a
 # stale prefix's objects are deleted, so the fetch fails, the entry is dropped and re-read).
-_PARQUET_PREFIX_CACHE: dict[int, str] = {}
+_PARQUET_PREFIX_CACHE: dict[str, str] = {}   # keyed by the caller's ref (uid or legacy id)
 
 
-async def _parquet_prefix(layer_id: int, db: AsyncSession) -> str | None:
-    cached = _PARQUET_PREFIX_CACHE.get(layer_id)
+async def _parquet_prefix(layer_ref: str, db: AsyncSession) -> str | None:
+    cached = _PARQUET_PREFIX_CACHE.get(layer_ref)
     if cached is not None:
         return cached
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == layer_id))
+    result = await db.execute(select(VectorLayer).where(by_ref(VectorLayer, layer_ref)))
     layer = result.scalar_one_or_none()
     if (not layer or layer.storage_backend != "geoparquet" or not layer.s3_key
             or layer.s3_key.rstrip("/").endswith(".parquet")):  # unprepped single file: no manifest
@@ -840,12 +843,12 @@ async def _parquet_prefix(layer_id: int, db: AsyncSession) -> str | None:
     if not await _publicly_readable(layer, db):  # private layer, not in any published portal
         return None
     prefix = layer.s3_key.rstrip("/")
-    _PARQUET_PREFIX_CACHE[layer_id] = prefix
+    _PARQUET_PREFIX_CACHE[layer_ref] = prefix
     return prefix
 
 
-@router.get("/{layer_id}/parquet/{path:path}")
-async def vector_parquet_object(layer_id: int, path: str, request: Request,
+@router.get("/{layer_ref}/parquet/{path:path}")
+async def vector_parquet_object(layer_ref: str, path: str, request: Request,
                                 db: AsyncSession = Depends(get_db)):
     """PUBLIC range proxy for a prepared GeoParquet layer's objects — `manifest.json` plus the
     `__cell=N/*.parquet` partition files — so the portal.js duckdb-wasm client can read parquet
@@ -856,7 +859,7 @@ async def vector_parquet_object(layer_id: int, path: str, request: Request,
     per map pan — keep it off the DB (prefix cache) and reuse the cached boto3 client."""
     if not path or ".." in path.split("/"):
         raise HTTPException(404, "Not found.")
-    prefix = await _parquet_prefix(layer_id, db)
+    prefix = await _parquet_prefix(layer_ref, db)
     if not prefix:
         raise HTTPException(404, "No parquet dataset for this layer.")
 
@@ -875,8 +878,8 @@ async def vector_parquet_object(layer_id: int, path: str, request: Request,
         obj = await run_in_threadpool(_get, prefix)
     except Exception:
         # The cached prefix may be stale (re-prep repointed the layer): refresh once and retry.
-        _PARQUET_PREFIX_CACHE.pop(layer_id, None)
-        fresh = await _parquet_prefix(layer_id, db)
+        _PARQUET_PREFIX_CACHE.pop(layer_ref, None)
+        fresh = await _parquet_prefix(layer_ref, db)
         if not fresh or fresh == prefix:
             raise HTTPException(404, "Object not found.")
         try:

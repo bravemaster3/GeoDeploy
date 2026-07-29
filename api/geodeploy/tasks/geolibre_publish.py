@@ -115,7 +115,7 @@ def _mark_raster_error(layer_id: int, job_id: str, message: str) -> None:
     the failed layer is then excluded from the built bundle (only 'ready' layers load)."""
     db_path = f"{get_settings().data_dir}/sqlite/geodeploy.db"
     try:
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, timeout=30)
         conn.execute("UPDATE raster_layers SET status = 'error', error_message = ? WHERE id = ?",
                      (message, layer_id))
         conn.execute("UPDATE upload_jobs SET status = 'error', error_message = ? WHERE id = ?",

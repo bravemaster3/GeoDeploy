@@ -16,7 +16,7 @@ from ..services.cog_converter import convert_to_cog, inspect as inspect_raster, 
 
 def _get_storage_creds(db_path: str) -> dict:
     import sqlite3
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(db_path, timeout=30) as conn:
         row = conn.execute(
             "SELECT storage_endpoint, storage_bucket, storage_access_key, storage_secret_key, storage_region "
             "FROM setup_config WHERE id=1"
@@ -32,7 +32,7 @@ def _get_storage_creds(db_path: str) -> dict:
 
 def _update_job(db_path: str, job_id: str, **kwargs) -> None:
     import sqlite3
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(db_path, timeout=30) as conn:
         sets = ", ".join(f"{k} = ?" for k in kwargs)
         values = list(kwargs.values()) + [job_id]
         conn.execute(f"UPDATE upload_jobs SET {sets} WHERE id = ?", values)
@@ -40,7 +40,7 @@ def _update_job(db_path: str, job_id: str, **kwargs) -> None:
 
 def _update_layer(db_path: str, layer_id: int, **kwargs) -> None:
     import sqlite3
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(db_path, timeout=30) as conn:
         sets = ", ".join(f"{k} = ?" for k in kwargs)
         values = list(kwargs.values()) + [layer_id]
         conn.execute(f"UPDATE raster_layers SET {sets} WHERE id = ?", values)

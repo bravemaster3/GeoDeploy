@@ -17,6 +17,11 @@ Three surfaces, three jobs:
 In the app, the **Share links** panel (link icon on any ready layer in *My Data*) hands you the
 right URL for each of these, labelled with the exact menu path in each tool.
 
+**About the identifiers in these URLs.** A layer is addressed by a short opaque id such as
+`vector-a7f3c91b04e2` — deliberately not a row number. Row numbers get reused when a layer is
+deleted, which would make an old link quietly return someone else's data; the opaque id is stable
+for the life of the layer and 404s honestly once it is gone. Links that used numbers still work.
+
 ## Sharing a layer (admin)
 
 Nothing is shared by default. In **My Data**, click the globe icon on a ready layer to list it
@@ -64,7 +69,7 @@ Every layer you share as **Public** becomes a collection, whatever it is stored 
 GeoParquet) — same URLs, same GeoJSON, EPSG:4326.
 
 - `GET /api/ogc` — landing page · `GET /api/ogc/conformance` — conformance classes
-- `GET /api/ogc/collections` — one collection per shared vector layer (`vector-{layer id}`)
+- `GET /api/ogc/collections` — one collection per shared vector layer (`vector-{uid}`)
 - `GET /api/ogc/collections/{cid}/items?bbox=minx,miny,maxx,maxy&limit=1000&offset=0`
 - `GET /api/ogc/collections/{cid}/items/{featureId}`
 
@@ -79,7 +84,7 @@ requests only your current extent.
 
 ```bash
 ogr2ogr -f GPKG roads.gpkg \
-  "OAPIF:https://YOUR-HOST/api/ogc/collections/vector-5"
+  "OAPIF:https://YOUR-HOST/api/ogc/collections/vector-a7f3c91b04e2"
 ```
 
 **Anything else** (Python, R, a browser) — `…/items?bbox=…` is plain GeoJSON over HTTP.

@@ -24,6 +24,8 @@ _pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 OWNER = 1
 
 PUBLIC_PG, ORG_PG, PUBLIC_GP, PROCESSING = 10, 11, 12, 13
+# Explicit uids so assertions are deterministic (the model would otherwise generate random ones).
+UID_PG, UID_GP = "aaaa1111bbbb", "cccc2222dddd"
 
 
 def _auth(uid=OWNER):
@@ -34,7 +36,7 @@ def _auth(uid=OWNER):
 async def _seed(db):
     db.add(User(id=OWNER, email="o@example.com", name="O", hashed_password=_pwd.hash("pw"),
                 is_admin=True, role="owner"))
-    db.add(VectorLayer(id=PUBLIC_PG, user_id=OWNER, name="Roads", table_name="roads",
+    db.add(VectorLayer(id=PUBLIC_PG, uid=UID_PG, user_id=OWNER, name="Roads", table_name="roads",
                        schema_name="ext_schema", status="ready", storage_backend="postgis",
                        visibility="public", is_public=True, crs="EPSG:4326",
                        bbox=json.dumps([11.0, 57.0, 12.0, 58.0]), feature_count=42,
@@ -44,7 +46,7 @@ async def _seed(db):
     db.add(VectorLayer(id=ORG_PG, user_id=OWNER, name="Internal", table_name="internal",
                        schema_name="ext_schema", status="ready", storage_backend="postgis",
                        visibility="organization", is_public=False))
-    db.add(VectorLayer(id=PUBLIC_GP, user_id=OWNER, name="Parcels", table_name="parcels",
+    db.add(VectorLayer(id=PUBLIC_GP, uid=UID_GP, user_id=OWNER, name="Parcels", table_name="parcels",
                        schema_name="ext_schema", status="ready", storage_backend="geoparquet",
                        s3_key="vectors/1/parcels/", visibility="public", is_public=True,
                        feature_count=7,
@@ -98,7 +100,7 @@ async def test_collections_lists_only_public_ready_layers(client, db):
     r = await client.get("/api/ogc/collections")
     assert r.status_code == 200
     ids = {c["id"] for c in r.json()["collections"]}
-    assert ids == {f"vector-{PUBLIC_PG}", f"vector-{PUBLIC_GP}"}
+    assert ids == {f"vector-{UID_PG}", f"vector-{UID_GP}"}
 
 
 @pytest.mark.asyncio
@@ -112,10 +114,12 @@ async def test_non_public_collections_404(client, db, cid):
 @pytest.mark.asyncio
 async def test_collection_document(client, db):
     await _seed(db)
+    # Requested by the LEGACY integer id (a link shared before uids existed) — it still resolves,
+    # but the document reports the canonical uid.
     r = await client.get(f"/api/ogc/collections/vector-{PUBLIC_PG}")
     assert r.status_code == 200
     doc = r.json()
-    assert doc["id"] == f"vector-{PUBLIC_PG}"
+    assert doc["id"] == f"vector-{UID_PG}"
     assert doc["title"] == "Roads"
     assert doc["itemType"] == "feature"
     assert doc["extent"]["spatial"]["bbox"] == [[11.0, 57.0, 12.0, 58.0]]
@@ -140,7 +144,7 @@ async def test_items_paging_links(client, db, monkeypatch):
         return [_feature(offset + i) for i in range(limit)], 42
 
     monkeypatch.setattr(ogcapi, "_postgis_items", fake)
-    r = await client.get(f"/api/ogc/collections/vector-{PUBLIC_PG}/items?limit=10&offset=10")
+    r = await client.get(f"/api/ogc/collections/vector-{UID_PG}/items?limit=10&offset=10")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("application/geo+json")
     doc = r.json()
@@ -160,7 +164,7 @@ async def test_items_last_page_has_no_next(client, db, monkeypatch):
         return [_feature(0)], 1
 
     monkeypatch.setattr(ogcapi, "_postgis_items", fake)
-    doc = (await client.get(f"/api/ogc/collections/vector-{PUBLIC_PG}/items?limit=10")).json()
+    doc = (await client.get(f"/api/ogc/collections/vector-{UID_PG}/items?limit=10")).json()
     assert {l["rel"] for l in doc["links"]}.isdisjoint({"next", "prev"})
     assert doc["numberMatched"] == 1
 
@@ -174,7 +178,7 @@ async def test_items_unknown_count_is_omitted_not_guessed(client, db, monkeypatc
         return [_feature(i) for i in range(limit)], None
 
     monkeypatch.setattr(ogcapi, "_geoparquet_items", fake)
-    doc = (await client.get(f"/api/ogc/collections/vector-{PUBLIC_GP}/items?limit=5")).json()
+    doc = (await client.get(f"/api/ogc/collections/vector-{UID_GP}/items?limit=5")).json()
     assert "numberMatched" not in doc
     assert {l["rel"] for l in doc["links"]} >= {"next"}   # full page → there may be more
 
@@ -190,7 +194,7 @@ async def test_bbox_is_parsed_and_passed_through(client, db, monkeypatch):
 
     monkeypatch.setattr(ogcapi, "_postgis_items", fake)
     r = await client.get(
-        f"/api/ogc/collections/vector-{PUBLIC_PG}/items?bbox=11,57,12,58&limit=99999")
+        f"/api/ogc/collections/vector-{UID_PG}/items?bbox=11,57,12,58&limit=99999")
     assert r.status_code == 200
     assert seen["bbox"] == [11.0, 57.0, 12.0, 58.0]
     assert seen["limit"] == ogcapi.MAX_LIMIT          # capped, never unbounded
@@ -206,7 +210,7 @@ async def test_3d_bbox_drops_elevation(client, db, monkeypatch):
         return [], 0
 
     monkeypatch.setattr(ogcapi, "_postgis_items", fake)
-    await client.get(f"/api/ogc/collections/vector-{PUBLIC_PG}/items?bbox=11,57,0,12,58,100")
+    await client.get(f"/api/ogc/collections/vector-{UID_PG}/items?bbox=11,57,0,12,58,100")
     assert seen["bbox"] == [11.0, 57.0, 12.0, 58.0]
 
 
@@ -214,7 +218,7 @@ async def test_3d_bbox_drops_elevation(client, db, monkeypatch):
 @pytest.mark.parametrize("bbox", ["1,2,3", "a,b,c,d", "11,57,12"])
 async def test_bad_bbox_400s(client, db, bbox):
     await _seed(db)
-    r = await client.get(f"/api/ogc/collections/vector-{PUBLIC_PG}/items?bbox={bbox}")
+    r = await client.get(f"/api/ogc/collections/vector-{UID_PG}/items?bbox={bbox}")
     assert r.status_code == 400
 
 
@@ -226,11 +230,11 @@ async def test_single_feature(client, db, monkeypatch):
         return _feature(7) if fid == "7" else None
 
     monkeypatch.setattr(ogcapi, "_postgis_item", fake)
-    r = await client.get(f"/api/ogc/collections/vector-{PUBLIC_PG}/items/7")
+    r = await client.get(f"/api/ogc/collections/vector-{UID_PG}/items/7")
     assert r.status_code == 200
     assert {l["rel"] for l in r.json()["links"]} == {"self", "collection"}
     assert (await client.get(
-        f"/api/ogc/collections/vector-{PUBLIC_PG}/items/8")).status_code == 404
+        f"/api/ogc/collections/vector-{UID_PG}/items/8")).status_code == 404
 
 
 # ── Cross-surface wiring: STAC advertises it, share links lead with it ────────────────────────
@@ -239,9 +243,9 @@ async def test_single_feature(client, db, monkeypatch):
 async def test_stac_item_advertises_the_ogc_collection(client, db):
     await _seed(db)
     item = (await client.get(
-        f"/api/stac/collections/vectors/items/vector-{PUBLIC_PG}")).json()
+        f"/api/stac/collections/vectors/items/vector-{UID_PG}")).json()
     assert item["assets"]["ogc-features"]["href"].endswith(
-        f"/api/ogc/collections/vector-{PUBLIC_PG}/items")
+        f"/api/ogc/collections/vector-{UID_PG}/items")
     assert any(l["rel"] == "alternate" and "/api/ogc/" in l["href"] for l in item["links"])
 
 
@@ -263,3 +267,74 @@ async def test_share_links_flag_a_non_public_layer(client, db):
     await _seed(db)
     body = (await client.get(f"/api/data/vector/{ORG_PG}/links", headers=_auth())).json()
     assert body["public"] is False      # UI turns this into "make it public first"
+
+
+# ── Stable public ids ────────────────────────────────────────────────────────────────────────
+# SQLite reuses an integer PK after the highest row is deleted, so a shared URL built from `id`
+# can silently start returning a DIFFERENT dataset. Public identity is therefore the layer's uid;
+# these tests are the contract. See models.new_uid + routers/common.by_ref.
+
+@pytest.mark.asyncio
+async def test_public_ids_are_uids_not_integer_pks(client, db):
+    await _seed(db)
+    cols = (await client.get("/api/ogc/collections")).json()["collections"]
+    assert all(c["id"].split("-", 1)[1] not in {str(PUBLIC_PG), str(PUBLIC_GP)} for c in cols)
+    item = (await client.get(
+        f"/api/stac/collections/vectors/items/vector-{UID_PG}")).json()
+    assert item["id"] == f"vector-{UID_PG}"
+    # …and every advertised URL addresses the uid, never the row id.
+    for asset in item["assets"].values():
+        assert f"/vector-{PUBLIC_PG}" not in asset["href"]
+        assert f"/data/vector/{PUBLIC_PG}/" not in asset["href"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ref", ["{uid}", "vector-{uid}", "{pk}", "vector-{pk}"])
+async def test_legacy_integer_links_keep_resolving(client, db, ref):
+    """Links shared before the uid migration must not break — by_ref accepts both forms."""
+    await _seed(db)
+    cid = ref.format(uid=UID_PG, pk=PUBLIC_PG)
+    if not cid.startswith("vector-"):
+        cid = f"vector-{cid}"
+    r = await client.get(f"/api/ogc/collections/{cid}")
+    assert r.status_code == 200
+    assert r.json()["id"] == f"vector-{UID_PG}"
+
+
+@pytest.mark.asyncio
+async def test_a_recycled_integer_id_cannot_serve_the_old_layers_url(client, db):
+    """THE failure this design prevents. Delete a shared layer, let a NEW layer take its recycled
+    integer id, and the URL published for the old one must NOT quietly return the new data."""
+    await _seed(db)
+    from sqlalchemy import select as sel
+    from geodeploy.models import VectorLayer as VL
+
+    old = (await db.execute(sel(VL).where(VL.id == PUBLIC_PG))).scalar_one()
+    await db.delete(old)
+    await db.commit()
+    # A different dataset lands on the very same integer id (what SQLite does on the next insert).
+    db.add(VL(id=PUBLIC_PG, uid="9999ffff8888", user_id=OWNER, name="Bedrock geology",
+              table_name="bedrock", schema_name="ext_schema", status="ready",
+              storage_backend="postgis", visibility="public", is_public=True))
+    await db.commit()
+
+    # The bookmarked uid URL 404s — honest — instead of serving Bedrock geology as "Roads".
+    assert (await client.get(f"/api/ogc/collections/vector-{UID_PG}")).status_code == 404
+    assert (await client.get(
+        f"/api/stac/collections/vectors/items/vector-{UID_PG}")).status_code == 404
+    # The new layer is reachable by its own uid.
+    assert (await client.get(
+        "/api/ogc/collections/vector-9999ffff8888")).json()["title"] == "Bedrock geology"
+
+
+@pytest.mark.asyncio
+async def test_uid_is_generated_for_new_layers(db):
+    """Every creation path gets one from the model default — no route needs to remember."""
+    from geodeploy.models import VectorLayer as VL
+    from sqlalchemy import select as sel
+    await _seed(db)
+    db.add(VL(id=99, user_id=OWNER, name="Fresh", table_name="t99", schema_name="s",
+              status="ready", storage_backend="postgis"))
+    await db.commit()
+    layer = (await db.execute(sel(VL).where(VL.id == 99))).scalar_one()
+    assert layer.uid and len(layer.uid) == 12 and layer.uid != "99"

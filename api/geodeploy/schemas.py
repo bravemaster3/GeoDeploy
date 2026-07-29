@@ -264,6 +264,7 @@ class VisibilityUpdate(BaseModel):
 
 class VectorLayerOut(BaseModel):
     id: int
+    uid: str | None = None          # stable PUBLIC id (models.new_uid) — what share links use
     user_id: int | None = None          # creator ("created by" provenance — shared workspace)
     created_by: str | None = None       # creator display name, populated by the list endpoints
     name: str
@@ -322,6 +323,7 @@ class RasterDefaultStyle(BaseModel):
 
 class RasterLayerOut(BaseModel):
     id: int
+    uid: str | None = None          # stable PUBLIC id (models.new_uid) — what share links use
     user_id: int | None = None
     created_by: str | None = None
     name: str

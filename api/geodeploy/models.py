@@ -1,3 +1,4 @@
+import secrets
 from datetime import datetime
 from sqlalchemy import (
     Boolean, DateTime, Float, ForeignKey,
@@ -6,6 +7,23 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .crypto import EncryptedText
 from .database import Base
+
+
+def new_uid() -> str:
+    """A layer's STABLE PUBLIC identifier.
+
+    Integer primary keys must never appear in shareable URLs. SQLite assigns them as rowid
+    aliases WITHOUT the AUTOINCREMENT keyword, so deleting the highest-id row frees that id for
+    the next insert: delete a shared layer, create another, and every saved link to
+    `.../vector-3` — a STAC item, an OGC API - Features collection, a `/vsicurl/` COG pasted into
+    someone's QGIS project — silently resolves to a DIFFERENT dataset. No error, wrong data.
+    Postgres sequences would fix the reuse, but not the wider problem: integer keys are only
+    meaningful within one database, so a restore or an instance-to-instance move renumbers
+    everything and invalidates every published URL.
+
+    12 hex chars from `secrets`: collision-free in practice, unguessable, and URL-safe.
+    """
+    return secrets.token_hex(6)
 
 
 class SetupConfig(Base):
@@ -128,6 +146,9 @@ class VectorLayer(Base):
     __tablename__ = "vector_layers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Stable public identity — see `new_uid()`. The integer `id` stays the internal key (foreign
+    # keys, portal layer_configs); `uid` is what STAC / OGC API - Features / share links expose.
+    uid: Mapped[str | None] = mapped_column(String(32), unique=True, index=True, default=new_uid)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     table_name: Mapped[str] = mapped_column(String(256), nullable=False)
@@ -185,6 +206,7 @@ class RasterLayer(Base):
     __tablename__ = "raster_layers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    uid: Mapped[str | None] = mapped_column(String(32), unique=True, index=True, default=new_uid)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(256), nullable=False)
     s3_key: Mapped[str] = mapped_column(String(512), nullable=False)

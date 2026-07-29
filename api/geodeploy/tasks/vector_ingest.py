@@ -56,7 +56,7 @@ def _srid_of(crs_wkt) -> int | None:
 
 def _update_job(db_path: str, job_id: str, **kwargs) -> None:
     import sqlite3
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(db_path, timeout=30) as conn:
         sets = ", ".join(f"{k} = ?" for k in kwargs)
         values = list(kwargs.values()) + [job_id]
         conn.execute(f"UPDATE upload_jobs SET {sets} WHERE id = ?", values)
@@ -64,7 +64,7 @@ def _update_job(db_path: str, job_id: str, **kwargs) -> None:
 
 def _update_layer(db_path: str, layer_id: int, **kwargs) -> None:
     import sqlite3
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(db_path, timeout=30) as conn:
         sets = ", ".join(f"{k} = ?" for k in kwargs)
         values = list(kwargs.values()) + [layer_id]
         conn.execute(f"UPDATE vector_layers SET {sets} WHERE id = ?", values)
@@ -72,7 +72,7 @@ def _update_layer(db_path: str, layer_id: int, **kwargs) -> None:
 
 def _get_all_layers(db_path: str) -> list[dict]:
     import sqlite3
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(db_path, timeout=30) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT schema_name, table_name, geometry_column, id_column, crs "
@@ -83,7 +83,7 @@ def _get_all_layers(db_path: str) -> list[dict]:
 
 def _get_setup(db_path: str) -> dict | None:
     import sqlite3
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(db_path, timeout=30) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM setup_config WHERE completed = 1").fetchone()
         return dict(row) if row else None
@@ -91,7 +91,7 @@ def _get_setup(db_path: str) -> dict | None:
 
 def _get_layer_user(db_path: str, layer_id: int) -> int | None:
     import sqlite3
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(db_path, timeout=30) as conn:
         row = conn.execute("SELECT user_id FROM vector_layers WHERE id = ?", (layer_id,)).fetchone()
         return row[0] if row else None
 

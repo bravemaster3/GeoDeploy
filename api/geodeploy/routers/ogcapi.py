@@ -32,6 +32,7 @@ from starlette.concurrency import run_in_threadpool
 from ..config import get_settings
 from ..database import get_db
 from ..models import VectorLayer
+from .common import by_ref
 
 router = APIRouter(prefix="/ogc", tags=["ogc-api-features"])
 
@@ -61,14 +62,10 @@ def _root(base: str) -> str:
 
 
 def _cid(layer) -> str:
-    return f"vector-{layer.id}"
-
-
-def _layer_id(cid: str) -> int | None:
-    try:
-        return int(cid.rsplit("-", 1)[1])
-    except (IndexError, ValueError):
-        return None
+    """Collection id = `vector-<uid>`, mirroring the STAC item id. The layer's STABLE identifier,
+    never the integer PK — ids are reused after a delete and would silently repoint a saved
+    collection URL at a different dataset (models.new_uid)."""
+    return f"vector-{getattr(layer, 'uid', None) or layer.id}"
 
 
 def _bbox(layer) -> list[float] | None:
@@ -115,10 +112,9 @@ async def _public_layers(db: AsyncSession) -> list[VectorLayer]:
 
 
 async def _get_layer(cid: str, db: AsyncSession) -> VectorLayer:
-    lid = _layer_id(cid)
-    if lid is None:
-        raise HTTPException(404, "No such collection.")
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == lid))
+    # `by_ref` accepts the uid AND the legacy integer id (with or without the `vector-` prefix),
+    # so collection URLs shared before the uid migration keep working.
+    result = await db.execute(select(VectorLayer).where(by_ref(VectorLayer, cid)))
     layer = result.scalar_one_or_none()
     if not layer or layer.status != "ready" or not layer.is_public:
         raise HTTPException(404, "No such collection.")
@@ -167,6 +163,10 @@ async def landing(request: Request):
         "links": [
             {"rel": "self", "href": _root(base), "type": "application/json",
              "title": "This document"},
+            # QGIS FETCHES THIS as soon as you connect. It must be a real, publicly reachable
+            # OpenAPI document — nginx proxies only `/api/`, so FastAPI's default `/openapi.json`
+            # fell through to the SPA and returned index.html ("Download of API page failed").
+            # `main.py` pins openapi_url to this path; keep the two in step.
             {"rel": "service-desc", "href": f"{base}/api/openapi.json",
              "type": "application/vnd.oai.openapi+json;version=3.0", "title": "API definition"},
             {"rel": "conformance", "href": f"{_root(base)}/conformance", "type": "application/json",

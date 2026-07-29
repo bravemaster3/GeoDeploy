@@ -15,7 +15,7 @@ def _pg_creds(settings) -> dict:
     vector tiles (the table is "ready" but never renders). Falls back to env if SQLite has none."""
     import sqlite3
     try:
-        with sqlite3.connect(f"{settings.data_dir}/sqlite/geodeploy.db") as conn:
+        with sqlite3.connect(f"{settings.data_dir}/sqlite/geodeploy.db", timeout=30) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT postgis_host, postgis_port, postgis_db, postgis_user, postgis_password "

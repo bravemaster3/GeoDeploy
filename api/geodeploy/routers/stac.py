@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..models import RasterLayer, VectorLayer
+from .common import by_ref
 from ..services import martin as martin_svc
 from ..services import titiler as titiler_svc
 
@@ -140,17 +141,23 @@ def _common_properties(layer) -> dict:
     return props
 
 
+def _ref(layer) -> str:
+    """The layer's STABLE public identifier for URLs and item ids (models.new_uid). Integer ids are
+    reused after a delete, which would silently repoint a bookmarked STAC item at another dataset."""
+    return getattr(layer, "uid", None) or str(layer.id)
+
+
 def _vector_assets(layer, base: str) -> dict:
     # The standards-based read surface, offered for EVERY vector layer regardless of backend —
     # this is what QGIS/ArcGIS/FME/GDAL consume natively (routers/ogcapi.py). The backend-specific
     # assets below are the fast/native paths for renderers.
     assets = {
         "ogc-features": {
-            "href": f"{base}/api/ogc/collections/vector-{layer.id}/items",
+            "href": f"{base}/api/ogc/collections/vector-{_ref(layer)}/items",
             "type": "application/geo+json",
             "title": "OGC API - Features items (?bbox=&limit=&offset=)",
             "description": "Standards-based feature access — the collection is at "
-                           f"{base}/api/ogc/collections/vector-{layer.id}, the service at "
+                           f"{base}/api/ogc/collections/vector-{_ref(layer)}, the service at "
                            f"{base}/api/ogc (QGIS: Add OGC API - Features Layer).",
             "roles": ["data"],
         },
@@ -159,30 +166,30 @@ def _vector_assets(layer, base: str) -> dict:
         prefixed = not layer.s3_key.rstrip("/").endswith(".parquet")
         if prefixed:
             assets["manifest"] = {
-                "href": f"{base}/api/data/vector/{layer.id}/parquet/manifest.json",
+                "href": f"{base}/api/data/vector/{_ref(layer)}/parquet/manifest.json",
                 "type": "application/json",
                 "title": "GeoParquet dataset manifest (partition grid + file list)",
                 "description": "Spatially partitioned GeoParquet: fetch this manifest for the "
                                "grid and the per-cell file keys, then read "
-                               f"{base}/api/data/vector/{layer.id}/parquet/<key> "
+                               f"{base}/api/data/vector/{_ref(layer)}/parquet/<key> "
                                "(HTTP Range requests supported — DuckDB/GDAL friendly).",
                 "roles": ["metadata"],
             }
         assets["features-geojson"] = {
-            "href": f"{base}/api/data/vector/{layer.id}/features.geojson",
+            "href": f"{base}/api/data/vector/{_ref(layer)}/features.geojson",
             "type": "application/geo+json",
             "title": "Viewport features (GeoJSON; ?bbox=minx,miny,maxx,maxy&limit=N)",
             "roles": ["data"],
         }
         assets["features-arrow"] = {
-            "href": f"{base}/api/data/vector/{layer.id}/features.arrow",
+            "href": f"{base}/api/data/vector/{_ref(layer)}/features.arrow",
             "type": "application/vnd.apache.arrow.stream",
             "title": "Viewport features (GeoArrow IPC; ?bbox=&limit=)",
             "roles": ["data"],
         }
         if layer.pmtiles_key and layer.tile_status == "ready":
             assets["pmtiles"] = {
-                "href": f"{base}/api/data/vector/{layer.id}/pmtiles",
+                "href": f"{base}/api/data/vector/{_ref(layer)}/pmtiles",
                 "type": "application/vnd.pmtiles",
                 "title": "PMTiles archive (vector tiles, HTTP Range)",
                 "roles": ["tiles"],
@@ -190,7 +197,7 @@ def _vector_assets(layer, base: str) -> dict:
     else:  # PostGIS-backed → Martin vector (MVT) tiles
         # The consumable one-URL artifact: a TileJSON other tools add directly as a vector source.
         assets["tilejson"] = {
-            "href": f"{base}/api/data/vector/{layer.id}/tilejson",
+            "href": f"{base}/api/data/vector/{_ref(layer)}/tilejson",
             "type": "application/json",
             "title": "TileJSON — add this URL directly as a vector-tile source (QGIS/GeoLibre/MapLibre)",
             "description": "The easiest way to consume this layer: paste this URL into QGIS "
@@ -221,7 +228,7 @@ def _raster_assets(layer, base: str) -> dict:
     )
     return {
         "cog": {
-            "href": f"{base}/api/data/raster/{layer.id}/cog",
+            "href": f"{base}/api/data/raster/{_ref(layer)}/cog",
             "type": "image/tiff; application=geotiff; profile=cloud-optimized",
             "title": "Cloud-Optimized GeoTIFF (HTTP Range — /vsicurl/ in QGIS/GDAL)",
             "roles": ["data"],
@@ -240,7 +247,7 @@ def _item(layer, kind: str, base: str) -> dict:
     item = {
         "type": "Feature",
         "stac_version": STAC_VERSION,
-        "id": f"{kind[:-1]}-{layer.id}",  # vectors → vector-<id>
+        "id": f"{kind[:-1]}-{_ref(layer)}",  # vectors → vector-<uid>
         "collection": kind,
         "geometry": _bbox_geometry(b) if b else None,
         "bbox": b,
@@ -248,12 +255,12 @@ def _item(layer, kind: str, base: str) -> dict:
         "license": layer.license or "proprietary",
         "assets": _vector_assets(layer, base) if kind == "vectors" else _raster_assets(layer, base),
         "links": [
-            {"rel": "self", "href": f"{base}/api/stac/collections/{kind}/items/{kind[:-1]}-{layer.id}",
+            {"rel": "self", "href": f"{base}/api/stac/collections/{kind}/items/{kind[:-1]}-{_ref(layer)}",
              "type": "application/geo+json"},
             {"rel": "collection", "href": f"{base}/api/stac/collections/{kind}", "type": "application/json"},
             {"rel": "root", "href": f"{base}/api/stac", "type": "application/json"},
             *([{"rel": "alternate", "type": "application/json",
-                "href": f"{base}/api/ogc/collections/vector-{layer.id}",
+                "href": f"{base}/api/ogc/collections/vector-{_ref(layer)}",
                 "title": "OGC API - Features collection"}] if kind == "vectors" else []),
         ],
     }
@@ -391,12 +398,10 @@ async def stac_items(cid: str, request: Request, bbox: str | None = None,
 async def stac_item(cid: str, item_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     if cid not in COLLECTIONS:
         raise HTTPException(404, "No such collection.")
-    try:
-        layer_id = int(item_id.rsplit("-", 1)[1])
-    except (IndexError, ValueError):
-        raise HTTPException(404, "No such item.")
     model = VectorLayer if cid == "vectors" else RasterLayer
-    result = await db.execute(select(model).where(model.id == layer_id))
+    # Accepts the current `vector-<uid>` form AND the legacy `vector-<int id>` so links shared
+    # before the uid migration keep resolving.
+    result = await db.execute(select(model).where(by_ref(model, item_id)))
     layer = result.scalar_one_or_none()
     if not layer or layer.status != "ready" or not layer.is_public:
         raise HTTPException(404, "No such item.")
@@ -412,7 +417,7 @@ async def _search(db: AsyncSession, base: str, bbox, collections, datetime_, ids
     matched = []
     for cid in wanted:
         for layer in await _public_layers(db, cid):
-            if wanted_ids and f"{cid[:-1]}-{layer.id}" not in wanted_ids:
+            if wanted_ids and f"{cid[:-1]}-{_ref(layer)}" not in wanted_ids:
                 continue
             if _bbox_matches(layer, qb) and _datetime_matches(layer, lo, hi):
                 matched.append((layer, cid))

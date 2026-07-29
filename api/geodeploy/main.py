@@ -120,6 +120,18 @@ def _apply_schema_migrations(conn) -> None:
         "ALTER TABLE portals ADD COLUMN story TEXT",
         # V-11 R3: per-portal colour theme (mode/accent/font) baked over the template theme.css
         "ALTER TABLE portals ADD COLUMN theme TEXT",
+        # STABLE PUBLIC LAYER IDS (2026-07-29). Integer PKs leak into shareable URLs (STAC items,
+        # OGC API - Features collections, /vsicurl/ COGs) and SQLite REUSES them: delete the
+        # highest-id layer, create another, and every saved link to the old one silently returns
+        # different data. `uid` is the stable identity — see models.new_uid().
+        # Backfill uses SQLite's randomblob (this migration only ever runs on the SQLite era; the
+        # Postgres move will carry the values across, not regenerate them).
+        "ALTER TABLE vector_layers ADD COLUMN uid VARCHAR(32)",
+        "UPDATE vector_layers SET uid = lower(hex(randomblob(6))) WHERE uid IS NULL OR uid = ''",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_vector_layers_uid ON vector_layers (uid)",
+        "ALTER TABLE raster_layers ADD COLUMN uid VARCHAR(32)",
+        "UPDATE raster_layers SET uid = lower(hex(randomblob(6))) WHERE uid IS NULL OR uid = ''",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_raster_layers_uid ON raster_layers (uid)",
     ]
     for sql in pending:
         try:
@@ -160,6 +172,14 @@ app = FastAPI(
     version="0.3.0",
     description="Self-hosted spatial data management and geoportal builder",
     lifespan=lifespan,
+    # nginx proxies ONLY `/api/` to this app; every other path falls through to the SPA. At
+    # FastAPI's defaults (`/openapi.json`, `/docs`) the schema was therefore unreachable from
+    # outside — the request returned the UI's index.html with content-type text/html. That broke
+    # QGIS, which follows the `service-desc` link on the OGC API - Features landing page and
+    # reports "Download of API page failed". Serve them under the proxied prefix instead.
+    openapi_url="/api/openapi.json",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
 )
 
 settings = get_settings()

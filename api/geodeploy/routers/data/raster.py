@@ -12,7 +12,7 @@ from ...schemas import JobStatus, LayerRename, PortalRefOut, RasterDefaultStyle,
 from ...services import share_links
 from ...services.titiler import get_tile_url as raster_tile_url, COLORMAPS
 from ...tasks.raster_ingest import ingest_raster
-from ..common import (apply_sharing, busy_job_progress, creator_names, portals_using,
+from ..common import (apply_sharing, busy_job_progress, by_ref, creator_names, portals_using,
                       prune_layer_from_portals, record_audit, visible_to)
 
 router = APIRouter(prefix="/data/raster", tags=["raster"])
@@ -207,13 +207,13 @@ async def rename_layer(
     return RasterLayerOut.from_orm_json(layer)
 
 
-@router.get("/{layer_id}/cog")
-async def raster_cog(layer_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+@router.get("/{layer_ref}/cog")
+async def raster_cog(layer_ref: str, request: Request, db: AsyncSession = Depends(get_db)):
     """PUBLIC range proxy for the layer's Cloud-Optimized GeoTIFF — ONLY when the admin shared
     the layer (`is_public`). This is what makes `/vsicurl/https://host/api/data/raster/{id}/cog`
     work in QGIS/GDAL (full pixel access, the modern WCS — notes §0h) and gives a direct
     download URL. Same pmtiles/parquet proxy pattern: Range → 206, creds stay server-side."""
-    result = await db.execute(select(RasterLayer).where(RasterLayer.id == layer_id))
+    result = await db.execute(select(RasterLayer).where(by_ref(RasterLayer, layer_ref)))
     layer = result.scalar_one_or_none()
     if not layer or layer.status != "ready" or not layer.is_public or not layer.s3_key:
         raise HTTPException(404, "No shared raster for this layer.")
@@ -243,8 +243,8 @@ async def raster_cog(layer_id: int, request: Request, db: AsyncSession = Depends
                              media_type="image/tiff", headers=headers)
 
 
-@router.get("/{layer_id}/tilejson")
-async def raster_tilejson(layer_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+@router.get("/{layer_ref}/tilejson")
+async def raster_tilejson(layer_ref: str, request: Request, db: AsyncSession = Depends(get_db)):
     """PUBLIC TileJSON (3.0.0) for a shared raster — the ONE URL other tools add directly.
 
     Why not TiTiler's own `/cog/…/tilejson.json`? Its self-referencing tile URL is built from the
@@ -258,7 +258,7 @@ async def raster_tilejson(layer_id: int, request: Request, db: AsyncSession = De
     import json
     from fastapi.responses import JSONResponse
 
-    result = await db.execute(select(RasterLayer).where(RasterLayer.id == layer_id))
+    result = await db.execute(select(RasterLayer).where(by_ref(RasterLayer, layer_ref)))
     layer = result.scalar_one_or_none()
     if not layer or layer.status != "ready" or not layer.is_public or not layer.s3_key:
         raise HTTPException(404, "No shared raster for this layer.")

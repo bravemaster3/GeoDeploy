@@ -54,6 +54,13 @@ BASEMAP_CATALOG = [
 _BASEMAP_BY_ID = {b["id"]: b for b in BASEMAP_CATALOG}
 
 
+def _ref(layer) -> str:
+    """A layer's STABLE public id for baked URLs (models.new_uid). Published portals outlive the
+    integer PK, which SQLite reuses after a delete — a baked `/vector/3/...` could come back
+    pointing at someone else's data after an unrelated deletion + upload."""
+    return getattr(layer, "uid", None) or str(layer.id)
+
+
 def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers: list,
                    external_sources: list | None = None,
                    deck_core_bounds: dict[int, list] | None = None,
@@ -125,8 +132,8 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                         # manifest; portal.js falls back to the features.geojson endpoint
                         # when this is null or the manifest fetch fails.
                         "parquet": ({
-                            "manifest": f"/api/data/vector/{layer.id}/parquet/manifest.json",
-                            "base": f"/api/data/vector/{layer.id}/parquet/",
+                            "manifest": f"/api/data/vector/{_ref(layer)}/parquet/manifest.json",
+                            "base": f"/api/data/vector/{_ref(layer)}/parquet/",
                         } if (layer.s3_key
                               and not layer.s3_key.rstrip("/").endswith(".parquet")) else None),
                     })
@@ -142,7 +149,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                     continue
                 sources[source_id] = {
                     "type": "vector",
-                    "url": f"pmtiles:///api/data/vector/{layer.id}/pmtiles",
+                    "url": f"pmtiles:///api/data/vector/{_ref(layer)}/pmtiles",
                 }
             else:
                 sources[source_id] = {
@@ -337,14 +344,14 @@ def _layer_info(layer, kind: str) -> dict:
         if kind == "raster":
             info["links"] = {
                 "STAC item": f"/api/stac/collections/rasters/items/raster-{layer.id}",
-                "Cloud-Optimized GeoTIFF": f"/api/data/raster/{layer.id}/cog",
+                "Cloud-Optimized GeoTIFF": f"/api/data/raster/{_ref(layer)}/cog",
             }
         else:
             links = {"STAC item": f"/api/stac/collections/vectors/items/vector-{layer.id}"}
             if getattr(layer, "storage_backend", "postgis") == "geoparquet" and layer.s3_key:
                 if not layer.s3_key.rstrip("/").endswith(".parquet"):
-                    links["GeoParquet manifest"] = f"/api/data/vector/{layer.id}/parquet/manifest.json"
-                links["Features (GeoJSON)"] = f"/api/data/vector/{layer.id}/features.geojson"
+                    links["GeoParquet manifest"] = f"/api/data/vector/{_ref(layer)}/parquet/manifest.json"
+                links["Features (GeoJSON)"] = f"/api/data/vector/{_ref(layer)}/features.geojson"
             info["links"] = links
     return info
 

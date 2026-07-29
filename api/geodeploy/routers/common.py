@@ -17,6 +17,33 @@ from ..models import AuditLog, Portal, UploadJob, User
 logger = logging.getLogger(__name__)
 
 
+def by_ref(model, ref):
+    """Match a layer by its STABLE PUBLIC `uid` or its legacy integer id.
+
+    Public URLs now carry `uid` (`models.new_uid` — integer ids get reused after a delete and
+    would silently repoint saved links at another dataset). Old links must keep working, so every
+    public lookup accepts either form, and a `vector-`/`raster-` prefix is tolerated so a STAC item
+    id or an OGC API - Features collection id can be passed straight through.
+
+    Returns a SQLAlchemy condition; combine it with `visible_to(...)` on authenticated routes.
+    """
+    raw = str(ref or "").strip()
+    if raw.startswith(("vector-", "raster-")):
+        raw = raw.split("-", 1)[1]
+    conds = []
+    if raw:
+        conds.append(model.uid == raw)
+    # A uid is hex, so it CAN be all digits — check both rather than either/or.
+    if raw.isdigit():
+        try:
+            conds.append(model.id == int(raw))
+        except ValueError:
+            pass
+    if not conds:
+        return model.id == -1        # matches nothing, without special-casing at every call site
+    return or_(*conds)
+
+
 async def portals_using(db: AsyncSession, layer_type: str, layer_id: int) -> list[Portal]:
     """Portals whose `layer_configs` reference (layer_type, layer_id). Powers the delete-confirmation
     'used in these portals' warning AND the prune-on-delete. Portals are few, so a full scan + JSON

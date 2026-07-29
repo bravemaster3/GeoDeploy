@@ -20,9 +20,16 @@ def _link(id_, label, url, *, fmt, tools, hint, primary=False, download=False):
             "hint": hint, "primary": primary, "download": download}
 
 
-def stac_item_url(base: str, kind: str, layer_id: int) -> str:
+def public_ref(layer) -> str:
+    """The identifier a layer is addressed by in PUBLIC URLs: its stable `uid`, falling back to the
+    integer id only for a row predating the uid migration. Never build a shareable URL from `id`
+    directly — ids get reused after a delete (models.new_uid)."""
+    return getattr(layer, "uid", None) or str(layer.id)
+
+
+def stac_item_url(base: str, kind: str, layer) -> str:
     """`kind` is the STAC collection: 'vectors' | 'rasters'."""
-    return f"{base}/api/stac/collections/{kind}/items/{kind[:-1]}-{layer_id}"
+    return f"{base}/api/stac/collections/{kind}/items/{kind[:-1]}-{public_ref(layer)}"
 
 
 def vector_links(layer, base: str) -> list[dict]:
@@ -31,7 +38,7 @@ def vector_links(layer, base: str) -> list[dict]:
     # both storage backends. Tiles/PMTiles below are for RENDERING speed, not interchange.
     links: list[dict] = [
         _link("ogc-features", "OGC API - Features — this layer",
-              f"{base}/api/ogc/collections/vector-{layer.id}",
+              f"{base}/api/ogc/collections/vector-{public_ref(layer)}",
               fmt="OGC API - Features (GeoJSON)",
               tools=["QGIS", "ArcGIS Pro", "FME", "GDAL/ogr2ogr"],
               hint="GDAL/ogr2ogr: use OAPIF:<this URL>. In QGIS you connect to the SERVICE url "
@@ -43,12 +50,12 @@ def vector_links(layer, base: str) -> list[dict]:
               hint="QGIS: Layer ▸ Add Layer ▸ Add OGC API - Features Layer ▸ New ▸ paste this as "
                    "the URL, then choose this layer from the collection list."),
         _link("ogc-items", "Features as GeoJSON (bbox-filtered, paged)",
-              f"{base}/api/ogc/collections/vector-{layer.id}/items?limit=1000",
+              f"{base}/api/ogc/collections/vector-{public_ref(layer)}/items?limit=1000",
               fmt="GeoJSON", tools=["any HTTP client", "Python", "R"],
               hint="Add &bbox=minx,miny,maxx,maxy (WGS84) to filter, &offset= to page; follow the "
                    "rel=\"next\" link for the rest."),
     ]
-    api = f"{base}/api/data/vector/{layer.id}"
+    api = f"{base}/api/data/vector/{public_ref(layer)}"
     if getattr(layer, "storage_backend", "postgis") == "postgis":
         src = f"{layer.schema_name}.{layer.table_name}"
         links.append(_link(
@@ -87,7 +94,7 @@ def vector_links(layer, base: str) -> list[dict]:
                 hint=f"Partition grid + file keys; each file is then at {api}/parquet/<key> "
                      "(HTTP Range supported)."))
     links.append(_link(
-        "stac", "STAC item (metadata + all assets)", stac_item_url(base, "vectors", layer.id),
+        "stac", "STAC item (metadata + all assets)", stac_item_url(base, "vectors", layer),
         fmt="STAC 1.0 Item", tools=["QGIS 3.40+", "stac-browser", "pystac-client"],
         hint="The machine-readable record of this layer. The whole catalog is at "
              f"{base}/api/stac."))
@@ -95,7 +102,7 @@ def vector_links(layer, base: str) -> list[dict]:
 
 
 def raster_links(layer, base: str, default_style: dict | None = None) -> list[dict]:
-    api = f"{base}/api/data/raster/{layer.id}"
+    api = f"{base}/api/data/raster/{public_ref(layer)}"
     ds = default_style or {}
     tile_url = base + titiler_svc.get_tile_url(
         layer.s3_key, colormap=ds.get("colormap"), rescale=ds.get("rescale"),
@@ -115,7 +122,7 @@ def raster_links(layer, base: str, default_style: dict | None = None) -> list[di
         _link("cog", "COG download", f"{api}/cog",
               fmt="GeoTIFF", tools=["any"], hint="The raw file (HTTP Range supported).",
               download=True),
-        _link("stac", "STAC item (metadata + all assets)", stac_item_url(base, "rasters", layer.id),
+        _link("stac", "STAC item (metadata + all assets)", stac_item_url(base, "rasters", layer),
               fmt="STAC 1.0 Item", tools=["QGIS 3.40+", "stac-browser", "pystac-client"],
               hint=f"The machine-readable record of this layer. The whole catalog is at "
                    f"{base}/api/stac."),
