@@ -27,7 +27,7 @@
             <h2 class="text-sm font-semibold text-foreground">Updates</h2>
             <p class="text-xs text-muted-foreground/70">Software version &amp; available updates</p>
           </div>
-          <button @click="checkUpdates" :disabled="updates.loading" class="btn-secondary text-xs px-3 py-1.5">
+          <button @click="checkUpdates(true)" :disabled="updates.loading" class="btn-secondary text-xs px-3 py-1.5">
             <RefreshIcon class="w-3.5 h-3.5" /> {{ updates.loading ? 'Checking…' : 'Check' }}
           </button>
         </header>
@@ -867,10 +867,12 @@ async function runExec() {
 
 // Software updates: check (read-only) + one-click update with live status.
 const updates = ref({ loading: false, data: null, updating: false, progress: null })
-async function checkUpdates() {
+async function checkUpdates(force = false) {
   updates.value.loading = true
   try {
-    const { data } = await api.get('/admin/updates')
+    // Pressing Check bypasses the server's 10-minute GitHub cache; the automatic load on mount
+    // does not (that cache is what keeps repeated page loads inside GitHub's rate limit).
+    const { data } = await api.get('/admin/updates', { params: force ? { refresh: true } : {} })
     updates.value.data = data
   } catch {
     updates.value.data = { status: 'offline', current: '—' }
@@ -908,7 +910,7 @@ async function pollUpdateStatus() {
     if (['rolledback', 'error'].includes(data.phase)) {
       updates.value.updating = false
       clearTimeout(updatePollTimer)
-      setTimeout(checkUpdates, 2000)
+      setTimeout(() => checkUpdates(true), 2000)
       return
     }
   } catch {

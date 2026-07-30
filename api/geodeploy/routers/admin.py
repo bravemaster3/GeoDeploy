@@ -61,7 +61,7 @@ def _finalize_update_available(result: dict, current: str) -> None:
 
 
 @router.get("/updates")
-async def check_updates(_: User = Depends(require_admin)):
+async def check_updates(refresh: bool = False, _: User = Depends(require_admin)):
     """Compare the DEPLOYED commit (see `_deployed_sha`) against the latest on GitHub `main`, so an
     admin can see whether an update is available — without SSH. Purely informational (no writes);
     the one-click updater is a separate, deliberate action."""
@@ -70,7 +70,11 @@ async def check_updates(_: User = Depends(require_admin)):
     import httpx
 
     now = time.time()
-    if _UPDATE_CACHE["data"] and now - _UPDATE_CACHE["at"] < _UPDATE_TTL:
+    # `refresh=true` = the admin PRESSED Check. The TTL exists to stop repeated PAGE LOADS burning
+    # GitHub's 60 req/hr unauthenticated budget — not to make a deliberate check return a stale
+    # answer. Without this, a commit pushed minutes ago stayed invisible for up to 10 minutes and
+    # looked like the push had failed.
+    if not refresh and _UPDATE_CACHE["data"] and now - _UPDATE_CACHE["at"] < _UPDATE_TTL:
         # The 10-min TTL exists for GITHUB's rate limit, not for our own version — re-read the
         # deployed sha on every call and re-derive from it, or the panel would keep showing the
         # pre-update version for up to TTL seconds after a successful update.
@@ -132,6 +136,7 @@ async def check_updates(_: User = Depends(require_admin)):
         return result
 
     _finalize_update_available(result, current)
+    result["checked_at"] = now          # so the UI can say how fresh the GitHub answer is
     _UPDATE_CACHE["at"] = now
     _UPDATE_CACHE["data"] = result
     return result

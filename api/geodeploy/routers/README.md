@@ -47,6 +47,11 @@ now REJECT token requests, so any route not explicitly `require_scope`-annotated
   The work runs in Celery (`tasks/backup.py`, its own `backup` queue so a multi-hour object copy
   can't occupy the ingest slots); scheduling is an every-15-min beat tick that reads the schedule
   from the DB, so changing it in Settings takes effect with no worker restart.
+- **`GET /admin/updates?refresh=true` (2026-07-30)** bypasses the 10-minute `_UPDATE_CACHE`. That
+  TTL protects GitHub's 60 req/hr unauthenticated budget against repeated PAGE LOADS; it must not
+  make a DELIBERATE check return a stale answer, which made a just-pushed commit look like it never
+  landed for up to ten minutes. The UI forces it from the Check button (and after an update
+  finishes) but not on mount.
 - **Deployment history (2026-07-30):** `GET /admin/deployments` + the `deployment_runs` table.
   `POST /admin/update` opens a row; it is CLOSED by whichever `GET /admin/update/status` poll first
   sees a terminal phase (`_reconcile_deployment`) — the API container is recreated by the update
