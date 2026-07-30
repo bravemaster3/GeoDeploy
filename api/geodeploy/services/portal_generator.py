@@ -379,6 +379,34 @@ _LAYOUT_ARCHETYPES = {
         },
         "panels": {"layerCatalog": True, "legend": True, "basemap": True, "about": True, "story": False},
     },
+    # CATALOG — a browsing surface, not a map surface. The dataset list IS the page; the map is a
+    # panel beside it (default right, full height: vertical space is the scarce axis, so a bottom
+    # split would leave both the list and the map too short to use). `layerCatalog` is OFF because
+    # the facet rail replaces the layer switcher — the visitor picks datasets from the results.
+    #
+    # `scope` bounds WHICH datasets are listed and defaults to this portal's own layers. It must
+    # never widen past the portal's audience: a published portal is anonymous, so "public" means
+    # visibility='public' only — never organization or private. `scope="public"` is read LIVE from
+    # /api/stac at runtime rather than baked, so adding a dataset does not require a re-publish.
+    "catalog": {
+        "regions": {
+            # Kept for merge-shape compatibility with the other archetypes; the catalog does not
+            # render a layer switcher (see panels.layerCatalog below).
+            "layerList": {"side": "left", "mode": "docked", "collapsed": True,
+                          "width": None, "x": None, "y": None},
+            "controls": {"position": "top-right"},
+            "header": {"style": "bar"},
+            "catalog": {
+                "scope": "portal",      # portal | public
+                "mapSide": "right",     # right | bottom | none
+                "mapWidth": 40,         # % of the content area when mapSide=right
+                "railWidth": 20,        # % for the facet rail
+                "perPage": 12,
+            },
+        },
+        "panels": {"catalog": True, "layerCatalog": False, "legend": True, "basemap": True,
+                   "about": True, "story": False},
+    },
     # scrollytelling — a narrative column drives the map camera; the layer list floats (collapsed by
     # default), reachable from the toggle at the top of the control cluster, like a normal web map.
     "storymap": {
@@ -393,7 +421,10 @@ _LAYOUT_ARCHETYPES = {
 }
 # Back-compat: the Phase-1 archetypes 'webmap+catalog'/'catalog' were dropped (their only difference was
 # a wider list — meaningless); they now resolve to webmap. Catalog prominence is just layer-list placement.
-_ARCHETYPE_ALIASES = {"webmap+catalog": "webmap", "catalog": "webmap"}
+# `catalog` used to be aliased to webmap as a placeholder — which is why choosing it appeared to do
+# nothing. It is a real archetype now. `webmap+catalog` (map-first WITH a catalog panel) is still
+# unbuilt, so it keeps degrading to a working web map rather than a blank shell.
+_ARCHETYPE_ALIASES = {"webmap+catalog": "webmap"}
 _DEFAULT_ARCHETYPE = "webmap"
 
 

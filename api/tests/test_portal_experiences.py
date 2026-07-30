@@ -36,10 +36,14 @@ def test_resolve_layout_unknown_archetype_falls_back_to_webmap():
     assert r["archetype"] == "webmap"
 
 
-def test_resolve_layout_dropped_archetypes_alias_to_webmap():
-    """The Phase-1 'catalog'/'webmap+catalog' archetypes were removed → they resolve to webmap."""
-    assert resolve_layout({"archetype": "catalog"})["archetype"] == "webmap"
+def test_resolve_layout_unbuilt_archetypes_alias_to_webmap():
+    """'webmap+catalog' is still unbuilt and must degrade to a working map, not a blank shell.
+
+    'catalog' USED to be aliased here too — that was the placeholder, and it is why selecting the
+    catalog experience appeared to do nothing. It is a real archetype now (see
+    test_portal_layouts.py), so it is asserted NOT to alias away."""
     assert resolve_layout({"archetype": "webmap+catalog"})["archetype"] == "webmap"
+    assert resolve_layout({"archetype": "catalog"})["archetype"] == "catalog"
 
 
 def test_resolve_layout_storymap_defaults():
