@@ -300,7 +300,7 @@
               </div>
               <div class="flex items-center justify-between mt-1.5">
                 <span class="text-[10px] text-muted-foreground/70">
-                  {{ s.view && s.view.center ? `Camera z${(s.view.zoom ?? 0).toFixed(1)}` : 'No camera pinned' }}
+                  {{ s.view && s.view.center ? `Camera z${(s.view.zoom ?? 0).toFixed(1)}${s.view.projection === 'globe' ? ' · globe' : ''}` : 'No camera pinned' }}
                 </span>
                 <button @click="captureStoryView(i)" class="text-[11px] text-primary hover:text-primary/80 font-medium">
                   ⦿ Capture current map view
@@ -929,7 +929,8 @@ onBeforeUnmount(closeAccess)
 const { map, loaded, applyStyle, fitToBbox, jumpTo, addTopRightControlFirst } =
   useMaplibre('portal-preview-map', { version: 8, sources: {}, layers: [] })
 
-// Admin-pinned view (center/zoom) for the published portal; null = fit to all layers.
+// Admin-pinned view (center/zoom/bearing/pitch/projection) for the published portal;
+// null = fit to all layers.
 const savedView = ref(null)
 // Gates the first preview build until the portal + its data + the basemap catalog are all loaded, so
 // the map paints ONCE (chosen basemap + layers) instead of flashing through several applyStyle calls.
@@ -1809,7 +1810,9 @@ function zoomToAll() {
 }
 
 // The published portal's start view. R2: the iframe reports its live camera on every moveend
-// (lastView); prefer that, else the previously-saved view.
+// (lastView); prefer that, else the previously-saved view. Spread WHOLE rather than picked apart —
+// the camera shape is owned by portal.js::currentViewObj (center/zoom/bearing/pitch/projection), so
+// a key added there flows through here without a matching edit.
 function currentView() {
   if (lastView.value && Array.isArray(lastView.value.center)) return { ...lastView.value }
   return savedView.value || null

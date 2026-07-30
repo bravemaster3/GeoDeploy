@@ -232,6 +232,19 @@
       b[0] >= -180 && b[2] <= 180 && b[0] < b[2] &&
       b[1] >= -90  && b[3] <= 90  && b[1] < b[3];
   }
+  // The globe/2D PROJECTION is part of the pinned start view: an admin who arranges a portal on the
+  // 3D globe expects visitors to open on the globe. center/zoom/bearing/pitch were already captured;
+  // this was the only piece of the camera that was lost. Both guards matter — a cached MapLibre v4
+  // bundle has no get/setProjection, and every portal saved before this has no `projection` key.
+  // Either way we leave the map alone, which is the previous behaviour (mercator).
+  function currentProjection() {
+    try { return (map.getProjection() || {}).type || null; } catch (e) { return null; }
+  }
+  function applyProjection(name) {
+    if (!name || typeof map.setProjection !== 'function') return;
+    try { map.setProjection({ type: name }); } catch (e) {}
+  }
+
   const bounds = STYLE.geodeploy?.bounds;
   const savedView = STYLE.geodeploy?.view;
   if (savedView && Array.isArray(savedView.center) && savedView.center.length === 2) {
@@ -243,6 +256,7 @@
         bearing: savedView.bearing || 0,
         pitch: savedView.pitch || 0,
       });
+      applyProjection(savedView.projection);
     } catch (e) { /* ignore — keep default view */ }
   } else if (validLonLatBounds(bounds)) {
     try {
@@ -1121,6 +1135,7 @@
         try {
           map.flyTo({ center: s.view.center, zoom: s.view.zoom != null ? s.view.zoom : map.getZoom(),
             bearing: s.view.bearing || 0, pitch: s.view.pitch || 0, duration: 1200, essential: true });
+          applyProjection(s.view.projection);
         } catch (e) {}
       }
       if (s && s.layers) applyStoryLayers(s.layers);
@@ -2416,7 +2431,8 @@
     // The published default extent: the admin-pinned view, else the fit-to-data bounds.
     if (savedView && Array.isArray(savedView.center) && savedView.center.length === 2) {
       try { map.flyTo({ center: savedView.center, zoom: savedView.zoom != null ? savedView.zoom : 2,
-        bearing: savedView.bearing || 0, pitch: savedView.pitch || 0, duration: 800, essential: true }); } catch (e) {}
+        bearing: savedView.bearing || 0, pitch: savedView.pitch || 0, duration: 800, essential: true });
+        applyProjection(savedView.projection); } catch (e) {}
     } else if (validLonLatBounds(bounds)) {
       try { map.fitBounds([[bounds[0], bounds[1]], [bounds[2], bounds[3]]],
         { padding: fitPadding(), duration: 800 }); } catch (e) {}
@@ -2635,7 +2651,8 @@
   // never enters this (no ?edit=1), so it's inert there.
   function currentViewObj() {
     const c = map.getCenter();
-    return { center: [c.lng, c.lat], zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
+    return { center: [c.lng, c.lat], zoom: map.getZoom(), bearing: map.getBearing(),
+             pitch: map.getPitch(), projection: currentProjection() };
   }
   // B (incremental preview): apply a colour theme live in the preview — no full iframe reload. Mirrors
   // portal_generator.build_theme_css + resolve_theme (mode/logo). Only used in edit mode.
@@ -2703,7 +2720,8 @@
         try { map.fitBounds([[d.bbox[0], d.bbox[1]], [d.bbox[2], d.bbox[3]]], { padding: 30, duration: 500 }); } catch (err) {}
       }
       else if (d.type === 'setview' && d.view && Array.isArray(d.view.center)) {
-        try { map.jumpTo({ center: d.view.center, zoom: d.view.zoom, bearing: d.view.bearing || 0, pitch: d.view.pitch || 0 }); } catch (err) {}
+        try { map.jumpTo({ center: d.view.center, zoom: d.view.zoom, bearing: d.view.bearing || 0, pitch: d.view.pitch || 0 });
+          applyProjection(d.view.projection); } catch (err) {}
       }
     });
   }

@@ -394,7 +394,7 @@ class Portal(Base):
     # V-13 catalog: optional nested folder TREE over the layers (JSON list of layer/group nodes).
     # NULL = flat list (renders like before). Structure lives here; per-layer style stays in layer_configs.
     layer_groups: Mapped[str | None] = mapped_column(Text)
-    initial_view: Mapped[str | None] = mapped_column(Text)  # JSON {center:[lng,lat], zoom, bearing, pitch} — published portal's start view
+    initial_view: Mapped[str | None] = mapped_column(Text)  # JSON {center:[lng,lat], zoom, bearing, pitch, projection} — published portal's start view
     # V-11 Template Experiences: optional layout manifest {archetype, regions, panels}. NULL = webmap
     # (identical to the pre-V-11 fixed shell). Resolved at publish via portal_generator.resolve_layout.
     layout_config: Mapped[str | None] = mapped_column(Text)

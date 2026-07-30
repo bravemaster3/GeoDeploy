@@ -61,6 +61,15 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
   - **R4 story pictures (V-11 redesign, 2026-07-22):** story sections gained an optional `image`
     (same-origin URL via `uploadPortalAsset`); `renderStoryHtml` emits `<img class="story-img">`
     (URL escaped). Editor: **+ Add image / Change / remove** per section.
+  - **Globe in the pinned start view (2026-07-30):** `initial_view` already carried
+    center/zoom/bearing/**pitch**; the MapLibre v5 **projection** (globe vs mercator) was the one part
+    of the camera that was lost, so a portal arranged on the 3D globe opened flat. `currentViewObj()`
+    now reports `projection` and `applyProjection()` restores it — on load, from the Home control, when
+    the editor pushes a view, and per **storymap section** (a section pinned on the globe returns to
+    it). Doubly guarded: a cached MapLibre v4 bundle has no `get/setProjection`, and every portal saved
+    before this has no `projection` key — both fall through to the map default (mercator), i.e. the
+    previous behaviour. The editor spreads the reported camera WHOLE (`{ ...lastView }`), so the shape
+    is owned by `portal.js::currentViewObj` alone.
   - **Catalog runtime (V-14, 2026-07-30):** when the archetype is `catalog`, `setupCatalog()` fills the
     hidden `#catalog-panel` (a sibling of `#map-wrap` in `shared/layout.html`, mirroring how
     `#story-panel` stays `display:none` for other archetypes) with a search box, a **facet rail**
