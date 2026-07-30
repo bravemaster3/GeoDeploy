@@ -7,9 +7,18 @@ import {
 } from '@/api'
 import { useDataStore } from '@/stores/data'
 
-// Files at or above this size can't be POSTed through the API (its multipart cap); they upload
+// Files at or above this size bypass the API entirely (see the note on the constant); they upload
 // direct-to-storage and convert to GeoParquet in the background. Matches the API's MAX_FILE_SIZE.
-export const LARGE_UPLOAD_THRESHOLD = 2 * 1024 * 1024 * 1024  // 2 GB
+// 48 MB, NOT 2 GB. The old value was sized to uvicorn's multipart cap, but the binding limit is
+// upstream: a reverse proxy/CDN in front of the instance caps the REQUEST BODY long before that —
+// Cloudflare's free tier at 100 MB. A 300 MB GeoPackage POSTed through the API was therefore cut
+// mid-body and surfaced as a bare "Network error" stuck at ~1%, with NOTHING in the API log
+// because the request never arrived. (Reported 2026-07-30; it had been failing for a while.)
+//
+// Above this we go direct-to-storage in 48 MB presigned parts, so no single request ever
+// approaches an edge limit, whatever the total file size. Matching CHUNK_THRESHOLD means every
+// file over it takes the chunked path rather than one large PUT.
+export const LARGE_UPLOAD_THRESHOLD = 48 * 1024 * 1024  // 48 MB
 
 // Above this, the single-PUT direct upload gets reset behind a CDN (Cloudflare buffers/caps the
 // body), so we switch to chunked multipart. Must stay <= the backend PART_SIZE (48 MB) so parts
