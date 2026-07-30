@@ -114,17 +114,66 @@ class _Connection:
         return False
 
 
+#: Credentials the setup wizard writes into the SHARED DATA VOLUME. See `runtime_credentials`.
+RUNTIME_DB_FILE = "runtime-db.json"
+
+
+def runtime_credentials() -> dict | None:
+    """Database credentials from the shared data dir, or None.
+
+    WHY THIS EXISTS. The worker gets its environment from `.env` — but Docker reads `.env` when a
+    container is CREATED, not when it restarts. The setup wizard writes the database password
+    *after* celery is already running, and `restart()` preserves the original environment, so the
+    worker kept the install-time empty password and every task died with
+    `fe_sendauth: no password supplied`. (The API escaped it by patching its own os.environ.)
+
+    Recreating the container from the Docker SDK would mean reconstructing its mounts and networks
+    by hand. This file is the smaller primitive: the data dir is bind-mounted into both the API and
+    the worker, so a value written here is visible immediately, with no restart at all. Read on
+    every connect — a short-lived task connection makes that free, and it means a credential change
+    never needs a container lifecycle event again.
+    """
+    import json
+    try:
+        with open(f"{get_settings().data_dir}/{RUNTIME_DB_FILE}") as fh:
+            data = json.load(fh)
+        return data if data.get("password") else None
+    except (OSError, ValueError):
+        return None
+
+
+def write_runtime_credentials(host, port, dbname, user, password, sslmode="") -> None:
+    """Publish credentials for the worker. Written by the setup wizard; 0600 because it holds a
+    password (the same one already in `.env` beside it)."""
+    import json
+    import os
+    path = f"{get_settings().data_dir}/{RUNTIME_DB_FILE}"
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump({"host": host, "port": int(port or 5432), "dbname": dbname,
+                   "user": user, "password": password, "sslmode": sslmode or ""}, fh)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)      # atomic: a worker must never read a half-written file
+
+
 def connect(timeout: int = 30) -> _Connection:
     """A short-lived connection to the state database (the same one PostGIS serves)."""
     settings = get_settings()
-    kwargs = dict(
-        host=settings.postgis_host or "postgres",
-        port=int(settings.postgis_port or 5432),
-        dbname=settings.postgis_db or "geodeploy",
-        user=settings.postgis_user or "geodeploy",
-        password=settings.postgis_password or "",
-        connect_timeout=timeout,
-    )
-    if settings.postgis_sslmode:
-        kwargs["sslmode"] = settings.postgis_sslmode
+    live = runtime_credentials()
+    if live:
+        kwargs = dict(host=live["host"], port=live["port"], dbname=live["dbname"],
+                      user=live["user"], password=live["password"], connect_timeout=timeout)
+        if live.get("sslmode"):
+            kwargs["sslmode"] = live["sslmode"]
+    else:
+        kwargs = dict(
+            host=settings.postgis_host or "postgres",
+            port=int(settings.postgis_port or 5432),
+            dbname=settings.postgis_db or "geodeploy",
+            user=settings.postgis_user or "geodeploy",
+            password=settings.postgis_password or "",
+            connect_timeout=timeout,
+        )
+        if settings.postgis_sslmode:
+            kwargs["sslmode"] = settings.postgis_sslmode
     return _Connection(psycopg2.connect(**kwargs))

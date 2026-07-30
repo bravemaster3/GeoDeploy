@@ -276,6 +276,21 @@ def _apply_to_process(config: SetupConfig) -> None:
         os.environ[key] = val
     get_settings.cache_clear()
 
+    # Publish the DB credentials to the shared data volume BEFORE touching containers. A restart
+    # does NOT re-read .env — Docker fixes a container's environment when it is CREATED — so the
+    # worker would otherwise keep the install-time empty password and every task would fail with
+    # "fe_sendauth: no password supplied". state_db.connect() reads this file on each connect.
+    try:
+        from .. import state_db
+        state_db.write_runtime_credentials(
+            config.postgis_host, config.postgis_port, config.postgis_db,
+            config.postgis_user, config.postgis_password,
+            "prefer" if config.postgis_type == "external" else "")
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("could not publish runtime DB credentials")
+
+    # Still restart celery: it picks up the new storage settings and clears any cached state.
     try:
         client = docker.from_env()
         for c in client.containers.list():
