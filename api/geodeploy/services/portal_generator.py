@@ -233,7 +233,10 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
             src = next((s for s in (external_sources or []) if s.id == cfg["layer_id"]), None)
             if not src:
                 continue
-            layers_info.append({"name": src.name, "kind": "external",
+            # layer_id is REQUIRED here, not decorative: the catalog joins a card to its map layer
+            # and to its folder by (kind, layer_id). Without it an external source got no
+            # "Show on map" button and never appeared under a Folder facet.
+            layers_info.append({"name": src.name, "kind": "external", "layer_id": src.id,
                                 "attribution": src.attribution, "url": src.url})
             estyle = cfg.get("style", {})
             source_id = f"ext_{src.id}"
@@ -308,7 +311,16 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
         valid_bounds = core_bounds
         core_fitted = True
     layers_info.reverse()  # the loop runs over reversed configs; the About panel shows list order
-    return {"sources": sources, "layers": layers, "bounds": valid_bounds, "core_fitted": core_fitted,
+    # Folder facet source. Done here rather than inside _layer_info because the reconciled TREE is
+    # what tells us where a layer lives, and _layer_info only ever sees one layer.
+    if layer_tree is not None:
+        _folders = _folder_by_ref(layer_tree)
+        for _info in layers_info:
+            _f = _folders.get((_info.get("kind"), _info.get("layer_id")))
+            if _f:
+                _info["folder"] = _f
+
+    return {"sources": sources, "layers": layers, "bounds": bounds, "core_fitted": core_fitted,
             "deck_layers": deck_layers, "layers_info": layers_info, "layer_tree": layer_tree}
 
 
@@ -1310,6 +1322,28 @@ def _flatten_layer_tree(tree: list) -> list[dict]:
             out.append({"layer_type": node.get("layer_type"), "layer_id": node.get("layer_id")})
         elif "children" in node:
             out.extend(_flatten_layer_tree(node.get("children") or []))
+    return out
+
+
+def _folder_by_ref(tree: list, path: tuple = ()) -> dict:
+    """Map every layer ref in the folder tree to the NAME OF THE FOLDER IT SITS IN.
+
+    Feeds the catalog archetype's "Folder" facet, so a visitor filters by the same groups the portal
+    author arranged in the editor — one organisation, not a second taxonomy to maintain.
+
+    Nested folders use the innermost name rather than a full path: it is what the author sees on the
+    card in the editor, and a path reads badly ellipsised in a 216px rail. A layer at the ROOT gets
+    no entry at all, so it is simply absent from the facet (unticking everything still shows it —
+    the facet narrows, it never becomes a required choice).
+    """
+    out: dict = {}
+    for node in tree or []:
+        if "layer_id" in node:
+            if path:
+                out[(node.get("layer_type"), node.get("layer_id"))] = path[-1]
+        elif "children" in node:
+            name = (node.get("name") or "").strip()
+            out.update(_folder_by_ref(node.get("children") or [], path + (name,) if name else path))
     return out
 
 

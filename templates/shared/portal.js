@@ -101,6 +101,11 @@
     if (L.archetype === 'catalog') {
       b.dataset.catalogMap = (L.regions.catalog && L.regions.catalog.mapSide) === 'left' ? 'left' : 'right';
       b.dataset.catalogView = 'list';
+      // Author-chosen split. Clamped: below ~30% the map is a thumbnail, above ~60% the result cards
+      // stop fitting a readable line length.
+      var mw = Number((L.regions.catalog || {}).mapWidth);
+      if (!isFinite(mw) || mw <= 0) mw = 40;
+      b.style.setProperty('--cat-map-w', Math.min(60, Math.max(30, mw)) + '%');
       const cp = document.getElementById('catalog-panel');
       if (cp) cp.style.display = '';
     }
@@ -3107,18 +3112,23 @@
 
     const perPage = Math.max(4, cfg.perPage || 12);
     const FACETS = [
+      // Folder FIRST: it is the grouping the portal author already made in the editor (the V-13
+      // layer tree), so it is the organisation a visitor is most likely to think in. Layers left at
+      // the tree root carry no `folder` and simply do not appear here — the facet narrows, it never
+      // becomes a required choice, so "everything" remains the default view.
+      { key: 'folder',  title: 'Folder',   of: function (r) { return r.folder ? [String(r.folder)] : []; } },
       { key: 'kind',    title: 'Type',     of: function (r) { return [catKindLabel(r)]; } },
       { key: 'keyword', title: 'Keywords', of: catKeywords },
       { key: 'license', title: 'Licence',  of: function (r) { return r.license ? [String(r.license)] : []; } },
     ];
-    const state = { q: '', page: 0, sort: 'name', kind: {}, keyword: {}, license: {}, open: {} };
+    const state = { q: '', page: 0, sort: 'name', folder: {}, kind: {}, keyword: {}, license: {}, open: {} };
 
     function selectedIn(key) {
       return Object.keys(state[key]).filter(function (k) { return state[key][k]; });
     }
     function textMatch(r) {
       if (!state.q) return true;
-      const hay = [r.name, r.abstract, r.keywords, r.license, catKindLabel(r)].join(' ').toLowerCase();
+      const hay = [r.name, r.abstract, r.keywords, r.license, r.folder, catKindLabel(r)].join(' ').toLowerCase();
       return state.q.toLowerCase().split(/\s+/).filter(Boolean)
         .every(function (t) { return hay.indexOf(t) >= 0; });
     }
@@ -3165,21 +3175,28 @@
     }
 
     function refOf(r) {
-      if (r.layer_id == null || r.kind === 'external' || r.kind === 'elevation') return null;
+      // Elevation is a terrain effect, not a toggleable layer.
+      if (r.layer_id == null || r.kind === 'elevation') return null;
       // A record that came from the instance-wide feed is NOT on this portal's map, so it has no
       // MapLibre/deck layer to toggle. Returning a ref would render a "Show on map" button that
       // silently does nothing — worse than not offering it.
       if (r._offmap) return null;
-      return (r.kind === 'raster' ? 'raster' : 'vector') + ':' + r.layer_id;
+      // Namespaced exactly like layerRefType(), so an external source and a real layer sharing an
+      // id stay distinct (they are both id 1 on a fresh install).
+      return (r.kind === 'raster' ? 'raster' : r.kind === 'external' ? 'external' : 'vector')
+        + ':' + r.layer_id;
     }
     // Seeded from what the admin PUBLISHED rather than forced on/off: a catalog that lit up every
     // layer at once would be unreadable, and one that hid them all would look broken.
     function publishedVisible(r) {
-      const lid = String(r.layer_id);
-      if (deckState[lid] !== undefined) return !!deckState[lid].visible;
+      const lid = String(r.layer_id), ext = r.kind === 'external';
+      // deckState is keyed by numeric layer_id and only ever holds GeoParquet VECTOR layers, so it
+      // must not be consulted for a raster or an external source that happens to share an id.
+      if (!ext && r.kind !== 'raster' && deckState[lid] !== undefined) return !!deckState[lid].visible;
       const l = (STYLE.layers || []).find(function (x) {
         const m = x.metadata || {};
-        return String(m['geodeploy:layer_id']) === lid && m['geodeploy:name'];
+        return String(m['geodeploy:layer_id']) === lid && m['geodeploy:name']
+          && !!m['geodeploy:external'] === ext;
       });
       return !!l && (l.layout || {}).visibility !== 'none';
     }

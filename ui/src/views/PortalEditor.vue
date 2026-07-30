@@ -40,7 +40,13 @@
         <section class="p-4 border-b border-border/60">
           <div class="flex items-center justify-between mb-3">
             <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Layers</h3>
-            <button @click="showAddLayer = !showAddLayer" class="text-xs text-primary hover:text-primary/80 font-medium">+ Add</button>
+            <span class="flex items-center gap-2">
+              <button v-if="availableLayers.length > 1" @click="addAllLayers" :disabled="addingAll"
+                class="text-xs text-muted-foreground hover:text-foreground font-medium disabled:opacity-50">
+                {{ addingAll ? 'Adding…' : `Add all (${availableLayers.length})` }}
+              </button>
+              <button @click="showAddLayer = !showAddLayer" class="text-xs text-primary hover:text-primary/80 font-medium">+ Add</button>
+            </span>
           </div>
 
           <div v-if="showAddLayer" class="mb-3 p-2 bg-muted/40 rounded-lg text-xs space-y-0.5 max-h-40 overflow-y-auto border border-border">
@@ -245,6 +251,14 @@
                 <button v-for="s in ['left','right']" :key="s" @click="catalogMapSide = s"
                   class="px-2 py-0.5 rounded border capitalize"
                   :class="catalogMapSide === s ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ s }}</button>
+              </div>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-muted-foreground">Map width</span>
+              <div class="flex gap-1">
+                <button v-for="w in [[40,'Default'],[50,'Half']]" :key="w[0]" @click="catalogMapWidth = w[0]"
+                  class="px-2 py-0.5 rounded border"
+                  :class="catalogMapWidth === w[0] ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ w[1] }}</button>
               </div>
             </div>
             <div class="flex items-center justify-between">
@@ -569,6 +583,15 @@ const catalogScope = computed({
     const c = { ...(layoutConfig.value || {}) }
     c.regions = { ...(c.regions || {}) }
     c.regions.catalog = { ...(c.regions.catalog || {}), scope: v }
+    layoutConfig.value = c
+  },
+})
+const catalogMapWidth = computed({
+  get: () => resolvedLayout.value.regions.catalog?.mapWidth ?? 40,
+  set: (v) => {
+    const c = { ...(layoutConfig.value || {}) }
+    c.regions = { ...(c.regions || {}) }
+    c.regions.catalog = { ...(c.regions.catalog || {}), mapWidth: v }
     layoutConfig.value = c
   },
 })
@@ -1725,6 +1748,21 @@ const LAYER_COLORS = [
 function nextColor() {
   const used = layerConfigs.value.map(c => c.style?.color).filter(Boolean)
   return LAYER_COLORS.find(c => !used.includes(c)) || LAYER_COLORS[layerConfigs.value.length % LAYER_COLORS.length]
+}
+
+// Bulk add — the common opening move for a catalog portal (list everything, then prune), and just
+// as useful for a web map. Iterates in REVERSE because addLayer() unshifts onto the top of the
+// list, so reversing leaves the final order matching the picker's.
+const addingAll = ref(false)
+async function addAllLayers() {
+  if (addingAll.value) return
+  addingAll.value = true
+  try {
+    for (const l of availableLayers.value.slice().reverse()) await addLayer(l)
+  } finally {
+    addingAll.value = false
+    showAddLayer.value = false
+  }
 }
 
 async function addLayer(layer) {
