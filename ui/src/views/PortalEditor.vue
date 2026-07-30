@@ -699,13 +699,43 @@ function setStoryImage(i, url) {
   arr[i] = { ...arr[i], image: url }
   story.value = { sections: arr }
 }
+// Mirrors the server's limits (routers/portals.py _MAX_ASSET_SIZE / _ASSET_EXTENSIONS) so an image
+// that will be rejected is reported INSTANTLY, instead of after uploading megabytes only to be told
+// no. The server still enforces them — this is the courtesy, not the gate.
+const ASSET_MAX_MB = 15
+const ASSET_TYPES = ['.png', '.jpg', '.jpeg', '.gif', '.webp']
+const ASSET_MIMES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+function assetProblem(file) {
+  const name = (file.name || '').toLowerCase()
+  const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')) : ''
+  // MIME first, extension only as the fallback: a PASTED screenshot often arrives with no filename
+  // at all, and judging it by a missing extension would reject the very case paste exists for.
+  const type = (file.type || '').toLowerCase()
+  const ok = type ? ASSET_MIMES.includes(type) : ASSET_TYPES.includes(ext)
+  if (!ok) {
+    return `${ext || type || 'That file'} is not a supported image type. Use ${ASSET_TYPES.join(', ')}.`
+  }
+  const mb = file.size / 1024 / 1024
+  if (mb > ASSET_MAX_MB) {
+    return `Image is ${mb.toFixed(1)} MB — the limit is ${ASSET_MAX_MB} MB. Resize it, or export at a lower quality.`
+  }
+  return null
+}
+
 async function uploadStoryImage(i, e) {
   const file = e.target.files && e.target.files[0]
   if (!file || !portal.value) { if (e.target) e.target.value = ''; return }
+  const bad = assetProblem(file)
+  if (bad) { saveMsg.value = { type: 'err', text: bad }; e.target.value = ''; return }
   try {
     const { data } = await uploadPortalAsset(portal.value.id, file)
     if (data && data.url) setStoryImage(i, data.url)
-  } catch (err) { /* ignore upload error */ }
+  } catch (err) {
+    // This used to be swallowed silently, so a rejected image looked like "nothing happened" — the
+    // server DOES say why (unsupported type, or over 10 MB), we just threw the message away. There is
+    // no limit on the NUMBER of images; a failure here is always about the individual file.
+    saveMsg.value = { type: 'err', text: err.response?.data?.detail || 'Image upload failed' }
+  }
   e.target.value = ''
 }
 // The choice is NESTED: experience first, then the templates that declare support for it. A template
@@ -937,6 +967,8 @@ function consumeImages(files, event) {
 }
 
 async function uploadAboutImages(files) {
+  const bad = files.map(assetProblem).find(Boolean)
+  if (bad) { saveMsg.value = { type: 'err', text: bad }; return }
   uploadingImage.value = true
   try {
     // Sequential, not Promise.all: each upload inserts at the cursor, and parallel completions would

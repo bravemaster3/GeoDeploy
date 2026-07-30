@@ -407,7 +407,11 @@ async def preview_portal(portal_id: int, req: PortalPreview,
 # GET below because both the editor preview and the published about.html reference them by URL.
 # SVG is deliberately excluded (script-capable when opened directly).
 _ASSET_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-_MAX_ASSET_SIZE = 10 * 1024 * 1024  # 10 MB
+_MAX_ASSET_SIZE = 15 * 1024 * 1024  # 15 MB
+# Portal images (About page + story sections) travel through the API, not direct-to-storage, so
+# this has to stay well under any proxy/CDN request-body cap in front of the instance — 15 MB is
+# comfortably below the common 100 MB floor. It is a ceiling for the ADMIN uploading, not advice:
+# a 15 MB photo is downloaded by every visitor to the portal, so resizing still pays.
 
 
 @router.post("/{portal_id}/assets")
@@ -425,7 +429,8 @@ async def upload_portal_asset(
                                  f"Use: {', '.join(sorted(_ASSET_EXTENSIONS))}")
     data = await file.read()
     if len(data) > _MAX_ASSET_SIZE:
-        raise HTTPException(400, "Image too large (max 10 MB).")
+        raise HTTPException(400, f"Image is {len(data) / 1024 / 1024:.1f} MB — the limit is "
+                                 f"{_MAX_ASSET_SIZE // (1024 * 1024)} MB. Resize it, or export at a lower quality.")
     settings = get_settings()
     asset_dir = f"{settings.data_dir}/portal_assets/{portal.id}"
     os.makedirs(asset_dir, exist_ok=True)
@@ -455,7 +460,8 @@ async def upload_portal_thumbnail(
     if not data:
         raise HTTPException(400, "Empty image.")
     if len(data) > _MAX_ASSET_SIZE:
-        raise HTTPException(400, "Image too large (max 10 MB).")
+        raise HTTPException(400, f"Image is {len(data) / 1024 / 1024:.1f} MB — the limit is "
+                                 f"{_MAX_ASSET_SIZE // (1024 * 1024)} MB. Resize it, or export at a lower quality.")
 
     settings = get_settings()
     asset_dir = f"{settings.data_dir}/portal_assets/{portal.id}"
