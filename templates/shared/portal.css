@@ -219,8 +219,13 @@
     body[data-layerlist-side="right"][data-archetype="storymap"] #story-panel {
       left: auto; right: 0; background: linear-gradient(270deg, var(--story-bg, var(--bg)) 72%, transparent);
     }
+    .story-section h1, .story-section h2, .story-section h3,
+    .story-section h4, .story-section p, .story-section li, .story-section strong {
+      color: inherit;   /* follow --story-fg, not the page theme */
+    }
     .story-section {
       pointer-events: auto; background: var(--story-bg, var(--bg)); border: 1px solid var(--border);
+      color: var(--story-fg, var(--text));
       border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 20px 22px;
       max-width: 300px;  /* E3: keep cards within the opaque part of the fade */
       margin-bottom: 55vh; opacity: .35; transition: opacity .35s ease;

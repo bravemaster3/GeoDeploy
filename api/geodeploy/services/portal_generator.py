@@ -496,10 +496,24 @@ def build_theme_css(theme: dict | None) -> str:
     if isinstance(accent, str) and _HEX_COLOR.match(accent.strip()):
         root.append(f"--accent: {accent.strip()};")
         root.append(f"--accent-light: color-mix(in srgb, {accent.strip()} 22%, transparent);")
-    # storyBg: the scrollytelling narrative-column colour (used only by the storymap archetype).
+    # storyBg / storyOpacity / storyFg: the scrollytelling narrative column (storymap archetype only).
+    # Opacity is applied as a colour-mix rather than CSS `opacity`, because `opacity` would fade the
+    # TEXT with the panel — the point is to see the map through the panel while the words stay solid.
     story_bg = theme.get("storyBg")
     if isinstance(story_bg, str) and _HEX_COLOR.match(story_bg.strip()):
-        root.append(f"--story-bg: {story_bg.strip()};")
+        bg = story_bg.strip()
+        try:
+            pct = int(theme.get("storyOpacity"))
+        except (TypeError, ValueError):
+            pct = 100
+        pct = max(20, min(100, pct))   # below ~20% the text has nothing to sit on
+        root.append(f"--story-bg: {bg};" if pct >= 100
+                    else f"--story-bg: color-mix(in srgb, {bg} {pct}%, transparent);")
+    # storyFg: text colour. A dark panel colour with the light theme's dark text is unreadable, and
+    # the visitor's own light/dark toggle can flip it either way — so the author sets it explicitly.
+    story_fg = theme.get("storyFg")
+    if isinstance(story_fg, str) and _HEX_COLOR.match(story_fg.strip()):
+        root.append(f"--story-fg: {story_fg.strip()};")
     if root:
         out.append(":root { " + " ".join(root) + " }")
     font = _FONT_STACKS.get(theme.get("font"))

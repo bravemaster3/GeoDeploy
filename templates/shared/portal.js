@@ -2771,8 +2771,20 @@
     if (/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(accent)) {
       css += ':root{--accent:' + accent + ';--accent-light:color-mix(in srgb,' + accent + ' 22%,transparent);}';
     }
+    // Mirrors build_theme_css: opacity is a colour-MIX, not CSS opacity, so the map shows through
+    // the panel while the words stay solid. Kept in step with the server or the editor preview would
+    // disagree with what gets published.
+    const HEX = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
     const storyBg = (typeof theme.storyBg === 'string') ? theme.storyBg.trim() : '';
-    if (/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(storyBg)) css += ':root{--story-bg:' + storyBg + ';}';
+    if (HEX.test(storyBg)) {
+      let pct = parseInt(theme.storyOpacity, 10);
+      if (!isFinite(pct)) pct = 100;
+      pct = Math.max(20, Math.min(100, pct));
+      css += ':root{--story-bg:' + (pct >= 100 ? storyBg
+        : 'color-mix(in srgb,' + storyBg + ' ' + pct + '%,transparent)') + ';}';
+    }
+    const storyFg = (typeof theme.storyFg === 'string') ? theme.storyFg.trim() : '';
+    if (HEX.test(storyFg)) css += ':root{--story-fg:' + storyFg + ';}';
     if (LIVE_FONTS[theme.font]) css += 'body{font-family:' + LIVE_FONTS[theme.font] + ';}';
     let style = document.getElementById('gd-live-theme');
     if (!style) { style = document.createElement('style'); style.id = 'gd-live-theme'; document.head.appendChild(style); }

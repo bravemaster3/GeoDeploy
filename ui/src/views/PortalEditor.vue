@@ -166,6 +166,35 @@
             </div>
           </div>
 
+          <!-- Panel transparency. Applied as a colour-mix server-side, NOT CSS opacity, so the map
+               shows through the panel while the text stays fully solid. -->
+          <div v-if="isStory && theme.storyBg" class="flex items-center justify-between mt-2 gap-2">
+            <span class="text-xs text-muted-foreground flex-shrink-0">Panel opacity</span>
+            <span class="flex items-center gap-2 min-w-0">
+              <input type="range" min="20" max="100" step="5"
+                :value="theme.storyOpacity ?? 100"
+                @input="e => setTheme({ storyOpacity: Number(e.target.value) })"
+                class="w-24 accent-primary" />
+              <span class="text-[11px] text-muted-foreground/70 w-8 text-right">{{ theme.storyOpacity ?? 100 }}%</span>
+            </span>
+          </div>
+
+          <!-- Text colour: a dark panel with the light theme's dark text is unreadable, and the
+               visitor's own light/dark toggle can flip it either way. -->
+          <div v-if="isStory" class="flex items-center justify-between mt-2">
+            <span class="text-xs text-muted-foreground">Story text colour</span>
+            <div class="flex items-center gap-1.5">
+              <label class="relative w-6 h-6 rounded border border-dashed border-muted-foreground/50 flex items-center justify-center cursor-pointer overflow-hidden" title="Story text colour"
+                :style="theme.storyFg ? { background: theme.storyFg } : {}">
+                <span v-if="!theme.storyFg" class="text-[10px] text-muted-foreground">+</span>
+                <input type="color" :value="theme.storyFg || '#f8fafc'" @input="e => setTheme({ storyFg: e.target.value })"
+                  class="absolute inset-0 opacity-0 cursor-pointer" />
+              </label>
+              <button v-if="theme.storyFg" @click="setTheme({ storyFg: '' })"
+                class="text-[11px] text-muted-foreground/70 hover:text-foreground">reset</button>
+            </div>
+          </div>
+
           <!-- Header logo / brand -->
           <label class="text-xs text-muted-foreground block mt-3 mb-1">Header logo</label>
           <div class="flex items-center gap-1.5 flex-wrap">
