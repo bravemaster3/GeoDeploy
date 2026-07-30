@@ -19,7 +19,17 @@ theme:
   icon:
     logo: material/earth
     repo: fontawesome/brands/github
+  # DARK FIRST. The product is a dark dashboard and the screenshots are dark, so a light docs page
+  # around a dark screenshot looks like a mistake. The light scheme stays available via the toggle,
+  # and `media` still honours a reader who has explicitly asked their OS for light.
   palette:
+    - media: "(prefers-color-scheme)"
+      scheme: slate
+      primary: green
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
       primary: green
@@ -27,23 +37,20 @@ theme:
       toggle:
         icon: material/weather-night
         name: Switch to dark mode
-    - media: "(prefers-color-scheme: dark)"
-      scheme: slate
-      primary: green
-      accent: teal
-      toggle:
-        icon: material/weather-sunny
-        name: Switch to light mode
   features:
     - navigation.instant
-    - navigation.sections
+    - navigation.sections     # group headings in the left sidebar
+    - navigation.expand       # ...opened, so the whole map of the docs is visible at once
     - navigation.top
     - navigation.tracking
+    - navigation.footer       # prev/next, so a reader is never at a dead end
     - content.code.copy
     - content.action.edit
+    - content.tooltips
     - search.highlight
+    - search.share
     - search.suggest
-    - toc.follow
+    - toc.follow              # the right-hand TOC tracks the heading you are reading
 
 nav:
   - Home: index.md

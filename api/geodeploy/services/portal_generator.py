@@ -625,6 +625,12 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
             full_style["geodeploy"]["baseRepointed"] = True
         full_style["geodeploy"]["defaultBasemap"] = bm["id"]
 
+    # MapLibre v5 reads `projection` from the STYLE. Baking it means a globe portal loads as a globe
+    # rather than loading flat and being corrected afterwards — the style's own projection was
+    # otherwise applied at style-load and silently reset an imperatively-set globe back to mercator.
+    if isinstance(initial_view, dict) and initial_view.get("projection") == "globe":
+        full_style["projection"] = {"type": "globe"}
+
     # Standalone documentation page (GeoNode-style "full page that links to the map") — written
     # BEFORE the style is baked so the aboutPage flag lands in the HTML.
     about_html = _about_page(slug, title, description, user_data.get("layers_info", []))

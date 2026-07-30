@@ -90,6 +90,21 @@
           </template>
         </section>
 
+        <!-- Experience (V-11). FIRST, because the template list below is filtered to the templates
+             that declare support for whatever is chosen here. -->
+        <section class="p-4 border-b border-border/60">
+          <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Experience</h3>
+          <div class="grid grid-cols-2 gap-2 mb-3">
+            <button v-for="a in ARCHETYPES" :key="a.id"
+              class="p-2 rounded-lg border text-left transition-colors"
+              :class="resolvedLayout.archetype === a.id ? 'border-primary bg-primary/10' : 'border-border hover:border-muted-foreground/40'"
+              @click="pickArchetype(a.id)">
+              <span class="block text-xs font-medium" :class="resolvedLayout.archetype === a.id ? 'text-primary' : 'text-foreground/85'">{{ a.name }}</span>
+              <span class="block text-[10px] text-muted-foreground/70 leading-snug">{{ a.desc }}</span>
+            </button>
+          </div>
+        </section>
+
         <!-- Template section -->
         <section class="p-4 border-b border-border/60">
           <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
@@ -224,19 +239,11 @@
           <p class="text-[10px] text-muted-foreground/60 mt-1">Recommended: a small square/wide mark, ~30px tall.</p>
         </section>
 
-        <!-- Experience / Layout section (V-11) -->
+        <!-- Layout section (V-11). The EXPERIENCE picker used to live here, far below Template —
+             backwards, now that the template list is filtered by the experience. It moved directly
+             above Template so the nested choice reads in the order it is made. -->
         <section class="p-4 border-b border-border/60">
-          <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Experience</h3>
-          <div class="grid grid-cols-2 gap-2 mb-3">
-            <button v-for="a in ARCHETYPES" :key="a.id"
-              class="p-2 rounded-lg border text-left transition-colors"
-              :class="resolvedLayout.archetype === a.id ? 'border-primary bg-primary/10' : 'border-border hover:border-muted-foreground/40'"
-              @click="pickArchetype(a.id)">
-              <span class="block text-xs font-medium" :class="resolvedLayout.archetype === a.id ? 'text-primary' : 'text-foreground/85'">{{ a.name }}</span>
-              <span class="block text-[10px] text-muted-foreground/70 leading-snug">{{ a.desc }}</span>
-            </button>
-          </div>
-
+          <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Layout</h3>
 
           <!-- Placement toggles (quick alternative to click-to-place) -->
           <div class="space-y-2 text-xs">
@@ -477,10 +484,12 @@
         <button @click="save" :disabled="busy" class="btn-secondary w-full justify-center text-sm">
           Save changes
         </button>
-        <p v-if="saveMsg" class="text-xs text-center"
-          :class="saveMsg.type === 'ok' ? 'text-green-400' : 'text-red-400'">
-          {{ saveMsg.text }}
-        </p>
+        <div v-if="saveMsg" class="flex items-start gap-2 text-xs rounded-lg px-2.5 py-1.5"
+          :class="saveMsg.type === 'ok' ? 'text-green-400 bg-green-500/10' : 'text-red-400 bg-red-500/10'">
+          <span class="flex-1 min-w-0 leading-snug">{{ saveMsg.text }}</span>
+          <button @click="saveMsg = null" title="Dismiss" aria-label="Dismiss"
+            class="flex-shrink-0 w-4 h-4 leading-none opacity-60 hover:opacity-100">&times;</button>
+        </div>
       </div>
     </div>
 
@@ -900,6 +909,15 @@ function onDragEnd() { dragIndex.value = null }
 const accessPassword = ref('')
 const busy = ref(false)
 const saveMsg = ref(null)
+// Every producer just assigns to saveMsg, so the dismissal lives HERE rather than at a dozen call
+// sites — a rejected image used to leave a red line with no way to clear it short of saving again.
+// Errors linger longer than confirmations because they carry something to act on.
+let saveMsgTimer = null
+watch(saveMsg, (m) => {
+  clearTimeout(saveMsgTimer)
+  if (!m) return
+  saveMsgTimer = setTimeout(() => { saveMsg.value = null }, m.type === 'ok' ? 3000 : 10000)
+})
 
 // ── Rename the portal (click the title) ─────────────────────────────────────
 // The slug (and therefore the public /portals/{slug}/ URL) is fixed at creation and never changes,
@@ -924,7 +942,6 @@ async function commitRename() {
     const updated = await portalsStore.update(portal.value.id, { title: name })
     portal.value = updated
     saveMsg.value = { type: 'ok', text: 'Renamed' }
-    setTimeout(() => { saveMsg.value = null }, 3000)
   } catch (err) {
     saveMsg.value = { type: 'err', text: err.response?.data?.detail || err.message }
   } finally {

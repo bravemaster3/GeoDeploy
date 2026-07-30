@@ -107,3 +107,61 @@
   border: 1px dashed var(--md-default-fg-color--lighter);
   text-align: center;
 }
+
+
+/* ── Screenshots ───────────────────────────────────────────────────────────
+   The product is a dark dashboard, so shots are framed rather than floated: a border and a soft
+   shadow stop a dark screenshot from bleeding into a dark page and losing its edges. */
+.md-typeset figure { margin: 1.6rem 0; }
+.md-typeset figure img {
+  width: 100%;
+  border-radius: .7rem;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .28);
+  display: block;
+}
+.md-typeset figcaption {
+  margin-top: .6rem;
+  font-size: .72rem;
+  line-height: 1.5;
+  color: var(--md-default-fg-color--light);
+  text-align: center;
+  max-width: 42rem;
+  margin-left: auto;
+  margin-right: auto;
+}
+/* The lead shot carries the page, so it may break out of the text column. */
+.gd-shot-lead img { border-radius: .9rem; box-shadow: 0 22px 60px rgba(0, 0, 0, .38); }
+
+/* Screenshot grids. `auto-fit` + minmax means these reflow to one column on a phone with no
+   breakpoint of their own. */
+.gd-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 1.2rem;
+  margin: 1.6rem 0;
+}
+.gd-tiles-2 { grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); }
+.gd-tiles figure { margin: 0; }
+.gd-tiles figure img { transition: transform .2s ease, box-shadow .2s ease; }
+.gd-tiles figure img:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .38);
+}
+
+/* Buttons that follow a section read as "read more", so they sit tighter than a paragraph. */
+.md-typeset .md-button { margin: .2rem .3rem 1.2rem 0; }
+
+.gd-next table { width: 100%; }
+
+/* Dark is the default scheme, so tune it rather than accepting Material's neutral slate. */
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: hsl(222 44% 8%);
+  --md-default-fg-color--lightest: hsl(217 33% 22%);
+  --md-code-bg-color: hsl(220 40% 12%);
+}
+[data-md-color-scheme="slate"] .gd-hero {
+  background:
+    radial-gradient(ellipse 80% 60% at 50% -10%, rgba(22, 163, 74, .28), transparent 70%),
+    linear-gradient(180deg, rgba(22, 163, 74, .12), transparent 65%);
+}

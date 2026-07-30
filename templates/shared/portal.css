@@ -230,6 +230,8 @@
       max-width: 300px;  /* E3: keep cards within the opaque part of the fade */
       margin-bottom: 55vh; opacity: .35; transition: opacity .35s ease;
     }
+    /* First paint only: the opening section must arrive already bright, not fade up into it. */
+    body[data-story-ready="0"] .story-section { transition: none; }
     body[data-layerlist-side="right"][data-archetype="storymap"] .story-section { margin-left: auto; }
 
     /* E1: up/down "more" chevrons, centred on the VISIBLE card column (22px pad + card ≤300px), shown

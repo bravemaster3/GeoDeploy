@@ -1050,6 +1050,11 @@
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), CTRL_POS);  // zoom below them
     // V-11 storymap: build the scrollytelling narrative that drives the camera + layer state.
     if (LAYOUT.archetype === 'storymap') { try { setupStory(); } catch (e) { console.warn('[geodeploy] story failed', e); } }
+    // The pinned projection is applied at construction too, but a style load can reset it — the style
+    // spec carries its own projection and MapLibre applies that when the style becomes live, which
+    // silently put a globe portal back on mercator. Re-applying here is the point where the map is
+    // definitely ready, and it is a no-op when the projection already matches.
+    if (savedView && savedView.projection) applyProjection(savedView.projection);
     // V-14 catalog: build the browse surface. AFTER initDeck() so GeoParquet layers already have a
     // deckState entry — the cards seed their on/off state from it.
     if (LAYOUT.archetype === 'catalog') { try { setupCatalog(); } catch (e) { console.warn('[geodeploy] catalog failed', e); } }
@@ -1176,7 +1181,14 @@
     sections.forEach(function (el) { io.observe(el); });
     // E4: in the editor preview each edit reloads the iframe — DON'T fly to section 0 (it yanks the
     // author's map away). Just mark it active; the baked initial_view keeps the author's camera.
+    // Sections default to opacity .35 and the ACTIVE one goes to 1 through a transition. On load that
+    // played as a visible fade — the panel appeared dimmed, then brightened. Suppress the transition
+    // for the first activation only, then hand it back for real scrolling.
+    document.body.dataset.storyReady = '0';
     activate(0, !EDIT_MODE);
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () { document.body.dataset.storyReady = '1'; });
+    });
 
     // E2: the wheel scrolls the narrative ONLY when the cursor is over the story column; over the open
     // map it zooms as normal. The panel is pointer-events:none (so the map drags behind it), so we can't
