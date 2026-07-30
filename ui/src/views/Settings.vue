@@ -234,6 +234,67 @@
           </div>
         </section>
 
+        <!-- Manage backups — DANGER ZONE. Same red treatment as the container terminal, because
+             restoring replaces the database and the files, and deleting a backup is the one
+             unrecoverable action in the app. -->
+        <section class="rounded-xl border border-red-500/40 bg-red-500/[0.03] overflow-hidden">
+          <header class="flex items-center gap-3 px-5 py-3.5 border-b border-red-500/30">
+            <span class="w-9 h-9 rounded-lg bg-red-500/15 text-red-400 flex items-center justify-center flex-shrink-0">
+              <AlertIcon class="w-5 h-5" />
+            </span>
+            <div class="min-w-0">
+              <h2 class="font-semibold text-red-300">Manage backups</h2>
+              <p class="text-xs text-muted-foreground">
+                What is actually stored at the destination. Restoring replaces everything.
+              </p>
+            </div>
+            <button @click="loadStored" :disabled="storedLoading"
+              class="ml-auto btn-secondary text-xs px-3 py-1.5">
+              {{ storedLoading ? 'Loading…' : 'Refresh' }}
+            </button>
+          </header>
+
+          <div class="p-5 space-y-3">
+            <p v-if="!bk.bucket" class="text-sm text-muted-foreground/70">
+              Configure a destination first.
+            </p>
+            <p v-else-if="!stored.length && !storedLoading" class="text-sm text-muted-foreground/70">
+              No backups stored yet.
+            </p>
+
+            <div v-for="b in stored" :key="b.key"
+              class="rounded-lg border border-border bg-card p-3 flex flex-wrap items-center gap-3">
+              <div class="min-w-0 flex-1">
+                <div class="text-sm font-medium font-mono truncate">{{ b.name }}</div>
+                <div class="text-[11px] text-muted-foreground mt-0.5">
+                  <span v-if="b.manifest">
+                    {{ fmtBytes(b.manifest.total_bytes) }} ·
+                    {{ Object.keys(b.manifest.parts || {}).join(' · ') }}
+                  </span>
+                  <span v-else class="text-amber-400">
+                    incomplete — no manifest, cannot be restored
+                  </span>
+                </div>
+              </div>
+              <button v-if="b.manifest && auth.isOwner" @click="openRestore(b)"
+                class="text-xs px-3 py-1.5 rounded-md border border-red-500/50 text-red-300
+                       hover:bg-red-500/10">Restore</button>
+              <button @click="removeStored(b)" :disabled="storedBusy === b.key"
+                class="text-xs px-3 py-1.5 rounded-md border border-border text-muted-foreground
+                       hover:text-red-400 hover:border-red-500/50 disabled:opacity-40">
+                {{ storedBusy === b.key ? 'Deleting…' : 'Delete' }}
+              </button>
+            </div>
+
+            <p v-if="stored.length && !auth.isOwner" class="text-[11px] text-muted-foreground/70">
+              Only the workspace owner can restore a backup.
+            </p>
+            <p v-if="storedMsg" class="text-xs" :class="storedMsg.ok ? 'text-emerald-400' : 'text-red-400'">
+              {{ storedMsg.text }}
+            </p>
+          </div>
+        </section>
+
         <section class="card overflow-hidden">
           <header class="px-5 py-3.5 border-b border-border/60">
             <h2 class="font-semibold">History</h2>
@@ -531,6 +592,62 @@
   </div>
 
   <TokenModal v-if="showTokenModal" @close="showTokenModal = false" @created="loadTokens" />
+
+    <!-- Restore confirmation. Deliberately NOT a one-click button: it replaces the database and
+         the files, and the encryption-key verdict has to be read before anyone commits. -->
+    <Teleport to="body">
+      <div v-if="restoreTarget" class="fixed inset-0 bg-gray-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+        @click.self="restoreTarget = null">
+        <div class="card w-full max-w-lg p-6 space-y-4 shadow-2xl border border-red-500/40">
+          <h2 class="text-lg font-semibold text-red-300">Restore this backup?</h2>
+
+          <div v-if="preflight" class="space-y-3">
+            <p class="text-sm text-muted-foreground">
+              This <strong class="text-foreground">replaces</strong> the database and files with the
+              contents of <span class="font-mono text-xs">{{ restoreTarget.name }}</span>.
+              Anything created since that backup is lost.
+            </p>
+
+            <div class="text-xs rounded-lg border border-border bg-muted/40 p-3 space-y-1">
+              <div class="text-muted-foreground">Currently in this instance:</div>
+              <div>{{ preflight.current.vector_layers }} vector · {{ preflight.current.raster_layers }} raster ·
+                   {{ preflight.current.portals }} portals · {{ preflight.current.users }} users</div>
+            </div>
+
+            <p class="text-xs rounded-lg p-3 border"
+              :class="preflight.secret_key.matches === false
+                ? 'border-red-500/40 bg-red-500/10 text-red-300'
+                : preflight.secret_key.matches === true
+                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                  : 'border-amber-400/30 bg-amber-500/10 text-amber-200'">
+              {{ preflight.secret_key.message }}
+            </p>
+
+            <div>
+              <label class="text-xs text-muted-foreground block mb-1">
+                Type <span class="font-mono text-foreground">{{ restoreTarget.name }}</span> to confirm
+              </label>
+              <input v-model="restoreConfirm" class="input w-full text-sm font-mono" spellcheck="false" />
+            </div>
+          </div>
+          <p v-else class="text-sm text-muted-foreground">Checking the backup…</p>
+
+          <div class="flex items-center justify-end gap-3">
+            <span v-if="restoreMsg" class="text-xs text-red-400 mr-auto">{{ restoreMsg }}</span>
+            <button @click="restoreTarget = null" class="text-sm text-muted-foreground hover:text-foreground px-3 py-2">
+              Cancel
+            </button>
+            <button @click="confirmRestore"
+              :disabled="restoreBusy || !preflight || restoreConfirm !== restoreTarget.name"
+              class="text-sm font-semibold text-white bg-red-600 hover:bg-red-700 disabled:opacity-40
+                     rounded-lg px-4 py-2">
+              {{ restoreBusy ? 'Starting…' : 'Restore' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
 </template>
 
 <script setup>
@@ -538,11 +655,12 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSystemStore } from '@/stores/system'
 import { useAuthStore } from '@/stores/auth'
-import { ServerIcon, HardDriveIcon, UserIcon, RefreshIcon, MailIcon, KeyIcon, TrashIcon } from './icons'
+import { ServerIcon, HardDriveIcon, UserIcon, RefreshIcon, MailIcon, KeyIcon, TrashIcon, AlertIcon } from './icons'
 import api, { changePassword, logoutAll, controlService, getEmailSettings, sendTestEmail,
               updateEmailSettings, listTokens, revokeToken, getOidcSettings, updateOidcSettings,
               getBackupSettings, updateBackupSettings, testBackupDestination,
-              listBackupRuns, startBackup } from '@/api'
+              listBackupRuns, startBackup, listStoredBackups, deleteStoredBackup,
+              restorePreflight, startRestore } from '@/api'
 import TokenModal from '@/components/users/TokenModal.vue'
 import InfrastructurePanel from '@/components/infra/InfrastructurePanel.vue'
 
@@ -611,6 +729,78 @@ function fmtBytes(b) {
   return (b / 1e3).toFixed(0) + ' KB'
 }
 
+// -- Manage backups (danger zone) ------------------------------------------------------------
+// `stored` comes from the DESTINATION's own manifests, not our run history: that history lives in
+// the state database, which is itself one of the things being backed up, so it can never be the
+// authority on what exists.
+const stored = ref([])
+const storedLoading = ref(false)
+const storedBusy = ref(null)
+const storedMsg = ref(null)
+const restoreTarget = ref(null)
+const preflight = ref(null)
+const restoreConfirm = ref('')
+const restoreBusy = ref(false)
+const restoreMsg = ref(null)
+
+async function loadStored() {
+  if (!auth.isAdmin) return
+  storedLoading.value = true
+  storedMsg.value = null
+  try {
+    stored.value = (await listStoredBackups()).data
+  } catch (e) {
+    stored.value = []
+    storedMsg.value = { ok: false, text: e.response?.data?.detail || 'Could not list the destination.' }
+  } finally {
+    storedLoading.value = false
+  }
+}
+
+async function removeStored(b) {
+  if (!confirm(`Delete the backup ${b.name}? This cannot be undone.`)) return
+  storedBusy.value = b.key
+  storedMsg.value = null
+  try {
+    await deleteStoredBackup(b.key)
+    stored.value = stored.value.filter(x => x.key !== b.key)
+    storedMsg.value = { ok: true, text: 'Deleted.' }
+  } catch (e) {
+    storedMsg.value = { ok: false, text: e.response?.data?.detail || 'Could not delete.' }
+  } finally {
+    storedBusy.value = null
+  }
+}
+
+async function openRestore(b) {
+  restoreTarget.value = b
+  preflight.value = null
+  restoreConfirm.value = ''
+  restoreMsg.value = null
+  try {
+    preflight.value = (await restorePreflight(b.key)).data
+  } catch (e) {
+    restoreMsg.value = e.response?.data?.detail || 'Could not read this backup.'
+  }
+}
+
+async function confirmRestore() {
+  restoreBusy.value = true
+  restoreMsg.value = null
+  try {
+    await startRestore({ key: restoreTarget.value.key, confirm_name: restoreConfirm.value })
+    restoreTarget.value = null
+    // The restore replaces this very database, so the page's data is about to be stale — reload
+    // rather than leave a UI describing an instance that no longer exists.
+    storedMsg.value = { ok: true, text: 'Restore started — reloading shortly.' }
+    setTimeout(() => window.location.reload(), 4000)
+  } catch (e) {
+    restoreMsg.value = e.response?.data?.detail || 'Could not start the restore.'
+  } finally {
+    restoreBusy.value = false
+  }
+}
+
 async function loadBackups() {
   if (!auth.isAdmin) return
   try {
@@ -618,6 +808,7 @@ async function loadBackups() {
     Object.assign(bk, data, { secret_key: '' })
   } catch { /* not configured yet */ }
   await refreshBackupRuns()
+  await loadStored()
 }
 
 async function refreshBackupRuns() {

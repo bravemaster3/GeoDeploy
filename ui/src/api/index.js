@@ -91,6 +91,12 @@ export const listBackupRuns = (limit = 20) => api.get('/backups/runs', { params:
 export const listStoredBackups = () => api.get('/backups/stored')
 export const startBackup = () => api.post('/backups/run')
 export const deleteStoredBackup = (key) => api.delete(`/backups/stored/${key}`)
+// Restore. OWNER-only server-side; preflight reports what the backup holds, what exists now, and
+// the encryption-key verdict — restoring with a different GEODEPLOY_SECRET_KEY leaves the stored
+// SMTP/OIDC/backup credentials unreadable, which is the one surprise worth showing up front.
+export const restorePreflight = (key) => api.get(`/backups/stored/${key}/preflight`)
+export const startRestore = (data) => api.post('/backups/restore', data)
+export const listRestoreRuns = (limit = 10) => api.get('/backups/restore/runs', { params: { limit } })
 
 // Outgoing email (admin Settings → Email; generic SMTP)
 export const getEmailSettings = () => api.get('/admin/email-settings')

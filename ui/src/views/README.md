@@ -56,6 +56,12 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 - Raster layer `bbox` from the API is in source CRS (not lon/lat) — using it directly for `fitToBbox` can throw "Invalid LngLat" (see tasks/raster notes). Prefer zooming via vector bounds or TiTiler TileJSON.
 
 ## Last updated
+2026-07-30 (Settings → Backups gains **Manage backups**, a DANGER ZONE section — same red treatment
+as the old container-terminal card. It lists what is at the DESTINATION (read from the manifests,
+not our run history: that history lives in the state database, which is itself backed up, so it can
+never be the authority on what exists) with Restore and Delete. Restore is owner-only, opens a
+preflight dialog showing what the backup holds / what exists now / the encryption-key verdict, and
+requires the backup's name typed back. An incomplete backup (no manifest) shows as unrestorable.)
 2026-07-30 (`Activity.vue` PAGINATED: server-side filters that combine — search · resource · action ·
 who · date preset (today/this week/this month/last 3 months/this year, resolved to an absolute
 `since` in the VIEWER's timezone by `periodStart`) — plus a per-page selector (20/50/100/200,
