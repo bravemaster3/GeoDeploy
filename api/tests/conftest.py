@@ -62,7 +62,21 @@ if TEST_DATA_DIR not in _MARTIN_PATH:
 
 
 def _assert_test_db():
-    """Guard the destructive fixtures too — belt-and-suspenders against a mid-run env change."""
+    """
+⚠️ THIS SUITE STILL ASSUMES SQLITE (2026-07-30).
+
+State moved to PostgreSQL on the `postgres-state` branch, so these fixtures — which point
+GEODEPLOY_DATA_DIR at a scratch dir and build a file-backed engine — no longer describe reality.
+Before that branch merges, the fixtures must spin up (or connect to) a THROWAWAY Postgres database
+and the safety guard below has to be rewritten around a DSN allow-list rather than a path check.
+
+The guard's purpose does NOT change and must survive the rewrite: this suite drops every table, and
+it once wiped the production database because `setdefault` silently kept the container's real path.
+A DSN check has to be at least as strict as the path check it replaces.
+
+Tests that need no database (test_state_db, test_cors_public_surface, test_geolibre_import) run
+regardless and are the ones to trust until this is done.
+"""Guard the destructive fixtures too — belt-and-suspenders against a mid-run env change."""
     assert TEST_DATA_DIR in str(engine.url), "destructive fixture blocked: not the test DB"
 
 
