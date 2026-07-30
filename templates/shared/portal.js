@@ -93,6 +93,17 @@
     // control column free (so it never covers the controls, top OR bottom).
     b.dataset.collide = (pos === 'top-' + L.regions.layerList.side) ? '1' : '0';
     b.dataset.sameside = (cside === L.regions.layerList.side) ? '1' : '0';
+    // V-14 catalog: claim the panel's space NOW, before the map is constructed. This runs at parse
+    // time; setupCatalog only runs on map 'load'. Revealing the panel there meant the map was built
+    // against a full-width container, painted, and then jumped sideways when the panel appeared —
+    // the visible "renders, blinks, moves" on load. With the grid correct up front MapLibre measures
+    // the final width at construction, so there is nothing to correct and no resize to chase.
+    if (L.archetype === 'catalog') {
+      b.dataset.catalogMap = (L.regions.catalog && L.regions.catalog.mapSide) === 'left' ? 'left' : 'right';
+      b.dataset.catalogView = 'list';
+      const cp = document.getElementById('catalog-panel');
+      if (cp) cp.style.display = '';
+    }
   }
   const LAYOUT = resolveLayout(STYLE.geodeploy && STYLE.geodeploy.layout);
   applyLayoutAttrs(LAYOUT);
@@ -3091,15 +3102,9 @@
     const records = ((STYLE.geodeploy && STYLE.geodeploy.catalog) || [])
       .filter(function (r) { return r && r.name; });
 
-    panel.style.display = '';
-    document.body.dataset.catalogMap = cfg.mapSide === 'left' ? 'left' : 'right';
-    // The panel takes width off the map container, so MapLibre must re-measure or the canvas keeps
-    // the full-width size it was created with (map renders offset / clipped).
-    setTimeout(function () { try { map.resize(); } catch (e) {} }, 0);
+    // The panel was revealed and the map side set in applyLayoutAttrs, BEFORE the map was built, so
+    // the layout is already final here — nothing to reveal, nothing to resize. Only content follows.
 
-    // A facet rail earns its space only when there is something to narrow down — below this it would
-    // be a column of one-item facets beside three cards. Same threshold as the About page's search.
-    const railOn = records.length >= 6;
     const perPage = Math.max(4, cfg.perPage || 12);
     const FACETS = [
       { key: 'kind',    title: 'Type',     of: function (r) { return [catKindLabel(r)]; } },
@@ -3201,7 +3206,7 @@
         '<div id="cat-chips" class="cat-chips"></div>' +
       '</div>' +
       '<div class="cat-body">' +
-        (railOn ? '<aside id="cat-rail" class="cat-rail"></aside>' : '') +
+        '<aside id="cat-rail" class="cat-rail"></aside>' +
         '<div class="cat-main"><div id="cat-results" class="cat-results"></div>' +
           '<div id="cat-pager" class="cat-pager"></div></div>' +
       '</div>';
@@ -3217,7 +3222,6 @@
       vt.querySelectorAll('button').forEach(function (x) { x.classList.toggle('on', x === b); });
       if (b.dataset.v === 'map') setTimeout(function () { try { map.resize(); } catch (e) {} }, 210);
     });
-    document.body.dataset.catalogView = 'list';
 
     const $q = panel.querySelector('#cat-q');
     const $rail = panel.querySelector('#cat-rail');
@@ -3239,7 +3243,9 @@
         const vals = Object.keys(counts).sort(function (a, b) {
           return counts[b] - counts[a] || a.localeCompare(b);
         });
-        if (!vals.length) return;
+        // A one-value facet cannot narrow anything (ticking it changes nothing), so it is noise.
+        // Keep it only when it is an ACTIVE selection the visitor needs in order to untick it.
+        if (vals.length < 2 && !selectedIn(f.key).length) return;
         const collapsed = state.open[f.key] === false;
         html += '<section class="cat-facet' + (collapsed ? ' collapsed' : '') + '" data-facet="' + f.key + '">' +
           '<button class="cat-facet-h" data-toggle="' + f.key + '">' + escHtml(f.title) +
@@ -3254,7 +3260,13 @@
         });
         html += '</div></section>';
       });
-      $rail.innerHTML = html || '<p class="cat-empty-rail">No filters available.</p>';
+      // Shown/hidden per RENDER, never gated on a one-time count. `scope: "public"` appends datasets
+      // from the live feed AFTER the first render, so a rail decided once — from the baked records
+      // only — stayed hidden even though the catalog had grown enough to need it. It also hides
+      // itself when there is genuinely nothing to filter by (one dataset, or every facet single-
+      // valued), which is the case the old threshold was really aiming at.
+      $rail.innerHTML = html;
+      $rail.style.display = html ? '' : 'none';
     }
 
     function renderChips() {
