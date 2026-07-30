@@ -321,6 +321,14 @@
                 </button>
               </div>
             </div>
+            <!-- A second Add, at the END of the list. Sections are written in order, so after
+                 filling one in you are already at the bottom — scrolling back to the header to add
+                 the next one is the wrong direction of travel. -->
+            <button v-if="story.sections.length" @click="addStorySection"
+              class="w-full mt-1 py-1.5 rounded-lg border border-dashed border-border text-xs font-medium
+                     text-muted-foreground hover:text-primary hover:border-primary/60 transition-colors">
+              + Add section
+            </button>
           </div>
         </section>
 
@@ -551,7 +559,7 @@ const _ARCH_DEFAULTS = {
   storymap: { regions: { layerList: { side: 'left', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: true, legend: true, basemap: true, about: false, story: true } },
   // V-14 catalog: the dataset list is the page and the map is a panel beside it, so layerCatalog is
   // off (the facet rail replaces the switcher) and `catalog` carries the split.
-  catalog:  { regions: { layerList: { side: 'left', mode: 'docked', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, catalog: { scope: 'portal', mapSide: 'right', mapWidth: 40, railWidth: 20, perPage: 12 } }, panels: { catalog: true, layerCatalog: false, legend: true, basemap: true, about: true, story: false } },
+  catalog:  { regions: { layerList: { side: 'left', mode: 'docked', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, catalog: { scope: 'portal', mapSide: 'right', mapWidth: 40, railWidth: 20, perPage: 12 } }, panels: { catalog: true, layerCatalog: false, legend: true, basemap: true, about: false, story: false } },
 }
 // `webmap+catalog` is still UNBUILT and degrades to a working map on purpose. `catalog` used to be
 // here too, which is why choosing it silently rendered a plain web map.
@@ -1032,8 +1040,11 @@ onMounted(async () => {
 // ── R2: iframe preview + click-to-place ─────────────────────────────────────
 let previewTimer = null
 function schedulePreview() {
+  // A rebuild is a server round-trip AND a full iframe reload, so the window has to outlast normal
+  // typing/dragging — 350ms fired between words and between slider nudges. Anything that should feel
+  // instant (theme) is applied live by postMessage instead of coming through here.
   clearTimeout(previewTimer)
-  previewTimer = setTimeout(refreshPreview, 350)
+  previewTimer = setTimeout(refreshPreview, 900)
 }
 async function refreshPreview() {
   if (!portal.value) return
@@ -1082,9 +1093,14 @@ function onFrameMessage(e) {
 onMounted(() => window.addEventListener('message', onFrameMessage))
 onBeforeUnmount(() => { window.removeEventListener('message', onFrameMessage); clearTimeout(previewTimer) })
 
-// Rebuild the iframe preview whenever config that shapes the published bundle changes. THEME is NOT
-// here — it applies LIVE via postMessage (below), so colour/mode/font tweaks don't reload the iframe.
-watch([layoutConfig, story, layerConfigs, layerTree, basemap, selectedTemplate, description, ready],
+// Rebuild the iframe preview whenever config that shapes the published MAP changes. Two deliberate
+// exclusions:
+//   THEME — applies LIVE via postMessage (below), so colour/mode/font tweaks never reload the iframe.
+//   DESCRIPTION — it only feeds the About PAGE, which the map preview does not render. It used to be
+//   watched, so every pause while typing in the About editor triggered a full server-side bundle
+//   rebuild and an iframe reload, to preview text you could not see in the preview. That was the
+//   "re-renders on every letter" problem. It is still baked on save/publish.
+watch([layoutConfig, story, layerConfigs, layerTree, basemap, selectedTemplate, ready],
   () => { if (ready.value) schedulePreview() }, { deep: true })
 
 // B: theme changes apply live in the preview (no reload). The theme is still baked on the next full

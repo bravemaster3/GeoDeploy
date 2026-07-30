@@ -429,7 +429,9 @@ _LAYOUT_ARCHETYPES = {
             },
         },
         "panels": {"catalog": True, "layerCatalog": False, "legend": True, "basemap": True,
-                   "about": True, "story": False},
+                   # No About page: every dataset already carries its abstract, licence and access
+                   # links on its own card, so an About page would only restate the catalog.
+                   "about": False, "story": False},
     },
     # scrollytelling — a narrative column drives the map camera; the layer list floats (collapsed by
     # default), reachable from the toggle at the top of the control cluster, like a normal web map.

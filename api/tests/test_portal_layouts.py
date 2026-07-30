@@ -75,6 +75,13 @@ class TestCatalogArchetype:
         assert out["panels"]["catalog"] is True
         assert out["panels"]["layerCatalog"] is False
 
+    def test_catalog_has_no_about_page(self):
+        """Every dataset already carries its abstract, licence and access links on its own card, so an
+        About page would just restate the catalog."""
+        assert resolve_layout({"archetype": "catalog"})["panels"]["about"] is False
+        # ...but a web map still has one.
+        assert resolve_layout({"archetype": "webmap"})["panels"]["about"] is True
+
     def test_catalog_scope_defaults_to_this_portal(self):
         """Default must be the portal's OWN layers. Defaulting to instance-wide would silently
         widen what a published portal exposes."""
