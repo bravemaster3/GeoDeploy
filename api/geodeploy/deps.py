@@ -34,8 +34,9 @@ _LAST_USED_THROTTLE = timedelta(minutes=5)  # don't write last_used_at on every 
 
 
 def _naive_utcnow() -> datetime:
-    """Naive UTC — matches how SQLite stores the model's DateTime columns (see users.utcnow)."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    """Naive UTC for DateTime columns — see timeutil.naive_utcnow, the canonical helper."""
+    from .timeutil import naive_utcnow
+    return naive_utcnow()
 
 
 async def authenticate_api_token(raw: str, db: AsyncSession) -> ApiToken | None:

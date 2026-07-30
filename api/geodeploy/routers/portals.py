@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_settings
 from ..database import get_db
 from ..deps import require_scope, resolve_cookie_user
+from ..timeutil import naive_utcnow
 from ..models import ExternalSource, Portal, RasterLayer, User, VectorLayer
 from ..schemas import PortalCreate, PortalOut, PortalUpdate
 from ..services.portal_generator import build_portal_bundle, generate_style, read_deck_core_bbox
@@ -299,7 +300,7 @@ async def publish_portal(portal_id: int, user: User = Depends(require_scope("por
     await _rebuild_bundle(portal, db)
 
     portal.published = True
-    portal.published_at = datetime.now(timezone.utc)
+    portal.published_at = naive_utcnow()   # naive: the column is TIMESTAMP WITHOUT TIME ZONE
     await db.commit()
     await db.refresh(portal)
     invalidate_public_layers()  # this portal's layers are now publicly readable

@@ -363,6 +363,54 @@ async def service_health(_: User = Depends(require_admin)):
     return results
 
 
+class ExecRequest(BaseModel):
+    command: str
+
+
+# DECLARED BEFORE the generic /services/{name}/{action} route below — and it must stay there.
+# FastAPI matches in DECLARATION ORDER, so with the generic route first, POST .../{name}/exec was
+# captured as action="exec" and answered "Action must be start, stop, or restart": the terminal
+# could never run anything at all (reported 2026-07-30).
+@router.post("/services/{name}/exec")
+async def service_exec(name: str, body: ExecRequest, user: User = Depends(require_admin),
+                       db: AsyncSession = Depends(get_db)):
+    """DANGER ZONE — run a shell command INSIDE a container and return its output. Layered gates:
+    (1) off unless `GEODEPLOY_ENABLE_TERMINAL` is set; (2) admin only; (3) only whitelisted LEAF
+    containers (never api/celery — they hold the Docker socket); (4) 30s-bounded; (5) output-capped;
+    (6) audited. It's a container-scoped command runner, not a host shell."""
+    if not get_settings().geodeploy_enable_terminal:
+        raise HTTPException(403, "Terminal is disabled. Set GEODEPLOY_ENABLE_TERMINAL=true in .env and "
+                                 "redeploy to enable it.")
+    if name not in TERMINAL_ALLOWED:
+        raise HTTPException(400, f"Terminal is not allowed for '{name}'.")
+    command = (body.command or "").strip()
+    if not command:
+        raise HTTPException(400, "No command.")
+
+    import docker
+    try:
+        client = docker.from_env()
+        c = _resolve_container(client, name)
+        if c is None:
+            raise HTTPException(404, f"Container for '{name}' not found.")
+        # `timeout 30` bounds a runaway command (present on our images); output is combined + capped.
+        res = await run_in_threadpool(
+            lambda: c.exec_run(["sh", "-c", f"timeout 30 {command}"], tty=False, demux=False))
+        raw = res.output
+        out = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw or "")
+        exit_code = res.exit_code
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"exec failed: {exc}") from exc
+
+    if len(out) > 100_000:
+        out = out[:100_000] + "\n… (truncated)"
+    await record_audit(db, user, "admin.terminal.exec", "service", None,
+                       {"service": name, "command": command[:500], "exit_code": exit_code})
+    return {"service": name, "exit_code": exit_code, "output": out}
+
+
 @router.post("/services/{name}/{action}")
 async def control_service(name: str, action: str, _: User = Depends(require_admin)):
     """Start / stop / restart a GeoDeploy container (Coolify-style controls)."""
@@ -407,50 +455,6 @@ async def service_logs(name: str, tail: int = 200, timestamps: bool = True,
     except Exception as exc:
         raise HTTPException(500, f"Failed to read logs for {name}: {exc}") from exc
     return {"service": name, "tail": tail, "timestamps": timestamps, "logs": text}
-
-
-class ExecRequest(BaseModel):
-    command: str
-
-
-@router.post("/services/{name}/exec")
-async def service_exec(name: str, body: ExecRequest, user: User = Depends(require_admin),
-                       db: AsyncSession = Depends(get_db)):
-    """DANGER ZONE — run a shell command INSIDE a container and return its output. Layered gates:
-    (1) off unless `GEODEPLOY_ENABLE_TERMINAL` is set; (2) admin only; (3) only whitelisted LEAF
-    containers (never api/celery — they hold the Docker socket); (4) 30s-bounded; (5) output-capped;
-    (6) audited. It's a container-scoped command runner, not a host shell."""
-    if not get_settings().geodeploy_enable_terminal:
-        raise HTTPException(403, "Terminal is disabled. Set GEODEPLOY_ENABLE_TERMINAL=true in .env and "
-                                 "redeploy to enable it.")
-    if name not in TERMINAL_ALLOWED:
-        raise HTTPException(400, f"Terminal is not allowed for '{name}'.")
-    command = (body.command or "").strip()
-    if not command:
-        raise HTTPException(400, "No command.")
-
-    import docker
-    try:
-        client = docker.from_env()
-        c = _resolve_container(client, name)
-        if c is None:
-            raise HTTPException(404, f"Container for '{name}' not found.")
-        # `timeout 30` bounds a runaway command (present on our images); output is combined + capped.
-        res = await run_in_threadpool(
-            lambda: c.exec_run(["sh", "-c", f"timeout 30 {command}"], tty=False, demux=False))
-        raw = res.output
-        out = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw or "")
-        exit_code = res.exit_code
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(500, f"exec failed: {exc}") from exc
-
-    if len(out) > 100_000:
-        out = out[:100_000] + "\n… (truncated)"
-    await record_audit(db, user, "admin.terminal.exec", "service", None,
-                       {"service": name, "command": command[:500], "exit_code": exit_code})
-    return {"service": name, "exit_code": exit_code, "output": out}
 
 
 @router.post("/reload-martin")

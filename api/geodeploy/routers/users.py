@@ -35,8 +35,10 @@ RESET_TTL = timedelta(hours=24)
 
 
 def utcnow() -> datetime:
-    """Naive UTC — matches how SQLite stores the model's DateTime columns."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    """Naive UTC for DateTime columns. Delegates to the one canonical helper — Postgres REJECTS an
+    aware datetime in a TIMESTAMP WITHOUT TIME ZONE column, so this must not drift."""
+    from ..timeutil import naive_utcnow
+    return naive_utcnow()
 
 
 def new_token() -> str:

@@ -128,7 +128,7 @@ def _mark_raster_error(layer_id: int, job_id: str, message: str) -> None:
 async def _finalize_portal(portal_id: int) -> None:
     """Build the static bundle from the portal's persisted config (reusing the router's rebuild) and
     mark it published — the same effect as POST /portals/{id}/publish, driven from the worker."""
-    from datetime import datetime, timezone
+    from ..timeutil import naive_utcnow
 
     from sqlalchemy import select
 
@@ -143,5 +143,5 @@ async def _finalize_portal(portal_id: int) -> None:
             return
         await _rebuild_bundle(portal, db)
         portal.published = True
-        portal.published_at = datetime.now(timezone.utc)
+        portal.published_at = naive_utcnow()   # column is TIMESTAMP WITHOUT TIME ZONE
         await db.commit()
