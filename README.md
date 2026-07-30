@@ -1,58 +1,103 @@
+<div align="center">
+
 # GeoDeploy
 
-**Self-hosted spatial data management and geoportal builder.**
+**Self-hosted spatial data platform and geoportal builder.**
 
-Install on your VPS. Upload your data. Publish a live geoportal. Own everything.
+Upload your data, style it, and publish a map anyone can use — on your own server, with your own
+domain, and no per-seat pricing.
 
-> GeoDeploy is to spatial data what Coolify is to app deployment — a control panel that makes complex infrastructure simple, running entirely on your own server.
+[Documentation](https://bravemaster3.github.io/GeoDeploy/) ·
+[Getting started](https://bravemaster3.github.io/GeoDeploy/getting-started/) ·
+[Access your data](https://bravemaster3.github.io/GeoDeploy/data-access/) ·
+[Roadmap](https://bravemaster3.github.io/GeoDeploy/roadmap/)
+
+</div>
 
 ---
 
-## The problem
+## What it is
 
-A GIS coordinator at a development project in Cotonou has PostGIS data and GeoTIFFs. They need a live public portal as a project deliverable. They have a modest VPS budget. They cannot hire a developer.
-
-Existing tools require deep technical knowledge (GeoNode, GeoServer) or charge enterprise prices and take data custody (ArcGIS Online, CARTO).
-
-GeoDeploy should take this person from a blank VPS to a published portal in under 30 minutes.
-
-## What it does
-
-- **One-command install** — `curl install.sh | bash` and a browser opens
-- **Browser-only management** — no terminal, no Docker knowledge, no database configuration
-- **Vector upload** — Shapefile, GeoJSON, GeoPackage → PostGIS → live MVT tiles via Martin
-- **Raster upload** — GeoTIFF → auto Cloud-Optimised GeoTIFF → MinIO → live XYZ tiles via TiTiler
-- **Portal builder** — drag layers, pick a template, set access control, click Publish
-- **Template system** — official + community templates, all MIT-licensed
-- **Embeddable** — one `<iframe>` line to embed any portal in any website
-
-## Quick install
+One command gives you a complete spatial stack on a single Linux server: a spatial database, object
+storage, vector and raster tile services, a web dashboard, and the portals you publish from it.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/bravemaster3/geodeploy/main/installer/install.sh | bash
 ```
 
-Requires: Linux VPS, Docker + Docker Compose. Tested on Hetzner CX31 (€11/month).
+A setup wizard takes it from there — database, storage, admin account — and you are uploading data a
+couple of minutes later. No terminal, no Docker knowledge, no database configuration.
+
+## What you get
+
+- **Bring data in.** Shapefile, GeoPackage, GeoJSON, CSV, GeoParquet, GeoTIFF. Large files upload
+  straight to object storage, so multi-gigabyte datasets are not a special case.
+- **Publish portals.** Choose an experience — a web map, a scrollytelling story, or a searchable
+  catalog — arrange the layers, set who can see it, publish. Each gets its own URL, and any portal
+  embeds in another site with one `<iframe>`.
+- **Share data properly.** Layers you mark public are readable by standard clients over open
+  standards, so QGIS, Python and R consume them directly with no export step.
+- **Work as a team.** Roles from viewer to owner, per-layer visibility, invitation links, scoped API
+  tokens, and an audit log of who changed what.
+- **Operate it from the browser.** Service logs, a terminal, scheduled backups to a separate
+  destination, an in-app restore, and one-button updates.
+
+## How data flows
+
+```
+upload ──▶ PostGIS or GeoParquet ──▶ tiles ──▶ portal editor ──▶ published portal
+                    │
+                    └──▶ OGC API - Features · STAC · COG · PMTiles ──▶ QGIS · Python · R
+```
+
+Vector data lands in PostGIS or as GeoParquet depending on its size and how you will use it; rasters
+become Cloud-Optimized GeoTIFFs. Everything is then reachable two ways: through the portals you
+publish, and through open standards other tools already speak.
+
+## Requirements
+
+A Linux server with Docker and Docker Compose. The reference setup is a small VPS — 2 vCPU, 8 GB RAM,
+80 GB disk — which comfortably runs a real geoportal with real data on it. A domain name is optional
+but recommended.
+
+## Documentation
+
+Full documentation: **<https://bravemaster3.github.io/GeoDeploy/>**
+
+| | |
+|---|---|
+| [Getting started](https://bravemaster3.github.io/GeoDeploy/getting-started/) | Install, set up, publish your first portal |
+| [Uploading data](https://bravemaster3.github.io/GeoDeploy/uploading/) | Formats, the two vector backends, large files |
+| [Portals and experiences](https://bravemaster3.github.io/GeoDeploy/portals/) | Web map, story map, catalog; layout and access |
+| [Users, roles and sharing](https://bravemaster3.github.io/GeoDeploy/users-and-sharing/) | Roles, visibility, tokens, audit log |
+| [Access from other tools](https://bravemaster3.github.io/GeoDeploy/data-access/) | QGIS, DuckDB, Python — which standard for which job |
+| [API reference](https://bravemaster3.github.io/GeoDeploy/api-reference/) | Tokens, scopes, and the live OpenAPI docs |
+| [Updating](https://bravemaster3.github.io/GeoDeploy/updating/) | Self-update, services, the Infrastructure panel |
+| [Backups and restore](https://bravemaster3.github.io/GeoDeploy/backups/) | Scheduled backups and in-app restore |
+
+Every instance also serves its own interactive API documentation at `/api/docs`.
 
 ## Stack
 
 | Layer | Technology |
 |-------|-----------|
 | API | FastAPI + Celery + Redis |
-| Database | PostGIS 16 (provisioned automatically) |
-| Vector tiles | Martin (Rust) |
+| State + spatial database | PostgreSQL / PostGIS (provisioned automatically) |
+| Vector tiles | Martin |
 | Raster tiles | TiTiler |
-| Object storage | MinIO (S3-compatible, provisioned automatically) |
-| Analytics | DuckDB (embedded) |
+| Object storage | MinIO, S3-compatible (provisioned automatically) |
+| Columnar analytics | DuckDB (embedded) |
 | Frontend | Vue 3 + MapLibre GL JS + deck.gl |
-| Infrastructure | Docker Compose, Nginx |
+| Infrastructure | Docker Compose, nginx |
 
-## License
+## Contributing
 
-MIT — free forever, no feature restrictions on self-hosted version.
+Issues and pull requests are welcome. Templates are the easiest place to start —
+see [templates/community/CONTRIBUTING.md](templates/community/CONTRIBUTING.md).
 
-Optional [GeoDeploy Cloud](https://geodeploy.io) hosting for teams who want managed infrastructure.
+Developer notes live in each folder's `README.md`; `CLAUDE.md` describes how the repository is
+organised and kept current.
 
----
+## Licence
 
-[Getting started](docs/getting-started.md) · [API reference](docs/api-reference.md) · [Template contributing](templates/community/CONTRIBUTING.md)
+MIT — free forever, with no feature restrictions on the self-hosted version.

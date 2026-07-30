@@ -571,6 +571,7 @@ class PortalOut(BaseModel):
     initial_view: dict[str, Any] | None = None
     access_type: str
     basemap: str | None = None
+    thumbnail_url: str | None = None   # card snapshot; None → the card's gradient fallback
     published: bool
     published_at: datetime | None
     created_at: datetime

@@ -421,14 +421,55 @@ async def upload_portal_asset(
     return {"url": f"/api/portals/{portal.id}/assets/{name}"}
 
 
+@router.post("/{portal_id}/thumbnail")
+async def upload_portal_thumbnail(
+    portal_id: int,
+    file: UploadFile = File(...),
+    user: User = Depends(require_scope("portal:publish")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Store the card snapshot captured in the browser at publish time.
+
+    Separate from /assets because the semantics differ: an About image is one of many and keeps its
+    random name forever, whereas a portal has exactly ONE thumbnail that is replaced on every
+    re-publish. Writing to a FIXED filename means republishing overwrites rather than leaving an
+    orphaned file per publish, and the stored URL carries a `?v=` cache-buster so browsers (and any
+    CDN in front) pick up the new image despite the unchanged path.
+    """
+    portal = await _get_portal(portal_id, db)
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "Empty image.")
+    if len(data) > _MAX_ASSET_SIZE:
+        raise HTTPException(400, "Image too large (max 10 MB).")
+
+    settings = get_settings()
+    asset_dir = f"{settings.data_dir}/portal_assets/{portal.id}"
+    os.makedirs(asset_dir, exist_ok=True)
+    # Written via a temp file + os.replace so a card never reads a half-written image: the swap is
+    # atomic, and a failed write leaves the previous thumbnail intact.
+    dest = os.path.join(asset_dir, "thumbnail.webp")
+    tmp = dest + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, dest)
+
+    portal.thumbnail_url = f"/api/portals/{portal.id}/assets/thumbnail.webp?v={int(naive_utcnow().timestamp())}"
+    await db.commit()
+    return {"url": portal.thumbnail_url}
+
+
 @router.get("/{portal_id}/assets/{filename}")
 async def portal_asset(portal_id: int, filename: str):
     """PUBLIC image serving for About documentation (published portals are unauthenticated).
-    The filename is a server-minted uuid + extension — the strict pattern below is the
-    traversal guard AND limits exposure to exactly what the upload endpoint can create."""
+    The filename is a server-minted uuid + extension, or the one fixed name the thumbnail endpoint
+    writes — the strict pattern below is the traversal guard AND limits exposure to exactly what the
+    upload endpoints can create. `thumbnail.webp` is listed explicitly rather than loosening the
+    pattern to arbitrary names, so the guard stays an allow-list."""
     import re
     from fastapi.responses import FileResponse
-    if not re.fullmatch(r"[0-9a-f]{32}\.(png|jpe?g|gif|webp)", filename):
+    if not (re.fullmatch(r"[0-9a-f]{32}\.(png|jpe?g|gif|webp)", filename)
+            or filename == "thumbnail.webp"):
         raise HTTPException(404, "Not found.")
     settings = get_settings()
     path = f"{settings.data_dir}/portal_assets/{portal_id}/{filename}"

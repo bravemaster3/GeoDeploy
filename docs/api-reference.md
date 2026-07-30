@@ -42,7 +42,7 @@ user and their tokens weaken with them.
 | `portal:publish` | editor | publish and unpublish portals |
 | `users:admin` | admin | user and role management |
 
-A worked end-to-end client lives in [`examples/geodeploy_cli.py`](../examples/geodeploy_cli.py) —
+A worked end-to-end client lives in [`examples/geodeploy_cli.py`](https://github.com/bravemaster3/GeoDeploy/blob/main/examples/geodeploy_cli.py) —
 whoami, upload, portal get/set, add/remove layer, set sharing, publish.
 
 ## Public read surfaces (no authentication)

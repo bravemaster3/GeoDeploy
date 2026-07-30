@@ -248,6 +248,13 @@ export const uploadPortalAsset = (id, file) => {
   form.append('file', file)
   return api.post(`/portals/${id}/assets`, form, { headers: { 'Content-Type': 'multipart/form-data' } })
 }
+// Card snapshot captured in the editor preview at publish time. Separate from uploadPortalAsset:
+// a portal has exactly ONE thumbnail, written to a fixed filename so re-publishing overwrites it.
+export const uploadPortalThumbnail = (id, blob) => {
+  const fd = new FormData()
+  fd.append('file', blob, 'thumbnail.webp')
+  return api.post(`/portals/${id}/thumbnail`, fd)
+}
 export const publishPortal = (id) => api.post(`/portals/${id}/publish`)
 export const previewPortal = (id, data) => api.post(`/portals/${id}/preview`, data)  // R2: build the unlisted preview bundle
 export const unpublishPortal = (id) => api.post(`/portals/${id}/unpublish`)

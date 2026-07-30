@@ -204,9 +204,12 @@ async def raster_multipart_complete(body: MultipartComplete,
     from ...services import minio as minio_svc
     if not (body.s3_key or "").startswith(f"rasters/{user.id}/"):
         raise HTTPException(400, "Invalid storage key.")
-    await run_in_threadpool(
-        minio_svc.complete_multipart, body.s3_key, body.upload_id,
-        [{"PartNumber": p.part_number, "ETag": p.etag} for p in body.parts])
+    # `model_dump()`, exactly as the vector path does — NOT a hand-built {"PartNumber", "ETag"} dict.
+    # complete_multipart() takes the schema's own field names ({part_number, etag}) and does the
+    # boto3 casing itself, so converting here made it look up a key that no longer existed and every
+    # large raster upload died with KeyError: 'part_number' at the final assemble step.
+    await run_in_threadpool(minio_svc.complete_multipart, body.s3_key, body.upload_id,
+                            [p.model_dump() for p in body.parts])
     return {"s3_key": body.s3_key}
 
 

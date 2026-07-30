@@ -404,6 +404,12 @@ class Portal(Base):
     # V-11 R3 colour theme: {mode:auto|light|dark, accent:#hex, font:sans|serif}. NULL = the template's
     # own theme.css unchanged. Baked as CSS-variable overrides AFTER theme.css (so it wins).
     theme: Mapped[str | None] = mapped_column(Text)
+    # Card thumbnail: a snapshot of the PUBLISHED map, captured in the browser at publish time (the
+    # editor already renders the real portal in an iframe) and written to a FIXED filename, so
+    # re-publishing overwrites instead of orphaning a file. Carries a ?v= cache-buster. NULL = the
+    # card falls back to its gradient — a portal published before this existed, or one whose capture
+    # failed, must still render.
+    thumbnail_url: Mapped[str | None] = mapped_column(String(512))
     # DORMANT: portals dropped the separate workspace-visibility control (it duplicated access_type
     # confusingly — a portal's audience is its published access_type, below). Kept at 'organization'
     # for every portal (reset by a migration); never written by the API. Data layers/sources still use

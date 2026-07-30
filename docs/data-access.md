@@ -1,7 +1,7 @@
 # Accessing GeoDeploy data from outside (QGIS, DuckDB, scripts)
 
-GeoDeploy is cloud-native: instead of running heavy XML-era OGC servers (WMS/WFS/WCS à la
-GeoServer), it shares data through formats clients read **directly over HTTP** — Cloud-Optimized
+GeoDeploy is cloud-native: rather than running heavy XML-era OGC services, it shares data through
+formats and APIs that clients read **directly over HTTP** — Cloud-Optimized
 GeoTIFF, XYZ tiles, and GeoParquet — discovered through a built-in **STAC catalog**, plus a
 standards-based **OGC API - Features** service (the WFS successor) so any GIS can read a layer
 with no GeoDeploy-specific knowledge.
@@ -157,28 +157,31 @@ FROM read_parquet([
   `/vsicurl/https://YOUR-HOST/api/data/vector/{id}/parquet/__cell=N/data_0.parquet`
   (GDAL ≥ 3.5 with the Parquet driver).
 
-## Comparison with GeoNode, honestly
+## Which standard for which job
 
-| | GeoNode | GeoDeploy |
-|---|---|---|
-| Catalog/discovery | GeoNode catalog + CSW | STAC API (this page) |
-| Raster data access | WCS (GeoServer) | COG over HTTP Range (`/vsicurl/`) |
-| Raster display | WMS/WMTS | TiTiler XYZ |
-| Vector display | WMS | Martin XYZ vector tiles / PMTiles |
-| Vector data access | WFS | **OGC API - Features** (the WFS successor) + GeoParquet over HTTP Range + GeoJSON/GeoArrow viewport queries |
-| Server weight | GeoServer (~1–2 GB JVM) | zero additional services |
+Every access path here is a modern, HTTP-native standard. There is one for each kind of job:
 
-The **XML-era** OGC endpoints (WMS/WFS/CSW) are deliberately **not** provided — they need a
-GeoServer-class stack, and their modern replacements are here: OGC API - Features instead of WFS,
-COG over Range instead of WCS, XYZ/TileJSON instead of WMS. Clients that specifically require the
-old protocols are out of scope for GeoDeploy's cheap-VPS design. See
-`notes_temp/notes_for_future.md` §0 / §0h for the full reasoning.
+| You want to… | Use |
+|---|---|
+| Read features with their attributes | **OGC API - Features** |
+| Draw a large vector layer quickly | **Vector tiles** (TileJSON) or **PMTiles** |
+| Read raster pixels, or a subset of them | **Cloud-Optimized GeoTIFF** over HTTP Range |
+| Draw a raster quickly | **XYZ raster tiles** |
+| Analyse a large table columnar-style | **GeoParquet** |
+| Discover what exists and its metadata | **STAC** |
+
+The XML-era OGC services — WMS, WFS, WCS, CSW — are deliberately **not** provided. Each has a
+modern replacement in the table above that clients read directly over HTTP, without a heavyweight
+service in front of it: OGC API - Features instead of WFS, COG over Range instead of WCS,
+XYZ/TileJSON instead of WMS, STAC instead of CSW. Keeping to those is what lets GeoDeploy run on a
+small server. Clients that specifically require the older protocols are out of scope.
 
 ## Not yet implemented
 
 - Private catalog access via API token (shared layers are public; unshared layers are simply
   not listed).
-- A GeoNode-style QGIS plugin (browse + one-click add). The STAC connection covers most of it.
+- A QGIS plugin (browse the catalog and add a layer in one click). The STAC connection already
+  covers most of this.
 - Single-file GeoParquet download of a partitioned dataset (merge-on-demand).
 - OGC API - Features extensions: CRS negotiation (Part 2), CQL2 filtering (Part 3), transactions,
   and property filters/queryables. Core + GeoJSON only, as `/api/ogc/conformance` states.

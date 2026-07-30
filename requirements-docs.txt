@@ -1,0 +1,3 @@
+# Documentation site only — not installed by the API image.
+# Pinned to a major so a theme release cannot silently restyle the published site.
+mkdocs-material>=9.5,<10

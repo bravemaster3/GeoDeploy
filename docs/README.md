@@ -16,13 +16,13 @@ End-user / operator documentation (not developer internals — those live in eac
 - The root `README.md` links here, including to `api-reference.md` (created 2026-07-30 — that link was dead before).
 
 ## Current status & known issues
-- **No docs site yet.** These are plain markdown read on GitHub. MkDocs Material + a Pages workflow
-  would render them as a proper site (GeoLibre does exactly this; GeoLens has no docs site at all).
-  Not set up — decide before writing much more.
-- **Coverage gaps — all of these shipped with no user documentation:** portals & template experiences
-  (webmap / storymap / catalog), users + roles + sharing, API tokens beyond `api-reference.md`, the
-  activity log, the Infrastructure panel and self-update, and the large-upload path (files over
-  ~100 MB bypass the API because a CDN caps request bodies — operator-relevant).
+- **Docs site is live.** `mkdocs.yml` + `.github/workflows/pages.yml` publish this folder to GitHub
+  Pages on every push to `main` that touches `docs/`. The workflow runs `mkdocs build --strict`, so a
+  broken internal link FAILS the build — links to files OUTSIDE `docs/` must be absolute GitHub URLs.
+  `docs/README.md` (this file) is excluded from the site via `exclude_docs`.
+- **Remaining gaps:** per-format upload troubleshooting, embedding a portal in another site, and a
+  worked tutorial end-to-end. Competitor comparisons are deliberately absent — describe what
+  GeoDeploy does, not what other tools do not.
 - User-facing docs; for build quirks and debugging history use `notes_temp/notes_for_future.md` instead.
 
 ## Last updated

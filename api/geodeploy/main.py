@@ -40,6 +40,7 @@ async def lifespan(app: FastAPI):
         try:
             async with eng.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
+                await conn.run_sync(_apply_pg_migrations)
             log.info("state database ready")
             # Publish the credentials that JUST WORKED to the shared volume, so the Celery worker
             # can reach the database no matter what its own (container-creation-time) environment
@@ -62,6 +63,36 @@ async def lifespan(app: FastAPI):
     _ensure_martin_config(settings)
 
     yield
+
+
+# ── Postgres additive migrations ──────────────────────────────────────────────────────────────
+# `Base.metadata.create_all` creates missing TABLES but never adds a column to a table that already
+# exists, so a new column would break every EXISTING install (queries select a column the database
+# does not have) while working perfectly on a fresh one. This list closes that gap.
+#
+# Rules for adding to it:
+#   * `ADD COLUMN IF NOT EXISTS` only — this runs on EVERY start and must be a no-op once applied.
+#   * Additive and nullable (or with a default). Never drop, rename or retype here: those need a
+#     real migration with a data step, and a destructive statement running unattended on every boot
+#     is how databases get lost.
+#   * Postgres dialect. The SQLite-era `_apply_schema_migrations` below is dead code kept for
+#     reference; do not extend it.
+_PG_MIGRATIONS = [
+    # Portal card thumbnail: a snapshot of the published map, captured in the browser at publish.
+    "ALTER TABLE portals ADD COLUMN IF NOT EXISTS thumbnail_url VARCHAR(512)",
+]
+
+
+def _apply_pg_migrations(conn) -> None:
+    """Apply the additive column migrations. Each runs independently so one failure cannot block the
+    rest, and a failure is logged rather than fatal — the API must keep serving (and the wizard must
+    stay reachable) even if a migration cannot be applied."""
+    from sqlalchemy import text
+    for stmt in _PG_MIGRATIONS:
+        try:
+            conn.execute(text(stmt))
+        except Exception:
+            log.exception("schema migration failed: %s", stmt)
 
 
 def _apply_schema_migrations(conn) -> None:

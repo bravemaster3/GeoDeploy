@@ -1,0 +1,94 @@
+site_name: GeoDeploy
+site_description: Self-hosted spatial data platform and geoportal builder — upload data, style it, publish a portal.
+site_url: https://bravemaster3.github.io/GeoDeploy/
+repo_name: bravemaster3/GeoDeploy
+repo_url: https://github.com/bravemaster3/GeoDeploy
+edit_uri: edit/main/docs/
+copyright: Open source, self-hosted.
+
+# Pinned explicitly so the Pages workflow's upload path can never drift from the build output.
+site_dir: site
+
+# docs/README.md is the folder's internal context note (see CLAUDE.md), not user documentation.
+exclude_docs: |
+  README.md
+
+theme:
+  name: material
+  language: en
+  icon:
+    logo: material/earth
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: green
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: green
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - content.code.copy
+    - content.action.edit
+    - search.highlight
+    - search.suggest
+    - toc.follow
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Guides:
+      - Portals and experiences: portals.md
+      - Users, roles and sharing: users-and-sharing.md
+      - Uploading data: uploading.md
+  - Sharing your data:
+      - Access from other tools: data-access.md
+      - API reference: api-reference.md
+  - Operating:
+      - Updating: updating.md
+      - Backups and restore: backups.md
+      - Performance tuning: performance-tuning.md
+  - Roadmap: roadmap.md
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  # The custom fence is what makes ```mermaid render as a diagram instead of a code block.
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/bravemaster3/GeoDeploy

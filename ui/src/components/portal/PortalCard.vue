@@ -1,9 +1,18 @@
 <template>
   <div class="card overflow-hidden group">
-    <div class="h-28 bg-gradient-to-br from-brand-700 to-brand-500 relative">
-      <div class="absolute inset-0 flex items-center justify-center">
+    <!-- A snapshot of the actual published map, captured in the editor at publish time. The gradient
+         stays as the fallback for portals published before this existed, drafts, and captures that
+         failed — the card must always render something. -->
+    <div class="h-28 bg-gradient-to-br from-brand-700 to-brand-500 relative overflow-hidden">
+      <img v-if="portal.thumbnail_url" :src="portal.thumbnail_url" alt=""
+        class="absolute inset-0 w-full h-full object-cover" loading="lazy" @error="thumbFailed = true"
+        v-show="!thumbFailed" />
+      <div v-if="!portal.thumbnail_url || thumbFailed" class="absolute inset-0 flex items-center justify-center">
         <GlobeIcon class="w-10 h-10 text-white/40" />
       </div>
+      <!-- Keeps the "Live" pill legible over an arbitrary map image. -->
+      <div v-if="portal.thumbnail_url && !thumbFailed"
+        class="absolute inset-x-0 top-0 h-10 bg-gradient-to-b from-black/45 to-transparent"></div>
       <div v-if="portal.published" class="absolute top-2 right-2">
         <span class="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full font-medium">Live</span>
       </div>
@@ -47,7 +56,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { GlobeIcon, TrashIcon, ExternalLinkIcon, KeyIcon, UsersIcon, UserIcon } from '@/views/icons'
 import { useAuthStore } from '@/stores/auth'
 
@@ -55,6 +64,10 @@ const props = defineProps({ portal: Object })
 defineEmits(['edit', 'publish', 'unpublish', 'delete'])
 
 const auth = useAuthStore()
+
+// A thumbnail can 404 (asset pruned, portal restored from a backup without its assets). Fall back to
+// the gradient rather than leaving a broken image in the card.
+const thumbFailed = ref(false)
 
 // The portal description is MARKDOWN (written in the About editor), so printing it raw put things
 // like "![clean-black-world-map…](…)" on the card. Reduced to a plain-text summary: images are

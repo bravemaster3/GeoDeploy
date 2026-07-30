@@ -231,6 +231,11 @@
     center: [0, 20],
     zoom: 2,
     attributionControl: false,
+    // Needed for getCanvas().toDataURL() to return pixels rather than a blank image: WebGL is free
+    // to discard the drawing buffer after compositing unless asked not to. It costs real rendering
+    // performance, so it is enabled ONLY in the editor preview, which is where the publish snapshot
+    // is taken. Published portals are unaffected.
+    preserveDrawingBuffer: EDIT_MODE,
   });
 
   // Zoom/compass added later (after the basemap + tools controls) so the basemap
@@ -2803,6 +2808,30 @@
       });
       wrap.appendChild(placeOverlay);
     }
+    // Card thumbnail: hand the editor a picture of the map as it currently renders. Waiting for
+    // 'idle' matters — tiles and the deck.gl overlay load asynchronously, and capturing before then
+    // yields a half-drawn map or bare basemap. The reply ALWAYS goes out, with dataUrl null on
+    // failure, so the editor never waits on a message that will not arrive.
+    function sendSnapshot(requestId) {
+      const reply = function (dataUrl) { post({ type: 'snapshot', requestId: requestId, dataUrl: dataUrl }); };
+      let done = false;
+      const grab = function () {
+        if (done) return;
+        done = true;
+        try {
+          map.triggerRepaint();
+          reply(map.getCanvas().toDataURL('image/webp', 0.75));
+        } catch (err) {
+          console.warn('[geodeploy] snapshot failed', err);
+          reply(null);
+        }
+      };
+      // A map that is already idle fires no further 'idle', so race a timeout against it — and the
+      // timeout doubles as the cap on how long publishing can be held up by a slow tile server.
+      map.once('idle', grab);
+      setTimeout(grab, 2500);
+    }
+
     window.addEventListener('message', function (e) {
       if (e.origin !== location.origin || !e.data || e.data.gd == null) return;
       const d = e.data;
@@ -2810,6 +2839,7 @@
       else if (d.type === 'cancelPlace') clearPlace();
       else if (d.type === 'theme') applyThemeLive(d.theme);   // B: live theme, no reload
       else if (d.type === 'zoomall') zoomToAllLayers();
+      else if (d.type === 'snapshot') sendSnapshot(d.requestId);
       else if (d.type === 'home') goHome();
       else if (d.type === 'fitbbox' && Array.isArray(d.bbox) && d.bbox.length === 4) {
         try { map.fitBounds([[d.bbox[0], d.bbox[1]], [d.bbox[2], d.bbox[3]]], { padding: 30, duration: 500 }); } catch (err) {}

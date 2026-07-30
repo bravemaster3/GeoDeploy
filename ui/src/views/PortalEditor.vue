@@ -469,7 +469,7 @@ import TipTapImage from '@tiptap/extension-image'
 import { Markdown } from 'tiptap-markdown'
 import { usePortalsStore } from '@/stores/portals'
 import { useDataStore } from '@/stores/data'
-import { listTemplates, listBasemaps, getRasterStats, getVectorFeatures, identifyVectorFeatures, uploadPortalAsset, previewPortal, syncSession } from '@/api'
+import { listTemplates, listBasemaps, getRasterStats, getVectorFeatures, identifyVectorFeatures, uploadPortalAsset, uploadPortalThumbnail, previewPortal, syncSession } from '@/api'
 import { useMaplibre } from '@/composables/useMaplibre'
 import maplibregl from 'maplibre-gl'
 import { MapboxOverlay } from '@deck.gl/mapbox'
@@ -1072,6 +1072,11 @@ function postToFrame(msg) {
 function onFrameMessage(e) {
   if (e.origin !== location.origin || !e.data || e.data.gd == null) return
   const d = e.data
+  if (d.type === 'snapshot') {
+    const pending = snapshotWaiters.get(d.requestId)
+    if (pending) { snapshotWaiters.delete(d.requestId); pending(d.dataUrl || null) }
+    return
+  }
   if (d.type === 'view' && d.view) lastView.value = d.view
 }
 onMounted(() => window.addEventListener('message', onFrameMessage))
@@ -1920,6 +1925,43 @@ async function save() {
   }
 }
 
+// Card thumbnail. The editor preview is the REAL published portal in an iframe, so a picture of its
+// canvas is a picture of the portal — no headless browser on the server, no second renderer to keep
+// in sync with portal.js. Keyed by requestId so a stale reply from an earlier attempt cannot resolve
+// a later one.
+const snapshotWaiters = new Map()
+let snapshotSeq = 0
+function requestSnapshot(timeoutMs = 6000) {
+  return new Promise((resolve) => {
+    const w = previewFrame.value && previewFrame.value.contentWindow
+    if (!w) return resolve(null)
+    const requestId = ++snapshotSeq
+    snapshotWaiters.set(requestId, resolve)
+    postToFrame({ type: 'snapshot', requestId })
+    // The iframe waits for map idle before capturing, so it can legitimately take a few seconds on
+    // slow tiles. This is the outer guarantee that publishing is never blocked by a reply that
+    // never comes.
+    setTimeout(() => {
+      if (snapshotWaiters.delete(requestId)) resolve(null)
+    }, timeoutMs)
+  })
+}
+
+async function captureThumbnail() {
+  try {
+    const dataUrl = await requestSnapshot()
+    if (!dataUrl || !dataUrl.startsWith('data:image/')) return
+    const blob = await (await fetch(dataUrl)).blob()
+    // A blank/near-empty canvas serialises to a tiny file; storing it would replace a good
+    // thumbnail with a grey rectangle, so keep the previous one instead.
+    if (blob.size < 2048) return
+    await uploadPortalThumbnail(portal.value.id, blob)
+  } catch (err) {
+    // Never fail a publish over a thumbnail — the card falls back to its gradient.
+    console.warn('thumbnail capture failed', err)
+  }
+}
+
 async function handlePublish() {
   await save()
   if (saveMsg.value?.type === 'err') return
@@ -1927,6 +1969,9 @@ async function handlePublish() {
   try {
     const updated = await portalsStore.publish(portal.value.id)
     portal.value = updated
+    // AFTER publishing, so a failed publish leaves no thumbnail for a portal that isn't live, and
+    // awaited so the Portals list shows the new card image immediately on navigating back.
+    await captureThumbnail()
   } catch (err) {
     saveMsg.value = { type: 'err', text: err.response?.data?.detail || err.message }
   } finally {
