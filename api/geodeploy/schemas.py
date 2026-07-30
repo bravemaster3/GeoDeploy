@@ -202,6 +202,20 @@ class PortalRefOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class DeploymentRunOut(BaseModel):
+    id: int
+    status: str
+    trigger: str
+    actor_name: str | None
+    from_sha: str | None
+    to_sha: str | None
+    message: str | None
+    started_at: datetime
+    finished_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
 class BackupSettingsIn(BaseModel):
     """Destination + schedule. `secret_key` is WRITE-ONLY: blank means "keep the stored one", and
     it is never echoed back (same rule as the SMTP/OIDC secrets)."""

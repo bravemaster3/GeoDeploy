@@ -129,6 +129,8 @@ def _apply_schema_migrations(conn) -> None:
         "ALTER TABLE vector_layers ADD COLUMN uid VARCHAR(32)",
         "UPDATE vector_layers SET uid = lower(hex(randomblob(6))) WHERE uid IS NULL OR uid = ''",
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_vector_layers_uid ON vector_layers (uid)",
+        # Deployment history (2026-07-30): `deployment_runs` is a NEW table, created by
+        # create_all — no ALTER needed. Listed here only so the migration log tells the story.
         # Backups (2026-07-30). Destination S3 + schedule + retention. `backup_runs` is a NEW
         # table (created by create_all, no entry needed); these are the setup_config additions.
         "ALTER TABLE setup_config ADD COLUMN backup_enabled BOOLEAN DEFAULT 0",

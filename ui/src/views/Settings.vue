@@ -77,79 +77,11 @@
       </section>
 
       <!-- Infrastructure health (admin/owner — service control is require_admin server-side) -->
-      <section v-if="auth.isAdmin" class="card overflow-hidden">
-        <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
-          <span class="w-9 h-9 rounded-lg bg-indigo-500/15 text-indigo-400 flex items-center justify-center flex-shrink-0">
-            <ServerIcon class="w-5 h-5" />
-          </span>
-          <div class="flex-1 min-w-0">
-            <h2 class="text-sm font-semibold text-foreground">Infrastructure</h2>
-            <p class="text-xs text-muted-foreground/70">Container health &amp; controls</p>
-          </div>
-          <button @click="systemStore.refreshHealth()" class="btn-secondary text-xs px-3 py-1.5">
-            <RefreshIcon class="w-3.5 h-3.5" /> Refresh
-          </button>
-          <button @click="reloadMartin" :disabled="martinBusy" class="btn-secondary text-xs px-3 py-1.5">
-            {{ martinBusy ? 'Reloading…' : 'Reload Martin' }}
-          </button>
-        </header>
-        <div class="p-2">
-          <div v-if="!systemStore.health.length" class="px-3 py-6 text-sm text-muted-foreground/70 text-center">Loading…</div>
-          <div v-for="svc in systemStore.health" :key="svc.name"
-            class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-muted/60">
-            <span class="w-2 h-2 rounded-full flex-shrink-0" :class="dotClass(svc.status)" />
-            <span class="text-sm font-medium text-foreground/85 capitalize flex-1 min-w-0 truncate">{{ svc.name }}</span>
-            <span class="inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-full" :class="pillClass(svc.status)">
-              {{ svc.status }}
-            </span>
-            <div v-if="svc.controllable" class="flex items-center gap-1 w-16 justify-end">
-              <button v-if="!['running','healthy'].includes(svc.status)"
-                @click="svcAction(svc.name, 'start')" :disabled="busySvc === svc.name"
-                class="svc-btn text-green-400" title="Start">▶</button>
-              <button v-else @click="svcAction(svc.name, 'stop')" :disabled="busySvc === svc.name"
-                class="svc-btn text-red-500" title="Stop">■</button>
-              <button @click="svcAction(svc.name, 'restart')" :disabled="busySvc === svc.name"
-                class="svc-btn text-muted-foreground" title="Restart">↻</button>
-            </div>
-            <div v-else class="w-16" />
-          </div>
-          <p v-if="martinMsg" class="px-3 pt-1 text-xs" :class="martinMsg.ok ? 'text-green-400' : 'text-red-400'">
-            {{ martinMsg.text }}
-          </p>
-        </div>
-      </section>
+      <!-- Everything per-service — status, actions, logs, terminal, deployments — in ONE place.
+           Replaces the separate health list / logs card / danger-zone terminal, which each made
+           you pick the service again. -->
+      <InfrastructurePanel />
 
-      <!-- Logs (admin) — read-only container output; the safe alternative to a shell -->
-      <section v-if="auth.isAdmin" class="card overflow-hidden">
-        <header class="flex flex-wrap items-center gap-2 px-5 py-3.5 border-b border-border/60">
-          <span class="w-9 h-9 rounded-lg bg-sky-500/15 text-sky-400 flex items-center justify-center flex-shrink-0">
-            <ServerIcon class="w-5 h-5" />
-          </span>
-          <div class="flex-1 min-w-0">
-            <h2 class="text-sm font-semibold text-foreground">Logs</h2>
-            <p class="text-xs text-muted-foreground/70">Recent container output (read-only)</p>
-          </div>
-          <select v-model="logs.service" @change="fetchLogs"
-                  class="text-xs rounded-md border border-border bg-background text-foreground px-2 py-1.5">
-            <option v-for="s in LOG_SERVICES" :key="s" :value="s">{{ s }}</option>
-          </select>
-          <select v-model.number="logs.tail" @change="fetchLogs"
-                  class="text-xs rounded-md border border-border bg-background text-foreground px-2 py-1.5">
-            <option :value="100">100</option>
-            <option :value="200">200</option>
-            <option :value="500">500</option>
-            <option :value="2000">2000</option>
-          </select>
-          <button @click="fetchLogs" :disabled="logs.loading" class="btn-secondary text-xs px-3 py-1.5">
-            <RefreshIcon class="w-3.5 h-3.5" /> {{ logs.loading ? 'Loading…' : 'Refresh' }}
-          </button>
-        </header>
-        <div class="p-2">
-          <pre class="text-[11px] leading-relaxed font-mono whitespace-pre-wrap break-words max-h-96 overflow-auto rounded-lg bg-[#0b0f14] text-slate-200 p-3 m-0">{{ logs.text || 'Choose a service and press Refresh.' }}</pre>
-        </div>
-      </section>
-
-      <!-- Storage (admin/owner — storage-stats is require_admin server-side) -->
       <section v-if="auth.isAdmin && systemStore.stats" class="card overflow-hidden">
         <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
           <span class="w-9 h-9 rounded-lg bg-amber-500/15 text-amber-400 flex items-center justify-center flex-shrink-0">
@@ -192,44 +124,6 @@
         </div>
       </section>
 
-      <!-- Danger Zone (admin) — the opt-in, gated in-container terminal -->
-      <section v-if="auth.isAdmin" class="rounded-xl border border-red-500/40 bg-red-500/[0.03] overflow-hidden">
-        <header class="flex items-center gap-3 px-5 py-3.5 border-b border-red-500/30">
-          <span class="w-9 h-9 rounded-lg bg-red-500/15 text-red-400 flex items-center justify-center flex-shrink-0">
-            <TrashIcon class="w-5 h-5" />
-          </span>
-          <div class="flex-1 min-w-0">
-            <h2 class="text-sm font-semibold text-red-400">Danger Zone</h2>
-            <p class="text-xs text-muted-foreground/70">Powerful tools — use with care.</p>
-          </div>
-        </header>
-        <div class="p-5 space-y-3">
-          <div>
-            <h3 class="text-sm font-semibold text-foreground">Container terminal</h3>
-            <p class="text-xs text-muted-foreground/70 mt-0.5">
-              Run a shell command inside a service container (e.g. <code class="font-mono">psql -c "…"</code>,
-              <code class="font-mono">redis-cli INFO</code>). <b>Off by default</b> — enable with
-              <code class="font-mono">GEODEPLOY_ENABLE_TERMINAL=true</code> in <code class="font-mono">.env</code>, then redeploy.
-              It never touches the host or the api/celery containers, and every command is audited.
-            </p>
-          </div>
-          <div class="flex flex-wrap gap-2">
-            <select v-model="term.service"
-                    class="text-xs rounded-md border border-border bg-background text-foreground px-2 py-1.5">
-              <option v-for="s in TERMINAL_SERVICES" :key="s" :value="s">{{ s }}</option>
-            </select>
-            <input v-model="term.command" @keyup.enter="runExec" spellcheck="false"
-                   placeholder='e.g. redis-cli INFO server'
-                   class="flex-1 min-w-[12rem] text-xs font-mono rounded-md border border-border bg-background text-foreground px-2.5 py-1.5" />
-            <button @click="runExec" :disabled="term.loading || !term.command.trim()"
-                    class="text-xs px-3 py-1.5 rounded-md border border-red-500/50 text-red-400 hover:bg-red-500/10 disabled:opacity-50">
-              {{ term.loading ? 'Running…' : 'Run' }}
-            </button>
-          </div>
-          <pre v-if="term.output !== null"
-               class="text-[11px] leading-relaxed font-mono whitespace-pre-wrap break-words max-h-80 overflow-auto rounded-lg bg-[#0b0f14] text-slate-200 p-3 m-0">{{ term.output || '(no output)' }}</pre>
-        </div>
-      </section>
       </div>
 
       <!-- Email tab (admin) -->
@@ -639,6 +533,7 @@ import api, { changePassword, logoutAll, controlService, getEmailSettings, sendT
               getBackupSettings, updateBackupSettings, testBackupDestination,
               listBackupRuns, startBackup } from '@/api'
 import TokenModal from '@/components/users/TokenModal.vue'
+import InfrastructurePanel from '@/components/infra/InfrastructurePanel.vue'
 
 const systemStore = useSystemStore()
 const auth = useAuthStore()

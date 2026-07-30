@@ -1,4 +1,6 @@
 import os
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -8,9 +10,9 @@ from starlette.concurrency import run_in_threadpool
 from ..config import get_settings
 from ..database import get_db
 from ..deps import require_admin
-from ..models import Portal, RasterLayer, SetupConfig, User, VectorLayer
-from ..schemas import (EmailSettings, EmailSettingsOut, OidcSettings, OidcSettingsOut,
-                       ServiceHealth, StorageStats)
+from ..models import DeploymentRun, Portal, RasterLayer, SetupConfig, User, VectorLayer
+from ..schemas import (DeploymentRunOut, EmailSettings, EmailSettingsOut, OidcSettings,
+                       OidcSettingsOut, ServiceHealth, StorageStats)
 from ..services import notifications
 from .common import record_audit
 from .users import request_origin
@@ -215,15 +217,23 @@ async def start_update(user: User = Depends(require_admin), db: AsyncSession = D
     except Exception as exc:
         raise HTTPException(500, f"Failed to launch the updater: {exc}") from exc
 
+    # History row. The API container is recreated by the update itself, so this is finalized later
+    # by whoever reads /admin/update/status and sees a terminal phase — not by this request.
+    try:
+        run = DeploymentRun(status="running", trigger="manual", actor_name=user.name,
+                            from_sha=_deployed_sha())
+        db.add(run)
+        await db.commit()
+    except Exception:
+        pass      # history must never block an update
+
     await record_audit(db, user, "admin.update.start", "system", None, {})
     return {"status": "started"}
 
 
-@router.get("/update/status")
-async def update_status(_: User = Depends(require_admin)):
-    """Progress the updater writes to `data/temp/update-status.json`. `phase` ∈ running | success |
-    rollingback | rolledback | error | idle. The API itself restarts mid-update, so the UI should
-    tolerate this endpoint being briefly unreachable while services come back."""
+def _read_update_status() -> dict:
+    """The updater's live progress file. Read from disk every time — the process that started the
+    update does not survive it, so nothing can be cached in memory."""
     import json as _json
     path = f"{get_settings().data_dir}/temp/update-status.json"
     try:
@@ -233,6 +243,60 @@ async def update_status(_: User = Depends(require_admin)):
         return {"phase": "idle", "message": "", "at": ""}
     except Exception as exc:
         return {"phase": "unknown", "message": str(exc), "at": ""}
+
+
+@router.get("/update/status")
+async def update_status(_: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    """Progress the updater writes to `data/temp/update-status.json`. `phase` ∈ running | success |
+    rollingback | rolledback | error | idle. The API itself restarts mid-update, so the UI should
+    tolerate this endpoint being briefly unreachable while services come back.
+
+    Also closes the open deployment-history row once the phase is terminal (see
+    `_reconcile_deployment`) — this poll is the first thing to run after the update finishes."""
+    status = _read_update_status()
+    await _reconcile_deployment(db, status)
+    return status
+
+
+_TERMINAL_PHASES = {"success": "success", "error": "error", "rolledback": "rolledback"}
+
+
+async def _reconcile_deployment(db: AsyncSession, status: dict) -> None:
+    """Close the open deployment row once the updater reaches a terminal phase.
+
+    Deliberately driven by whoever READS the status rather than by the updater: the API process
+    that started the update is gone by the time it finishes (the update recreates it), so nothing
+    in-process survives to write the result.
+    """
+    phase = (status or {}).get("phase")
+    final = _TERMINAL_PHASES.get(phase)
+    if not final:
+        return
+    try:
+        run = (await db.execute(select(DeploymentRun)
+                                .where(DeploymentRun.status == "running")
+                                .order_by(DeploymentRun.started_at.desc())
+                                .limit(1))).scalar_one_or_none()
+        if not run:
+            return
+        run.status = final
+        run.message = (status.get("message") or "")[:500]
+        run.to_sha = _deployed_sha()
+        run.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        await db.commit()
+    except Exception:
+        pass
+
+
+@router.get("/deployments", response_model=list[DeploymentRunOut])
+async def list_deployments(limit: int = 20, _: User = Depends(require_admin),
+                           db: AsyncSession = Depends(get_db)):
+    """Update history. Before finalizing, reconcile any row left 'running' by a finished update —
+    the process that started it did not survive to write the outcome."""
+    await _reconcile_deployment(db, _read_update_status())
+    rows = (await db.execute(select(DeploymentRun).order_by(DeploymentRun.started_at.desc())
+                             .limit(max(1, min(limit, 100))))).scalars().all()
+    return [DeploymentRunOut.model_validate(r) for r in rows]
 
 # Services shown on the Settings page, in display order.
 SERVICE_KEYS = ["postgres", "minio", "redis", "martin", "titiler", "nginx", "celery", "ui", "api"]
@@ -316,7 +380,8 @@ async def control_service(name: str, action: str, _: User = Depends(require_admi
 
 
 @router.get("/services/{name}/logs")
-async def service_logs(name: str, tail: int = 200, _: User = Depends(require_admin)):
+async def service_logs(name: str, tail: int = 200, timestamps: bool = True,
+                       _: User = Depends(require_admin)):
     """Recent container logs for a service (READ-ONLY, admin-only). Combined stdout+stderr with
     timestamps; `tail` is capped so a huge log can't blow up the response. Admins can already read the
     host, so this is an information view, not a new privilege — and it's the safe substitute for a
@@ -330,13 +395,13 @@ async def service_logs(name: str, tail: int = 200, _: User = Depends(require_adm
         c = _resolve_container(client, name)
         if c is None:
             raise HTTPException(404, f"Container for '{name}' not found.")
-        raw = c.logs(tail=tail, timestamps=True, stdout=True, stderr=True)
+        raw = c.logs(tail=tail, timestamps=timestamps, stdout=True, stderr=True)
         text = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(500, f"Failed to read logs for {name}: {exc}") from exc
-    return {"service": name, "tail": tail, "logs": text}
+    return {"service": name, "tail": tail, "timestamps": timestamps, "logs": text}
 
 
 class ExecRequest(BaseModel):

@@ -75,6 +75,11 @@ export const revokeToken = (id) => api.delete(`/tokens/${id}`)
 export const listAudit = (params) => api.get('/audit', { params })
 export const listAuditActions = () => api.get('/audit/actions')
 
+// Deployment history (admin Settings -> Infrastructure -> Deployments). Persisted per update
+// run; the API container is recreated mid-update, so a row is closed by whichever poll of
+// /admin/update/status first sees a terminal phase.
+export const listDeployments = (limit = 20) => api.get('/admin/deployments', { params: { limit } })
+
 // Backups (admin Settings -> Backups). The destination is a SEPARATE S3; secret_key is
 // write-only (blank keeps the stored one). `stored` reads the destination's own manifests, which
 // is the only trustworthy answer about what exists -- our run history lives in the state DB, and

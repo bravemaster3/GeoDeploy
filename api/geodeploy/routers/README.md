@@ -47,6 +47,11 @@ now REJECT token requests, so any route not explicitly `require_scope`-annotated
   The work runs in Celery (`tasks/backup.py`, its own `backup` queue so a multi-hour object copy
   can't occupy the ingest slots); scheduling is an every-15-min beat tick that reads the schedule
   from the DB, so changing it in Settings takes effect with no worker restart.
+- **Deployment history (2026-07-30):** `GET /admin/deployments` + the `deployment_runs` table.
+  `POST /admin/update` opens a row; it is CLOSED by whichever `GET /admin/update/status` poll first
+  sees a terminal phase (`_reconcile_deployment`) — the API container is recreated by the update
+  itself, so the process that started it cannot write the outcome. `GET /admin/services/{name}/logs`
+  gained a `timestamps` flag alongside `tail`.
 - **Activity log pagination (2026-07-30):** `GET /audit` returns a PAGE — `{items, total, limit,
   offset}` (default limit 20, max 500) — and every filter is applied SERVER-side before the page is
   cut: `q` (LIKE over action/actor_name/resource_id/detail), `resource_type`, `resource_id`,
@@ -225,6 +230,7 @@ deliberately NOT visibility-filtered (published portals depend on them).
 - No rate limiting beyond nginx; no pagination on list endpoints (fine at current scale).
 
 ## Last updated
+2026-07-30 (deployment history + log options for the consolidated Infrastructure panel)
 2026-07-30 (new `backups.py` — destination config, history, manual run)
 2026-07-30 (activity log paginated + server-side filters/date range + `/audit/actions`)
 2026-07-29 (stable public `uid` on layers + `common.by_ref`; SQLite WAL/busy_timeout)

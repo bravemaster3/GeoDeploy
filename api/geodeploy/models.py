@@ -115,6 +115,27 @@ class BackupRun(Base):
     progress: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class DeploymentRun(Base):
+    """One update attempt — the Deployments history in Settings -> Infrastructure.
+
+    The updater already writes live progress to `data/temp/update-status.json`, but that file is
+    overwritten by the next run, so history was lost. This table keeps it. The API container is
+    RECREATED mid-update, so a row can outlive the process that made it: `finished_at` is set by
+    whoever next reads the status file and finds a terminal phase (see admin.update_status).
+    """
+    __tablename__ = "deployment_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    status: Mapped[str] = mapped_column(String(16), default="running")   # running|success|error|rolledback
+    trigger: Mapped[str] = mapped_column(String(16), default="manual")   # manual|scheduled
+    actor_name: Mapped[str | None] = mapped_column(String(256))
+    from_sha: Mapped[str | None] = mapped_column(String(64))
+    to_sha: Mapped[str | None] = mapped_column(String(64))
+    message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
 class User(Base):
     __tablename__ = "users"
 
