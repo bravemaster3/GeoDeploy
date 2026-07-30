@@ -1955,7 +1955,17 @@ async function captureThumbnail() {
     // A blank/near-empty canvas serialises to a tiny file; storing it would replace a good
     // thumbnail with a grey rectangle, so keep the previous one instead.
     if (blob.size < 2048) return
-    await uploadPortalThumbnail(portal.value.id, blob)
+    const { data } = await uploadPortalThumbnail(portal.value.id, blob)
+    // Write the new URL back into BOTH the open portal and the cached list. publish() replaced the
+    // store entry moments ago with a response whose thumbnail_url predates this upload, so without
+    // this the card kept its gradient until something refetched the list — which looked like the
+    // snapshot taking minutes to appear when it had actually been ready all along.
+    if (data?.url) {
+      portal.value = { ...portal.value, thumbnail_url: data.url }
+      const list = portalsStore.portals
+      const idx = list.findIndex(p => p.id === portal.value.id)
+      if (idx !== -1) list[idx] = { ...list[idx], thumbnail_url: data.url }
+    }
   } catch (err) {
     // Never fail a publish over a thumbnail — the card falls back to its gradient.
     console.warn('thumbnail capture failed', err)

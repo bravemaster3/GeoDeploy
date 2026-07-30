@@ -77,10 +77,23 @@ async def _with_public_catalog_layers(db: AsyncSession, layer_configs: list[dict
         for layer in rows:
             if (kind, layer.id) in have:
                 continue
+            # Seeded from the layer's OWN default_style, exactly as the editor does when you add a
+            # layer by hand. An empty style is not a neutral default: a raster with no `rescale`
+            # renders blank/black through the tile service for anything that is not already 8-bit,
+            # so a baked-in raster looked like "Show on map does nothing".
+            ds = {}
+            try:
+                ds = json.loads(layer.default_style) if layer.default_style else {}
+            except (ValueError, TypeError):
+                ds = {}
+            style = dict(ds.get("style") or {}) if kind == "vector" else {
+                k: ds[k] for k in ("colormap", "rescale", "algorithm", "zfactor", "bidx") if ds.get(k) is not None
+            }
             # Appended at the END so these draw BENEATH the author's own layers (configs are built in
             # reverse, so later entries sit lower).
             out.append({"layer_id": layer.id, "layer_type": kind, "visible": False,
-                        "opacity": 1.0, "style": {}, "popup_fields": [], "_catalog_extra": True})
+                        "opacity": ds.get("opacity", 1.0), "style": style,
+                        "popup_fields": ds.get("popup_fields") or [], "_catalog_extra": True})
     return out
 
 

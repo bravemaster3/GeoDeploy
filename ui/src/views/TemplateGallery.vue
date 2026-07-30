@@ -21,10 +21,32 @@
               <span class="w-1 h-1 rounded-full bg-white/80"></span>
               <span class="h-1 w-8 rounded-full bg-white/60"></span>
             </div>
-            <div class="flex-1 flex gap-1.5 min-h-0" :class="archetypeOf(t) === 'storymap' ? 'flex-row' : ''">
-              <!-- side column: layer list, facet rail, or narrative column -->
-              <div class="rounded-sm flex flex-col gap-1 p-1 flex-shrink-0"
-                :class="archetypeOf(t) === 'storymap' ? 'w-1/3' : 'w-1/4'"
+            <div class="flex-1 flex gap-1.5 min-h-0">
+              <!-- CATALOG: a narrow facet rail AND a column of result cards, map squeezed to the side. -->
+              <template v-if="archetypeOf(t) === 'catalog'">
+                <div class="rounded-sm flex flex-col gap-1 p-1 flex-shrink-0 w-1/6"
+                  :style="{ background: mix(t) }">
+                  <span v-for="n in 3" :key="n" class="h-0.5 rounded-full"
+                    :style="{ background: t.accent || '#38bdf8', opacity: .5, width: (85 - n * 15) + '%' }"></span>
+                </div>
+                <div class="flex flex-col gap-1 flex-shrink-0 w-1/3">
+                  <div v-for="n in 3" :key="n" class="flex-1 rounded-sm p-1"
+                    :style="{ background: mix(t, .5) }">
+                    <span class="block h-0.5 rounded-full w-2/3"
+                      :style="{ background: t.accent || '#38bdf8', opacity: .7 }"></span>
+                  </div>
+                </div>
+              </template>
+              <!-- STORYMAP: no docked list — a narrative card floats over a full-bleed map. -->
+              <div v-else-if="archetypeOf(t) === 'storymap'"
+                class="absolute left-3 top-8 bottom-3 w-1/3 rounded-sm p-1.5 flex flex-col gap-1 z-10"
+                :style="{ background: t.bg || '#0b1220', opacity: .96 }">
+                <span v-for="n in 5" :key="n" class="h-0.5 rounded-full"
+                  :style="{ background: t.accent || '#38bdf8', opacity: n === 1 ? .9 : .4,
+                            width: n === 1 ? '55%' : (95 - n * 6) + '%' }"></span>
+              </div>
+              <!-- WEB MAP: the docked layer list beside the map. -->
+              <div v-else class="rounded-sm flex flex-col gap-1 p-1 flex-shrink-0 w-1/4"
                 :style="{ background: mix(t) }">
                 <span v-for="n in 4" :key="n" class="h-1 rounded-full"
                   :style="{ background: t.accent || '#38bdf8', opacity: .55, width: (90 - n * 12) + '%' }"></span>
@@ -40,9 +62,12 @@
               </div>
             </div>
           </div>
+          <!-- "Opens as", not a bare archetype name: the experience is a STARTING POINT the template
+               presets, and it is freely changeable in the editor afterwards. The bare label read as a
+               restriction ("this template is only a story map"), which is not true of any of them. -->
           <span v-if="archetypeOf(t) !== 'webmap'"
-            class="absolute bottom-1.5 right-1.5 text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-black/55 text-white/90">
-            {{ archetypeOf(t) }}
+            class="absolute bottom-1.5 right-1.5 text-[9px] px-1.5 py-0.5 rounded bg-black/55 text-white/90">
+            Opens as {{ ARCHETYPE_LABEL[archetypeOf(t)] }}
           </span>
         </div>
         <div class="p-4 space-y-2">
@@ -75,8 +100,15 @@ function mix(t, amount = 0.35) {
   const accent = t.accent || '#38bdf8'
   return `color-mix(in srgb, ${accent} ${Math.round(amount * 22)}%, ${bg})`
 }
-// Templates predating the archetype field are plain web maps.
-const archetypeOf = (t) => t.archetype || 'webmap'
+// Templates predating the archetype field are plain web maps. `webmap+catalog` is not built and the
+// runtime aliases it to webmap, so the gallery must resolve it the same way — a card advertising an
+// experience the portal will not actually render is worse than no label.
+const ARCH_ALIAS = { 'webmap+catalog': 'webmap' }
+const ARCHETYPE_LABEL = { webmap: 'a web map', storymap: 'a story map', catalog: 'a catalog' }
+const archetypeOf = (t) => {
+  const a = t.archetype || 'webmap'
+  return ARCH_ALIAS[a] || (ARCHETYPE_LABEL[a] ? a : 'webmap')
+}
 
 const templates = ref([])
 const loading = ref(true)
