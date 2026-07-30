@@ -10,6 +10,24 @@ jobs:
   api:
     name: API tests
     runs-on: ubuntu-latest
+
+    # State lives in PostgreSQL now, so the suite needs a real server. PostGIS rather than plain
+    # postgres because create_all runs against the same database the spatial data uses.
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: geodeploy
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: geodeploy_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U geodeploy"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +51,11 @@ jobs:
           GEODEPLOY_ENV: development
           GEODEPLOY_SECRET_KEY: test-secret-key
           GEODEPLOY_DATA_DIR: /tmp/geodeploy-test
+          POSTGIS_HOST: 127.0.0.1
+          POSTGIS_PORT: "5432"
+          POSTGIS_DB: geodeploy_test
+          POSTGIS_USER: geodeploy
+          POSTGIS_PASSWORD: test
 
   ui:
     name: UI build
