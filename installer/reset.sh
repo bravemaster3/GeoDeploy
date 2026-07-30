@@ -9,6 +9,7 @@ info()  { echo -e "${GREEN}[geodeploy-reset]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[geodeploy-reset]${NC} $*"; }
 
 warn "This will permanently delete all GeoDeploy data, containers, and configuration."
+warn "It also removes this directory, so run 'cd ~' afterwards before anything else."
 read -r -p "Are you sure? (yes/no): " confirm
 if [ "$confirm" != "yes" ]; then
   echo "Aborted."
@@ -36,5 +37,9 @@ sudo rm -rf "$GEODEPLOY_DIR"
 echo ""
 echo -e "${GREEN}Reset complete. Run the installer to start fresh:${NC}"
 echo ""
+# `cd ~` first: this script just deleted the directory the caller is standing in. Our own `cd`
+# above only moved THIS subshell — the parent shell keeps a now-dangling cwd, so its next command
+# fails with "getcwd: cannot access parent directories" and any relative path is unresolvable.
+echo "  cd ~"
 echo "  curl -fsSL https://raw.githubusercontent.com/bravemaster3/geodeploy/main/installer/install.sh | bash"
 echo ""
