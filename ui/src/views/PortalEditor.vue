@@ -269,6 +269,14 @@
                 </button>
               </div>
             </div>
+            <!-- The projection was already SAVED with the pinned view (portal.js reports it with the
+                 camera), but only if you happened to switch the preview to the globe first — there was
+                 nothing here to tell you that, so the feature was invisible. This drives the preview,
+                 and the pinned view follows from it. -->
+            <label class="flex items-center justify-between cursor-pointer">
+              <span class="text-muted-foreground">Start in 3D globe</span>
+              <input type="checkbox" :checked="startsInGlobe" @change="e => setGlobe(e.target.checked)" />
+            </label>
             <label v-if="!isStory && !isCatalog" class="flex items-center justify-between cursor-pointer">
               <span class="text-muted-foreground">Start collapsed</span>
               <input type="checkbox" :checked="resolvedLayout.regions.layerList.collapsed"
@@ -1950,6 +1958,17 @@ function zoomToAll() {
 // (lastView); prefer that, else the previously-saved view. Spread WHOLE rather than picked apart —
 // the camera shape is owned by portal.js::currentViewObj (center/zoom/bearing/pitch/projection), so
 // a key added there flows through here without a matching edit.
+// Reads from the live preview first (lastView), falling back to what was saved — same precedence as
+// currentView(), so the checkbox always shows what WOULD be pinned right now.
+const startsInGlobe = computed(() =>
+  (lastView.value?.projection ?? savedView.value?.projection) === 'globe')
+function setGlobe(on) {
+  postToFrame({ type: 'projection', value: on ? 'globe' : 'mercator' })
+  // Optimistic: the iframe reports the real camera back within a frame, but a portal that has never
+  // reported one yet would otherwise leave the box unticked after a click.
+  if (lastView.value) lastView.value = { ...lastView.value, projection: on ? 'globe' : 'mercator' }
+}
+
 function currentView() {
   if (lastView.value && Array.isArray(lastView.value.center)) return { ...lastView.value }
   return savedView.value || null

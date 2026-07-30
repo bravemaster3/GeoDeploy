@@ -2853,6 +2853,13 @@
       else if (d.type === 'zoomall') zoomToAllLayers();
       else if (d.type === 'snapshot') sendSnapshot(d.requestId);
       else if (d.type === 'home') goHome();
+      // The editor's "Start in 3D globe" toggle. setProjection fires no moveend, so the camera is
+      // reported explicitly — otherwise the editor's lastView would keep the OLD projection and the
+      // pinned start view would not match what the preview is showing.
+      else if (d.type === 'projection') {
+        applyProjection(d.value === 'globe' ? 'globe' : 'mercator');
+        post({ type: 'view', view: currentViewObj() });
+      }
       else if (d.type === 'fitbbox' && Array.isArray(d.bbox) && d.bbox.length === 4) {
         try { map.fitBounds([[d.bbox[0], d.bbox[1]], [d.bbox[2], d.bbox[3]]], { padding: 30, duration: 500 }); } catch (err) {}
       }
@@ -3363,6 +3370,56 @@
       if (b.dataset.v === 'map') setTimeout(function () { try { map.resize(); } catch (e) {} }, 210);
     });
 
+    // A catalog has no docked layer switcher — the facet rail owns that side, and listing every
+    // baked-in layer would defeat the point. What a visitor DOES need is a list of what they have
+    // switched on, which is a moving target: it starts empty and changes with every card they add.
+    // So it is built from the live `onMap` state, overlays the map, and hides itself when empty.
+    const byRef = {};
+    records.forEach(function (r) { const ref = refOf(r); if (ref) byRef[ref] = r; });
+
+    const $active = document.createElement('div');
+    $active.id = 'cat-active';
+    $active.style.display = 'none';
+    (document.getElementById('map-wrap') || document.body).appendChild($active);
+
+    function activeRefs() {
+      return Object.keys(onMap).filter(function (ref) { return onMap[ref] && byRef[ref]; });
+    }
+    function renderActive() {
+      const refs = activeRefs();
+      if (!refs.length) { $active.style.display = 'none'; $active.innerHTML = ''; return; }
+      $active.style.display = '';
+      $active.innerHTML =
+        '<div class="cat-active-h"><span>On map</span><span class="cat-active-n">' + refs.length + '</span></div>' +
+        refs.map(function (ref) {
+          const r = byRef[ref];
+          const canZoom = !!(r.bbox && r.bbox.length === 4);
+          return '<div class="cat-active-row" data-ref="' + ref + '">' +
+            '<span class="cat-active-dot cat-b-' + (r.kind === 'raster' ? 'raster' : 'vector') + '"></span>' +
+            '<span class="cat-active-t" title="' + escHtml(r.name) + '">' + escHtml(r.name) + '</span>' +
+            (canZoom ? '<button class="cat-active-b" data-act="zoom" title="Zoom to this layer">&#9678;</button>' : '') +
+            '<button class="cat-active-b" data-act="off" title="Remove from map">&times;</button>' +
+            '</div>';
+        }).join('');
+    }
+    $active.addEventListener('click', function (e) {
+      const b = e.target.closest('[data-act]');
+      if (!b) return;
+      const row = b.closest('.cat-active-row');
+      const ref = row && row.dataset.ref;
+      const r = ref && byRef[ref];
+      if (!r) return;
+      if (b.dataset.act === 'zoom') {
+        if (r.bbox) map.fitBounds([[r.bbox[0], r.bbox[1]], [r.bbox[2], r.bbox[3]]],
+                                  { padding: 40, duration: 700 });
+        return;
+      }
+      onMap[ref] = false;
+      setLayerVisByRef(ref, false);
+      renderActive();
+      render();   // the card's button has to stop saying "On map"
+    });
+
     const $q = panel.querySelector('#cat-q');
     const $rail = panel.querySelector('#cat-rail');
     const $res = panel.querySelector('#cat-results');
@@ -3584,6 +3641,7 @@
         act.classList.toggle('on', onMap[ref]);
         const lbl = act.querySelector('span');
         if (lbl) lbl.textContent = onMap[ref] ? 'On map' : 'Show on map';
+        renderActive();
         if (onMap[ref] && bbox) {
           map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 40, duration: 700 });
         }
@@ -3599,6 +3657,7 @@
     $res.addEventListener('mouseleave', function () { showHl(null); });
 
     render();
+    renderActive();
   }
 
   function escHtml(str) {
