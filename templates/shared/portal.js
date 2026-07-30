@@ -1247,9 +1247,14 @@
     const m = prim && prim.metadata;
     if (!m || m['geodeploy:layer_id'] == null) return [primaryId];
     const lid = String(m['geodeploy:layer_id']), type = m['geodeploy:type'];
+    // `ext` is part of the identity for the SAME reason card refs use layerRefType(): an external
+    // XYZ source bakes geodeploy:type = 'raster', so without this an external and a real raster
+    // sharing an id (both 1 on a fresh install) group together and one eye toggles both.
+    const ext = !!m['geodeploy:external'];
     const ids = STYLE.layers.filter(function (l) {
       const lm = l.metadata;
       return lm && String(lm['geodeploy:layer_id']) === lid
+        && !!lm['geodeploy:external'] === ext
         && (lm['geodeploy:type'] === type || lm['geodeploy:part'] === true);
     }).map(function (l) { return l.id; });
     return ids.length ? ids : [primaryId];
@@ -1280,7 +1285,14 @@
       const card = document.createElement('div');
       card.className = 'layer-card';
       card.dataset.layerId = layer.id;
-      card.dataset.ref = type + ':' + meta['geodeploy:layer_id'];  // V-13: match to the folder tree
+      // V-13: match to the folder tree. MUST be layerRefType(), NOT geodeploy:type — an EXTERNAL
+      // source bakes geodeploy:type = src.kind ('raster' for an XYZ layer), so an XYZ source and a
+      // real raster layer that happen to share an id (both 1 on a fresh install) produced the SAME
+      // ref. cardByRef is a plain object, so the external overwrote the raster's entry: the tree's
+      // raster node moved the EXTERNAL's card into that folder, and the tree's 'external:<id>' node
+      // matched nothing, leaving its folder empty. layerRefType() namespaces externals separately,
+      // which is already what setLayerVisByRef() and the storymap layer refs use.
+      card.dataset.ref = layerRefType(layer) + ':' + meta['geodeploy:layer_id'];
       if (canZoom) card.dataset.bbox = JSON.stringify(bbox);       // V-13: for folder zoom-to-extent
       card.setAttribute('draggable', 'true');
       const dash = dashKind(layer.paint);
@@ -2164,7 +2176,11 @@
       ftLayerId = f.layer.id;
       const layerId = f.layer.metadata && f.layer.metadata['geodeploy:layer_id'];
       ftLayerName = (f.layer.metadata && f.layer.metadata['geodeploy:name']) || f.layer.id;
-      const fields = POPUP_CONFIG[layerId] || POPUP_CONFIG[String(layerId)];
+      // POPUP_CONFIG is keyed by vector-LAYER id and holds nothing for external sources, so an
+      // external vector source sharing an id with a real layer would borrow that layer's field
+      // list. No config → fall through to showing the feature's own properties.
+      const fields = (f.layer.metadata && f.layer.metadata['geodeploy:external'])
+        ? null : (POPUP_CONFIG[layerId] || POPUP_CONFIG[String(layerId)]);
       const props = f.properties || {};
       const keys = fields && fields.length
         ? fields.filter(k => props[k] != null)
@@ -2856,7 +2872,10 @@
     (STYLE.layers || []).forEach(l => {
       if (!l.metadata || !l.metadata['geodeploy:name']) return;
       const type = l.metadata['geodeploy:type'], id = l.metadata['geodeploy:layer_id'];
-      const key = type + '-' + id;
+      // Namespaced like the card refs: an external XYZ source bakes geodeploy:type = 'raster', so
+      // without the flag an external and a real raster sharing an id collide and `seen` silently
+      // drops one of them from the download list.
+      const key = (l.metadata['geodeploy:external'] ? 'ext' : type) + '-' + id;
       if (seen.has(key)) return;
       let hit = false;
       if (type === 'vector') {
