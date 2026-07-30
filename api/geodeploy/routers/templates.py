@@ -1,4 +1,5 @@
 import json
+import re
 import os
 from pathlib import Path
 from fastapi import APIRouter
@@ -25,6 +26,15 @@ def _load_templates() -> list[TemplateOut]:
                 if not (entry / "style.json").exists():
                     continue
                 meta = json.loads(meta_file.read_text())
+                accent = bg = None
+                try:
+                    css = (entry / "theme.css").read_text(encoding="utf-8")
+                    m = re.search(r"--accent:\s*([^;]+);", css)
+                    accent = m.group(1).strip() if m else None
+                    m = re.search(r"--bg:\s*([^;]+);", css)
+                    bg = m.group(1).strip() if m else None
+                except OSError:
+                    pass   # a template without theme.css simply has no palette to advertise
                 templates.append(TemplateOut(
                     id=entry.name,
                     name=meta.get("name", entry.name),
@@ -33,7 +43,16 @@ def _load_templates() -> list[TemplateOut]:
                     tags=meta.get("tags", []),
                     language=meta.get("language", "en"),
                     basemap=meta.get("basemap", "osm-bright"),
-                    preview_url=f"/templates-static/{category}/{entry.name}/preview.png",
+                    # Only advertise a preview that EXISTS. This was unconditional, so every card
+                    # rendered a broken <img> and the "no preview" fallback was unreachable — no
+                    # template in the repo ships a preview.png. Accepts the common web formats so a
+                    # community template can drop in a .webp/.jpg without a code change.
+                    preview_url=next(
+                        (f"/templates-static/{category}/{entry.name}/preview{ext}"
+                         for ext in (".png", ".webp", ".jpg", ".jpeg")
+                         if (entry / f"preview{ext}").exists()), None),
+                    accent=accent,
+                    bg=bg,
                     version=meta.get("version", "1.0.0"),
                     license=meta.get("license", "MIT"),
                     is_official=is_official,

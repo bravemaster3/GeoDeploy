@@ -12,7 +12,7 @@
     <div class="p-4 space-y-3">
       <div>
         <h3 class="font-semibold text-foreground truncate">{{ portal.title }}</h3>
-        <p v-if="portal.description" class="text-xs text-muted-foreground mt-0.5 line-clamp-2">{{ portal.description }}</p>
+        <p v-if="summary" class="text-xs text-muted-foreground mt-0.5 line-clamp-2">{{ summary }}</p>
       </div>
 
       <div class="text-xs text-muted-foreground/70 flex gap-3 flex-wrap items-center">
@@ -55,6 +55,26 @@ const props = defineProps({ portal: Object })
 defineEmits(['edit', 'publish', 'unpublish', 'delete'])
 
 const auth = useAuthStore()
+
+// The portal description is MARKDOWN (written in the About editor), so printing it raw put things
+// like "![clean-black-world-map…](…)" on the card. Reduced to a plain-text summary: images are
+// dropped entirely (their alt text is not a description), links keep their label, and the remaining
+// syntax markers are stripped. Not a full markdown parser on purpose — this is a two-line teaser,
+// and rendering real markdown in a fixed-height card invites broken layout.
+const summary = computed(() => {
+  const md = props.portal?.description
+  if (!md) return ''
+  return String(md)
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')      // images — drop, alt text is not prose
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')    // links — keep the label
+    .replace(/`{1,3}[^`]*`{1,3}/g, ' ')          // code spans/fences
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')           // headings
+    .replace(/^\s{0,3}>\s?/gm, '')                // blockquotes
+    .replace(/^\s{0,3}([-*+]|\d+\.)\s+/gm, '')   // list markers
+    .replace(/[*_~]{1,3}/g, '')                  // emphasis
+    .replace(/\s+/g, ' ')
+    .trim()
+})
 
 // Published access tier → badge. 'private' is the legacy value for organization (members-only).
 const ACCESS = {

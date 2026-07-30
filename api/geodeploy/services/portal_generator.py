@@ -320,7 +320,10 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
             if _f:
                 _info["folder"] = _f
 
-    return {"sources": sources, "layers": layers, "bounds": bounds, "core_fitted": core_fitted,
+    # `valid_bounds`, NOT `bounds`: it is the deck-only CORE extent when core_fitted, and None when
+    # no layer contributed an extent (raw `bounds` is still the inverted sentinel there, which would
+    # be baked as a real extent and open the map on nothing).
+    return {"sources": sources, "layers": layers, "bounds": valid_bounds, "core_fitted": core_fitted,
             "deck_layers": deck_layers, "layers_info": layers_info, "layer_tree": layer_tree}
 
 

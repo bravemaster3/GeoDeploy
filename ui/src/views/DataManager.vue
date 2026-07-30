@@ -29,7 +29,11 @@
           </span>
           <div class="flex-1 min-w-0">
             <h2 class="text-sm font-semibold text-foreground">Vector layers</h2>
-            <p class="text-xs text-muted-foreground/70">Stored in PostGIS · served as vector tiles</p>
+            <!-- Was "Stored in PostGIS · served as vector tiles", which stopped being true once
+                 GeoParquet layers arrived: those are files in object storage, read directly or via
+                 PMTiles, never loaded into PostGIS. Each row already shows its own backend, so the
+                 heading no longer claims one. -->
+            <p class="text-xs text-muted-foreground/70">PostGIS tables and GeoParquet files</p>
           </div>
           <input v-if="dataStore.vectorLayers.length > 3" v-model="vectorSearch" type="search"
             id="vector-search" name="vector-search" placeholder="Search…"

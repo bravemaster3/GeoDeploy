@@ -601,7 +601,14 @@ class TemplateOut(BaseModel):
     tags: list[str]
     language: str
     basemap: str
-    preview_url: str
+    # None when the template ships no preview image — the gallery then draws a mock from the
+    # palette below rather than a broken <img>.
+    preview_url: str | None = None
+    # Read out of the template's own theme.css so the gallery can render a preview in the colours the
+    # template ACTUALLY produces. Cheaper and more honest than a screenshot that goes stale when the
+    # theme changes.
+    accent: str | None = None
+    bg: str | None = None
     version: str
     license: str
     is_official: bool
