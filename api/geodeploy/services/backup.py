@@ -85,7 +85,10 @@ def infer_region(endpoint: str | None) -> str | None:
     if host.endswith("wasabisys.com") and len(parts) >= 3 and parts[0] == "s3":
         return parts[1]                                 # s3.eu-central-1.wasabisys.com
     if host.endswith("your-objectstorage.com"):
-        return parts[0]                                 # Hetzner: fsn1 / nbg1 / hel1
+        # Hetzner: the hostname carries the LOCATION (hel1 / fsn1 / nbg1) but the region string is
+        # the NETWORK ZONE, which their console shows as `eu-central` for all three. Verified
+        # against a live bucket's Overview page — an earlier version returned the location prefix.
+        return "eu-central"
     return None
 
 

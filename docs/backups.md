@@ -13,7 +13,7 @@ the images uploaded to portal About pages.
 | Endpoint | Blank for AWS S3; otherwise the S3-compatible endpoint (Wasabi, Backblaze B2, Cloudflare R2, Hetzner, another MinIO) |
 | Bucket | **Must not be your data bucket** |
 | Access / secret key | Credentials for the destination only. The secret is encrypted at rest and never shown again |
-| Region | **Leave blank** — it is derived from the endpoint. It is only a SigV4 signing input: most S3-compatible providers ignore it, AWS validates it strictly, Cloudflare R2 wants the literal `auto`, and Backblaze/Hetzner encode the location in the hostname (`s3.us-west-004.backblazeb2.com` → `us-west-004`; `fsn1.your-objectstorage.com` → `fsn1`). Set it by hand only if your provider rejects the derived value |
+| Region | **Leave blank** — it is derived from the endpoint. It is only a SigV4 signing input: most S3-compatible providers ignore it, AWS validates it strictly, Cloudflare R2 wants the literal `auto`, Backblaze encodes the region in the hostname (`s3.us-west-004.backblazeb2.com` → `us-west-004`), and Hetzner uses its network zone `eu-central` for every location (the `hel1`/`fsn1`/`nbg1` in the hostname is the location, not the region). Set it by hand only if your provider rejects the derived value |
 | Path prefix | Default `geodeploy-backups` |
 | Schedule | Manual, daily, or weekly, at a chosen UTC hour |
 | Keep last | Retention. Older *complete* backups are deleted after each successful run |

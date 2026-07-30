@@ -179,8 +179,7 @@
                   :placeholder="guessedRegion || 'auto-detected from the endpoint'" />
                 <datalist id="gd-s3-regions">
                   <option value="auto" /><option value="us-east-1" /><option value="eu-central-1" />
-                  <option value="eu-west-1" /><option value="fsn1" /><option value="nbg1" />
-                  <option value="hel1" />
+                  <option value="eu-west-1" /><option value="eu-central" />
                 </datalist>
                 <p class="text-[11px] text-muted-foreground/70 mt-1">
                   <span v-if="guessedRegion">Leave blank to use <span class="font-mono">{{ guessedRegion }}</span>, read from your endpoint.</span>
@@ -593,7 +592,7 @@ const guessedRegion = computed(() => {
   }
   if (h.endsWith('backblazeb2.com') && p.length >= 3) return p[1]
   if (h.endsWith('wasabisys.com') && p[0] === 's3' && p.length >= 3) return p[1]
-  if (h.endsWith('your-objectstorage.com')) return p[0]
+  if (h.endsWith('your-objectstorage.com')) return 'eu-central'  // network zone, not the hel1/fsn1 location
   return ''
 })
 
