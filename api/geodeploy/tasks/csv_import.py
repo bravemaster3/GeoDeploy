@@ -70,7 +70,7 @@ def _download_s3(key: str, settings) -> str:
     import boto3
     from botocore.client import Config
     from .raster_ingest import _get_storage_creds
-    creds = _get_storage_creds(f"{settings.data_dir}/sqlite/geodeploy.db")
+    creds = _get_storage_creds()
     s3 = boto3.client(
         "s3", endpoint_url=creds["endpoint"],
         aws_access_key_id=creds["access_key"], aws_secret_access_key=creds["secret_key"],
@@ -260,15 +260,14 @@ def import_csv(self, job_id, layer_id, source, schema, table, x_col, y_col, srid
     (points) or, when `wkt_col` is set, from a WKT column (any geometry type)."""
     import json
     settings = get_settings()
-    db_path = f"{settings.data_dir}/sqlite/geodeploy.db"
 
     def step(msg, pct):
-        _update_job(db_path, job_id, status="processing", current_step=msg, progress=pct,
+        _update_job(job_id, status="processing", current_step=msg, progress=pct,
                     started_at=datetime.now(timezone.utc).isoformat())
 
     # Build the DB connection from the SQLite setup_config (authoritative) — NOT from env
     # settings, whose POSTGIS_PASSWORD isn't reliably present in the celery container.
-    setup = _get_setup(db_path)
+    setup = _get_setup()
     if not setup:
         raise ValueError("Setup is not complete — no database configured.")
     dsn = (f"host={setup['postgis_host']} port={setup['postgis_port']} dbname={setup['postgis_db']} "
@@ -286,20 +285,20 @@ def import_csv(self, job_id, layer_id, source, schema, table, x_col, y_col, srid
         res = _load_copy(path, schema, table, x_col, y_col, srid, dsn, delimiter, wkt_col)
 
         step("Saving metadata", 90)
-        _update_layer(db_path, layer_id, status="ready", feature_count=res["feature_count"],
+        _update_layer(layer_id, status="ready", feature_count=res["feature_count"],
                       bbox=json.dumps(res["bbox"]) if res["bbox"] else None,
                       columns=json.dumps(res["columns"]), crs=res.get("crs", "EPSG:4326"),
                       geometry_type=res.get("geometry_type", "point"),
                       updated_at=datetime.now(timezone.utc).isoformat())
-        _update_job(db_path, job_id, status="ready", progress=100,
+        _update_job(job_id, status="ready", progress=100,
                     completed_at=datetime.now(timezone.utc).isoformat())
 
         import asyncio
-        asyncio.run(martin_svc.regenerate_config(_get_all_layers(db_path)))
+        asyncio.run(martin_svc.regenerate_config(_get_all_layers()))
     except Exception as exc:
-        _update_job(db_path, job_id, status="error", error_message=str(exc),
+        _update_job(job_id, status="error", error_message=str(exc),
                     completed_at=datetime.now(timezone.utc).isoformat())
-        _update_layer(db_path, layer_id, status="error", error_message=str(exc))
+        _update_layer(layer_id, status="error", error_message=str(exc))
         raise
     finally:
         # Clean up the temp file (the downloaded S3 copy, or the uploaded local file).

@@ -61,7 +61,6 @@ def _resume_interrupted_tiling(sender=None, **kwargs):
     import logging
     try:
         from .tasks.pmtiles_tile import tile_geoparquet
-        db_path = f"{settings.data_dir}/sqlite/geodeploy.db"
         with state_db.connect() as conn:
             rows = conn.execute(
                 "SELECT id, s3_key, pmtiles_key FROM vector_layers "

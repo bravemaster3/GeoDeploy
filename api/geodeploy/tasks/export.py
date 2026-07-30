@@ -100,7 +100,7 @@ def _gpq_features(s3_key: str, b, settings, keep_native: bool = False) -> list[d
     from ..services import duckdb_engine
     from .raster_ingest import _get_storage_creds
     # Storage creds from SQLite (§0f) — celery env is unreliable.
-    creds = _get_storage_creds(f"{settings.data_dir}/sqlite/geodeploy.db")
+    creds = _get_storage_creds()
     fc = duckdb_engine.query_features_geojson(s3_key, list(b), FEATURE_CAP, creds, keep_native=keep_native)
     feats = fc.get("features", [])
     if keep_native:
@@ -245,7 +245,7 @@ def export_bundle(self, bbox: str, items: list[dict], target_crs: str = "4326") 
     # Build the DSN from the SQLite setup_config (authoritative) rather than env settings —
     # the celery container's POSTGIS_PASSWORD isn't reliably populated. See csv_import.
     from .vector_ingest import _get_setup
-    setup = _get_setup(f"{settings.data_dir}/sqlite/geodeploy.db")
+    setup = _get_setup()
     if not setup:
         raise ValueError("Setup is not complete — no database configured.")
     dsn = (f"host={setup['postgis_host']} port={setup['postgis_port']} dbname={setup['postgis_db']} "

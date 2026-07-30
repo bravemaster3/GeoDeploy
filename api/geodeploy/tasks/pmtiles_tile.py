@@ -105,7 +105,7 @@ def _resolve_maxzoom(feature_count: int) -> int:
     return 13
 
 
-def _layer_feature_count(db_path: str, layer_id) -> int:
+def _layer_feature_count(layer_id) -> int:
     """Read a layer's stored feature_count (0 if unknown) to drive {@link _resolve_maxzoom}."""
     try:
         con = state_db.connect()
@@ -196,8 +196,7 @@ def _run_tippecanoe(cmd: list, feed=None) -> None:
 def tile_geoparquet(self, layer_id, s3_key, pmtiles_key):
     from ..services import duckdb_engine
     settings = get_settings()
-    db_path = f"{settings.data_dir}/sqlite/geodeploy.db"
-    creds = _get_storage_creds(db_path)
+    creds = _get_storage_creds()
     tmpdir = f"{settings.data_dir}/temp"
     # Per-run scratch dir: the .fgb, DuckDB spills, tippecanoe temp, and the output .pmtiles all live
     # here and are removed in `finally`, so a killed run cannot leak GBs (the old code left a 5GB
@@ -207,10 +206,10 @@ def tile_geoparquet(self, layer_id, s3_key, pmtiles_key):
     os.makedirs(tile_scratch, exist_ok=True)
     out_path = os.path.join(run_dir, "out.pmtiles")
 
-    feature_count = _layer_feature_count(db_path, layer_id)
+    feature_count = _layer_feature_count(layer_id)
     maxzoom = _resolve_maxzoom(feature_count)
     simplify_tol = _simplify_tol(maxzoom)
-    _update_layer(db_path, layer_id, tile_status="tiling")
+    _update_layer(layer_id, tile_status="tiling")
     started = time.monotonic()
     logger.info("tile_geoparquet: layer %s — tiling %s → z%s (PMTiles, input=%s, mem=%s, features=%s, simplify_tol=%s)",
                 layer_id, s3_key, maxzoom, PMTILES_INPUT, PMTILES_TILE_MEMORY_LIMIT, f"{feature_count:,}", simplify_tol)
@@ -263,11 +262,11 @@ def tile_geoparquet(self, layer_id, s3_key, pmtiles_key):
         s3.upload_file(out_path, creds["bucket"], pmtiles_key,
                        ExtraArgs={"ContentType": "application/octet-stream"})
 
-        _update_layer(db_path, layer_id, pmtiles_key=pmtiles_key, tile_status="ready",
+        _update_layer(layer_id, pmtiles_key=pmtiles_key, tile_status="ready",
                       updated_at=datetime.now(timezone.utc).isoformat())
         logger.info("tile_geoparquet: layer %s — READY in %.0fs total", layer_id, time.monotonic() - started)
     except Exception as exc:
-        _update_layer(db_path, layer_id, tile_status="error", error_message=str(exc))
+        _update_layer(layer_id, tile_status="error", error_message=str(exc))
         raise
     finally:
         shutil.rmtree(run_dir, ignore_errors=True)

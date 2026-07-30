@@ -113,7 +113,6 @@ def _download_https_cog(url: str) -> str:
 def _mark_raster_error(layer_id: int, job_id: str, message: str) -> None:
     """Flag the layer + job as failed (download error) so a failed COG doesn't linger 'processing';
     the failed layer is then excluded from the built bundle (only 'ready' layers load)."""
-    db_path = f"{get_settings().data_dir}/sqlite/geodeploy.db"
     try:
         conn = state_db.connect()
         conn.execute("UPDATE raster_layers SET status = 'error', error_message = ? WHERE id = ?",

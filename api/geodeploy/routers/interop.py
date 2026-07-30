@@ -198,7 +198,7 @@ def _pg_dsn() -> str:
     """The PostGIS DSN, from the SQLite-stored setup (same source the ingest/export tasks use)."""
     from ..tasks.vector_ingest import _get_setup
     s = get_settings()
-    setup = _get_setup(f"{s.data_dir}/sqlite/geodeploy.db")
+    setup = _get_setup()
     dsn = (f"host={setup['postgis_host']} port={setup['postgis_port']} dbname={setup['postgis_db']} "
            f"user={setup['postgis_user']} password={setup['postgis_password']}")
     if s.postgis_sslmode:
