@@ -78,11 +78,24 @@ def vector_links(layer, base: str) -> list[dict]:
             hint=f"Add as a VECTOR-tile source (not 'XYZ tiles' raster). Source-layer name: '{src}'."))
     else:
         if getattr(layer, "pmtiles_key", None) and getattr(layer, "tile_status", None) == "ready":
+            # TWO entries, because `pmtiles://` is NOT a URL scheme — it is a protocol handler the
+            # MapLibre GL JS `pmtiles` library registers, so it means something only inside a
+            # MapLibre-based web client (GeoDeploy's own portals; GeoLibre's basemap path does the
+            # same). QGIS and GDAL have never understood it and need the plain HTTPS URL. One
+            # combined entry made people paste the prefixed string into QGIS and get nothing.
             links.append(_link(
-                "pmtiles", "PMTiles archive (fast rendering)", f"pmtiles://{api}/pmtiles",
-                fmt="PMTiles (vector)", tools=["MapLibre", "GeoLibre", "QGIS (PMTiles)"],
-                hint="MapLibre/GeoLibre: add as a vector source with the pmtiles:// prefix. Drop the "
-                     "prefix for a plain download of the archive."))
+                "pmtiles", "PMTiles — MapLibre source URL", f"pmtiles://{api}/pmtiles",
+                fmt="PMTiles (vector)", tools=["MapLibre GL JS", "GeoLibre (basemap)"],
+                hint="Use EXACTLY as-is in a MapLibre style source, after registering the pmtiles "
+                     "protocol (`pmtiles` JS library). The prefix is a MapLibre protocol handler, "
+                     "not part of the address \u2014 it will not work in QGIS or a browser."))
+            links.append(_link(
+                "pmtiles-file", "PMTiles \u2014 the archive itself", f"{api}/pmtiles",
+                fmt="PMTiles (vector)", tools=["download", "GDAL"],
+                hint="The plain URL: downloadable, and readable over HTTP Range by GDAL builds with "
+                     "PMTiles support (prefix with /vsicurl/). For loading this layer INTO QGIS, "
+                     "prefer the OGC API - Features link above \u2014 that is supported outright.",
+                download=True))
         links.append(_link(
             "features-geojson", "Viewport features (GeoDeploy native)",
             f"{api}/features.geojson?bbox=minx,miny,maxx,maxy&limit=50000",
