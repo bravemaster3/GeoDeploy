@@ -69,7 +69,11 @@ export const createToken = (data) => api.post('/tokens', data)
 export const revokeToken = (id) => api.delete(`/tokens/${id}`)
 
 // Activity & audit log (A-05, admin)
+// Activity log. Returns a PAGE: {items, total, limit, offset}. Every filter (q, resource_type,
+// action, actor_id, since/until) is applied server-side — the log grows without bound, so never
+// fetch it whole and filter in the browser.
 export const listAudit = (params) => api.get('/audit', { params })
+export const listAuditActions = () => api.get('/audit/actions')
 
 // Outgoing email (admin Settings → Email; generic SMTP)
 export const getEmailSettings = () => api.get('/admin/email-settings')

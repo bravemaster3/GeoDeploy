@@ -202,6 +202,16 @@ class PortalRefOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AuditPage(BaseModel):
+    """One page of the activity log. `total` is the count AFTER filtering, so the UI can show a real
+    page count — the log grows without bound, so the client must never fetch it whole and filter
+    locally (that would search only the downloaded slice)."""
+    items: list[AuditLogOut]
+    total: int
+    limit: int
+    offset: int
+
+
 class InvitePublicOut(BaseModel):
     """What the public accept/reset page may learn from a valid token."""
     email: str

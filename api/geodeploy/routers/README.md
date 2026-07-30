@@ -36,6 +36,17 @@ now REJECT token requests, so any route not explicitly `require_scope`-annotated
   `common.prune_layer_from_portals` removes the (now-dangling) layer from every portal's `layer_configs`
   and RE-PUBLISHES the published ones (best-effort, lazy-imports `_rebuild_bundle`) so no "ghost" layer
   lingers in the live map/editor. The delete audit detail records `portals_updated`.
+- **Activity log pagination (2026-07-30):** `GET /audit` returns a PAGE — `{items, total, limit,
+  offset}` (default limit 20, max 500) — and every filter is applied SERVER-side before the page is
+  cut: `q` (LIKE over action/actor_name/resource_id/detail), `resource_type`, `resource_id`,
+  `actor_id`, `action` (exact OR `action.` prefix, so "portal" gets the whole family), and
+  `since`/`until` ISO instants. Filters AND together. The UI computes date presets (today / this
+  week / this month / last 3 months / this year) in the VIEWER's timezone and sends an absolute
+  `since` — the server never guesses where a week starts. `GET /audit/actions` lists the distinct
+  action values present so the filter offers real options instead of a hardcoded list that drifts.
+  Composite indexes (`main.py`) back `WHERE <filter> ORDER BY created_at DESC`: per-column indexes
+  satisfied the WHERE but left a full sort. NEVER fetch the log whole and filter client-side — it
+  would search only the downloaded slice.
 - **A-05 audit log** (`audit.py`, `GET /audit`, admin-only + filterable): reads the append-only
   `AuditLog`. Mutations write via **`common.record_audit(db, actor, action, resource_type, resource_id,
   detail)`** — BEST-EFFORT + self-committing (never fails the real op), called AFTER the mutation
@@ -203,6 +214,7 @@ deliberately NOT visibility-filtered (published portals depend on them).
 - No rate limiting beyond nginx; no pagination on list endpoints (fine at current scale).
 
 ## Last updated
+2026-07-30 (activity log paginated + server-side filters/date range + `/audit/actions`)
 2026-07-29 (stable public `uid` on layers + `common.by_ref`; SQLite WAL/busy_timeout)
 2026-07-29 (INTEROP: new `ogcapi.py` = OGC API - Features Core/GeoJSON at `/api/ogc`; raster
 TileJSON; per-layer `/links` (share links) via the new `services/share_links.py`; STAC items +

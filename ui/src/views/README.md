@@ -56,6 +56,13 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 - Raster layer `bbox` from the API is in source CRS (not lon/lat) — using it directly for `fitToBbox` can throw "Invalid LngLat" (see tasks/raster notes). Prefer zooming via vector bounds or TiTiler TileJSON.
 
 ## Last updated
+2026-07-30 (`Activity.vue` PAGINATED: server-side filters that combine — search · resource · action ·
+who · date preset (today/this week/this month/last 3 months/this year, resolved to an absolute
+`since` in the VIEWER's timezone by `periodStart`) — plus a per-page selector (20/50/100/200,
+default 20) and a pager driven by the endpoint's `total`. Any filter change resets to page 1; if an
+offset ends up past the end it steps back to the last real page rather than showing an empty table.
+`GET /audit` now returns `{items,total,limit,offset}` — do NOT go back to fetching the whole log and
+filtering locally, that searches only the downloaded slice.)
 2026-07-21 (V-13 editor catalog: LayerTree drag & drop — reorder · into-folder · drag whole folders —
 centralized in a PortalEditor `dnd` controller, arrows kept as fallback; layer search, expand/collapse-all,
 zoom-to-folder (`zoomToGroup`). `Activity.vue`: click a "Who" cell → a user-info popup (name/role/email +

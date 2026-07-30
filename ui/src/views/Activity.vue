@@ -6,8 +6,20 @@
           <h1 class="text-2xl font-semibold tracking-tight text-foreground">Activity</h1>
           <p class="text-sm text-muted-foreground mt-1">Who did what, when — across the workspace.</p>
         </div>
-        <div class="flex items-center gap-2">
-          <select v-model="filterType" @change="load" class="input text-sm">
+        <button @click="load" class="btn-secondary text-xs px-3 py-1.5">Refresh</button>
+      </div>
+
+      <!-- Filters. All are applied SERVER-side and combine (AND); changing any resets to page 1.
+           Never filter the loaded page locally — that would only search the current 20 rows. -->
+      <div class="card p-3 flex flex-wrap items-end gap-2">
+        <div class="flex-1 min-w-[180px]">
+          <label class="text-[11px] text-muted-foreground block mb-1">Search</label>
+          <input v-model="filters.q" @keyup.enter="apply" type="text" placeholder="name, id, detail…"
+            class="input text-sm w-full" />
+        </div>
+        <div>
+          <label class="text-[11px] text-muted-foreground block mb-1">Resource</label>
+          <select v-model="filters.resource_type" @change="apply" class="input text-sm">
             <option value="">All resources</option>
             <option value="user">Users</option>
             <option value="portal">Portals</option>
@@ -16,8 +28,36 @@
             <option value="source">Sources</option>
             <option value="token">Tokens</option>
           </select>
-          <button @click="load" class="btn-secondary text-xs px-3 py-1.5">Refresh</button>
         </div>
+        <div>
+          <label class="text-[11px] text-muted-foreground block mb-1">Action</label>
+          <select v-model="filters.action" @change="apply" class="input text-sm">
+            <option value="">All actions</option>
+            <option v-for="a in actions" :key="a" :value="a">{{ a }}</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-[11px] text-muted-foreground block mb-1">Who</label>
+          <select v-model="filters.actor_id" @change="apply" class="input text-sm">
+            <option value="">Anyone</option>
+            <option v-for="u in usersStore.users" :key="u.id" :value="u.id">{{ u.name || u.email }}</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-[11px] text-muted-foreground block mb-1">When</label>
+          <select v-model="filters.period" @change="apply" class="input text-sm">
+            <option v-for="p in PERIODS" :key="p.value" :value="p.value">{{ p.label }}</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-[11px] text-muted-foreground block mb-1">Per page</label>
+          <select v-model.number="limit" @change="apply" class="input text-sm">
+            <option v-for="n in [20, 50, 100, 200]" :key="n" :value="n">{{ n }}</option>
+          </select>
+        </div>
+        <button v-if="anyFilter" @click="reset" class="text-xs text-muted-foreground hover:text-foreground px-2 py-2">
+          Clear
+        </button>
       </div>
 
       <div class="card overflow-x-auto">
@@ -50,9 +90,18 @@
           </tbody>
         </table>
       </div>
-      <p v-if="entries.length >= limit" class="text-[11px] text-muted-foreground/70 text-center">
-        Showing the {{ limit }} most recent entries.
-      </p>
+      <div v-if="total" class="flex items-center justify-between gap-3 flex-wrap">
+        <p class="text-[11px] text-muted-foreground/70">
+          {{ rangeStart }}–{{ rangeEnd }} of {{ total.toLocaleString() }}{{ anyFilter ? ' matching' : '' }}
+        </p>
+        <div v-if="pageCount > 1" class="flex items-center gap-1.5">
+          <button @click="go(0)" :disabled="page === 1" class="btn-secondary text-xs px-2 py-1 disabled:opacity-40">«</button>
+          <button @click="go(offset - limit)" :disabled="page === 1" class="btn-secondary text-xs px-2 py-1 disabled:opacity-40">Prev</button>
+          <span class="text-xs text-muted-foreground px-1">Page {{ page }} / {{ pageCount }}</span>
+          <button @click="go(offset + limit)" :disabled="page === pageCount" class="btn-secondary text-xs px-2 py-1 disabled:opacity-40">Next</button>
+          <button @click="go((pageCount - 1) * limit)" :disabled="page === pageCount" class="btn-secondary text-xs px-2 py-1 disabled:opacity-40">»</button>
+        </div>
+      </div>
     </div>
 
     <!-- User info popup (click a "Who" cell) -->
@@ -93,14 +142,52 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { listAudit } from '@/api'
+import { ref, reactive, computed, onMounted } from 'vue'
+import { listAudit, listAuditActions } from '@/api'
 import { useUsersStore } from '@/stores/users'
 
+// Date presets. Each returns the START instant in the VIEWER's local timezone — that is why the
+// boundary is computed here and not on the server: only the browser knows where the user's day,
+// week and year begin. The server just gets an absolute ISO instant.
+const PERIODS = [
+  { value: '', label: 'Any time' },
+  { value: 'today', label: 'Today' },
+  { value: 'week', label: 'This week' },
+  { value: 'month', label: 'This month' },
+  { value: 'quarter', label: 'Last 3 months' },
+  { value: 'year', label: 'This year' },
+]
+
+function periodStart(value) {
+  if (!value) return null
+  const d = new Date()
+  d.setHours(0, 0, 0, 0)
+  if (value === 'today') return d
+  if (value === 'week') {
+    const dow = (d.getDay() + 6) % 7        // Monday-first
+    d.setDate(d.getDate() - dow)
+    return d
+  }
+  if (value === 'month') { d.setDate(1); return d }
+  if (value === 'quarter') { d.setMonth(d.getMonth() - 3); return d }
+  if (value === 'year') { d.setMonth(0, 1); return d }
+  return null
+}
+
 const entries = ref([])
+const actions = ref([])
 const loading = ref(true)
-const filterType = ref('')
-const limit = 200
+const total = ref(0)
+const limit = ref(20)
+const offset = ref(0)
+const filters = reactive({ q: '', resource_type: '', action: '', actor_id: '', period: '' })
+
+const anyFilter = computed(() =>
+  !!(filters.q || filters.resource_type || filters.action || filters.actor_id || filters.period))
+const page = computed(() => Math.floor(offset.value / limit.value) + 1)
+const pageCount = computed(() => Math.max(1, Math.ceil(total.value / limit.value)))
+const rangeStart = computed(() => (total.value ? offset.value + 1 : 0))
+const rangeEnd = computed(() => Math.min(offset.value + entries.value.length, total.value))
 
 const usersStore = useUsersStore()
 const userPopup = ref(null)
@@ -142,16 +229,46 @@ function roleBadge(role) {
 async function load() {
   loading.value = true
   try {
-    const params = { limit }
-    if (filterType.value) params.resource_type = filterType.value
-    entries.value = (await listAudit(params)).data
+    const params = { limit: limit.value, offset: offset.value }
+    if (filters.q) params.q = filters.q.trim()
+    if (filters.resource_type) params.resource_type = filters.resource_type
+    if (filters.action) params.action = filters.action
+    if (filters.actor_id) params.actor_id = filters.actor_id
+    const start = periodStart(filters.period)
+    if (start) params.since = start.toISOString()
+    const { data } = await listAudit(params)
+    entries.value = data.items || []
+    total.value = data.total || 0
+    // A filter change can leave us past the end (e.g. page 7 of a now-shorter result) — step back
+    // to the last real page instead of showing an empty table.
+    if (!entries.value.length && offset.value > 0 && total.value > 0) {
+      offset.value = Math.max(0, (Math.ceil(total.value / limit.value) - 1) * limit.value)
+      return load()
+    }
   } catch {
     entries.value = []
+    total.value = 0
   } finally {
     loading.value = false
   }
 }
-onMounted(load)
+
+function apply() { offset.value = 0; load() }   // any filter change restarts at page 1
+function go(next) {
+  offset.value = Math.max(0, Math.min(next, (pageCount.value - 1) * limit.value))
+  load()
+}
+function reset() {
+  Object.assign(filters, { q: '', resource_type: '', action: '', actor_id: '', period: '' })
+  apply()
+}
+
+onMounted(async () => {
+  load()
+  // The "Who" and "Action" pickers need the real option sets; both are admin-gated like this page.
+  try { if (!usersStore.users.length) await usersStore.fetchAll() } catch { /* ignore */ }
+  try { actions.value = (await listAuditActions()).data } catch { /* ignore */ }
+})
 
 function fmt(s) { return new Date(s).toLocaleString() }
 

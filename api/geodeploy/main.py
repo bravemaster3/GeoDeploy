@@ -129,6 +129,14 @@ def _apply_schema_migrations(conn) -> None:
         "ALTER TABLE vector_layers ADD COLUMN uid VARCHAR(32)",
         "UPDATE vector_layers SET uid = lower(hex(randomblob(6))) WHERE uid IS NULL OR uid = ''",
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_vector_layers_uid ON vector_layers (uid)",
+        # Activity log pagination (2026-07-30): every query is `WHERE <filter> ORDER BY created_at
+        # DESC LIMIT n`. The per-column indexes on the model satisfy the WHERE but leave a full sort
+        # of the matches; SQLite uses ONE index per table per query, so these COMPOSITE indexes let
+        # it walk the filter and the order together. Plain created_at covers the unfiltered page.
+        "CREATE INDEX IF NOT EXISTS ix_audit_created ON audit_log (created_at DESC, id DESC)",
+        "CREATE INDEX IF NOT EXISTS ix_audit_rtype_created ON audit_log (resource_type, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS ix_audit_actor_created ON audit_log (actor_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS ix_audit_action_created ON audit_log (action, created_at DESC)",
         "ALTER TABLE raster_layers ADD COLUMN uid VARCHAR(32)",
         "UPDATE raster_layers SET uid = lower(hex(randomblob(6))) WHERE uid IS NULL OR uid = ''",
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_raster_layers_uid ON raster_layers (uid)",

@@ -701,6 +701,21 @@ def _share_block(links: list[dict]) -> str:
             f'<div class="s-body">{"".join(rows)}</div></details>')
 
 
+def _layers_section(cards: list[str]) -> str:
+    """The "Layers & data" section, with a filter box once there are enough layers that scanning
+    the list stops being practical. Filtering is client-side over `data-search` — every card is
+    already in the DOM, so there is nothing to fetch and it works on a static page."""
+    if not cards:
+        return ""
+    search = ("" if len(cards) < 6 else
+              '<input type="search" id="layer-search" class="layer-search" '
+              'placeholder="Filter layers…" aria-label="Filter layers">')
+    return ('<div class="section-title">Layers &amp; data</div>'
+            + search
+            + '<div class="grid" id="layer-grid">' + "".join(cards) + "</div>"
+            + '<p class="no-match" id="layer-nomatch" hidden>No layer matches that.</p>')
+
+
 def _about_page(slug: str, title: str, description: str | None, layers_info: list[dict]) -> str | None:
     """The standalone documentation page (`about.html`) published next to the map — GeoNode-style
     'full page that links to the map', styled after GeoLibre's dark design tokens. Static HTML,
@@ -715,10 +730,16 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
     for i in layers_info:
         # Private layer → just the name + a "Private" tag; none of its metadata is exposed publicly.
         if i.get("private"):
-            cards.append('<div class="layer"><div class="layer-name">' + _esc(i.get("name"))
+            cards.append('<div class="layer" data-search="' + _esc((i.get("name") or "").lower())
+                         + '"><div class="layer-name">' + _esc(i.get("name"))
                          + '<span class="badge badge-private">private</span></div></div>')
             continue
-        parts = ['<div class="layer"><div class="layer-name">' + _esc(i.get("name"))
+        # Searchable haystack for the About page's filter box (name + abstract + keywords +
+        # geometry/CRS), lowercased once here so the browser only has to substring-match.
+        haystack = " ".join(str(i.get(k) or "") for k in
+                            ("name", "abstract", "keywords", "geometry_type", "crs")).lower()
+        parts = ['<div class="layer" data-search="' + _esc(haystack) + '">'
+                 + '<div class="layer-name">' + _esc(i.get("name"))
                  + ('<span class="badge">public data</span>' if i.get("is_public") else "") + "</div>"]
         if i.get("abstract"):
             parts.append('<p class="abstract">' + _esc(i["abstract"]) + "</p>")
@@ -865,6 +886,13 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
     border: 1px solid var(--border); transition: border-color .15s;
   }}
   .pill:hover {{ border-color: var(--primary); }}
+  .layer-search {{
+    width: 100%; margin: 0 0 14px; padding: 9px 13px; font: inherit; font-size: 13.5px;
+    color: var(--fg); background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }}
+  .layer-search:focus {{ outline: none; border-color: var(--primary); }}
+  .no-match {{ font-size: 13px; color: var(--muted); text-align: center; padding: 18px 0; }}
   /* "Use this data elsewhere" — mirrors ui/src/components/data/ShareLinksModal.vue so the
      published portal and the dashboard read the same. Change both together. */
   .share {{ margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }}
@@ -921,7 +949,7 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
   <div class="kicker">Documentation</div>
   <h1>{_esc(title)}</h1>
   <div class="doc">{desc_html}</div>
-  {'<div class="section-title">Layers &amp; data</div><div class="grid">' + ''.join(cards) + '</div>' if cards else ''}
+  {_layers_section(cards)}
   <p class="foot">All shared data of this server: <a href="/api/stac">STAC catalog</a></p>
 </div>
 <script>
@@ -955,6 +983,24 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
           ta.remove(); done();
         }}
       }});
+    }});
+  }})();
+  // Layer filter: plain substring match over each card's prebuilt data-search haystack.
+  (function () {{
+    var box = document.getElementById('layer-search');
+    var grid = document.getElementById('layer-grid');
+    var none = document.getElementById('layer-nomatch');
+    if (!box || !grid) return;
+    var cards = Array.prototype.slice.call(grid.querySelectorAll('.layer'));
+    box.addEventListener('input', function () {{
+      var q = box.value.trim().toLowerCase();
+      var shown = 0;
+      cards.forEach(function (card) {{
+        var hit = !q || (card.getAttribute('data-search') || '').indexOf(q) !== -1;
+        card.hidden = !hit;
+        if (hit) shown++;
+      }});
+      if (none) none.hidden = shown !== 0;
     }});
   }})();
   (function () {{
