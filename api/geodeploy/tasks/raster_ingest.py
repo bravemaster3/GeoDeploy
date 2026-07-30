@@ -149,3 +149,58 @@ def ingest_raster(self, job_id: str, layer_id: int, file_path: str, s3_key: str)
             os.unlink(file_path)
         if cog_path and cog_path != file_path and os.path.exists(cog_path):
             os.unlink(cog_path)
+
+
+@celery_app.task(bind=True, name="geodeploy.tasks.raster_ingest.ingest_raster_from_storage")
+def ingest_raster_from_storage(self, job_id: str, layer_id: int, source_key: str, dest_key: str):
+    """Ingest a raster the BROWSER uploaded straight to object storage.
+
+    Why this exists: a GeoTIFF over ~100 MB cannot be POSTed through the API at all when a CDN sits
+    in front of the instance (Cloudflare's free tier cuts request bodies at 100 MB), so large
+    rasters upload direct-to-storage in presigned parts, exactly like large vectors. By that point
+    the bytes are in the bucket and the normal pipeline just needs a local file.
+
+    So: download once, then hand off to `ingest_raster` UNCHANGED — it inspects, converts to COG,
+    uploads to `dest_key` and writes the metadata. Reusing it rather than duplicating that logic is
+    the point; COG conversion and the default-stretch heuristic have too much history to fork.
+    `.apply()` runs it in-process (not a second queued task) so progress lands on the same job row.
+    """
+    import os
+    import tempfile
+
+    settings = get_settings()
+    creds = _get_storage_creds()
+    tmp_path = None
+    try:
+        _update_job(job_id, status="processing", current_step="Fetching uploaded file", progress=3,
+                    started_at=datetime.now(timezone.utc).isoformat())
+        os.makedirs(f"{settings.data_dir}/temp", exist_ok=True)
+        ext = os.path.splitext(source_key)[1] or ".tif"
+        fd, tmp_path = tempfile.mkstemp(suffix=ext, dir=f"{settings.data_dir}/temp")
+        os.close(fd)
+
+        s3 = boto3.client(
+            "s3", endpoint_url=creds["endpoint"], aws_access_key_id=creds["access_key"],
+            aws_secret_access_key=creds["secret_key"], region_name=creds["region"],
+            config=Config(signature_version="s3v4"))
+        s3.download_file(creds["bucket"], source_key, tmp_path)
+
+        # ingest_raster deletes tmp_path itself when it finishes.
+        ingest_raster.apply(args=(job_id, layer_id, tmp_path, dest_key))
+        tmp_path = None
+
+        # The raw upload is superseded by the COG at dest_key. Only remove it if they differ —
+        # a raster already COG-shaped can legitimately be converted in place to the same key.
+        if source_key != dest_key:
+            try:
+                s3.delete_object(Bucket=creds["bucket"], Key=source_key)
+            except Exception:
+                pass      # a leftover raw object costs space, not correctness
+    except Exception as exc:
+        _update_job(job_id, status="error", error_message=str(exc),
+                    completed_at=datetime.now(timezone.utc).isoformat())
+        _update_layer(layer_id, status="error", error_message=str(exc))
+        raise
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)

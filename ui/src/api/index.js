@@ -208,6 +208,13 @@ export const uploadRasterFile = (file, onProgress) => {
   })
 }
 export const getRasterJobStatus = (jobId) => api.get(`/data/raster/jobs/${jobId}`)
+// Large rasters upload DIRECT to storage in presigned parts, then get registered — a GeoTIFF over
+// ~100 MB cannot be POSTed through the API when a CDN fronts the instance (Cloudflare's free tier
+// cuts request bodies at 100 MB and the request never arrives). Mirrors the large-vector flow.
+export const rasterMultipartInitiate = (data) => api.post('/data/raster/upload/multipart/initiate', data)
+export const rasterMultipartComplete = (data) => api.post('/data/raster/upload/multipart/complete', data)
+export const rasterMultipartAbort = (data) => api.post('/data/raster/upload/multipart/abort', data)
+export const completeLargeRaster = (data) => api.post('/data/raster/large/complete', data)
 export const saveRasterDefaultStyle = (id, style) => api.put(`/data/raster/${id}/default-style`, style)
 export const setRasterSharing = (id, data) => api.put(`/data/raster/${id}/sharing`, data)
 export const renameRasterLayer = (id, name) => api.put(`/data/raster/${id}/rename`, { name })

@@ -1,6 +1,8 @@
 import os
 import uuid
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -149,6 +151,100 @@ async def upload_raster(
         id=job_id, layer_id=layer.id, layer_type="raster",
         status="queued", progress=0, current_step="Queued", error_message=None,
     )
+
+
+# ── Large rasters: direct-to-storage in presigned parts ──────────────────────────────────────
+# A GeoTIFF over ~100 MB cannot be POSTed through the API when a CDN fronts the instance
+# (Cloudflare's free tier cuts request bodies at 100 MB) — the request never even arrives. So the
+# browser uploads to object storage in parts and we ingest from there, mirroring the large-VECTOR
+# flow. PART_SIZE and the multipart bodies are imported from the vector router deliberately: one
+# definition, so the two paths cannot drift on the part size that keeps requests under the limit.
+from .vector import PART_SIZE, MultipartComplete, MultipartInitiate   # noqa: E402
+
+
+class LargeRasterComplete(BaseModel):
+    s3_key: str
+    name: str | None = None
+    file_size: int | None = None
+
+
+def _raster_key(user_id: int, filename: str) -> str:
+    base = os.path.splitext(os.path.basename(filename or "raster"))[0] or "raster"
+    ext = os.path.splitext(filename or "")[1].lower() or ".tif"
+    return f"rasters/{user_id}/{uuid.uuid4().hex}/{base}{ext}"
+
+
+@router.post("/upload/multipart/initiate")
+async def raster_multipart_initiate(body: MultipartInitiate,
+                                    user: User = Depends(require_scope("data:write"))):
+    """Open a chunked upload for a raster and presign every part."""
+    import math
+
+    from ...services import minio as minio_svc
+    ext = os.path.splitext(body.filename or "")[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(400, f"Unsupported type: {ext}. Upload GeoTIFF (.tif/.tiff).")
+    if body.file_size <= 0:
+        raise HTTPException(400, "Empty file.")
+    if body.file_size > MAX_FILE_SIZE:
+        raise HTTPException(413, "File exceeds 10 GB limit.")
+
+    s3_key = _raster_key(user.id, body.filename)
+    upload_id = await run_in_threadpool(minio_svc.create_multipart, s3_key)
+    num_parts = max(1, math.ceil(body.file_size / PART_SIZE))
+    parts = await run_in_threadpool(minio_svc.presign_parts, s3_key, upload_id, num_parts)
+    return {"s3_key": s3_key, "upload_id": upload_id, "part_size": PART_SIZE, "parts": parts}
+
+
+@router.post("/upload/multipart/complete")
+async def raster_multipart_complete(body: MultipartComplete,
+                                    user: User = Depends(require_scope("data:write"))):
+    """Assemble the parts. Registration is the separate /large/complete call, matching the vector
+    flow. The key must be inside the caller's own prefix — never trust a client-supplied key."""
+    from ...services import minio as minio_svc
+    if not (body.s3_key or "").startswith(f"rasters/{user.id}/"):
+        raise HTTPException(400, "Invalid storage key.")
+    await run_in_threadpool(
+        minio_svc.complete_multipart, body.s3_key, body.upload_id,
+        [{"PartNumber": p.part_number, "ETag": p.etag} for p in body.parts])
+    return {"s3_key": body.s3_key}
+
+
+@router.post("/upload/multipart/abort", status_code=204)
+async def raster_multipart_abort(body: MultipartComplete,
+                                 user: User = Depends(require_scope("data:write"))):
+    from ...services import minio as minio_svc
+    if not (body.s3_key or "").startswith(f"rasters/{user.id}/"):
+        raise HTTPException(400, "Invalid storage key.")
+    await run_in_threadpool(minio_svc.abort_multipart, body.s3_key, body.upload_id)
+
+
+@router.post("/large/complete", response_model=JobStatus, status_code=202)
+async def large_raster_complete(body: LargeRasterComplete,
+                                user: User = Depends(require_scope("data:write")),
+                                db: AsyncSession = Depends(get_db)):
+    """Register a raster already uploaded to storage and queue its COG conversion."""
+    if not (body.s3_key or "").startswith(f"rasters/{user.id}/"):
+        raise HTTPException(400, "Invalid storage key.")
+    base_name = (body.name or "").strip() or os.path.splitext(os.path.basename(body.s3_key))[0]
+    # The COG is written beside the upload, so the raw file can be dropped afterwards.
+    dest_key = f"{os.path.dirname(body.s3_key)}/{base_name}.tif"
+
+    layer = RasterLayer(user_id=user.id, name=base_name, s3_key=dest_key,
+                        file_size=body.file_size, status="processing")
+    db.add(layer)
+    await db.flush()
+    job_id = str(uuid.uuid4())
+    db.add(UploadJob(id=job_id, layer_id=layer.id, layer_type="raster"))
+    await db.commit()
+    await db.refresh(layer)
+    await record_audit(db, user, "raster.upload", "raster", layer.id,
+                       {"name": base_name, "direct_upload": True})
+
+    from ...tasks.raster_ingest import ingest_raster_from_storage
+    ingest_raster_from_storage.delay(job_id, layer.id, body.s3_key, dest_key)
+    return JobStatus(id=job_id, layer_id=layer.id, layer_type="raster", status="queued",
+                     progress=0, current_step="Queued", error_message=None)
 
 
 @router.get("/jobs/{job_id}", response_model=JobStatus)

@@ -234,6 +234,49 @@
           </div>
         </section>
 
+        <section class="card overflow-hidden">
+          <header class="px-5 py-3.5 border-b border-border/60">
+            <h2 class="font-semibold">History</h2>
+            <p class="text-xs text-muted-foreground">Every run, successful or not.</p>
+          </header>
+          <div v-if="!bkRuns.length" class="px-5 py-8 text-center text-sm text-muted-foreground/70">
+            No backups yet.
+          </div>
+          <table v-else class="w-full text-sm">
+            <tbody>
+              <tr v-for="r in bkRunsPage" :key="r.id" class="border-b border-border/40 last:border-0">
+                <td class="px-5 py-2.5 whitespace-nowrap">
+                  <span class="text-[11px] font-mono px-1.5 py-0.5 rounded"
+                    :class="r.status === 'success' ? 'bg-emerald-500/15 text-emerald-400'
+                      : r.status === 'error' ? 'bg-red-500/15 text-red-400' : 'bg-amber-500/15 text-amber-400'">{{ r.status }}</span>
+                </td>
+                <td class="px-2 py-2.5 text-xs text-muted-foreground whitespace-nowrap">{{ new Date(r.started_at).toLocaleString() }}</td>
+                <td class="px-2 py-2.5 text-xs text-muted-foreground">{{ r.trigger }}</td>
+                <td class="px-2 py-2.5 text-xs text-muted-foreground">
+                  <span v-if="r.status === 'running'">{{ r.current_step }} &middot; {{ r.progress }}%</span>
+                  <span v-else-if="r.status === 'error'" class="text-red-400">{{ r.error_message }}</span>
+                  <span v-else>{{ fmtBytes(r.size_bytes) }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <!-- Paginated rather than scrolled: this list only grows, and a page that gets taller
+               forever pushes everything below it out of reach. -->
+          <div v-if="bkRunPages > 1" class="flex items-center justify-between gap-3 px-5 py-3 border-t border-border/60">
+            <span class="text-[11px] text-muted-foreground/70">
+              {{ bkRunPage * BK_PER_PAGE + 1 }}–{{ Math.min((bkRunPage + 1) * BK_PER_PAGE, bkRuns.length) }}
+              of {{ bkRuns.length }}
+            </span>
+            <span class="flex items-center gap-1.5">
+              <button @click="bkRunPage--" :disabled="bkRunPage === 0"
+                class="btn-secondary text-xs px-2 py-1 disabled:opacity-40">Prev</button>
+              <span class="text-xs text-muted-foreground px-1">{{ bkRunPage + 1 }} / {{ bkRunPages }}</span>
+              <button @click="bkRunPage++" :disabled="bkRunPage >= bkRunPages - 1"
+                class="btn-secondary text-xs px-2 py-1 disabled:opacity-40">Next</button>
+            </span>
+          </div>
+        </section>
+
         <!-- Manage backups — DANGER ZONE. Same red treatment as the container terminal, because
              restoring replaces the database and the files, and deleting a backup is the one
              unrecoverable action in the app. -->
@@ -262,7 +305,7 @@
               No backups stored yet.
             </p>
 
-            <div v-for="b in stored" :key="b.key"
+            <div v-for="b in storedPage" :key="b.key"
               class="rounded-lg border border-border bg-card p-3 flex flex-wrap items-center gap-3">
               <div class="min-w-0 flex-1">
                 <div class="text-sm font-medium font-mono truncate">{{ b.name }}</div>
@@ -286,6 +329,20 @@
               </button>
             </div>
 
+            <div v-if="storedPages > 1" class="flex items-center justify-between gap-3 pt-1">
+              <span class="text-[11px] text-muted-foreground/70">
+                {{ storedPageIdx * BK_PER_PAGE + 1 }}–{{ Math.min((storedPageIdx + 1) * BK_PER_PAGE, stored.length) }}
+                of {{ stored.length }}
+              </span>
+              <span class="flex items-center gap-1.5">
+                <button @click="storedPageIdx--" :disabled="storedPageIdx === 0"
+                  class="btn-secondary text-xs px-2 py-1 disabled:opacity-40">Prev</button>
+                <span class="text-xs text-muted-foreground px-1">{{ storedPageIdx + 1 }} / {{ storedPages }}</span>
+                <button @click="storedPageIdx++" :disabled="storedPageIdx >= storedPages - 1"
+                  class="btn-secondary text-xs px-2 py-1 disabled:opacity-40">Next</button>
+              </span>
+            </div>
+
             <p v-if="stored.length && !auth.isOwner" class="text-[11px] text-muted-foreground/70">
               Only the workspace owner can restore a backup.
             </p>
@@ -293,34 +350,6 @@
               {{ storedMsg.text }}
             </p>
           </div>
-        </section>
-
-        <section class="card overflow-hidden">
-          <header class="px-5 py-3.5 border-b border-border/60">
-            <h2 class="font-semibold">History</h2>
-            <p class="text-xs text-muted-foreground">Every run, successful or not.</p>
-          </header>
-          <div v-if="!bkRuns.length" class="px-5 py-8 text-center text-sm text-muted-foreground/70">
-            No backups yet.
-          </div>
-          <table v-else class="w-full text-sm">
-            <tbody>
-              <tr v-for="r in bkRuns" :key="r.id" class="border-b border-border/40 last:border-0">
-                <td class="px-5 py-2.5 whitespace-nowrap">
-                  <span class="text-[11px] font-mono px-1.5 py-0.5 rounded"
-                    :class="r.status === 'success' ? 'bg-emerald-500/15 text-emerald-400'
-                      : r.status === 'error' ? 'bg-red-500/15 text-red-400' : 'bg-amber-500/15 text-amber-400'">{{ r.status }}</span>
-                </td>
-                <td class="px-2 py-2.5 text-xs text-muted-foreground whitespace-nowrap">{{ new Date(r.started_at).toLocaleString() }}</td>
-                <td class="px-2 py-2.5 text-xs text-muted-foreground">{{ r.trigger }}</td>
-                <td class="px-2 py-2.5 text-xs text-muted-foreground">
-                  <span v-if="r.status === 'running'">{{ r.current_step }} &middot; {{ r.progress }}%</span>
-                  <span v-else-if="r.status === 'error'" class="text-red-400">{{ r.error_message }}</span>
-                  <span v-else>{{ fmtBytes(r.size_bytes) }}</span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
         </section>
       </div>
 
@@ -721,6 +750,13 @@ const bkRunning = ref(false)
 const bkMsg = ref(null)
 let bkPoll = null
 
+const bkRunPages = computed(() => Math.max(1, Math.ceil(bkRuns.value.length / BK_PER_PAGE)))
+const bkRunsPage = computed(() =>
+  bkRuns.value.slice(bkRunPage.value * BK_PER_PAGE, (bkRunPage.value + 1) * BK_PER_PAGE))
+const storedPages = computed(() => Math.max(1, Math.ceil(stored.value.length / BK_PER_PAGE)))
+const storedPage = computed(() =>
+  stored.value.slice(storedPageIdx.value * BK_PER_PAGE, (storedPageIdx.value + 1) * BK_PER_PAGE))
+
 function fmtBytes(b) {
   if (!b) return '-'
   if (b > 1e12) return (b / 1e12).toFixed(1) + ' TB'
@@ -733,6 +769,14 @@ function fmtBytes(b) {
 // `stored` comes from the DESTINATION's own manifests, not our run history: that history lives in
 // the state database, which is itself one of the things being backed up, so it can never be the
 // authority on what exists.
+// Both lists here grow without bound (a run per backup, a folder per stored backup), so they are
+// PAGINATED rather than left to stretch the page — the same reasoning as the Activity log. These
+// are small enough to page client-side; if either ever needs server paging, follow /audit's
+// {items,total,limit,offset} shape rather than fetching everything.
+const BK_PER_PAGE = 10
+const bkRunPage = ref(0)
+const storedPageIdx = ref(0)
+
 const stored = ref([])
 const storedLoading = ref(false)
 const storedBusy = ref(null)
@@ -749,6 +793,7 @@ async function loadStored() {
   storedMsg.value = null
   try {
     stored.value = (await listStoredBackups()).data
+    if (storedPageIdx.value >= storedPages.value) storedPageIdx.value = storedPages.value - 1
   } catch (e) {
     stored.value = []
     storedMsg.value = { ok: false, text: e.response?.data?.detail || 'Could not list the destination.' }
@@ -816,6 +861,7 @@ async function refreshBackupRuns() {
     bkRuns.value = (await listBackupRuns()).data
   } catch { bkRuns.value = [] }
   // Keep polling while a run is in flight so the step/percentage advances on screen.
+  if (bkRunPage.value >= bkRunPages.value) bkRunPage.value = bkRunPages.value - 1
   const running = bkRuns.value.some(r => r.status === 'running')
   bkRunning.value = running
   clearTimeout(bkPoll)

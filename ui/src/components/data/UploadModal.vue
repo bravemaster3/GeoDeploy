@@ -124,7 +124,7 @@ const emit = defineEmits(['close'])
 
 const fileInput = ref(null)
 const fileName = ref('')
-const { uploading, uploadProgress, error, uploadFile, uploadGeoParquet, uploadLargeVector } = useUpload()
+const { uploading, uploadProgress, error, uploadFile, uploadGeoParquet, uploadLargeVector, uploadLargeRaster } = useUpload()
 const dataStore = useDataStore()
 
 // CSV import state (vector only)
@@ -193,8 +193,16 @@ async function handleFile(file) {
     return
   }
   fileName.value = file.name
-  // Vector files too big for the API multipart cap upload direct-to-storage and convert to
-  // GeoParquet in the background instead of being rejected.
+  // Big RASTERS also bypass the API: a GeoTIFF over the CDN's request-body cap never reaches it.
+  if (props.type === 'raster' && file.size >= LARGE_UPLOAD_THRESHOLD) {
+    try {
+      await uploadLargeRaster(file, file.name.replace(/\.[^.]+$/, ''))
+      setTimeout(() => emit('close'), 800)
+    } catch { /* error shown via `error` */ }
+    return
+  }
+  // Vector files too big for a single request upload direct-to-storage and convert to GeoParquet
+  // in the background instead of being rejected.
   if (props.type === 'vector' && file.size >= LARGE_UPLOAD_THRESHOLD) {
     try {
       await uploadLargeVector(file, file.name.replace(/\.[^.]+$/, ''))

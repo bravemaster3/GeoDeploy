@@ -66,7 +66,17 @@ function place() {
   if (!r) return
   // Right-align the menu with the trigger, clamped into the viewport.
   const left = Math.max(8, Math.min(r.right - MENU_W, window.innerWidth - MENU_W - 8))
-  menuStyle.value = { top: `${r.bottom + 4}px`, left: `${left}px` }
+
+  // FLIP UP when there isn't room below. A fixed menu is not clipped by an ancestor, but it can
+  // still fall off the bottom of the VIEWPORT — which is what happened to the last row of My Data:
+  // the tiers rendered below the fold and were unreachable. Measure the real height (it varies
+  // with the number of tiers) and prefer whichever side actually fits.
+  const h = menu.value?.offsetHeight || 0
+  const below = window.innerHeight - r.bottom - 8
+  const above = r.top - 8
+  const openUp = h > below && above > below
+  const top = openUp ? Math.max(8, r.top - h - 4) : r.bottom + 4
+  menuStyle.value = { top: `${top}px`, left: `${left}px` }
 }
 
 function toggle() {
@@ -74,7 +84,10 @@ function toggle() {
 }
 function openMenu() {
   open.value = true
-  nextTick(place)
+  // Park it off-screen for the first frame so the measure-then-position pass can't flash the menu
+  // in the wrong place.
+  menuStyle.value = { top: '-9999px', left: '-9999px' }
+  nextTick(() => { place(); requestAnimationFrame(place) })
   document.addEventListener('click', onDocClick, true)
   // A fixed menu detaches from the trigger on scroll/resize — close rather than chase it.
   window.addEventListener('scroll', close, true)

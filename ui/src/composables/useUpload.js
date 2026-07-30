@@ -4,6 +4,7 @@ import {
   presignGeoParquet, completeGeoParquet, putFileToUrl,
   presignLargeVector, completeLargeVector,
   multipartInitiate, multipartComplete, multipartAbort, putPartToUrl,
+  rasterMultipartInitiate, rasterMultipartComplete, rasterMultipartAbort, completeLargeRaster,
 } from '@/api'
 import { useDataStore } from '@/stores/data'
 
@@ -28,8 +29,15 @@ const CHUNK_CONCURRENCY = 4                // parts uploaded in parallel
 
 // Upload a file as presigned multipart parts (initiate → PUT each part → complete). Returns the
 // finished object's s3_key. `onProgress` gets a 0–100 percentage aggregated across all parts.
+// `kind` selects BOTH the validation and the destination prefix: 'raster' routes to the raster
+// endpoints (keys under rasters/), anything else to the vector ones (vectors/). Same part size and
+// the same parallel-part loop either way — there is only one place that knows how to chunk.
 async function uploadChunked(file, kind, onProgress) {
-  const { data: init } = await multipartInitiate({ filename: file.name, file_size: file.size, kind })
+  const isRaster = kind === 'raster'
+  const initiate = isRaster ? rasterMultipartInitiate : multipartInitiate
+  const complete = isRaster ? rasterMultipartComplete : multipartComplete
+  const abort = isRaster ? rasterMultipartAbort : multipartAbort
+  const { data: init } = await initiate({ filename: file.name, file_size: file.size, kind })
   const { s3_key, upload_id, part_size, parts } = init
   const loaded = new Array(parts.length).fill(0)
   const results = new Array(parts.length)
@@ -49,10 +57,10 @@ async function uploadChunked(file, kind, onProgress) {
   }
   try {
     await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, parts.length) }, worker))
-    await multipartComplete({ s3_key, upload_id, parts: results })
+    await complete({ s3_key, upload_id, parts: results })
     return s3_key
   } catch (err) {
-    multipartAbort({ s3_key, upload_id }).catch(() => {})
+    abort({ s3_key, upload_id }).catch(() => {})
     throw err
   }
 }
@@ -119,6 +127,30 @@ export function useUpload() {
   // Large vector file (over the API cap): presign → PUT straight to storage → register + queue the
   // background GeoParquet conversion. `csvOpts` (x/y or wkt column + srid + delimiter) is only used
   // for CSV. Same no-API-passthrough benefit as GeoParquet uploads.
+  // Large GeoTIFF: chunked direct-to-storage, then register + queue the COG conversion. Without
+  // this, anything over the CDN's request-body cap failed with a bare "Network error" and nothing
+  // in the API log, because the upload never reached the API at all.
+  async function uploadLargeRaster(file, name) {
+    uploading.value = true
+    uploadProgress.value = 0
+    error.value = null
+    try {
+      const s3Key = await uploadChunked(file, 'raster', (p) => (uploadProgress.value = p))
+      const { data: job } = await completeLargeRaster({
+        s3_key: s3Key, name: name || file.name.replace(/\.[^.]+$/, ''), file_size: file.size,
+      })
+      dataStore.rasterLayers.unshift({
+        id: job.layer_id, name: name || file.name, status: 'processing', _job: job })
+      dataStore.pollJob(job.id, 'raster', job.layer_id).catch(() => {})
+      return job
+    } catch (err) {
+      error.value = err.response?.data?.detail || err.message
+      throw err
+    } finally {
+      uploading.value = false
+    }
+  }
+
   async function uploadLargeVector(file, name, csvOpts) {
     uploading.value = true
     uploadProgress.value = 0
@@ -146,5 +178,5 @@ export function useUpload() {
     }
   }
 
-  return { uploading, uploadProgress, error, uploadFile, uploadGeoParquet, uploadLargeVector }
+  return { uploading, uploadProgress, error, uploadFile, uploadGeoParquet, uploadLargeVector, uploadLargeRaster }
 }
