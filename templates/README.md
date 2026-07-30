@@ -61,6 +61,20 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
   - **R4 story pictures (V-11 redesign, 2026-07-22):** story sections gained an optional `image`
     (same-origin URL via `uploadPortalAsset`); `renderStoryHtml` emits `<img class="story-img">`
     (URL escaped). Editor: **+ Add image / Change / remove** per section.
+  - **Previous / next extent (2026-07-30):** `NavHistoryControl` — the navigation history every
+    desktop GIS has, added to the control cluster for EVERY archetype (it belongs to the map, not to
+    one experience). `moveend` records the camera; `histSuppress` stops our own `easeTo` from being
+    recorded as a new step, and `sameView()` tolerances stop sub-pixel drift and animation tails from
+    filling the history with identical entries. A new move discards the forward branch (browser
+    semantics); the stack is capped at 60. Buttons stay VISIBLE but disabled at the ends — a control
+    that vanishes and returns makes the whole cluster jump.
+  - **Catalog Folder facet (2026-07-30):** `portal_generator._folder_by_ref` maps each layer to the
+    V-13 folder it sits in, baked into the catalog records. Root-level layers report no folder, so the
+    facet narrows without ever becoming a required choice; nested folders report the INNERMOST name.
+    Keyed by `(kind, layer_id)` so an external source and a layer sharing an id stay distinct.
+    `regions.catalog.mapWidth` (author choice, clamped 30–60%) is applied as the `--cat-map-w` custom
+    property at parse time. On phones the split turns VERTICAL — filters on top, results beneath, map
+    below at 40vh — instead of the List/Map toggle used at tablet widths.
   - **Globe in the pinned start view (2026-07-30):** `initial_view` already carried
     center/zoom/bearing/**pitch**; the MapLibre v5 **projection** (globe vs mercator) was the one part
     of the camera that was lost, so a portal arranged on the 3D globe opened flat. `currentViewObj()`

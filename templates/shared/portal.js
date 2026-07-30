@@ -2438,6 +2438,7 @@
     map.addControl(new BasemapControl(), CTRL_POS);
     map.addControl(new HomeControl(), CTRL_POS);        // back to the published default extent
     map.addControl(new ZoomAllControl(), CTRL_POS);     // fit all layers
+    map.addControl(new NavHistoryControl(), CTRL_POS);  // previous / next extent
     map.addControl(new DrawZoomControl(), CTRL_POS);    // drag a box to zoom (toggle back to pan)
     map.addControl(new ToolsControl(), CTRL_POS);
   }
@@ -2503,6 +2504,78 @@
   class ZoomAllControl {
     onAdd() { this._c = ctrlButton('gd-zoomall-btn', 'Zoom to all layers', zoomAllIcon(), zoomToAllLayers); return this._c; }
     onRemove() { if (this._c) this._c.remove(); }
+  }
+
+  // ── Previous / next extent ────────────────────────────────────────────────
+  // The navigation history every desktop GIS has: step back to where you just were after a zoom or
+  // a "Zoom to" jump, and forward again. Applies to EVERY archetype — it is part of the map, not of
+  // any one experience.
+  const viewHist = [];
+  let viewIdx = -1;
+  let histSuppress = false;   // set while WE move the map, so our own move isn't recorded as a step
+  let histBack = null, histFwd = null;
+
+  function sameView(a, b) {
+    if (!a || !b) return false;
+    // Tolerances, not equality: a moveend fires for sub-pixel drift and for the tail of an eased
+    // animation, and recording those would fill the history with steps that look identical.
+    return Math.abs(a.zoom - b.zoom) < 0.01
+      && Math.abs(a.center[0] - b.center[0]) < 1e-6 && Math.abs(a.center[1] - b.center[1]) < 1e-6
+      && Math.abs((a.bearing || 0) - (b.bearing || 0)) < 0.5
+      && Math.abs((a.pitch || 0) - (b.pitch || 0)) < 0.5;
+  }
+  function updateHistBtns() {
+    if (histBack) histBack.disabled = viewIdx <= 0;
+    if (histFwd) histFwd.disabled = viewIdx < 0 || viewIdx >= viewHist.length - 1;
+  }
+  function recordView() {
+    if (histSuppress) { histSuppress = false; updateHistBtns(); return; }
+    const v = currentViewObj();
+    if (sameView(viewHist[viewIdx], v)) return;
+    viewHist.splice(viewIdx + 1);   // a new move discards the forward branch, like a browser
+    viewHist.push(v);
+    if (viewHist.length > 60) viewHist.shift();   // bounded: a long panning session is not a leak
+    viewIdx = viewHist.length - 1;
+    updateHistBtns();
+  }
+  function histGo(delta) {
+    const i = viewIdx + delta;
+    if (i < 0 || i >= viewHist.length) return;
+    viewIdx = i;
+    histSuppress = true;
+    const v = viewHist[i];
+    try {
+      map.easeTo({ center: v.center, zoom: v.zoom, bearing: v.bearing || 0, pitch: v.pitch || 0,
+                   duration: 450, essential: true });
+      applyProjection(v.projection);
+    } catch (e) { histSuppress = false; }
+    updateHistBtns();
+  }
+  function histBackIcon() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>';
+  }
+  function histFwdIcon() {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>';
+  }
+  class NavHistoryControl {
+    onAdd() {
+      const c = document.createElement('div');
+      c.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+      c.innerHTML =
+        '<button type="button" class="gd-navback-btn" title="Previous extent" aria-label="Previous extent" disabled>' + histBackIcon() + '</button>' +
+        '<button type="button" class="gd-navfwd-btn" title="Next extent" aria-label="Next extent" disabled>' + histFwdIcon() + '</button>';
+      histBack = c.querySelector('.gd-navback-btn');
+      histFwd = c.querySelector('.gd-navfwd-btn');
+      histBack.addEventListener('click', function (e) { e.stopPropagation(); histGo(-1); });
+      histFwd.addEventListener('click', function (e) { e.stopPropagation(); histGo(1); });
+      // Seed with wherever the map settled after its opening fit, so the FIRST zoom already has
+      // somewhere to go back to.
+      map.once('idle', function () { recordView(); });
+      map.on('moveend', recordView);
+      this._c = c;
+      return c;
+    }
+    onRemove() { map.off('moveend', recordView); if (this._c) this._c.remove(); }
   }
   // Draw-a-box-to-zoom, as a TOGGLE: on → drag a box to zoom (repeatable); click again → back to pan.
   let dzActive = false, dzStart = null, dzBtn = null;
