@@ -101,6 +101,11 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
     # ordered_configs[0] is the TOP of the layer list and should draw on TOP of the map.
     # MapLibre draws later layers on top, so build them in reverse (config[0] added last).
     for cfg in reversed(ordered_configs):
+        # V-14 catalog scope="public": layers baked in ONLY so a visitor can switch them on. They
+        # must not drag the opening extent to the union of the whole instance, so every bounds
+        # contribution below is skipped for them. Not persisted to Portal.layer_configs — added at
+        # bundle-assembly time only.
+        _extra = bool(cfg.get("_catalog_extra"))
         if cfg["layer_type"] == "vector":
             layer = next((l for l in vector_layers if l.id == cfg["layer_id"]), None)
             if not layer:
@@ -138,13 +143,13 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                               and not layer.s3_key.rstrip("/").endswith(".parquet")) else None),
                     })
                     lb = json.loads(layer.bbox) if layer.bbox else None
-                    if lb:
+                    if lb and not _extra:
                         _expand_bounds(bounds, lb)
-                    core_bbox = (deck_core_bounds or {}).get(layer.id)
+                    core_bbox = None if _extra else (deck_core_bounds or {}).get(layer.id)
                     if core_bbox:
                         _expand_bounds(core_bounds, core_bbox)
                         deck_core_seen = True
-                    elif lb:  # no manifest core for this layer → keep its full extent in the core set
+                    elif lb and not _extra:  # no manifest core → keep its full extent in the core set
                         _expand_bounds(core_bounds, lb)
                     continue
                 sources[source_id] = {
@@ -180,7 +185,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                     ml.setdefault("layout", {})["visibility"] = "none"
             layers.extend(ml_layers)
 
-            if layer.bbox:
+            if layer.bbox and not _extra:
                 _expand_bounds(bounds, json.loads(layer.bbox))
 
         elif cfg["layer_type"] == "raster":
@@ -226,7 +231,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 raster_layer["layout"] = {"visibility": "none"}
             layers.append(raster_layer)
 
-            if layer.bbox:
+            if layer.bbox and not _extra:
                 _expand_bounds(bounds, json.loads(layer.bbox))
 
         elif cfg["layer_type"] == "external":
@@ -299,7 +304,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
             })
             elev_seq += 1
             layers_info.append({"name": cfg.get("name", "3D layer"), "kind": "elevation"})
-            if e_bbox:
+            if e_bbox and not _extra:
                 _expand_bounds(bounds, e_bbox)
 
     valid_bounds = bounds if bounds[0] < bounds[2] else None

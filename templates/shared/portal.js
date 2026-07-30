@@ -3286,10 +3286,6 @@
     function refOf(r) {
       // Elevation is a terrain effect, not a toggleable layer.
       if (r.layer_id == null || r.kind === 'elevation') return null;
-      // A record that came from the instance-wide feed is NOT on this portal's map, so it has no
-      // MapLibre/deck layer to toggle. Returning a ref would render a "Show on map" button that
-      // silently does nothing — worse than not offering it.
-      if (r._offmap) return null;
       // Namespaced exactly like layerRefType(), so an external source and a real layer sharing an
       // id stay distinct (they are both id 1 on a fresh install).
       return (r.kind === 'raster' ? 'raster' : r.kind === 'external' ? 'external' : 'vector')
@@ -3585,29 +3581,6 @@
     $res.addEventListener('mouseleave', function () { showHl(null); });
 
     render();
-
-    // scope "public": ALSO list every public layer on the instance, read live, so sharing a layer
-    // shows up without re-publishing every portal. The portal's own layers are rendered immediately
-    // from the baked records above and are never replaced — they are the ones with a map to toggle —
-    // so a slow or failed feed degrades to the portal-scoped catalog rather than an empty page.
-    if (cfg.scope === 'public') {
-      const own = {};
-      records.forEach(function (r) { if (r.layer_id != null) own[r.kind + ':' + r.layer_id] = true; });
-      fetch('/api/portals/' + encodeURIComponent(window.GEODEPLOY.slug) + '/catalog', {
-        credentials: 'same-origin',
-      }).then(function (res) { return res.ok ? res.json() : null; }).then(function (data) {
-        if (!data || !data.records) return;
-        let added = 0;
-        data.records.forEach(function (r) {
-          if (!r || !r.name) return;
-          if (r.layer_id != null && own[r.kind + ':' + r.layer_id]) return;   // already on the map
-          r._offmap = true;
-          records.push(r);
-          added++;
-        });
-        if (added) render();
-      }).catch(function (e) { console.warn('[geodeploy] catalog feed failed', e); });
-    }
   }
 
   function escHtml(str) {

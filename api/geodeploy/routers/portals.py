@@ -15,7 +15,8 @@ from ..deps import require_scope, resolve_cookie_user
 from ..timeutil import naive_utcnow
 from ..models import ExternalSource, Portal, RasterLayer, User, VectorLayer
 from ..schemas import PortalCreate, PortalOut, PortalUpdate
-from ..services.portal_generator import build_portal_bundle, generate_style, read_deck_core_bbox
+from ..services.portal_generator import (build_portal_bundle, generate_style,
+                                         read_deck_core_bbox, resolve_layout)
 from .common import creator_names, record_audit
 from .data.vector import invalidate_public_layers
 
@@ -54,11 +55,51 @@ async def _new_slug(db: AsyncSession) -> str:
             return slug
 
 
+async def _with_public_catalog_layers(db: AsyncSession, layer_configs: list[dict],
+                                      layout_config) -> list[dict]:
+    """Append every PUBLIC layer the portal does not already carry, hidden, for a catalog portal
+    scoped to "all public". Any other portal is returned untouched."""
+    try:
+        cfg = json.loads(layout_config) if isinstance(layout_config, str) else layout_config
+    except (ValueError, TypeError):
+        return layer_configs
+    layout = resolve_layout(cfg)
+    if layout.get("archetype") != "catalog":
+        return layer_configs
+    if (layout.get("regions", {}).get("catalog", {}) or {}).get("scope") != "public":
+        return layer_configs
+
+    have = {(c.get("layer_type"), c.get("layer_id")) for c in layer_configs}
+    out = list(layer_configs)
+    for model, kind in ((VectorLayer, "vector"), (RasterLayer, "raster")):
+        rows = (await db.execute(select(model).where(
+            model.visibility == "public", model.status == "ready"))).scalars().all()
+        for layer in rows:
+            if (kind, layer.id) in have:
+                continue
+            # Appended at the END so these draw BENEATH the author's own layers (configs are built in
+            # reverse, so later entries sit lower).
+            out.append({"layer_id": layer.id, "layer_type": kind, "visible": False,
+                        "opacity": 1.0, "style": {}, "popup_fields": [], "_catalog_extra": True})
+    return out
+
+
 async def _assemble_bundle(db: AsyncSession, *, slug: str, title: str, layer_configs: list[dict],
                            layer_groups, layout_config, story, theme, initial_view, template_id: str,
                            basemap, description, access_type: str, password_sha256, owner_id) -> None:
     """Resolve the layers referenced by `layer_configs`, build the MapLibre style, and write the static
     bundle to data/portals/{slug}/. Shared by publish (persisted values) and preview (unsaved values)."""
+    # V-14: a catalog portal scoped to "all public" LISTS every public layer, so those layers must
+    # actually BE on the map — otherwise its cards offer "Show on map" for something the runtime has
+    # no layer to toggle. Baked HIDDEN: nothing is fetched until a visitor switches one on, and the
+    # portal still opens on the extent of the layers the author actually chose (generate_style skips
+    # bounds for _catalog_extra configs).
+    #
+    # Appended to a LOCAL copy, never persisted to Portal.layer_configs — what the author saved stays
+    # what they saved, and the public-readability cache keyed off that column is unaffected.
+    # `visibility == "public"` only: a published portal is browsed anonymously.
+    layer_configs = await _with_public_catalog_layers(db, layer_configs, layout_config)
+
     vector_ids = [cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "vector"]
     raster_ids = [cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "raster"]
     external_ids = [cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "external"]
@@ -221,46 +262,6 @@ async def portal_gate_info(slug: str, db: AsyncSession = Depends(get_db)):
     if not portal or not portal.published:
         raise HTTPException(404, "Portal not found.")
     return {"access_type": portal.access_type, "title": portal.title}
-
-
-@router.get("/{slug}/catalog")
-async def portal_catalog(slug: str, db: AsyncSession = Depends(get_db)):
-    """PUBLIC: the dataset records a `catalog` portal lists when its scope is "all public".
-
-    Deliberately keyed by SLUG and gated on the portal's own resolved layout rather than exposed as a
-    standalone "list every public layer" route: it answers only for a PUBLISHED portal whose archetype
-    is `catalog` AND whose scope is `public`, i.e. only where an admin explicitly asked for an
-    instance-wide listing. Any other portal gets 404, so this adds no new enumeration surface.
-
-    Records are built by the SAME `_layer_info` the published bundle and the About page use, so the
-    live listing and the baked one cannot drift on what a dataset's metadata or access links are.
-
-    `visibility == "public"` ONLY. A published portal is browsed anonymously, so organization/private
-    layers must never appear here — being a member of a portal is not the same as being logged in.
-    """
-    from ..services.portal_generator import _layer_info, resolve_layout
-
-    portal = (await db.execute(select(Portal).where(Portal.slug == slug))).scalar_one_or_none()
-    if not portal or not portal.published:
-        raise HTTPException(404, "Portal not found.")
-    try:
-        cfg = json.loads(portal.layout_config) if isinstance(portal.layout_config, str) else portal.layout_config
-    except (ValueError, TypeError):
-        cfg = None
-    layout = resolve_layout(cfg)
-    if layout.get("archetype") != "catalog":
-        raise HTTPException(404, "Portal has no catalog.")
-    if (layout.get("regions", {}).get("catalog", {}) or {}).get("scope") != "public":
-        raise HTTPException(404, "Catalog is scoped to this portal.")
-
-    vectors = (await db.execute(select(VectorLayer).where(
-        VectorLayer.visibility == "public", VectorLayer.status == "ready"))).scalars().all()
-    rasters = (await db.execute(select(RasterLayer).where(
-        RasterLayer.visibility == "public", RasterLayer.status == "ready"))).scalars().all()
-    records = ([_layer_info(l, "vector") for l in vectors]
-               + [_layer_info(l, "raster") for l in rasters])
-    records.sort(key=lambda r: (r.get("name") or "").lower())
-    return {"records": records, "total": len(records)}
 
 
 @router.post("/{slug}/unlock", status_code=204)
