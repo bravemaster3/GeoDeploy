@@ -39,9 +39,14 @@ AsyncSessionLocal = None
 
 def is_configured() -> bool:
     """True when the environment carries enough to reach a database. Deliberately checks the
-    SETTINGS (i.e. `.env`), not any stored row — the stored row is in the database."""
+    SETTINGS (i.e. `.env`), not any stored row — the stored row is in the database.
+
+    The PASSWORD is part of the test on purpose. `install.sh` copies `.env.example`, which ships
+    POSTGIS_HOST=postgres / DB / USER already filled in but the password EMPTY — so a host/db/user
+    check alone reports "configured" on a brand-new install, builds an engine, and tries to reach a
+    server the wizard has not provisioned yet. That put the API in a restart loop on first boot."""
     s = get_settings()
-    return bool(s.postgis_host and s.postgis_db and s.postgis_user)
+    return bool(s.postgis_host and s.postgis_db and s.postgis_user and s.postgis_password)
 
 
 def configure(force: bool = False):

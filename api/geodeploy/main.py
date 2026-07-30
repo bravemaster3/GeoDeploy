@@ -26,13 +26,24 @@ async def lifespan(app: FastAPI):
     # database at all and still serve /api/setup/*. `configure()` returns None until credentials
     # exist in the environment; `routers/setup.configure_db` calls it again and creates the schema
     # the moment it has them.
+    log = logging.getLogger(__name__)
     eng = database.configure(force=True)
     if eng is None:
-        logging.getLogger(__name__).info(
-            "no state database configured yet — serving the setup wizard only")
+        log.info("no state database configured yet — serving the setup wizard only")
     else:
-        async with eng.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        # NEVER fatal. Credentials existing does not mean the server is REACHABLE: on a fresh
+        # install postgres is behind the `local-db` compose profile and is not started until the
+        # wizard runs, and on a running instance the database can simply be slow to come up or
+        # briefly down. Dying here puts the API in a restart loop and takes the whole site to 502
+        # — including the setup wizard that would have fixed it. Log and serve; `configure_db`
+        # creates the schema itself, and `get_db` answers 503 until then.
+        try:
+            async with eng.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            log.info("state database ready")
+        except Exception as exc:
+            log.warning("state database not reachable yet (%s) — serving the setup wizard "
+                        "until it is", exc)
 
     # Write a minimal Martin config on first start so Martin can boot without layers
     _ensure_martin_config(settings)
