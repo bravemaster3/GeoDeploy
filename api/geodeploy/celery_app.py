@@ -1,5 +1,6 @@
 from celery import Celery
 from celery.signals import worker_ready
+from . import state_db
 from .config import get_settings
 
 settings = get_settings()
@@ -57,12 +58,11 @@ def _resume_interrupted_tiling(sender=None, **kwargs):
     of sitting stuck forever (the manual 're-tile' button did this by hand). Best-effort; a failure here
     must never block worker startup. Idempotent: the task flips tile_status to ready/error when it ends,
     so a layer that finishes/erros won't be re-picked; one still 'tiling' genuinely needs another go."""
-    import sqlite3
     import logging
     try:
         from .tasks.pmtiles_tile import tile_geoparquet
         db_path = f"{settings.data_dir}/sqlite/geodeploy.db"
-        with sqlite3.connect(db_path, timeout=30) as conn:
+        with state_db.connect() as conn:
             rows = conn.execute(
                 "SELECT id, s3_key, pmtiles_key FROM vector_layers "
                 "WHERE storage_backend='geoparquet' AND tile_status='tiling' AND s3_key IS NOT NULL"

@@ -29,6 +29,7 @@ import time
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from .. import state_db
 from ..celery_app import celery_app
 from ..config import get_settings
 from .raster_ingest import _get_storage_creds
@@ -106,9 +107,8 @@ def _resolve_maxzoom(feature_count: int) -> int:
 
 def _layer_feature_count(db_path: str, layer_id) -> int:
     """Read a layer's stored feature_count (0 if unknown) to drive {@link _resolve_maxzoom}."""
-    import sqlite3
     try:
-        con = sqlite3.connect(db_path, timeout=30)
+        con = state_db.connect()
         try:
             row = con.execute(
                 "SELECT feature_count FROM vector_layers WHERE id=?", (layer_id,)).fetchone()

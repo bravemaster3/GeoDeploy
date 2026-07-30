@@ -1,50 +1,78 @@
-import os
-from sqlalchemy import event
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+"""State database — PostgreSQL (2026-07-30; previously SQLite).
+
+**One database, not two.** GeoDeploy's own state (users, the layer catalog, portals, settings,
+audit log) now lives in the SAME PostgreSQL database as the spatial data, in the `public` schema —
+user layers live in `geodeploy_u*` schemas and never collide. Three things fall out of that, and
+they are the reasons for the move:
+
+* **One backup.** `pg_dump` captures state and spatial data together, atomically. The old split
+  meant a SQLite file snapshot plus a PostGIS dump, taken at different instants.
+* **Nothing to delete by accident.** The state was a file on disk that a stray command (or a test
+  run pointed at the wrong path) could wipe. See `api/tests/conftest.py` for how that happened.
+* **Real concurrency.** The API and the Celery worker both write; SQLite gave them a single global
+  write lock (mitigated with WAL, now unnecessary).
+
+**Boot order.** The DB connection is configured by the setup wizard, so the app MUST start with no
+database at all and still serve `/api/setup/*`. Hence a rebuildable engine: `engine` is None until
+credentials exist in the environment, `configure()` builds it once they do, and `get_db` answers
+503 in between. Credentials come from `.env` — never from `SetupConfig`, which lives inside the
+database being configured.
+"""
+import logging
+
+from fastapi import HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+
 from .config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
     pass
 
 
-def _make_engine():
+engine = None
+AsyncSessionLocal = None
+
+
+def is_configured() -> bool:
+    """True when the environment carries enough to reach a database. Deliberately checks the
+    SETTINGS (i.e. `.env`), not any stored row — the stored row is in the database."""
+    s = get_settings()
+    return bool(s.postgis_host and s.postgis_db and s.postgis_user)
+
+
+def configure(force: bool = False):
+    """(Re)build the engine from the current settings. Called at startup and again by the setup
+    wizard the moment it writes credentials, so the running process picks them up without a
+    restart. Returns the engine, or None when nothing is configured yet."""
+    global engine, AsyncSessionLocal
+    if engine is not None and not force:
+        return engine
+    if not is_configured():
+        return None
     settings = get_settings()
-    os.makedirs(f"{settings.data_dir}/sqlite", exist_ok=True)
     engine = create_async_engine(
-        settings.sqlite_url,
-        connect_args={"check_same_thread": False, "timeout": 30},
+        settings.postgis_dsn,
         echo=settings.is_dev,
+        pool_pre_ping=True,     # a recycled/idle connection after a DB restart must not 500 a request
+        pool_size=10,
+        max_overflow=20,
     )
-
-    # INTERIM (2026-07-29) — remove when state moves to PostgreSQL.
-    # TWO processes write this file: the API (here, via SQLAlchemy) and the Celery worker (raw
-    # `sqlite3.connect`, updating job progress + layer status throughout an ingest). In SQLite's
-    # default DELETE journal mode a writer takes a lock that blocks *readers* too, so a long ingest
-    # could surface as "database is locked" in unrelated API requests.
-    #   journal_mode=WAL   readers never block on the writer. PERSISTENT — stored in the file header,
-    #                      so setting it here also covers the worker's own connections.
-    #   busy_timeout       wait for a contended write instead of failing instantly (per-connection,
-    #                      hence `timeout` above AND in the tasks' sqlite3.connect calls).
-    #   synchronous=NORMAL the standard, safe-with-WAL durability tradeoff.
-    @event.listens_for(engine.sync_engine, "connect")
-    def _sqlite_pragmas(dbapi_connection, _record):  # pragma: no cover - driver-level
-        cur = dbapi_connection.cursor()
-        try:
-            cur.execute("PRAGMA journal_mode=WAL")
-            cur.execute("PRAGMA busy_timeout=30000")
-            cur.execute("PRAGMA synchronous=NORMAL")
-        finally:
-            cur.close()
-
+    AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    logger.info("state database engine configured (%s/%s)", settings.postgis_host, settings.postgis_db)
     return engine
 
 
-engine = _make_engine()
-AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+configure()      # no-op before the wizard has run
 
 
 async def get_db() -> AsyncSession:
+    if AsyncSessionLocal is None and configure() is None:
+        # Only the setup routes should ever be reachable in this state, and they don't depend on
+        # the DB until they have configured it.
+        raise HTTPException(503, "No database configured yet — finish setup first.")
     async with AsyncSessionLocal() as session:
         yield session

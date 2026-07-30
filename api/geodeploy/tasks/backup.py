@@ -5,16 +5,16 @@ time. The schedule lives in the DB and is READ each tick rather than compiled in
 config — changing "daily at 03:00" in Settings then takes effect immediately, with no worker
 restart and no beat reconfiguration.
 
-Like every other task module here, DB access is raw `sqlite3` (the worker has no async session)
-— see tasks/README.md.
+Like every other task module here, DB access goes through `state_db` (the worker has no async
+session) — see tasks/README.md.
 """
 import json
 import logging
 import os
-import sqlite3
 import tempfile
 from datetime import datetime, timedelta, timezone
 
+from .. import state_db
 from ..celery_app import celery_app
 from ..config import get_settings
 
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 def _db():
-    return sqlite3.connect(f"{get_settings().data_dir}/sqlite/geodeploy.db", timeout=30)
+    return state_db.connect()
 
 
 class _Cfg:
@@ -182,8 +182,10 @@ def check_scheduled_backups():
                 pass
         from ..services.backup import run_key
         key = run_key(cfg.backup_prefix, now)
-        cur = conn.execute(
+        # Postgres has no lastrowid — ask for the id back (state_db raises on lastrowid so this
+        # can't be forgotten silently).
+        run_id = conn.execute(
             "INSERT INTO backup_runs (key, status, trigger, started_at, progress) "
-            "VALUES (?, 'running', 'scheduled', ?, 0)", (key, now.replace(tzinfo=None)))
-        run_id = cur.lastrowid
+            "VALUES (?, 'running', 'scheduled', ?, 0) RETURNING id",
+            (key, now.replace(tzinfo=None))).fetchone()[0]
     run_backup.delay(run_id, "scheduled")
