@@ -101,12 +101,12 @@ filtering, no transactions, no OGC API - Tiles or Records — and `/api/ogc/conf
 > The **Share links** panel in My Data (link icon on any ready layer) gives you every one of these
 > URLs for a layer, already labelled with the menu path for each tool.
 
-> **`pmtiles://` is not a URL scheme.** It is a protocol handler registered by the MapLibre GL JS
-> `pmtiles` library, so it is meaningful *only* inside a MapLibre-based web map (GeoDeploy's own
-> portals, GeoLibre's basemap path). Pasting it into QGIS, GDAL or a browser address bar cannot
-> work. The plain `…/pmtiles` URL is the archive itself — that is what you download, and what
-> GDAL builds with PMTiles support read via `/vsicurl/`. To load a layer *into QGIS*, use OGC API -
-> Features; PMTiles is a rendering format.
+> **PMTiles: paste the plain URL.** `…/api/data/vector/{uid}/pmtiles` is the archive itself —
+> that is what GeoLibre's PMTiles field, a download, and GDAL's `/vsicurl/` all expect. The
+> `pmtiles://` prefix you may have seen is a protocol handler the MapLibre GL JS library registers
+> in *code*; it belongs inside a style source (GeoDeploy's own portals emit it), never in a UI
+> field or an address bar. To load a layer *into QGIS*, use OGC API - Features — PMTiles is a
+> rendering format.
 
 ## Consuming the assets
 

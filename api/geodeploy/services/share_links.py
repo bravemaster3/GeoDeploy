@@ -78,24 +78,19 @@ def vector_links(layer, base: str) -> list[dict]:
             hint=f"Add as a VECTOR-tile source (not 'XYZ tiles' raster). Source-layer name: '{src}'."))
     else:
         if getattr(layer, "pmtiles_key", None) and getattr(layer, "tile_status", None) == "ready":
-            # TWO entries, because `pmtiles://` is NOT a URL scheme — it is a protocol handler the
-            # MapLibre GL JS `pmtiles` library registers, so it means something only inside a
-            # MapLibre-based web client (GeoDeploy's own portals; GeoLibre's basemap path does the
-            # same). QGIS and GDAL have never understood it and need the plain HTTPS URL. One
-            # combined entry made people paste the prefixed string into QGIS and get nothing.
+            # The PLAIN https URL — no `pmtiles://`. That prefix is a protocol handler the MapLibre
+            # GL JS library registers INTERNALLY; it is not part of any address a person pastes.
+            # Every consumer-facing field expects the plain URL, GeoLibre's own PMTiles input
+            # included (its DEFAULT_ARCHIVE_URL is `https://…/latest.pmtiles`), and QGIS/GDAL have
+            # never understood the prefix. GeoDeploy's OWN portals still emit `pmtiles://…` inside
+            # their MapLibre style — see portal_generator — which is correct and unrelated to this.
             links.append(_link(
-                "pmtiles", "PMTiles — MapLibre source URL", f"pmtiles://{api}/pmtiles",
-                fmt="PMTiles (vector)", tools=["MapLibre GL JS", "GeoLibre (basemap)"],
-                hint="Use EXACTLY as-is in a MapLibre style source, after registering the pmtiles "
-                     "protocol (`pmtiles` JS library). The prefix is a MapLibre protocol handler, "
-                     "not part of the address \u2014 it will not work in QGIS or a browser."))
-            links.append(_link(
-                "pmtiles-file", "PMTiles \u2014 the archive itself", f"{api}/pmtiles",
-                fmt="PMTiles (vector)", tools=["download", "GDAL"],
-                hint="The plain URL: downloadable, and readable over HTTP Range by GDAL builds with "
-                     "PMTiles support (prefix with /vsicurl/). For loading this layer INTO QGIS, "
-                     "prefer the OGC API - Features link above \u2014 that is supported outright.",
-                download=True))
+                "pmtiles", "PMTiles archive (fast rendering)", f"{api}/pmtiles",
+                fmt="PMTiles (vector)", tools=["GeoLibre", "MapLibre", "download", "GDAL"],
+                hint="Paste as-is. A MapLibre style source needs the pmtiles:// protocol prefix "
+                     "added in code, but no UI field wants it. GDAL builds with PMTiles support "
+                     "read it via /vsicurl/. To load this layer INTO QGIS, prefer the OGC API - "
+                     "Features link above \u2014 PMTiles is a rendering format."))
         links.append(_link(
             "features-geojson", "Viewport features (GeoDeploy native)",
             f"{api}/features.geojson?bbox=minx,miny,maxx,maxy&limit=50000",
