@@ -223,6 +223,46 @@ async def portal_gate_info(slug: str, db: AsyncSession = Depends(get_db)):
     return {"access_type": portal.access_type, "title": portal.title}
 
 
+@router.get("/{slug}/catalog")
+async def portal_catalog(slug: str, db: AsyncSession = Depends(get_db)):
+    """PUBLIC: the dataset records a `catalog` portal lists when its scope is "all public".
+
+    Deliberately keyed by SLUG and gated on the portal's own resolved layout rather than exposed as a
+    standalone "list every public layer" route: it answers only for a PUBLISHED portal whose archetype
+    is `catalog` AND whose scope is `public`, i.e. only where an admin explicitly asked for an
+    instance-wide listing. Any other portal gets 404, so this adds no new enumeration surface.
+
+    Records are built by the SAME `_layer_info` the published bundle and the About page use, so the
+    live listing and the baked one cannot drift on what a dataset's metadata or access links are.
+
+    `visibility == "public"` ONLY. A published portal is browsed anonymously, so organization/private
+    layers must never appear here — being a member of a portal is not the same as being logged in.
+    """
+    from ..services.portal_generator import _layer_info, resolve_layout
+
+    portal = (await db.execute(select(Portal).where(Portal.slug == slug))).scalar_one_or_none()
+    if not portal or not portal.published:
+        raise HTTPException(404, "Portal not found.")
+    try:
+        cfg = json.loads(portal.layout_config) if isinstance(portal.layout_config, str) else portal.layout_config
+    except (ValueError, TypeError):
+        cfg = None
+    layout = resolve_layout(cfg)
+    if layout.get("archetype") != "catalog":
+        raise HTTPException(404, "Portal has no catalog.")
+    if (layout.get("regions", {}).get("catalog", {}) or {}).get("scope") != "public":
+        raise HTTPException(404, "Catalog is scoped to this portal.")
+
+    vectors = (await db.execute(select(VectorLayer).where(
+        VectorLayer.visibility == "public", VectorLayer.status == "ready"))).scalars().all()
+    rasters = (await db.execute(select(RasterLayer).where(
+        RasterLayer.visibility == "public", RasterLayer.status == "ready"))).scalars().all()
+    records = ([_layer_info(l, "vector") for l in vectors]
+               + [_layer_info(l, "raster") for l in rasters])
+    records.sort(key=lambda r: (r.get("name") or "").lower())
+    return {"records": records, "total": len(records)}
+
+
 @router.post("/{slug}/unlock", status_code=204)
 async def portal_unlock(slug: str, body: PortalUnlock, request: Request,
                         db: AsyncSession = Depends(get_db)):

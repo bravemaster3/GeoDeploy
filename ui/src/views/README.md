@@ -56,6 +56,8 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 - Raster layer `bbox` from the API is in source CRS (not lon/lat) — using it directly for `fitToBbox` can throw "Invalid LngLat" (see tasks/raster notes). Prefer zooming via vector bounds or TiTiler TileJSON.
 
 ## Last updated
+2026-07-30 (PortalEditor: `catalog` archetype option + Map side / Datasets listed controls; the
+layer-list placement toggles are hidden for it since the facet rail replaces the sidebar)
 2026-07-30 (Settings → Backups gains **Manage backups**, a DANGER ZONE section — same red treatment
 as the old container-terminal card. It lists what is at the DESTINATION (read from the manifests,
 not our run history: that history lives in the state database, which is itself backed up, so it can

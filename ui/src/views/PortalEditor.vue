@@ -200,7 +200,7 @@
 
           <!-- Placement toggles (quick alternative to click-to-place) -->
           <div class="space-y-2 text-xs">
-            <div v-if="!isStory" class="flex items-center justify-between">
+            <div v-if="!isStory && !isCatalog" class="flex items-center justify-between">
               <span class="text-muted-foreground">Layer list side</span>
               <div class="flex gap-1">
                 <button v-for="s in ['left','right']" :key="s" @click="setRegionOpt('layerList', { side: s })"
@@ -208,7 +208,7 @@
                   :class="resolvedLayout.regions.layerList.side === s ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ s }}</button>
               </div>
             </div>
-            <div v-if="!isStory" class="flex items-center justify-between">
+            <div v-if="!isStory && !isCatalog" class="flex items-center justify-between">
               <span class="text-muted-foreground">Layer list</span>
               <div class="flex gap-1">
                 <button v-for="m in [['docked','Docked'],['floating','Floating']]" :key="m[0]" @click="setRegionOpt('layerList', { mode: m[0] })"
@@ -229,11 +229,41 @@
                 </button>
               </div>
             </div>
-            <label v-if="!isStory" class="flex items-center justify-between cursor-pointer">
+            <label v-if="!isStory && !isCatalog" class="flex items-center justify-between cursor-pointer">
               <span class="text-muted-foreground">Start collapsed</span>
               <input type="checkbox" :checked="resolvedLayout.regions.layerList.collapsed"
                 @change="e => setRegionOpt('layerList', { collapsed: e.target.checked })" />
             </label>
+          </div>
+
+          <!-- Catalog settings (catalog archetype) -->
+          <div v-if="isCatalog" class="mt-3 pt-3 border-t border-border/60 space-y-2 text-xs">
+            <span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Catalog</span>
+            <div class="flex items-center justify-between">
+              <span class="text-muted-foreground">Map side</span>
+              <div class="flex gap-1">
+                <button v-for="s in ['left','right']" :key="s" @click="catalogMapSide = s"
+                  class="px-2 py-0.5 rounded border capitalize"
+                  :class="catalogMapSide === s ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ s }}</button>
+              </div>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-muted-foreground">Datasets listed</span>
+              <div class="flex gap-1">
+                <button v-for="o in [['portal','This portal'],['public','All public']]" :key="o[0]"
+                  @click="catalogScope = o[0]" class="px-2 py-0.5 rounded border"
+                  :class="catalogScope === o[0] ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ o[1] }}</button>
+              </div>
+            </div>
+            <p class="text-[11px] text-muted-foreground/70 leading-snug">
+              <template v-if="catalogScope === 'public'">
+                Lists every <strong>public</strong> layer on this instance, read live — a newly shared layer
+                appears without re-publishing. Only the portal’s own layers are drawn on the map.
+              </template>
+              <template v-else>
+                Lists the layers you added above. The visitor can search, filter and toggle them on the map.
+              </template>
+            </p>
           </div>
 
           <!-- Story sections editor (storymap archetype) -->
@@ -499,13 +529,19 @@ async function uploadLogo(e) {
 const ARCHETYPES = [
   { id: 'webmap',   name: 'Web map',   desc: 'Map-first with a layer list.' },
   { id: 'storymap', name: 'Story map', desc: 'Scrollytelling — scroll drives the map.' },
+  { id: 'catalog',  name: 'Catalog',   desc: 'Browse datasets — searchable list beside a map.' },
 ]
 // PARITY mirror of portal_generator.resolve_layout / portal.js resolveLayout — change all three together.
 const _ARCH_DEFAULTS = {
   webmap:   { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
   storymap: { regions: { layerList: { side: 'left', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: true, legend: true, basemap: true, about: false, story: true } },
+  // V-14 catalog: the dataset list is the page and the map is a panel beside it, so layerCatalog is
+  // off (the facet rail replaces the switcher) and `catalog` carries the split.
+  catalog:  { regions: { layerList: { side: 'left', mode: 'docked', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, catalog: { scope: 'portal', mapSide: 'right', mapWidth: 40, railWidth: 20, perPage: 12 } }, panels: { catalog: true, layerCatalog: false, legend: true, basemap: true, about: true, story: false } },
 }
-const _ARCH_ALIASES = { 'webmap+catalog': 'webmap', catalog: 'webmap' }
+// `webmap+catalog` is still UNBUILT and degrades to a working map on purpose. `catalog` used to be
+// here too, which is why choosing it silently rendered a plain web map.
+const _ARCH_ALIASES = { 'webmap+catalog': 'webmap' }
 function resolveLayout(config) {
   let arch = (config && config.archetype) || 'webmap'
   arch = _ARCH_ALIASES[arch] || arch
@@ -523,6 +559,28 @@ function resolveLayout(config) {
 }
 const resolvedLayout = computed(() => resolveLayout(layoutConfig.value))
 const isStory = computed(() => resolvedLayout.value.archetype === 'storymap')
+const isCatalog = computed(() => resolvedLayout.value.archetype === 'catalog')
+// Which datasets the published catalog lists. 'portal' = this portal's own layers (baked at publish).
+// 'public' reads the instance's PUBLIC layers live, so adding a public layer shows up without a
+// re-publish — it can never widen past public, because a published portal is browsed anonymously.
+const catalogScope = computed({
+  get: () => resolvedLayout.value.regions.catalog?.scope || 'portal',
+  set: (v) => {
+    const c = { ...(layoutConfig.value || {}) }
+    c.regions = { ...(c.regions || {}) }
+    c.regions.catalog = { ...(c.regions.catalog || {}), scope: v }
+    layoutConfig.value = c
+  },
+})
+const catalogMapSide = computed({
+  get: () => resolvedLayout.value.regions.catalog?.mapSide || 'right',
+  set: (v) => {
+    const c = { ...(layoutConfig.value || {}) }
+    c.regions = { ...(c.regions || {}) }
+    c.regions.catalog = { ...(c.regions.catalog || {}), mapSide: v }
+    layoutConfig.value = c
+  },
+})
 const sidebarWireWidth = computed(() => '28%')
 
 function pickArchetype(id) {

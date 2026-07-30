@@ -319,11 +319,15 @@ def _layer_info(layer, kind: str) -> dict:
     # A PRIVATE layer can still appear on a public portal's map, but its catalog/technical metadata must
     # NOT be exposed on the public About page — list it as "Private" and bake nothing sensitive.
     if getattr(layer, "visibility", "organization") == "private":
-        return {"name": layer.name, "kind": kind, "private": True}
+        # layer_id is safe to expose and NEEDED: the catalog archetype joins its cards to the map's
+        # `metadata["geodeploy:layer_id"]` to toggle/zoom. Without it a restricted layer would draw
+        # on the map with no card explaining what it is.
+        return {"name": layer.name, "kind": kind, "private": True, "layer_id": layer.id}
     info = {
         "name": layer.name,
         "kind": kind,
         "private": False,
+        "layer_id": layer.id,   # joins a catalog card to its map layer / deck layer
         "abstract": getattr(layer, "abstract", None),
         "license": getattr(layer, "license", None),
         "attribution": getattr(layer, "attribution", None),
@@ -526,6 +530,10 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
                    or _read(shared_dir / "layout.html")
                    or _default_layout())
 
+    # Resolved once and reused: the style needs it, and so does the decision below about whether to
+    # bake the catalog payload at all.
+    _layout = resolve_layout(layout_config)
+
     # Merge basemap + user layers into a single complete MapLibre style
     full_style = {
         "version": 8,
@@ -545,7 +553,14 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
             "layerTree": user_data.get("layer_tree"),
             # V-11: resolved layout manifest {archetype, regions, panels}. Always present (webmap
             # default) so portal.js has one source of truth; the editor mirrors resolveLayout().
-            "layout": resolve_layout(layout_config),
+            "layout": _layout,
+            # V-14 catalog archetype: the dataset records the browse surface renders (name, abstract,
+            # keywords, license, CRS, geometry, feature count, bbox and the public access links).
+            # This is the SAME `layers_info` the About page uses — one metadata shape, so a field added
+            # for one surface appears on the other. Baked only for the catalog archetype: it is a few
+            # KB per layer and webmap/storymap have no use for it.
+            "catalog": (user_data.get("layers_info", [])
+                        if _layout.get("panels", {}).get("catalog") else None),
             # V-11 storymap: narrative sections (only rendered when archetype == 'storymap').
             "story": story if (story and story.get("sections")) else None,
             # V-11 R3: colour-theme metadata (portal.js reads .mode for the initial light/dark state).

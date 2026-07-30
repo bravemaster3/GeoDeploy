@@ -131,6 +131,14 @@ deliberately NOT visibility-filtered (published portals depend on them).
   (verify current, set new — does NOT revoke outstanding 7-day JWTs; that's A-04).
 - `portals.py` — portal CRUD + `/portals/{id}/publish` and `/unpublish`. Publish loads ready layers, calls `services.portal_generator.generate_style` + `build_portal_bundle` (via the shared `_rebuild_bundle` helper) to write the static site. Slugs are auto-deduped (`_unique_slug`). Passwords stored as both bcrypt (future server-side) and SHA-256 (embedded in the published HTML gate). **Rename (2026-07-11): `PUT /portals/{id}` regenerates the slug when `title` changes** (unique, excluding self); if the slug changes on a **published** portal it re-bakes the bundle under the new slug (the slug is baked as `{{SLUG}}`) and removes the old `data/portals/{old_slug}/` dir so the old URL 404s — a draft just carries the new slug until published. **Anti-flash bake (2026-07-16):** `_rebuild_bundle` reads each deck (GeoParquet, non-PMTiles) layer's manifest core extent via `portal_generator.read_deck_core_bbox` (best-effort, `run_in_threadpool`) and passes `deck_core_bounds` to `generate_style` so a deck-only portal opens on the core extent (no on-load snap — see `services/README.md`).
 - `templates.py` — `/templates` lists template folders from `/templates` that have `template.json` + `style.json` (layout.html is optional — shared skeleton fallback).
+- `portals.py` **catalog feed (V-14, 2026-07-30):** `GET /portals/{slug}/catalog` — PUBLIC, unauthenticated.
+  Serves the dataset records a `catalog` portal lists when its scope is "all public", built by the same
+  `portal_generator._layer_info` as the baked bundle so the live and baked listings cannot drift. Keyed by
+  SLUG and gated on the portal's own resolved layout rather than exposed as a standalone "list every public
+  layer" route: **404 unless the portal is published AND its archetype is `catalog` AND its scope is
+  `public`**, so it adds no new enumeration surface. Only `visibility == "public"` layers are returned — a
+  published portal is browsed anonymously, so organization/private layers must never appear. Pinned by
+  `tests/test_portal_catalog_feed.py`.
 - `portals.py` area-select export (all **public**, queued via Celery so heavy clips never block the API):
   - `POST /portals/{slug}/export-bundle` (body `{bbox, items:[{layer_id, layer_type, format}]}`) — validates the items belong to the portal, resolves them, enqueues `tasks.export.export_bundle`, returns `{job_id}` (202).
   - `GET /portals/{slug}/export-status/{job_id}` — `queued|processing|ready|error` (checks the result file + Celery `AsyncResult`).
@@ -235,6 +243,7 @@ deliberately NOT visibility-filtered (published portals depend on them).
 - No rate limiting beyond nginx; no pagination on list endpoints (fine at current scale).
 
 ## Last updated
+2026-07-30 (public `GET /portals/{slug}/catalog` feed for catalog portals scoped to "all public")
 2026-07-30 (deployment history + log options for the consolidated Infrastructure panel)
 2026-07-30 (new `backups.py` — destination config, history, manual run)
 2026-07-30 (activity log paginated + server-side filters/date range + `/audit/actions`)

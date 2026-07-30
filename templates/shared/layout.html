@@ -45,6 +45,11 @@
 </header>
 
 <div id="layout">
+  <!-- V-14 catalog archetype: the dataset BROWSE surface (facet rail + result cards). Sits as a
+       sibling of #map-wrap so the catalog layout is a plain grid change on #layout — the map keeps
+       its own element and MapLibre is never re-parented (a moved canvas container loses its size).
+       Filled by portal.js (setupCatalog) only when the resolved archetype is 'catalog'. -->
+  <div id="catalog-panel" style="display:none"></div>
   <aside id="sidebar">
     <div id="sidebar-inner">
       <p class="sidebar-section-title">Layers</p>

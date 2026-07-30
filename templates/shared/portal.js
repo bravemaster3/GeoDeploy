@@ -56,8 +56,13 @@
   const LAYOUT_ARCHETYPES = {
     webmap:   { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
     storymap: { regions: { layerList: { side: 'left', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: true, legend: true, basemap: true, about: false, story: true } },
+    // V-14 catalog: a BROWSE surface. The dataset list is the page and the map is a panel beside it,
+    // so layerCatalog is off (the facet rail replaces the switcher) and `catalog` carries the split.
+    catalog:  { regions: { layerList: { side: 'left', mode: 'docked', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, catalog: { scope: 'portal', mapSide: 'right', mapWidth: 40, railWidth: 20, perPage: 12 } }, panels: { catalog: true, layerCatalog: false, legend: true, basemap: true, about: true, story: false } },
   };
-  const LAYOUT_ALIASES = { 'webmap+catalog': 'webmap', catalog: 'webmap' };  // dropped Phase-1 archetypes → webmap
+  // `webmap+catalog` is still UNBUILT and degrades to a working map on purpose — a blank shell would
+  // be worse. `catalog` used to be here too, which is why choosing it silently rendered a web map.
+  const LAYOUT_ALIASES = { 'webmap+catalog': 'webmap' };
   function resolveLayout(config) {
     let arch = (config && config.archetype) || 'webmap';
     arch = LAYOUT_ALIASES[arch] || arch;
@@ -1004,6 +1009,9 @@
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), CTRL_POS);  // zoom below them
     // V-11 storymap: build the scrollytelling narrative that drives the camera + layer state.
     if (LAYOUT.archetype === 'storymap') { try { setupStory(); } catch (e) { console.warn('[geodeploy] story failed', e); } }
+    // V-14 catalog: build the browse surface. AFTER initDeck() so GeoParquet layers already have a
+    // deckState entry — the cards seed their on/off state from it.
+    if (LAYOUT.archetype === 'catalog') { try { setupCatalog(); } catch (e) { console.warn('[geodeploy] catalog failed', e); } }
     // R2: when rendered as the editor's preview (?edit=1), open the postMessage channel + click-to-place.
     try { setupEditMode(); } catch (e) { console.warn('[geodeploy] edit mode failed', e); }
   });
@@ -3015,6 +3023,416 @@
       return c;
     }
     onRemove() { if (this._c) this._c.remove(); }
+  }
+
+  // ── V-14 Catalog archetype: the dataset browse surface ──────────────────
+  // Facet rail + result cards + a view-only map panel. Runs ONLY when the resolved archetype is
+  // 'catalog'; webmap/storymap never reach here and #catalog-panel stays display:none, so their DOM
+  // is untouched. Records come from style.geodeploy.catalog — the SAME `layers_info` the About page
+  // renders, so the two surfaces cannot drift on what a dataset's metadata is.
+  const CAT_ORIGIN_TOKEN = '__GD_ORIGIN__';
+  function catAbs(url) { return String(url || '').split(CAT_ORIGIN_TOKEN).join(location.origin); }
+  function catKindLabel(r) {
+    if (r.kind === 'raster') return 'Raster';
+    if (r.kind === 'external') return 'External';
+    if (r.kind === 'elevation') return '3D terrain';
+    return r.backend === 'geoparquet' ? 'GeoParquet' : 'Vector';
+  }
+  function catNum(n) {
+    if (n == null) return '';
+    const s = function (v, u) { return v.toFixed(1).replace(/\.0$/, '') + u; };
+    return n >= 1e6 ? s(n / 1e6, 'M') : n >= 1e3 ? s(n / 1e3, 'k') : String(n);
+  }
+  function catKeywords(r) {
+    return String(r.keywords || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+  }
+
+  function setupCatalog() {
+    const panel = document.getElementById('catalog-panel');
+    if (!panel) return;
+    const cfg = (LAYOUT.regions && LAYOUT.regions.catalog) || {};
+    const records = ((STYLE.geodeploy && STYLE.geodeploy.catalog) || [])
+      .filter(function (r) { return r && r.name; });
+
+    panel.style.display = '';
+    document.body.dataset.catalogMap = cfg.mapSide === 'left' ? 'left' : 'right';
+    // The panel takes width off the map container, so MapLibre must re-measure or the canvas keeps
+    // the full-width size it was created with (map renders offset / clipped).
+    setTimeout(function () { try { map.resize(); } catch (e) {} }, 0);
+
+    // A facet rail earns its space only when there is something to narrow down — below this it would
+    // be a column of one-item facets beside three cards. Same threshold as the About page's search.
+    const railOn = records.length >= 6;
+    const perPage = Math.max(4, cfg.perPage || 12);
+    const FACETS = [
+      { key: 'kind',    title: 'Type',     of: function (r) { return [catKindLabel(r)]; } },
+      { key: 'keyword', title: 'Keywords', of: catKeywords },
+      { key: 'license', title: 'Licence',  of: function (r) { return r.license ? [String(r.license)] : []; } },
+    ];
+    const state = { q: '', page: 0, sort: 'name', kind: {}, keyword: {}, license: {}, open: {} };
+
+    function selectedIn(key) {
+      return Object.keys(state[key]).filter(function (k) { return state[key][k]; });
+    }
+    function textMatch(r) {
+      if (!state.q) return true;
+      const hay = [r.name, r.abstract, r.keywords, r.license, catKindLabel(r)].join(' ').toLowerCase();
+      return state.q.toLowerCase().split(/\s+/).filter(Boolean)
+        .every(function (t) { return hay.indexOf(t) >= 0; });
+    }
+    // `skip` excludes one facet group from the test — that is what makes the COUNTS beside each facet
+    // value correct: a value's count must show how many results picking it would give, so the group
+    // being counted cannot filter itself.
+    function facetMatch(r, skip) {
+      return FACETS.every(function (f) {
+        if (f.key === skip) return true;
+        const sel = selectedIn(f.key);
+        if (!sel.length) return true;
+        const vals = f.of(r);
+        return sel.some(function (s) { return vals.indexOf(s) >= 0; });
+      });
+    }
+    function results() {
+      const out = records.filter(function (r) { return textMatch(r) && facetMatch(r, null); });
+      const by = state.sort;
+      out.sort(function (a, b) {
+        if (by === 'features') return (b.feature_count || 0) - (a.feature_count || 0);
+        const c = String(a.name).localeCompare(String(b.name), undefined, { sensitivity: 'base' });
+        return by === 'name-desc' ? -c : c;
+      });
+      return out;
+    }
+
+    // ── the extent highlight the map shows while a card is hovered ──
+    function ensureHl() {
+      if (map.getSource('gd-cat-hl')) return;
+      map.addSource('gd-cat-hl', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addLayer({ id: 'gd-cat-hl-fill', type: 'fill', source: 'gd-cat-hl',
+        paint: { 'fill-color': '#f59e0b', 'fill-opacity': 0.10 } });
+      map.addLayer({ id: 'gd-cat-hl-line', type: 'line', source: 'gd-cat-hl',
+        paint: { 'line-color': '#f59e0b', 'line-width': 2, 'line-dasharray': [2, 1.5] } });
+    }
+    function showHl(bbox) {
+      let data = { type: 'FeatureCollection', features: [] };
+      if (bbox && bbox.length === 4) {
+        const x0 = bbox[0], y0 = bbox[1], x1 = bbox[2], y1 = bbox[3];
+        data = { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: {
+          type: 'Polygon', coordinates: [[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]] } }] };
+      }
+      try { ensureHl(); map.getSource('gd-cat-hl').setData(data); } catch (e) {}
+    }
+
+    function refOf(r) {
+      if (r.layer_id == null || r.kind === 'external' || r.kind === 'elevation') return null;
+      // A record that came from the instance-wide feed is NOT on this portal's map, so it has no
+      // MapLibre/deck layer to toggle. Returning a ref would render a "Show on map" button that
+      // silently does nothing — worse than not offering it.
+      if (r._offmap) return null;
+      return (r.kind === 'raster' ? 'raster' : 'vector') + ':' + r.layer_id;
+    }
+    // Seeded from what the admin PUBLISHED rather than forced on/off: a catalog that lit up every
+    // layer at once would be unreadable, and one that hid them all would look broken.
+    function publishedVisible(r) {
+      const lid = String(r.layer_id);
+      if (deckState[lid] !== undefined) return !!deckState[lid].visible;
+      const l = (STYLE.layers || []).find(function (x) {
+        const m = x.metadata || {};
+        return String(m['geodeploy:layer_id']) === lid && m['geodeploy:name'];
+      });
+      return !!l && (l.layout || {}).visibility !== 'none';
+    }
+    const onMap = {};
+    records.forEach(function (r) { if (refOf(r)) onMap[refOf(r)] = publishedVisible(r); });
+
+    // ── shell ──
+    panel.innerHTML =
+      '<div class="cat-head">' +
+        '<div class="cat-search">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+            '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3"/></svg>' +
+          '<input id="cat-q" type="search" placeholder="Search datasets, keywords, descriptions…" autocomplete="off">' +
+        '</div>' +
+        '<div class="cat-metabar">' +
+          '<span id="cat-count" class="cat-count"></span>' +
+          '<label class="cat-sortwrap">Sort' +
+            '<select id="cat-sort">' +
+              '<option value="name">Name A–Z</option>' +
+              '<option value="name-desc">Name Z–A</option>' +
+              '<option value="features">Most features</option>' +
+            '</select></label>' +
+        '</div>' +
+        '<div id="cat-chips" class="cat-chips"></div>' +
+      '</div>' +
+      '<div class="cat-body">' +
+        (railOn ? '<aside id="cat-rail" class="cat-rail"></aside>' : '') +
+        '<div class="cat-main"><div id="cat-results" class="cat-results"></div>' +
+          '<div id="cat-pager" class="cat-pager"></div></div>' +
+      '</div>';
+
+    // Below the breakpoint the list and the map cannot share the viewport, so they become two views.
+    const vt = document.createElement('div');
+    vt.id = 'cat-viewtoggle';
+    vt.innerHTML = '<button data-v="list" class="on">List</button><button data-v="map">Map</button>';
+    document.body.appendChild(vt);
+    vt.addEventListener('click', function (e) {
+      const b = e.target.closest('button'); if (!b) return;
+      document.body.dataset.catalogView = b.dataset.v;
+      vt.querySelectorAll('button').forEach(function (x) { x.classList.toggle('on', x === b); });
+      if (b.dataset.v === 'map') setTimeout(function () { try { map.resize(); } catch (e) {} }, 210);
+    });
+    document.body.dataset.catalogView = 'list';
+
+    const $q = panel.querySelector('#cat-q');
+    const $rail = panel.querySelector('#cat-rail');
+    const $res = panel.querySelector('#cat-results');
+    const $pager = panel.querySelector('#cat-pager');
+    const $count = panel.querySelector('#cat-count');
+    const $chips = panel.querySelector('#cat-chips');
+
+    function renderRail() {
+      if (!$rail) return;
+      let html = '';
+      FACETS.forEach(function (f) {
+        // Count against everything EXCEPT this group (see facetMatch) so the numbers stay honest.
+        const pool = records.filter(function (r) { return textMatch(r) && facetMatch(r, f.key); });
+        const counts = {};
+        pool.forEach(function (r) {
+          f.of(r).forEach(function (v) { counts[v] = (counts[v] || 0) + 1; });
+        });
+        const vals = Object.keys(counts).sort(function (a, b) {
+          return counts[b] - counts[a] || a.localeCompare(b);
+        });
+        if (!vals.length) return;
+        const collapsed = state.open[f.key] === false;
+        html += '<section class="cat-facet' + (collapsed ? ' collapsed' : '') + '" data-facet="' + f.key + '">' +
+          '<button class="cat-facet-h" data-toggle="' + f.key + '">' + escHtml(f.title) +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+            '<path d="M6 9l6 6 6-6"/></svg></button><div class="cat-facet-b">';
+        vals.slice(0, 12).forEach(function (v) {
+          const on = !!state[f.key][v];
+          html += '<label class="cat-fv' + (on ? ' on' : '') + '">' +
+            '<input type="checkbox" data-g="' + f.key + '" value="' + escHtml(v) + '"' + (on ? ' checked' : '') + '>' +
+            '<span class="cat-fv-t">' + escHtml(v) + '</span>' +
+            '<span class="cat-fv-n">' + counts[v] + '</span></label>';
+        });
+        html += '</div></section>';
+      });
+      $rail.innerHTML = html || '<p class="cat-empty-rail">No filters available.</p>';
+    }
+
+    function renderChips() {
+      let html = '';
+      FACETS.forEach(function (f) {
+        selectedIn(f.key).forEach(function (v) {
+          html += '<button class="cat-chip" data-g="' + f.key + '" data-v="' + escHtml(v) + '">' +
+            escHtml(v) + '<span aria-hidden="true">&times;</span></button>';
+        });
+      });
+      if (html) html += '<button class="cat-chip cat-chip-clear" data-clear="1">Clear all</button>';
+      $chips.innerHTML = html;
+      $chips.hidden = !html;
+    }
+
+    function cardHtml(r) {
+      const ref = refOf(r);
+      const badges = [];
+      badges.push('<span class="cat-b cat-b-' + (r.kind === 'raster' ? 'raster' : 'vector') + '">' +
+        escHtml(catKindLabel(r)) + '</span>');
+      if (r.private) badges.push('<span class="cat-b cat-b-lock">Restricted</span>');
+      if (r.geometry_type) badges.push('<span class="cat-b">' + escHtml(String(r.geometry_type)) + '</span>');
+      if (r.feature_count != null) badges.push('<span class="cat-b">' + catNum(r.feature_count) + ' features</span>');
+      if (r.crs) badges.push('<span class="cat-b">' + escHtml(String(r.crs)) + '</span>');
+      if (r.license) badges.push('<span class="cat-b cat-b-lic">' + escHtml(String(r.license)) + '</span>');
+
+      let foot = '';
+      if (ref) {
+        foot += '<button class="cat-act' + (onMap[ref] ? ' on' : '') + '" data-act="map" data-ref="' + ref + '">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+          '<path d="M1 6l7-3 8 3 7-3v15l-7 3-8-3-7 3z"/><path d="M8 3v15M16 6v15"/></svg>' +
+          '<span>' + (onMap[ref] ? 'On map' : 'Show on map') + '</span></button>';
+        if (r.bbox) foot += '<button class="cat-act" data-act="zoom" data-ref="' + ref + '">Zoom to</button>';
+      }
+      const links = (r.share || []).filter(function (l) { return l && l.url; });
+      if (links.length) foot += '<button class="cat-act" data-act="links">Access &amp; download</button>';
+      if (!ref && !links.length) {
+        foot += '<span class="cat-note">' + (r.private ? 'Metadata withheld' : 'No public access') + '</span>';
+      }
+
+      let linkHtml = '';
+      if (links.length) {
+        linkHtml = '<div class="cat-links" hidden>' + links.map(function (l) {
+          const u = catAbs(l.url);
+          return '<div class="cat-link' + (l.primary ? ' primary' : '') + '">' +
+            '<div class="cat-link-h"><span class="cat-link-l">' + escHtml(l.label) +
+              (l.primary ? ' <em>recommended</em>' : '') + '</span>' +
+              '<span class="cat-link-f">' + escHtml(l.format || '') + '</span></div>' +
+            '<div class="cat-link-u"><code>' + escHtml(u) + '</code>' +
+              '<button class="cat-copy" data-copy="' + escHtml(u) + '">Copy</button>' +
+              (l.download ? '<a class="cat-dl" href="' + escHtml(u) + '">Download</a>' : '') + '</div>' +
+            (l.hint ? '<p class="cat-link-hint">' + escHtml(l.hint) + '</p>' : '') +
+            ((l.tools || []).length ? '<p class="cat-link-tools">' +
+              l.tools.map(function (t) { return '<span>' + escHtml(t) + '</span>'; }).join('') + '</p>' : '') +
+            '</div>';
+        }).join('') + '</div>';
+      }
+
+      const kw = catKeywords(r).slice(0, 6);
+      return '<article class="cat-card" data-bbox="' + (r.bbox ? escHtml(JSON.stringify(r.bbox)) : '') + '">' +
+        '<h3 class="cat-card-t">' + escHtml(r.name) + '</h3>' +
+        '<div class="cat-badges">' + badges.join('') + '</div>' +
+        (r.abstract ? '<p class="cat-abstract">' + escHtml(String(r.abstract)) + '</p>'
+                    : '<p class="cat-abstract cat-abstract-none">No description provided.</p>') +
+        (kw.length ? '<div class="cat-kw">' + kw.map(function (k) {
+          return '<button class="cat-kwb" data-kw="' + escHtml(k) + '">' + escHtml(k) + '</button>';
+        }).join('') + '</div>' : '') +
+        '<div class="cat-foot">' + foot + '</div>' + linkHtml + '</article>';
+    }
+
+    function render() {
+      const all = results();
+      const pages = Math.max(1, Math.ceil(all.length / perPage));
+      if (state.page >= pages) state.page = pages - 1;
+      const page = all.slice(state.page * perPage, (state.page + 1) * perPage);
+
+      $count.textContent = all.length === records.length
+        ? all.length + (all.length === 1 ? ' dataset' : ' datasets')
+        : all.length + ' of ' + records.length + ' datasets';
+
+      $res.innerHTML = page.length ? page.map(cardHtml).join('')
+        : '<div class="cat-empty"><strong>Nothing matches</strong>' +
+          '<p>Try fewer filters or a broader search term.</p>' +
+          '<button data-clear="1">Clear all filters</button></div>';
+
+      // Paginated, not scrolled: the list only grows, and a page that gets taller forever pushes
+      // everything below it out of reach (same reasoning as the Activity log).
+      if (pages > 1) {
+        let nums = '';
+        for (let i = 0; i < pages; i++) {
+          nums += '<button class="cat-pg' + (i === state.page ? ' on' : '') + '" data-pg="' + i + '">' + (i + 1) + '</button>';
+        }
+        $pager.innerHTML = '<button class="cat-pg" data-pg="' + (state.page - 1) + '"' +
+            (state.page === 0 ? ' disabled' : '') + '>Prev</button>' + nums +
+          '<button class="cat-pg" data-pg="' + (state.page + 1) + '"' +
+            (state.page >= pages - 1 ? ' disabled' : '') + '>Next</button>';
+      } else $pager.innerHTML = '';
+      renderRail();
+      renderChips();
+    }
+
+    // ── events (delegated: the cards are re-rendered on every change) ──
+    let qt = null;
+    $q.addEventListener('input', function () {
+      clearTimeout(qt);
+      qt = setTimeout(function () { state.q = $q.value.trim(); state.page = 0; render(); }, 140);
+    });
+    panel.querySelector('#cat-sort').addEventListener('change', function (e) {
+      state.sort = e.target.value; render();
+    });
+    if ($rail) $rail.addEventListener('click', function (e) {
+      const t = e.target.closest('[data-toggle]');
+      if (t) {
+        const k = t.dataset.toggle;
+        state.open[k] = state.open[k] === false;
+        renderRail();
+        return;
+      }
+      const cb = e.target.closest('input[data-g]');
+      if (cb) { state[cb.dataset.g][cb.value] = cb.checked; state.page = 0; render(); }
+    });
+    $chips.addEventListener('click', function (e) {
+      if (e.target.closest('[data-clear]')) {
+        FACETS.forEach(function (f) { state[f.key] = {}; });
+        state.page = 0; render(); return;
+      }
+      const c = e.target.closest('.cat-chip');
+      if (c) { state[c.dataset.g][c.dataset.v] = false; state.page = 0; render(); }
+    });
+    $pager.addEventListener('click', function (e) {
+      const b = e.target.closest('[data-pg]');
+      if (!b || b.disabled) return;
+      state.page = Math.max(0, parseInt(b.dataset.pg, 10) || 0);
+      render();
+      // .cat-main is the scroller (.cat-body is overflow:hidden) — page 2 must start at the top,
+      // otherwise clicking Next leaves you looking at the middle of the new page.
+      const sc = panel.querySelector('.cat-main');
+      if (sc) sc.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+
+    $res.addEventListener('click', function (e) {
+      if (e.target.closest('[data-clear]')) {
+        FACETS.forEach(function (f) { state[f.key] = {}; });
+        state.q = ''; $q.value = ''; state.page = 0; render(); return;
+      }
+      const kw = e.target.closest('[data-kw]');
+      if (kw) { state.keyword[kw.dataset.kw] = true; state.page = 0; render(); return; }
+      const copy = e.target.closest('[data-copy]');
+      if (copy) {
+        const done = function () { const o = copy.textContent; copy.textContent = 'Copied'; setTimeout(function () { copy.textContent = o; }, 1200); };
+        if (navigator.clipboard) navigator.clipboard.writeText(copy.dataset.copy).then(done, function () {});
+        else done();
+        return;
+      }
+      const act = e.target.closest('[data-act]');
+      if (!act) return;
+      const card = act.closest('.cat-card');
+      const bbox = card && card.dataset.bbox ? JSON.parse(card.dataset.bbox) : null;
+      if (act.dataset.act === 'links') {
+        const box = card.querySelector('.cat-links');
+        if (box) { box.hidden = !box.hidden; act.classList.toggle('on', !box.hidden); }
+        return;
+      }
+      if (act.dataset.act === 'zoom') {
+        if (bbox) map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 40, duration: 700 });
+        if (window.matchMedia('(max-width: 1023px)').matches) {
+          const mb = vt.querySelector('[data-v="map"]'); if (mb) mb.click();
+        }
+        return;
+      }
+      if (act.dataset.act === 'map') {
+        const ref = act.dataset.ref;
+        onMap[ref] = !onMap[ref];
+        setLayerVisByRef(ref, onMap[ref]);
+        act.classList.toggle('on', onMap[ref]);
+        const lbl = act.querySelector('span');
+        if (lbl) lbl.textContent = onMap[ref] ? 'On map' : 'Show on map';
+        if (onMap[ref] && bbox) {
+          map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 40, duration: 700 });
+        }
+      }
+    });
+    // Hover a card → flash its footprint. The spatial cue a catalog needs, without a tile request
+    // per card (which is what a thumbnail grid would cost).
+    $res.addEventListener('mouseover', function (e) {
+      const card = e.target.closest('.cat-card');
+      if (!card) return;
+      showHl(card.dataset.bbox ? JSON.parse(card.dataset.bbox) : null);
+    });
+    $res.addEventListener('mouseleave', function () { showHl(null); });
+
+    render();
+
+    // scope "public": ALSO list every public layer on the instance, read live, so sharing a layer
+    // shows up without re-publishing every portal. The portal's own layers are rendered immediately
+    // from the baked records above and are never replaced — they are the ones with a map to toggle —
+    // so a slow or failed feed degrades to the portal-scoped catalog rather than an empty page.
+    if (cfg.scope === 'public') {
+      const own = {};
+      records.forEach(function (r) { if (r.layer_id != null) own[r.kind + ':' + r.layer_id] = true; });
+      fetch('/api/portals/' + encodeURIComponent(window.GEODEPLOY.slug) + '/catalog', {
+        credentials: 'same-origin',
+      }).then(function (res) { return res.ok ? res.json() : null; }).then(function (data) {
+        if (!data || !data.records) return;
+        let added = 0;
+        data.records.forEach(function (r) {
+          if (!r || !r.name) return;
+          if (r.layer_id != null && own[r.kind + ':' + r.layer_id]) return;   // already on the map
+          r._offmap = true;
+          records.push(r);
+          added++;
+        });
+        if (added) render();
+      }).catch(function (e) { console.warn('[geodeploy] catalog feed failed', e); });
+    }
   }
 
   function escHtml(str) {

@@ -8,8 +8,9 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
 ## Architecture (read this before touching templates)
 - **`shared/`** — the runtime, edited ONCE, inherited by every template:
   - **Template EXPERIENCES / region-driven layout (V-11; redesign R1, 2026-07-22):** a portal has an
-    **archetype** (now just `webmap` · `storymap` — the Phase-1 `webmap+catalog`/`catalog` were dropped as
-    meaningless and **alias to webmap**) + **layout manifest** `{archetype, regions, panels}`. `regions` =
+    **archetype** (`webmap` · `storymap` · `catalog` — `webmap+catalog` is still unbuilt and
+    **aliases to webmap**; `catalog` did too until V-14, which is why choosing it silently rendered a
+    plain web map) + **layout manifest** `{archetype, regions, panels}`. `regions` =
     `layerList {side:left|right, mode:docked|floating, collapsed, width, x, y}`, `controls {side:left|right}`
     (the whole map-control cluster), `header {style}`. Lives in `Portal.layout_config` (nullable JSON),
     resolved by `portal_generator.resolve_layout` (defaults ⊕ overrides), baked into `style.geodeploy.layout`.
@@ -60,6 +61,21 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
   - **R4 story pictures (V-11 redesign, 2026-07-22):** story sections gained an optional `image`
     (same-origin URL via `uploadPortalAsset`); `renderStoryHtml` emits `<img class="story-img">`
     (URL escaped). Editor: **+ Add image / Change / remove** per section.
+  - **Catalog runtime (V-14, 2026-07-30):** when the archetype is `catalog`, `setupCatalog()` fills the
+    hidden `#catalog-panel` (a sibling of `#map-wrap` in `shared/layout.html`, mirroring how
+    `#story-panel` stays `display:none` for other archetypes) with a search box, a **facet rail**
+    (Type · Keywords · Licence, each value carrying a count computed with its OWN group excluded so the
+    number says how many results picking it would give), **result cards** (badges, 3-line abstract
+    clamp, keyword chips, Show-on-map / Zoom-to / Access-and-download) and a **pager**. The map keeps
+    its own element and is never re-parented — `#layout` just becomes a two-column flex with
+    `#map-wrap` at `flex: 0 0 40%`, and `map.resize()` runs once the panel is in place or the canvas
+    keeps its full-width size. Hovering a card flashes its bbox via the `gd-cat-hl` source (chosen over
+    per-card thumbnails, which would cost a tile request each). Records come from
+    `style.geodeploy.catalog`, i.e. the SAME `layers_info` the About page renders. The facet rail is
+    suppressed below 6 datasets; below 1024px the list and map become two views via `#cat-viewtoggle`;
+    below 640px the rail is dropped entirely. `regions.catalog.scope = "public"` additionally fetches
+    `/api/portals/{slug}/catalog` and appends instance-wide public datasets — those are marked
+    `_offmap` so they show no "Show on map" button (there is no layer on this portal's map to toggle).
   - **Story map runtime (V-11 Phase 2 MVP, 2026-07-21):** when the archetype is `storymap`, `setupStory()`
     fills `#story-panel` (an overlay narrative column, `layout.html`) from `style.geodeploy.story`
     (`{sections:[{title,body,view,layers}]}`). An `IntersectionObserver` (mid-viewport band) drives
@@ -134,7 +150,7 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
 - `official/satellite-dark/` — dark UI (dark `:root` overrides) over Esri satellite imagery; sky accent.
 - `official/editorial/` — warm cream + terracotta, serif headings, on CARTO Voyager. Print/story feel.
 - `official/humanitarian/` — OCHA-style cerulean header + red rule, high contrast, on OSM. Presets the
-  `webmap+catalog` archetype (V-11).
+  `webmap+catalog` archetype (V-11 — still aliased to webmap).
 - `official/story/` — warm serif narrative theme; presets the `storymap` archetype (V-11) — a
   scrollytelling portal whose sections are authored in the editor's Experience panel.
 - `official/west-africa-fr/` — metadata-only stub (no `style.json` → not listed until completed;
@@ -163,7 +179,7 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
-2026-07-25 (V-11 polish, 2nd pass: story-map wheel now ZOOMS the map over the open map and only scrolls
+2026-07-30 (V-11 polish, 2nd pass: story-map wheel now ZOOMS the map over the open map and only scrolls
 the narrative over the story column [`setupStory` hit-tests the pointer against the panel's opaque band in
 a capture-phase wheel listener; `scrollZoom` re-enabled]; the up/down "more" chevrons are bigger [42px,
 filled accent] and centred on the visible card column)
