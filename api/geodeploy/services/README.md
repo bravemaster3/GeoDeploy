@@ -27,9 +27,19 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   because the public host isn't known at publish time; the page's inline script swaps it for
   `location.origin` on load. That token approach (rather than root-relative URLs) is what keeps
   `/vsicurl/<origin>/…` and `pmtiles://<origin>/…` correct, where the origin sits mid-string.
-  The About page also gets a **layer filter box** (`_layers_section`, shown from 6 layers up):
-  client-side substring matching over a `data-search` haystack (name + abstract + keywords +
-  geometry + CRS) baked onto each card, so it needs no request and works on the static page.
+  The About page also gets a **toolbar** (`_layers_section`, from 6 layers up): a search box +
+  kind chips (Vector / GeoParquet / Raster, only the kinds actually present), ANDed together and
+  matched client-side against `data-search` (name + abstract + keywords + geometry + CRS) and
+  `data-kind` baked onto each card — no request, works on the static page. Both are block children
+  of `.wrap`, so the toolbar spans exactly the card column's width.
+  **Layout decisions (2026-07-30, from user feedback on the live page):** the card grid is
+  deliberately **one column** — at 2-up an expanded card stretched its row-mate and cramped the long
+  URLs; the share `<details>` blocks are an **accordion** (opening one closes the rest) so the page
+  never becomes a wall of URLs; `.abstract` is full-width + justified (it was not filling the card);
+  and the link glyph is the literal 🔗 **character, not a CSS `F517` escape** — the backslash was
+  being eaten on the way out of the Python f-string and rendered as a literal "F517".
+  `.doc img` is block/centred/`max-width:100%`, and `![alt|full](src)` opts an image into filling
+  the column (`_md_inline` strips the marker from the alt text).
 - `external_sources.py` — third-party services shown in portals **without ingesting**. `kind_for` (xyz/wms→raster, wfs→vector), `tile_url` (xyz template as-is; wms → GetMap KVP with MapLibre's `{bbox-epsg-3857}` token), `features_url` (the public GeoJSON proxy path), `probe_wfs` (fetch 1 feature on add → geometry type + bbox; validates), `fetch_wfs_geojson` (proxy fetch, 5k-feature cap). Consumed by `routers/data/sources.py` + `portal_generator`.
 - `cog_converter.py` — rasterio-based: `is_cog`, `convert_to_cog` (512×512 tiles, overviews 2–64, LZW + dtype-aware predictor), `inspect` (local file → CRS/bbox/bands/nodata; bbox reprojected to 4326 via shared `_read_meta`), `inspect_s3` (same but reads an existing object's header over S3 for the "import existing data" flow).
 - `oidc.py` (A-04 SSO) — generic OpenID Connect via **Authlib**. `get_oidc_config(db)` reads the admin-set `SetupConfig.oidc_*` (client secret decrypted by EncryptedText; None when not enabled/complete). `build_oauth(cfg)` registers a fresh Authlib client per-request (config is dynamic). **`resolve_user(claims, cfg, db)` is THE account-linking/provisioning policy (unit-tested):** link by `oidc_sub` then VERIFIED email; no account → create only if `auto_provision` + domain allow-listed, with `default_role`; else raise `OidcError` (user-facing). SSO-created users get a RANDOM bcrypt hash (a non-bcrypt placeholder would make passlib.verify RAISE in the login path). Consumed by `routers/auth_oidc.py`.

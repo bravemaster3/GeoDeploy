@@ -331,6 +331,7 @@ def _layer_info(layer, kind: str) -> dict:
         "is_public": bool(getattr(layer, "is_public", False)),
         # A3: technical metadata auto-captured at ingest — shown for organization/public layers.
         "crs": getattr(layer, "crs", None),
+        "backend": getattr(layer, "storage_backend", None),   # drives the GeoParquet filter chip
         "geometry_type": getattr(layer, "geometry_type", None),
         "feature_count": getattr(layer, "feature_count", None),
     }
@@ -609,8 +610,17 @@ def _json_for_html(obj) -> str:
 def _md_inline(s: str) -> str:
     """Inline markdown on an ALREADY-ESCAPED string: images, links, bold, italic, code."""
     import re
-    s = re.sub(r"!\[([^\]]*)\]\((https?://[^)\s]+|/[^)\s]*)\)",
-               r'<img src="\2" alt="\1" loading="lazy">', s)
+    # Images. `![alt](src)` is centred at its natural size (capped to the column width); an alt
+    # ending in `|full` — `![Map of the area|full](src)` — stretches it to fill the column. The
+    # marker is stripped from the alt so it never reaches a screen reader.
+    def _img(m):
+        alt, src = m.group(1), m.group(2)
+        cls = ""
+        if alt.endswith("|full"):
+            alt, cls = alt[:-5].rstrip(), ' class="full"'
+        return f'<img src="{src}" alt="{alt}"{cls} loading="lazy">'
+
+    s = re.sub(r"!\[([^\]]*)\]\((https?://[^)\s]+|/[^)\s]*)\)", _img, s)
     s = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+|/[^)\s]*)\)",
                r'<a href="\2" target="_blank" rel="noopener">\1</a>', s)
     s = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", s)
@@ -707,13 +717,33 @@ def _layers_section(cards: list[str]) -> str:
     already in the DOM, so there is nothing to fetch and it works on a static page."""
     if not cards:
         return ""
-    search = ("" if len(cards) < 6 else
-              '<input type="search" id="layer-search" class="layer-search" '
-              'placeholder="Filter layers…" aria-label="Filter layers">')
+    kinds = {k for k in (_kind_of(c) for c in cards) if k}
+    chips = ""
+    if len(kinds) > 1:
+        labels = [("", "All"), ("vector", "Vector"), ("geoparquet", "GeoParquet"),
+                  ("raster", "Raster")]
+        chips = '<div class="kind-chips" id="layer-kinds">' + "".join(
+            f'<button type="button" class="kind-chip{" on" if not k else ""}" data-kind="{k}">{lbl}</button>'
+            for k, lbl in labels if not k or k in kinds) + "</div>"
+    # The toolbar only earns its space once the list is long enough to scan.
+    bar = ("" if len(cards) < 6 else
+           '<div class="layer-tools">'
+           '<input type="search" id="layer-search" class="layer-search" '
+           'placeholder="Search layers…" aria-label="Search layers">'
+           + chips + "</div>")
     return ('<div class="section-title">Layers &amp; data</div>'
-            + search
+            + bar
             + '<div class="grid" id="layer-grid">' + "".join(cards) + "</div>"
             + '<p class="no-match" id="layer-nomatch" hidden>No layer matches that.</p>')
+
+
+def _kind_of(card_html: str) -> str:
+    marker = 'data-kind="'
+    i = card_html.find(marker)
+    if i < 0:
+        return ""
+    i += len(marker)
+    return card_html[i:card_html.find('"', i)]
 
 
 def _about_page(slug: str, title: str, description: str | None, layers_info: list[dict]) -> str | None:
@@ -730,7 +760,8 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
     for i in layers_info:
         # Private layer → just the name + a "Private" tag; none of its metadata is exposed publicly.
         if i.get("private"):
-            cards.append('<div class="layer" data-search="' + _esc((i.get("name") or "").lower())
+            cards.append('<div class="layer" data-kind="' + _esc(i.get("kind") or "")
+                         + '" data-search="' + _esc((i.get("name") or "").lower())
                          + '"><div class="layer-name">' + _esc(i.get("name"))
                          + '<span class="badge badge-private">private</span></div></div>')
             continue
@@ -738,7 +769,10 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
         # geometry/CRS), lowercased once here so the browser only has to substring-match.
         haystack = " ".join(str(i.get(k) or "") for k in
                             ("name", "abstract", "keywords", "geometry_type", "crs")).lower()
-        parts = ['<div class="layer" data-search="' + _esc(haystack) + '">'
+        # GeoParquet is its own filter bucket: a file-backed vector behaves differently enough
+        # (deck.gl/DuckDB, different artifacts) that people look for it by name.
+        kind = "geoparquet" if (i.get("kind") == "vector" and i.get("backend") == "geoparquet")             else (i.get("kind") or "")
+        parts = ['<div class="layer" data-kind="' + _esc(kind) + '" data-search="' + _esc(haystack) + '">'
                  + '<div class="layer-name">' + _esc(i.get("name"))
                  + ('<span class="badge">public data</span>' if i.get("is_public") else "") + "</div>"]
         if i.get("abstract"):
@@ -847,7 +881,14 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
   .doc li {{ margin: 4px 0; }}
   .doc a {{ color: var(--primary); text-decoration: none; border-bottom: 1px solid transparent; }}
   .doc a:hover {{ border-bottom-color: var(--primary); }}
-  .doc img {{ max-width: 100%; border-radius: var(--radius); border: 1px solid var(--border); margin: 14px 0; }}
+  /* Pasted/linked images: block-level, centred, and never wider than the column. An
+     image narrower than the column stays centred rather than hugging the left edge;
+     `![alt|full](src)` opts into filling the width. */
+  .doc img {{
+    display: block; max-width: 100%; height: auto; margin: 16px auto;
+    border-radius: var(--radius); border: 1px solid var(--border);
+  }}
+  .doc img.full {{ width: 100%; }}
   .doc blockquote {{
     border-left: 3px solid var(--primary); background: var(--panel);
     padding: 10px 18px; margin: 14px 0; border-radius: 0 var(--radius) var(--radius) 0;
@@ -862,8 +903,9 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
     font-size: 13px; font-weight: 700; letter-spacing: 1.8px; text-transform: uppercase;
     color: var(--muted); margin: 56px 0 18px; padding-top: 26px; border-top: 1px solid var(--border);
   }}
+  /* Single column ON PURPOSE: these cards expand (share links), and in a 2-up grid the
+     expanded card stretched its row-mate and left the long URLs cramped. */
   .grid {{ display: grid; grid-template-columns: 1fr; gap: 14px; }}
-  @media (min-width: 700px) {{ .grid {{ grid-template-columns: 1fr 1fr; }} }}
   .layer {{
     background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
     padding: 18px 20px; transition: border-color .15s;
@@ -876,7 +918,10 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
     border-radius: 999px; padding: 2.5px 9px; margin-left: 8px; vertical-align: 2px;
   }}
   .badge-private {{ color: var(--muted); background: transparent; border-color: var(--border); }}
-  .abstract {{ font-size: 13.5px; color: var(--abstract-fg); margin-top: 8px; }}
+  .abstract {{
+    font-size: 13.5px; color: var(--abstract-fg); margin-top: 8px;
+    width: 100%; max-width: none; text-align: justify; hyphens: auto;
+  }}
   .meta {{ font-size: 12px; color: var(--muted); margin-top: 8px; }}
   .tech {{ font-variant-numeric: tabular-nums; margin-top: 4px; opacity: .9; }}
   .links {{ display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }}
@@ -886,12 +931,23 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
     border: 1px solid var(--border); transition: border-color .15s;
   }}
   .pill:hover {{ border-color: var(--primary); }}
+  /* Toolbar sits directly above .grid and, like it, is a block child of .wrap — so it spans
+     exactly the same width as the cards beneath it. */
+  .layer-tools {{ display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 14px; }}
   .layer-search {{
-    width: 100%; margin: 0 0 14px; padding: 9px 13px; font: inherit; font-size: 13.5px;
+    flex: 1 1 240px; min-width: 0; padding: 9px 13px; font: inherit; font-size: 13.5px;
     color: var(--fg); background: var(--card); border: 1px solid var(--border);
     border-radius: var(--radius);
   }}
   .layer-search:focus {{ outline: none; border-color: var(--primary); }}
+  .kind-chips {{ display: flex; gap: 6px; flex-wrap: wrap; }}
+  .kind-chip {{
+    cursor: pointer; font: inherit; font-size: 12px; font-weight: 600; padding: 7px 13px;
+    border-radius: 999px; color: var(--muted); background: var(--card);
+    border: 1px solid var(--border); transition: color .15s, border-color .15s;
+  }}
+  .kind-chip:hover {{ border-color: var(--layer-hover); }}
+  .kind-chip.on {{ color: var(--primary); border-color: var(--primary); }}
   .no-match {{ font-size: 13px; color: var(--muted); text-align: center; padding: 18px 0; }}
   /* "Use this data elsewhere" — mirrors ui/src/components/data/ShareLinksModal.vue so the
      published portal and the dashboard read the same. Change both together. */
@@ -901,7 +957,10 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
     list-style: none; display: flex; align-items: center; gap: 8px;
   }}
   .share > summary::-webkit-details-marker {{ display: none; }}
-  .share > summary::before {{ content: "\1F517"; font-size: 12px; }}
+  /* The character itself, NOT a CSS F517 escape: this stylesheet is written from a
+     Python f-string, and the backslash was being consumed on the way out (it rendered
+     as a literal "F517"). No escaping layer left to get wrong. */
+  .share > summary::before {{ content: "🔗"; font-size: 12px; }}
   .share[open] > summary {{ margin-bottom: 10px; }}
   .s-count {{ font-size: 11px; font-weight: 500; color: var(--muted); }}
   .s-row {{
@@ -985,22 +1044,52 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
       }});
     }});
   }})();
-  // Layer filter: plain substring match over each card's prebuilt data-search haystack.
+  // Layer filter: substring match over each card's prebuilt data-search haystack, ANDed with the
+  // kind chip. Both are attributes already in the DOM, so there is nothing to fetch.
   (function () {{
-    var box = document.getElementById('layer-search');
     var grid = document.getElementById('layer-grid');
+    if (!grid) return;
+    var box = document.getElementById('layer-search');
+    var chipBox = document.getElementById('layer-kinds');
     var none = document.getElementById('layer-nomatch');
-    if (!box || !grid) return;
     var cards = Array.prototype.slice.call(grid.querySelectorAll('.layer'));
-    box.addEventListener('input', function () {{
-      var q = box.value.trim().toLowerCase();
+    var kind = '';
+
+    function apply() {{
+      var q = box ? box.value.trim().toLowerCase() : '';
       var shown = 0;
       cards.forEach(function (card) {{
-        var hit = !q || (card.getAttribute('data-search') || '').indexOf(q) !== -1;
+        var hit = (!q || (card.getAttribute('data-search') || '').indexOf(q) !== -1) &&
+                  (!kind || card.getAttribute('data-kind') === kind);
         card.hidden = !hit;
         if (hit) shown++;
       }});
       if (none) none.hidden = shown !== 0;
+    }}
+
+    if (box) box.addEventListener('input', apply);
+    if (chipBox) {{
+      chipBox.addEventListener('click', function (ev) {{
+        var chip = ev.target.closest('.kind-chip');
+        if (!chip) return;
+        kind = chip.getAttribute('data-kind') || '';
+        chipBox.querySelectorAll('.kind-chip').forEach(function (c) {{
+          c.classList.toggle('on', c === chip);
+        }});
+        apply();
+      }});
+    }}
+  }})();
+
+  // Accordion: opening one layer's links closes the others, so the page never becomes a wall of
+  // URLs. (<details name> does this natively but only in recent browsers — do it explicitly.)
+  (function () {{
+    var all = Array.prototype.slice.call(document.querySelectorAll('details.share'));
+    all.forEach(function (d) {{
+      d.addEventListener('toggle', function () {{
+        if (!d.open) return;
+        all.forEach(function (other) {{ if (other !== d) other.open = false; }});
+      }});
     }});
   }})();
   (function () {{
