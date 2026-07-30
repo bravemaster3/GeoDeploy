@@ -58,7 +58,7 @@
     storymap: { regions: { layerList: { side: 'left', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: true, legend: true, basemap: true, about: false, story: true } },
     // V-14 catalog: a BROWSE surface. The dataset list is the page and the map is a panel beside it,
     // so layerCatalog is off (the facet rail replaces the switcher) and `catalog` carries the split.
-    catalog:  { regions: { layerList: { side: 'left', mode: 'docked', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, catalog: { scope: 'portal', mapSide: 'right', mapWidth: 40, railWidth: 20, perPage: 12 } }, panels: { catalog: true, layerCatalog: false, legend: true, basemap: true, about: false, story: false } },
+    catalog:  { regions: { layerList: { side: 'left', mode: 'docked', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, catalog: { scope: 'portal', mapSide: 'right', mapWidth: 50, railWidth: 20, perPage: 12 } }, panels: { catalog: true, layerCatalog: false, legend: true, basemap: true, about: false, story: false } },
   };
   // `webmap+catalog` is still UNBUILT and degrades to a working map on purpose — a blank shell would
   // be worse. `catalog` used to be here too, which is why choosing it silently rendered a web map.
@@ -3045,17 +3045,23 @@
         !(bb[2] < bbox[0] || bb[0] > bbox[2] || bb[3] < bbox[1] || bb[1] > bbox[3]);
       if (!hit) return;
       seen.add(key);
-      items.push({ id: d.layer_id, type: 'vector', name: d.name || ('Layer ' + d.layer_id) });
+      items.push({ id: d.layer_id, type: 'vector', backend: 'geoparquet',
+                   name: d.name || ('Layer ' + d.layer_id) });
     });
 
-    const fmtOptions = (type) => type === 'raster'
+    // GeoParquet is offered ONLY for GeoParquet-backed layers, where it is both the fastest export
+    // (parquet-to-parquet, no conversion) and the only lossless one — GeoJSON is forced to 4326.
+    // A PostGIS layer has no parquet to copy, so listing it there would be a broken choice.
+    const fmtOptions = (it) => it.type === 'raster'
       ? '<option value="tif" selected>GeoTIFF</option>'
-      : '<option value="geojson" selected>GeoJSON</option><option value="gpkg">GeoPackage</option><option value="csv">CSV</option>';
+      : (it.backend === 'geoparquet' ? '<option value="geoparquet" selected>GeoParquet</option>' : '')
+        + '<option value="geojson"' + (it.backend === 'geoparquet' ? '' : ' selected') + '>GeoJSON</option>'
+        + '<option value="gpkg">GeoPackage</option><option value="csv">CSV</option>';
     const rowHtml = (it) =>
       '<label class="gd-download-row">' +
         '<input type="checkbox" class="gd-dl-check" data-id="' + it.id + '" data-type="' + it.type + '" checked>' +
         '<span class="gd-download-name" title="' + escHtml(it.name) + '">' + escHtml(it.name) + '</span>' +
-        '<select class="gd-dl-format">' + fmtOptions(it.type) + '</select>' +
+        '<select class="gd-dl-format">' + fmtOptions(it) + '</select>' +
       '</label>';
 
     const old = document.getElementById('gd-download');

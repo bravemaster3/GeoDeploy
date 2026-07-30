@@ -256,7 +256,7 @@
             <div class="flex items-center justify-between">
               <span class="text-muted-foreground">Map width</span>
               <div class="flex gap-1">
-                <button v-for="w in [[40,'Default'],[50,'Half']]" :key="w[0]" @click="catalogMapWidth = w[0]"
+                <button v-for="w in [[33,'1/3'],[50,'1/2'],[60,'3/5']]" :key="w[0]" @click="catalogMapWidth = w[0]"
                   class="px-2 py-0.5 rounded border"
                   :class="catalogMapWidth === w[0] ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ w[1] }}</button>
               </div>
@@ -559,7 +559,7 @@ const _ARCH_DEFAULTS = {
   storymap: { regions: { layerList: { side: 'left', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: true, legend: true, basemap: true, about: false, story: true } },
   // V-14 catalog: the dataset list is the page and the map is a panel beside it, so layerCatalog is
   // off (the facet rail replaces the switcher) and `catalog` carries the split.
-  catalog:  { regions: { layerList: { side: 'left', mode: 'docked', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, catalog: { scope: 'portal', mapSide: 'right', mapWidth: 40, railWidth: 20, perPage: 12 } }, panels: { catalog: true, layerCatalog: false, legend: true, basemap: true, about: false, story: false } },
+  catalog:  { regions: { layerList: { side: 'left', mode: 'docked', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, catalog: { scope: 'portal', mapSide: 'right', mapWidth: 50, railWidth: 20, perPage: 12 } }, panels: { catalog: true, layerCatalog: false, legend: true, basemap: true, about: false, story: false } },
 }
 // `webmap+catalog` is still UNBUILT and degrades to a working map on purpose. `catalog` used to be
 // here too, which is why choosing it silently rendered a plain web map.
@@ -595,7 +595,7 @@ const catalogScope = computed({
   },
 })
 const catalogMapWidth = computed({
-  get: () => resolvedLayout.value.regions.catalog?.mapWidth ?? 40,
+  get: () => resolvedLayout.value.regions.catalog?.mapWidth ?? 50,
   set: (v) => {
     const c = { ...(layoutConfig.value || {}) }
     c.regions = { ...(c.regions || {}) }

@@ -116,6 +116,24 @@ def _gpq_features(s3_key: str, b, settings, keep_native: bool = False) -> list[d
     return kept
 
 
+def _gpq_parquet(s3_key: str, b, settings) -> bytes:
+    """Clip a GeoParquet layer to the bbox and return GeoParquet BYTES for the zip.
+
+    Written to a temp file because pyarrow writes parquet to a path, then read back — parquet is a
+    random-access format with a footer, so it cannot be streamed into the archive as it is produced.
+    """
+    import tempfile
+
+    from ..services import duckdb_engine
+    from .raster_ingest import _get_storage_creds
+    creds = _get_storage_creds()
+    with tempfile.TemporaryDirectory() as td:
+        out = os.path.join(td, "clip.parquet")
+        duckdb_engine.copy_features_parquet(s3_key, list(b), FEATURE_CAP, out, creds)
+        with open(out, "rb") as f:
+            return f.read()
+
+
 def _gpq_geojson(feats: list[dict]) -> str:
     return json.dumps({"type": "FeatureCollection", "features": feats}, separators=(",", ":"))
 
@@ -279,9 +297,17 @@ def export_bundle(self, bbox: str, items: list[dict], target_crs: str = "4326") 
                     fmt = it.get("format", "geojson")
                     # native only for CSV/GPKG; GeoJSON must be 4326.
                     keep_native = native and fmt in ("csv", "gpkg")
-                    feats = _gpq_features(it["s3_key"], b, settings, keep_native=keep_native)
+                    # The parquet path never needs decoded features — computing them would undo the
+                    # entire point of it.
+                    feats = ([] if fmt == "geoparquet"
+                             else _gpq_features(it["s3_key"], b, settings, keep_native=keep_native))
                     out_crs = (it.get("crs") or "EPSG:4326") if keep_native else "EPSG:4326"
-                    if fmt == "csv":
+                    if fmt == "geoparquet":
+                        # Parquet-to-parquet inside DuckDB: no GeoJSON materialisation, no shapely
+                        # round-trip, geometry stays WKB in the file's own CRS. Lossless and the
+                        # cheapest of the four, which is why it is offered only where it applies.
+                        z.writestr(fn(base, "parquet"), _gpq_parquet(it["s3_key"], b, settings))
+                    elif fmt == "csv":
                         z.writestr(fn(base, "csv"), _gpq_csv(feats))
                     elif fmt == "gpkg":
                         gj = _gpq_geojson(feats)

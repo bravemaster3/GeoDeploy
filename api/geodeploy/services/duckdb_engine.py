@@ -328,6 +328,100 @@ def _jsonable(v):
     return str(v)
 
 
+def copy_features_parquet(s3_key: str, bbox, limit: int, out_path: str,
+                          creds: dict | None = None, bucket: str | None = None) -> int:
+    """Clip a GeoParquet layer to `bbox` and write a GeoParquet file. Returns the row count.
+
+    The FASTEST and only lossless download for a GeoParquet layer: rows go parquet-to-parquet inside
+    DuckDB, so nothing is ever materialised as GeoJSON, geometry stays WKB in the file's OWN CRS, and
+    no reprojection or shapely round-trip happens at all. The other formats (GeoJSON/GPKG/CSV) all
+    pay that conversion.
+
+    Reuses `query_features_geojson`'s pruning verbatim — covering-bbox comparisons plus `__cell`
+    partition pruning — so a small box over a multi-GB dataset opens only the partitions it touches.
+
+    The source file's `geo` key-value metadata is copied onto the output. Without it the result is a
+    parquet file that merely happens to contain WKB: readers would not know which column is the
+    geometry or what CRS it is in, and GDAL would not open it as GeoParquet.
+    """
+    settings = get_settings()
+    bkt = bucket or settings.storage_bucket
+    meta_path, src = _parquet_paths(f"s3://{bkt}/{s3_key}")
+    limit = max(1, int(limit))
+
+    conn = _connect_read(creds)
+    try:
+        meta = _read_geo_metadata(conn, meta_path)
+        all_cols = [r[0] for r in conn.execute(f"DESCRIBE SELECT * FROM {src}").fetchall()]
+        geom_col = meta["column"] or next(
+            (c for c in all_cols if c.lower() in ("geometry", "geom", "wkb_geometry", "wkb")), None)
+        if not geom_col:
+            raise ValueError("No geometry column found.")
+        src_epsg = meta["epsg"] or "EPSG:4326"
+
+        where_parts, qb = [], None
+        if bbox and len(bbox) == 4 and meta["covering"]:
+            qb = _reproject_bbox(list(bbox), "EPSG:4326", src_epsg)
+            col, fields = meta["covering"]
+
+            def ce(f):
+                return f"struct_extract({_q(col)}, '{fields[f]}')"
+            where_parts.append(f"{ce('xmin')} <= {qb[2]} AND {ce('xmax')} >= {qb[0]} "
+                               f"AND {ce('ymin')} <= {qb[3]} AND {ce('ymax')} >= {qb[1]}")
+
+        read_src = src
+        gm = meta.get("grid")
+        if qb is not None and gm:
+            gsz = int(gm["grid"]); pad = 1
+
+            def _ci(v, lo, span):
+                return int((v - lo) / (span or 1.0) * gsz)
+            ix0 = max(0, _ci(qb[0], gm["minx"], gm["spanx"]) - pad)
+            ix1 = min(gsz - 1, _ci(qb[2], gm["minx"], gm["spanx"]) + pad)
+            iy0 = max(0, _ci(qb[1], gm["miny"], gm["spany"]) - pad)
+            iy1 = min(gsz - 1, _ci(qb[3], gm["miny"], gm["spany"]) + pad)
+            if ix0 <= ix1 and iy0 <= iy1:
+                cells = [ix * gsz + iy for ix in range(ix0, ix1 + 1) for iy in range(iy0, iy1 + 1)]
+                if len(cells) < gsz * gsz:
+                    read_src = f"read_parquet('{meta_path}', hive_partitioning=true)"
+                    where_parts.append(f"__cell IN ({','.join(str(c) for c in cells)})")
+
+        where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+        # `__cell` is a hive PARTITION column, an artefact of how the layer is stored — it must not
+        # travel into someone's download as if it were an attribute.
+        keep = [c for c in all_cols if c != "__cell"]
+        sel = ", ".join(_q(c) for c in keep)
+        tbl = conn.execute(f"SELECT {sel} FROM {read_src} {where} LIMIT {limit}").arrow()
+
+        geo_kv = None
+        try:
+            row = conn.execute(
+                f"SELECT value FROM parquet_kv_metadata('{meta_path}') WHERE key = 'geo' LIMIT 1"
+            ).fetchone()
+            if row and row[0]:
+                geo_kv = row[0] if isinstance(row[0], bytes) else str(row[0]).encode()
+        except Exception:
+            geo_kv = None   # older DuckDB without parquet_kv_metadata → fall through to a rebuild
+
+        if geo_kv is None:
+            # Minimal but VALID GeoParquet metadata, so the download still opens as geospatial data
+            # rather than an anonymous table.
+            import json as _json
+            geo_kv = _json.dumps({
+                "version": "1.0.0", "primary_column": geom_col,
+                "columns": {geom_col: {"encoding": "WKB", "crs": None if src_epsg == "EPSG:4326" else src_epsg,
+                                       "geometry_types": []}},
+            }).encode()
+
+        import pyarrow.parquet as pq
+        md = dict(tbl.schema.metadata or {})
+        md[b"geo"] = geo_kv
+        pq.write_table(tbl.replace_schema_metadata(md), out_path, compression="zstd")
+        return tbl.num_rows
+    finally:
+        conn.close()
+
+
 def query_features_geojson(s3_key: str, bbox=None, limit: int = 50_000, creds: dict | None = None,
                            bucket: str | None = None, keep_native: bool = False,
                            offset: int = 0) -> dict:

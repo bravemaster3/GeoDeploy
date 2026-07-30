@@ -423,7 +423,7 @@ _LAYOUT_ARCHETYPES = {
             "catalog": {
                 "scope": "portal",      # portal | public
                 "mapSide": "right",     # right | bottom | none
-                "mapWidth": 40,         # % of the content area when mapSide=right
+                "mapWidth": 50,         # % of the content area when mapSide=right (half the page)
                 "railWidth": 20,        # % for the facet rail
                 "perPage": 12,
             },
