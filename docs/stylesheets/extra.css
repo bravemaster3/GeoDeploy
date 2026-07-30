@@ -1,0 +1,109 @@
+/* GeoDeploy documentation theme.
+   Material's defaults are deliberately neutral; this gives the site its own identity — brand green,
+   a landing hero, and cards that read as a product page rather than a wiki. */
+
+:root {
+  --gd-green: #16a34a;
+  --gd-green-dim: #15803d;
+  --gd-ink: #0b1220;
+}
+
+/* Material's primary is a fixed palette name, so the exact brand colour is set here. */
+[data-md-color-primary="green"] {
+  --md-primary-fg-color: var(--gd-green);
+  --md-primary-fg-color--dark: var(--gd-green-dim);
+  --md-accent-fg-color: var(--gd-green);
+}
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: hsl(222 44% 9%);
+  --md-code-bg-color: hsl(220 40% 13%);
+  --md-typeset-a-color: #4ade80;
+}
+[data-md-color-scheme="default"] {
+  --md-typeset-a-color: var(--gd-green-dim);
+}
+
+/* ── Landing hero ──────────────────────────────────────────────────────────
+   Only on pages that opt in with `hero` in their front matter class, so no other page inherits it. */
+.gd-hero {
+  margin: -1.2rem -.8rem 2.5rem;
+  padding: 4rem 2rem 3.5rem;
+  text-align: center;
+  border-radius: 0 0 1.5rem 1.5rem;
+  background:
+    radial-gradient(ellipse 80% 60% at 50% -10%, rgba(22,163,74,.22), transparent 70%),
+    linear-gradient(180deg, rgba(22,163,74,.10), transparent 65%);
+}
+.gd-hero h1 {
+  font-size: 2.9rem;
+  line-height: 1.1;
+  font-weight: 800;
+  letter-spacing: -.03em;
+  margin: 0 0 .9rem;
+}
+.gd-hero .gd-sub {
+  max-width: 40rem;
+  margin: 0 auto 2rem;
+  font-size: 1.05rem;
+  line-height: 1.65;
+  color: var(--md-default-fg-color--light);
+}
+.gd-hero .md-button {
+  margin: .3rem .35rem;
+  border-radius: .6rem;
+  font-weight: 600;
+}
+.gd-hero .md-button--primary {
+  box-shadow: 0 6px 20px rgba(22,163,74,.28);
+  border-color: transparent;
+}
+
+/* The install line, presented as the one thing to copy. */
+.gd-install {
+  max-width: 46rem;
+  margin: 2rem auto 0;
+  text-align: left;
+}
+.gd-install .highlight pre {
+  border-radius: .7rem;
+  border: 1px solid var(--md-default-fg-color--lightest);
+}
+
+/* ── Feature cards ─────────────────────────────────────────────────────────
+   Material ships `.grid.cards`; these adjust the weight so a card reads as a feature, not a note. */
+.md-typeset .grid.cards > ul > li {
+  border-radius: .8rem;
+  border-color: var(--md-default-fg-color--lightest);
+  padding: 1.1rem 1.2rem;
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+.md-typeset .grid.cards > ul > li:hover {
+  border-color: var(--gd-green);
+  box-shadow: 0 6px 22px rgba(0,0,0,.10);
+  transform: translateY(-2px);
+}
+.md-typeset .grid.cards > ul > li > hr {
+  margin: .6rem 0 .8rem;
+}
+.md-typeset .grid.cards .twemoji,
+.md-typeset .grid.cards .md-typeset .twemoji {
+  color: var(--gd-green);
+}
+
+/* ── Reading comfort ───────────────────────────────────────────────────────*/
+.md-typeset h1 { font-weight: 750; letter-spacing: -.02em; }
+.md-typeset h2 {
+  font-weight: 700; letter-spacing: -.015em;
+  margin-top: 2.4rem; padding-top: .4rem;
+  border-top: 1px solid var(--md-default-fg-color--lightest);
+}
+.gd-hero + h2, .md-typeset h1 + h2 { border-top: none; }
+.md-typeset table:not([class]) { font-size: .78rem; }
+.md-typeset table:not([class]) th { font-weight: 600; }
+
+/* A flow diagram in a code block should not read as something to copy. */
+.gd-flow .highlight pre {
+  background: transparent;
+  border: 1px dashed var(--md-default-fg-color--lighter);
+  text-align: center;
+}
