@@ -68,9 +68,8 @@ def prepare_geoparquet(self, layer_id, s3_key, job_id=None):
     new partitioned prefix, refresh metadata, and delete the original upload."""
     from ..services import duckdb_engine
     settings = get_settings()
-    db_path = f"{settings.data_dir}/sqlite/geodeploy.db"
     # Storage creds from SQLite (NOT env) — celery's env isn't reliably populated. See §0f.
-    creds = _get_storage_creds(db_path)
+    creds = _get_storage_creds()
     try:
         logger.info("prepare_geoparquet: layer %s — partitioning %s + bbox covering", layer_id, s3_key)
         # Env knobs (retunable on celery without an image rebuild): PREP_MEMORY_LIMIT caps DuckDB
@@ -84,7 +83,7 @@ def prepare_geoparquet(self, layer_id, s3_key, job_id=None):
         attached = not s3_key.startswith("vectors/")
         out_prefix = None
         if attached:
-            uid = _get_layer_user(db_path, layer_id) or 0
+            uid = _get_layer_user(layer_id) or 0
             out_prefix = f"vectors/{uid}/{uuid.uuid4().hex}/parts-{uuid.uuid4().hex[:8]}"
         result = duckdb_engine.partition_with_covering(
             s3_key, creds, out_prefix=out_prefix,
@@ -102,8 +101,7 @@ def prepare_geoparquet(self, layer_id, s3_key, job_id=None):
         # Re-inspect the partitioned dataset (covering column now present; inspect drops it from the
         # catalog columns). inspect_parquet handles the prefix via _parquet_paths.
         info = duckdb_engine.inspect_parquet(f"s3://{creds['bucket']}/{new_key}", creds)
-        _update_layer(
-            db_path, layer_id, status="ready",
+        _update_layer(layer_id, status="ready",
             s3_key=new_key,  # repoint the catalog at the partitioned prefix
             geometry_type=info.get("geometry_type"),
             geometry_column=info.get("geometry_column"),
@@ -133,7 +131,7 @@ def prepare_geoparquet(self, layer_id, s3_key, job_id=None):
                 logger.warning("prepare_geoparquet: layer %s — could not delete old source %s",
                                layer_id, s3_key, exc_info=True)
         if job_id:
-            _update_job(db_path, job_id, status="ready", progress=100,
+            _update_job(job_id, status="ready", progress=100,
                         completed_at=datetime.now(timezone.utc).isoformat())
         logger.info("prepare_geoparquet: layer %s — READY (%s features) → %s",
                     layer_id, info.get("feature_count"), new_key)
@@ -152,10 +150,10 @@ def prepare_geoparquet(self, layer_id, s3_key, job_id=None):
             # Enqueue failed (e.g. broker hiccup): clear the 'tiling' badge so the layer isn't stuck.
             logger.warning("prepare_geoparquet: layer %s — could not enqueue auto-tiling", layer_id,
                            exc_info=True)
-            _update_layer(db_path, layer_id, tile_status=None)
+            _update_layer(layer_id, tile_status=None)
     except Exception as exc:
-        _update_layer(db_path, layer_id, status="error", error_message=str(exc))
+        _update_layer(layer_id, status="error", error_message=str(exc))
         if job_id:
-            _update_job(db_path, job_id, status="error", error_message=str(exc),
+            _update_job(job_id, status="error", error_message=str(exc),
                         completed_at=datetime.now(timezone.utc).isoformat())
         raise

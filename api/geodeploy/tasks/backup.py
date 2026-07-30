@@ -5,16 +5,16 @@ time. The schedule lives in the DB and is READ each tick rather than compiled in
 config — changing "daily at 03:00" in Settings then takes effect immediately, with no worker
 restart and no beat reconfiguration.
 
-Like every other task module here, DB access is raw `sqlite3` (the worker has no async session)
-— see tasks/README.md.
+Like every other task module here, DB access goes through `state_db` (the worker has no async
+session) — see tasks/README.md.
 """
 import json
 import logging
 import os
-import sqlite3
 import tempfile
 from datetime import datetime, timedelta, timezone
 
+from .. import state_db
 from ..celery_app import celery_app
 from ..config import get_settings
 
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 def _db():
-    return sqlite3.connect(f"{get_settings().data_dir}/sqlite/geodeploy.db", timeout=30)
+    return state_db.connect()
 
 
 class _Cfg:
@@ -48,6 +48,12 @@ def _load_cfg():
     # The worker reads SQLite directly, so EncryptedText's decrypt never runs — do it here.
     cfg.backup_secret_key = decrypt_secret(cfg.backup_secret_key)
     return cfg
+
+
+def _secret_fingerprint() -> str | None:
+    import hashlib
+    secret = get_settings().secret_key
+    return hashlib.sha256(secret.encode()).hexdigest()[:16] if secret else None
 
 
 def _step(run_id: int, step: str, progress: int) -> None:
@@ -88,6 +94,10 @@ def run_backup(run_id: int, trigger: str = "manual"):
         "created_at": datetime.now(timezone.utc).isoformat(),
         "trigger": trigger,
         "source": {"bucket": settings.storage_bucket, "endpoint": settings.storage_endpoint},
+        # Non-reversible marker of GEODEPLOY_SECRET_KEY. It lets a RESTORE warn that the encrypted
+        # settings (SMTP/OIDC/backup credentials) will be unreadable on an install with a different
+        # key — without the backup ever carrying the key itself.
+        "secret_key_fingerprint": _secret_fingerprint(),
         "parts": {},
     }
     total_bytes = 0
@@ -105,14 +115,9 @@ def run_backup(run_id: int, trigger: str = "manual"):
                 os.unlink(path)      # free the disk before the next part
 
             if cfg.backup_include_state:
-                _step(run_id, "Snapshotting the state database", 30)
-                path = os.path.join(tmp, "state.db")
-                info = bk.snapshot_state_db(path)
-                bk.upload_file(dest, cfg.backup_bucket, f"{key_prefix}/state.db", path)
-                manifest["parts"]["state"] = info
-                total_bytes += info["bytes"]
-                os.unlink(path)
-
+                # No separate state snapshot any more: state lives in the same PostgreSQL database,
+                # so the pg_dump above already contains it. Only portal_assets remain — uploaded
+                # About-page images, which exist on disk and nowhere else.
                 _step(run_id, "Archiving portal assets", 40)
                 path = os.path.join(tmp, "portal_assets.tar.gz")
                 info = bk.archive_dir(f"{settings.data_dir}/portal_assets", path)
@@ -182,8 +187,10 @@ def check_scheduled_backups():
                 pass
         from ..services.backup import run_key
         key = run_key(cfg.backup_prefix, now)
-        cur = conn.execute(
+        # Postgres has no lastrowid — ask for the id back (state_db raises on lastrowid so this
+        # can't be forgotten silently).
+        run_id = conn.execute(
             "INSERT INTO backup_runs (key, status, trigger, started_at, progress) "
-            "VALUES (?, 'running', 'scheduled', ?, 0)", (key, now.replace(tzinfo=None)))
-        run_id = cur.lastrowid
+            "VALUES (?, 'running', 'scheduled', ?, 0) RETURNING id",
+            (key, now.replace(tzinfo=None))).fetchone()[0]
     run_backup.delay(run_id, "scheduled")

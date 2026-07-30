@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..database import get_db
+from .. import database
+from ..database import Base, get_db
 from ..deps import ROLE_ORDER, resolve_bearer_user
 from ..models import SetupConfig, User
 from ..schemas import (
@@ -12,6 +13,24 @@ from ..services import postgis as postgis_svc, minio as minio_svc
 from ..config import get_settings
 
 router = APIRouter(prefix="/setup", tags=["setup"])
+
+# ── BOOTSTRAP ORDER (changed 2026-07-30, state moved to PostgreSQL) ──────────────────────────
+# State now lives IN the database the wizard configures, so there is a genuine chicken-and-egg:
+# nothing can be stored until a connection exists. Hence:
+#
+#   1. `/status` must answer with NO database — it reads the environment, not a row.
+#   2. `/configure-db` provisions or validates, writes `.env`, rebuilds the engine, creates the
+#      schema, and only THEN persists the SetupConfig row.
+#   3. Everything after that (storage, admin) is ordinary DB work.
+#
+# So these two endpoints must NOT `Depends(get_db)` — that dependency answers 503 until an engine
+# exists, which is exactly the state the wizard runs in. They open a session by hand afterwards.
+
+
+def _session():
+    """A session, or None when no database is configured yet."""
+    database.configure()
+    return database.AsyncSessionLocal() if database.AsyncSessionLocal else None
 
 
 async def _get_or_create_config(db: AsyncSession) -> SetupConfig:
@@ -43,22 +62,45 @@ async def _guard_setup_mutation(request: Request, db: AsyncSession) -> None:
 
 
 @router.get("/status", response_model=SetupStatus)
-async def setup_status(db: AsyncSession = Depends(get_db)):
-    config = await _get_or_create_config(db)
-    has_admin = bool((await db.execute(select(User))).scalars().first())
-    return SetupStatus(
-        completed=config.completed,
-        postgis_configured=bool(config.postgis_host),
-        storage_configured=bool(config.storage_endpoint),
-        admin_created=has_admin,
-        email_enabled=bool((config.smtp_host or "").strip() and (config.email_from or "").strip()),
-    )
+async def setup_status():
+    """Answers BEFORE any database exists — this is the very first call the UI makes, and on a
+    fresh install there is nothing to query. Everything is false until `/configure-db` runs."""
+    session = _session()
+    if session is None:
+        return SetupStatus(completed=False, postgis_configured=False, storage_configured=False,
+                           admin_created=False, email_enabled=False)
+    async with session as db:
+        try:
+            config = await _get_or_create_config(db)
+            has_admin = bool((await db.execute(select(User))).scalars().first())
+        except Exception:
+            # Engine configured but the schema/server isn't reachable yet (a container still
+            # starting, wrong creds in .env). Report "not set up" rather than 500 the wizard.
+            return SetupStatus(completed=False, postgis_configured=False,
+                               storage_configured=False, admin_created=False, email_enabled=False)
+        return SetupStatus(
+            completed=config.completed,
+            postgis_configured=bool(config.postgis_host),
+            storage_configured=bool(config.storage_endpoint),
+            admin_created=has_admin,
+            email_enabled=bool((config.smtp_host or "").strip() and (config.email_from or "").strip()),
+        )
 
 
 @router.post("/configure-db")
-async def configure_db(req: ConfigureDBRequest, request: Request, db: AsyncSession = Depends(get_db)):
-    await _guard_setup_mutation(request, db)
-    config = await _get_or_create_config(db)
+async def configure_db(req: ConfigureDBRequest, request: Request):
+    """Establish the state+spatial database. This is the ONE endpoint that runs before a database
+    exists, so it takes no `get_db` dependency and does the work in order:
+    provision/validate → write `.env` → rebuild the engine → create the schema → persist the row."""
+    session = _session()
+    if session is not None:
+        async with session as db:
+            await _guard_setup_mutation(request, db)
+    # No engine yet ⇒ nothing is configured ⇒ first run by definition, so the guard is a no-op.
+
+    # An UNSAVED instance: it carries the credentials for `_write_env` before any database exists
+    # to store it in. It is persisted further down, once there is somewhere to put it.
+    config = SetupConfig(id=1)
 
     if req.type == "local":
         try:
@@ -86,7 +128,27 @@ async def configure_db(req: ConfigureDBRequest, request: Request, db: AsyncSessi
         # it boots on a sources-less config and `regenerate_config` rewrites + restarts it
         # when the first layer is uploaded.
 
-    await db.commit()
+    # .env FIRST: it is the only place database credentials may live, since SetupConfig is inside
+    # the database being configured. Then rebuild the engine so this very process can use it.
+    _write_env(config)
+    _apply_to_process(config)
+    engine = database.configure(force=True)
+    if engine is None:
+        raise HTTPException(500, "Credentials were written but the engine could not be built.")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception as exc:
+        raise HTTPException(500, f"Connected, but could not create the schema: {exc}") from exc
+
+    # Now there is somewhere to persist it.
+    async with database.AsyncSessionLocal() as db:
+        stored = await _get_or_create_config(db)
+        for field in ("postgis_type", "postgis_host", "postgis_port", "postgis_db",
+                      "postgis_user", "postgis_password"):
+            setattr(stored, field, getattr(config, field))
+        await db.commit()
+
     return {"status": "ok", "type": config.postgis_type}
 
 

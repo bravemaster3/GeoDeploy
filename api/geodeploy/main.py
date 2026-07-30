@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from contextlib import asynccontextmanager
@@ -8,7 +9,8 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response
 
 from .config import get_settings
-from .database import engine, Base
+from . import database
+from .database import Base
 from .routers import (setup, auth, auth_oidc, portals, stac, templates, admin, basemaps, users,
                       tokens, audit, interop, ogcapi, backups)
 from .routers.data import vector, raster, sources, discover
@@ -17,12 +19,20 @@ from .routers.data import vector, raster, sources, discover
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    for subdir in ("sqlite", "portals", "portal_assets", "temp", "martin"):
+    for subdir in ("portals", "portal_assets", "temp", "martin"):
         os.makedirs(f"{settings.data_dir}/{subdir}", exist_ok=True)
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        await conn.run_sync(_apply_schema_migrations)
+    # State lives in PostgreSQL, which the SETUP WIZARD configures — so the app must boot with no
+    # database at all and still serve /api/setup/*. `configure()` returns None until credentials
+    # exist in the environment; `routers/setup.configure_db` calls it again and creates the schema
+    # the moment it has them.
+    eng = database.configure(force=True)
+    if eng is None:
+        logging.getLogger(__name__).info(
+            "no state database configured yet — serving the setup wizard only")
+    else:
+        async with eng.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
 
     # Write a minimal Martin config on first start so Martin can boot without layers
     _ensure_martin_config(settings)
@@ -31,7 +41,13 @@ async def lifespan(app: FastAPI):
 
 
 def _apply_schema_migrations(conn) -> None:
-    """Add columns that may be missing on databases created before the current schema."""
+    """LEGACY — SQLite-era upgrades, kept for reference only.
+
+    State moved to PostgreSQL on 2026-07-30 and every install starts from `Base.metadata.create_all`,
+    which builds the current schema outright. These statements are SQLite dialect (`DEFAULT 0` for a
+    boolean, `lower(hex(randomblob(6)))`) and would error on Postgres, so nothing calls this anymore.
+    A future Postgres schema change belongs in a real migration, not here — see notes_for_future.
+    """
     from sqlalchemy import text
     pending = [
         "ALTER TABLE portals ADD COLUMN access_password_sha256 VARCHAR(64)",

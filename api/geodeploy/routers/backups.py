@@ -11,15 +11,17 @@ import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from ..database import get_db
-from ..deps import require_admin
-from ..models import BackupRun, SetupConfig, User
-from ..schemas import BackupRunOut, BackupSettingsIn, BackupSettingsOut
+from ..deps import require_admin, require_owner
+from ..models import BackupRun, RestoreRun, SetupConfig, User
+from ..schemas import (BackupRunOut, BackupSettingsIn, BackupSettingsOut,
+                       RestoreRequest, RestoreRunOut)
 from ..services import backup as bk
+from ..services import restore as rs
 from .common import record_audit
 
 router = APIRouter(prefix="/backups", tags=["backups"])
@@ -153,3 +155,90 @@ async def delete_stored(key: str, user: User = Depends(require_admin),
         raise HTTPException(502, f"Could not delete: {exc}") from exc
     await record_audit(db, user, "backup.delete", "backup", None,
                        {"key": key, "objects_removed": removed})
+
+
+# ── Restore ──────────────────────────────────────────────────────────────────────────────────
+# OWNER-ONLY, not admin-only. Restoring replaces the database and the files: it is the one action
+# that can destroy an instance, and unlike everything else here it cannot be undone by re-running
+# it. `require_owner` also rejects API tokens, so it is browser-only by construction.
+
+@router.get("/stored/{key:path}/preflight")
+async def restore_preflight(key: str, _: User = Depends(require_owner),
+                            db: AsyncSession = Depends(get_db)):
+    """What this restore would do — shown BEFORE the confirmation box.
+
+    Returns the manifest, the encryption-key verdict, and what currently exists. The key check is
+    the one that surprises people: everything restores, but with a different GEODEPLOY_SECRET_KEY
+    the stored SMTP/OIDC/backup credentials become unreadable.
+    """
+    cfg = await _config(db)
+    if not cfg.backup_bucket:
+        raise HTTPException(400, "No backup destination configured.")
+    try:
+        manifest = await run_in_threadpool(rs.read_manifest, cfg, key)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Could not read the backup: {exc}") from exc
+
+    from ..models import Portal, RasterLayer, VectorLayer
+    current = {
+        "vector_layers": await db.scalar(select(func.count()).select_from(VectorLayer)) or 0,
+        "raster_layers": await db.scalar(select(func.count()).select_from(RasterLayer)) or 0,
+        "portals": await db.scalar(select(func.count()).select_from(Portal)) or 0,
+        "users": await db.scalar(select(func.count()).select_from(User)) or 0,
+    }
+    return {
+        "key": key,
+        "name": key.rsplit("/", 1)[-1],
+        "manifest": manifest,
+        "secret_key": rs.check_secret_key_match(manifest),
+        "current": current,
+        "is_empty": all(v == 0 for k, v in current.items() if k != "users"),
+    }
+
+
+@router.post("/restore", response_model=RestoreRunOut, status_code=202)
+async def start_restore(body: RestoreRequest, user: User = Depends(require_owner),
+                        db: AsyncSession = Depends(get_db)):
+    """Start a restore. Guarded three ways, deliberately:
+    owner-only · the backup's name must be typed back · no concurrent run."""
+    cfg = await _config(db)
+    if not cfg.backup_bucket or not cfg.backup_secret_key:
+        raise HTTPException(400, "No backup destination configured.")
+
+    expected = body.key.rsplit("/", 1)[-1]
+    if (body.confirm_name or "").strip() != expected:
+        raise HTTPException(400, f"Type the backup name exactly ({expected}) to confirm.")
+
+    # A manifest read also proves the backup is complete — a half-written run must never restore.
+    try:
+        await run_in_threadpool(rs.read_manifest, cfg, body.key)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    for model, label in ((RestoreRun, "restore"), (BackupRun, "backup")):
+        busy = (await db.execute(select(model).where(model.status == "running")
+                                 .limit(1))).scalar_one_or_none()
+        if busy:
+            raise HTTPException(409, f"A {label} is already running.")
+
+    run = RestoreRun(key=body.key, status="running", confirmed_by=user.email,
+                     current_step="Queued", progress=0)
+    db.add(run)
+    await db.commit()
+    await db.refresh(run)
+    await record_audit(db, user, "backup.restore", "backup", str(run.id),
+                       {"key": body.key})
+
+    from ..tasks.restore import run_restore
+    run_restore.delay(run.id, body.key)
+    return RestoreRunOut.model_validate(run)
+
+
+@router.get("/restore/runs", response_model=list[RestoreRunOut])
+async def list_restore_runs(limit: int = 10, _: User = Depends(require_admin),
+                            db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(RestoreRun).order_by(RestoreRun.started_at.desc())
+                             .limit(max(1, min(limit, 50))))).scalars().all()
+    return [RestoreRunOut.model_validate(r) for r in rows]

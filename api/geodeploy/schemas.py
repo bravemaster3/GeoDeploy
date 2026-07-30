@@ -216,6 +216,27 @@ class DeploymentRunOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class RestoreRequest(BaseModel):
+    """`confirm_name` must equal the backup's own name. Typing it is the point: it makes a
+    destructive action deliberate rather than one misplaced click."""
+    key: str
+    confirm_name: str
+
+
+class RestoreRunOut(BaseModel):
+    id: int
+    key: str
+    status: str
+    confirmed_by: str | None
+    started_at: datetime
+    finished_at: datetime | None
+    error_message: str | None
+    current_step: str | None
+    progress: int
+
+    model_config = {"from_attributes": True}
+
+
 class BackupSettingsIn(BaseModel):
     """Destination + schedule. `secret_key` is WRITE-ONLY: blank means "keep the stored one", and
     it is never echoed back (same rule as the SMTP/OIDC secrets)."""

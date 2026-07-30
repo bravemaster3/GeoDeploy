@@ -23,6 +23,7 @@ import fiona
 import psycopg2
 from shapely.geometry import shape as shp_shape
 
+from .. import state_db
 from ..celery_app import celery_app
 from ..config import get_settings
 from ..services import martin as martin_svc
@@ -54,26 +55,23 @@ def _srid_of(crs_wkt) -> int | None:
         return None
 
 
-def _update_job(db_path: str, job_id: str, **kwargs) -> None:
-    import sqlite3
-    with sqlite3.connect(db_path, timeout=30) as conn:
+def _update_job(job_id: str, **kwargs) -> None:
+    with state_db.connect() as conn:
         sets = ", ".join(f"{k} = ?" for k in kwargs)
         values = list(kwargs.values()) + [job_id]
         conn.execute(f"UPDATE upload_jobs SET {sets} WHERE id = ?", values)
 
 
-def _update_layer(db_path: str, layer_id: int, **kwargs) -> None:
-    import sqlite3
-    with sqlite3.connect(db_path, timeout=30) as conn:
+def _update_layer(layer_id: int, **kwargs) -> None:
+    with state_db.connect() as conn:
         sets = ", ".join(f"{k} = ?" for k in kwargs)
         values = list(kwargs.values()) + [layer_id]
         conn.execute(f"UPDATE vector_layers SET {sets} WHERE id = ?", values)
 
 
-def _get_all_layers(db_path: str) -> list[dict]:
-    import sqlite3
-    with sqlite3.connect(db_path, timeout=30) as conn:
-        conn.row_factory = sqlite3.Row
+def _get_all_layers() -> list[dict]:
+    with state_db.connect() as conn:
+        conn.row_factory = state_db.dict_row
         rows = conn.execute(
             "SELECT schema_name, table_name, geometry_column, id_column, crs "
             "FROM vector_layers WHERE status = 'ready' AND storage_backend = 'postgis'"
@@ -81,17 +79,15 @@ def _get_all_layers(db_path: str) -> list[dict]:
         return [dict(r) for r in rows]
 
 
-def _get_setup(db_path: str) -> dict | None:
-    import sqlite3
-    with sqlite3.connect(db_path, timeout=30) as conn:
-        conn.row_factory = sqlite3.Row
+def _get_setup() -> dict | None:
+    with state_db.connect() as conn:
+        conn.row_factory = state_db.dict_row
         row = conn.execute("SELECT * FROM setup_config WHERE completed = 1").fetchone()
         return dict(row) if row else None
 
 
-def _get_layer_user(db_path: str, layer_id: int) -> int | None:
-    import sqlite3
-    with sqlite3.connect(db_path, timeout=30) as conn:
+def _get_layer_user(layer_id: int) -> int | None:
+    with state_db.connect() as conn:
         row = conn.execute("SELECT user_id FROM vector_layers WHERE id = ?", (layer_id,)).fetchone()
         return row[0] if row else None
 
@@ -99,10 +95,9 @@ def _get_layer_user(db_path: str, layer_id: int) -> int | None:
 @celery_app.task(bind=True, name="geodeploy.tasks.vector_ingest.ingest_vector")
 def ingest_vector(self, job_id: str, layer_id: int, file_path: str, layer_name: str, schema_name: str, table_name: str):
     settings = get_settings()
-    db_path = f"{settings.data_dir}/sqlite/geodeploy.db"
 
     def step(msg: str, progress: int) -> None:
-        _update_job(db_path, job_id, status="processing", current_step=msg, progress=progress,
+        _update_job(job_id, status="processing", current_step=msg, progress=progress,
                     started_at=datetime.now(timezone.utc).isoformat())
 
     try:
@@ -114,10 +109,10 @@ def ingest_vector(self, job_id: str, layer_id: int, file_path: str, layer_name: 
         # and directly analysable with DuckDB. Same downstream pipeline as a .parquet upload.
         threshold_mb = float(os.getenv("VECTOR_GEOPARQUET_THRESHOLD_MB", "200"))
         if threshold_mb > 0 and _source_size(src_path) >= threshold_mb * 1024 * 1024:
-            _ingest_as_geoparquet(db_path, job_id, layer_id, src_path, layer_name, step, settings)
+            _ingest_as_geoparquet(job_id, layer_id, src_path, layer_name, step, settings)
             return
 
-        setup = _get_setup(db_path)
+        setup = _get_setup()
         dsn = (f"host={setup['postgis_host']} port={setup['postgis_port']} dbname={setup['postgis_db']} "
                f"user={setup['postgis_user']} password={setup['postgis_password']}")
         # External/managed DBs may require SSL; the local provisioned DB leaves this empty.
@@ -128,7 +123,7 @@ def ingest_vector(self, job_id: str, layer_id: int, file_path: str, layer_name: 
         res = _ingest_via_copy(dsn, schema_name, table_name, src_path, settings.data_dir)
 
         step("Saving metadata", 90)
-        _update_layer(db_path, layer_id,
+        _update_layer(layer_id,
                       status="ready",
                       feature_count=res["count"],
                       bbox=json.dumps(res["bbox"]) if res["bbox"] else None,
@@ -141,15 +136,15 @@ def ingest_vector(self, job_id: str, layer_id: int, file_path: str, layer_name: 
 
         step("Updating tile server", 95)
         import asyncio
-        asyncio.run(martin_svc.regenerate_config(_get_all_layers(db_path)))
+        asyncio.run(martin_svc.regenerate_config(_get_all_layers()))
 
-        _update_job(db_path, job_id, status="ready", progress=100,
+        _update_job(job_id, status="ready", progress=100,
                     completed_at=datetime.now(timezone.utc).isoformat())
 
     except Exception as exc:
-        _update_job(db_path, job_id, status="error", error_message=str(exc),
+        _update_job(job_id, status="error", error_message=str(exc),
                     completed_at=datetime.now(timezone.utc).isoformat())
-        _update_layer(db_path, layer_id, status="error", error_message=str(exc))
+        _update_layer(layer_id, status="error", error_message=str(exc))
         raise
     finally:
         if os.path.exists(file_path):
@@ -271,7 +266,7 @@ def _kind_from_types(geom_types) -> str:
                  if t in geom_types), "polygon")
 
 
-def _ingest_as_geoparquet(db_path: str, job_id: str, layer_id: int, src_path: str,
+def _ingest_as_geoparquet(job_id: str, layer_id: int, src_path: str,
                           layer_name: str, step, settings) -> None:
     """Heavy-file path: convert the source to GeoParquet (EPSG:4326, WKB) on object storage and
     chain the spatial prep — the layer becomes a `storage_backend='geoparquet'` layer exactly like
@@ -285,8 +280,8 @@ def _ingest_as_geoparquet(db_path: str, job_id: str, layer_id: int, src_path: st
         res = _convert_to_geoparquet(src_path, out_path)
 
         step("Uploading to storage", 60)
-        creds = _get_storage_creds(db_path)
-        user_id = _get_layer_user(db_path, layer_id) or 0
+        creds = _get_storage_creds()
+        user_id = _get_layer_user(layer_id) or 0
         safe = layer_name or "layer"
         s3_key = f"vectors/{user_id}/{uuid.uuid4().hex}/{safe}.parquet"
         _s3_client(creds).upload_file(out_path, creds["bucket"], s3_key)
@@ -295,7 +290,7 @@ def _ingest_as_geoparquet(db_path: str, job_id: str, layer_id: int, src_path: st
             os.unlink(out_path)
 
     step("Queueing spatial prep", 80)
-    _update_layer(db_path, layer_id,
+    _update_layer(layer_id,
                   status="processing",
                   storage_backend="geoparquet", s3_key=s3_key,
                   geometry_type=res["geom_type"], geometry_column="geometry",

@@ -22,11 +22,11 @@ import ipaddress
 import logging
 import os
 import socket
-import sqlite3
 import urllib.parse
 import urllib.request
 import uuid
 
+from .. import state_db
 from ..celery_app import celery_app
 from ..config import get_settings
 from .raster_ingest import ingest_raster
@@ -113,9 +113,8 @@ def _download_https_cog(url: str) -> str:
 def _mark_raster_error(layer_id: int, job_id: str, message: str) -> None:
     """Flag the layer + job as failed (download error) so a failed COG doesn't linger 'processing';
     the failed layer is then excluded from the built bundle (only 'ready' layers load)."""
-    db_path = f"{get_settings().data_dir}/sqlite/geodeploy.db"
     try:
-        conn = sqlite3.connect(db_path, timeout=30)
+        conn = state_db.connect()
         conn.execute("UPDATE raster_layers SET status = 'error', error_message = ? WHERE id = ?",
                      (message, layer_id))
         conn.execute("UPDATE upload_jobs SET status = 'error', error_message = ? WHERE id = ?",

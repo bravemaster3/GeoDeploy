@@ -2,68 +2,97 @@ import os
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CRITICAL SAFETY: this suite is DESTRUCTIVE (setup_db teardown drops all tables;
 # _isolate runs DELETE FROM on every table before each test). It MUST only ever
 # touch a throwaway database.
 #
-# History: an earlier version used os.environ.setdefault("GEODEPLOY_DATA_DIR", ...).
-# setdefault is a no-op when the var is ALREADY set — and inside the geodeploy-api
-# container it is always set to /data. Running `pytest` in that container therefore
-# pointed the test engine at the PRODUCTION sqlite DB and wiped it. Never again:
-#   1) HARD-set the data dir (assignment, not setdefault) BEFORE importing the app,
-#      so the engine is built against the test path.
-#   2) A fail-safe guard below ABORTS collection if the engine URL is not the
-#      throwaway test DB — defence in depth if step 1 ever regresses.
+# History: an earlier version used os.environ.setdefault(...). setdefault is a no-op
+# when the var is ALREADY set — and inside the geodeploy-api container it always is —
+# so `pytest` in that container pointed the engine at the PRODUCTION database and
+# wiped it. The rule that came out of it has not changed now that state lives in
+# PostgreSQL, only its shape:
+#   1) HARD-set the connection (assignment, not setdefault) BEFORE importing the app.
+#   2) A fail-safe guard ABORTS collection unless the target database NAME is clearly
+#      a test database — defence in depth if step 1 ever regresses.
 # See notes_temp/notes_for_future.md ("NEVER run the test suite against a real DB").
+#
+# The database must exist and be reachable: CI provides it as a service container,
+# locally use e.g.
+#   docker run -d --rm -p 55432:5432 -e POSTGRES_PASSWORD=test \
+#     -e POSTGRES_USER=geodeploy -e POSTGRES_DB=geodeploy_test postgis/postgis:16-3.4
+# then POSTGIS_PORT=55432 pytest
 # ─────────────────────────────────────────────────────────────────────────────
 TEST_DATA_DIR = "/tmp/geodeploy-test"
+TEST_DB = os.environ.get("POSTGIS_DB", "geodeploy_test")
+
 os.environ["GEODEPLOY_DATA_DIR"] = TEST_DATA_DIR
 os.environ["GEODEPLOY_SECRET_KEY"] = "test-secret"
 os.environ["GEODEPLOY_ENV"] = "development"
-# CRITICAL: the Martin config path is its OWN env var (default /data/martin/martin-config.yaml) — it is
-# NOT derived from GEODEPLOY_DATA_DIR. Several tests (e.g. test_layer_delete) exercise the layer-delete
-# endpoint, which calls martin.regenerate_config → _write_config(settings.martin_config_path) + reload.
-# Without this override, running the suite via `docker compose run geodeploy-api pytest` (where /data is
-# the mounted PRODUCTION volume) would OVERWRITE the live Martin config from the empty test DB and
-# reload Martin, breaking real PostGIS vector-tile serving until the next real ingest. Redirect it to
-# the throwaway path so the suite can never touch the real Martin config.
-# NOTE: the Settings field is `martin_config_path` with NO prefix (config.py, case_sensitive=False), so
-# the env var is MARTIN_CONFIG_PATH — NOT GEODEPLOY_MARTIN_CONFIG_PATH (that has the geodeploy_ prefix
-# only because the FIELD is `geodeploy_data_dir`). Getting this name wrong = the override silently
-# no-ops and the guard below refuses (which is exactly what happened in CI).
+os.environ["POSTGIS_HOST"] = os.environ.get("POSTGIS_HOST", "127.0.0.1")
+os.environ["POSTGIS_PORT"] = os.environ.get("POSTGIS_PORT", "5432")
+os.environ["POSTGIS_DB"] = TEST_DB
+os.environ["POSTGIS_USER"] = os.environ.get("POSTGIS_USER", "geodeploy")
+os.environ["POSTGIS_PASSWORD"] = os.environ.get("POSTGIS_PASSWORD", "test")
+# Martin's config path is its OWN env var, NOT derived from GEODEPLOY_DATA_DIR. Several tests
+# exercise layer-delete, which calls martin.regenerate_config → writes the config + reloads Martin.
+# Without this override, running the suite where /data is the PRODUCTION volume would overwrite the
+# live Martin config from an empty test DB and break real tile serving.
 os.environ["MARTIN_CONFIG_PATH"] = f"{TEST_DATA_DIR}/martin-config.yaml"
-os.makedirs(f"{TEST_DATA_DIR}/sqlite", exist_ok=True)
+os.makedirs(TEST_DATA_DIR, exist_ok=True)
 
-from geodeploy.main import app
-from geodeploy.database import engine, Base, AsyncSessionLocal
-
-# Fail-safe: refuse to run if the engine is not pointed at the throwaway test DB.
-_ENGINE_URL = str(engine.url)
-if TEST_DATA_DIR not in _ENGINE_URL:
+# The name must SAY it is a test database. Refusing on anything else is the whole guard: a DSN
+# typo that pointed at `geodeploy` would otherwise drop every table in production.
+if not ("test" in TEST_DB.lower() or TEST_DB.lower().endswith("_ci")):
     raise RuntimeError(
-        f"REFUSING to run the test suite: engine URL {_ENGINE_URL!r} is not the throwaway "
-        f"test database (expected a path under {TEST_DATA_DIR!r}). This suite drops/DELETEs "
-        "every table. Do NOT run pytest inside the production api container without overriding "
-        "GEODEPLOY_DATA_DIR to a scratch path."
+        f"REFUSING to run the test suite: POSTGIS_DB={TEST_DB!r} does not look like a throwaway "
+        "database (its name must contain 'test'). This suite DROPS EVERY TABLE."
     )
 
-# Same fail-safe for the Martin config path (its own env var — see the override above).
+from geodeploy.main import app
+from geodeploy import database
+from geodeploy.database import Base
+
+# main.py's lifespan builds the engine, but fixtures need it at import time too.
+if database.configure(force=True) is None:
+    raise RuntimeError("Test database is not configured - see the header of this file.")
+
+# NullPool for tests, deliberately. pytest-asyncio gives each test its OWN event loop, and an
+# asyncpg connection belongs to the loop that opened it — so a POOLED connection outlives its loop,
+# is never properly closed, and the server accumulates them until it answers TooManyConnections
+# partway through the run (which is exactly what happened: 103 failures, all connection errors).
+# NullPool opens and closes per use: marginally slower, and correct across loops.
+from sqlalchemy.ext.asyncio import async_sessionmaker as _sessionmaker, create_async_engine as _mk
+from sqlalchemy.pool import NullPool as _NullPool
+
+from geodeploy.config import get_settings as _settings_for_engine
+
+engine = _mk(_settings_for_engine().postgis_dsn, poolclass=_NullPool)
+database.engine = engine
+database.AsyncSessionLocal = _sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+# Fail-safe: the engine's own URL must name the throwaway database.
+_ENGINE_URL = str(engine.url)
+if TEST_DB not in _ENGINE_URL:
+    raise RuntimeError(
+        f"REFUSING to run the test suite: engine URL {_ENGINE_URL!r} is not the throwaway test "
+        f"database {TEST_DB!r}. This suite drops/DELETEs every table."
+    )
+
 from geodeploy.config import get_settings as _get_settings
 _MARTIN_PATH = _get_settings().martin_config_path
 if TEST_DATA_DIR not in _MARTIN_PATH:
     raise RuntimeError(
         f"REFUSING to run the test suite: martin_config_path {_MARTIN_PATH!r} is not under the "
-        f"throwaway test dir {TEST_DATA_DIR!r}. The layer-delete tests rewrite + reload Martin; "
-        "against the production path this clobbers live tile serving. Set "
-        "MARTIN_CONFIG_PATH to a scratch path."
+        f"throwaway test dir {TEST_DATA_DIR!r}. Set MARTIN_CONFIG_PATH to a scratch path."
     )
 
 
 def _assert_test_db():
-    """Guard the destructive fixtures too — belt-and-suspenders against a mid-run env change."""
-    assert TEST_DATA_DIR in str(engine.url), "destructive fixture blocked: not the test DB"
+    """Guard the destructive fixtures too - belt-and-suspenders against a mid-run env change."""
+    assert TEST_DB in str(engine.url), "destructive fixture blocked: not the test DB"
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -83,11 +112,28 @@ async def _isolate(setup_db):
     tests (the engine/schema is session-scoped for speed)."""
     _assert_test_db()
     from sqlalchemy import text
-    async with AsyncSessionLocal() as s:
+    async with database.AsyncSessionLocal() as s:
         for tbl in ("portals", "vector_layers", "raster_layers", "external_sources",
-                    "upload_jobs", "invitations", "api_tokens", "audit_log", "users", "setup_config"):
+                    "upload_jobs", "invitations", "api_tokens", "audit_log", "backup_runs",
+                    "restore_runs", "deployment_runs", "users", "setup_config"):
             try:
-                await s.execute(text(f"DELETE FROM {tbl}"))
+                # TRUNCATE ... RESTART IDENTITY: unlike SQLite, Postgres sequences keep climbing
+                # after a DELETE, so tests that assert on a specific id (audit ids, layer ids)
+                # would pass alone and fail in a full run. CASCADE because of the FKs between them.
+                await s.execute(text(f"TRUNCATE TABLE {tbl} RESTART IDENTITY CASCADE"))
+            except Exception:
+                pass
+        # Start every id sequence ABOVE the range the fixtures hand-seed (they use small explicit
+        # ids like 1..10). Postgres sequences are independent of explicitly-inserted ids, so after
+        # RESTART IDENTITY an app-created row would be handed id=1 and collide with a seeded one —
+        # SQLite never showed this because its rowid picks max+1. Seeded ids stay small and
+        # readable; anything the app creates lands at 1000+.
+        for tbl in ("users", "vector_layers", "raster_layers", "portals", "external_sources",
+                    "audit_log", "api_tokens", "invitations", "backup_runs", "restore_runs",
+                    "deployment_runs"):
+            try:
+                await s.execute(text(
+                    f"SELECT setval(pg_get_serial_sequence('{tbl}', 'id'), 1000, false)"))
             except Exception:
                 pass
         await s.commit()
@@ -97,7 +143,7 @@ async def _isolate(setup_db):
 @pytest_asyncio.fixture
 async def db(setup_db):
     """A DB session for seeding fixtures/asserting directly against the test database."""
-    async with AsyncSessionLocal() as s:
+    async with database.AsyncSessionLocal() as s:
         yield s
 
 

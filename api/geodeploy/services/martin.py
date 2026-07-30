@@ -3,6 +3,7 @@ import asyncio
 import os
 import docker
 import yaml
+from .. import state_db
 from ..config import get_settings
 
 
@@ -13,10 +14,9 @@ def _pg_creds(settings) -> dict:
     re-read env_file — and `regenerate_config` runs in celery after every ingest. Reading creds
     from env would write a password-less Martin connection string → Martin can't connect → no
     vector tiles (the table is "ready" but never renders). Falls back to env if SQLite has none."""
-    import sqlite3
     try:
-        with sqlite3.connect(f"{settings.data_dir}/sqlite/geodeploy.db", timeout=30) as conn:
-            conn.row_factory = sqlite3.Row
+        with state_db.connect() as conn:
+            conn.row_factory = state_db.dict_row
             row = conn.execute(
                 "SELECT postgis_host, postgis_port, postgis_db, postgis_user, postgis_password "
                 "FROM setup_config WHERE id = 1"

@@ -33,12 +33,16 @@ you from an account suspension or a mistaken bucket deletion.
 Each run writes to `s3://<bucket>/<prefix>/<UTC timestamp>/`:
 
 ```
-manifest.json          inventory: what was included, sizes, source bucket, when
-postgis.dump           pg_dump custom format (all schemas, including every member's geodeploy_u*)
-state.db               the instance database (SQLite), a consistent snapshot
+manifest.json          inventory: what was included, sizes, source bucket, encryption fingerprint
+postgis.dump           pg_dump custom format — the catalog, users, portals AND the spatial data
 portal_assets.tar.gz   images uploaded to portal About pages
 objects/…              every object from your data bucket, same key layout
 ```
+
+Since GeoDeploy's own state lives in the same PostgreSQL database as the spatial data, **one
+`pg_dump` captures both in a single consistent snapshot**. There is no separate state file: the
+old arrangement (a SQLite copy plus a PostGIS dump) could not be atomic, so a layer created
+between the two ended up in one and not the other.
 
 Two things are **not** backed up because they are regenerated from the above:
 
@@ -50,50 +54,72 @@ Notes on how it is done, because they matter if you ever inspect the artifacts:
 - **Objects are copied server-side** when the destination is the same provider as your data
   (`copy_object`), so the bytes never pass through the GeoDeploy container. A cross-provider
   destination streams instead — correct, but slower and bandwidth-billed.
-- **`state.db` is captured with SQLite's `VACUUM INTO`**, not a file copy. The database is being
-  written while the backup runs, and in WAL mode the newest commits live in a sidecar file — a
-  plain copy can restore corrupt or silently missing the most recent changes.
+- **The dump is one transaction-consistent snapshot**, so the catalog can never disagree with the
+  spatial tables it describes.
 
 ## Restore
 
-**Restore is deliberately not a button.** Restoring over a live instance is how people destroy the
-data they were trying to protect. The procedure below is explicit, and you should practise it once
-on a throwaway instance *before* you need it.
+**Settings → Backups → Manage backups → Restore.** Restore is in the app, because a backup you
+cannot restore is a guess. It is also the one action that can destroy an instance and cannot be
+undone by re-running it, so it sits in a danger zone and is guarded:
 
-Restore onto a **freshly installed** GeoDeploy of the same version (check `manifest.json`).
+- **Owner only** — not admin. That also makes it browser-only: an API token can never trigger it.
+- **You must type the backup's name** to confirm.
+- **A backup with no `manifest.json` is refused.** That run never finished; restoring its
+  artifacts would silently produce a broken instance.
+- It will not start while a backup or another restore is running.
+- It is recorded in the activity log, with who confirmed it.
+
+**Preflight** runs first and tells you what you are about to do: what the backup contains, what
+currently exists (layers, portals, users), and the encryption-key verdict below.
+
+### The encryption-key trap
+
+`GEODEPLOY_SECRET_KEY` encrypts stored credentials at rest — the SMTP password, the OIDC client
+secret, and the backup destination's own key. **Restoring onto an install with a different key
+leaves those rows present but unreadable.** Everything else restores perfectly, which is what makes
+this easy to miss.
+
+Backups therefore record a *fingerprint* of the key (a hash, never the key), and preflight reports:
+
+| Verdict | Meaning |
+|---|---|
+| Key matches | Encrypted settings will work |
+| Different key | Everything restores; SMTP/OIDC/backup credentials must be re-entered |
+| Unknown | Backup predates fingerprinting — assume they must be re-entered |
+
+To avoid it entirely, copy the old `GEODEPLOY_SECRET_KEY` into `.env` before restoring.
+
+### What restore does
+
+1. **Files first**, back into the data bucket (server-side copy when the destination is the same
+   provider). Existing keys are overwritten; keys absent from the backup are left alone.
+2. **Portal assets** untarred over `data/portal_assets`.
+3. **The database last**, `pg_restore --clean` — it drops and recreates, so anything created after
+   the backup is gone.
+4. Martin's tile config is regenerated.
+
+The order is deliberate: restoring the database first would mean a failed file copy leaves a
+catalog advertising layers whose files are not there — every one 404s and the instance looks
+corrupt. This way a mid-failure leaves orphaned files that nothing references.
+
+**Afterwards:** re-publish your portals (bundles are rebuilt from the database, not restored).
+
+### Doing it by hand
+
+If the API is down, the same result from a shell:
 
 ```bash
-# 0. Pick the backup and fetch it (any S3 client; example uses the AWS CLI)
 BK=s3://YOUR-BUCKET/geodeploy-backups/2026-07-30T03-00-00Z
-aws s3 cp "$BK/manifest.json" .   && cat manifest.json     # confirm what you are restoring
+aws s3 cp "$BK/manifest.json" . && cat manifest.json      # confirm what you are restoring
 aws s3 cp "$BK/postgis.dump" .
-aws s3 cp "$BK/state.db" .
-aws s3 cp "$BK/portal_assets.tar.gz" .
-
-# 1. Stop the services that write, so nothing races the restore
-cd ~/geodeploy
-docker compose stop geodeploy-api celery
-
-# 2. PostGIS
-docker compose exec -T postgres psql -U geodeploy -c \
-  "DROP DATABASE IF EXISTS geodeploy; CREATE DATABASE geodeploy;"
-docker compose exec -T postgres pg_restore -U geodeploy -d geodeploy --no-owner < postgis.dump
-
-# 3. Files — restore into the data bucket (server-side copy, same layout)
 aws s3 sync "$BK/objects/" s3://YOUR-DATA-BUCKET/
 
-# 4. Instance database + portal assets
-cp state.db data/sqlite/geodeploy.db
-rm -f data/sqlite/geodeploy.db-wal data/sqlite/geodeploy.db-shm   # stale sidecars of the OLD db
-tar xzf portal_assets.tar.gz -C data/portal_assets
-
-# 5. Start, then rebuild what is derived
+cd ~/geodeploy
+docker compose stop geodeploy-api celery
+docker compose exec -T postgres pg_restore -U geodeploy -d geodeploy   --clean --if-exists --no-owner --no-acl < postgis.dump
 docker compose start geodeploy-api celery
-#   Settings -> Infrastructure -> Reload Martin, then re-publish each portal.
 ```
-
-Step 4's `rm` matters: leaving the previous database's `-wal`/`-shm` files next to a restored
-`geodeploy.db` can corrupt it on first open.
 
 ### Verifying a backup
 
@@ -101,8 +127,8 @@ Do this occasionally — an unverified backup is a guess:
 
 1. `manifest.json` lists every part with a non-zero size.
 2. `pg_restore --list postgis.dump | head` prints a table of contents.
-3. `sqlite3 state.db "PRAGMA integrity_check;"` prints `ok`.
-4. Best of all: run the restore into a scratch instance and log in.
+3. Best of all: restore into a scratch instance and log in — the round trip is the only real
+   proof, and Manage backups makes it a few clicks.
 
 ## Troubleshooting
 

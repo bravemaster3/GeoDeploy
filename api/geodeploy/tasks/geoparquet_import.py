@@ -21,12 +21,11 @@ def import_geoparquet(self, job_id, layer_id, s3_key):
     """Inspect a GeoParquet object already present at `s3_key` and mark the layer ready."""
     from ..services import duckdb_engine
     settings = get_settings()
-    db_path = f"{settings.data_dir}/sqlite/geodeploy.db"
     # Storage creds from SQLite (NOT env) — celery's env isn't reliably populated. See §0f.
-    creds = _get_storage_creds(db_path)
+    creds = _get_storage_creds()
 
     def step(msg, pct):
-        _update_job(db_path, job_id, status="processing", current_step=msg, progress=pct,
+        _update_job(job_id, status="processing", current_step=msg, progress=pct,
                     started_at=datetime.now(timezone.utc).isoformat())
 
     try:
@@ -34,8 +33,7 @@ def import_geoparquet(self, job_id, layer_id, s3_key):
         info = duckdb_engine.inspect_parquet(f"s3://{creds['bucket']}/{s3_key}", creds)
 
         step("Saving metadata", 60)
-        _update_layer(
-            db_path, layer_id, status="processing",
+        _update_layer(layer_id, status="processing",
             storage_backend="geoparquet", s3_key=s3_key,
             geometry_type=info.get("geometry_type"),
             geometry_column=info.get("geometry_column"),
@@ -53,7 +51,7 @@ def import_geoparquet(self, job_id, layer_id, s3_key):
         from .geoparquet_prep import prepare_geoparquet
         prepare_geoparquet.delay(layer_id, s3_key, job_id)
     except Exception as exc:
-        _update_job(db_path, job_id, status="error", error_message=str(exc),
+        _update_job(job_id, status="error", error_message=str(exc),
                     completed_at=datetime.now(timezone.utc).isoformat())
-        _update_layer(db_path, layer_id, status="error", error_message=str(exc))
+        _update_layer(layer_id, status="error", error_message=str(exc))
         raise

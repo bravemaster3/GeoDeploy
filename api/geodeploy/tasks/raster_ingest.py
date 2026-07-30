@@ -9,14 +9,14 @@ from datetime import datetime, timezone
 import boto3
 from botocore.client import Config
 
+from .. import state_db
 from ..celery_app import celery_app
 from ..config import get_settings
 from ..services.cog_converter import convert_to_cog, inspect as inspect_raster, is_cog
 
 
-def _get_storage_creds(db_path: str) -> dict:
-    import sqlite3
-    with sqlite3.connect(db_path, timeout=30) as conn:
+def _get_storage_creds() -> dict:
+    with state_db.connect() as conn:
         row = conn.execute(
             "SELECT storage_endpoint, storage_bucket, storage_access_key, storage_secret_key, storage_region "
             "FROM setup_config WHERE id=1"
@@ -30,17 +30,15 @@ def _get_storage_creds(db_path: str) -> dict:
             "region": settings.storage_region or "us-east-1"}
 
 
-def _update_job(db_path: str, job_id: str, **kwargs) -> None:
-    import sqlite3
-    with sqlite3.connect(db_path, timeout=30) as conn:
+def _update_job(job_id: str, **kwargs) -> None:
+    with state_db.connect() as conn:
         sets = ", ".join(f"{k} = ?" for k in kwargs)
         values = list(kwargs.values()) + [job_id]
         conn.execute(f"UPDATE upload_jobs SET {sets} WHERE id = ?", values)
 
 
-def _update_layer(db_path: str, layer_id: int, **kwargs) -> None:
-    import sqlite3
-    with sqlite3.connect(db_path, timeout=30) as conn:
+def _update_layer(layer_id: int, **kwargs) -> None:
+    with state_db.connect() as conn:
         sets = ", ".join(f"{k} = ?" for k in kwargs)
         values = list(kwargs.values()) + [layer_id]
         conn.execute(f"UPDATE raster_layers SET {sets} WHERE id = ?", values)
@@ -77,10 +75,9 @@ def _default_rescale(s3_key: str, settings) -> str | None:
 @celery_app.task(bind=True, name="geodeploy.tasks.raster_ingest.ingest_raster")
 def ingest_raster(self, job_id: str, layer_id: int, file_path: str, s3_key: str):
     settings = get_settings()
-    db_path = f"{settings.data_dir}/sqlite/geodeploy.db"
 
     def step(msg: str, progress: int) -> None:
-        _update_job(db_path, job_id, status="processing", current_step=msg, progress=progress,
+        _update_job(job_id, status="processing", current_step=msg, progress=progress,
                     started_at=datetime.now(timezone.utc).isoformat())
 
     cog_path = None
@@ -103,7 +100,7 @@ def ingest_raster(self, job_id: str, layer_id: int, file_path: str, s3_key: str)
         file_size = os.path.getsize(cog_path)
 
         step("Uploading to storage", 60)
-        creds = _get_storage_creds(db_path)
+        creds = _get_storage_creds()
         s3 = boto3.client(
             "s3",
             endpoint_url=creds["endpoint"],
@@ -127,7 +124,7 @@ def ingest_raster(self, job_id: str, layer_id: int, file_path: str, s3_key: str)
             rescale = _default_rescale(s3_key, settings)
             if rescale:
                 extra["default_style"] = json.dumps({"rescale": rescale})
-        _update_layer(db_path, layer_id,
+        _update_layer(layer_id,
                       status="ready",
                       crs=meta["crs"],
                       bbox=json.dumps(meta["bbox"]),
@@ -137,13 +134,13 @@ def ingest_raster(self, job_id: str, layer_id: int, file_path: str, s3_key: str)
                       updated_at=datetime.now(timezone.utc).isoformat(),
                       **extra)
 
-        _update_job(db_path, job_id, status="ready", progress=100,
+        _update_job(job_id, status="ready", progress=100,
                     completed_at=datetime.now(timezone.utc).isoformat())
 
     except Exception as exc:
-        _update_job(db_path, job_id, status="error", error_message=str(exc),
+        _update_job(job_id, status="error", error_message=str(exc),
                     completed_at=datetime.now(timezone.utc).isoformat())
-        _update_layer(db_path, layer_id, status="error", error_message=str(exc))
+        _update_layer(layer_id, status="error", error_message=str(exc))
         raise
     finally:
         if file_path and os.path.exists(file_path):
