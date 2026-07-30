@@ -8,7 +8,21 @@
 # each failure so we can roll back instead of dying half-applied.
 set -uo pipefail
 
-cd "$(dirname "$0")/.." || exit 1   # repo root (this script lives in installer/)
+# Run from a COPY of ourselves. `git reset --hard origin/main` below rewrites this very file, and
+# bash reads a script INCREMENTALLY by byte offset — if the bytes change under it mid-run it resumes
+# at the old offset inside new content and executes garbage. Any update that touches this script
+# would be at risk (this one did). Copying first makes the running program immutable; the repo path
+# rides along in the environment because $0 is then /tmp/… and dirname would resolve wrong.
+if [ -z "${GD_UPDATER_REPO:-}" ]; then
+  GD_UPDATER_REPO="$(cd "$(dirname "$0")/.." && pwd)" || exit 1
+  export GD_UPDATER_REPO
+  _copy="$(mktemp "${TMPDIR:-/tmp}/gd-self-update.XXXXXX")" 2>/dev/null || _copy=""
+  if [ -n "$_copy" ] && cp "$0" "$_copy" 2>/dev/null; then
+    exec bash "$_copy" "$@"      # never returns
+  fi
+  # Couldn't copy (read-only /tmp?) — carry on in place rather than refusing to update.
+fi
+cd "$GD_UPDATER_REPO" || exit 1   # repo root (this script lives in installer/)
 STATUS_FILE="data/temp/update-status.json"   # under data/temp (mounted into the API → the UI can poll it)
 HEALTH_URL="${GEODEPLOY_HEALTH_URL:-http://localhost/health}"
 HEALTH_TRIES="${GEODEPLOY_HEALTH_TRIES:-40}"   # × 3s ≈ 2 min for the stack to come back healthy
