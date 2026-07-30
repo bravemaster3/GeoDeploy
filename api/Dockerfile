@@ -11,8 +11,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 FROM python:3.12-slim AS base
 
+# postgresql-client-16 is for BACKUPS (services/backup.dump_postgis). It must be pinned to the
+# SERVER's major version: our PostGIS is postgis/postgis:16-3.4, and pg_dump REFUSES to dump a
+# server newer than itself ("server version mismatch") — Debian bookworm ships client 15, which
+# would fail every backup. Bump this together with services/postgis.IMAGE + docker-compose.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gdal-bin libgdal-dev libpq-dev curl libsqlite3-0 \
+    gdal-bin libgdal-dev libpq-dev curl libsqlite3-0 gnupg ca-certificates \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+        -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update && apt-get install -y --no-install-recommends postgresql-client-16 \
+    && apt-get purge -y gnupg && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
 # tippecanoe + tile-join from the build stage (runtime needs libsqlite3-0, installed above).

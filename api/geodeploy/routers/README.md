@@ -36,6 +36,17 @@ now REJECT token requests, so any route not explicitly `require_scope`-annotated
   `common.prune_layer_from_portals` removes the (now-dangling) layer from every portal's `layer_configs`
   and RE-PUBLISHES the published ones (best-effort, lazy-imports `_rebuild_bundle`) so no "ghost" layer
   lingers in the live map/editor. The delete audit detail records `portals_updated`.
+- `backups.py` — **admin-only + browser-only** backup config, history and manual runs
+  (`/backups/settings`, `/settings/test`, `/runs`, `/stored`, `/run`, `DELETE /stored/{key}`).
+  Browser-only on purpose: these settings hold the credentials to the one copy that survives losing
+  this instance, so a scoped API token must not be able to read them or re-point them. The
+  destination secret is **write-only** (blank keeps the stored value; `secret_set` tells the UI one
+  exists) — same rule as the SMTP/OIDC secrets. `/stored` reads the destination's own manifests,
+  which is the only trustworthy inventory: our `backup_runs` table lives in the state DB, and that
+  DB is itself part of what gets backed up. Deletion is confined to the configured prefix.
+  The work runs in Celery (`tasks/backup.py`, its own `backup` queue so a multi-hour object copy
+  can't occupy the ingest slots); scheduling is an every-15-min beat tick that reads the schedule
+  from the DB, so changing it in Settings takes effect with no worker restart.
 - **Activity log pagination (2026-07-30):** `GET /audit` returns a PAGE — `{items, total, limit,
   offset}` (default limit 20, max 500) — and every filter is applied SERVER-side before the page is
   cut: `q` (LIKE over action/actor_name/resource_id/detail), `resource_type`, `resource_id`,
@@ -214,6 +225,7 @@ deliberately NOT visibility-filtered (published portals depend on them).
 - No rate limiting beyond nginx; no pagination on list endpoints (fine at current scale).
 
 ## Last updated
+2026-07-30 (new `backups.py` — destination config, history, manual run)
 2026-07-30 (activity log paginated + server-side filters/date range + `/audit/actions`)
 2026-07-29 (stable public `uid` on layers + `common.by_ref`; SQLite WAL/busy_timeout)
 2026-07-29 (INTEROP: new `ogcapi.py` = OGC API - Features Core/GeoJSON at `/api/ogc`; raster

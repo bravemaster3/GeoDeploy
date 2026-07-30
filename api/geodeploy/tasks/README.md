@@ -158,6 +158,13 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   `{id}.zip.part` then `os.replace()`** to the final name — see known issues for why.
 - `__init__.py` — package marker.
 
+- `backup.py` (2026-07-30) — `run_backup` (the work, reporting `current_step`/`progress` into
+  `backup_runs`) and `check_scheduled_backups` (beat tick every 15 min). The tick reads the
+  schedule from the DB EACH TIME instead of it being compiled into beat's config, so an admin
+  changing "daily at 03:00" takes effect immediately; it decides "already ran" from the last
+  scheduled run's timestamp rather than a timer, so a worker restart or a missed tick can't cause
+  a double run or a silently skipped day. Routed to its own `backup` queue — see celery_app.
+
 ## Dependencies / relationships
 - Registered in `celery_app.py` (`include=[...]`), routed to the `ingest` queue.
 - `vector_ingest` calls `services.martin.regenerate_config` (so a successful upload makes the layer immediately tileable).

@@ -40,6 +40,19 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   being eaten on the way out of the Python f-string and rendered as a literal "F517".
   `.doc img` is block/centred/`max-width:100%`, and `![alt|full](src)` opts an image into filling
   the column (`_md_inline` strips the marker from the alt text).
+- `backup.py` (2026-07-30) — copies everything non-regenerable to a **separate** object store.
+  `verify_destination` REFUSES a destination whose endpoint+bucket match the live data bucket (a
+  copy that dies with the original is not a backup). `copy_objects` uses **server-side
+  `copy_object`** when destination and source are the same provider, so a multi-hundred-GB instance
+  never streams its bytes through this container; cross-provider falls back to streaming.
+  `snapshot_state_db` uses SQLite **`VACUUM INTO`**, never a file copy — the DB is written during
+  the backup and in WAL mode the newest commits sit in the `-wal` sidecar, so a plain copy can
+  restore corrupt or stale. `dump_postgis` shells to `pg_dump -Fc`; the client is pinned to the
+  server major in `api/Dockerfile` (**bump both together with `postgis.IMAGE`** — pg_dump refuses a
+  newer server). `list_runs` reads the destination's own `manifest.json` files rather than our DB,
+  because the state DB is itself one of the things being backed up. `prune` only ever counts
+  COMPLETE backups toward retention, so a run of failures can't age out the last good copy.
+  Restore is deliberately NOT automated — procedure in `docs/backups.md`.
 - `external_sources.py` — third-party services shown in portals **without ingesting**. `kind_for` (xyz/wms→raster, wfs→vector), `tile_url` (xyz template as-is; wms → GetMap KVP with MapLibre's `{bbox-epsg-3857}` token), `features_url` (the public GeoJSON proxy path), `probe_wfs` (fetch 1 feature on add → geometry type + bbox; validates), `fetch_wfs_geojson` (proxy fetch, 5k-feature cap). Consumed by `routers/data/sources.py` + `portal_generator`.
 - `cog_converter.py` — rasterio-based: `is_cog`, `convert_to_cog` (512×512 tiles, overviews 2–64, LZW + dtype-aware predictor), `inspect` (local file → CRS/bbox/bands/nodata; bbox reprojected to 4326 via shared `_read_meta`), `inspect_s3` (same but reads an existing object's header over S3 for the "import existing data" flow).
 - `oidc.py` (A-04 SSO) — generic OpenID Connect via **Authlib**. `get_oidc_config(db)` reads the admin-set `SetupConfig.oidc_*` (client secret decrypted by EncryptedText; None when not enabled/complete). `build_oauth(cfg)` registers a fresh Authlib client per-request (config is dynamic). **`resolve_user(claims, cfg, db)` is THE account-linking/provisioning policy (unit-tested):** link by `oidc_sub` then VERIFIED email; no account → create only if `auto_provision` + domain allow-listed, with `default_role`; else raise `OidcError` (user-facing). SSO-created users get a RANDOM bcrypt hash (a non-bcrypt placeholder would make passlib.verify RAISE in the login path). Consumed by `routers/auth_oidc.py`.
@@ -107,6 +120,7 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   permalink it serves, never a substitute for the bbox queries.
 
 ## Last updated
+2026-07-30 (new `backup.py` — separate-destination backups of PostGIS/objects/state)
 2026-07-29 (About page renders share_links via `portal_generator._share_block`; `ORIGIN_TOKEN`)
 2026-07-29 (new `share_links.py`; `duckdb_engine` gained `offset` paging + `query_feature_by_id` for
 `routers/ogcapi.py`)

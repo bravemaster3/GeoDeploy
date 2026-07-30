@@ -67,8 +67,52 @@ class SetupConfig(Base):
     oidc_allowed_domains: Mapped[str | None] = mapped_column(String(512))  # comma-separated
     oidc_default_role: Mapped[str] = mapped_column(String(16), default="viewer")
 
+    # Backups (2026-07-30). A SEPARATE S3 destination on purpose: a backup that lives in the same
+    # bucket (or on the same box) as the data is not a backup. Credentials are Fernet-encrypted at
+    # rest and the secret is write-only over the API, like the SMTP/OIDC secrets.
+    backup_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    backup_endpoint: Mapped[str | None] = mapped_column(String(512))
+    backup_bucket: Mapped[str | None] = mapped_column(String(256))
+    backup_prefix: Mapped[str | None] = mapped_column(String(256), default="geodeploy-backups")
+    backup_access_key: Mapped[str | None] = mapped_column(String(256))
+    backup_secret_key: Mapped[str | None] = mapped_column(EncryptedText)
+    backup_region: Mapped[str | None] = mapped_column(String(64), default="us-east-1")
+    # Schedule: 'off' | 'daily' | 'weekly', fired at backup_hour UTC (weekly → Mondays). Checked by a
+    # periodic task rather than reconfiguring celery beat when the setting changes.
+    backup_schedule: Mapped[str] = mapped_column(String(16), default="off")
+    backup_hour: Mapped[int] = mapped_column(Integer, default=3)
+    backup_keep: Mapped[int] = mapped_column(Integer, default=7)      # retention, newest N kept
+    # What to include. PostGIS + object storage are the irreplaceable ones; the state DB is small
+    # and essential; portal bundles are regenerable by re-publishing but portal_assets are NOT.
+    backup_include_postgis: Mapped[bool] = mapped_column(Boolean, default=True)
+    backup_include_objects: Mapped[bool] = mapped_column(Boolean, default=True)
+    backup_include_state: Mapped[bool] = mapped_column(Boolean, default=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class BackupRun(Base):
+    """One backup attempt — the history behind Settings → Backups.
+
+    A backup you cannot see the result of is not a backup, so every run is recorded whether it
+    succeeded or not, with the failure text. `manifest` is the JSON inventory written alongside the
+    artifacts (what was included, sizes, the PostGIS/state/object counts) — it is what a restore
+    reads to know what it is looking at.
+    """
+    __tablename__ = "backup_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(256), nullable=False, index=True)   # destination prefix
+    status: Mapped[str] = mapped_column(String(16), default="running")  # running|success|error
+    trigger: Mapped[str] = mapped_column(String(16), default="manual")  # manual|scheduled
+    started_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    size_bytes: Mapped[int | None] = mapped_column(Integer)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    manifest: Mapped[str | None] = mapped_column(Text)     # JSON inventory
+    current_step: Mapped[str | None] = mapped_column(String(128))
+    progress: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class User(Base):

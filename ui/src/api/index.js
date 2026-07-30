@@ -75,6 +75,18 @@ export const revokeToken = (id) => api.delete(`/tokens/${id}`)
 export const listAudit = (params) => api.get('/audit', { params })
 export const listAuditActions = () => api.get('/audit/actions')
 
+// Backups (admin Settings -> Backups). The destination is a SEPARATE S3; secret_key is
+// write-only (blank keeps the stored one). `stored` reads the destination's own manifests, which
+// is the only trustworthy answer about what exists -- our run history lives in the state DB, and
+// that DB is itself one of the things being backed up.
+export const getBackupSettings = () => api.get('/backups/settings')
+export const updateBackupSettings = (data) => api.put('/backups/settings', data)
+export const testBackupDestination = () => api.post('/backups/settings/test')
+export const listBackupRuns = (limit = 20) => api.get('/backups/runs', { params: { limit } })
+export const listStoredBackups = () => api.get('/backups/stored')
+export const startBackup = () => api.post('/backups/run')
+export const deleteStoredBackup = (key) => api.delete(`/backups/stored/${key}`)
+
 // Outgoing email (admin Settings → Email; generic SMTP)
 export const getEmailSettings = () => api.get('/admin/email-settings')
 export const updateEmailSettings = (data) => api.put('/admin/email-settings', data)

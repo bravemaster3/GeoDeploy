@@ -10,7 +10,7 @@ from starlette.responses import Response
 from .config import get_settings
 from .database import engine, Base
 from .routers import (setup, auth, auth_oidc, portals, stac, templates, admin, basemaps, users,
-                      tokens, audit, interop, ogcapi)
+                      tokens, audit, interop, ogcapi, backups)
 from .routers.data import vector, raster, sources, discover
 
 
@@ -129,6 +129,21 @@ def _apply_schema_migrations(conn) -> None:
         "ALTER TABLE vector_layers ADD COLUMN uid VARCHAR(32)",
         "UPDATE vector_layers SET uid = lower(hex(randomblob(6))) WHERE uid IS NULL OR uid = ''",
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_vector_layers_uid ON vector_layers (uid)",
+        # Backups (2026-07-30). Destination S3 + schedule + retention. `backup_runs` is a NEW
+        # table (created by create_all, no entry needed); these are the setup_config additions.
+        "ALTER TABLE setup_config ADD COLUMN backup_enabled BOOLEAN DEFAULT 0",
+        "ALTER TABLE setup_config ADD COLUMN backup_endpoint VARCHAR(512)",
+        "ALTER TABLE setup_config ADD COLUMN backup_bucket VARCHAR(256)",
+        "ALTER TABLE setup_config ADD COLUMN backup_prefix VARCHAR(256) DEFAULT 'geodeploy-backups'",
+        "ALTER TABLE setup_config ADD COLUMN backup_access_key VARCHAR(256)",
+        "ALTER TABLE setup_config ADD COLUMN backup_secret_key TEXT",
+        "ALTER TABLE setup_config ADD COLUMN backup_region VARCHAR(64) DEFAULT 'us-east-1'",
+        "ALTER TABLE setup_config ADD COLUMN backup_schedule VARCHAR(16) DEFAULT 'off'",
+        "ALTER TABLE setup_config ADD COLUMN backup_hour INTEGER DEFAULT 3",
+        "ALTER TABLE setup_config ADD COLUMN backup_keep INTEGER DEFAULT 7",
+        "ALTER TABLE setup_config ADD COLUMN backup_include_postgis BOOLEAN DEFAULT 1",
+        "ALTER TABLE setup_config ADD COLUMN backup_include_objects BOOLEAN DEFAULT 1",
+        "ALTER TABLE setup_config ADD COLUMN backup_include_state BOOLEAN DEFAULT 1",
         # Activity log pagination (2026-07-30): every query is `WHERE <filter> ORDER BY created_at
         # DESC LIMIT n`. The per-column indexes on the model satisfy the WHERE but leave a full sort
         # of the matches; SQLite uses ONE index per table per query, so these COMPOSITE indexes let
@@ -256,7 +271,7 @@ async def _public_data_cors(request, call_next):
 for router in [setup.router, auth.router, auth_oidc.router, users.router, tokens.router,
                audit.router, portals.router, templates.router, admin.router, basemaps.router,
                vector.router, raster.router, sources.router, discover.router, stac.router,
-               ogcapi.router, interop.router]:
+               ogcapi.router, interop.router, backups.router]:
     app.include_router(router, prefix="/api")
 
 # Serve published portals as static files

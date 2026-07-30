@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
@@ -198,6 +198,55 @@ class PortalRefOut(BaseModel):
     id: int
     title: str
     published: bool
+
+    model_config = {"from_attributes": True}
+
+
+class BackupSettingsIn(BaseModel):
+    """Destination + schedule. `secret_key` is WRITE-ONLY: blank means "keep the stored one", and
+    it is never echoed back (same rule as the SMTP/OIDC secrets)."""
+    enabled: bool = False
+    endpoint: str | None = None          # blank = AWS proper; else an S3-compatible endpoint
+    bucket: str | None = None
+    prefix: str | None = "geodeploy-backups"
+    access_key: str | None = None
+    secret_key: str | None = None
+    region: str | None = "us-east-1"
+    schedule: Literal["off", "daily", "weekly"] = "off"
+    hour: int = 3                        # UTC hour the scheduled run may start
+    keep: int = 7                        # retention: newest N complete backups
+    include_postgis: bool = True
+    include_objects: bool = True
+    include_state: bool = True
+
+
+class BackupSettingsOut(BaseModel):
+    enabled: bool
+    endpoint: str | None
+    bucket: str | None
+    prefix: str
+    access_key: str | None
+    region: str
+    schedule: str
+    hour: int
+    keep: int
+    include_postgis: bool
+    include_objects: bool
+    include_state: bool
+    secret_set: bool                     # "a secret is stored" WITHOUT returning it
+
+
+class BackupRunOut(BaseModel):
+    id: int
+    key: str
+    status: str
+    trigger: str
+    started_at: datetime
+    finished_at: datetime | None
+    size_bytes: int | None
+    error_message: str | None
+    current_step: str | None
+    progress: int
 
     model_config = {"from_attributes": True}
 

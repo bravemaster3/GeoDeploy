@@ -233,6 +233,131 @@
       </div>
 
       <!-- Email tab (admin) -->
+      <!-- Backups: destination + schedule + history -->
+      <div v-if="activeTab === 'backups'" class="space-y-6">
+        <section class="card overflow-hidden">
+          <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
+            <span class="w-9 h-9 rounded-lg bg-emerald-500/15 text-emerald-400 flex items-center justify-center flex-shrink-0">
+              <HardDriveIcon class="w-5 h-5" />
+            </span>
+            <div class="min-w-0">
+              <h2 class="font-semibold">Backup destination</h2>
+              <p class="text-xs text-muted-foreground">
+                A separate object store for PostGIS, your files, and this instance's database.
+              </p>
+            </div>
+            <label class="ml-auto flex items-center gap-2 text-sm">
+              <input type="checkbox" v-model="bk.enabled" class="w-4 h-4" /> Enabled
+            </label>
+          </header>
+
+          <div class="p-5 space-y-4">
+            <p class="text-xs text-amber-300/90 bg-amber-500/10 border border-amber-400/30 rounded-lg p-3">
+              Use a <strong>different bucket from your data</strong> &mdash; ideally a different
+              provider. A copy that dies with the original is not a backup, so the test below
+              refuses a destination pointing at your live bucket.
+            </p>
+            <div class="grid md:grid-cols-2 gap-3">
+              <div>
+                <label class="text-xs text-muted-foreground block mb-1">Endpoint <span class="text-muted-foreground/60">(blank = AWS S3)</span></label>
+                <input v-model="bk.endpoint" class="input w-full text-sm" placeholder="https://s3.eu-central-1.wasabisys.com" />
+              </div>
+              <div>
+                <label class="text-xs text-muted-foreground block mb-1">Bucket</label>
+                <input v-model="bk.bucket" class="input w-full text-sm" placeholder="geodeploy-backups" />
+              </div>
+              <div>
+                <label class="text-xs text-muted-foreground block mb-1">Access key</label>
+                <input v-model="bk.access_key" class="input w-full text-sm" autocomplete="off" />
+              </div>
+              <div>
+                <label class="text-xs text-muted-foreground block mb-1">
+                  Secret key <span v-if="bk.secret_set" class="text-emerald-400">&middot; stored</span>
+                </label>
+                <input v-model="bk.secret_key" type="password" class="input w-full text-sm"
+                  autocomplete="new-password" :placeholder="bk.secret_set ? 'Leave blank to keep' : ''" />
+              </div>
+              <div>
+                <label class="text-xs text-muted-foreground block mb-1">Region</label>
+                <input v-model="bk.region" class="input w-full text-sm" placeholder="us-east-1" />
+              </div>
+              <div>
+                <label class="text-xs text-muted-foreground block mb-1">Path prefix</label>
+                <input v-model="bk.prefix" class="input w-full text-sm" placeholder="geodeploy-backups" />
+              </div>
+            </div>
+
+            <div class="grid md:grid-cols-3 gap-3 pt-3 border-t border-border/60">
+              <div>
+                <label class="text-xs text-muted-foreground block mb-1">Schedule</label>
+                <select v-model="bk.schedule" class="input w-full text-sm">
+                  <option value="off">Manual only</option>
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly (Mondays)</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-xs text-muted-foreground block mb-1">At (UTC hour)</label>
+                <select v-model.number="bk.hour" class="input w-full text-sm" :disabled="bk.schedule === 'off'">
+                  <option v-for="h in 24" :key="h - 1" :value="h - 1">{{ String(h - 1).padStart(2, '0') }}:00</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-xs text-muted-foreground block mb-1">Keep last</label>
+                <input v-model.number="bk.keep" type="number" min="1" max="365" class="input w-full text-sm" />
+              </div>
+            </div>
+
+            <div class="flex flex-wrap gap-4">
+              <label class="flex items-center gap-2 text-sm"><input type="checkbox" v-model="bk.include_postgis" class="w-4 h-4" /> PostGIS database</label>
+              <label class="flex items-center gap-2 text-sm"><input type="checkbox" v-model="bk.include_objects" class="w-4 h-4" /> Files (rasters, GeoParquet, tiles)</label>
+              <label class="flex items-center gap-2 text-sm"><input type="checkbox" v-model="bk.include_state" class="w-4 h-4" /> Instance database &amp; portal assets</label>
+            </div>
+
+            <div class="flex items-center gap-3 flex-wrap">
+              <button @click="saveBackups" :disabled="bkSaving" class="btn-primary text-sm px-4 py-2 disabled:opacity-60">
+                {{ bkSaving ? 'Saving...' : 'Save' }}
+              </button>
+              <button @click="testBackups" :disabled="bkTesting" class="btn-secondary text-sm px-4 py-2 disabled:opacity-60">
+                {{ bkTesting ? 'Testing...' : 'Test destination' }}
+              </button>
+              <button @click="runBackup" :disabled="bkRunning || !bk.enabled" class="btn-secondary text-sm px-4 py-2 disabled:opacity-60">
+                Back up now
+              </button>
+              <span v-if="bkMsg" class="text-xs" :class="bkMsg.ok ? 'text-emerald-400' : 'text-red-400'">{{ bkMsg.text }}</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="card overflow-hidden">
+          <header class="px-5 py-3.5 border-b border-border/60">
+            <h2 class="font-semibold">History</h2>
+            <p class="text-xs text-muted-foreground">Every run, successful or not.</p>
+          </header>
+          <div v-if="!bkRuns.length" class="px-5 py-8 text-center text-sm text-muted-foreground/70">
+            No backups yet.
+          </div>
+          <table v-else class="w-full text-sm">
+            <tbody>
+              <tr v-for="r in bkRuns" :key="r.id" class="border-b border-border/40 last:border-0">
+                <td class="px-5 py-2.5 whitespace-nowrap">
+                  <span class="text-[11px] font-mono px-1.5 py-0.5 rounded"
+                    :class="r.status === 'success' ? 'bg-emerald-500/15 text-emerald-400'
+                      : r.status === 'error' ? 'bg-red-500/15 text-red-400' : 'bg-amber-500/15 text-amber-400'">{{ r.status }}</span>
+                </td>
+                <td class="px-2 py-2.5 text-xs text-muted-foreground whitespace-nowrap">{{ new Date(r.started_at).toLocaleString() }}</td>
+                <td class="px-2 py-2.5 text-xs text-muted-foreground">{{ r.trigger }}</td>
+                <td class="px-2 py-2.5 text-xs text-muted-foreground">
+                  <span v-if="r.status === 'running'">{{ r.current_step }} &middot; {{ r.progress }}%</span>
+                  <span v-else-if="r.status === 'error'" class="text-red-400">{{ r.error_message }}</span>
+                  <span v-else>{{ fmtBytes(r.size_bytes) }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
+
       <div v-if="activeTab === 'email'" class="space-y-6">
       <!-- Outgoing email (generic SMTP — admin/owner) -->
       <section v-if="auth.isAdmin" class="card overflow-hidden">
@@ -504,13 +629,15 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSystemStore } from '@/stores/system'
 import { useAuthStore } from '@/stores/auth'
 import { ServerIcon, HardDriveIcon, UserIcon, RefreshIcon, MailIcon, KeyIcon, TrashIcon } from './icons'
 import api, { changePassword, logoutAll, controlService, getEmailSettings, sendTestEmail,
-              updateEmailSettings, listTokens, revokeToken, getOidcSettings, updateOidcSettings } from '@/api'
+              updateEmailSettings, listTokens, revokeToken, getOidcSettings, updateOidcSettings,
+              getBackupSettings, updateBackupSettings, testBackupDestination,
+              listBackupRuns, startBackup } from '@/api'
 import TokenModal from '@/components/users/TokenModal.vue'
 
 const systemStore = useSystemStore()
@@ -525,11 +652,97 @@ const TABS = [
   { id: 'account', label: 'Account' },
   { id: 'api', label: 'API tokens' },
   { id: 'infra', label: 'Infrastructure', admin: true },
+  { id: 'backups', label: 'Backups', admin: true },
   { id: 'email', label: 'Email', admin: true },
   { id: 'auth', label: 'Authentication', admin: true },
 ]
 const tabs = computed(() => TABS.filter(t => !t.admin || auth.isAdmin))
 const activeTab = ref('account')
+
+// -- Backups -------------------------------------------------------------------------------
+// The destination secret is write-only: `secret_set` tells us one is stored, and we send
+// `secret_key` only when the admin actually typed a new one.
+const bk = reactive({
+  enabled: false, endpoint: '', bucket: '', prefix: 'geodeploy-backups', access_key: '',
+  secret_key: '', region: 'us-east-1', schedule: 'off', hour: 3, keep: 7,
+  include_postgis: true, include_objects: true, include_state: true, secret_set: false,
+})
+const bkRuns = ref([])
+const bkSaving = ref(false)
+const bkTesting = ref(false)
+const bkRunning = ref(false)
+const bkMsg = ref(null)
+let bkPoll = null
+
+function fmtBytes(b) {
+  if (!b) return '-'
+  if (b > 1e12) return (b / 1e12).toFixed(1) + ' TB'
+  if (b > 1e9) return (b / 1e9).toFixed(1) + ' GB'
+  if (b > 1e6) return (b / 1e6).toFixed(1) + ' MB'
+  return (b / 1e3).toFixed(0) + ' KB'
+}
+
+async function loadBackups() {
+  if (!auth.isAdmin) return
+  try {
+    const { data } = await getBackupSettings()
+    Object.assign(bk, data, { secret_key: '' })
+  } catch { /* not configured yet */ }
+  await refreshBackupRuns()
+}
+
+async function refreshBackupRuns() {
+  try {
+    bkRuns.value = (await listBackupRuns()).data
+  } catch { bkRuns.value = [] }
+  // Keep polling while a run is in flight so the step/percentage advances on screen.
+  const running = bkRuns.value.some(r => r.status === 'running')
+  bkRunning.value = running
+  clearTimeout(bkPoll)
+  if (running) bkPoll = setTimeout(refreshBackupRuns, 4000)
+}
+
+async function saveBackups() {
+  bkSaving.value = true
+  bkMsg.value = null
+  try {
+    const payload = { ...bk }
+    delete payload.secret_set
+    if (!payload.secret_key) delete payload.secret_key   // blank = keep stored
+    const { data } = await updateBackupSettings(payload)
+    Object.assign(bk, data, { secret_key: '' })
+    bkMsg.value = { ok: true, text: 'Saved.' }
+  } catch (e) {
+    bkMsg.value = { ok: false, text: e.response?.data?.detail || 'Could not save.' }
+  } finally {
+    bkSaving.value = false
+  }
+}
+
+async function testBackups() {
+  bkTesting.value = true
+  bkMsg.value = null
+  try {
+    await testBackupDestination()
+    bkMsg.value = { ok: true, text: 'Destination is reachable and writable.' }
+  } catch (e) {
+    bkMsg.value = { ok: false, text: e.response?.data?.detail || 'Could not reach the destination.' }
+  } finally {
+    bkTesting.value = false
+  }
+}
+
+async function runBackup() {
+  bkMsg.value = null
+  try {
+    await startBackup()
+    bkRunning.value = true
+    bkMsg.value = { ok: true, text: 'Backup started.' }
+    refreshBackupRuns()
+  } catch (e) {
+    bkMsg.value = { ok: false, text: e.response?.data?.detail || 'Could not start the backup.' }
+  }
+}
 
 // ── API tokens (A-03) — each user manages their own ──
 const tokens = ref([])
@@ -715,8 +928,12 @@ onMounted(() => {
     loadEmail()
     loadOidc()
     checkUpdates()
+    loadBackups()
   }
 })
+
+// Stop the backup progress poll when leaving Settings (it re-arms itself while a run is active).
+onUnmounted(() => clearTimeout(bkPoll))
 
 // Service logs (read-only). Admin-only server-side; a safe substitute for a shell.
 const LOG_SERVICES = ['celery', 'api', 'nginx', 'martin', 'titiler', 'postgres', 'minio', 'redis', 'ui']

@@ -12,7 +12,7 @@ celery_app = Celery(
              "geodeploy.tasks.export", "geodeploy.tasks.csv_import",
              "geodeploy.tasks.geoparquet_import", "geodeploy.tasks.pmtiles_tile",
              "geodeploy.tasks.geoparquet_prep", "geodeploy.tasks.convert_upload",
-             "geodeploy.tasks.geolibre_publish"],
+             "geodeploy.tasks.geolibre_publish", "geodeploy.tasks.backup"],
 )
 
 celery_app.conf.update(
@@ -29,6 +29,20 @@ celery_app.conf.update(
         "geodeploy.tasks.geoparquet_prep.*": {"queue": "ingest"},
         "geodeploy.tasks.convert_upload.*": {"queue": "ingest"},
         "geodeploy.tasks.geolibre_publish.*": {"queue": "ingest"},
+        # Its OWN queue: a backup can run for hours (a full object copy), and on the shared
+        # `ingest` queue with concurrency 2 it would occupy half the ingest capacity the whole
+        # time. docker-compose runs the worker with -Q ingest,backup.
+        "geodeploy.tasks.backup.*": {"queue": "backup"},
+    },
+    # Scheduled backups. The tick is cheap and does nothing unless a schedule is configured; the
+    # SCHEDULE ITSELF lives in the DB and is read per tick, so changing it in Settings takes effect
+    # immediately instead of needing beat reconfigured (see tasks/backup.check_scheduled_backups).
+    beat_schedule={
+        "check-scheduled-backups": {
+            "task": "geodeploy.tasks.backup.check_scheduled_backups",
+            "schedule": 900.0,      # every 15 min
+            "options": {"queue": "backup"},
+        },
     },
     task_track_started=True,
     worker_prefetch_multiplier=1,

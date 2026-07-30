@@ -153,13 +153,18 @@ services:
       pull: false
     image: geodeploy/api:latest
     restart: unless-stopped
-    command: celery -A geodeploy.celery_app worker --loglevel=info --concurrency=2 -Q ingest
+    # -Q ingest,backup: backups get their own queue so a multi-hour object copy can't
+    #   occupy the ingest slots. -B: embedded beat drives the scheduled-backup tick
+    #   (single worker, so a separate beat container would be pure overhead); its
+    #   schedule file lives under /data/temp so it survives a recreate.
+    command: celery -A geodeploy.celery_app worker --loglevel=info --concurrency=2
+      -Q ingest,backup -B --schedule=/data/temp/celerybeat-schedule
     env_file: .env
     volumes:
       - ./.env:/geodeploy/.env
-      - ./data/sqlite:/data/sqlite
-      - ./data/temp:/data/temp
-      - ./data/martin:/data/martin
+      # The WHOLE data dir (was: sqlite + temp + martin only). Backups archive portal_assets,
+      # which the worker could not otherwise see. Same container paths as before, plus the rest.
+      - ./data:/data
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - geodeploy
