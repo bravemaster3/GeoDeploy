@@ -172,8 +172,20 @@
                   autocomplete="new-password" :placeholder="bk.secret_set ? 'Leave blank to keep' : ''" />
               </div>
               <div>
-                <label class="text-xs text-muted-foreground block mb-1">Region</label>
-                <input v-model="bk.region" class="input w-full text-sm" placeholder="us-east-1" />
+                <label class="text-xs text-muted-foreground block mb-1">
+                  Region <span class="text-muted-foreground/60">(optional)</span>
+                </label>
+                <input v-model="bk.region" list="gd-s3-regions" class="input w-full text-sm"
+                  :placeholder="guessedRegion || 'auto-detected from the endpoint'" />
+                <datalist id="gd-s3-regions">
+                  <option value="auto" /><option value="us-east-1" /><option value="eu-central-1" />
+                  <option value="eu-west-1" /><option value="fsn1" /><option value="nbg1" />
+                  <option value="hel1" />
+                </datalist>
+                <p class="text-[11px] text-muted-foreground/70 mt-1">
+                  <span v-if="guessedRegion">Leave blank to use <span class="font-mono">{{ guessedRegion }}</span>, read from your endpoint.</span>
+                  <span v-else>Leave blank unless your provider rejects the default. Only AWS checks it strictly.</span>
+                </p>
               </div>
               <div>
                 <label class="text-xs text-muted-foreground block mb-1">Path prefix</label>
@@ -565,6 +577,26 @@ const bk = reactive({
   secret_key: '', region: 'us-east-1', schedule: 'off', hour: 3, keep: 7,
   include_postgis: true, include_objects: true, include_state: true, secret_set: false,
 })
+// Mirrors services/backup.py::infer_region for the PLACEHOLDER only; the server does the real
+// derivation when the field is left blank. Region is just a SigV4 signing input — most
+// S3-compatible providers ignore it, AWS validates it, R2 wants a literal "auto", and
+// Backblaze/Hetzner put the location in the hostname where it can simply be read off.
+const guessedRegion = computed(() => {
+  let h = (bk.endpoint || '').trim().toLowerCase().replace(/^https?:\/\//, '').split('/')[0].split(':')[0]
+  if (!h) return ''
+  const p = h.split('.')
+  if (h.endsWith('r2.cloudflarestorage.com')) return 'auto'
+  if (h.endsWith('amazonaws.com')) {
+    if (p[0] === 's3' && p.length >= 3 && p[1] !== 'amazonaws') return p[1]
+    if (p[0].startsWith('s3-')) return p[0].slice(3)
+    return 'us-east-1'
+  }
+  if (h.endsWith('backblazeb2.com') && p.length >= 3) return p[1]
+  if (h.endsWith('wasabisys.com') && p[0] === 's3' && p.length >= 3) return p[1]
+  if (h.endsWith('your-objectstorage.com')) return p[0]
+  return ''
+})
+
 const bkRuns = ref([])
 const bkSaving = ref(false)
 const bkTesting = ref(false)
@@ -621,8 +653,9 @@ async function testBackups() {
   bkTesting.value = true
   bkMsg.value = null
   try {
-    await testBackupDestination()
-    bkMsg.value = { ok: true, text: 'Destination is reachable and writable.' }
+    const { data } = await testBackupDestination()
+    bkMsg.value = { ok: true,
+      text: `Destination is reachable and writable (region: ${data.region}).` }
   } catch (e) {
     bkMsg.value = { ok: false, text: e.response?.data?.detail || 'Could not reach the destination.' }
   } finally {

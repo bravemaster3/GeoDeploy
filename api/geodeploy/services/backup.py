@@ -52,6 +52,43 @@ def make_client(endpoint: str | None, access_key: str, secret_key: str, region: 
     )
 
 
+def infer_region(endpoint: str | None) -> str | None:
+    """Best-effort region from an S3 endpoint, so nobody has to look it up.
+
+    `region` is part of the SigV4 signature, so client and server must agree on the STRING. AWS
+    validates it strictly (a mismatch is `AuthorizationHeaderMalformed`); most S3-compatible
+    providers don't validate at all, which is why `us-east-1` works nearly everywhere. The
+    exceptions are worth encoding: Cloudflare R2 expects `auto`, and Backblaze/Hetzner put the
+    location in the hostname, so it can simply be read off.
+
+    Returns None when nothing is recognisable — the caller keeps its default rather than guessing.
+    """
+    host = (endpoint or "").strip().lower()
+    for scheme in ("https://", "http://"):
+        if host.startswith(scheme):
+            host = host[len(scheme):]
+    host = host.split("/")[0].split(":")[0]
+    if not host:
+        return None
+    parts = host.split(".")
+    if host.endswith("r2.cloudflarestorage.com"):
+        return "auto"                                   # R2 signs with a literal "auto"
+    if host.endswith("amazonaws.com"):
+        # s3.eu-central-1.amazonaws.com / s3-eu-central-1.amazonaws.com
+        if len(parts) >= 3 and parts[0] == "s3" and parts[1] not in ("amazonaws",):
+            return parts[1]
+        if parts[0].startswith("s3-"):
+            return parts[0][3:]
+        return "us-east-1"
+    if host.endswith("backblazeb2.com") and len(parts) >= 3:
+        return parts[1]                                 # s3.us-west-004.backblazeb2.com
+    if host.endswith("wasabisys.com") and len(parts) >= 3 and parts[0] == "s3":
+        return parts[1]                                 # s3.eu-central-1.wasabisys.com
+    if host.endswith("your-objectstorage.com"):
+        return parts[0]                                 # Hetzner: fsn1 / nbg1 / hel1
+    return None
+
+
 def _norm(endpoint: str | None) -> str:
     return (endpoint or "").rstrip("/").lower()
 
@@ -66,8 +103,8 @@ def verify_destination(cfg) -> dict:
             "The backup destination is the same endpoint AND bucket as your live data. "
             "A copy that dies with the original is not a backup — use a different bucket, "
             "ideally a different provider.")
-    s3 = make_client(cfg.backup_endpoint, cfg.backup_access_key, cfg.backup_secret_key,
-                     cfg.backup_region)
+    region = cfg.backup_region or infer_region(cfg.backup_endpoint) or "us-east-1"
+    s3 = make_client(cfg.backup_endpoint, cfg.backup_access_key, cfg.backup_secret_key, region)
     probe = f"{(cfg.backup_prefix or 'geodeploy-backups').strip('/')}/.geodeploy-write-test"
     try:
         s3.put_object(Bucket=cfg.backup_bucket, Key=probe, Body=b"ok")
@@ -75,7 +112,8 @@ def verify_destination(cfg) -> dict:
     except ClientError as exc:
         raise ValueError(f"Could not write to the destination bucket: "
                          f"{exc.response.get('Error', {}).get('Message', exc)}") from exc
-    return {"ok": True, "bucket": cfg.backup_bucket, "prefix": cfg.backup_prefix}
+    return {"ok": True, "bucket": cfg.backup_bucket, "prefix": cfg.backup_prefix,
+            "region": region}      # what we actually signed with, so a blank field is explainable
 
 
 def run_key(prefix: str | None, when: datetime | None = None) -> str:

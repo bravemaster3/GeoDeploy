@@ -60,7 +60,10 @@ async def save_settings(body: BackupSettingsIn, user: User = Depends(require_adm
     cfg.backup_bucket = (body.bucket or "").strip() or None
     cfg.backup_prefix = (body.prefix or "geodeploy-backups").strip("/") or "geodeploy-backups"
     cfg.backup_access_key = (body.access_key or "").strip() or None
-    cfg.backup_region = (body.region or "us-east-1").strip() or "us-east-1"
+    # Blank = derive it from the endpoint (bk.infer_region). Region is only a signing input;
+    # asking an operator to know their provider's magic string is a bad default.
+    cfg.backup_region = ((body.region or "").strip()
+                         or bk.infer_region(cfg.backup_endpoint) or "us-east-1")
     cfg.backup_schedule = body.schedule
     cfg.backup_hour = max(0, min(int(body.hour), 23))
     cfg.backup_keep = max(1, min(int(body.keep), 365))
