@@ -41,6 +41,19 @@ async def lifespan(app: FastAPI):
             async with eng.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
             log.info("state database ready")
+            # Publish the credentials that JUST WORKED to the shared volume, so the Celery worker
+            # can reach the database no matter what its own (container-creation-time) environment
+            # says. Doing it here rather than only in the setup wizard makes it SELF-HEALING: any
+            # instance configured before this existed repairs itself on the next API start, and
+            # the value can never drift from what the API is actually using. Connecting
+            # successfully is the proof that these credentials are the right ones.
+            try:
+                from . import state_db
+                state_db.write_runtime_credentials(
+                    settings.postgis_host, settings.postgis_port, settings.postgis_db,
+                    settings.postgis_user, settings.postgis_password, settings.postgis_sslmode)
+            except Exception:
+                log.exception("could not publish runtime DB credentials for the worker")
         except Exception as exc:
             log.warning("state database not reachable yet (%s) — serving the setup wizard "
                         "until it is", exc)

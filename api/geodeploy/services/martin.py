@@ -22,7 +22,11 @@ def _pg_creds(settings) -> dict:
                 "FROM setup_config WHERE id = 1"
             ).fetchone()
         if row and row["postgis_password"]:
-            return dict(row)
+            # Raw shim read — decrypt explicitly (EncryptedText only applies to ORM reads).
+            from ..crypto import decrypt_secret
+            creds = dict(row)
+            creds["postgis_password"] = decrypt_secret(creds["postgis_password"])
+            return creds
     except Exception:
         pass
     return {

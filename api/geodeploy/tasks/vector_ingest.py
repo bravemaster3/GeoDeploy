@@ -80,10 +80,24 @@ def _get_all_layers() -> list[dict]:
 
 
 def _get_setup() -> dict | None:
+    """setup_config as a dict. Read through the raw shim, which BYPASSES SQLAlchemy's
+    EncryptedText — so the secrets are decrypted explicitly here. `decrypt_secret` passes legacy
+    plaintext through unchanged, so this is safe on a database written before encryption."""
+    from ..crypto import decrypt_secret
     with state_db.connect() as conn:
         conn.row_factory = state_db.dict_row
-        row = conn.execute("SELECT * FROM setup_config WHERE completed = 1").fetchone()
-        return dict(row) if row else None
+        # `completed` is BOOLEAN. SQLite accepted `= 1`; Postgres rejects it outright with
+        # "operator does not exist: boolean = integer", which would have broken every caller
+        # (csv_import, export, interop, the large-file ingest path).
+        row = conn.execute("SELECT * FROM setup_config WHERE completed").fetchone()
+    if not row:
+        return None
+    setup = dict(row)
+    for field in ("postgis_password", "storage_secret_key", "smtp_password",
+                  "oidc_client_secret", "backup_secret_key"):
+        if setup.get(field):
+            setup[field] = decrypt_secret(setup[field])
+    return setup
 
 
 def _get_layer_user(layer_id: int) -> int | None:

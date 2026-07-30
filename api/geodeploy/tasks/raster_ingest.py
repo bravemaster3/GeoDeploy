@@ -22,8 +22,10 @@ def _get_storage_creds() -> dict:
             "FROM setup_config WHERE id=1"
         ).fetchone()
     if row and row[2]:
+        # Raw shim read — SQLAlchemy's EncryptedText does not apply, so decrypt explicitly.
+        from ..crypto import decrypt_secret
         return {"endpoint": row[0], "bucket": row[1], "access_key": row[2],
-                "secret_key": row[3], "region": row[4] or "us-east-1"}
+                "secret_key": decrypt_secret(row[3]), "region": row[4] or "us-east-1"}
     settings = get_settings()
     return {"endpoint": settings.storage_endpoint, "bucket": settings.storage_bucket,
             "access_key": settings.storage_access_key, "secret_key": settings.storage_secret_key,

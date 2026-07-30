@@ -37,13 +37,17 @@ class SetupConfig(Base):
     postgis_port: Mapped[int | None] = mapped_column(Integer, default=5432)
     postgis_db: Mapped[str | None] = mapped_column(String(128))
     postgis_user: Mapped[str | None] = mapped_column(String(128))
-    postgis_password: Mapped[str | None] = mapped_column(Text)  # encrypted at rest
+    # Fernet-encrypted at rest (crypto.EncryptedText). It was plain Text until 2026-07-30 despite
+    # the comment claiming otherwise — which mattered once backups shipped: pg_dump carries
+    # setup_config, so this and storage_secret_key were leaving the box in plaintext.
+    # Raw readers (the Celery shim bypasses SQLAlchemy types) MUST call crypto.decrypt_secret.
+    postgis_password: Mapped[str | None] = mapped_column(EncryptedText)
 
     storage_type: Mapped[str | None] = mapped_column(String(16))   # local | s3 | hetzner | r2 | backblaze
     storage_endpoint: Mapped[str | None] = mapped_column(String(512))
     storage_bucket: Mapped[str | None] = mapped_column(String(256))
     storage_access_key: Mapped[str | None] = mapped_column(String(256))
-    storage_secret_key: Mapped[str | None] = mapped_column(Text)   # encrypted at rest
+    storage_secret_key: Mapped[str | None] = mapped_column(EncryptedText)  # see postgis_password
     storage_region: Mapped[str | None] = mapped_column(String(64), default="us-east-1")
 
     # Outgoing email (C-08a): generic SMTP so ANY provider works (Resend/Brevo/institutional
