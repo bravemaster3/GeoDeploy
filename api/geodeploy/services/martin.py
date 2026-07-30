@@ -118,14 +118,14 @@ def _build_config(layers: list[dict], settings) -> dict:
             table_cfg["properties"] = props
         tables[key] = table_cfg
 
-    return {
-        "listen_addresses": "0.0.0.0:3000",
-        "postgres": {
-            "connection_string": _pg_sync_dsn(settings),
-            "pool_size": 5,
-            "tables": tables,
-        },
-    }
+    postgres = {"connection_string": _pg_sync_dsn(settings), "pool_size": 5}
+    # OMIT `tables` when there are none. An explicit empty map means "publish nothing", and Martin
+    # then exits with "No tile sources found" instead of idling — which crash-looped the container
+    # on every fresh install until the first layer was uploaded. With no `tables` key it
+    # auto-discovers instead, finds whatever PostGIS itself exposes, and stays up.
+    if tables:
+        postgres["tables"] = tables
+    return {"listen_addresses": "0.0.0.0:3000", "postgres": postgres}
 
 
 def _write_config(config: dict, path: str) -> None:

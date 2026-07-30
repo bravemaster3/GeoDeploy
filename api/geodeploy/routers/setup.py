@@ -9,7 +9,7 @@ from ..models import SetupConfig, User
 from ..schemas import (
     ConfigureDBRequest, ConfigureStorageRequest, CreateAdminRequest, SetupStatus
 )
-from ..services import postgis as postgis_svc, minio as minio_svc
+from ..services import postgis as postgis_svc, minio as minio_svc, martin as martin_svc
 from ..config import get_settings
 
 router = APIRouter(prefix="/setup", tags=["setup"])
@@ -148,6 +148,16 @@ async def configure_db(req: ConfigureDBRequest, request: Request):
                       "postgis_user", "postgis_password"):
             setattr(stored, field, getattr(config, field))
         await db.commit()
+
+    # Martin has been restart-looping since install: it had no reachable database (before the
+    # wizard, .env carries a host but no password). Now that real credentials exist, rewrite its
+    # config and restart it — otherwise it keeps failing until someone uploads the first layer,
+    # which is what made a freshly-installed instance look broken.
+    try:
+        await martin_svc.regenerate_config([])
+    except Exception as exc:      # never fail setup over the tile server
+        import logging
+        logging.getLogger(__name__).warning("could not start Martin after DB setup: %s", exc)
 
     return {"status": "ok", "type": config.postgis_type}
 
