@@ -15,6 +15,13 @@ from . import martin as martin_svc
 from . import titiler as titiler_svc
 
 
+# Baked into a PUBLISHED portal's About page, whose HTML is written at publish time when the public
+# origin isn't known. `portal_generator` passes this as `base`; the page's inline script swaps it for
+# `location.origin` on load. Works for every link shape — including `/vsicurl/<origin>/…` and
+# `pmtiles://<origin>/…`, where the origin sits mid-string and a root-relative URL would be wrong.
+ORIGIN_TOKEN = "__GD_ORIGIN__"
+
+
 def _link(id_, label, url, *, fmt, tools, hint, primary=False, download=False):
     return {"id": id_, "label": label, "url": url, "format": fmt, "tools": tools,
             "hint": hint, "primary": primary, "download": download}

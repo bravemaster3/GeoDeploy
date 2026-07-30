@@ -341,18 +341,21 @@ def _layer_info(layer, kind: str) -> dict:
         except Exception:
             pass
     if info["is_public"]:
+        # SINGLE SOURCE OF TRUTH: the same `services/share_links.py` entries the dashboard's
+        # "Share links" panel renders (which artifact suits which backend, the tool labels, the
+        # per-tool menu-path hints, and which one is Recommended). The About page is plain HTML
+        # and the dashboard is Vue, so the RENDERERS differ — the link data must not. Add a new
+        # artifact in share_links.py and both surfaces get it.
+        from . import share_links
+        base = share_links.ORIGIN_TOKEN      # resolved to location.origin by the About page's script
         if kind == "raster":
-            info["links"] = {
-                "STAC item": f"/api/stac/collections/rasters/items/raster-{layer.id}",
-                "Cloud-Optimized GeoTIFF": f"/api/data/raster/{_ref(layer)}/cog",
-            }
+            try:
+                ds = json.loads(layer.default_style) if layer.default_style else {}
+            except (ValueError, TypeError):
+                ds = {}
+            info["share"] = share_links.raster_links(layer, base, ds)
         else:
-            links = {"STAC item": f"/api/stac/collections/vectors/items/vector-{layer.id}"}
-            if getattr(layer, "storage_backend", "postgis") == "geoparquet" and layer.s3_key:
-                if not layer.s3_key.rstrip("/").endswith(".parquet"):
-                    links["GeoParquet manifest"] = f"/api/data/vector/{_ref(layer)}/parquet/manifest.json"
-                links["Features (GeoJSON)"] = f"/api/data/vector/{_ref(layer)}/features.geojson"
-            info["links"] = links
+            info["share"] = share_links.vector_links(layer, base)
     return info
 
 
@@ -671,11 +674,38 @@ def _md_to_html(md: str) -> str:
     return "".join(out)
 
 
+def _share_block(links: list[dict]) -> str:
+    """The About page's "Use this data" section — the published-portal twin of the dashboard's
+    `ShareLinksModal.vue`. Same data (`services/share_links.py`), same reading order (Recommended
+    first), same per-row anatomy: label · format · tools · URL · copy · hint. Collapsed into a
+    native <details> so a portal with many layers stays readable; no framework, and the only JS is
+    the origin swap + clipboard at the bottom of the page."""
+    rows = []
+    for l in links:
+        head = [f'<span class="s-label">{_esc(l["label"])}</span>']
+        if l.get("primary"):
+            head.append('<span class="s-rec">Recommended</span>')
+        head.append(f'<span class="s-fmt">{_esc(l["format"])}</span>')
+        head += [f'<span class="s-tool">{_esc(t)}</span>' for t in l.get("tools", [])]
+        rows.append(
+            '<div class="s-row">'
+            f'<div class="s-head">{"".join(head)}</div>'
+            '<div class="s-urlrow">'
+            f'<code class="s-url" data-url="{_esc(l["url"])}">{_esc(l["url"])}</code>'
+            '<button class="s-copy" type="button" title="Copy">Copy</button>'
+            "</div>"
+            f'<p class="s-hint">{_esc(l.get("hint") or "")}</p>'
+            "</div>")
+    return ('<details class="share"><summary>Use this data elsewhere '
+            f'<span class="s-count">{len(links)} links</span></summary>'
+            f'<div class="s-body">{"".join(rows)}</div></details>')
+
+
 def _about_page(slug: str, title: str, description: str | None, layers_info: list[dict]) -> str | None:
     """The standalone documentation page (`about.html`) published next to the map — GeoNode-style
     'full page that links to the map', styled after GeoLibre's dark design tokens. Static HTML,
     rendered server-side at publish (no JS needed)."""
-    has_layer_docs = any(i.get("abstract") or i.get("license") or i.get("attribution") or i.get("links")
+    has_layer_docs = any(i.get("abstract") or i.get("license") or i.get("attribution") or i.get("share")
                          or i.get("crs") or i.get("bbox") or i.get("geometry_type")
                          for i in layers_info)
     if not description and not has_layer_docs:
@@ -714,14 +744,13 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
                 pass
         if tech:
             parts.append('<p class="meta tech">' + " · ".join(tech) + "</p>")
-        if i.get("links"):
-            links = "".join(f'<a class="pill" href="{_esc(url)}" target="_blank" rel="noopener">'
-                            f"{_esc(label)} ↗</a>" for label, url in i["links"].items())
-            parts.append(f'<div class="links">{links}</div>')
+        if i.get("share"):
+            parts.append(_share_block(i["share"]))
         parts.append("</div>")
         cards.append("".join(parts))
 
     desc_html = _md_to_html(description) if description else ""
+    from .share_links import ORIGIN_TOKEN as _ORIGIN_TOKEN
     # Design tokens borrowed from GeoLibre's dark theme (shadcn scale) — an intentional,
     # self-contained look independent of the map template. Light/dark via html[data-theme],
     # sharing the SAME localStorage key ('gd-portal-theme') + OS-preference default as the
@@ -836,6 +865,46 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
     border: 1px solid var(--border); transition: border-color .15s;
   }}
   .pill:hover {{ border-color: var(--primary); }}
+  /* "Use this data elsewhere" — mirrors ui/src/components/data/ShareLinksModal.vue so the
+     published portal and the dashboard read the same. Change both together. */
+  .share {{ margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }}
+  .share > summary {{
+    cursor: pointer; font-size: 12.5px; font-weight: 650; color: var(--primary);
+    list-style: none; display: flex; align-items: center; gap: 8px;
+  }}
+  .share > summary::-webkit-details-marker {{ display: none; }}
+  .share > summary::before {{ content: "\1F517"; font-size: 12px; }}
+  .share[open] > summary {{ margin-bottom: 10px; }}
+  .s-count {{ font-size: 11px; font-weight: 500; color: var(--muted); }}
+  .s-row {{
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--card); padding: 10px 12px; margin-bottom: 8px;
+  }}
+  .s-head {{ display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }}
+  .s-label {{ font-size: 13px; font-weight: 650; }}
+  .s-rec {{
+    font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+    color: var(--badge-fg); background: var(--badge-bg); border: 1px solid var(--badge-border);
+    border-radius: 999px; padding: 2px 7px;
+  }}
+  .s-fmt {{
+    font-size: 10.5px; color: var(--muted); background: var(--panel);
+    border-radius: 4px; padding: 1.5px 6px;
+  }}
+  .s-tool {{ font-size: 10.5px; color: var(--muted); }}
+  .s-urlrow {{ display: flex; align-items: center; gap: 8px; margin-top: 7px; }}
+  .s-url {{
+    flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font-size: 11.5px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--panel); border-radius: 5px; padding: 5px 8px; color: var(--doc-fg);
+  }}
+  .s-copy {{
+    flex: none; cursor: pointer; font: inherit; font-size: 11px; font-weight: 600;
+    color: var(--primary); background: var(--card); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 10px;
+  }}
+  .s-copy:hover {{ border-color: var(--primary); }}
+  .s-hint {{ font-size: 11.5px; color: var(--muted); margin-top: 6px; }}
   .foot {{ font-size: 12.5px; color: var(--muted); margin-top: 40px; }}
   .foot a {{ color: var(--primary); text-decoration: none; }}
 </style>
@@ -856,6 +925,38 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
   <p class="foot">All shared data of this server: <a href="/api/stac">STAC catalog</a></p>
 </div>
 <script>
+  // Share links: the URLs are baked with an ORIGIN placeholder (the public host isn't known at
+  // publish time) — swap it for this page's real origin, then wire the copy buttons. Doing it here
+  // rather than server-side is what lets ONE published bundle work behind any hostname.
+  (function () {{
+    var ORIGIN = '{_ORIGIN_TOKEN}';
+    document.querySelectorAll('.s-url').forEach(function (el) {{
+      var url = (el.getAttribute('data-url') || '').split(ORIGIN).join(location.origin);
+      el.setAttribute('data-url', url);
+      el.textContent = url;
+    }});
+    document.querySelectorAll('.s-copy').forEach(function (btn) {{
+      btn.addEventListener('click', function () {{
+        var row = btn.closest('.s-urlrow');
+        var url = row && row.querySelector('.s-url');
+        if (!url) return;
+        var text = url.getAttribute('data-url') || url.textContent;
+        var done = function () {{
+          btn.textContent = 'Copied';
+          setTimeout(function () {{ btn.textContent = 'Copy'; }}, 1500);
+        }};
+        if (navigator.clipboard && window.isSecureContext) {{
+          navigator.clipboard.writeText(text).then(done, done);
+        }} else {{
+          // clipboard API needs HTTPS — fall back so a plain-http instance still copies
+          var ta = document.createElement('textarea');
+          ta.value = text; document.body.appendChild(ta); ta.select();
+          try {{ document.execCommand('copy'); }} catch (e) {{}}
+          ta.remove(); done();
+        }}
+      }});
+    }});
+  }})();
   (function () {{
     var btn = document.getElementById('theme-toggle');
     if (!btn) return;
