@@ -114,8 +114,12 @@ class _Connection:
         return False
 
 
-#: Credentials the setup wizard writes into the SHARED DATA VOLUME. See `runtime_credentials`.
-RUNTIME_DB_FILE = "runtime-db.json"
+#: Credentials published for the worker. Under `temp/` DELIBERATELY: the API container mounts data
+#: SUB-DIRECTORIES (data/sqlite, data/portals, data/temp, ...), not the data root — so a file
+#: written to `{data_dir}/x` lands in the API container's own writable layer and is invisible to
+#: the host and to celery, which mounts the whole `./data`. `data/temp` is mounted by BOTH and is
+#: already the channel for cross-container handoffs (update-status.json, deployed-sha).
+RUNTIME_DB_FILE = "temp/runtime-db.json"
 
 
 def runtime_credentials() -> dict | None:
@@ -148,6 +152,7 @@ def write_runtime_credentials(host, port, dbname, user, password, sslmode="") ->
     import json
     import os
     path = f"{get_settings().data_dir}/{RUNTIME_DB_FILE}"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w") as fh:
         json.dump({"host": host, "port": int(port or 5432), "dbname": dbname,
