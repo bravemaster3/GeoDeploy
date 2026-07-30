@@ -110,8 +110,26 @@ def verify_destination(cfg) -> dict:
         s3.put_object(Bucket=cfg.backup_bucket, Key=probe, Body=b"ok")
         s3.delete_object(Bucket=cfg.backup_bucket, Key=probe)
     except ClientError as exc:
-        raise ValueError(f"Could not write to the destination bucket: "
-                         f"{exc.response.get('Error', {}).get('Message', exc)}") from exc
+        err = exc.response.get("Error", {})
+        code, message = err.get("Code", ""), err.get("Message", str(exc))
+        # "NoSuchBucket" is authoritative and GOOD news: to answer it the provider had to accept
+        # the signature, so the credentials, endpoint and region are all fine — only the bucket
+        # name or its LOCATION is wrong. Say so, and list what this key can actually see, because
+        # "does not exist" alone sends people to re-check credentials that were never the problem.
+        if code in ("NoSuchBucket", "404"):
+            hint = (f"Bucket '{cfg.backup_bucket}' does not exist at {cfg.backup_endpoint or 'AWS S3'}. "
+                    "Your credentials worked, so this is the bucket name or its location — on "
+                    "location-scoped providers (Hetzner, Backblaze) the endpoint must match the "
+                    "region the bucket was created in.")
+            try:
+                names = [b["Name"] for b in (s3.list_buckets().get("Buckets") or [])]
+                hint += (f" Buckets visible here: {', '.join(names)}." if names
+                         else " This key can see no buckets at this endpoint.")
+            except ClientError:
+                pass      # key may lack ListAllMyBuckets — the main hint still stands
+            raise ValueError(hint) from exc
+        raise ValueError(f"Could not write to the destination bucket ({code or 'error'}): "
+                         f"{message}") from exc
     return {"ok": True, "bucket": cfg.backup_bucket, "prefix": cfg.backup_prefix,
             "region": region}      # what we actually signed with, so a blank field is explainable
 

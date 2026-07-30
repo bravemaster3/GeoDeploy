@@ -106,6 +106,13 @@ Do this occasionally — an unverified backup is a guess:
 
 ## Troubleshooting
 
+**"The specified bucket does not exist"** — good news, oddly: to answer `NoSuchBucket` the
+provider had to accept your signature, so the credentials, endpoint and region are all correct.
+Only the bucket **name** or its **location** is wrong. On location-scoped providers (Hetzner,
+Backblaze B2) a bucket lives in one region and is reachable **only** through that region's
+endpoint — a bucket created in `fsn1` returns "does not exist" via `hel1.your-objectstorage.com`.
+The test lists the buckets your key can actually see, which settles name-vs-location immediately.
+
 **"pg_dump failed: server version mismatch"** — the client in the API image is pinned to the
 PostGIS server's major version (16). If you upgrade the PostGIS image, bump
 `postgresql-client-16` in `api/Dockerfile` and `services/postgis.py::IMAGE` together.
