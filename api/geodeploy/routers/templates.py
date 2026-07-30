@@ -57,6 +57,11 @@ def _load_templates() -> list[TemplateOut]:
                     license=meta.get("license", "MIT"),
                     is_official=is_official,
                     archetype=meta.get("archetype"),   # V-11 preset experience (None → webmap)
+                    # Default to web-map-only rather than "everything": a template that never
+                    # declared support has only ever been used as a web map, and silently offering
+                    # it for a story map would apply a treatment nobody designed for that layout.
+                    archetypes=(meta.get("archetypes")
+                                or ([meta["archetype"]] if meta.get("archetype") else ["webmap"])),
                     layout=meta.get("layout"),          # V-11 optional region/panel overrides
                 ))
             except Exception:

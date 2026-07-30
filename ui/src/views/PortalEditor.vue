@@ -92,9 +92,14 @@
 
         <!-- Template section -->
         <section class="p-4 border-b border-border/60">
-          <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Template</h3>
+          <h3 class="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+            Template <span class="normal-case font-normal text-muted-foreground/70">for {{ ARCHETYPE_NOUN[resolvedLayout.archetype] || 'this portal' }}</span>
+          </h3>
+          <p v-if="!templatesForArchetype.length" class="text-[11px] text-muted-foreground/70 mb-2">
+            No template declares support for this experience yet.
+          </p>
           <div class="grid grid-cols-2 gap-2">
-            <button v-for="t in templates" :key="t.id"
+            <button v-for="t in templatesForArchetype" :key="t.id"
               class="p-2 rounded-lg border text-xs font-medium transition-colors text-left"
               :class="selectedTemplate === t.id
                 ? 'border-primary bg-primary/10 text-primary'
@@ -695,12 +700,29 @@ async function uploadStoryImage(i, e) {
   } catch (err) { /* ignore upload error */ }
   e.target.value = ''
 }
+// The choice is NESTED: experience first, then the templates that declare support for it. A template
+// is a designed treatment of a particular layout, so offering all of them for every experience let
+// you put, say, the narrative serif theme on a catalog it was never drawn for.
+const templatesForArchetype = computed(() => {
+  const arch = resolvedLayout.value.archetype
+  return templates.value.filter(t => (t.archetypes || ['webmap']).includes(arch))
+})
+const ARCHETYPE_NOUN = { webmap: 'a web map', storymap: 'a story map', catalog: 'a catalog' }
+
 function onSelectTemplate(t) {
   selectedTemplate.value = t.id
-  // Template = curated preset: seed the archetype/layout when the template declares one (theme stays
-  // swappable). Templates without an archetype leave the current experience untouched.
-  if (t.archetype) layoutConfig.value = Object.assign({ archetype: t.archetype }, t.layout || {})
+  // Only the LAYOUT details are seeded now — the experience is already chosen above, and re-seeding
+  // `archetype` from the template would let picking a theme silently change the layout you selected.
+  if (t.layout) layoutConfig.value = Object.assign({}, layoutConfig.value || {}, t.layout)
 }
+
+// Changing the experience can strand the current template. Fall back to the first that supports the
+// new one rather than leaving a template applied to a layout it does not support.
+watch(() => resolvedLayout.value.archetype, () => {
+  if (!ready.value) return
+  const ok = templatesForArchetype.value
+  if (ok.length && !ok.some(t => t.id === selectedTemplate.value)) selectedTemplate.value = ok[0].id
+})
 
 const allGroups = computed(() => {
   const out = []

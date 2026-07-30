@@ -65,9 +65,13 @@
           <!-- "Opens as", not a bare archetype name: the experience is a STARTING POINT the template
                presets, and it is freely changeable in the editor afterwards. The bare label read as a
                restriction ("this template is only a story map"), which is not true of any of them. -->
-          <span v-if="archetypeOf(t) !== 'webmap'"
-            class="absolute bottom-1.5 right-1.5 text-[9px] px-1.5 py-0.5 rounded bg-black/55 text-white/90">
-            Opens as {{ ARCHETYPE_LABEL[archetypeOf(t)] }}
+          <!-- What this template may be used FOR. It is a restriction, not a hint: the editor asks for
+               the experience first and then offers only the templates that list it. -->
+          <span class="absolute bottom-1.5 right-1.5 flex gap-1">
+            <span v-for="a in (t.archetypes || ['webmap'])" :key="a"
+              class="text-[9px] px-1.5 py-0.5 rounded bg-black/55 text-white/90">
+              {{ ARCHETYPE_SHORT[a] || a }}
+            </span>
           </span>
         </div>
         <div class="p-4 space-y-2">
@@ -105,6 +109,7 @@ function mix(t, amount = 0.35) {
 // experience the portal will not actually render is worse than no label.
 const ARCH_ALIAS = { 'webmap+catalog': 'webmap' }
 const ARCHETYPE_LABEL = { webmap: 'a web map', storymap: 'a story map', catalog: 'a catalog' }
+const ARCHETYPE_SHORT = { webmap: 'Web map', storymap: 'Story map', catalog: 'Catalog' }
 const archetypeOf = (t) => {
   const a = t.archetype || 'webmap'
   return ARCH_ALIAS[a] || (ARCHETYPE_LABEL[a] ? a : 'webmap')

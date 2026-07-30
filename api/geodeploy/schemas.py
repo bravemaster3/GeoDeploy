@@ -613,8 +613,13 @@ class TemplateOut(BaseModel):
     version: str
     license: str
     is_official: bool
-    # V-11: the experience archetype this template presets (webmap | webmap+catalog | catalog |
-    # storymap). Selecting the template seeds the portal's layout_config.archetype. None → webmap.
+    # Which EXPERIENCES this template may be used for. The editor picks the experience FIRST and then
+    # offers only the templates whose list contains it, so a template designed for one layout cannot
+    # be applied to another it was never built for. A template that omits it is treated as web-map
+    # only, which is what every template predating this field actually is.
+    archetypes: list[str] = ["webmap"]
+    # The archetype this template DEFAULTS to when chosen (always one of `archetypes` above).
+    # Selecting the template seeds the portal's layout_config.archetype. None → webmap.
     archetype: str | None = None
     # V-11: optional layout region/panel overrides shipped with the preset (merged onto the archetype).
     layout: dict[str, Any] | None = None
