@@ -136,6 +136,27 @@ class DeploymentRun(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
+class RestoreRun(Base):
+    """One restore attempt.
+
+    Separate from BackupRun on purpose: a restore is a different, destructive act and its history
+    should not be mixed in with routine backups. `confirmed_by` records WHO typed the confirmation,
+    because this is the one operation that can destroy an instance.
+    """
+    __tablename__ = "restore_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(16), default="running")  # running|success|error
+    confirmed_by: Mapped[str | None] = mapped_column(String(256))
+    started_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    current_step: Mapped[str | None] = mapped_column(String(128))
+    progress: Mapped[int] = mapped_column(Integer, default=0)
+    detail: Mapped[str | None] = mapped_column(Text)      # JSON: what each part restored
+
+
 class User(Base):
     __tablename__ = "users"
 

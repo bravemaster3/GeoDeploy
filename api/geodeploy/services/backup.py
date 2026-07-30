@@ -9,19 +9,19 @@ Design rules, in order of importance:
 2. **Server-side copy for objects.** Rasters and GeoParquet are the bulk of an instance and can be
    hundreds of GB. When source and destination are the same S3 provider we `copy_object`, so the
    bytes never travel through this container. Cross-provider falls back to streaming.
-3. **A consistent state snapshot.** The SQLite state DB is being written while the backup runs, so
-   it is copied with SQLite's own online-backup API (via `VACUUM INTO`), never a file copy — a
-   half-written page set restores as a corrupt database.
+3. **One dump, one instant.** Since state moved into PostgreSQL (2026-07-30) `pg_dump` captures
+   the catalog, users, portals AND the spatial data in a single consistent snapshot. The old split
+   — a SQLite file copy plus a separate PostGIS dump — could not be atomic: a layer created between
+   the two ended up in one and not the other.
 4. **Every run is recorded**, success or failure, with a `manifest.json` inventory. A backup you
    cannot inspect is a backup you do not have.
 
-What is included: PostGIS (`pg_dump`, custom format), object storage (everything under the bucket),
-the state DB, and `portal_assets` (About-page uploads — NOT regenerable, unlike portal bundles,
-which a re-publish recreates from the DB).
+What is included: the database (`pg_dump -Fc` — state and spatial together), object storage
+(everything under the bucket), and `portal_assets` (About-page uploads — NOT regenerable, unlike
+portal bundles, which a re-publish recreates from the DB).
 
-RESTORE IS DELIBERATELY NOT ONE-CLICK — see `docs/backups.md`. Restoring over a live instance is
-how people lose the data they were trying to protect; the manifest + documented procedure is the
-supported path.
+RESTORE lives in `services/restore.py`. It is destructive by nature, so it is owner-gated and
+guarded rather than sitting next to "Back up now" — see that module and `docs/backups.md`.
 """
 import io
 import json
@@ -157,20 +157,6 @@ def dump_postgis(dest_path: str) -> dict:
     proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=6 * 3600)
     if proc.returncode != 0:
         raise RuntimeError(f"pg_dump failed: {(proc.stderr or '').strip()[:500]}")
-    return {"bytes": os.path.getsize(dest_path)}
-
-
-def snapshot_state_db(dest_path: str) -> dict:
-    """A CONSISTENT copy of the state DB. `VACUUM INTO` takes SQLite's own read lock and writes a
-    complete, compacted database — a plain file copy of a live DB (especially in WAL mode, where
-    recent commits sit in the -wal sidecar) can restore corrupt or missing the newest rows."""
-    import sqlite3
-    settings = get_settings()
-    src = f"{settings.data_dir}/sqlite/geodeploy.db"
-    if os.path.exists(dest_path):
-        os.unlink(dest_path)            # VACUUM INTO refuses to overwrite
-    with sqlite3.connect(src, timeout=60) as conn:
-        conn.execute("VACUUM INTO ?", (dest_path,))
     return {"bytes": os.path.getsize(dest_path)}
 
 

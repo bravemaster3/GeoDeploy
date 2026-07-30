@@ -50,6 +50,12 @@ def _load_cfg():
     return cfg
 
 
+def _secret_fingerprint() -> str | None:
+    import hashlib
+    secret = get_settings().secret_key
+    return hashlib.sha256(secret.encode()).hexdigest()[:16] if secret else None
+
+
 def _step(run_id: int, step: str, progress: int) -> None:
     try:
         with _db() as conn:
@@ -88,6 +94,10 @@ def run_backup(run_id: int, trigger: str = "manual"):
         "created_at": datetime.now(timezone.utc).isoformat(),
         "trigger": trigger,
         "source": {"bucket": settings.storage_bucket, "endpoint": settings.storage_endpoint},
+        # Non-reversible marker of GEODEPLOY_SECRET_KEY. It lets a RESTORE warn that the encrypted
+        # settings (SMTP/OIDC/backup credentials) will be unreadable on an install with a different
+        # key — without the backup ever carrying the key itself.
+        "secret_key_fingerprint": _secret_fingerprint(),
         "parts": {},
     }
     total_bytes = 0
@@ -105,14 +115,9 @@ def run_backup(run_id: int, trigger: str = "manual"):
                 os.unlink(path)      # free the disk before the next part
 
             if cfg.backup_include_state:
-                _step(run_id, "Snapshotting the state database", 30)
-                path = os.path.join(tmp, "state.db")
-                info = bk.snapshot_state_db(path)
-                bk.upload_file(dest, cfg.backup_bucket, f"{key_prefix}/state.db", path)
-                manifest["parts"]["state"] = info
-                total_bytes += info["bytes"]
-                os.unlink(path)
-
+                # No separate state snapshot any more: state lives in the same PostgreSQL database,
+                # so the pg_dump above already contains it. Only portal_assets remain — uploaded
+                # About-page images, which exist on disk and nowhere else.
                 _step(run_id, "Archiving portal assets", 40)
                 path = os.path.join(tmp, "portal_assets.tar.gz")
                 info = bk.archive_dir(f"{settings.data_dir}/portal_assets", path)

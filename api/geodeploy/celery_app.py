@@ -13,7 +13,8 @@ celery_app = Celery(
              "geodeploy.tasks.export", "geodeploy.tasks.csv_import",
              "geodeploy.tasks.geoparquet_import", "geodeploy.tasks.pmtiles_tile",
              "geodeploy.tasks.geoparquet_prep", "geodeploy.tasks.convert_upload",
-             "geodeploy.tasks.geolibre_publish", "geodeploy.tasks.backup"],
+             "geodeploy.tasks.geolibre_publish", "geodeploy.tasks.backup",
+             "geodeploy.tasks.restore"],
 )
 
 celery_app.conf.update(
@@ -34,6 +35,7 @@ celery_app.conf.update(
         # `ingest` queue with concurrency 2 it would occupy half the ingest capacity the whole
         # time. docker-compose runs the worker with -Q ingest,backup.
         "geodeploy.tasks.backup.*": {"queue": "backup"},
+        "geodeploy.tasks.restore.*": {"queue": "backup"},
     },
     # Scheduled backups. The tick is cheap and does nothing unless a schedule is configured; the
     # SCHEDULE ITSELF lives in the DB and is read per tick, so changing it in Settings takes effect
