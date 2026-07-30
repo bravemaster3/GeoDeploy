@@ -32,6 +32,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Turns Pages on for the repository if it is not already, and reports the site URL. Without
+      # this (or the manual Settings -> Pages -> Source: GitHub Actions toggle) the BUILD succeeds and
+      # the DEPLOY fails with a bare 404, because there is no Pages site to deploy into.
+      # Only meaningful on a real push — a fork or a PR from one cannot enable Pages.
+      - uses: actions/configure-pages@v5
+        if: github.event_name != 'pull_request'
+        with:
+          enablement: true
+        continue-on-error: true
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
