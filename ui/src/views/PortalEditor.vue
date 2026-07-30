@@ -849,7 +849,40 @@ const aboutEditor = useEditor({
   ],
   content: '',
   onUpdate: ({ editor }) => { description.value = editor.storage.markdown.getMarkdown() },
+  editorProps: {
+    // Paste or drag an image straight in — screenshots and images copied from another page are how
+    // people actually add pictures, and "browse for a file" makes them save to disk first.
+    handlePaste: (view, event) => consumeImages(Array.from(event.clipboardData?.items || [])
+      .filter(i => i.kind === 'file' && i.type.startsWith('image/')).map(i => i.getAsFile()), event),
+    handleDrop: (view, event) => consumeImages(
+      Array.from(event.dataTransfer?.files || []).filter(f => f.type.startsWith('image/')), event),
+  },
 })
+
+// Shared by paste and drop. Returns true only when images were actually taken, so ProseMirror still
+// handles ordinary text/HTML pastes normally — swallowing those would break copying formatted text in.
+function consumeImages(files, event) {
+  const imgs = (files || []).filter(Boolean)
+  if (!imgs.length || !portal.value) return false
+  event.preventDefault()
+  uploadAboutImages(imgs)
+  return true
+}
+
+async function uploadAboutImages(files) {
+  uploadingImage.value = true
+  try {
+    // Sequential, not Promise.all: each upload inserts at the cursor, and parallel completions would
+    // land in whatever order they finished rather than the order they were pasted.
+    for (const file of files) {
+      const { data } = await uploadPortalAsset(portal.value.id, file)
+      const alt = (file.name || 'image').replace(/\.\w+$/, '')
+      aboutEditor.value.chain().focus().setImage({ src: data.url, alt }).run()
+    }
+  } catch (err) {
+    saveMsg.value = { type: 'err', text: err.response?.data?.detail || 'Image upload failed' }
+  } finally { uploadingImage.value = false }
+}
 
 // Image embedding: pick a file → upload to the portal's asset store → insert the public URL.
 const aboutImageInput = ref(null)
@@ -858,13 +891,7 @@ async function insertAboutImage(e) {
   const file = e.target.files && e.target.files[0]
   e.target.value = ''
   if (!file || !portal.value) return
-  uploadingImage.value = true
-  try {
-    const { data } = await uploadPortalAsset(portal.value.id, file)
-    aboutEditor.value.chain().focus().setImage({ src: data.url, alt: file.name.replace(/\.\w+$/, '') }).run()
-  } catch (err) {
-    saveMsg.value = { type: 'err', text: err.response?.data?.detail || 'Image upload failed' }
-  } finally { uploadingImage.value = false }
+  await uploadAboutImages([file])
 }
 
 // Load the saved markdown whenever the modal opens (the portal may load after editor setup).

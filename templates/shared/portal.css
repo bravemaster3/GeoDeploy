@@ -631,15 +631,50 @@
     }
 
     /* ── Mobile ──────────────────────────────────────────── */
+    /* ── Phone: the map is the page ────────────────────────────────────────────────────────
+       The layer list becomes an overlay DRAWER instead of stealing width from the map, and portal.js
+       force-collapses it on load (see initialCollapsed) so a visitor lands on the map, not on a list.
+       It slides rather than resizing the map, so MapLibre never re-measures on open/close. */
     @media (max-width: 640px) {
+      :root { --sidebar-w: 85vw; --header-h: 46px; }
       #sidebar {
         position: absolute; top: 0; left: 0; bottom: 0; z-index: 50;
+        width: var(--sidebar-w); max-width: 320px;
         box-shadow: var(--shadow-lg);
         transform: translateX(0);
       }
       #sidebar.collapsed { transform: translateX(-100%); width: var(--sidebar-w); }
-      :root { --sidebar-w: 85vw; }
+      /* The drawer opens from whichever side the author chose, so it never covers the control
+         cluster on the opposite edge. */
+      body[data-layerlist-side="right"] #sidebar { left: auto; right: 0; }
+      body[data-layerlist-side="right"] #sidebar.collapsed { transform: translateX(100%); }
+      /* A floating list has no room to float on a phone — it becomes the same drawer. */
+      body[data-layerlist="floating"] #sidebar {
+        top: 0; bottom: 0; left: 0; max-height: none; border-radius: 0; border: none;
+      }
+      body[data-layerlist="floating"][data-layerlist-side="right"] #sidebar { left: auto; right: 0; }
+      body[data-layerlist="floating"] #sidebar.collapsed { display: flex; }  /* slide, don't vanish */
       #header-badge { display: none; }
+      #portal-title { font-size: 14px; }
+
+      /* Controls must stay reachable: shrink the gutter and cap flyouts to the viewport so a
+         basemap/tools menu can't run off-screen. */
+      .maplibregl-ctrl-top-right, .maplibregl-ctrl-top-left { top: 6px; }
+      .maplibregl-ctrl-top-right { right: 6px; }
+      .maplibregl-ctrl-top-left { left: 6px; }
+      .maplibregl-ctrl-bottom-right { right: 6px; bottom: 6px; }
+      .maplibregl-ctrl-bottom-left { left: 6px; bottom: 6px; }
+      .gd-basemap-menu, .gd-tools-menu, .gd-sym-pop {
+        max-width: calc(100vw - 24px); max-height: 60vh; overflow-y: auto;
+      }
+
+      /* Storymap: the narrative can't share width with the map, so it takes the full column and the
+         map reads through the fade behind it. */
+      #story-panel { width: 100%; padding: 30vh 14px 50vh; }
+      .story-section { max-width: none; margin-bottom: 40vh; padding: 16px 16px; }
+
+      /* Attribute table: a 42% slice of a phone screen shows about one row. */
+      #attr-panel { height: 55%; max-height: none; }
     }
 
     /* ── Access gate ─────────────────────────────────────── */

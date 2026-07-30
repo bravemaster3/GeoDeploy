@@ -212,7 +212,13 @@
   // ── Sidebar toggle ──────────────────────────────────────
   const sidebar = document.getElementById('sidebar');
   // V-11: honour the manifest's start-collapsed region option.
-  if (LAYOUT.regions.layerList.collapsed) sidebar.classList.add('collapsed');
+  // On a PHONE the list is an overlay drawer, so an expanded one covers the whole map — the visitor
+  // would land on a list of names with no map behind it. Start collapsed there whatever the author
+  // chose: the choice is about how a portal opens on a desktop, and the on-map toggle is one tap
+  // away. Deliberately evaluated once at load, not on resize, so it never yanks a panel shut while
+  // someone is using it (a phone rotating, or a desktop window being dragged narrow).
+  const isPhone = window.matchMedia && window.matchMedia('(max-width: 640px)').matches;
+  if (LAYOUT.regions.layerList.collapsed || isPhone) sidebar.classList.add('collapsed');
   document.getElementById('sidebar-toggle').addEventListener('click', () => {
     sidebar.classList.toggle('collapsed');
     setTimeout(() => map.resize(), 220);

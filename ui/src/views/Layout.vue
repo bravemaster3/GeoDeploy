@@ -1,9 +1,16 @@
 <template>
   <div class="flex h-screen overflow-hidden bg-background">
     <!-- Sidebar -->
+    <!-- Tapping outside closes the drawer. Only rendered while it is actually overlaying, so it
+         never intercepts clicks on desktop. -->
+    <div v-if="isNarrow && !collapsed" @click="collapsed = true"
+      class="fixed inset-0 z-40 bg-black/50" aria-hidden="true"></div>
     <aside
       class="flex-shrink-0 bg-card border-r border-border flex flex-col transition-[width] duration-200 ease-out"
-      :class="collapsed ? 'w-[60px]' : 'w-56'"
+      :class="[
+        collapsed ? 'w-[60px]' : 'w-56',
+        isNarrow && !collapsed ? 'fixed inset-y-0 left-0 z-50 shadow-2xl' : '',
+      ]"
     >
       <!-- Brand + collapse toggle -->
       <div class="h-[57px] border-b border-border flex items-center"
@@ -65,7 +72,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, RouterLink, RouterView } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { DatabaseIcon, GlobeIcon, LayoutIcon, SettingsIcon, UsersIcon, ActivityIcon } from './icons'
@@ -90,13 +97,35 @@ const isEditor = computed(() => /^\/portals\/[^/]+\/edit/.test(route.path))
 const collapsed = ref(isEditor.value || userPref.value)
 
 watch(isEditor, (nowEditor) => {
-  // Entering the editor forces collapse; leaving restores the saved preference.
-  collapsed.value = nowEditor ? true : userPref.value
+  // Entering the editor forces collapse; leaving restores the saved preference — unless we are on a
+  // phone, where collapsed is the only workable state.
+  collapsed.value = nowEditor ? true : (isNarrow.value ? true : userPref.value)
 })
+
+// A phone cannot spare a permanent nav column: below this the sidebar force-collapses to its icon
+// rail, and expanding it OVERLAYS the content rather than squeezing it into what is left. Tracked
+// with a listener rather than read once, so rotating the device re-applies it.
+const isNarrow = ref(false)
+let _mq = null
+function _applyNarrow() {
+  isNarrow.value = _mq.matches
+  if (_mq.matches) collapsed.value = true
+}
+onMounted(() => {
+  _mq = window.matchMedia('(max-width: 767px)')
+  _applyNarrow()
+  _mq.addEventListener('change', _applyNarrow)
+})
+onUnmounted(() => { if (_mq) _mq.removeEventListener('change', _applyNarrow) })
+
+// Close the drawer on navigation — on a phone the nav is a modal step, and leaving it open over the
+// page the visitor just chose is the classic mobile-drawer bug.
+watch(() => route.path, () => { if (isNarrow.value) collapsed.value = true })
 
 function toggle() {
   collapsed.value = !collapsed.value
-  if (!isEditor.value) {
+  // Neither the editor's forced collapse nor a phone's should overwrite the desktop preference.
+  if (!isEditor.value && !isNarrow.value) {
     userPref.value = collapsed.value
     localStorage.setItem(STORAGE_KEY, collapsed.value ? '1' : '0')
   }
