@@ -28,6 +28,9 @@
           <span class="w-2 h-2 rounded-full flex-shrink-0" :class="dot(s.status)" :title="s.status"></span>
           <span class="truncate">{{ s.name }}</span>
         </button>
+        <p v-if="!services.length" class="px-4 py-3 text-xs text-muted-foreground/70">
+          No services reported. <button @click="refreshAll" class="text-primary hover:underline">Retry</button>
+        </p>
       </nav>
 
       <!-- ── Detail ───────────────────────────────────────────────────────────────────── -->
@@ -188,7 +191,10 @@ const deployments = ref([])
 const martinBusy = ref(false)
 const martinMsg = ref(null)
 
-const services = computed(() => systemStore.health?.services || [])
+// systemStore.health IS the array of ServiceHealth (not an object wrapping one) — reading
+// `.services` yielded undefined, so the rail rendered empty and the service could not be
+// changed at all.
+const services = computed(() => systemStore.health || [])
 const current = computed(() => services.value.find(s => s.name === active.value))
 const termAllowed = computed(() => TERMINAL_ALLOWED.includes(active.value))
 

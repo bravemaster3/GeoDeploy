@@ -543,16 +543,19 @@ const martinMsg = ref(null)
 const busySvc = ref(null)
 
 // ── Tabs — group Settings so it doesn't sprawl. Admin-only tabs are filtered out for editors/viewers.
+// Order = how often an operator reaches for them: infrastructure first, personal settings last.
 const TABS = [
-  { id: 'account', label: 'Account' },
-  { id: 'api', label: 'API tokens' },
   { id: 'infra', label: 'Infrastructure', admin: true },
   { id: 'backups', label: 'Backups', admin: true },
   { id: 'email', label: 'Email', admin: true },
   { id: 'auth', label: 'Authentication', admin: true },
+  { id: 'api', label: 'API tokens' },
+  { id: 'account', label: 'Account' },
 ]
 const tabs = computed(() => TABS.filter(t => !t.admin || auth.isAdmin))
-const activeTab = ref('account')
+// Land on the first tab this user can actually see: admins open on Infrastructure,
+// editors/viewers (for whom the admin tabs are filtered out) on API tokens.
+const activeTab = ref(tabs.value[0]?.id || 'account')
 
 // -- Backups -------------------------------------------------------------------------------
 // The destination secret is write-only: `secret_set` tells us one is stored, and we send
