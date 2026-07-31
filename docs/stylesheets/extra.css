@@ -3,26 +3,24 @@
    a landing hero, and cards that read as a product page rather than a wiki. */
 
 :root {
-  /* Matches the dashboard's --primary and the accent published portals default to, so the docs, the
-     app and the thing it produces are one colour rather than three. */
-  --gd-blue: #2563eb;
-  --gd-blue-dim: #1d4ed8;
+  --gd-green: #16a34a;
+  --gd-green-dim: #15803d;
   --gd-ink: #0b1220;
 }
 
 /* Material's primary is a fixed palette name, so the exact brand colour is set here. */
-[data-md-color-primary="blue"] {
-  --md-primary-fg-color: var(--gd-blue);
-  --md-primary-fg-color--dark: var(--gd-blue-dim);
-  --md-accent-fg-color: var(--gd-blue);
+[data-md-color-primary="green"] {
+  --md-primary-fg-color: var(--gd-green);
+  --md-primary-fg-color--dark: var(--gd-green-dim);
+  --md-accent-fg-color: var(--gd-green);
 }
 [data-md-color-scheme="slate"] {
   --md-default-bg-color: hsl(222 44% 9%);
   --md-code-bg-color: hsl(220 40% 13%);
-  --md-typeset-a-color: #60a5fa;
+  --md-typeset-a-color: #4ade80;
 }
 [data-md-color-scheme="default"] {
-  --md-typeset-a-color: var(--gd-blue-dim);
+  --md-typeset-a-color: var(--gd-green-dim);
 }
 
 /* ── Landing hero ──────────────────────────────────────────────────────────
@@ -33,8 +31,8 @@
   text-align: center;
   border-radius: 0 0 1.5rem 1.5rem;
   background:
-    radial-gradient(ellipse 80% 60% at 50% -10%, rgba(37,99,235,.22), transparent 70%),
-    linear-gradient(180deg, rgba(37,99,235,.10), transparent 65%);
+    radial-gradient(ellipse 80% 60% at 50% -10%, rgba(22,163,74,.22), transparent 70%),
+    linear-gradient(180deg, rgba(22,163,74,.10), transparent 65%);
 }
 .gd-hero h1 {
   font-size: 2.9rem;
@@ -56,7 +54,7 @@
   font-weight: 600;
 }
 .gd-hero .md-button--primary {
-  box-shadow: 0 6px 20px rgba(37,99,235,.28);
+  box-shadow: 0 6px 20px rgba(22,163,74,.28);
   border-color: transparent;
 }
 
@@ -80,7 +78,7 @@
   transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
 }
 .md-typeset .grid.cards > ul > li:hover {
-  border-color: var(--gd-blue);
+  border-color: var(--gd-green);
   box-shadow: 0 6px 22px rgba(0,0,0,.10);
   transform: translateY(-2px);
 }
@@ -89,7 +87,7 @@
 }
 .md-typeset .grid.cards .twemoji,
 .md-typeset .grid.cards .md-typeset .twemoji {
-  color: var(--gd-blue);
+  color: var(--gd-green);
 }
 
 /* ── Reading comfort ───────────────────────────────────────────────────────*/
@@ -164,8 +162,8 @@
 }
 [data-md-color-scheme="slate"] .gd-hero {
   background:
-    radial-gradient(ellipse 80% 60% at 50% -10%, rgba(37, 99, 235, .28), transparent 70%),
-    linear-gradient(180deg, rgba(37, 99, 235, .12), transparent 65%);
+    radial-gradient(ellipse 80% 60% at 50% -10%, rgba(22, 163, 74, .28), transparent 70%),
+    linear-gradient(180deg, rgba(22, 163, 74, .12), transparent 65%);
 }
 
 /* ── Roadmap legend ────────────────────────────────────────────────────────*/
@@ -176,7 +174,7 @@
   font-size: .74rem;
   line-height: 1.9;
 }
-.gd-legend .gd-ok   { color: #22c55e; }   /* SEMANTIC success, not branding — and blue here would collide with .gd-plan */
+.gd-legend .gd-ok   { color: #22c55e; }
 .gd-legend .gd-wip  { color: #f59e0b; }
 .gd-legend .gd-plan { color: #38bdf8; }
 .gd-legend .gd-idea { color: var(--md-default-fg-color--light); }

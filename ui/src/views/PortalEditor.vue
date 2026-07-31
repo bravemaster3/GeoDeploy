@@ -1045,7 +1045,7 @@ const toolbarButtons = [
 
 const accessOptions = [
   { value: 'public',       label: 'Public',       icon: GlobeIcon, color: 'text-emerald-400', desc: 'Anyone with the URL can view' },
-  { value: 'password',     label: 'Password',     icon: KeyIcon,   color: 'text-cyan-400',  desc: 'Require a password to view' },
+  { value: 'password',     label: 'Password',     icon: KeyIcon,   color: 'text-violet-400',  desc: 'Require a password to view' },
   { value: 'organization', label: 'Organization', icon: UsersIcon, color: 'text-sky-400',     desc: 'Only signed-in members of your workspace can view' },
   { value: 'owner',        label: 'Private',      icon: UserIcon,  color: 'text-amber-400',   desc: 'Only you (the creator) and workspace admins can view' },
 ]

@@ -220,7 +220,7 @@ const popupStats = computed(() => {
 function roleBadge(role) {
   return {
     owner: 'bg-amber-500/15 text-amber-400',
-    admin: 'bg-cyan-500/15 text-cyan-400',
+    admin: 'bg-violet-500/15 text-violet-400',
     editor: 'bg-blue-500/15 text-blue-400',
     viewer: 'bg-muted text-muted-foreground',
   }[role] || 'bg-muted text-muted-foreground'
@@ -277,7 +277,7 @@ function badge(action) {
   if (action.includes('publish')) return 'bg-emerald-500/15 text-emerald-400'
   if (action.startsWith('auth')) return 'bg-sky-500/15 text-sky-400'
   if (action.includes('role') || action.includes('ownership') || action.includes('invite'))
-    return 'bg-cyan-500/15 text-cyan-400'
+    return 'bg-violet-500/15 text-violet-400'
   return 'bg-muted text-muted-foreground'
 }
 

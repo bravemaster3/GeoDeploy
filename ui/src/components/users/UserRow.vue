@@ -111,7 +111,7 @@ const countLabel = computed(() => {
 
 const roleBadge = computed(() => ({
   owner: 'bg-amber-500/15 text-amber-400',
-  admin: 'bg-cyan-500/15 text-cyan-400',
+  admin: 'bg-violet-500/15 text-violet-400',
   editor: 'bg-blue-500/15 text-blue-400',
   viewer: 'bg-muted text-muted-foreground',
 }[props.user.role] || 'bg-muted text-muted-foreground'))

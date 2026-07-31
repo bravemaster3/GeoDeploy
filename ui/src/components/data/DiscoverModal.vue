@@ -61,7 +61,7 @@
             </div>
             <span class="text-[10px] uppercase px-1.5 py-0.5 rounded-full flex-shrink-0"
               :class="f.kind === 'csv' ? 'bg-emerald-500/15 text-emerald-400'
-                : f.kind === 'geoparquet' ? 'bg-cyan-500/15 text-cyan-400'
+                : f.kind === 'geoparquet' ? 'bg-violet-500/15 text-violet-400'
                 : 'bg-amber-500/15 text-amber-400'">{{ f.kind }}</span>
             <span class="text-muted-foreground/70 flex-shrink-0">{{ fmtSize(f.size) }}</span>
             <span v-if="f.already_imported" class="text-[10px] text-muted-foreground/70 flex-shrink-0">imported</span>

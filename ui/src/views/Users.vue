@@ -15,7 +15,7 @@
       <!-- Members -->
       <section class="card overflow-hidden">
         <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
-          <div class="w-9 h-9 rounded-lg bg-cyan-500/15 text-cyan-400 flex items-center justify-center flex-shrink-0">
+          <div class="w-9 h-9 rounded-lg bg-violet-500/15 text-violet-400 flex items-center justify-center flex-shrink-0">
             <UsersIcon class="w-4 h-4" />
           </div>
           <div>

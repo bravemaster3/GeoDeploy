@@ -16,7 +16,7 @@
       </div>
       <div class="gd-row-meta text-xs text-muted-foreground flex gap-3 mt-0.5 items-center">
         <span v-if="layer.storage_backend === 'geoparquet'"
-          class="px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-400 font-medium text-[10px] uppercase tracking-wide">GeoParquet</span>
+          class="px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 font-medium text-[10px] uppercase tracking-wide">GeoParquet</span>
         <!-- GeoParquet layers display via deck.gl over the prepared file — PMTiles tiling is OPT-IN
              (POST /{id}/tile), so only show this badge for an ACTUAL tiling attempt. tile_status
              'none'/null means "not tiled" (the normal deck.gl case), NOT "tiling in progress". -->
@@ -43,7 +43,7 @@
          "Ready" badge lines up at the same right-hand position regardless of storage backend. -->
     <button v-if="auth.canEdit && layer.storage_backend === 'geoparquet' && layer.status === 'ready'"
       @click="onTile" :disabled="tiling || layer.tile_status === 'tiling'"
-      class="p-1.5 rounded transition-all text-muted-foreground/70 hover:text-cyan-400 disabled:opacity-40"
+      class="p-1.5 rounded transition-all text-muted-foreground/70 hover:text-violet-400 disabled:opacity-40"
       :class="layer.tile_status === 'tiling' ? '' : 'opacity-0 group-hover:opacity-100'"
       :title="layer.tile_status === 'ready' ? 'Re-tile for fast display (regenerate PMTiles)' : 'Tile for fast seamless display (PMTiles)'"
     >

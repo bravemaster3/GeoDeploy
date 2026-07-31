@@ -92,7 +92,7 @@ const summary = computed(() => {
 // Published access tier → badge. 'private' is the legacy value for organization (members-only).
 const ACCESS = {
   public: { label: 'Public', icon: GlobeIcon, class: 'bg-emerald-500/15 text-emerald-400' },
-  password: { label: 'Password', icon: KeyIcon, class: 'bg-cyan-500/15 text-cyan-400' },
+  password: { label: 'Password', icon: KeyIcon, class: 'bg-violet-500/15 text-violet-400' },
   organization: { label: 'Organization', icon: UsersIcon, class: 'bg-sky-500/15 text-sky-400' },
   private: { label: 'Organization', icon: UsersIcon, class: 'bg-sky-500/15 text-sky-400' },
   owner: { label: 'Private', icon: UserIcon, class: 'bg-amber-500/15 text-amber-400' },

@@ -19,14 +19,13 @@ export default {
         'primary-foreground': 'hsl(var(--primary-foreground) / <alpha-value>)',
         // Legacy palette (pre-token pages/chips still reference it; new code uses `primary`)
         brand: {
-          50: '#eff6ff',
-          100: '#dbeafe',
-          300: '#93c5fd',
-          400: '#60a5fa',
-          500: '#3b82f6',
-          600: '#2563eb',
-          700: '#1d4ed8',
-          900: '#1e3a8a',
+          50: '#f0fdf4',
+          100: '#dcfce7',
+          400: '#4ade80',
+          500: '#22c55e',
+          600: '#16a34a',
+          700: '#15803d',
+          900: '#14532d',
         },
       },
       fontFamily: {
