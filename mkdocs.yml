@@ -1,6 +1,6 @@
 site_name: GeoDeploy
 site_description: Self-hosted spatial data platform and geoportal builder — upload data, style it, publish a portal.
-site_url: https://bravemaster3.github.io/GeoDeploy/
+site_url: https://docs-geodeploy.kndev.org/
 repo_name: bravemaster3/GeoDeploy
 repo_url: https://github.com/bravemaster3/GeoDeploy
 edit_uri: edit/main/docs/
@@ -22,16 +22,17 @@ theme:
   # DARK FIRST. The product is a dark dashboard and the screenshots are dark, so a light docs page
   # around a dark screenshot looks like a mistake. The light scheme stays available via the toggle,
   # and `media` still honours a reader who has explicitly asked their OS for light.
+  # NO `media:` here on purpose. With a media query Material follows the READER'S OS preference, so a
+  # visitor on a light desktop got the light site no matter what we intended. Listing slate FIRST with
+  # no media makes dark the actual default; the toggle still switches, and the choice is remembered.
   palette:
-    - media: "(prefers-color-scheme)"
-      scheme: slate
+    - scheme: slate
       primary: green
       accent: teal
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
-    - media: "(prefers-color-scheme: light)"
-      scheme: default
+    - scheme: default
       primary: green
       accent: teal
       toggle:

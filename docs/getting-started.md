@@ -1,10 +1,22 @@
 # Getting Started
 
-## Requirements
+## What you need
 
-- A Linux VPS (Hetzner CX31 or equivalent: 2 vCPU, 8GB RAM, 80GB SSD)
-- Docker and Docker Compose installed
-- A domain name (optional, but recommended)
+| | |
+| --- | --- |
+| **RAM** | **4 GB recommended.** A running instance is comfortable there, including tiling. Less may well work — it simply has not been measured yet. |
+| **CPU** | 2 cores recommended; 1 is enough to get started. Tiling and raster conversion are the only CPU-heavy steps, and they run in the background. |
+| **Disk** | Depends entirely on your data, not on GeoDeploy. The software itself is small; layers are what grow. |
+| **Domain** | Optional, but recommended — you get HTTPS and a stable portal URL. |
+
+!!! tip "Disk is the one to think about"
+    Storage is the only requirement that scales with use, and you are not stuck with the disk you
+    start on: point GeoDeploy at **S3-compatible object storage** during setup (or later) and
+    capacity stops being a server decision. That is the right choice if you expect many layers or
+    large rasters — it expands on demand, at whatever your provider charges.
+
+Docker and Docker Compose are installed by the installer if they are missing — you do not need to
+set them up first.
 
 ## Install
 
@@ -32,10 +44,21 @@ After setup you land on the main dashboard. You never return to the wizard.
 
 ## Upload your first dataset
 
-1. Go to **My Data** → **Upload vector**
-2. Drag a Shapefile (.zip), GeoJSON, or GeoPackage
-3. GeoDeploy validates the geometry, reprojects to EPSG:4326, and loads it into PostGIS
-4. Status shows **Ready** when done (usually 10–60 seconds)
+1. Go to **My Data** and choose **Upload vector** or **Upload raster**.
+2. Drop the file in — Shapefile (`.zip`), GeoPackage, GeoJSON, CSV or GeoParquet for vectors,
+   GeoTIFF for rasters.
+3. GeoDeploy validates it, reads its coordinate system, and stores it — in PostGIS or as GeoParquet
+   for vectors, as a Cloud-Optimized GeoTIFF for rasters.
+4. The row shows **Ready** when it can be added to a portal.
+
+!!! info "Your coordinate system is kept"
+    Data is stored in **its own CRS**, not flattened to EPSG:4326 on the way in. Portal maps draw in
+    Web Mercator like every web map, but a download can give you the original projection back —
+    nothing is silently reprojected underneath you.
+
+How long step 3 takes depends entirely on the file: a small GeoJSON is near-instant, while a large
+dataset is converted and tiled in the background and takes as long as it takes. You can leave the
+page — processing continues, and the row updates when it is done.
 
 ## Publish your first portal
 
@@ -45,8 +68,10 @@ After setup you land on the main dashboard. You never return to the wizard.
 4. Choose a template
 5. Click **Publish** — your portal is live at `http://your-server/portals/your-portal-name/`
 
-## Update
+## Keeping it up to date
 
-```bash
-cd ~/geodeploy && bash installer/update.sh
-```
+Update from the dashboard — **Settings → Infrastructure** shows the version you are running and
+whether a newer one exists, and updates in place, database schema included. That is the intended way;
+you should not need a terminal for it.
+
+[How updating works](updating.md){ .md-button }

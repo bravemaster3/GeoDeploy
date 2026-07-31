@@ -18,8 +18,15 @@ out of its own server.
 
 ## Inviting people
 
-**Settings ▸ Users ▸ Invite** creates a single-use link and the role the new account will get. Send
-it however you like; email is not required.
+**Settings ▸ Users ▸ Invite** creates a single-use link and the role the new account will get.
+
+You can send it two ways:
+
+- **Copy the link** and pass it on however you like — chat, your own mail, anything. No mail server
+  needed, which is the default and works out of the box.
+- **Let GeoDeploy email it**, by configuring an SMTP service under **Settings ▸ Email** — Resend, or
+  any SMTP provider. Invitations and password resets then arrive by mail without you forwarding
+  anything.
 
 If someone leaves, deleting their account reassigns what they created to the owner, so nothing is
 orphaned or silently deleted.
@@ -69,5 +76,9 @@ deletion of the user who caused them.
 
 - Passwords can be changed by the user and reset by an administrator.
 - Changing a password ends that account's other sessions.
-- Single sign-on via OpenID Connect can be configured in **Settings ▸ Authentication** if you already
-  have an identity provider.
+- **Single sign-on (OpenID Connect)** can be configured under **Settings ▸ Authentication** if your
+  organisation already has an identity provider.
+
+    !!! warning "Not yet verified against a live provider"
+        The SSO path is implemented but has not been tested end-to-end against a real identity
+        provider. Treat it as unproven, and keep a password account you can still sign in with.

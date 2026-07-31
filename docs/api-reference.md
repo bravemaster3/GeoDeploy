@@ -42,8 +42,25 @@ user and their tokens weaken with them.
 | `portal:publish` | editor | publish and unpublish portals |
 | `users:admin` | admin | user and role management |
 
-A worked end-to-end client lives in [`examples/geodeploy_cli.py`](https://github.com/bravemaster3/GeoDeploy/blob/main/examples/geodeploy_cli.py) —
-whoami, upload, portal get/set, add/remove layer, set sharing, publish.
+## Command line
+
+A worked client lives in the repository at
+[`examples/geodeploy_cli.py`](https://github.com/bravemaster3/GeoDeploy/blob/main/examples/geodeploy_cli.py)
+— whoami, upload, portal get/set, add and remove layers, set sharing, publish. It is a real script
+against the same API you would use, and the starting point for automating anything.
+
+A proper packaged **`geodeploy` CLI** is being built from it, so this becomes an install rather than a
+file to copy.
+
+!!! note "Where this is going"
+    The API exists so GeoDeploy is not a place your work gets stuck. Planned next:
+
+    - **Edit in QGIS or GeoLibre, push back to your instance** — style a layer in the tool you already
+      use and publish the result, without exporting and re-uploading.
+    - **A QGIS plugin** that browses your catalog and adds a layer in one click, instead of copying
+      URLs by hand.
+
+    See the [roadmap](roadmap.md).
 
 ## Public read surfaces (no authentication)
 

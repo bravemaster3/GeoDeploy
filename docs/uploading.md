@@ -52,10 +52,60 @@ object storage** in parts, then GeoDeploy ingests them from there.
 Progress is shown per file, and processing continues in the background: you can leave the page and
 come back.
 
+## What happens to your file
+
+Worth knowing, because it explains why things behave as they do — and every piece is open source and
+replaceable.
+
+=== "A vector layer"
+
+    ```mermaid
+    flowchart LR
+      F[Your file] --> I[Inspect: geometry,<br/>CRS, attributes]
+      I --> P[(PostGIS)]
+      I --> G[GeoParquet<br/>in object storage]
+      P --> M[Martin<br/>vector tiles]
+      G --> T[PMTiles<br/>tippecanoe]
+      M --> V[Portal map]
+      T --> V
+      G --> D[DuckDB<br/>queries + downloads]
+    ```
+
+    Small and frequently-queried data goes into **PostGIS**, and **Martin** serves it as vector tiles.
+    Large data becomes **GeoParquet** in object storage, and is tiled to **PMTiles** with
+    **tippecanoe** in the background; **DuckDB** answers queries, clips and downloads against the file
+    itself. Either way the map gets tiles and you get your data back in full resolution.
+
+=== "A raster"
+
+    ```mermaid
+    flowchart LR
+      F[Your GeoTIFF] --> C[Converted to<br/>Cloud-Optimized GeoTIFF]
+      C --> S[Object storage<br/>MinIO or your S3]
+      S --> T[TiTiler]
+      T --> V[Portal map]
+      S --> D["Direct read<br/>/vsicurl/, rasterio"]
+    ```
+
+    Rasters become **Cloud-Optimized GeoTIFFs**, which can be read by range request instead of being
+    downloaded whole. **TiTiler** renders map tiles from them on demand, and the same file is readable
+    directly by QGIS, GDAL and rasterio.
+
+**Your coordinate system is preserved.** Data is stored in its own CRS rather than being flattened on
+the way in; portal maps draw in Web Mercator as every web map does, and downloads can return the
+original projection.
+
+!!! note "On the roadmap"
+    - **Uploading several files at once**, instead of one at a time.
+    - **Archive uploads** — `.tar.gz` and friends, not just `.zip` for Shapefiles.
+
+    See the [roadmap](roadmap.md).
+
 ## After upload
 
-Each layer is inspected, reprojected as needed and given a default style. The row shows **Ready**
-when it can be added to a portal — usually seconds, longer for very large data.
+Each layer is inspected and given a default style. The row shows **Ready** when it can be added to a
+portal — how long that takes depends on the file, from near-instant for a small GeoJSON to a while for
+a large dataset being converted and tiled.
 
 ### Add metadata
 

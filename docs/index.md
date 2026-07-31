@@ -9,8 +9,9 @@ hide:
 # Your data. Your server. Your map.
 
 <p class="gd-sub" markdown>
-GeoDeploy is a self-hosted spatial data platform and geoportal builder. Upload your data, style it,
-and publish a map anyone can use — with your own domain, your own storage, and no per-seat pricing.
+GeoDeploy is an <strong>open-source</strong>, self-hosted spatial data platform and geoportal
+builder. Upload your data, style it, and publish a map anyone can use — with your own domain, your
+own storage, and no per-seat pricing.
 </p>
 
 [Get started](getting-started.md){ .md-button .md-button--primary }
@@ -140,11 +141,22 @@ Roles from viewer to owner, per-layer visibility, invitation links and scoped AP
 
 [Users, roles and sharing](users-and-sharing.md){ .md-button }
 
+## Open source, and yours to run
+
+GeoDeploy is open source. You can read every line, change it, and run it wherever you like — there is
+no paid tier that unlocks features, and no arrangement where your data lives somewhere you do not
+control.
+
+A hosted **GeoDeploy Cloud** is coming for people who would rather not run a server themselves, or who
+only need a handful of layers and would rather share the hosting cost than pay for a whole VPS. It
+changes nothing here: the project stays open source, and self-hosting stays the full product.
+
 ## Runs on a small server
 
-The reference setup is a modest VPS — 2 vCPU, 8 GB RAM, 80 GB disk — which comfortably runs a real
-geoportal with real data on it. Everything is Docker Compose behind nginx: one thing to start, one
-thing to update.
+**4 GB of RAM is a comfortable recommendation**, and two CPU cores are plenty — a real instance runs
+happily there, tiling included. Disk depends on your data rather than on GeoDeploy, and you can point
+it at S3-compatible storage so capacity is never a server decision. Everything is Docker Compose
+behind nginx: one thing to start, one thing to update.
 
 <div class="gd-next" markdown>
 

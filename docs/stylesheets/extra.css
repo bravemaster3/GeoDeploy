@@ -165,3 +165,20 @@
     radial-gradient(ellipse 80% 60% at 50% -10%, rgba(22, 163, 74, .28), transparent 70%),
     linear-gradient(180deg, rgba(22, 163, 74, .12), transparent 65%);
 }
+
+/* ── Roadmap legend ────────────────────────────────────────────────────────*/
+.gd-legend {
+  padding: .7rem 1rem;
+  border-radius: .6rem;
+  background: var(--md-code-bg-color);
+  font-size: .74rem;
+  line-height: 1.9;
+}
+.gd-legend .gd-ok   { color: #22c55e; }
+.gd-legend .gd-wip  { color: #f59e0b; }
+.gd-legend .gd-plan { color: #38bdf8; }
+.gd-legend .gd-idea { color: var(--md-default-fg-color--light); }
+
+/* Cards carrying an icon lead read better with the icon on its own line. */
+.md-typeset .grid.cards .lg.twemoji,
+.md-typeset .grid.cards svg.lg { height: 1.6rem; width: 1.6rem; }

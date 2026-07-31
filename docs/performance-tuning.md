@@ -1,38 +1,51 @@
 # Performance tuning (heavy layers & tiling)
 
-GeoDeploy is designed to run on a **cheap VPS** with sensible defaults — a normal install needs **no
-tuning at all**. This page documents the optional knobs for operators pushing very large layers or
-running on unusually small/large hardware.
+GeoDeploy runs on a small server with sensible defaults, and **a normal install needs no tuning at
+all**. This page exists for operators pushing unusually large layers, and it is the escape hatch —
+not a setup step.
 
-## How heavy vector layers are displayed
+## How vector layers are displayed
 
-A GeoParquet layer is rendered two ways, and GeoDeploy picks automatically:
+**Every GeoParquet layer is tiled automatically.** Preparing a layer enqueues PMTiles tiling as part
+of ingest — there is no button to press and no decision to make. What changes is which path serves it
+while that happens:
 
-- **Small / medium layers** render live from the file via DuckDB (deck.gl viewport queries). No tiling
-  needed.
-- **Heavy layers** (millions of features) become sluggish to pan/zoom that way, so you **tile them to
-  PMTiles once**: open the **Data Manager**, and on a GeoParquet layer click the **Tile** button (grid
-  icon). Tiling runs in the background; the layer keeps displaying via the live path until tiling
-  finishes, then switches to the fast pre-tiled path automatically. You can re-tile at any time.
+| Stage | Served by |
+| --- | --- |
+| While tiling runs | Read live from the GeoParquet file — DuckDB-WASM in the browser, with a server-side fallback |
+| Once tiling finishes | The `.pmtiles` archive, over HTTP range requests |
 
-The original `.parquet` is never modified — it stays the source for analysis, identify, and download.
-The `.pmtiles` archive is display-only, served to browsers via HTTP range requests (no per-pan server
-work), which is what makes pan/zoom seamless at 20 M+ features.
+The layer is usable throughout; the switch happens on its own when the archive is ready. You can
+re-tile at any time from **My Data** if the source data changes.
 
-> **Why not just render everything live?** Browser WebAssembly (DuckDB-WASM) has a hard ~4 GB memory
-> ceiling, so a browser physically cannot hold a 20 M-polygon layer. Pre-tiling to PMTiles is the only
-> approach that scales on the client. The tiling itself runs server-side in native DuckDB, which has no
-> such limit and spills to disk, so it works in bounded memory at any feature count.
+The original data is never modified. The `.pmtiles` archive is display-only, and stays the fast path
+for pan and zoom; the GeoParquet remains the source for identify, analysis and download.
+
+!!! info "Why tile at all, if the live path works?"
+    Browser WebAssembly has a hard memory ceiling of about 4 GB, so a browser physically cannot hold a
+    20-million-feature layer however good the query is. Pre-tiling is the only approach that scales on
+    the client. The tiling itself runs server-side in native DuckDB, which has no such ceiling and
+    spills to disk, so it completes in bounded memory at any feature count — which is also why it does
+    not need a large server.
 
 ## Tuning knobs
 
-All of these are optional environment variables. Set them in the **`.env` file** at the root of your
-GeoDeploy install (the same file the installer generates for your database/storage credentials), then
-apply with:
+All of these are optional environment variables, and **you are unlikely to need any of them**.
+
+!!! tip "Coming soon: edit these from the dashboard"
+    An **Environment** tab in Settings → Infrastructure will let the owner change these values and
+    apply them per service, with no terminal at all. The long-term goal is that a mature GeoDeploy
+    never asks you to SSH in. Until then, the file below is the way.
+
+Set them in the **`.env` file** at the root of your GeoDeploy install (the same file the installer
+generates for your database and storage credentials), then apply with:
 
 ```bash
 docker compose up -d --force-recreate geodeploy-api celery
 ```
+
+A plain `restart` is not enough — the file is read when a container is **created**, not when it
+restarts.
 
 | Variable | Default | What it does |
 |---|---|---|
@@ -46,13 +59,19 @@ docker compose up -d --force-recreate geodeploy-api celery
 | `PMTILES_SIMPLIFY_FACTOR` | `1.0` | Scales the simplification tolerance (higher = more aggressive/faster/coarser). Only used when `PMTILES_SIMPLIFY=1`. |
 | `PMTILES_INPUT` | `native` | Tiling feed: `native` (DuckDB streams GeoJSON to tippecanoe concurrently, with the simplification above) or `geojsonseq` (force the shapely fallback, no simplify). Debug knob; leave default. |
 
-### Guidance by hardware
+### When to touch any of this
 
-- **Tiny VPS (≤ 4 GB total RAM):** `PMTILES_TILE_MEMORY_LIMIT=512MB`. Everything else default.
-- **Default cheap VPS (~8 GB):** leave everything unset.
-- **Very dense layers that still tile slowly:** the max zoom is already lowered automatically by
-  feature count, but you can force it lower still (e.g. `PMTILES_MAXZOOM=9`) and/or raise
-  `PMTILES_SIMPLIFICATION`. These trade a little top-zoom detail for a large speedup.
+**Leave everything unset.** A 4 GB server runs the defaults comfortably, tiling included — the tiler
+streams and spills to disk rather than holding a layer in memory, which is why it does not need a big
+machine.
+
+Reach for these only when you have a specific problem:
+
+- **Tiling is being killed on a very small server** — lower `PMTILES_TILE_MEMORY_LIMIT` (e.g.
+  `512MB`). Only worth trying if you actually see a tiling run die.
+- **A very dense layer still tiles slowly** — the max zoom is already lowered automatically by feature
+  count, but you can force it lower (`PMTILES_MAXZOOM=9`) and/or raise `PMTILES_SIMPLIFICATION`.
+  Both trade a little top-zoom detail for a large speedup.
 
 ## Monitoring a tiling run
 

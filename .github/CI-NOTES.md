@@ -1,5 +1,10 @@
 # .github/
 
+> **Why this is not called `README.md`.** GitHub renders `.github/README.md` as the REPOSITORY's front
+> page, in preference to the root `README.md` — so this folder note was what visitors saw instead of
+> the project description. It keeps the folder-note role described in `CLAUDE.md`; only the filename
+> changed, and it must not go back.
+
 ## Purpose
 GitHub Actions CI and the community-template validation pipeline.
 

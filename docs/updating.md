@@ -16,6 +16,10 @@ database schema changes.
 Updates are additive to the schema: new columns are added if missing, nothing is dropped or
 renamed automatically.
 
+!!! note "Coming: choose a version"
+    Today the updater moves you to the **latest** release. Being able to pick a specific version —
+    to hold back, or to step back down after a bad update — is on the [roadmap](roadmap.md).
+
 ## The Infrastructure panel
 
 Pick a service on the left, then work with it through the tabs:

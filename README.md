@@ -7,10 +7,10 @@
 Upload your data, style it, and publish a map anyone can use — on your own server, with your own
 domain, and no per-seat pricing.
 
-[Documentation](https://bravemaster3.github.io/GeoDeploy/) ·
-[Getting started](https://bravemaster3.github.io/GeoDeploy/getting-started/) ·
-[Access your data](https://bravemaster3.github.io/GeoDeploy/data-access/) ·
-[Roadmap](https://bravemaster3.github.io/GeoDeploy/roadmap/)
+[Documentation](https://docs-geodeploy.kndev.org/) ·
+[Getting started](https://docs-geodeploy.kndev.org/getting-started/) ·
+[Access your data](https://docs-geodeploy.kndev.org/data-access/) ·
+[Roadmap](https://docs-geodeploy.kndev.org/roadmap/)
 
 </div>
 
@@ -56,24 +56,25 @@ publish, and through open standards other tools already speak.
 
 ## Requirements
 
-A Linux server with Docker and Docker Compose. The reference setup is a small VPS — 2 vCPU, 8 GB RAM,
-80 GB disk — which comfortably runs a real geoportal with real data on it. A domain name is optional
-but recommended.
+A Linux server. **4 GB of RAM is a comfortable recommendation** and two cores are plenty — tiling
+included. Disk depends on your data, not on GeoDeploy, and you can attach S3-compatible storage so
+capacity is never a server decision. Docker and Docker Compose are installed for you if missing. A
+domain name is optional but recommended.
 
 ## Documentation
 
-Full documentation: **<https://bravemaster3.github.io/GeoDeploy/>**
+Full documentation: **<https://docs-geodeploy.kndev.org/>**
 
 | | |
 |---|---|
-| [Getting started](https://bravemaster3.github.io/GeoDeploy/getting-started/) | Install, set up, publish your first portal |
-| [Uploading data](https://bravemaster3.github.io/GeoDeploy/uploading/) | Formats, the two vector backends, large files |
-| [Portals and experiences](https://bravemaster3.github.io/GeoDeploy/portals/) | Web map, story map, catalog; layout and access |
-| [Users, roles and sharing](https://bravemaster3.github.io/GeoDeploy/users-and-sharing/) | Roles, visibility, tokens, audit log |
-| [Access from other tools](https://bravemaster3.github.io/GeoDeploy/data-access/) | QGIS, DuckDB, Python — which standard for which job |
-| [API reference](https://bravemaster3.github.io/GeoDeploy/api-reference/) | Tokens, scopes, and the live OpenAPI docs |
-| [Updating](https://bravemaster3.github.io/GeoDeploy/updating/) | Self-update, services, the Infrastructure panel |
-| [Backups and restore](https://bravemaster3.github.io/GeoDeploy/backups/) | Scheduled backups and in-app restore |
+| [Getting started](https://docs-geodeploy.kndev.org/getting-started/) | Install, set up, publish your first portal |
+| [Uploading data](https://docs-geodeploy.kndev.org/uploading/) | Formats, the two vector backends, large files |
+| [Portals and experiences](https://docs-geodeploy.kndev.org/portals/) | Web map, story map, catalog; layout and access |
+| [Users, roles and sharing](https://docs-geodeploy.kndev.org/users-and-sharing/) | Roles, visibility, tokens, audit log |
+| [Access from other tools](https://docs-geodeploy.kndev.org/data-access/) | QGIS, DuckDB, Python — which standard for which job |
+| [API reference](https://docs-geodeploy.kndev.org/api-reference/) | Tokens, scopes, and the live OpenAPI docs |
+| [Updating](https://docs-geodeploy.kndev.org/updating/) | Self-update, services, the Infrastructure panel |
+| [Backups and restore](https://docs-geodeploy.kndev.org/backups/) | Scheduled backups and in-app restore |
 
 Every instance also serves its own interactive API documentation at `/api/docs`.
 

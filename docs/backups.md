@@ -6,7 +6,10 @@ the images uploaded to portal About pages.
 
 ## Set it up
 
-**Settings → Backups** (admin only).
+**Settings → Backups.** Administrators and the owner can configure a destination, run a backup and
+manage what is stored. **Restoring is owner-only** — it overwrites live data, so it sits behind the
+single account that cannot be locked out, and asks you to type the backup's name back before it
+runs.
 
 | Field | Notes |
 |---|---|

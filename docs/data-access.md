@@ -1,4 +1,6 @@
-# Accessing GeoDeploy data from outside (QGIS, DuckDB, scripts)
+# Accessing your data from other tools
+
+**QGIS · GeoLibre · DuckDB · Python · R · anything that speaks HTTP.**
 
 GeoDeploy is cloud-native: rather than running heavy XML-era OGC services, it shares data through
 formats and APIs that clients read **directly over HTTP** — Cloud-Optimized
@@ -156,6 +158,26 @@ FROM read_parquet([
 - **QGIS/GDAL:** single `.parquet` files open via
   `/vsicurl/https://YOUR-HOST/api/data/vector/{id}/parquet/__cell=N/data_0.parquet`
   (GDAL ≥ 3.5 with the Parquet driver).
+
+## GeoLibre
+
+[GeoLibre](https://geolibre.app) reads GeoDeploy layers directly — it is a lightweight, cloud-native
+GIS that speaks the same modern formats, so nothing has to be exported or converted.
+
+| In GeoLibre, choose | Paste |
+| --- | --- |
+| **Add data ▸ OGC API - Features** | the layer's OGC API - Features URL |
+| **Add data ▸ OGC API - Tiles (vector)** | the layer's TileJSON URL — fastest for drawing a big layer |
+| **PMTiles** | the layer's PMTiles URL, as a plain `https://` address with no prefix |
+| **COG** | a raster's Cloud-Optimized GeoTIFF URL |
+
+Every one of those URLs is on the layer's **Share** panel in GeoDeploy, ready to copy.
+
+!!! note "Round-tripping is on the roadmap"
+    Today the flow is one-way: publish here, open there. Planned next is two-way — import a GeoLibre
+    project's layers and styling into a portal, and push a portal's layers and symbology back out.
+    Both sides already speak the MapLibre style specification, which is the shared ground that makes
+    it tractable. See the [roadmap](roadmap.md).
 
 ## Which standard for which job
 
