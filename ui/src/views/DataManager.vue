@@ -23,7 +23,7 @@
 
       <!-- Vector layers -->
       <section class="card overflow-hidden">
-        <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
+        <header class="flex flex-wrap items-center gap-3 px-5 py-3.5 border-b border-border/60">
           <span class="w-9 h-9 rounded-lg bg-blue-500/15 text-blue-400 flex items-center justify-center flex-shrink-0">
             <DatabaseIcon class="w-5 h-5" />
           </span>
@@ -37,7 +37,7 @@
           </div>
           <input v-if="dataStore.vectorLayers.length > 3" v-model="vectorSearch" type="search"
             id="vector-search" name="vector-search" placeholder="Search…"
-            class="w-36 text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+            class="w-36 max-w-full text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
           <span class="text-xs font-medium text-muted-foreground bg-muted rounded-full px-2 py-0.5">{{ dataStore.vectorLayers.length }}</span>
           <button v-if="auth.canEdit" @click="showVectorUpload = true" class="btn-primary text-xs px-3 py-1.5">
             <UploadIcon class="w-3.5 h-3.5" /> Upload
@@ -59,7 +59,7 @@
 
       <!-- Raster files -->
       <section class="card overflow-hidden">
-        <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
+        <header class="flex flex-wrap items-center gap-3 px-5 py-3.5 border-b border-border/60">
           <span class="w-9 h-9 rounded-lg bg-amber-500/15 text-amber-400 flex items-center justify-center flex-shrink-0">
             <ImageIcon class="w-5 h-5" />
           </span>
@@ -69,7 +69,7 @@
           </div>
           <input v-if="dataStore.rasterLayers.length > 3" v-model="rasterSearch" type="search"
             id="raster-search" name="raster-search" placeholder="Search…"
-            class="w-36 text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+            class="w-36 max-w-full text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
           <span class="text-xs font-medium text-muted-foreground bg-muted rounded-full px-2 py-0.5">{{ dataStore.rasterLayers.length }}</span>
           <button v-if="auth.canEdit" @click="showRasterUpload = true" class="btn-primary text-xs px-3 py-1.5">
             <UploadIcon class="w-3.5 h-3.5" /> Upload
@@ -91,7 +91,7 @@
 
       <!-- External sources -->
       <section class="card overflow-hidden">
-        <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
+        <header class="flex flex-wrap items-center gap-3 px-5 py-3.5 border-b border-border/60">
           <span class="w-9 h-9 rounded-lg bg-emerald-500/15 text-emerald-400 flex items-center justify-center flex-shrink-0">
             <LinkIcon class="w-5 h-5" />
           </span>

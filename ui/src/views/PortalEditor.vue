@@ -606,7 +606,7 @@ const ARCHETYPES = [
 ]
 // PARITY mirror of portal_generator.resolve_layout / portal.js resolveLayout — change all three together.
 const _ARCH_DEFAULTS = {
-  webmap:   { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
+  webmap:   { regions: { layerList: { side: 'left', mode: 'docked', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
   storymap: { regions: { layerList: { side: 'left', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: true, legend: true, basemap: true, about: false, story: true } },
   // V-14 catalog: the dataset list is the page and the map is a panel beside it, so layerCatalog is
   // off (the facet rail replaces the switcher) and `catalog` carries the split.

@@ -1055,7 +1055,16 @@
         border-radius: 999px; cursor: pointer;
       }
       #cat-viewtoggle button.on { color: #fff; background: var(--accent); }
-      .cat-rail { flex: 0 0 168px; padding-left: 16px; }
+      /* The rail becomes a SHALLOW HORIZONTAL STRIP here, not a 168px column: at this width a
+         column was taking most of the space the result cards need, which is the whole page. */
+      .cat-body { flex-direction: column; }
+      .cat-rail {
+        display: flex; gap: 16px; overflow-x: auto; overflow-y: auto;
+        flex: 0 0 auto; max-height: 26vh;
+        padding: 10px 16px; border-right: none; border-bottom: 1px solid var(--border);
+      }
+      .cat-facet { flex: 0 0 auto; min-width: 124px; }
+      .cat-facet + .cat-facet { margin-top: 0; }
       .cat-head { padding: 14px 16px 12px; }
       .cat-main { padding: 14px 16px 24px; }
     }
@@ -1126,16 +1135,9 @@
       /* Both are on screen, so the List/Map switch has nothing to switch. */
       body[data-archetype="catalog"] #cat-viewtoggle { display: none; }
 
-      .cat-body { flex-direction: column; }
-      /* Facets sit side by side and scroll sideways instead of stacking down the page, so the strip
-         stays shallow and the results keep the room. */
-      .cat-rail {
-        display: flex; gap: 18px; overflow-x: auto; overflow-y: auto;
-        flex: 0 0 auto; max-height: 33vh;
-        padding: 12px 16px; border-right: none; border-bottom: 1px solid var(--border);
-      }
-      .cat-facet { flex: 0 0 auto; min-width: 128px; }
-      .cat-facet + .cat-facet { margin-top: 0; }
+      /* Shallower still: the map takes 40vh below this, so the strip must not crowd the results. */
+      .cat-rail { max-height: 22vh; padding: 8px 14px; gap: 14px; }
+      .cat-facet { min-width: 112px; }
       .cat-head { padding: 12px 16px 10px; }
       .cat-main { padding: 14px 16px 20px; }
     }

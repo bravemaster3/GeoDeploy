@@ -13,10 +13,14 @@ import pytest
 
 from geodeploy.services.portal_generator import resolve_layout
 
+# CHANGED 2026-07-31: webmap now opens with the layer list CLOSED. Deliberate and user-requested —
+# an open docked list costs the map a quarter of its width unasked, and on a phone it covers the map
+# including its own toggle, leaving no way to close it. Existing portals that never set `collapsed`
+# inherit this, which is the intent.
 WEBMAP = {
     "archetype": "webmap",
     "regions": {
-        "layerList": {"side": "left", "mode": "docked", "collapsed": False,
+        "layerList": {"side": "left", "mode": "docked", "collapsed": True,
                       "width": None, "x": None, "y": None},
         "controls": {"position": "top-right"},
         "header": {"style": "bar"},

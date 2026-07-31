@@ -64,7 +64,10 @@ def test_resolve_layout_merges_overrides_onto_archetype():
                         "panels": {"about": False}})
     assert r["regions"]["layerList"]["side"] == "right"      # override applied
     assert r["regions"]["layerList"]["mode"] == "floating"   # override applied
-    assert r["regions"]["layerList"]["collapsed"] is False   # untouched default preserved
+    # Untouched default preserved. The VALUE changed on 2026-07-31 (webmap now opens with the layer
+    # list closed); what this line tests is that a key the override never mentions keeps whatever the
+    # archetype says — so it tracks the default rather than pinning a particular one.
+    assert r["regions"]["layerList"]["collapsed"] is True
     assert r["regions"]["controls"]["position"] == "bottom-left"  # override applied
     assert r["panels"]["about"] is False                     # override applied
     assert r["panels"]["basemap"] is True                    # untouched default preserved

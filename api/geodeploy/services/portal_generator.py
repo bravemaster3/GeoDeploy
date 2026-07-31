@@ -394,7 +394,10 @@ _LAYOUT_ARCHETYPES = {
     "webmap": {
         "regions": {
             # layerList: the catalog panel — which side, docked vs floating, its floating box.
-            "layerList": {"side": "left", "mode": "docked", "collapsed": False,
+            # Opens CLOSED. A docked list costs the map a quarter of its width before the visitor
+            # has asked for anything, and on a phone it is an overlay that covers the map entirely —
+            # including its own toggle, which left no way to shut it. One tap opens it.
+            "layerList": {"side": "left", "mode": "docked", "collapsed": True,
                           "width": None, "x": None, "y": None},
             # controls: the map-control cluster (basemap · globe · zoom · tools · home · zoom-all · draw-zoom).
             # position: any of the 4 corners (top-left | top-right | bottom-left | bottom-right).

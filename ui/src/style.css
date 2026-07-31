@@ -108,3 +108,23 @@
 }
 .dark .maplibregl-popup-tip { border-top-color: hsl(var(--card)); border-bottom-color: hsl(var(--card)); }
 .dark .maplibregl-popup-close-button { color: hsl(var(--muted-foreground)); }
+
+/* ── Touch devices: reveal the hover-only controls ─────────────────────────────────────────
+   13 places use the `opacity-0 group-hover:opacity-100` pattern to keep row actions quiet until you
+   point at them — rename, re-tile, reprocess, delete. A touch screen has no hover, so on a phone or
+   tablet those controls were invisible AND unreachable: the feature simply did not exist there.
+   `hover: none` is the honest test for that (a narrow window on a laptop still has a mouse, and
+   should keep the quiet treatment). */
+@media (hover: none) {
+  .group .opacity-0 { opacity: 1; }
+}
+
+/* ── My Data on small screens ──────────────────────────────────────────────────────────────
+   Rows are a single flex line: icon · name + metadata · a cluster of action buttons. Below this the
+   actions squeezed the name to nothing, so the line wraps and the actions drop underneath, where
+   they have room to be tapped. */
+@media (max-width: 640px) {
+  .gd-row { flex-wrap: wrap; row-gap: .5rem; }
+  .gd-row > .gd-row-main { flex: 1 1 100%; order: -1; min-width: 0; }
+  .gd-row-meta { flex-wrap: wrap; row-gap: .25rem; }
+}

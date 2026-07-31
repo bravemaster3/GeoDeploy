@@ -54,7 +54,7 @@
   // already bakes a resolved manifest into style.geodeploy.layout, so this is normally a pass-through;
   // resolveLayout stays defensive (older bundles / partial configs). Absent → webmap = pre-V-11 shell.
   const LAYOUT_ARCHETYPES = {
-    webmap:   { regions: { layerList: { side: 'left', mode: 'docked', collapsed: false, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
+    webmap:   { regions: { layerList: { side: 'left', mode: 'docked', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' } },     panels: { layerCatalog: true,  legend: true, basemap: true, about: true,  story: false } },
     storymap: { regions: { layerList: { side: 'left', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: true, legend: true, basemap: true, about: false, story: true } },
     // V-14 catalog: a BROWSE surface. The dataset list is the page and the map is a panel beside it,
     // so layerCatalog is off (the facet rail replaces the switcher) and `catalog` carries the split.
@@ -223,6 +223,17 @@
     sidebar.classList.toggle('collapsed');
     setTimeout(() => map.resize(), 220);
   });
+  // On a phone the list is an overlay drawer covering the map, so tapping the map is the natural way
+  // to dismiss it — and it is the SAFETY NET for the case that had no way out at all: an open drawer
+  // hides the control cluster including its own toggle button. Capture phase, because the map's own
+  // handlers stop propagation. Desktop is untouched: there the list sits beside the map, and closing
+  // it on any stray click would be hostile.
+  document.addEventListener('click', function (e) {
+    if (!window.matchMedia || !window.matchMedia('(max-width: 640px)').matches) return;
+    if (sidebar.classList.contains('collapsed')) return;
+    if (sidebar.contains(e.target) || e.target.closest('#gd-list-toggle, #sidebar-toggle')) return;
+    sidebar.classList.add('collapsed');
+  }, true);
 
   // ── Map init ────────────────────────────────────────────
   const map = new maplibregl.Map({

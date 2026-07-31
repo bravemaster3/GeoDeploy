@@ -1,7 +1,7 @@
 <template>
-  <div class="flex items-center gap-4 px-4 py-3 hover:bg-muted/60 group">
+  <div class="gd-row flex items-center gap-4 px-4 py-3 hover:bg-muted/60 group">
     <div class="w-8 h-8 rounded-md bg-blue-500/15 text-blue-400 flex items-center justify-center text-xs font-bold flex-shrink-0">V</div>
-    <div class="flex-1 min-w-0">
+    <div class="gd-row-main flex-1 min-w-0">
       <div class="flex items-center gap-1.5 min-w-0">
         <input v-if="editing" ref="nameInput" v-model="draft"
           @keyup.enter="saveName" @keyup.esc="cancelEdit" @blur="saveName"
@@ -14,7 +14,7 @@
           </button>
         </template>
       </div>
-      <div class="text-xs text-muted-foreground flex gap-3 mt-0.5 items-center">
+      <div class="gd-row-meta text-xs text-muted-foreground flex gap-3 mt-0.5 items-center">
         <span v-if="layer.storage_backend === 'geoparquet'"
           class="px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 font-medium text-[10px] uppercase tracking-wide">GeoParquet</span>
         <!-- GeoParquet layers display via deck.gl over the prepared file — PMTiles tiling is OPT-IN
