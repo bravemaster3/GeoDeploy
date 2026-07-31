@@ -32,20 +32,21 @@ for pan and zoom; the GeoParquet remains the source for identify, analysis and d
 
 All of these are optional environment variables, and **you are unlikely to need any of them**.
 
-!!! tip "Coming soon: edit these from the dashboard"
-    An **Environment** tab in Settings → Infrastructure will let the owner change these values and
-    apply them per service, with no terminal at all. The long-term goal is that a mature GeoDeploy
-    never asks you to SSH in. Until then, the file below is the way.
+!!! tip "Edit these from the dashboard"
+    **Settings → Infrastructure → Environment** (owner only) lets you change these and apply them per
+    service, with no terminal. Only a curated set is editable — database, storage and encryption
+    values are deliberately not exposed there.
 
-Set them in the **`.env` file** at the root of your GeoDeploy install (the same file the installer
-generates for your database and storage credentials), then apply with:
+    Note that **Save** and **Apply** are separate steps. Docker reads the file when a container is
+    **created**, not when it restarts, so a saved value takes effect only once the affected services
+    are recreated. Apply does that for you.
+
+If you prefer the file, it is `.env` at the root of your install — the same file the installer
+generates for your database and storage credentials. Apply changes with:
 
 ```bash
 docker compose up -d --force-recreate geodeploy-api celery
 ```
-
-A plain `restart` is not enough — the file is read when a container is **created**, not when it
-restarts.
 
 | Variable | Default | What it does |
 |---|---|---|

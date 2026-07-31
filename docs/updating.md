@@ -27,14 +27,16 @@ Pick a service on the left, then work with it through the tabs:
 | Tab | What it gives you |
 | --- | --- |
 | **Logs** | Live output from that service, with adjustable history |
-| **Terminal** | A shell inside the container, for the owner only |
+| **Terminal** | A shell inside the container, for the owner only (off until enabled under Environment) |
+| **Environment** | Owner-only instance settings, applied per service — no terminal needed |
 | **Deployments** | History of updates, with what changed and whether it succeeded |
 
 You can also start, stop and restart individual services from here.
 
 !!! warning "The terminal is a real shell"
-    It runs as root inside the container and is restricted to the owner account. Use it for
-    inspection; prefer the dashboard for anything it can already do.
+    It runs as root inside the container and is restricted to the owner account, and it is **off by
+    default** — switch it on under the **Environment** tab and apply. Use it for inspection; prefer
+    the dashboard for anything it can already do.
 
 ## Services
 

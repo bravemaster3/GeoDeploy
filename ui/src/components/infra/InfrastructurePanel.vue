@@ -116,7 +116,7 @@
         </div>
 
         <!-- Deployments -->
-        <div v-else class="p-4">
+        <div v-else-if="tab === 'deployments'" class="p-4">
           <div v-if="!deployments.length" class="py-8 text-center text-sm text-muted-foreground/70">
             No deployments recorded yet.
           </div>
@@ -145,14 +145,67 @@
             </div>
           </div>
         </div>
+
+        <!-- Environment. SAVE and APPLY are separate on purpose: Docker reads .env when a container
+             is CREATED, so a saved value does nothing until the affected services are recreated.
+             Collapsing the two would leave people wondering why a setting "did not work". -->
+        <div v-else-if="tab === 'environment'" class="p-4 space-y-3">
+          <p class="text-xs text-muted-foreground">
+            Instance settings, written to <code class="font-mono">{{ envPath }}</code>. Only these are
+            editable — database, storage and encryption values are deliberately not exposed here.
+          </p>
+
+          <div v-if="envLoading" class="py-8 text-center text-sm text-muted-foreground/70">Loading…</div>
+          <div v-else class="space-y-3">
+            <div v-for="v in envVars" :key="v.key" class="rounded-lg border p-3"
+              :class="v.danger ? 'border-red-500/40 bg-red-500/5' : 'border-border'">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <p class="text-sm font-medium text-foreground">
+                    {{ v.label }}
+                    <span v-if="v.danger" class="ml-1 text-[10px] uppercase tracking-wide text-red-400">care</span>
+                  </p>
+                  <p class="text-[11px] font-mono text-muted-foreground/70">{{ v.key }}</p>
+                </div>
+                <label v-if="v.kind === 'bool'" class="flex-shrink-0 pt-1">
+                  <input type="checkbox" :checked="isOn(v)"
+                    @change="e => (draft[v.key] = e.target.checked ? 'true' : 'false')" />
+                </label>
+                <input v-else v-model="draft[v.key]" :placeholder="v.default || 'automatic'"
+                  class="w-40 flex-shrink-0 text-xs bg-background text-foreground border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+              </div>
+              <p class="text-xs text-muted-foreground mt-1.5 leading-snug">{{ v.help }}</p>
+              <p class="text-[11px] text-muted-foreground/60 mt-1">
+                Default <span class="font-mono">{{ v.default || 'automatic' }}</span>
+                · restarts {{ v.services.join(', ') }}
+              </p>
+            </div>
+
+            <div class="flex items-center gap-2 pt-1 flex-wrap">
+              <button @click="onSaveEnv" :disabled="envBusy || !envDirty"
+                class="btn-primary text-xs px-3 py-1.5 disabled:opacity-40">Save</button>
+              <button v-if="envPending.length" @click="onApplyEnv" :disabled="envBusy"
+                class="btn-secondary text-xs px-3 py-1.5 disabled:opacity-40">
+                Apply &amp; restart {{ envPending.join(', ') }}
+              </button>
+              <span v-if="envMsg" class="text-xs"
+                :class="envMsg.type === 'ok' ? 'text-green-400' : 'text-red-400'">{{ envMsg.text }}</span>
+            </div>
+            <p v-if="envPending.length" class="text-[11px] text-muted-foreground/70">
+              Saved. Those services still run with their previous values until they are recreated — a
+              restart is not enough, because the file is read when a container is created.
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   </section>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import api, { controlService, listDeployments } from '@/api'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import api, { controlService, listDeployments, getEnvVars, saveEnvVars, applyEnvVars } from '@/api'
+import { useAuthStore } from '@/stores/auth'
 import { useSystemStore } from '@/stores/system'
 import { ServerIcon, RefreshIcon } from '@/views/icons'
 
@@ -163,6 +216,8 @@ const TABS = [
   { id: 'logs', label: 'Logs' },
   { id: 'terminal', label: 'Terminal' },
   { id: 'deployments', label: 'Deployments' },
+  // Owner-only: these change how the instance RUNS, and one of them opens a root shell.
+  ...(auth.isOwner ? [{ id: 'environment', label: 'Environment' }] : []),
 ]
 const ACTIONS = [
   { id: 'restart', label: 'Restart' },
@@ -170,10 +225,76 @@ const ACTIONS = [
   { id: 'start', label: 'Start' },
 ]
 
+const auth = useAuthStore()
 const systemStore = useSystemStore()
 const active = ref('api')
 const tab = ref('logs')
 const busy = ref(false)
+
+// ── Environment variables (owner only) ──────────────────────────────────────────────────
+const envVars = ref([])
+const envPath = ref('.env')
+const envLoading = ref(false)
+const envBusy = ref(false)
+const envMsg = ref(null)
+const envPending = ref([])      // services saved but not yet recreated
+const draft = ref({})
+
+const isOn = (v) => ['true', '1'].includes(String(draft.value[v.key] ?? '').toLowerCase())
+
+// Only send what actually CHANGED. Writing every field back would rewrite lines the operator never
+// touched, and an unchanged blank would delete an override they still wanted.
+const changed = computed(() => {
+  const out = {}
+  for (const v of envVars.value) {
+    const now = draft.value[v.key] ?? ''
+    if (now !== (v.value ?? '')) out[v.key] = now
+  }
+  return out
+})
+const envDirty = computed(() => Object.keys(changed.value).length > 0)
+
+async function loadEnv() {
+  envLoading.value = true
+  try {
+    const { data } = await getEnvVars()
+    envVars.value = data.vars
+    envPath.value = data.path
+    draft.value = Object.fromEntries(data.vars.map(v => [v.key, v.value ?? '']))
+  } catch (e) {
+    envMsg.value = { type: 'err', text: e.response?.data?.detail || 'Could not read the settings' }
+  } finally { envLoading.value = false }
+}
+
+async function onSaveEnv() {
+  const values = changed.value
+  envBusy.value = true
+  envMsg.value = null
+  try {
+    const { data } = await saveEnvVars(values)
+    envPending.value = data.restart_required || []
+    envMsg.value = { type: 'ok', text: 'Saved' }
+    await loadEnv()
+  } catch (e) {
+    envMsg.value = { type: 'err', text: e.response?.data?.detail || 'Could not save' }
+  } finally { envBusy.value = false }
+}
+
+async function onApplyEnv() {
+  envBusy.value = true
+  envMsg.value = null
+  try {
+    // Named by service so the server recreates exactly what the saved keys needed.
+    await applyEnvVars(Object.fromEntries(envPending.value.map(k => [k, ''])))
+    envMsg.value = { type: 'ok', text: 'Restarting — this page may briefly lose contact.' }
+    envPending.value = []
+  } catch (e) {
+    envMsg.value = { type: 'err', text: e.response?.data?.detail || 'Could not apply' }
+  } finally { envBusy.value = false }
+}
+
+// Read when the tab is opened, not on mount: it is owner-only and most sessions never look at it.
+watch(tab, (t) => { if (t === 'environment' && !envVars.value.length) loadEnv() })
 
 const logs = ref('')
 const logLines = ref(200)

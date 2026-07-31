@@ -9,7 +9,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ..config import get_settings
 from ..database import get_db
-from ..deps import require_admin
+from ..deps import require_admin, require_owner
 from ..models import DeploymentRun, Portal, RasterLayer, SetupConfig, User, VectorLayer
 from ..schemas import (DeploymentRunOut, EmailSettings, EmailSettingsOut, OidcSettings,
                        OidcSettingsOut, ServiceHealth, StorageStats)
@@ -236,6 +236,96 @@ async def start_update(user: User = Depends(require_admin), db: AsyncSession = D
     return {"status": "started"}
 
 
+class EnvUpdate(BaseModel):
+    values: dict[str, str]
+
+
+@router.get("/env")
+async def list_env(_: User = Depends(require_owner)):
+    """The allow-listed environment settings and their current values.
+
+    OWNER-only, not admin: these change how the instance runs, and one of them opens a root shell.
+    The allow-list lives in services/envfile.py — anything not on it is neither returned here nor
+    writable, so `.env` secrets never reach this surface.
+    """
+    from ..services import envfile
+    return {"vars": envfile.list_editable(), "path": envfile.ENV_PATH}
+
+
+@router.put("/env")
+async def save_env(body: EnvUpdate, user: User = Depends(require_owner),
+                   db: AsyncSession = Depends(get_db)):
+    """Write the values. Returns the services that must be RECREATED for them to take effect —
+    Docker reads .env when a container is created, not when it restarts, so saving alone changes
+    nothing until /env/apply runs."""
+    from ..services import envfile
+    try:
+        services = envfile.write(body.values)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(500, f"Could not write the environment file: {exc}") from exc
+    # Values are NOT audited — an allow-listed setting is not a secret, but logging values would make
+    # the audit log a place secrets could land if the allow-list ever grew carelessly. Keys only.
+    await record_audit(db, user, "admin.env.save", "system", None, {"keys": sorted(body.values)})
+    return {"restart_required": services}
+
+
+@router.post("/env/apply", status_code=202)
+async def apply_env(body: EnvUpdate | None = None, user: User = Depends(require_owner),
+                    db: AsyncSession = Depends(get_db)):
+    """Recreate the given services so they pick up the new .env.
+
+    `up -d --force-recreate`, NOT `restart`: a restart reuses the existing container, which already
+    has its environment baked in from creation time. Runs in the same detached docker:cli helper the
+    updater uses, mounted at the repo's REAL host path so compose resolves the relative bind mounts
+    to the same host paths the running stack uses (mounting elsewhere is what once recreated the API
+    against empty data directories).
+    """
+    import docker
+    from ..services import envfile
+
+    # Only the services the CHANGED keys actually need. Falls back to api+celery when the caller
+    # names nothing, so "apply whatever is pending" still does the right thing.
+    by_key = {v.key: v.services for v in envfile.EDITABLE}
+    services: list[str] = []
+    for key in (body.values if body and body.values else {}):
+        for svc in by_key.get(key, ()):
+            if svc not in services:
+                services.append(svc)
+    if not services:
+        services = ["geodeploy-api", "celery"]
+
+    try:
+        client = docker.from_env()
+    except Exception as exc:
+        raise HTTPException(500, f"Docker is not reachable: {exc}") from exc
+    repo = _repo_host_dir(client)
+    if not repo:
+        raise HTTPException(500, "Could not resolve the host repo path.")
+
+    # Service names come from our own allow-list, never from the request body, so nothing a caller
+    # sends can reach the shell.
+    joined = " ".join(services)
+    try:
+        client.containers.run(
+            image="docker:cli",
+            command=["sh", "-c", f'cd "{repo}" && docker compose up -d --force-recreate {joined}'],
+            volumes={
+                repo: {"bind": repo, "mode": "rw"},
+                "/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"},
+            },
+            detach=True,
+            remove=True,
+            name="geodeploy-env-apply",
+        )
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to apply: {exc}") from exc
+
+    await record_audit(db, user, "admin.env.apply", "system", None, {"services": services})
+    return {"status": "applying", "services": services}
+
+
 def _read_update_status() -> dict:
     """The updater's live progress file. Read from disk every time — the process that started the
     update does not survive it, so nothing can be cached in memory."""
@@ -379,8 +469,8 @@ async def service_exec(name: str, body: ExecRequest, user: User = Depends(requir
     containers (never api/celery — they hold the Docker socket); (4) 30s-bounded; (5) output-capped;
     (6) audited. It's a container-scoped command runner, not a host shell."""
     if not get_settings().geodeploy_enable_terminal:
-        raise HTTPException(403, "Terminal is disabled. Set GEODEPLOY_ENABLE_TERMINAL=true in .env and "
-                                 "redeploy to enable it.")
+        raise HTTPException(403, "Terminal is disabled. Turn it on under Settings → Infrastructure "
+                                 "→ Environment (owner only), then apply so the API is recreated.")
     if name not in TERMINAL_ALLOWED:
         raise HTTPException(400, f"Terminal is not allowed for '{name}'.")
     command = (body.command or "").strip()
