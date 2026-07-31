@@ -45,7 +45,7 @@ const error = ref('')
 const expires = computed(() => new Date(props.invite.expires_at).toLocaleDateString())
 
 const roleBadge = computed(() => ({
-  admin: 'bg-violet-500/15 text-violet-400',
+  admin: 'bg-cyan-500/15 text-cyan-400',
   editor: 'bg-blue-500/15 text-blue-400',
   viewer: 'bg-muted text-muted-foreground',
 }[props.invite.role] || 'bg-muted text-muted-foreground'))

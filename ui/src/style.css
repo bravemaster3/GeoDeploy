@@ -14,8 +14,11 @@
     --muted: 210 40% 96.1%;
     --muted-foreground: 215.4 16.3% 40%;
     --border: 214.3 31.8% 91.4%;
-    --primary: 142.1 76.2% 36.3%;
-    --primary-foreground: 355.7 100% 97.3%;
+    /* #2563eb — the exact accent published portals already default to (portal.css --accent).
+       The dashboard used to be green while everything it PRODUCED was blue; matching them means the
+       app looks like the thing it makes. */
+    --primary: 221.2 83.2% 53.3%;
+    --primary-foreground: 210 40% 98%;
   }
   .dark {
     --background: 222 47% 7%;
@@ -25,8 +28,8 @@
     --muted: 217.2 32.6% 17.5%;
     --muted-foreground: 215 20.2% 65.1%;
     --border: 217.2 32.6% 17.5%;
-    --primary: 142.1 70.6% 45.3%;
-    --primary-foreground: 144.9 80.4% 10%;
+    --primary: 217.2 91.2% 59.8%;   /* #3b82f6 — lifted for contrast on the dark surface */
+    --primary-foreground: 222 47% 11%;
   }
 
   /* Tell the browser which scheme is active so NATIVE widget chrome follows the theme —

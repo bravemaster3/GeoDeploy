@@ -573,7 +573,7 @@
       <div v-if="activeTab === 'api'" class="space-y-6">
         <section class="card overflow-hidden">
           <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
-            <span class="w-9 h-9 rounded-lg bg-violet-500/15 text-violet-400 flex items-center justify-center flex-shrink-0">
+            <span class="w-9 h-9 rounded-lg bg-cyan-500/15 text-cyan-400 flex items-center justify-center flex-shrink-0">
               <KeyIcon class="w-5 h-5" />
             </span>
             <div class="flex-1 min-w-0">
@@ -972,7 +972,7 @@ const initials = computed(() =>
 
 const roleBadge = computed(() => ({
   owner: 'bg-amber-500/15 text-amber-400',
-  admin: 'bg-violet-500/15 text-violet-400',
+  admin: 'bg-cyan-500/15 text-cyan-400',
   editor: 'bg-blue-500/15 text-blue-400',
   viewer: 'bg-muted text-muted-foreground',
 }[auth.role] || 'bg-muted text-muted-foreground'))
@@ -1019,7 +1019,7 @@ const statTiles = computed(() => [
 const STORES = [
   { key: 'postgis_bytes', label: 'PostGIS', dot: 'bg-blue-400', bar: 'bg-blue-500/80' },
   { key: 'raster_bytes', label: 'Rasters (COG)', dot: 'bg-amber-400', bar: 'bg-amber-500/80' },
-  { key: 'geoparquet_bytes', label: 'GeoParquet', dot: 'bg-violet-400', bar: 'bg-violet-500/80' },
+  { key: 'geoparquet_bytes', label: 'GeoParquet', dot: 'bg-cyan-400', bar: 'bg-cyan-500/80' },
   { key: 'portal_bundle_bytes', label: 'Portal pages', dot: 'bg-emerald-400', bar: 'bg-emerald-500/80' },
 ]
 const storageTiles = computed(() => STORES.map((s) => ({

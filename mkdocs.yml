@@ -27,14 +27,14 @@ theme:
   # no media makes dark the actual default; the toggle still switches, and the choice is remembered.
   palette:
     - scheme: slate
-      primary: green
-      accent: teal
+      primary: blue
+      accent: light blue
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
     - scheme: default
-      primary: green
-      accent: teal
+      primary: blue
+      accent: light blue
       toggle:
         icon: material/weather-night
         name: Switch to dark mode
