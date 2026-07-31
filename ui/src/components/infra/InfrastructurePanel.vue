@@ -212,13 +212,17 @@ import { ServerIcon, RefreshIcon } from '@/views/icons'
 // Mirrors admin.py TERMINAL_ALLOWED. Kept in sync by hand: the SERVER is the enforcement point
 // (this only decides whether to show the box), so drifting is a cosmetic bug, not a hole.
 const TERMINAL_ALLOWED = ['postgres', 'redis', 'martin', 'titiler', 'minio', 'nginx', 'ui']
-const TABS = [
+// COMPUTED, not a constant array, for two reasons. It reads `auth`, which is declared below — a
+// const is not hoisted, so evaluating it at module scope threw "Cannot access 'auth' before
+// initialization" and took the ENTIRE panel down, not just the tab. And `isOwner` is false until the
+// session has loaded, so a value computed once would hide the tab from the owner on a cold load.
+const TABS = computed(() => [
   { id: 'logs', label: 'Logs' },
   { id: 'terminal', label: 'Terminal' },
   { id: 'deployments', label: 'Deployments' },
   // Owner-only: these change how the instance RUNS, and one of them opens a root shell.
   ...(auth.isOwner ? [{ id: 'environment', label: 'Environment' }] : []),
-]
+])
 const ACTIONS = [
   { id: 'restart', label: 'Restart' },
   { id: 'stop', label: 'Stop' },
