@@ -93,12 +93,21 @@ Every instance also serves its own interactive API documentation at `/api/docs`.
 
 ## Contributing
 
-Issues and pull requests are welcome. Templates are the easiest place to start —
-see [templates/community/CONTRIBUTING.md](templates/community/CONTRIBUTING.md).
+Issues and pull requests are welcome — see **[CONTRIBUTING.md](CONTRIBUTING.md)**. Contributing a
+template is the easiest place to start.
+
+Commits need a `Signed-off-by` line ([DCO](https://developercertificate.org/)) — `git commit -s`. No
+copyright assignment: you keep your work, and there is no future relicensing that would need your
+permission.
 
 Developer notes live in each folder's `README.md`; `CLAUDE.md` describes how the repository is
 organised and kept current.
 
-## Licence
+## Licence and what stays open
 
-MIT — free forever, with no feature restrictions on the self-hosted version.
+[MIT](LICENSE). Every feature is in this repository — no paid tier, nothing held back, nothing that
+unlocks with a key.
+
+If a hosted **GeoDeploy Cloud** appears, it is **hosting only**: this same open-source code, run for
+people who would rather not run a server. It will not have features you cannot get by installing it
+yourself.

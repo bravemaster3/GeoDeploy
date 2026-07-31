@@ -1,0 +1,42 @@
+name: DCO
+
+# Checks that every commit in a pull request carries a Signed-off-by line, as CONTRIBUTING.md asks.
+# Runs ONLY on pull requests: pushes to main are the maintainer's own, and failing those would block
+# the repository on its own history rather than on incoming work.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The whole PR range, not just the tip — every commit needs the line, and a shallow clone
+          # cannot see the earlier ones.
+          fetch-depth: 0
+      - name: Every commit is signed off
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          missing=0
+          while read -r sha; do
+            [ -z "$sha" ] && continue
+            author="$(git log -1 --format='%an <%ae>' "$sha")"
+            if ! git log -1 --format='%B' "$sha" | grep -qi "^Signed-off-by: "; then
+              echo "::error::$(git log -1 --format='%h %s' "$sha") is missing Signed-off-by"
+              missing=1
+            fi
+          done < <(git rev-list "$base".."$head")
+          if [ "$missing" -eq 1 ]; then
+            echo ""
+            echo "Add the sign-off by committing with -s, or fix existing commits with:"
+            echo "  git rebase --signoff $base"
+            echo "See CONTRIBUTING.md — it is one line and you keep your copyright."
+            exit 1
+          fi
+          echo "All commits signed off."

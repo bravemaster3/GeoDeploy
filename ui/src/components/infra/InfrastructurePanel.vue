@@ -150,9 +150,19 @@
              is CREATED, so a saved value does nothing until the affected services are recreated.
              Collapsing the two would leave people wondering why a setting "did not work". -->
         <div v-else-if="tab === 'environment'" class="p-4 space-y-3">
+          <!-- This tab sits inside a per-service panel, so it HAS to say plainly that it is not
+               per-service — otherwise "restarts geodeploy-api" while `postgres` is selected on the
+               left reads as a mistake. Each variable declares the services IT affects. -->
+          <div class="rounded-lg border border-border bg-muted/40 px-3 py-2">
+            <p class="text-xs text-foreground/90">
+              These are <strong>instance-wide settings</strong> — not settings for
+              <span class="font-medium">{{ active }}</span>. Each one restarts only the services it
+              actually affects, listed under it.
+            </p>
+          </div>
           <p class="text-xs text-muted-foreground">
-            Instance settings, written to <code class="font-mono">{{ envPath }}</code>. Only these are
-            editable — database, storage and encryption values are deliberately not exposed here.
+            Written to <code class="font-mono">{{ envPath }}</code>. Only these are editable —
+            database, storage and encryption values are deliberately not exposed here.
           </p>
 
           <div v-if="envLoading" class="py-8 text-center text-sm text-muted-foreground/70">Loading…</div>
@@ -177,7 +187,7 @@
               <p class="text-xs text-muted-foreground mt-1.5 leading-snug">{{ v.help }}</p>
               <p class="text-[11px] text-muted-foreground/60 mt-1">
                 Default <span class="font-mono">{{ v.default || 'automatic' }}</span>
-                · restarts {{ v.services.join(', ') }}
+                · takes effect after restarting {{ v.services.join(' + ') }}
               </p>
             </div>
 
