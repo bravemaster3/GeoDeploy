@@ -15,8 +15,9 @@
     capacity stops being a server decision. That is the right choice if you expect many layers or
     large rasters — it expands on demand, at whatever your provider charges.
 
-Docker and Docker Compose are installed by the installer if they are missing — you do not need to
-set them up first.
+**Docker** is installed for you if it is missing. **Docker Compose** is only checked for — if your
+distribution does not ship it, the installer stops and tells you to install `docker-compose-plugin`
+first. On a current Debian or Ubuntu it is already there.
 
 ## Install
 

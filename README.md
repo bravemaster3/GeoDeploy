@@ -58,8 +58,8 @@ publish, and through open standards other tools already speak.
 
 A Linux server. **4 GB of RAM is a comfortable recommendation** and two cores are plenty — tiling
 included. Disk depends on your data, not on GeoDeploy, and you can attach S3-compatible storage so
-capacity is never a server decision. Docker and Docker Compose are installed for you if missing. A
-domain name is optional but recommended.
+capacity is never a server decision. Docker is installed for you if missing; Docker Compose must already be
+available (it ships with current Debian/Ubuntu). A domain name is optional but recommended.
 
 ## Documentation
 
