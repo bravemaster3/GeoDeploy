@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import os
 import re
+
+from ..config import get_settings
 from dataclasses import dataclass, field
 
 ENV_PATH = os.getenv("GEODEPLOY_ENV_FILE", "/geodeploy/.env")
@@ -42,6 +44,9 @@ class EnvVar:
     choices: tuple[str, ...] = ()
     services: tuple[str, ...] = ("geodeploy-api", "celery")
     danger: bool = False
+    # Only listed when the instance is ALREADY a demo. Keeps sandbox settings out of a production
+    # owner's way, and — the real reason — keeps them from being discoverable there at all.
+    demo_only: bool = False
 
 
 EDITABLE: tuple[EnvVar, ...] = (
@@ -64,6 +69,18 @@ EDITABLE: tuple[EnvVar, ...] = (
            "Guarantees no feature is dropped in dense areas at high zoom, at the cost of slower tiling "
            "and a larger archive.",
            default="1", kind="bool", services=("celery",)),
+    # ── Demo-only. Note what is ABSENT: GEODEPLOY_DEMO_MODE itself is deliberately NOT editable
+    # here, on any install. It arms an hourly wipe that deletes everything the snapshot does not
+    # contain, so arming it must cost a deliberate edit to .env over SSH — friction is the point.
+    # These two only TUNE a sandbox that is already running, so they are safe to expose there.
+    EnvVar("GEODEPLOY_DEMO_SNAPSHOT", "Demo seed snapshot",
+           "The backup the hourly reset restores. Take a backup once the demo is seeded the way you "
+           "want visitors to find it, then name it here.",
+           default="", services=("celery",), demo_only=True),
+    EnvVar("GEODEPLOY_DEMO_MAX_UPLOAD_MB", "Demo upload limit (MB)",
+           "Largest file a demo visitor may upload. Lower it if visitors fill the disk between "
+           "resets.",
+           default="500", demo_only=True),
     EnvVar("MAX_LARGE_UPLOAD_BYTES", "Large-upload ceiling",
            "Upper bound on a single direct-to-storage upload, in bytes. Files above the chunking "
            "threshold bypass the API entirely, so this is about your storage, not your server.",
@@ -106,8 +123,13 @@ def read_all(path: str | None = None) -> dict[str, str]:
 
 
 def list_editable(path: str | None = None) -> list[dict]:
-    """The allow-listed variables with their current values, for the UI."""
+    """The allow-listed variables with their current values, for the UI.
+
+    Demo-only entries are omitted on a normal install — not merely hidden in the template, so they
+    never reach the browser at all.
+    """
     current = read_all(path)
+    demo = get_settings().geodeploy_demo_mode
     return [{
         "key": v.key, "label": v.label, "help": v.help, "kind": v.kind,
         "choices": list(v.choices), "default": v.default, "danger": v.danger,
@@ -115,7 +137,7 @@ def list_editable(path: str | None = None) -> list[dict]:
         "value": current.get(v.key, ""),
         "effective": current.get(v.key) or v.default,
         "is_default": v.key not in current or current[v.key] == v.default,
-    } for v in EDITABLE]
+    } for v in EDITABLE if demo or not v.demo_only]
 
 
 def validate(key: str, value: str) -> str:
@@ -123,6 +145,10 @@ def validate(key: str, value: str) -> str:
     spec = _BY_KEY.get(key)
     if spec is None:
         raise ValueError(f"{key} is not an editable setting.")
+    if spec.demo_only and not get_settings().geodeploy_demo_mode:
+        # The UI omitting it is presentation; this is the gate. A hand-crafted request must not be
+        # able to configure a sandbox on a production instance.
+        raise ValueError(f"{key} is only editable on a demo instance.")
     if "\n" in value or "\r" in value or '"' in value or "'" in value:
         raise ValueError("Value may not contain quotes or line breaks.")
     if spec.kind == "bool" and value.lower() not in ("true", "false", "1", "0", ""):

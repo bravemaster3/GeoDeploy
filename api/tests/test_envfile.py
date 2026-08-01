@@ -100,3 +100,49 @@ def test_missing_file_is_not_an_error(tmp_path):
     assert envfile.list_editable(p)          # defaults, no values
     envfile.write({"PMTILES_MAXZOOM": "8"}, p)
     assert "PMTILES_MAXZOOM=8" in open(p).read()
+
+
+# ── demo-only variables ─────────────────────────────────────────────────────────────────────
+
+def test_demo_settings_are_invisible_on_a_normal_install(env):
+    """A production owner must not even SEE sandbox settings, let alone a switch that arms an
+    hourly wipe."""
+    keys = {v["key"] for v in envfile.list_editable(env)}
+    assert "GEODEPLOY_DEMO_SNAPSHOT" not in keys
+    assert "GEODEPLOY_DEMO_MAX_UPLOAD_MB" not in keys
+
+
+def test_demo_settings_are_refused_on_a_normal_install(env):
+    """The UI omitting them is presentation. THIS is the gate — a hand-crafted request must not be
+    able to configure a sandbox on a production instance."""
+    with pytest.raises(ValueError):
+        envfile.write({"GEODEPLOY_DEMO_SNAPSHOT": "some-backup"}, env)
+
+
+def test_demo_settings_appear_once_the_instance_is_a_demo(env):
+    from geodeploy.config import get_settings
+    s = get_settings()
+    before = s.geodeploy_demo_mode
+    s.geodeploy_demo_mode = True
+    try:
+        keys = {v["key"] for v in envfile.list_editable(env)}
+        assert "GEODEPLOY_DEMO_SNAPSHOT" in keys
+        envfile.write({"GEODEPLOY_DEMO_SNAPSHOT": "seed-2026-08-01"}, env)
+        assert "seed-2026-08-01" in open(env).read()
+    finally:
+        s.geodeploy_demo_mode = before
+
+
+def test_the_arming_flag_is_never_editable(env):
+    """GEODEPLOY_DEMO_MODE must not be writable through this API on ANY instance, demo or not — it
+    is the one setting whose cost is a deliberate edit to .env."""
+    from geodeploy.config import get_settings
+    s = get_settings()
+    before = s.geodeploy_demo_mode
+    for state in (False, True):
+        s.geodeploy_demo_mode = state
+        try:
+            with pytest.raises(ValueError):
+                envfile.write({"GEODEPLOY_DEMO_MODE": "true"}, env)
+        finally:
+            s.geodeploy_demo_mode = before
