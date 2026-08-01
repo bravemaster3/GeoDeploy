@@ -14,8 +14,39 @@ celery_app = Celery(
              "geodeploy.tasks.geoparquet_import", "geodeploy.tasks.pmtiles_tile",
              "geodeploy.tasks.geoparquet_prep", "geodeploy.tasks.convert_upload",
              "geodeploy.tasks.geolibre_publish", "geodeploy.tasks.backup",
-             "geodeploy.tasks.restore"],
+             "geodeploy.tasks.restore", "geodeploy.tasks.demo_reset"],
 )
+
+# Beat entries. Split out of `conf.update` so the DEMO entry can be added conditionally and so a test
+# can assert the invariant that broke here: every task named in a schedule must also be in `include`,
+# or beat cheerfully sends a message the worker has never imported and cannot run.
+BEAT_SCHEDULE = {
+    # Scheduled backups. The tick is cheap and does nothing unless a schedule is configured; the
+    # SCHEDULE ITSELF lives in the DB and is read per tick, so changing it in Settings takes effect
+    # immediately instead of needing beat reconfigured (see tasks/backup.check_scheduled_backups).
+    "check-scheduled-backups": {
+        "task": "geodeploy.tasks.backup.check_scheduled_backups",
+        "schedule": 900.0,      # every 15 min
+        "options": {"queue": "backup"},
+    },
+}
+
+# Demo reset. Ticks every minute and no-ops unless it is the top of the hour — a fixed CLOCK, so the
+# banner can promise an exact time rather than "about once an hour".
+#
+# REGISTERED ONLY ON A DEMO. The task guards itself anyway, so scheduling it everywhere looked
+# harmless — it was not. A per-minute beat message costs a log line a minute on every install
+# forever, for a task that can never do anything there. Demo mode is meant to be invisible to a
+# normal install, and a schedule entry is not invisible.
+DEMO_BEAT = {
+    "demo-reset-tick": {
+        "task": "geodeploy.tasks.demo_reset.tick",
+        "schedule": 60.0,
+        "options": {"queue": "backup"},
+    },
+}
+if settings.geodeploy_demo_mode:
+    BEAT_SCHEDULE.update(DEMO_BEAT)
 
 celery_app.conf.update(
     task_serializer="json",
@@ -40,21 +71,7 @@ celery_app.conf.update(
     # Scheduled backups. The tick is cheap and does nothing unless a schedule is configured; the
     # SCHEDULE ITSELF lives in the DB and is read per tick, so changing it in Settings takes effect
     # immediately instead of needing beat reconfigured (see tasks/backup.check_scheduled_backups).
-    beat_schedule={
-        "check-scheduled-backups": {
-            "task": "geodeploy.tasks.backup.check_scheduled_backups",
-            "schedule": 900.0,      # every 15 min
-            "options": {"queue": "backup"},
-        },
-        # Demo reset. Ticks every minute and no-ops immediately unless demo mode is on AND it is the
-        # top of the hour — a fixed CLOCK, so the banner can promise an exact time rather than
-        # "about once an hour". Inert on every normal install.
-        "demo-reset-tick": {
-            "task": "geodeploy.tasks.demo_reset.tick",
-            "schedule": 60.0,
-            "options": {"queue": "backup"},
-        },
-    },
+    beat_schedule=BEAT_SCHEDULE,
     task_track_started=True,
     worker_prefetch_multiplier=1,
 )
