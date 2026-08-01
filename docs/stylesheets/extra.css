@@ -29,8 +29,12 @@
    negative margins in rem only ate the padding — leaving a visible gutter on three sides.
    `calc(50% - 50vw)` pulls each edge out to the VIEWPORT regardless of how wide that column is, and
    the negative top margin closes the gap under the header so the gradient meets it. */
+/* The top margin cancels the two separate spacings Material puts above the first block:
+   `.md-main__inner` (1.5rem) and `.md-content__inner`'s own padding (.6rem). Pulling back only the
+   first left a thin strip of page background between the header and the gradient. Written as the sum
+   rather than -2.1rem so it stays legible if either value changes upstream. */
 .gd-hero {
-  margin: -1.5rem calc(50% - 50vw) 3rem;
+  margin: calc(-1.5rem - .6rem) calc(50% - 50vw) 3rem;
   width: 100vw;
   padding: 5rem 2rem 4rem;
   text-align: center;
@@ -191,3 +195,77 @@
 /* Cards carrying an icon lead read better with the icon on its own line. */
 .md-typeset .grid.cards .lg.twemoji,
 .md-typeset .grid.cards svg.lg { height: 1.6rem; width: 1.6rem; }
+
+/* ── Roadmap: milestones, not a card wall ──────────────────────────────────
+   The complaint was that it did not read as a roadmap. A roadmap needs a SPINE — a visible sequence
+   you travel down — so releases are laid out as stops on a line rather than tiles in a grid. */
+.gd-rel {
+  position: relative;
+  padding-left: 2.2rem;
+  margin: 0 0 2.2rem;
+}
+/* The line itself, running through the whole sequence. */
+.gd-rel::before {
+  content: "";
+  position: absolute;
+  left: .62rem;
+  top: .35rem;
+  bottom: -2.2rem;
+  width: 2px;
+  background: linear-gradient(180deg, var(--gd-green), var(--md-default-fg-color--lightest));
+}
+.gd-rel:last-of-type::before { bottom: auto; height: 1.6rem; }
+/* The stop. Filled = shipped, hollow = still ahead. */
+.gd-rel::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: .28rem;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  border: 2px solid var(--gd-green);
+  background: var(--md-default-bg-color);
+}
+.gd-rel.done::after {
+  background: var(--gd-green);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--gd-green) 22%, transparent);
+}
+.gd-rel.now::after {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 4px rgba(245, 158, 11, .22);
+}
+.gd-rel > h3 {
+  margin: 0 0 .2rem !important;
+  font-size: .95rem;
+  letter-spacing: -.01em;
+}
+.gd-rel .gd-when {
+  font-size: .68rem;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--md-default-fg-color--light);
+}
+.gd-rel .gd-goal {
+  font-size: .78rem;
+  color: var(--md-default-fg-color--light);
+  margin: .35rem 0 .6rem;
+}
+/* Checklists read as progress rather than bullets. */
+.md-typeset .gd-rel .task-list-item { font-size: .78rem; line-height: 1.75; }
+.md-typeset .gd-rel .task-list-item.done { color: var(--md-default-fg-color--light); }
+
+/* Status chips used inline in prose. */
+.gd-chip {
+  display: inline-block;
+  padding: .05rem .45rem;
+  border-radius: 999px;
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  vertical-align: .12em;
+}
+.gd-chip-done { color: #22c55e; background: rgba(34, 197, 94, .14); }
+.gd-chip-now  { color: #f59e0b; background: rgba(245, 158, 11, .14); }
+.gd-chip-next { color: #38bdf8; background: rgba(56, 189, 248, .14); }
