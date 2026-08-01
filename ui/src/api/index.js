@@ -83,6 +83,8 @@ export const listAuditActions = () => api.get('/audit/actions')
 // run; the API container is recreated mid-update, so a row is closed by whichever poll of
 // /admin/update/status first sees a terminal phase.
 // Owner-only. The server exposes ONLY allow-listed variables, so this can never surface a secret.
+// Owner-only, audited server-side. Deliberately NOT called on page load — see ConnectionDetails.vue.
+export const getConnectionDetails = () => api.get('/admin/credentials')
 export const getEnvVars = () => api.get('/admin/env')
 export const saveEnvVars = (values) => api.put('/admin/env', { values })
 export const applyEnvVars = (values) => api.post('/admin/env/apply', { values })

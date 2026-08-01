@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     # Upload ceiling while in demo mode only. A self-hosted install has no such cap; the message the
     # user sees says so, because "too large" on a demo would otherwise read as a product limit.
     geodeploy_demo_max_upload_mb: int = 500
+    # Which backup is the seed the hourly reset restores. A setting rather than "the latest backup",
+    # because the latest backup of a demo is a snapshot of whatever visitors last did to it.
+    geodeploy_demo_snapshot: str = ""
     # Extra CORS origins allowed to call the API cross-origin (comma-separated), IN ADDITION to
     # localhost + GEODEPLOY_ORIGIN. Needed so a GeoLibre instance (e.g. https://web.geolibre.app, or a
     # desktop origin) can reach /api/interop to publish. Auth there is a Bearer token, not a cookie,

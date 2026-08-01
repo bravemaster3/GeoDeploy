@@ -124,6 +124,10 @@
         </div>
       </section>
 
+      <!-- Below Storage on purpose: this is where someone goes wondering "what ARE my credentials?"
+           after seeing how much space they use. Owner-only, and it fetches nothing until asked. -->
+      <ConnectionDetails v-if="auth.isOwner" />
+
       </div>
 
       <!-- Email tab (admin) -->
@@ -682,6 +686,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
+import ConnectionDetails from '@/components/infra/ConnectionDetails.vue'
 import { useSystemStore } from '@/stores/system'
 import { useAuthStore } from '@/stores/auth'
 import { ServerIcon, HardDriveIcon, UserIcon, RefreshIcon, MailIcon, KeyIcon, TrashIcon, AlertIcon } from './icons'

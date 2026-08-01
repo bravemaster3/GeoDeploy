@@ -46,6 +46,14 @@ celery_app.conf.update(
             "schedule": 900.0,      # every 15 min
             "options": {"queue": "backup"},
         },
+        # Demo reset. Ticks every minute and no-ops immediately unless demo mode is on AND it is the
+        # top of the hour — a fixed CLOCK, so the banner can promise an exact time rather than
+        # "about once an hour". Inert on every normal install.
+        "demo-reset-tick": {
+            "task": "geodeploy.tasks.demo_reset.tick",
+            "schedule": 60.0,
+            "options": {"queue": "backup"},
+        },
     },
     task_track_started=True,
     worker_prefetch_multiplier=1,

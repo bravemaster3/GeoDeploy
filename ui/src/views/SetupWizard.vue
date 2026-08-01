@@ -132,13 +132,22 @@ onMounted(async () => {
   }
 })
 
+// No "(recommended)" on either list. Which option is right depends on the person, not on us: someone
+// who already runs PostGIS should obviously use it, and someone expecting a lot of data should
+// obviously use S3. Labelling one choice as blessed makes the other look like a mistake, and pushed
+// people onto local storage who then found they could not grow past their disk. Each option says
+// WHO it is for, and lets the reader recognise themselves.
 const dbOptions = [
-  { value: 'local', label: 'Set up PostGIS on this server (recommended)', desc: 'GeoDeploy installs and manages PostgreSQL + PostGIS for you.' },
-  { value: 'external', label: 'Connect an existing PostGIS database', desc: 'Use a database you already manage.' },
+  { value: 'local', label: 'Let GeoDeploy set up PostGIS',
+    desc: 'Installs and manages PostgreSQL + PostGIS on this server. Nothing to configure, and it is backed up with everything else. Choose this if you do not already run a spatial database.' },
+  { value: 'external', label: 'Connect a PostGIS database you already have',
+    desc: 'Point GeoDeploy at an existing database — your own server, or a managed one. Choose this if you already run PostGIS, or want the database separate from this machine.' },
 ]
 const storageOptions = [
-  { value: 'local', label: 'Use local storage on this server (recommended)', desc: 'GeoDeploy installs and manages MinIO (S3-compatible) for you.' },
-  { value: 's3', label: 'Connect your own S3-compatible bucket', desc: 'AWS S3, Hetzner Object Storage, Cloudflare R2, Backblaze B2.' },
+  { value: 'local', label: 'Store files on this server',
+    desc: 'Installs and manages MinIO here. Fast and free, but limited by the disk on this machine — growing later means attaching a bigger volume. Good for a modest amount of data.' },
+  { value: 's3', label: 'Use S3-compatible object storage',
+    desc: 'AWS S3, Hetzner Object Storage, Cloudflare R2, Backblaze B2. Grows on demand and is billed by what you use — the better choice if you expect many layers or large rasters.' },
 ]
 
 async function next() {

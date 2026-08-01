@@ -236,6 +236,53 @@ async def start_update(user: User = Depends(require_admin), db: AsyncSession = D
     return {"status": "started"}
 
 
+@router.get("/credentials")
+async def connection_details(user: User = Depends(require_owner), db: AsyncSession = Depends(get_db)):
+    """The instance's OWN database and object-storage connection details, secrets included.
+
+    OWNER-only and audited. This is the one endpoint that deliberately returns secrets, so the
+    reasoning is worth stating: the credentials for the PostGIS and MinIO that GeoDeploy provisioned
+    for you are generated during setup and then never shown anywhere. Wanting them is legitimate and
+    common — pointing a backup destination at your own MinIO, connecting QGIS straight to PostGIS,
+    running a query — and the only way to get them today is to read .env over SSH, which is exactly
+    the terminal dependency the Environment tab exists to remove.
+
+    It is not a new capability: an owner can already enable the terminal, or read the file. It makes
+    an existing power convenient rather than granting a new one. Still owner-only, still audited, and
+    the UI keeps the values masked until asked for.
+    """
+    from ..models import SetupConfig
+    cfg = (await db.execute(select(SetupConfig))).scalars().first()
+    settings = get_settings()
+    await record_audit(db, user, "admin.credentials.view", "system", None, {})
+
+    # Prefer the persisted setup values; fall back to the running settings, which is what a
+    # pre-wizard or env-configured install actually uses.
+    def pick(attr, fallback):
+        return (getattr(cfg, attr, None) if cfg else None) or fallback
+
+    return {
+        "database": {
+            "host": pick("postgis_host", settings.postgis_host),
+            "port": pick("postgis_port", settings.postgis_port),
+            "database": pick("postgis_db", settings.postgis_db),
+            "user": pick("postgis_user", settings.postgis_user),
+            "password": pick("postgis_password", settings.postgis_password),
+            # Ready to paste into a client. The host is the one GeoDeploy itself uses, which on a
+            # default install is the container name — reachable from the server, not the internet.
+            "managed": (cfg.postgis_type if cfg else None) != "external",
+        },
+        "storage": {
+            "endpoint": pick("storage_endpoint", settings.storage_endpoint),
+            "bucket": pick("storage_bucket", settings.storage_bucket),
+            "access_key": pick("storage_access_key", settings.storage_access_key),
+            "secret_key": pick("storage_secret_key", settings.storage_secret_key),
+            "region": pick("storage_region", settings.storage_region),
+            "managed": (cfg.storage_type if cfg else None) in (None, "local"),
+        },
+    }
+
+
 class EnvUpdate(BaseModel):
     values: dict[str, str]
 

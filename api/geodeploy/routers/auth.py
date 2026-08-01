@@ -121,9 +121,15 @@ async def demo_info():
     settings = get_settings()
     if not settings.geodeploy_demo_mode:
         return {"demo": False}
+    # Next top of the hour, in UTC. The server owns this rather than the browser computing it, so a
+    # visitor in any timezone — or with a wrong clock — sees the same countdown the reset obeys.
+    now = datetime.now(timezone.utc)
+    nxt = (now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
     return {
         "demo": True,
         "max_upload_mb": settings.geodeploy_demo_max_upload_mb,
+        "next_reset": nxt.isoformat(),
+        "server_time": now.isoformat(),
     }
 
 
