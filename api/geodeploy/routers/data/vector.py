@@ -16,7 +16,7 @@ from ...models import Portal, UploadJob, User, VectorLayer
 from ...schemas import DefaultStyle, JobStatus, LayerRename, PortalRefOut, SharingUpdate, VectorLayerOut
 from ...services import martin as martin_svc
 from ...tasks.vector_ingest import ingest_vector
-from ..common import (apply_sharing, busy_job_progress, by_ref, creator_names, portals_using,
+from ..common import (apply_sharing, demo_upload_cap, busy_job_progress, by_ref, creator_names, portals_using,
                       prune_layer_from_portals, record_audit, visible_to)
 
 router = APIRouter(prefix="/data/vector", tags=["vector"])
@@ -328,6 +328,7 @@ async def multipart_initiate(body: MultipartInitiate, user: User = Depends(requi
     """Begin a chunked upload: validate, mint a key under the user's prefix, open the S3 multipart
     upload, and return a presigned PUT URL for every part. The key convention matches the single-PUT
     flows so /geoparquet/complete and /large/complete accept it unchanged."""
+    demo_upload_cap(body.file_size)
     import math
     from ...services import minio as minio_svc
     ext = os.path.splitext(body.filename or "")[1].lower()

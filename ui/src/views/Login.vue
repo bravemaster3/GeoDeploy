@@ -2,7 +2,36 @@
   <div class="min-h-screen bg-muted/40 flex items-center justify-center p-4">
     <div class="w-full max-w-sm">
       <div class="text-center mb-8">
+        <img :src="logoDark" alt="" class="w-14 h-14 mx-auto mb-3" />
         <h1 class="text-2xl font-bold text-foreground">GeoDeploy</h1>
+      </div>
+
+      <!-- DEMO: join with a name. Rendered only when the server says this instance is a demo, so a
+           normal install's login page is byte-identical to what it was. Placed first and styled as
+           the primary action because on a demo it is the ONLY thing a visitor can usefully do —
+           they have no account to sign in with. -->
+      <div v-if="isDemo && mode === 'login'" class="card p-6 space-y-4 mb-4 border-primary/40">
+        <div>
+          <p class="text-sm font-medium text-foreground">Try GeoDeploy</p>
+          <p class="text-xs text-muted-foreground mt-1">
+            No sign-up, no email. Pick a name and you are in.
+          </p>
+        </div>
+        <div>
+          <label class="label">Your name</label>
+          <input v-model="demoName" class="input" placeholder="e.g. Ada" maxlength="60"
+            @keydown.enter="joinDemo" />
+        </div>
+        <div v-if="demoError" class="text-sm text-red-400">{{ demoError }}</div>
+        <button @click="joinDemo" :disabled="demoBusy || !demoName.trim()"
+          class="btn-primary w-full justify-center disabled:opacity-50">
+          <span v-if="demoBusy" class="animate-spin">⟳</span>
+          Start exploring
+        </button>
+        <p class="text-[11px] text-muted-foreground/70 leading-snug">
+          Everything in this demo is wiped about once an hour, and everyone shares one workspace —
+          treat it as a sandbox, not storage.
+        </p>
       </div>
 
       <!-- Forgot-password (only offered when the instance has outgoing email configured) -->
@@ -66,7 +95,8 @@
 import { onMounted, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { forgotPassword, getSetupStatus, oidcStatus } from '@/api'
+import logoDark from '@/assets/logo-dark.svg'
+import { forgotPassword, getSetupStatus, oidcStatus, getDemoInfo, demoJoin } from '@/api'
 
 const router = useRouter()
 const route = useRoute()
@@ -76,12 +106,39 @@ const password = ref('')
 const error = ref('')
 const busy = ref(false)
 const mode = ref('login')
+
+// ── Demo join ──────────────────────────────────────────────────────────────────────────────
+// isDemo stays false unless the SERVER says otherwise, so nothing below renders on a normal install.
+const isDemo = ref(false)
+const demoName = ref('')
+const demoBusy = ref(false)
+const demoError = ref('')
+
+async function joinDemo() {
+  const name = demoName.value.trim()
+  if (!name) return
+  demoBusy.value = true
+  demoError.value = ''
+  try {
+    const { data } = await demoJoin(name)
+    auth.setToken(data.access_token)
+    await auth.fetchMe()
+    router.push('/data')
+  } catch (e) {
+    demoError.value = e.response?.data?.detail || 'Could not start the demo. Try again.'
+  } finally {
+    demoBusy.value = false
+  }
+}
 const forgotDone = ref(false)
 const emailEnabled = ref(false)
 const ssoEnabled = ref(false)
 const ssoLabel = ref('Single sign-on')
 
 onMounted(async () => {
+  // Failure means "not a demo" — a normal install answers {demo:false}, and an error must not turn
+  // the login page into a join form.
+  try { isDemo.value = !!(await getDemoInfo()).data.demo } catch { isDemo.value = false }
   // An SSO refusal (unknown account, blocked domain, provider error) bounces here with ?sso_error=.
   if (typeof route.query.sso_error === 'string') error.value = route.query.sso_error
   try {

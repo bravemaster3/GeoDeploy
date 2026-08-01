@@ -16,8 +16,10 @@ exclude_docs: |
 theme:
   name: material
   language: en
+  # The site is dark by default, so the dark-variant mark is the one shown in the header.
+  logo: assets/logo-dark.svg
+  favicon: assets/logo.svg
   icon:
-    logo: material/earth
     repo: fontawesome/brands/github
   # DARK FIRST. The product is a dark dashboard and the screenshots are dark, so a light docs page
   # around a dark screenshot looks like a mistake. The light scheme stays available via the toggle,

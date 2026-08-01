@@ -14,6 +14,18 @@ class Settings(BaseSettings):
     geodeploy_port: int = 8000
     geodeploy_env: str = "production"
     geodeploy_data_dir: str = "/data"
+    # ── DEMO MODE ────────────────────────────────────────────────────────────────────────────
+    # OFF unless explicitly set. Everything it enables is additive and guarded by an explicit check
+    # on this flag, so a normal install must behave EXACTLY as it did before this existed — that is
+    # the contract, and tests/test_demo_mode.py pins it rather than trusting it.
+    #
+    # It is a public sandbox: anyone may join with a name, gets the EDITOR role (so the existing role
+    # system already withholds terminal, environment, services, backups and user management), and the
+    # instance is wiped on a schedule. Never switch this on for an instance holding real data.
+    geodeploy_demo_mode: bool = False
+    # Upload ceiling while in demo mode only. A self-hosted install has no such cap; the message the
+    # user sees says so, because "too large" on a demo would otherwise read as a product limit.
+    geodeploy_demo_max_upload_mb: int = 500
     # Extra CORS origins allowed to call the API cross-origin (comma-separated), IN ADDITION to
     # localhost + GEODEPLOY_ORIGIN. Needed so a GeoLibre instance (e.g. https://web.geolibre.app, or a
     # desktop origin) can reach /api/interop to publish. Auth there is a Bearer token, not a cookie,

@@ -14,7 +14,7 @@ from ...schemas import JobStatus, LayerRename, PortalRefOut, RasterDefaultStyle,
 from ...services import share_links
 from ...services.titiler import get_tile_url as raster_tile_url, COLORMAPS
 from ...tasks.raster_ingest import ingest_raster
-from ..common import (apply_sharing, busy_job_progress, by_ref, creator_names, portals_using,
+from ..common import (apply_sharing, demo_upload_cap, busy_job_progress, by_ref, creator_names, portals_using,
                       prune_layer_from_portals, record_audit, visible_to)
 
 router = APIRouter(prefix="/data/raster", tags=["raster"])
@@ -178,6 +178,7 @@ def _raster_key(user_id: int, filename: str) -> str:
 async def raster_multipart_initiate(body: MultipartInitiate,
                                     user: User = Depends(require_scope("data:write"))):
     """Open a chunked upload for a raster and presign every part."""
+    demo_upload_cap(body.file_size)
     import math
 
     from ...services import minio as minio_svc

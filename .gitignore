@@ -46,9 +46,9 @@ data/certbot/
 .DS_Store
 Thumbs.db
 
-# External reference repos (local clones, not part of GeoDeploy)
-GeoLibre/
-vendor/geolens/
+# Local-only working directory: reference clones and anything else not part of GeoDeploy.
+# One recursive entry ON PURPOSE — naming the individual clones here would put them in a public
+# file, which is the opposite of keeping them local.
 vendor/
 
 # Scratch portal-config dumps written by examples/geodeploy_cli.py (portal-get)

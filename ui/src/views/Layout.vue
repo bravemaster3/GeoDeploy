@@ -15,7 +15,8 @@
       <!-- Brand + collapse toggle -->
       <div class="h-[57px] border-b border-border flex items-center"
         :class="collapsed ? 'justify-center px-0' : 'px-5 gap-2.5'">
-        <span class="w-2.5 h-2.5 rounded-full bg-primary shadow-[0_0_10px_hsl(var(--primary)/.6)] flex-shrink-0" />
+        <!-- Dark UI by default, so the dark-variant mark is the one that reads here. -->
+        <img :src="logoDark" alt="" class="w-6 h-6 flex-shrink-0" />
         <span v-if="!collapsed" class="font-bold text-foreground text-[15px] tracking-tight">GeoDeploy</span>
         <button v-if="!collapsed" @click="toggle" title="Collapse sidebar"
           class="ml-auto flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center text-muted-foreground/70 hover:text-foreground hover:bg-muted/60">
@@ -75,6 +76,7 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, RouterLink, RouterView } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import logoDark from '@/assets/logo-dark.svg'
 import { DatabaseIcon, GlobeIcon, LayoutIcon, SettingsIcon, UsersIcon, ActivityIcon } from './icons'
 
 const auth = useAuthStore()

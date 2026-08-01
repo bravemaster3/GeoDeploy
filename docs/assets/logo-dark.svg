@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 240 240">
+  <defs><clipPath id="gcd"><circle cx="120" cy="120" r="90"></circle></clipPath></defs>
+  <g clip-path="url(#gcd)">
+    <ellipse cx="120" cy="120" rx="38" ry="90" fill="none" stroke="#bfc8cf" stroke-width="6"></ellipse>
+    <ellipse cx="120" cy="120" rx="90" ry="38" fill="none" stroke="#bfc8cf" stroke-width="6"></ellipse>
+    <line x1="30" y1="120" x2="210" y2="120" stroke="#bfc8cf" stroke-width="6"></line>
+    <line x1="120" y1="30" x2="120" y2="210" stroke="#bfc8cf" stroke-width="6"></line>
+  </g>
+  <circle cx="120" cy="120" r="90" fill="none" stroke="#ffffff" stroke-width="11"></circle>
+  <g transform="translate(165,165) rotate(-45)">
+    <rect x="-11" y="-32" width="22" height="72" rx="11" fill="#2e9c62"></rect>
+    <polygon points="-22,-22 22,-22 0,-60" fill="#3fbb7a"></polygon>
+  </g>
+  <circle cx="150" cy="72" r="9" fill="#ffffff"></circle>
+</svg>

@@ -325,6 +325,48 @@ _PUBLIC_CORS = re.compile(
 )
 
 
+class _DemoUploadCap:
+    """DEMO ONLY: refuse request bodies over the demo ceiling.
+
+    PURE ASGI, deliberately — NOT `@app.middleware("http")`. That decorator is Starlette's
+    BaseHTTPMiddleware, which runs the rest of the app in a separate anyio task; stacking a second one
+    broke the `get_db` dependency teardown so that COMMITS WERE SILENTLY ROLLED BACK. Every write in
+    the app, not just demo uploads. A pure-ASGI wrapper adds no task and no context switch, so it
+    cannot do that.
+
+    Content-Length is enough here: every browser upload sets it, and the check exists as a courtesy —
+    the real enforcement for direct-to-storage uploads is `demo_upload_cap()` at the multipart
+    initiate, which is where a size that never passes through the API is declared.
+
+    Inert unless demo mode is on: a normal install keeps its full 2 GB API cap.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http" and scope.get("method") in ("POST", "PUT", "PATCH"):
+            settings = get_settings()
+            if settings.geodeploy_demo_mode:
+                limit = settings.geodeploy_demo_max_upload_mb * 1024 * 1024
+                raw = dict(scope.get("headers") or {}).get(b"content-length")
+                try:
+                    declared = int(raw) if raw else 0
+                except ValueError:
+                    declared = 0
+                if declared > limit:
+                    from fastapi.responses import JSONResponse
+                    await JSONResponse(status_code=413, content={"detail": (
+                        f"This demo caps uploads at {settings.geodeploy_demo_max_upload_mb} MB "
+                        f"(yours is {declared / 1024 / 1024:.0f} MB). The limit exists only here — a "
+                        f"GeoDeploy you install yourself has no such cap.")})(scope, receive, send)
+                    return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(_DemoUploadCap)
+
+
 @app.middleware("http")
 async def _public_data_cors(request, call_next):
     public = bool(_PUBLIC_CORS.match(request.url.path))

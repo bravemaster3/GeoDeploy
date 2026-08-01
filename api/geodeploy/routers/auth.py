@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -11,8 +12,8 @@ from ..database import get_db
 from ..deps import SESSION_COOKIE, get_current_user, resolve_cookie_user
 from ..models import Invitation, User
 from ..schemas import (
-    AcceptInviteRequest, ForgotPasswordRequest, InvitePublicOut, PasswordChangeRequest,
-    PasswordResetRequest, TokenResponse, UserOut,
+    AcceptInviteRequest, DemoJoinRequest, ForgotPasswordRequest, InvitePublicOut,
+    PasswordChangeRequest, PasswordResetRequest, TokenResponse, UserOut,
 )
 from ..services import notifications
 from .common import record_audit
@@ -108,6 +109,63 @@ async def _valid_invitation(token: str, db: AsyncSession) -> Invitation:
     if inv.used_at is not None or inv.expires_at <= utcnow():
         raise HTTPException(410, "This link has expired or was already used.")
     return inv
+
+
+@router.get("/demo")
+async def demo_info():
+    """PUBLIC: whether this instance is a demo, so the UI can show the banner and the join form.
+
+    Always answers — a normal install replies `{"demo": false}` rather than 404, because the UI asks
+    on every load and a 404 would be indistinguishable from the endpoint being broken.
+    """
+    settings = get_settings()
+    if not settings.geodeploy_demo_mode:
+        return {"demo": False}
+    return {
+        "demo": True,
+        "max_upload_mb": settings.geodeploy_demo_max_upload_mb,
+    }
+
+
+@router.post("/demo/join", response_model=TokenResponse)
+async def demo_join(body: DemoJoinRequest, request: Request, response: Response,
+                    db: AsyncSession = Depends(get_db)):
+    """PUBLIC, DEMO ONLY: take a name, hand back a session as an EDITOR.
+
+    Editor is deliberate rather than a bespoke "demo" role: the existing role system already withholds
+    the terminal, environment variables, service control, backups and user management from editors, so
+    the dangerous surface is closed by the rules that already exist instead of by a second set of
+    demo-specific gates that could drift out of step with them.
+
+    404 — not 403 — when demo mode is off. On a normal install this route should be indistinguishable
+    from one that does not exist.
+    """
+    settings = get_settings()
+    if not settings.geodeploy_demo_mode:
+        raise HTTPException(404, "Not found.")
+
+    from .users import utcnow
+    name = body.name.strip()[:60] or "Guest"
+    # A synthetic, unique address: the User model needs one, but nothing is ever sent to it. `.invalid`
+    # is reserved by RFC 2606 precisely so it can never resolve to a real mailbox.
+    email = f"demo-{uuid.uuid4().hex[:12]}@demo.invalid"
+    user = User(
+        email=email,
+        name=name,
+        # A random password nobody is given: the account is reachable only through the session minted
+        # here, so it cannot be signed back into after this browser forgets it.
+        hashed_password=_pwd.hash(uuid.uuid4().hex),
+        role="editor",
+        is_admin=False,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+    token_str = _create_token(user)
+    _set_session_cookie(response, token_str, request)
+    # TokenResponse is token-only, exactly as the invitation flow returns; the client reads /auth/me.
+    return TokenResponse(access_token=token_str, token_type="bearer")
 
 
 @router.get("/invitations/{token}", response_model=InvitePublicOut)

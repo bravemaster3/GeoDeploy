@@ -303,6 +303,12 @@ class InvitePublicOut(BaseModel):
     purpose: str
 
 
+class DemoJoinRequest(BaseModel):
+    """A name is the only thing a demo visitor supplies. No email, no password — the account is
+    disposable and the instance is wiped on a schedule."""
+    name: str = Field(min_length=1, max_length=60)
+
+
 class AcceptInviteRequest(BaseModel):
     name: str
     password: str = Field(min_length=8)

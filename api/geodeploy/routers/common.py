@@ -1,3 +1,4 @@
+from fastapi import HTTPException
 """Shared helpers for the resource routers (A-01 shared-workspace + A-02 per-resource sharing).
 
 Since A-01, GeoDeploy is a single shared workspace and the ROLE (viewer/editor/admin/owner)
@@ -12,6 +13,7 @@ import logging
 from sqlalchemy import or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import get_settings
 from ..models import AuditLog, Portal, UploadJob, User
 
 logger = logging.getLogger(__name__)
@@ -126,6 +128,24 @@ async def record_audit(db: AsyncSession, actor, action: str, resource_type: str 
 # Roles that see + act on EVERY resource regardless of its visibility (workspace governance:
 # bulk review, delete-reassign, sharing changes). Keep in sync with deps.ROLE_ORDER's top tiers.
 _GOVERNANCE_ROLES = ("admin", "owner")
+
+
+def demo_upload_cap(file_size: int | None) -> None:
+    """DEMO ONLY: cap a DIRECT-TO-STORAGE upload at the multipart initiate.
+
+    The Content-Length middleware in main.py cannot see these — the bytes go browser to S3 and never
+    pass through the API — so the size declared at initiate is the one chance to refuse. No-op unless
+    demo mode is on, so a normal install keeps its full limits.
+    """
+    settings = get_settings()
+    if not settings.geodeploy_demo_mode or not file_size:
+        return
+    limit = settings.geodeploy_demo_max_upload_mb * 1024 * 1024
+    if file_size > limit:
+        raise HTTPException(413, (
+            f"This demo caps uploads at {settings.geodeploy_demo_max_upload_mb} MB "
+            f"(yours is {file_size / 1024 / 1024:.0f} MB). The limit exists only here — a GeoDeploy "
+            f"you install yourself has no such cap."))
 
 
 def visible_to(user: User, model):

@@ -22,6 +22,10 @@ api.interceptors.response.use(
 export default api
 
 // Setup
+// Answers on every install: {demo:false} normally, so the banner and join form simply do not render.
+export const getDemoInfo = () => api.get('/auth/demo')
+export const demoJoin = (name) => api.post('/auth/demo/join', { name })
+
 export const getSetupStatus = () => api.get('/setup/status')
 export const configureDB = (data) => api.post('/setup/configure-db', data)
 export const configureStorage = (data) => api.post('/setup/configure-storage', data)
