@@ -235,6 +235,19 @@
               </button>
               <span v-if="bkMsg" class="text-xs" :class="bkMsg.ok ? 'text-emerald-400' : 'text-red-400'">{{ bkMsg.text }}</span>
             </div>
+
+            <!-- Shown only when the test proved the credentials work and the bucket simply is not
+                 there. Sending someone to a provider console to type a name the app already knows
+                 is friction with no safety gain — creating a bucket destroys nothing. -->
+            <div v-if="bkMissingBucket" class="flex items-center gap-3 flex-wrap p-3 rounded-lg border border-amber-500/30 bg-amber-500/10">
+              <span class="text-xs text-amber-200/90">
+                Create <span class="font-mono">{{ bkMissingBucket }}</span> at this endpoint now?
+              </span>
+              <button @click="createBucket" :disabled="bkCreating"
+                class="btn-secondary text-xs px-3 py-1.5 disabled:opacity-60">
+                {{ bkCreating ? 'Creating...' : 'Create it' }}
+              </button>
+            </div>
           </div>
         </section>
 
@@ -692,7 +705,7 @@ import { useAuthStore } from '@/stores/auth'
 import { ServerIcon, HardDriveIcon, UserIcon, RefreshIcon, MailIcon, KeyIcon, TrashIcon, AlertIcon } from './icons'
 import api, { changePassword, logoutAll, controlService, getEmailSettings, sendTestEmail,
               updateEmailSettings, listTokens, revokeToken, getOidcSettings, updateOidcSettings,
-              getBackupSettings, updateBackupSettings, testBackupDestination,
+              getBackupSettings, updateBackupSettings, testBackupDestination, createBackupBucket,
               listBackupRuns, startBackup, listStoredBackups, deleteStoredBackup,
               restorePreflight, startRestore } from '@/api'
 import TokenModal from '@/components/users/TokenModal.vue'
@@ -753,6 +766,10 @@ const bkSaving = ref(false)
 const bkTesting = ref(false)
 const bkRunning = ref(false)
 const bkMsg = ref(null)
+// Set only by a test that failed with "bucket_missing"; clearing it hides the offer again, so the
+// button cannot linger next to a message it no longer belongs to.
+const bkMissingBucket = ref('')
+const bkCreating = ref(false)
 let bkPoll = null
 
 const bkRunPages = computed(() => Math.max(1, Math.ceil(bkRuns.value.length / BK_PER_PAGE)))
@@ -877,6 +894,7 @@ async function saveBackups() {
   bkSaving.value = true
   bkMsg.value = null
   try {
+    bkMissingBucket.value = ''      // the name may have just changed; re-test to re-offer
     const payload = { ...bk }
     delete payload.secret_set
     if (!payload.secret_key) delete payload.secret_key   // blank = keep stored
@@ -890,17 +908,42 @@ async function saveBackups() {
   }
 }
 
+// The bucket-missing failure carries a structured detail; everything else is a plain string.
+// Read both shapes rather than rendering "[object Object]" at the one moment the message matters.
+function errText(e, fallback) {
+  const d = e.response?.data?.detail
+  return (typeof d === 'string' ? d : d?.message) || fallback
+}
+
 async function testBackups() {
   bkTesting.value = true
   bkMsg.value = null
+  bkMissingBucket.value = ''
   try {
     const { data } = await testBackupDestination()
     bkMsg.value = { ok: true,
       text: `Destination is reachable and writable (region: ${data.region}).` }
   } catch (e) {
-    bkMsg.value = { ok: false, text: e.response?.data?.detail || 'Could not reach the destination.' }
+    const d = e.response?.data?.detail
+    // Reachable, credentials good, bucket absent — the one failure fixable from right here.
+    if (d?.code === 'bucket_missing') bkMissingBucket.value = d.bucket
+    bkMsg.value = { ok: false, text: errText(e, 'Could not reach the destination.') }
   } finally {
     bkTesting.value = false
+  }
+}
+
+async function createBucket() {
+  bkCreating.value = true
+  try {
+    const { data } = await createBackupBucket()
+    bkMissingBucket.value = ''
+    bkMsg.value = { ok: true,
+      text: `Created ${data.bucket} — reachable and writable (region: ${data.region}).` }
+  } catch (e) {
+    bkMsg.value = { ok: false, text: errText(e, 'Could not create the bucket.') }
+  } finally {
+    bkCreating.value = false
   }
 }
 

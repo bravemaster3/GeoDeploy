@@ -37,7 +37,10 @@ now REJECT token requests, so any route not explicitly `require_scope`-annotated
   and RE-PUBLISHES the published ones (best-effort, lazy-imports `_rebuild_bundle`) so no "ghost" layer
   lingers in the live map/editor. The delete audit detail records `portals_updated`.
 - `backups.py` — **admin-only + browser-only** backup config, history and manual runs
-  (`/backups/settings`, `/settings/test`, `/runs`, `/stored`, `/run`, `DELETE /stored/{key}`).
+  (`/backups/settings`, `/settings/test`, `/settings/bucket`, `/runs`, `/stored`, `/run`,
+  `DELETE /stored/{key}`). `POST /settings/bucket` CREATES the destination bucket — offered by the
+  settings page only after `/settings/test` failed with a structured `bucket_missing` detail, which
+  is the moment the provider has already accepted the credentials. It refuses the live data bucket.
   Browser-only on purpose: these settings hold the credentials to the one copy that survives losing
   this instance, so a scoped API token must not be able to read them or re-point them. The
   destination secret is **write-only** (blank keeps the stored value; `secret_set` tells the UI one
@@ -248,6 +251,9 @@ deliberately NOT visibility-filtered (published portals depend on them).
 ## Last updated
 2026-07-30 (public `GET /portals/{slug}/catalog` feed for catalog portals scoped to "all public")
 2026-07-30 (deployment history + log options for the consolidated Infrastructure panel)
+2026-08-01 (`backups.py` gains `POST /settings/bucket`; `/settings/test` returns a structured
+`{code: bucket_missing, bucket, message}` detail for that one failure so the UI can offer to fix it)
+
 2026-07-30 (new `backups.py` — destination config, history, manual run)
 2026-07-30 (activity log paginated + server-side filters/date range + `/audit/actions`)
 2026-07-29 (stable public `uid` on layers + `common.by_ref`; SQLite WAL/busy_timeout)

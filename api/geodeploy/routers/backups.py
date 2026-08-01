@@ -91,10 +91,39 @@ async def test_destination(_: User = Depends(require_admin), db: AsyncSession = 
         raise HTTPException(400, "Set the destination bucket and credentials first.")
     try:
         return await run_in_threadpool(bk.verify_destination, cfg)
+    except bk.BucketMissing as exc:
+        # A STRUCTURED detail for this one case, so the settings page can offer to create the
+        # bucket instead of only printing the sentence. `message` carries the same text every other
+        # failure sends as a bare string — the UI reads either shape.
+        raise HTTPException(400, {"code": "bucket_missing", "bucket": exc.bucket,
+                                  "message": str(exc)}) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(502, f"Could not reach the destination: {exc}") from exc
+
+
+@router.post("/settings/bucket")
+async def create_bucket(user: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    """Create the configured destination bucket.
+
+    Reachable from the "Test destination" failure, which is the moment the operator has the problem
+    and the app already holds credentials the provider has just accepted. Sending them to a
+    provider console to type the same name is friction with no safety benefit — the destructive
+    direction is deleting a bucket, and that is not offered here.
+    """
+    cfg = await _config(db)
+    if not cfg.backup_bucket or not cfg.backup_access_key or not cfg.backup_secret_key:
+        raise HTTPException(400, "Set the destination bucket and credentials first.")
+    try:
+        result = await run_in_threadpool(bk.create_destination_bucket, cfg)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Could not reach the destination: {exc}") from exc
+    await record_audit(db, user, "backup.bucket.create", "backup", None,
+                       {"bucket": cfg.backup_bucket, "endpoint": cfg.backup_endpoint})
+    return result
 
 
 @router.get("/runs", response_model=list[BackupRunOut])

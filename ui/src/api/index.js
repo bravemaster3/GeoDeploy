@@ -98,6 +98,9 @@ export const listDeployments = (limit = 20) => api.get('/admin/deployments', { p
 export const getBackupSettings = () => api.get('/backups/settings')
 export const updateBackupSettings = (data) => api.put('/backups/settings', data)
 export const testBackupDestination = () => api.post('/backups/settings/test')
+// Offered only when the test failed with code "bucket_missing" — the provider accepted the
+// signature, so the same credentials can create what is missing.
+export const createBackupBucket = () => api.post('/backups/settings/bucket')
 export const listBackupRuns = (limit = 20) => api.get('/backups/runs', { params: { limit } })
 export const listStoredBackups = () => api.get('/backups/stored')
 export const startBackup = () => api.post('/backups/run')

@@ -96,12 +96,31 @@ def _norm(endpoint: str | None) -> str:
     return (endpoint or "").rstrip("/").lower()
 
 
+class BucketMissing(ValueError):
+    """The destination is reachable and the credentials are good — the bucket simply is not there.
+
+    A distinct type because it is the one failure the operator can fix from where they are standing:
+    the same credentials that just proved themselves can create it. Everything else
+    (`verify_destination` raising plain ValueError) needs them to go and change something.
+    """
+
+    def __init__(self, message: str, bucket: str):
+        super().__init__(message)
+        self.bucket = bucket
+
+
+def _same_as_live_data(cfg) -> bool:
+    """True when the destination IS the live data bucket. Backing up into the bucket being backed up
+    protects against nothing, so both `verify_destination` and bucket creation refuse it."""
+    settings = get_settings()
+    return (_norm(cfg.backup_endpoint) == _norm(settings.storage_endpoint)
+            and (cfg.backup_bucket or "") == (settings.storage_bucket or ""))
+
+
 def verify_destination(cfg) -> dict:
     """Check the destination is reachable, writable, and NOT the live data bucket. Returns a small
     report for the settings page; raises ValueError with a user-facing message on refusal."""
-    settings = get_settings()
-    if _norm(cfg.backup_endpoint) == _norm(settings.storage_endpoint) \
-            and (cfg.backup_bucket or "") == (settings.storage_bucket or ""):
+    if _same_as_live_data(cfg):
         raise ValueError(
             "The backup destination is the same endpoint AND bucket as your live data. "
             "A copy that dies with the original is not a backup — use a different bucket, "
@@ -130,11 +149,63 @@ def verify_destination(cfg) -> dict:
                          else " This key can see no buckets at this endpoint.")
             except ClientError:
                 pass      # key may lack ListAllMyBuckets — the main hint still stands
-            raise ValueError(hint) from exc
+            # BucketMissing, not ValueError: the settings page turns this one into a "Create it"
+            # button, because the credentials needed to create the bucket are the ones that just
+            # produced this error.
+            raise BucketMissing(hint, cfg.backup_bucket or "") from exc
         raise ValueError(f"Could not write to the destination bucket ({code or 'error'}): "
                          f"{message}") from exc
     return {"ok": True, "bucket": cfg.backup_bucket, "prefix": cfg.backup_prefix,
             "region": region}      # what we actually signed with, so a blank field is explainable
+
+
+def create_destination_bucket(cfg) -> dict:
+    """Create the configured destination bucket, then prove it is writable.
+
+    Only reachable after `verify_destination` raised `BucketMissing`, which means the provider
+    already accepted the signature — so this is not a blind attempt with unvalidated credentials.
+
+    It refuses the live data bucket for the same reason `verify_destination` does: a "backup" that
+    lives in the bucket being backed up is not one. The check matters more here, because creation is
+    the one path that could bring such a destination into existence rather than merely reject it.
+    """
+    if _same_as_live_data(cfg):
+        raise ValueError(
+            "That is the bucket your live data is in. A backup has to go somewhere else — "
+            "a different bucket, ideally a different provider.")
+    if not (cfg.backup_bucket or "").strip():
+        raise ValueError("Set the destination bucket name first.")
+
+    region = cfg.backup_region or infer_region(cfg.backup_endpoint) or "us-east-1"
+    s3 = make_client(cfg.backup_endpoint, cfg.backup_access_key, cfg.backup_secret_key, region)
+
+    # `LocationConstraint` is required by AWS everywhere EXCEPT us-east-1, where sending it is an
+    # error, and it is meaningless to R2 (which signs with the literal "auto"). MinIO ignores it.
+    # So: send it only when it is both meaningful and legal.
+    kwargs = {"Bucket": cfg.backup_bucket}
+    if region not in ("us-east-1", "auto", ""):
+        kwargs["CreateBucketConfiguration"] = {"LocationConstraint": region}
+
+    try:
+        s3.create_bucket(**kwargs)
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "")
+        if code not in ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"):
+            # Creation is commonly the thing a scoped key is NOT allowed to do, even when it can
+            # read and write objects. Say that, rather than leaving them to decode AccessDenied.
+            if code in ("AccessDenied", "403"):
+                raise ValueError(
+                    f"These credentials cannot create buckets at {cfg.backup_endpoint or 'AWS S3'} "
+                    f"({code}). Create '{cfg.backup_bucket}' in your provider's console, or use a "
+                    "key with permission to create buckets.") from exc
+            raise ValueError(
+                f"Could not create '{cfg.backup_bucket}' ({code or 'error'}): "
+                f"{exc.response.get('Error', {}).get('Message', exc)}") from exc
+        # Already there and ours — treat as success. The operator asked for the bucket to exist.
+
+    # Prove it rather than announce it: creation succeeding says nothing about whether this key may
+    # write objects INTO it, and that is what a backup needs.
+    return verify_destination(cfg)
 
 
 def run_key(prefix: str | None, when: datetime | None = None) -> str:

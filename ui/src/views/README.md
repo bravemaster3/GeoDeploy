@@ -58,6 +58,11 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 ## Last updated
 2026-07-30 (PortalEditor: `catalog` archetype option + Map side / Datasets listed controls; the
 layer-list placement toggles are hidden for it since the facet rail replaces the sidebar)
+2026-08-01 (Settings → Backups: a **Create it** offer appears when "Test destination" fails with
+`bucket_missing`, calling `POST /backups/settings/bucket`. Cleared on save and on the next test, so it
+never sits next to a message it no longer belongs to. `errText()` reads both the string and the
+structured `detail` shapes — without it the one message that matters renders as `[object Object]`.)
+
 2026-07-30 (Settings → Backups gains **Manage backups**, a DANGER ZONE section — same red treatment
 as the old container-terminal card. It lists what is at the DESTINATION (read from the manifests,
 not our run history: that history lives in the state database, which is itself backed up, so it can

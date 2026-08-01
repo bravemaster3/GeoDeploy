@@ -26,8 +26,13 @@ Press **Test destination** before relying on it. The test writes and deletes a p
 dies with the original is not a backup. Prefer a different provider entirely: that also protects
 you from an account suspension or a mistaken bucket deletion.
 
+If the bucket does not exist yet, the test says so and offers to **create it** for you — see
+[Troubleshooting](#troubleshooting).
+
 > **Use a dedicated, least-privilege key.** The destination key only needs `PutObject`,
-> `GetObject`, `ListBucket` and `DeleteObject` on that one bucket. If the destination provider
+> `GetObject`, `ListBucket` and `DeleteObject` on that one bucket. (Add `CreateBucket` only if you
+> want GeoDeploy to create the bucket for you; a key without it works fine once the bucket exists.)
+> If the destination provider
 > supports object lock / versioning, turn it on — that is what protects you from ransomware and
 > from GeoDeploy itself deleting the wrong thing.
 
@@ -141,6 +146,11 @@ Only the bucket **name** or its **location** is wrong. On location-scoped provid
 Backblaze B2) a bucket lives in one region and is reachable **only** through that region's
 endpoint — a bucket created in `fsn1` returns "does not exist" via `hel1.your-objectstorage.com`.
 The test lists the buckets your key can actually see, which settles name-vs-location immediately.
+
+If the bucket simply is not there yet, the test offers **Create it** — the same credentials the
+provider just accepted are used to create the bucket and then re-verify that it is writable. Keys
+scoped to a single bucket often cannot create buckets; if yours cannot, the message says so and you
+create it in your provider's console instead.
 
 **"pg_dump failed: server version mismatch"** — the client in the API image is pinned to the
 PostGIS server's major version (16). If you upgrade the PostGIS image, bump
