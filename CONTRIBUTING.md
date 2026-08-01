@@ -93,7 +93,7 @@ requirement. Clear English is enough.
 
 ## What stays open
 
-Every feature of GeoDeploy is in this repository under the MIT licence, and that is the arrangement
+Every feature of GeoDeploy is in this repository under the Apache License 2.0, and that is the arrangement
 going forward. There is no paid tier, no feature held back, and nothing that unlocks with a key.
 
 If a hosted **GeoDeploy Cloud** appears, it is hosting only — running this same open-source code for
@@ -111,5 +111,7 @@ give a reasonable window to ship a fix before disclosing.
 
 ## Licence
 
-By contributing you agree that your work is licensed under the [MIT licence](LICENSE), the same terms
-as the rest of the project. You keep the copyright to what you write.
+By contributing you agree that your work is licensed under the [Apache License 2.0](LICENSE), the
+same terms as the rest of the project — this is Apache 2.0 §5, which makes contributions inbound
+under the project's own licence unless you say otherwise. **You keep the copyright to what you
+write**; nothing here assigns it.

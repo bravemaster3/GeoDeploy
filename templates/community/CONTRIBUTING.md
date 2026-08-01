@@ -23,7 +23,7 @@ my-template/
   "basemap": "osm-bright | osm-humanitarian | satellite | ...",
   "preview": "preview.png",
   "version": "semver",
-  "license": "MIT | CC-BY-4.0 | ..."
+  "license": "Apache-2.0 | MIT | CC-BY-4.0 | ..."
 }
 ```
 

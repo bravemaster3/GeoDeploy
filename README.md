@@ -105,8 +105,12 @@ organised and kept current.
 
 ## Licence and what stays open
 
-[MIT](LICENSE). Every feature is in this repository — no paid tier, nothing held back, nothing that
-unlocks with a key.
+[Apache License 2.0](LICENSE). Every feature is in this repository — no paid tier, nothing held back,
+nothing that unlocks with a key.
+
+Apache 2.0 rather than MIT for two reasons that matter to the institutions who run this: it grants
+patent rights explicitly, and it does not hand over the GeoDeploy name. Fork it, host it, sell it —
+just don't call your service GeoDeploy.
 
 If a hosted **GeoDeploy Cloud** appears, it is **hosting only**: this same open-source code, run for
 people who would rather not run a server. It will not have features you cannot get by installing it
