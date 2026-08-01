@@ -1,6 +1,6 @@
 # Roadmap
 
-Where GeoDeploy is, and where it is going. **50 tracked items**, of which 17 have shipped.
+Where GeoDeploy is, and where it is going. **51 tracked items**, of which 17 have shipped.
 
 <div class="gd-legend" markdown>
 :material-check-circle:{ .gd-ok } **Shipped** · :material-progress-wrench:{ .gd-wip } **Building
@@ -56,8 +56,9 @@ now** · :material-calendar-check:{ .gd-plan } **Planned** · :material-lightbul
 
     ---
 
-    284 backend tests run on every change. Growing toward integration tests that exercise the full
-    Docker stack, which unit tests cannot cover.
+    Over 300 backend tests run on every change. Growing toward integration tests that exercise the
+    full Docker stack, which unit tests cannot cover — the failures that have actually hurt here were
+    all integration-shaped.
 
 </div>
 
@@ -68,6 +69,7 @@ Concrete things queued behind the above, several of which came from real use:
 | | |
 | --- | --- |
 | **Environment variables in the UI** | Change settings and apply them per service without a terminal — the goal is that a mature GeoDeploy never asks you to SSH in |
+| **Unattended install** | Configure an install from environment variables instead of the wizard, so provisioning can be scripted |
 | **Choose a version when updating** | Hold back, or step back down after a bad update, instead of only ever moving to latest |
 | **Multi-file and archive uploads** | Several files at once, and `.tar.gz` alongside `.zip` |
 | **A packaged `geodeploy` CLI** | Turning the worked example script into something you install |

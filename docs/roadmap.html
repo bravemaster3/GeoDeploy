@@ -292,78 +292,917 @@
 
 <script id="roadmap-data" type="application/json">
 {
-  "updated": "2026-07-30",
-  "statusOrder": ["shipped", "building", "next", "planned", "future", "idea"],
+  "updated": "2026-08-01",
+  "statusOrder": [
+    "shipped",
+    "building",
+    "next",
+    "planned",
+    "future",
+    "idea"
+  ],
   "statusMeta": {
-    "shipped":  {"label": "Shipped",  "var": "--st-shipped"},
-    "building": {"label": "Building",  "var": "--st-building"},
-    "next":     {"label": "Next",      "var": "--st-next"},
-    "planned":  {"label": "Planned",   "var": "--st-planned"},
-    "future":   {"label": "Future",    "var": "--st-future"},
-    "idea":     {"label": "Idea",      "var": "--st-idea"}
+    "shipped": {
+      "label": "Shipped",
+      "var": "--st-shipped"
+    },
+    "building": {
+      "label": "Building",
+      "var": "--st-building"
+    },
+    "next": {
+      "label": "Next",
+      "var": "--st-next"
+    },
+    "planned": {
+      "label": "Planned",
+      "var": "--st-planned"
+    },
+    "future": {
+      "label": "Future",
+      "var": "--st-future"
+    },
+    "idea": {
+      "label": "Idea",
+      "var": "--st-idea"
+    }
   },
   "phases": [
-    {"n": "00", "key": "foundation", "title": "Foundation", "tag": "The platform, shipped", "note": "Self-hosted spatial stack: ingest anything, render heavy layers seamlessly, publish geoportals — all on a cheap VPS."},
-    {"n": "01", "key": "access", "title": "Multi-user & Access", "tag": "The bridge to Cloud", "note": "Turn the single-admin install into a real multi-user platform with ownership and permissions. Everything Cloud needs starts here."},
-    {"n": "02", "key": "cloud", "title": "GeoDeploy Cloud", "tag": "Managed, multi-tenant", "note": "Run many isolated tenants on shared infrastructure — self-serve, metered, and upgraded for them."},
-    {"n": "03", "key": "ecosystem", "title": "Ecosystem & Interop", "tag": "Adoption engine", "note": "Meet users inside the tools they already use — GeoLibre, QGIS, and open standards — to drive adoption."},
-    {"n": "04", "key": "advanced", "title": "Advanced Capabilities", "tag": "Differentiators", "note": "Depth beyond hosting: in-browser analysis, story maps, temporal and 3D scenes."}
+    {
+      "n": "00",
+      "key": "foundation",
+      "title": "Foundation",
+      "tag": "The platform, shipped",
+      "note": "Self-hosted spatial stack: ingest anything, render heavy layers seamlessly, publish geoportals — all on a cheap VPS."
+    },
+    {
+      "n": "01",
+      "key": "access",
+      "title": "Multi-user & Access",
+      "tag": "The bridge to Cloud",
+      "note": "Turn the single-admin install into a real multi-user platform with ownership and permissions. Everything Cloud needs starts here."
+    },
+    {
+      "n": "02",
+      "key": "cloud",
+      "title": "GeoDeploy Cloud",
+      "tag": "Managed, multi-tenant",
+      "note": "Run many isolated tenants on shared infrastructure — self-serve, metered, and upgraded for them."
+    },
+    {
+      "n": "03",
+      "key": "ecosystem",
+      "title": "Ecosystem & Interop",
+      "tag": "Adoption engine",
+      "note": "Meet users inside the tools they already use — GeoLibre, QGIS, and open standards — to drive adoption."
+    },
+    {
+      "n": "04",
+      "key": "advanced",
+      "title": "Advanced Capabilities",
+      "tag": "Differentiators",
+      "note": "Depth beyond hosting: in-browser analysis, story maps, temporal and 3D scenes."
+    }
   ],
   "items": [
-    {"id": "F-01", "phase": "foundation", "title": "Core platform", "status": "shipped", "effort": "L", "areas": ["infra", "api", "ui"], "why": "FastAPI + Celery + Vue 3 + PostGIS/Martin + MinIO/TiTiler behind nginx, in one Docker Compose.", "detail": "The whole stack comes up with a one-line install and holds state in SQLite. This is the polished, one-command base every later phase builds on.", "depends": []},
-    {"id": "F-02", "phase": "foundation", "title": "Universal vector ingest", "status": "shipped", "effort": "L", "areas": ["api", "celery", "duckdb"], "why": "Shapefile, GeoJSON, GeoPackage, CSV (X/Y + WKT) and GeoParquet — heavy uploads auto-convert.", "detail": "Large files upload direct to object storage and convert to GeoParquet in the background, ending up identical to a native .parquet upload: deck.gl display + DuckDB analysis, no PostGIS table.", "depends": ["F-01"]},
-    {"id": "F-03", "phase": "foundation", "title": "Raster → COG + tiles", "status": "shipped", "effort": "M", "areas": ["celery", "tiles"], "why": "Rasters become cloud-optimized GeoTIFFs served as tiles by TiTiler.", "detail": "Uploads are converted to COG and served via TiTiler with a Web-Mercator latitude clamp so polar rows never blank low-zoom tiles.", "depends": ["F-01"]},
-    {"id": "F-04", "phase": "foundation", "title": "Heavy GeoParquet display", "status": "shipped", "effort": "XL", "areas": ["duckdb", "tiles", "ui"], "why": "deck.gl + server DuckDB for live layers; PMTiles (tippecanoe) for millions of features.", "detail": "Small/medium layers render live from the file via DuckDB viewport queries; heavy layers tile once to PMTiles and stream by HTTP range request for seamless pan/zoom at 20 M+ features — no PostGIS ingestion, keeping the cheap-VPS promise.", "depends": ["F-02"]},
-    {"id": "F-05", "phase": "foundation", "title": "Faithful tiling (no data loss)", "status": "shipped", "effort": "M", "areas": ["tiles", "celery"], "why": "Simplification off + keep-all-features: every feature stays visible when zoomed in, even in dense areas.", "detail": "Display simplification was collapsing small polygons and cutting corners; it is now off by default, and extend-zooms deepens only the dense tiles that were still dropping features until they all fit. The source .parquet is never touched — downloads and analysis read it at full resolution.", "depends": ["F-04"]},
-    {"id": "F-06", "phase": "foundation", "title": "In-browser query & download", "status": "shipped", "effort": "M", "areas": ["duckdb", "ui"], "why": "DuckDB-WASM does identify-on-click and bbox-clip download with no server round trip.", "detail": "The browser reads GeoParquet directly for click-to-identify and area-clip export, keeping per-visitor server CPU near zero on public portals.", "depends": ["F-02"]},
-    {"id": "F-07", "phase": "foundation", "title": "Geoportal builder", "status": "shipped", "effort": "XL", "areas": ["portal", "ui"], "why": "Symbology, basemaps, a 3D globe, portal-as-documentation, and publish-to-URL.", "detail": "The editor, the published MapLibre style, and the live portal runtime stay in parity across z-order, symbology, and markers. Portals double as documentation pages with a styled header and layer catalog.", "depends": ["F-01"]},
-    {"id": "F-08", "phase": "foundation", "title": "External sources", "status": "shipped", "effort": "M", "areas": ["api", "tiles"], "why": "Consume WMS / XYZ / WFS as first-class, admin-added layers.", "detail": "Remote services can be attached and rendered alongside hosted data without copying it in.", "depends": ["F-01"]},
-    {"id": "F-09", "phase": "foundation", "title": "Single-admin onboarding", "status": "shipped", "effort": "S", "areas": ["auth"], "why": "First run creates one admin account. It works — but it's the ceiling this roadmap raises.", "detail": "There is exactly one user and no way to add or scope others. Phase 01 turns this into real user management.", "depends": ["F-01"]},
-    {"id": "F-10", "phase": "foundation", "title": "Security hardening", "status": "shipped", "effort": "M", "areas": ["auth", "api", "tiles"], "why": "Closed the 2026-07 audit: setup lock, private-layer enforcement, login rate-limit, portal XSS, read-only tile key, headers.", "detail": "Setup config endpoints require an admin once installed (were open → config tampering); vector display endpoints serve only public or published-portal layers (were any layer by id); nginx rate-limits login (429) and sends X-Frame-Options / nosniff / Referrer-Policy; portal JSON embedding can no longer break out of the inline script tag; TiTiler runs on a read-only MinIO key instead of the root key. All covered by regression tests.", "depends": ["F-09"]},
-    {"id": "F-11", "phase": "foundation", "title": "Automated tests & CI", "status": "building", "effort": "M", "areas": ["api", "docs"], "why": "A pytest suite (started with the security regressions) plus CI to run it on every change.", "detail": "The repo had only a health check; there is now a real regression suite covering auth, the setup lock, vector authorization, and portal XSS. Next: broaden coverage (ingest, portal build, tiling) and add a CI workflow so tests gate every change.", "depends": ["F-01"]},
-    {"id": "F-12", "phase": "foundation", "title": "Service logs & console", "status": "planned", "effort": "M", "areas": ["infra", "api", "ui"], "why": "Per-service live logs (and a security-gated container console) in Settings → Infrastructure, so an admin can debug a failed Celery ingest or tile job without SSH-ing into the box.", "detail": "Extends the existing service start/stop/restart controls with a streaming LOG viewer per container (celery worker, api, martin, titiler, nginx, postgis) — read-only, follow-tail, filter — the Coolify/Portainer 'Logs' tab. A second, security-GATED tier adds an in-browser terminal (interactive exec into a container): owner-only and OFF by default (opt-in config flag), since a shell is a full RCE surface, so it's kept as its own capability rather than riding on plain admin. Reads the Docker socket the API already uses for service control; the Cloud log-aggregation in C-07 builds on this per-instance view.", "depends": ["F-01"]},
-
-    {"id": "A-01", "phase": "access", "title": "Multi-user & RBAC", "status": "shipped", "effort": "XL", "areas": ["auth", "api", "ui"], "why": "User management plus roles — owner / admin / editor / viewer. Invite, edit, and remove people.", "detail": "Shared-workspace model (ArcGIS-org style): every member sees all data and portals; the role gates what they can do. Shipped: role ladder with a single transferable owner, copy-link invitations (single-use hashed tokens), user CRUD with delete-reassign-to-owner, password change/reset, role-aware UI with creator filters. Per-resource private/org sharing is A-02.", "depends": ["F-09"]},
-    {"id": "A-02", "phase": "access", "title": "Resource ownership & sharing", "status": "shipped", "effort": "L", "areas": ["api", "portal", "auth"], "why": "Per-resource visibility: private (creator + admins) / organization (all members) / public (data catalog) on layers & sources; portals get a 4-tier published-access model.", "detail": "Code complete 2026-07-16 (in verification): a single visibility axis (private ⊂ organization ⊂ public) on vector + raster layers and external sources, folding the prior is_public STAC flag into it (write-only-synced); the visible_to() seam enforces it across every list + authenticated by-id lookup while public-by-id portal display endpoints stay untouched. Portals instead got a clearer 4-tier PUBLISHED access model — public / password / organization (any signed-in member) / private (creator + admins), now enforced SERVER-SIDE (nginx auth_request → an authz endpoint that checks a session cookie before serving the static bundle; password portals use a server-verified per-portal unlock cookie via a dedicated gate page).", "depends": ["A-01"]},
-    {"id": "A-03", "phase": "access", "title": "API tokens", "status": "shipped", "effort": "M", "areas": ["api", "auth"], "why": "Personal access tokens for scripting and CI — the same routes, headless. The foundation under the GeoLibre/QGIS plugins (E-02, E-05).", "detail": "Scoped personal access tokens (opaque, shown once, stored hashed) let power users and desktop plugins upload, tile, and publish — and open a portal in edit mode — without a browser session. A token authenticates as its owner via the same Bearer path, capped at a chosen role tier (read-only / editor / admin, never above the owner's live role) so enforcement reuses the RBAC ladder. Managed per-user in Settings; revocable; auto-expires optionally; dies with the owner.", "depends": ["A-01"]},
-    {"id": "A-04", "phase": "access", "title": "Auth hardening", "status": "shipped", "effort": "M", "areas": ["auth", "ui"], "unverified": true, "why": "Session/token revocation + OIDC single sign-on (password reset already shipped with A-01/C-08).", "detail": "Building 2026-07-20: (0) app-managed DB secrets encrypted at rest (Fernet EncryptedText); (1) session revocation — browser JWTs carry a token_version, so a password change/reset and a 'log out other sessions' action kill outstanding tokens while the acting tab stays signed in; (2) generic OIDC SSO via Authlib — admin-configured provider (Google/Microsoft/Keycloak/institutional), account linking by verified email, opt-in domain-allow-listed auto-provisioning with a default role. Rounds out the identity layer so it's safe to open beyond a trusted single operator.", "depends": ["A-01"]},
-    {"id": "A-05", "phase": "access", "title": "Activity & audit log", "status": "shipped", "effort": "S", "areas": ["api", "ui"], "why": "Who did what, when — per resource. Groundwork for Cloud trust and support.", "detail": "Building 2026-07-20: an append-only AuditLog + a best-effort record_audit() helper wired into the key mutations (user role/delete/invite/transfer, portal create/publish/unpublish/delete, token create/revoke, auth login/password/logout-all, data upload/share/delete). Admin-only, filterable GET /audit (also serves per-resource history) + an Activity view. Entries survive user deletion (denormalized actor name; no FK).", "depends": ["A-02"]},
-
-    {"id": "C-01", "phase": "cloud", "title": "Workspaces / organizations", "status": "planned", "effort": "L", "areas": ["api", "auth"], "why": "A tenant boundary above users: many members, shared resources, one bill.", "detail": "Introduces the organization/workspace entity that everything in Cloud hangs off — membership, shared layers, and the unit of billing.", "depends": ["A-01", "A-02"]},
-    {"id": "C-02", "phase": "cloud", "title": "Tenant isolation", "status": "planned", "effort": "XL", "areas": ["infra", "storage", "duckdb"], "why": "Per-tenant storage prefix, DB schema, and tile namespace so tenants never cross paths.", "detail": "Hard isolation of data at rest and in queries — object-storage prefixes, database schemas, and tile keys scoped per tenant, verified on every read.", "depends": ["C-01"]},
-    {"id": "C-03", "phase": "cloud", "title": "Quotas & fair use", "status": "planned", "effort": "M", "areas": ["infra", "celery"], "why": "Storage caps and tiling-minute budgets so one heavy job can't starve its neighbors.", "detail": "Per-tenant limits and queue fairness keep shared infrastructure predictable when a 20 M-feature tiling run lands.", "depends": ["C-01"]},
-    {"id": "C-04", "phase": "cloud", "title": "Self-serve provisioning", "status": "future", "effort": "L", "areas": ["infra", "ui", "billing"], "why": "Sign up, get a workspace, upload — no operator in the loop.", "detail": "The signup-to-first-map flow that makes Cloud a product rather than a managed install.", "depends": ["C-01", "A-04"]},
-    {"id": "C-05", "phase": "cloud", "title": "Metering & billing", "status": "future", "effort": "L", "areas": ["billing", "api"], "why": "Measure storage, tiles served, and compute; plug into a billing provider.", "detail": "Usage metering wired to plans and a payment provider — the commercial engine of Cloud.", "depends": ["C-03", "C-04"]},
-    {"id": "C-06", "phase": "cloud", "title": "Managed upgrades", "status": "future", "effort": "M", "areas": ["infra"], "why": "One-click, zero-downtime updates — hosted and hands-off.", "detail": "Rolling upgrades across tenants without an operator babysitting each instance.", "depends": ["C-02"]},
-    {"id": "C-07", "phase": "cloud", "title": "Observability & backups", "status": "planned", "effort": "M", "areas": ["infra"], "why": "Metrics, health, log aggregation, plus automated backups and restore drills.", "detail": "The operational floor for running someone else's data with confidence.", "depends": ["C-01"]},
-    {"id": "C-08", "phase": "cloud", "title": "Transactional email & export notifications", "status": "building", "effort": "M", "areas": ["api", "celery", "infra"], "unverified": true, "why": "Optional outgoing email — invites, password resets now; export notifications and receipts later.", "detail": "First half built 2026-07-16: generic SMTP (stdlib, zero lock-in — Resend, Brevo, or an institutional relay all work via their SMTP endpoints), admin-configured in Settings → Email, STRICTLY optional: unconfigured installs keep copy-link delivery, and the copyable link always remains the fallback. Powers invite emails, admin reset links, and the login page's self-service 'Forgot password?' (anti-enumeration, rate-limited). Remaining half: 'your download is ready' for queued exports and billing receipts (C-05).", "depends": ["A-01"]},
-
-    {"id": "E-01", "phase": "ecosystem", "title": "Open in GeoLibre", "status": "planned", "effort": "M", "areas": ["geolibre", "portal"], "why": "Hand a portal's layers to the GeoLibre app as GeoParquet/COG URLs for instant client-side analysis.", "detail": "Ship the GeoLibre static app beside a portal with an 'Open in GeoLibre' button that passes vector layers as GeoParquet URLs and rasters as COG URLs — a big quick-analysis surface for almost no server cost.", "depends": ["F-07"]},
-    {"id": "E-02", "phase": "ecosystem", "title": "Push from GeoLibre", "status": "building", "effort": "L", "areas": ["geolibre", "api", "duckdb"], "why": "Style data in GeoLibre, then publish it straight to a GeoDeploy instance as a hosted portal — the desktop adoption funnel.", "detail": "A 'Publish to GeoDeploy' GeoLibre plugin + a GeoDeploy .geolibre.json importer. GeoDeploy translates each GeoLibre LayerStyle → MapLibre paint (single/graduated/categorized/expression/rule-based + attribute extrusion), ingests vectors (native-CRS, Z-preserving) + COG rasters + XYZ/WMS tiles, maps view/basemap/storymap, and builds the portal (POST /api/interop/geolibre/{preview,publish}). Real 3D: attribute extrusion renders natively; coordinate-Z layers render at altitude via an inline deck.gl elevation layer. The plugin (integrations/geolibre-plugin, scaffolded from the opengeos template) sends the project with a Bearer API token; CORS + SSRF handled. Full fidelity needs a tiny upstream GeoLibre host-API addition (app.getProjectSnapshot(), patch documented). Built; pending stack validation + the upstream PR.", "depends": ["E-01", "A-03"]},
-    {"id": "E-03", "phase": "ecosystem", "title": "Style interchange (MapLibre)", "status": "planned", "effort": "M", "areas": ["portal", "ui"], "why": "Import and export MapLibre style JSON so portal symbology round-trips with the ecosystem.", "detail": "Portals can adopt an external MapLibre style and emit their own, making cartography portable in and out of GeoDeploy.", "depends": ["F-07"]},
-    {"id": "E-04", "phase": "ecosystem", "title": "Style import: QGIS & GeoLibre", "status": "planned", "effort": "M", "areas": ["portal"], "why": "Bring QGIS QML/SLD and GeoLibre styles into a portal — keep the cartography you already made.", "detail": "A translation layer from common desktop/style formats into the portal symbology model, so users don't restyle from scratch. The GeoLibre half already landed with E-02 (GeoLibre LayerStyle → MapLibre paint, incl. data-driven color + extrusion, via a raw-paint passthrough in generate_style); QGIS QML/SLD remains.", "depends": ["E-03"]},
-    {"id": "E-05", "phase": "ecosystem", "title": "Connect from QGIS", "status": "future", "effort": "L", "areas": ["api", "qgis"], "why": "A QGIS plugin — the GeoNode-plugin equivalent — to browse and load an instance's layers directly.", "detail": "Desktop users reach a GeoDeploy instance from inside QGIS, loading hosted layers over the wire in a cloud-native, server-light way (not GeoServer).", "depends": ["E-06", "A-03"]},
-    {"id": "E-06", "phase": "ecosystem", "title": "Catalog / STAC", "status": "shipped", "effort": "M", "areas": ["api"], "why": "A machine-readable catalog of an instance's layers for discovery and interop.", "detail": "SHIPPED: a public STAC 1.0.0 API at /api/stac — catalog, conformance, the vectors/rasters collections, per-layer items carrying ready-to-use assets (COG, XYZ/MVT tiles, TileJSON, PMTiles, GeoParquet manifest, OGC API - Features), and GET+POST item search with bbox/datetime/ids/limit paging. Generated per request from SQLite so it can never drift from the catalog; lists ONLY layers shared as public. Consumers: QGIS 3.40+, stac-browser, pystac-client.", "depends": ["A-02"]},
-    {"id": "E-07", "phase": "ecosystem", "title": "OGC API - Features", "status": "building", "unverified": true, "effort": "M", "areas": ["api", "tiles"], "why": "The one read standard EVERY GIS speaks natively — QGIS, ArcGIS Pro, FME, anything on GDAL's OAPIF driver. Tiles and TileJSON only reach MapLibre-family clients; this is what makes GeoDeploy data usable everywhere, and it closes the standards gap against GeoLens.", "detail": "BUILT 2026-07-29 (routers/ogcapi.py), needs live verification. /api/ogc landing + /conformance + /collections + /collections/{id} + /items + /items/{featureId}. One collection per PUBLIC vector layer (ids mirror the STAC item ids: vector-<layer id>), both storage backends: PostGIS via ST_AsGeoJSON with an index-usable && envelope filter, GeoParquet via DuckDB with covering-column + partition pruning. bbox/limit/offset paging with numberMatched/numberReturned/timeStamp and next/prev links; GeoJSON, EPSG:4326. Conformance claims Core + GeoJSON ONLY — no CRS negotiation, no CQL2, no transactions (over-claiming was the bug being fixed). Advertised from the STAC item (asset + alternate link) and led with in the new My Data share-links panel. NOT included: OGC API - Tiles (rendering is TileJSON/PMTiles today), Records, CQL2.", "depends": ["E-06"]},
-    {"id": "E-08", "phase": "ecosystem", "title": "Multi-language (i18n)", "status": "planned", "effort": "M", "areas": ["ui", "portal"], "why": "Run the dashboard AND published portals in the visitor's language — a direct adoption lever for non-English (e.g. Francophone) regions. Slated near-term.", "detail": "The admin UI already carries vue-i18n scaffolding (nav labels use $t); this completes it — extract every remaining string, add a language switcher, and (the bigger half) translate the published-portal runtime (portal.js UI: layer list, basemap, download dialog, popups, About) so a portal renders in its audience's language. Templates already carry a `language` field (en/fr); wire it to a locale bundle and default a portal to its template/admin locale. French first (West-Africa focus), then extensible to more locales via simple JSON message catalogs.", "depends": ["F-07"]},
-    {"id": "E-09", "phase": "ecosystem", "title": "Round-trip / write-back from GeoLibre", "status": "building", "effort": "M", "areas": ["geolibre", "api", "postgis"], "why": "Edit a GeoDeploy layer in GeoLibre (data cleaning, geometry/attribute fixes) and save it straight back to source.", "detail": "GeoDeploy exposes a layer as editable GeoJSON (GET /api/interop/geodeploy/layers/{id}/features.geojson) and a write-back (PUT .../features) that re-ingests the edited GeoJSON into the SAME PostGIS table — a full replace via the normal vector ingest (bbox/count refresh, Martin reload) — so published portals using the layer update too. The plugin adds a 'Round-trip a layer' panel: list/load → edit in GeoLibre → save edits back. Owner-only, feature-capped, PostGIS layers (native CRS becomes 4326 on round-trip). Built; pending stack validation.", "depends": ["E-02"]},
-
-    {"id": "V-01", "phase": "advanced", "title": "In-browser analysis console", "status": "future", "effort": "L", "areas": ["duckdb", "ui"], "why": "A DuckDB-WASM spatial SQL console over your layers — query and derive without a server.", "detail": "Interactive SQL against hosted GeoParquet from the browser, extending the existing client-side read path into full analysis.", "depends": ["F-06"]},
-    {"id": "V-02", "phase": "advanced", "title": "Fast processing toolkit", "status": "planned", "effort": "L", "areas": ["duckdb", "celery", "ui"], "why": "Clip, buffer, overlay, and raster band math run in-process — DuckDB / TiTiler, not GeoServer.", "detail": "A small set of high-value geoprocessing tools executed server-light, matching the lakehouse philosophy.", "depends": ["F-04"]},
-    {"id": "V-03", "phase": "advanced", "title": "Story-map portals", "status": "future", "effort": "L", "areas": ["portal", "ui"], "why": "A portal type where chapters are composed on the live map — narrative cartography.", "detail": "Borrows GeoLibre's story-map pattern: scroll-linked chapters that fly the map and toggle layers, published as a portal.", "depends": ["F-07"]},
-    {"id": "V-04", "phase": "advanced", "title": "Photo features (field stories)", "status": "future", "effort": "M", "areas": ["portal", "api"], "why": "Attach photos to points via EXIF GPS; show them in popups and panels in the published portal.", "detail": "Bulk-import geotagged photos into a point layer with narrative + imagery per feature — the data model for field-story maps.", "depends": ["V-03"]},
-    {"id": "V-05", "phase": "advanced", "title": "Temporal data & time slider", "status": "idea", "effort": "M", "areas": ["portal", "tiles"], "why": "Time-aware layers with a slider for change over time.", "detail": "Temporal attributes drive a portal time control for animating change — land cover, growth, movement.", "depends": ["F-07"]},
-    {"id": "V-06", "phase": "advanced", "title": "3D tiles & terrain", "status": "idea", "effort": "L", "areas": ["tiles", "portal"], "why": "3D tilesets and terrain in the globe view for true 2.5D / 3D scenes.", "detail": "Extends the existing globe with elevation and 3D tiles for buildings and terrain-aware visualization.", "depends": ["F-07"]},
-    {"id": "V-07", "phase": "advanced", "title": "Live connectors & refresh", "status": "idea", "effort": "M", "areas": ["celery", "api"], "why": "Scheduled sync from PostGIS, S3, or APIs so hosted layers stay current.", "detail": "Connectors that periodically re-pull a source and re-prep the layer, keeping published maps fresh without manual re-upload.", "depends": ["F-02"]},
-    {"id": "V-08", "phase": "advanced", "title": "Portal tools framework", "status": "planned", "effort": "L", "areas": ["portal", "ui"], "why": "An admin-selectable toolbox — pick which map tools a portal exposes when publishing: measure, print, download, swipe, share and more.", "detail": "A registry of portal tools the admin toggles per portal in the editor; the published portal renders the enabled ones as a consistent toolbar. The existing area-select download (F-06) becomes the first registered tool. Candidate catalog, roughly by value: area/feature download (shipped), measure distance & area, coordinate readout + go-to lat/lon, attribute filter & search, print/export map to PDF (legend + scale bar), layer swipe & spyglass compare, share-this-view permalink, legend panel, fullscreen, geolocate (my location), and saved views/bookmarks. Basemap gallery already ships in every portal. The framework is the reusable plumbing; individual heavier tools are tracked separately (e.g. V-09).", "depends": ["F-07"]},
-    {"id": "V-09", "phase": "advanced", "title": "Measurement & print tools", "status": "future", "effort": "M", "areas": ["portal", "ui"], "why": "The build-heavier toolbox entries: interactive measure (distance/area) and a composed print/export to PDF.", "detail": "Measure distance and area on the map with live readouts and unit switching, plus a print composer that exports the current view to PDF/PNG with title, legend, scale bar and attribution — the two most-requested geoportal tools beyond download. Registered into the V-08 toolbox.", "depends": ["V-08"]},
-    {"id": "V-10", "phase": "advanced", "title": "Template gallery & branding", "status": "planned", "effort": "M", "areas": ["portal", "ui"], "why": "Templates as a real feature: a visual gallery, custom brand colours + logo/wordmark.", "detail": "A first distinct set already ships (minimal, satellite-dark, editorial, humanitarian — each a theme.css of palette + header/card treatment over the shared runtime, now that basemap is picked separately). This item turns theming into a first-class feature: a visual template gallery with real previews in the editor, plus per-portal custom brand colours + logo/wordmark. This is the look-and-feel half; the structural-layout half (rearranging the map's panels) is V-11.", "depends": ["F-07"]},
-    {"id": "V-13", "phase": "advanced", "title": "Layer groups & catalog panel", "status": "shipped", "effort": "L", "areas": ["portal", "ui"], "why": "Organize a portal's layers into named groups/folders — a browsable catalog tree like the layer catalogs in GeoNode / ArcGIS / mainstream geoportals — as a portal element you can include per template.", "detail": "Today a portal's layer list is FLAT. This adds hierarchical GROUPS (folders, nestable) the admin arranges in the editor (drag layers into groups, order them, collapse-by-default, per-group legend), rendered in the published portal as an expandable catalog tree with group-level toggle-all. It becomes a selectable portal ELEMENT (a 'catalog' panel) whose presence + placement a template declares — ties into V-11's configurable regions. Data model: groups live in the portal's layer_configs (a keyed/nested structure) so no new global taxonomy is needed; a later step can promote groups to reusable cross-portal collections. Must mirror across the three surfaces (PortalEditor preview, portal_generator.generate_style, portal.js). Look at ArcGIS/GeoNode/QGIS-server catalogs + Mapbox/MapLibre layer trees for patterns. SHIPPED alongside: a search/filter box over the published layer list (name match — hides non-matching layers + empty folders, force-expands folders holding a hit) so even a single portal's catalog is searchable.", "depends": ["F-07"]},
-    {"id": "V-14", "phase": "advanced", "title": "Catalog / discovery portal", "status": "building", "unverified": true, "effort": "L", "frontier": true, "areas": ["portal", "ui", "api"], "why": "A human-readable, SEARCHABLE catalog portal for discovery — find any layer across the organization, see its metadata, and grab its access links (XYZ tiles, GeoParquet/COG download, STAC). The friendly face of E-06's machine catalog.", "detail": "A dedicated catalog portal TEMPLATE (not map-first): a searchable, browsable index of the workspace's layers — full-text search over name + keywords + abstract (the A-02 catalog metadata), filter by type/theme, organized with the V-13 folder tree, each entry showing abstract/license/attribution + copyable ACCESS LINKS (XYZ/vector-tile URL, GeoParquet/COG/features.geojson download, STAC item) and add-to-map / preview. ORG-WIDE — draws the whole inventory (respecting A-02 visibility: public catalog for anonymous, org layers for members), unlike a normal portal's hand-picked layers. Builds on E-06 (STAC index), A-02 (metadata + visibility), V-13 (folders) and V-11 (a list-centric layout). The GeoNode/Terria-style discovery experience, human-readable where raw STAC isn't. BUILT 2026-07-30 (V-11 Phase 3): the `catalog` archetype is real — it had been ALIASED to `webmap` as a placeholder in all three parity surfaces, which is why selecting it silently rendered a plain web map. Ships as search + sort + active-filter chips over a facet rail (Type / Keywords / Licence, counts computed with each group excluded so a number says what picking it would give), paginated result cards (type/geometry/feature-count/CRS/licence badges, 3-line abstract clamp, clickable keywords, Show-on-map / Zoom-to / Access-and-download reusing share_links) and a full-height map panel on the right (configurable left). Hover flashes a dataset's footprint. Scope `portal` (baked) or `public` (live from the new gated GET /portals/{slug}/catalog, so sharing a layer needs no re-publish). Rail auto-hides under 6 datasets; <1024px list/map become two views; <640px the rail drops. Regression-pinned by tests/test_portal_layouts.py, which states the webmap + storymap manifests LITERALLY. REMAINING: box-draw → spatial filter + \"download this area\", and the folder-tree organization of results.", "depends": ["E-06", "V-13"]},
-    {"id": "V-11", "phase": "advanced", "title": "Template experiences (layouts + app types)", "status": "building", "unverified": true, "effort": "XL", "areas": ["portal", "ui", "api"], "why": "Make choosing a template produce a different EXPERIENCE, not just a palette — webmap · webmap+catalog · catalogue app · story map · (later) dashboard — think ArcGIS Experience Builder / StoryMaps. Templates are the headline appeal of a geoportal CREATOR; they must be striking.", "detail": "Generalize the 'one shared runtime, themes are cheap' model into THREE orthogonal axes: ARCHETYPE (app type — webmap / webmap+catalog / catalog / storymap / dashboard), LAYOUT (a JSON manifest of REGIONS → enabled PANELS + placement: sidebar side, floating vs docked layer list, header style, tools placement, overlay vs docked, collapsed-by-default), and THEME (today's palette). A template = a curated preset bundling {archetype+layout+theme}; the user picks one, gets that experience, then tweaks (per-portal overrides). Runtime: refactor the fixed layout.html into a REGION-DRIVEN (CSS-grid) skeleton the shared portal.js fills from the manifest, mounting modular panels (MapPanel, the V-13 LayerCatalogPanel, Legend, Tools, Basemap, Header, About, + new StoryPanel / CatalogGridPanel). Data: new Portal.layout_config (nullable JSON, migration in main.py), baked into style.geodeploy.layout so portal.js AND PortalEditor's preview read one source (3-surface parity — the hard part). Editor: an Experience/Layout section — archetype picker (thumbnails) + a few placement toggles (presets, not a drag-designer yet). PHASING: P1 architecture + webmap/webmap+catalog/catalog from EXISTING panels; P2 story map (see V-15); P3 catalog/discovery in full (= V-14); P4 dashboard (V-16) + free-form placement. Back-compat: no manifest ⇒ webmap ⇒ identical to today. FULL DESIGN in notes_temp/notes_for_future.md top section (decisions to resolve + start-here checklist).", "depends": ["V-10", "V-13"]},
-    {"id": "V-15", "phase": "advanced", "title": "Story map experience", "status": "planned", "effort": "XL", "areas": ["portal", "ui", "api"], "why": "Scrollytelling geoportals — a narrative of sections, each pinned to a map camera + layer state, the map animating as the reader scrolls. The flagship, high-appeal archetype of V-11.", "detail": "A 'storymap' archetype (V-11) plus the STORY EDITOR it needs: an ordered list of sections, each = rich text (reuse the About TipTap stack) + a captured map view (currentView() camera + which layers/visibility) + optional media (uploadPortalAsset); drag to reorder. Runtime StoryPanel: sections scroll in a narrative column; entering a section flies the map to its saved state (scroll-driven, IntersectionObserver). Stored as Portal.story JSON. Builds on portals-as-documentation (TipTap), V-13 layer state, and note '2e. Photos attached to vector features'. Text+map first; charts later (V-16).", "depends": ["V-11"]},
-    {"id": "V-16", "phase": "advanced", "title": "Dashboard experience & charts", "status": "future", "effort": "XL", "areas": ["portal", "ui", "api"], "why": "A dashboard archetype — map alongside charts/indicators/panels driven by the layer data, for monitoring-style geoportals.", "detail": "A 'dashboard' archetype (V-11) with a charting story: configurable panels (chart / stat / filter) bound to a layer's attributes, laid out with the map in the region grid. Needs a chart library decision (self-contained, CSP-safe for published portals) + an attribute-aggregation path (DuckDB over GeoParquet is a natural fit). The precursor to Experience-Builder-style free-form composition. Largest/most speculative of the V-11 family — after story map + catalog land.", "depends": ["V-11", "V-15"]},
-    {"id": "V-12", "phase": "advanced", "title": "Responsive layouts (mobile / tablet)", "status": "planned", "effort": "M", "areas": ["ui", "portal"], "why": "Make the admin dashboard AND published portals work well across phone / tablet / desktop screen sizes.", "detail": "Today the dashboard and portal chrome are tuned for desktop widths; on small screens panels overflow, controls crowd, and the portal sidebar eats the map. This item does a responsive pass on both surfaces: collapsible/stacking panels, a drawer for the portal layer list on narrow viewports, touch-friendly hit targets, fluid grids, and testing at common breakpoints. Pairs naturally with V-11 (configurable regions) but is scoped as plain responsiveness of the existing layouts.", "depends": []}
+    {
+      "id": "F-01",
+      "phase": "foundation",
+      "title": "Core platform",
+      "status": "shipped",
+      "effort": "L",
+      "areas": [
+        "infra",
+        "api",
+        "ui"
+      ],
+      "why": "FastAPI + Celery + Vue 3 + PostGIS/Martin + MinIO/TiTiler behind nginx, in one Docker Compose.",
+      "detail": "The whole stack comes up with a one-line install and holds state in SQLite. This is the polished, one-command base every later phase builds on.",
+      "depends": []
+    },
+    {
+      "id": "F-02",
+      "phase": "foundation",
+      "title": "Universal vector ingest",
+      "status": "shipped",
+      "effort": "L",
+      "areas": [
+        "api",
+        "celery",
+        "duckdb"
+      ],
+      "why": "Shapefile, GeoJSON, GeoPackage, CSV (X/Y + WKT) and GeoParquet — heavy uploads auto-convert.",
+      "detail": "Large files upload direct to object storage and convert to GeoParquet in the background, ending up identical to a native .parquet upload: deck.gl display + DuckDB analysis, no PostGIS table.",
+      "depends": [
+        "F-01"
+      ]
+    },
+    {
+      "id": "F-03",
+      "phase": "foundation",
+      "title": "Raster → COG + tiles",
+      "status": "shipped",
+      "effort": "M",
+      "areas": [
+        "celery",
+        "tiles"
+      ],
+      "why": "Rasters become cloud-optimized GeoTIFFs served as tiles by TiTiler.",
+      "detail": "Uploads are converted to COG and served via TiTiler with a Web-Mercator latitude clamp so polar rows never blank low-zoom tiles.",
+      "depends": [
+        "F-01"
+      ]
+    },
+    {
+      "id": "F-04",
+      "phase": "foundation",
+      "title": "Heavy GeoParquet display",
+      "status": "shipped",
+      "effort": "XL",
+      "areas": [
+        "duckdb",
+        "tiles",
+        "ui"
+      ],
+      "why": "deck.gl + server DuckDB for live layers; PMTiles (tippecanoe) for millions of features.",
+      "detail": "Small/medium layers render live from the file via DuckDB viewport queries; heavy layers tile once to PMTiles and stream by HTTP range request for seamless pan/zoom at 20 M+ features — no PostGIS ingestion, keeping the cheap-VPS promise.",
+      "depends": [
+        "F-02"
+      ]
+    },
+    {
+      "id": "F-05",
+      "phase": "foundation",
+      "title": "Faithful tiling (no data loss)",
+      "status": "shipped",
+      "effort": "M",
+      "areas": [
+        "tiles",
+        "celery"
+      ],
+      "why": "Simplification off + keep-all-features: every feature stays visible when zoomed in, even in dense areas.",
+      "detail": "Display simplification was collapsing small polygons and cutting corners; it is now off by default, and extend-zooms deepens only the dense tiles that were still dropping features until they all fit. The source .parquet is never touched — downloads and analysis read it at full resolution.",
+      "depends": [
+        "F-04"
+      ]
+    },
+    {
+      "id": "F-06",
+      "phase": "foundation",
+      "title": "In-browser query & download",
+      "status": "shipped",
+      "effort": "M",
+      "areas": [
+        "duckdb",
+        "ui"
+      ],
+      "why": "DuckDB-WASM does identify-on-click and bbox-clip download with no server round trip.",
+      "detail": "The browser reads GeoParquet directly for click-to-identify and area-clip export, keeping per-visitor server CPU near zero on public portals.",
+      "depends": [
+        "F-02"
+      ]
+    },
+    {
+      "id": "F-07",
+      "phase": "foundation",
+      "title": "Geoportal builder",
+      "status": "shipped",
+      "effort": "XL",
+      "areas": [
+        "portal",
+        "ui"
+      ],
+      "why": "Symbology, basemaps, a 3D globe, portal-as-documentation, and publish-to-URL.",
+      "detail": "The editor, the published MapLibre style, and the live portal runtime stay in parity across z-order, symbology, and markers. Portals double as documentation pages with a styled header and layer catalog.",
+      "depends": [
+        "F-01"
+      ]
+    },
+    {
+      "id": "F-08",
+      "phase": "foundation",
+      "title": "External sources",
+      "status": "shipped",
+      "effort": "M",
+      "areas": [
+        "api",
+        "tiles"
+      ],
+      "why": "Consume WMS / XYZ / WFS as first-class, admin-added layers.",
+      "detail": "Remote services can be attached and rendered alongside hosted data without copying it in.",
+      "depends": [
+        "F-01"
+      ]
+    },
+    {
+      "id": "F-09",
+      "phase": "foundation",
+      "title": "Single-admin onboarding",
+      "status": "shipped",
+      "effort": "S",
+      "areas": [
+        "auth"
+      ],
+      "why": "First run creates one admin account. It works — but it's the ceiling this roadmap raises.",
+      "detail": "There is exactly one user and no way to add or scope others. Phase 01 turns this into real user management.",
+      "depends": [
+        "F-01"
+      ]
+    },
+    {
+      "id": "F-10",
+      "phase": "foundation",
+      "title": "Security hardening",
+      "status": "shipped",
+      "effort": "M",
+      "areas": [
+        "auth",
+        "api",
+        "tiles"
+      ],
+      "why": "Closed the 2026-07 audit: setup lock, private-layer enforcement, login rate-limit, portal XSS, read-only tile key, headers.",
+      "detail": "Setup config endpoints require an admin once installed (were open → config tampering); vector display endpoints serve only public or published-portal layers (were any layer by id); nginx rate-limits login (429) and sends X-Frame-Options / nosniff / Referrer-Policy; portal JSON embedding can no longer break out of the inline script tag; TiTiler runs on a read-only MinIO key instead of the root key. All covered by regression tests.",
+      "depends": [
+        "F-09"
+      ]
+    },
+    {
+      "id": "F-11",
+      "phase": "foundation",
+      "title": "Automated tests & CI",
+      "status": "building",
+      "effort": "M",
+      "areas": [
+        "api",
+        "docs"
+      ],
+      "why": "A pytest suite (started with the security regressions) plus CI to run it on every change.",
+      "detail": "The repo had only a health check; there is now a real regression suite covering auth, the setup lock, vector authorization, and portal XSS. Next: broaden coverage (ingest, portal build, tiling) and add a CI workflow so tests gate every change.",
+      "depends": [
+        "F-01"
+      ]
+    },
+    {
+      "id": "F-12",
+      "phase": "foundation",
+      "title": "Service logs & console",
+      "status": "planned",
+      "effort": "M",
+      "areas": [
+        "infra",
+        "api",
+        "ui"
+      ],
+      "why": "Per-service live logs (and a security-gated container console) in Settings → Infrastructure, so an admin can debug a failed Celery ingest or tile job without SSH-ing into the box.",
+      "detail": "Extends the existing service start/stop/restart controls with a streaming LOG viewer per container (celery worker, api, martin, titiler, nginx, postgis) — read-only, follow-tail, filter — the Coolify/Portainer 'Logs' tab. A second, security-GATED tier adds an in-browser terminal (interactive exec into a container): owner-only and OFF by default (opt-in config flag), since a shell is a full RCE surface, so it's kept as its own capability rather than riding on plain admin. Reads the Docker socket the API already uses for service control; the Cloud log-aggregation in C-07 builds on this per-instance view.",
+      "depends": [
+        "F-01"
+      ]
+    },
+    {
+      "id": "F-13",
+      "phase": "foundation",
+      "title": "Unattended install (environment variables)",
+      "status": "planned",
+      "effort": "M",
+      "areas": [
+        "installer",
+        "api"
+      ],
+      "why": "Install and configure GeoDeploy without touching the setup wizard, so it can be scripted — provisioning, CI, rebuilding a machine from scratch, or standing up a sandbox.",
+      "detail": "Today the installer reads exactly one variable (GEODEPLOY_VERSION) and everything else comes from the wizard, so an install cannot be automated. This adds an env-var path for the same decisions the wizard makes: database (managed or an external DSN), object storage (managed or S3 credentials), the first admin account, and the public domain. The wizard remains the default and is skipped only when the variables are complete — a partial set should fall back to it rather than half-configure an instance. Deliberately NOT a flag on install.sh: `curl | bash --something` is the most copy-pasteable line in the project and the wrong place for choices that are hard to undo. Demo mode falls out of this for free rather than needing a special case, and self-serve provisioning (C-04) needs it as a prerequisite.",
+      "depends": [
+        "F-01"
+      ]
+    },
+    {
+      "id": "A-01",
+      "phase": "access",
+      "title": "Multi-user & RBAC",
+      "status": "shipped",
+      "effort": "XL",
+      "areas": [
+        "auth",
+        "api",
+        "ui"
+      ],
+      "why": "User management plus roles — owner / admin / editor / viewer. Invite, edit, and remove people.",
+      "detail": "Shared-workspace model (ArcGIS-org style): every member sees all data and portals; the role gates what they can do. Shipped: role ladder with a single transferable owner, copy-link invitations (single-use hashed tokens), user CRUD with delete-reassign-to-owner, password change/reset, role-aware UI with creator filters. Per-resource private/org sharing is A-02.",
+      "depends": [
+        "F-09"
+      ]
+    },
+    {
+      "id": "A-02",
+      "phase": "access",
+      "title": "Resource ownership & sharing",
+      "status": "shipped",
+      "effort": "L",
+      "areas": [
+        "api",
+        "portal",
+        "auth"
+      ],
+      "why": "Per-resource visibility: private (creator + admins) / organization (all members) / public (data catalog) on layers & sources; portals get a 4-tier published-access model.",
+      "detail": "Code complete 2026-07-16 (in verification): a single visibility axis (private ⊂ organization ⊂ public) on vector + raster layers and external sources, folding the prior is_public STAC flag into it (write-only-synced); the visible_to() seam enforces it across every list + authenticated by-id lookup while public-by-id portal display endpoints stay untouched. Portals instead got a clearer 4-tier PUBLISHED access model — public / password / organization (any signed-in member) / private (creator + admins), now enforced SERVER-SIDE (nginx auth_request → an authz endpoint that checks a session cookie before serving the static bundle; password portals use a server-verified per-portal unlock cookie via a dedicated gate page).",
+      "depends": [
+        "A-01"
+      ]
+    },
+    {
+      "id": "A-03",
+      "phase": "access",
+      "title": "API tokens",
+      "status": "shipped",
+      "effort": "M",
+      "areas": [
+        "api",
+        "auth"
+      ],
+      "why": "Personal access tokens for scripting and CI — the same routes, headless. The foundation under the GeoLibre/QGIS plugins (E-02, E-05).",
+      "detail": "Scoped personal access tokens (opaque, shown once, stored hashed) let power users and desktop plugins upload, tile, and publish — and open a portal in edit mode — without a browser session. A token authenticates as its owner via the same Bearer path, capped at a chosen role tier (read-only / editor / admin, never above the owner's live role) so enforcement reuses the RBAC ladder. Managed per-user in Settings; revocable; auto-expires optionally; dies with the owner.",
+      "depends": [
+        "A-01"
+      ]
+    },
+    {
+      "id": "A-04",
+      "phase": "access",
+      "title": "Auth hardening",
+      "status": "shipped",
+      "effort": "M",
+      "areas": [
+        "auth",
+        "ui"
+      ],
+      "unverified": true,
+      "why": "Session/token revocation + OIDC single sign-on (password reset already shipped with A-01/C-08).",
+      "detail": "Building 2026-07-20: (0) app-managed DB secrets encrypted at rest (Fernet EncryptedText); (1) session revocation — browser JWTs carry a token_version, so a password change/reset and a 'log out other sessions' action kill outstanding tokens while the acting tab stays signed in; (2) generic OIDC SSO via Authlib — admin-configured provider (Google/Microsoft/Keycloak/institutional), account linking by verified email, opt-in domain-allow-listed auto-provisioning with a default role. Rounds out the identity layer so it's safe to open beyond a trusted single operator.",
+      "depends": [
+        "A-01"
+      ]
+    },
+    {
+      "id": "A-05",
+      "phase": "access",
+      "title": "Activity & audit log",
+      "status": "shipped",
+      "effort": "S",
+      "areas": [
+        "api",
+        "ui"
+      ],
+      "why": "Who did what, when — per resource. Groundwork for Cloud trust and support.",
+      "detail": "Building 2026-07-20: an append-only AuditLog + a best-effort record_audit() helper wired into the key mutations (user role/delete/invite/transfer, portal create/publish/unpublish/delete, token create/revoke, auth login/password/logout-all, data upload/share/delete). Admin-only, filterable GET /audit (also serves per-resource history) + an Activity view. Entries survive user deletion (denormalized actor name; no FK).",
+      "depends": [
+        "A-02"
+      ]
+    },
+    {
+      "id": "C-01",
+      "phase": "cloud",
+      "title": "Workspaces / organizations",
+      "status": "planned",
+      "effort": "L",
+      "areas": [
+        "api",
+        "auth"
+      ],
+      "why": "A tenant boundary above users: many members, shared resources, one bill.",
+      "detail": "Introduces the organization/workspace entity that everything in Cloud hangs off — membership, shared layers, and the unit of billing.",
+      "depends": [
+        "A-01",
+        "A-02"
+      ]
+    },
+    {
+      "id": "C-02",
+      "phase": "cloud",
+      "title": "Tenant isolation",
+      "status": "planned",
+      "effort": "XL",
+      "areas": [
+        "infra",
+        "storage",
+        "duckdb"
+      ],
+      "why": "Per-tenant storage prefix, DB schema, and tile namespace so tenants never cross paths.",
+      "detail": "Hard isolation of data at rest and in queries — object-storage prefixes, database schemas, and tile keys scoped per tenant, verified on every read.",
+      "depends": [
+        "C-01"
+      ]
+    },
+    {
+      "id": "C-03",
+      "phase": "cloud",
+      "title": "Quotas & fair use",
+      "status": "planned",
+      "effort": "M",
+      "areas": [
+        "infra",
+        "celery"
+      ],
+      "why": "Storage caps and tiling-minute budgets so one heavy job can't starve its neighbors.",
+      "detail": "Per-tenant limits and queue fairness keep shared infrastructure predictable when a 20 M-feature tiling run lands.",
+      "depends": [
+        "C-01"
+      ]
+    },
+    {
+      "id": "C-04",
+      "phase": "cloud",
+      "title": "Self-serve provisioning",
+      "status": "future",
+      "effort": "L",
+      "areas": [
+        "infra",
+        "ui",
+        "billing"
+      ],
+      "why": "Sign up, get a workspace, upload — no operator in the loop.",
+      "detail": "The signup-to-first-map flow that makes Cloud a product rather than a managed install.",
+      "depends": [
+        "C-01",
+        "A-04"
+      ]
+    },
+    {
+      "id": "C-05",
+      "phase": "cloud",
+      "title": "Metering & billing",
+      "status": "future",
+      "effort": "L",
+      "areas": [
+        "billing",
+        "api"
+      ],
+      "why": "Measure storage, tiles served, and compute; plug into a billing provider.",
+      "detail": "Usage metering wired to plans and a payment provider — the commercial engine of Cloud.",
+      "depends": [
+        "C-03",
+        "C-04"
+      ]
+    },
+    {
+      "id": "C-06",
+      "phase": "cloud",
+      "title": "Managed upgrades",
+      "status": "future",
+      "effort": "M",
+      "areas": [
+        "infra"
+      ],
+      "why": "One-click, zero-downtime updates — hosted and hands-off.",
+      "detail": "Rolling upgrades across tenants without an operator babysitting each instance.",
+      "depends": [
+        "C-02"
+      ]
+    },
+    {
+      "id": "C-07",
+      "phase": "cloud",
+      "title": "Observability & backups",
+      "status": "planned",
+      "effort": "M",
+      "areas": [
+        "infra"
+      ],
+      "why": "Metrics, health, log aggregation, plus automated backups and restore drills.",
+      "detail": "The operational floor for running someone else's data with confidence.",
+      "depends": [
+        "C-01"
+      ]
+    },
+    {
+      "id": "C-08",
+      "phase": "cloud",
+      "title": "Transactional email & export notifications",
+      "status": "building",
+      "effort": "M",
+      "areas": [
+        "api",
+        "celery",
+        "infra"
+      ],
+      "unverified": true,
+      "why": "Optional outgoing email — invites, password resets now; export notifications and receipts later.",
+      "detail": "First half built 2026-07-16: generic SMTP (stdlib, zero lock-in — Resend, Brevo, or an institutional relay all work via their SMTP endpoints), admin-configured in Settings → Email, STRICTLY optional: unconfigured installs keep copy-link delivery, and the copyable link always remains the fallback. Powers invite emails, admin reset links, and the login page's self-service 'Forgot password?' (anti-enumeration, rate-limited). Remaining half: 'your download is ready' for queued exports and billing receipts (C-05).",
+      "depends": [
+        "A-01"
+      ]
+    },
+    {
+      "id": "E-01",
+      "phase": "ecosystem",
+      "title": "Open in GeoLibre",
+      "status": "planned",
+      "effort": "M",
+      "areas": [
+        "geolibre",
+        "portal"
+      ],
+      "why": "Hand a portal's layers to the GeoLibre app as GeoParquet/COG URLs for instant client-side analysis.",
+      "detail": "Ship the GeoLibre static app beside a portal with an 'Open in GeoLibre' button that passes vector layers as GeoParquet URLs and rasters as COG URLs — a big quick-analysis surface for almost no server cost.",
+      "depends": [
+        "F-07"
+      ]
+    },
+    {
+      "id": "E-02",
+      "phase": "ecosystem",
+      "title": "Push from GeoLibre",
+      "status": "building",
+      "effort": "L",
+      "areas": [
+        "geolibre",
+        "api",
+        "duckdb"
+      ],
+      "why": "Style data in GeoLibre, then publish it straight to a GeoDeploy instance as a hosted portal — the desktop adoption funnel.",
+      "detail": "A 'Publish to GeoDeploy' GeoLibre plugin + a GeoDeploy .geolibre.json importer. GeoDeploy translates each GeoLibre LayerStyle → MapLibre paint (single/graduated/categorized/expression/rule-based + attribute extrusion), ingests vectors (native-CRS, Z-preserving) + COG rasters + XYZ/WMS tiles, maps view/basemap/storymap, and builds the portal (POST /api/interop/geolibre/{preview,publish}). Real 3D: attribute extrusion renders natively; coordinate-Z layers render at altitude via an inline deck.gl elevation layer. The plugin (integrations/geolibre-plugin, scaffolded from the opengeos template) sends the project with a Bearer API token; CORS + SSRF handled. Full fidelity needs a tiny upstream GeoLibre host-API addition (app.getProjectSnapshot(), patch documented). Built; pending stack validation + the upstream PR.",
+      "depends": [
+        "E-01",
+        "A-03"
+      ]
+    },
+    {
+      "id": "E-03",
+      "phase": "ecosystem",
+      "title": "Style interchange (MapLibre)",
+      "status": "planned",
+      "effort": "M",
+      "areas": [
+        "portal",
+        "ui"
+      ],
+      "why": "Import and export MapLibre style JSON so portal symbology round-trips with the ecosystem.",
+      "detail": "Portals can adopt an external MapLibre style and emit their own, making cartography portable in and out of GeoDeploy.",
+      "depends": [
+        "F-07"
+      ]
+    },
+    {
+      "id": "E-04",
+      "phase": "ecosystem",
+      "title": "Style import: QGIS & GeoLibre",
+      "status": "planned",
+      "effort": "M",
+      "areas": [
+        "portal"
+      ],
+      "why": "Bring QGIS QML/SLD and GeoLibre styles into a portal — keep the cartography you already made.",
+      "detail": "A translation layer from common desktop/style formats into the portal symbology model, so users don't restyle from scratch. The GeoLibre half already landed with E-02 (GeoLibre LayerStyle → MapLibre paint, incl. data-driven color + extrusion, via a raw-paint passthrough in generate_style); QGIS QML/SLD remains.",
+      "depends": [
+        "E-03"
+      ]
+    },
+    {
+      "id": "E-05",
+      "phase": "ecosystem",
+      "title": "Connect from QGIS",
+      "status": "future",
+      "effort": "L",
+      "areas": [
+        "api",
+        "qgis"
+      ],
+      "why": "A QGIS plugin — the GeoNode-plugin equivalent — to browse and load an instance's layers directly.",
+      "detail": "Desktop users reach a GeoDeploy instance from inside QGIS, loading hosted layers over the wire in a cloud-native, server-light way (not GeoServer).",
+      "depends": [
+        "E-06",
+        "A-03"
+      ]
+    },
+    {
+      "id": "E-06",
+      "phase": "ecosystem",
+      "title": "Catalog / STAC",
+      "status": "shipped",
+      "effort": "M",
+      "areas": [
+        "api"
+      ],
+      "why": "A machine-readable catalog of an instance's layers for discovery and interop.",
+      "detail": "SHIPPED: a public STAC 1.0.0 API at /api/stac — catalog, conformance, the vectors/rasters collections, per-layer items carrying ready-to-use assets (COG, XYZ/MVT tiles, TileJSON, PMTiles, GeoParquet manifest, OGC API - Features), and GET+POST item search with bbox/datetime/ids/limit paging. Generated per request from SQLite so it can never drift from the catalog; lists ONLY layers shared as public. Consumers: QGIS 3.40+, stac-browser, pystac-client.",
+      "depends": [
+        "A-02"
+      ]
+    },
+    {
+      "id": "E-07",
+      "phase": "ecosystem",
+      "title": "OGC API - Features",
+      "status": "building",
+      "unverified": true,
+      "effort": "M",
+      "areas": [
+        "api",
+        "tiles"
+      ],
+      "why": "The one read standard EVERY GIS speaks natively — QGIS, ArcGIS Pro, FME, anything on GDAL's OAPIF driver. Tiles and TileJSON only reach MapLibre-family clients; this is what makes GeoDeploy data usable everywhere, and it closes the standards gap against GeoLens.",
+      "detail": "BUILT 2026-07-29 (routers/ogcapi.py), needs live verification. /api/ogc landing + /conformance + /collections + /collections/{id} + /items + /items/{featureId}. One collection per PUBLIC vector layer (ids mirror the STAC item ids: vector-<layer id>), both storage backends: PostGIS via ST_AsGeoJSON with an index-usable && envelope filter, GeoParquet via DuckDB with covering-column + partition pruning. bbox/limit/offset paging with numberMatched/numberReturned/timeStamp and next/prev links; GeoJSON, EPSG:4326. Conformance claims Core + GeoJSON ONLY — no CRS negotiation, no CQL2, no transactions (over-claiming was the bug being fixed). Advertised from the STAC item (asset + alternate link) and led with in the new My Data share-links panel. NOT included: OGC API - Tiles (rendering is TileJSON/PMTiles today), Records, CQL2.",
+      "depends": [
+        "E-06"
+      ]
+    },
+    {
+      "id": "E-08",
+      "phase": "ecosystem",
+      "title": "Multi-language (i18n)",
+      "status": "planned",
+      "effort": "M",
+      "areas": [
+        "ui",
+        "portal"
+      ],
+      "why": "Run the dashboard AND published portals in the visitor's language — a direct adoption lever for non-English (e.g. Francophone) regions. Slated near-term.",
+      "detail": "The admin UI already carries vue-i18n scaffolding (nav labels use $t); this completes it — extract every remaining string, add a language switcher, and (the bigger half) translate the published-portal runtime (portal.js UI: layer list, basemap, download dialog, popups, About) so a portal renders in its audience's language. Templates already carry a `language` field (en/fr); wire it to a locale bundle and default a portal to its template/admin locale. French first (West-Africa focus), then extensible to more locales via simple JSON message catalogs.",
+      "depends": [
+        "F-07"
+      ]
+    },
+    {
+      "id": "E-09",
+      "phase": "ecosystem",
+      "title": "Round-trip / write-back from GeoLibre",
+      "status": "building",
+      "effort": "M",
+      "areas": [
+        "geolibre",
+        "api",
+        "postgis"
+      ],
+      "why": "Edit a GeoDeploy layer in GeoLibre (data cleaning, geometry/attribute fixes) and save it straight back to source.",
+      "detail": "GeoDeploy exposes a layer as editable GeoJSON (GET /api/interop/geodeploy/layers/{id}/features.geojson) and a write-back (PUT .../features) that re-ingests the edited GeoJSON into the SAME PostGIS table — a full replace via the normal vector ingest (bbox/count refresh, Martin reload) — so published portals using the layer update too. The plugin adds a 'Round-trip a layer' panel: list/load → edit in GeoLibre → save edits back. Owner-only, feature-capped, PostGIS layers (native CRS becomes 4326 on round-trip). Built; pending stack validation.",
+      "depends": [
+        "E-02"
+      ]
+    },
+    {
+      "id": "V-01",
+      "phase": "advanced",
+      "title": "In-browser analysis console",
+      "status": "future",
+      "effort": "L",
+      "areas": [
+        "duckdb",
+        "ui"
+      ],
+      "why": "A DuckDB-WASM spatial SQL console over your layers — query and derive without a server.",
+      "detail": "Interactive SQL against hosted GeoParquet from the browser, extending the existing client-side read path into full analysis.",
+      "depends": [
+        "F-06"
+      ]
+    },
+    {
+      "id": "V-02",
+      "phase": "advanced",
+      "title": "Fast processing toolkit",
+      "status": "planned",
+      "effort": "L",
+      "areas": [
+        "duckdb",
+        "celery",
+        "ui"
+      ],
+      "why": "Clip, buffer, overlay, and raster band math run in-process — DuckDB / TiTiler, not GeoServer.",
+      "detail": "A small set of high-value geoprocessing tools executed server-light, matching the lakehouse philosophy.",
+      "depends": [
+        "F-04"
+      ]
+    },
+    {
+      "id": "V-03",
+      "phase": "advanced",
+      "title": "Story-map portals",
+      "status": "future",
+      "effort": "L",
+      "areas": [
+        "portal",
+        "ui"
+      ],
+      "why": "A portal type where chapters are composed on the live map — narrative cartography.",
+      "detail": "Borrows GeoLibre's story-map pattern: scroll-linked chapters that fly the map and toggle layers, published as a portal.",
+      "depends": [
+        "F-07"
+      ]
+    },
+    {
+      "id": "V-04",
+      "phase": "advanced",
+      "title": "Photo features (field stories)",
+      "status": "future",
+      "effort": "M",
+      "areas": [
+        "portal",
+        "api"
+      ],
+      "why": "Attach photos to points via EXIF GPS; show them in popups and panels in the published portal.",
+      "detail": "Bulk-import geotagged photos into a point layer with narrative + imagery per feature — the data model for field-story maps.",
+      "depends": [
+        "V-03"
+      ]
+    },
+    {
+      "id": "V-05",
+      "phase": "advanced",
+      "title": "Temporal data & time slider",
+      "status": "idea",
+      "effort": "M",
+      "areas": [
+        "portal",
+        "tiles"
+      ],
+      "why": "Time-aware layers with a slider for change over time.",
+      "detail": "Temporal attributes drive a portal time control for animating change — land cover, growth, movement.",
+      "depends": [
+        "F-07"
+      ]
+    },
+    {
+      "id": "V-06",
+      "phase": "advanced",
+      "title": "3D tiles & terrain",
+      "status": "idea",
+      "effort": "L",
+      "areas": [
+        "tiles",
+        "portal"
+      ],
+      "why": "3D tilesets and terrain in the globe view for true 2.5D / 3D scenes.",
+      "detail": "Extends the existing globe with elevation and 3D tiles for buildings and terrain-aware visualization.",
+      "depends": [
+        "F-07"
+      ]
+    },
+    {
+      "id": "V-07",
+      "phase": "advanced",
+      "title": "Live connectors & refresh",
+      "status": "idea",
+      "effort": "M",
+      "areas": [
+        "celery",
+        "api"
+      ],
+      "why": "Scheduled sync from PostGIS, S3, or APIs so hosted layers stay current.",
+      "detail": "Connectors that periodically re-pull a source and re-prep the layer, keeping published maps fresh without manual re-upload.",
+      "depends": [
+        "F-02"
+      ]
+    },
+    {
+      "id": "V-08",
+      "phase": "advanced",
+      "title": "Portal tools framework",
+      "status": "planned",
+      "effort": "L",
+      "areas": [
+        "portal",
+        "ui"
+      ],
+      "why": "An admin-selectable toolbox — pick which map tools a portal exposes when publishing: measure, print, download, swipe, share and more.",
+      "detail": "A registry of portal tools the admin toggles per portal in the editor; the published portal renders the enabled ones as a consistent toolbar. The existing area-select download (F-06) becomes the first registered tool. Candidate catalog, roughly by value: area/feature download (shipped), measure distance & area, coordinate readout + go-to lat/lon, attribute filter & search, print/export map to PDF (legend + scale bar), layer swipe & spyglass compare, share-this-view permalink, legend panel, fullscreen, geolocate (my location), and saved views/bookmarks. Basemap gallery already ships in every portal. The framework is the reusable plumbing; individual heavier tools are tracked separately (e.g. V-09).",
+      "depends": [
+        "F-07"
+      ]
+    },
+    {
+      "id": "V-09",
+      "phase": "advanced",
+      "title": "Measurement & print tools",
+      "status": "future",
+      "effort": "M",
+      "areas": [
+        "portal",
+        "ui"
+      ],
+      "why": "The build-heavier toolbox entries: interactive measure (distance/area) and a composed print/export to PDF.",
+      "detail": "Measure distance and area on the map with live readouts and unit switching, plus a print composer that exports the current view to PDF/PNG with title, legend, scale bar and attribution — the two most-requested geoportal tools beyond download. Registered into the V-08 toolbox.",
+      "depends": [
+        "V-08"
+      ]
+    },
+    {
+      "id": "V-10",
+      "phase": "advanced",
+      "title": "Template gallery & branding",
+      "status": "planned",
+      "effort": "M",
+      "areas": [
+        "portal",
+        "ui"
+      ],
+      "why": "Templates as a real feature: a visual gallery, custom brand colours + logo/wordmark.",
+      "detail": "A first distinct set already ships (minimal, satellite-dark, editorial, humanitarian — each a theme.css of palette + header/card treatment over the shared runtime, now that basemap is picked separately). This item turns theming into a first-class feature: a visual template gallery with real previews in the editor, plus per-portal custom brand colours + logo/wordmark. This is the look-and-feel half; the structural-layout half (rearranging the map's panels) is V-11.",
+      "depends": [
+        "F-07"
+      ]
+    },
+    {
+      "id": "V-13",
+      "phase": "advanced",
+      "title": "Layer groups & catalog panel",
+      "status": "shipped",
+      "effort": "L",
+      "areas": [
+        "portal",
+        "ui"
+      ],
+      "why": "Organize a portal's layers into named groups/folders — a browsable catalog tree like the layer catalogs in GeoNode / ArcGIS / mainstream geoportals — as a portal element you can include per template.",
+      "detail": "Today a portal's layer list is FLAT. This adds hierarchical GROUPS (folders, nestable) the admin arranges in the editor (drag layers into groups, order them, collapse-by-default, per-group legend), rendered in the published portal as an expandable catalog tree with group-level toggle-all. It becomes a selectable portal ELEMENT (a 'catalog' panel) whose presence + placement a template declares — ties into V-11's configurable regions. Data model: groups live in the portal's layer_configs (a keyed/nested structure) so no new global taxonomy is needed; a later step can promote groups to reusable cross-portal collections. Must mirror across the three surfaces (PortalEditor preview, portal_generator.generate_style, portal.js). Look at ArcGIS/GeoNode/QGIS-server catalogs + Mapbox/MapLibre layer trees for patterns. SHIPPED alongside: a search/filter box over the published layer list (name match — hides non-matching layers + empty folders, force-expands folders holding a hit) so even a single portal's catalog is searchable.",
+      "depends": [
+        "F-07"
+      ]
+    },
+    {
+      "id": "V-14",
+      "phase": "advanced",
+      "title": "Catalog / discovery portal",
+      "status": "building",
+      "unverified": true,
+      "effort": "L",
+      "frontier": true,
+      "areas": [
+        "portal",
+        "ui",
+        "api"
+      ],
+      "why": "A human-readable, SEARCHABLE catalog portal for discovery — find any layer across the organization, see its metadata, and grab its access links (XYZ tiles, GeoParquet/COG download, STAC). The friendly face of E-06's machine catalog.",
+      "detail": "A dedicated catalog portal TEMPLATE (not map-first): a searchable, browsable index of the workspace's layers — full-text search over name + keywords + abstract (the A-02 catalog metadata), filter by type/theme, organized with the V-13 folder tree, each entry showing abstract/license/attribution + copyable ACCESS LINKS (XYZ/vector-tile URL, GeoParquet/COG/features.geojson download, STAC item) and add-to-map / preview. ORG-WIDE — draws the whole inventory (respecting A-02 visibility: public catalog for anonymous, org layers for members), unlike a normal portal's hand-picked layers. Builds on E-06 (STAC index), A-02 (metadata + visibility), V-13 (folders) and V-11 (a list-centric layout). The GeoNode/Terria-style discovery experience, human-readable where raw STAC isn't. BUILT 2026-07-30 (V-11 Phase 3): the `catalog` archetype is real — it had been ALIASED to `webmap` as a placeholder in all three parity surfaces, which is why selecting it silently rendered a plain web map. Ships as search + sort + active-filter chips over a facet rail (Type / Keywords / Licence, counts computed with each group excluded so a number says what picking it would give), paginated result cards (type/geometry/feature-count/CRS/licence badges, 3-line abstract clamp, clickable keywords, Show-on-map / Zoom-to / Access-and-download reusing share_links) and a full-height map panel on the right (configurable left). Hover flashes a dataset's footprint. Scope `portal` (baked) or `public` (live from the new gated GET /portals/{slug}/catalog, so sharing a layer needs no re-publish). Rail auto-hides under 6 datasets; <1024px list/map become two views; <640px the rail drops. Regression-pinned by tests/test_portal_layouts.py, which states the webmap + storymap manifests LITERALLY. REMAINING: box-draw → spatial filter + \"download this area\", and the folder-tree organization of results.",
+      "depends": [
+        "E-06",
+        "V-13"
+      ]
+    },
+    {
+      "id": "V-11",
+      "phase": "advanced",
+      "title": "Template experiences (layouts + app types)",
+      "status": "building",
+      "unverified": true,
+      "effort": "XL",
+      "areas": [
+        "portal",
+        "ui",
+        "api"
+      ],
+      "why": "Make choosing a template produce a different EXPERIENCE, not just a palette — webmap · webmap+catalog · catalogue app · story map · (later) dashboard — think ArcGIS Experience Builder / StoryMaps. Templates are the headline appeal of a geoportal CREATOR; they must be striking.",
+      "detail": "Generalize the 'one shared runtime, themes are cheap' model into THREE orthogonal axes: ARCHETYPE (app type — webmap / webmap+catalog / catalog / storymap / dashboard), LAYOUT (a JSON manifest of REGIONS → enabled PANELS + placement: sidebar side, floating vs docked layer list, header style, tools placement, overlay vs docked, collapsed-by-default), and THEME (today's palette). A template = a curated preset bundling {archetype+layout+theme}; the user picks one, gets that experience, then tweaks (per-portal overrides). Runtime: refactor the fixed layout.html into a REGION-DRIVEN (CSS-grid) skeleton the shared portal.js fills from the manifest, mounting modular panels (MapPanel, the V-13 LayerCatalogPanel, Legend, Tools, Basemap, Header, About, + new StoryPanel / CatalogGridPanel). Data: new Portal.layout_config (nullable JSON, migration in main.py), baked into style.geodeploy.layout so portal.js AND PortalEditor's preview read one source (3-surface parity — the hard part). Editor: an Experience/Layout section — archetype picker (thumbnails) + a few placement toggles (presets, not a drag-designer yet). PHASING: P1 architecture + webmap/webmap+catalog/catalog from EXISTING panels; P2 story map (see V-15); P3 catalog/discovery in full (= V-14); P4 dashboard (V-16) + free-form placement. Back-compat: no manifest ⇒ webmap ⇒ identical to today. FULL DESIGN in notes_temp/notes_for_future.md top section (decisions to resolve + start-here checklist).",
+      "depends": [
+        "V-10",
+        "V-13"
+      ]
+    },
+    {
+      "id": "V-15",
+      "phase": "advanced",
+      "title": "Story map experience",
+      "status": "planned",
+      "effort": "XL",
+      "areas": [
+        "portal",
+        "ui",
+        "api"
+      ],
+      "why": "Scrollytelling geoportals — a narrative of sections, each pinned to a map camera + layer state, the map animating as the reader scrolls. The flagship, high-appeal archetype of V-11.",
+      "detail": "A 'storymap' archetype (V-11) plus the STORY EDITOR it needs: an ordered list of sections, each = rich text (reuse the About TipTap stack) + a captured map view (currentView() camera + which layers/visibility) + optional media (uploadPortalAsset); drag to reorder. Runtime StoryPanel: sections scroll in a narrative column; entering a section flies the map to its saved state (scroll-driven, IntersectionObserver). Stored as Portal.story JSON. Builds on portals-as-documentation (TipTap), V-13 layer state, and note '2e. Photos attached to vector features'. Text+map first; charts later (V-16).",
+      "depends": [
+        "V-11"
+      ]
+    },
+    {
+      "id": "V-16",
+      "phase": "advanced",
+      "title": "Dashboard experience & charts",
+      "status": "future",
+      "effort": "XL",
+      "areas": [
+        "portal",
+        "ui",
+        "api"
+      ],
+      "why": "A dashboard archetype — map alongside charts/indicators/panels driven by the layer data, for monitoring-style geoportals.",
+      "detail": "A 'dashboard' archetype (V-11) with a charting story: configurable panels (chart / stat / filter) bound to a layer's attributes, laid out with the map in the region grid. Needs a chart library decision (self-contained, CSP-safe for published portals) + an attribute-aggregation path (DuckDB over GeoParquet is a natural fit). The precursor to Experience-Builder-style free-form composition. Largest/most speculative of the V-11 family — after story map + catalog land.",
+      "depends": [
+        "V-11",
+        "V-15"
+      ]
+    },
+    {
+      "id": "V-12",
+      "phase": "advanced",
+      "title": "Responsive layouts (mobile / tablet)",
+      "status": "planned",
+      "effort": "M",
+      "areas": [
+        "ui",
+        "portal"
+      ],
+      "why": "Make the admin dashboard AND published portals work well across phone / tablet / desktop screen sizes.",
+      "detail": "Today the dashboard and portal chrome are tuned for desktop widths; on small screens panels overflow, controls crowd, and the portal sidebar eats the map. This item does a responsive pass on both surfaces: collapsible/stacking panels, a drawer for the portal layer list on narrow viewports, touch-friendly hit targets, fluid grids, and testing at common breakpoints. Pairs naturally with V-11 (configurable regions) but is scoped as plain responsiveness of the existing layouts.",
+      "depends": []
+    }
   ]
 }
 </script>
