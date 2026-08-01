@@ -117,6 +117,25 @@ def _sweep_orphans(cfg, key: str) -> dict:
     from ..services.minio import get_s3_client
 
     settings = get_settings()
+
+    # THE BACKUP MUST NOT LIVE IN THE BUCKET WE ARE ABOUT TO SWEEP. Keeping the demo's backups in the
+    # same MinIO is fine and expected — it costs nothing and the data is disposable — but it has to be
+    # a DIFFERENT BUCKET. Share one and this sweep deletes the snapshot itself (its keys are not under
+    # the snapshot's own objects/ prefix), leaving the next reset nothing to restore from.
+    #
+    # Checked HERE, before any client is built: it is a configuration mistake, and refusing it should
+    # not depend on being able to reach storage.
+    #
+    # Compares bucket NAMES only, not endpoints. That also refuses a genuinely separate S3 reusing the
+    # name — a false refusal, chosen deliberately: if endpoint normalisation ("minio:9000" vs
+    # "http://minio:9000") were wrong, the error would fall the other way and delete the snapshot. A
+    # refusal is fixed by renaming a bucket; a deletion is not fixed at all.
+    if (cfg.backup_bucket or "").strip() == (settings.storage_bucket or "").strip():
+        logger.error(
+            "demo reset: backup bucket %r is the SAME as the data bucket — sweeping would delete the "
+            "snapshot this reset depends on. Point backups at a different bucket.", cfg.backup_bucket)
+        return {"error": "backup and data share a bucket; sweep refused"}
+
     live = get_s3_client()
     src = bk.make_client(cfg.backup_endpoint, cfg.backup_access_key, cfg.backup_secret_key,
                          cfg.backup_region)
@@ -131,6 +150,17 @@ def _sweep_orphans(cfg, key: str) -> dict:
         # An empty snapshot would mean "delete everything", which is never what was meant.
         logger.warning("demo reset: snapshot contains no objects — sweep skipped as a safety check")
         return {"skipped": "snapshot had no objects"}
+
+    # THE BACKUP MUST NOT LIVE IN THE BUCKET WE ARE ABOUT TO SWEEP. Putting the demo's backups in the
+    # same MinIO is fine and expected — it costs nothing and the data is disposable — but it has to be
+    # a DIFFERENT BUCKET. Share one, and this sweep deletes the snapshot itself (its keys are not
+    # under the snapshot's own objects/ prefix), leaving the next reset with nothing to restore from.
+    # Refuse rather than warn: a reset that eats its own seed is unrecoverable without re-seeding.
+    if (cfg.backup_bucket or "").strip() == (settings.storage_bucket or "").strip():
+        logger.error(
+            "demo reset: backup bucket %r is the SAME as the data bucket — sweeping would delete the "
+            "snapshot this reset depends on. Point backups at a different bucket.", cfg.backup_bucket)
+        return {"error": "backup and data share a bucket; sweep refused"}
 
     deleted, batch = 0, []
     for page in live.get_paginator("list_objects_v2").paginate(Bucket=settings.storage_bucket):

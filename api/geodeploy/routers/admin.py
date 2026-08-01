@@ -161,6 +161,51 @@ def _repo_host_dir(client):
     return None
 
 
+@router.get("/update/preflight")
+async def update_preflight(_: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    """What work is in flight right now, so an admin can decide whether this is a good moment.
+
+    An update recreates the API and the worker. Anything mid-flight dies with them: an upload being
+    converted, a layer being tiled, an export being clipped, a backup being written. Some of that
+    self-heals (tiling is re-queued on worker start), some of it does not, and none of it should be
+    a surprise. The endpoint REPORTS; it never blocks — the admin may have a good reason, and a
+    forced choice with no information is what we are fixing, not the choice itself.
+    """
+    from ..models import BackupRun, RestoreRun, UploadJob
+
+    busy: list[dict] = []
+
+    rows = (await db.execute(select(UploadJob).where(
+        UploadJob.status.in_(("queued", "processing"))))).scalars().all()
+    for j in rows:
+        busy.append({"kind": "upload", "what": f"{j.layer_type} layer being processed",
+                     "detail": j.current_step or j.status, "recovers": False})
+
+    tiling = (await db.execute(select(VectorLayer).where(
+        VectorLayer.tile_status == "tiling"))).scalars().all()
+    for l in tiling:
+        # Tiling IS resumed automatically on worker start (celery_app._resume_interrupted_tiling),
+        # so this one is informational rather than a reason to wait.
+        busy.append({"kind": "tiling", "what": f"“{l.name}” is being tiled",
+                     "detail": "resumes automatically after the update", "recovers": True})
+
+    for model, kind, verb in ((BackupRun, "backup", "Backup"), (RestoreRun, "restore", "Restore")):
+        try:
+            runs = (await db.execute(select(model).where(model.status == "running"))).scalars().all()
+        except Exception:
+            runs = []
+        for r in runs:
+            busy.append({"kind": kind, "what": f"{verb} in progress",
+                         "detail": getattr(r, "message", None) or "running", "recovers": False})
+
+    return {
+        "busy": busy,
+        "count": len(busy),
+        # Only work that will NOT pick itself back up is a real reason to wait.
+        "blocking": sum(1 for b in busy if not b["recovers"]),
+    }
+
+
 @router.post("/update", status_code=202)
 async def start_update(user: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     """One-click update. Launches a DETACHED helper container that runs `installer/self-update.sh`

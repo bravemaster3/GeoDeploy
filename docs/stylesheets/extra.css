@@ -25,15 +25,24 @@
 
 /* ── Landing hero ──────────────────────────────────────────────────────────
    Only on pages that opt in with `hero` in their front matter class, so no other page inherits it. */
+/* FULL-BLEED. The hero lives inside Material's content column, which is padded and centred, so
+   negative margins in rem only ate the padding — leaving a visible gutter on three sides.
+   `calc(50% - 50vw)` pulls each edge out to the VIEWPORT regardless of how wide that column is, and
+   the negative top margin closes the gap under the header so the gradient meets it. */
 .gd-hero {
-  margin: -1.2rem -.8rem 2.5rem;
-  padding: 4rem 2rem 3.5rem;
+  margin: -1.5rem calc(50% - 50vw) 3rem;
+  width: 100vw;
+  padding: 5rem 2rem 4rem;
   text-align: center;
-  border-radius: 0 0 1.5rem 1.5rem;
+  border-radius: 0;
   background:
     radial-gradient(ellipse 80% 60% at 50% -10%, rgba(22,163,74,.22), transparent 70%),
     linear-gradient(180deg, rgba(22,163,74,.10), transparent 65%);
 }
+/* Material reserves space above the first block for the (hidden) breadcrumb/edit row. On the landing
+   page that space is what stopped the hero touching the header. */
+.md-content__inner::before { display: none; }
+.md-typeset .gd-hero > :first-child { margin-top: 0; }
 .gd-hero h1 {
   font-size: 2.9rem;
   line-height: 1.1;

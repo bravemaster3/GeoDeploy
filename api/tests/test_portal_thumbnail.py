@@ -38,15 +38,20 @@ async def test_upload_sets_thumbnail_url(client, db):
                           headers=_auth())
     assert r.status_code == 200
     url = r.json()["url"]
-    assert url.startswith("/api/portals/1/assets/thumbnail.webp?v=")
+    # A unique PATH, not a fixed name with ?v=. The assets route serves `immutable` with a 24h
+    # max-age, so a constant path let any cache that ignores query strings serve a stale image for a
+    # day — which is exactly what happened in practice.
+    import re as _re
+    assert _re.fullmatch(r"/api/portals/1/assets/thumbnail-[0-9a-f]{12}\.webp", url), url
 
     # It must be persisted, not just returned — the card reads it off the portal.
     got = await client.get("/api/portals/1", headers=_auth())
     assert got.json()["thumbnail_url"] == url
 
 
-async def test_republish_overwrites_rather_than_accumulating(client, db):
-    """A new file per publish would leave one orphan per re-publish, forever."""
+async def test_republish_replaces_rather_than_accumulating(client, db):
+    """Each capture gets its own path (so caches cannot serve a stale one), but the OLD file must be
+    removed — otherwise every re-publish leaves an orphan behind forever."""
     await _seed(db)
     first = (await client.post("/api/portals/1/thumbnail",
                                files={"file": ("t.webp", PNG, "image/webp")},
@@ -54,23 +59,27 @@ async def test_republish_overwrites_rather_than_accumulating(client, db):
     second = (await client.post("/api/portals/1/thumbnail",
                                 files={"file": ("t.webp", PNG + b"x", "image/webp")},
                                 headers=_auth())).json()["url"]
-    assert first.split("?")[0] == second.split("?")[0]      # same path → overwritten
+    assert first != second                                  # a NEW path, so no cache can serve the old
 
     from geodeploy.config import get_settings
     import os
     d = f"{get_settings().data_dir}/portal_assets/1"
-    assert sorted(os.listdir(d)) == ["thumbnail.webp"]      # no orphans, no leftover .tmp
+    files = sorted(os.listdir(d))
+    assert len(files) == 1, files                           # the previous capture was removed
+    assert files[0] == second.rsplit("/", 1)[-1]            # ...and the survivor is the current one
 
 
 async def test_asset_route_serves_the_fixed_name(client, db):
     """The public route's filename allow-list is a traversal guard; it must admit this one name."""
     await _seed(db)
-    await client.post("/api/portals/1/thumbnail",
-                      files={"file": ("t.webp", PNG, "image/webp")}, headers=_auth())
-    assert (await client.get("/api/portals/1/assets/thumbnail.webp")).status_code == 200
+    url = (await client.post("/api/portals/1/thumbnail",
+                             files={"file": ("t.webp", PNG, "image/webp")},
+                             headers=_auth())).json()["url"]
+    assert (await client.get(url)).status_code == 200
 
 
-@pytest.mark.parametrize("name", ["../../etc/passwd", "thumbnail.php", "thumb.webp", "..%2Fx.webp"])
+@pytest.mark.parametrize("name", ["../../etc/passwd", "thumbnail.php", "thumb.webp", "..%2Fx.webp",
+                                  "thumbnail-.webp", "thumbnail-zzzzzzzzzzzz.webp"])
 async def test_asset_route_still_rejects_everything_else(client, db, name):
     await _seed(db)
     assert (await client.get(f"/api/portals/1/assets/{name}")).status_code in (404, 400)

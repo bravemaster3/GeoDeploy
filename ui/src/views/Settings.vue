@@ -1157,7 +1157,29 @@ async function checkUpdates(force = false) {
 let updatePollTimer = null
 let updatePollCount = 0
 async function startUpdate() {
-  if (!confirm('Update GeoDeploy now? Services restart briefly. If the new version is unhealthy it rolls back automatically.')) return
+  // Ask the server what is in flight BEFORE the confirm, so the dialog can say what will actually be
+  // interrupted. An update recreates the API and the worker; anything mid-run dies with them. The
+  // check REPORTS rather than blocks — the admin may have a good reason, and being forced to choose
+  // with no information is the problem, not the choice.
+  let warning = ''
+  try {
+    const { data } = await api.get('/admin/update/preflight')
+    if (data.count) {
+      const NL = '\n'
+      const lines = data.busy.slice(0, 6).map(b => '  • ' + b.what + (b.detail ? ' — ' + b.detail : ''))
+      const more = data.count > 6 ? NL + '  …and ' + (data.count - 6) + ' more' : ''
+      const tail = data.blocking
+        ? 'Updating restarts the services, so ' + (data.blocking === 1 ? 'this' : 'these') +
+          ' will be interrupted and may need re-running.'
+        : 'All of it resumes automatically after the update.'
+      warning = 'Work is in progress right now:' + NL + NL + lines.join(NL) + more +
+        NL + NL + tail + NL + NL
+    }
+  } catch {
+    // The preflight failing must not block an update — an admin locked out of updating because a
+    // status check broke would be worse than the risk it warns about.
+  }
+  if (!confirm(warning + 'Update GeoDeploy now? Services restart briefly. If the new version is unhealthy it rolls back automatically.')) return
   updates.value.updating = true
   updatePollCount = 0
   updates.value.progress = { phase: 'running', message: 'Starting…' }

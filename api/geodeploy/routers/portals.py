@@ -466,15 +466,34 @@ async def upload_portal_thumbnail(
     settings = get_settings()
     asset_dir = f"{settings.data_dir}/portal_assets/{portal.id}"
     os.makedirs(asset_dir, exist_ok=True)
-    # Written via a temp file + os.replace so a card never reads a half-written image: the swap is
-    # atomic, and a failed write leaves the previous thumbnail intact.
-    dest = os.path.join(asset_dir, "thumbnail.webp")
+
+    # A UNIQUE FILENAME per capture, not a fixed name with a ?v= query string.
+    #
+    # The fixed name was chosen to avoid orphaned files, but it made the URL PATH constant, and this
+    # route serves assets with `Cache-Control: max-age=86400, immutable`. `immutable` tells caches
+    # never to revalidate, so the only thing distinguishing one capture from the next was the query
+    # string — and anything that ignores query strings in its cache key (Cloudflare's "Ignore Query
+    # String" mode, some proxies) then serves yesterday's image for a full day. A new path cannot be
+    # defeated by any cache configuration.
+    #
+    # The no-orphan property is kept by deleting the previous captures below, so this trades nothing.
+    name = f"thumbnail-{uuid.uuid4().hex[:12]}.webp"
+    dest = os.path.join(asset_dir, name)
     tmp = dest + ".tmp"
     with open(tmp, "wb") as f:
         f.write(data)
-    os.replace(tmp, dest)
+    os.replace(tmp, dest)   # atomic: a card never reads a half-written image
 
-    portal.thumbnail_url = f"/api/portals/{portal.id}/assets/thumbnail.webp?v={int(naive_utcnow().timestamp())}"
+    # Remove earlier captures (including the legacy fixed-name file). Best-effort: a leftover costs
+    # disk, while failing the publish over it would cost the user their portal.
+    for old_name in os.listdir(asset_dir):
+        if old_name != name and (old_name.startswith("thumbnail-") or old_name == "thumbnail.webp"):
+            try:
+                os.remove(os.path.join(asset_dir, old_name))
+            except OSError:
+                pass
+
+    portal.thumbnail_url = f"/api/portals/{portal.id}/assets/{name}"
     await db.commit()
     return {"url": portal.thumbnail_url}
 
@@ -489,7 +508,8 @@ async def portal_asset(portal_id: int, filename: str):
     import re
     from fastapi.responses import FileResponse
     if not (re.fullmatch(r"[0-9a-f]{32}\.(png|jpe?g|gif|webp)", filename)
-            or filename == "thumbnail.webp"):
+            or re.fullmatch(r"thumbnail-[0-9a-f]{12}\.webp", filename)
+            or filename == "thumbnail.webp"):      # legacy fixed name, still served if present
         raise HTTPException(404, "Not found.")
     settings = get_settings()
     path = f"{settings.data_dir}/portal_assets/{portal_id}/{filename}"
