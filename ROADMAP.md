@@ -19,6 +19,11 @@ The board is gone and this file is a pointer. One roadmap, in the docs, in the d
 
 ## Editing it
 
-Edit `docs/roadmap.md`. Releases are `<div class="gd-rel">` blocks rendered as stops on a timeline;
-add `now` to the class for the one being worked on, and use `- [x]` for what is done. The styling
+Edit `docs/roadmap.md`. Releases are `<div class="gd-rel">` blocks rendered as stops on a timeline:
+add `done` for a shipped milestone, `now` for the one being cut, `tail` for the last stop before an
+intervening heading (it stops the spine running on), and `- [x]` for a finished item. The styling
 lives in `docs/stylesheets/extra.css` under "Roadmap".
+
+The retired phase board's item detail — the paragraphs of reasoning behind each unshipped item — was
+mined out to `notes_temp/roadmap_old.md` (gitignored) before the file was deleted. Recover the
+original with `git show a34c9bd^:docs/roadmap.html`.

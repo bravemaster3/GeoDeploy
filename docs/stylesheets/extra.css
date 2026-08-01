@@ -214,7 +214,10 @@
   width: 2px;
   background: linear-gradient(180deg, var(--gd-green), var(--md-default-fg-color--lightest));
 }
-.gd-rel:last-of-type::before { bottom: auto; height: 1.6rem; }
+/* The spine must stop where a run of releases stops. `tail` marks the last stop before an intervening
+   heading, otherwise the line reaches down past it into unrelated prose. */
+.gd-rel:last-of-type::before,
+.gd-rel.tail::before { bottom: auto; height: 1.6rem; }
 /* The stop. Filled = shipped, hollow = still ahead. */
 .gd-rel::after {
   content: "";
@@ -251,9 +254,25 @@
   color: var(--md-default-fg-color--light);
   margin: .35rem 0 .6rem;
 }
+/* Seven of the eight stops are history. They stay legible but recede, so the one release actually in
+   flight is what the eye lands on — otherwise a page that is mostly green reads as finished. */
+.gd-rel.now {
+  padding: .1rem 1rem .1rem 2.2rem;
+  margin-left: -1rem;
+  border-radius: .7rem;
+  background: linear-gradient(90deg, rgba(245, 158, 11, .09), transparent 70%);
+}
+.gd-rel.now > h3 { padding-top: .9rem; }
+.gd-rel.now::before, .gd-rel.now::after { left: 1.62rem; }
+.gd-rel.now::after { left: 1rem; top: 1.18rem; }
+
 /* Checklists read as progress rather than bullets. */
 .md-typeset .gd-rel .task-list-item { font-size: .78rem; line-height: 1.75; }
 .md-typeset .gd-rel .task-list-item.done { color: var(--md-default-fg-color--light); }
+/* A ticked box on a shipped milestone is the whole point of the page — colour it. */
+.md-typeset .gd-rel [type="checkbox"]:checked + .task-list-indicator::before {
+  background-color: var(--gd-green);
+}
 
 /* Status chips used inline in prose. */
 .gd-chip {
