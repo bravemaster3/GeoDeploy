@@ -60,23 +60,30 @@ def reset_now():
     if not key:
         logger.warning("demo reset: GEODEPLOY_DEMO_SNAPSHOT is not set — nothing to restore")
         return {"error": "no snapshot configured"}
+    # The runbook shows `GEODEPLOY_DEMO_SNAPSHOT=<the backup name from step 3>` and that literal
+    # placeholder gets pasted into .env verbatim. Without this it fails several steps later as
+    # "snapshot unreadable: NoSuchKey", which reads like a storage problem rather than a typo.
+    if key.startswith("<") or key.endswith(">"):
+        logger.error("demo reset: GEODEPLOY_DEMO_SNAPSHOT is still the placeholder %r", key)
+        return {"error": f"GEODEPLOY_DEMO_SNAPSHOT is still the placeholder ({key}) — set it to a "
+                         "real backup name from Settings → Backups → Manage backups."}
 
     from ..services import backup as bk, restore as rs
-    from ..state_db import connect
+    from .backup import _load_cfg
 
-    # The destination config lives in the same row the Backups page writes.
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT backup_endpoint, backup_bucket, backup_access_key, backup_secret_key, "
-            "backup_region FROM setup_config LIMIT 1").fetchone()
-    if not row:
+    # Reuse the BACKUP task's loader rather than reading the row here. The hand-rolled version had
+    # two bugs that made this task fail every single time it ran:
+    #
+    #   1. it subscripted the row BY NAME (`row["backup_endpoint"]`) — state_db returns tuples unless
+    #      `row_factory = dict_row` is set, so it raised TypeError before doing anything, and
+    #   2. it never decrypted `backup_secret_key`, which is stored encrypted at rest, so even with
+    #      the rows read correctly the S3 client would have signed with ciphertext.
+    #
+    # One loader, one place to get this right. The reset is the rarest-run code in the product, so it
+    # must not have its own copy of anything.
+    cfg = _load_cfg()
+    if not cfg or not cfg.backup_bucket:
         return {"error": "no backup destination configured"}
-
-    cfg = type("Cfg", (), {
-        "backup_endpoint": row["backup_endpoint"], "backup_bucket": row["backup_bucket"],
-        "backup_access_key": row["backup_access_key"], "backup_secret_key": row["backup_secret_key"],
-        "backup_region": row["backup_region"],
-    })()
 
     result = {"at": datetime.now(timezone.utc).isoformat(), "snapshot": key}
     try:
@@ -92,6 +99,19 @@ def reset_now():
         dump = os.path.join(td, "db.dump")
         rs.download(cfg, f"{key}/database.dump", "database.dump", dump)
         result["database"] = rs.restore_database(dump)
+
+    # 1b. Repair what replacing the database broke. The RESTORE task learned these the hard way;
+    # this path calls restore_database directly and so needs them just as much — more, because it
+    # runs unattended every hour and nobody is watching the result.
+    #
+    #   * the schema is now the SEED'S schema, so every column added by a release after that backup
+    #     is gone. Unfixed, an updated demo silently loses new columns at the top of every hour and
+    #     no API restart ever comes to re-apply them.
+    #   * the seed contains its own backup run frozen as `running`, which makes the instance answer
+    #     "a backup is already running" — permanently, and again after every reset.
+    from .restore import _clear_restored_running_rows, _reapply_schema_migrations
+    result["schema"] = _reapply_schema_migrations()
+    result["stale_runs_cleared"] = _clear_restored_running_rows()
 
     # 2. Objects — put the seed layers back.
     result["objects"] = rs.restore_objects(cfg, key)
