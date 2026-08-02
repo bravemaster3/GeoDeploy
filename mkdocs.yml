@@ -57,6 +57,7 @@ theme:
 
 nav:
   - Home: index.md
+  - Try it: https://geodeploy-demo.kndev.org
   - Getting started: getting-started.md
   - Guides:
       - Portals and experiences: portals.md

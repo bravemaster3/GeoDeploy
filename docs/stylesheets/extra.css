@@ -66,6 +66,11 @@
   border-radius: .6rem;
   font-weight: 600;
 }
+.gd-hero .gd-demo-note {
+  margin: 1rem auto 0;
+  font-size: .72rem;
+  color: var(--md-default-fg-color--light);
+}
 .gd-hero .md-button--primary {
   box-shadow: 0 6px 20px rgba(22,163,74,.28);
   border-color: transparent;

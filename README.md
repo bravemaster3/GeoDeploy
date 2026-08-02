@@ -7,6 +7,8 @@
 Upload your data, style it, and publish a map anyone can use — on your own server, with your own
 domain, and no per-seat pricing.
 
+**[Try the live demo](https://geodeploy-demo.kndev.org)** — no sign-up, wiped hourly
+
 [Documentation](https://docs-geodeploy.kndev.org/) ·
 [Getting started](https://docs-geodeploy.kndev.org/getting-started/) ·
 [Access your data](https://docs-geodeploy.kndev.org/data-access/) ·
@@ -27,6 +29,11 @@ curl -fsSL https://raw.githubusercontent.com/bravemaster3/geodeploy/main/install
 
 A setup wizard takes it from there — database, storage, admin account — and you are uploading data a
 couple of minutes later. No terminal, no Docker knowledge, no database configuration.
+
+> **Want to look before installing?** [geodeploy-demo.kndev.org](https://geodeploy-demo.kndev.org)
+> is a live instance anyone can use: join with a name, upload something, style it, publish a portal.
+> Everyone shares one workspace and it is wiped every hour, so treat it as a sandbox — but it is the
+> same code this repository installs, running with demo mode switched on.
 
 ## What you get
 

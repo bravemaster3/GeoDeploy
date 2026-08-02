@@ -14,8 +14,13 @@ builder. Upload your data, style it, and publish a map anyone can use — with y
 own storage, and no per-seat pricing.
 </p>
 
-[Get started](getting-started.md){ .md-button .md-button--primary }
+[Try the demo](https://geodeploy-demo.kndev.org){ .md-button .md-button--primary }
+[Get started](getting-started.md){ .md-button }
 [See what it publishes](#three-kinds-of-portal){ .md-button }
+
+<p class="gd-demo-note" markdown>
+No sign-up — join with a name and you can upload, style and publish. Everything is wiped hourly.
+</p>
 
 <div class="gd-install" markdown>
 ```bash
@@ -33,6 +38,16 @@ curl -fsSL https://raw.githubusercontent.com/bravemaster3/geodeploy/main/install
 One command installs the whole stack on a single Linux server: a spatial database, object storage,
 vector and raster tile services, a web dashboard, and the portals you publish from it. A setup wizard
 handles the rest.
+
+## Try it without installing anything
+
+[**geodeploy-demo.kndev.org**](https://geodeploy-demo.kndev.org) is a live GeoDeploy. Join with a
+name — no email, no password — and you can upload data, style it, and publish a portal.
+
+Two things to know before you do: everyone trying it shares **one workspace**, so treat anything you
+put there as public and changeable by others; and the whole instance is **wiped every hour, on the
+hour**, so nothing you build survives. It runs the same code this page tells you how to install,
+with demo mode switched on.
 
 ## Three kinds of portal
 

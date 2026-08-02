@@ -29,7 +29,7 @@ app — because "exec into the container" is not an answer for whoever has to ke
 - [x] One-button update, with a preflight that refuses to run over work in progress
 - [x] Owner-editable environment variables, allow-listed and applied per service
 - [x] Connection details for the managed PostGIS and MinIO — masked, revealed, copyable
-- [x] Demo mode — a public sandbox, wiped hourly, behind one flag
+- [x] Demo mode — a public sandbox, wiped hourly, behind one flag ([live](https://geodeploy-demo.kndev.org))
 
 </div>
 
@@ -113,12 +113,15 @@ of who did what.</p>
 ### Finishing v1.0
 <span class="gd-when">In progress</span>
 
-<p class="gd-goal">The last of it: a clean install and a backup round trip verified on fresh
-hardware, then release notes and the tag.</p>
+<p class="gd-goal">The last of it: verifying on real hardware what the tests can only check in
+parts, then the release notes and the tag.</p>
 
 - [x] Apache 2.0 licence, contribution guide, documentation site
-- [ ] Final verification on a fresh machine, following only the docs
-- [ ] Release notes, and the first tag
+- [x] **Backup → restore round trip proven end to end** on a live instance
+- [x] **Scheduled wipe-and-restore proven** (demo mode runs the same restore path hourly)
+- [x] Release notes
+- [ ] A clean install verified from scratch on a fresh machine, following only the docs
+- [ ] An upgrade exercised between two tagged versions — which needs the first tag to exist
 
 </div>
 
