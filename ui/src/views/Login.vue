@@ -58,8 +58,12 @@
         </button>
       </div>
 
-      <!-- Sign in -->
-      <div v-else class="card p-6 space-y-4">
+      <!-- Sign in.
+           On a DEMO this is collapsed behind a quiet link. A visitor's only useful action is "pick a
+           name and go", and a half-visible email/password form directly beneath that reads as a
+           required second step — several people scrolled into it and stalled. The operator still
+           needs it on the same page, so it is one click away rather than gone. -->
+      <div v-else-if="!isDemo || showSignIn" class="card p-6 space-y-4">
         <div>
           <label class="label">Email</label>
           <input v-model="email" type="email" class="input" @keydown.enter="submit" />
@@ -86,7 +90,20 @@
           </div>
           <button @click="ssoLogin" class="btn-secondary w-full justify-center">{{ ssoLabel }}</button>
         </template>
+        <button v-if="isDemo" @click="showSignIn = false"
+          class="text-xs text-muted-foreground hover:text-foreground w-full text-center">
+          ← Back to the demo
+        </button>
       </div>
+
+      <!-- Demo: the way back to a real sign-in. Deliberately plain text, well below the fold of the
+           join card, and it says whose it is — a visitor has no account here to sign in with. -->
+      <p v-else-if="isDemo && mode === 'login'" class="pt-8 text-center">
+        <button @click="showSignIn = true"
+          class="text-[11px] text-muted-foreground/50 hover:text-muted-foreground">
+          Instance owner? Sign in with an account
+        </button>
+      </p>
     </div>
   </div>
 </template>
@@ -110,6 +127,8 @@ const mode = ref('login')
 // ── Demo join ──────────────────────────────────────────────────────────────────────────────
 // isDemo stays false unless the SERVER says otherwise, so nothing below renders on a normal install.
 const isDemo = ref(false)
+// Demo only: the email/password card starts hidden and is revealed by the link below it.
+const showSignIn = ref(false)
 const demoName = ref('')
 const demoBusy = ref(false)
 const demoError = ref('')

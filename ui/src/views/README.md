@@ -58,6 +58,10 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 ## Last updated
 2026-07-30 (PortalEditor: `catalog` archetype option + Map side / Datasets listed controls; the
 layer-list placement toggles are hidden for it since the facet rail replaces the sidebar)
+2026-08-02d (`Login` on a DEMO collapses the email/password card behind a quiet "Instance owner? Sign in with an account" link. Presentation only — the page cannot know who a 
+visitor is before credentials, and the password is still the boundary. It fixes a visitor reading 
+the half-visible form under "Start exploring" as a required second step.)
+
 2026-08-02c (`PortalEditor` publish now uses `composables/portalThumbnail` — the same capture the
 Portals list uses — instead of photographing its own preview iframe. Upload modal gained a `done`
 state so a finished upload no longer flashes the dropzone before closing.)
