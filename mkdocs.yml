@@ -4,7 +4,10 @@ site_url: https://docs-geodeploy.kndev.org/
 repo_name: bravemaster3/GeoDeploy
 repo_url: https://github.com/bravemaster3/GeoDeploy
 edit_uri: edit/main/docs/
-copyright: Open source, self-hosted.
+copyright: >-
+  Open source under the
+  <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache License 2.0</a>.
+  &copy; 2026 Koffi Dodji Noumonvi.
 
 # Pinned explicitly so the Pages workflow's upload path can never drift from the build output.
 site_dir: site
@@ -71,6 +74,7 @@ nav:
       - Backups and restore: backups.md
       - Performance tuning: performance-tuning.md
   - Roadmap: roadmap.md
+  - Licence: licence.md
 
 markdown_extensions:
   - abbr

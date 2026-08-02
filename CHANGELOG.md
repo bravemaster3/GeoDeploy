@@ -4,7 +4,7 @@ Notable changes, newest first. Versions follow [semantic versioning](https://sem
 the major version changes when an upgrade needs manual work, the minor when features land, the
 patch for fixes alone.
 
-## v1.0.0 — unreleased
+## v1.0.0
 
 **The first tagged release.** GeoDeploy has been running in production for months; this is the point
 at which it becomes something you can install by version number, upgrade, and recover.

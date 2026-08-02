@@ -184,5 +184,6 @@ behind nginx: one thing to start, one thing to update.
 | Keep it backed up | [Backups and restore](backups.md) |
 | Tune it for heavy layers | [Performance tuning](performance-tuning.md) |
 | See what is planned | [Roadmap](roadmap.md) |
+| Check the licence | [Apache 2.0](licence.md) |
 
 </div>

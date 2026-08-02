@@ -96,9 +96,12 @@
         </button>
       </div>
 
-      <!-- Demo: the way back to a real sign-in. Deliberately plain text, well below the fold of the
-           join card, and it says whose it is — a visitor has no account here to sign in with. -->
-      <p v-else-if="isDemo && mode === 'login'" class="pt-8 text-center">
+      <!-- Demo: the way back to a real sign-in. Pushed a full screen DOWN, not merely styled small —
+           a visitor should never see it, and anything on the first screen gets read as part of the
+           flow. `85vh` inline rather than a Tailwind arbitrary value so it does not depend on the
+           JIT scanning this file. The page grows past the viewport, so the outer `items-center` stops
+           having any effect and the join card sits at the top where it belongs. -->
+      <p v-else-if="isDemo && mode === 'login'" class="text-center" style="margin-top: 85vh">
         <button @click="showSignIn = true"
           class="text-[11px] text-muted-foreground/50 hover:text-muted-foreground">
           Instance owner? Sign in with an account
