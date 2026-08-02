@@ -58,6 +58,10 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 ## Last updated
 2026-07-30 (PortalEditor: `catalog` archetype option + Map side / Datasets listed controls; the
 layer-list placement toggles are hidden for it since the facet rail replaces the sidebar)
+2026-08-02c (`PortalEditor` publish now uses `composables/portalThumbnail` — the same capture the
+Portals list uses — instead of photographing its own preview iframe. Upload modal gained a `done`
+state so a finished upload no longer flashes the dropzone before closing.)
+
 2026-08-02b (Settings → Backups shows LIVE restore progress and a verdict instead of reloading 4s
 after starting one; **Restore history** section added (the API had it from day one and nothing
 rendered it). `PortalBuilder` now captures a card thumbnail when publishing from the LIST — that

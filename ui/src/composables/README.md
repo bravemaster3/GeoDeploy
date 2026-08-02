@@ -49,9 +49,13 @@ identically, where a copy in each would drift.
 
 ## Current status & known issues
 
-- The editor keeps its own copy of the capture flow rather than using `portalThumbnail.js`: it
-  already has a warm, visible iframe, so mounting a second one would be slower and would photograph
-  a colder map. The duplication is deliberate but real — a protocol change must update both.
+- **Both** callers use this now: `PortalEditor.vue` (publish) and `PortalBuilder.vue` (publish from
+  a card, and the ⟲ "refresh card image" action). The editor previously photographed its own warm
+  preview iframe — cheaper, and the only path that worked — but it drifted from the list's path in
+  every detail that mattered (size floor, reply handling, whether a failure was reported at all).
+  One implementation costs a second of extra load and makes a fix apply everywhere.
+- The handshake matches on `e.source`: the editor keeps its own preview iframe on the page and it
+  announces `ready` too. The snapshot reply is keyed by `requestId`, but `ready` carries no id.
 - Capture is best-effort everywhere. A failed or blank capture leaves the previous image, or the
   gradient placeholder; publishing never fails over a picture.
 

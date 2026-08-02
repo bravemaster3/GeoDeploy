@@ -95,6 +95,10 @@ export async function capturePortalThumbnail(portalId, { hasExisting = false } =
 
       onMessage = (e) => {
         if (e.origin !== location.origin) return
+        // MUST be our frame. The editor keeps its own preview iframe on the page and it announces
+        // `ready` too, so without this the handshake fires on someone else's frame. The snapshot
+        // reply is already keyed by requestId, but `ready` carries no id at all.
+        if (!frame || e.source !== frame.contentWindow) return
         const d = e.data
         if (!d || d.gd !== 1) return
         if (d.type === 'ready') return ask()          // listening now — ask immediately
