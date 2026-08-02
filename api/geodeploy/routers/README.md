@@ -251,6 +251,11 @@ deliberately NOT visibility-filtered (published portals depend on them).
 ## Last updated
 2026-07-30 (public `GET /portals/{slug}/catalog` feed for catalog portals scoped to "all public")
 2026-07-30 (deployment history + log options for the consolidated Infrastructure panel)
+2026-08-02 (`backups.py`: `_reap_stale_runs` clears runs stuck in `running` — a snapshot always
+contains its OWN row as running, so restoring one left the instance answering 409 "A backup is
+already running" forever. Called from `/runs` AND the start guard so both agree; writes on a GET
+deliberately. `tasks/restore` clears them outright after the DB replace.)
+
 2026-08-01 (`backups.py` gains `POST /settings/bucket`; `/settings/test` returns a structured
 `{code: bucket_missing, bucket, message}` detail for that one failure so the UI can offer to fix it)
 

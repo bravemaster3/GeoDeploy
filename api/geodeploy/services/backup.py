@@ -38,6 +38,18 @@ from ..config import get_settings
 
 MANIFEST = "manifest.json"
 
+# After this long, a run still marked "running" is not running.
+#
+# A backup row is created as `running` BEFORE pg_dump and set to `success` after, so every backup
+# necessarily contains ITSELF frozen as `running`. Restore that snapshot and the instance believes a
+# backup is permanently in flight: "Back up now" refuses with 409 forever. The same happens when a
+# worker is OOM-killed or the host reboots mid-run — nothing is left alive to write the final status.
+#
+# 6 hours is chosen to be longer than any plausible run on the hardware this targets while still
+# clearing within a working day. Reaping a run that IS somehow still alive is harmless: the task
+# writes its own final status when it finishes, which overwrites the reap.
+STALE_RUN_HOURS = 6
+
 
 def make_client(endpoint: str | None, access_key: str, secret_key: str, region: str | None):
     """A client for the BACKUP destination. `endpoint=None` means AWS proper (boto picks the

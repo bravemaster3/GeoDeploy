@@ -228,7 +228,7 @@
                    left "Back up now" clickable in the browser and refused by the API. Beside Save,
                    the sequence is visible: tick, save, test, run. -->
               <label class="flex items-center gap-2 text-sm mr-1 select-none cursor-pointer">
-                <input type="checkbox" v-model="bk.enabled" class="w-4 h-4" /> Enabled
+                <input type="checkbox" v-model="bk.enabled" class="w-4 h-4" /> Enable backups
               </label>
               <button @click="saveBackups" :disabled="bkSaving" class="btn-primary text-sm px-4 py-2 disabled:opacity-60">
                 {{ bkSaving ? 'Saving...' : 'Save' }}
@@ -790,11 +790,11 @@ let bkPoll = null
 // rather than being enabled into a 400.
 const runBlockedReason = computed(() => {
   if (bkRunning.value) return 'A backup is already running.'
-  if (!bk.enabled) return 'Tick Enabled, then Save, to run a backup.'
+  if (!bk.enabled) return 'Tick Enable backups, then Save, to run one.'
   // Enabled is SERVER state. Ticking the box only changes it here, so a button that trusted the
   // checkbox was clickable while the API still refused with "Configure and enable a backup
   // destination first" — the button promising something the server would not honour.
-  if (!bkSavedEnabled.value) return 'Save first — Enabled has not been saved yet.'
+  if (!bkSavedEnabled.value) return 'Save first — the change has not been saved yet.'
   if (!bk.bucket || !(bk.secret_key || bk.secret_set)) return 'Set the destination bucket and credentials first.'
   return ''
 })

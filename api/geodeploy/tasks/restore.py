@@ -46,6 +46,32 @@ def _finish(run_id: int, status: str, **fields) -> None:
         logger.warning("restore %s: could not record final status %s", run_id, status)
 
 
+def _clear_restored_running_rows() -> dict:
+    """Mark every `running` backup/restore row in the just-restored database as interrupted.
+
+    Safe to be unconditional: this runs immediately after `pg_dump`'s contents replaced the database,
+    so every row present came from the snapshot, and nothing recorded in a snapshot is still running
+    now. The one row that legitimately IS in flight — this restore — no longer exists here, because
+    the snapshot predates it (see `_finish`).
+    """
+    cleared = {}
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for table in ("backup_runs", "restore_runs"):
+        try:
+            with state_db.connect() as conn:
+                cur = conn.execute(
+                    f"UPDATE {table} SET status = ?, finished_at = ?, current_step = ?, "
+                    f"error_message = ? WHERE status = ?",
+                    ("error", now, "Interrupted",
+                     "Interrupted — this run was in progress when the restored backup was taken.",
+                     "running"))
+                cleared[table] = getattr(cur, "rowcount", None)
+        except Exception as exc:      # never fail a good restore over bookkeeping
+            logger.warning("restore: could not clear stale %s rows: %s", table, exc)
+            cleared[table] = f"failed: {exc}"
+    return cleared
+
+
 @celery_app.task(name="geodeploy.tasks.restore.run_restore")
 def run_restore(run_id: int, key: str):
     from ..services import backup as bk, restore as rs
@@ -89,6 +115,15 @@ def run_restore(run_id: int, key: str):
                 _step(run_id, "Restoring database", 80)
                 detail["database"] = rs.restore_database(path)
                 os.unlink(path)
+                # The restored history describes the SNAPSHOT's moment, not this one. A backup row is
+                # created `running` before pg_dump and marked `success` after, so every snapshot
+                # contains ITSELF frozen as `running` — restore it and the instance believes a backup
+                # is in flight, refusing every new one with 409 forever. That is exactly what
+                # happened on the first real restore.
+                #
+                # Cleared HERE rather than left to the 6-hour reaper because a restore KNOWS these
+                # rows are stale: nothing that was running when the dump was taken is running now.
+                detail["stale_runs_cleared"] = _clear_restored_running_rows()
 
         _step(run_id, "Rebuilding tile configuration", 95)
         try:

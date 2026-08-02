@@ -8,10 +8,10 @@ The secret key is WRITE-ONLY over the API (never returned, blank keeps the store
 same rule as the SMTP and OIDC secrets.
 """
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
@@ -25,6 +25,28 @@ from ..services import restore as rs
 from .common import record_audit
 
 router = APIRouter(prefix="/backups", tags=["backups"])
+
+
+async def _reap_stale_runs(db: AsyncSession) -> None:
+    """Clear runs left marked `running` by something that can no longer finish them.
+
+    Called from the two places that ask "is a backup running?" — the history endpoint the UI polls,
+    and the guard on starting a new one — so both answer from the same rule and neither can disagree
+    with the other. A write on a GET is unusual; it is deliberate here, because the alternative is an
+    instance that refuses backups forever with no way to clear it from the app.
+
+    The common cause is a RESTORE: a backup snapshot always contains its own row as `running`
+    (created before pg_dump, marked success after), so restoring one re-imports that row into a live
+    instance. See `services/backup.STALE_RUN_HOURS`.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=bk.STALE_RUN_HOURS)).replace(tzinfo=None)
+    for model in (BackupRun, RestoreRun):
+        await db.execute(
+            update(model).where(model.status == "running", model.started_at < cutoff)
+            .values(status="error", finished_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                    current_step="Interrupted",
+                    error_message="Interrupted — the process that started this did not finish it."))
+    await db.commit()
 
 
 async def _config(db: AsyncSession) -> SetupConfig:
@@ -129,6 +151,7 @@ async def create_bucket(user: User = Depends(require_admin), db: AsyncSession = 
 @router.get("/runs", response_model=list[BackupRunOut])
 async def list_runs(limit: int = 20, _: User = Depends(require_admin),
                     db: AsyncSession = Depends(get_db)):
+    await _reap_stale_runs(db)
     rows = (await db.execute(select(BackupRun).order_by(BackupRun.started_at.desc())
                              .limit(max(1, min(limit, 100))))).scalars().all()
     return [BackupRunOut.model_validate(r) for r in rows]
@@ -153,6 +176,7 @@ async def start_backup(user: User = Depends(require_admin), db: AsyncSession = D
     cfg = await _config(db)
     if not cfg.backup_enabled or not cfg.backup_bucket or not cfg.backup_secret_key:
         raise HTTPException(400, "Configure and enable a backup destination first.")
+    await _reap_stale_runs(db)
     busy = (await db.execute(select(BackupRun).where(BackupRun.status == "running")
                              .limit(1))).scalar_one_or_none()
     if busy:
