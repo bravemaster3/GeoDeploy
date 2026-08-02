@@ -69,8 +69,6 @@ as MapLibre GL JS and deck.gl. Running them alongside GeoDeploy does not change 
 them under this one.
 
 If you redistribute a GeoDeploy deployment, check those components' licences as well as this one.
-MinIO in particular is AGPL-licensed, which has obligations of its own if you distribute or offer it
-as a service; a deployment using external S3-compatible storage instead does not include it at all.
 
 !!! note "Not legal advice"
     This page summarises the licence in plain language for orientation. Where it and the
