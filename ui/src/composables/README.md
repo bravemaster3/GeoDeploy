@@ -18,7 +18,18 @@ identically, where a copy in each would drift.
   with no thumbnail at all — which read as the feature being broken rather than as a path that
   never had it.
 
-  Two requirements that each yield a silently BLANK image if missed:
+  Three requirements that each yield a silent failure if missed:
+  - **Build the preview bundle first.** `/portals/_preview/{id}/` is not a live route; it serves a
+    bundle `POST /portals/{id}/preview` writes to disk, and only the editor ever called that. From
+    the Portals list the directory frequently did not exist, so the iframe loaded a 404 and nothing
+    answered. Rebuilding also re-bakes the bundle from the CURRENT `templates/shared/portal.js`
+    (`portal_generator` inlines the runtime at publish time), so an old portal is not photographed
+    by an old runtime.
+  - **Wait for the runtime's `ready` message, do not post on `iframe.onload`.** `portal.js` installs
+    its listener inside `setupEditMode()`, called from `map.on('load')` — seconds after the document
+    loads. A request sent at onload arrives before anything is listening and is dropped silently.
+    The request is also repeated every 2s, which is the only way to reach a bundle old enough not to
+    send `ready` at all.
   - **`?edit=1`** — `templates/shared/portal.js` sets `preserveDrawingBuffer` only in edit mode (it
     costs performance, so a published portal does not pay for it). Without it the WebGL canvas is
     already cleared by the time `toDataURL` runs.

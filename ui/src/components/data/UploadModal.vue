@@ -21,6 +21,21 @@
         <p class="text-xs text-muted-foreground">Uploading… GeoDeploy will process it in the background.</p>
       </div>
 
+      <!-- Handed over. Shown for the moment between the upload finishing and the modal closing.
+           Without it the modal fell back to the DROPZONE for that instant, so a completed upload
+           ended with "Drop file here" flashing up — indistinguishable from the upload having been
+           discarded. -->
+      <div v-else-if="done" class="space-y-2">
+        <div class="flex items-center gap-2 text-sm text-emerald-400">
+          <span aria-hidden="true">✓</span>
+          <span class="font-medium truncate">{{ fileName }}</span>
+        </div>
+        <p class="text-xs text-muted-foreground">
+          Uploaded. GeoDeploy is processing it in the background — it will appear in your list as it
+          becomes ready.
+        </p>
+      </div>
+
       <!-- CSV options (X/Y/CRS) -->
       <div v-else-if="csvFile" class="space-y-3">
         <p class="text-sm font-medium text-foreground/85 truncate">{{ csvFile.name }}</p>
@@ -124,6 +139,16 @@ const emit = defineEmits(['close'])
 
 const fileInput = ref(null)
 const fileName = ref('')
+// True from the instant an upload succeeds until the modal closes. `uploading` goes false as soon as
+// the request resolves, so without this flag the template has no branch to show during the closing
+// delay and falls through to the dropzone.
+const done = ref(false)
+
+// Every success path ends here, so the hand-off looks the same however the file was sent.
+function finishAndClose() {
+  done.value = true
+  setTimeout(() => emit('close'), 1200)
+}
 const { uploading, uploadProgress, error, uploadFile, uploadGeoParquet, uploadLargeVector, uploadLargeRaster } = useUpload()
 const dataStore = useDataStore()
 
@@ -188,7 +213,7 @@ async function handleFile(file) {
     fileName.value = file.name
     try {
       await uploadGeoParquet(file, file.name.replace(/\.(geo)?parquet$/i, ''))
-      setTimeout(() => emit('close'), 800)
+      finishAndClose()
     } catch { /* error shown via `error` */ }
     return
   }
@@ -197,7 +222,7 @@ async function handleFile(file) {
   if (props.type === 'raster' && file.size >= LARGE_UPLOAD_THRESHOLD) {
     try {
       await uploadLargeRaster(file, file.name.replace(/\.[^.]+$/, ''))
-      setTimeout(() => emit('close'), 800)
+      finishAndClose()
     } catch { /* error shown via `error` */ }
     return
   }
@@ -206,13 +231,13 @@ async function handleFile(file) {
   if (props.type === 'vector' && file.size >= LARGE_UPLOAD_THRESHOLD) {
     try {
       await uploadLargeVector(file, file.name.replace(/\.[^.]+$/, ''))
-      setTimeout(() => emit('close'), 800)
+      finishAndClose()
     } catch { /* error shown via `error` */ }
     return
   }
   try {
     await uploadFile(file, props.type)
-    setTimeout(() => emit('close'), 800)
+    finishAndClose()
   } catch { /* error shown via `error` */ }
 }
 
@@ -229,7 +254,7 @@ async function importCsv() {
     try {
       await uploadLargeVector(csvFile.value, csvName.value || csvFile.value.name.replace(/\.csv$/i, ''),
         { ...geom, srid, delimiter: csvDelim.value })
-      setTimeout(() => emit('close'), 800)
+      finishAndClose()
     } catch { /* error shown via `error` */ }
     return
   }
@@ -242,7 +267,7 @@ async function importCsv() {
     }, (p) => (uploadProgress.value = p))
     dataStore.vectorLayers.unshift({ id: job.layer_id, name: csvName.value || csvFile.value.name, status: 'processing', _job: job })
     dataStore.pollJob(job.id, 'vector', job.layer_id).catch(() => {})
-    setTimeout(() => emit('close'), 800)
+    finishAndClose()
   } catch (err) {
     error.value = err.response?.data?.detail || err.message
   } finally {

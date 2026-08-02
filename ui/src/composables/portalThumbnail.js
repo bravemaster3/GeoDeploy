@@ -13,7 +13,8 @@
 // canvas is already cleared by the time toDataURL runs and reads back blank.
 import { previewPortal, syncSession, uploadPortalThumbnail } from '@/api'
 
-const CAPTURE_TIMEOUT_MS = 15000   // generous: an off-screen frame is cold, and tiles must load
+const CAPTURE_TIMEOUT_MS = 25000   // an off-screen frame is cold: style, sources and tiles all
+                                   // load from scratch before the runtime says `ready`
 
 // Size floors, and why there are two.
 //
@@ -33,6 +34,9 @@ const MIN_BYTES_FIRST = 256
 export async function capturePortalThumbnail(portalId, { hasExisting = false } = {}) {
   let frame = null
   let onMessage = null
+  // Hoisted so the outer `finally` can always clear it. A repeating timer that outlives its promise
+  // keeps posting into a removed iframe for the life of the page.
+  let retryTimer = null
   try {
     // The preview route is behind an nginx session gate; without the cookie the iframe loads the
     // login page and photographs that.
@@ -70,28 +74,48 @@ export async function capturePortalThumbnail(portalId, { hasExisting = false } =
       frame.setAttribute('aria-hidden', 'true')
       frame.src = `/portals/_preview/${portalId}/?edit=1&t=${Date.now()}`
 
+      // The request is sent when the RUNTIME says it is listening, not when the iframe fires
+      // `load`. portal.js installs its message listener inside setupEditMode(), which runs from
+      // `map.on('load')` — i.e. after the style has loaded, seconds after the document did. A
+      // request posted at iframe-onload therefore arrived before anything was listening and was
+      // silently dropped, and the capture always timed out. It announces itself with `ready`.
+      //
+      // The repeat is not belt-and-braces: a portal whose bundle predates this handshake never
+      // sends `ready` at all, and re-asking is the only thing that reaches it once it is up.
+      let asked = 0
+      const ask = () => {
+        if (done || !frame || !frame.contentWindow) return
+        try {
+          frame.contentWindow.postMessage({ gd: 1, type: 'snapshot', requestId }, location.origin)
+          asked += 1
+        } catch { /* frame not ready yet; the interval will try again */ }
+      }
+      retryTimer = setInterval(ask, 2000)
+      const stopRetry = () => clearInterval(retryTimer)
+
       onMessage = (e) => {
         if (e.origin !== location.origin) return
         const d = e.data
         if (!d || d.gd !== 1) return
+        if (d.type === 'ready') return ask()          // listening now — ask immediately
         if (d.type === 'snapshot' && d.requestId === requestId) {
+          stopRetry()
           finish({ dataUrl: d.dataUrl || null, error: d.error || null })
         }
       }
       window.addEventListener('message', onMessage)
 
-      frame.onload = () => {
-        // The runtime answers when the map is idle; asking on load is the earliest it can hear us.
-        try {
-          frame.contentWindow.postMessage({ gd: 1, type: 'snapshot', requestId }, location.origin)
-        } catch (e) { finish({ dataUrl: null, error: 'could not reach the preview frame' }) }
-      }
+      frame.onload = () => ask()
       document.body.appendChild(frame)
-      setTimeout(() => finish({
-        dataUrl: null,
-        error: `the preview did not answer within ${CAPTURE_TIMEOUT_MS / 1000}s `
-             + '(it may have failed to load — check that the portal opens normally)',
-      }), CAPTURE_TIMEOUT_MS)
+      setTimeout(() => {
+        stopRetry()
+        finish({
+          dataUrl: null,
+          error: `the preview did not answer within ${CAPTURE_TIMEOUT_MS / 1000}s`
+               + (asked ? ` (asked ${asked}x)` : ' (the frame never loaded)')
+               + ' — open the portal itself and check it renders',
+        })
+      }, CAPTURE_TIMEOUT_MS)
     })
 
     if (!reply.dataUrl || !reply.dataUrl.startsWith('data:image/')) {
@@ -110,6 +134,7 @@ export async function capturePortalThumbnail(portalId, { hasExisting = false } =
     console.warn('[geodeploy] thumbnail capture failed', err)
     return { error: err?.response?.data?.detail || err?.message || String(err) }
   } finally {
+    clearInterval(retryTimer)
     if (onMessage) window.removeEventListener('message', onMessage)
     if (frame && frame.parentNode) frame.parentNode.removeChild(frame)
   }
