@@ -11,7 +11,7 @@
 // `?edit=1` is REQUIRED, not incidental: portal.js only sets `preserveDrawingBuffer` in edit mode
 // (it costs performance, so the published portal does not pay for it), and without it the WebGL
 // canvas is already cleared by the time toDataURL runs and reads back blank.
-import { syncSession, uploadPortalThumbnail } from '@/api'
+import { previewPortal, syncSession, uploadPortalThumbnail } from '@/api'
 
 const CAPTURE_TIMEOUT_MS = 15000   // generous: an off-screen frame is cold, and tiles must load
 
@@ -27,6 +27,9 @@ const CAPTURE_TIMEOUT_MS = 15000   // generous: an off-screen frame is cold, and
 const MIN_BYTES_REPLACE = 2048
 const MIN_BYTES_FIRST = 256
 
+// Returns { url } on success, or { error } naming what went wrong. NOT a bare null: four different
+// failures used to collapse into "no image", and telling them apart meant asking the operator to
+// read a browser console. The caller shows `error` verbatim.
 export async function capturePortalThumbnail(portalId, { hasExisting = false } = {}) {
   let frame = null
   let onMessage = null
@@ -35,8 +38,25 @@ export async function capturePortalThumbnail(portalId, { hasExisting = false } =
     // login page and photographs that.
     await syncSession().catch(() => {})
 
+    // BUILD the preview bundle first. `/portals/_preview/{id}/` is not a live route — it serves a
+    // bundle that `POST /portals/{id}/preview` writes to disk, and only the EDITOR was ever calling
+    // that. From the Portals list the directory frequently did not exist at all, so the iframe
+    // loaded a 404 page, nothing answered, and the capture timed out with no explanation. That is
+    // why publishing from a card produced no thumbnail while publishing from the editor did.
+    //
+    // An empty body is deliberate: every field falls back to the portal's SAVED state, which is
+    // exactly what a card image should depict. It also re-bakes the bundle from the current
+    // templates/shared/portal.js, so a portal published before a runtime change is photographed by
+    // the runtime running now.
+    try {
+      await previewPortal(portalId, {})
+    } catch (err) {
+      return { error: 'could not build a preview of this portal ('
+                    + (err?.response?.data?.detail || err?.message || err) + ')' }
+    }
+
     const requestId = Date.now() % 100000
-    const dataUrl = await new Promise((resolve) => {
+    const reply = await new Promise((resolve) => {
       let done = false
       const finish = (v) => { if (!done) { done = true; resolve(v) } }
 
@@ -54,7 +74,9 @@ export async function capturePortalThumbnail(portalId, { hasExisting = false } =
         if (e.origin !== location.origin) return
         const d = e.data
         if (!d || d.gd !== 1) return
-        if (d.type === 'snapshot' && d.requestId === requestId) finish(d.dataUrl || null)
+        if (d.type === 'snapshot' && d.requestId === requestId) {
+          finish({ dataUrl: d.dataUrl || null, error: d.error || null })
+        }
       }
       window.addEventListener('message', onMessage)
 
@@ -62,24 +84,31 @@ export async function capturePortalThumbnail(portalId, { hasExisting = false } =
         // The runtime answers when the map is idle; asking on load is the earliest it can hear us.
         try {
           frame.contentWindow.postMessage({ gd: 1, type: 'snapshot', requestId }, location.origin)
-        } catch { finish(null) }
+        } catch (e) { finish({ dataUrl: null, error: 'could not reach the preview frame' }) }
       }
       document.body.appendChild(frame)
-      setTimeout(() => finish(null), CAPTURE_TIMEOUT_MS)
+      setTimeout(() => finish({
+        dataUrl: null,
+        error: `the preview did not answer within ${CAPTURE_TIMEOUT_MS / 1000}s `
+             + '(it may have failed to load — check that the portal opens normally)',
+      }), CAPTURE_TIMEOUT_MS)
     })
 
-    if (!dataUrl || !dataUrl.startsWith('data:image/')) return null
-    const blob = await (await fetch(dataUrl)).blob()
-    if (blob.size < (hasExisting ? MIN_BYTES_REPLACE : MIN_BYTES_FIRST)) {
-      console.warn('[geodeploy] snapshot too small to store', blob.size, 'bytes')
-      return null
+    if (!reply.dataUrl || !reply.dataUrl.startsWith('data:image/')) {
+      return { error: reply.error || 'the map produced no image' }
+    }
+    const blob = await (await fetch(reply.dataUrl)).blob()
+    const floor = hasExisting ? MIN_BYTES_REPLACE : MIN_BYTES_FIRST
+    if (blob.size < floor) {
+      return { error: `the captured image was only ${blob.size} bytes (minimum ${floor}) — `
+                    + 'the map was probably still blank when it was taken' }
     }
     const { data } = await uploadPortalThumbnail(portalId, blob)
-    return data?.url || null
+    return data?.url ? { url: data.url } : { error: 'the server stored no URL for the image' }
   } catch (err) {
     // A thumbnail is decoration. Publishing must never fail because a picture could not be taken.
     console.warn('[geodeploy] thumbnail capture failed', err)
-    return null
+    return { error: err?.response?.data?.detail || err?.message || String(err) }
   } finally {
     if (onMessage) window.removeEventListener('message', onMessage)
     if (frame && frame.parentNode) frame.parentNode.removeChild(frame)

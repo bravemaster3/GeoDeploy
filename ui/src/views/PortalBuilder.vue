@@ -65,8 +65,8 @@ onMounted(() => portalsStore.refresh())
 async function grabThumbnail(portal) {
   capturingId.value = portal.id
   try {
-    const url = await capturePortalThumbnail(portal.id,
-                                             { hasExisting: !!portal.thumbnail_url })
+    const { url, error } = await capturePortalThumbnail(
+      portal.id, { hasExisting: !!portal.thumbnail_url })
     if (url) {
       const list = portalsStore.portals
       const idx = list.findIndex(p => p.id === portal.id)
@@ -74,7 +74,9 @@ async function grabThumbnail(portal) {
       // replaced thumbnail is never served from a stale cache entry.
       if (idx !== -1) list[idx] = { ...list[idx], thumbnail_url: url }
     } else {
-      alert('Could not capture a preview for this portal. Open it in the editor and publish again.')
+      // The REASON, verbatim. "Could not capture a preview" told the operator nothing they could
+      // act on and sent them to the editor, where the same failure was waiting.
+      alert(['Could not capture a preview for this portal:', '', error].join('\n'))
     }
   } finally {
     capturingId.value = null

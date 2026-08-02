@@ -72,6 +72,54 @@ def _finish(run_id: int, status: str, seed: dict | None = None, **fields) -> Non
         logger.exception("restore %s: could not record final status %s", run_id, status)
 
 
+def restore_snapshot(cfg, key: str, manifest: dict, tmp_dir: str, on_step=None) -> dict:
+    """Put a snapshot back: objects, portal assets, database, then the post-database repairs.
+
+    THE single implementation. The demo reset previously had its own copy of this and every
+    divergence was a bug: it downloaded `database.dump` (the file is `postgis.dump`), passed the
+    composed path as the `key` argument so the request became `<key>/database.dump/database.dump`,
+    never restored portal assets at all, and restored the database BEFORE the objects — the exact
+    ordering this module's header explains is wrong. It failed with a 404 at the top of every hour.
+
+    Ordering is not arbitrary; see the module docstring. Objects first, database last, repairs after.
+    """
+    # Imported here, not at module scope: `services.restore` pulls in boto3 and the settings, and
+    # this module is imported by celery_app at worker start.
+    from ..services import restore as rs
+
+    step = on_step or (lambda *_a, **_k: None)
+    parts = manifest.get("parts", {})
+    detail: dict = {}
+
+    if "objects" in parts:
+        step("Restoring files", 15)
+        detail["objects"] = rs.restore_objects(
+            cfg, key, on_progress=lambda n, _b: step(f"Restoring files ({n:,} objects)", 15))
+
+    if "portal_assets" in parts:
+        step("Restoring portal assets", 60)
+        path = os.path.join(tmp_dir, "portal_assets.tar.gz")
+        rs.download(cfg, key, "portal_assets.tar.gz", path)
+        detail["portal_assets"] = rs.restore_portal_assets(path)
+        os.unlink(path)
+
+    # DATABASE LAST. Everything after this point talks to a replaced database.
+    if "postgis" in parts:
+        step("Downloading database dump", 70)
+        path = os.path.join(tmp_dir, "postgis.dump")
+        rs.download(cfg, key, "postgis.dump", path)
+        step("Restoring database", 80)
+        detail["database"] = rs.restore_database(path)
+        os.unlink(path)
+
+        # Repair what replacing the database broke — the schema is now the SNAPSHOT'S, and its
+        # in-flight rows are frozen. Inside this function so no caller can forget them.
+        detail["schema"] = _reapply_schema_migrations()
+        detail["stale_runs_cleared"] = _clear_restored_running_rows()
+
+    return detail
+
+
 def _reapply_schema_migrations() -> dict:
     """Re-apply the additive column migrations over the just-restored schema.
 
@@ -188,42 +236,9 @@ def run_restore(run_id: int, key: str):
         detail["key_check"] = rs.check_secret_key_match(manifest)
 
         with tempfile.TemporaryDirectory(dir=f"{settings.data_dir}/temp") as tmp:
-            # 1. OBJECTS FIRST — see the module note.
-            if "objects" in parts:
-                _step(run_id, "Restoring files", 15)
-
-                def _progress(n, _b):
-                    _step(run_id, f"Restoring files ({n:,} objects)", 15)
-
-                detail["objects"] = rs.restore_objects(cfg, key, on_progress=_progress)
-
-            if "portal_assets" in parts:
-                _step(run_id, "Restoring portal assets", 60)
-                path = os.path.join(tmp, "portal_assets.tar.gz")
-                rs.download(cfg, key, "portal_assets.tar.gz", path)
-                detail["portal_assets"] = rs.restore_portal_assets(path)
-                os.unlink(path)
-
-            # 2. DATABASE LAST. Everything after this point talks to a replaced database.
-            if "postgis" in parts:
-                _step(run_id, "Downloading database dump", 70)
-                path = os.path.join(tmp, "postgis.dump")
-                rs.download(cfg, key, "postgis.dump", path)
-                _step(run_id, "Restoring database", 80)
-                detail["database"] = rs.restore_database(path)
-                os.unlink(path)
-                # The restored history describes the SNAPSHOT's moment, not this one. A backup row is
-                # created `running` before pg_dump and marked `success` after, so every snapshot
-                # contains ITSELF frozen as `running` — restore it and the instance believes a backup
-                # is in flight, refusing every new one with 409 forever. That is exactly what
-                # happened on the first real restore.
-                #
-                # Cleared HERE rather than left to the 6-hour reaper because a restore KNOWS these
-                # rows are stale: nothing that was running when the dump was taken is running now.
-                # Schema FIRST: the restored schema may predate the running code, and the row
-                # updates below (and everything the API does next) assume current columns.
-                detail["schema"] = _reapply_schema_migrations()
-                detail["stale_runs_cleared"] = _clear_restored_running_rows()
+            detail.update(restore_snapshot(
+                cfg, key, manifest, tmp,
+                on_step=lambda text, pct: _step(run_id, text, pct)))
 
         _step(run_id, "Rebuilding tile configuration", 95)
         try:

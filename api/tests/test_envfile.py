@@ -114,21 +114,26 @@ def test_demo_settings_are_invisible_on_a_normal_install(env):
 
 def test_demo_settings_are_refused_on_a_normal_install(env):
     """The UI omitting them is presentation. THIS is the gate — a hand-crafted request must not be
-    able to configure a sandbox on a production instance."""
+    able to configure a sandbox on a production instance. (They are now absent from EDITABLE
+    outright, so this is the allow-list refusing an unknown key.)"""
     with pytest.raises(ValueError):
         envfile.write({"GEODEPLOY_DEMO_SNAPSHOT": "some-backup"}, env)
 
 
-def test_demo_settings_appear_once_the_instance_is_a_demo(env):
+def test_demo_settings_are_invisible_even_on_a_demo(env):
+    """They used to appear once the instance WAS a demo. Removed: a demo is configured by whoever has
+    shell access, and splitting that across two places made `.env` disagree with the dashboard —
+    hand-typed values sat under a header claiming the dashboard had written them."""
     from geodeploy.config import get_settings
     s = get_settings()
     before = s.geodeploy_demo_mode
     s.geodeploy_demo_mode = True
     try:
         keys = {v["key"] for v in envfile.list_editable(env)}
-        assert "GEODEPLOY_DEMO_SNAPSHOT" in keys
-        envfile.write({"GEODEPLOY_DEMO_SNAPSHOT": "seed-2026-08-01"}, env)
-        assert "seed-2026-08-01" in open(env).read()
+        assert "GEODEPLOY_DEMO_SNAPSHOT" not in keys
+        assert "GEODEPLOY_DEMO_MAX_UPLOAD_MB" not in keys
+        with pytest.raises(ValueError):
+            envfile.write({"GEODEPLOY_DEMO_SNAPSHOT": "seed-2026-08-01"}, env)
     finally:
         s.geodeploy_demo_mode = before
 

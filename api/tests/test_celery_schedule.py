@@ -58,3 +58,17 @@ def test_scheduled_tasks_are_routed_to_a_queue_the_worker_consumes():
         queue = entry.get("options", {}).get("queue")
         assert queue in consumed, (
             f"beat schedule '{name}' targets queue {queue!r}, which the worker does not consume.")
+
+
+def test_every_task_module_routes_to_a_queue_the_worker_consumes():
+    """A schedule entry can pin its own queue, which hides a missing ROUTE: the scheduled call works
+    while a direct `.delay()` of the same task goes to the default queue and waits forever. That is
+    indistinguishable from a task that ran and did nothing — the failure mode this whole file exists
+    to prevent."""
+    consumed = {"ingest", "backup"}
+    routes = celery_app.conf.task_routes
+    for module in celery_app.conf.include:
+        pattern = module + ".*"
+        assert pattern in routes, f"{module} has no task_route — .delay() would use the default queue"
+        assert routes[pattern]["queue"] in consumed, (
+            f"{module} routes to {routes[pattern]['queue']!r}, which the worker does not consume.")

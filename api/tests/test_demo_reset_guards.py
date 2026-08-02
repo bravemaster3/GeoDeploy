@@ -9,6 +9,8 @@ import pytest
 from geodeploy.config import get_settings
 from geodeploy.tasks import demo_reset
 
+NL = chr(10)
+
 
 @pytest.fixture
 def demo_on():
@@ -123,18 +125,46 @@ def test_reset_refuses_when_no_destination_is_configured(demo_on, monkeypatch):
     assert demo_reset.reset_now()["error"] == "no backup destination configured"
 
 
-def test_reset_repairs_the_schema_the_way_a_restore_does(demo_on):
-    """The demo reset calls restore_database DIRECTLY, so it inherits every consequence the restore
-    task had to learn — and it runs unattended every hour, where nobody sees the result.
+def test_reset_uses_THE_shared_restore_implementation(demo_on):
+    """The demo reset must not carry its own copy of "put this snapshot back".
 
-    Without re-applying migrations, an updated demo silently loses any column added after the seed
-    was taken, at the top of every hour, with no API restart ever coming to put it back. Without
-    clearing `running` rows it permanently answers "a backup is already running", again after every
-    reset.
+    Every demo-reset bug so far came from that duplication: it fetched `database.dump` when the file
+    is `postgis.dump`; it passed the composed path as the `key` argument, so the request became
+    `<key>/database.dump/database.dump` and 404'd at the top of every hour; it never restored portal
+    assets; and it restored the database BEFORE the objects, the ordering restore.py's own header
+    explains is wrong.
+
+    Asserting on the CALL rather than on behaviour is deliberate — the failure mode is divergence,
+    and only one implementation can prevent it.
     """
     import inspect
 
+    from geodeploy.tasks import restore as rt
+
+    # CODE only. The docstring and comments name the old wrong filename on purpose, to explain the
+    # bug — and a source grep that counts prose would fail on the very explanation of what it
+    # prevents. (This bit an earlier contract test the same way.)
     src = inspect.getsource(demo_reset.reset_now)
-    assert "_reapply_schema_migrations" in src
-    assert "_clear_restored_running_rows" in src
-    assert src.index("restore_database") < src.index("_reapply_schema_migrations")
+    code = NL.join(l.split("#")[0] for l in src.splitlines() if not l.strip().startswith("#"))
+    assert "restore_snapshot" in code, "the demo reset must delegate, not re-implement"
+    assert "database.dump" not in code, "the dump is postgis.dump; this name never existed"
+
+    # The repairs live INSIDE the shared function, so neither caller can forget them.
+    shared = inspect.getsource(rt.restore_snapshot)
+    assert "_reapply_schema_migrations" in shared
+    assert "_clear_restored_running_rows" in shared
+    assert shared.index("restore_database") < shared.index("_reapply_schema_migrations")
+    # Objects before the database — a failure between the steps must not leave the catalog
+    # advertising files that are not there yet.
+    assert shared.index("restore_objects") < shared.index("restore_database")
+
+
+def test_the_shared_restore_downloads_the_file_the_backup_actually_writes(demo_on):
+    """tasks/backup.py uploads `<key>/postgis.dump`. A mismatch here is a 404 that only appears in
+    production, since no test writes a real snapshot."""
+    import inspect
+
+    from geodeploy.tasks import backup as bt, restore as rt
+
+    assert "postgis.dump" in inspect.getsource(bt.run_backup)
+    assert "postgis.dump" in inspect.getsource(rt.restore_snapshot)

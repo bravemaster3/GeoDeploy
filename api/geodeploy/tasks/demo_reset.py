@@ -45,7 +45,21 @@ def tick():
     now = datetime.now(timezone.utc)
     if now.minute != 0:
         return {"skipped": f"minute={now.minute}"}
-    return reset_now()
+
+    logger.info("demo reset: top of the hour — starting")
+    result = reset_now()
+    # RETURNING an error is not REPORTING one. Celery records the return value in the result backend
+    # and logs the task as succeeded, so an hourly reset that failed every time looked identical to
+    # one that never ran: an hour passes, nothing is wiped, and the log says nothing at all. That is
+    # exactly how the config-row crash survived undetected. Anything other than a clean run is now
+    # loud in the worker log, which is the only place anyone is watching.
+    if isinstance(result, dict) and result.get("error"):
+        logger.error("DEMO RESET FAILED: %s", result["error"])
+    elif isinstance(result, dict) and result.get("skipped"):
+        logger.warning("demo reset skipped: %s", result["skipped"])
+    else:
+        logger.info("demo reset finished: %s", result)
+    return result
 
 
 @celery_app.task(name="geodeploy.tasks.demo_reset.reset_now")
@@ -69,6 +83,7 @@ def reset_now():
                          "real backup name from Settings → Backups → Manage backups."}
 
     from ..services import backup as bk, restore as rs
+    from . import restore as rt
     from .backup import _load_cfg
 
     # Reuse the BACKUP task's loader rather than reading the row here. The hand-rolled version had
@@ -92,29 +107,16 @@ def reset_now():
         logger.exception("demo reset: cannot read the snapshot manifest")
         return {"error": f"snapshot unreadable: {exc}"}
 
-    # 1. Database — a true replace, so visitor accounts and their rows are gone.
+    # ONE implementation of "put this snapshot back", shared with the restore task. Keeping a second
+    # copy here is what produced every demo-reset bug so far: it fetched `database.dump` when the
+    # file is `postgis.dump`, passed the composed path as the `key` argument (asking for
+    # `<key>/database.dump/database.dump`), skipped portal assets entirely, and restored the database
+    # BEFORE the objects — the ordering restore.py's header explains is wrong. The result was a 404
+    # at the top of every hour, on a task nobody was watching.
     import os
     import tempfile
-    with tempfile.TemporaryDirectory() as td:
-        dump = os.path.join(td, "db.dump")
-        rs.download(cfg, f"{key}/database.dump", "database.dump", dump)
-        result["database"] = rs.restore_database(dump)
-
-    # 1b. Repair what replacing the database broke. The RESTORE task learned these the hard way;
-    # this path calls restore_database directly and so needs them just as much — more, because it
-    # runs unattended every hour and nobody is watching the result.
-    #
-    #   * the schema is now the SEED'S schema, so every column added by a release after that backup
-    #     is gone. Unfixed, an updated demo silently loses new columns at the top of every hour and
-    #     no API restart ever comes to re-apply them.
-    #   * the seed contains its own backup run frozen as `running`, which makes the instance answer
-    #     "a backup is already running" — permanently, and again after every reset.
-    from .restore import _clear_restored_running_rows, _reapply_schema_migrations
-    result["schema"] = _reapply_schema_migrations()
-    result["stale_runs_cleared"] = _clear_restored_running_rows()
-
-    # 2. Objects — put the seed layers back.
-    result["objects"] = rs.restore_objects(cfg, key)
+    with tempfile.TemporaryDirectory(dir=f"{get_settings().data_dir}/temp") as tmp:
+        result.update(rt.restore_snapshot(cfg, key, manifest, tmp))
 
     # 3. Sweep — remove what visitors added. THIS is the demo-only part.
     result["swept"] = _sweep_orphans(cfg, key)

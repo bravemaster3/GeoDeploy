@@ -44,8 +44,10 @@ class EnvVar:
     choices: tuple[str, ...] = ()
     services: tuple[str, ...] = ("geodeploy-api", "celery")
     danger: bool = False
-    # Only listed when the instance is ALREADY a demo. Keeps sandbox settings out of a production
-    # owner's way, and — the real reason — keeps them from being discoverable there at all.
+    # Kept as a supported flag though NOTHING sets it today: demo settings are edited in `.env` over
+    # SSH and are deliberately absent from EDITABLE entirely. It stays because the filter and the
+    # write-side refusal below are the difference between "hidden in the UI" and "not reachable", and
+    # re-deriving that distinction later is how a sandbox setting ends up exposed on a production box.
     demo_only: bool = False
 
 
@@ -69,18 +71,14 @@ EDITABLE: tuple[EnvVar, ...] = (
            "Guarantees no feature is dropped in dense areas at high zoom, at the cost of slower tiling "
            "and a larger archive.",
            default="1", kind="bool", services=("celery",)),
-    # ── Demo-only. Note what is ABSENT: GEODEPLOY_DEMO_MODE itself is deliberately NOT editable
-    # here, on any install. It arms an hourly wipe that deletes everything the snapshot does not
-    # contain, so arming it must cost a deliberate edit to .env over SSH — friction is the point.
-    # These two only TUNE a sandbox that is already running, so they are safe to expose there.
-    EnvVar("GEODEPLOY_DEMO_SNAPSHOT", "Demo seed snapshot",
-           "The backup the hourly reset restores. Take a backup once the demo is seeded the way you "
-           "want visitors to find it, then name it here.",
-           default="", services=("celery",), demo_only=True),
-    EnvVar("GEODEPLOY_DEMO_MAX_UPLOAD_MB", "Demo upload limit (MB)",
-           "Largest file a demo visitor may upload. Lower it if visitors fill the disk between "
-           "resets.",
-           default="500", demo_only=True),
+    # ── NO DEMO SETTINGS HERE, on any install. GEODEPLOY_DEMO_MODE, _SNAPSHOT and _MAX_UPLOAD_MB
+    # are edited in `.env` over SSH and nowhere else.
+    #
+    # The snapshot and upload cap were briefly listed as `demo_only` (visible only once the instance
+    # was already a demo). Removed: a demo is configured by whoever has shell access to the box, and
+    # splitting that across two places meant the file said one thing and the dashboard another —
+    # `.env` even carried a "Set from Settings → Infrastructure → Environment" header above values
+    # that had been typed in by hand. One place, and it is the file.
     EnvVar("MAX_LARGE_UPLOAD_BYTES", "Large-upload ceiling",
            "Upper bound on a single direct-to-storage upload, in bytes. Files above the chunking "
            "threshold bypass the API entirely, so this is about your storage, not your server.",
@@ -192,7 +190,11 @@ def write(updates: dict[str, str], path: str | None = None) -> list[str]:
     if added:
         if out and out[-1].strip():
             out.append("")
-        out.append("# Set from Settings → Infrastructure → Environment")
+        # Marks only the lines written immediately below, and says so: anything appended
+        # afterwards (by hand, over SSH) would otherwise inherit a claim that the dashboard
+        # wrote it. Provenance you cannot trust is worse than none.
+        out.append("# The line(s) directly below were written by GeoDeploy "
+                   "(Settings → Infrastructure → Environment).")
         out.extend(added)
 
     body = "\n".join(out).rstrip("\n") + "\n"

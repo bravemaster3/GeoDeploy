@@ -99,7 +99,7 @@ def test_restore_clears_running_rows_without_waiting_for_the_reaper():
     assert hasattr(rt, "_clear_restored_running_rows")
 
     import inspect
-    src = inspect.getsource(rt.run_restore)
+    src = inspect.getsource(rt.restore_snapshot)
     # It must run AFTER the database is replaced — clearing before would only clear rows the restore
     # is about to overwrite, which is the one ordering that does nothing at all.
     assert src.index("restore_database") < src.index("_clear_restored_running_rows")
@@ -120,7 +120,9 @@ def test_restore_reapplies_schema_migrations_after_the_database_is_replaced():
 
     assert PG_MIGRATIONS, "the migration list must be importable without importing the FastAPI app"
 
-    src = inspect.getsource(rt.run_restore)
+    # The repairs live in `restore_snapshot`, the ONE implementation shared with the demo reset —
+    # inside it rather than in each caller, so neither can forget them.
+    src = inspect.getsource(rt.restore_snapshot)
     assert "_reapply_schema_migrations" in src
     # AFTER the restore, or it only migrates a schema that is about to be thrown away.
     assert src.index("restore_database") < src.index("_reapply_schema_migrations")

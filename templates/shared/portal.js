@@ -2848,17 +2848,27 @@
     // yields a half-drawn map or bare basemap. The reply ALWAYS goes out, with dataUrl null on
     // failure, so the editor never waits on a message that will not arrive.
     function sendSnapshot(requestId) {
-      const reply = function (dataUrl) { post({ type: 'snapshot', requestId: requestId, dataUrl: dataUrl }); };
+      // The reason travels WITH the reply. Discarding it made every failure look identical from the
+      // dashboard — a tainted canvas (SecurityError, from a tile server that sent no CORS header),
+      // a lost WebGL context and a plain bug all arrived as "no image", and diagnosing which meant
+      // asking the operator to read their browser console.
+      const reply = function (dataUrl, error) {
+        post({ type: 'snapshot', requestId: requestId, dataUrl: dataUrl, error: error || null });
+      };
       let done = false;
       const grab = function () {
         if (done) return;
         done = true;
         try {
           map.triggerRepaint();
-          reply(map.getCanvas().toDataURL('image/webp', 0.75));
+          const url = map.getCanvas().toDataURL('image/webp', 0.75);
+          // toDataURL can succeed and still hand back a 1x1 placeholder if the drawing buffer was
+          // already cleared — say so rather than letting it fail a size check three layers up.
+          reply(url, url && url.length > 2048 ? null : 'canvas produced no image (' +
+                (url ? url.length : 0) + ' chars) — preserveDrawingBuffer may be off');
         } catch (err) {
           console.warn('[geodeploy] snapshot failed', err);
-          reply(null);
+          reply(null, (err && err.name ? err.name + ': ' : '') + (err && err.message || String(err)));
         }
       };
       // A map that is already idle fires no further 'idle', so race a timeout against it — and the

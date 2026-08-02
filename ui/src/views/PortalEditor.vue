@@ -1193,7 +1193,11 @@ function onFrameMessage(e) {
   const d = e.data
   if (d.type === 'snapshot') {
     const pending = snapshotWaiters.get(d.requestId)
-    if (pending) { snapshotWaiters.delete(d.requestId); pending(d.dataUrl || null) }
+    if (pending) {
+      snapshotWaiters.delete(d.requestId)
+      if (d.error) console.warn('[geodeploy] snapshot reported:', d.error)
+      pending(d.dataUrl || null)
+    }
     return
   }
   if (d.type === 'view' && d.view) lastView.value = d.view
@@ -2085,7 +2089,13 @@ function requestSnapshot(timeoutMs = 6000) {
 async function captureThumbnail() {
   try {
     const dataUrl = await requestSnapshot()
-    if (!dataUrl || !dataUrl.startsWith('data:image/')) return
+    if (!dataUrl || !dataUrl.startsWith('data:image/')) {
+      // Visible, not silent. Publishing succeeded; the picture did not, and the operator was left to
+      // infer that from a card that never changed.
+      saveMsg.value = { type: 'err', text: 'Published, but the card preview could not be captured. '
+                                         + 'See the browser console for the reason.' }
+      return
+    }
     const blob = await (await fetch(dataUrl)).blob()
     // A blank/near-empty canvas serialises to a tiny file; storing it would replace a good
     // thumbnail with a grey rectangle, so keep the previous one instead. The strict floor applies

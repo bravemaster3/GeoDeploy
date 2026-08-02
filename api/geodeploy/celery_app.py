@@ -67,6 +67,12 @@ celery_app.conf.update(
         # time. docker-compose runs the worker with -Q ingest,backup.
         "geodeploy.tasks.backup.*": {"queue": "backup"},
         "geodeploy.tasks.restore.*": {"queue": "backup"},
+        # The demo reset IS a restore plus a sweep, so it belongs on the same queue — and it needs a
+        # route of its own, not just the queue pinned in its beat entry. Without this a bare
+        # `reset_now.delay()` (the natural way to test it by hand) goes to the DEFAULT queue, which
+        # the worker does not consume (-Q ingest,backup), and the task waits there forever looking
+        # exactly like a reset that silently did nothing.
+        "geodeploy.tasks.demo_reset.*": {"queue": "backup"},
     },
     # Scheduled backups. The tick is cheap and does nothing unless a schedule is configured; the
     # SCHEDULE ITSELF lives in the DB and is read per tick, so changing it in Settings takes effect

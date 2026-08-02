@@ -12,12 +12,12 @@
       <strong class="font-semibold">This is a demo.</strong>
       Everything here — layers, portals, accounts — is
       <strong>deleted every hour, on the hour</strong><span v-if="countdown"> — next wipe in
-      <strong>{{ countdown }}</strong></span>. Do not upload anything you need, and do not put
-      anything private here: everyone using the demo shares this workspace and can see and change
-      what you make.
+      <strong>{{ countdown }}</strong></span>. Don't build a portal here that you intend to keep,
+      and don't put anything private here: everyone trying the demo shares this workspace, and can
+      see and change what you make.
       <span class="text-amber-200/80">
-        Uploads are capped at {{ maxUploadMb }} MB in the demo only; a GeoDeploy you install yourself
-        has no such limit.
+        Uploads are capped at {{ maxUploadMb }} MB in the demo only — on your own server, the limit
+        is your server.
       </span>
     </p>
     <button @click="dismissed = true" title="Hide until the page reloads" aria-label="Hide"
