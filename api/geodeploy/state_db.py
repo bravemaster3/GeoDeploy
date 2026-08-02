@@ -61,6 +61,14 @@ class _Cursor:
         return [self._wrap(r) for r in self._cur.fetchall()]
 
     @property
+    def rowcount(self):
+        """Rows affected by the last statement. psycopg2 has it; the wrapper simply never exposed it,
+        so callers reaching for it got AttributeError (or silently `None` via getattr). It is the only
+        way to tell "UPDATE matched nothing" from "UPDATE changed nothing", which matters when a
+        restore has replaced the row you were updating."""
+        return self._cur.rowcount
+
+    @property
     def lastrowid(self):
         """sqlite3's lastrowid has no psycopg2 equivalent — a statement that needs the new id must
         say `RETURNING id` and read it back. Raising here (rather than returning None) makes the

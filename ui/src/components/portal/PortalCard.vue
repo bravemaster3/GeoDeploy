@@ -13,6 +13,12 @@
       <!-- Keeps the "Live" pill legible over an arbitrary map image. -->
       <div v-if="portal.thumbnail_url && !thumbFailed"
         class="absolute inset-x-0 top-0 h-10 bg-gradient-to-b from-black/45 to-transparent"></div>
+      <!-- The capture mounts an off-screen preview and waits for the map to settle, which takes a
+           few seconds. Saying so beats a card that looks like it failed and then changes by itself. -->
+      <div v-if="capturing"
+        class="absolute inset-0 flex items-center justify-center gap-2 bg-black/45 text-white text-xs">
+        <span class="animate-spin">⟳</span> Capturing preview…
+      </div>
       <div v-if="portal.published" class="absolute top-2 right-2">
         <span class="text-xs bg-green-500 text-white px-2 py-0.5 rounded-full font-medium">Live</span>
       </div>
@@ -60,7 +66,7 @@ import { computed, ref } from 'vue'
 import { GlobeIcon, TrashIcon, ExternalLinkIcon, KeyIcon, UsersIcon, UserIcon } from '@/views/icons'
 import { useAuthStore } from '@/stores/auth'
 
-const props = defineProps({ portal: Object })
+const props = defineProps({ portal: Object, capturing: Boolean })
 defineEmits(['edit', 'publish', 'unpublish', 'delete'])
 
 const auth = useAuthStore()

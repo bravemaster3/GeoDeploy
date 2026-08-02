@@ -30,20 +30,76 @@ def _step(run_id: int, step: str, progress: int) -> None:
         pass       # progress reporting must never fail the restore
 
 
-def _finish(run_id: int, status: str, **fields) -> None:
+def _finish(run_id: int, status: str, seed: dict | None = None, **fields) -> None:
+    """Record the final status — RE-INSERTING the row if the restore removed it.
+
+    A restore replaces the database this row lives in, and the snapshot predates the restore, so
+    after the database step the row is simply gone. The UPDATE then matched nothing and the result
+    was never recorded anywhere: the restore that just ran did not appear in its own history, and
+    the UI had nothing to poll to learn whether it worked. `seed` is the row as it was BEFORE the
+    database was replaced, captured at the start of the task for exactly this.
+    """
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     sets = ["status = ?", "finished_at = ?"]
-    vals = [status, datetime.now(timezone.utc).replace(tzinfo=None)]
+    vals = [status, now]
     for k, v in fields.items():
         sets.append(f"{k} = ?")
         vals.append(v)
     vals.append(run_id)
     try:
         with state_db.connect() as conn:
-            conn.execute(f"UPDATE restore_runs SET {', '.join(sets)} WHERE id = ?", vals)
+            cur = conn.execute(f"UPDATE restore_runs SET {', '.join(sets)} WHERE id = ?", vals)
+            if cur.rowcount:
+                return
+            if not seed:
+                logger.warning("restore %s: row is gone and no seed was captured", run_id)
+                return
+            row = {"id": run_id, "key": seed.get("key"), "confirmed_by": seed.get("confirmed_by"),
+                   "started_at": seed.get("started_at") or now, "status": status,
+                   "finished_at": now, **fields}
+            cols = [c for c in ("id", "key", "status", "confirmed_by", "started_at", "finished_at",
+                                "error_message", "current_step", "progress", "detail")
+                    if c in row]
+            conn.execute(
+                f"INSERT INTO restore_runs ({', '.join(cols)}) "
+                f"VALUES ({', '.join('?' for _ in cols)})", [row[c] for c in cols])
+            # The id was forced rather than drawn from the sequence, and the sequence came from the
+            # snapshot — so without this the NEXT restore collides on the primary key.
+            conn.execute("SELECT setval(pg_get_serial_sequence('restore_runs', 'id'), "
+                         "GREATEST((SELECT MAX(id) FROM restore_runs), 1))")
+            logger.info("restore %s: re-inserted its run row after the database was replaced", run_id)
     except Exception:
-        # The restore just replaced this very database — the row we were updating may no longer
-        # exist (it belonged to the pre-restore state). Nothing to do; the log is the record.
-        logger.warning("restore %s: could not record final status %s", run_id, status)
+        logger.exception("restore %s: could not record final status %s", run_id, status)
+
+
+def _reapply_schema_migrations() -> dict:
+    """Re-apply the additive column migrations over the just-restored schema.
+
+    `pg_restore --clean` DROPS and recreates every table from the dump, so the schema becomes the
+    SNAPSHOT'S schema — every column added by a release after that backup is gone. The API applies
+    these at startup and nothing re-applies them mid-run, so an instance stayed on the old schema
+    until someone happened to restart it.
+
+    That is not theoretical. Restoring a backup taken before `portals.thumbnail_url` existed removed
+    the column from a running instance: publishing a portal succeeded, recording its thumbnail
+    failed, and portal cards silently lost their images. The BIGINT widening of `size_bytes` reverts
+    the same way, bringing back the 'integer out of range' that broke backups over 2.1 GB.
+
+    Every statement is `IF NOT EXISTS` or guarded, so this is a no-op when the snapshot is current.
+    """
+    from ..schema_migrations import PG_MIGRATIONS
+
+    applied, failed = 0, []
+    for stmt in PG_MIGRATIONS:
+        try:
+            with state_db.connect() as conn:
+                conn.execute(stmt)
+            applied += 1
+        except Exception as exc:      # one bad statement must not stop the rest
+            logger.warning("restore: schema migration failed (%s): %s",
+                           stmt.strip().splitlines()[0], exc)
+            failed.append(str(exc)[:200])
+    return {"applied": applied, "failed": failed}
 
 
 def _clear_restored_running_rows() -> dict:
@@ -78,9 +134,23 @@ def run_restore(run_id: int, key: str):
     from ..tasks.backup import _load_cfg
 
     settings = get_settings()
+
+    # Capture the row BEFORE anything is replaced. After the database step it will not exist —
+    # the snapshot being restored predates this restore — and `_finish` needs these values to put
+    # the record back, so the restore appears in its own history.
+    seed = None
+    try:
+        with state_db.connect() as conn:
+            conn.row_factory = state_db.dict_row
+            seed = conn.execute(
+                "SELECT key, confirmed_by, started_at FROM restore_runs WHERE id = ?",
+                (run_id,)).fetchone()
+    except Exception:
+        logger.warning("restore %s: could not read its own row up front", run_id)
+
     cfg = _load_cfg()
     if not cfg or not cfg.backup_bucket:
-        _finish(run_id, "error", error_message="Backups are not configured.")
+        _finish(run_id, "error", seed=seed, error_message="Backups are not configured.")
         return
 
     detail = {}
@@ -123,6 +193,9 @@ def run_restore(run_id: int, key: str):
                 #
                 # Cleared HERE rather than left to the 6-hour reaper because a restore KNOWS these
                 # rows are stale: nothing that was running when the dump was taken is running now.
+                # Schema FIRST: the restored schema may predate the running code, and the row
+                # updates below (and everything the API does next) assume current columns.
+                detail["schema"] = _reapply_schema_migrations()
                 detail["stale_runs_cleared"] = _clear_restored_running_rows()
 
         _step(run_id, "Rebuilding tile configuration", 95)
@@ -134,12 +207,12 @@ def run_restore(run_id: int, key: str):
             logger.warning("restore: Martin regeneration failed: %s", exc)
             detail["martin"] = f"failed: {exc}"
 
-        _finish(run_id, "success", progress=100, current_step="Done",
+        _finish(run_id, "success", seed=seed, progress=100, current_step="Done",
                 detail=json.dumps(detail))
         logger.info("restore of %s complete", key)
     except Exception as exc:
         logger.exception("restore failed")
-        _finish(run_id, "error", error_message=str(exc)[:1000], current_step="Failed",
+        _finish(run_id, "error", seed=seed, error_message=str(exc)[:1000], current_step="Failed",
                 detail=json.dumps(detail))
 
 

@@ -189,6 +189,11 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
+2026-08-02b (`restore.py`: re-applies `schema_migrations.PG_MIGRATIONS` after the DB step —
+`pg_restore --clean` installs the SNAPSHOT's schema, silently dropping every column added since;
+and `_finish` RE-INSERTS its run row, which the restore itself deletes, so a restore finally
+appears in its own history.)
+
 2026-08-02 (`backup.py`: recording SUCCESS moved outside the try/except that guards the work.
 `size_bytes` overflowing int4 raised at 100%, on a complete backup, and the handler relabelled it
 "error" — a bookkeeping failure reported as a data failure. Columns widened to BIGINT; a

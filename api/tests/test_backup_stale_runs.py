@@ -103,3 +103,40 @@ def test_restore_clears_running_rows_without_waiting_for_the_reaper():
     # It must run AFTER the database is replaced — clearing before would only clear rows the restore
     # is about to overwrite, which is the one ordering that does nothing at all.
     assert src.index("restore_database") < src.index("_clear_restored_running_rows")
+
+
+def test_restore_reapplies_schema_migrations_after_the_database_is_replaced():
+    """`pg_restore --clean` installs the SNAPSHOT's schema, so every column added since that backup
+    disappears from a RUNNING instance — and the API only applies migrations at startup.
+
+    This was found in production: restoring a backup taken before `portals.thumbnail_url` existed
+    dropped the column, after which publishing a portal succeeded while recording its thumbnail
+    silently failed. The BIGINT widening reverts the same way, bringing back 'integer out of range'.
+    """
+    import inspect
+
+    from geodeploy.schema_migrations import PG_MIGRATIONS
+    from geodeploy.tasks import restore as rt
+
+    assert PG_MIGRATIONS, "the migration list must be importable without importing the FastAPI app"
+
+    src = inspect.getsource(rt.run_restore)
+    assert "_reapply_schema_migrations" in src
+    # AFTER the restore, or it only migrates a schema that is about to be thrown away.
+    assert src.index("restore_database") < src.index("_reapply_schema_migrations")
+    # BEFORE the row bookkeeping, which writes to tables those migrations may have just repaired.
+    assert src.index("_reapply_schema_migrations") < src.index("_clear_restored_running_rows")
+
+
+def test_restore_records_itself_even_though_it_deletes_its_own_row():
+    """The restored database predates the restore, so the run row it was updating is gone. Without
+    a re-insert the restore leaves NO record: nothing to poll for a verdict, nothing in history."""
+    import inspect
+
+    from geodeploy.tasks import restore as rt
+
+    src = inspect.getsource(rt._finish)
+    assert "INSERT INTO restore_runs" in src
+    assert "rowcount" in src, "it must detect that the UPDATE matched nothing"
+    # A forced id with a sequence inherited from the snapshot collides on the NEXT restore.
+    assert "setval" in src

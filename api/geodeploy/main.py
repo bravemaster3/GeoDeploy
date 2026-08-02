@@ -14,6 +14,16 @@ from .database import Base
 from .routers import (setup, auth, auth_oidc, portals, stac, templates, admin, basemaps, users,
                       tokens, audit, interop, ogcapi, backups)
 from .routers.data import vector, raster, sources, discover
+# The migration list lives in its own module because the Celery worker re-applies it after a
+# RESTORE (pg_restore --clean installs the SNAPSHOT's schema, losing every column added since);
+# importing main.py from a task would drag in the whole FastAPI app.
+from .schema_migrations import PG_MIGRATIONS as _PG_MIGRATIONS
+
+# Module-level, because `_apply_pg_migrations` logs from it. `lifespan` binds its own local `log`,
+# so this was previously a NameError waiting inside an `except` — a failing migration would have
+# raised from its own error handler and surfaced as "state database not reachable yet", hiding the
+# real cause behind an unrelated message.
+log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -63,54 +73,6 @@ async def lifespan(app: FastAPI):
     _ensure_martin_config(settings)
 
     yield
-
-
-# ── Postgres additive migrations ──────────────────────────────────────────────────────────────
-# `Base.metadata.create_all` creates missing TABLES but never adds a column to a table that already
-# exists, so a new column would break every EXISTING install (queries select a column the database
-# does not have) while working perfectly on a fresh one. This list closes that gap.
-#
-# Rules for adding to it:
-#   * `ADD COLUMN IF NOT EXISTS` only — this runs on EVERY start and must be a no-op once applied.
-#   * Additive and nullable (or with a default). Never drop, rename or retype here: those need a
-#     real migration with a data step, and a destructive statement running unattended on every boot
-#     is how databases get lost.
-#   * Postgres dialect. The SQLite-era `_apply_schema_migrations` below is dead code kept for
-#     reference; do not extend it.
-_PG_MIGRATIONS = [
-    # Portal card thumbnail: a snapshot of the published map, captured in the browser at publish.
-    "ALTER TABLE portals ADD COLUMN IF NOT EXISTS thumbnail_url VARCHAR(512)",
-    # int4 → int8 on every byte count. The rule above says "never retype", and this is the exception
-    # it allows for: WIDENING an integer is lossless, cannot fail on existing data, and the
-    # alternative is a live bug. int4 stops at 2_147_483_647 — 2.1 GB — which a whole-instance
-    # backup passes immediately and a single raster passes eventually. On an install that overflowed,
-    # `backup_runs.size_bytes` raised "integer out of range" at the END of a backup that had already
-    # been written correctly, so a GOOD backup was recorded as a failure.
-    #
-    # Guarded by information_schema so it is a true no-op once applied: a bare ALTER TYPE would take
-    # an ACCESS EXCLUSIVE lock on every boot for no reason.
-    """DO $$ BEGIN
-         IF EXISTS (SELECT 1 FROM information_schema.columns
-                    WHERE table_name = 'backup_runs' AND column_name = 'size_bytes'
-                      AND data_type = 'integer') THEN
-           ALTER TABLE backup_runs ALTER COLUMN size_bytes TYPE BIGINT;
-         END IF;
-       END $$""",
-    """DO $$ BEGIN
-         IF EXISTS (SELECT 1 FROM information_schema.columns
-                    WHERE table_name = 'vector_layers' AND column_name = 'file_size'
-                      AND data_type = 'integer') THEN
-           ALTER TABLE vector_layers ALTER COLUMN file_size TYPE BIGINT;
-         END IF;
-       END $$""",
-    """DO $$ BEGIN
-         IF EXISTS (SELECT 1 FROM information_schema.columns
-                    WHERE table_name = 'raster_layers' AND column_name = 'file_size'
-                      AND data_type = 'integer') THEN
-           ALTER TABLE raster_layers ALTER COLUMN file_size TYPE BIGINT;
-         END IF;
-       END $$""",
-]
 
 
 def _apply_pg_migrations(conn) -> None:

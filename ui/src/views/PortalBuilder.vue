@@ -27,6 +27,7 @@
         :key="portal.id"
         :portal="portal"
         @edit="$router.push(`/portals/${portal.id}/edit`)"
+        :capturing="capturingId === portal.id"
         @publish="handlePublish(portal)"
         @unpublish="portalsStore.unpublish(portal.id)"
         @delete="portalsStore.remove(portal.id)"
@@ -44,10 +45,12 @@ import { usePortalsStore } from '@/stores/portals'
 import { PlusIcon, GlobeIcon } from './icons'
 import PortalCard from '@/components/portal/PortalCard.vue'
 import CreatePortalModal from '@/components/portal/CreatePortalModal.vue'
+import { capturePortalThumbnail } from '@/composables/portalThumbnail'
 
 const auth = useAuthStore()
 const portalsStore = usePortalsStore()
 const showCreate = ref(false)
+const capturingId = ref(null)   // portal whose card image is being taken
 
 const creatorFilter = ref('')
 const creators = computed(() =>
@@ -62,6 +65,22 @@ async function handlePublish(portal) {
     await portalsStore.publish(portal.id)
   } catch (err) {
     alert(err.response?.data?.detail || err.message)
+    return
+  }
+  // Capture the card image here too. The EDITOR captures from its live preview iframe, but a portal
+  // published from this list never passed through the editor, so it kept the gradient placeholder
+  // forever — indistinguishable from thumbnails being broken. Not awaited into the publish result:
+  // publishing is done, and a picture is decoration.
+  capturingId.value = portal.id
+  try {
+    const url = await capturePortalThumbnail(portal.id)
+    if (url) {
+      const list = portalsStore.portals
+      const idx = list.findIndex(p => p.id === portal.id)
+      if (idx !== -1) list[idx] = { ...list[idx], thumbnail_url: url }
+    }
+  } finally {
+    capturingId.value = null
   }
 }
 </script>

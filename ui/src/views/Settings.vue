@@ -377,7 +377,68 @@
             <p v-if="storedMsg" class="text-xs" :class="storedMsg.ok ? 'text-emerald-400' : 'text-red-400'">
               {{ storedMsg.text }}
             </p>
+
+            <!-- LIVE restore progress. Previously the page reloaded 4 seconds after starting a
+                 restore, which says nothing about whether it worked — a restore takes minutes, so
+                 the reload landed mid-way and the operator was left guessing. Now it waits for the
+                 real verdict and only reloads on success. -->
+            <div v-if="activeRestore" class="rounded-lg border p-3 space-y-2"
+              :class="activeRestore.status === 'error' ? 'border-red-500/50 bg-red-500/10'
+                : activeRestore.status === 'success' ? 'border-emerald-500/50 bg-emerald-500/10'
+                : 'border-amber-500/40 bg-amber-500/10'">
+              <div class="flex items-center gap-2 text-sm">
+                <span v-if="activeRestore.status === 'running'" class="animate-spin">⟳</span>
+                <span class="font-medium"
+                  :class="activeRestore.status === 'error' ? 'text-red-300'
+                    : activeRestore.status === 'success' ? 'text-emerald-300' : 'text-amber-200'">
+                  {{ activeRestore.status === 'success' ? 'Restore complete'
+                    : activeRestore.status === 'error' ? 'Restore failed' : 'Restoring…' }}
+                </span>
+                <span class="text-xs text-muted-foreground">{{ activeRestore.current_step }}</span>
+              </div>
+              <div v-if="activeRestore.status === 'running'" class="h-1.5 rounded-full bg-muted overflow-hidden">
+                <div class="h-full bg-amber-400 transition-all" :style="{ width: (activeRestore.progress || 0) + '%' }" />
+              </div>
+              <p v-if="activeRestore.error_message" class="text-xs text-red-300">{{ activeRestore.error_message }}</p>
+              <p v-if="activeRestore.status === 'success'" class="text-xs text-emerald-300/90">
+                Your data has been replaced from that backup. Reloading in {{ reloadIn }}s —
+                <button @click="reloadNow" class="underline">reload now</button>.
+              </p>
+            </div>
           </div>
+        </section>
+
+        <!-- Restore history. It existed in the API from the start and was never shown; the restore
+             is the most consequential action in the app and left no visible trace. -->
+        <section v-if="auth.isOwner" class="card overflow-hidden">
+          <header class="px-5 py-3.5 border-b border-border/60">
+            <h2 class="font-semibold">Restore history</h2>
+            <p class="text-xs text-muted-foreground">Every restore, who confirmed it, and how it ended.</p>
+          </header>
+          <div v-if="!rsRuns.length" class="px-5 py-8 text-center text-sm text-muted-foreground/70">
+            No restores yet.
+          </div>
+          <table v-else class="w-full text-sm">
+            <tbody>
+              <tr v-for="r in rsRuns" :key="r.id" class="border-b border-border/40 last:border-0">
+                <td class="px-5 py-2.5 whitespace-nowrap">
+                  <span class="text-[11px] font-mono px-1.5 py-0.5 rounded"
+                    :class="r.status === 'success' ? 'bg-emerald-500/15 text-emerald-400'
+                      : r.status === 'error' ? 'bg-red-500/15 text-red-400' : 'bg-amber-500/15 text-amber-400'">{{ r.status }}</span>
+                </td>
+                <td class="px-2 py-2.5 text-xs text-muted-foreground whitespace-nowrap">
+                  {{ new Date(r.started_at).toLocaleString() }}
+                </td>
+                <td class="px-2 py-2.5 text-xs text-muted-foreground font-mono truncate max-w-[14rem]"
+                  :title="r.key">{{ r.key.split('/').pop() }}</td>
+                <td class="px-2 py-2.5 text-xs text-muted-foreground">{{ r.confirmed_by }}</td>
+                <td class="px-5 py-2.5 text-xs text-muted-foreground">
+                  <span v-if="r.status === 'error'" class="text-red-400">{{ r.error_message }}</span>
+                  <span v-else>{{ r.current_step }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </section>
       </div>
 
@@ -717,6 +778,7 @@ import { ServerIcon, HardDriveIcon, UserIcon, RefreshIcon, MailIcon, KeyIcon, Tr
 import api, { changePassword, logoutAll, controlService, getEmailSettings, sendTestEmail,
               updateEmailSettings, listTokens, revokeToken, getOidcSettings, updateOidcSettings,
               getBackupSettings, updateBackupSettings, testBackupDestination, createBackupBucket,
+              listRestoreRuns,
               listBackupRuns, startBackup, listStoredBackups, deleteStoredBackup,
               restorePreflight, startRestore } from '@/api'
 import TokenModal from '@/components/users/TokenModal.vue'
@@ -835,6 +897,43 @@ const preflight = ref(null)
 const restoreConfirm = ref('')
 const restoreBusy = ref(false)
 const restoreMsg = ref(null)
+// The restore in flight (or the one that just ended), polled until it reaches a verdict.
+const activeRestore = ref(null)
+const rsRuns = ref([])
+const reloadIn = ref(8)
+let rsPoll = null, reloadTimer = null
+
+async function loadRestoreRuns() {
+  if (!auth.isOwner) return
+  try { rsRuns.value = (await listRestoreRuns()).data } catch { /* not configured yet */ }
+}
+
+// Poll until the restore stops running. Errors are SWALLOWED rather than treated as failure:
+// the restore replaces the database this API reads, so requests genuinely fail for a few seconds
+// mid-way. Giving up there would report a failure for a restore that is working.
+function reloadNow() { window.location.reload() }
+
+function pollRestore(id) {
+  clearTimeout(rsPoll)
+  rsPoll = setTimeout(async () => {
+    let run = null
+    try {
+      run = ((await listRestoreRuns()).data || []).find(r => r.id === id)
+    } catch { /* database is being replaced — keep waiting */ }
+    if (run) activeRestore.value = run
+    if (!run || run.status === 'running') return pollRestore(id)
+    await loadRestoreRuns()
+    // Only a SUCCESSFUL restore reloads. On failure the instance is whatever the restore left
+    // behind, and reloading would replace the one screen explaining what happened.
+    if (run.status === 'success') {
+      reloadIn.value = 8
+      clearInterval(reloadTimer)
+      reloadTimer = setInterval(() => {
+        if (--reloadIn.value <= 0) { clearInterval(reloadTimer); window.location.reload() }
+      }, 1000)
+    }
+  }, 2500)
+}
 
 async function loadStored() {
   if (!auth.isAdmin) return
@@ -882,14 +981,14 @@ async function confirmRestore() {
   restoreBusy.value = true
   restoreMsg.value = null
   try {
-    await startRestore({ key: restoreTarget.value.key, confirm_name: restoreConfirm.value })
+    const { data } = await startRestore({ key: restoreTarget.value.key,
+                                          confirm_name: restoreConfirm.value })
     restoreTarget.value = null
-    // The restore replaces this very database, so the page's data is about to be stale — reload
-    // rather than leave a UI describing an instance that no longer exists.
-    storedMsg.value = { ok: true, text: 'Restore started — reloading shortly.' }
-    setTimeout(() => window.location.reload(), 4000)
+    storedMsg.value = null
+    activeRestore.value = data          // shows the progress panel immediately
+    pollRestore(data.id)
   } catch (e) {
-    restoreMsg.value = e.response?.data?.detail || 'Could not start the restore.'
+    restoreMsg.value = errText(e, 'Could not start the restore.')
   } finally {
     restoreBusy.value = false
   }
@@ -904,6 +1003,7 @@ async function loadBackups() {
   } catch { /* not configured yet */ }
   await refreshBackupRuns()
   await loadStored()
+  await loadRestoreRuns()
 }
 
 async function refreshBackupRuns() {
@@ -1177,7 +1277,14 @@ onMounted(() => {
 })
 
 // Stop the backup progress poll when leaving Settings (it re-arms itself while a run is active).
-onUnmounted(() => clearTimeout(bkPoll))
+onUnmounted(() => {
+  clearTimeout(bkPoll)
+  // The restore poll re-arms itself and the reload countdown fires window.location.reload —
+  // both must die with the component, or leaving Settings mid-restore reloads the page from
+  // under whatever the user navigated to.
+  clearTimeout(rsPoll)
+  clearInterval(reloadTimer)
+})
 
 // Service logs (read-only). Admin-only server-side; a safe substitute for a shell.
 const LOG_SERVICES = ['celery', 'api', 'nginx', 'martin', 'titiler', 'postgres', 'minio', 'redis', 'ui']

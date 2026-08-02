@@ -12,6 +12,11 @@ FastAPI backend — GeoDeploy's control plane: auth, setup wizard, data ingestio
   (viewer<editor<admin<owner), `require_role()` factory, `require_editor`/`require_admin`/
   `require_owner`, and `resolve_bearer_user` (raw-header resolution for conditionally-open guards
   like setup first-run). See `routers/README.md` for the permission model.
+- `geodeploy/schema_migrations.py` (2026-08-02) — `PG_MIGRATIONS`, the additive `ALTER TABLE` list.
+  In its OWN module because two processes need it: the API applies it at startup, and the Celery
+  worker RE-APPLIES it after a restore (`pg_restore --clean` installs the snapshot's schema, so
+  every column added since that backup vanishes from a running instance). Importing `main` from a
+  task would drag in the whole FastAPI app.
 - `geodeploy/models.py` — ORM: `SetupConfig`, `User` (with `role`; `is_admin` deprecated,
   write-only-synced), `Invitation` (invite + password-reset tokens, sha256-hashed),
   `VectorLayer`, `RasterLayer`, `UploadJob`, `Portal`. JSON-ish fields (`bbox`, `columns`,
@@ -21,7 +26,7 @@ FastAPI backend — GeoDeploy's control plane: auth, setup wizard, data ingestio
 - `geodeploy/routers/` — HTTP endpoints. See `routers/README.md`.
 - `geodeploy/services/` — provisioning + tile-URL + storage helpers. See `services/README.md`.
 - `geodeploy/tasks/` — Celery ingest pipelines. See `tasks/README.md`.
-- `alembic/`, `alembic.ini` — present but **effectively unused**: `versions/` holds only `.gitkeep`. Real schema management is `Base.metadata.create_all` + the hand-written `ALTER TABLE` list in `main.py::_apply_schema_migrations`. Add new columns there, not via Alembic, unless you intend to wire Alembic up properly.
+- `alembic/`, `alembic.ini` — present but **effectively unused**: `versions/` holds only `.gitkeep`. Real schema management is `Base.metadata.create_all` + the hand-written `ALTER TABLE` list in **`schema_migrations.py::PG_MIGRATIONS`** (moved out of `main.py` 2026-08-02). Add new columns there, not via Alembic, unless you intend to wire Alembic up properly. `main.py::_apply_schema_migrations` is the DEAD SQLite-era list, kept for reference only.
 - `tests/` — pytest-asyncio; `conftest.py` builds an ASGI test client over a throwaway SQLite at
   `/tmp/geodeploy-test` (HARD-set env + import-time guard — NEVER weaken; see notes_for_future.md
   top section). Suites: `test_health.py`, `test_security.py` (2026-07 audit regressions + role

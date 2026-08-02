@@ -58,6 +58,11 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 ## Last updated
 2026-07-30 (PortalEditor: `catalog` archetype option + Map side / Datasets listed controls; the
 layer-list placement toggles are hidden for it since the facet rail replaces the sidebar)
+2026-08-02b (Settings → Backups shows LIVE restore progress and a verdict instead of reloading 4s
+after starting one; **Restore history** section added (the API had it from day one and nothing
+rendered it). `PortalBuilder` now captures a card thumbnail when publishing from the LIST — that
+path never had one, since the capture lives in the editor's preview iframe.)
+
 2026-08-02 (Settings → Backups: the **Enabled** toggle moved OUT of the card header to sit beside
 **Save** — it gates "Back up now" and was nowhere near it, and it is SERVER state, so ticking it
 without saving left the button clickable and the API refusing. `runBlockedReason` mirrors the
