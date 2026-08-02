@@ -117,7 +117,12 @@ async def configure_db(req: ConfigureDBRequest, request: Request):
         try:
             await postgis_svc.test_connection(req.host, req.port, req.db, req.user, req.password)
         except Exception as exc:
-            raise HTTPException(400, f"Cannot connect to PostGIS: {exc}") from exc
+            # NAME the cause. A timeout, a refusal, bad credentials and a missing PostGIS extension
+            # all arrived here as the same "Cannot connect to PostGIS: <driver text>", and only two
+            # of those have anything to do with what was just typed — so the first thing a new
+            # install shows you was a message that sent you to check the wrong thing.
+            from ..services.setup_errors import postgres_error
+            raise HTTPException(400, postgres_error(exc, req.host, req.port, req.db, req.user)) from exc
         config.postgis_type = "external"
         config.postgis_host = req.host
         config.postgis_port = req.port
@@ -186,7 +191,10 @@ async def configure_storage(req: ConfigureStorageRequest, request: Request, db: 
         try:
             await minio_svc.test_connection(req.endpoint, req.bucket, req.access_key, req.secret_key, req.region)
         except Exception as exc:
-            raise HTTPException(400, f"Cannot connect to storage: {exc}") from exc
+            # Same reasoning as the database step: an unreachable endpoint, a rejected key, a bucket
+            # this key may not touch, and a bucket in another region are four different fixes.
+            from ..services.setup_errors import storage_error
+            raise HTTPException(400, storage_error(exc, req.endpoint, req.bucket)) from exc
         config.storage_type = req.type
         config.storage_endpoint = req.endpoint
         config.storage_bucket = req.bucket

@@ -40,6 +40,11 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   being eaten on the way out of the Python f-string and rendered as a literal "F517".
   `.doc img` is block/centred/`max-width:100%`, and `![alt|full](src)` opts an image into filling
   the column (`_md_inline` strips the marker from the alt text).
+- `setup_errors.py` (2026-08-02) — turns a driver exception into a sentence naming the CAUSE and
+  the next command. The wizard used to surface the raw error, so a firewalled port, a closed one,
+  wrong credentials and a missing PostGIS extension all read as "Cannot connect" — and only two
+  of those relate to what was typed. Timeout vs REFUSED is the key split: refused means
+  something answered. Unclassified errors keep their original text.
 - `backup.py` (2026-07-30) — copies everything non-regenerable to a **separate** object store.
   `verify_destination` REFUSES a destination whose endpoint+bucket match the live data bucket (a
   copy that dies with the original is not a backup). `copy_objects` uses **server-side

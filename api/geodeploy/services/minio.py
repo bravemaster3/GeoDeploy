@@ -141,7 +141,7 @@ async def test_connection(endpoint: str, bucket: str, access_key: str, secret_ke
     except ClientError as e:
         code = e.response["Error"]["Code"]
         if code == "404":
-            _ensure_bucket(s3, bucket)
+            _ensure_bucket(s3, bucket, region)
         else:
             raise ValueError(f"Storage connection failed: {e}") from e
 
@@ -157,9 +157,20 @@ def _make_client(endpoint: str, access_key: str, secret_key: str, region: str):
     )
 
 
-def _ensure_bucket(s3, bucket: str) -> None:
+def _ensure_bucket(s3, bucket: str, region: str | None = None) -> None:
+    """Create the bucket if it is not there. Idempotent.
+
+    `LocationConstraint` is REQUIRED by AWS outside us-east-1 and REJECTED in us-east-1 (you cannot
+    ask for the default explicitly), and it is meaningless to Cloudflare R2, whose region is the
+    literal word "auto" — a signing input, not a location. MinIO ignores it. So it is sent only
+    where it is both legal and meaningful; without this, creating a bucket in any real AWS region
+    fails with InvalidLocationConstraint, which reads as a credentials problem.
+    """
+    kwargs = {"Bucket": bucket}
+    if region and region not in ("us-east-1", "auto"):
+        kwargs["CreateBucketConfiguration"] = {"LocationConstraint": region}
     try:
-        s3.create_bucket(Bucket=bucket)
+        s3.create_bucket(**kwargs)
     except ClientError as e:
         if e.response["Error"]["Code"] not in ("BucketAlreadyExists", "BucketAlreadyOwnedByYou"):
             raise
