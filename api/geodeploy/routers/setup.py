@@ -350,6 +350,23 @@ def _write_env(config: SetupConfig) -> None:
         "TITILER_SECRET_KEY": os.environ.get("TITILER_SECRET_KEY") or config.storage_secret_key or "",
     }
 
+    # A None value means "this step knows nothing about that setting", NOT "set it to nothing".
+    #
+    # `configure_db` calls this with a BLANK SetupConfig — it has no storage fields yet — so every
+    # STORAGE_* key arrived here as None and was formatted into an f-string, writing the literal
+    # four characters `None`:
+    #
+    #     STORAGE_ENDPOINT=None
+    #
+    # Normally the storage step overwrote them seconds later and nobody saw it. When it does not —
+    # the wizard is interrupted, or the setup guard refuses the storage step — the file keeps that
+    # value, boto3 is handed it as an endpoint URL, and everything touching object storage fails
+    # with `Invalid endpoint: None`, restores included.
+    #
+    # Skipping the key also stops one step CLOBBERING another's settings: re-running configure-db
+    # on a working instance used to blank its storage configuration.
+    updates = {k: v for k, v in updates.items() if v is not None}
+
     existing_keys = set()
     new_lines = []
     for line in lines:
