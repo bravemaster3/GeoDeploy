@@ -10,6 +10,19 @@ warn()  { echo -e "${YELLOW}[geodeploy-reset]${NC} $*"; }
 
 warn "This will permanently delete all GeoDeploy data, containers, and configuration."
 warn "It also removes this directory, so run 'cd ~' afterwards before anything else."
+echo ""
+# The one that catches people. MinIO keeps EVERY bucket under $GEODEPLOY_DIR/data/minio, so the
+# rm -rf below destroys the whole object store — not just the data bucket. An operator who followed
+# the "back up to a different bucket" rule can still be storing those backups in this same MinIO,
+# where they are as deleted as everything else. The rule protects against overwriting and against
+# the demo sweep; it cannot protect against removing the directory that holds both.
+if [ -d "$GEODEPLOY_DIR/data/minio" ]; then
+  warn "LOCAL OBJECT STORAGE: this deletes EVERY bucket in this server's MinIO, including any"
+  warn "backups you have stored in it. Buckets found:"
+  ls -1 "$GEODEPLOY_DIR/data/minio" 2>/dev/null | grep -v '^\.' | sed 's/^/    - /' || true
+  warn "A backup is only safe from this if it is on ANOTHER server or provider."
+  echo ""
+fi
 read -r -p "Are you sure? (yes/no): " confirm
 if [ "$confirm" != "yes" ]; then
   echo "Aborted."

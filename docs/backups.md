@@ -44,6 +44,16 @@ Press **Test destination** before relying on it. The test writes and deletes a p
 dies with the original is not a backup. Prefer a different provider entirely: that also protects
 you from an account suspension or a mistaken bucket deletion.
 
+!!! warning "A different bucket in the *same* MinIO is not a different place"
+
+    GeoDeploy's managed MinIO keeps **every** bucket under `~/geodeploy/data/minio`. So a backup
+    stored in a second bucket on the same server survives an accidental overwrite and the demo
+    reset — but not `installer/reset.sh`, not a lost disk, and not a lost server, because all of
+    those take the directory that holds both buckets.
+
+    It is a fine place for a demo seed you can rebuild. For anything you would miss, the destination
+    has to be **another provider or another machine**.
+
 If the bucket does not exist yet, the test says so and offers to **create it** for you — see
 [Troubleshooting](#troubleshooting).
 
