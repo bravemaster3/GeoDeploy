@@ -75,8 +75,12 @@ async def provision_local() -> dict:
 
 async def test_connection(host: str, port: int, db: str, user: str, password: str) -> None:
     """Raise if PostGIS is unreachable or the postgis extension is missing."""
-    dsn = f"postgresql://{user}:{password}@{host}:{port}/{db}"
-    conn = await asyncpg.connect(dsn, timeout=10)
+    # Credentials as ARGUMENTS, never interpolated into a URL. A password containing @ / : ? # or %
+    # silently corrupts a `postgresql://` string — `@` splits the authority so libpq connects to the
+    # wrong host, and `%` starts an invalid escape — and the operator sees "cannot connect" for a
+    # password that is perfectly correct. asyncpg takes these directly, so there is nothing to quote.
+    conn = await asyncpg.connect(host=host, port=port, database=db, user=user, password=password,
+                                 timeout=10)
     try:
         await conn.fetchval("SELECT PostGIS_Version()")
     except asyncpg.exceptions.UndefinedFunctionError:
@@ -87,8 +91,7 @@ async def test_connection(host: str, port: int, db: str, user: str, password: st
 
 async def create_user_schema(user_id: int, host: str, port: int, db: str, user: str, password: str) -> str:
     schema = f"geodeploy_u{user_id}"
-    dsn = f"postgresql://{user}:{password}@{host}:{port}/{db}"
-    conn = await asyncpg.connect(dsn)
+    conn = await asyncpg.connect(host=host, port=port, database=db, user=user, password=password)
     try:
         await conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
         await conn.execute(f'CREATE EXTENSION IF NOT EXISTS postgis')
@@ -98,10 +101,10 @@ async def create_user_schema(user_id: int, host: str, port: int, db: str, user: 
 
 
 async def _wait_healthy(host: str, port: int, db: str, user: str, password: str, retries: int = 30) -> None:
-    dsn = f"postgresql://{user}:{password}@{host}:{port}/{db}"
     for attempt in range(retries):
         try:
-            conn = await asyncpg.connect(dsn, timeout=5)
+            conn = await asyncpg.connect(host=host, port=port, database=db, user=user,
+                                         password=password, timeout=5)
             await conn.close()
             return
         except Exception:

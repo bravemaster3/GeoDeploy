@@ -87,16 +87,25 @@ class Settings(BaseSettings):
         return f"?sslmode={self.postgis_sslmode}" if self.postgis_sslmode else ""
 
     @property
+    def _pg_userinfo(self) -> str:
+        """`user:password`, PERCENT-ENCODED. These end up in a `postgresql://` URL, where a password
+        containing @ / : ? # or % changes what the URL means — `@` splits the authority so the host
+        becomes whatever followed it. Generated passwords hit this routinely, and the symptom is a
+        connection failure that looks like wrong credentials."""
+        from urllib.parse import quote
+        return f"{quote(self.postgis_user or '', safe='')}:{quote(self.postgis_password or '', safe='')}"
+
+    @property
     def postgis_dsn(self) -> str:
         return (
-            f"postgresql+asyncpg://{self.postgis_user}:{self.postgis_password}"
+            f"postgresql+asyncpg://{self._pg_userinfo}"
             f"@{self.postgis_host}:{self.postgis_port}/{self.postgis_db}{self._pg_sslmode_query}"
         )
 
     @property
     def postgis_sync_dsn(self) -> str:
         return (
-            f"postgresql://{self.postgis_user}:{self.postgis_password}"
+            f"postgresql://{self._pg_userinfo}"
             f"@{self.postgis_host}:{self.postgis_port}/{self.postgis_db}{self._pg_sslmode_query}"
         )
 

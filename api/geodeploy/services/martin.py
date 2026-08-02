@@ -39,7 +39,11 @@ def _pg_creds(settings) -> dict:
 def _pg_sync_dsn(settings) -> str:
     c = _pg_creds(settings)
     ssl = f"?sslmode={settings.postgis_sslmode}" if settings.postgis_sslmode else ""
-    return (f"postgresql://{c['postgis_user']}:{c['postgis_password']}"
+    # Percent-encoded: this string goes into martin-config.yaml verbatim, and a password with @ or %
+    # in it would point Martin at a different host or fail to parse. See config._pg_userinfo.
+    from urllib.parse import quote
+    userinfo = f"{quote(c['postgis_user'] or '', safe='')}:{quote(c['postgis_password'] or '', safe='')}"
+    return (f"postgresql://{userinfo}"
             f"@{c['postgis_host']}:{c['postgis_port']}/{c['postgis_db']}{ssl}")
 
 
