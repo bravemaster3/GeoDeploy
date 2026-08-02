@@ -38,7 +38,16 @@
               <div><label class="label">Port</label><input v-model="db.port" type="number" class="input" /></div>
               <div><label class="label">Database</label><input v-model="db.db" class="input" /></div>
               <div><label class="label">User</label><input v-model="db.user" class="input" /></div>
-              <div><label class="label">Password</label><input v-model="db.password" type="password" class="input" /></div>
+              <div>
+                <label class="label">Password</label>
+                <!-- `new-password` is what actually stops autofill here. A browser sees a password
+                     field on a host it has a saved credential for and silently substitutes it — the
+                     dots look identical, so the operator submits someone else's password and reads
+                     "password authentication failed" for a password they can see is correct. This
+                     is not a login form: nothing saved for this host is ever the right value. -->
+                <input v-model="db.password" type="password" class="input"
+                  autocomplete="new-password" name="geodeploy-db-password" spellcheck="false" />
+              </div>
             </div>
           </template>
         </template>
@@ -63,7 +72,11 @@
               <div><label class="label">Endpoint URL</label><input v-model="storage.endpoint" class="input" placeholder="https://s3.amazonaws.com" /></div>
               <div><label class="label">Bucket</label><input v-model="storage.bucket" class="input" /></div>
               <div><label class="label">Access Key</label><input v-model="storage.access_key" class="input" /></div>
-              <div><label class="label">Secret Key</label><input v-model="storage.secret_key" type="password" class="input" /></div>
+              <div>
+                <label class="label">Secret Key</label>
+                <input v-model="storage.secret_key" type="password" class="input"
+                  autocomplete="new-password" name="geodeploy-storage-secret" spellcheck="false" />
+              </div>
             </div>
           </template>
         </template>
@@ -76,7 +89,8 @@
             <div><label class="label">Email</label><input v-model="admin.email" type="email" class="input" /></div>
             <div>
               <label class="label">Password</label>
-              <input v-model="admin.password" type="password" class="input" minlength="8" />
+              <input v-model="admin.password" type="password" class="input" minlength="8"
+                autocomplete="new-password" name="geodeploy-new-admin-password" />
               <p class="text-xs text-muted-foreground mt-1">Minimum 8 characters</p>
             </div>
           </div>
