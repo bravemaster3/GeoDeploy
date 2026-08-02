@@ -4,6 +4,24 @@ GeoDeploy can copy everything that cannot be regenerated to a **separate object 
 PostGIS database, your files (rasters, GeoParquet, PMTiles), this instance's own database, and
 the images uploaded to portal About pages.
 
+!!! danger "Save your encryption key somewhere other than the server"
+
+    Run this now and put the value in your password manager:
+
+    ```bash
+    grep GEODEPLOY_SECRET_KEY ~/geodeploy/.env
+    ```
+
+    `GEODEPLOY_SECRET_KEY` lives in `.env` **on the server** — deliberately not in the database, and
+    therefore **not in your backups**. That is what stops a stolen backup from handing over your SMTP
+    password and the keys to your backup destination.
+
+    The cost of that design is this: **if the server is lost, the key is lost with it.** Your layers,
+    portals, users and files still restore perfectly onto a new machine — but the five settings
+    encrypted at rest cannot be recovered from any backup, and must be re-entered by hand.
+
+    A copy of one line, kept somewhere else, removes the problem entirely.
+
 ## Set it up
 
 **Settings → Backups.** Administrators and the owner can configure a destination, run a backup and
@@ -97,6 +115,42 @@ Backups therefore record a *fingerprint* of the key (a hash, never the key), and
 | Unknown | Backup predates fingerprinting — assume they must be re-entered |
 
 To avoid it entirely, copy the old `GEODEPLOY_SECRET_KEY` into `.env` before restoring.
+
+### Restoring onto a different server
+
+The procedure for a machine that is not the one the backup came from — a rebuild, a migration, or
+proving your backups actually work.
+
+1. **On the old instance** (if you still have it), point Backups at the destination, **Save**,
+   **Test destination**, then **Run now**. Note the backup's name.
+2. **Copy the encryption key.** `grep GEODEPLOY_SECRET_KEY ~/geodeploy/.env` — or take it from the
+   password manager, per the warning at the top of this page.
+3. **Install GeoDeploy on the new server** and run the setup wizard. Any database and storage choice
+   is fine: the restore does not use what you pick here, because runtime settings come from `.env`,
+   not from the restored configuration.
+4. **Put the old key into the new `.env`**, replacing the generated one, then recreate the services
+   so they read it:
+
+    ```bash
+    cd ~/geodeploy
+    nano .env                 # set GEODEPLOY_SECRET_KEY to the old value
+    docker compose up -d --force-recreate geodeploy-api celery
+    ```
+
+5. **Configure the same backup destination** on the new instance and press **Test destination**.
+6. **Settings → Backups → Manage backups.** Your backup is listed — that list is read from the
+   destination itself, not from any database, so it appears on an instance that has never seen it.
+   Press **Restore** and type the backup's name to confirm.
+
+!!! warning "You will log in with the OLD instance's credentials"
+
+    A restore replaces the users table. The admin account you created in the wizard two minutes ago
+    is gone, and the accounts from the backup are what exist. Have those credentials to hand before
+    you start, or you will be locked out of a server you just built.
+
+Skipping step 4 is not fatal — everything still restores. You will simply need to re-enter the SMTP
+password, the OIDC client secret and the backup destination's secret key afterwards, because those
+were encrypted with a key the new server does not have.
 
 ### What restore does
 

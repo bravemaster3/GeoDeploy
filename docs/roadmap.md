@@ -158,6 +158,10 @@ trip — edit in the tool you prefer, publish back.</p>
 - [ ] Draw a box to *filter* a catalog, not only to download
 - [ ] Rule-based and expression symbology; a wider template gallery
 - [ ] Multi-file and archive uploads (`.tar.gz` alongside `.zip`)
+- [ ] **Choose what a restore replaces** — files, portal assets and database as separate choices,
+      instead of all-or-nothing. (Restoring layers *without* users is a different, harder thing:
+      `user_id` is a NOT NULL foreign key on layers, portals and tokens, so it needs id remapping,
+      not a checkbox.)
 - [ ] Choose a version when updating — hold back, or step down after a bad one
 - [ ] Unattended install from environment variables, so provisioning can be scripted
 
