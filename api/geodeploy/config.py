@@ -97,10 +97,37 @@ class Settings(BaseSettings):
 
     @property
     def postgis_dsn(self) -> str:
+        """The ASYNCPG url. Note it carries NO ssl parameter — see `postgis_connect_args`.
+
+        `sslmode` is a libpq spelling. asyncpg does not have that keyword, and SQLAlchemy's asyncpg
+        dialect forwards unrecognised query parameters straight to `asyncpg.connect()`, so a
+        `?sslmode=prefer` here fails the whole engine with
+
+            connect() got an unexpected keyword argument 'sslmode'
+
+        The setup wizard sets `POSTGIS_SSLMODE=prefer` for every EXTERNAL database and empty for a
+        local one, so this broke external PostGIS specifically — at the schema-creation step, after
+        the connection test had already passed, which made it read as a permissions problem.
+        """
         return (
             f"postgresql+asyncpg://{self._pg_userinfo}"
-            f"@{self.postgis_host}:{self.postgis_port}/{self.postgis_db}{self._pg_sslmode_query}"
+            f"@{self.postgis_host}:{self.postgis_port}/{self.postgis_db}"
         )
+
+    @property
+    def postgis_connect_args(self) -> dict:
+        """`connect_args` for `create_async_engine`, translating libpq's `sslmode` to asyncpg's
+        `ssl`. Passed as a real argument rather than smuggled through the URL, so there is no
+        parameter-forwarding behaviour to depend on.
+
+        asyncpg 0.30 accepts the libpq mode NAMES for `ssl`, so the operator-facing setting keeps its
+        familiar spelling. `disable` is the one that must become False: asyncpg treats the string
+        'disable' as truthy-but-unknown in some paths, where False is unambiguous.
+        """
+        mode = (self.postgis_sslmode or "").strip().lower()
+        if not mode or mode == "disable":
+            return {}
+        return {"ssl": mode}
 
     @property
     def postgis_sync_dsn(self) -> str:

@@ -61,6 +61,9 @@ def configure(force: bool = False):
     settings = get_settings()
     engine = create_async_engine(
         settings.postgis_dsn,
+        # SSL as a real connect argument, not a URL query parameter: asyncpg has no `sslmode`
+        # keyword, and the dialect would forward it verbatim into asyncpg.connect().
+        connect_args=settings.postgis_connect_args,
         echo=settings.is_dev,
         pool_pre_ping=True,     # a recycled/idle connection after a DB restart must not 500 a request
         pool_size=10,

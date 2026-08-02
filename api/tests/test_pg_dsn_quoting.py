@@ -69,3 +69,48 @@ def test_martin_dsn_is_encoded():
 
     src = inspect.getsource(martin._pg_sync_dsn)
     assert "quote(" in src, "martin's DSN must percent-encode the credentials"
+
+
+# ── sslmode is a libpq spelling, and asyncpg does not have it ──────────────────────────────────
+
+def test_async_dsn_carries_no_sslmode():
+    """`postgresql+asyncpg://...?sslmode=prefer` fails the ENGINE with
+
+        connect() got an unexpected keyword argument 'sslmode'
+
+    because SQLAlchemy's asyncpg dialect forwards unrecognised query parameters straight into
+    `asyncpg.connect()`. The setup wizard sets sslmode=prefer for every EXTERNAL database, so this
+    broke external PostGIS and nothing else — and it broke it at schema creation, AFTER the
+    connection test had passed, which made it read as a permissions problem.
+    """
+    s = _settings()
+    s.postgis_sslmode = "prefer"
+    assert "sslmode" not in s.postgis_dsn
+    assert "ssl" not in s.postgis_dsn.split("://", 1)[1]      # no ssl param smuggled in either
+
+
+def test_sslmode_becomes_asyncpg_connect_args():
+    s = _settings()
+    s.postgis_sslmode = "require"
+    assert s.postgis_connect_args == {"ssl": "require"}
+
+
+def test_no_ssl_setting_means_no_connect_args():
+    """A local database sets sslmode empty. Passing ssl=None or ssl='' would change behaviour."""
+    s = _settings()
+    s.postgis_sslmode = ""
+    assert s.postgis_connect_args == {}
+
+
+def test_disable_is_not_passed_as_a_string():
+    """asyncpg treats an unknown truthy string as 'use SSL'. 'disable' must not silently enable it."""
+    s = _settings()
+    s.postgis_sslmode = "disable"
+    assert s.postgis_connect_args == {}
+
+
+def test_sync_dsn_keeps_sslmode():
+    """psycopg2 and pg_dump DO speak libpq, so the sync URL must keep the libpq spelling."""
+    s = _settings()
+    s.postgis_sslmode = "require"
+    assert "sslmode=require" in s.postgis_sync_dsn
