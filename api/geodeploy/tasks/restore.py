@@ -102,6 +102,33 @@ def _reapply_schema_migrations() -> dict:
     return {"applied": applied, "failed": failed}
 
 
+def _reaudit_restore(key: str, seed: dict | None, status: str, detail: dict) -> None:
+    """Write the audit entry for THIS restore back into the restored database.
+
+    `POST /backups/restore` already audits `backup.restore` — and then the restore replaces the
+    database, and the snapshot does not contain that entry. So the log lost the record of the single
+    most destructive operation in the product, which is precisely the one an operator needs to find
+    later ("why is last week's data back?"). The Activity page showed nothing at all.
+
+    Append-only means append: this adds an entry describing what just finished, rather than trying to
+    resurrect the pre-restore row (whose id belonged to a table that no longer exists).
+    """
+    try:
+        with state_db.connect() as conn:
+            conn.execute(
+                "INSERT INTO audit_log (actor_id, actor_name, action, resource_type, resource_id, "
+                "detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (None, (seed or {}).get("confirmed_by") or "unknown",
+                 "backup.restore.finished", "backup", key,
+                 json.dumps({"status": status, "key": key,
+                             "database": (detail or {}).get("database"),
+                             "objects": (detail or {}).get("objects"),
+                             "schema": (detail or {}).get("schema")})[:2000],
+                 datetime.now(timezone.utc).replace(tzinfo=None)))
+    except Exception as exc:      # never fail a good restore over bookkeeping
+        logger.warning("restore: could not record the audit entry: %s", exc)
+
+
 def _clear_restored_running_rows() -> dict:
     """Mark every `running` backup/restore row in the just-restored database as interrupted.
 
@@ -207,11 +234,15 @@ def run_restore(run_id: int, key: str):
             logger.warning("restore: Martin regeneration failed: %s", exc)
             detail["martin"] = f"failed: {exc}"
 
+        # The audit entry written when this restore STARTED was destroyed by the restore itself.
+        _reaudit_restore(key, seed, "success", detail)
         _finish(run_id, "success", seed=seed, progress=100, current_step="Done",
                 detail=json.dumps(detail))
         logger.info("restore of %s complete", key)
     except Exception as exc:
         logger.exception("restore failed")
+        # A restore that failed PART WAY still replaced things, so it must appear in the log too.
+        _reaudit_restore(key, seed, "error", detail)
         _finish(run_id, "error", seed=seed, error_message=str(exc)[:1000], current_step="Failed",
                 detail=json.dumps(detail))
 

@@ -2088,8 +2088,13 @@ async function captureThumbnail() {
     if (!dataUrl || !dataUrl.startsWith('data:image/')) return
     const blob = await (await fetch(dataUrl)).blob()
     // A blank/near-empty canvas serialises to a tiny file; storing it would replace a good
-    // thumbnail with a grey rectangle, so keep the previous one instead.
-    if (blob.size < 2048) return
+    // thumbnail with a grey rectangle, so keep the previous one instead. The strict floor applies
+    // ONLY when there is something to protect — a sparse portal (plain basemap, one small layer)
+    // compresses below 2 KB legitimately, and discarding that left it with no picture at all.
+    if (blob.size < (portal.value.thumbnail_url ? 2048 : 256)) {
+      console.warn('[geodeploy] snapshot too small to store', blob.size, 'bytes')
+      return
+    }
     const { data } = await uploadPortalThumbnail(portal.value.id, blob)
     // Write the new URL back into BOTH the open portal and the cached list. publish() replaced the
     // store entry moments ago with a response whose thumbnail_url predates this upload, so without

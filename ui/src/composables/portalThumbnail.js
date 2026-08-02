@@ -14,9 +14,20 @@
 import { syncSession, uploadPortalThumbnail } from '@/api'
 
 const CAPTURE_TIMEOUT_MS = 15000   // generous: an off-screen frame is cold, and tiles must load
-const MIN_BYTES = 2048             // a blank canvas serialises tiny; never overwrite a good one
 
-export async function capturePortalThumbnail(portalId) {
+// Size floors, and why there are two.
+//
+// A failed capture serialises to almost nothing, and storing it would replace a good picture with a
+// grey rectangle — hence a floor. But the floor was a flat 2 KB, and a SPARSE portal (plain basemap,
+// one small layer, zoomed out) legitimately compresses below that in WebP at q=0.75. Those captures
+// were discarded silently, so portals that most needed a picture were the ones that never got one.
+//
+// So the strict floor applies only when there is an existing thumbnail worth protecting. With no
+// thumbnail, anything that decoded at all beats the gradient placeholder.
+const MIN_BYTES_REPLACE = 2048
+const MIN_BYTES_FIRST = 256
+
+export async function capturePortalThumbnail(portalId, { hasExisting = false } = {}) {
   let frame = null
   let onMessage = null
   try {
@@ -59,7 +70,10 @@ export async function capturePortalThumbnail(portalId) {
 
     if (!dataUrl || !dataUrl.startsWith('data:image/')) return null
     const blob = await (await fetch(dataUrl)).blob()
-    if (blob.size < MIN_BYTES) return null
+    if (blob.size < (hasExisting ? MIN_BYTES_REPLACE : MIN_BYTES_FIRST)) {
+      console.warn('[geodeploy] snapshot too small to store', blob.size, 'bytes')
+      return null
+    }
     const { data } = await uploadPortalThumbnail(portalId, blob)
     return data?.url || null
   } catch (err) {

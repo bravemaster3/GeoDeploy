@@ -29,6 +29,7 @@
         @edit="$router.push(`/portals/${portal.id}/edit`)"
         :capturing="capturingId === portal.id"
         @publish="handlePublish(portal)"
+        @recapture="handleRecapture(portal)"
         @unpublish="portalsStore.unpublish(portal.id)"
         @delete="portalsStore.remove(portal.id)"
       />
@@ -60,6 +61,30 @@ const filteredPortals = computed(() =>
 
 onMounted(() => portalsStore.refresh())
 
+// Shared by publish-from-list and the explicit "refresh card image" button.
+async function grabThumbnail(portal) {
+  capturingId.value = portal.id
+  try {
+    const url = await capturePortalThumbnail(portal.id,
+                                             { hasExisting: !!portal.thumbnail_url })
+    if (url) {
+      const list = portalsStore.portals
+      const idx = list.findIndex(p => p.id === portal.id)
+      // Cache-busting is unnecessary: the endpoint mints a NEW filename per capture, precisely so a
+      // replaced thumbnail is never served from a stale cache entry.
+      if (idx !== -1) list[idx] = { ...list[idx], thumbnail_url: url }
+    } else {
+      alert('Could not capture a preview for this portal. Open it in the editor and publish again.')
+    }
+  } finally {
+    capturingId.value = null
+  }
+}
+
+async function handleRecapture(portal) {
+  await grabThumbnail(portal)
+}
+
 async function handlePublish(portal) {
   try {
     await portalsStore.publish(portal.id)
@@ -71,16 +96,6 @@ async function handlePublish(portal) {
   // published from this list never passed through the editor, so it kept the gradient placeholder
   // forever — indistinguishable from thumbnails being broken. Not awaited into the publish result:
   // publishing is done, and a picture is decoration.
-  capturingId.value = portal.id
-  try {
-    const url = await capturePortalThumbnail(portal.id)
-    if (url) {
-      const list = portalsStore.portals
-      const idx = list.findIndex(p => p.id === portal.id)
-      if (idx !== -1) list[idx] = { ...list[idx], thumbnail_url: url }
-    }
-  } finally {
-    capturingId.value = null
-  }
+  await grabThumbnail(portal)
 }
 </script>

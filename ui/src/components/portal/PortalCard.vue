@@ -51,6 +51,12 @@
           <a :href="`/portals/${portal.slug}/`" target="_blank" class="btn-primary flex-1 justify-center text-xs py-1.5 no-underline">
             <ExternalLinkIcon class="w-3 h-3" /> View
           </a>
+          <!-- Re-take the card image. A published portal has no Publish button to trigger a
+               capture, so a portal that predates thumbnails (or whose capture failed) had NO WAY to
+               get one without unpublishing and publishing again. -->
+          <button v-if="auth.canEdit" @click="$emit('recapture')" :disabled="capturing"
+            class="btn-secondary px-2 text-xs py-1.5 text-muted-foreground disabled:opacity-50"
+            title="Refresh card image">⟲</button>
           <button v-if="auth.canEdit" @click="$emit('unpublish')" class="btn-secondary px-2 text-xs py-1.5 text-muted-foreground" title="Unpublish">⊘</button>
         </template>
         <button v-if="auth.canEdit" @click="$emit('delete')" class="px-2 text-muted-foreground/70 hover:text-red-500 transition-colors" title="Delete">
