@@ -20,6 +20,11 @@ variable added to `.env` later is safe by default rather than exposed by default
   * `GEODEPLOY_SECRET_KEY` — the key for secrets encrypted at rest is derived from it. Changing it
     makes every stored secret (SMTP password, OIDC client secret, storage keys) permanently
     undecryptable. That is data loss, not a setting.
+
+    Changing it is a real need — adopting an old instance's key before restoring its backup requires
+    exactly that — but the safe form is KEY ROTATION: decrypt with the old key, re-encrypt with the
+    new one, in one operation. That is on the roadmap. Until it exists the answer is `.env` plus a
+    recreate, documented in docs/backups.md, and NOT a text field whose failure mode is silent.
   * `POSTGIS_*`, `STORAGE_*` — owned by the setup wizard, and self-healing. Hand-editing fights it.
 """
 from __future__ import annotations

@@ -162,6 +162,11 @@ trip — edit in the tool you prefer, publish back.</p>
       instead of all-or-nothing. (Restoring layers *without* users is a different, harder thing:
       `user_id` is a NOT NULL foreign key on layers, portals and tokens, so it needs id remapping,
       not a checkbox.)
+- [ ] **Rotate the encryption key from the app** — decrypt with the old key and re-encrypt with the
+      new one, so the key can be changed, or an old instance's key adopted before restoring its
+      backup, without a shell. Today `GEODEPLOY_SECRET_KEY` is edited in `.env` only, and is
+      deliberately absent from the environment editor: setting it in place would leave every
+      already-encrypted setting unreadable, with no error at the moment of the change.
 - [ ] Choose a version when updating — hold back, or step down after a bad one
 - [ ] Unattended install from environment variables, so provisioning can be scripted
 
