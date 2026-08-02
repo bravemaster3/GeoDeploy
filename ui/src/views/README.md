@@ -58,6 +58,11 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 ## Last updated
 2026-07-30 (PortalEditor: `catalog` archetype option + Map side / Datasets listed controls; the
 layer-list placement toggles are hidden for it since the facet rail replaces the sidebar)
+2026-08-02e (`Login` waits for the demo check before rendering ANY card. `isDemo` alone could not
+express "not known yet", so the normal sign-in card rendered during the round trip and was then
+swapped for the join card — a visible flash of the wrong page on every demo load. A skeleton of
+the same height holds the space.)
+
 2026-08-02d (`Login` on a DEMO collapses the email/password card behind a quiet "Instance owner? Sign in with an account" link. Presentation only — the page cannot know who a 
 visitor is before credentials, and the password is still the boundary. It fixes a visitor reading 
 the half-visible form under "Start exploring" as a required second step.)

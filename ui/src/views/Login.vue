@@ -10,7 +10,12 @@
            normal install's login page is byte-identical to what it was. Placed first and styled as
            the primary action because on a demo it is the ONLY thing a visitor can usefully do —
            they have no account to sign in with. -->
-      <div v-if="isDemo && mode === 'login'" class="card p-6 space-y-4 mb-4 border-primary/40">
+      <!-- Placeholder while the demo check is in flight. Same height as a card, so the layout does
+           not jump when the real one arrives — a skeleton is honest about not knowing yet, whereas
+           rendering the sign-in form was a guess that was wrong half the time. -->
+      <div v-if="!demoChecked" class="card p-6 h-40 animate-pulse opacity-40" aria-hidden="true"></div>
+
+      <div v-else-if="isDemo && mode === 'login'" class="card p-6 space-y-4 mb-4 border-primary/40">
         <div>
           <p class="text-sm font-medium text-foreground">Try GeoDeploy</p>
           <p class="text-xs text-muted-foreground mt-1">
@@ -35,7 +40,7 @@
       </div>
 
       <!-- Forgot-password (only offered when the instance has outgoing email configured) -->
-      <div v-if="mode === 'forgot'" class="card p-6 space-y-4">
+      <div v-if="demoChecked && mode === 'forgot'" class="card p-6 space-y-4">
         <p class="text-sm text-foreground/85">Reset your password</p>
         <template v-if="!forgotDone">
           <p class="text-xs text-muted-foreground">
@@ -63,7 +68,7 @@
            name and go", and a half-visible email/password form directly beneath that reads as a
            required second step — several people scrolled into it and stalled. The operator still
            needs it on the same page, so it is one click away rather than gone. -->
-      <div v-else-if="!isDemo || showSignIn" class="card p-6 space-y-4">
+      <div v-else-if="demoChecked && (!isDemo || showSignIn)" class="card p-6 space-y-4">
         <div>
           <label class="label">Email</label>
           <input v-model="email" type="email" class="input" @keydown.enter="submit" />
@@ -101,7 +106,7 @@
            flow. `85vh` inline rather than a Tailwind arbitrary value so it does not depend on the
            JIT scanning this file. The page grows past the viewport, so the outer `items-center` stops
            having any effect and the join card sits at the top where it belongs. -->
-      <p v-else-if="isDemo && mode === 'login'" class="text-center" style="margin-top: 85vh">
+      <p v-else-if="demoChecked && isDemo && mode === 'login'" class="text-center" style="margin-top: 85vh">
         <button @click="showSignIn = true"
           class="text-[11px] text-muted-foreground/50 hover:text-muted-foreground">
           Instance owner? Sign in with an account
@@ -130,6 +135,10 @@ const mode = ref('login')
 // ── Demo join ──────────────────────────────────────────────────────────────────────────────
 // isDemo stays false unless the SERVER says otherwise, so nothing below renders on a normal install.
 const isDemo = ref(false)
+// Whether the demo CHECK has answered — distinct from its answer. `isDemo` alone cannot express
+// "we do not know yet", so the page rendered the normal sign-in card during the round trip and then
+// swapped it for the join card: a visible flash of the wrong page on every demo load.
+const demoChecked = ref(false)
 // Demo only: the email/password card starts hidden and is revealed by the link below it.
 const showSignIn = ref(false)
 const demoName = ref('')
@@ -161,6 +170,7 @@ onMounted(async () => {
   // Failure means "not a demo" — a normal install answers {demo:false}, and an error must not turn
   // the login page into a join form.
   try { isDemo.value = !!(await getDemoInfo()).data.demo } catch { isDemo.value = false }
+  finally { demoChecked.value = true }
   // An SSO refusal (unknown account, blocked domain, provider error) bounces here with ?sso_error=.
   if (typeof route.query.sso_error === 'string') error.value = route.query.sso_error
   try {
