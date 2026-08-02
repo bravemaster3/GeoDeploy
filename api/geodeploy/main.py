@@ -80,6 +80,36 @@ async def lifespan(app: FastAPI):
 _PG_MIGRATIONS = [
     # Portal card thumbnail: a snapshot of the published map, captured in the browser at publish.
     "ALTER TABLE portals ADD COLUMN IF NOT EXISTS thumbnail_url VARCHAR(512)",
+    # int4 → int8 on every byte count. The rule above says "never retype", and this is the exception
+    # it allows for: WIDENING an integer is lossless, cannot fail on existing data, and the
+    # alternative is a live bug. int4 stops at 2_147_483_647 — 2.1 GB — which a whole-instance
+    # backup passes immediately and a single raster passes eventually. On an install that overflowed,
+    # `backup_runs.size_bytes` raised "integer out of range" at the END of a backup that had already
+    # been written correctly, so a GOOD backup was recorded as a failure.
+    #
+    # Guarded by information_schema so it is a true no-op once applied: a bare ALTER TYPE would take
+    # an ACCESS EXCLUSIVE lock on every boot for no reason.
+    """DO $$ BEGIN
+         IF EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'backup_runs' AND column_name = 'size_bytes'
+                      AND data_type = 'integer') THEN
+           ALTER TABLE backup_runs ALTER COLUMN size_bytes TYPE BIGINT;
+         END IF;
+       END $$""",
+    """DO $$ BEGIN
+         IF EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'vector_layers' AND column_name = 'file_size'
+                      AND data_type = 'integer') THEN
+           ALTER TABLE vector_layers ALTER COLUMN file_size TYPE BIGINT;
+         END IF;
+       END $$""",
+    """DO $$ BEGIN
+         IF EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'raster_layers' AND column_name = 'file_size'
+                      AND data_type = 'integer') THEN
+           ALTER TABLE raster_layers ALTER COLUMN file_size TYPE BIGINT;
+         END IF;
+       END $$""",
 ]
 
 

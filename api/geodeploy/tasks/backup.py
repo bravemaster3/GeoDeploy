@@ -147,13 +147,33 @@ def run_backup(run_id: int, trigger: str = "manual"):
         except Exception as exc:                      # retention must not fail a good backup
             logger.warning("backup retention failed: %s", exc)
 
-        _finish(run_id, "success", size_bytes=total_bytes, progress=100,
-                current_step=f"Done ({len(pruned)} old backup(s) pruned)" if pruned else "Done",
-                manifest=json.dumps(manifest))
-        logger.info("backup %s complete: %s bytes", key_prefix, total_bytes)
     except Exception as exc:
         logger.exception("backup failed")
         _finish(run_id, "error", error_message=str(exc)[:1000], current_step="Failed")
+        return
+
+    # RECORDING the success sits OUTSIDE the try, deliberately. Everything above either wrote the
+    # backup or raised; by here the artifacts and the manifest are in the destination and the backup
+    # EXISTS. If the bookkeeping then fails, that is a database problem, not a backup problem —
+    # inside the try it was caught by the handler above and the run was relabelled "error", telling
+    # the operator their backup had failed when it had not.
+    #
+    # That is not hypothetical: `size_bytes` was int4, so a >2.1 GB instance raised "integer out of
+    # range" HERE, at 100%, on a complete and restorable backup.
+    try:
+        _finish(run_id, "success", size_bytes=total_bytes, progress=100,
+                current_step=f"Done ({len(pruned)} old backup(s) pruned)" if pruned else "Done",
+                manifest=json.dumps(manifest))
+    except Exception:
+        logger.exception("backup %s SUCCEEDED but its run row could not be updated", key_prefix)
+        # Last resort: say it worked, even without the detail. A backup that exists and is recorded
+        # as failed is worse than one recorded with a missing size — the operator distrusts good data.
+        try:
+            _finish(run_id, "success", progress=100,
+                    current_step="Done (details could not be recorded)")
+        except Exception:
+            logger.exception("could not record backup %s at all", key_prefix)
+    logger.info("backup %s complete: %s bytes", key_prefix, total_bytes)
 
 
 @celery_app.task(name="geodeploy.tasks.backup.check_scheduled_backups")

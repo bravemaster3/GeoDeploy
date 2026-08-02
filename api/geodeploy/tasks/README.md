@@ -189,6 +189,12 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
+2026-08-02 (`backup.py`: recording SUCCESS moved outside the try/except that guards the work.
+`size_bytes` overflowing int4 raised at 100%, on a complete backup, and the handler relabelled it
+"error" — a bookkeeping failure reported as a data failure. Columns widened to BIGINT; a
+fallback still records success when the detail cannot be stored. `celery_app`: the demo beat entry
+is registered ONLY on a demo, and every scheduled task must be in `include=`.)
+
 2026-07-24 (**NATIVE-CRS vector storage**: `_ingest_via_copy` + `_convert_to_geoparquet` keep a
 resolvable non-4326 EPSG un-reprojected [PostGIS `geometry(…,{srid})`; GeoParquet footer PROJJSON via
 `_write_geo_footer`], `crs="EPSG:{srid}"` recorded, `bbox` stays 4326; Martin/duckdb read paths already

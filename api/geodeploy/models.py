@@ -1,7 +1,7 @@
 import secrets
 from datetime import datetime
 from sqlalchemy import (
-    Boolean, DateTime, Float, ForeignKey,
+    BigInteger, Boolean, DateTime, Float, ForeignKey,
     Integer, String, Text, func
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -112,7 +112,10 @@ class BackupRun(Base):
     trigger: Mapped[str] = mapped_column(String(16), default="manual")  # manual|scheduled
     started_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
-    size_bytes: Mapped[int | None] = mapped_column(Integer)
+    # BIGINT, not Integer. int4 tops out at 2_147_483_647 — 2.1 GB — and this is the size of an
+    # ENTIRE INSTANCE, so it overflows on any real deployment. It did: 'integer out of range',
+    # raised at the very end AFTER a complete, valid backup had been written.
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger)
     error_message: Mapped[str | None] = mapped_column(Text)
     manifest: Mapped[str | None] = mapped_column(Text)     # JSON inventory
     current_step: Mapped[str | None] = mapped_column(String(128))
@@ -252,7 +255,7 @@ class VectorLayer(Base):
     # from an existing PostGIS may use any names (NULL → fall back to geom/id).
     geometry_column: Mapped[str | None] = mapped_column(String(128))
     id_column: Mapped[str | None] = mapped_column(String(128))
-    file_size: Mapped[int | None] = mapped_column(Integer)
+    file_size: Mapped[int | None] = mapped_column(BigInteger)   # BIGINT: a single raster or GeoParquet can exceed int4's 2.1 GB
     storage_backend: Mapped[str] = mapped_column(String(16), default="postgis")  # postgis | geoparquet
     s3_key: Mapped[str | None] = mapped_column(String(512))
     # For a GeoParquet layer ATTACHED via import-existing: the ORIGINAL object key it was imported
@@ -304,7 +307,7 @@ class RasterLayer(Base):
     bbox: Mapped[str | None] = mapped_column(Text)
     band_count: Mapped[int | None] = mapped_column(Integer)
     nodata_value: Mapped[float | None] = mapped_column(Float)
-    file_size: Mapped[int | None] = mapped_column(Integer)
+    file_size: Mapped[int | None] = mapped_column(BigInteger)   # BIGINT: a single raster or GeoParquet can exceed int4's 2.1 GB
     status: Mapped[str] = mapped_column(String(16), default="processing")
     error_message: Mapped[str | None] = mapped_column(Text)
     default_style: Mapped[str | None] = mapped_column(Text)  # JSON {opacity}

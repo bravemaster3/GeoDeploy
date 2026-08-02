@@ -144,9 +144,8 @@
                 A separate object store for PostGIS, your files, and this instance's database.
               </p>
             </div>
-            <label class="ml-auto flex items-center gap-2 text-sm">
-              <input type="checkbox" v-model="bk.enabled" class="w-4 h-4" /> Enabled
-            </label>
+            <span v-if="bk.enabled" class="ml-auto text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400">Enabled</span>
+            <span v-else class="ml-auto text-[11px] font-medium px-2 py-0.5 rounded-full bg-muted text-muted-foreground">Off</span>
           </header>
 
           <div class="p-5 space-y-4">
@@ -224,16 +223,28 @@
             </div>
 
             <div class="flex items-center gap-3 flex-wrap">
+              <!-- The toggle lives WITH the buttons, not in the card header. It was up there, far
+                   from the actions it gates, and it is server state — so ticking it without saving
+                   left "Back up now" clickable in the browser and refused by the API. Beside Save,
+                   the sequence is visible: tick, save, test, run. -->
+              <label class="flex items-center gap-2 text-sm mr-1 select-none cursor-pointer">
+                <input type="checkbox" v-model="bk.enabled" class="w-4 h-4" /> Enabled
+              </label>
               <button @click="saveBackups" :disabled="bkSaving" class="btn-primary text-sm px-4 py-2 disabled:opacity-60">
                 {{ bkSaving ? 'Saving...' : 'Save' }}
               </button>
               <button @click="testBackups" :disabled="bkTesting" class="btn-secondary text-sm px-4 py-2 disabled:opacity-60">
                 {{ bkTesting ? 'Testing...' : 'Test destination' }}
               </button>
-              <button @click="runBackup" :disabled="bkRunning || !bk.enabled" class="btn-secondary text-sm px-4 py-2 disabled:opacity-60">
+              <button @click="runBackup" :disabled="!!runBlockedReason"
+                :title="runBlockedReason" class="btn-secondary text-sm px-4 py-2 disabled:opacity-60">
                 Back up now
               </button>
               <span v-if="bkMsg" class="text-xs" :class="bkMsg.ok ? 'text-emerald-400' : 'text-red-400'">{{ bkMsg.text }}</span>
+              <!-- A disabled button must say why it is disabled. The Enabled toggle is in the card
+                   HEADER and this button is at the foot of the card, so the cause is off-screen from
+                   the effect: clicking did nothing, silently, with no request to inspect. -->
+              <span v-else-if="runBlockedReason" class="text-xs text-muted-foreground">{{ runBlockedReason }}</span>
             </div>
 
             <!-- Shown only when the test proved the credentials work and the bucket simply is not
@@ -770,7 +781,23 @@ const bkMsg = ref(null)
 // button cannot linger next to a message it no longer belongs to.
 const bkMissingBucket = ref('')
 const bkCreating = ref(false)
+// What the SERVER last told us `enabled` is, as distinct from the checkbox the admin just ticked.
+const bkSavedEnabled = ref(false)
 let bkPoll = null
+
+// Why "Back up now" is disabled, in the user's terms. Mirrors the server's own guard in
+// routers/backups.py::start_backup, so the button refuses for the same reasons the API would —
+// rather than being enabled into a 400.
+const runBlockedReason = computed(() => {
+  if (bkRunning.value) return 'A backup is already running.'
+  if (!bk.enabled) return 'Tick Enabled, then Save, to run a backup.'
+  // Enabled is SERVER state. Ticking the box only changes it here, so a button that trusted the
+  // checkbox was clickable while the API still refused with "Configure and enable a backup
+  // destination first" — the button promising something the server would not honour.
+  if (!bkSavedEnabled.value) return 'Save first — Enabled has not been saved yet.'
+  if (!bk.bucket || !(bk.secret_key || bk.secret_set)) return 'Set the destination bucket and credentials first.'
+  return ''
+})
 
 const bkRunPages = computed(() => Math.max(1, Math.ceil(bkRuns.value.length / BK_PER_PAGE)))
 const bkRunsPage = computed(() =>
@@ -873,6 +900,7 @@ async function loadBackups() {
   try {
     const { data } = await getBackupSettings()
     Object.assign(bk, data, { secret_key: '' })
+    bkSavedEnabled.value = !!data.enabled
   } catch { /* not configured yet */ }
   await refreshBackupRuns()
   await loadStored()
@@ -900,6 +928,7 @@ async function saveBackups() {
     if (!payload.secret_key) delete payload.secret_key   // blank = keep stored
     const { data } = await updateBackupSettings(payload)
     Object.assign(bk, data, { secret_key: '' })
+    bkSavedEnabled.value = !!data.enabled
     bkMsg.value = { ok: true, text: 'Saved.' }
   } catch (e) {
     bkMsg.value = { ok: false, text: e.response?.data?.detail || 'Could not save.' }

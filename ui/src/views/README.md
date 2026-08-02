@@ -58,6 +58,12 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 ## Last updated
 2026-07-30 (PortalEditor: `catalog` archetype option + Map side / Datasets listed controls; the
 layer-list placement toggles are hidden for it since the facet rail replaces the sidebar)
+2026-08-02 (Settings → Backups: the **Enabled** toggle moved OUT of the card header to sit beside
+**Save** — it gates "Back up now" and was nowhere near it, and it is SERVER state, so ticking it
+without saving left the button clickable and the API refusing. `runBlockedReason` mirrors the
+server guard and is shown as tooltip + text; `bkSavedEnabled` tracks what the server last
+confirmed, as distinct from the checkbox. The header keeps an Enabled/Off badge.)
+
 2026-08-01 (Settings → Backups: a **Create it** offer appears when "Test destination" fails with
 `bucket_missing`, calling `POST /backups/settings/bucket`. Cleared on save and on the next test, so it
 never sits next to a message it no longer belongs to. `errText()` reads both the string and the
