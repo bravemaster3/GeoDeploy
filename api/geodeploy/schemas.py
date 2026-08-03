@@ -29,6 +29,17 @@ class ConfigureDBRequest(BaseModel):
     create_database: str | None = None
 
 
+class RecoverStorageSecretRequest(BaseModel):
+    """Supply the storage secret after reconnecting to a database whose copy cannot be decrypted.
+
+    `access_key` is not decoration: it is the proof that the caller is the operator. The server never
+    sends it to the browser, so knowing it means knowing the storage account — which is exactly who
+    is entitled to set its secret.
+    """
+    access_key: str
+    secret_key: str
+
+
 class ConfigureStorageRequest(BaseModel):
     type: str = Field(pattern="^(local|s3|hetzner|r2|backblaze)$")
     endpoint: str | None = None

@@ -7,7 +7,8 @@ from ..database import Base, get_db
 from ..deps import ROLE_ORDER, resolve_bearer_user
 from ..models import SetupConfig, User
 from ..schemas import (
-    ConfigureDBRequest, ConfigureStorageRequest, CreateAdminRequest, SetupStatus
+    ConfigureDBRequest, ConfigureStorageRequest, CreateAdminRequest,
+    RecoverStorageSecretRequest, SetupStatus
 )
 from ..services import postgis as postgis_svc, minio as minio_svc, martin as martin_svc
 from ..config import get_settings
@@ -247,6 +248,54 @@ async def configure_db(req: ConfigureDBRequest, request: Request):
         logging.getLogger(__name__).warning("could not start Martin after DB setup: %s", exc)
 
     return {"status": "ok", "type": config.postgis_type, "existing_install": existing}
+
+
+@router.post("/recover-storage-secret")
+async def recover_storage_secret(req: RecoverStorageSecretRequest,
+                                 db: AsyncSession = Depends(get_db)):
+    """Set ONLY the storage secret, for an instance that has just reconnected to a database whose
+    stored copy was encrypted with a different GEODEPLOY_SECRET_KEY.
+
+    Deliberately not behind the admin guard, because the operator cannot sign in usefully yet — the
+    instance they would sign into has no working storage. Three things keep that safe, and all three
+    are needed:
+
+      1. It changes ONE field. Endpoint, bucket and access key are whatever the database already
+         holds, so this cannot repoint storage at an attacker's bucket — the objection that made me
+         refuse to open `/configure-storage` for this.
+      2. It requires the EXISTING access key. The server never sends that to the browser, so knowing
+         it means knowing the storage account. An attacker guessing has nothing to guess from.
+      3. It is only reachable while the stored secret is UNDECRYPTABLE. Storing a valid one closes
+         the window permanently, because the value then decrypts and this endpoint refuses.
+    """
+    import hmac
+
+    config = await _get_or_create_config(db)
+    if not config.storage_endpoint or not _looks_encrypted(config.storage_secret_key):
+        # Either nothing to recover, or it has already been recovered. Same answer for both: this is
+        # not a route for changing a working secret — that belongs in Settings, behind admin auth.
+        raise HTTPException(409, "There is no unreadable storage secret to recover on this instance.")
+
+    if not hmac.compare_digest((req.access_key or "").strip(), config.storage_access_key or ""):
+        raise HTTPException(403, "That access key does not match the one stored for this instance.")
+
+    # Verify BEFORE storing. Writing an unchecked secret would swap one broken state for another,
+    # and close the recovery window while doing it.
+    try:
+        await minio_svc.test_connection(config.storage_endpoint, config.storage_bucket,
+                                        req.access_key.strip(), req.secret_key.strip(),
+                                        config.storage_region or "us-east-1")
+    except Exception as exc:
+        from ..services.setup_errors import storage_error
+        raise HTTPException(400, storage_error(exc, config.storage_endpoint,
+                                               config.storage_bucket)) from exc
+
+    config.storage_secret_key = req.secret_key.strip()   # re-encrypted with THIS install's key
+    await db.commit()
+    await db.refresh(config)
+    _write_env(config)
+    _apply_to_process(config)
+    return {"status": "ok", "bucket": config.storage_bucket}
 
 
 @router.post("/configure-storage")

@@ -111,15 +111,32 @@
             class="text-xs text-emerald-400">
             Storage reconnected: {{ reconnected.storage_bucket }} at {{ reconnected.storage_endpoint }}
           </p>
-          <p v-else-if="reconnected.storage_configured" class="text-xs text-amber-300 leading-relaxed">
-            Storage points at <span class="font-mono">{{ reconnected.storage_bucket }}</span>, but
-            its secret key was encrypted with the previous install's
-            <span class="font-mono">GEODEPLOY_SECRET_KEY</span> and cannot be read here.
-            <strong>Uploads and maps will fail until it is supplied</strong>, and there is no screen
-            for it after signing in — it has to go into <span class="font-mono">.env</span>:
-            set <span class="font-mono">STORAGE_SECRET_KEY</span> directly, or restore the old
-            <span class="font-mono">GEODEPLOY_SECRET_KEY</span> and run setup again (which recovers
-            the SMTP and SSO secrets too). Then recreate the services.
+          <div v-else-if="reconnected.storage_configured && !secretSaved"
+            class="text-xs text-amber-300 leading-relaxed space-y-2">
+            <p>
+              Storage points at <span class="font-mono">{{ reconnected.storage_bucket }}</span>, but
+              its secret key was encrypted with the previous install's
+              <span class="font-mono">GEODEPLOY_SECRET_KEY</span> and cannot be read here.
+              <strong>Enter it now</strong> — uploads and maps fail without it.
+            </p>
+            <input v-model="recoverAccessKey" class="input w-full text-sm"
+              autocomplete="off" name="gd-recover-access" placeholder="Access key" />
+            <input v-model="recoverSecretKey" type="password" class="input w-full text-sm"
+              autocomplete="new-password" name="gd-recover-secret" placeholder="Secret key"
+              @keydown.enter="submitStorageSecret" />
+            <button @click="submitStorageSecret" :disabled="busy || !recoverSecretKey.trim()"
+              class="btn-secondary w-full justify-center text-sm disabled:opacity-60">
+              {{ busy ? 'Checking…' : 'Save storage credentials' }}
+            </button>
+            <p v-if="recoverError" class="text-red-400">{{ recoverError }}</p>
+            <p class="text-muted-foreground/80">
+              Restoring the old <span class="font-mono">GEODEPLOY_SECRET_KEY</span> into
+              <span class="font-mono">.env</span> and running setup again is the alternative — that
+              recovers the SMTP and SSO secrets too.
+            </p>
+          </div>
+          <p v-else-if="secretSaved" class="text-xs text-emerald-400">
+            Storage credentials verified and saved.
           </p>
           <button @click="router.push('/login')" class="btn-primary w-full justify-center">
             Go to sign in
@@ -170,7 +187,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { configureDB, configureStorage, createAdmin, getSetupStatus } from '@/api'
+import { configureDB, configureStorage, createAdmin, getSetupStatus, recoverStorageSecret } from '@/api'
 
 const router = useRouter()
 const step = ref(0)
@@ -180,6 +197,10 @@ const error = ref('')
 const reconnected = ref(null)
 const newDbName = ref('geodeploy')
 const newDbError = ref('')
+const recoverAccessKey = ref('')
+const recoverSecretKey = ref('')
+const recoverError = ref('')
+const secretSaved = ref(false)
 
 const steps = ['Database', 'Storage', 'Admin']
 
@@ -219,6 +240,25 @@ const storageOptions = [
   { value: 's3', label: 'Use S3-compatible object storage',
     desc: 'AWS S3, Hetzner Object Storage, Cloudflare R2, Backblaze B2. Grows on demand and is billed by what you use — the better choice if you expect many layers or large rasters.' },
 ]
+
+// The one thing a reconnect cannot recover. The server verifies the credentials against the bucket
+// before storing them, so a typo is reported here rather than becoming a broken instance.
+async function submitStorageSecret() {
+  recoverError.value = ''
+  busy.value = true
+  try {
+    await recoverStorageSecret({
+      access_key: recoverAccessKey.value.trim(),
+      secret_key: recoverSecretKey.value.trim(),
+    })
+    secretSaved.value = true
+  } catch (err) {
+    const d = err.response?.data?.detail
+    recoverError.value = (typeof d === 'string' ? d : d?.message) || err.message
+  } finally {
+    busy.value = false
+  }
+}
 
 // Create a new database on the server just validated, and carry on with the normal wizard.
 async function createAndContinue() {

@@ -29,6 +29,10 @@ export const demoJoin = (name) => api.post('/auth/demo/join', { name })
 export const getSetupStatus = () => api.get('/setup/status')
 export const configureDB = (data) => api.post('/setup/configure-db', data)
 export const configureStorage = (data) => api.post('/setup/configure-storage', data)
+// Reconnect-only: supply the storage secret when the database's copy was encrypted with a previous
+// install's GEODEPLOY_SECRET_KEY. Sets that ONE field, requires the existing access key as proof,
+// and refuses once a readable secret is stored.
+export const recoverStorageSecret = (data) => api.post('/setup/recover-storage-secret', data)
 export const createAdmin = (data) => api.post('/setup/create-admin', data)
 
 // Auth

@@ -77,3 +77,47 @@ def test_reconnecting_rewrites_env_from_the_database():
     src = inspect.getsource(setup_router.configure_db)
     assert "_describe_existing_install" in src
     assert "_write_env(stored)" in src, "the STORED config must be written, not the fresh one"
+
+
+# ── recovering the one secret a reconnect cannot ───────────────────────────────────────────────
+
+def test_recovery_endpoint_changes_only_the_secret():
+    """It must not be a back door onto /configure-storage. Endpoint, bucket and access key come from
+    the database, so an unauthenticated caller cannot repoint storage at their own bucket — which is
+    the reason that endpoint is guarded in the first place."""
+    import inspect
+
+    src = inspect.getsource(setup_router.recover_storage_secret)
+    code = "\n".join(l.split("#")[0] for l in src.splitlines() if not l.strip().startswith("#"))
+    assert "config.storage_secret_key = " in code
+    for field in ("storage_endpoint =", "storage_bucket =", "storage_access_key ="):
+        assert field not in code, f"recovery must not write {field}"
+
+
+def test_recovery_requires_the_existing_access_key():
+    """The access key is never sent to the browser, so knowing it is proof the caller owns the
+    storage account. Compared with hmac.compare_digest rather than == so the check does not leak
+    length or position through timing."""
+    import inspect
+
+    src = inspect.getsource(setup_router.recover_storage_secret)
+    assert "compare_digest" in src
+    assert "storage_access_key" in src
+
+
+def test_recovery_closes_once_a_readable_secret_exists():
+    """The window must be self-limiting: after a valid secret is stored it decrypts, so the guard
+    refuses. Otherwise this would stay open forever as an unauthenticated write."""
+    import inspect
+
+    src = inspect.getsource(setup_router.recover_storage_secret)
+    assert "_looks_encrypted" in src
+
+
+def test_recovery_verifies_before_storing():
+    """Storing an unchecked secret would swap one broken state for another AND close the window
+    while doing it — leaving no way back through the UI."""
+    import inspect
+
+    src = inspect.getsource(setup_router.recover_storage_secret)
+    assert src.index("test_connection") < src.index("config.storage_secret_key = ")
