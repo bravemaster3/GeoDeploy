@@ -1,4 +1,6 @@
 import os
+import re
+import shlex
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -95,6 +97,7 @@ async def check_updates(refresh: bool = False, _: User = Depends(require_admin))
         "current_full": current,
         "latest": None, "latest_full": None, "latest_message": None, "latest_date": None,
         "behind": None, "up_to_date": None, "update_available": None, "commits": [],
+        "releases": [],
         "status": "ok",
         # The rollback-capable updater (builds, health-checks, and reverts if the new version is
         # unhealthy) — safer than a plain pull+build.
@@ -103,6 +106,22 @@ async def check_updates(refresh: bool = False, _: User = Depends(require_admin))
     try:
         headers = {"Accept": "application/vnd.github+json", "User-Agent": "GeoDeploy"}
         async with httpx.AsyncClient(timeout=8, headers=headers) as client:
+            # Tagged releases, so the panel can offer "hold on v1.0" as well as "track main".
+            # Best-effort: a repo with no releases, or a rate-limited call, simply means the choice
+            # is not offered — it must never stop the update CHECK from answering.
+            try:
+                rel_r = await client.get(
+                    f"https://api.github.com/repos/{GEODEPLOY_REPO}/releases?per_page=20")
+                if rel_r.status_code == 200:
+                    result["releases"] = [
+                        {"tag": r["tag_name"], "name": r.get("name") or r["tag_name"],
+                         "published_at": r.get("published_at"),
+                         "prerelease": bool(r.get("prerelease"))}
+                        for r in rel_r.json() if not r.get("draft")
+                    ]
+            except Exception:
+                pass
+
             latest_r = await client.get(f"https://api.github.com/repos/{GEODEPLOY_REPO}/commits/main")
             latest_r.raise_for_status()
             latest = latest_r.json()
@@ -206,8 +225,19 @@ async def update_preflight(_: User = Depends(require_admin), db: AsyncSession = 
     }
 
 
+_TARGET_RE = re.compile(r"^[A-Za-z0-9._/-]{1,100}$")
+
+
+class UpdateRequest(BaseModel):
+    """Which version to move to. `main` (the default) tracks the newest commit, as before; a tag name
+    pins a released version, so an operator can hold back on a release, or step down after a bad
+    one."""
+    target: str = "main"
+
+
 @router.post("/update", status_code=202)
-async def start_update(user: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+async def start_update(body: UpdateRequest | None = None,
+                       user: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     """One-click update. Launches a DETACHED helper container that runs `installer/self-update.sh`
     (pull → build → recreate the core services → health-check → **roll back** if unhealthy), then
     returns immediately; the UI polls `GET /admin/update/status`. The helper is `docker:cli` (bundles
@@ -216,6 +246,15 @@ async def start_update(user: User = Depends(require_admin), db: AsyncSession = D
     A bad update self-heals via the script's rollback, so the worst case is 'no change applied'."""
     import docker
     settings = get_settings()
+
+    # The target reaches `git` inside the helper. Validated HERE as well as in the script: this is
+    # the boundary where untrusted input enters, and a shell command is assembled a few lines below.
+    # `main` becomes `origin/main` so a stale local branch cannot win over the remote.
+    target = (body.target if body else "main").strip() or "main"
+    if not _TARGET_RE.match(target):
+        raise HTTPException(400, "That version name contains characters that are not allowed.")
+    ref = "origin/main" if target == "main" else target
+
     try:
         client = docker.from_env()
     except Exception as exc:
@@ -251,7 +290,8 @@ async def start_update(user: User = Depends(require_admin), db: AsyncSession = D
             # recreate the API against empty /geodeploy/data/* → blank portals + vanished layers after every
             # update, and could leave nginx serving a diverged mount. The mount path MUST equal the host path.
             command=["sh", "-c",
-                     f'apk add --no-cache git bash >/dev/null 2>&1; cd "{repo}" && bash installer/self-update.sh'],
+                     f'apk add --no-cache git bash >/dev/null 2>&1; cd "{repo}" && '
+                     f'bash installer/self-update.sh {shlex.quote(ref)}'],
             volumes={
                 repo: {"bind": repo, "mode": "rw"},
                 "/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"},

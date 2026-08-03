@@ -117,9 +117,29 @@ rollback() { # old_sha reason
 OLD_SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 [ "$OLD_SHA" = unknown ] && { write_status error "Not a git checkout — can't self-update."; exit 1; }
 
-write_status running "Fetching the latest version"
-if ! git fetch origin main >/dev/null 2>&1; then write_status error "git fetch failed (no network?)."; exit 1; fi
-if ! git reset --hard origin/main >/dev/null 2>&1; then write_status error "git update failed."; exit 1; fi
+# WHAT to update to. Default `origin/main` keeps every existing caller working; a tag name pins a
+# released version, so an operator can hold back, or step down after a bad one. The API passes this
+# as the first argument.
+#
+# Validated rather than trusted: this string reaches `git`, and the API is the only caller today but
+# will not always be. Letters, digits, dot, dash, slash and underscore cover every branch and tag we
+# create and exclude anything that could carry an option or a shell character.
+TARGET="${1:-origin/main}"
+case "$TARGET" in
+  *[!A-Za-z0-9._/-]*|-*) write_status error "Refusing an unsafe update target: $TARGET"; exit 1 ;;
+esac
+
+write_status running "Fetching ${TARGET}"
+# --tags as well as the branch: a released version is a TAG, and without this a fresh clone cannot
+# resolve one. --force because a tag can legitimately be re-pointed upstream.
+if ! git fetch --tags --force origin main >/dev/null 2>&1; then write_status error "git fetch failed (no network?)."; exit 1; fi
+
+# Resolve BEFORE resetting, so a typo'd or missing tag fails while the checkout is still intact
+# rather than half-applied.
+if ! git rev-parse --verify "${TARGET}^{commit}" >/dev/null 2>&1; then
+  write_status error "No such version: ${TARGET}. Check the release exists."; exit 1
+fi
+if ! git reset --hard "$TARGET" >/dev/null 2>&1; then write_status error "git update failed."; exit 1; fi
 NEW_SHA="$(git rev-parse HEAD)"
 if [ "$NEW_SHA" = "$OLD_SHA" ]; then
   # Keep the deployed-commit marker honest even on a no-op — a manual `git pull` moves HEAD but leaves
