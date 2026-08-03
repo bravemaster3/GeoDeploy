@@ -1,8 +1,8 @@
 # Changelog
 
-Notable changes, newest first. Versions follow [semantic versioning](https://semver.org/):
-the major version changes when an upgrade needs manual work, the minor when features land, the
-patch for fixes alone.
+Notable changes, newest first. Versions are **major.minor** — `v1.0`, `v1.1`, … `v1.9`, then
+`v2.0`. The minor number moves for anything shipped, features or fixes; the major changes when an
+upgrade needs manual work.
 
 ## v1.0.0
 
