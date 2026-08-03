@@ -49,6 +49,19 @@ def decrypt_secret(value: str | None) -> str | None:
         return value  # legacy plaintext (pre-encryption) — read as-is; re-encrypted on next write
 
 
+def looks_encrypted(value: str | None) -> bool:
+    """True when a value that has been through `decrypt_secret` is STILL a Fernet token.
+
+    Decryption failure is indistinguishable from a legacy plaintext value, so `decrypt_secret`
+    returns the input unchanged rather than raising. That is the right default for reading, and a
+    trap for anything that then USES the result: signing an S3 request with a Fernet blob fails as
+    `SignatureDoesNotMatch`, which blames the credentials rather than the key.
+
+    Fernet tokens are version byte 0x80, base64url-encoded — always the `gAAAAA` prefix.
+    """
+    return bool(value) and value.startswith("gAAAAA")
+
+
 class EncryptedText(TypeDecorator):
     """A Text column Fernet-encrypted at rest and transparently decrypted on read. Legacy plaintext
     reads through unchanged. Use ONLY for ORM-read, DB-only secrets (see the module docstring)."""

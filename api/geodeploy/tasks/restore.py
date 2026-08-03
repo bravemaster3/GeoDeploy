@@ -90,6 +90,8 @@ def restore_snapshot(cfg, key: str, manifest: dict, tmp_dir: str, on_step=None) 
     step = on_step or (lambda *_a, **_k: None)
     parts = manifest.get("parts", {})
     detail: dict = {}
+    # BEFORE anything is replaced: these are the credentials that just read the snapshot.
+    saved_destination = _capture_backup_destination(cfg)
 
     if "objects" in parts:
         step("Restoring files", 15)
@@ -116,8 +118,64 @@ def restore_snapshot(cfg, key: str, manifest: dict, tmp_dir: str, on_step=None) 
         # in-flight rows are frozen. Inside this function so no caller can forget them.
         detail["schema"] = _reapply_schema_migrations()
         detail["stale_runs_cleared"] = _clear_restored_running_rows()
+        # Keep the destination we just read the backup FROM, when the restored copy is unreadable.
+        detail["backup_destination"] = _restore_backup_destination(saved_destination)
 
     return detail
+
+
+BACKUP_DEST_FIELDS = ("backup_endpoint", "backup_bucket", "backup_prefix",
+                      "backup_access_key", "backup_secret_key", "backup_region")
+
+
+def _capture_backup_destination(cfg) -> dict:
+    """The destination settings THIS instance is using, taken before the database is replaced."""
+    return {f: getattr(cfg, f, None) for f in BACKUP_DEST_FIELDS}
+
+
+def _restore_backup_destination(saved: dict) -> dict:
+    """Put the working destination settings back after the database step.
+
+    A restore replaces `setup_config` wholesale, so the backup destination comes back as the SNAPSHOT
+    held it — encrypted with whatever key the instance that took the backup was using. On any
+    instance with a different GEODEPLOY_SECRET_KEY that value cannot be decrypted, and
+    `decrypt_secret` returns the ciphertext rather than raising, so the next backup signs its S3
+    request with a Fernet blob and fails as `SignatureDoesNotMatch` — blaming the credentials rather
+    than the key.
+
+    The operator proved these credentials seconds ago: the restore could not have read the backup
+    without them. Throwing them away and asking for them again after every restore is a loop, and
+    the failure at the end of it names the wrong cause.
+
+    Only applied when the restored value is UNREADABLE. A snapshot whose secret decrypts here was
+    written by an instance sharing this key, and its settings are as valid as ours.
+    """
+    from ..crypto import encrypt_secret, looks_encrypted
+
+    result = {"kept": False}
+    try:
+        with state_db.connect() as conn:
+            conn.row_factory = state_db.dict_row
+            row = conn.execute(
+                "SELECT backup_secret_key FROM setup_config WHERE id = 1").fetchone()
+            restored_secret = (row or {}).get("backup_secret_key")
+            # The worker reads the column RAW (no ORM), so decrypt before judging it.
+            from ..crypto import decrypt_secret
+            if not looks_encrypted(decrypt_secret(restored_secret)):
+                return {"kept": False, "reason": "restored destination is readable"}
+
+            if not saved.get("backup_secret_key"):
+                return {"kept": False, "reason": "no working destination to keep"}
+
+            sets = ", ".join(f"{f} = ?" for f in BACKUP_DEST_FIELDS)
+            vals = [encrypt_secret(saved[f]) if f == "backup_secret_key" else saved[f]
+                    for f in BACKUP_DEST_FIELDS]
+            conn.execute(f"UPDATE setup_config SET {sets} WHERE id = 1", vals)
+        result = {"kept": True, "bucket": saved.get("backup_bucket")}
+    except Exception as exc:      # never fail a good restore over bookkeeping
+        logger.warning("restore: could not keep the backup destination settings: %s", exc)
+        result = {"kept": False, "error": str(exc)[:200]}
+    return result
 
 
 def _reapply_schema_migrations() -> dict:
@@ -244,6 +302,9 @@ def run_restore(run_id: int, key: str):
         try:
             _regenerate_martin()
             detail["martin"] = "reloaded"
+            # AFTER Martin: a bundle's style points at tile URLs Martin must already be serving.
+            _step(run_id, "Republishing portals", 97)
+            detail["portals"] = _republish_portals()
         except Exception as exc:
             # Not fatal: the data is back, and Settings → Infrastructure → Reload Martin fixes it.
             logger.warning("restore: Martin regeneration failed: %s", exc)
@@ -260,6 +321,52 @@ def run_restore(run_id: int, key: str):
         _reaudit_restore(key, seed, "error", detail)
         _finish(run_id, "error", seed=seed, error_message=str(exc)[:1000], current_step="Failed",
                 detail=json.dumps(detail))
+
+
+def _republish_portals() -> dict:
+    """Rebuild the bundle of every PUBLISHED portal.
+
+    Portal bundles (`data/portals/`) are deliberately not in a backup: they are derived data — HTML,
+    the MapLibre style and the runtime, all regenerated from rows that ARE backed up — and including
+    them would inflate every backup with something reproducible.
+
+    The consequence was left to the operator: "re-publish each portal after a restore", in the docs,
+    and nowhere in the product. A restored portal that 404s reads as data loss, and it is exactly the
+    step nobody remembers at 2am. The rows needed are all present by now, so do it here.
+
+    Best-effort per portal: one that fails must not stop the rest, and none of it may fail a restore
+    that has already put the data back.
+    """
+    import asyncio
+
+    async def _run() -> dict:
+        # Imported inside: `routers.portals` pulls in a good deal of the app, and this module is
+        # imported by celery_app at worker start.
+        from sqlalchemy import select
+
+        from .. import database
+        from ..models import Portal
+        from ..routers.portals import _rebuild_bundle
+
+        database.configure(force=True)          # the database underneath us was just replaced
+        rebuilt, failed = 0, []
+        async with database.AsyncSessionLocal() as db:
+            portals = (await db.execute(
+                select(Portal).where(Portal.published.is_(True)))).scalars().all()
+            for portal in portals:
+                try:
+                    await _rebuild_bundle(portal, db)
+                    rebuilt += 1
+                except Exception as exc:        # noqa: BLE001 — one bad portal is not a failed restore
+                    logger.warning("restore: could not republish %s: %s", portal.slug, exc)
+                    failed.append(f"{portal.slug}: {str(exc)[:120]}")
+        return {"rebuilt": rebuilt, "failed": failed}
+
+    try:
+        return asyncio.run(_run())
+    except Exception as exc:      # noqa: BLE001
+        logger.warning("restore: portal republish pass failed: %s", exc)
+        return {"rebuilt": 0, "failed": [str(exc)[:200]]}
 
 
 def _regenerate_martin() -> None:

@@ -142,3 +142,39 @@ def test_restore_records_itself_even_though_it_deletes_its_own_row():
     assert "rowcount" in src, "it must detect that the UPDATE matched nothing"
     # A forced id with a sequence inherited from the snapshot collides on the NEXT restore.
     assert "setval" in src
+
+
+def test_a_restore_keeps_the_destination_it_just_read_from():
+    """A restore replaces setup_config wholesale, so the backup destination comes back as the
+    SNAPSHOT held it — encrypted with the key of whichever instance took the backup. On an instance
+    with a different GEODEPLOY_SECRET_KEY that cannot be decrypted, and `decrypt_secret` returns the
+    ciphertext rather than raising, so the NEXT backup signs its S3 request with a Fernet blob and
+    fails as SignatureDoesNotMatch — blaming the credentials rather than the key.
+
+    Reported from the field as "I have to enter the storage key again after every restore".
+
+    The credentials being discarded are the ones that just read the snapshot, seconds earlier, so
+    they are known good. Keeping them is both safe and the only way out of the loop.
+    """
+    import inspect
+
+    from geodeploy.tasks import restore as rt
+
+    src = inspect.getsource(rt.restore_snapshot)
+    assert "_capture_backup_destination" in src
+    assert "_restore_backup_destination" in src
+    # Captured BEFORE the database is replaced, applied AFTER — the other order captures the
+    # snapshot's own (unreadable) values and puts them straight back.
+    assert src.index("_capture_backup_destination") < src.index("restore_database")
+    assert src.index("restore_database") < src.index("_restore_backup_destination")
+
+
+def test_the_destination_is_only_replaced_when_unreadable():
+    """A snapshot whose secret decrypts here was written by an instance sharing this key; its
+    settings are as valid as ours, and overwriting them would be us deciding we know better."""
+    import inspect
+
+    from geodeploy.tasks import restore as rt
+
+    src = inspect.getsource(rt._restore_backup_destination)
+    assert "looks_encrypted" in src

@@ -85,10 +85,13 @@ Since GeoDeploy's own state lives in the same PostgreSQL database as the spatial
 old arrangement (a SQLite copy plus a PostGIS dump) could not be atomic, so a layer created
 between the two ended up in one and not the other.
 
-Two things are **not** backed up because they are regenerated from the above:
+Two things are **not** backed up because they are regenerated from the above — and a restore now
+regenerates both for you, so there is nothing to do by hand:
 
-- **Published portal bundles** (`data/portals/`) — re-publish each portal after a restore.
-- **Martin's config** — rebuilt by Settings → Infrastructure → *Reload Martin*.
+- **Published portal bundles** (`data/portals/`) — every published portal is rebuilt at the end of a
+  restore. If one fails, the restore's detail names it and re-publishing that portal fixes it.
+- **Martin's config** — rebuilt automatically; Settings → Infrastructure → *Reload Martin* is the
+  fallback.
 
 Notes on how it is done, because they matter if you ever inspect the artifacts:
 

@@ -84,18 +84,8 @@ async def _guard_setup_mutation(request: Request, db: AsyncSession,
         raise HTTPException(403, "Admin access required to reconfigure a running instance.")
 
 
-def _looks_encrypted(value: str | None) -> bool:
-    """True when a "decrypted" value is still a Fernet token.
-
-    `crypto.decrypt_secret` returns the ciphertext UNCHANGED when decryption fails, because a failure
-    is indistinguishable from a legacy plaintext value written before encryption existed. That is the
-    right default for reading, and a trap here: with the wrong GEODEPLOY_SECRET_KEY we would write a
-    Fernet blob into `.env` as if it were a storage secret, and every S3 call would fail with a
-    signature error that says nothing about keys.
-
-    Fernet tokens are version byte 0x80 base64url-encoded, which always yields the `gAAAAA` prefix.
-    """
-    return bool(value) and value.startswith("gAAAAA")
+# Shared with tasks/restore.py, which faces the same question after replacing the database.
+from ..crypto import looks_encrypted as _looks_encrypted
 
 
 async def _describe_existing_install(db: AsyncSession, stored: SetupConfig) -> dict | None:

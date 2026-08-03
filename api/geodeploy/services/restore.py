@@ -74,10 +74,12 @@ def check_secret_key_match(manifest: dict) -> dict:
     if stored == current:
         return {"known": True, "matches": True, "message": "Encryption key matches."}
     return {"known": True, "matches": False, "message":
-            "This backup was taken with a DIFFERENT GEODEPLOY_SECRET_KEY. Everything restores, but "
-            "the encrypted settings (SMTP password, OIDC client secret, backup destination key) "
-            "will be unreadable and must be re-entered. To avoid that, copy the old key into .env "
-            "before restoring."}
+            "This backup was taken with a DIFFERENT GEODEPLOY_SECRET_KEY. Your data — layers, "
+            "portals, users, files — restores normally. What does not survive is the handful of "
+            "settings stored ENCRYPTED: the SMTP password and the OIDC client secret come back "
+            "unreadable and have to be re-entered afterwards. (The backup destination is kept: the "
+            "one this restore is reading from is preserved, since it demonstrably works.) "
+            "Putting the old key into .env before restoring avoids the re-entry entirely."}
 
 
 def download(cfg, key: str, name: str, dest_path: str) -> int:
