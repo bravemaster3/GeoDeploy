@@ -59,6 +59,9 @@ def fake(monkeypatch):
         return holder["s3"]
 
     monkeypatch.setattr(bk, "make_client", make_client)
+    # The operator-facing checks build a PROBE client (short timeouts, one attempt), so a fake that
+    # only replaces `make_client` lets the real boto through and the test talks to the network.
+    monkeypatch.setattr(bk, "make_probe_client", make_client)
     holder["s3"] = FakeS3()
     return holder
 
@@ -107,6 +110,7 @@ def test_an_existing_bucket_we_own_is_success(monkeypatch):
     monkeypatch.setattr(bk, "_same_as_live_data", lambda cfg: False)
     s3 = FakeS3(create_error=_client_error("BucketAlreadyOwnedByYou"))
     monkeypatch.setattr(bk, "make_client", lambda *a, **k: s3)
+    monkeypatch.setattr(bk, "make_probe_client", lambda *a, **k: s3)
     assert bk.create_destination_bucket(Cfg())["ok"] is True
 
 
@@ -116,6 +120,7 @@ def test_access_denied_says_what_to_do(monkeypatch):
     monkeypatch.setattr(bk, "_same_as_live_data", lambda cfg: False)
     s3 = FakeS3(create_error=_client_error("AccessDenied"))
     monkeypatch.setattr(bk, "make_client", lambda *a, **k: s3)
+    monkeypatch.setattr(bk, "make_probe_client", lambda *a, **k: s3)
     with pytest.raises(ValueError, match="cannot create buckets"):
         bk.create_destination_bucket(Cfg())
 
@@ -131,6 +136,7 @@ def test_creation_is_verified_not_assumed(monkeypatch):
 
     s3.put_object = put_denied
     monkeypatch.setattr(bk, "make_client", lambda *a, **k: s3)
+    monkeypatch.setattr(bk, "make_probe_client", lambda *a, **k: s3)
     with pytest.raises(ValueError):
         bk.create_destination_bucket(Cfg())
 
@@ -147,8 +153,37 @@ def test_missing_bucket_raises_the_offerable_error(monkeypatch):
     s3.put_object = put_missing
     s3.list_buckets = lambda: {"Buckets": [{"Name": "something-else"}]}
     monkeypatch.setattr(bk, "make_client", lambda *a, **k: s3)
+    monkeypatch.setattr(bk, "make_probe_client", lambda *a, **k: s3)
 
     with pytest.raises(bk.BucketMissing) as exc:
         bk.verify_destination(Cfg(bucket="gd-backups"))
     assert exc.value.bucket == "gd-backups"
     assert "something-else" in str(exc.value)      # still lists what the key CAN see
+
+
+def test_operator_facing_checks_fail_fast():
+    """`make_client` leaves botocore's defaults — 60s connect, 60s read, FIVE attempts — which is
+    right for a multi-hour object copy and wrong for anything a person is waiting on.
+
+    Reported from the field as a Cloudflare 524 on `/backups/settings/test` AND `/backups/stored`:
+    an unreachable destination held the request open past the proxy's 120s limit, so the browser
+    showed a timeout page that says nothing about the destination and looks like GeoDeploy hanging.
+    """
+    import inspect
+
+    src = inspect.getsource(bk.make_probe_client)
+    assert "max_attempts" in src and "connect_timeout" in src and "read_timeout" in src
+
+    for fn in (bk.verify_destination, bk.create_destination_bucket, bk.list_runs):
+        code = inspect.getsource(fn)
+        assert "make_probe_client(" in code, f"{fn.__name__} answers a waiting operator; probe it"
+
+
+def test_transfers_keep_the_patient_client():
+    """The fast timeouts must NOT leak onto the data path: a server-side copy of a large object can
+    legitimately take minutes, and one attempt with a 15s read timeout would abandon it."""
+    import inspect
+
+    for fn in (bk.copy_objects,):
+        assert "make_probe_client(" not in inspect.getsource(fn), (
+            f"{fn.__name__} moves data; it must keep the patient client")

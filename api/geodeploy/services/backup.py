@@ -64,6 +64,29 @@ def make_client(endpoint: str | None, access_key: str, secret_key: str, region: 
     )
 
 
+def make_probe_client(endpoint: str | None, access_key: str, secret_key: str, region: str | None):
+    """A client for CHECKING a destination, not for moving data.
+
+    `make_client` leaves botocore's defaults: 60s to connect, 60s to read, and FIVE attempts. Those
+    are right for a multi-hour object copy and badly wrong for "Test destination" — an unreachable
+    endpoint keeps the request open for minutes, so the browser sees whatever the proxy in front of
+    GeoDeploy does at its own limit. Behind Cloudflare that is a 120-second `Proxy Read Timeout`
+    page, which says nothing about the destination and looks like GeoDeploy hanging.
+
+    A probe should fail fast and say so: one attempt, short timeouts. The operator is waiting.
+    """
+    return boto3.client(
+        "s3",
+        endpoint_url=endpoint or None,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        region_name=region or "us-east-1",
+        config=Config(signature_version="s3v4",
+                      retries={"max_attempts": 1, "mode": "standard"},
+                      connect_timeout=5, read_timeout=15),
+    )
+
+
 def infer_region(endpoint: str | None) -> str | None:
     """Best-effort region from an S3 endpoint, so nobody has to look it up.
 
@@ -138,7 +161,7 @@ def verify_destination(cfg) -> dict:
             "A copy that dies with the original is not a backup — use a different bucket, "
             "ideally a different provider.")
     region = cfg.backup_region or infer_region(cfg.backup_endpoint) or "us-east-1"
-    s3 = make_client(cfg.backup_endpoint, cfg.backup_access_key, cfg.backup_secret_key, region)
+    s3 = make_probe_client(cfg.backup_endpoint, cfg.backup_access_key, cfg.backup_secret_key, region)
     probe = f"{(cfg.backup_prefix or 'geodeploy-backups').strip('/')}/.geodeploy-write-test"
     try:
         s3.put_object(Bucket=cfg.backup_bucket, Key=probe, Body=b"ok")
@@ -189,7 +212,7 @@ def create_destination_bucket(cfg) -> dict:
         raise ValueError("Set the destination bucket name first.")
 
     region = cfg.backup_region or infer_region(cfg.backup_endpoint) or "us-east-1"
-    s3 = make_client(cfg.backup_endpoint, cfg.backup_access_key, cfg.backup_secret_key, region)
+    s3 = make_probe_client(cfg.backup_endpoint, cfg.backup_access_key, cfg.backup_secret_key, region)
 
     # `LocationConstraint` is required by AWS everywhere EXCEPT us-east-1, where sending it is an
     # error, and it is meaningless to R2 (which signs with the literal "auto"). MinIO ignores it.
@@ -302,8 +325,11 @@ def write_manifest(dest_s3, bucket: str, key_prefix: str, manifest: dict) -> Non
 def list_runs(cfg) -> list[dict]:
     """Backups actually PRESENT at the destination, read from their manifests — the source of
     truth, independent of our own DB (which is itself one of the things being backed up)."""
-    s3 = make_client(cfg.backup_endpoint, cfg.backup_access_key, cfg.backup_secret_key,
-                     cfg.backup_region)
+    # PROBE client: this answers a page the operator is looking at. With the patient client an
+    # unreachable destination held the request open past the proxy's limit and the browser got a
+    # 524 with no explanation — the same way "Test destination" did.
+    s3 = make_probe_client(cfg.backup_endpoint, cfg.backup_access_key, cfg.backup_secret_key,
+                           cfg.backup_region)
     prefix = (cfg.backup_prefix or "geodeploy-backups").strip("/") + "/"
     out = []
     paginator = s3.get_paginator("list_objects_v2")

@@ -267,7 +267,15 @@ async function createAndContinue() {
   try {
     const { data } = await configureDB({ ...db, create_database: newDbName.value.trim() })
     if (data?.existing_install) {
-      // Only possible if the NEW name also already holds an installation.
+      // The name they chose ALSO holds an installation — a second GeoDeploy on the same server.
+      // `create_database` is a no-op there (it exists), so without this the panel simply re-rendered
+      // itself: no error, no progress, nothing to explain why the button did nothing.
+      newDbError.value = `A GeoDeploy installation already exists in a database named `
+        + `"${newDbName.value.trim()}"`
+        + (data.existing_install.users
+            ? ` (${data.existing_install.users} account${data.existing_install.users === 1 ? '' : 's'})`
+            : '')
+        + `. Choose a different name, or sign in to that one above.`
       reconnected.value = data.existing_install
       return
     }
