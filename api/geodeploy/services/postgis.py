@@ -4,6 +4,8 @@ import os
 import secrets
 import string
 import docker
+import re
+
 import asyncpg
 from ..config import get_settings
 
@@ -85,6 +87,51 @@ async def test_connection(host: str, port: int, db: str, user: str, password: st
         await conn.fetchval("SELECT PostGIS_Version()")
     except asyncpg.exceptions.UndefinedFunctionError:
         raise ValueError("PostGIS extension not installed on this database.")
+    finally:
+        await conn.close()
+
+
+DB_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+
+
+async def create_database(host: str, port: int, admin_db: str, user: str, password: str,
+                          new_db: str) -> None:
+    """Create `new_db` on an existing server, with PostGIS enabled.
+
+    Offered when the operator points the wizard at a database that already holds an installation:
+    they have a working server and correct credentials, and the only thing they need is a fresh
+    database. Making them leave for a psql prompt to type one statement is friction we can remove.
+
+    The NAME is the injection surface — it cannot be a bind parameter, because `CREATE DATABASE`
+    takes an identifier rather than a value. So it is validated against a strict pattern first and
+    quoted second; either alone would be a mistake.
+    """
+    if not DB_NAME_RE.match(new_db or ""):
+        raise ValueError(
+            "A database name must start with a letter or underscore and contain only letters, "
+            "digits and underscores (max 63 characters).")
+
+    # CREATE DATABASE cannot run inside a transaction block; asyncpg executes in autocommit unless a
+    # transaction is opened, so this is fine as-is.
+    conn = await asyncpg.connect(host=host, port=port, database=admin_db, user=user,
+                                 password=password, timeout=10)
+    try:
+        exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", new_db)
+        if not exists:
+            await conn.execute(f'CREATE DATABASE "{new_db}"')
+    finally:
+        await conn.close()
+
+    # PostGIS is per-DATABASE. The postgis/postgis image seeds template1 so a new database usually
+    # inherits it, but a plain PostgreSQL server with the extension merely available does not.
+    conn = await asyncpg.connect(host=host, port=port, database=new_db, user=user,
+                                 password=password, timeout=10)
+    try:
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS postgis")
+    except Exception as exc:
+        raise ValueError(
+            f'Created the database "{new_db}", but could not enable PostGIS in it ({exc}). '
+            f"Run `CREATE EXTENSION postgis;` there as a superuser, then continue.") from exc
     finally:
         await conn.close()
 

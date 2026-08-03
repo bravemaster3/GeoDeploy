@@ -61,6 +61,47 @@ async def _guard_setup_mutation(request: Request, db: AsyncSession) -> None:
         raise HTTPException(403, "Admin access required to reconfigure a running instance.")
 
 
+def _looks_encrypted(value: str | None) -> bool:
+    """True when a "decrypted" value is still a Fernet token.
+
+    `crypto.decrypt_secret` returns the ciphertext UNCHANGED when decryption fails, because a failure
+    is indistinguishable from a legacy plaintext value written before encryption existed. That is the
+    right default for reading, and a trap here: with the wrong GEODEPLOY_SECRET_KEY we would write a
+    Fernet blob into `.env` as if it were a storage secret, and every S3 call would fail with a
+    signature error that says nothing about keys.
+
+    Fernet tokens are version byte 0x80 base64url-encoded, which always yields the `gAAAAA` prefix.
+    """
+    return bool(value) and value.startswith("gAAAAA")
+
+
+async def _describe_existing_install(db: AsyncSession, stored: SetupConfig) -> dict | None:
+    """What this database already contains, or None if it is a fresh one.
+
+    Pointing a new install at an existing GeoDeploy database is a supported thing to do — a rebuilt
+    server, new hardware, or recovery without a backup. The database holds every answer the wizard
+    would ask for, so the wizard should stop asking and adopt them.
+    """
+    has_admin = bool((await db.execute(select(User))).scalars().first())
+    if not has_admin and not stored.completed:
+        return None                       # genuinely fresh — the normal wizard applies
+
+    users = len((await db.execute(select(User))).scalars().all())
+    # The secret is the one field that may be unreadable: it is encrypted with the key of the
+    # install that WROTE it, and this server generated a new one unless the operator carried it.
+    secret_ok = not _looks_encrypted(stored.storage_secret_key)
+    return {
+        "users": users,
+        "storage_configured": bool(stored.storage_endpoint),
+        "storage_endpoint": stored.storage_endpoint,
+        "storage_bucket": stored.storage_bucket,
+        # False means: everything else was recovered, but the stored storage secret cannot be read
+        # with this instance's GEODEPLOY_SECRET_KEY. Carrying the old key across fixes it; nothing
+        # else can, because the key is deliberately not in the database or in any backup.
+        "storage_secret_recovered": secret_ok,
+    }
+
+
 @router.get("/status", response_model=SetupStatus)
 async def setup_status():
     """Answers BEFORE any database exists — this is the very first call the UI makes, and on a
@@ -114,19 +155,35 @@ async def configure_db(req: ConfigureDBRequest, request: Request):
         config.postgis_user = creds["user"]
         config.postgis_password = creds["password"]
     else:
+        target_db = req.db
+        if req.create_database:
+            # The operator asked for a NEW database on this server, having been told the one they
+            # named already holds an installation. `req.db` is the maintenance database to connect
+            # through; the new one becomes the target for everything below.
+            try:
+                await postgis_svc.create_database(req.host, req.port, req.db, req.user,
+                                                  req.password, req.create_database)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            except Exception as exc:
+                from ..services.setup_errors import postgres_error
+                raise HTTPException(400, postgres_error(exc, req.host, req.port, req.db,
+                                                        req.user)) from exc
+            target_db = req.create_database
         try:
-            await postgis_svc.test_connection(req.host, req.port, req.db, req.user, req.password)
+            await postgis_svc.test_connection(req.host, req.port, target_db, req.user, req.password)
         except Exception as exc:
             # NAME the cause. A timeout, a refusal, bad credentials and a missing PostGIS extension
             # all arrived here as the same "Cannot connect to PostGIS: <driver text>", and only two
             # of those have anything to do with what was just typed — so the first thing a new
             # install shows you was a message that sent you to check the wrong thing.
             from ..services.setup_errors import postgres_error
-            raise HTTPException(400, postgres_error(exc, req.host, req.port, req.db, req.user)) from exc
+            raise HTTPException(400, postgres_error(exc, req.host, req.port, target_db,
+                                                    req.user)) from exc
         config.postgis_type = "external"
         config.postgis_host = req.host
         config.postgis_port = req.port
-        config.postgis_db = req.db
+        config.postgis_db = target_db
         config.postgis_user = req.user
         config.postgis_password = req.password
         # Martin is a core always-on service now, so external DBs need nothing special here:
@@ -147,12 +204,37 @@ async def configure_db(req: ConfigureDBRequest, request: Request):
         raise HTTPException(500, f"Connected, but could not create the schema: {exc}") from exc
 
     # Now there is somewhere to persist it.
+    existing = None
     async with database.AsyncSessionLocal() as db:
         stored = await _get_or_create_config(db)
         for field in ("postgis_type", "postgis_host", "postgis_port", "postgis_db",
                       "postgis_user", "postgis_password"):
             setattr(stored, field, getattr(config, field))
         await db.commit()
+        await db.refresh(stored)
+        # RECONNECTING to a database that already holds an installation.
+        #
+        # Pointing a fresh install at an existing GeoDeploy database is a legitimate thing to do —
+        # rebuilding a lost server, moving the app to new hardware, or recovering without a backup.
+        # It used to half-work: this step succeeded, the STORAGE step was then refused by
+        # `_guard_setup_mutation` (an admin already exists), and `.env` was left holding the
+        # installer's template defaults. The instance could never reach its own object storage.
+        #
+        # The database already knows every answer the wizard would have asked for, so take them from
+        # it rather than making the operator retype what is already stored.
+        existing = await _describe_existing_install(db, stored)
+        if existing:
+            if not existing["storage_secret_recovered"]:
+                # NEVER write ciphertext as if it were a secret. `decrypt_secret` hands back the
+                # token unchanged when the key is wrong, and a Fernet blob in STORAGE_SECRET_KEY
+                # would fail every S3 call with a signature error that blames the key you can see
+                # rather than the key you cannot. None means "say nothing", so `.env` keeps whatever
+                # it had and the operator is told to supply it.
+                stored.storage_secret_key = None
+            # Inside the session and after the commit: this mutation is in-memory only, and closing
+            # without committing discards it. The row keeps its encrypted value.
+            _write_env(stored)          # storage_* included — that is the whole point
+            _apply_to_process(stored)
 
     # Martin has been restart-looping since install: it had no reachable database (before the
     # wizard, .env carries a host but no password). Now that real credentials exist, rewrite its
@@ -164,7 +246,7 @@ async def configure_db(req: ConfigureDBRequest, request: Request):
         import logging
         logging.getLogger(__name__).warning("could not start Martin after DB setup: %s", exc)
 
-    return {"status": "ok", "type": config.postgis_type}
+    return {"status": "ok", "type": config.postgis_type, "existing_install": existing}
 
 
 @router.post("/configure-storage")

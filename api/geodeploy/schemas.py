@@ -23,6 +23,10 @@ class ConfigureDBRequest(BaseModel):
     db: str = "geodeploy"
     user: str = "geodeploy"
     password: str | None = None
+    # Ask the server to CREATE this database and use it instead of `db`. Offered when `db` turns out
+    # to already contain a GeoDeploy installation: the credentials are proven at that point, and the
+    # only thing missing is an empty database.
+    create_database: str | None = None
 
 
 class ConfigureStorageRequest(BaseModel):

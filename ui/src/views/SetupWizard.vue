@@ -96,11 +96,59 @@
           </div>
         </template>
 
+        <!-- Reconnected to an existing installation. A STATE, not a failure: the database already
+             answered everything the remaining steps would have asked. -->
+        <div v-if="reconnected" class="p-4 rounded-lg border border-primary/40 bg-primary/10 space-y-3">
+          <p class="text-sm font-medium text-foreground">Reconnected to an existing GeoDeploy</p>
+          <p class="text-xs text-muted-foreground leading-relaxed">
+            This database already contains an installation
+            <template v-if="reconnected.users">
+              with {{ reconnected.users }} account{{ reconnected.users === 1 ? '' : 's' }}</template>.
+            Its settings have been restored, so there is nothing left to set up — sign in with an
+            existing account.
+          </p>
+          <p v-if="reconnected.storage_configured && reconnected.storage_secret_recovered"
+            class="text-xs text-emerald-400">
+            Storage reconnected: {{ reconnected.storage_bucket }} at {{ reconnected.storage_endpoint }}
+          </p>
+          <p v-else-if="reconnected.storage_configured" class="text-xs text-amber-300 leading-relaxed">
+            Storage points at {{ reconnected.storage_bucket }}, but its secret key was encrypted with
+            the previous install's <span class="font-mono">GEODEPLOY_SECRET_KEY</span> and cannot be
+            read here. Put that key into <span class="font-mono">.env</span> and run setup again, or
+            re-enter the storage credentials after signing in.
+          </p>
+          <button @click="router.push('/login')" class="btn-primary w-full justify-center">
+            Go to sign in
+          </button>
+
+          <!-- The other legitimate intent: they wanted a FRESH install and reached for the wrong
+               database. The credentials are already proven at this point, so the only thing missing
+               is an empty database — which we can create on the same server rather than sending
+               them to a psql prompt for one statement. -->
+          <div class="pt-3 border-t border-border/60 space-y-2">
+            <p class="text-xs text-muted-foreground">
+              Wanted a fresh install instead? Create a new database on this same server:
+            </p>
+            <div class="flex gap-2">
+              <input v-model="newDbName" class="input flex-1 text-sm" placeholder="geodeploy"
+                @keydown.enter="createAndContinue" />
+              <button @click="createAndContinue" :disabled="busy || !newDbName.trim()"
+                class="btn-secondary text-sm px-3 disabled:opacity-60">
+                {{ busy ? 'Creating…' : 'Create &amp; continue' }}
+              </button>
+            </div>
+            <p class="text-[11px] text-muted-foreground/70">
+              Letters, digits and underscores. PostGIS is enabled in it automatically.
+            </p>
+            <p v-if="newDbError" class="text-xs text-red-400">{{ newDbError }}</p>
+          </div>
+        </div>
+
         <!-- Error -->
-        <div v-if="error" class="p-3 bg-red-500/15 border border-red-500/30 rounded-lg text-sm text-red-400">{{ error }}</div>
+        <div v-else-if="error" class="p-3 bg-red-500/15 border border-red-500/30 rounded-lg text-sm text-red-400">{{ error }}</div>
 
         <!-- Actions -->
-        <div class="flex justify-between pt-2">
+        <div v-if="!reconnected" class="flex justify-between pt-2">
           <button v-if="step > 0" @click="step--" class="btn-secondary">Back</button>
           <button @click="next" :disabled="busy"
             class="btn-primary ml-auto"
@@ -124,6 +172,10 @@ const router = useRouter()
 const step = ref(0)
 const busy = ref(false)
 const error = ref('')
+// Set when /configure-db reports the database already contains an installation.
+const reconnected = ref(null)
+const newDbName = ref('geodeploy')
+const newDbError = ref('')
 
 const steps = ['Database', 'Storage', 'Admin']
 
@@ -164,12 +216,41 @@ const storageOptions = [
     desc: 'AWS S3, Hetzner Object Storage, Cloudflare R2, Backblaze B2. Grows on demand and is billed by what you use — the better choice if you expect many layers or large rasters.' },
 ]
 
+// Create a new database on the server just validated, and carry on with the normal wizard.
+async function createAndContinue() {
+  newDbError.value = ''
+  busy.value = true
+  try {
+    const { data } = await configureDB({ ...db, create_database: newDbName.value.trim() })
+    if (data?.existing_install) {
+      // Only possible if the NEW name also already holds an installation.
+      reconnected.value = data.existing_install
+      return
+    }
+    reconnected.value = null
+    step.value = 1
+  } catch (err) {
+    const d = err.response?.data?.detail
+    newDbError.value = (typeof d === 'string' ? d : d?.message) || err.message
+  } finally {
+    busy.value = false
+  }
+}
+
 async function next() {
   error.value = ''
   busy.value = true
   try {
     if (step.value === 0) {
-      await configureDB(db)
+      const { data } = await configureDB(db)
+      // The database already holds an installation. There is nothing left to configure — its own
+      // settings have just been written back into .env — so stop asking and send them to sign in.
+      // Continuing would walk into the storage step, which the setup guard refuses because an admin
+      // exists, leaving a red error on a step that never had a problem.
+      if (data?.existing_install) {
+        reconnected.value = data.existing_install
+        return
+      }
       step.value++
     } else if (step.value === 1) {
       await configureStorage(storage)

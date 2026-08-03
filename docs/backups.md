@@ -22,6 +22,11 @@ the images uploaded to portal About pages.
 
     A copy of one line, kept somewhere else, removes the problem entirely.
 
+    It matters for one more case than backups: pointing a new install at an existing GeoDeploy
+    database ([reconnecting](getting-started.md#reconnecting-to-an-existing-geodeploy-database))
+    restores everything the database holds — but those same three settings only come back if the old
+    key came with you.
+
 ## Set it up
 
 **Settings → Backups.** Administrators and the owner can configure a destination, run a backup and

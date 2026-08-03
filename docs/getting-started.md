@@ -35,13 +35,57 @@ This command:
 
 The wizard runs automatically on first visit and takes about 2 minutes.
 
-**Step 1 — Database**: Choose "Set up PostGIS on this server" (recommended). GeoDeploy installs and manages PostgreSQL + PostGIS for you. Or connect an existing PostGIS database.
+**Step 1 — Database.** Either let GeoDeploy install and manage PostgreSQL + PostGIS on this server,
+or point it at a database you already run. Neither is "the right one": the first is for people who do
+not already run a spatial database, the second for people who do, or who want the database on
+separate hardware.
 
-**Step 2 — File storage**: Choose "Use local storage on this server" (recommended). GeoDeploy installs and manages MinIO (S3-compatible) for you. Or connect your own S3-compatible bucket.
+**Step 2 — File storage.** Either let GeoDeploy install and manage MinIO here, or use any
+S3-compatible provider. Local storage is limited by this machine's disk; S3 grows on demand and is
+billed by use.
 
-**Step 3 — Admin account**: Create your admin login.
+**Step 3 — Admin account.** Create your login.
 
-After setup you land on the main dashboard. You never return to the wizard.
+After setup you land on the dashboard. You never return to the wizard.
+
+### Connecting a database you already run
+
+Three things to know, in the order they bite:
+
+**The port must be reachable from this server.** A timeout at this step is a network fact — the
+credentials are never examined — so check the database listens on a public address
+(`listen_addresses = '*'`), that the port is published, and that no firewall, *including your
+provider's*, blocks it. The wizard names which of these it hit.
+
+**PostGIS is per-database, not per-server.** A server with PostGIS installed still needs
+`CREATE EXTENSION postgis;` in the specific database you name. Images such as `postgis/postgis` seed
+`template1`, so databases created afterwards inherit it; a plain PostgreSQL server with the extension
+merely available does not.
+
+**Point it at a database that does not already contain GeoDeploy** — unless you mean to reconnect to
+one, below.
+
+### Reconnecting to an existing GeoDeploy database
+
+Pointing the wizard at a database that already holds an installation is supported, and is how you
+rebuild a lost server without a backup: the database holds your accounts, layers, portals *and* the
+instance's own settings.
+
+The wizard recognises it, restores those settings into `.env`, and offers two choices:
+
+- **Sign in** — the installation is intact and there is nothing to set up.
+- **Create a new database** — name one and GeoDeploy creates it on the same server, with PostGIS
+  enabled, then continues the fresh install against it.
+
+!!! warning "Carry `GEODEPLOY_SECRET_KEY` across, or lose three settings"
+
+    The SMTP password, the OIDC client secret and the storage secret key are encrypted at rest with
+    the key in `.env` — which is deliberately **not** in the database and **not** in any backup, so
+    that a stolen backup cannot hand over your credentials.
+
+    Reconnect with a *different* key and everything is recovered except those three, which must be
+    re-entered. Copy the old `GEODEPLOY_SECRET_KEY` into the new `.env` before running the wizard and
+    nothing is lost. See [Backups and restore](backups.md).
 
 ## Upload your first dataset
 
