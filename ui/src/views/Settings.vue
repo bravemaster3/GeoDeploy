@@ -57,6 +57,19 @@
               </div>
             </div>
             <div v-if="updates.data.behind > 0 || updates.data.update_available" class="space-y-2">
+              <!-- WHICH version. Tracking `main` is the default and what every install did before
+                   there were releases; a tag pins a released version, so an operator can hold back
+                   on one, or step down after a bad one. Only shown once releases exist. -->
+              <div v-if="updates.data.releases && updates.data.releases.length"
+                   class="flex items-center gap-2 flex-wrap">
+                <label class="text-xs text-muted-foreground">Update to</label>
+                <select v-model="updateTarget" class="input text-xs py-1 w-auto">
+                  <option value="main">Latest development (main)</option>
+                  <option v-for="r in updates.data.releases" :key="r.tag" :value="r.tag">
+                    {{ r.name }}{{ r.prerelease ? ' (pre-release)' : '' }}
+                  </option>
+                </select>
+              </div>
               <button @click="startUpdate" :disabled="updates.updating"
                       class="text-xs font-semibold px-3.5 py-2 rounded-md bg-primary text-primary-foreground hover:brightness-110 disabled:opacity-50">
                 {{ updates.updating ? 'Updating…' : 'Update now' }}
@@ -1320,6 +1333,10 @@ async function runExec() {
 
 // Software updates: check (read-only) + one-click update with live status.
 const updates = ref({ loading: false, data: null, updating: false, progress: null })
+// Which version the Update button will move to. `main` matches the behaviour that existed
+// before releases, so an instance that ignores this control keeps working as it did.
+const updateTarget = ref('main')
+
 async function checkUpdates(force = false) {
   updates.value.loading = true
   try {
@@ -1358,12 +1375,16 @@ async function startUpdate() {
     // The preflight failing must not block an update — an admin locked out of updating because a
     // status check broke would be worse than the risk it warns about.
   }
-  if (!confirm(warning + 'Update GeoDeploy now? Services restart briefly. If the new version is unhealthy it rolls back automatically.')) return
+  const what = updateTarget.value === 'main'
+    ? 'the latest development version (main)'
+    : `version ${updateTarget.value}`
+  if (!confirm(warning + `Update GeoDeploy to ${what}? Services restart briefly. `
+    + 'If the new version is unhealthy it rolls back automatically.')) return
   updates.value.updating = true
   updatePollCount = 0
   updates.value.progress = { phase: 'running', message: 'Starting…' }
   try {
-    await api.post('/admin/update')
+    await api.post('/admin/update', { target: updateTarget.value })
     pollUpdateStatus()
   } catch (e) {
     updates.value.progress = { phase: 'error', message: e?.response?.data?.detail || e.message }
