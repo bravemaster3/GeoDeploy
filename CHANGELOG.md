@@ -4,7 +4,7 @@ Notable changes, newest first. Versions are **major.minor** — `v1.0`, `v1.1`, 
 `v2.0`. The minor number moves for anything shipped, features or fixes; the major changes when an
 upgrade needs manual work.
 
-## v1.0.0
+## v1.0 — 2026-08-03
 
 **The first tagged release.** GeoDeploy has been running in production for months; this is the point
 at which it becomes something you can install by version number, upgrade, and recover.
