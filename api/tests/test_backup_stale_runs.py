@@ -178,3 +178,32 @@ def test_the_destination_is_only_replaced_when_unreadable():
 
     src = inspect.getsource(rt._restore_backup_destination)
     assert "looks_encrypted" in src
+
+
+def test_a_restore_keeps_this_instances_own_database_settings():
+    """setup_config records how THIS instance reaches its database. A restore replaces that row with
+    the snapshot's — describing another instance's database, with the password encrypted under that
+    instance's GEODEPLOY_SECRET_KEY.
+
+    Reported from the field: after a restore Martin crash-looped with `password authentication
+    failed for user "geodeploy"`, and portals rendered basemap only. `services/martin._pg_creds`
+    reads the password from setup_config and decrypts it — and `decrypt_secret` returns the
+    CIPHERTEXT unchanged when the key does not match, because it cannot tell that from a legacy
+    plaintext value. So martin-config.yaml was written with a Fernet blob as its password.
+
+    Restored ALWAYS, not only when unreadable: a snapshot is never authoritative about where this
+    instance's database lives, even when its password happens to decrypt.
+    """
+    import inspect
+
+    from geodeploy.tasks import restore as rt
+
+    src = inspect.getsource(rt.restore_snapshot)
+    assert "_restore_own_db_settings" in src
+    # After the database is replaced, and BEFORE anything else reads setup_config.
+    assert src.index("restore_database") < src.index("_restore_own_db_settings")
+    assert src.index("_restore_own_db_settings") < src.index("_reapply_schema_migrations")
+
+    body = inspect.getsource(rt._restore_own_db_settings)
+    assert "encrypt_secret" in body, "must re-encrypt with THIS instance's key"
+    assert "postgis_password" in body

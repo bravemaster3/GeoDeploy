@@ -116,6 +116,8 @@ def restore_snapshot(cfg, key: str, manifest: dict, tmp_dir: str, on_step=None) 
 
         # Repair what replacing the database broke — the schema is now the SNAPSHOT'S, and its
         # in-flight rows are frozen. Inside this function so no caller can forget them.
+        # FIRST, before anything reads setup_config: the row now describes the snapshot's instance.
+        detail["own_db"] = _restore_own_db_settings()
         detail["schema"] = _reapply_schema_migrations()
         detail["stale_runs_cleared"] = _clear_restored_running_rows()
         # Keep the destination we just read the backup FROM, when the restored copy is unreadable.
@@ -126,6 +128,56 @@ def restore_snapshot(cfg, key: str, manifest: dict, tmp_dir: str, on_step=None) 
 
 BACKUP_DEST_FIELDS = ("backup_endpoint", "backup_bucket", "backup_prefix",
                       "backup_access_key", "backup_secret_key", "backup_region")
+
+#: How THIS instance reaches its own database. Never taken from a snapshot — see below.
+OWN_DB_FIELDS = ("postgis_type", "postgis_host", "postgis_port", "postgis_db",
+                 "postgis_user", "postgis_password")
+
+
+def _restore_own_db_settings() -> dict:
+    """Put this instance's OWN database coordinates back into setup_config after a restore.
+
+    `setup_config` holds how the instance reaches its database, and a restore replaces that row with
+    the snapshot's — which describes the database of whatever instance took the backup, with the
+    password encrypted under THAT instance's GEODEPLOY_SECRET_KEY.
+
+    Two ways this hurts, and the second is silent:
+
+      * different host/port/db → anything reading setup_config aims at another server entirely.
+      * same host, different key → `decrypt_secret` cannot decrypt it and returns the CIPHERTEXT
+        unchanged (it cannot distinguish failure from legacy plaintext). `services/martin._pg_creds`
+        reads from here, so martin-config.yaml gets a Fernet blob as its password and Martin
+        crash-loops with `password authentication failed for user "geodeploy"` — vector tiles gone,
+        portals rendering basemap only.
+
+    The running process is, by definition, connected to the right database with the right password.
+    So these fields are ALWAYS restored from the live configuration, not merely when unreadable:
+    a snapshot's copy is never authoritative about where THIS instance's database is.
+    """
+    from ..config import get_settings
+    from ..crypto import encrypt_secret
+
+    settings = get_settings()
+    if not settings.postgis_password:
+        return {"kept": False, "reason": "no live password to write"}
+    values = {
+        "postgis_type": "local" if (settings.postgis_host or "").startswith("geodeploy-")
+                        else "external",
+        "postgis_host": settings.postgis_host,
+        "postgis_port": int(settings.postgis_port or 5432),
+        "postgis_db": settings.postgis_db,
+        "postgis_user": settings.postgis_user,
+        "postgis_password": encrypt_secret(settings.postgis_password),
+    }
+    try:
+        with state_db.connect() as conn:
+            sets = ", ".join(f"{f} = ?" for f in OWN_DB_FIELDS)
+            conn.execute(f"UPDATE setup_config SET {sets} WHERE id = 1",
+                         [values[f] for f in OWN_DB_FIELDS])
+        return {"kept": True, "host": settings.postgis_host, "db": settings.postgis_db}
+    except Exception as exc:      # never fail a good restore over bookkeeping
+        logger.warning("restore: could not restore own DB settings: %s", exc)
+        return {"kept": False, "error": str(exc)[:200]}
 
 
 def _capture_backup_destination(cfg) -> dict:
