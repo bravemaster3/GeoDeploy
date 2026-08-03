@@ -121,3 +121,71 @@ def test_recovery_verifies_before_storing():
 
     src = inspect.getsource(setup_router.recover_storage_secret)
     assert src.index("test_connection") < src.index("config.storage_secret_key = ")
+
+
+# ── creating a fresh database when the target is occupied ──────────────────────────────────────
+
+def _req(**kw):
+    from geodeploy.schemas import ConfigureDBRequest
+    base = dict(type="external", host="db.example.com", port=5432, db="postgres",
+                user="postgres", password="the-real-password")
+    base.update(kw)
+    return ConfigureDBRequest(**base)
+
+
+def _bare_request():
+    from starlette.requests import Request
+    return Request({"type": "http", "method": "POST", "path": "/", "headers": [],
+                    "query_string": b""})
+
+
+async def _seed_installed(db):
+    from geodeploy.models import SetupConfig, User
+    db.add(SetupConfig(id=1, completed=True, postgis_type="external",
+                       postgis_host="db.example.com", postgis_port=5432, postgis_db="postgres",
+                       postgis_user="postgres", postgis_password="the-real-password"))
+    db.add(User(id=1, email="owner@example.com", name="Owner", hashed_password="x", role="owner"))
+    await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_creating_a_new_database_is_allowed_with_the_current_credentials(db):
+    """THE regression from the field. Reaching the "create a fresh database" offer requires having
+    just connected — so the engine points at the OCCUPIED database, the guard sees its admin, and
+    refused before `create_database` was ever read. The feature was unreachable in the only
+    situation it exists for."""
+    await _seed_installed(db)
+    # Returns without raising.
+    await setup_router._guard_setup_mutation(_bare_request(), db,
+                                             req=_req(create_database="geodeploy"))
+
+
+@pytest.mark.asyncio
+async def test_creating_a_new_database_is_refused_on_another_server(db):
+    """The exemption must not become the hijack the guard exists to prevent: pointing a live
+    instance at a database the caller controls. Same intent, different server → refused."""
+    await _seed_installed(db)
+    with pytest.raises(Exception) as exc:
+        await setup_router._guard_setup_mutation(
+            _bare_request(), db, req=_req(host="attacker.example.com", create_database="geodeploy"))
+    assert "403" in str(getattr(exc.value, "status_code", "")) or exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_creating_a_new_database_is_refused_with_a_wrong_password(db):
+    """Ownership is proven by the CURRENT database password. Without it the caller cannot know what
+    they would be replacing."""
+    await _seed_installed(db)
+    with pytest.raises(Exception) as exc:
+        await setup_router._guard_setup_mutation(
+            _bare_request(), db, req=_req(password="guessed", create_database="geodeploy"))
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_the_exemption_does_not_apply_without_create_database(db):
+    """An ordinary reconfigure — no new database requested — stays admin-only."""
+    await _seed_installed(db)
+    with pytest.raises(Exception) as exc:
+        await setup_router._guard_setup_mutation(_bare_request(), db, req=_req())
+    assert exc.value.status_code == 403

@@ -45,7 +45,8 @@ async def _get_or_create_config(db: AsyncSession) -> SetupConfig:
     return config
 
 
-async def _guard_setup_mutation(request: Request, db: AsyncSession) -> None:
+async def _guard_setup_mutation(request: Request, db: AsyncSession,
+                                req: ConfigureDBRequest | None = None) -> None:
     """The DB/storage config endpoints are unauthenticated during FIRST-RUN so the wizard works
     before any account exists. Once setup is completed (or an admin exists), they would otherwise let
     ANYONE repoint storage/DB on a live instance (data hijack / DoS) — so from that point on they
@@ -54,6 +55,27 @@ async def _guard_setup_mutation(request: Request, db: AsyncSession) -> None:
     has_admin = bool((await db.execute(select(User))).scalars().first())
     if not config.completed and not has_admin:
         return  # first-run: setup is still open
+
+    # ONE exemption: "this database is occupied, make me a fresh one on the same server".
+    #
+    # Without it the feature is unreachable in the only situation it exists for. Reaching the offer
+    # requires having just connected, which means the engine now points at the OCCUPIED database —
+    # so the guard above sees its admin and refuses before `create_database` is ever read.
+    #
+    # Safe because it demands the CURRENT database credentials, unchanged. An attacker cannot use it
+    # to repoint the instance at a server they control, which is the hijack the guard exists to stop;
+    # they would have to already know the password to the database holding all the data. The password
+    # is compared with compare_digest so the check does not leak through timing.
+    if req is not None and req.create_database:
+        import hmac
+        same_server = (
+            (req.host or "") == (config.postgis_host or "")
+            and int(req.port or 0) == int(config.postgis_port or 0)
+            and (req.user or "") == (config.postgis_user or "")
+            and hmac.compare_digest(req.password or "", config.postgis_password or "")
+        )
+        if same_server:
+            return
 
     user = await resolve_bearer_user(request, db)
     if user is None:
@@ -137,7 +159,7 @@ async def configure_db(req: ConfigureDBRequest, request: Request):
     session = _session()
     if session is not None:
         async with session as db:
-            await _guard_setup_mutation(request, db)
+            await _guard_setup_mutation(request, db, req=req)
     # No engine yet ⇒ nothing is configured ⇒ first run by definition, so the guard is a no-op.
 
     # An UNSAVED instance: it carries the credentials for `_write_env` before any database exists
