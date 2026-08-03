@@ -3,6 +3,48 @@ from celery.signals import worker_ready
 from . import state_db
 from .config import get_settings
 
+def _adopt_runtime_storage() -> None:
+    """Apply the wizard's storage settings to this process's environment, at import.
+
+    Docker fixes a container's environment when it is CREATED. The worker is created by the
+    installer, BEFORE the setup wizard runs, so `.env` changes never reach it — and `restart()`
+    preserves the original environment, which is why restarting celery was not enough. The database
+    credentials already worked around this with a small file in the shared data dir
+    (`state_db.runtime_credentials`); storage had no equivalent, so the worker kept the installer's
+
+        STORAGE_ENDPOINT=http://minio:9000
+        STORAGE_BUCKET=geodeploy
+
+    forever. On a LOCAL install those are accidentally correct — Compose gives the MinIO service the
+    network alias `minio` — which is why this was invisible for so long. On external S3 every worker
+    task that touches storage failed against a host that does not exist for that instance: ingest,
+    tiling, and a restore reporting `Could not connect to the endpoint URL: "http://minio:9000/..."`.
+
+    Done HERE rather than at each of the ~35 call sites that read `settings.storage_*`: one place,
+    and it fixes the bucket and region as well as the endpoint. Applied at import, so the restart
+    the wizard already performs is what picks it up.
+    """
+    import os
+
+    from . import state_db
+
+    try:
+        live = state_db.runtime_storage()
+    except Exception:      # noqa: BLE001 — never stop a worker from starting over this
+        return
+    if not live:
+        return
+    for env_key, value in (("STORAGE_ENDPOINT", live.get("endpoint")),
+                           ("STORAGE_BUCKET", live.get("bucket")),
+                           ("STORAGE_ACCESS_KEY", live.get("access_key")),
+                           ("STORAGE_SECRET_KEY", live.get("secret_key")),
+                           ("STORAGE_REGION", live.get("region"))):
+        if value:
+            os.environ[env_key] = value
+    get_settings.cache_clear()
+
+
+_adopt_runtime_storage()
 settings = get_settings()
 
 celery_app = Celery(

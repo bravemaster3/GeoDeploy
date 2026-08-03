@@ -183,10 +183,42 @@ def _ensure_bucket(s3, bucket: str, region: str | None = None) -> None:
 _client_cache: dict[tuple, object] = {}
 
 
-def get_s3_client():
+def storage_settings() -> tuple[str, str, str, str, str]:
+    """(endpoint, bucket, access_key, secret_key, region), preferring the RUNTIME file.
+
+    The worker's environment is fixed when its container is CREATED, and the setup wizard runs after
+    that — so `.env` changes never reach it. The database credentials already solved this with a
+    small file in the shared data dir; storage needs the same, and did not have it: the worker kept
+    the installer's `http://minio:9000` forever.
+
+    Invisible on a local install, because Compose gives the MinIO service exactly that network alias.
+    On external S3 every worker task touching storage failed against a host that does not exist for
+    this instance — ingest, tiling, and a restore reporting
+    `Could not connect to the endpoint URL: "http://minio:9000/..."`.
+
+    Environment stays the fallback, so nothing changes for an instance whose container was recreated
+    after setup (an update does that), or for the API, which patches its own os.environ.
+    """
+    from .. import state_db
+
     settings = get_settings()
-    key = (settings.storage_endpoint, settings.storage_access_key,
-           settings.storage_secret_key, settings.storage_region)
+    live = state_db.runtime_storage()
+    if live:
+        return (live.get("endpoint") or "", live.get("bucket") or settings.storage_bucket,
+                live.get("access_key") or "", live.get("secret_key") or "",
+                live.get("region") or "us-east-1")
+    return (settings.storage_endpoint, settings.storage_bucket, settings.storage_access_key,
+            settings.storage_secret_key, settings.storage_region)
+
+
+def storage_bucket() -> str:
+    """The bucket the worker should read and write. Same reasoning as `storage_settings`."""
+    return storage_settings()[1]
+
+
+def get_s3_client():
+    endpoint, _bucket, access_key, secret_key, region = storage_settings()
+    key = (endpoint, access_key, secret_key, region)
     client = _client_cache.get(key)
     if client is None:
         client = _make_client(*key)

@@ -72,3 +72,44 @@ def test_an_intentional_empty_value_is_still_written(tmp_path, monkeypatch):
                       postgis_db="geodeploy", postgis_user="geodeploy", postgis_password="p")
     body = _write(tmp_path, cfg, monkeypatch)
     assert "POSTGIS_SSLMODE=\n" in body
+
+
+# ── the worker's storage settings ──────────────────────────────────────────────────────────────
+
+def test_runtime_storage_lives_under_temp():
+    """The API container mounts data SUB-directories, not the data root, so a file at `{data_dir}/x`
+    lands in the API's own writable layer and the worker never sees it. `data/temp` is mounted by
+    both — the same reason RUNTIME_DB_FILE is there."""
+    from geodeploy import state_db
+
+    assert state_db.RUNTIME_STORAGE_FILE.startswith("temp/")
+
+
+def test_the_worker_adopts_runtime_storage_at_import():
+    """Docker fixes a container's environment when it is CREATED. The worker is created by the
+    installer, BEFORE the wizard runs, so `.env` never reaches it and `restart()` preserves the
+    original environment — the worker kept `STORAGE_ENDPOINT=http://minio:9000`.
+
+    Invisible on a local install (Compose aliases the MinIO service to `minio`), fatal on external
+    S3: a restore failed with `Could not connect to the endpoint URL: "http://minio:9000/..."` on an
+    instance configured for Hetzner.
+    """
+    import inspect
+
+    from geodeploy import celery_app as ca
+
+    src = inspect.getsource(ca)
+    assert "_adopt_runtime_storage()" in src
+    # Before `settings = get_settings()`, or the module caches the stale values it just replaced.
+    assert src.index("_adopt_runtime_storage()\nsettings = get_settings()") > 0
+
+
+def test_the_api_republishes_storage_so_old_instances_heal():
+    """An instance configured before this existed has no runtime file. Writing it on every API start
+    repairs it with no action from the operator — the same self-healing the DB credentials have."""
+    import inspect
+
+    from geodeploy import main
+
+    src = inspect.getsource(main.lifespan)
+    assert "write_runtime_storage" in src

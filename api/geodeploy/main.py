@@ -63,8 +63,19 @@ async def lifespan(app: FastAPI):
                 state_db.write_runtime_credentials(
                     settings.postgis_host, settings.postgis_port, settings.postgis_db,
                     settings.postgis_user, settings.postgis_password, settings.postgis_sslmode)
+                # STORAGE, for the same reason and with the same self-healing property. The worker's
+                # environment was fixed when its container was created — before the wizard ran — so
+                # it kept the installer's `http://minio:9000` and `geodeploy` bucket. Publishing here
+                # repairs any instance configured before this existed, on its next API start, with no
+                # action from the operator. The API's own values come from `.env`, which the wizard
+                # does write correctly, so they are the right source.
+                if settings.storage_access_key:
+                    state_db.write_runtime_storage(
+                        settings.storage_endpoint, settings.storage_bucket,
+                        settings.storage_access_key, settings.storage_secret_key,
+                        settings.storage_region)
             except Exception:
-                log.exception("could not publish runtime DB credentials for the worker")
+                log.exception("could not publish runtime credentials for the worker")
         except Exception as exc:
             log.warning("state database not reachable yet (%s) — serving the setup wizard "
                         "until it is", exc)

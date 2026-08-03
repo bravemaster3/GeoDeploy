@@ -441,7 +441,22 @@ def _apply_to_process(config: SetupConfig) -> None:
         import logging
         logging.getLogger(__name__).exception("could not publish runtime DB credentials")
 
-    # Still restart celery: it picks up the new storage settings and clears any cached state.
+    # Publish STORAGE the same way, and for the same reason the note above gives for the database:
+    # a restart does not re-read `.env`, so the worker keeps the installer's `http://minio:9000`.
+    # That default is accidentally CORRECT for a local install (Compose aliases the MinIO service to
+    # `minio`), which is why this stayed invisible — on external S3 every worker task that touches
+    # storage failed against a host that does not exist for this instance.
+    try:
+        from .. import state_db
+        state_db.write_runtime_storage(
+            config.storage_endpoint, config.storage_bucket,
+            config.storage_access_key, config.storage_secret_key,
+            config.storage_region or "us-east-1")
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("could not publish runtime storage settings")
+
+    # Still restart celery: it clears cached state (the boto client cache is keyed on credentials).
     try:
         client = docker.from_env()
         for c in client.containers.list():

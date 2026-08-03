@@ -169,6 +169,50 @@ def write_runtime_credentials(host, port, dbname, user, password, sslmode="") ->
     os.replace(tmp, path)      # atomic: a worker must never read a half-written file
 
 
+#: Under `temp/` for the SAME reason as RUNTIME_DB_FILE above — the API container mounts data
+#: sub-directories, not the data root, so a file at `{data_dir}/x` lands in the API's own writable
+#: layer and the worker never sees it. `data/temp` is mounted by both.
+RUNTIME_STORAGE_FILE = "temp/runtime-storage.json"
+
+
+def runtime_storage() -> dict | None:
+    """Object-storage settings published by the setup wizard, or None."""
+    import json
+    try:
+        with open(f"{get_settings().data_dir}/{RUNTIME_STORAGE_FILE}") as fh:
+            data = json.load(fh)
+        return data if data.get("access_key") else None
+    except (OSError, ValueError):
+        return None
+
+
+def write_runtime_storage(endpoint, bucket, access_key, secret_key, region="us-east-1") -> None:
+    """Publish storage settings for the WORKER, for the same reason the DB credentials are published:
+    a `docker restart` does not re-read `.env` — Docker fixes a container's environment when it is
+    CREATED — so celery keeps whatever the installer wrote before the wizard ran.
+
+    That default is `http://minio:9000`, which happens to be CORRECT for a local install (Compose
+    gives the MinIO service that network alias), so the bug is invisible there. On external S3 the
+    worker kept trying `minio:9000` for every task that touches storage — ingest, tiling, restore —
+    while the API, whose own os.environ the wizard updates in-process, worked fine. A restore failed
+    with `Could not connect to the endpoint URL: "http://minio:9000/..."` on an instance configured
+    for Hetzner.
+
+    0600: it holds a secret key, the same one already in `.env` beside it.
+    """
+    import json
+    import os
+    path = f"{get_settings().data_dir}/{RUNTIME_STORAGE_FILE}"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump({"endpoint": endpoint or "", "bucket": bucket or "",
+                   "access_key": access_key or "", "secret_key": secret_key or "",
+                   "region": region or "us-east-1"}, fh)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)      # atomic: a worker must never read a half-written file
+
+
 def connect(timeout: int = 30) -> _Connection:
     """A short-lived connection to the state database (the same one PostGIS serves)."""
     settings = get_settings()
