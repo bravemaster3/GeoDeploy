@@ -75,20 +75,33 @@ join with a name, publish something, and watch it disappear on the hour.
 The pieces were always tested; these are the things that can only be proven on a running instance,
 and each of them turned up real bugs that unit tests could not have caught:
 
+- **A clean install from scratch**, in all four combinations: PostGIS managed by GeoDeploy or
+  external, object storage on this server or an external S3 provider.
 - A **backup → restore round trip** on a live instance, including the object copy.
+- **Restoring onto a rebuilt instance**, against a database that already held an installation.
 - A **scheduled wipe and restore**, hourly and unattended (demo mode uses the same restore path).
 - A backup **larger than 2 GB**, which had been failing on an `int4` column.
+
+That exercise found seven bugs no test suite could have caught, because each needed real
+infrastructure and several were invisible on a local install — the defaults happen to be correct
+there. Among them: external PostGIS could never complete setup, the worker never received the
+storage or database credentials the wizard wrote, and a restore silently rewrote the instance's own
+database settings. All are fixed, and all are covered by tests now.
 
 ### Known issues
 
 Stated plainly, because finding these yourself is worse:
 
-- **A clean install has not yet been verified end to end on fresh hardware** following only the
-  documentation. It is the last open item before the tag.
 - **No upgrade has been exercised between two tagged versions**, for the obvious reason that there
   are not two yet. Updates between commits on `main` have been running throughout.
 - **Single sign-on (OIDC)** is built and unit-tested but has not been verified against a live
   identity provider.
+- **SMTP and OIDC secrets do not survive a restore taken under a different `GEODEPLOY_SECRET_KEY`**
+  and must be re-entered. That is the design — the key lives in `.env` and deliberately not in the
+  database or any backup, so a stolen backup cannot hand over your credentials. Your data, and the
+  backup destination, are unaffected.
+- **Object storage credentials can only be set during setup.** There is no screen for them
+  afterwards, so rotating an S3 key means editing `.env`. Same for `GEODEPLOY_SECRET_KEY` itself.
 - **Restoring a backup rolls the schema back** to the snapshot's, then re-applies the additive
   migrations. Restoring a backup from a *much* older version is untested territory.
 - Restore history begins at the restore that creates it: a restore replaces the database its own

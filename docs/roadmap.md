@@ -64,7 +64,7 @@ narrative are not maps with extra panels.</p>
 - [x] **Story maps** — ordered sections of rich text, each with a captured camera and layer state
 - [x] **Catalog portals** — facet rail (folder, type, keywords, licence), result cards, side map
 - [x] Editor with live preview, kept in parity with the published runtime
-- [x] Symbology: single, graduated and categorized; dashes, marker shapes, sizes, opacity
+- [x] Symbology: colour, opacity, dashes, marker shapes and sizes — one style per layer
 - [x] Layer icons and canvas markers, legend swatches, per-layer legends
 - [x] Layer folders — nestable, ordered, collapsible
 - [x] **About pages** — a WYSIWYG editor with pasted images, per-layer metadata and data links
@@ -120,7 +120,8 @@ parts, then the release notes and the tag.</p>
 - [x] **Backup → restore round trip proven end to end** on a live instance
 - [x] **Scheduled wipe-and-restore proven** (demo mode runs the same restore path hourly)
 - [x] Release notes
-- [ ] A clean install verified from scratch on a fresh machine, following only the docs
+- [x] **A clean install verified from scratch** on fresh machines — all four combinations of
+      managed/external PostGIS and managed/external object storage
 - [ ] An upgrade exercised between two tagged versions — which needs the first tag to exist
 
 </div>
@@ -156,6 +157,8 @@ trip — edit in the tool you prefer, publish back.</p>
 - [ ] Measure distance and area; **print composer** to PDF with legend, scale bar, attribution
 - [ ] Swipe compare, and permalinks that restore view and layer state
 - [ ] Draw a box to *filter* a catalog, not only to download
+- [ ] **Data-driven symbology** — colour and size from a field: categorized for text
+      values, graduated for numbers, with a legend that matches
 - [ ] Rule-based and expression symbology; a wider template gallery
 - [ ] Multi-file and archive uploads (`.tar.gz` alongside `.zip`)
 - [ ] **Choose what a restore replaces** — files, portal assets and database as separate choices,
