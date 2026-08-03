@@ -165,6 +165,12 @@ services:
       # The WHOLE data dir (was: sqlite + temp + martin only). Backups archive portal_assets,
       # which the worker could not otherwise see. Same container paths as before, plus the rest.
       - ./data:/data
+      # The portal RUNTIME. services/portal_generator reads /templates/shared/{portal.js,portal.css,
+      # layout.html} at a fixed path, and `_read` returns "" for a missing file — so without this
+      # mount the worker wrote bundles containing a style and NOTHING ELSE. A restore's automatic
+      # republish produced portals that rendered a basemap and MapLibre's own zoom control, with no
+      # sidebar, no layer list and no data, and reported success because three files were written.
+      - ./templates:/templates:ro
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - geodeploy

@@ -560,6 +560,20 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
     portal_css = _read(shared_dir / "portal.css", "")
     portal_js = _read(shared_dir / "portal.js", "")
 
+    # REFUSE to write a portal with no runtime. `_read` returns "" for a missing file, so a caller
+    # that cannot see /templates produced a bundle containing a style and nothing else: the portal
+    # rendered a basemap and MapLibre's own zoom control, with no sidebar, no layer list and no data,
+    # and every caller reported success because files were written.
+    #
+    # That is exactly what happened when the celery container had no `./templates` mount and a
+    # restore's automatic republish ran there. A hollow portal that claims to be published is worse
+    # than a failed publish, because nothing points at the cause.
+    if not portal_js.strip():
+        raise RuntimeError(
+            f"The portal runtime is missing: {shared_dir}/portal.js is empty or unreadable. "
+            "A bundle written without it renders a basemap and nothing else. If this is the Celery "
+            "worker, the container needs the `./templates:/templates:ro` mount.")
+
     # Load template files. A template only needs theme.css + style.json + template.json;
     # layout.html is optional and falls back to the shared skeleton.
     basemap_style = _load_basemap(template_dir)

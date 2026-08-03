@@ -207,3 +207,32 @@ def test_a_restore_keeps_this_instances_own_database_settings():
     body = inspect.getsource(rt._restore_own_db_settings)
     assert "encrypt_secret" in body, "must re-encrypt with THIS instance's key"
     assert "postgis_password" in body
+
+
+def test_the_worker_can_see_the_portal_runtime():
+    """`portal_generator` reads /templates/shared/portal.js at a FIXED path, and `_read` returns ""
+    for a missing file. The API mounts ./templates; the celery container did not — so a restore's
+    automatic republish wrote bundles with a style and no runtime. The portal rendered a basemap and
+    MapLibre's own zoom control: no sidebar, no layer list, no data. It reported success, because
+    three files had been written.
+
+    Both containers must mount it, and the generator must refuse rather than write a hollow bundle.
+    """
+    import pathlib
+    import re
+
+    compose = pathlib.Path(__file__).resolve().parents[2] / "docker-compose.yml"
+    text = compose.read_text(encoding="utf-8")
+    celery_block = re.search(r"^  celery:.*?(?=^\w|\Z)", text, re.S | re.M).group(0)
+    assert "/templates" in celery_block, (
+        "the celery service must mount ./templates — it generates portal bundles after a restore")
+
+
+def test_the_generator_refuses_a_bundle_with_no_runtime():
+    import inspect
+
+    from geodeploy.services import portal_generator as pg
+
+    src = inspect.getsource(pg)
+    assert "portal_js.strip()" in src
+    assert "runtime is missing" in src
