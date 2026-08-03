@@ -3,8 +3,8 @@ from celery.signals import worker_ready
 from . import state_db
 from .config import get_settings
 
-def _adopt_runtime_storage() -> None:
-    """Apply the wizard's storage settings to this process's environment, at import.
+def _adopt_runtime_config() -> None:
+    """Apply the wizard's DATABASE and STORAGE settings to this process's environment, at import.
 
     Docker fixes a container's environment when it is CREATED. The worker is created by the
     installer, BEFORE the setup wizard runs, so `.env` changes never reach it — and `restart()`
@@ -28,23 +28,50 @@ def _adopt_runtime_storage() -> None:
 
     from . import state_db
 
+    changed = False
     try:
-        live = state_db.runtime_storage()
+        storage = state_db.runtime_storage()
     except Exception:      # noqa: BLE001 — never stop a worker from starting over this
-        return
-    if not live:
-        return
-    for env_key, value in (("STORAGE_ENDPOINT", live.get("endpoint")),
-                           ("STORAGE_BUCKET", live.get("bucket")),
-                           ("STORAGE_ACCESS_KEY", live.get("access_key")),
-                           ("STORAGE_SECRET_KEY", live.get("secret_key")),
-                           ("STORAGE_REGION", live.get("region"))):
-        if value:
-            os.environ[env_key] = value
-    get_settings.cache_clear()
+        storage = None
+    if storage:
+        for env_key, value in (("STORAGE_ENDPOINT", storage.get("endpoint")),
+                               ("STORAGE_BUCKET", storage.get("bucket")),
+                               ("STORAGE_ACCESS_KEY", storage.get("access_key")),
+                               ("STORAGE_SECRET_KEY", storage.get("secret_key")),
+                               ("STORAGE_REGION", storage.get("region"))):
+            if value:
+                os.environ[env_key] = value
+                changed = True
+
+    # The DATABASE credentials need this too, even though `state_db.connect()` already reads the
+    # file directly. pg_dump and pg_restore are SUBPROCESSES: they never touch state_db, they build
+    # their arguments from `get_settings()`, and PGPASSWORD comes from `settings.postgis_password` —
+    # the install-time EMPTY value in this container. So backups and restores died with
+    #
+    #     fe_sendauth: no password supplied
+    #
+    # while every ordinary task worked, because those go through state_db. Adopting the credentials
+    # into the environment fixes the subprocesses and costs nothing for the rest.
+    try:
+        db_creds = state_db.runtime_credentials()
+    except Exception:      # noqa: BLE001
+        db_creds = None
+    if db_creds:
+        for env_key, value in (("POSTGIS_HOST", db_creds.get("host")),
+                               ("POSTGIS_PORT", str(db_creds.get("port") or "")),
+                               ("POSTGIS_DB", db_creds.get("dbname")),
+                               ("POSTGIS_USER", db_creds.get("user")),
+                               ("POSTGIS_PASSWORD", db_creds.get("password")),
+                               ("POSTGIS_SSLMODE", db_creds.get("sslmode"))):
+            if value:
+                os.environ[env_key] = value
+                changed = True
+
+    if changed:
+        get_settings.cache_clear()
 
 
-_adopt_runtime_storage()
+_adopt_runtime_config()
 settings = get_settings()
 
 celery_app = Celery(

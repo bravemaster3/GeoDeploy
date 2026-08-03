@@ -99,9 +99,9 @@ def test_the_worker_adopts_runtime_storage_at_import():
     from geodeploy import celery_app as ca
 
     src = inspect.getsource(ca)
-    assert "_adopt_runtime_storage()" in src
-    # Before `settings = get_settings()`, or the module caches the stale values it just replaced.
-    assert src.index("_adopt_runtime_storage()\nsettings = get_settings()") > 0
+    assert "_adopt_runtime_config()" in src
+    # Called BEFORE the module captures `settings`, or it caches the values just replaced.
+    assert src.index("_adopt_runtime_config()\n") < src.index("settings = get_settings()")
 
 
 def test_the_api_republishes_storage_so_old_instances_heal():
@@ -113,3 +113,17 @@ def test_the_api_republishes_storage_so_old_instances_heal():
 
     src = inspect.getsource(main.lifespan)
     assert "write_runtime_storage" in src
+
+
+def test_the_worker_adopts_database_credentials_for_subprocesses():
+    """pg_dump and pg_restore are SUBPROCESSES: they never call state_db, they read
+    `settings.postgis_password` — the install-time EMPTY value in the worker's container. So every
+    backup and restore died with `fe_sendauth: no password supplied` while ordinary tasks worked,
+    because those go through state_db.connect() which reads the runtime file directly."""
+    import inspect
+
+    from geodeploy import celery_app as ca
+
+    src = inspect.getsource(ca._adopt_runtime_config)
+    assert "runtime_credentials" in src
+    assert "POSTGIS_PASSWORD" in src
