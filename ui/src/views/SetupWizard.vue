@@ -112,10 +112,14 @@
             Storage reconnected: {{ reconnected.storage_bucket }} at {{ reconnected.storage_endpoint }}
           </p>
           <p v-else-if="reconnected.storage_configured" class="text-xs text-amber-300 leading-relaxed">
-            Storage points at {{ reconnected.storage_bucket }}, but its secret key was encrypted with
-            the previous install's <span class="font-mono">GEODEPLOY_SECRET_KEY</span> and cannot be
-            read here. Put that key into <span class="font-mono">.env</span> and run setup again, or
-            re-enter the storage credentials after signing in.
+            Storage points at <span class="font-mono">{{ reconnected.storage_bucket }}</span>, but
+            its secret key was encrypted with the previous install's
+            <span class="font-mono">GEODEPLOY_SECRET_KEY</span> and cannot be read here.
+            <strong>Uploads and maps will fail until it is supplied</strong>, and there is no screen
+            for it after signing in — it has to go into <span class="font-mono">.env</span>:
+            set <span class="font-mono">STORAGE_SECRET_KEY</span> directly, or restore the old
+            <span class="font-mono">GEODEPLOY_SECRET_KEY</span> and run setup again (which recovers
+            the SMTP and SSO secrets too). Then recreate the services.
           </p>
           <button @click="router.push('/login')" class="btn-primary w-full justify-center">
             Go to sign in
