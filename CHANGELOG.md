@@ -38,7 +38,8 @@ wizard handles the rest — no Docker knowledge, no database configuration.
 - Three experiences: **web map**, **story map**, **catalog** — each a different shape, not a map
   with extra panels.
 - An editor whose preview *is* the published runtime, so what you see is what visitors get.
-- Symbology (single, graduated, categorized), layer icons and markers, legends, nestable folders.
+- One style per layer — colour, opacity, dashes, marker shapes and sizes — plus layer icons,
+  legends and nestable folders. (Styling by a data field is the next feature, not this one.)
 - **About pages** with a WYSIWYG editor, per-layer metadata and direct data links.
 - Templates, per-portal branding, a 3D globe start view, and responsive layouts.
 
