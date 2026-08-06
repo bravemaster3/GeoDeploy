@@ -624,7 +624,7 @@ const _ARCH_DEFAULTS = {
   storymap: { regions: { layerList: { side: 'left', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: true, legend: true, basemap: true, about: false, story: true } },
   // V-14 catalog: the dataset list is the page and the map is a panel beside it, so layerCatalog is
   // off (the facet rail replaces the switcher) and `catalog` carries the split.
-  catalog:  { regions: { layerList: { side: 'left', mode: 'docked', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, catalog: { scope: 'portal', mapSide: 'right', mapWidth: 50, railWidth: 20, perPage: 12 } }, panels: { catalog: true, layerCatalog: false, legend: true, basemap: true, about: false, story: false } },
+  catalog:  { regions: { layerList: { side: 'right', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, catalog: { scope: 'portal', mapSide: 'right', mapWidth: 50, railWidth: 20, perPage: 12 } }, panels: { catalog: true, layerCatalog: false, legend: true, basemap: true, about: false, story: false } },
 }
 // `webmap+catalog` is still UNBUILT and degrades to a working map on purpose. `catalog` used to be
 // here too, which is why choosing it silently rendered a plain web map.

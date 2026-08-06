@@ -457,9 +457,13 @@ _LAYOUT_ARCHETYPES = {
     # /api/stac at runtime rather than baked, so adding a dataset does not require a re-publish.
     "catalog": {
         "regions": {
-            # Kept for merge-shape compatibility with the other archetypes; the catalog does not
-            # render a layer switcher (see panels.layerCatalog below).
-            "layerList": {"side": "left", "mode": "docked", "collapsed": True,
+            # `layerCatalog` is off by default here (the facet rail is the browse surface), but an
+            # author CAN turn it on — so these settings have to be the ones that work when they do.
+            # FLOATING and on the map's side: the horizontal space of a catalog page belongs to the
+            # results, so a docked column would be taken out of the map's half, and the map is the
+            # only part of the page a layer list means anything to. Collapsed, like every other
+            # archetype — one tap on the on-map toggle opens it.
+            "layerList": {"side": "right", "mode": "floating", "collapsed": True,
                           "width": None, "x": None, "y": None},
             "controls": {"position": "top-right"},
             "header": {"style": "bar"},

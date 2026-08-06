@@ -202,6 +202,39 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-06d (**first-paint loader · tilt · brighter space · the list scrolls**. `#gd-loading` lives in
+`shared/layout.html`, not in portal.js — its job is to cover the window from the FIRST paint, and an
+element created once the runtime has parsed appears after the thing it hides. portal.js's `loading`
+clears it on READINESS: gates registered synchronously up front (`map`, `render`, plus `catalog` /
+`story` per archetype) and cleared by the piece that owns each — `map` at the end of the load
+handler, `render` on the map's first `idle`. Two rules make it safe: register every gate before any
+can clear, and clear OUTSIDE the try/catch, so one broken panel cannot make a portal that never
+appears. The 15 s timeout is a backstop for a piece that never calls back, not the mechanism. Deck
+(GeoParquet) data is deliberately NOT gated — it streams and has its own indicator.
+**Tilt:** `NavigationControl` gains `visualizePitch` (drag the compass to pitch) and a `TiltControl`
+button toggles 0 ↔ 60°; `maxPitch` raised 60 → 75. Nothing on the page previously advertised
+right-drag, so a 3D portal looked flat and unfixable. The button reflects `pitchend`, so it can never
+contradict the map. **Space** is brighter: 8 star layers with halos on the bright ones, a diagonal
+Milky Way, three nebulae, and a 4-minute drift (dropped under `prefers-reduced-motion`); the sky's
+horizon limb went `#7fb2ff` → `#a8d4ff`.
+**Catalog "On map" legend (`#cat-active`)** — the box listing what a visitor has switched on — now
+COLLAPSES and opens closed, with the count still on the header, and its rows scroll rather than the
+whole panel. It sits on the map, and on a catalog the map is already the smaller half of the page,
+so a list that grew with every dataset ate the view it described. State is per-visit and re-applied
+on each render (the panel is rebuilt from `onMap` on every change, so it cannot live on the DOM).
+**Layer list:** `#layer-list` is now the scroll container (needs `min-height:0` down the flex chain)
+so the search box and action row stay put while a long list scrolls. Separately, the catalog
+archetype no longer hides `#sidebar` in CSS — portal.js hides it when `panels.layerCatalog` is off,
+so a catalog author who turns it ON now gets a list (floating, on the map's side, collapsed) instead
+of one built and then hidden by a rule that could not see the choice.
+**Pointer cursor over features:** the hover handler covered MapLibre layers only, so GeoParquet
+layers — which emit no MapLibre layer for `queryRenderedFeatures` to find — showed the pan cursor
+over every feature. Deck DETAIL layers are now `pickable` and hit-tested with `deckOverlay.pickObject`
+(one pick per animation frame; a pick is a render pass and mousemove far outruns the screen). The
+density OVERVIEW stays unpickable — a grid cell is not a feature. `setCursor` is the single writer
+and defers to the draw-box / area-select modes, which own the cursor while active. The MapLibre
+query now also drops ids the live style lacks: `queryRenderedFeatures` rejects the WHOLE call on one
+unknown id rather than skipping that layer.)
 2026-08-06c (`markerImage` takes an OUTLINE (colour + width) — the white stroke was hard-coded. Width
 is a RATIO of the radius so it stays proportional when a layer is resized (0.28 = the old value, so
 an unstyled marker is pixel-identical); a thick one hides the fill, which is how a RING is drawn.
