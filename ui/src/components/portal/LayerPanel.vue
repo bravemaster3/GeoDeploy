@@ -134,34 +134,6 @@
                 </div>
               </div>
 
-              <!-- 3D. Polygons only: MapLibre extrudes fills, and there is nothing to raise a line
-                   or a point into. Needs a numeric field, so it is hidden when the layer has none —
-                   an enabled switch that cannot do anything is worse than an absent one. -->
-              <div v-if="numericFields.length" class="pt-1 border-t border-border/50">
-                <label class="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" :checked="!!config.style?.extrusion?.enabled"
-                    @change="setExtrusion({ enabled: $event.target.checked })" class="accent-primary" />
-                  <span class="text-xs text-foreground">3D — extrude by a field</span>
-                </label>
-                <div v-if="config.style?.extrusion?.enabled" class="mt-1.5 space-y-1.5 pl-5">
-                  <select :value="config.style?.extrusion?.field || ''"
-                    @change="setExtrusion({ field: $event.target.value })"
-                    class="w-full text-xs border border-border rounded px-1.5 py-1">
-                    <option value="">Choose a height field…</option>
-                    <option v-for="f in numericFields" :key="f.name" :value="f.name">{{ f.name }}</option>
-                  </select>
-                  <label class="flex items-center gap-2">
-                    <span class="text-[11px] text-muted-foreground flex-shrink-0">Height ×</span>
-                    <input type="number" min="0.01" step="0.5" :value="config.style?.extrusion?.scale ?? 1"
-                      @change="setExtrusion({ scale: parseFloat($event.target.value) || 1 })"
-                      class="w-20 text-xs border border-border rounded px-1.5 py-0.5" />
-                  </label>
-                  <p class="text-[11px] text-muted-foreground/70 leading-snug">
-                    The field is in metres. Use the multiplier when it is not — floors × 3, say.
-                    The map tilts so you can see it.
-                  </p>
-                </div>
-              </div>
             </template>
 
             <div v-else-if="geomType === 'line'" class="space-y-2">
@@ -201,6 +173,49 @@
                     class="w-16 text-xs border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
                   <span class="text-xs text-muted-foreground/70">px</span>
                 </div>
+              </div>
+            </div>
+
+            <!-- 3D. Polygons extrude directly (MapLibre raises a fill); POINTS become pillars —
+                 a column standing at each location, served as a buffered polygon by the shared
+                 Martin function (services/pillars), so the layer keeps the renderer it already had.
+                 Lines are excluded: there is no sensible column for a line, and QGIS/GeoLibre do not
+                 offer one either. Hidden without a numeric field — an enabled switch that cannot do
+                 anything is worse than an absent one. -->
+            <div v-if="canExtrude" class="pt-1 border-t border-border/50">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" :checked="!!config.style?.extrusion?.enabled"
+                  @change="setExtrusion({ enabled: $event.target.checked })" class="accent-primary" />
+                <span class="text-xs text-foreground">
+                  {{ geomType === 'point' ? '3D — pillars by a field' : '3D — extrude by a field' }}
+                </span>
+              </label>
+              <div v-if="config.style?.extrusion?.enabled" class="mt-1.5 space-y-1.5 pl-5">
+                <select :value="config.style?.extrusion?.field || ''"
+                  @change="setExtrusion({ field: $event.target.value })"
+                  class="w-full text-xs border border-border rounded px-1.5 py-1">
+                  <option value="">Choose a height field…</option>
+                  <option v-for="f in numericFields" :key="f.name" :value="f.name">{{ f.name }}</option>
+                </select>
+                <label class="flex items-center gap-2">
+                  <span class="text-[11px] text-muted-foreground flex-shrink-0">Height ×</span>
+                  <input type="number" min="0.01" step="0.5" :value="config.style?.extrusion?.scale ?? 1"
+                    @change="setExtrusion({ scale: parseFloat($event.target.value) || 1 })"
+                    class="w-20 text-xs border border-border rounded px-1.5 py-0.5" />
+                </label>
+                <!-- Points only: a polygon already has a footprint, a point has none — so the pillar
+                     needs a width before it can be drawn at all. -->
+                <label v-if="geomType === 'point'" class="flex items-center gap-2">
+                  <span class="text-[11px] text-muted-foreground flex-shrink-0">Pillar radius</span>
+                  <input type="number" min="0.5" step="5" :value="config.style?.extrusion?.radius ?? 30"
+                    @change="setExtrusion({ radius: parseFloat($event.target.value) || 30 })"
+                    class="w-20 text-xs border border-border rounded px-1.5 py-0.5" />
+                  <span class="text-[11px] text-muted-foreground/70">m</span>
+                </label>
+                <p class="text-[11px] text-muted-foreground/70 leading-snug">
+                  The field is in metres. Use the multiplier when it is not — floors × 3, say.
+                  The map tilts so you can see it.
+                </p>
               </div>
             </div>
 
@@ -572,6 +587,22 @@ function setEntryColor(i, color) {
     emitStyle({ categories: cats })
   }
 }
+
+// Which layers can be given 3D, and why the others cannot:
+//   * LINES — there is no sensible column for a line; QGIS and GeoLibre do not offer one either.
+//   * GEOPARQUET POINTS — they render through deck.gl, not Martin, so the buffered-polygon tile
+//     source that gives PostGIS points their pillars does not apply. deck extrudes POLYGONS, not
+//     points, and the vendored bundle has no ColumnLayer — so a pillar there needs the geometry
+//     buffered client-side first, which is not built. Hidden rather than shown doing nothing, the
+//     same rule as hiding it when a layer has no numeric field.
+// GeoParquet POLYGONS are fine and offered: deck's GeoJsonLayer extrudes them directly
+// (`extruded` + `getElevation`), and a PMTiles-tiled one takes the normal MapLibre path.
+const canExtrude = computed(() => {
+  if (!numericFields.value.length) return false
+  if (geomType.value === 'line') return false
+  if (geomType.value === 'point' && layer.value?.storage_backend === 'geoparquet') return false
+  return true
+})
 
 function setExtrusion(patch) {
   emitStyle({ extrusion: { ...(props.config.style?.extrusion || {}), ...patch } })

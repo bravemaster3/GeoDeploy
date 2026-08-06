@@ -1373,12 +1373,25 @@ function makeDeckLayer(cfg) {
       getLineWidth: 0.5,
     })
   }
+  // 3D for a deck-rendered POLYGON layer. GeoParquet layers emit no MapLibre layer, so
+  // `fill-extrusion` never reaches them — deck extrudes them directly. Mirrors
+  // templates/shared/portal.js::makeDeckLayer; if these disagree the preview shows a style the
+  // portal will not render. Points are excluded (deck extrudes polygons; a pillar needs the
+  // geometry buffered, which only the PostGIS tile path does).
+  const ex = cfg.style?.extrusion || {}
+  const extruded = isPoly && !!ex.enabled && !!ex.field
+  const exScale = Number(ex.scale) || 1
   return new GeoJsonLayer({
     id: `deck_${cfg.layer_id}`,
     data,
     pickable: false,
     filled: !isLine,
-    stroked: true,
+    stroked: !extruded,        // walls plus an outline reads as a smudge at any pitch
+    extruded,
+    // Non-numeric or missing → 0, not NaN: NaN propagates into the mesh and drops the whole layer.
+    getElevation: extruded
+      ? (f) => { const v = Number((f.properties || {})[ex.field]); return (isFinite(v) ? v : 0) * exScale }
+      : 0,
     getFillColor: [...rgb, Math.round(255 * opacity * (isPoly ? (cfg.style?.fill_opacity ?? 0.45) : 1))],
     getLineColor: isPoly ? [...outline, Math.round(255 * opacity)] : [...rgb, Math.round(255 * opacity)],
     lineWidthUnits: 'pixels',
@@ -1842,6 +1855,26 @@ function buildPreviewStyle() {
         else if (st.lineType === 'dotted') linePaint['line-dasharray'] = [0.4, 1.8]
         style.layers.push({
           id: srcId, type: 'line', source: srcId, 'source-layer': sourceLayer, paint: linePaint,
+        })
+      } else if (symIsExtruded(st) && layer.storage_backend !== 'geoparquet') {
+        // POINTS IN 3D: pillars. MapLibre extrudes fills only, so the geometry has to become a
+        // polygon — the shared Martin function buffers the points by a radius in metres and serves
+        // them as one. A SECOND source beside the normal one, so toggling 3D off changes nothing
+        // else. Mirrors portal_generator._vector_layer / the pillar source it adds.
+        const pillarSrc = `${srcId}-pillars`
+        const r = Math.min(Math.max(Number(st.extrusion?.radius) || 30, 0.5), 100000)
+        const qs = new URLSearchParams({
+          schema: layer.schema_name, table: layer.table_name,
+          geom: layer.geometry_column || 'geom', radius: String(Math.round(r * 100) / 100),
+        })
+        style.sources[pillarSrc] = {
+          type: 'vector',
+          tiles: [`${location.origin}/tiles/point_pillars/{z}/{x}/{y}?${qs}`],
+          minzoom: 0, maxzoom: 22,
+        }
+        style.layers.push({
+          id: srcId, type: 'fill-extrusion', source: pillarSrc, 'source-layer': 'pillars',
+          paint: symExtrusionPaint(st, opacity),
         })
       } else {
         // Points render as a symbol layer with generated canvas icons, so marker SHAPES work on any

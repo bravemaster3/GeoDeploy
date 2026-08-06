@@ -131,6 +131,19 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   permalink it serves, never a substitute for the bbox queries.
 
 ## Last updated
+2026-08-06b (**new `pillars.py` — 3D for POINT layers**. MapLibre extrudes FILLS, so there is no
+point form of `fill-extrusion`: the geometry has to become a polygon. ONE shared Martin FUNCTION
+source (`geodeploy.point_pillars`) buffers a layer's points by a radius in METRES (via `geography` —
+a degree buffer is a different real size at every latitude) and returns them as MVT polygons, which
+`fill-extrusion` then raises. The layer is named by QUERY PARAMETERS on the tile URL, so one function
+serves every layer instead of DDL per upload. That URL is PUBLIC on a published portal, so the
+function validates schema/table/geom against `information_schema` before interpolating them and
+`%I`-quotes them as well. `martin._ensure_pillar_function` installs it (CREATE OR REPLACE,
+non-fatal) from the same place that writes the config naming it, so the two cannot drift.
+Deliberately NOT deck.gl's ColumnLayer for these: PostGIS layers render through Martin into MapLibre,
+and switching renderer when 3D is ticked would need a second implementation of identify, visibility
+and z-order. GeoParquet points are deck-rendered and their half is NOT built — the editor hides the
+control for them rather than showing one that does nothing.)
 2026-08-06 (**new `symbology.py` — data-driven styling**. THE source of truth for turning a layer's
 friendly style keys into MapLibre expressions: `classify` (quantile/equal/jenks-by-k-means),
 `build_classes`/`build_categories`, `color_expression` (`step`/`match`), `size_expression`

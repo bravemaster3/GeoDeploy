@@ -455,6 +455,26 @@ def is_extruded(style: dict) -> bool:
     return bool(ex.get("enabled")) and bool(ex.get("field") or ex.get("height"))
 
 
+#: Metres. A pillar MARKS a location rather than covering ground, so the default footprint is small
+#: and the operator sets it against their own extent. Mirrors services/pillars.DEFAULT_RADIUS_M.
+DEFAULT_PILLAR_RADIUS_M = 30.0
+
+
+def pillar_radius(style: dict) -> float:
+    """The footprint radius, in metres, of an extruded POINT.
+
+    Points have no area, so extruding one needs a width that polygons get for free. Kept out of
+    `extrusion_paint` because it is not paint at all — it decides the GEOMETRY the tile server
+    generates (`services/pillars`), not how it is drawn.
+    """
+    ex = style.get("extrusion") or {}
+    try:
+        r = float(ex.get("radius") or DEFAULT_PILLAR_RADIUS_M)
+    except (TypeError, ValueError):
+        r = DEFAULT_PILLAR_RADIUS_M
+    return min(max(r, 0.5), 100000.0)
+
+
 def legend_entries(style: dict) -> list[dict]:
     """What a legend should show for this layer: `[{color, label}]`, or [] for single symbols.
 

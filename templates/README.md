@@ -202,6 +202,16 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-06b (**`map.on('load')` is a guarded sequence — keep it that way**. Every step in it is
+wrapped in its own try/catch with a console.warn, because anything escaping aborts the REST of the
+handler — which is where `setupBasemaps()` adds the control cluster and the interaction wiring
+happens. A map in that state loads, paints and does not respond. `ensurePointImages()` was its first
+line and the only unguarded one; it became far riskier when a classified layer started registering
+one icon PER CLASS, and `markerImage()` sat outside the try inside `setMarkerImage`. Now guarded at
+both levels, as is the `applySpace()` call in `applyProjection` (also reached from that handler).
+Also: deck-rendered POLYGON layers extrude via GeoJsonLayer `extruded`/`getElevation` — GeoParquet
+layers emit no MapLibre layer, so `fill-extrusion` never reaches them; outline is disabled when
+extruded, and a non-numeric height becomes 0 rather than NaN, which would drop the whole mesh.)
 2026-08-06 (**data-driven symbology + 3D + space**: `portal.js::vectorLegendHtml` renders the
 `geodeploy:legend` baked into the style — a RENDERER only, it never rebuilds labels from
 classes/categories, so the published legend cannot drift from the published map. `applySpace()`

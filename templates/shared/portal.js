@@ -287,7 +287,12 @@
   function applyProjection(name) {
     if (!name || typeof map.setProjection !== 'function') return;
     try { map.setProjection({ type: name }); } catch (e) {}
-    applySpace(name === 'globe');
+    // Caught SEPARATELY, and never allowed to escape. `applyProjection` is called from inside
+    // `map.on('load')`, which is where the control cluster and every input handler are wired up —
+    // so anything that throws here would abort the REST of that handler and leave the map half
+    // built: some controls present, others missing, and interactions in whatever state they were
+    // in. The sky is decoration; it must not be able to take navigation down with it.
+    try { applySpace(name === 'globe'); } catch (e) { /* decoration only */ }
   }
 
   /**
@@ -496,12 +501,30 @@
         getLineWidth: 0.5,
       });
     }
+    // 3D for a deck-rendered POLYGON layer. A GeoParquet layer emits no MapLibre layer at all
+    // (portal_generator returns a deck descriptor instead), so `fill-extrusion` never reaches it —
+    // extrusion has to be asked of deck directly. GeoJsonLayer does it natively for polygons:
+    // `extruded` + `getElevation`, no geometry change and no extra layer type.
+    //
+    // POINTS are not handled here. deck extrudes polygons, not points, and the vendored bundle has
+    // no ColumnLayer — so a point pillar needs the geometry buffered first, which is what the
+    // PostGIS path does in the tile server. Until that is mirrored here, the editor hides 3D for
+    // deck-rendered point layers rather than offering something that does nothing.
+    const ex = d.extrusion || {};
+    const extruded = isPoly && !!ex.enabled && !!ex.field;
+    const exScale = Number(ex.scale) || 1;
     return new DK.GeoJsonLayer({
       id: 'deck_' + d.layer_id,
       data: st.data,
       pickable: false,
       filled: !isLine,
-      stroked: true,
+      stroked: !extruded,          // walls plus an outline reads as a smudge at any pitch
+      extruded: extruded,
+      // A feature missing the property, or holding a non-numeric one, becomes 0 rather than NaN —
+      // NaN propagates into the mesh and drops the whole layer, not just that feature.
+      getElevation: extruded
+        ? function (f) { const v = Number((f.properties || {})[ex.field]); return (isFinite(v) ? v : 0) * exScale; }
+        : 0,
       getFillColor: rgb.concat(Math.round(255 * op * (isPoly ? (d.fill_opacity != null ? d.fill_opacity : 0.45) : 1))),
       getLineColor: (isPoly ? outline : rgb).concat(Math.round(255 * op)),
       lineWidthUnits: 'pixels',
@@ -1346,9 +1369,20 @@
     return m ? { shape: m[1], color: '#' + m[2], size: parseFloat(m[3]) } : null;
   }
   function setMarkerImage(imgId, shape, color, size) {
-    const im = markerImage(shape, color, size);
-    try { if (map.hasImage(imgId)) map.updateImage(imgId, im); else map.addImage(imgId, im, { pixelRatio: im.pixelRatio }); }
-    catch (e) { try { if (map.hasImage(imgId)) map.removeImage(imgId); map.addImage(imgId, im, { pixelRatio: im.pixelRatio }); } catch (e2) {} }
+    // The WHOLE body is guarded, not just the add/update. `markerImage()` builds a canvas — it can
+    // fail (no 2D context in a restricted browser, an unknown shape, a zero-sized canvas) and it
+    // used to sit OUTSIDE the try, so a single bad image threw out of `ensurePointImages`, which
+    // runs seven lines into `map.on('load')` — aborting the rest of that handler, where the control
+    // cluster and every input binding are set up. The map would then load, draw, and simply not
+    // respond properly: a missing marker must never cost you navigation.
+    //
+    // This got sharper when a classified layer began registering one image PER CLASS: many more
+    // chances to hit it, on a code path that had only ever created one.
+    try {
+      const im = markerImage(shape, color, size);
+      try { if (map.hasImage(imgId)) map.updateImage(imgId, im); else map.addImage(imgId, im, { pixelRatio: im.pixelRatio }); }
+      catch (e) { try { if (map.hasImage(imgId)) map.removeImage(imgId); map.addImage(imgId, im, { pixelRatio: im.pixelRatio }); } catch (e2) {} }
+    } catch (e) { /* one marker is not worth the map */ }
   }
   // SVG mirror of a marker shape, for the list/legend swatch.
   function markerSvg(shape, c) {
@@ -1362,7 +1396,9 @@
   }
   // Build/refresh icon images for every point (symbol) layer from its metadata.
   function ensurePointImages() {
-    (STYLE.layers || []).forEach(l => {
+    // Per-layer guard for the same reason as above: this runs inside map.on('load'), so anything
+    // escaping it takes the control setup with it.
+    (STYLE.layers || []).forEach(l => { try {
       if (l.type !== 'symbol' || !l.layout || !l.layout['icon-image'] || !l.metadata) return;
       // A classified point layer declares one image per class in geodeploy:markerImages. Create
       // them ALL now: leaving it to styleimagemissing means each class's markers pop in the first
@@ -1375,7 +1411,7 @@
       if (l.metadata['geodeploy:marker'] === undefined) return;
       setMarkerImage(l.layout['icon-image'], l.metadata['geodeploy:marker'] || 'circle',
         l.metadata['geodeploy:markerColor'] || '#3b82f6', l.metadata['geodeploy:markerSize'] || 5);
-    });
+    } catch (e) { /* one layer's icons are not worth the rest of the load handler */ } });
   }
 
   // All MapLibre layer ids that make up ONE catalog layer. Usually just the primary, but a

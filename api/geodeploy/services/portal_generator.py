@@ -7,6 +7,7 @@ from ..config import get_settings
 from .martin import get_tile_url as vector_tile_url
 from .titiler import get_tile_url as raster_tile_url
 from . import external_sources as ext_svc
+from . import pillars
 from . import symbology
 
 
@@ -132,6 +133,15 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                         "line_width": dstyle.get("line_width", 2),
                         "radius": dstyle.get("radius", 5),
                         "visible": cfg.get("visible", True),
+                        # 3D for a deck-rendered POLYGON layer. These emit no MapLibre layer, so
+                        # `fill-extrusion` never reaches them — deck's GeoJsonLayer is asked for
+                        # `extruded`/`getElevation` instead (portal.js::makeDeckLayer). Points are
+                        # excluded: deck extrudes polygons, and a point pillar needs the geometry
+                        # buffered first, which only the PostGIS tile path does today.
+                        "extrusion": ((cfg.get("style") or {}).get("extrusion")
+                                      if (symbology.is_extruded(cfg.get("style") or {})
+                                          and _geom_kind(layer.geometry_type) == "polygon")
+                                      else None),
                         "bbox": json.loads(layer.bbox) if layer.bbox else None,
                         # Client-side duckdb-wasm read path (root-relative; portal.js
                         # absolutifies). Only prepped (partitioned-prefix) layers carry a
@@ -161,6 +171,21 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 sources[source_id] = {
                     "type": "vector",
                     "tiles": [vector_tile_url(layer.schema_name, layer.table_name)],
+                    "minzoom": 0,
+                    "maxzoom": 22,
+                }
+            # A point layer in 3D reads from a SECOND source: the same table, buffered into polygons
+            # by the shared Martin function (services/pillars). Added beside the normal one rather
+            # than replacing it, so toggling 3D off needs no source change.
+            _st = cfg.get("style") or {}
+            if (symbology.is_extruded(_st)
+                    and _geom_kind(layer.geometry_type) == "point"
+                    and getattr(layer, "storage_backend", "postgis") != "geoparquet"):
+                sources[f"{source_id}-pillars"] = {
+                    "type": "vector",
+                    "tiles": [pillars.tile_url(layer.schema_name, layer.table_name,
+                                               layer.geometry_column or "geom",
+                                               symbology.pillar_radius(_st))],
                     "minzoom": 0,
                     "maxzoom": 22,
                 }
@@ -1349,6 +1374,20 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
             "source": source_id,
             "source-layer": source_layer,
             "paint": paint,
+        }
+    # POINTS IN 3D: a pillar standing at each location. MapLibre extrudes FILLS only, so there is no
+    # point form of fill-extrusion — the geometry has to become a polygon. `services/pillars` serves
+    # exactly that: one shared Martin FUNCTION buffers the points by a radius in metres and returns
+    # them as polygons, so the layer keeps the renderer it already had (MapLibre, from a tile source)
+    # and every cross-cutting behaviour around it — identify, z-order, visibility — is unchanged.
+    # Routing these through deck.gl instead would mean a layer changes RENDERER when 3D is ticked.
+    if symbology.is_extruded(style) and getattr(layer, "storage_backend", "postgis") != "geoparquet":
+        return {
+            "id": f"vector-{layer.id}",
+            "type": "fill-extrusion",
+            "source": f"{source_id}-pillars",
+            "source-layer": pillars.SOURCE_LAYER,
+            "paint": symbology.extrusion_paint(style, opacity),
         }
     # point / unknown — a symbol layer with runtime-generated canvas icons, which is what lets points
     # use shapes (circle/square/triangle/diamond/star/cross) on any basemap.
