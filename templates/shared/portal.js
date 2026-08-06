@@ -2686,27 +2686,33 @@
   // Deck features are hit-tested with deck's own picking, the only thing that knows where they are.
   // That is why the deck layers are `pickable` (see buildDeckLayer); the density OVERVIEW stays
   // unpickable on purpose — a grid cell is not a feature and clicking one does nothing.
-  let pickQueued = false, deckHit = false;
+  let pickTimer = null, deckHit = false;
   function setCursor(c) {
     // One writer. The draw-box and area-select modes own the cursor while they are active and set
     // it to crosshair themselves; this must not fight them.
     if (drawing || dzActive) return;
     map.getCanvas().style.cursor = c;
   }
+  // Debounced, not throttled — this matters on the layers deck actually exists for. A pick is a
+  // render pass over the pickable layers, and `mousemove` fires far faster than the screen updates;
+  // running one per animation frame would mean ~60 picking passes a second over a multi-million-row
+  // GeoArrow layer for the entire time the pointer is moving, which is most of the cost of the
+  // interaction people notice. Nobody is asking "is there a feature here?" WHILE sweeping across the
+  // map — they ask when they stop. So: pick once the pointer settles, and cancel outright if it
+  // moves again. Panning and sweeping now cost nothing at all.
+  const PICK_SETTLE_MS = 70;
   function deckHover(pt) {
-    if (!deckOverlay || pickQueued) return;
-    pickQueued = true;
-    // One pick per animation frame at most. A pick is a render pass, and mousemove fires far faster
-    // than the screen updates — without this, dragging across a dense layer queues hundreds.
-    requestAnimationFrame(function () {
-      pickQueued = false;
+    if (!deckOverlay) return;
+    if (pickTimer) clearTimeout(pickTimer);
+    pickTimer = setTimeout(function () {
+      pickTimer = null;
       let hit = false;
       try {
         const info = deckOverlay.pickObject({ x: pt.x, y: pt.y, radius: 4 });
         hit = !!(info && info.object);
       } catch (e) { hit = false; }   // older bundle without pickObject, or a layer mid-update
       if (hit !== deckHit) { deckHit = hit; setCursor(hit ? 'pointer' : ''); }
-    });
+    }, PICK_SETTLE_MS);
   }
   map.on('mousemove', e => {
     if (drawing) return;  // keep the crosshair while drawing a selection box
@@ -2720,9 +2726,22 @@
     const f = vectorLayerIds.length
       ? map.queryRenderedFeatures(e.point, { layers: vectorLayerIds })
       : [];
-    if (f.length) { deckHit = false; setCursor('pointer'); return; }
+    if (f.length) {
+      // A MapLibre feature wins outright — and any pick already queued has to be dropped, or it
+      // would land a moment later and overwrite this with its own (stale) answer.
+      if (pickTimer) { clearTimeout(pickTimer); pickTimer = null; }
+      deckHit = false;
+      setCursor('pointer');
+      return;
+    }
     setCursor('');
     deckHover(e.point);
+  });
+  // Leaving the canvas cancels a queued pick: it would resolve against a pointer position that is
+  // no longer on the map.
+  map.on('mouseout', function () {
+    if (pickTimer) { clearTimeout(pickTimer); pickTimer = null; }
+    deckHit = false;
   });
 
   // ── Coordinate readout (bottom-right) ───────────────────

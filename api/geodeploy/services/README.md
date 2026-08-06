@@ -131,6 +131,25 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   permalink it serves, never a substitute for the bbox queries.
 
 ## Last updated
+2026-08-06e (**the 3D-bar defaults come from the DATA, and "Unknown" no longer reaches the buffer**.
+After the SQL and Martin-config fixes, bars STILL showed nothing: 240 country centroids with
+latitude as the height field means the tallest bar is 90 m and the default footprint was 30 m — about
+three thousandths of a pixel at world zoom. Correct in every layer of the stack, invisible on screen.
+`symbology.pillar_radius(style, bbox)` now derives the footprint from the layer's own extent
+(`extent_metres`/400 — world → 100 km, a city → 36 m, i.e. street scale unchanged) and an
+author-chosen radius still wins. The editor mirrors it (`lib/symbology.pillarRadius`) so the number
+shown is the number rendered. The height MULTIPLIER is deliberately left alone at ×1: an earlier
+pass auto-derived it from the field's max, which was tuned on one throwaway test field — deriving a
+default from the data is right, inferring INTENT from it is not.
+Also `portal_generator._is_point`: `_geom_kind` FALLS BACK to "point" for an unrecognised type, and
+`"Unknown"` is a real stored value (Fiona reports it for any generic/mixed shapefile header) — that
+fallback sent a polygon layer to the pillar function, which buffered administrative polygons into
+self-intersecting rings. The fallback stays as a RENDERING default; anything acting on the geometry
+must ask `_is_point`. Both the pillar SOURCE and the pillar LAYER use it — emitting one without the
+other points a layer at a missing source and MapLibre drops it. Plus `_lonlat_bounds`: raster sources
+now declare `bounds`, so MapLibre stops requesting whole-world tiles that the tile server 404s;
+range-checked because the ingest bbox reprojection falls back to the SOURCE CRS, and a projected
+bbox there would hide the layer entirely.)
 2026-08-06d (**`pillars.py`: the tile function never worked** — it failed on EVERY request with
 `syntax error at or near "%"`, so 3D point bars drew nothing from the day they shipped. The body used
 `%%1$I` inside a `format()`, which renders a literal `%1$I` awaiting a SECOND format pass that did

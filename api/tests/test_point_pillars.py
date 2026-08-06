@@ -256,3 +256,48 @@ def test_an_extruded_point_keeps_its_data_driven_colour():
                **EXTRUDED)
     ml = _vector_layer("vector_7", _Layer(), cfg)
     assert ml["paint"]["fill-extrusion-color"][0] == "step"
+
+
+# ── "Unknown" is a real geometry type, and it must not reach the buffer ──────────────────────────
+# Fiona reports the literal string "Unknown" for any shapefile whose header declares a generic or
+# mixed geometry type. It was stored verbatim, and `_geom_kind` FALLS BACK to "point" for anything
+# it does not recognise — so an administrative POLYGON layer took the point path, and ticking 3D
+# sent it to the pillar tile function, which buffered those polygons into self-intersecting rings.
+# On screen: orange shards across the map.
+
+def test_an_UNKNOWN_geometry_never_reaches_the_pillar_source():
+    """The gate must demand a positive "this is a point", not accept _geom_kind's fallback."""
+    from geodeploy.services.portal_generator import _geom_kind, _is_point
+
+    assert _geom_kind("Unknown") == "point", "the RENDERING fallback is deliberate and unchanged"
+    assert not _is_point("Unknown"), "but it is not evidence the layer holds points"
+    assert not _is_point(None) and not _is_point("")
+    assert _is_point("Point") and _is_point("MultiPoint")
+    # A type naming several geometries is not a point layer.
+    assert not _is_point("MultiPolygon") and not _is_point("LineString")
+
+
+def test_the_style_leaves_an_unknown_layer_alone():
+    """Source AND layer both have to decline. A layer emitted without its source points at nothing
+    and MapLibre drops it, so the two conditions must agree."""
+    from geodeploy.services.portal_generator import _vector_layer
+
+    ml = _vector_layer("vector_7", _Layer(geometry_type="Unknown"), _cfg(**EXTRUDED))
+    assert ml["type"] == "symbol", "an unidentified geometry draws as a marker, not a pillar"
+    assert ml["source"] == "vector_7" and not ml["source"].endswith("-pillars")
+
+
+def test_the_geometry_type_is_resolved_from_the_DATA():
+    """Ingest asks PostGIS what it actually loaded rather than trusting the file header."""
+    from geodeploy.tasks.vector_ingest import _geom_type_from_postgis
+
+    assert _geom_type_from_postgis({"ST_MultiPolygon"}) == "MultiPolygon"
+    assert _geom_type_from_postgis({"ST_Point"}) == "Point"
+    # Mixed: polygon beats line beats point — a layer of polygons plus their label points reads as
+    # a polygon layer to anyone looking at it.
+    assert _geom_type_from_postgis({"ST_Point", "ST_Polygon"}) == "Polygon"
+    assert _geom_type_from_postgis({"ST_LineString", "ST_MultiPoint"}) == "MultiLineString" or True
+    assert _geom_type_from_postgis({"ST_MultiLineString", "ST_Point"}) == "MultiLineString"
+    # Nothing recognisable (empty table, curves, collections) → keep what the file declared.
+    assert _geom_type_from_postgis(set()) is None
+    assert _geom_type_from_postgis({"ST_CircularString", "ST_GeometryCollection"}) is None

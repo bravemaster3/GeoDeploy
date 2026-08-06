@@ -245,8 +245,8 @@
                      portals' URLs — but "bars" is the word people use, so the UI says that.) -->
                 <label v-if="geomType === 'point'" class="flex items-center gap-2">
                   <span class="text-[11px] text-muted-foreground flex-shrink-0">Bar radius</span>
-                  <input type="number" min="0.5" step="5" :value="config.style?.extrusion?.radius ?? 30"
-                    @change="setExtrusion({ radius: parseFloat($event.target.value) || 30 })"
+                  <input type="number" min="0.5" step="5" :value="config.style?.extrusion?.radius ?? defaultRadius"
+                    @change="setExtrusion({ radius: parseFloat($event.target.value) || defaultRadius })"
                     class="w-20 text-xs border border-border rounded px-1.5 py-0.5" />
                   <span class="text-[11px] text-muted-foreground/70">m</span>
                 </label>
@@ -388,7 +388,8 @@ import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps, getRaste
          getFieldStats } from '@/api'
 // The shared symbology vocabulary — twin of api/geodeploy/services/symbology.py. The swatch and
 // the legend here must describe exactly what the published portal will draw.
-import { RAMPS, DIVERGING, NO_OUTLINE, markerOutline, legendEntries, representativeColor } from '@/lib/symbology'
+import { RAMPS, DIVERGING, NO_OUTLINE, markerOutline, legendEntries, representativeColor,
+         pillarRadius } from '@/lib/symbology'
 import { TrashIcon, LocateIcon } from '@/views/icons'
 
 const props = defineProps({ config: Object })
@@ -643,6 +644,12 @@ function setEntryColor(i, color) {
 const canExtrude = computed(() => {
   if (!numericFields.value.length) return false
   if (geomType.value === 'line') return false
+  // An UNKNOWN geometry gets no 3D. "Unknown" is a real stored value — Fiona reports it for any
+  // shapefile with a generic or mixed header — and offering "extrude by a field" for it produced a
+  // control whose behaviour nobody could predict: the server's fallback treated the layer as points
+  // and buffered polygons into a mess. Ingest now resolves the type from the data, so this is the
+  // backstop for layers imported before that, not the normal path.
+  if (geomType.value === 'unknown') return false
   if (geomType.value === 'point' && layer.value?.storage_backend === 'geoparquet') return false
   return true
 })
@@ -665,6 +672,14 @@ function setNoOutline(on) {
 function setExtrusion(patch) {
   emitStyle({ extrusion: { ...(props.config.style?.extrusion || {}), ...patch } })
 }
+
+// The bar footprint the SERVER will use when the author has not chosen one — derived from the
+// layer's own extent (parity: `symbology.pillar_radius`). Shown in the input so the number on
+// screen is the number being rendered; a hard-coded 30 there was a lie for any layer wider than a
+// town, and 30 m on a world map is about three thousandths of a pixel.
+const defaultRadius = computed(() =>
+  Math.round(pillarRadius(props.config.style || {}, layer.value?.bbox)))
+
 
 // ── Multiband band selection (bidx) ──────────────────────────────────────────
 // bidx in the style: [n] = single band, [r,g,b] = RGB composite, absent = TiTiler default.

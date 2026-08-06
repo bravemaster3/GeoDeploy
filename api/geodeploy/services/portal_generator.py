@@ -178,14 +178,23 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
             # by the shared Martin function (services/pillars). Added beside the normal one rather
             # than replacing it, so toggling 3D off needs no source change.
             _st = cfg.get("style") or {}
+            # `_is_point`, not `_geom_kind(...) == "point"`: _geom_kind FALLS BACK to point for a
+            # type it does not recognise, and "Unknown" is a real value — Fiona reports it for any
+            # shapefile with a generic or mixed header. That fallback sent a polygon layer through
+            # here, and the tile function then buffered administrative polygons into
+            # self-intersecting rings. Buffering geometry we cannot identify is never right, so this
+            # gate demands a positive answer.
             if (symbology.is_extruded(_st)
-                    and _geom_kind(layer.geometry_type) == "point"
+                    and _is_point(layer.geometry_type)
                     and getattr(layer, "storage_backend", "postgis") != "geoparquet"):
                 sources[f"{source_id}-pillars"] = {
                     "type": "vector",
                     "tiles": [pillars.tile_url(layer.schema_name, layer.table_name,
                                                layer.geometry_column or "geom",
-                                               symbology.pillar_radius(_st))],
+                                               # The layer's own extent sets the default bar width:
+                                               # a fixed 30 m is invisible on anything wider than a
+                                               # town, which is what "3D does nothing" looked like.
+                                               symbology.pillar_radius(_st, layer.bbox))],
                     "minzoom": 0,
                     "maxzoom": 22,
                 }
@@ -247,6 +256,13 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 )],
                 "tileSize": 256,
             }
+            # Where the data actually IS. Without this MapLibre requests tiles across the whole
+            # viewport at every zoom, and the tile server answers 404 for every one that misses the
+            # raster — a console full of failed requests, and real traffic spent proving that a COG
+            # covering one country does not cover the Pacific. `bounds` stops them being asked for.
+            _rb = _lonlat_bounds(layer.bbox)
+            if _rb:
+                sources[source_id]["bounds"] = _rb
             # Base opacity + an optional raster-paint passthrough (GeoLibre import carries
             # brightness/contrast/saturation/hue in style.paint; GeoDeploy's own UI sets none of these).
             raster_paint = {"raster-opacity": cfg.get("opacity", 1.0)}
@@ -1394,7 +1410,13 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
     # them as polygons, so the layer keeps the renderer it already had (MapLibre, from a tile source)
     # and every cross-cutting behaviour around it — identify, z-order, visibility — is unchanged.
     # Routing these through deck.gl instead would mean a layer changes RENDERER when 3D is ticked.
-    if symbology.is_extruded(style) and getattr(layer, "storage_backend", "postgis") != "geoparquet":
+    #
+    # The `_is_point` test MUST match the one guarding the pillar SOURCE in generate_style — this
+    # layer reads from that source, so a layer emitted without it points at a source that does not
+    # exist and MapLibre drops the layer entirely. Two conditions, one decision: keep them identical.
+    if (symbology.is_extruded(style)
+            and _is_point(layer.geometry_type)
+            and getattr(layer, "storage_backend", "postgis") != "geoparquet"):
         return {
             "id": f"vector-{layer.id}",
             "type": "fill-extrusion",
@@ -1427,8 +1449,33 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
     }
 
 
+def _lonlat_bounds(raw) -> list[float] | None:
+    """A stored bbox as MapLibre source `bounds` — [w, s, e, n] in lon/lat — or None.
+
+    Raster bboxes are reprojected to EPSG:4326 at ingest (`cog_converter._read_meta`), but that
+    reprojection has a fallback that keeps the SOURCE CRS when it fails. A projected bbox here would
+    be far outside lon/lat range and would hide the layer completely rather than merely leaving the
+    404s in place, so the range check is what makes this safe to apply blindly: anything that is not
+    plausibly lon/lat is dropped and the source simply carries no bounds, exactly as before.
+    """
+    try:
+        b = json.loads(raw) if isinstance(raw, str) else raw
+        w, s, e, n = (float(v) for v in b)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not (-180.0 <= w < e <= 180.0 and -90.0 <= s < n <= 90.0):
+        return None
+    return [w, s, e, n]
+
+
 def _geom_kind(geometry_type: str | None) -> str:
-    """Normalize a PostGIS/Fiona geometry type to point|line|polygon."""
+    """Normalize a PostGIS/Fiona geometry type to point|line|polygon.
+
+    NOTE the fallback: an unrecognised type answers "point". That is a rendering default and it is
+    kept — a symbol is the least destructive way to draw something unidentified. It is NOT a
+    statement that the layer holds points, so anything that would act on the geometry itself must
+    ask `_is_point` instead. See the pillar source in `generate_style`.
+    """
     g = (geometry_type or "").lower()
     if "polygon" in g:
         return "polygon"
@@ -1437,6 +1484,12 @@ def _geom_kind(geometry_type: str | None) -> str:
     if "point" in g:
         return "point"
     return "point"
+
+
+def _is_point(geometry_type: str | None) -> bool:
+    """True only when the type POSITIVELY says point — never for an unknown or missing one."""
+    g = (geometry_type or "").lower()
+    return "point" in g and "polygon" not in g and "line" not in g
 
 
 def _expand_bounds(bounds: list, bbox: list) -> None:

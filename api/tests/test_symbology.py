@@ -403,3 +403,57 @@ def test_a_ramp_yields_the_requested_number_of_distinct_colours():
 
 def test_an_unknown_ramp_falls_back_rather_than_failing():
     assert sym.ramp_colors("no-such-ramp", 3) == sym.ramp_colors("viridis", 3)
+
+
+# ── 3D bar defaults come from the DATA ───────────────────────────────────────────────────────────
+# A point has no size, so BOTH the width and the height of a bar come from defaults — and a fixed
+# default is right at exactly one scale. 240 country centroids with the old fixed 30 m radius drew
+# bars roughly three thousandths of a pixel wide: rendered exactly as asked, and indistinguishable
+# from "3D does not work".
+
+def test_the_bar_radius_scales_with_the_layers_own_extent():
+    import json as _json
+
+    world = _json.dumps([-180, -60, 180, 75])
+    city = _json.dumps([11.90, 57.65, 12.05, 57.75])
+
+    # World-scale layer: a bar has to be kilometres across to be a pixel.
+    assert sym.pillar_radius({}, world) >= 50_000
+    # Street-scale layer: essentially the old default, so nothing local changes.
+    assert 20 <= sym.pillar_radius({}, city) <= 60
+    assert sym.pillar_radius({}, city) < sym.pillar_radius({}, world)
+
+
+def test_an_author_chosen_radius_always_wins():
+    import json as _json
+
+    world = _json.dumps([-180, -60, 180, 75])
+    assert sym.pillar_radius({"extrusion": {"radius": 42}}, world) == 42
+    # ...still clamped.
+    assert sym.pillar_radius({"extrusion": {"radius": 10 ** 9}}, world) <= 100_000
+
+
+def test_without_a_usable_bbox_it_falls_back_to_the_fixed_default():
+    """No bbox, a malformed one, or a zero-area one must not produce a nonsense size."""
+    assert sym.pillar_radius({}, None) == sym.DEFAULT_PILLAR_RADIUS_M
+    assert sym.pillar_radius({}, "not json") == sym.DEFAULT_PILLAR_RADIUS_M
+    assert sym.pillar_radius({}, "[5, 5, 5, 5]") == sym.DEFAULT_PILLAR_RADIUS_M
+    assert sym.extent_metres("[1, 2, 3]") is None
+
+
+def test_extent_metres_is_sane():
+    import json as _json
+
+    # Sweden-ish: roughly 1500 km across the diagonal. Approximate is fine; wrong by an order of
+    # magnitude is not, since it sets the symbol size.
+    d = sym.extent_metres(_json.dumps([11.0, 55.3, 24.2, 69.1]))
+    assert 1_000_000 < d < 2_500_000
+
+
+def test_a_bbox_that_is_not_lonlat_is_refused():
+    """Layer bboxes are EPSG:4326 app-wide, but a projected one would be read as millions of degrees
+    and silently clamp every bar to the maximum size. Out of range → the fixed fallback, which is
+    merely small rather than wrong."""
+    assert sym.extent_metres("[319000, 6390000, 410000, 6480000]") is None
+    assert sym.pillar_radius({}, "[319000, 6390000, 410000, 6480000]") == \
+        sym.DEFAULT_PILLAR_RADIUS_M

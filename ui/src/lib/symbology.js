@@ -306,3 +306,43 @@ export function representativeColor(style = {}) {
   if (entries.length) return entries[Math.floor(entries.length / 2)].color
   return style.color || DEFAULT_COLOR
 }
+
+// ── 3D bars: defaults that depend on the DATA ────────────────────────────────
+// Twin of `symbology.extent_metres` / `pillar_radius` (Python). A point has no size of its own, so
+// both the width of a bar and the height of one come entirely from defaults — and a fixed default
+// is wrong at every scale but one. 240 country centroids with the old 30 m default drew bars about
+// three thousandths of a pixel wide: rendered exactly as asked, and indistinguishable from "3D does
+// not work". Deriving from the layer's own extent means ticking the box shows something.
+
+/** Rough diagonal of a lon/lat bbox in metres, or null. Approximate on purpose — it picks a
+ *  symbol size, and a geodesic would not change anything a viewer can see. */
+export function extentMetres(bbox) {
+  let b = bbox
+  if (typeof b === 'string') { try { b = JSON.parse(b) } catch { return null } }
+  if (!Array.isArray(b) || b.length < 4) return null
+  const [w, s, e, n] = b.map(Number)
+  // Must actually BE lon/lat — a projected bbox would read as millions of degrees and clamp the
+  // symbol to its maximum size. Parity: symbology.extent_metres.
+  if (![w, s, e, n].every(Number.isFinite)) return null
+  if (!(e > w && n > s && w >= -180 && e <= 180 && s >= -90 && n <= 90)) return null
+  const mid = ((n + s) / 2) * Math.PI / 180
+  const dx = (e - w) * 111320 * Math.max(Math.cos(mid), 0.05)
+  const dy = (n - s) * 110540
+  const d = Math.hypot(dx, dy)
+  return d > 0 ? d : null
+}
+
+export const PILLAR_RADIUS_FRACTION = 400
+export const DEFAULT_PILLAR_RADIUS_M = 30
+
+/** The bar footprint radius in metres: the author's if they set one, else from the extent. */
+export function pillarRadius(style = {}, bbox = null) {
+  const raw = (style.extrusion || {}).radius
+  if (raw !== null && raw !== undefined && raw !== '') {
+    const r = Number(raw)
+    if (Number.isFinite(r)) return Math.min(Math.max(r, 0.5), 100000)
+  }
+  const d = extentMetres(bbox)
+  if (d) return Math.min(Math.max(d / PILLAR_RADIUS_FRACTION, 5), 100000)
+  return DEFAULT_PILLAR_RADIUS_M
+}

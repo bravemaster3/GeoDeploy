@@ -48,6 +48,8 @@ with no legend to contradict), so it uses `interpolate`.
 """
 from __future__ import annotations
 
+import json
+
 # ── Colour ramps ─────────────────────────────────────────────────────────────────────────────────
 # Sampled at 7 stops and interpolated to whatever class count is asked for, so a ramp definition
 # does not have to be repeated per class count. Perceptually-uniform ramps (viridis, magma) are
@@ -519,19 +521,61 @@ def is_extruded(style: dict) -> bool:
 DEFAULT_PILLAR_RADIUS_M = 30.0
 
 
-def pillar_radius(style: dict) -> float:
+#: A bar this fraction of the layer's own diagonal reads as a marker at the layer's natural zoom —
+#: wide enough to see, narrow enough to still be a symbol rather than a blob.
+PILLAR_RADIUS_FRACTION = 400.0
+
+
+def extent_metres(bbox) -> float | None:
+    """Rough diagonal of a lon/lat bbox in metres. None if it is not a usable bbox.
+
+    Deliberately approximate — a degree of longitude scaled by the latitude midpoint. This picks a
+    default symbol size; a proper geodesic would not change the answer by anything a viewer notices.
+    """
+    import math
+
+    try:
+        w, s, e, n = (float(v) for v in (bbox if not isinstance(bbox, str) else json.loads(bbox)))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    # Must actually BE lon/lat. Layer bboxes are stored in EPSG:4326 app-wide, but a bbox that
+    # somehow arrived in a projected CRS would be read as millions of degrees here and silently
+    # clamp the symbol to the maximum size. Out of range → None → the fixed fallback, which is
+    # merely small rather than wrong.
+    if not (e > w and n > s and -180.0 <= w and e <= 180.0 and -90.0 <= s and n <= 90.0):
+        return None
+    mid = math.radians((n + s) / 2.0)
+    dx = (e - w) * 111320.0 * max(math.cos(mid), 0.05)
+    dy = (n - s) * 110540.0
+    d = math.hypot(dx, dy)
+    return d if d > 0 else None
+
+
+def pillar_radius(style: dict, bbox=None) -> float:
     """The footprint radius, in metres, of an extruded POINT.
 
     Points have no area, so extruding one needs a width that polygons get for free. Kept out of
     `extrusion_paint` because it is not paint at all — it decides the GEOMETRY the tile server
     generates (`services/pillars`), not how it is drawn.
+
+    WITHOUT an author-chosen radius this is derived from the LAYER'S OWN EXTENT. The old fixed 30 m
+    default was unusable for anything but a street-scale layer: 240 country centroids across the
+    whole world got 30 m bars, about three thousandths of a pixel at that zoom — rendered perfectly
+    and completely invisible, which is indistinguishable from "3D is broken". A default that depends
+    on the data means ticking the box shows something, and the author adjusts from there instead of
+    guessing what number makes anything appear at all.
     """
     ex = style.get("extrusion") or {}
-    try:
-        r = float(ex.get("radius") or DEFAULT_PILLAR_RADIUS_M)
-    except (TypeError, ValueError):
-        r = DEFAULT_PILLAR_RADIUS_M
-    return min(max(r, 0.5), 100000.0)
+    raw = ex.get("radius")
+    if raw not in (None, ""):
+        try:
+            return min(max(float(raw), 0.5), 100000.0)
+        except (TypeError, ValueError):
+            pass
+    d = extent_metres(bbox)
+    if d:
+        return min(max(d / PILLAR_RADIUS_FRACTION, 5.0), 100000.0)
+    return DEFAULT_PILLAR_RADIUS_M
 
 
 def legend_entries(style: dict) -> list[dict]:
