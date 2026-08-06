@@ -40,8 +40,8 @@
             class="w-36 max-w-full text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
           <span class="text-xs font-medium text-muted-foreground bg-muted rounded-full px-2 py-0.5">{{ dataStore.vectorLayers.length }}</span>
           <button @click="toggleSection('vector')" class="flex-shrink-0 w-6 h-6 rounded flex items-center justify-center text-muted-foreground/70 hover:text-foreground hover:bg-muted"
-            :title="collapsed.vector ? 'Expand' : 'Collapse'" :aria-expanded="!collapsed.vector">
-            <svg class="w-4 h-4 transition-transform" :class="collapsed.vector ? '-rotate-90' : ''"
+            :title="sectionOpen.vector ? 'Collapse' : 'Expand'" :aria-expanded="sectionOpen.vector">
+            <svg class="w-4 h-4 transition-transform" :class="sectionOpen.vector ? '' : '-rotate-90'"
               viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="m6 9 6 6 6-6" />
             </svg>
@@ -50,7 +50,7 @@
             <UploadIcon class="w-3.5 h-3.5" /> Upload
           </button>
         </header>
-        <div v-if="collapsed.vector" class="px-5 py-2.5 text-xs text-muted-foreground/60">
+        <div v-if="!sectionOpen.vector" class="px-5 py-2.5 text-xs text-muted-foreground/60">
           {{ filteredVectors.length }} hidden — click the chevron to expand.
         </div>
         <div v-else-if="!dataStore.vectorLayers.length" class="px-5 py-10 text-center">
@@ -67,7 +67,7 @@
         </div>
         <!-- Pagination, shown only once it earns its place. Every row renders whether or not it is
              near the viewport, so an unbounded list costs both screen space and frame time. -->
-        <div v-if="!collapsed.vector && pageCount(filteredVectors.length) > 1"
+        <div v-if="sectionOpen.vector && pageCount(filteredVectors.length) > 1"
           class="flex items-center justify-between gap-3 px-5 py-2.5 border-t border-border/60">
           <span class="text-[11px] text-muted-foreground/70">
             {{ pageLabel('vector', filteredVectors.length) }}
@@ -97,8 +97,8 @@
             class="w-36 max-w-full text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
           <span class="text-xs font-medium text-muted-foreground bg-muted rounded-full px-2 py-0.5">{{ dataStore.rasterLayers.length }}</span>
           <button @click="toggleSection('raster')" class="flex-shrink-0 w-6 h-6 rounded flex items-center justify-center text-muted-foreground/70 hover:text-foreground hover:bg-muted"
-            :title="collapsed.raster ? 'Expand' : 'Collapse'" :aria-expanded="!collapsed.raster">
-            <svg class="w-4 h-4 transition-transform" :class="collapsed.raster ? '-rotate-90' : ''"
+            :title="sectionOpen.raster ? 'Collapse' : 'Expand'" :aria-expanded="sectionOpen.raster">
+            <svg class="w-4 h-4 transition-transform" :class="sectionOpen.raster ? '' : '-rotate-90'"
               viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="m6 9 6 6 6-6" />
             </svg>
@@ -107,7 +107,7 @@
             <UploadIcon class="w-3.5 h-3.5" /> Upload
           </button>
         </header>
-        <div v-if="collapsed.raster" class="px-5 py-2.5 text-xs text-muted-foreground/60">
+        <div v-if="!sectionOpen.raster" class="px-5 py-2.5 text-xs text-muted-foreground/60">
           {{ filteredRasters.length }} hidden — click the chevron to expand.
         </div>
         <div v-else-if="!dataStore.rasterLayers.length" class="px-5 py-10 text-center">
@@ -124,7 +124,7 @@
         </div>
         <!-- Pagination, shown only once it earns its place. Every row renders whether or not it is
              near the viewport, so an unbounded list costs both screen space and frame time. -->
-        <div v-if="!collapsed.raster && pageCount(filteredRasters.length) > 1"
+        <div v-if="sectionOpen.raster && pageCount(filteredRasters.length) > 1"
           class="flex items-center justify-between gap-3 px-5 py-2.5 border-t border-border/60">
           <span class="text-[11px] text-muted-foreground/70">
             {{ pageLabel('raster', filteredRasters.length) }}
@@ -154,8 +154,8 @@
             class="w-36 max-w-full text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
           <span class="text-xs font-medium text-muted-foreground bg-muted rounded-full px-2 py-0.5">{{ dataStore.externalSources.length }}</span>
           <button @click="toggleSection('source')" class="flex-shrink-0 w-6 h-6 rounded flex items-center justify-center text-muted-foreground/70 hover:text-foreground hover:bg-muted"
-            :title="collapsed.source ? 'Expand' : 'Collapse'" :aria-expanded="!collapsed.source">
-            <svg class="w-4 h-4 transition-transform" :class="collapsed.source ? '-rotate-90' : ''"
+            :title="sectionOpen.source ? 'Collapse' : 'Expand'" :aria-expanded="sectionOpen.source">
+            <svg class="w-4 h-4 transition-transform" :class="sectionOpen.source ? '' : '-rotate-90'"
               viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="m6 9 6 6 6-6" />
             </svg>
@@ -164,7 +164,7 @@
             <PlusIcon class="w-3.5 h-3.5" /> Connect
           </button>
         </header>
-        <div v-if="collapsed.source" class="px-5 py-2.5 text-xs text-muted-foreground/60">
+        <div v-if="!sectionOpen.source" class="px-5 py-2.5 text-xs text-muted-foreground/60">
           {{ filteredSources.length }} hidden — click the chevron to expand.
         </div>
         <div v-else-if="!dataStore.externalSources.length" class="px-5 py-10 text-center">
@@ -181,7 +181,7 @@
         </div>
         <!-- Pagination, shown only once it earns its place. Every row renders whether or not it is
              near the viewport, so an unbounded list costs both screen space and frame time. -->
-        <div v-if="!collapsed.source && pageCount(filteredSources.length) > 1"
+        <div v-if="sectionOpen.source && pageCount(filteredSources.length) > 1"
           class="flex items-center justify-between gap-3 px-5 py-2.5 border-t border-border/60">
           <span class="text-[11px] text-muted-foreground/70">
             {{ pageLabel('source', filteredSources.length) }}
@@ -308,6 +308,20 @@ function toggleSection(key) {
   collapsed.value = { ...collapsed.value, [key]: !collapsed.value[key] }
   try { localStorage.setItem('gd-data-collapsed', JSON.stringify(collapsed.value)) } catch { /* private mode */ }
 }
+
+// A search into a COLLAPSED section would otherwise be silent: you type a name, the one-line
+// placeholder's count changes, and the row you were looking for is still unreachable. So an active
+// search that HAS hits force-opens its section. Display only — the persisted preference is left
+// alone, so clearing the box returns the section to however the user had it. A search with no hits
+// does not open anything: there is nothing to show, and the "N hidden" line still reads correctly.
+const sectionOpen = computed(() => {
+  const forced = (q, list) => q.trim() !== '' && list.length > 0
+  return {
+    vector: !collapsed.value.vector || forced(vectorSearch.value, filteredVectors.value),
+    raster: !collapsed.value.raster || forced(rasterSearch.value, filteredRasters.value),
+    source: !collapsed.value.source || forced(sourceSearch.value, filteredSources.value),
+  }
+})
 
 const page = ref({ vector: 1, raster: 1, source: 1 })
 const pageCount = (total) => Math.max(1, Math.ceil(total / PAGE_SIZE))

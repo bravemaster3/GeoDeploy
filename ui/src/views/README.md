@@ -63,6 +63,11 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 - Raster layer `bbox` from the API is in source CRS (not lon/lat) — using it directly for `fitToBbox` can throw "Invalid LngLat" (see tasks/raster notes). Prefer zooming via vector bounds or TiTiler TileJSON.
 
 ## Last updated
+2026-08-06e (`DataManager`: page size 20 → 10, and a search with hits FORCE-OPENS a collapsed
+section — `sectionOpen` is the effective state (`!collapsed || search-with-hits`), display only, so
+the persisted preference survives and clearing the box collapses it again. A search that matches
+nothing opens nothing. Without this, searching a collapsed section only changed a number on the
+"N hidden" line and the row stayed unreachable.)
 2026-08-06d (`DataManager`: External sources gained the search box the other two sections already
 had — same `matches()`, widened to cover `source_type` and `url`, since a WMS is usually remembered
 by its endpoint rather than the name you gave it. Search runs over the WHOLE list and pagination
