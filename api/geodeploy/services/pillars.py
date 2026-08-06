@@ -1,4 +1,10 @@
-"""3D pillars for POINT layers — served as buffered polygons through Martin.
+"""3D bars for POINT layers — served as buffered polygons through Martin.
+
+NAMING: the UI calls these **bars** — the word people actually use — while the code says "pillars"
+throughout and the Martin function is `point_pillars`. Deliberately not renamed to match: that
+function name is baked into the tile URL of every PUBLISHED portal bundle, so changing it would 404
+every existing 3D point layer until each portal was re-published. A cosmetic rename is not worth
+breaking published maps for.
 
 ## Why points need this at all
 

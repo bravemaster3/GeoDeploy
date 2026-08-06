@@ -187,7 +187,7 @@
                 <input type="checkbox" :checked="!!config.style?.extrusion?.enabled"
                   @change="setExtrusion({ enabled: $event.target.checked })" class="accent-primary" />
                 <span class="text-xs text-foreground">
-                  {{ geomType === 'point' ? '3D — pillars by a field' : '3D — extrude by a field' }}
+                  {{ geomType === 'point' ? '3D — bars by a field' : '3D — extrude by a field' }}
                 </span>
               </label>
               <div v-if="config.style?.extrusion?.enabled" class="mt-1.5 space-y-1.5 pl-5">
@@ -203,10 +203,12 @@
                     @change="setExtrusion({ scale: parseFloat($event.target.value) || 1 })"
                     class="w-20 text-xs border border-border rounded px-1.5 py-0.5" />
                 </label>
-                <!-- Points only: a polygon already has a footprint, a point has none — so the pillar
-                     needs a width before it can be drawn at all. -->
+                <!-- Points only: a polygon already has a footprint, a point has none — so the bar
+                     needs a width before it can be drawn at all. (The code calls these "pillars"
+                     — services/pillars.py, and the tile function name is baked into published
+                     portals' URLs — but "bars" is the word people use, so the UI says that.) -->
                 <label v-if="geomType === 'point'" class="flex items-center gap-2">
-                  <span class="text-[11px] text-muted-foreground flex-shrink-0">Pillar radius</span>
+                  <span class="text-[11px] text-muted-foreground flex-shrink-0">Bar radius</span>
                   <input type="number" min="0.5" step="5" :value="config.style?.extrusion?.radius ?? 30"
                     @change="setExtrusion({ radius: parseFloat($event.target.value) || 30 })"
                     class="w-20 text-xs border border-border rounded px-1.5 py-0.5" />
@@ -591,7 +593,7 @@ function setEntryColor(i, color) {
 // Which layers can be given 3D, and why the others cannot:
 //   * LINES — there is no sensible column for a line; QGIS and GeoLibre do not offer one either.
 //   * GEOPARQUET POINTS — they render through deck.gl, not Martin, so the buffered-polygon tile
-//     source that gives PostGIS points their pillars does not apply. deck extrudes POLYGONS, not
+//     source that gives PostGIS points their bars does not apply. deck extrudes POLYGONS, not
 //     points, and the vendored bundle has no ColumnLayer — so a pillar there needs the geometry
 //     buffered client-side first, which is not built. Hidden rather than shown doing nothing, the
 //     same rule as hiding it when a layer has no numeric field.
