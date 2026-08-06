@@ -63,7 +63,7 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 - Raster layer `bbox` from the API is in source CRS (not lon/lat) — using it directly for `fitToBbox` can throw "Invalid LngLat" (see tasks/raster notes). Prefer zooming via vector bounds or TiTiler TileJSON.
 
 ## Last updated
-2026-08-06 (Settings → Updates: choose main / latest release / a specific tag before updating)
+2026-08-06 (Settings → Updates: target picker gains branches + a channel-aware status; Settings → Backups → History gains per-row removal and 'Clear N failed' — the LOG, never the destination)
 2026-07-30 (PortalEditor: `catalog` archetype option + Map side / Datasets listed controls; the
 layer-list placement toggles are hidden for it since the facet rail replaces the sidebar)
 2026-08-02e (`Login` waits for the demo check before rendering ANY card. `isDemo` alone could not

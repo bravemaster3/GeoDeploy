@@ -47,6 +47,15 @@ now REJECT token requests, so any route not explicitly `require_scope`-annotated
   exists) — same rule as the SMTP/OIDC secrets. `/stored` reads the destination's own manifests,
   which is the only trustworthy inventory: our `backup_runs` table lives in the state DB, and that
   DB is itself part of what gets backed up. Deletion is confined to the configured prefix.
+  **History cleanup (2026-08-06):** `DELETE /runs/{id}` and `DELETE /runs?status=error|all` (plus
+  `DELETE /restore/runs/{id}`) remove entries from the LOG. They never call `bk.delete_run`, and a
+  test asserts that: the two live side by side in the UI and only one of them destroys the single
+  copy of your data. A `running` row is refused (409) — the worker still owns it, and deleting it
+  would make its final UPDATE match nothing, so a backup that then succeeded would be missing from
+  its own history; `_reap_stale_runs` turns a genuinely abandoned one into `error` after
+  `STALE_RUN_HOURS`, and it is deletable then. Bulk clearing accepts only `error` (the case that
+  motivated it — a failure fixed long ago staying red forever) or `all`; arbitrary filters would
+  make the log selectively editable. Both actions are audited, because the log is what is edited.
   The work runs in Celery (`tasks/backup.py`, its own `backup` queue so a multi-hour object copy
   can't occupy the ingest slots); scheduling is an every-15-min beat tick that reads the schedule
   from the DB, so changing it in Settings takes effect with no worker restart.
@@ -251,11 +260,12 @@ deliberately NOT visibility-filtered (published portals depend on them).
 - No rate limiting beyond nginx; no pagination on list endpoints (fine at current scale).
 
 ## Last updated
-2026-08-06 (`admin.py`: version TARGETS — `/admin/updates` reports main + latest release + every
-published tag, `POST /admin/update` takes a `ref`, and `_deployed_ref` says which channel this
-instance follows (issue #4). `/admin/credentials` now reads `.env` before the database row, since a
-restore replaces that row with the snapshot's (issue #2); merge logic split into `merge_credentials`
-so the precedence is testable without a database.)
+2026-08-06 (`admin.py`: update CHANNELS on top of PR #1 — `/admin/updates` adds `branches`, joins
+tags with releases for the sha, and `_deployed_ref` says which channel this instance follows, so a
+pinned box is judged against releases rather than main (issue #4). `/admin/credentials` now reads
+`.env` before the database row, since a restore replaces that row with the snapshot's (issue #2);
+merge logic split into `merge_credentials` so the precedence is testable without a database.
+`backups.py`: history entries can be deleted — the log, never the destination.)
 2026-07-30 (public `GET /portals/{slug}/catalog` feed for catalog portals scoped to "all public")
 2026-07-30 (deployment history + log options for the consolidated Infrastructure panel)
 2026-08-02 (`backups.py`: `_reap_stale_runs` clears runs stuck in `running` — a snapshot always

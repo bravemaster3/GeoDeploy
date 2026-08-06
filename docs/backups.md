@@ -101,6 +101,28 @@ Notes on how it is done, because they matter if you ever inspect the artifacts:
 - **The dump is one transaction-consistent snapshot**, so the catalog can never disagree with the
   spatial tables it describes.
 
+## The history, and tidying it
+
+**Settings → Backups → History** lists what this instance has *attempted* — successes and failures,
+with the reason for each failure. It is a log, not an inventory: the question "what backups do I
+actually have?" is answered by **Manage backups**, which reads the destination itself.
+
+That distinction is why history entries can be removed and stored backups are guarded:
+
+- The **✕** on a row removes that entry. **Nothing at the destination is touched.**
+- **Clear N failed** removes every failed entry at once. Failed runs produced no backup, so there is
+  nothing to lose.
+- A run that is still **running** cannot be removed — the worker is still writing it. One that is
+  genuinely stuck is marked failed automatically after six hours, and can be cleared then.
+
+Both actions are recorded in the [Activity log](users-and-sharing.md), so a removed entry still
+leaves a trace of who removed it.
+
+!!! tip "Clear the red once you have fixed the cause"
+    A run that failed for a reason you have since fixed — wrong credentials, a bucket that did not
+    exist yet — stays red forever otherwise, and a history full of stale alarms is one you stop
+    reading. Clearing it is how the page keeps meaning "your backups are healthy".
+
 ## Restore
 
 **Settings → Backups → Manage backups → Restore.** Restore is in the app, because a backup you

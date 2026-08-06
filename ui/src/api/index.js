@@ -109,6 +109,12 @@ export const listBackupRuns = (limit = 20) => api.get('/backups/runs', { params:
 export const listStoredBackups = () => api.get('/backups/stored')
 export const startBackup = () => api.post('/backups/run')
 export const deleteStoredBackup = (key) => api.delete(`/backups/stored/${key}`)
+// HISTORY, not backups. These remove rows from the log of attempts; the backups themselves live at
+// the destination and are listed by `listStoredBackups` / removed by `deleteStoredBackup`. Keeping
+// the two clearly apart matters — one is tidying, the other is destroying the only copy.
+export const deleteBackupRun = (id) => api.delete(`/backups/runs/${id}`)
+export const clearBackupRuns = (status = 'error') =>
+  api.delete('/backups/runs', { params: { status } })
 // Restore. OWNER-only server-side; preflight reports what the backup holds, what exists now, and
 // the encryption-key verdict — restoring with a different GEODEPLOY_SECRET_KEY leaves the stored
 // SMTP/OIDC/backup credentials unreadable, which is the one surprise worth showing up front.

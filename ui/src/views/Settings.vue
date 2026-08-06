@@ -317,9 +317,21 @@
         </section>
 
         <section class="card overflow-hidden">
-          <header class="px-5 py-3.5 border-b border-border/60">
-            <h2 class="font-semibold">History</h2>
-            <p class="text-xs text-muted-foreground">Every run, successful or not.</p>
+          <header class="px-5 py-3.5 border-b border-border/60 flex items-center gap-3 flex-wrap">
+            <div class="flex-1 min-w-0">
+              <h2 class="font-semibold">History</h2>
+              <p class="text-xs text-muted-foreground">
+                Every run, successful or not. This is a log of attempts — removing an entry does not
+                delete a backup.
+              </p>
+            </div>
+            <!-- Clearing failures is the case that matters: a run that failed for a reason since
+                 fixed stays red forever on the one page whose job is to say, at a glance, whether
+                 backups are healthy. A history nobody can tidy stops being read. -->
+            <button v-if="bkFailedCount" @click="clearFailedRuns" :disabled="bkClearing"
+              class="btn-secondary text-xs px-3 py-1.5">
+              {{ bkClearing ? 'Clearing…' : `Clear ${bkFailedCount} failed` }}
+            </button>
           </header>
           <div v-if="!bkRuns.length" class="px-5 py-8 text-center text-sm text-muted-foreground/70">
             No backups yet.
@@ -338,6 +350,17 @@
                   <span v-if="r.status === 'running'">{{ r.current_step }} &middot; {{ r.progress }}%</span>
                   <span v-else-if="r.status === 'error'" class="text-red-400">{{ r.error_message }}</span>
                   <span v-else>{{ fmtBytes(r.size_bytes) }}</span>
+                </td>
+                <td class="px-2 py-2.5 text-right whitespace-nowrap">
+                  <!-- Never offered while running: the worker still owns that row. -->
+                  <button v-if="r.status !== 'running'" @click="deleteRunEntry(r)"
+                    :title="'Remove this entry'" aria-label="Remove this entry"
+                    class="w-7 h-7 rounded-md inline-flex items-center justify-center text-muted-foreground/60 hover:text-red-400 hover:bg-red-500/10">
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                      stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                  </button>
                 </td>
               </tr>
             </tbody>
@@ -834,6 +857,7 @@ import api, { changePassword, logoutAll, controlService, getEmailSettings, sendT
               getBackupSettings, updateBackupSettings, testBackupDestination, createBackupBucket,
               listRestoreRuns,
               listBackupRuns, startBackup, listStoredBackups, deleteStoredBackup,
+              deleteBackupRun, clearBackupRuns,
               restorePreflight, startRestore } from '@/api'
 import TokenModal from '@/components/users/TokenModal.vue'
 import InfrastructurePanel from '@/components/infra/InfrastructurePanel.vue'
@@ -889,6 +913,8 @@ const guessedRegion = computed(() => {
 })
 
 const bkRuns = ref([])
+const bkClearing = ref(false)
+const bkFailedCount = computed(() => bkRuns.value.filter(r => r.status === 'error').length)
 const bkSaving = ref(false)
 const bkTesting = ref(false)
 const bkRunning = ref(false)
@@ -1070,6 +1096,34 @@ async function refreshBackupRuns() {
   bkRunning.value = running
   clearTimeout(bkPoll)
   if (running) bkPoll = setTimeout(refreshBackupRuns, 4000)
+}
+
+// Removing HISTORY, not backups. Worth being explicit in the confirmation: next to a "Delete"
+// button that really does destroy the only copy of your data, an ✕ on a row needs to say which of
+// the two it is.
+async function deleteRunEntry(run) {
+  const when = new Date(run.started_at).toLocaleString()
+  if (!confirm(`Remove the ${run.status} entry from ${when}?\n\n`
+    + 'This removes the HISTORY entry only — any backup at the destination is untouched.')) return
+  try {
+    await deleteBackupRun(run.id)
+    await refreshBackupRuns()
+  } catch (e) {
+    bkMsg.value = { ok: false, text: e?.response?.data?.detail || 'Could not remove that entry.' }
+  }
+}
+
+async function clearFailedRuns() {
+  const n = bkFailedCount.value
+  if (!confirm(`Remove ${n} failed ${n === 1 ? 'entry' : 'entries'} from the history?\n\n`
+    + 'Failed runs produced no backup, so nothing at the destination is affected.')) return
+  bkClearing.value = true
+  try {
+    await clearBackupRuns('error')
+    await refreshBackupRuns()
+  } catch (e) {
+    bkMsg.value = { ok: false, text: e?.response?.data?.detail || 'Could not clear the history.' }
+  } finally { bkClearing.value = false }
 }
 
 async function saveBackups() {

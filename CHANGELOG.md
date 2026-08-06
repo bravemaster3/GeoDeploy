@@ -21,6 +21,13 @@ that is how an unreleased feature branch gets tried on a real instance instead o
 The same choice works from the server: `sudo bash installer/self-update.sh v1.0`,
 matching `GEODEPLOY_VERSION` in the installer. Documented in [Updating](docs/updating.md).
 
+### Backup history can be tidied
+
+Failed backup runs stayed red in **Settings ▸ Backups ▸ History** forever, on the page whose job is
+to tell you at a glance whether your backups are healthy. Entries can now be removed individually,
+or all failed ones at once. History is a log of attempts — removing an entry never touches a backup
+at the destination, and the app says so at the point of the click.
+
 ### Fixed
 
 - **Large uploads work again after a restore.** A GeoParquet, GeoPackage or big CSV would upload to
