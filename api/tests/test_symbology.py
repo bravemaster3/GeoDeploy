@@ -307,6 +307,34 @@ def test_no_outline_is_a_SENTINEL_not_an_empty_string():
     assert sym.outline_color({"outline_color": sym.NO_OUTLINE}) is None
 
 
+def test_no_outline_on_a_fill_is_ANTIALIAS_not_an_omission():
+    """Reported as "I chose None and it drew a black outline".
+
+    Omitting `fill-outline-color` does NOT remove the outline — the MapLibre spec says an
+    unspecified outline MATCHES `fill-color`, and a `fill` layer always strokes its own edge. So the
+    first implementation drew an outline in the fill colour, which on a dark fill reads as black.
+    `fill-antialias: false` is the actual switch.
+
+    Reasoned from intuition rather than the spec, which is why this test states the mechanism.
+    """
+    from geodeploy.services.portal_generator import _vector_layer
+
+    class _L:
+        id = 3; geometry_type = "MultiPolygon"; schema_name = "s"; table_name = "t"
+        storage_backend = "postgis"; geometry_column = "geom"
+
+    def paint(style):
+        return _vector_layer("src", _L(), {"opacity": 1.0, "style": style})["paint"]
+
+    off = paint({"color": "#123456", "outline_color": sym.NO_OUTLINE})
+    assert off.get("fill-antialias") is False
+    assert "fill-outline-color" not in off, "a colour here would be an outline, whatever its value"
+
+    on = paint({"color": "#123456", "outline_color": "#ff0000"})
+    assert on["fill-outline-color"] == "#ff0000"
+    assert "fill-antialias" not in on, "the default is antialiased; do not restate it"
+
+
 def test_a_marker_outline_width_is_a_RATIO_of_the_marker():
     """A 3 px ring around a 4 px dot and around a 20 px dot are different symbols. Someone resizing a
     layer expects the outline to keep its proportion, so the width scales with the marker. 0.28 is

@@ -1358,7 +1358,7 @@ function makeDeckLayer(cfg) {
   const geom = (layer?.geometry_type || '').toLowerCase()
   const rgb = hexToRgb(cfg.style?.color || '#3b82f6')
   const opacity = cfg.opacity ?? 1.0
-  const outline = hexToRgb(cfg.style?.outline_color || '#1d4ed8')
+  const outline = hexToRgb(_safeOutline(cfg.style?.outline_color))
   const isPoly = geom.includes('polygon'), isLine = geom.includes('line')
   if (data.__overview) {
     // Large-scale representation: partition grid shaded by feature density (see portal.js twin).
@@ -1381,13 +1381,16 @@ function makeDeckLayer(cfg) {
   // geometry buffered, which only the PostGIS tile path does).
   const ex = cfg.style?.extrusion || {}
   const extruded = isPoly && !!ex.enabled && !!ex.field
+  // "none" is a sentinel, not a colour — hex-parsing it yields NaN, which deck renders as BLACK.
+  const noOutline = cfg.style?.outline_color === NO_OUTLINE
   const exScale = Number(ex.scale) || 1
   return new GeoJsonLayer({
     id: `deck_${cfg.layer_id}`,
     data,
     pickable: false,
     filled: !isLine,
-    stroked: !extruded,        // walls plus an outline reads as a smudge at any pitch
+    // Lines ARE their stroke, so noOutline must not erase them — it is a POLYGON outline setting.
+    stroked: isLine || (!extruded && !(isPoly && noOutline)),
     extruded,
     // Non-numeric or missing → 0, not NaN: NaN propagates into the mesh and drops the whole layer.
     getElevation: extruded
@@ -1404,6 +1407,11 @@ function makeDeckLayer(cfg) {
     pointRadiusMinPixels: 2,
   })
 }
+
+// "none" is a sentinel, not a colour: hexToRgb would return NaN components and deck renders those
+// as BLACK — the most visible outline available, for the setting that asks for none. `stroked` is
+// what actually removes it; this only guarantees no NaN ever reaches the GPU.
+function _safeOutline(v) { return (!v || v === NO_OUTLINE) ? '#1d4ed8' : v }
 
 // 3D-Z: transform Z (scale·z+offset) so deck.gl's GeoJsonLayer draws at altitude (mirror portal.js).
 function transformElevationGeojson(geojson, elev) {
@@ -1424,7 +1432,7 @@ function makeElevationDeckLayer(cfg, idx) {
   const geom = (cfg.geometry || 'line').toLowerCase()
   const isPoly = geom.includes('polygon'), isLine = geom.includes('line')
   const rgb = hexToRgb(cfg.style?.color || '#3b82f6')
-  const outline = hexToRgb(cfg.style?.outline_color || '#1d4ed8')
+  const outline = hexToRgb(_safeOutline(cfg.style?.outline_color))
   const opacity = cfg.opacity ?? 1.0
   return new GeoJsonLayer({
     id: `deck_elev_${idx}`, data, pickable: false, filled: !isLine, stroked: true,
@@ -1849,7 +1857,11 @@ function buildPreviewStyle() {
             'fill-color': color,
             'fill-opacity': opacity * (st.fill_opacity ?? 0.45),
           }
-          if (st.outline_color !== NO_OUTLINE) fillPaint['fill-outline-color'] = st.outline_color || '#1d4ed8'
+          // `fill-antialias: false`, not an omission: an omitted fill-outline-color MATCHES the
+          // fill colour (the spec default), which is why "None" drew a visible edge. Mirrors
+          // portal_generator._vector_layer.
+          if (st.outline_color === NO_OUTLINE) fillPaint['fill-antialias'] = false
+          else fillPaint['fill-outline-color'] = st.outline_color || '#1d4ed8'
           style.layers.push({
             id: srcId, type: 'fill', source: srcId, 'source-layer': sourceLayer, paint: fillPaint,
           })

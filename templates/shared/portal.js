@@ -454,7 +454,11 @@
     if (!st || !st.visible || !st.data) return null;
     const geom = (d.geometry || '').toLowerCase();
     const isPoly = geom.indexOf('polygon') !== -1, isLine = geom.indexOf('line') !== -1;
-    const rgb = deckHexToRgb(d.color), outline = deckHexToRgb(d.outline_color || '#1d4ed8');
+    // "none" is a SENTINEL, not a colour. Feeding it to the hex parser gave NaN components, which
+    // deck renders as BLACK — so asking for no outline produced the most visible outline available.
+    const noOutline = d.outline_color === 'none';
+    const rgb = deckHexToRgb(d.color);
+    const outline = deckHexToRgb(noOutline ? '#000000' : (d.outline_color || '#1d4ed8'));
     const op = d.opacity != null ? d.opacity : 1;
     if (st.data.__arrowTable) {
       // GeoArrow detail: the Arrow table is consumed zero-copy by @geoarrow/deck.gl-layers —
@@ -481,7 +485,7 @@
         const acol = (aex.enabled && aex.field && t.getChild) ? t.getChild(aex.field) : null;
         return new DK.geo.GeoArrowPolygonLayer({
           id: 'deck_' + d.layer_id, data: t, pickable: false,
-          filled: true, stroked: !acol,      // walls plus an outline is a smudge at any pitch
+          filled: true, stroked: !acol && !noOutline,   // walls plus an outline is a smudge at any pitch
           extruded: !!acol,
           getElevation: acol || undefined,
           elevationScale: Number(aex.scale) || 1,
@@ -531,7 +535,9 @@
       data: st.data,
       pickable: false,
       filled: !isLine,
-      stroked: !extruded,          // walls plus an outline reads as a smudge at any pitch
+      // Lines ARE their stroke, so `noOutline` must not erase a line layer — it is a POLYGON
+      // outline setting. Extruded polygons drop it too (walls plus an outline is a smudge).
+      stroked: isLine || (!extruded && !(isPoly && noOutline)),
       extruded: extruded,
       // A feature missing the property, or holding a non-numeric one, becomes 0 rather than NaN —
       // NaN propagates into the mesh and drops the whole layer, not just that feature.

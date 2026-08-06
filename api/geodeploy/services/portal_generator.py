@@ -1350,11 +1350,15 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
             "fill-color": color,
             "fill-opacity": opacity * style.get("fill_opacity", 0.45),
         }
-        # MapLibre has no "transparent" keyword for an outline — you get no outline by NOT setting
-        # the property. So this is an omission, not a value.
+        # Removing a fill's outline is `fill-antialias: false`, NOT omitting fill-outline-color.
+        # Omitting it makes the outline MATCH FILL-COLOR (the spec's default), which is why "None"
+        # produced a visible dark edge instead of none — reported as "it drew a black outline".
+        # A `fill` layer always strokes its own edge; antialias is the switch that stops it.
         _outline = symbology.outline_color(style)
         if _outline:
             fill_paint["fill-outline-color"] = _outline
+        else:
+            fill_paint["fill-antialias"] = False
         return {
             "id": f"vector-{layer.id}",
             "type": "fill",
