@@ -26,4 +26,12 @@ Bash scripts that take a bare Linux VPS to a running GeoDeploy (the `curl instal
   everywhere.
 
 ## Last updated
+2026-08-06b (**`verify_deployed`: "healthy" is not "updated"**. `docker compose build` returning 0
+does not mean an image was produced (a cached build is a success and keeps its old timestamp), and
+`/health` is answered perfectly by OLD code — so an update that rebuilt nothing reported success
+while `record_sha` advertised the new version. Observed: an api image 47 hours old after an update to
+a 2-hour-old commit, with the panel reading "Up to date". Now, after the health check: the image must
+have been rebuilt IF its build context changed (`git diff -- api/`, so a docs-only update stays
+silent), and each service must be RUNNING that image; on failure the sha/ref markers are restored and
+the status is an error naming the exact recovery command.)
 2026-08-06 (branch + release targets reach a default clone: un-shallow, all-branch refspec, tag/branch pruning; the deployed ref is recorded — issue #4)

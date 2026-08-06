@@ -55,6 +55,40 @@ def test_the_updater_records_the_ref_it_deployed():
     assert 'record_ref "$OLD_REF"' in sh, "a rollback must restore the ref with the code"
 
 
+def test_the_updater_verifies_the_new_code_is_actually_RUNNING():
+    """A health check proves the stack is UP, not that it is NEW.
+
+    Observed 2026-08-06: an update to a commit merged two hours earlier left `geodeploy/api:latest`
+    47 hours old, both the API and the worker on pre-fix code, and the dashboard reading "Up to
+    date" — because `/health` answers perfectly from an old-but-healthy API and `record_sha` had
+    already moved the marker. The operator was told a fix was deployed that was not, and spent the
+    next hour debugging its symptoms.
+
+    Two independent things must hold, and the second catches what the first cannot:
+      * an image whose build CONTEXT changed must have been rebuilt (scoped to the context, so a
+        docs-only update legitimately produces no new image and stays silent);
+      * every service must be RUNNING the image that was just built — "built fine, recreated
+        nothing" is the other half.
+
+    And when it fails, the version marker must go BACK. A wrong marker is worse than a failed
+    update: it tells the operator, and the next debugging session, that a fix is live when it is not.
+    """
+    import pathlib
+
+    sh = (pathlib.Path(__file__).resolve().parents[2] / "installer" / "self-update.sh"
+          ).read_text(encoding="utf-8")
+
+    assert "verify_deployed" in sh
+    assert "context_changed" in sh, "must not cry wolf on a docs-only update"
+    assert "container_image_id" in sh, "must catch 'built but not recreated'"
+    # The verification runs AFTER the health check — being up is a precondition, not the proof.
+    assert sh.index("if ! healthy;") < sh.index("DEPLOY_PROBLEM=")
+    # …and a failure restores the previous marker rather than leaving a lie behind.
+    fail_block = sh[sh.index('if [ -n "$DEPLOY_PROBLEM" ]'):]
+    assert 'record_sha "$OLD_SHA"' in fail_block[:400]
+    assert "write_status error" in fail_block[:800]
+
+
 def test_the_updater_can_reach_tags_and_branches_of_a_default_clone():
     """`install.sh` clones `--depth 1 --branch main`: SHALLOW and SINGLE-BRANCH. Only the new targets
     hit either limit, so a normal update never revealed them — the first branch target would have

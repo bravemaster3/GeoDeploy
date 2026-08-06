@@ -27,6 +27,13 @@ does not come up healthy.
 
     If it has already happened, see [Recovering from a failed update](#recovering-from-a-failed-update).
 
+!!! info "How the updater knows it worked"
+    Coming up healthy is not the same as being new — an old container answers a health check
+    perfectly. So after the health check the updater also verifies that the images were actually
+    rebuilt (when their code changed) and that the services are running those images. If they are
+    not, it reports an error and leaves the version marker on the OLD commit rather than claiming a
+    version that is not running.
+
 !!! note "What survives an update"
     Your database, uploaded files, published portals and settings are all outside the application
     containers, so an update replaces the software and leaves your data alone.
