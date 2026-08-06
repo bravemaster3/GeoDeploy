@@ -160,26 +160,52 @@ export function isDataDriven(style = {}) {
 // The image ID CARRIES its parameters so any renderer can generate a missing one from the id alone,
 // which matters now that a layer needs N images rather than one.
 
-export function markerImageId(shape, color, size) {
+export const NO_OUTLINE = 'none'
+export const DEFAULT_MARKER_OUTLINE = '#ffffff'
+
+/** `[colour, widthRatio]` for a marker outline; colour null means draw none. Twin of marker_outline(). */
+export function markerOutline(style = {}) {
+  const raw = style.outline_color === undefined ? DEFAULT_MARKER_OUTLINE : style.outline_color
+  const color = (raw === NO_OUTLINE || raw === '' || raw === false || raw === null)
+    ? null : (raw || DEFAULT_MARKER_OUTLINE)
+  let ratio = Number(style.outline_width)
+  if (!Number.isFinite(ratio)) ratio = 0.28
+  return [color, Math.min(Math.max(ratio, 0), 1)]
+}
+
+const _px = (v, d = 5) => {
+  let n = Number(v == null ? d : v)
+  if (!Number.isFinite(n)) n = d
+  return Math.round(n * 100) / 100
+}
+
+/** Every parameter that changes the PIXELS is in the id — see the note above. */
+export function markerImageId(shape, color, size, outline = DEFAULT_MARKER_OUTLINE, outlineWidth = 0.28) {
   const hexish = String(color || DEFAULT_COLOR).replace(/^#/, '').toLowerCase() || '3b82f6'
-  let px = Number(size == null ? 5 : size)
-  if (!Number.isFinite(px)) px = 5
-  px = Math.round(px * 100) / 100
-  return `gd-pt-${shape || 'circle'}-${hexish}-${px}`
+  const ohex = !outline ? 'none' : String(outline).replace(/^#/, '').toLowerCase()
+  return `gd-pt-${shape || 'circle'}-${hexish}-${_px(size)}-${ohex}-${_px(outlineWidth, 0.28)}`
 }
 
 /** Parse an id back into its parameters — how `styleimagemissing` builds one on demand. */
 export function parseMarkerImageId(id) {
-  const m = /^gd-pt-([a-z]+)-([0-9a-f]{3,8})-([0-9.]+)$/.exec(String(id || ''))
+  // The outline pair is optional: an id baked into a portal published before outlines were
+  // configurable still parses, and then draws with the old white stroke — which is how it looked.
+  const m = /^gd-pt-([a-z]+)-([0-9a-f]{3,8})-([0-9.]+)(?:-(none|[0-9a-f]{3,8})-([0-9.]+))?$/
+    .exec(String(id || ''))
   if (!m) return null
-  return { shape: m[1], color: '#' + m[2], size: parseFloat(m[3]) }
+  return {
+    shape: m[1], color: '#' + m[2], size: parseFloat(m[3]),
+    outline: m[4] === undefined ? undefined : (m[4] === 'none' ? null : '#' + m[4]),
+    outlineWidth: m[5] === undefined ? undefined : parseFloat(m[5]),
+  }
 }
 
 /** `icon-image`: one id, or a data-driven choice. Mirrors colorExpression stop for stop. */
 export function iconImageExpression(style = {}) {
   const shape = style.marker || 'circle'
   const size = style.radius ?? 5
-  const base = markerImageId(shape, style.color || DEFAULT_COLOR, size)
+  const [ol, ow] = markerOutline(style)
+  const base = markerImageId(shape, style.color || DEFAULT_COLOR, size, ol, ow)
   const mode = style.color_mode || 'single'
   const field = (style.color_field || '').trim()
   if (mode === 'single' || !field) return base
@@ -187,10 +213,10 @@ export function iconImageExpression(style = {}) {
   if (mode === 'graduated') {
     const classes = (style.classes || []).filter((c) => c && c.color)
     if (!classes.length) return base
-    const expr = ['step', ['to-number', ['get', field]], markerImageId(shape, classes[0].color, size)]
+    const expr = ['step', ['to-number', ['get', field]], markerImageId(shape, classes[0].color, size, ol, ow)]
     for (const c of classes.slice(1)) {
       if (c.min === null || c.min === undefined) continue
-      expr.push(c.min, markerImageId(shape, c.color, size))
+      expr.push(c.min, markerImageId(shape, c.color, size, ol, ow))
     }
     return expr.length < 5 ? base : expr
   }
@@ -198,8 +224,8 @@ export function iconImageExpression(style = {}) {
     const cats = (style.categories || []).filter((c) => c && c.color)
     if (!cats.length) return base
     const expr = ['match', ['to-string', ['get', field]]]
-    for (const c of cats) expr.push(String(c.value), markerImageId(shape, c.color, size))
-    expr.push(markerImageId(shape, style.other_color || DEFAULT_OTHER_COLOR, size))
+    for (const c of cats) expr.push(String(c.value), markerImageId(shape, c.color, size, ol, ow))
+    expr.push(markerImageId(shape, style.other_color || DEFAULT_OTHER_COLOR, size, ol, ow))
     return expr.length > 3 ? expr : base
   }
   return base
@@ -209,6 +235,7 @@ export function iconImageExpression(style = {}) {
 export function markerImages(style = {}) {
   const shape = style.marker || 'circle'
   const size = style.radius ?? 5
+  const [ol, ow] = markerOutline(style)
   const colors = [style.color || DEFAULT_COLOR]
   const mode = style.color_mode || 'single'
   if (mode === 'graduated' && style.color_field) {
@@ -220,10 +247,10 @@ export function markerImages(style = {}) {
   const seen = new Set()
   const out = []
   for (const c of colors) {
-    const id = markerImageId(shape, c, size)
+    const id = markerImageId(shape, c, size, ol, ow)
     if (seen.has(id)) continue
     seen.add(id)
-    out.push({ id, shape, color: c, size })
+    out.push({ id, shape, color: c, size, outline: ol, outline_width: ow })
   }
   return out
 }

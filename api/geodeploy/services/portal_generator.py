@@ -1346,16 +1346,21 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
                 "source-layer": source_layer,
                 "paint": symbology.extrusion_paint(style, opacity),
             }
+        fill_paint = {
+            "fill-color": color,
+            "fill-opacity": opacity * style.get("fill_opacity", 0.45),
+        }
+        # MapLibre has no "transparent" keyword for an outline — you get no outline by NOT setting
+        # the property. So this is an omission, not a value.
+        _outline = symbology.outline_color(style)
+        if _outline:
+            fill_paint["fill-outline-color"] = _outline
         return {
             "id": f"vector-{layer.id}",
             "type": "fill",
             "source": source_id,
             "source-layer": source_layer,
-            "paint": {
-                "fill-color": color,
-                "fill-opacity": opacity * style.get("fill_opacity", 0.45),
-                "fill-outline-color": style.get("outline_color", "#1d4ed8"),
-            },
+            "paint": fill_paint,
         }
     if "line" in geom:
         paint = {

@@ -534,6 +534,7 @@ import { useMaplibre } from '@/composables/useMaplibre'
 // not as a local helper someone might be tempted to tweak in place. The Python twin is
 // services/symbology.py and the two must stay identical (CLAUDE.md parity rule).
 import {
+  NO_OUTLINE,
   colorExpression as symColorExpression,
   sizeExpression as symSizeExpression,
   extrusionPaint as symExtrusionPaint,
@@ -1613,7 +1614,7 @@ watch(loaded, (v) => {
     if (!e.id || !e.id.startsWith('gd-pt-') || map.value.hasImage(e.id)) return
     const spec = markerSpecs[e.id]
     if (!spec) return
-    const im = markerImage(spec.shape, spec.color, spec.size)
+    const im = markerImage(spec.shape, spec.color, spec.size, spec.outline, spec.outline_width)
     try { map.value.addImage(e.id, im, { pixelRatio: im.pixelRatio }) } catch { /* ignore */ }
   })
   // deck.gl overlay (once): a control so it survives setStyle; refetch the viewport on pan/zoom.
@@ -1667,8 +1668,12 @@ function crossPts(cx, cy, r) {
   const t = r * 0.38
   return [[-t, -r], [t, -r], [t, -t], [r, -t], [r, t], [t, t], [t, r], [-t, r], [-t, t], [-r, t], [-r, -t], [-t, -t]].map(d => [cx + d[0], cy + d[1]])
 }
-function markerImage(shape, color, size) {
-  const dpr = 2, r = Math.max(3, Number(size) || 5), stroke = Math.max(1, r * 0.28)
+function markerImage(shape, color, size, outline, outlineWidth) {
+  const dpr = 2, r = Math.max(3, Number(size) || 5)
+  // Outline width is a RATIO of the radius (see portal.js) so it stays proportional when a layer is
+  // resized; 0.28 reproduces the old hard-coded stroke exactly.
+  const ow = outlineWidth == null ? 0.28 : Number(outlineWidth)
+  const stroke = Math.max(0, r * (isFinite(ow) ? ow : 0.28))
   const dim = 80  // fixed canvas (see portal.js): constant dims let updateImage handle size changes
   const cv = document.createElement('canvas')
   cv.width = dim * dpr; cv.height = dim * dpr
@@ -1683,7 +1688,9 @@ function markerImage(shape, color, size) {
   else if (shape === 'cross') { crossPts(cx, cy, r).forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.closePath() }
   else ctx.arc(cx, cy, r, 0, Math.PI * 2)
   ctx.fillStyle = color || '#3b82f6'; ctx.fill()
-  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = stroke; ctx.stroke()
+  // null = draw no outline; undefined = unspecified, i.e. the white default markers always had.
+  const oc = outline === undefined ? '#ffffff' : outline
+  if (oc && stroke > 0) { ctx.strokeStyle = oc; ctx.lineWidth = stroke; ctx.stroke() }
   const d = ctx.getImageData(0, 0, dim * dpr, dim * dpr)
   return { width: dim * dpr, height: dim * dpr, data: d.data, pixelRatio: dpr }
 }
@@ -1836,13 +1843,15 @@ function buildPreviewStyle() {
             paint: symExtrusionPaint(st, opacity),
           })
         } else {
+          // MapLibre has no transparent-outline keyword: you get no outline by omitting the
+          // property. Mirrors portal_generator._vector_layer.
+          const fillPaint = {
+            'fill-color': color,
+            'fill-opacity': opacity * (st.fill_opacity ?? 0.45),
+          }
+          if (st.outline_color !== NO_OUTLINE) fillPaint['fill-outline-color'] = st.outline_color || '#1d4ed8'
           style.layers.push({
-            id: srcId, type: 'fill', source: srcId, 'source-layer': sourceLayer,
-            paint: {
-              'fill-color': color,
-              'fill-opacity': opacity * (st.fill_opacity ?? 0.45),
-              'fill-outline-color': st.outline_color || '#1d4ed8',
-            },
+            id: srcId, type: 'fill', source: srcId, 'source-layer': sourceLayer, paint: fillPaint,
           })
         }
       } else if (geom.includes('line')) {

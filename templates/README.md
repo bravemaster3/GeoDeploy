@@ -202,6 +202,16 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-06c (`markerImage` takes an OUTLINE (colour + width) — the white stroke was hard-coded. Width
+is a RATIO of the radius so it stays proportional when a layer is resized (0.28 = the old value, so
+an unstyled marker is pixel-identical); a thick one hides the fill, which is how a RING is drawn.
+`null` means draw none, `undefined` means unspecified → the old white. The marker image ID carries
+both, because they change the pixels — otherwise two differently-ringed markers collide on one image;
+`parseMarkerImageId` treats the pair as OPTIONAL so ids baked into portals published before this
+still parse and draw as they did. Also: `GeoArrowPolygonLayer` extrudes — that is the transport an
+UNTILED GeoParquet layer uses, so extruding only in the GeoJSON branch meant 3D did nothing for
+exactly the layers it was added for. A GeoArrow accessor is an Arrow COLUMN, so getElevation takes
+the vector and the × multiplier rides on `elevationScale`.)
 2026-08-06b (**`map.on('load')` is a guarded sequence — keep it that way**. Every step in it is
 wrapped in its own try/catch with a console.warn, because anything escaping aborts the REST of the
 handler — which is where `setupBasemaps()` adds the control cluster and the interaction wiring

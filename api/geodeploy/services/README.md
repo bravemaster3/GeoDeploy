@@ -131,6 +131,11 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   permalink it serves, never a substitute for the bbox queries.
 
 ## Last updated
+2026-08-06c (`symbology.py`: `outline_color()` and `marker_outline()` — `NO_OUTLINE` ("none") means
+draw none, absent means the default, so existing portals are untouched. MapLibre has no transparent
+-outline keyword, so a polygon expresses "none" by OMITTING `fill-outline-color`; a marker expresses
+it by not stroking. Marker outline width is a RATIO of the radius and is part of `marker_image_id`,
+since it changes the pixels — two differently-ringed markers must not share one image.)
 2026-08-06b (**new `pillars.py` — 3D for POINT layers**. MapLibre extrudes FILLS, so there is no
 point form of `fill-extrusion`: the geometry has to become a polygon. ONE shared Martin FUNCTION
 source (`geodeploy.point_pillars`) buffers a layer's points by a radius in METRES (via `geography` —

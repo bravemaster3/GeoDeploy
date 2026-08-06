@@ -68,6 +68,14 @@ All dialogs (`UploadModal`, `AddSourceModal`, `DiscoverModal`, `portal/CreatePor
   icon logic in `views/PortalEditor.vue` + `templates/shared/portal.js` — change all three together.
 
 ## Last updated
+2026-08-06c (`portal/LayerPanel.vue`: outline controls. Polygons AND points can now set an outline
+colour or **None** — previously a polygon always had a blue one and a point a hard-coded white one.
+Points also get a thickness, expressed as a PROPORTION of the marker so it survives a resize; past
+~60% the fill is hidden and the marker reads as a RING, which the panel says rather than leaving you
+to find out. `NO_OUTLINE` is the sentinel string `"none"`, never `""` — an uninitialised colour input
+yields `""`, and treating that as "no outline" would silently strip outlines from layers nobody
+styled. The popover widened 230→288px; it had grown a mode picker, field, class controls, an
+editable legend, marker and outline controls and a 3D block, and the labelled rows were wrapping.)
 2026-08-06b (`portal/LayerPanel.vue`: **data-driven symbology**. The popover gains Single /
 Graduated / Categories, a field picker (numeric-only for graduated; the geometry column never
 offered), class count + method + ramp, and an EDITABLE legend whose swatches are the colours the map

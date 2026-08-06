@@ -26,6 +26,14 @@ flat polygon are the same shape.
 **The globe has a sky.** In 3D globe view the planet now sits against space with an atmospheric limb,
 instead of a flat dark panel.
 
+### Outlines, and rings
+
+- **Outlines can be turned off.** Polygons and points both take "None" — previously a polygon always
+  had a blue outline and a point always had a white one, with no way to remove either.
+- **Points get a real outline control**: a colour and a thickness. Thickness is a proportion of the
+  marker, so resizing a layer keeps it looking right — and a thick one hides the fill, which is how
+  you draw a **ring**.
+
 ### Easier to live with
 
 - **My Data** collapses per section (Vectors / Rasters / External, remembered between visits) and

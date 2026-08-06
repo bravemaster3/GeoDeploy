@@ -262,7 +262,7 @@
     // a layer had exactly ONE icon — a classified point layer has one per class, and `icon-image`
     // is a data-driven expression selecting between them.
     const spec = parseMarkerImageId(e.id);
-    if (spec) { setMarkerImage(e.id, spec.shape, spec.color, spec.size); return; }
+    if (spec) { setMarkerImage(e.id, spec.shape, spec.color, spec.size, spec.outline, spec.outlineWidth); return; }
     const l = (STYLE.layers || []).find(x => x.layout && x.layout['icon-image'] === e.id);
     const m = (l && l.metadata) || {};
     setMarkerImage(e.id, m['geodeploy:marker'] || 'circle', m['geodeploy:markerColor'] || '#3b82f6', m['geodeploy:markerSize'] || 5);
@@ -469,9 +469,22 @@
         });
       }
       if (isPoly) {
+        // 3D through the ARROW path too. This is the transport an untiled GeoParquet layer actually
+        // uses, so extruding only in the GeoJSON branch below meant "3D does nothing" for exactly
+        // the layers the feature was added for.
+        //
+        // A GeoArrow accessor is an Arrow COLUMN, not a function — `getElevation` takes the vector
+        // straight from the table. The × multiplier therefore rides on `elevationScale` rather than
+        // being folded into the accessor, which is what the prop is for anyway. No column of that
+        // name (renamed, or a re-prep that dropped it) → no extrusion, rather than a flat mesh.
+        const aex = d.extrusion || {};
+        const acol = (aex.enabled && aex.field && t.getChild) ? t.getChild(aex.field) : null;
         return new DK.geo.GeoArrowPolygonLayer({
           id: 'deck_' + d.layer_id, data: t, pickable: false,
-          filled: true, stroked: true,
+          filled: true, stroked: !acol,      // walls plus an outline is a smudge at any pitch
+          extruded: !!acol,
+          getElevation: acol || undefined,
+          elevationScale: Number(aex.scale) || 1,
           getFillColor: rgb.concat(Math.round(255 * op * (d.fill_opacity != null ? d.fill_opacity : 0.45))),
           getLineColor: outline.concat(Math.round(255 * op)),
           lineWidthUnits: 'pixels',
@@ -1348,8 +1361,13 @@
     else if (shape === 'cross') { const a = crossPoints(cx, cy, r).split(' '); a.forEach((pt, i) => { const xy = pt.split(','); i ? ctx.lineTo(+xy[0], +xy[1]) : ctx.moveTo(+xy[0], +xy[1]); }); ctx.closePath(); }
     else { ctx.arc(cx, cy, r, 0, Math.PI * 2); }
   }
-  function markerImage(shape, color, size) {
-    const dpr = 2, r = Math.max(3, Number(size) || 5), stroke = Math.max(1, r * 0.28);
+  function markerImage(shape, color, size, outline, outlineWidth) {
+    const dpr = 2, r = Math.max(3, Number(size) || 5);
+    // A RATIO of the radius, not pixels: a 3 px ring around a 4 px dot and around a 20 px dot are
+    // different symbols, and resizing a layer should keep the outline in proportion. 0.28 is what
+    // the old hard-coded stroke was, so an unstyled marker is pixel-identical to before.
+    const ow = (outlineWidth == null ? 0.28 : Number(outlineWidth));
+    const stroke = Math.max(0, r * (isFinite(ow) ? ow : 0.28));
     // Fixed canvas size (fits the max marker radius) so every icon for a layer shares
     // dimensions — that lets map.updateImage() work when only the SIZE changes.
     const dim = 80;
@@ -1359,16 +1377,28 @@
     ctx.scale(dpr, dpr); ctx.lineJoin = 'round';
     drawMarkerPath(ctx, shape, dim / 2, dim / 2, r);
     ctx.fillStyle = color || '#3b82f6'; ctx.fill();
-    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = stroke; ctx.stroke();
+    // No outline is a real choice — `outline === null` means draw none, which is different from
+    // "not specified" (undefined → the white default every marker used to have).
+    const oc = outline === undefined ? '#ffffff' : outline;
+    if (oc && stroke > 0) { ctx.strokeStyle = oc; ctx.lineWidth = stroke; ctx.stroke(); }
     const d = ctx.getImageData(0, 0, dim * dpr, dim * dpr);
     return { width: dim * dpr, height: dim * dpr, data: d.data, pixelRatio: dpr };
   }
   // Twin of ui/src/lib/symbology.js::parseMarkerImageId — the id is the spec.
   function parseMarkerImageId(id) {
-    const m = /^gd-pt-([a-z]+)-([0-9a-f]{3,8})-([0-9.]+)$/.exec(String(id || ''));
-    return m ? { shape: m[1], color: '#' + m[2], size: parseFloat(m[3]) } : null;
+    // gd-pt-<shape>-<hex>-<size>-<outlineHex|none>-<widthRatio>. The trailing pair is optional so an
+    // id baked into a portal published before outlines were configurable still parses — it then
+    // draws with the old white stroke, which is what that portal looked like.
+    const m = /^gd-pt-([a-z]+)-([0-9a-f]{3,8})-([0-9.]+)(?:-(none|[0-9a-f]{3,8})-([0-9.]+))?$/
+      .exec(String(id || ''));
+    if (!m) return null;
+    return {
+      shape: m[1], color: '#' + m[2], size: parseFloat(m[3]),
+      outline: m[4] === undefined ? undefined : (m[4] === 'none' ? null : '#' + m[4]),
+      outlineWidth: m[5] === undefined ? undefined : parseFloat(m[5]),
+    };
   }
-  function setMarkerImage(imgId, shape, color, size) {
+  function setMarkerImage(imgId, shape, color, size, outline, outlineWidth) {
     // The WHOLE body is guarded, not just the add/update. `markerImage()` builds a canvas — it can
     // fail (no 2D context in a restricted browser, an unknown shape, a zero-sized canvas) and it
     // used to sit OUTSIDE the try, so a single bad image threw out of `ensurePointImages`, which
@@ -1379,7 +1409,7 @@
     // This got sharper when a classified layer began registering one image PER CLASS: many more
     // chances to hit it, on a code path that had only ever created one.
     try {
-      const im = markerImage(shape, color, size);
+      const im = markerImage(shape, color, size, outline, outlineWidth);
       try { if (map.hasImage(imgId)) map.updateImage(imgId, im); else map.addImage(imgId, im, { pixelRatio: im.pixelRatio }); }
       catch (e) { try { if (map.hasImage(imgId)) map.removeImage(imgId); map.addImage(imgId, im, { pixelRatio: im.pixelRatio }); } catch (e2) {} }
     } catch (e) { /* one marker is not worth the map */ }
@@ -1405,7 +1435,7 @@
       // time that class scrolls into view, which looks like the map is still loading.
       const all = l.metadata['geodeploy:markerImages'];
       if (Array.isArray(all) && all.length) {
-        all.forEach(function (im) { setMarkerImage(im.id, im.shape, im.color, im.size); });
+        all.forEach(function (im) { setMarkerImage(im.id, im.shape, im.color, im.size, im.outline, im.outline_width); });
         return;
       }
       if (l.metadata['geodeploy:marker'] === undefined) return;

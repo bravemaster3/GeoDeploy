@@ -254,7 +254,7 @@ def test_a_classified_point_layer_KEEPS_its_marker_shape():
     ids = [x for x in expr if isinstance(x, str) and x.startswith("gd-pt-")]
     assert len(ids) == 2
     # Every image is the CHOSEN shape at the chosen size — only the colour differs per class.
-    assert all(i.startswith("gd-pt-star-") and i.endswith("-6") for i in ids)
+    assert all(i.startswith("gd-pt-star-") and "-6-" in i for i in ids)
 
 
 def test_the_icon_expression_mirrors_the_colour_expression_stop_for_stop():
@@ -275,7 +275,9 @@ def test_categorized_points_get_an_image_for_the_fallback_too():
     outside the listed categories renders with no marker at all."""
     style = {"marker": "diamond", "color_mode": "categorized", "color_field": "kind",
              "categories": [{"value": "oak", "color": "#0a0a0a"}], "other_color": "#999999"}
-    assert sym.icon_image_expression(style)[-1] == sym.marker_image_id("diamond", "#999999", 5)
+    ol, ow = sym.marker_outline(style)
+    assert sym.icon_image_expression(style)[-1] == sym.marker_image_id(
+        "diamond", "#999999", 5, ol, ow)
 
 
 def test_marker_images_lists_every_bitmap_the_style_needs():
@@ -292,11 +294,55 @@ def test_marker_images_lists_every_bitmap_the_style_needs():
     assert all(i["shape"] == "circle" for i in images)
 
 
+# ── Outlines, including "none" ───────────────────────────────────────────────────────────────────
+
+def test_no_outline_is_a_SENTINEL_not_an_empty_string():
+    """The style dict is JSON that round-trips through a saved portal and three renderers, and "" is
+    what an uninitialised colour input produces — so treating "" as "no outline" would silently strip
+    outlines from layers whose author never touched the control. Absent still means the DEFAULT, so
+    portals styled before this are unchanged."""
+    assert sym.outline_color({}) == "#1d4ed8"
+    assert sym.outline_color({"outline_color": None}) == "#1d4ed8"
+    assert sym.outline_color({"outline_color": "#ff0000"}) == "#ff0000"
+    assert sym.outline_color({"outline_color": sym.NO_OUTLINE}) is None
+
+
+def test_a_marker_outline_width_is_a_RATIO_of_the_marker():
+    """A 3 px ring around a 4 px dot and around a 20 px dot are different symbols. Someone resizing a
+    layer expects the outline to keep its proportion, so the width scales with the marker. 0.28 is
+    what the old hard-coded stroke was, so an unstyled marker is pixel-identical to before."""
+    assert sym.marker_outline({}) == ("#ffffff", 0.28)
+    assert sym.marker_outline({"outline_color": sym.NO_OUTLINE})[0] is None
+    assert sym.marker_outline({"outline_width": 0.8})[1] == 0.8
+    # Clamped: a ratio above 1 would draw outside the marker's own footprint.
+    assert sym.marker_outline({"outline_width": 5})[1] == 1.0
+    assert sym.marker_outline({"outline_width": "wide"})[1] == 0.28
+
+
+def test_the_outline_is_part_of_the_marker_ID():
+    """It changes the PIXELS, so it must change the id — otherwise a red-ringed marker and a
+    white-ringed one collide on one image and whichever was created first wins for both."""
+    white = sym.marker_image_id("circle", "#123456", 5, "#ffffff", 0.28)
+    red = sym.marker_image_id("circle", "#123456", 5, "#ff0000", 0.28)
+    none = sym.marker_image_id("circle", "#123456", 5, None, 0.28)
+    thick = sym.marker_image_id("circle", "#123456", 5, "#ffffff", 0.6)
+    assert len({white, red, none, thick}) == 4
+    assert none.endswith("-none-0.28")
+
+
+def test_marker_images_carry_the_outline_for_the_renderer():
+    """The runtime builds each bitmap from this list, so the outline has to travel with it."""
+    images = sym.marker_images({"marker": "circle", "color": "#123456",
+                                "outline_color": sym.NO_OUTLINE, "outline_width": 0.5})
+    assert images[0]["outline"] is None
+    assert images[0]["outline_width"] == 0.5
+
+
 def test_a_marker_id_round_trips_its_parameters():
     """The id IS the spec: the runtime rebuilds a missing image from it alone, which is what lets
     one layer own many icons. Twin of parseMarkerImageId in lib/symbology.js."""
-    assert sym.marker_image_id("star", "#AABBCC", 7) == "gd-pt-star-aabbcc-7"
-    assert sym.marker_image_id("circle", "3b82f6", 5.5) == "gd-pt-circle-3b82f6-5.5"
+    assert sym.marker_image_id("star", "#AABBCC", 7) == "gd-pt-star-aabbcc-7-ffffff-0.28"
+    assert sym.marker_image_id("circle", "3b82f6", 5.5, None, 0.5) == "gd-pt-circle-3b82f6-5.5-none-0.5"
 
 
 def test_icon_size_is_a_multiplier_of_the_bitmap():

@@ -325,6 +325,26 @@ def extrusion_paint(style: dict, opacity: float) -> dict:
     }
 
 
+#: Outline colour meaning NO OUTLINE. A distinct sentinel rather than an empty string, because the
+#: style dict travels through JSON, a saved portal, and three renderers — and "" is what an
+#: uninitialised colour input produces, which would silently turn outlines off for someone who never
+#: asked. `None`/absent still means "use the default", so existing portals are untouched.
+NO_OUTLINE = "none"
+
+
+def outline_color(style: dict, default: str = "#1d4ed8"):
+    """The outline colour, or None when the layer asks for no outline at all.
+
+    Callers must distinguish the two: MapLibre has no "transparent" outline keyword, so an absent
+    outline is expressed by omitting the paint property (fills) or by a zero width (points), not by
+    passing a colour.
+    """
+    raw = style.get("outline_color", default)
+    if raw in (NO_OUTLINE, "", False):
+        return None
+    return raw if raw is not None else default
+
+
 def is_data_driven(style: dict) -> bool:
     """True when colour or size varies per feature."""
     mode = style.get("color_mode") or "single"
@@ -355,16 +375,51 @@ def is_data_driven(style: dict) -> bool:
 # missing one from the id alone. That matters now that a layer needs N images rather than one — the
 # runtime's `styleimagemissing` handler can no longer look them up from a single layer metadata blob.
 
-def marker_image_id(shape: str, color: str, size) -> str:
-    """The canonical id for a marker bitmap. Parameters are IN the id — see the note above."""
-    hexish = str(color or DEFAULT_COLOR).lstrip("#").lower() or "3b82f6"
+#: A marker's outline, when the style does not say otherwise. White at 28% of the radius is what
+#: every marker drew before outlines were configurable, so leaving these alone reproduces it exactly.
+DEFAULT_MARKER_OUTLINE = "#ffffff"
+
+
+def marker_outline(style: dict) -> tuple[str | None, float]:
+    """`(colour, width_ratio)` for a point marker's outline — colour None means draw none.
+
+    The width is a RATIO of the marker radius, not pixels: a 3 px ring around a 4 px dot and around
+    a 20 px dot are different symbols, and someone resizing a layer expects the outline to keep its
+    proportion. The old hard-coded stroke was `radius * 0.28`, which is the default here.
+
+    A wide outline on a small marker is how you draw a RING — the fill disappears behind it — which
+    is a symbol people ask for by name, so the ratio is deliberately allowed up to 1.
+    """
+    raw = style.get("outline_color", DEFAULT_MARKER_OUTLINE)
+    color = None if raw in (NO_OUTLINE, "", False) else (raw or DEFAULT_MARKER_OUTLINE)
     try:
-        px = round(float(size if size is not None else 5), 2)
+        ratio = float(style.get("outline_width", 0.28))
     except (TypeError, ValueError):
-        px = 5
-    if px == int(px):
-        px = int(px)
-    return f"gd-pt-{(shape or 'circle')}-{hexish}-{px}"
+        ratio = 0.28
+    return color, min(max(ratio, 0.0), 1.0)
+
+
+def _px(value, default=5):
+    try:
+        n = round(float(value if value is not None else default), 2)
+    except (TypeError, ValueError):
+        n = default
+    return int(n) if n == int(n) else n
+
+
+def marker_image_id(shape: str, color: str, size, outline: str | None = DEFAULT_MARKER_OUTLINE,
+                    outline_width: float = 0.28) -> str:
+    """The canonical id for a marker bitmap. Every parameter that changes the PIXELS is in the id.
+
+    That is the whole contract: a renderer seeing an unknown id can draw it from the id alone, and
+    two layers wanting the same marker share one image. Adding outline colour and width to the
+    drawing therefore has to add them here — otherwise a red-ringed marker and a white-ringed one
+    would collide on the same id, and whichever was created first would win for both.
+    """
+    hexish = str(color or DEFAULT_COLOR).lstrip("#").lower() or "3b82f6"
+    ohex = "none" if not outline else str(outline).lstrip("#").lower()
+    ow = _px(outline_width, 0.28)
+    return f"gd-pt-{(shape or 'circle')}-{hexish}-{_px(size)}-{ohex}-{ow}"
 
 
 def icon_image_expression(style: dict):
@@ -376,7 +431,8 @@ def icon_image_expression(style: dict):
     """
     shape = style.get("marker") or "circle"
     size = style.get("radius", 5)
-    base = marker_image_id(shape, style.get("color") or DEFAULT_COLOR, size)
+    ol, ow = marker_outline(style)
+    base = marker_image_id(shape, style.get("color") or DEFAULT_COLOR, size, ol, ow)
     mode = style.get("color_mode") or "single"
     field = (style.get("color_field") or "").strip()
     if mode == "single" or not field:
@@ -387,11 +443,11 @@ def icon_image_expression(style: dict):
         if not classes:
             return base
         expr: list = ["step", ["to-number", ["get", field]],
-                      marker_image_id(shape, classes[0]["color"], size)]
+                      marker_image_id(shape, classes[0]["color"], size, ol, ow)]
         for c in classes[1:]:
             if c.get("min") is None:
                 continue
-            expr.extend([c["min"], marker_image_id(shape, c["color"], size)])
+            expr.extend([c["min"], marker_image_id(shape, c["color"], size, ol, ow)])
         return base if len(expr) < 5 else expr
 
     if mode == "categorized":
@@ -400,8 +456,9 @@ def icon_image_expression(style: dict):
             return base
         expr: list = ["match", ["to-string", ["get", field]]]
         for c in cats:
-            expr.extend([str(c.get("value")), marker_image_id(shape, c["color"], size)])
-        expr.append(marker_image_id(shape, style.get("other_color") or DEFAULT_OTHER_COLOR, size))
+            expr.extend([str(c.get("value")), marker_image_id(shape, c["color"], size, ol, ow)])
+        expr.append(marker_image_id(shape, style.get("other_color") or DEFAULT_OTHER_COLOR,
+                                    size, ol, ow))
         return expr if len(expr) > 3 else base
 
     return base
@@ -416,6 +473,7 @@ def marker_images(style: dict) -> list[dict]:
     """
     shape = style.get("marker") or "circle"
     size = style.get("radius", 5)
+    ol, ow = marker_outline(style)
     colors = [style.get("color") or DEFAULT_COLOR]
     mode = style.get("color_mode") or "single"
     if mode == "graduated" and style.get("color_field"):
@@ -426,11 +484,12 @@ def marker_images(style: dict) -> list[dict]:
 
     seen, out = set(), []
     for c in colors:
-        iid = marker_image_id(shape, c, size)
+        iid = marker_image_id(shape, c, size, ol, ow)
         if iid in seen:
             continue
         seen.add(iid)
-        out.append({"id": iid, "shape": shape, "color": c, "size": size})
+        out.append({"id": iid, "shape": shape, "color": c, "size": size,
+                    "outline": ol, "outline_width": ow})
     return out
 
 

@@ -127,10 +127,15 @@
               <div>
                 <label class="text-xs text-muted-foreground">Outline color</label>
                 <div class="flex items-center gap-2 mt-0.5">
-                  <input type="color" :value="config.style?.outline_color || '#1d4ed8'"
+                  <input type="color" :value="outlineSwatch('#1d4ed8')" :disabled="noOutline"
                     @input="emitStyle({ outline_color: $event.target.value })"
-                    class="w-6 h-6 rounded border border-border cursor-pointer p-0" />
-                  <span class="text-xs text-muted-foreground/70 font-mono">{{ config.style?.outline_color || '#1d4ed8' }}</span>
+                    class="w-6 h-6 rounded border border-border cursor-pointer p-0 disabled:opacity-40" />
+                  <label class="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                    <input type="checkbox" :checked="noOutline" @change="setNoOutline($event.target.checked)"
+                      class="accent-primary" />
+                    None
+                  </label>
+                  <span v-if="!noOutline" class="text-xs text-muted-foreground/70 font-mono">{{ outlineSwatch('#1d4ed8') }}</span>
                 </div>
               </div>
 
@@ -173,6 +178,37 @@
                     class="w-16 text-xs border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
                   <span class="text-xs text-muted-foreground/70">px</span>
                 </div>
+              </div>
+              <!-- Marker outline. Points had a hard-coded white stroke and no way to change or
+                   remove it. The width is a RATIO of the marker size, so it stays proportional when
+                   the layer is resized — and a wide one hides the fill entirely, which is how you
+                   draw a RING. -->
+              <div>
+                <label class="text-xs text-muted-foreground">Outline</label>
+                <div class="flex items-center gap-2 mt-0.5">
+                  <input type="color" :value="outlineSwatch('#ffffff')" :disabled="noOutline"
+                    @input="emitStyle({ outline_color: $event.target.value })"
+                    class="w-6 h-6 rounded border border-border cursor-pointer p-0 disabled:opacity-40" />
+                  <label class="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                    <input type="checkbox" :checked="noOutline" @change="setNoOutline($event.target.checked)"
+                      class="accent-primary" />
+                    None
+                  </label>
+                </div>
+                <div v-if="!noOutline" class="flex items-center gap-2 mt-1.5">
+                  <span class="text-[11px] text-muted-foreground flex-shrink-0">Thickness</span>
+                  <input type="range" min="0" max="1" step="0.04"
+                    :value="config.style?.outline_width ?? 0.28"
+                    @input="emitStyle({ outline_width: parseFloat($event.target.value) })"
+                    class="flex-1 h-1 accent-primary" />
+                  <span class="text-[11px] text-muted-foreground/70 w-8 text-right">
+                    {{ Math.round((config.style?.outline_width ?? 0.28) * 100) }}%
+                  </span>
+                </div>
+                <p v-if="!noOutline && (config.style?.outline_width ?? 0.28) > 0.6"
+                   class="text-[11px] text-muted-foreground/70 mt-1">
+                  At this thickness the fill is hidden — the marker reads as a ring.
+                </p>
               </div>
             </div>
 
@@ -352,7 +388,7 @@ import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps, getRaste
          getFieldStats } from '@/api'
 // The shared symbology vocabulary — twin of api/geodeploy/services/symbology.py. The swatch and
 // the legend here must describe exactly what the published portal will draw.
-import { RAMPS, DIVERGING, legendEntries, representativeColor } from '@/lib/symbology'
+import { RAMPS, DIVERGING, NO_OUTLINE, markerOutline, legendEntries, representativeColor } from '@/lib/symbology'
 import { TrashIcon, LocateIcon } from '@/views/icons'
 
 const props = defineProps({ config: Object })
@@ -382,10 +418,12 @@ function positionPop() {
   const el = swatchBtn.value
   if (!el) return
   const r = el.getBoundingClientRect()
-  const w = 230
+  // Widened from 230: the panel now carries a colour-mode picker, a field, class count/method/ramp,
+  // an editable legend, marker + outline controls and a 3D block. At 230 the labelled rows wrapped.
+  const w = 288
   let left = r.right + 8
   if (left + w > window.innerWidth) left = Math.max(8, r.left - w - 8)
-  popStyle.value = { left: left + 'px', top: Math.min(r.top, window.innerHeight - 340) + 'px', width: w + 'px' }
+  popStyle.value = { left: left + 'px', top: Math.min(r.top, window.innerHeight - 380) + 'px', width: w + 'px' }
 }
 function onDocClick(e) {
   if (!showStyle.value) return
@@ -457,7 +495,10 @@ function crossPts(cx, cy, r) {
     .map(d => (cx + d[0]).toFixed(1) + ',' + (cy + d[1]).toFixed(1)).join(' ')
 }
 function markerSvg(shape, c) {
-  const s = ' stroke="#fff" stroke-width="1.5" stroke-linejoin="round"'
+  // Mirrors the canvas marker: no outline means none here either, or the list swatch would keep a
+  // white ring the map does not draw.
+  const [oc] = markerOutline(props.config.style || {})
+  const s = oc ? ` stroke="${oc}" stroke-width="1.5" stroke-linejoin="round"` : ''
   if (shape === 'square') return `<rect x="3" y="3" width="12" height="12" fill="${c}"${s}/>`
   if (shape === 'triangle') return `<polygon points="9,2.5 15.5,15 2.5,15" fill="${c}"${s}/>`
   if (shape === 'diamond') return `<polygon points="9,2 16,9 9,16 2,9" fill="${c}"${s}/>`
@@ -605,6 +646,21 @@ const canExtrude = computed(() => {
   if (geomType.value === 'point' && layer.value?.storage_backend === 'geoparquet') return false
   return true
 })
+
+// Outline, shared by polygons and points. NO_OUTLINE is a sentinel string rather than '' or null,
+// because this dict is JSON that round-trips through a saved portal and three renderers — and '' is
+// what an uninitialised colour input yields, which would silently remove outlines from layers whose
+// author never touched the control. Absent still means "the default", so old portals are unchanged.
+const noOutline = computed(() => props.config.style?.outline_color === NO_OUTLINE)
+const outlineSwatch = (fallback) => {
+  const c = props.config.style?.outline_color
+  return (!c || c === NO_OUTLINE) ? fallback : c
+}
+function setNoOutline(on) {
+  // Turning it back ON restores the geometry's own default rather than whatever was last picked:
+  // the previous colour is gone from the style, and guessing one would be worse than a known start.
+  emitStyle({ outline_color: on ? NO_OUTLINE : (geomType.value === 'point' ? '#ffffff' : '#1d4ed8') })
+}
 
 function setExtrusion(patch) {
   emitStyle({ extrusion: { ...(props.config.style?.extrusion || {}), ...patch } })
