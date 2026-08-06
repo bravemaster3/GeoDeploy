@@ -168,6 +168,83 @@ def test_geoparquet_points_are_not_offered_3d_yet():
     assert ml["type"] == "symbol", "a GeoParquet point layer still renders as icons"
 
 
+# ── The function actually RUNS ───────────────────────────────────────────────────────────────────
+# Everything above reads the SQL as text. That is exactly how a function that could never serve a
+# single tile shipped: `%%1$I` in the source looked like a correctly escaped identifier placeholder,
+# but the outer format() turned it into a literal `%1$I` that a second format() pass was supposed to
+# substitute — and there was no second pass. Every request died on `syntax error at or near "%"`.
+#
+# So these install the function in the test database and CALL it. Nothing short of executing it
+# distinguishes SQL that is well-formed from SQL that merely looks well-formed.
+
+import pytest
+import pytest_asyncio
+
+
+@pytest_asyncio.fixture
+async def pg():
+    """A raw asyncpg connection, which is what `_ensure_pillar_function` uses in production.
+
+    Deliberately NOT the SQLAlchemy engine: its asyncpg dialect PREPARES every statement, and a
+    prepared statement can hold only one command — so `CREATE_SQL` (a schema plus a function) fails
+    there for a reason that has nothing to do with the SQL being correct. Going through the same
+    driver as production also means this test exercises the real installation path.
+    """
+    import asyncpg
+
+    from geodeploy import database
+    from geodeploy.config import get_settings
+    from geodeploy.services import martin
+
+    # The suite's own guard rail, restated: this fixture creates and drops schemas.
+    assert "test" in str(database.engine.url), "refusing to run: not the throwaway test database"
+
+    conn = await asyncpg.connect(martin._pg_sync_dsn(get_settings()), timeout=10)
+    try:
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS postgis")
+        await conn.execute(pillars.CREATE_SQL)
+        yield conn
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_the_function_installs_and_returns_a_real_tile(pg):
+    """Install it, point it at a real point table, and require actual MVT bytes back."""
+    await pg.execute("CREATE SCHEMA IF NOT EXISTS gd_pillar_t")
+    try:
+        await pg.execute(
+            "CREATE TABLE gd_pillar_t.sites (id serial primary key, height double precision, "
+            "geom geometry(Point, 4326))")
+        await pg.execute(
+            "INSERT INTO gd_pillar_t.sites (height, geom) VALUES "
+            "(10, ST_SetSRID(ST_MakePoint(2.35, 48.85), 4326)), "
+            "(20, ST_SetSRID(ST_MakePoint(2.36, 48.86), 4326))")
+
+        q = '{"schema":"gd_pillar_t","table":"sites","geom":"geom","radius":300}'
+        # z12/2074/1409 covers central Paris, where both points are.
+        tile = await pg.fetchval("SELECT geodeploy.point_pillars(12, 2074, 1409, $1::json)", q)
+        assert tile, "the tile function returned nothing for a tile containing two points"
+
+        # The HEIGHT attribute has to survive into the tile: it is what fill-extrusion-height reads,
+        # so a tile carrying geometry alone would draw flat pillars and look like 3D not working.
+        assert b"height" in tile
+
+        # A tile with no points in it is empty, not an error.
+        assert not await pg.fetchval("SELECT geodeploy.point_pillars(12, 10, 10, $1::json)", q)
+    finally:
+        await pg.execute("DROP SCHEMA gd_pillar_t CASCADE")
+
+
+@pytest.mark.asyncio
+async def test_a_crafted_tile_url_cannot_read_a_non_spatial_table(pg):
+    """The identifiers arrive from a PUBLIC tile URL. `pg_authid.rolname` is a real column of a real
+    table, so existence alone is not enough of a check — it must be a GEOMETRY column, and anything
+    else must yield an empty tile rather than a Postgres error surfacing through Martin."""
+    q = '{"schema":"pg_catalog","table":"pg_authid","geom":"rolname"}'
+    assert await pg.fetchval("SELECT geodeploy.point_pillars(0, 0, 0, $1::json)", q) is None
+
+
 def test_an_extruded_point_keeps_its_data_driven_colour():
     """Colouring by one field and extruding by another is the normal case, and the pillar path must
     not quietly drop the classification."""

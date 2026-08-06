@@ -917,7 +917,9 @@ async def reload_martin(_: User = Depends(require_admin), db: AsyncSession = Dep
     layers = [{"schema_name": l.schema_name, "table_name": l.table_name,
                "geometry_column": l.geometry_column, "id_column": l.id_column, "crs": l.crs}
               for l in result.scalars().all()]
-    await regenerate_config(layers)
+    # force: this endpoint IS the manual restart. It must act even when the config is byte-identical
+    # to what is on disk, which is the usual case when someone reaches for it.
+    await regenerate_config(layers, force=True)
     return {"status": "ok", "tables": len(layers)}
 
 

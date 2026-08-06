@@ -50,20 +50,30 @@ def _pg_sync_dsn(settings) -> str:
             f"@{c['postgis_host']}:{c['postgis_port']}/{c['postgis_db']}{ssl}")
 
 
-async def regenerate_config(layers: list[dict]) -> None:
+async def regenerate_config(layers: list[dict], force: bool = False) -> None:
     """
     Rebuild martin-config.yaml from the current layer list and signal Martin to reload.
     layers: [{"schema": str, "table": str, "id_column": str}]
+    force: restart Martin even when nothing changed (the operator's "Reload Martin" button).
     """
     settings = get_settings()
     layers = await _attach_properties(layers, settings)
-    await _ensure_pillar_function(settings)
+    installed = await _ensure_pillar_function(settings)
     config = _build_config(layers, settings)
-    _write_config(config, settings.martin_config_path)
-    await _reload_martin()
+    changed = _write_config(config, settings.martin_config_path)
+    # Restarting Martin drops every in-flight tile request, so do it only when it can change what
+    # Martin serves: the config differs, or the pillar function did not exist when Martin last
+    # resolved its sources. A function whose BODY changed needs no restart — Martin resolves the
+    # source by name at startup and runs the current body per request.
+    #
+    # `force` is for the operator's "Reload Martin" button, whose entire purpose is to restart a
+    # Martin that is misbehaving for reasons the config cannot show. Skipping the restart there
+    # because nothing changed on disk would take away the one manual recovery there is.
+    if force or changed or installed:
+        await _reload_martin()
 
 
-async def _ensure_pillar_function(settings) -> None:
+async def _ensure_pillar_function(settings) -> bool:
     """Create/refresh the shared `geodeploy.point_pillars` tile function (3D pillars for points).
 
     Done HERE rather than in a migration because it must exist wherever Martin's config names it,
@@ -74,6 +84,9 @@ async def _ensure_pillar_function(settings) -> None:
     Non-fatal. A database that refuses the DDL (a read-only replica, a locked-down role) must not
     stop the tile config for every OTHER layer from being written — the pillars source simply
     returns nothing and 3D points do not draw.
+
+    Returns True when the function did NOT exist beforehand, i.e. Martin last resolved its sources
+    without it and has to be restarted to pick the source up.
     """
     from . import pillars
 
@@ -81,9 +94,17 @@ async def _ensure_pillar_function(settings) -> None:
     conn = None
     try:
         conn = await asyncpg.connect(_pg_sync_dsn(settings), timeout=10)
+        existed = await conn.fetchval(
+            """SELECT EXISTS (SELECT 1 FROM pg_proc p
+                              JOIN pg_namespace n ON n.oid = p.pronamespace
+                              WHERE n.nspname = $1 AND p.proname = $2)""",
+            pillars.SCHEMA, pillars.FUNCTION,
+        )
         await conn.execute(pillars.CREATE_SQL)
+        return not existed
     except Exception as exc:      # noqa: BLE001 — see docstring
         _log.warning("could not install the 3D pillar tile function: %s", exc)
+        return False
     finally:
         if conn is not None:
             await conn.close()
@@ -174,10 +195,24 @@ def _build_config(layers: list[dict], settings) -> dict:
     return {"listen_addresses": "0.0.0.0:3000", "postgres": postgres}
 
 
-def _write_config(config: dict, path: str) -> None:
+def _write_config(config: dict, path: str) -> bool:
+    """Write the config, returning whether it actually DIFFERS from what was already there.
+
+    The caller restarts Martin on a change, and a restart drops in-flight tile requests — so
+    "nothing changed" is worth knowing. Compared as rendered YAML rather than as dicts, because the
+    rendered text is what Martin reads.
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    rendered = yaml.dump(config, default_flow_style=False, allow_unicode=True)
+    try:
+        with open(path) as f:
+            if f.read() == rendered:
+                return False
+    except OSError:
+        pass          # no config yet (or unreadable) — write it and treat that as a change
     with open(path, "w") as f:
-        yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+        f.write(rendered)
+    return True
 
 
 async def _reload_martin() -> None:

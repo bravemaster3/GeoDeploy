@@ -52,6 +52,11 @@ QUAD_SEGS = 4
 #: so the default is deliberately small and the operator sets it against their own extent.
 DEFAULT_RADIUS_M = 30.0
 
+#: Names the generated query uses for its own geometry. A source column called one of these would
+#: collide with it in the attribute list, so they are dropped from the attributes — losing an oddly
+#: named attribute is survivable, two columns of the same name in the row handed to `ST_AsMVT` is not.
+_RESERVED_COLS = ("pgeom", "mvtgeom")
+
 CREATE_SQL = f"""
 CREATE SCHEMA IF NOT EXISTS {SCHEMA};
 
@@ -62,50 +67,78 @@ DECLARE
   src_table  text := coalesce(query->>'table', '');
   geom_col   text := coalesce(query->>'geom', 'geom');
   radius     double precision := coalesce((query->>'radius')::double precision, {DEFAULT_RADIUS_M});
-  ok         boolean;
+  env        geometry := ST_TileEnvelope(z, x, y);
+  cols_t     text;
+  cols_s     text;
+  srid       integer;
   mvt        bytea;
 BEGIN
   -- The caller is a tile URL, which is PUBLIC for a published portal. Confirm the identifiers name
-  -- a real column of a real table before they reach the query, so a crafted URL cannot point this
-  -- at pg_authid. format('%I') quotes them as well; both, deliberately.
-  SELECT EXISTS (
+  -- a real GEOMETRY column of a real table before they reach the query, so a crafted URL cannot
+  -- point this at pg_authid. format('%I') quotes them as well; both, deliberately.
+  --
+  -- The type check is not decoration: "a column that exists" is satisfied by pg_authid.rolname, and
+  -- the query built from it then fails deep inside with a Postgres error (a 500 out of Martin)
+  -- rather than the empty tile that a request for something that is not a map layer should get.
+  IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_schema = src_schema AND table_name = src_table AND column_name = geom_col
-  ) INTO ok;
-  IF NOT ok THEN
+      AND udt_name IN ('geometry', 'geography')
+  ) THEN
     RETURN NULL;
   END IF;
+
+  -- The ATTRIBUTES to carry into the tile, listed explicitly rather than as `t.*`. The height a
+  -- pillar is drawn at is an attribute, so this is not optional decoration — and `t.*` would put
+  -- the source POINT geometry in the tile beside the buffered polygon, giving the row handed to
+  -- ST_AsMVT two geometry columns.
+  SELECT string_agg(format('t.%I', column_name), ', ' ORDER BY ordinal_position),
+         string_agg(format('%I',   column_name), ', ' ORDER BY ordinal_position)
+    INTO cols_t, cols_s
+  FROM information_schema.columns
+  WHERE table_schema = src_schema AND table_name = src_table
+    AND column_name <> geom_col
+    AND column_name <> ALL (ARRAY[{", ".join(f"'{c}'" for c in _RESERVED_COLS)}]);
+  -- A table whose only column is the geometry yields NULL, not ''.
+  cols_t := CASE WHEN cols_t IS NULL THEN '' ELSE ', ' || cols_t END;
+  cols_s := CASE WHEN cols_s IS NULL THEN '' ELSE ', ' || cols_s END;
 
   -- Clamp: a huge radius turns every tile into an enormous polygon set and is never a real request.
   radius := least(greatest(radius, 0.5), 100000);
 
+  -- Read the SRID from the data so the tile envelope can be transformed INTO it below. Comparing
+  -- `ST_Transform(t.geom, 3857) && env` instead would transform every row in the table on every
+  -- tile request and could not use the spatial index; this way the index does the work.
+  EXECUTE format('SELECT ST_SRID(%I) FROM %I.%I WHERE %I IS NOT NULL LIMIT 1',
+                 geom_col, src_schema, src_table, geom_col) INTO srid;
+  IF srid IS NULL OR srid = 0 THEN
+    RETURN NULL;   -- empty table, or geometry with no CRS: nothing that can be placed on a tile
+  END IF;
+
   EXECUTE format($f$
-    WITH bounds AS (SELECT ST_TileEnvelope(%s, %s, %s) AS env),
-    src AS (
+    WITH src AS (
       SELECT
         -- Buffer in METRES via geography, then back to Web Mercator for the tile. A degree buffer
         -- would be a different real size at every latitude — visibly wrong on any map wider than a
         -- country, and the one thing a "30 m pillar" must not be.
         ST_Transform(
-          ST_Buffer(ST_Transform(t.%%1$I, 4326)::geography, %%2$L, %s)::geometry, 3857) AS geom,
-        t.*
-      FROM %%3$I.%%4$I t, bounds
-      WHERE t.%%1$I IS NOT NULL
-        AND ST_Transform(t.%%1$I, 3857) && bounds.env
+          ST_Buffer(ST_Transform(t.%1$I::geometry, 4326)::geography,
+                    (%2$L)::double precision, {QUAD_SEGS})::geometry, 3857) AS pgeom%5$s
+      FROM %3$I.%4$I t
+      WHERE t.%1$I IS NOT NULL
+        AND t.%1$I::geometry && ST_Transform((%7$L)::geometry, %8$s)
     ),
     tile AS (
-      SELECT ST_AsMVTGeom(src.geom, bounds.env, 4096, 64, true) AS geom, src.*
-      FROM src, bounds
-      WHERE ST_AsMVTGeom(src.geom, bounds.env, 4096, 64, true) IS NOT NULL
+      SELECT ST_AsMVTGeom(pgeom, (%7$L)::geometry, 4096, 64, true) AS mvtgeom%6$s
+      FROM src
     )
-    SELECT ST_AsMVT(tile, 'pillars', 4096, 'geom') FROM tile
-  $f$, z, x, y, {QUAD_SEGS})
-  USING geom_col, radius, src_schema, src_table
+    SELECT ST_AsMVT(tile, 'pillars', 4096, 'mvtgeom') FROM tile WHERE mvtgeom IS NOT NULL
+  $f$, geom_col, radius, src_schema, src_table, cols_t, cols_s, env, srid)
   INTO mvt;
 
   RETURN mvt;
 END;
-$$ LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE;
+$$ LANGUAGE plpgsql STABLE PARALLEL SAFE;
 """
 
 
