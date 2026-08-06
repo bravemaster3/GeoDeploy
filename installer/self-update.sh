@@ -211,12 +211,28 @@ if ! git fetch --tags --force --prune-tags origin >/dev/null 2>&1; then
 fi
 git remote prune origin >/dev/null 2>&1 || true   # a branch deleted upstream must stop resolving
 
-# Resolve BEFORE resetting, so a typo'd or missing tag fails while the checkout is still intact
+# Resolve BEFORE resetting, so a typo'd or missing ref fails while the checkout is still intact
 # rather than half-applied.
-if ! git rev-parse --verify "${TARGET}^{commit}" >/dev/null 2>&1; then
-  write_status error "No such version: ${TARGET}. Check the release exists."; exit 1
+#
+# Try the REMOTE-TRACKING ref first. A branch this checkout has never been on exists ONLY as
+# `refs/remotes/origin/<name>` — the bare name resolves to nothing — so `feat/whatever` failed as
+# "No such version" even though the fetch above had just brought it down. `main` and tags hid the
+# bug: the API rewrites `main` to `origin/main`, and a tag IS local after `--tags`.
+#
+# Remote before local, deliberately: if a stale local branch of the same name exists (left by a
+# manual checkout), the remote is the one the operator means.
+TARGET_COMMIT=""
+for _cand in "refs/remotes/origin/${TARGET#origin/}" "refs/tags/$TARGET" "$TARGET"; do
+  if TARGET_COMMIT="$(git rev-parse -q --verify "${_cand}^{commit}" 2>/dev/null)" && [ -n "$TARGET_COMMIT" ]; then
+    break
+  fi
+  TARGET_COMMIT=""
+done
+if [ -z "$TARGET_COMMIT" ]; then
+  write_status error "No such version: ${TARGET}. Expected a release tag (e.g. v1.0), a branch, 'main', or a commit."
+  exit 1
 fi
-if ! git reset --hard "$TARGET" >/dev/null 2>&1; then write_status error "git update failed."; exit 1; fi
+if ! git reset --hard "$TARGET_COMMIT" >/dev/null 2>&1; then write_status error "git update failed."; exit 1; fi
 NEW_SHA="$(git rev-parse HEAD)"
 if [ "$NEW_SHA" = "$OLD_SHA" ]; then
   # Keep the deployed-commit marker honest even on a no-op — a manual `git pull` moves HEAD but leaves

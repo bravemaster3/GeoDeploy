@@ -74,7 +74,7 @@ def test_the_updater_fetches_tags_and_resolves_before_resetting():
     sh = (pathlib.Path(__file__).resolve().parents[2] / "installer" / "self-update.sh"
           ).read_text(encoding="utf-8")
     assert "--tags" in sh
-    assert sh.index("rev-parse --verify") < sh.index('git reset --hard "$TARGET"')
+    assert sh.index("rev-parse -q --verify") < sh.index('git reset --hard "$TARGET_COMMIT"')
 
 
 def test_releases_are_optional():

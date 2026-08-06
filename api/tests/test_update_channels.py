@@ -89,6 +89,31 @@ def test_the_updater_verifies_the_new_code_is_actually_RUNNING():
     assert "write_status error" in fail_block[:800]
 
 
+def test_a_BRANCH_target_resolves_through_the_remote_tracking_ref():
+    """THE bug this test exists for, shipped and caught by the user in the UI.
+
+    A branch this checkout has never been on exists ONLY as `refs/remotes/origin/<name>`. Resolving
+    the bare name finds nothing, so selecting a branch failed with "No such version" even though the
+    fetch had just brought it down. `main` and tags both hid it: the API rewrites `main` to
+    `origin/main`, and a tag IS a local ref after `--tags`.
+
+    Why the earlier test missed it: it asserted the FETCH mechanics (`--unshallow`,
+    `set-branches origin '*'`) and inferred that branches therefore worked. Mechanics are not an
+    outcome. This one asserts the resolution order itself.
+    """
+    import pathlib
+
+    sh = (pathlib.Path(__file__).resolve().parents[2] / "installer" / "self-update.sh"
+          ).read_text(encoding="utf-8")
+
+    assert 'refs/remotes/origin/${TARGET#origin/}' in sh,         "a bare branch name must be resolved via its remote-tracking ref"
+    # Remote BEFORE local: a stale local branch of the same name must not win over the remote.
+    remote_at = sh.index('refs/remotes/origin/${TARGET#origin/}')
+    assert remote_at < sh.index('"refs/tags/$TARGET"')
+    # …and the reset must use the RESOLVED commit, not the raw string.
+    assert 'git reset --hard "$TARGET_COMMIT"' in sh
+
+
 def test_the_updater_can_reach_tags_and_branches_of_a_default_clone():
     """`install.sh` clones `--depth 1 --branch main`: SHALLOW and SINGLE-BRANCH. Only the new targets
     hit either limit, so a normal update never revealed them — the first branch target would have
@@ -100,7 +125,7 @@ def test_the_updater_can_reach_tags_and_branches_of_a_default_clone():
     assert "--unshallow" in sh
     assert "set-branches origin '*'" in sh
     # …and both before the ref is resolved, or they cannot help.
-    assert sh.index("set-branches") < sh.index("rev-parse --verify")
+    assert sh.index("set-branches") < sh.index("rev-parse -q --verify")
 
 
 class _Settings:
