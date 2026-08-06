@@ -20,11 +20,30 @@ Style a layer **by its data**, not just with one colour. In the portal editor's 
   diamonds; only the colour varies.
 
 **3D.** Polygons can be extruded by a numeric field — building heights, floors × a multiplier,
-anything. Portals containing an extruded layer open tilted, because straight down a 3D block and a
-flat polygon are the same shape.
+anything. Points get **bars**: a column standing at each location, raised by a field. Portals
+containing an extruded layer open tilted, because straight down a 3D block and a flat polygon are the
+same shape — and there is now a **tilt button** beside the zoom controls, so you can look at 3D from
+the side without knowing that right-dragging the map does it.
 
-**The globe has a sky.** In 3D globe view the planet now sits against space with an atmospheric limb,
-instead of a flat dark panel.
+The bar footprint is sized from the layer's own extent rather than a fixed number of metres. A fixed
+default is right at exactly one scale: a few hundred points spread across the world would otherwise
+draw bars a few thousandths of a pixel wide — rendered perfectly, and invisible.
+
+**The globe has a sky.** In 3D globe view the planet sits against space with an atmospheric limb,
+instead of a flat dark panel — now with a brighter, deeper starfield behind it.
+
+### Portals load as one piece
+
+Every portal used to assemble itself in front of the visitor: the map appeared as soon as its tiles
+arrived, and the catalog rail, story column and layer list turned up afterwards in whatever order
+they finished. Portals now show a loading screen until the pieces are actually ready — not for a
+fixed time, but until each part reports in.
+
+- **Pointing at a feature shows a pointer cursor** — including GeoParquet layers, which are drawn by
+  a different renderer and never had one.
+- On a **catalog**, the "On map" list folds away and opens closed, so switching several datasets on
+  no longer eats the map it is describing.
+- A long **layer list** scrolls on its own, leaving the search box and buttons in place.
 
 ### Outlines, and rings
 
@@ -37,7 +56,10 @@ instead of a flat dark panel.
 ### Easier to live with
 
 - **My Data** collapses per section (Vectors / Rasters / External, remembered between visits) and
-  paginates at 20 — a few hundred layers no longer make the page unusable.
+  paginates at 10 — a few hundred layers no longer make the page unusable. **External sources** got
+  the search box the other two sections already had, matching on the service type and endpoint as
+  well as the name, and searching a collapsed section now opens it rather than reporting a count for
+  rows you cannot reach.
 - **Infrastructure ▸ Deployments and Environment** scroll inside a fixed height instead of growing
   the Settings page without limit.
 - **`CELERY_CONCURRENCY`** is now an editable setting. Each background worker holds its own copy of
@@ -67,6 +89,21 @@ or all failed ones at once. History is a log of attempts — removing an entry n
 at the destination, and the app says so at the point of the click.
 
 ### Fixed
+
+- **A shapefile's geometry type is read from the data, not its header.** Shapefiles whose header
+  declares a generic or mixed type were recorded as "Unknown", and the rest of the app then guessed
+  — differently in different places. A polygon layer could be treated as points, which with 3D
+  enabled drew a mess of shards across the map. Imports now ask the database what actually arrived.
+  Layers imported before this keep their recorded type until re-uploaded.
+
+- **Rasters stop asking for tiles that do not exist.** A raster layer did not tell the map where its
+  data was, so the map requested tiles across the whole world at every zoom and the tile server
+  answered "not found" to nearly all of them.
+
+- **The tile server learns about new capabilities on restart.** Its configuration was only rebuilt
+  when the layer list changed, so an instance that updated without uploading anything could be
+  running a version whose new tile features were never switched on. It is now rebuilt whenever
+  GeoDeploy starts, and the tile server is only restarted when something actually changed.
 
 - **Large uploads work again after a restore.** A GeoParquet, GeoPackage or big CSV would upload to
   100% and then fail. Background jobs took their storage credentials from a copy kept in the
