@@ -63,9 +63,13 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 - Raster layer `bbox` from the API is in source CRS (not lon/lat) — using it directly for `fitToBbox` can throw "Invalid LngLat" (see tasks/raster notes). Prefer zooming via vector bounds or TiTiler TileJSON.
 
 ## Last updated
+2026-08-06d (`DataManager`: External sources gained the search box the other two sections already
+had — same `matches()`, widened to cover `source_type` and `url`, since a WMS is usually remembered
+by its endpoint rather than the name you gave it. Search runs over the WHOLE list and pagination
+slices the RESULT, so a match on page 4 is still found from page 1.)
 2026-08-06c (`DataManager`: each section (Vectors / Rasters / External) COLLAPSES — state persisted
 in localStorage, since someone who works mostly with rasters should not re-collapse Vectors every
-visit — and paginates at 20. Two controls because they solve different halves: collapse hides a
+visit — and paginates at 10. Two controls because they solve different halves: collapse hides a
 section you are not working in, pagination bounds the one you are. The page is CLAMPED rather than
 reset when the list shrinks (deleting the last row of page 3 leaves you on the new last page), and
 reset to 1 when a search or the creator filter narrows the list under you. Every row renders whether

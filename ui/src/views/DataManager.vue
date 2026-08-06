@@ -149,6 +149,9 @@
             <h2 class="text-sm font-semibold text-foreground">External sources</h2>
             <p class="text-xs text-muted-foreground/70">WMS · XYZ · WFS — shown in portals without importing</p>
           </div>
+          <input v-if="dataStore.externalSources.length > 3" v-model="sourceSearch" type="search"
+            id="source-search" name="source-search" placeholder="Search…"
+            class="w-36 max-w-full text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
           <span class="text-xs font-medium text-muted-foreground bg-muted rounded-full px-2 py-0.5">{{ dataStore.externalSources.length }}</span>
           <button @click="toggleSection('source')" class="flex-shrink-0 w-6 h-6 rounded flex items-center justify-center text-muted-foreground/70 hover:text-foreground hover:bg-muted"
             :title="collapsed.source ? 'Expand' : 'Collapse'" :aria-expanded="!collapsed.source">
@@ -168,6 +171,9 @@
           <LinkIcon class="w-8 h-8 text-muted-foreground/40 mx-auto mb-2" />
           <p class="text-sm font-medium text-muted-foreground">No external sources</p>
           <p class="text-xs text-muted-foreground/70 mt-0.5">Connect a WMS, XYZ/WMTS, or WFS service to show it in portals.</p>
+        </div>
+        <div v-else-if="!filteredSources.length" class="px-5 py-6 text-center text-xs text-muted-foreground/70">
+          No external source matches “{{ sourceSearch }}”.
         </div>
         <div v-else class="divide-y divide-border/60">
           <SourceRow v-for="src in pagedSources" :key="src.id" :source="src"
@@ -250,10 +256,15 @@ async function confirmDelete() {
 // name plus catalog keywords/abstract so shared metadata makes layers findable.
 const vectorSearch = ref('')
 const rasterSearch = ref('')
+const sourceSearch = ref('')
+// One matcher for all three sections: the extra fields are simply absent on the other kinds, and
+// the `v &&` guard skips them. External sources match on their service type and endpoint too, which
+// is often how you remember one ("the WMS from lantmateriet") rather than by the name you gave it.
 const matches = (layer, q) => {
   const needle = q.trim().toLowerCase()
   if (!needle) return true
-  return [layer.name, layer.keywords, layer.abstract, layer.geometry_type]
+  return [layer.name, layer.keywords, layer.abstract, layer.geometry_type,
+    layer.source_type, layer.url]
     .some((v) => v && String(v).toLowerCase().includes(needle))
 }
 
@@ -272,7 +283,8 @@ const filteredVectors = computed(() =>
   dataStore.vectorLayers.filter((l) => matches(l, vectorSearch.value) && byCreator(l)))
 const filteredRasters = computed(() =>
   dataStore.rasterLayers.filter((l) => matches(l, rasterSearch.value) && byCreator(l)))
-const filteredSources = computed(() => dataStore.externalSources.filter(byCreator))
+const filteredSources = computed(() =>
+  dataStore.externalSources.filter((s) => matches(s, sourceSearch.value) && byCreator(s)))
 
 // ── Collapse + pagination ────────────────────────────────────────────────────
 // This page only grows. With a few hundred layers the three sections push each other off the
@@ -281,7 +293,7 @@ const filteredSources = computed(() => dataStore.externalSources.filter(byCreato
 //
 // Two independent controls, because they solve different halves: COLLAPSE hides a whole section you
 // are not working in, PAGINATION bounds the one you are.
-const PAGE_SIZE = 20
+const PAGE_SIZE = 10
 
 // Persisted: someone who works mostly with rasters should not re-collapse Vectors on every visit.
 // Read defensively — a malformed value must not take the page down with it.
@@ -327,7 +339,7 @@ const pagedSources = computed(() => paged(filteredSources.value, 'source'))
 // A search narrows the list under your feet; staying on page 4 of a 1-page result shows nothing.
 watch([vectorSearch, creatorFilter], () => setPage('vector', 1))
 watch([rasterSearch, creatorFilter], () => setPage('raster', 1))
-watch(creatorFilter, () => setPage('source', 1))
+watch([sourceSearch, creatorFilter], () => setPage('source', 1))
 
 const showVectorUpload = ref(false)
 const showRasterUpload = ref(false)
