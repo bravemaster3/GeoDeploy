@@ -110,7 +110,13 @@ def _quote(value: str) -> str:
 
 def read_all(path: str | None = None) -> dict[str, str]:
     """Every key/value in the file — INTERNAL use (the write path needs it). Never return this to a
-    caller; it contains the secrets the allow-list exists to keep out of the API surface."""
+    caller; it contains the secrets the allow-list exists to keep out of the API surface.
+
+    ONE deliberate exception: `routers/admin.connection_details` reads named POSTGIS_*/STORAGE_* keys
+    out of it. That endpoint exists to show those exact secrets, is owner-only and audited, and needs
+    the FILE rather than the process environment because the file is what every container is created
+    from — see its docstring. It returns named fields, never this dict.
+    """
     out: dict[str, str] = {}
     try:
         with open(path or ENV_PATH, encoding="utf-8") as fh:

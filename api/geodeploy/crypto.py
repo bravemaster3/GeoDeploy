@@ -1,12 +1,16 @@
 """Application-level encryption for secrets stored in the database (Fernet, symmetric).
 
-Scope is deliberate: only secrets that live EXCLUSIVELY in the DB and are read through the ORM are
-encrypted here — currently `smtp_password`, and `oidc_client_secret` (A-04). The infra credentials
-(`postgis_password`, `storage_secret_key`) are NOT encrypted on purpose: the containers consume them
-as plaintext env vars (setup.py provisions them into the compose env), so the DB copy can't be the
-source of truth, and they're read via RAW SQL in services/martin.py + tasks/raster_ingest.py, which a
-TypeDecorator wouldn't cover. Encrypting only the DB copy there would be inconsistent theatre; the
-real protection for those is host/filesystem security + keeping env files out of git.
+Scope: `smtp_password`, `oidc_client_secret` (A-04), and — since 2026-07-30 — the infra credentials
+`postgis_password` and `storage_secret_key`. Those two were deliberately left in plaintext while the
+DB copy was only a convenience, on the argument that the containers consume them as env vars anyway.
+Backups changed that argument: `pg_dump` carries `setup_config`, so plaintext there meant every
+infra secret left the box inside every backup. They are encrypted now.
+
+The consequence for readers: `.env` remains the SOURCE OF TRUTH for those two (the containers are
+created from it), and the DB copy is a derived record. Anything reading them via RAW SQL — the
+Celery shim bypasses SQLAlchemy types, so `services/martin.py`, `tasks/raster_ingest.py` and
+`tasks/restore.py` — MUST call `decrypt_secret` itself, and must expect `looks_encrypted` to be true
+when the row came from another instance's snapshot.
 
 This defends the realistic threats for the app-managed secrets — a leaked DB file, a stolen backup, a
 SQL read that dumps setup_config — but is defense-in-depth, not absolute (the key lives on the host).

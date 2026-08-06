@@ -159,6 +159,70 @@ def test_reset_uses_THE_shared_restore_implementation(demo_on):
     assert shared.index("restore_objects") < shared.index("restore_database")
 
 
+def test_the_shared_restore_rebuilds_derived_state_too(demo_on):
+    """Martin's config and the portal BUNDLES must be rebuilt by the shared function, not by the
+    restore task around it.
+
+    They were not, and only the demo felt it. Deleting a portal `rmtree`s `data/portals/<slug>`;
+    bundles are derived data and deliberately absent from a backup; so the hourly reset brought the
+    portal ROW back with nothing behind it. The portal was listed, said "published", and opened BLANK
+    until somebody pressed Publish by hand — on the one instance where nobody can.
+
+    Blank, not 404: nginx serves portals with `try_files $uri $uri/index.html @spa`, so a missing
+    bundle falls through to the dashboard SPA (which has no route for a public portal URL). 200, an
+    empty page, and no error anywhere — the hardest possible symptom to trace back to a missing file.
+
+    `run_restore` had both steps and looked correct. The demo reset calls `restore_snapshot`
+    directly, which is exactly the divergence the test above exists to prevent, one level down.
+    """
+    import inspect
+
+    from geodeploy.tasks import restore as rt
+
+    shared = inspect.getsource(rt.restore_snapshot)
+    assert "_republish_portals" in shared, "a restored portal with no bundle is a 404"
+    assert "_regenerate_martin" in shared, "the restored catalog names tables Martin does not know"
+    # After the database: both read rows that only exist once the snapshot is back.
+    assert shared.index("restore_database") < shared.index("_regenerate_martin")
+    assert shared.index("_regenerate_martin") < shared.index("_republish_portals")
+
+    # …and the task must NOT keep its own copy — two callers, one implementation.
+    task = inspect.getsource(rt.run_restore)
+    code = NL.join(l.split("#")[0] for l in task.splitlines() if not l.strip().startswith("#"))
+    assert "_republish_portals" not in code
+
+
+def test_a_failed_martin_reload_does_not_skip_the_republish(demo_on):
+    """They used to share one `try`, so a Martin failure — the recoverable one, fixed from Settings —
+    silently skipped the portal republish, which is the one that leaves 404s behind."""
+    import inspect
+
+    from geodeploy.tasks import restore as rt
+
+    src = inspect.getsource(rt.restore_snapshot)
+    martin_at = src.index("_regenerate_martin()")
+    republish_at = src.index("_republish_portals()")
+    # An `except` between them is the proof: the Martin call's handler closes before the republish.
+    assert "except" in src[martin_at:republish_at]
+
+
+def test_the_restore_keeps_this_instances_own_storage_credentials(demo_on):
+    """setup_config comes back as the SNAPSHOT'S row — including storage keys encrypted under
+    another instance's secret. `.env` is what the containers actually run on, so the live values
+    win. Without this the Settings panel showed keys matching nothing (GitHub issue #2) and
+    `tasks/raster_ingest._get_storage_creds`, which reads these columns FIRST, signed with them."""
+    import inspect
+
+    from geodeploy.tasks import restore as rt
+
+    shared = inspect.getsource(rt.restore_snapshot)
+    assert "_restore_own_storage_settings" in shared
+    assert shared.index("restore_database") < shared.index("_restore_own_storage_settings")
+    # Before the repairs that READ setup_config, for the same reason the DB block is.
+    assert shared.index("_restore_own_storage_settings") < shared.index("_reapply_schema_migrations")
+    assert "storage_secret_key" in rt.OWN_STORAGE_FIELDS
+
+
 def test_the_shared_restore_downloads_the_file_the_backup_actually_writes(demo_on):
     """tasks/backup.py uploads `<key>/postgis.dump`. A mismatch here is a 404 that only appears in
     production, since no test writes a real snapshot."""

@@ -79,11 +79,18 @@ def test_the_updater_fetches_tags_and_resolves_before_resetting():
 
 def test_releases_are_optional():
     """The picker is a convenience; the update CHECK is not. A repo with no releases, or a
-    rate-limited GitHub, must still answer whether an update exists."""
+    rate-limited GitHub, must still answer whether an update exists.
+
+    The fetch moved into `_load_releases` (it now joins /tags with /releases so the panel can tell
+    which release is RUNNING), so the guarantee moved with it: the loader swallows its own failures
+    instead of the call site doing it. Same invariant, one level down — `test_update_channels.py`
+    proves it behaviourally against a 403.
+    """
     import inspect
 
     src = inspect.getsource(admin.check_updates)
     assert '"releases": []' in src, "the key must always exist so the UI can test its length"
-    # The release fetch sits in its own try/except rather than the outer one.
+    # Still fetched before the commit comparison, and still unable to break it.
     head = src[:src.index("latest_r = await client.get")]
-    assert head.count("try:") >= 1 and "except Exception:" in head
+    assert "_load_releases" in head
+    assert "except Exception:" in inspect.getsource(admin._load_releases)
