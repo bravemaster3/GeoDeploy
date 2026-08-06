@@ -28,7 +28,8 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   (`storage_backend='geoparquet'`) → chain `geoparquet_prep` (which marks layer + job ready). Exactly
   the pipeline a direct `.parquet` upload takes; no PostGIS table, no Martin entry.
 - `raster_ingest.py` — `ingest_raster(job_id, layer_id, file_path, s3_key)`:
-  inspect (rasterio) → COG-convert if needed (`services.cog_converter`) → upload to MinIO (boto3) → save metadata (crs, bbox, band_count, nodata). Same raw-sqlite3 status updates. Reads storage creds from the `setup_config` table first, falling back to settings.
+  inspect (rasterio) → COG-convert if needed (`services.cog_converter`) → upload to MinIO (boto3) → save metadata (crs, bbox, band_count, nodata). Same raw-sqlite3 status updates.
+  **`_get_storage_creds` is THE storage resolver for every task in this folder** (convert_upload, csv_import, geoparquet_import, geoparquet_prep, export, pmtiles_tile all import it), and since 2026-08-06 it delegates to `services/minio.storage_settings()` — the runtime file the API republishes, then the environment — with `setup_config` only as a LAST resort. It used to read `setup_config` FIRST, which a restore replaces with the snapshot's row: the browser's upload succeeded (presigned by the API, live creds) and the worker's download then failed (stale creds), so a restored instance reported "upload works, then error" on every large upload while the dashboard looked healthy (issue #5). Two resolvers for one credential is the bug; do not add a third.
 - `csv_import.py` — `import_csv(job_id, layer_id, source, schema, table, x_col, y_col, srid, is_s3,
   delimiter, wkt_col)`: builds a PostGIS vector layer from a CSV. **Geometry from X/Y columns (points)
   OR — since 2026-07-11 — from a `wkt_col` WKT column (ANY geometry type**, e.g. Google Open Buildings
@@ -189,6 +190,19 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
+2026-08-06 (`restore.py`: `restore_snapshot` now also **regenerates Martin's config and republishes
+every published portal**, and restores this instance's own STORAGE credentials into `setup_config`
+alongside its database ones. Both were in `run_restore`, around the shared function — so the demo
+reset, which calls `restore_snapshot` directly, got neither. A visitor deleting a portal `rmtree`s
+its bundle; bundles are derived data and deliberately absent from a backup; so the hourly reset
+restored the ROW and left a page that opened BLANK — nginx's `try_files $uri $uri/index.html @spa`
+falls a missing bundle through to the dashboard SPA, so there is no 404 to notice — and nobody could
+fix it without pressing Publish (issue #3). Storage: a
+restored `setup_config` carries the SNAPSHOT's keys, encrypted under ITS secret key — wrong in the
+Settings panel (issue #2) and actively used by `raster_ingest._get_storage_creds`, which reads those
+columns before the environment. **The rule stands and now has three instances: anything the restore
+path must do belongs INSIDE `restore_snapshot`, not in one of its two callers.**)
+
 2026-08-02c (`demo_reset.py`: the hourly reset had NEVER run — it read its config row by column
 name (state_db returns tuples) and never decrypted the destination secret. Now reuses
 `backup._load_cfg`, and calls `restore._reapply_schema_migrations` +

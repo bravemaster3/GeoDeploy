@@ -43,6 +43,13 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
   provider form (enabled, issuer, client_id, client_secret blank-to-keep, label, auto_provision +
   allowed_domains + default_role) with the read-only redirect URI to register with the provider. The
   Account tab gained a **"Log out other sessions"** button (A-04). Original tab notes: an underline tab bar driven by an `activeTab` ref + a role-filtered `tabs` computed. **Account** + **API tokens** show for everyone; **Infrastructure** (health rows with status pills + per-service start/stop/restart `POST /admin/services/{name}/{action}` + "Reload Martin"; and Storage bar/tiles) and **Email** are admin-only tabs (their admin API calls still don't fire for lower roles). Panels are `v-if`'d on the active tab; the existing cards moved verbatim under their tab. **API tokens tab (A-03):** lists the caller's tokens (name, scope badges, `gdp_…` prefix, last-used/expiry) with two-step inline revoke, and a "Create token" button opening `components/users/TokenModal.vue`; calls `listTokens`/`revokeToken`/`createToken`. Account keeps the change-password form (`PUT /auth/password`) + sign-out.
+  The **Updates** card (Infrastructure tab) picks a VERSION before it updates (2026-08-06, issue #4):
+  radio targets `main` / latest release / a specific tag, defaulting to the channel the instance
+  already follows (`data.channel`) so a release-pinned box is not offered development first. The
+  button says what it will do (`Update to v1.1` / `Reinstall v1.0`), the manual command mirrors the
+  selection (`sudo bash installer/self-update.sh <ref>`), the commit list is shown only
+  for `main`, and a pinned instance's status line is judged against releases rather than main. The
+  confirm names the target and says out loud when it installs OLDER code.
 - `icons.js` — shared inline SVG icon components (imported across views/components).
 
 ## Dependencies / relationships
@@ -56,6 +63,7 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 - Raster layer `bbox` from the API is in source CRS (not lon/lat) — using it directly for `fitToBbox` can throw "Invalid LngLat" (see tasks/raster notes). Prefer zooming via vector bounds or TiTiler TileJSON.
 
 ## Last updated
+2026-08-06 (Settings → Updates: choose main / latest release / a specific tag before updating)
 2026-07-30 (PortalEditor: `catalog` archetype option + Map side / Datasets listed controls; the
 layer-list placement toggles are hidden for it since the facet rail replaces the sidebar)
 2026-08-02e (`Login` waits for the demo check before rendering ANY card. `isDemo` alone could not

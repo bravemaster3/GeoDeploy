@@ -4,7 +4,7 @@
 
 | | |
 | --- | --- |
-| **RAM** | **4 GB recommended.** A running instance is comfortable there, including tiling. Less may well work — it simply has not been measured yet. |
+| **RAM** | **4 GB recommended.** A running instance is comfortable there, including tiling. **2 GB has been tested and runs well** — only the install and the setup wizard are noticeably slower, because that is when images are pulled and built. |
 | **CPU** | 2 cores recommended; 1 is enough to get started. Tiling and raster conversion are the only CPU-heavy steps, and they run in the background. |
 | **Disk** | Depends entirely on your data, not on GeoDeploy. The software itself is small; layers are what grow. |
 | **Domain** | Optional, but recommended — you get HTTPS and a stable portal URL. |

@@ -35,7 +35,20 @@
           <div v-if="updates.loading && !updates.data" class="text-sm text-muted-foreground/70">Checking for updates…</div>
           <template v-else-if="updates.data">
             <div class="text-sm font-medium">
-              <span v-if="updates.data.up_to_date === true" class="text-green-400">✓ Up to date</span>
+              <!-- An instance PINNED to a release is judged against releases: being many commits
+                   behind the development branch is the state its operator chose, not a problem. -->
+              <template v-if="updates.data.channel === 'release'">
+                <span v-if="updates.data.release_update_available" class="text-amber-400">
+                  New release available — {{ updates.data.latest_release?.tag }}
+                </span>
+                <span v-else class="text-green-400">✓ Up to date — on the latest release</span>
+              </template>
+              <!-- A branch or a bare commit: report what it follows, don't nag. -->
+              <span v-else-if="updates.data.channel === 'branch' || updates.data.channel === 'pinned'"
+                    class="text-sky-400">
+                Pinned to {{ updates.data.current_ref }} — not tracking main
+              </span>
+              <span v-else-if="updates.data.up_to_date === true" class="text-green-400">✓ Up to date</span>
               <span v-else-if="updates.data.behind > 0" class="text-amber-400">
                 Update available — {{ updates.data.behind }} commit{{ updates.data.behind === 1 ? '' : 's' }} behind
               </span>
@@ -46,37 +59,65 @@
               <span v-else class="text-muted-foreground/80">Version check unavailable.</span>
             </div>
             <div class="text-xs text-muted-foreground/80 font-mono flex flex-wrap gap-x-5 gap-y-1">
-              <span>Running <b class="text-foreground">{{ updates.data.current }}</b></span>
-              <span v-if="updates.data.latest">Latest <b class="text-foreground">{{ updates.data.latest }}</b></span>
+              <span>Running
+                <b class="text-foreground">{{ updates.data.current_tag || updates.data.current }}</b>
+                <span v-if="updates.data.current_tag" class="text-muted-foreground/60"> ({{ updates.data.current }})</span>
+              </span>
+              <span v-if="updates.data.latest">Latest on main <b class="text-foreground">{{ updates.data.latest }}</b></span>
+              <span v-if="updates.data.latest_release">Latest release <b class="text-foreground">{{ updates.data.latest_release.tag }}</b></span>
+              <span v-if="updates.data.current_ref">Following <b class="text-foreground">{{ updates.data.current_ref }}</b></span>
             </div>
-            <div v-if="updates.data.commits && updates.data.commits.length"
+            <div v-if="updates.data.commits && updates.data.commits.length && updateChoice === 'main'"
                  class="rounded-lg border border-border/60 bg-muted/20 divide-y divide-border/40 max-h-52 overflow-y-auto">
               <div v-for="c in updates.data.commits" :key="c.sha" class="px-3 py-1.5 text-xs flex gap-2">
                 <span class="font-mono text-muted-foreground/60 flex-shrink-0">{{ c.sha }}</span>
                 <span class="text-foreground/85 truncate">{{ c.message }}</span>
               </div>
             </div>
-            <div v-if="updates.data.behind > 0 || updates.data.update_available" class="space-y-2">
-              <!-- WHICH version. Tracking `main` is the default and what every install did before
-                   there were releases; a tag pins a released version, so an operator can hold back
-                   on one, or step down after a bad one. Only shown once releases exist. -->
-              <div v-if="updates.data.releases && updates.data.releases.length"
-                   class="flex items-center gap-2 flex-wrap">
-                <label class="text-xs text-muted-foreground">Update to</label>
-                <select v-model="updateTarget" class="input text-xs py-1 w-auto">
-                  <option value="main">Latest development (main)</option>
-                  <option v-for="r in updates.data.releases" :key="r.tag" :value="r.tag">
-                    {{ r.name }}{{ r.prerelease ? ' (pre-release)' : '' }}
+            <!-- WHICH version. Tracking `main` is what every install did before there were
+                 releases; a tag pins a released version, so an operator can hold back on one or step
+                 down after a bad one; a branch is unreleased work, for trying a feature before it
+                 merges. Always shown — "reinstall the version I am on" is a legitimate action, and
+                 hiding the picker until an update exists is what made a pinned instance look stuck. -->
+            <div class="rounded-lg border border-border/60 bg-muted/20 p-3 space-y-2">
+              <div class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">Version to install</div>
+              <label v-for="opt in updateChoices" :key="opt.value"
+                     class="flex items-start gap-2.5 text-xs cursor-pointer">
+                <input type="radio" v-model="updateChoice" :value="opt.value" class="mt-0.5 accent-primary" />
+                <span class="min-w-0">
+                  <span class="font-medium text-foreground">{{ opt.label }}</span>
+                  <span v-if="opt.hint" class="text-muted-foreground/70"> — {{ opt.hint }}</span>
+                </span>
+              </label>
+              <div v-if="updateChoice === 'pick'" class="pl-6">
+                <select v-model="updatePickedTag" class="input text-xs py-1.5">
+                  <option v-for="r in (updates.data.releases || [])" :key="r.tag" :value="r.tag">
+                    {{ r.name }}{{ r.is_current ? ' — running now' : '' }}{{ r.prerelease ? ' (pre-release)' : '' }}
                   </option>
                 </select>
               </div>
-              <button @click="startUpdate" :disabled="updates.updating"
+              <div v-if="updateChoice === 'branch'" class="pl-6 space-y-1.5">
+                <!-- A list, not a text box: a typo in a ref fails minutes later, inside a container,
+                     as "No such version". -->
+                <select v-model="updatePickedBranch" class="input text-xs py-1.5">
+                  <option v-for="b in (updates.data.branches || [])" :key="b.name" :value="b.name">
+                    {{ b.name }}{{ b.sha === updates.data.current_full ? ' — running now' : '' }}
+                  </option>
+                </select>
+                <p class="text-[11px] text-amber-300/80">
+                  A branch is work in progress — unreleased, and possibly broken. Take a backup first,
+                  and come back to “Latest release” when you are done.
+                </p>
+              </div>
+            </div>
+            <div class="space-y-2">
+              <button @click="startUpdate" :disabled="updates.updating || !updateTarget"
                       class="text-xs font-semibold px-3.5 py-2 rounded-md bg-primary text-primary-foreground hover:brightness-110 disabled:opacity-50">
-                {{ updates.updating ? 'Updating…' : 'Update now' }}
+                {{ updates.updating ? 'Updating…' : (updateIsReinstall ? 'Reinstall ' + updateTarget : 'Update to ' + updateTarget) }}
               </button>
               <p class="text-[11px] text-muted-foreground/70">
                 Builds the new version, restarts services, and health-checks — <b>rolls back automatically</b> if it comes up unhealthy.
-                Or run manually: <code class="font-mono bg-muted/40 rounded px-1.5 py-0.5 select-all">{{ updates.data.update_command }}</code>
+                Or run manually: <code class="font-mono bg-muted/40 rounded px-1.5 py-0.5 select-all">{{ manualUpdateCommand }}</code>
               </p>
             </div>
             <!-- Live update progress -->
@@ -782,7 +823,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import ConnectionDetails from '@/components/infra/ConnectionDetails.vue'
 import { useSystemStore } from '@/stores/system'
@@ -1333,9 +1374,60 @@ async function runExec() {
 
 // Software updates: check (read-only) + one-click update with live status.
 const updates = ref({ loading: false, data: null, updating: false, progress: null })
-// Which version the Update button will move to. `main` matches the behaviour that existed
-// before releases, so an instance that ignores this control keeps working as it did.
-const updateTarget = ref('main')
+// WHICH version the Update button will move to. The CHOICE is a category — 'main' (development),
+// 'release' (the newest published one), 'pick' (a specific tag) or 'branch' (unreleased work) —
+// and `updateTarget` resolves it to the ref actually sent. Categories rather than one flat list
+// because "the latest release" must keep meaning that as new ones are cut.
+const updateChoice = ref('main')
+const updatePickedTag = ref('')
+const updatePickedBranch = ref('')
+let updateChoiceMade = false        // once the admin picks, a re-check must not overrule them
+
+const updateChoices = computed(() => {
+  const d = updates.value.data || {}
+  const opts = [{
+    value: 'main', label: 'main (development)',
+    hint: d.latest ? 'latest commit ' + d.latest : 'the newest code, not yet released',
+  }]
+  if (d.latest_release) {
+    opts.push({
+      value: 'release', label: 'Latest release — ' + d.latest_release.tag,
+      hint: d.latest_release.sha === d.current_full ? 'what you are running' : 'the recommended version',
+    })
+  }
+  if ((d.releases || []).length) {
+    opts.push({ value: 'pick', label: 'A specific release', hint: 'pin to, or roll back to, any published version' })
+  }
+  if ((d.branches || []).length) {
+    opts.push({ value: 'branch', label: 'Another branch (advanced)', hint: 'unreleased work in progress' })
+  }
+  return opts
+})
+
+// The ref actually POSTed as `target`.
+const updateTarget = computed(() => {
+  const d = updates.value.data || {}
+  if (updateChoice.value === 'release') return d.latest_release?.tag || 'main'
+  if (updateChoice.value === 'pick') return updatePickedTag.value || ''
+  if (updateChoice.value === 'branch') return updatePickedBranch.value || ''
+  return 'main'
+})
+const updateIsReinstall = computed(() => {
+  const d = updates.value.data || {}
+  const r = (d.releases || []).find(x => x.tag === updateTarget.value)
+  if (r) return !!r.is_current
+  const b = (d.branches || []).find(x => x.name === updateTarget.value)
+  if (b) return b.sha === d.current_full
+  return updateChoice.value === 'main' && d.up_to_date === true
+})
+const manualUpdateCommand = computed(() => {
+  const d = updates.value.data || {}
+  if (updateTarget.value === 'main' || !updateTarget.value) {
+    return d.update_command || 'cd ~/geodeploy && sudo bash installer/self-update.sh'
+  }
+  return (d.update_command_template || 'cd ~/geodeploy && sudo bash installer/self-update.sh {ref}')
+    .replace('{ref}', updateTarget.value)
+})
 
 async function checkUpdates(force = false) {
   updates.value.loading = true
@@ -1344,12 +1436,29 @@ async function checkUpdates(force = false) {
     // does not (that cache is what keeps repeated page loads inside GitHub's rate limit).
     const { data } = await api.get('/admin/updates', { params: force ? { refresh: true } : {} })
     updates.value.data = data
+    // Default to the channel this instance ALREADY follows, so a pinned instance is not offered the
+    // development branch as its first option — the panel should not undo the operator's choice.
+    if (!updateChoiceMade) {
+      if (data.channel === 'release' && data.latest_release) updateChoice.value = 'release'
+      else if (data.channel === 'branch') updateChoice.value = 'branch'
+      else updateChoice.value = 'main'
+    }
+    if (!updatePickedTag.value) {
+      updatePickedTag.value = data.current_tag || data.latest_release?.tag || data.releases?.[0]?.tag || ''
+    }
+    if (!updatePickedBranch.value) {
+      // Default to the branch it is already on, so "update" on a branch means "pull its latest
+      // commit" rather than "jump to some other branch".
+      updatePickedBranch.value = (data.channel === 'branch' ? data.current_ref : '')
+        || data.branches?.[0]?.name || ''
+    }
   } catch {
     updates.value.data = { status: 'offline', current: '—' }
   } finally {
     updates.value.loading = false
   }
 }
+watch(updateChoice, () => { updateChoiceMade = true })
 let updatePollTimer = null
 let updatePollCount = 0
 async function startUpdate() {
@@ -1375,11 +1484,19 @@ async function startUpdate() {
     // The preflight failing must not block an update — an admin locked out of updating because a
     // status check broke would be worse than the risk it warns about.
   }
-  const what = updateTarget.value === 'main'
-    ? 'the latest development version (main)'
-    : `version ${updateTarget.value}`
-  if (!confirm(warning + `Update GeoDeploy to ${what}? Services restart briefly. `
-    + 'If the new version is unhealthy it rolls back automatically.')) return
+  const target = updateTarget.value
+  if (!target) return
+  const onBranch = updateChoice.value === 'branch'
+  const what = target === 'main' ? 'the latest development version (main)'
+    : (onBranch ? `the branch ${target}` : `version ${target}`)
+  // Moving BACKWARDS is legitimate — pinning to a release you trust, or undoing a bad update — but
+  // it is not what "update" normally means, so say it out loud.
+  const backwards = target !== 'main' && !onBranch
+    && updates.value.data?.channel === 'main' && updates.value.data?.up_to_date === true
+  if (!confirm(warning + `Update GeoDeploy to ${what}?`
+    + (onBranch ? '\n\nThat branch is unreleased work in progress and may be broken. Back up first.' : '')
+    + (backwards ? '\n\nThis instance is on the newest development code, so this installs OLDER code.' : '')
+    + '\n\nServices restart briefly. If the new version is unhealthy it rolls back automatically.')) return
   updates.value.updating = true
   updatePollCount = 0
   updates.value.progress = { phase: 'running', message: 'Starting…' }
