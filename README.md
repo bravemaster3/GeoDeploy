@@ -64,8 +64,9 @@ publish, and through open standards other tools already speak.
 ## Requirements
 
 A Linux server. **4 GB of RAM is a comfortable recommendation** and two cores are plenty — tiling
-included. Disk depends on your data, not on GeoDeploy, and you can attach S3-compatible storage so
-capacity is never a server decision. Docker is installed for you if missing; Docker Compose must already be
+included. **2 GB has been tested and runs well** (2 CPU / 2 GB VPS); only the install and setup
+wizard are noticeably slower there. Disk depends on your data, not on GeoDeploy, and you can attach
+S3-compatible storage so capacity is never a server decision. Docker is installed for you if missing; Docker Compose must already be
 available (it ships with current Debian/Ubuntu). A domain name is optional but recommended.
 
 ## Documentation

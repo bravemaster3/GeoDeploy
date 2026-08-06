@@ -36,7 +36,18 @@ cd "$GEODEPLOY_DIR"
 
 if [ -d ".git" ]; then
   warn "Existing installation found. Updating…"
-  git pull origin "$VERSION"
+  # Resolve VERSION the same way self-update.sh does — branch, then tag, then commit — and reset to
+  # it. `git pull origin "$VERSION"` could not do this: a TAG is not a branch, so pulling one onto a
+  # detached HEAD either merges or refuses, and re-running the installer pinned at a release was the
+  # obvious way to reach one. Tags also have to be fetched explicitly.
+  git fetch --tags --force origin >/dev/null 2>&1 || warn "Could not fetch from GitHub — continuing with what is here."
+  GD_TARGET=""
+  for candidate in "refs/remotes/origin/$VERSION" "refs/tags/$VERSION" "$VERSION"; do
+    if GD_TARGET="$(git rev-parse -q --verify "${candidate}^{commit}" 2>/dev/null)" && [ -n "$GD_TARGET" ]; then break; fi
+    GD_TARGET=""
+  done
+  [ -n "$GD_TARGET" ] || error "No such version: $VERSION (expected a release tag like v1.0, 'main', or a commit)."
+  git reset --hard "$GD_TARGET" >/dev/null || error "Could not check out $VERSION."
 else
   git clone --branch "$VERSION" --depth 1 "$REPO" .
 fi
@@ -61,6 +72,11 @@ if grep -q '^GEODEPLOY_GIT_SHA=' .env 2>/dev/null; then
 else
   echo "GEODEPLOY_GIT_SHA=${GD_SHA}" >> .env
 fi
+# …and the REF it came from, so the Updates panel knows whether this instance follows `main` or is
+# pinned to a release, and offers the right next version. Same bind-mounted data/temp channel the
+# updater writes; the API re-reads it per request.
+mkdir -p data/temp
+printf '%s' "$VERSION" > data/temp/deployed-ref 2>/dev/null || true
 
 # ── Ensure the geodeploy network exists (persists across compose down/up) ────
 

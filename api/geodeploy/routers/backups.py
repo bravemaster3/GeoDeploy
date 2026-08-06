@@ -157,6 +157,65 @@ async def list_runs(limit: int = 20, _: User = Depends(require_admin),
     return [BackupRunOut.model_validate(r) for r in rows]
 
 
+@router.delete("/runs/{run_id}", status_code=204)
+async def delete_run_entry(run_id: int, user: User = Depends(require_admin),
+                           db: AsyncSession = Depends(get_db)):
+    """Remove ONE entry from the backup history.
+
+    History is a LOG, not an inventory. `GET /stored` reads the destination's own manifests and is
+    the answer to "what backups do I have"; these rows only say what this instance attempted. So
+    deleting one destroys no backup and loses no data — which is exactly why it may be deleted at
+    all, and why the UI must say so plainly.
+
+    The reason it is needed: a failed run stays red forever. Backups that failed for a reason since
+    fixed — a wrong key, a bucket that did not exist yet, a 2.1 GB overflow — leave a permanent row
+    of alarm on a page whose entire job is to tell an operator at a glance whether their backups are
+    healthy. A history that cannot be cleared stops being read.
+
+    A RUNNING row is refused: the worker still owns it, and deleting it would make its final UPDATE
+    match nothing, so a finished backup would vanish from its own history. Something genuinely
+    stuck is marked `error` by `_reap_stale_runs` after `STALE_RUN_HOURS`, and is deletable then.
+    """
+    run = (await db.execute(select(BackupRun).where(BackupRun.id == run_id))).scalar_one_or_none()
+    if not run:
+        raise HTTPException(404, "No such history entry.")
+    if run.status == "running":
+        raise HTTPException(409, "That backup is still running. Wait for it to finish, or let it "
+                                 "time out, before removing its history entry.")
+    key, status = run.key, run.status
+    await db.delete(run)
+    await db.commit()
+    # Audited, because the log is the thing being edited: removing an entry must itself leave one.
+    await record_audit(db, user, "backup.history.delete", "backup", str(run_id),
+                       {"key": key, "status": status})
+
+
+@router.delete("/runs", status_code=200)
+async def clear_run_history(status: str = "error", user: User = Depends(require_admin),
+                            db: AsyncSession = Depends(get_db)):
+    """Clear finished history entries in bulk — by default every FAILED one.
+
+    `status=error` (the default) is the case that motivated this; `status=all` removes every entry
+    that is not currently running. Deliberately no other filters: a log you can carve arbitrarily is
+    a log nobody trusts, and the two cases above cover "tidy up the red" and "start the record
+    fresh" without inviting selective history.
+
+    Running rows are never touched, for the reason in `delete_run_entry`.
+    """
+    if status not in ("error", "all"):
+        raise HTTPException(400, "status must be 'error' or 'all'.")
+    stmt = select(BackupRun).where(BackupRun.status != "running")
+    if status == "error":
+        stmt = stmt.where(BackupRun.status == "error")
+    rows = (await db.execute(stmt)).scalars().all()
+    for row in rows:
+        await db.delete(row)
+    await db.commit()
+    await record_audit(db, user, "backup.history.clear", "backup", None,
+                       {"status": status, "removed": len(rows)})
+    return {"removed": len(rows)}
+
+
 @router.get("/stored")
 async def list_stored(_: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     """What is ACTUALLY at the destination, read from the manifests. This is the answer that
@@ -295,3 +354,28 @@ async def list_restore_runs(limit: int = 10, _: User = Depends(require_admin),
     rows = (await db.execute(select(RestoreRun).order_by(RestoreRun.started_at.desc())
                              .limit(max(1, min(limit, 50))))).scalars().all()
     return [RestoreRunOut.model_validate(r) for r in rows]
+
+
+@router.delete("/restore/runs/{run_id}", status_code=204)
+async def delete_restore_run_entry(run_id: int, user: User = Depends(require_admin),
+                                   db: AsyncSession = Depends(get_db)):
+    """Remove one entry from the RESTORE history — same reasoning as the backup one, and the same
+    refusal while it is running.
+
+    A restore's history row has one extra property worth knowing: `tasks/restore._finish`
+    RE-INSERTS it if the restore removed it (the snapshot predates the restore, so replacing the
+    database deletes the row describing the restore in progress). Deleting a finished row is
+    therefore final — nothing re-creates it. The audit entry `backup.restore.finished`, written
+    after the database step, remains in the Activity log, which is where the durable record of a
+    destructive operation belongs.
+    """
+    run = (await db.execute(select(RestoreRun).where(RestoreRun.id == run_id))).scalar_one_or_none()
+    if not run:
+        raise HTTPException(404, "No such history entry.")
+    if run.status == "running":
+        raise HTTPException(409, "That restore is still running.")
+    key, status = run.key, run.status
+    await db.delete(run)
+    await db.commit()
+    await record_audit(db, user, "restore.history.delete", "backup", str(run_id),
+                       {"key": key, "status": status})

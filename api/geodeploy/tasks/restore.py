@@ -118,10 +118,33 @@ def restore_snapshot(cfg, key: str, manifest: dict, tmp_dir: str, on_step=None) 
         # in-flight rows are frozen. Inside this function so no caller can forget them.
         # FIRST, before anything reads setup_config: the row now describes the snapshot's instance.
         detail["own_db"] = _restore_own_db_settings()
+        detail["own_storage"] = _restore_own_storage_settings()
         detail["schema"] = _reapply_schema_migrations()
         detail["stale_runs_cleared"] = _clear_restored_running_rows()
         # Keep the destination we just read the backup FROM, when the restored copy is unreadable.
         detail["backup_destination"] = _restore_backup_destination(saved_destination)
+
+        # Rebuild the DERIVED state that lives outside the database and is therefore not in the
+        # snapshot: Martin's table list and the published portal bundles on disk. Both are here, not
+        # in `run_restore`, for the same reason as the repairs above — the demo reset calls this
+        # function too, and it had neither. A demo visitor could delete a portal (which rmtree's
+        # data/portals/<slug>) and the hourly reset brought the ROW back with no bundle behind it:
+        # the portal was listed, said published, and opened BLANK until somebody pressed Publish.
+        # Blank, not 404 — nginx serves portals with `try_files $uri $uri/index.html @spa`, so a
+        # missing bundle falls through to the dashboard SPA, which has no route for a public portal
+        # URL. The visitor gets 200 and an empty page, and nothing anywhere logs an error.
+        step("Rebuilding tile configuration", 95)
+        try:
+            _regenerate_martin()
+            detail["martin"] = "reloaded"
+        except Exception as exc:      # noqa: BLE001 — the data is back; Settings → Reload Martin fixes this
+            logger.warning("restore: Martin regeneration failed: %s", exc)
+            detail["martin"] = f"failed: {exc}"
+        # AFTER Martin: a bundle's style points at tile URLs Martin should already be serving. In its
+        # OWN try, though — a failed Martin reload must not skip the republish, since a portal with
+        # no bundle at all (a blank page) is worse than one whose tiles arrive a reload later.
+        step("Republishing portals", 97)
+        detail["portals"] = _republish_portals()
 
     return detail
 
@@ -132,6 +155,10 @@ BACKUP_DEST_FIELDS = ("backup_endpoint", "backup_bucket", "backup_prefix",
 #: How THIS instance reaches its own database. Never taken from a snapshot — see below.
 OWN_DB_FIELDS = ("postgis_type", "postgis_host", "postgis_port", "postgis_db",
                  "postgis_user", "postgis_password")
+
+#: How THIS instance reaches its own object storage. Same reasoning as OWN_DB_FIELDS.
+OWN_STORAGE_FIELDS = ("storage_type", "storage_endpoint", "storage_bucket",
+                      "storage_access_key", "storage_secret_key", "storage_region")
 
 
 def _restore_own_db_settings() -> dict:
@@ -178,6 +205,60 @@ def _restore_own_db_settings() -> dict:
     except Exception as exc:      # never fail a good restore over bookkeeping
         logger.warning("restore: could not restore own DB settings: %s", exc)
         return {"kept": False, "error": str(exc)[:200]}
+
+
+def _restore_own_storage_settings() -> dict:
+    """Put this instance's OWN object-storage coordinates back into setup_config after a restore.
+
+    Exactly the `_restore_own_db_settings` argument, one row over. A restore replaces `setup_config`
+    with the snapshot's, whose storage block describes the bucket and keys of whatever instance took
+    the backup — with `storage_secret_key` encrypted under THAT instance's GEODEPLOY_SECRET_KEY.
+
+    The running process is, by definition, using the credentials in its own environment: the restore
+    just READ the snapshot and WROTE every object back through them. `.env` never changed. So the
+    live values are authoritative and the snapshot's copy never is.
+
+    Two things went wrong without this, and neither announced itself:
+
+      * Settings → Infrastructure → Connection details showed the snapshot's access key, or the raw
+        Fernet ciphertext of its secret when the keys differ (`decrypt_secret` returns the input
+        unchanged when it cannot decrypt — it cannot tell failure from legacy plaintext). The
+        operator compares it with `.env`, finds a different value, and has no way to tell which one
+        the instance is actually using. That is GitHub issue #2.
+      * `tasks/raster_ingest._get_storage_creds` reads these columns FIRST and only falls back to
+        the environment, so raster ingest starts signing S3 requests with the snapshot's keys.
+    """
+    from ..config import get_settings
+
+    settings = get_settings()
+    if not settings.storage_access_key:
+        # Nothing trustworthy to write. Leave the restored row alone rather than blanking a working
+        # configuration — an instance with no storage in its environment has nothing better to offer.
+        return {"kept": False, "reason": "no live storage credentials"}
+    values = {
+        "storage_type": settings.storage_type or None,
+        "storage_endpoint": settings.storage_endpoint,
+        "storage_bucket": settings.storage_bucket,
+        "storage_access_key": settings.storage_access_key,
+        # Encrypted at rest, and the worker writes the column RAW (no ORM type), so encrypt here.
+        "storage_secret_key": _encrypt(settings.storage_secret_key),
+        "storage_region": settings.storage_region or "us-east-1",
+    }
+    fields = [f for f in OWN_STORAGE_FIELDS if values[f] is not None]
+    try:
+        with state_db.connect() as conn:
+            sets = ", ".join(f"{f} = ?" for f in fields)
+            conn.execute(f"UPDATE setup_config SET {sets} WHERE id = 1", [values[f] for f in fields])
+        return {"kept": True, "bucket": settings.storage_bucket,
+                "endpoint": settings.storage_endpoint}
+    except Exception as exc:      # never fail a good restore over bookkeeping
+        logger.warning("restore: could not restore own storage settings: %s", exc)
+        return {"kept": False, "error": str(exc)[:200]}
+
+
+def _encrypt(value: str | None) -> str | None:
+    from ..crypto import encrypt_secret
+    return encrypt_secret(value) if value else value
 
 
 def _capture_backup_destination(cfg) -> dict:
@@ -350,17 +431,8 @@ def run_restore(run_id: int, key: str):
                 cfg, key, manifest, tmp,
                 on_step=lambda text, pct: _step(run_id, text, pct)))
 
-        _step(run_id, "Rebuilding tile configuration", 95)
-        try:
-            _regenerate_martin()
-            detail["martin"] = "reloaded"
-            # AFTER Martin: a bundle's style points at tile URLs Martin must already be serving.
-            _step(run_id, "Republishing portals", 97)
-            detail["portals"] = _republish_portals()
-        except Exception as exc:
-            # Not fatal: the data is back, and Settings → Infrastructure → Reload Martin fixes it.
-            logger.warning("restore: Martin regeneration failed: %s", exc)
-            detail["martin"] = f"failed: {exc}"
+        # Martin's config and the portal bundles are rebuilt INSIDE restore_snapshot (steps 95/97),
+        # so the demo reset — which calls it directly — gets them too.
 
         # The audit entry written when this restore STARTED was destroyed by the restore itself.
         _reaudit_restore(key, seed, "success", detail)
@@ -383,8 +455,13 @@ def _republish_portals() -> dict:
     them would inflate every backup with something reproducible.
 
     The consequence was left to the operator: "re-publish each portal after a restore", in the docs,
-    and nowhere in the product. A restored portal that 404s reads as data loss, and it is exactly the
-    step nobody remembers at 2am. The rows needed are all present by now, so do it here.
+    and nowhere in the product. A restored portal whose page opens BLANK reads as data loss, and it is
+    exactly the step nobody remembers at 2am. The rows needed are all present by now, so do it here.
+
+    Blank rather than 404 because nginx serves this path as `try_files $uri $uri/index.html @spa`: a
+    missing bundle is indistinguishable from a dashboard route, so it falls through to the SPA and
+    the visitor gets 200 and an empty page. Nothing errors, nothing is logged — which is why this was
+    reported as "the portal is broken" rather than "the file is missing".
 
     Best-effort per portal: one that fails must not stop the rest, and none of it may fail a restore
     that has already put the data back.

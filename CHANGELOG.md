@@ -4,6 +4,49 @@ Notable changes, newest first. Versions are **major.minor** — `v1.0`, `v1.1`, 
 `v2.0`. The minor number moves for anything shipped, features or fixes; the major changes when an
 upgrade needs manual work.
 
+## v1.1 — unreleased
+
+### Choose which version to install
+
+The updater could only ever move you to the tip of the development branch — even on an instance
+deliberately installed at a release, which meant "Update now" silently undid that choice. Settings ▸
+Infrastructure ▸ Updates now offers **main**, the **latest release**, or **a specific release** (to
+hold back, or to step back down after a bad update) — and remembers which one this instance follows,
+so an instance on a release is measured against releases instead of being told it is many commits
+behind development.
+
+Any **branch** can be installed too, listed in the same picker under "Another branch (advanced)" —
+that is how an unreleased feature branch gets tried on a real instance instead of by hand over SSH.
+
+The same choice works from the server: `sudo bash installer/self-update.sh v1.0`,
+matching `GEODEPLOY_VERSION` in the installer. Documented in [Updating](docs/updating.md).
+
+### Backup history can be tidied
+
+Failed backup runs stayed red in **Settings ▸ Backups ▸ History** forever, on the page whose job is
+to tell you at a glance whether your backups are healthy. Entries can now be removed individually,
+or all failed ones at once. History is a log of attempts — removing an entry never touches a backup
+at the destination, and the app says so at the point of the click.
+
+### Fixed
+
+- **Large uploads work again after a restore.** A GeoParquet, GeoPackage or big CSV would upload to
+  100% and then fail. Background jobs took their storage credentials from a copy kept in the
+  database — the copy a restore replaces with the backup's — while the upload itself used the live
+  ones, so the file arrived and nothing could read it back. There is now one source for both, and a
+  restore puts the instance's own credentials back. Rasters, tiling and exports were affected the
+  same way.
+
+- **Restoring a backup no longer breaks the connection details.** The Settings panel read the
+  credentials stored *in the database* — the one copy a restore replaces with the backup's — so after
+  a restore it showed keys belonging to another instance, or unreadable text, while `.env` (what the
+  instance actually runs on) was right all along. It now reads `.env` first and says where each value
+  came from. The restore also puts this instance's own storage credentials back where the rest of the
+  app looks for them, which raster ingest was quietly using.
+- **Demo instances republish their portals after the hourly reset.** A portal deleted by a visitor
+  came back in the dashboard, but its page opened blank until someone pressed Publish. Published
+  portal pages are now rebuilt as part of restoring any snapshot, not just an operator-run restore.
+
 ## v1.0 — 2026-08-03
 
 **The first tagged release.** GeoDeploy has been running in production for months; this is the point

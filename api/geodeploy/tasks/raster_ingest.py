@@ -16,6 +16,40 @@ from ..services.cog_converter import convert_to_cog, inspect as inspect_raster, 
 
 
 def _get_storage_creds() -> dict:
+    """The storage credentials EVERY background task uses. ONE source, shared with the API.
+
+    This used to read `setup_config` FIRST and fall back to the environment. That ordering broke
+    every large upload on any instance that had been restored, in a way designed to look like a
+    different bug:
+
+      * the browser uploads to a presigned URL minted by the API, which signs with the LIVE
+        credentials (`services/minio.storage_settings`) — so the upload succeeds, 100%, no error;
+      * the background convert then downloads the object with the creds from `setup_config` — which
+        `pg_restore` replaced with the SNAPSHOT'S, i.e. another instance's MinIO keys, or the same
+        keys encrypted under another instance's GEODEPLOY_SECRET_KEY;
+      * the layer goes straight to `error`. "It uploads, then says error."
+
+    Every task here reached storage this way (`convert_upload`, `csv_import`, `geoparquet_import`,
+    `geoparquet_prep`, `export`, `pmtiles_tile`, raster ingest), so a restore silently disabled the
+    whole ingest pipeline while the API kept working perfectly.
+
+    The DB-first read had a real reason in 2026-06 (notes §0f): the worker's environment is fixed
+    when its container is CREATED, and the setup wizard runs after that, so `.env` alone left the
+    worker with install-time credentials. That problem now has a better answer —
+    `state_db.runtime_storage()`, a small file in the shared data dir that the API republishes from
+    what it just proved works, on every start. `storage_settings()` reads it. So the database copy is
+    no longer the freshest source; it is only the one a restore can poison.
+
+    `setup_config` stays as a LAST resort, after the runtime file and the environment, for an
+    instance that somehow has neither — never ahead of them.
+    """
+    from ..services.minio import storage_settings
+
+    endpoint, bucket, access_key, secret_key, region = storage_settings()
+    if access_key:
+        return {"endpoint": endpoint, "bucket": bucket, "access_key": access_key,
+                "secret_key": secret_key, "region": region or "us-east-1"}
+
     with state_db.connect() as conn:
         row = conn.execute(
             "SELECT storage_endpoint, storage_bucket, storage_access_key, storage_secret_key, storage_region "

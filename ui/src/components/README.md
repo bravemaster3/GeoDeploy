@@ -31,6 +31,13 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
   `TERMINAL_ALLOWED` here mirrors `admin.py`; the SERVER enforces it, so drift is cosmetic.
   Streaming polls only while the box is ticked AND the Logs tab is open — an unattended tail would
   otherwise hit the Docker socket forever.
+- `infra/ConnectionDetails.vue` — owner-only "here are your PostGIS and MinIO credentials" card.
+  Fetches nothing until **Show** is pressed (the request is audited, so an automatic load would fill
+  the log with views nobody performed); secrets are masked with a reveal + copy per field. The
+  precedence behind the values is `routers/admin.merge_credentials` (`.env` first). The response
+  carries a `source` per group for diagnostics; it is deliberately **not rendered** — the panel
+  answers "what are my credentials", and where they were read from is our plumbing, not the
+  operator's question (user call, 2026-08-06).
 - `portal/CreatePortalModal.vue` — new-portal dialog (title, description, access); creates via the portals store then routes to the editor.
 - `portal/LayerPanel.vue` (resolves vector/raster/**external** layers from the data store; external sources get an opacity-only popover, plus a colour picker for WFS vector) — **thin row** mirroring the published portal: drag handle (reorder is wired in `PortalEditor.vue`) · eye/eye-off (`update {visible}`) · **symbol swatch** that opens a **teleported symbology popover** · name · zoom · remove. The popover holds: opacity; vector colour/fill/outline/width; **line type** (solid/dashed/dotted); **point marker shape** (circle/square/triangle/diamond/star/cross) + size; popup-field picker; **raster band selection** (multiband → RGB composite with R/G/B band pickers, or single band) + palette/hillshade/Z (single-band output) and stretch/rescale (all); save/use default. Band selection stores `style.bidx` (`[n]` single, `[r,g,b]` RGB). The list swatch (`geomSvg`/`markerSvg`) draws the actual symbol (colour, dash, marker shape). Emits `update`/`remove`/`zoom`.
 - `portal/PortalCard.vue` — portal tile in the builder grid (edit/publish/view/unpublish/delete).
@@ -57,6 +64,8 @@ All dialogs (`UploadModal`, `AddSourceModal`, `DiscoverModal`, `portal/CreatePor
   icon logic in `views/PortalEditor.vue` + `templates/shared/portal.js` — change all three together.
 
 ## Last updated
+2026-08-06 (`infra/ConnectionDetails.vue` documented + it now shows which source each credential
+group came from — issue #2)
 2026-07-29 (new `data/ShareLinksModal.vue` + a link button on VectorRow/RasterRow — the per-layer
 "use this data elsewhere" panel, led by OGC API - Features)
 2026-07-16 (RBAC A-01: new `users/` folder; VectorRow/RasterRow/SourceRow/PortalCard mutating
