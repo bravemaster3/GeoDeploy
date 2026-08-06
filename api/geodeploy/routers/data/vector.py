@@ -718,6 +718,135 @@ async def prepare_layer(
     return VectorLayerOut.from_orm_json(layer)
 
 
+def _qi(ident: str) -> str:
+    """Quote a SQL identifier — neither driver can parameterise one, and a column name here comes
+    from a request. Doubling embedded quotes is the whole defence and it is sufficient: the result
+    is a single quoted identifier that cannot terminate early."""
+    return '"' + str(ident).replace('"', '""') + '"'
+
+
+@router.get("/{layer_ref}/field-stats")
+async def field_stats(
+    layer_ref: str,
+    field: str,
+    classes: int = 5,
+    method: str = "quantile",
+    ramp: str = "viridis",
+    user: User = Depends(require_scope("data:read")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Everything the symbology editor needs to classify ONE attribute of a layer.
+
+    Returns the distribution AND a ready-made `suggestion` (classes for a numeric field, categories
+    for a text one), so choosing a field produces a styled map in one round trip rather than three.
+    The suggestion is computed by `services/symbology`, the same module the renderers use, so what
+    the editor previews is what the published portal draws.
+
+    Both storage backends, because a layer's backend is an implementation detail the person styling
+    it should never have to think about: PostGIS layers are queried with SQL, GeoParquet layers
+    through DuckDB (`duckdb_engine.field_stats`).
+
+    NUMERIC columns return sampled raw values rather than pre-computed breaks — the classifier must
+    be one implementation, or the editor and the portal would disagree about which class a feature
+    is in. TEXT columns return distinct values by frequency, capped, so a 400-value column produces
+    a legend rather than a wall.
+    """
+    from ...services import symbology
+
+    result = await db.execute(
+        select(VectorLayer).where(by_ref(VectorLayer, layer_ref), visible_to(user, VectorLayer)))
+    layer = result.scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not found.")
+    if not (field or "").strip():
+        raise HTTPException(400, "A field name is required.")
+
+    # The field must be one the layer actually has. This is an allow-list check, not only a
+    # nicety: `field` reaches a SQL identifier below, and the catalog is the authority on what
+    # columns exist. (`_qi` quotes it as well — both, deliberately.)
+    known = {c.get("name") for c in json.loads(layer.columns or "[]") if isinstance(c, dict)}
+    if known and field not in known:
+        raise HTTPException(400, f"No such field on this layer: {field}")
+
+    classes = max(2, min(int(classes), 12))
+    if method not in ("quantile", "equal", "jenks"):
+        raise HTTPException(400, "method must be quantile, equal or jenks.")
+
+    if layer.storage_backend == "geoparquet":
+        if not layer.s3_key:
+            raise HTTPException(400, "This layer has no data file yet.")
+        from ...services import duckdb_engine
+        try:
+            stats = await run_in_threadpool(duckdb_engine.field_stats, layer.s3_key, field)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(502, f"Could not read the field: {exc}") from exc
+    else:
+        stats = await _postgis_field_stats(db, layer, field)
+
+    if stats.get("kind") == "numeric":
+        stats["suggestion"] = {
+            "color_mode": "graduated",
+            "classes": symbology.build_classes(stats.get("values") or [], method, classes, ramp),
+        }
+        # The raw sample is for the classifier, not for the browser: tens of thousands of numbers
+        # would be the bulk of this response and the UI never reads them.
+        stats["values"] = None
+    else:
+        stats["suggestion"] = {
+            "color_mode": "categorized",
+            "categories": symbology.build_categories(
+                [c["value"] for c in stats.get("categories") or []]),
+        }
+    return stats
+
+
+async def _postgis_field_stats(db: AsyncSession, layer, field: str, sample: int = 100_000,
+                               distinct_limit: int = 60) -> dict:
+    """The PostGIS half of `field_stats`. Same contract as `duckdb_engine.field_stats`.
+
+    Sampled with a LIMIT for the reason given there — class breaks are a display decision, and one
+    an editor is waiting on. The numeric test asks `information_schema` rather than trying a cast:
+    a failed cast on one bad row would lose the whole column.
+    """
+    from sqlalchemy import text
+
+    schema, table = layer.schema_name, layer.table_name
+    if not schema or not table:
+        raise HTTPException(400, "This layer has no table.")
+
+    dtype_row = (await db.execute(text(
+        "SELECT data_type FROM information_schema.columns "
+        "WHERE table_schema = :s AND table_name = :t AND column_name = :c"
+    ), {"s": schema, "t": table, "c": field})).first()
+    if not dtype_row:
+        raise HTTPException(400, f"No such field on this layer: {field}")
+    dtype = (dtype_row[0] or "").lower()
+    numeric = any(k in dtype for k in
+                  ("int", "numeric", "decimal", "double", "real", "float", "serial"))
+
+    q = f"{_qi(schema)}.{_qi(table)}"
+    col = _qi(field)
+    if numeric:
+        rows = (await db.execute(text(
+            f"SELECT {col}::double precision FROM {q} WHERE {col} IS NOT NULL LIMIT {sample}"
+        ))).fetchall()
+        values = [float(r[0]) for r in rows if r[0] is not None]
+        if not values:
+            return {"kind": "numeric", "count": 0, "min": None, "max": None, "values": []}
+        return {"kind": "numeric", "count": len(values), "sampled": len(values) >= sample,
+                "min": min(values), "max": max(values), "values": values}
+
+    rows = (await db.execute(text(
+        f"SELECT {col}::text AS v, COUNT(*) AS n FROM {q} WHERE {col} IS NOT NULL "
+        f"GROUP BY 1 ORDER BY n DESC LIMIT {distinct_limit + 1}"
+    ))).fetchall()
+    cats = [{"value": r[0], "count": int(r[1])} for r in rows[:distinct_limit]]
+    return {"kind": "categorical", "count": len(cats),
+            "truncated": len(rows) > distinct_limit, "categories": cats}
+
+
 @router.post("/{layer_id}/reprocess", response_model=JobStatus, status_code=202)
 async def reprocess_layer(
     layer_id: int,

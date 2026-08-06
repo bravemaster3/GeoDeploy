@@ -202,6 +202,15 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-06 (**data-driven symbology + 3D + space**: `portal.js::vectorLegendHtml` renders the
+`geodeploy:legend` baked into the style — a RENDERER only, it never rebuilds labels from
+classes/categories, so the published legend cannot drift from the published map. `applySpace()`
+gives globe mode a MapLibre sky (atmospheric limb, faded out by zoom) plus a CSS starfield on the
+container: the sky draws the atmosphere and everything beyond it is TRANSPARENT, which is why the
+globe used to sit in a flat dark panel; stars are not in the MapLibre style spec so CSS is the only
+source. A portal containing a `fill-extrusion` layer opens at 45° pitch — straight down, an extruded
+polygon and a plain fill are the same shape — but only when the author never pinned a pitch, since
+an explicit 0 chosen while looking at a 3D layer is a decision.)
 2026-07-30 (V-11 polish, 2nd pass: story-map wheel now ZOOMS the map over the open map and only scrolls
 the narrative over the story column [`setupStory` hit-tests the pointer against the panel's opaque band in
 a capture-phase wheel listener; `scrollZoom` re-enabled]; the up/down "more" chevrons are bigger [42px,

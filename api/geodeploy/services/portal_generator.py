@@ -7,6 +7,7 @@ from ..config import get_settings
 from .martin import get_tile_url as vector_tile_url
 from .titiler import get_tile_url as raster_tile_url
 from . import external_sources as ext_svc
+from . import symbology
 
 
 # ── Basemap catalog — THE single source of truth ─────────────────────────────────────────────────
@@ -174,6 +175,20 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 "geodeploy:marker": (cfg.get("style") or {}).get("marker", "circle"),
                 "geodeploy:markerColor": (cfg.get("style") or {}).get("color", "#3b82f6"),
                 "geodeploy:markerSize": (cfg.get("style") or {}).get("radius", 5),
+                # EVERY marker bitmap this layer needs — one per class for a classified point layer.
+                # Baked so the runtime can create them all up front; discovering them one
+                # `styleimagemissing` at a time makes markers pop in as each class first scrolls
+                # into view.
+                "geodeploy:markerImages": symbology.marker_images(cfg.get("style") or {}),
+                # The legend for a classified layer, BAKED rather than re-derived at runtime.
+                # portal.js renders these entries; it does not read `classes`/`categories` and build
+                # its own labels. One description, one legend — a legend that disagrees with the map
+                # is worse than none, and the only way to guarantee it agrees is to derive both from
+                # the same call (`symbology.legend_entries`, which also feeds the editor).
+                # Empty for a single-symbol layer, which is what the swatch already covers.
+                "geodeploy:legend": symbology.legend_entries(cfg.get("style") or {}),
+                # 3D is worth announcing: the runtime opens the map tilted when any layer has it.
+                "geodeploy:extruded": symbology.is_extruded(cfg.get("style") or {}),
             }
             # A raw-paint passthrough can emit several sub-layers (fill + outline, …). Only the FIRST
             # carries the full geodeploy:* metadata so the switcher lists the layer once; the rest carry
@@ -1290,23 +1305,37 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
     style = cfg.get("style", {})
     opacity = cfg.get("opacity", 1.0)
     source_layer = _source_layer_name(layer)
+    # Colour may now be a data-driven EXPRESSION rather than a string (graduated / categorized).
+    # `services/symbology` computes it, and `ui/src/lib/symbology.js` computes the same thing for
+    # the editor preview and the runtime — one description, four renderers (CLAUDE.md parity rule).
+    color = symbology.color_expression(style)
 
     if "polygon" in geom:
+        # 3D: polygons extruded by a numeric property. A separate layer TYPE, not a paint variation,
+        # so it has to be decided here rather than patched onto the fill below.
+        if symbology.is_extruded(style):
+            return {
+                "id": f"vector-{layer.id}",
+                "type": "fill-extrusion",
+                "source": source_id,
+                "source-layer": source_layer,
+                "paint": symbology.extrusion_paint(style, opacity),
+            }
         return {
             "id": f"vector-{layer.id}",
             "type": "fill",
             "source": source_id,
             "source-layer": source_layer,
             "paint": {
-                "fill-color": style.get("color", "#3b82f6"),
+                "fill-color": color,
                 "fill-opacity": opacity * style.get("fill_opacity", 0.45),
                 "fill-outline-color": style.get("outline_color", "#1d4ed8"),
             },
         }
     if "line" in geom:
         paint = {
-            "line-color": style.get("color", "#3b82f6"),
-            "line-width": style.get("line_width", 2),
+            "line-color": color,
+            "line-width": symbology.size_expression(style, style.get("line_width", 2)),
             "line-opacity": opacity,
         }
         line_type = style.get("lineType")
@@ -1321,16 +1350,22 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
             "source-layer": source_layer,
             "paint": paint,
         }
-    # point / unknown — rendered as a symbol layer with a runtime-generated icon
-    # (portal.js / the editor build the image from the marker metadata). This lets
-    # points use shapes (circle/square/triangle/diamond/star/cross) on raster basemaps.
+    # point / unknown — a symbol layer with runtime-generated canvas icons, which is what lets points
+    # use shapes (circle/square/triangle/diamond/star/cross) on any basemap.
+    #
+    # A classified layer keeps its shape: `icon-image` is DATA-DRIVEN in MapLibre, so the style emits
+    # one image per class and selects between them with the same `step`/`match` the colour uses. See
+    # the note above `symbology.marker_image_id` for why this beats an SDF icon (mushy edges) and why
+    # falling back to a `circle` layer — the first implementation — was wrong: losing the marker
+    # shape the moment you classify is not a trade anyone asked for.
     return {
         "id": f"vector-{layer.id}",
         "type": "symbol",
         "source": source_id,
         "source-layer": source_layer,
         "layout": {
-            "icon-image": f"gd-pt-{layer.id}",
+            "icon-image": symbology.icon_image_expression(style),
+            "icon-size": symbology.icon_size_expression(style),
             "icon-allow-overlap": True,
             "icon-ignore-placement": True,
         },

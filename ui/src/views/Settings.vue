@@ -91,8 +91,11 @@
               </label>
               <div v-if="updateChoice === 'pick'" class="pl-6">
                 <select v-model="updatePickedTag" class="input text-xs py-1.5">
+                  <!-- The TAG leads. `name` is the GitHub release TITLE, which is prose ("Self-hosted
+                       spatial data platform…") and told you nothing about which version you were
+                       selecting — the one thing this control exists to say. -->
                   <option v-for="r in (updates.data.releases || [])" :key="r.tag" :value="r.tag">
-                    {{ r.name }}{{ r.is_current ? ' — running now' : '' }}{{ r.prerelease ? ' (pre-release)' : '' }}
+                    {{ r.tag }}{{ r.name && r.name !== r.tag ? ' — ' + r.name : '' }}{{ r.is_current ? ' (running now)' : '' }}{{ r.prerelease ? ' (pre-release)' : '' }}
                   </option>
                 </select>
               </div>

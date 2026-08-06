@@ -61,6 +61,11 @@ EDITABLE: tuple[EnvVar, ...] = (
            "Enables the Terminal tab in Infrastructure. It is a root shell inside a container and is "
            "owner-only even when on — leave it off unless you are actively debugging.",
            default="false", kind="bool", services=("geodeploy-api",), danger=True),
+    EnvVar("CELERY_CONCURRENCY", "Background worker processes",
+           "How many ingest/tiling jobs run at once. Each process holds its own copy of the file it "
+           "is converting, so this multiplies MEMORY before it multiplies speed — set it to 1 on a "
+           "server with 2 GB of RAM or less. Takes effect when the worker is recreated.",
+           default="2", services=("celery",)),
     EnvVar("PMTILES_TILE_MEMORY_LIMIT", "Tiler memory limit",
            "Caps the memory the tiling step may use before it spills to disk. Lower it only if you see "
            "a tiling run being killed on a very small server.",

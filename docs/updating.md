@@ -10,6 +10,23 @@ install**. Pick one, then press the button: it fetches the new code, rebuilds wh
 the affected services, health-checks the result and **rolls back automatically** if the new version
 does not come up healthy.
 
+!!! danger "No swap? Add some before updating"
+    An update **builds** the dashboard, and building needs far more memory than running does. With
+    no swap the kernel kills the build part-way through — the update appears to hang, and you are
+    left with stopped containers and no new image.
+
+    Run `free -m`. If the Swap row is 0 — which is how most cloud images ship, at any size — add
+    some. One command, once, and the build completes instead of being killed (it does not
+    noticeably slow down: what gets paged out is idle build memory):
+
+    ```bash
+    sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+    sudo mkswap /swapfile && sudo swapon /swapfile
+    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+    ```
+
+    If it has already happened, see [Recovering from a failed update](#recovering-from-a-failed-update).
+
 !!! note "What survives an update"
     Your database, uploaded files, published portals and settings are all outside the application
     containers, so an update replaces the software and leaves your data alone.
@@ -105,6 +122,51 @@ curl -fsSL https://raw.githubusercontent.com/bravemaster3/geodeploy/main/install
     (`~/geodeploy` by default) recreates containers against the wrong paths and detaches them from
     your data. The script recreates only the code services, reloads nginx without downtime, and rolls
     back if the result is unhealthy.
+
+## Recovering from a failed update
+
+If an update died part-way — the build was killed, the server rebooted, the connection dropped — the
+instance is usually *stopped*, not damaged. Your data is in the database and object storage, neither
+of which an update touches. Work through this from the server:
+
+```bash
+cd ~/geodeploy
+
+# 1. What is actually running? Include stopped containers.
+docker ps -a --format 'table {{.Names}}\t{{.Status}}'
+
+# 2. Was it memory? (A killed build says so here.)
+free -h
+sudo dmesg | grep -i -E 'out of memory|killed process' | tail
+
+# 3. Start the services the setup wizard provisioned (these live OUTSIDE Compose).
+docker start geodeploy-postgres geodeploy-minio geodeploy-redis geodeploy-martin geodeploy-titiler
+
+# 4. Start the application services. --no-deps so Compose touches nothing else.
+docker compose up -d --no-deps geodeploy-api geodeploy-ui celery nginx
+
+# 5. Confirm.
+curl -sf localhost/health && echo "healthy"
+docker compose logs --tail=50 geodeploy-api
+```
+
+!!! danger "Never run a bare `docker compose up -d` here"
+    PostgreSQL, MinIO and TiTiler are provisioned by the setup wizard **outside** Compose, with fixed
+    container names. A blanket `up -d` collides with them (`container name /geodeploy-postgres is
+    already in use`) and can detach services from your data. Always name the services, as above.
+
+**"It gets to the login page but will not log in"** is the classic shape of this: nginx and the
+dashboard are up (so you see the page), while the API or the database behind it is not. Step 3 and 4
+fix it. Confirm with `docker compose logs geodeploy-api` — a database it cannot reach says so plainly.
+
+If an image is genuinely missing because the build never finished, rebuild one at a time (the
+dashboard is the memory-hungry one) rather than letting both run at once:
+
+```bash
+docker compose build geodeploy-ui
+docker compose build geodeploy-api
+docker compose up -d --no-deps --force-recreate geodeploy-api geodeploy-ui celery
+```
 
 ## Before a big change
 

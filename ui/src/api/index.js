@@ -129,6 +129,11 @@ export const sendTestEmail = () => api.post('/admin/email-settings/test')
 
 // Vector layers
 export const listVectorLayers = () => api.get('/data/vector')
+// Symbology: the distribution of ONE attribute, plus a ready-made classification. The breaks are
+// computed server-side on purpose — the classifier reads the whole column, and a second
+// implementation in the browser would be two versions of one decision (see lib/symbology.js).
+export const getFieldStats = (layerRef, params) =>
+  api.get(`/data/vector/${layerRef}/field-stats`, { params })
 export const uploadVectorFile = (file, onProgress) => {
   const form = new FormData()
   form.append('file', file)

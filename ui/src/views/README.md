@@ -63,6 +63,19 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 - Raster layer `bbox` from the API is in source CRS (not lon/lat) — using it directly for `fitToBbox` can throw "Invalid LngLat" (see tasks/raster notes). Prefer zooming via vector bounds or TiTiler TileJSON.
 
 ## Last updated
+2026-08-06c (`DataManager`: each section (Vectors / Rasters / External) COLLAPSES — state persisted
+in localStorage, since someone who works mostly with rasters should not re-collapse Vectors every
+visit — and paginates at 20. Two controls because they solve different halves: collapse hides a
+section you are not working in, pagination bounds the one you are. The page is CLAMPED rather than
+reset when the list shrinks (deleting the last row of page 3 leaves you on the new last page), and
+reset to 1 when a search or the creator filter narrows the list under you. Every row renders whether
+or not it is near the viewport, so an unbounded list cost frame time as well as screen space.)
+2026-08-06b (`PortalEditor.buildPreviewStyle` renders data-driven paint through `@/lib/symbology`
+— the twin of `services/symbology.py`, so the preview classifies features exactly as the published
+portal does. Includes the same point-renderer switch (icon → `circle` when colour or size must vary
+per feature, losing the marker shape) and `fill-extrusion` for 3D. The preview tilts to 45° ONCE,
+the first time an extruded layer appears: straight down, 3D looks identical to a flat fill, so
+enabling it would otherwise appear to do nothing.)
 2026-08-06 (Settings → Updates: target picker gains branches + a channel-aware status; Settings → Backups → History gains per-row removal and 'Clear N failed' — the LOG, never the destination)
 2026-07-30 (PortalEditor: `catalog` archetype option + Map side / Datasets listed controls; the
 layer-list placement toggles are hidden for it since the facet rail replaces the sidebar)

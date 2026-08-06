@@ -83,3 +83,59 @@ docker compose logs -f celery | grep -iE "tile_geoparquet|export_geoparquet|tipp
 A healthy run logs the FlatGeobuf conversion, then tippecanoe's progress, then `READY`. If the fast
 path can't run it logs a warning and continues via the slower fallback (`via geojsonseq`) — tiling
 still completes.
+
+## Running on a small server (2 GB)
+
+GeoDeploy runs on a 2 CPU / 2 GB VPS. Nine containers on that much memory leaves little headroom,
+so two things need saying plainly.
+
+### Swap is not optional — and this is not only a 2 GB concern
+
+**Building** the dashboard needs far more memory than running it, and an update builds. With no swap
+the kernel kills the build part-way: the update appears to hang and you are left with stopped
+containers and no new image.
+
+Most cloud images ship with **no swap at all**, at any size. Check with `free -m` before you believe
+you are unaffected — a 4 GB server with no swap and a worker mid-conversion can hit the same wall.
+The smaller the machine, the sooner; on 2 GB it is close to certain. Add swap once:
+
+```bash
+fallocate -l 2G /swapfile && chmod 600 /swapfile
+mkswap /swapfile && swapon /swapfile
+echo '/swapfile none swap sw 0 0' >> /etc/fstab   # survives a reboot
+```
+
+Confirm it took with `swapon --show`, or `free -m` — the Swap row should no longer read zero.
+
+Swap here is insurance rather than a performance trade: the pages it absorbs are mostly idle build
+memory, so a build that previously died tends to complete at close to normal speed. On a 2 CPU /
+2 GB VPS the difference measured was between *killed* and *finished*, not between fast and slow.
+
+### One worker process, not two
+
+Each background worker holds its own copy of the file it is converting, so concurrency multiplies
+**memory** before it multiplies speed. On 2 GB set it to one, in
+**Settings → Infrastructure → Environment**:
+
+| Setting | 2 GB | Why |
+| --- | --- | --- |
+| `CELERY_CONCURRENCY` | `1` | Two simultaneous conversions is the most common way to run out of memory |
+| `PMTILES_TILE_MEMORY_LIMIT` | `512MB` | Caps the tiler before the kernel has to |
+| `PMTILES_TILE_THREADS` | `1` | Fewer parallel geometry conversions |
+
+Apply, and the worker is recreated with the new values.
+
+### Where the memory actually goes
+
+```bash
+docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}'
+```
+
+PostgreSQL and MinIO are the resident baseline; the worker is what spikes. If you are only serving
+published portals and not ingesting, the worker can be stopped entirely
+(`docker compose stop celery`) and started again when you next upload — portals, tiles and the
+dashboard do not depend on it.
+
+!!! tip "Object storage takes the pressure off"
+    Pointing storage at an external S3 provider removes MinIO from the server entirely — one fewer
+    resident process, and disk stops being a server decision. See [Getting started](getting-started.md).

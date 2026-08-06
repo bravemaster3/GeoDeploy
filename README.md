@@ -64,8 +64,10 @@ publish, and through open standards other tools already speak.
 ## Requirements
 
 A Linux server. **4 GB of RAM is a comfortable recommendation** and two cores are plenty — tiling
-included. **2 GB has been tested and runs well** (2 CPU / 2 GB VPS); only the install and setup
-wizard are noticeably slower there. Disk depends on your data, not on GeoDeploy, and you can attach
+included. **2 GB has been tested and runs well** (2 CPU / 2 GB VPS). Whatever your RAM,
+check you have **swap** (`free -m`) — most cloud images ship with none, and building the dashboard
+during an update needs far more memory than running it does
+([details](https://docs-geodeploy.kndev.org/getting-started/)). Disk depends on your data, not on GeoDeploy, and you can attach
 S3-compatible storage so capacity is never a server decision. Docker is installed for you if missing; Docker Compose must already be
 available (it ships with current Debian/Ubuntu). A domain name is optional but recommended.
 

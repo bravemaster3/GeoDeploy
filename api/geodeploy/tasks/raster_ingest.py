@@ -47,6 +47,7 @@ def _get_storage_creds() -> dict:
 
     endpoint, bucket, access_key, secret_key, region = storage_settings()
     if access_key:
+        _log_creds_once("runtime/env", endpoint, bucket, access_key)
         return {"endpoint": endpoint, "bucket": bucket, "access_key": access_key,
                 "secret_key": secret_key, "region": region or "us-east-1"}
 
@@ -58,12 +59,42 @@ def _get_storage_creds() -> dict:
     if row and row[2]:
         # Raw shim read — SQLAlchemy's EncryptedText does not apply, so decrypt explicitly.
         from ..crypto import decrypt_secret
+        _log_creds_once("setup_config (LAST RESORT)", row[0], row[1], row[2])
         return {"endpoint": row[0], "bucket": row[1], "access_key": row[2],
                 "secret_key": decrypt_secret(row[3]), "region": row[4] or "us-east-1"}
     settings = get_settings()
+    _log_creds_once("settings", settings.storage_endpoint, settings.storage_bucket,
+                    settings.storage_access_key)
     return {"endpoint": settings.storage_endpoint, "bucket": settings.storage_bucket,
             "access_key": settings.storage_access_key, "secret_key": settings.storage_secret_key,
             "region": settings.storage_region or "us-east-1"}
+
+
+_creds_logged = None
+
+
+def _log_creds_once(source: str, endpoint, bucket, access_key) -> None:
+    """Say WHERE the storage credentials came from, once per worker process.
+
+    A rejected key surfaces as a bare `403 Forbidden` from botocore with no hint of which key was
+    used or where it was read — so diagnosing it means reading code and guessing. One line in the
+    worker log next to the traceback turns that into a glance. Logged once (and again if the answer
+    changes) so it cannot become noise in a long-running worker.
+
+    The access key is an identifier, not a secret, but it is still truncated: enough to compare
+    against `.env` at a glance, not enough to be worth harvesting from a log someone pastes into an
+    issue. The secret is never logged at all.
+    """
+    global _creds_logged
+    import logging
+    fingerprint = (source, endpoint, bucket, access_key)
+    if fingerprint == _creds_logged:
+        return
+    _creds_logged = fingerprint
+    masked = (access_key[:4] + "…" + access_key[-2:]) if access_key and len(access_key) > 8 else "(none)"
+    logging.getLogger(__name__).info(
+        "storage credentials from %s — endpoint=%s bucket=%s access_key=%s",
+        source, endpoint or "(none)", bucket or "(none)", masked)
 
 
 def _update_job(job_id: str, **kwargs) -> None:

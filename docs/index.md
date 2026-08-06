@@ -170,7 +170,8 @@ changes nothing here: the project stays open source, and self-hosting stays the 
 
 **4 GB of RAM is a comfortable recommendation**, and two CPU cores are plenty — a real instance runs
 happily there, tiling included. **2 GB works too**: the same stack has been tested on a 2 CPU / 2 GB
-VPS and runs well, with only the install and setup wizard noticeably slower. Disk depends on your
+VPS and runs well. Whatever the size, give the machine some swap — most cloud images have none, and
+building the dashboard during an update needs far more memory than running it does. Disk depends on your
 data rather than on GeoDeploy, and you can point it at S3-compatible storage so capacity is never a
 server decision. Everything is Docker Compose behind nginx: one thing to start, one thing to update.
 

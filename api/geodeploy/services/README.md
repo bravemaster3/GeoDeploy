@@ -131,6 +131,21 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   permalink it serves, never a substitute for the bbox queries.
 
 ## Last updated
+2026-08-06 (**new `symbology.py` — data-driven styling**. THE source of truth for turning a layer's
+friendly style keys into MapLibre expressions: `classify` (quantile/equal/jenks-by-k-means),
+`build_classes`/`build_categories`, `color_expression` (`step`/`match`), `size_expression`
+(`interpolate`), `extrusion_paint` (`fill-extrusion`), `legend_entries`, plus the point-marker set
+(`marker_image_id`/`icon_image_expression`/`marker_images`/`icon_size_expression`). Points keep their
+SHAPE under a classification: `icon-image` is data-driven in MapLibre, so the style emits one image
+per class and selects between them with the same step/match the colour uses. (An earlier version
+switched to a `circle` layer and lost the shape — rejected; see notes_for_future.) Pure and DB-free because
+`ui/src/lib/symbology.js` is its line-by-line twin and three of the four renderers are JavaScript;
+`tests/test_symbology.py` pins the expressions as literals for both. Two decisions worth keeping:
+class breaks have OPEN outer edges (data added after styling still draws), and a break at the column
+minimum is dropped rather than shipped as an empty class. `portal_generator` bakes
+`geodeploy:legend` from `legend_entries` so portal.js renders a legend it never re-derives.
+`duckdb_engine.field_stats` + `routers/data/vector.field-stats` supply the distribution; the
+classifier stays server-side so the editor and the portal cannot disagree.)
 2026-07-30 (V-14 `catalog` archetype in `resolve_layout` — it previously ALIASED to webmap, which is
 why selecting it did nothing; `layers_info` gains `layer_id` and is baked to `style.geodeploy.catalog`)
 2026-08-01 (`backup.py`: `BucketMissing` + `create_destination_bucket`)

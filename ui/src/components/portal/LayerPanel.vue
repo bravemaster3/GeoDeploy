@@ -39,13 +39,79 @@
 
           <!-- Vector style controls -->
           <template v-if="config.layer_type === 'vector'">
+            <!-- COLOUR: one symbol, or a function of a field. The mode picker comes first because
+                 it decides what the rest of this section even means. -->
             <div>
               <label class="text-xs text-muted-foreground">Color</label>
-              <div class="flex items-center gap-2 mt-0.5">
+              <div v-if="styleFields.length" class="flex gap-1 mt-1 mb-1.5">
+                <button v-for="m in COLOR_MODES" :key="m.value" type="button" @click="setColorMode(m.value)"
+                  class="flex-1 text-[11px] py-1 rounded border transition-colors"
+                  :class="colorMode === m.value
+                    ? 'border-primary/60 bg-primary/15 text-foreground'
+                    : 'border-border text-muted-foreground hover:text-foreground'">{{ m.label }}</button>
+              </div>
+
+              <div v-if="colorMode === 'single'" class="flex items-center gap-2 mt-0.5">
                 <input type="color" :value="config.style?.color || '#3b82f6'"
                   @input="emitStyle({ color: $event.target.value })"
                   class="w-6 h-6 rounded border border-border cursor-pointer p-0" />
                 <span class="text-xs text-muted-foreground/70 font-mono">{{ config.style?.color || '#3b82f6' }}</span>
+              </div>
+
+              <div v-else class="space-y-2">
+                <select :value="config.style?.color_field || ''" @change="pickColorField($event.target.value)"
+                  class="w-full text-xs border border-border rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary/60">
+                  <option value="">Choose a field…</option>
+                  <option v-for="f in colorFields" :key="f.name" :value="f.name">{{ f.name }}</option>
+                </select>
+
+                <div v-if="colorMode === 'graduated' && config.style?.color_field" class="flex gap-1.5">
+                  <label class="flex-1">
+                    <span class="text-[11px] text-muted-foreground">Classes</span>
+                    <input type="number" min="2" max="9" :value="classCount" @change="setClassCount($event.target.value)"
+                      class="w-full text-xs border border-border rounded px-1.5 py-1 mt-0.5" />
+                  </label>
+                  <label class="flex-[1.4]">
+                    <span class="text-[11px] text-muted-foreground">Method</span>
+                    <select :value="classMethod" @change="setMethod($event.target.value)"
+                      class="w-full text-xs border border-border rounded px-1.5 py-1 mt-0.5">
+                      <option value="quantile">Quantile</option>
+                      <option value="equal">Equal interval</option>
+                      <option value="jenks">Natural breaks</option>
+                    </select>
+                  </label>
+                </div>
+
+                <label v-if="colorMode === 'graduated' && config.style?.color_field" class="block">
+                  <span class="text-[11px] text-muted-foreground">Colour ramp</span>
+                  <select :value="ramp" @change="setRamp($event.target.value)"
+                    class="w-full text-xs border border-border rounded px-1.5 py-1 mt-0.5">
+                    <optgroup label="Sequential">
+                      <option v-for="r in SEQUENTIAL" :key="r" :value="r">{{ r }}</option>
+                    </optgroup>
+                    <optgroup label="Diverging (has a midpoint)">
+                      <option v-for="r in DIVERGING" :key="r" :value="r">{{ r }}</option>
+                    </optgroup>
+                  </select>
+                </label>
+
+                <p v-if="statsBusy" class="text-[11px] text-muted-foreground/70">Reading the field…</p>
+                <p v-else-if="statsError" class="text-[11px] text-red-400">{{ statsError }}</p>
+
+                <!-- The legend, editable. Each swatch is the actual colour the map will use, so this
+                     doubles as the preview of the classification. -->
+                <div v-if="legend.length" class="space-y-0.5 max-h-40 overflow-y-auto pr-1">
+                  <div v-for="(e, i) in legend" :key="i" class="flex items-center gap-1.5">
+                    <input type="color" :value="e.color" @input="setEntryColor(i, $event.target.value)"
+                      :disabled="e.isOther"
+                      class="w-4 h-4 rounded border border-border cursor-pointer p-0 flex-shrink-0 disabled:opacity-60" />
+                    <span class="text-[11px] text-muted-foreground truncate">{{ e.label }}</span>
+                  </div>
+                </div>
+                <p v-if="truncatedCats" class="text-[11px] text-amber-300/80">
+                  Showing the {{ (config.style?.categories || []).length }} commonest values; the rest
+                  draw in the “Other” colour.
+                </p>
               </div>
             </div>
 
@@ -65,6 +131,35 @@
                     @input="emitStyle({ outline_color: $event.target.value })"
                     class="w-6 h-6 rounded border border-border cursor-pointer p-0" />
                   <span class="text-xs text-muted-foreground/70 font-mono">{{ config.style?.outline_color || '#1d4ed8' }}</span>
+                </div>
+              </div>
+
+              <!-- 3D. Polygons only: MapLibre extrudes fills, and there is nothing to raise a line
+                   or a point into. Needs a numeric field, so it is hidden when the layer has none —
+                   an enabled switch that cannot do anything is worse than an absent one. -->
+              <div v-if="numericFields.length" class="pt-1 border-t border-border/50">
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" :checked="!!config.style?.extrusion?.enabled"
+                    @change="setExtrusion({ enabled: $event.target.checked })" class="accent-primary" />
+                  <span class="text-xs text-foreground">3D — extrude by a field</span>
+                </label>
+                <div v-if="config.style?.extrusion?.enabled" class="mt-1.5 space-y-1.5 pl-5">
+                  <select :value="config.style?.extrusion?.field || ''"
+                    @change="setExtrusion({ field: $event.target.value })"
+                    class="w-full text-xs border border-border rounded px-1.5 py-1">
+                    <option value="">Choose a height field…</option>
+                    <option v-for="f in numericFields" :key="f.name" :value="f.name">{{ f.name }}</option>
+                  </select>
+                  <label class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0">Height ×</span>
+                    <input type="number" min="0.01" step="0.5" :value="config.style?.extrusion?.scale ?? 1"
+                      @change="setExtrusion({ scale: parseFloat($event.target.value) || 1 })"
+                      class="w-20 text-xs border border-border rounded px-1.5 py-0.5" />
+                  </label>
+                  <p class="text-[11px] text-muted-foreground/70 leading-snug">
+                    The field is in metres. Use the multiplier when it is not — floors × 3, say.
+                    The map tilts so you can see it.
+                  </p>
                 </div>
               </div>
             </template>
@@ -236,7 +331,11 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useDataStore } from '@/stores/data'
-import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps, getRasterStats } from '@/api'
+import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps, getRasterStats,
+         getFieldStats } from '@/api'
+// The shared symbology vocabulary — twin of api/geodeploy/services/symbology.py. The swatch and
+// the legend here must describe exactly what the published portal will draw.
+import { RAMPS, DIVERGING, legendEntries, representativeColor } from '@/lib/symbology'
 import { TrashIcon, LocateIcon } from '@/views/icons'
 
 const props = defineProps({ config: Object })
@@ -313,7 +412,10 @@ const geomLabel = computed(() => ({
 // Legend swatch mirroring the layer's actual symbol — colour + line dash for vectors.
 const geomSvg = computed(() => {
   const k = geomKind.value
-  const col = props.config.style?.color || '#3b82f6'
+  // The swatch has to stand for the WHOLE layer, so under a classification it shows the middle
+  // class rather than the flat `color` (which a data-driven layer no longer uses anywhere). A
+  // swatch showing a colour that appears nowhere on the map is a small lie told constantly.
+  const col = representativeColor(props.config.style || {})
   if (k === 'polygon')
     return `<svg width="18" height="18" viewBox="0 0 18 18"><rect x="2.5" y="4" width="13" height="10" fill="${col}" fill-opacity="0.45" stroke="${col}" stroke-width="1.5"/></svg>`
   if (k === 'line') {
@@ -349,6 +451,130 @@ function markerSvg(shape, c) {
 
 function emitStyle(patch) {
   emit('update', { style: { ...props.config.style, ...patch } })
+}
+
+// ── Data-driven symbology ────────────────────────────────────────────────────
+// The class BREAKS are computed on the server (`GET /data/vector/{ref}/field-stats`) and never
+// here: the classifier reads the whole column, and a second implementation in the browser would be
+// two versions of one decision — exactly the divergence `lib/symbology.js` exists to avoid. This
+// component chooses, requests and edits; it does not classify.
+const COLOR_MODES = [
+  { value: 'single', label: 'Single' },
+  { value: 'graduated', label: 'Graduated' },
+  { value: 'categorized', label: 'Categories' },
+]
+const SEQUENTIAL = Object.keys(RAMPS).filter(r => !DIVERGING.includes(r))
+
+const statsBusy = ref(false)
+const statsError = ref('')
+const truncatedCats = ref(false)
+
+const colorMode = computed(() => props.config.style?.color_mode || 'single')
+const classCount = computed(() => (props.config.style?.classes || []).length || 5)
+const classMethod = computed(() => props.config.style?.class_method || 'quantile')
+const ramp = computed(() => props.config.style?.color_ramp || 'viridis')
+
+// Fields worth offering. The geometry column is never a symbology field, and a column of unique
+// ids classifies into as many classes as there are rows — offering them invites a useless map.
+const styleFields = computed(() => (layer.value?.columns || []).filter(
+  c => c.name && !/^(geom|geometry|wkb_geometry|the_geom|bbox)$/i.test(c.name)))
+const numericFields = computed(() => styleFields.value.filter(
+  c => /int|numeric|decimal|double|real|float|serial/i.test(c.type || '')))
+// Graduated needs a quantity; categories need something with repeated values. Text columns are
+// offered for both because a numeric-looking code (a zone, a year) is legitimately categorical.
+const colorFields = computed(() =>
+  colorMode.value === 'graduated' ? numericFields.value : styleFields.value)
+
+const legend = computed(() => {
+  const entries = legendEntries(props.config.style || {})
+  const cats = props.config.style?.categories || []
+  return entries.map((e, i) => ({
+    ...e,
+    // The last entry of a categorized legend is the `match` fallback, which has no value to edit.
+    isOther: colorMode.value === 'categorized' && i >= cats.length,
+  }))
+})
+
+function setColorMode(mode) {
+  if (mode === colorMode.value) return
+  if (mode === 'single') {
+    // Keep the field: switching back and forth while comparing is normal, and re-picking it every
+    // time would be its own small punishment.
+    emitStyle({ color_mode: 'single' })
+    return
+  }
+  emitStyle({ color_mode: mode, classes: [], categories: [] })
+  if (props.config.style?.color_field) refreshClasses({ color_mode: mode })
+}
+
+function pickColorField(field) {
+  emitStyle({ color_field: field, classes: [], categories: [] })
+  if (field) refreshClasses({ color_field: field })
+}
+function setClassCount(n) { refreshClasses({ classes_n: Math.max(2, Math.min(9, parseInt(n) || 5)) }) }
+function setMethod(m) { refreshClasses({ class_method: m }) }
+function setRamp(r) { refreshClasses({ color_ramp: r }) }
+
+/**
+ * Ask the server to classify the chosen field and apply the result.
+ *
+ * `over` carries the control the user JUST changed, because the style prop has not been updated yet
+ * when this runs — reading it back would classify with the previous value and look like a one-step
+ * lag, which is the classic version of this bug.
+ */
+async function refreshClasses(over = {}) {
+  const style = { ...props.config.style, ...over }
+  const mode = over.color_mode || colorMode.value
+  const field = over.color_field ?? style.color_field
+  if (!field || mode === 'single') return
+  statsBusy.value = true
+  statsError.value = ''
+  try {
+    const { data } = await getFieldStats(props.config.layer_id, {
+      field,
+      classes: over.classes_n || classCount.value,
+      method: over.class_method || classMethod.value,
+      ramp: over.color_ramp || ramp.value,
+    })
+    truncatedCats.value = !!data.truncated
+    const patch = {
+      color_mode: mode,
+      color_field: field,
+      color_ramp: over.color_ramp || ramp.value,
+      class_method: over.class_method || classMethod.value,
+    }
+    // A text column cannot be graduated and a numeric one is usually not meant to be categorical.
+    // Follow the DATA rather than refusing: the mode switches, and the legend shows what happened.
+    if (data.kind === 'numeric' && mode === 'graduated') {
+      patch.classes = data.suggestion?.classes || []
+      patch.categories = []
+      if (!patch.classes.length) statsError.value = 'That field has no usable range to classify.'
+    } else if (data.kind === 'categorical' || mode === 'categorized') {
+      patch.color_mode = 'categorized'
+      patch.categories = data.suggestion?.categories || []
+      patch.classes = []
+      if (!patch.categories.length) statsError.value = 'That field has no values to group by.'
+    }
+    emitStyle(patch)
+  } catch (e) {
+    statsError.value = e?.response?.data?.detail || 'Could not read that field.'
+  } finally {
+    statsBusy.value = false
+  }
+}
+
+function setEntryColor(i, color) {
+  if (colorMode.value === 'graduated') {
+    const classes = (props.config.style?.classes || []).map((c, j) => j === i ? { ...c, color } : c)
+    emitStyle({ classes })
+  } else {
+    const cats = (props.config.style?.categories || []).map((c, j) => j === i ? { ...c, color } : c)
+    emitStyle({ categories: cats })
+  }
+}
+
+function setExtrusion(patch) {
+  emitStyle({ extrusion: { ...(props.config.style?.extrusion || {}), ...patch } })
 }
 
 // ── Multiband band selection (bidx) ──────────────────────────────────────────

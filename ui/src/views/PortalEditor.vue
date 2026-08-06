@@ -530,6 +530,18 @@ import { usePortalsStore } from '@/stores/portals'
 import { useDataStore } from '@/stores/data'
 import { listTemplates, listBasemaps, getRasterStats, getVectorFeatures, identifyVectorFeatures, uploadPortalAsset, previewPortal, syncSession } from '@/api'
 import { useMaplibre } from '@/composables/useMaplibre'
+// Aliased on import so every call site in this 2000-line file reads as "the shared symbology",
+// not as a local helper someone might be tempted to tweak in place. The Python twin is
+// services/symbology.py and the two must stay identical (CLAUDE.md parity rule).
+import {
+  colorExpression as symColorExpression,
+  sizeExpression as symSizeExpression,
+  extrusionPaint as symExtrusionPaint,
+  isExtruded as symIsExtruded,
+  iconImageExpression as symIconImageExpression,
+  iconSizeExpression as symIconSizeExpression,
+  markerImages as symMarkerImages,
+} from '@/lib/symbology'
 import { capturePortalThumbnail } from '@/composables/portalThumbnail'
 import maplibregl from 'maplibre-gl'
 import { MapboxOverlay } from '@deck.gl/mapbox'
@@ -1551,6 +1563,7 @@ async function onPreviewClick(e) {
 // edits (band/colour/etc.) must NOT yank the view — setStyle keeps the current camera.
 let viewInitialized = false
 let lastStyleJson = ''  // last applied MapLibre style → skip redundant setStyle repaints (each = a flash)
+let pitched3D = false   // the one automatic tilt when an extruded layer first appears
 // When the catalog arrives from /api/basemaps (or changes), refresh the picker's list and, if the
 // chosen basemap's tiles differ, rebuild the preview.
 watch(basemapCatalog, () => basemapControl?.refresh())
@@ -1563,6 +1576,14 @@ watch([layerConfigs, layerTree, loaded, basemap, basemapCatalog, ready], () => {
   // layers live outside the MapLibre style, so refreshDeck runs regardless.
   const json = JSON.stringify(style)
   if (json !== lastStyleJson) { lastStyleJson = json; applyStyle(style) }
+  // Straight down, an extruded polygon and a plain fill are the same shape — so turning 3D on
+  // while looking at a flat preview appears to do NOTHING. Tilt once, the first time an extrusion
+  // shows up, and never again: after that the camera is the author's to place (the same reasoning
+  // as the camera watcher above, which only moves on the first build).
+  if (!pitched3D && style.layers.some(l => l.type === 'fill-extrusion')) {
+    pitched3D = true
+    if (map.value && map.value.getPitch() === 0) map.value.easeTo({ pitch: 45, duration: 600 })
+  }
   refreshDeck(false)  // rebuild deck layers (fetch only newly-appeared geoparquet layers)
   if (!viewInitialized) {
     if (savedView.value) { jumpTo(savedView.value); viewInitialized = true }
@@ -1785,36 +1806,57 @@ function buildPreviewStyle() {
         expandBounds(layer.bbox)
         continue
       }
-      const color = cfg.style?.color || '#3b82f6'
+      const st = cfg.style || {}
       const opacity = cfg.opacity ?? 1.0
       const geom = (layer.geometry_type || '').toLowerCase()
+      // Colour may be a data-driven EXPRESSION (graduated / categorized). `lib/symbology` is the
+      // twin of services/symbology.py, so the preview and the published portal classify features
+      // identically — see the parity note in that file.
+      const color = symColorExpression(st)
 
       if (geom.includes('polygon')) {
-        style.layers.push({
-          id: srcId, type: 'fill', source: srcId, 'source-layer': sourceLayer,
-          paint: {
-            'fill-color': color,
-            'fill-opacity': opacity * (cfg.style?.fill_opacity ?? 0.45),
-            'fill-outline-color': cfg.style?.outline_color || '#1d4ed8',
-          },
-        })
+        if (symIsExtruded(st)) {
+          // 3D: a different layer TYPE, not a paint variation. Needs pitch to be visible at all —
+          // `ensurePitchFor3D` below tilts the preview the first time an extrusion appears.
+          style.layers.push({
+            id: srcId, type: 'fill-extrusion', source: srcId, 'source-layer': sourceLayer,
+            paint: symExtrusionPaint(st, opacity),
+          })
+        } else {
+          style.layers.push({
+            id: srcId, type: 'fill', source: srcId, 'source-layer': sourceLayer,
+            paint: {
+              'fill-color': color,
+              'fill-opacity': opacity * (st.fill_opacity ?? 0.45),
+              'fill-outline-color': st.outline_color || '#1d4ed8',
+            },
+          })
+        }
       } else if (geom.includes('line')) {
-        const linePaint = { 'line-color': color, 'line-width': cfg.style?.line_width ?? 2, 'line-opacity': opacity }
-        if (cfg.style?.lineType === 'dashed') linePaint['line-dasharray'] = [2, 1.5]
-        else if (cfg.style?.lineType === 'dotted') linePaint['line-dasharray'] = [0.4, 1.8]
+        const linePaint = {
+          'line-color': color,
+          'line-width': symSizeExpression(st, st.line_width ?? 2),
+          'line-opacity': opacity,
+        }
+        if (st.lineType === 'dashed') linePaint['line-dasharray'] = [2, 1.5]
+        else if (st.lineType === 'dotted') linePaint['line-dasharray'] = [0.4, 1.8]
         style.layers.push({
           id: srcId, type: 'line', source: srcId, 'source-layer': sourceLayer, paint: linePaint,
         })
       } else {
-        // Points render as a symbol layer with a runtime-generated icon (so shapes
-        // work on raster basemaps). Icon id encodes the style so it refreshes on change.
-        const shape = cfg.style?.marker || 'circle'
-        const mSize = cfg.style?.radius ?? 5
-        const iconId = `gd-pt-${layer.id}-${shape}-${String(color).replace('#', '')}-${mSize}`
-        markerSpecs[iconId] = { shape, color, size: mSize }
+        // Points render as a symbol layer with generated canvas icons, so marker SHAPES work on any
+        // basemap. A classified layer keeps its shape: `icon-image` is data-driven, so we register
+        // one image per class and let MapLibre pick. Mirrors portal_generator._vector_layer — if
+        // these disagree, the preview shows a style the portal will not render.
+        symMarkerImages(st).forEach((im) => { markerSpecs[im.id] = im })
         style.layers.push({
           id: srcId, type: 'symbol', source: srcId, 'source-layer': sourceLayer,
-          layout: { 'icon-image': iconId, 'icon-allow-overlap': true, 'icon-ignore-placement': true },
+          layout: {
+            'icon-image': symIconImageExpression(st),
+            'icon-size': symIconSizeExpression(st),
+            'icon-allow-overlap': true,
+            'icon-ignore-placement': true,
+          },
           paint: { 'icon-opacity': opacity },
         })
       }

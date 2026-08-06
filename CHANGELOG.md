@@ -6,6 +6,36 @@ upgrade needs manual work.
 
 ## v1.1 — unreleased
 
+### Data-driven symbology
+
+Style a layer **by its data**, not just with one colour. In the portal editor's symbology popover:
+
+- **Graduated** — classify a numeric field into colour classes, with quantile, equal-interval or
+  natural-breaks classing, 2–9 classes, and a choice of sequential or diverging colour ramps.
+- **Categories** — a colour per distinct value, with a qualitative palette (a sequential ramp on
+  unordered values implies a ranking the data does not have).
+- Every class colour is editable, and the class list *is* the legend — published portals show it
+  beside the layer name.
+- **Point markers keep their shape.** A classified point layer still draws stars, squares or
+  diamonds; only the colour varies.
+
+**3D.** Polygons can be extruded by a numeric field — building heights, floors × a multiplier,
+anything. Portals containing an extruded layer open tilted, because straight down a 3D block and a
+flat polygon are the same shape.
+
+**The globe has a sky.** In 3D globe view the planet now sits against space with an atmospheric limb,
+instead of a flat dark panel.
+
+### Easier to live with
+
+- **My Data** collapses per section (Vectors / Rasters / External, remembered between visits) and
+  paginates at 20 — a few hundred layers no longer make the page unusable.
+- **Infrastructure ▸ Deployments and Environment** scroll inside a fixed height instead of growing
+  the Settings page without limit.
+- **`CELERY_CONCURRENCY`** is now an editable setting. Each background worker holds its own copy of
+  the file it is converting, so on a small server this multiplies memory before it multiplies speed —
+  set it to 1 on 2 GB.
+
 ### Choose which version to install
 
 The updater could only ever move you to the tip of the development branch — even on an instance

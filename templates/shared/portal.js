@@ -257,6 +257,12 @@
   // Generate point-marker icons on demand (also covers the first render gap).
   map.on('styleimagemissing', function (e) {
     if (!e.id || e.id.indexOf('gd-pt-') !== 0 || map.hasImage(e.id)) return;
+    // The id CARRIES its parameters (gd-pt-<shape>-<hex>-<size>), so any missing image can be built
+    // from the id alone. It used to be looked up from the layer's metadata, which only worked while
+    // a layer had exactly ONE icon — a classified point layer has one per class, and `icon-image`
+    // is a data-driven expression selecting between them.
+    const spec = parseMarkerImageId(e.id);
+    if (spec) { setMarkerImage(e.id, spec.shape, spec.color, spec.size); return; }
     const l = (STYLE.layers || []).find(x => x.layout && x.layout['icon-image'] === e.id);
     const m = (l && l.metadata) || {};
     setMarkerImage(e.id, m['geodeploy:marker'] || 'circle', m['geodeploy:markerColor'] || '#3b82f6', m['geodeploy:markerSize'] || 5);
@@ -281,10 +287,63 @@
   function applyProjection(name) {
     if (!name || typeof map.setProjection !== 'function') return;
     try { map.setProjection({ type: name }); } catch (e) {}
+    applySpace(name === 'globe');
+  }
+
+  /**
+   * The globe hangs in SPACE, not in a dark rectangle.
+   *
+   * Two independent pieces, because they cover different parts of the picture and either can be
+   * unavailable:
+   *
+   *  1. `setSky` (MapLibre v5) paints the ATMOSPHERE — the luminous rim that makes the planet read
+   *     as a sphere with air around it rather than a flat circle. Wrapped in try/catch and a
+   *     capability check: a portal bundle published before this shipped runs an older maplibre from
+   *     its own bundle, and must not throw here.
+   *  2. A CSS starfield on the map CONTAINER, behind the canvas, which is what shows through
+   *     wherever the canvas is transparent (everything beyond the atmosphere). Stars are not part of
+   *     the MapLibre style spec at all, so this is the only way to have any.
+   *
+   * Toggled OFF for mercator: a flat map covering the whole viewport would never show it, and a
+   * star texture behind a partially-transparent basemap would tint it.
+   */
+  function applySpace(on) {
+    var el = map.getContainer && map.getContainer();
+    if (el) el.classList.toggle('gd-space', !!on);
+    if (typeof map.setSky !== 'function') return;
+    try {
+      map.setSky(on ? {
+        'sky-color': '#0b1026',            // deep space, not pure black — black looks like a hole
+        'sky-horizon-blend': 0.5,
+        'horizon-color': '#7fb2ff',        // the atmospheric limb
+        'horizon-fog-blend': 0.6,
+        'fog-color': '#0b1026',
+        'fog-ground-blend': 0.1,
+        // Fade the atmosphere out as you zoom in: it belongs to the view of a PLANET, and at street
+        // level it would just be a blue wash over the map.
+        'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 4, 0.7, 7, 0],
+      } : {
+        'atmosphere-blend': 0,
+      });
+    } catch (e) { /* older maplibre in an existing bundle — the starfield still applies */ }
   }
 
   const bounds = STYLE.geodeploy?.bounds;
   const savedView = STYLE.geodeploy?.view;
+
+  /**
+   * A `fill-extrusion` layer is INVISIBLE on a flat map — straight down, an extruded polygon and a
+   * plain fill are the same shape. So a portal whose author enabled 3D and pinned a top-down view
+   * (which is what pinning does by default) would publish looking exactly like the 2D version, and
+   * read as "the 3D feature is broken".
+   *
+   * Opening tilted only when the author did NOT choose a pitch: an explicit 0 that the author set
+   * while looking at their 3D layer is a decision, and this must not overrule it. `pitch == null`
+   * means "never pinned", which is the case that needs the help.
+   */
+  const has3D = (STYLE.layers || []).some(function (l) { return l && l.type === 'fill-extrusion'; });
+  const DEFAULT_3D_PITCH = 45;
+
   if (savedView && Array.isArray(savedView.center) && savedView.center.length === 2) {
     // Admin pinned a specific extent/zoom during portal creation — honour it exactly.
     try {
@@ -292,7 +351,7 @@
         center: savedView.center,
         zoom: savedView.zoom != null ? savedView.zoom : 2,
         bearing: savedView.bearing || 0,
-        pitch: savedView.pitch || 0,
+        pitch: savedView.pitch != null ? savedView.pitch : (has3D ? DEFAULT_3D_PITCH : 0),
       });
       applyProjection(savedView.projection);
     } catch (e) { /* ignore — keep default view */ }
@@ -301,8 +360,11 @@
       map.fitBounds([[bounds[0], bounds[1]], [bounds[2], bounds[3]]], {
         padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 },
         duration: 0,
+        pitch: has3D ? DEFAULT_3D_PITCH : 0,
       });
     } catch (e) { /* ignore — keep default view */ }
+  } else if (has3D) {
+    try { map.setPitch(DEFAULT_3D_PITCH); } catch (e) { /* ignore */ }
   }
 
   // ── deck.gl overlay for GeoParquet layers ───────────────
@@ -1278,6 +1340,11 @@
     const d = ctx.getImageData(0, 0, dim * dpr, dim * dpr);
     return { width: dim * dpr, height: dim * dpr, data: d.data, pixelRatio: dpr };
   }
+  // Twin of ui/src/lib/symbology.js::parseMarkerImageId — the id is the spec.
+  function parseMarkerImageId(id) {
+    const m = /^gd-pt-([a-z]+)-([0-9a-f]{3,8})-([0-9.]+)$/.exec(String(id || ''));
+    return m ? { shape: m[1], color: '#' + m[2], size: parseFloat(m[3]) } : null;
+  }
   function setMarkerImage(imgId, shape, color, size) {
     const im = markerImage(shape, color, size);
     try { if (map.hasImage(imgId)) map.updateImage(imgId, im); else map.addImage(imgId, im, { pixelRatio: im.pixelRatio }); }
@@ -1297,6 +1364,14 @@
   function ensurePointImages() {
     (STYLE.layers || []).forEach(l => {
       if (l.type !== 'symbol' || !l.layout || !l.layout['icon-image'] || !l.metadata) return;
+      // A classified point layer declares one image per class in geodeploy:markerImages. Create
+      // them ALL now: leaving it to styleimagemissing means each class's markers pop in the first
+      // time that class scrolls into view, which looks like the map is still loading.
+      const all = l.metadata['geodeploy:markerImages'];
+      if (Array.isArray(all) && all.length) {
+        all.forEach(function (im) { setMarkerImage(im.id, im.shape, im.color, im.size); });
+        return;
+      }
       if (l.metadata['geodeploy:marker'] === undefined) return;
       setMarkerImage(l.layout['icon-image'], l.metadata['geodeploy:marker'] || 'circle',
         l.metadata['geodeploy:markerColor'] || '#3b82f6', l.metadata['geodeploy:markerSize'] || 5);
@@ -1378,7 +1453,7 @@
         '</div>' +
         (type === 'raster' && !meta['geodeploy:external']
           ? '<div class="layer-legend" data-legend="' + layer.id + '">' + rasterLegendHtml(layer) + '</div>'
-          : '');
+          : vectorLegendHtml(meta['geodeploy:legend'], geom));
       container.appendChild(card);
     });
 
@@ -2018,6 +2093,28 @@
   function rasterBandCount(srcId) {
     const l = STYLE.layers.find(x => x.source === srcId && x.metadata && x.metadata['geodeploy:type'] === 'raster');
     return (l && l.metadata['geodeploy:bands']) || 1;
+  }
+
+  /**
+   * The legend for a CLASSIFIED vector layer, from `geodeploy:legend` baked into the style.
+   *
+   * Deliberately a renderer and nothing more: it does not read `classes`/`categories` and build its
+   * own labels. The entries come from `services/symbology.legend_entries`, the same call the editor
+   * shows while you are styling — so the published legend cannot drift from the published map, and
+   * neither can drift from what you saw when you made it.
+   *
+   * Empty for a single-symbol layer: the swatch beside the name already says everything there is
+   * to say, and a one-row legend repeating it is noise.
+   */
+  function vectorLegendHtml(entries, geom) {
+    if (!Array.isArray(entries) || !entries.length) return '';
+    const rows = entries.map(function (e) {
+      return '<div class="legend-class">' +
+        '<span class="legend-chip" style="background:' + escHtml(e.color || '#999') + '"></span>' +
+        '<span class="legend-label">' + escHtml(e.label == null ? '' : String(e.label)) + '</span>' +
+        '</div>';
+    }).join('');
+    return '<div class="layer-legend legend-classes">' + rows + '</div>';
   }
 
   function rasterLegendHtml(layer) {

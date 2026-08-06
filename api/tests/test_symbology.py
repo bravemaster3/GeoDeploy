@@ -1,0 +1,331 @@
+"""Data-driven symbology: classification and the MapLibre expressions it produces.
+
+These are the CONTRACT for four renderers — `portal_generator` (published style), `portal.js` (live
+runtime), `PortalEditor.vue` (preview) and `LayerPanel.vue` (swatch). Three of them are JavaScript,
+so the expressions are pinned here as literals rather than derived from the code that builds them: a
+test that recomputes its expectation from the implementation would happily accept a wrong one, and
+the JS twin (`ui/src/lib/symbology.js`) is checked against these same literals by eye.
+
+The failure this guards against is specific and quiet: an editor preview and a published portal
+disagreeing about which class a feature falls into. Nobody sees that until the map is public.
+"""
+import pytest
+
+from geodeploy.services import symbology as sym
+
+
+# ── Classification ───────────────────────────────────────────────────────────────────────────────
+
+def test_quantile_puts_equal_counts_in_each_class():
+    breaks = sym.classify(list(range(1, 101)), "quantile", 4)
+    assert len(breaks) == 3
+    assert breaks == [26.0, 51.0, 76.0]
+
+
+def test_equal_interval_splits_the_RANGE_not_the_count():
+    breaks = sym.classify([0, 1, 2, 3, 100], "equal", 2)
+    assert breaks == [50.0]
+
+
+def test_a_skewed_distribution_is_why_quantile_is_the_default():
+    """Equal-interval on skewed data leaves almost everything in the first class — a map of one
+    colour. Quantile spreads the same data across all of them. This is not a preference: it is the
+    reason the default is what it is, and a change to that default should argue with this test.
+
+    The data below is the shape most spatial attributes have: many small values, a few large ones.
+    """
+    skewed = list(range(1, 91)) + [5000, 6000, 7000, 8000, 9000, 10000]
+
+    equal = sym.classify(skewed, "equal", 4)
+    quant = sym.classify(skewed, "quantile", 4)
+
+    def counts(breaks):
+        edges = [float("-inf"), *breaks, float("inf")]
+        return [sum(1 for v in skewed if edges[i] <= v < edges[i + 1]) for i in range(len(edges) - 1)]
+
+    # Equal interval: one class holds nearly everything — a map of essentially one colour.
+    assert max(counts(equal)) > 0.8 * len(skewed)
+    # Quantile: every class is populated, and none dominates.
+    assert all(c > 0 for c in counts(quant))
+    assert max(counts(quant)) < 0.5 * len(skewed)
+
+
+def test_a_column_that_is_mostly_one_value_yields_FEWER_classes_not_empty_ones():
+    """The real case behind this: a column that is 90% one value — a default, a flag, an unfilled
+    field. Every quantile break then lands ON that value, i.e. on the minimum, and a break equal to
+    the minimum leaves the lowest class EMPTY: a legend entry for a colour that appears nowhere,
+    which reads to the viewer as missing data.
+
+    Honest degradation — fewer classes — beats a legend the map does not match."""
+    breaks = sym.classify([1] * 90 + [1000] * 10, "quantile", 4)
+    assert all(b > 1 for b in breaks), "a break at the minimum leaves an empty first class"
+
+    classes = sym.build_classes([1] * 90 + [1000] * 10, "quantile", 4, "viridis")
+    assert len(classes) < 4
+
+
+def test_ties_collapse_classes_rather_than_producing_an_invalid_step():
+    """MapLibre requires strictly ascending `step` stops. A column with many repeated values makes
+    two quantile breaks land on the same number; emitting both produces a style MapLibre REJECTS —
+    i.e. a blank layer. Fewer classes than requested is a correct map."""
+    breaks = sym.classify([5] * 50 + [9] * 50, "quantile", 5)
+    assert breaks == sorted(set(breaks))
+    assert len(breaks) < 4
+
+
+def test_too_few_distinct_values_for_the_requested_classes():
+    assert sym.classify([1, 1, 1], "quantile", 5) == []
+    assert sym.classify([], "quantile", 5) == []
+    assert sym.classify([7], "equal", 3) == []
+
+
+def test_jenks_finds_the_gap_in_clustered_data():
+    """Natural breaks should land IN the gap, not inside a cluster."""
+    breaks = sym.classify([1, 2, 3, 4, 100, 101, 102, 103], "jenks", 2)
+    assert len(breaks) == 1
+    assert 4 < breaks[0] < 100
+
+
+# ── Classes and legends ──────────────────────────────────────────────────────────────────────────
+
+def test_the_outer_edges_of_the_class_list_are_OPEN():
+    """The lowest class has no minimum and the highest no maximum, so a feature outside the sampled
+    range still draws. A layer gains rows after it is styled; closed outer edges would make the
+    newest data invisible while the map still looked fine — the worst failure mode available."""
+    classes = sym.build_classes(list(range(1, 101)), "quantile", 4, "viridis")
+    assert classes[0]["min"] is None
+    assert classes[-1]["max"] is None
+    assert all(c["color"] for c in classes)
+
+
+def test_classes_are_contiguous():
+    """Each class starts where the previous one ended — no gap a value could fall through."""
+    classes = sym.build_classes(list(range(1, 101)), "quantile", 5, "viridis")
+    for a, b in zip(classes, classes[1:]):
+        assert a["max"] == b["min"]
+
+
+def test_a_legend_describes_the_open_edges_honestly():
+    classes = sym.build_classes(list(range(1, 101)), "quantile", 3, "viridis")
+    labels = [e["label"] for e in sym.legend_entries({"color_mode": "graduated", "classes": classes})]
+    assert labels[0].startswith("<")
+    assert labels[-1].startswith("≥")
+
+
+def test_a_categorized_legend_ends_with_Other():
+    """The `match` expression has a fallback colour, so the legend must show it — otherwise every
+    value outside the listed categories is drawn in a colour the legend does not explain."""
+    style = {"color_mode": "categorized",
+             "categories": [{"value": "a", "color": "#111111"}, {"value": "b", "color": "#222222"}]}
+    labels = [e["label"] for e in sym.legend_entries(style)]
+    assert labels == ["a", "b", "Other"]
+
+
+def test_a_single_symbol_layer_has_no_legend():
+    assert sym.legend_entries({"color_mode": "single", "color": "#ff0000"}) == []
+
+
+def test_categories_use_a_QUALITATIVE_palette():
+    """A sequential ramp on unordered values implies a ranking that is not in the data — the most
+    common misleading map there is. Distinct hues, not shades of one."""
+    cats = sym.build_categories(["oak", "pine", "birch"])
+    colors = [c["color"] for c in cats]
+    assert len(set(colors)) == 3
+    assert colors[0] in sym.CATEGORY_COLORS
+
+
+# ── Expressions ──────────────────────────────────────────────────────────────────────────────────
+
+def test_single_mode_is_a_plain_string():
+    """The existing single-symbol path must not become an expression: portals styled before this
+    feature existed have to keep rendering byte-identically."""
+    assert sym.color_expression({"color": "#ff0000"}) == "#ff0000"
+    assert sym.color_expression({}) == sym.DEFAULT_COLOR
+
+
+def test_graduated_builds_a_step_expression():
+    style = {"color": "#000000", "color_mode": "graduated", "color_field": "pop",
+             "classes": [{"min": None, "max": 10, "color": "#aaa"},
+                         {"min": 10, "max": 20, "color": "#bbb"},
+                         {"min": 20, "max": None, "color": "#ccc"}]}
+    assert sym.color_expression(style) == [
+        "step", ["to-number", ["get", "pop"]], "#aaa", 10, "#bbb", 20, "#ccc"]
+
+
+def test_categorized_builds_a_match_expression_with_a_fallback():
+    style = {"color": "#000000", "color_mode": "categorized", "color_field": "kind",
+             "categories": [{"value": "oak", "color": "#0a0"}, {"value": "pine", "color": "#00a"}],
+             "other_color": "#999"}
+    assert sym.color_expression(style) == [
+        "match", ["to-string", ["get", "kind"]], "oak", "#0a0", "pine", "#00a", "#999"]
+
+
+def test_numeric_categories_are_matched_as_strings():
+    """The input is coerced with `to-string`, so a numeric label must be a string too — otherwise
+    the category never equals its own value and every feature falls to the fallback colour."""
+    style = {"color_mode": "categorized", "color_field": "zone",
+             "categories": [{"value": 3, "color": "#0a0"}]}
+    expr = sym.color_expression(style)
+    assert expr[2] == "3" and isinstance(expr[2], str)
+
+
+@pytest.mark.parametrize("style", [
+    {"color_mode": "graduated", "color_field": "pop"},                       # no classes yet
+    {"color_mode": "graduated", "classes": [{"min": None, "color": "#a"}]},  # no field yet
+    {"color_mode": "categorized", "color_field": "k", "categories": []},
+    {"color_mode": "graduated", "color_field": "pop",
+     "classes": [{"min": None, "max": None, "color": "#aaa"}]},              # one class = no stop
+])
+def test_an_incomplete_configuration_falls_back_to_the_plain_colour(style):
+    """Styling is edited LIVE, so every intermediate state is something someone is looking at. A
+    half-configured mode must render the layer, never blank it."""
+    assert sym.color_expression({**style, "color": "#123456"}) == "#123456"
+
+
+def test_proportional_size_interpolates():
+    style = {"size_mode": "proportional", "size_field": "area", "size_stops": [[0, 2], [100, 20]]}
+    assert sym.size_expression(style, 5) == [
+        "interpolate", ["linear"], ["to-number", ["get", "area"]], 0, 2, 100, 20]
+
+
+def test_size_stops_are_sorted_and_deduped():
+    """MapLibre requires strictly ascending stop inputs; a user dragging stops around produces
+    neither order nor uniqueness."""
+    style = {"size_mode": "proportional", "size_field": "a",
+             "size_stops": [[100, 20], [0, 2], [100, 9]]}
+    expr = sym.size_expression(style, 5)
+    assert expr[3:] == [0, 2, 100, 20]
+
+
+def test_fixed_size_stays_a_number():
+    assert sym.size_expression({}, 7) == 7
+    assert sym.size_expression({"size_mode": "proportional", "size_field": "a"}, 7) == 7
+
+
+# ── 3D extrusion ─────────────────────────────────────────────────────────────────────────────────
+
+def test_extrusion_height_comes_from_a_field_and_is_scaled():
+    paint = sym.extrusion_paint(
+        {"extrusion": {"enabled": True, "field": "levels", "scale": 3}}, 1.0)
+    assert paint["fill-extrusion-height"] == ["*", ["to-number", ["get", "levels"], 0], 3]
+
+
+def test_a_missing_or_bad_height_becomes_zero_not_a_broken_layer():
+    """`to-number` with an explicit fallback: one row with a null or a text height must not make
+    MapLibre discard the expression and flatten the whole layer."""
+    expr = sym.extrusion_paint({"extrusion": {"enabled": True, "field": "h"}}, 1.0)["fill-extrusion-height"]
+    assert expr[1] == ["to-number", ["get", "h"], 0]
+
+
+def test_extrusion_colour_can_still_be_data_driven():
+    """Height by one field, colour by another is a normal thing to want — the extrusion must not
+    quietly drop the graduated colour."""
+    style = {"color_mode": "graduated", "color_field": "pop",
+             "classes": [{"min": None, "max": 10, "color": "#aaa"}, {"min": 10, "color": "#bbb"}],
+             "extrusion": {"enabled": True, "field": "h"}}
+    assert sym.extrusion_paint(style, 1.0)["fill-extrusion-color"][0] == "step"
+
+
+def test_extrusion_opacity_respects_the_layer_opacity():
+    paint = sym.extrusion_paint({"extrusion": {"enabled": True, "field": "h", "opacity": 0.5}}, 0.5)
+    assert paint["fill-extrusion-opacity"] == 0.25
+
+
+def test_extrusion_is_off_unless_it_has_something_to_extrude_by():
+    assert not sym.is_extruded({})
+    assert not sym.is_extruded({"extrusion": {"enabled": True}})       # enabled but no field
+    assert not sym.is_extruded({"extrusion": {"field": "h"}})          # field but not enabled
+    assert sym.is_extruded({"extrusion": {"enabled": True, "field": "h"}})
+
+
+# ── Point markers: shapes AND per-feature colour ─────────────────────────────────────────────────
+# The first implementation switched a classified point layer to a `circle`, losing the marker shape.
+# Rejected outright: "I should be able to choose a different marker and still use the graduated
+# colour." `icon-image` is data-driven in MapLibre, so the style carries one image per CLASS and lets
+# MapLibre pick. These tests exist to stop anything sliding back to the lossy version.
+
+def test_a_classified_point_layer_KEEPS_its_marker_shape():
+    style = {"marker": "star", "radius": 6, "color": "#000000",
+             "color_mode": "graduated", "color_field": "pop",
+             "classes": [{"min": None, "max": 10, "color": "#aaaaaa"},
+                         {"min": 10, "max": None, "color": "#bbbbbb"}]}
+    expr = sym.icon_image_expression(style)
+    assert expr[0] == "step"
+    ids = [x for x in expr if isinstance(x, str) and x.startswith("gd-pt-")]
+    assert len(ids) == 2
+    # Every image is the CHOSEN shape at the chosen size — only the colour differs per class.
+    assert all(i.startswith("gd-pt-star-") and i.endswith("-6") for i in ids)
+
+
+def test_the_icon_expression_mirrors_the_colour_expression_stop_for_stop():
+    """Same field, same breaks, same order — otherwise a feature could take its colour from one
+    classification and its icon from another."""
+    style = {"marker": "square", "color_mode": "graduated", "color_field": "pop",
+             "classes": [{"min": None, "max": 10, "color": "#aaaaaa"},
+                         {"min": 10, "max": 20, "color": "#bbbbbb"},
+                         {"min": 20, "max": None, "color": "#cccccc"}]}
+    colors = sym.color_expression(style)
+    icons = sym.icon_image_expression(style)
+    assert colors[1] == icons[1]                    # same input expression
+    assert colors[3::2][:2] == icons[3::2][:2]      # same break values
+
+
+def test_categorized_points_get_an_image_for_the_fallback_too():
+    """The `match` has an "other" colour, so there must be an "other" ICON — otherwise every value
+    outside the listed categories renders with no marker at all."""
+    style = {"marker": "diamond", "color_mode": "categorized", "color_field": "kind",
+             "categories": [{"value": "oak", "color": "#0a0a0a"}], "other_color": "#999999"}
+    assert sym.icon_image_expression(style)[-1] == sym.marker_image_id("diamond", "#999999", 5)
+
+
+def test_marker_images_lists_every_bitmap_the_style_needs():
+    """Baked into the published style so the runtime creates them up front — discovering them one
+    `styleimagemissing` at a time makes markers pop in as each class scrolls into view."""
+    style = {"marker": "circle", "color": "#000000", "color_mode": "categorized",
+             "color_field": "k", "other_color": "#999999",
+             "categories": [{"value": "a", "color": "#111111"}, {"value": "b", "color": "#222222"}]}
+    images = sym.marker_images(style)
+    ids = [i["id"] for i in images]
+    assert len(ids) == len(set(ids)), "a duplicate would be generated twice for nothing"
+    assert sym.marker_image_id("circle", "#111111", 5) in ids
+    assert sym.marker_image_id("circle", "#999999", 5) in ids       # the fallback
+    assert all(i["shape"] == "circle" for i in images)
+
+
+def test_a_marker_id_round_trips_its_parameters():
+    """The id IS the spec: the runtime rebuilds a missing image from it alone, which is what lets
+    one layer own many icons. Twin of parseMarkerImageId in lib/symbology.js."""
+    assert sym.marker_image_id("star", "#AABBCC", 7) == "gd-pt-star-aabbcc-7"
+    assert sym.marker_image_id("circle", "3b82f6", 5.5) == "gd-pt-circle-3b82f6-5.5"
+
+
+def test_icon_size_is_a_multiplier_of_the_bitmap():
+    """The bitmap is drawn at the layer's base radius, so a fixed-size layer is exactly 1 and
+    proportional size divides through — arithmetic MapLibre does inside the expression, which keeps
+    ONE classification rather than pre-scaled stops."""
+    assert sym.icon_size_expression({"radius": 6}) == 1
+    expr = sym.icon_size_expression({"radius": 6, "size_mode": "proportional",
+                                     "size_field": "a", "size_stops": [[0, 3], [10, 12]]})
+    assert expr[0] == "/" and expr[2] == 6.0
+
+
+def test_data_driven_detection_still_reports_per_feature_variation():
+    """No longer picks a renderer — points keep their symbol layer — but it still answers "does
+    anything vary per feature?" for callers that need to know."""
+    assert not sym.is_data_driven({"color": "#f00", "marker": "star"})
+    assert sym.is_data_driven({"color_mode": "graduated", "color_field": "p",
+                               "classes": [{"min": None, "color": "#a"}]})
+    assert not sym.is_data_driven({"color_mode": "graduated", "color_field": "p"})
+
+
+# ── Ramps ────────────────────────────────────────────────────────────────────────────────────────
+
+def test_a_ramp_yields_the_requested_number_of_distinct_colours():
+    for n in (3, 5, 7, 9):
+        colors = sym.ramp_colors("viridis", n)
+        assert len(colors) == n
+        assert colors[0] != colors[-1]
+
+
+def test_an_unknown_ramp_falls_back_rather_than_failing():
+    assert sym.ramp_colors("no-such-ramp", 3) == sym.ramp_colors("viridis", 3)
