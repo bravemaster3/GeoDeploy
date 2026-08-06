@@ -35,9 +35,20 @@
           <div v-if="updates.loading && !updates.data" class="text-sm text-muted-foreground/70">Checking for updates…</div>
           <template v-else-if="updates.data">
             <div class="text-sm font-medium">
+              <!-- FIRST, always: whether we could reach GitHub at all. It outranks every conclusion
+                   below, because those are drawn from data we may not have — and a channel line
+                   printed over a failed check reads as a confident answer to a question nobody
+                   managed to ask. (It did exactly that: an instance pinned to a branch showed
+                   "Pinned to … — not tracking main" while every version lookup had failed.) -->
+              <span v-if="updates.data.status === 'offline'" class="text-amber-400">
+                Couldn't reach GitHub — version information is unavailable
+                <span v-if="updates.data.current_ref" class="text-muted-foreground/80">
+                  (following {{ updates.data.current_ref }})
+                </span>
+              </span>
               <!-- An instance PINNED to a release is judged against releases: being many commits
                    behind the development branch is the state its operator chose, not a problem. -->
-              <template v-if="updates.data.channel === 'release'">
+              <template v-else-if="updates.data.channel === 'release'">
                 <span v-if="updates.data.release_update_available" class="text-amber-400">
                   New release available — {{ updates.data.latest_release?.tag }}
                 </span>
