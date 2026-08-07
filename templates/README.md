@@ -202,6 +202,11 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-07b (`.layer-actions-row` reads as a TOOLBAR, not floating buttons. With no folders the
+`.la-left` group is empty, so `justify-content: space-between` pushed Reset-styling and About to the
+far right with nothing anchoring them — they hovered over the list rather than belonging to it. A
+bottom rule ties them to the list they act on; `min-height` keeps that rule in the same place whether
+or not the folder expand/collapse buttons are present.)
 2026-08-06d (**first-paint loader · tilt · brighter space · the list scrolls**. `#gd-loading` lives in
 `shared/layout.html`, not in portal.js — its job is to cover the window from the FIRST paint, and an
 element created once the runtime has parsed appears after the thing it hides. portal.js's `loading`

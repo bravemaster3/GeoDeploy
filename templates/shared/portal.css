@@ -168,8 +168,18 @@
     }
     .gd-float-resize:hover { opacity: 1; }
 
-    /* Layer-list actions row (setupLayerSearch): expand/collapse-all · Reset styling · About. */
-    .layer-actions-row { justify-content: space-between; }
+    /* Layer-list actions row (setupLayerSearch): expand/collapse-all · Reset styling · About.
+       With no FOLDERS the left group is empty, so `space-between` pushed the two icons to the far
+       right with nothing to anchor them — they read as buttons floating over the list rather than a
+       toolbar belonging to it. A rule under the row ties them to the list they act on, and the
+       min-height keeps that rule in the same place whether or not the folder buttons are present. */
+    .layer-actions-row {
+      justify-content: space-between;
+      min-height: 26px;
+      padding-bottom: 5px;
+      margin-bottom: 7px;
+      border-bottom: 1px solid var(--border);
+    }
     .layer-actions-row .la-left, .layer-actions-row .la-right { display: flex; align-items: center; gap: 3px; }
     .la-icon {
       width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
