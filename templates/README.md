@@ -83,7 +83,10 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
     it). Doubly guarded: a cached MapLibre v4 bundle has no `get/setProjection`, and every portal saved
     before this has no `projection` key — both fall through to the map default (mercator), i.e. the
     previous behaviour. The editor spreads the reported camera WHOLE (`{ ...lastView }`), so the shape
-    is owned by `portal.js::currentViewObj` alone.
+    is owned by `portal.js::currentViewObj` alone. **Tilt joined it (2026-08-07):** `setupEditMode`
+    takes a `tilt` message (`map.easeTo` between 0 and `TILT_PITCH`), the editor's "Start tilted"
+    checkbox. Unlike `projection`, no explicit `post` is needed — `easeTo` fires `moveend`, which
+    already reports the camera, and `syncTilt` keeps the on-map tilt button in step.
   - **Catalog runtime (V-14, 2026-07-30):** when the archetype is `catalog`, `setupCatalog()` fills the
     hidden `#catalog-panel` (a sibling of `#map-wrap` in `shared/layout.html`, mirroring how
     `#story-panel` stays `display:none` for other archetypes) with a search box, a **facet rail**
@@ -202,6 +205,10 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-07d (**"Start tilted" is now an authoring choice, not a right-drag.** `setupEditMode` gained a
+`tilt` message that eases the preview between 0 and `TILT_PITCH` (60°); the editor checkbox mirrors
+the on-map `TiltControl`, and the resulting pitch is pinned with the rest of the camera. Published
+portals needed no change — `initial_view.pitch` was already honoured on load.)
 2026-08-07c (**Download-by-area hit-tested the SCREEN, so it found nothing on the globe.**
 `openDownloadDialog` decided which layers to offer with `queryRenderedFeatures(pixBox, …)` —
 `pixBox` being an axis-aligned SCREEN rectangle between the two projected drag corners. On a globe

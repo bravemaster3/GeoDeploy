@@ -63,6 +63,12 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 - Raster layer `bbox` from the API is in source CRS (not lon/lat) — using it directly for `fitToBbox` can throw "Invalid LngLat" (see tasks/raster notes). Prefer zooming via vector bounds or TiTiler TileJSON.
 
 ## Last updated
+2026-08-07 (`PortalEditor`: **"Start tilted"** beside "Start in 3D globe" in the Layout panel.
+`initial_view` always carried `pitch`, but the only way to set it was right-dragging the preview —
+the same invisibility the globe toggle fixed. `setTilt` posts `{type:'tilt'}` to the preview iframe
+and optimistically updates `lastView.pitch`, because the iframe eases over 550 ms and the box would
+otherwise lag the click. `startsTilted` tests `pitch >= 5` (portal.js `TILT_ON_AT`), not `=== 60`, so
+a camera dragged to another angle still reads as tilted.)
 2026-08-06e (`DataManager`: page size 20 → 10, and a search with hits FORCE-OPENS a collapsed
 section — `sectionOpen` is the effective state (`!collapsed || search-with-hits`), display only, so
 the persisted preference survives and clearing the box collapses it again. A search that matches

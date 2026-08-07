@@ -25,6 +25,10 @@ containing an extruded layer open tilted, because straight down a 3D block and a
 same shape — and there is now a **tilt button** beside the zoom controls, so you can look at 3D from
 the side without knowing that right-dragging the map does it.
 
+Tilt is also an authoring choice: **Start tilted**, beside *Start in 3D globe* in the portal editor's
+Layout panel, decides whether visitors open in perspective or looking straight down. The pinned start
+view always carried a pitch — until now the only way to set one was to right-drag the preview.
+
 The bar footprint is sized from the layer's own extent rather than a fixed number of metres. A fixed
 default is right at exactly one scale: a few hundred points spread across the world would otherwise
 draw bars a few thousandths of a pixel wide — rendered perfectly, and invisible.
