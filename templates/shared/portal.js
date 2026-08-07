@@ -386,6 +386,22 @@
    * Toggled OFF for mercator: a flat map covering the whole viewport would never show it, and a
    * star texture behind a partially-transparent basemap would tint it.
    */
+  /**
+   * Apply the sky/starfield from the map's CURRENT projection, whatever set it.
+   *
+   * `applyProjection` is only one of the ways a portal reaches globe mode — MapLibre's own globe
+   * control is another, and it changes the projection directly. Reading the map instead of tracking
+   * our own intent means every route is covered, including ones added later.
+   */
+  function syncSpace() {
+    let type = null;
+    try {
+      const p = map.getProjection && map.getProjection();
+      type = p && (typeof p === 'string' ? p : p.type);
+    } catch (e) { return; }        // older maplibre with no getProjection — leave it alone
+    applySpace(type === 'globe');
+  }
+
   function applySpace(on) {
     var el = map.getContainer && map.getContainer();
     if (el) el.classList.toggle('gd-space', !!on);
@@ -1242,7 +1258,22 @@
     if (LAYOUT.panels.basemap) setupBasemaps();  // adds the basemap/home/zoom-all/draw-zoom/tools cluster (CTRL_POS)
     // Globe/2D projection toggle (MapLibre v5 native — no Cesium, no token). Guarded so a
     // cached v4 script can't crash the portal.
-    if (maplibregl.GlobeControl) map.addControl(new maplibregl.GlobeControl(), CTRL_POS);
+    if (maplibregl.GlobeControl) {
+      map.addControl(new maplibregl.GlobeControl(), CTRL_POS);
+      // MapLibre's own globe button flips the projection ITSELF — it never goes through
+      // applyProjection, which is the only thing that was telling applySpace about it. So switching
+      // to the globe with that button gave a planet on a flat black panel: the sky and the starfield
+      // are ours, and nothing had told them the projection changed. Sync from the map's ACTUAL
+      // projection rather than from whatever we last set, so any route into globe mode is covered.
+      try { syncSpace(); } catch (e) { /* decoration only */ }
+      try { map.on('projectiontransition', syncSpace); } catch (e) { /* not in older maplibre */ }
+      // The event above is not in every v5 build, so also watch the button itself. Deferred a tick
+      // because the control sets the projection after the click handler it registered first.
+      setTimeout(function () {
+        const btn = document.querySelector('.maplibregl-ctrl-globe, button.maplibregl-ctrl-globe-enabled');
+        if (btn) btn.addEventListener('click', function () { setTimeout(syncSpace, 0); });
+      }, 0);
+    }
     // `visualizePitch` makes the compass a TILT handle as well as a rotate one (drag it up/down) and
     // shows the current pitch on the needle. Without it the only way to tilt is right-drag or
     // ctrl-drag, which nothing on the page advertises — so a 3D portal looked flat and unfixable.

@@ -68,9 +68,15 @@ def test_the_function_validates_its_identifiers_before_using_them():
 
 def test_the_buffer_is_in_METRES_not_degrees():
     """A degree buffer is a different real size at every latitude — visibly wrong on any map wider
-    than a country, and the one thing a "30 m pillar" must not be."""
+    than a country, and the one thing a "30 m pillar" must not be.
+
+    This used to assert the buffer ran on `geography`. It no longer does (that wrapped at the
+    antimeridian), and the assertion survived the change only because the word `geography` still
+    appears in the column-type guard — a test that passed for the wrong reason. It now checks the
+    property that actually matters: the radius is corrected for Mercator's latitude stretch.
+    """
     sql = pillars.CREATE_SQL
-    assert "::geography" in sql
+    assert "cos(radians(" in sql, "no latitude correction: bars would be the wrong ground size"
     assert "ST_Transform" in sql
 
 
@@ -301,3 +307,63 @@ def test_the_geometry_type_is_resolved_from_the_DATA():
     # Nothing recognisable (empty table, curves, collections) → keep what the file declared.
     assert _geom_type_from_postgis(set()) is None
     assert _geom_type_from_postgis({"ST_CircularString", "ST_GeometryCollection"}) is None
+
+
+@pytest.mark.asyncio
+async def test_a_bar_near_the_antimeridian_does_not_wrap_the_planet(pg):
+    """`ST_Buffer(geography)` returns lon/lat, so a point at 179.9°E buffered by 100 km comes back
+    as a ring running from -179.76° to 179.90° — as a planar polygon that is a band around the whole
+    world at that latitude, not a circle. Any dataset with a feature near ±180 (Fiji, Kiribati) drew
+    a stripe across the globe. Buffering in Mercator has no wrap to get wrong.
+    """
+    await pg.execute("CREATE SCHEMA IF NOT EXISTS gd_am_t")
+    try:
+        await pg.execute("CREATE TABLE gd_am_t.p (id serial primary key, h double precision, "
+                         "geom geometry(Point, 4326))")
+        await pg.execute("INSERT INTO gd_am_t.p (h, geom) VALUES "
+                         "(50, ST_SetSRID(ST_MakePoint(179.9, 0), 4326))")
+
+        # The generated footprint, straight from the same expression the function uses.
+        width_m = await pg.fetchval(
+            "SELECT ST_XMax(g) - ST_XMin(g) FROM (SELECT ST_Buffer(ST_Transform(geom, 3857), "
+            "100000 / cos(radians(least(abs(ST_Y(geom)), 85.0))), 4) g FROM gd_am_t.p) s")
+        # 2 x 100 km, not most of the 40 000 km world.
+        assert 150_000 < width_m < 250_000, f"the bar spans {width_m / 1000:.0f} km"
+
+        q = '{"schema":"gd_am_t","table":"p","geom":"geom","radius":100000}'
+        assert await pg.fetchval("SELECT geodeploy.point_pillars(2, 3, 2, $1::json)", q)
+    finally:
+        await pg.execute("DROP SCHEMA gd_am_t CASCADE")
+
+
+def test_the_buffer_is_still_sized_in_METRES_on_the_ground():
+    """Mercator stretches distance by 1/cos(latitude), so the radius is divided by cos(lat) to put
+    the GROUND size back — the property the geography buffer had and the reason it was used."""
+    # COMMENTS STRIPPED FIRST. The comment above this buffer quotes the old geography form to
+    # explain why it was abandoned, and a naive substring check matches the explanation instead of
+    # the code — a test that passes or fails on prose is worse than no test.
+    lines = [ln for ln in pillars.CREATE_SQL.splitlines() if not ln.strip().startswith("--")]
+    compact = "".join(" ".join(lines).split())
+    assert "cos(radians(" in compact
+    assert "ST_Buffer(ST_Transform(t.%1$I::geometry,3857)" in compact
+    # The geography BUFFER is what wrapped at the dateline. (`geography` still appears in the
+    # column-type guard above, which is why this checks the buffer call and not the whole file.)
+    assert "::geography," not in compact
+
+
+def test_no_stray_percent_signs_in_the_dynamic_sql_template():
+    """Every "%" inside the format() template must be a real positional specifier.
+
+    The template is one big format() argument, so ANY other per-cent sign — including one inside a
+    comment — is read as a format specifier and the function fails when a tile is requested, not
+    when it is created. That is a nasty failure mode: `CREATE FUNCTION` succeeds, the deploy looks
+    clean, and every tile 500s. It happened twice while writing this file, the second time in a
+    comment warning about the first.
+    """
+    import re
+
+    body = pillars.CREATE_SQL.split("$f$")[1]
+    # Valid forms only: %1$I, %2$L, %7$s …
+    for m in re.finditer(r"%(.{0,4})", body):
+        assert re.match(r"^\d+\$[ILs]", m.group(1)), \
+            f"stray per-cent sign in the template near: {m.group(0)!r}"

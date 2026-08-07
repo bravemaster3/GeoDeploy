@@ -118,18 +118,44 @@ BEGIN
   EXECUTE format($f$
     WITH src AS (
       SELECT
-        -- Buffer in METRES via geography, then back to Web Mercator for the tile. A degree buffer
-        -- would be a different real size at every latitude — visibly wrong on any map wider than a
-        -- country, and the one thing a "30 m pillar" must not be.
-        ST_Transform(
-          ST_Buffer(ST_Transform(t.%1$I::geometry, 4326)::geography,
-                    (%2$L)::double precision, {QUAD_SEGS})::geometry, 3857) AS pgeom%5$s
+        -- Buffer in WEB MERCATOR, with the radius divided by cos(latitude).
+        --
+        -- The obvious implementation — `ST_Buffer(geom::geography, radius)` — is correct everywhere
+        -- except across the antimeridian, and there it fails spectacularly. A geography buffer
+        -- returns lon/lat, so a point at 179.9°E buffered by 100 km comes back as a ring running
+        -- from -179.76° to 179.90°: as a planar polygon that is not a circle at the dateline, it is
+        -- a band wrapping the ENTIRE planet at that latitude. Any dataset with a feature near ±180
+        -- (Fiji, Kiribati, NZ's outer islands) drew a stripe right around the globe.
+        --
+        -- In Mercator there is no wrap to get wrong: the buffer is planar, coordinates simply run
+        -- past the world edge, and ST_AsMVTGeom clips them to the tile. The worst case becomes a bar
+        -- cut off at the edge instead of a stripe around the world.
+        --
+        -- Mercator distances are stretched by 1/cos(latitude), so dividing by cos(lat) puts the
+        -- GROUND size back to `radius` metres — the same real-world size the geography buffer gave,
+        -- which is the property that matters (a degree buffer would be a different size at every
+        -- latitude). Clamped at 85° because cos → 0 at the poles, where Mercator has no meaning
+        -- anyway.
+        ST_Buffer(
+          ST_Transform(t.%1$I::geometry, 3857),
+          (%2$L)::double precision
+            / cos(radians(least(abs(ST_Y(ST_Transform(t.%1$I::geometry, 4326))), 85.0))),
+          {QUAD_SEGS}) AS pgeom%5$s
       FROM %3$I.%4$I t
       WHERE t.%1$I IS NOT NULL
         AND t.%1$I::geometry && ST_Transform((%7$L)::geometry, %8$s)
     ),
     tile AS (
-      SELECT ST_AsMVTGeom(pgeom, (%7$L)::geometry, 4096, 64, true) AS mvtgeom%6$s
+      -- A 256-unit clip margin (of 4096), not the usual 64. A bar is generated at a fixed size in
+      -- METRES, so at low zoom it can be a large fraction of a tile — and one straddling a tile
+      -- boundary gets cut, leaving a bar with its side sliced open. 64 units is about a sixtieth of
+      -- a tile, smaller than the symbol itself once you are zoomed out; 256 gives it room. Tiles
+      -- grow slightly, and only where geometry actually crosses an edge.
+      --
+      -- NOTE: no per-cent signs anywhere in this template, comments included. The whole string is a
+      -- format() argument, so a stray one is read as a format specifier and the function fails at
+      -- RUNTIME, not at creation — see the module docstring.
+      SELECT ST_AsMVTGeom(pgeom, (%7$L)::geometry, 4096, 256, true) AS mvtgeom%6$s
       FROM src
     )
     SELECT ST_AsMVT(tile, 'pillars', 4096, 'mvtgeom') FROM tile WHERE mvtgeom IS NOT NULL
