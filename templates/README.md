@@ -205,6 +205,20 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-07g (**the catalog's "On map" list shows real symbology, and the phone layout stops starving
+the results.** The list is a catalog portal's ONLY legend (the layer switcher is a separate panel),
+and each row carried a 7px dot coloured by KIND — so three point layers on screen were three
+identical blue dots. `activeSwatch(ref, rec)` now resolves the row through the same `legendSwatch`
+the layer list uses, handling all three cases: MapLibre layers (colour/geometry/dash/marker from the
+style), **deck/GeoParquet layers checked FIRST** (they have no style layer to find, only a
+`DECK_LAYERS` entry), and rasters. **Rasters deliberately do NOT use `legendSwatch`** — its raster
+branch is `geomIcon('raster')`, a grid, which at 18px in a 200px panel was the largest thing in the
+row and identical for every raster. They get a colour-RAMP chip from `LEGEND_GRADIENTS` instead,
+which is what actually tells two rasters apart; hillshade reads grey, which it is. CSS: `.cat-active-sw`
+(fixed 18px box so names stay aligned) + `.cat-active-ramp`, replacing `.cat-active-dot`.
+**Phone catalog (portal.css ≤640px):** filters now sit BESIDE the results (rail 42%) instead of a
+22vh strip above them — the old stack split the one scarce axis three ways and the result list, the
+point of the page, got the smallest share. Tablet/desktop rules untouched.)
 2026-08-07f (**the raster popover now OPENS showing what is on the map.** New `effectiveHillshade` /
 `effectiveZfactor` / `effectiveColormap` / `effectiveRescale` beside `effectiveBidx`: viewer session
 state first, else the params baked into the tile URL. Only `bidx` did this, so a portal published

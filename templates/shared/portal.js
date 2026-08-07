@@ -3986,6 +3986,46 @@
     records.forEach(function (r) { const ref = refOf(r); if (ref) byRef[ref] = r; });
 
     const $active = document.createElement('div');
+    /**
+     * The "on map" row's swatch: the layer's ACTUAL symbology, not a dot coloured by kind.
+     *
+     * This list is the only legend a catalog portal has — the layer switcher is a different panel —
+     * and a row saying "vector" told you nothing about which of three point layers on screen was
+     * which. It resolves through the same `legendSwatch` the layer list uses, so the two agree.
+     *
+     * RASTERS get a palette chip instead of `legendSwatch`'s raster icon. That icon is a grid, and
+     * at this size in a 200px panel it is both the largest thing in the row and the least
+     * informative — every raster gets an identical square. The colour ramp is what actually
+     * distinguishes them, and it fits in the same space. Hillshade reads as grey, which it is.
+     */
+    function activeSwatch(ref, rec) {
+      const parts = String(ref).split(':'), kind = parts[0], lid = parts[1];
+      if (kind === 'raster') {
+        const l = (STYLE.layers || []).find(function (x) {
+          return x.metadata && x.metadata['geodeploy:type'] === 'raster'
+            && String(x.metadata['geodeploy:layer_id']) === String(lid);
+        });
+        const src = l && l.source;
+        const cmap = src ? (effectiveHillshade(src) ? 'gray' : effectiveColormap(src)) : '';
+        const grad = LEGEND_GRADIENTS[cmap] || LEGEND_GRADIENTS.gray;
+        return '<span class="cat-active-sw cat-active-ramp" style="background:' + grad + '"></span>';
+      }
+      // GeoParquet layers live in deckState, not the style — check them before the MapLibre layers,
+      // since a deck layer has no style layer to find.
+      const d = (typeof DECK_LAYERS !== 'undefined' ? DECK_LAYERS : [])
+        .find(function (x) { return String(x.layer_id) === String(lid); });
+      if (d) return '<span class="cat-active-sw">' + legendSwatch(d.geometry || 'point', d.color, null, 'circle') + '</span>';
+      const layer = (STYLE.layers || []).find(function (x) {
+        const m = x.metadata || {};
+        return layerRefType(x) === kind && String(m['geodeploy:layer_id']) === String(lid);
+      });
+      if (!layer) return '<span class="cat-active-sw"></span>';
+      const m = layer.metadata || {};
+      return '<span class="cat-active-sw">' +
+        legendSwatch(m['geodeploy:geometry'] || 'point', getLayerColor(layer),
+                     dashKind(layer.paint), m['geodeploy:marker'] || 'circle') + '</span>';
+    }
+
     $active.id = 'cat-active';
     $active.style.display = 'none';
     (document.getElementById('map-wrap') || document.body).appendChild($active);
@@ -4016,7 +4056,7 @@
           const r = byRef[ref];
           const canZoom = !!(r.bbox && r.bbox.length === 4);
           return '<div class="cat-active-row" data-ref="' + ref + '">' +
-            '<span class="cat-active-dot cat-b-' + (r.kind === 'raster' ? 'raster' : 'vector') + '"></span>' +
+            activeSwatch(ref, r) +
             '<span class="cat-active-t" title="' + escHtml(r.name) + '">' + escHtml(r.name) + '</span>' +
             (canZoom ? '<button class="cat-active-b" data-act="zoom" title="Zoom to this layer">&#9678;</button>' : '') +
             '<button class="cat-active-b" data-act="off" title="Remove from map">&times;</button>' +

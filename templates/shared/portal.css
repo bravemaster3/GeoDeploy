@@ -1157,7 +1157,20 @@
     }
     .cat-active-row:last-child { border-bottom: none; }
     .cat-active-row:hover { background: var(--surface); }
-    .cat-active-dot { width: 7px; height: 7px; border-radius: 2px; flex-shrink: 0; }
+    /* Was a 7px dot coloured by KIND, which told a visitor nothing about which of three point
+       layers on screen was which. Now it carries the layer's real symbology (portal.js
+       ::activeSwatch). Fixed 18px box so the names stay aligned whatever the swatch is. */
+    .cat-active-sw {
+      display: flex; align-items: center; justify-content: center;
+      width: 18px; height: 18px; flex-shrink: 0;
+    }
+    .cat-active-sw svg { display: block; }
+    /* Rasters: the colour RAMP, not legendSwatch's grid icon — at this size the grid was the
+       biggest thing in the row and identical for every raster, so it distinguished nothing. */
+    .cat-active-ramp {
+      width: 18px; height: 10px; border-radius: 2px;
+      border: 1px solid var(--border); box-sizing: border-box;
+    }
     .cat-active-t {
       flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       color: var(--text);
