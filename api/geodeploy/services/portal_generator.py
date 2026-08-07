@@ -606,7 +606,12 @@ def resolve_theme(theme: dict | None) -> dict:
     # Header logo/brand: {kind:'preset'|'custom'|'none', id?, url?}. Custom url is a same-origin asset.
     logo = t.get("logo")
     if isinstance(logo, dict) and logo.get("kind") in ("preset", "custom", "none"):
-        out["logo"] = {"kind": logo["kind"], "id": logo.get("id"), "url": logo.get("url")}
+        # `tint` rides along: a custom logo drawn as a MASK in the accent colour (portal.js
+        # buildHeaderLogo). Rebuilt key-by-key rather than passed through, so anything new here has
+        # to be added deliberately — which is exactly how `tint` would otherwise have been dropped
+        # between the editor and the published page, with no error anywhere.
+        out["logo"] = {"kind": logo["kind"], "id": logo.get("id"), "url": logo.get("url"),
+                       "tint": bool(logo.get("tint"))}
     return out
 
 

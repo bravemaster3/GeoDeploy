@@ -236,7 +236,15 @@
               class="w-8 h-8 rounded border text-xs"
               :class="currentLogo().kind === 'none' ? 'border-primary text-primary bg-primary/10' : 'border-border text-muted-foreground'">∅</button>
           </div>
-          <p class="text-[10px] text-muted-foreground/60 mt-1">Recommended: a small square/wide mark, ~30px tall.</p>
+          <label v-if="currentLogo().kind === 'custom'" class="flex items-center justify-between text-xs mt-2 cursor-pointer">
+            <span class="text-muted-foreground">Tint to theme colour</span>
+            <input type="checkbox" :checked="!!currentLogo().tint" @change="e => setLogoTint(e.target.checked)" />
+          </label>
+          <p class="text-[10px] text-muted-foreground/60 mt-1">
+            {{ currentLogo().kind === 'custom' && currentLogo().tint
+               ? 'The mark is drawn in the accent colour — its own colours are ignored. Best for a monochrome logo.'
+               : 'Recommended: a small square/wide mark, ~30px tall. SVG stays sharp at any size.' }}
+          </p>
         </section>
 
         <!-- Layout section (V-11). The EXPERIENCE picker used to live here, far below Template —
@@ -609,12 +617,19 @@ const LOGO_PRESET_IDS = ['layers', 'globe', 'pin', 'compass']
 function currentLogo() { return theme.value.logo || { kind: 'preset', id: 'layers' } }
 function setLogoPreset(id) { setTheme({ logo: { kind: 'preset', id } }) }
 function setLogoNone() { setTheme({ logo: { kind: 'none' } }) }
+function setLogoTint(on) { setTheme({ logo: Object.assign({}, currentLogo(), { tint: !!on }) }) }
 async function uploadLogo(e) {
   const file = e.target.files && e.target.files[0]
   if (!file || !portal.value) { if (e.target) e.target.value = ''; return }
   try {
     const { data } = await uploadPortalAsset(portal.value.id, file)
-    if (data && data.url) setTheme({ logo: { kind: 'custom', url: data.url } })
+    // Tint defaults ON for SVG. An SVG logo is nearly always a monochrome mark exported dark on
+    // transparent, which is invisible against a dark header — the default that surprises least is
+    // the one that shows up. A raster upload is more often a full-colour picture, so it defaults off.
+    if (data && data.url) {
+      const isSvg = /\.svg($|\?)/i.test(data.url) || file.type === 'image/svg+xml'
+      setTheme({ logo: { kind: 'custom', url: data.url, tint: isSvg } })
+    }
   } catch (err) { /* ignore */ }
   e.target.value = ''
 }

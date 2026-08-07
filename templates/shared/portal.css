@@ -138,6 +138,18 @@
     }
     #gd-header-logo svg { width: 24px; height: 24px; }
     img#gd-header-logo { width: auto; max-height: 30px; max-width: 150px; object-fit: contain; }
+    /* Tinted custom logo: the uploaded file is the MASK and the accent shows through it, so an
+       uploaded mark takes the theme colour like the built-in presets (which are inline SVG using
+       currentColor — an <img> cannot inherit that). Sized like the preset icons rather than the
+       <img>, because a tinted mark reads as an icon, not a picture. `contain` keeps a wide
+       wordmark's aspect ratio; the -webkit- prefix is still required by Safari. */
+    span#gd-header-logo.gd-logo-tint {
+      width: 26px; height: 26px;
+      background-color: var(--accent);
+      -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+      -webkit-mask-position: center;  mask-position: center;
+      -webkit-mask-size: contain;     mask-size: contain;
+    }
 
     /* On-map layer-list toggle — a MapLibre control (ListToggleControl) at the list's top corner, so
        MapLibre gives it the exact button box/radius/shadow/spacing of the other controls. We only size

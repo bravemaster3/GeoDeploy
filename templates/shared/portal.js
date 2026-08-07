@@ -141,7 +141,24 @@
     if (logo.kind === 'none') return;
     let el;
     if (logo.kind === 'custom' && logo.url) {
-      el = document.createElement('img'); el.src = logo.url; el.alt = '';
+      if (logo.tint) {
+        // Tinted: the file becomes a MASK and the accent shows through it, so an uploaded mark
+        // takes the theme colour the way the built-in presets do (those are inline SVG using
+        // `currentColor`, which an <img> cannot inherit). A dark-on-transparent logo — the usual
+        // export — is otherwise invisible against a dark header.
+        //
+        // Masking rather than inlining the SVG is deliberate. Inlining would give real
+        // `currentColor`, but it puts an uploaded document in the page's DOM, where a <script> or
+        // an `on*` attribute inside it would run with the portal's origin. A mask reads only the
+        // alpha channel: nothing in the file is ever parsed as markup. It costs multi-colour —
+        // which tinting was going to flatten anyway — and it works for a transparent PNG too.
+        el = document.createElement('span');
+        const u = 'url("' + String(logo.url).replace(/["\\]/g, '\\$&') + '")';
+        el.style.webkitMaskImage = u; el.style.maskImage = u;
+        el.className = 'gd-logo-tint';
+      } else {
+        el = document.createElement('img'); el.src = logo.url; el.alt = '';
+      }
     } else {
       el = document.createElement('span'); el.innerHTML = LOGO_PRESETS[logo.id] || LOGO_PRESETS.layers;
     }
