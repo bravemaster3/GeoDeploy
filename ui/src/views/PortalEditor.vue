@@ -1933,7 +1933,14 @@ function buildPreviewStyle() {
       // the tile server 404s every one that misses the raster. For a drone orthomosaic a few
       // hundred metres wide that is nearly every tile on screen, which is what filled the console.
       const rbounds = lonLatBbox(layer.bbox)
-      if (rbounds) style.sources[srcId].bounds = rbounds
+      if (rbounds) {
+        style.sources[srcId].bounds = rbounds
+        // And how far OUT to bother asking. Mirrors portal_generator._min_zoom_for: `bounds` stops
+        // tiles that MISS the raster, not a tile that hits it and spans a continent — and a z3 tile
+        // of a drone orthomosaic took long enough that nginx returned 504, which hangs the map.
+        const mz = minZoomFor(rbounds)
+        if (mz) style.sources[srcId].minzoom = mz
+      }
       style.layers.push({
         id: srcId, type: 'raster', source: srcId,
         paint: { 'raster-opacity': cfg.opacity ?? 1.0, ...(cfg.style?.paint || {}) },
@@ -1986,6 +1993,18 @@ function lonLatBbox(b) {
   return (Array.isArray(b) && b.length === 4 &&
     b[0] >= -180 && b[2] <= 180 && b[0] < b[2] &&
     b[1] >= -90 && b[3] <= 90 && b[1] < b[3]) ? b.slice(0, 4) : null
+}
+
+// The lowest zoom worth requesting tiles at, from the layer's extent. Mirrors
+// services/portal_generator.py::_min_zoom_for — a tile spans 360/2^z degrees, so the layer first
+// fits in one tile at log2(360/width); four levels of slack keeps it visible as a speck before we
+// stop asking. 0 (falsy) = continent-sized, leave unrestricted.
+const MINZOOM_SLACK = 4
+function minZoomFor(b) {
+  const width = Math.max(b[2] - b[0], b[3] - b[1])
+  if (!(width > 0)) return 0
+  const fitsAt = width < 360 ? Math.log2(360 / width) : 0
+  return Math.max(0, Math.min(Math.trunc(fitsAt) - MINZOOM_SLACK, 18))
 }
 
 // Build a raster tile URL from the layer's base URL + the configured raster style.

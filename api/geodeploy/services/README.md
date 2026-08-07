@@ -131,6 +131,17 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   permalink it serves, never a substitute for the bbox queries.
 
 ## Last updated
+2026-08-07c (**a 504 on one tile hangs the whole portal.** `bounds` stops MapLibre
+asking for tiles that MISS a raster; it does nothing about a tile that HITS it and spans a continent.
+A drone orthomosaic a few hundred metres across was still requested at z3 — one tile covering most of
+Europe — and TiTiler took long enough that nginx answered 504. MapLibre waits on it, the portal's load
+handler never completes, and the page sits on the loading screen until the 15s backstop: the whole
+portal held up by one request. New `portal_generator._min_zoom_for(bounds)` writes a source `minzoom`
+from the extent (a tile spans 360/2^z degrees, so the layer fits one tile at log2(360/width);
+`_MINZOOM_SLACK` = 4 levels of "visible speck" before we stop asking). Continent-sized layers get 0 =
+unrestricted. Mirrored in `PortalEditor.minZoomFor`. Pinned by `api/tests/test_raster_minzoom.py`.
+NOTE this is a heuristic on EXTENT, not the COG's real overview range — TiTiler `/cog/info` knows the
+true min/max zoom and storing it at ingest would be the exact fix.)
 2026-08-07b (**hillshade rendered nothing from the portal editor, because the layer's own stretch was
 applied to it.** TiTiler applies `rescale` AFTER the algorithm, and a hillshade is already a finished
 0–255 relief image — so stretching it with the SOURCE data's range saturates every pixel to one

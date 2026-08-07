@@ -264,6 +264,16 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
             _rb = _lonlat_bounds(layer.bbox)
             if _rb:
                 sources[source_id]["bounds"] = _rb
+                # And how far OUT it is worth asking. `bounds` stops tiles that miss the raster;
+                # it does nothing about a tile that hits it and spans a continent. A drone
+                # orthomosaic a few hundred metres wide was still requested at z3 — one tile
+                # covering most of Europe — and TiTiler took long enough that nginx returned 504.
+                # MapLibre then sits waiting on that tile, the portal's load handler never settles,
+                # and the whole page hangs on the loading screen until the 15s backstop. A 504 is
+                # far worse than a 404: the 404 is instant, this one costs the entire page.
+                _mz = _min_zoom_for(_rb)
+                if _mz:
+                    sources[source_id]["minzoom"] = _mz
             # Base opacity + an optional raster-paint passthrough (GeoLibre import carries
             # brightness/contrast/saturation/hue in style.paint; GeoDeploy's own UI sets none of these).
             raster_paint = {"raster-opacity": cfg.get("opacity", 1.0)}
@@ -1467,6 +1477,37 @@ def _lonlat_bounds(raw) -> list[float] | None:
     if not (-180.0 <= w < e <= 180.0 and -90.0 <= s < n <= 90.0):
         return None
     return [w, s, e, n]
+
+
+#: How many zoom levels BELOW "the layer fills one tile" we still bother asking for. Four levels
+#: means the layer is about 1/16th of a tile at the lowest zoom requested — a visible speck, not a
+#: sub-pixel nothing, and cheap for the tile server to produce from an overview.
+_MINZOOM_SLACK = 4
+
+
+def _min_zoom_for(bounds: list[float]) -> int:
+    """The lowest zoom worth requesting tiles at, from the layer's extent.
+
+    `bounds` stops MapLibre asking for tiles that MISS the raster. It does nothing about a tile that
+    hits it and spans a continent, and that is the expensive case: a z3 tile of a drone orthomosaic
+    is one request covering most of Europe, which TiTiler can take long enough over that nginx
+    answers **504**. MapLibre then waits on it, the portal's load handler never completes, and the
+    page sits on the loading screen — so one oversized request costs the whole portal, where a 404
+    would have cost nothing.
+
+    A tile spans 360/2^z degrees, so the layer first fits inside one tile at z = log2(360 / width).
+    Below that it is only getting smaller; `_MINZOOM_SLACK` keeps a few levels of "visible as a
+    speck" before we stop asking.
+
+    Returns 0 (falsy — no `minzoom` written) for anything continent-sized, where every zoom is
+    legitimate and the old behaviour is correct.
+    """
+    import math
+    width = max(bounds[2] - bounds[0], bounds[3] - bounds[1])
+    if width <= 0:
+        return 0
+    fits_at = math.log2(360.0 / width) if width < 360 else 0
+    return max(0, min(int(fits_at) - _MINZOOM_SLACK, 18))
 
 
 def _geom_kind(geometry_type: str | None) -> str:
