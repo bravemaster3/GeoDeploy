@@ -2,6 +2,19 @@
 
 # GeoDeploy
 
+[![Release](https://img.shields.io/github/v/release/bravemaster3/GeoDeploy?label=release&color=2563eb)](https://github.com/bravemaster3/GeoDeploy/releases/latest)
+[![CI](https://img.shields.io/github/actions/workflow/status/bravemaster3/GeoDeploy/ci.yml?branch=main&label=CI)](https://github.com/bravemaster3/GeoDeploy/actions/workflows/ci.yml)
+[![Licence](https://img.shields.io/badge/licence-Apache--2.0-blue)](LICENSE)
+[![Live demo](https://img.shields.io/badge/live%20demo-open-brightgreen)](https://geodeploy-demo.kndev.org)
+[![Docs](https://img.shields.io/badge/docs-read-informational)](https://docs-geodeploy.kndev.org/)
+[![Self-hosted](https://img.shields.io/badge/self--hosted-Docker%20Compose-0db7ed)](https://docs-geodeploy.kndev.org/getting-started/)
+
+[![PostGIS](https://img.shields.io/badge/PostGIS-spatial%20database-336791)](https://postgis.net/)
+[![MapLibre](https://img.shields.io/badge/MapLibre-GL%20JS-295dfc)](https://maplibre.org/)
+[![OGC API](https://img.shields.io/badge/OGC%20API-Features%20%C2%B7%20WMTS-6a1b9a)](https://docs-geodeploy.kndev.org/data-access/)
+[![STAC](https://img.shields.io/badge/STAC-catalog-ef6c00)](https://docs-geodeploy.kndev.org/data-access/)
+[![GeoParquet](https://img.shields.io/badge/GeoParquet-COG%20%C2%B7%20PMTiles-00897b)](https://docs-geodeploy.kndev.org/data-access/)
+
 **Self-hosted spatial data platform and geoportal builder.**
 
 Upload your data, style it, and publish a map anyone can use — on your own server, with your own
