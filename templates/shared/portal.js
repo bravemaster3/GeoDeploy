@@ -3297,6 +3297,79 @@
     // 'idle' matters — tiles and the deck.gl overlay load asynchronously, and capturing before then
     // yields a half-drawn map or bare basemap. The reply ALWAYS goes out, with dataUrl null on
     // failure, so the editor never waits on a message that will not arrive.
+    /**
+     * The space backdrop, painted into a 2D canvas.
+     *
+     * The starfield is a CSS background on the map CONTAINER, *behind* a transparent canvas (see
+     * applySpace + portal.css `.gd-space`). `map.getCanvas().toDataURL()` reads the WebGL canvas
+     * ALONE, so a globe thumbnail came out with the planet floating on transparency — and whatever
+     * displayed it showed through, which is the green band behind the earth on the portal card.
+     * CSS cannot be rasterised into the capture, so the backdrop is repainted here.
+     *
+     * Deliberately deterministic: a seeded PRNG places the stars, so re-publishing a portal does not
+     * silently produce a different picture. Mirrors the colours in portal.css `.gd-space` — keep the
+     * two in step, or the thumbnail stops looking like the portal it links to.
+     */
+    function paintSpaceBackdrop(ctx, w, h) {
+      ctx.fillStyle = '#070b1a';
+      ctx.fillRect(0, 0, w, h);
+      // Nebula washes, in the CSS order (blue upper-left, violet lower-right, faint teal centre).
+      [[0.26, 0.18, 1.15, 'rgba(72,116,215,.34)'],
+       [0.80, 0.80, 0.85, 'rgba(150,84,196,.26)'],
+       [0.62, 0.38, 0.60, 'rgba(38,190,190,.14)']].forEach(function (n) {
+        const r = Math.max(w, h) * n[2] * 0.5;
+        const g = ctx.createRadialGradient(w * n[0], h * n[1], 0, w * n[0], h * n[1], r);
+        g.addColorStop(0, n[3]);
+        g.addColorStop(1, 'transparent');
+        ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+      });
+      // The Milky Way, on a diagonal — a horizontal band reads as a defect.
+      ctx.save();
+      ctx.translate(w / 2, h / 2); ctx.rotate(12 * Math.PI / 180); ctx.translate(-w / 2, -h / 2);
+      const mw = ctx.createLinearGradient(0, h * 0.34, 0, h * 0.66);
+      mw.addColorStop(0, 'transparent');
+      mw.addColorStop(0.5, 'rgba(186,196,255,.26)');
+      mw.addColorStop(1, 'transparent');
+      ctx.fillStyle = mw; ctx.fillRect(-w, 0, w * 3, h);
+      ctx.restore();
+      // Stars. LCG rather than Math.random so the field is identical on every capture.
+      let seed = 20260807;
+      const rnd = function () { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+      const count = Math.round((w * h) / 2600);
+      for (let i = 0; i < count; i++) {
+        const x = rnd() * w, y = rnd() * h, t = rnd();
+        const rad = t > 0.96 ? 1.6 : t > 0.82 ? 1.1 : 0.8;
+        const alpha = t > 0.96 ? 1 : t > 0.82 ? 0.9 : 0.6;
+        const tint = t > 0.96 ? '255,247,230' : t > 0.9 ? '210,228,255' : '255,255,255';
+        if (t > 0.96) {  // brightest stars carry a halo, as in the CSS
+          const halo = ctx.createRadialGradient(x, y, 0, x, y, rad * 3.5);
+          halo.addColorStop(0, 'rgba(' + tint + ',.45)');
+          halo.addColorStop(1, 'transparent');
+          ctx.fillStyle = halo;
+          ctx.beginPath(); ctx.arc(x, y, rad * 3.5, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.fillStyle = 'rgba(' + tint + ',' + alpha + ')';
+        ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+
+    /** The map canvas, flattened onto whatever is behind it. Returns the source canvas untouched
+     *  when there is nothing behind it to lose (mercator paints its own opaque backdrop). */
+    function snapshotCanvas() {
+      const src = map.getCanvas();
+      // Ask the SAME element applySpace writes to (`map.getContainer()`), not `#map-wrap` — the CSS
+      // matches either, so guessing the wrong one here would silently skip the backdrop.
+      const wrap = map.getContainer && map.getContainer();
+      if (!wrap || !wrap.classList.contains('gd-space')) return src;
+      const out = document.createElement('canvas');
+      out.width = src.width; out.height = src.height;
+      const ctx = out.getContext('2d');
+      if (!ctx) return src;
+      paintSpaceBackdrop(ctx, out.width, out.height);
+      ctx.drawImage(src, 0, 0);
+      return out;
+    }
+
     function sendSnapshot(requestId) {
       // The reason travels WITH the reply. Discarding it made every failure look identical from the
       // dashboard — a tainted canvas (SecurityError, from a tile server that sent no CORS header),
@@ -3311,7 +3384,7 @@
         done = true;
         try {
           map.triggerRepaint();
-          const url = map.getCanvas().toDataURL('image/webp', 0.75);
+          const url = snapshotCanvas().toDataURL('image/webp', 0.75);
           // toDataURL can succeed and still hand back a 1x1 placeholder if the drawing buffer was
           // already cleared — say so rather than letting it fail a size check three layers up.
           reply(url, url && url.length > 2048 ? null : 'canvas produced no image (' +
