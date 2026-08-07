@@ -4,6 +4,74 @@ Notable changes, newest first. Versions are **major.minor** — `v1.0`, `v1.1`, 
 `v2.0`. The minor number moves for anything shipped, features or fixes; the major changes when an
 upgrade needs manual work.
 
+## v1.2 — 2026-08-07
+
+### From an upload to a map anyone can open
+
+Every raster failure fixed here was **silent**. The layer said `ready`, its TileJSON was valid, and
+the tiles did not work — so the only honest place to look was a tile server's log, which is not where
+anyone looks first.
+
+- **A 3 GB raster upload no longer dies writing overviews.** A classic TIFF cannot pass 4 GB (its
+  header offsets are 32-bit), and GDAL does not refuse the job up front — it fails part way through,
+  so the size limit surfaced as an overview error. Large rasters are written as BigTIFF now.
+- **Multispectral imagery renders.** A 4-band drone image asked the PNG encoder for five channels
+  (four bands plus the mask) and every tile failed, everywhere — the portal, the XYZ link, the STAC
+  asset, all of them build the same URL. A raster with more than three bands now gets an explicit
+  band selection.
+- **Hillshade works from the portal editor**, not only from the published legend. The layer's own
+  stretch was being applied *after* the algorithm, flattening a finished relief image to one colour.
+- **A world layer no longer breaks every tile.** Web Mercator is undefined at the poles, so a
+  countries dataset reaching Antarctica made PostGIS refuse the projection and Martin answer 500 for
+  every tile at every zoom. Geographic data is clipped to the Mercator band at import.
+- **One oversized tile no longer hangs a portal.** A drone plot 200 m across was still being
+  requested at zoom 3 — a single tile spanning 2,000 km — and the timeout left the map waiting, so a
+  catalog portal never finished loading and its filters never appeared.
+- **Clicking the map** no longer asks every raster on screen for a value it does not have.
+
+### Your data opens somewhere else
+
+- **WMTS for QGIS.** *Layer ▸ Add Layer ▸ Add WMS/WMTS Layer*, paste the link, and **Zoom to Layer**
+  goes to the data. An XYZ URL has nowhere to put an extent, which is why it could not.
+- **Tiles that miss a raster come back empty, not missing.** A tile server answering 404 for the
+  edges of a tile grid is correct for an API and wrong for a map — and a bare XYZ URL gives QGIS,
+  GeoLibre or Leaflet no way to avoid asking. They now get a transparent tile instead of a console
+  full of errors.
+- **Share links say which tool each one is for**, and the service-wide link says so plainly rather
+  than looking like the one dataset it was copied from.
+
+### Portals
+
+- **Start tilted** is an authoring choice, beside *Start in 3D globe*. The pinned view always
+  carried a pitch; the only way to set one was to right-drag the preview.
+- **Catalog portals on a phone**: filters sit beside the results instead of above them. The old
+  layout split the one scarce axis three ways and the result list — the point of the page — got the
+  smallest share.
+- **The "On map" list shows each layer's real symbology.** It is a catalog's only legend, and every
+  row used to be a dot coloured by type, so three point layers were three identical dots. Rasters
+  show their colour ramp.
+- **Custom logos can take the theme colour**, like the built-in ones always could — an SVG exported
+  dark on transparent was nearly invisible against a dark header. **SVG uploads** are accepted.
+- **A globe portal's thumbnail keeps the space behind the earth.**
+
+### Upgrading
+
+From the dashboard: **Settings ▸ Infrastructure ▸ Updates**, or on the server:
+
+```bash
+sudo bash installer/self-update.sh v1.2
+```
+
+**Re-publish your portals after updating.** The layer symbology in the catalog list, the logo
+tinting, the tilt state and the phone layout are baked into each portal when it is published.
+
+**One behaviour change worth knowing.** Geographic data is now clipped to the Web Mercator band
+(±85.05°) at import. Nothing outside that band can be shown on a web map anyway, but it means a
+world dataset downloaded back out of GeoDeploy has a truncated Antarctica rather than the polygon you
+uploaded. Existing layers are unaffected until re-imported.
+
+No manual migration is needed.
+
 ## v1.1 — 2026-08-07
 
 ### Data-driven symbology

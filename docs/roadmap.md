@@ -1,10 +1,10 @@
 # Roadmap
 
-GeoDeploy is being cut as **v1.0** — the first tagged release. Everything under *In v1.0* is built
-and running in production; the groups after it are what comes next.
+GeoDeploy is at **v1.2**. Everything under *In v1.0* and in the releases after it is built and
+running in production; the groups at the end are what comes next.
 
 <div class="gd-legend" markdown>
-:material-check-circle:{ .gd-ok } **Shipped — in v1.0** ·
+:material-check-circle:{ .gd-ok } **Shipped** ·
 :material-progress-clock:{ .gd-wip } **Finishing** ·
 :material-circle-outline: **Planned**
 </div>
@@ -154,12 +154,38 @@ show <em>what they are</em> — and where choosing a version to run stops being 
 
 </div>
 
+<div class="gd-rel done" markdown>
+### v1.2 — from an upload to a map anyone can open
+<span class="gd-when">Shipped · 2026-08-07</span>
+
+<p class="gd-goal">Rasters that used to fail silently, and layers another tool can actually open.
+Every raster fault fixed here reported itself as healthy — the layer said <em>ready</em>, its
+TileJSON was valid, and only the tile server's log knew otherwise.</p>
+
+- [x] **Big and awkward rasters work** — a 3 GB upload no longer dies writing overviews (BigTIFF),
+      and a 4-band multispectral image renders instead of failing every tile at the PNG encoder
+- [x] **Hillshade works from the editor**, not only from the published legend
+- [x] **A world layer no longer breaks every tile** — geographic data is clipped to the Web Mercator
+      band at import, so a dataset reaching Antarctica stops making the projection refuse
+- [x] **One oversized tile no longer hangs a portal** — a 200 m drone plot was still being requested
+      at zoom 3, and the timeout left a catalog portal loading forever
+- [x] **WMTS for QGIS** — paste one URL and *Zoom to Layer* goes to the data, which an XYZ link can
+      never do because it has nowhere to carry an extent
+- [x] **Tiles that miss a raster come back empty, not missing** — no more 404 storms in someone
+      else's console
+- [x] **Share links say which tool each one is for**
+- [x] **Portals**: *Start tilted* as an authoring choice, real symbology in the catalog's on-map
+      list, a phone layout where the results are not a sliver, SVG logos that take the theme colour,
+      and a globe thumbnail that keeps the space behind the earth
+
+</div>
+
 <div class="gd-rel now tail" markdown>
-### v1.2 — the CLI, and getting data back out
+### v1.3 — the CLI, and getting data back out
 <span class="gd-when">Next</span>
 
-<p class="gd-goal">v1.1 made a portal say what the data means. This one is about reaching an instance
-without a browser, and about being able to take your data with you.</p>
+<p class="gd-goal">v1.2 made the data readable by other tools. This one is about reaching an instance
+without a browser, and about being able to take a copy with you.</p>
 
 - [ ] **A real CLI**, not an example script — every argument the API takes, the v1.1 symbology
       included, with its own section in the docs and tests so it is verified without anyone
@@ -172,6 +198,9 @@ without a browser, and about being able to take your data with you.</p>
 - [ ] Collapsible legend entries in the layer list, with a collapse-all ([#9](https://github.com/bravemaster3/GeoDeploy/issues/9))
 - [ ] Class count stops snapping back, and the 9-vs-12 ceiling agrees with the server ([#10](https://github.com/bravemaster3/GeoDeploy/issues/10))
 - [ ] **Invert a colour ramp** ([#11](https://github.com/bravemaster3/GeoDeploy/issues/11))
+- [ ] **A raster's zoom range read from the file, not guessed from its extent** — today a small
+      high-resolution layer stops drawing below a computed floor, with nothing saying why
+      ([#17](https://github.com/bravemaster3/GeoDeploy/issues/17))
 - [ ] **Size from a field**, and **labels** — the half of data-driven symbology v1.1 did not ship
 
 </div>
