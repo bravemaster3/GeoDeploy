@@ -205,6 +205,16 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-07f (**the raster popover now OPENS showing what is on the map.** New `effectiveHillshade` /
+`effectiveZfactor` / `effectiveColormap` / `effectiveRescale` beside `effectiveBidx`: viewer session
+state first, else the params baked into the tile URL. Only `bidx` did this, so a portal published
+with hillshade opened the popover UNCHECKED with Z 1, contradicting the map behind it. Second, worse
+fault from the same gap: `applyRaster` rebuilt the URL from `rasterState` ALONE, so touching one
+control discarded every baked param the viewer had not touched — pick a palette, lose the author's
+stretch. `applyRaster` and `rasterLegendHtml` now read through the same helpers, so popover, map and
+legend cannot disagree. Stretch inputs render disabled under hillshade (mirrors `LayerPanel`).
+`undefined` means "untouched" and is deliberately distinct from a viewer's empty value, which must
+NOT resurrect the baked one.)
 2026-08-07e (**`applyRaster` no longer stretches a hillshade.** TiTiler applies `rescale` AFTER the
 algorithm and a hillshade is already 0–255, so a data-range stretch flattens it to one colour. This
 path was only accidentally right — it rebuilds the URL from `baseFull.split('&')[0]`, dropping the

@@ -2297,6 +2297,40 @@
     const st = rasterState[srcId] || {};
     return Array.isArray(st.bidx) ? st.bidx : bakedBidx(srcId);
   }
+  // ── What is ACTUALLY on the map, per control ─────────────────────────────────────────────────
+  // Viewer's session choice first, else what the author baked into the tile URL. Only `bidx` did
+  // this before, which caused two related faults: the popover OPENED showing defaults (hillshade
+  // unchecked, Z 1, empty stretch, grayscale) no matter how the portal was published; and because
+  // `applyRaster` rebuilt the URL from `rasterState` alone, touching any ONE control then discarded
+  // every baked param the viewer had not touched — changing the palette silently dropped the
+  // author's stretch. Both surfaces now read through these, so the popover, the map and the legend
+  // cannot disagree.
+  //
+  // `undefined` means "viewer has not touched this" — distinct from a viewer's deliberate empty
+  // value, which must NOT resurrect the baked one.
+  function effectiveHillshade(srcId) {
+    const st = rasterState[srcId] || {};
+    if (st.hillshade !== undefined) return !!st.hillshade;
+    return parseRasterParams(srcId).algorithm === 'hillshade';
+  }
+  function effectiveZfactor(srcId) {
+    const st = rasterState[srcId] || {};
+    if (st.zfactor !== undefined && st.zfactor !== '') return st.zfactor;
+    const m = /^b1\*([0-9.]+)$/.exec(parseRasterParams(srcId).expression || '');
+    return m ? m[1] : 1;
+  }
+  function effectiveColormap(srcId) {
+    const st = rasterState[srcId] || {};
+    if (st.colormap !== undefined) return st.colormap || '';
+    return parseRasterParams(srcId).colormap_name || '';
+  }
+  /** "min,max" or '' — as a STRING, since that is what the tile URL wants. */
+  function effectiveRescale(srcId) {
+    const st = rasterState[srcId] || {};
+    if (st.min != null && st.min !== '' && st.max != null && st.max !== '') return st.min + ',' + st.max;
+    if (st.min !== undefined || st.max !== undefined) return '';  // viewer cleared it — respect that
+    return parseRasterParams(srcId).rescale || '';
+  }
   function rasterBandCount(srcId) {
     const l = STYLE.layers.find(x => x.source === srcId && x.metadata && x.metadata['geodeploy:type'] === 'raster');
     return (l && l.metadata['geodeploy:bands']) || 1;
@@ -2330,11 +2364,10 @@
     const bidx = Array.isArray(st.bidx) ? st.bidx : bakedBidx(srcId);
     if (bidx.length === 3)  // RGB composite — a colormap gradient would be misleading
       return '<div class="legend-range"><span>RGB composite</span><span>bands ' + escHtml(bidx.join(' / ')) + '</span></div>';
-    const baked = parseRasterParams(srcId);
-    const cmap = st.hillshade ? 'gray' : (st.colormap !== undefined ? (st.colormap || '') : (baked.colormap_name || ''));
-    const rescale = (st.min != null && st.min !== '' && st.max != null && st.max !== '')
-      ? (st.min + ',' + st.max) : (baked.rescale || '');
-    const p = rescale.split(',');
+    // Through the same helpers as the popover and the tile URL — three surfaces that must agree
+    // about what is on the map. Hillshade always reads as a grey ramp: it IS a grey relief image.
+    const cmap = effectiveHillshade(srcId) ? 'gray' : effectiveColormap(srcId);
+    const p = effectiveRescale(srcId).split(',');
     const mn = (p[0] !== undefined && p[0] !== '') ? p[0] : 'min';
     const mx = (p[1] !== undefined && p[1] !== '') ? p[1] : 'max';
     const grad = LEGEND_GRADIENTS[cmap] || LEGEND_GRADIENTS.gray;
@@ -2439,45 +2472,61 @@
           '<select class="rstyle-band" data-src="' + src + '">' + bandOpts(cur[0] || 1) + '</select></div>';
       }
     }
+    // Every control opens showing what is ON THE MAP (author's published styling, or the viewer's
+    // own change). These used to render hard-coded defaults, so a portal published with hillshade
+    // opened the popover with the box UNCHECKED and Z 1 — contradicting the map behind it.
+    const cmapSel = effectiveColormap(src);
     if (bands === 1 || mode === 'single') {
       html += '<div class="layer-style-field"><label>Palette</label>' +
-        '<select class="rstyle-colormap" data-src="' + src + '"><option value="">Grayscale</option>' +
-        PORTAL_COLORMAPS.map(c => '<option value="' + c + '">' + c + '</option>').join('') +
+        '<select class="rstyle-colormap" data-src="' + src + '"><option value=""' + (cmapSel ? '' : ' selected') + '>Grayscale</option>' +
+        PORTAL_COLORMAPS.map(c => '<option value="' + c + '"' + (c === cmapSel ? ' selected' : '') + '>' + c + '</option>').join('') +
         '</select></div>';
       html += '<label class="layer-style-field" style="cursor:pointer">' +
-        '<input type="checkbox" class="rstyle-hillshade" data-src="' + src + '"> Hillshade</label>';
+        '<input type="checkbox" class="rstyle-hillshade" data-src="' + src + '"' +
+        (effectiveHillshade(src) ? ' checked' : '') + '> Hillshade</label>';
       html += '<div class="layer-style-field" title="Hillshade vertical exaggeration"><label>Z</label>' +
-        '<input class="rstyle-zfactor" data-src="' + src + '" type="number" min="0.1" max="10" step="0.1" value="1"></div>';
+        '<input class="rstyle-zfactor" data-src="' + src + '" type="number" min="0.1" max="10" step="0.1" value="' +
+        escHtml(String(effectiveZfactor(src))) + '"></div>';
     }
-    html += '<div class="layer-style-field"><label>Stretch</label>' +
-      '<input class="rstyle-min" data-src="' + src + '" type="number" placeholder="min">' +
-      '<input class="rstyle-max" data-src="' + src + '" type="number" placeholder="max">' +
-      '<button type="button" class="rstyle-auto" data-src="' + src + '" title="Auto stretch from raster statistics">Auto</button></div>';
+    // Stretch does nothing under hillshade (the relief is already 0-255 and TiTiler applies rescale
+    // AFTER the algorithm), so it is shown disabled rather than as an inviting empty box.
+    const hs = effectiveHillshade(src);
+    const rs = effectiveRescale(src).split(',');
+    const dis = hs ? ' disabled' : '';
+    html += '<div class="layer-style-field"' + (hs ? ' title="Not used while Hillshade is on"' : '') + '><label>Stretch</label>' +
+      '<input class="rstyle-min" data-src="' + src + '" type="number" placeholder="min" value="' + escHtml(String(rs[0] || '')) + '"' + dis + '>' +
+      '<input class="rstyle-max" data-src="' + src + '" type="number" placeholder="max" value="' + escHtml(String(rs[1] || '')) + '"' + dis + '>' +
+      '<button type="button" class="rstyle-auto" data-src="' + src + '" title="Auto stretch from raster statistics"' + dis + '>Auto</button></div>';
     return '<div class="layer-style-row" data-style-for="' + layer.id + '">' + html + '</div>';
   }
 
   // Rebuild a raster source's tile URL from the viewer's chosen params (session only)
   const rasterState = {};
   function applyRaster(srcId) {
-    const st = rasterState[srcId] || {};
     const baseFull = (STYLE.sources[srcId] && STYLE.sources[srcId].tiles && STYLE.sources[srcId].tiles[0]) || '';
     if (!baseFull) return;
     const base = baseFull.split('&')[0];  // keep up to ?url=s3://... (s3 key has no '&')
     const params = [];
-    // Preserve the admin's baked band selection unless the viewer overrode it.
-    const bidx = Array.isArray(st.bidx) ? st.bidx : bakedBidx(srcId);
+    // EVERY param is rebuilt from the effective* helpers, not from `st` alone. Reading `st` directly
+    // meant that changing one control dropped every baked param the viewer had not touched — pick a
+    // palette and the author's stretch vanished, because it was never in `rasterState` to begin with.
+    const bidx = effectiveBidx(srcId);
     bidx.forEach(b => params.push('bidx=' + b));
+    const hillshade = effectiveHillshade(srcId);
     // Not when hillshading: TiTiler applies rescale AFTER the algorithm, and a hillshade is already
-    // a finished 0-255 relief image, so a data-range stretch flattens it to one colour. This path
-    // only escaped the bug by accident — it rebuilds the URL from scratch, dropping the layer's
-    // baked rescale — but a viewer who pressed Auto and then ticked Hillshade hit it too.
+    // a finished 0-255 relief image, so a data-range stretch flattens it to one colour.
     // Mirrors services/titiler.py::get_tile_url.
-    if (!st.hillshade && st.min != null && st.min !== '' && st.max != null && st.max !== '') params.push('rescale=' + st.min + ',' + st.max);
-    if (st.hillshade) {
+    if (!hillshade) {
+      const rescale = effectiveRescale(srcId);
+      if (rescale) params.push('rescale=' + rescale);
+    }
+    if (hillshade) {
       params.push('algorithm=hillshade');
-      if (st.zfactor && Number(st.zfactor) !== 1) params.push('expression=b1*' + st.zfactor);
-    } else if (st.colormap && bidx.length !== 3) {  // colormap is ignored for an RGB composite
-      params.push('colormap_name=' + st.colormap);
+      const z = effectiveZfactor(srcId);
+      if (Number(z) !== 1) params.push('expression=b1*' + z);
+    } else {
+      const cmap = effectiveColormap(srcId);
+      if (cmap && bidx.length !== 3) params.push('colormap_name=' + cmap);  // ignored for RGB
     }
     const url = base + (params.length ? '&' + params.join('&') : '');
     const src = map.getSource(srcId);

@@ -1788,9 +1788,7 @@ function buildPreviewStyle() {
   // projected raster) so "fit"/zoom-to-all covers all layers, not just the last one.
   let bounds = null
   const expandBounds = (b) => {
-    const ok = Array.isArray(b) && b.length === 4 &&
-      b[0] >= -180 && b[2] <= 180 && b[0] < b[2] && b[1] >= -90 && b[3] <= 90 && b[1] < b[3]
-    if (!ok) return
+    if (!lonLatBbox(b)) return
     bounds = bounds
       ? [Math.min(bounds[0], b[0]), Math.min(bounds[1], b[1]), Math.max(bounds[2], b[2]), Math.max(bounds[3], b[3])]
       : b.slice()
@@ -1930,6 +1928,12 @@ function buildPreviewStyle() {
       const srcId = `raster_${layer.id}`
       const absTileUrl = rasterTilesUrl(layer.tile_url, cfg.style)
       style.sources[srcId] = { type: 'raster', tiles: [absTileUrl], tileSize: 256 }
+      // Where the data actually IS — the published style has carried this for a while, this map
+      // never did. Without it MapLibre asks for tiles across the whole viewport at every zoom and
+      // the tile server 404s every one that misses the raster. For a drone orthomosaic a few
+      // hundred metres wide that is nearly every tile on screen, which is what filled the console.
+      const rbounds = lonLatBbox(layer.bbox)
+      if (rbounds) style.sources[srcId].bounds = rbounds
       style.layers.push({
         id: srcId, type: 'raster', source: srcId,
         paint: { 'raster-opacity': cfg.opacity ?? 1.0, ...(cfg.style?.paint || {}) },
@@ -1969,6 +1973,19 @@ function buildPreviewStyle() {
   }
 
   return { style, bounds }
+}
+
+/**
+ * A stored bbox as [w, s, e, n] in lon/lat, or null. Mirrors
+ * `portal_generator._lonlat_bounds` — including WHY the range check exists: a raster bbox is
+ * reprojected to EPSG:4326 at ingest, but that reprojection falls back to the SOURCE CRS when it
+ * fails. Projected metres used as MapLibre `bounds` would hide the layer completely, which is far
+ * worse than the 404s being fixed, so anything not plausibly lon/lat is dropped.
+ */
+function lonLatBbox(b) {
+  return (Array.isArray(b) && b.length === 4 &&
+    b[0] >= -180 && b[2] <= 180 && b[0] < b[2] &&
+    b[1] >= -90 && b[3] <= 90 && b[1] < b[3]) ? b.slice(0, 4) : null
 }
 
 // Build a raster tile URL from the layer's base URL + the configured raster style.
