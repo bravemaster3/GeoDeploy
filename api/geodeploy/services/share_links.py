@@ -129,9 +129,16 @@ def raster_links(layer, base: str, default_style: dict | None = None) -> list[di
               hint="Carries the tile template AND the layer bounds, so 'zoom to layer' works "
                    "(a bare XYZ URL has no bounds).",
               primary=True),
+        _link("wmts", "WMTS — for QGIS", f"{api}/wmts",
+              fmt="WMTS 1.0.0 GetCapabilities", tools=["QGIS", "ArcGIS Pro", "OpenLayers"],
+              hint="QGIS: Layer ▸ Add Layer ▸ Add WMS/WMTS Layer ▸ New ▸ paste this as the URL. "
+                   "Use this rather than XYZ in QGIS — it carries the extent, so 'Zoom to Layer' "
+                   "goes to the data instead of the whole world."),
         _link("xyz", "XYZ raster tiles", tile_url,
-              fmt="PNG tiles", tools=["QGIS (XYZ connection)", "Leaflet", "OpenLayers"],
-              hint="Rendered by TiTiler with this layer's saved styling (band/colormap/stretch)."),
+              fmt="PNG tiles", tools=["Leaflet", "OpenLayers", "QGIS (XYZ connection)"],
+              hint="Rendered by TiTiler with this layer's saved styling (band/colormap/stretch). "
+                   "A bare XYZ template carries no extent — prefer WMTS in QGIS, TileJSON in "
+                   "GeoLibre/MapLibre."),
         _link("vsicurl", "COG for GDAL/QGIS (/vsicurl/)", f"/vsicurl/{api}/cog",
               fmt="Cloud-Optimized GeoTIFF", tools=["QGIS", "GDAL", "rasterio"],
               hint="Full pixel access without downloading — paste as a raster layer source."),
