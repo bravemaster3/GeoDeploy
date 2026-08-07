@@ -1977,7 +1977,9 @@ function rasterTilesUrl(baseTileUrl, style) {
   const params = []
   const bands = Array.isArray(style?.bidx) ? style.bidx.filter(b => b != null) : []
   bands.forEach(b => params.push(`bidx=${b}`))
-  if (style?.rescale) params.push(`rescale=${style.rescale}`)
+  // Mirrors services/titiler.py::get_tile_url — a hillshade is already a finished 0-255 relief
+  // image, and TiTiler applies rescale AFTER the algorithm, so a data-range stretch flattens it.
+  if (style?.rescale && style?.algorithm !== 'hillshade') params.push(`rescale=${style.rescale}`)
   if (style?.algorithm) {
     params.push(`algorithm=${style.algorithm}`)
     if (style.algorithm === 'hillshade' && style.zfactor && Number(style.zfactor) !== 1) {

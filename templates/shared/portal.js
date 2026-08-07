@@ -2467,7 +2467,12 @@
     // Preserve the admin's baked band selection unless the viewer overrode it.
     const bidx = Array.isArray(st.bidx) ? st.bidx : bakedBidx(srcId);
     bidx.forEach(b => params.push('bidx=' + b));
-    if (st.min != null && st.min !== '' && st.max != null && st.max !== '') params.push('rescale=' + st.min + ',' + st.max);
+    // Not when hillshading: TiTiler applies rescale AFTER the algorithm, and a hillshade is already
+    // a finished 0-255 relief image, so a data-range stretch flattens it to one colour. This path
+    // only escaped the bug by accident — it rebuilds the URL from scratch, dropping the layer's
+    // baked rescale — but a viewer who pressed Auto and then ticked Hillshade hit it too.
+    // Mirrors services/titiler.py::get_tile_url.
+    if (!st.hillshade && st.min != null && st.min !== '' && st.max != null && st.max !== '') params.push('rescale=' + st.min + ',' + st.max);
     if (st.hillshade) {
       params.push('algorithm=hillshade');
       if (st.zfactor && Number(st.zfactor) !== 1) params.push('expression=b1*' + st.zfactor);

@@ -205,6 +205,12 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-07e (**`applyRaster` no longer stretches a hillshade.** TiTiler applies `rescale` AFTER the
+algorithm and a hillshade is already 0–255, so a data-range stretch flattens it to one colour. This
+path was only accidentally right — it rebuilds the URL from `baseFull.split('&')[0]`, dropping the
+layer's baked rescale, which is why ticking Hillshade in the published legend worked while the editor
+sidebar produced a blank layer. A viewer who pressed **Auto** and then ticked Hillshade hit the bug
+here too. Mirrors `services/titiler.py::get_tile_url`.)
 2026-08-07d (**"Start tilted" is now an authoring choice, not a right-drag.** `setupEditMode` gained a
 `tilt` message that eases the preview between 0 and `TILT_PITCH` (60°); the editor checkbox mirrors
 the on-map `TiltControl`, and the resulting pitch is pinned with the rest of the camera. Published

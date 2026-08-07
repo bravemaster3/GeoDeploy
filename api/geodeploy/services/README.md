@@ -131,6 +131,19 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   permalink it serves, never a substitute for the bbox queries.
 
 ## Last updated
+2026-08-07b (**hillshade rendered nothing from the portal editor, because the layer's own stretch was
+applied to it.** TiTiler applies `rescale` AFTER the algorithm, and a hillshade is already a finished
+0–255 relief image — so stretching it with the SOURCE data's range saturates every pixel to one
+value. Measured on a vegetation index with range 0.5563–0.9477: `algorithm=hillshade` returns a
+15505-byte tile, `algorithm=hillshade&rescale=0.5563,0.9477` returns 623 bytes of uniform colour.
+`titiler.get_tile_url` now skips `rescale` when the algorithm is `hillshade` — the same reasoning
+that already dropped `colormap`, which had simply been missed. **Scoped to hillshade on purpose:** an
+index-style algorithm outputs a range of its own and still wants stretching, so this must not become
+"any algorithm". Why it looked like an EDITOR bug: `portal.js::applyRaster` rebuilds the tile URL
+from scratch and drops the baked rescale, so the published legend's checkbox worked — the same
+option, two paths, one accidentally right. Mirrored in `PortalEditor.rasterTilesUrl` + `portal.js`,
+and `LayerPanel` now disables the stretch inputs under hillshade. Pinned by
+`api/tests/test_raster_hillshade_url.py`.)
 2026-08-07 (**a 3 GB raster died in `build_overviews`, and the real limit was the FILE FORMAT.**
 A classic TIFF cannot pass 4 GB — 32-bit header offsets — and GDAL does not refuse the job up front,
 it fails part-way through with `TIFFAppendToStrip:Maximum TIFF file size exceeded`, which reached us

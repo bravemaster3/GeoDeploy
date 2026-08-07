@@ -35,7 +35,12 @@ def get_tile_url(
     bands = [b for b in (bidx or []) if b is not None]
     for b in bands:
         url += f"&bidx={b}"
-    if rescale:
+    # `rescale` is a stretch over the DATA range, and TiTiler applies it AFTER the algorithm. Feed it
+    # a hillshade — which is already a finished 0–255 relief image — and every pixel saturates to one
+    # value: a flat tile that reads as "hillshade is not rendering". Measured on a vegetation index
+    # whose range is 0.5563–0.9477: hillshade alone returns a 15 kB tile, hillshade + that rescale
+    # returns 623 bytes of uniform colour. Exactly the reasoning that already drops `colormap` below.
+    if rescale and algorithm != "hillshade":
         url += f"&rescale={rescale}"
     if algorithm:
         url += f"&algorithm={algorithm}"

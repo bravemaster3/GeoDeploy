@@ -63,6 +63,9 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 - Raster layer `bbox` from the API is in source CRS (not lon/lat) — using it directly for `fitToBbox` can throw "Invalid LngLat" (see tasks/raster notes). Prefer zooming via vector bounds or TiTiler TileJSON.
 
 ## Last updated
+2026-08-07b (`PortalEditor.rasterTilesUrl`: skips `rescale` under `algorithm === 'hillshade'`,
+mirroring `services/titiler.py::get_tile_url` — TiTiler applies the stretch after the algorithm, and
+a hillshade is already 0–255, so the layer's own data range flattened it to one colour.)
 2026-08-07 (`PortalEditor`: **"Start tilted"** beside "Start in 3D globe" in the Layout panel.
 `initial_view` always carried `pitch`, but the only way to set it was right-dragging the preview —
 the same invisibility the globe toggle fixed. `setTilt` posts `{type:'tilt'}` to the preview iframe
