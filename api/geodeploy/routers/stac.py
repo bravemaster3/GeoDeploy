@@ -224,7 +224,7 @@ def _raster_assets(layer, base: str) -> dict:
         layer.s3_key,
         colormap=default.get("colormap"), rescale=default.get("rescale"),
         algorithm=default.get("algorithm"), zfactor=default.get("zfactor"),
-        bidx=default.get("bidx"),
+        bidx=default.get("bidx"), band_count=layer.band_count,
     )
     return {
         "cog": {

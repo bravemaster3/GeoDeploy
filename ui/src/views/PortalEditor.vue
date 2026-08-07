@@ -1926,7 +1926,7 @@ function buildPreviewStyle() {
       if (!layer || layer.status !== 'ready' || !layer.tile_url) continue
 
       const srcId = `raster_${layer.id}`
-      const absTileUrl = rasterTilesUrl(layer.tile_url, cfg.style)
+      const absTileUrl = rasterTilesUrl(layer.tile_url, cfg.style, layer.band_count)
       style.sources[srcId] = { type: 'raster', tiles: [absTileUrl], tileSize: 256 }
       // Where the data actually IS — the published style has carried this for a while, this map
       // never did. Without it MapLibre asks for tiles across the whole viewport at every zoom and
@@ -1989,10 +1989,14 @@ function lonLatBbox(b) {
 }
 
 // Build a raster tile URL from the layer's base URL + the configured raster style.
-function rasterTilesUrl(baseTileUrl, style) {
+function rasterTilesUrl(baseTileUrl, style, bandCount) {
   const base = (baseTileUrl || '').split('&')[0]  // s3 key has no '&', so this keeps ?url=...
   const params = []
-  const bands = Array.isArray(style?.bidx) ? style.bidx.filter(b => b != null) : []
+  let bands = Array.isArray(style?.bidx) ? style.bidx.filter(b => b != null) : []
+  // Mirrors services/titiler.py::get_tile_url. A PNG holds at most four channels and TiTiler adds
+  // the mask as alpha, so a 4-band multispectral raster asks the driver for five and every tile
+  // 500s. With no band selection TiTiler reads them all — hence an explicit default.
+  if (!bands.length && bandCount > 3) bands = [1, 2, 3]
   bands.forEach(b => params.push(`bidx=${b}`))
   // Mirrors services/titiler.py::get_tile_url — a hillshade is already a finished 0-255 relief
   // image, and TiTiler applies rescale AFTER the algorithm, so a data-range stretch flattens it.

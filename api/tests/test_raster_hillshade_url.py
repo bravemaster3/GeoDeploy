@@ -60,3 +60,28 @@ def test_colormap_is_still_dropped_under_an_algorithm():
 
 class _FakeSettings:
     storage_bucket = "geodeploy"
+
+
+def test_a_4_band_raster_gets_an_explicit_band_default():
+    """A PNG holds four channels and TiTiler appends the mask as alpha, so reading all four bands of
+    a multispectral raster asks the driver for FIVE and every tile 500s:
+
+        PNG driver doesn't support 5 bands. Must be 1 (grey), 2 (grey+alpha), 3 (rgb) or 4 (rgba)
+
+    This hit a drone Sequoia (GRE/RED/REG/NIR) on every surface at once — the portal, the XYZ share
+    link, the STAC tiles asset — because they all build the URL here.
+    """
+    p = _params(get_tile_url("k.tif", band_count=4, settings=_FakeSettings()))
+    assert p["bidx"] == ["1", "2", "3"]
+
+
+def test_an_explicit_band_choice_always_wins():
+    p = _params(get_tile_url("k.tif", bidx=[4], band_count=4, settings=_FakeSettings()))
+    assert p["bidx"] == ["4"]
+
+
+def test_rgb_and_single_band_rasters_are_left_alone():
+    """Only >3 bands is ambiguous. 1 and 3 already encode as PNG, so adding bidx would be noise —
+    and forcing [1,2,3] on a single-band raster would ask for bands that do not exist."""
+    for n in (None, 1, 3):
+        assert "bidx" not in _params(get_tile_url("k.tif", band_count=n, settings=_FakeSettings()))

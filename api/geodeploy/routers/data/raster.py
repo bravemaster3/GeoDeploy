@@ -52,6 +52,7 @@ async def list_layers(user: User = Depends(require_scope("data:read")), db: Asyn
                 algorithm=ds.get("algorithm"),
                 zfactor=ds.get("zfactor"),
                 bidx=ds.get("bidx"),
+                band_count=l.band_count,
             )
         out.append(obj)
     return out
@@ -373,7 +374,8 @@ async def raster_tilejson(layer_ref: str, request: Request, db: AsyncSession = D
         "scheme": "xyz",
         "tiles": [base + raster_tile_url(
             layer.s3_key, colormap=ds.get("colormap"), rescale=ds.get("rescale"),
-            algorithm=ds.get("algorithm"), zfactor=ds.get("zfactor"), bidx=ds.get("bidx"))],
+            algorithm=ds.get("algorithm"), zfactor=ds.get("zfactor"), bidx=ds.get("bidx"),
+            band_count=layer.band_count)],
         "minzoom": 0,
         "maxzoom": 22,
     }
