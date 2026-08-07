@@ -2630,7 +2630,9 @@
     const deckTol = Math.max(Math.abs(tp2.lng - tp1.lng) / 2, 1e-7);
 
     // ── Raster identify section ──
-    const rasters = visibleRasterLayers();
+    // Pass the click point: a raster that does not cover it has nothing to say, and asking anyway
+    // costs a 500 per raster per click (TiTiler PointOutsideBounds).
+    const rasters = visibleRasterLayers(e.lngLat);
     if (!vectorHtml && !rasters.length && !deckQ.length) return;
 
     const loading = (rasters.length || deckQ.length)
@@ -2688,10 +2690,32 @@
     if (btn) btn.addEventListener('click', () => openAttrPanel(mapLayerId, layerName));
   }
 
-  function visibleRasterLayers() {
+  /**
+   * Does this raster actually cover the clicked point?
+   *
+   * TiTiler's `/cog/point` raises `PointOutsideBounds` for a point off the edge of the data, and
+   * that surfaces as a 500. So clicking anywhere on the map fired one request per visible raster and
+   * every raster that does not cover that spot answered 500 — a wall of red in the console on every
+   * single click, and real work asked of the tile server to be told what we already knew.
+   *
+   * The answer is not to swallow the 500 (`fetchRasterPoint` already does, which is exactly why this
+   * stayed invisible) but to not ask: the extent is baked into the layer as `geodeploy:bbox`.
+   *
+   * No bbox → ASK. A layer whose extent was never recorded must still be identifiable; a 500 from
+   * one of those is the old behaviour, not a regression.
+   */
+  function rasterCoversPoint(layer, lngLat) {
+    const b = layer.metadata && layer.metadata['geodeploy:bbox'];
+    if (!Array.isArray(b) || b.length < 4) return true;
+    return lngLat.lng >= b[0] && lngLat.lng <= b[2] && lngLat.lat >= b[1] && lngLat.lat <= b[3];
+  }
+
+  function visibleRasterLayers(lngLat) {
     return (STYLE.layers || []).filter(l => {
       if (!l.metadata || l.metadata['geodeploy:type'] !== 'raster') return false;
       if (!map.getLayer(l.id)) return false;
+      // Only when identifying at a point — a caller with no point wants every visible raster.
+      if (lngLat && !rasterCoversPoint(l, lngLat)) return false;
       try { return map.getLayoutProperty(l.id, 'visibility') !== 'none'; } catch (e) { return true; }
     });
   }
