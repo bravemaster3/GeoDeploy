@@ -190,6 +190,19 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
+2026-08-07 (**a world shapefile 500'd every Martin tile, because of Antarctica.** `vector_ingest`
+now clips 4326 storage to the Web Mercator band via `_store_geom_sql` (±85.05112878°). EPSG:3857 is
+undefined past that, and PROJ does not degrade — it raises `transform: tolerance condition error
+(-20)` (lwgeom_pg.c) inside **Martin's own** ST_Transform, so Martin returns 500 for every tile at
+every zoom and the layer never draws. **Nothing about the ingest looks wrong**: the layer is `ready`,
+the TileJSON is valid, and the only evidence is in `docker logs geodeploy-martin` — which is what
+makes it expensive to find. This was a KNOWN gap: `csv_import` has clamped since 2026-06-04 and
+notes_for_future §0g named this exact expression as the vector fix, deferred "to avoid touching the
+working path" until a shapefile with Antarctica arrived. Only geographic storage is clipped —
+a projected SRID has no lat/lon pole, and clipping it against a 4326 envelope would delete the layer.
+The CASE guard keeps `ST_Intersection` off rows inside the band, since it is expensive AND rewrites
+geometry. **Existing bad tables are NOT repaired by this** — re-import, or UPDATE in place and
+restart Martin (it caches tiles in memory). Pinned by `api/tests/test_mercator_clip.py`.)
 2026-08-06 (**the geometry type now comes from the DATA, not the file header**. `_ingest_via_copy`
 took `src.schema["geometry"]` from Fiona, and a shapefile with a generic or mixed header makes that
 the literal string `"Unknown"` — stored verbatim, then guessed at differently by every consumer:
