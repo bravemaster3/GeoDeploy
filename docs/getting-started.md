@@ -4,10 +4,36 @@
 
 | | |
 | --- | --- |
-| **RAM** | **4 GB recommended.** A running instance is comfortable there, including tiling. **2 GB has been tested and runs well** — only the install and the setup wizard are noticeably slower, because that is when images are pulled and built. |
+| **RAM** | **4 GB recommended.** A running instance is comfortable there, including tiling. **2 GB has been tested and runs well** — but see the warning below: *building* the dashboard, which happens during an update, needs more memory than running it. |
 | **CPU** | 2 cores recommended; 1 is enough to get started. Tiling and raster conversion are the only CPU-heavy steps, and they run in the background. |
 | **Disk** | Depends entirely on your data, not on GeoDeploy. The software itself is small; layers are what grow. |
 | **Domain** | Optional, but recommended — you get HTTPS and a stable portal URL. |
+
+!!! warning "Check you have swap — many VPS images ship with none"
+    This is not only a small-server concern. **Building** GeoDeploy peaks far above what running it
+    needs (an update compiles the dashboard with Vite/Node), and on a machine with no swap Linux
+    *kills* the build rather than slowing it down. The symptom is nasty: the update appears to hang,
+    and you are left with stopped containers and no new image.
+
+    Most cloud images ship with no swap file at all, so check first — `free -m`, and look at the
+    Swap row. If it reads 0, add some whatever your RAM:
+
+    ```bash
+    sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+    sudo mkswap /swapfile && sudo swapon /swapfile
+    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab   # survives a reboot
+    swapon --show                                                # confirm
+    ```
+
+    The less RAM you have the sooner it bites — on 2 GB it is close to certain — but a 4 GB server
+    with no swap and a busy worker can hit it too.
+
+    Swap is **insurance, not a tax**: what gets paged out is mostly idle build memory, so in practice
+    the build runs at normal speed — it simply stops being killed. Measured on a 2 CPU / 2 GB VPS,
+    adding swap turned a build that died into one that finished with no noticeable slowdown.
+
+    If you would rather not add swap, build the two images one at a time
+    (`docker compose build geodeploy-ui`, then `geodeploy-api`) instead of letting the updater do both.
 
 !!! tip "Disk is the one to think about"
     Storage is the only requirement that scales with use, and you are not stuck with the disk you

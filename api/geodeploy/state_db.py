@@ -176,12 +176,18 @@ RUNTIME_STORAGE_FILE = "temp/runtime-storage.json"
 
 
 def runtime_storage() -> dict | None:
-    """Object-storage settings published by the setup wizard, or None."""
+    """Object-storage settings published by the setup wizard, or None.
+
+    BOTH keys must be present. Requiring only `access_key` meant a half-written file — one whose
+    secret was empty — outranked a perfectly good environment and produced `403 Forbidden` on every
+    worker task, with nothing in the message to suggest the credentials came from a file at all.
+    An incomplete file is not a configuration; it is a file to ignore.
+    """
     import json
     try:
         with open(f"{get_settings().data_dir}/{RUNTIME_STORAGE_FILE}") as fh:
             data = json.load(fh)
-        return data if data.get("access_key") else None
+        return data if (data.get("access_key") and data.get("secret_key")) else None
     except (OSError, ValueError):
         return None
 

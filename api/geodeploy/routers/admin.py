@@ -175,8 +175,7 @@ async def check_updates(refresh: bool = False, _: User = Depends(require_admin))
             # best-effort INSIDE their loaders: a repo with no releases, or a rate-limited call,
             # simply means the choice is not offered — it must never stop the update CHECK from
             # answering.
-            await _load_releases(client, result)
-            await _load_branches(client, result)
+            await _load_version_metadata(client, result, force=refresh)
 
             latest_r = await client.get(f"https://api.github.com/repos/{GEODEPLOY_REPO}/commits/main")
             latest_r.raise_for_status()
@@ -217,20 +216,64 @@ async def check_updates(refresh: bool = False, _: User = Depends(require_admin))
     return result
 
 
-async def _load_releases(client, result: dict) -> None:
-    """Fill `releases` + `latest_release` from GitHub.
+#: Tags, releases and branches change RARELY, so they get their own — much longer — cache.
+#:
+#: The version check went from 2 GitHub calls to 5 when releases and branches were added, against an
+#: unauthenticated budget of 60 per hour PER IP. Pressing Check a dozen times while testing an update
+#: is enough to exhaust it, and the failure is quiet: the picker loses its releases and branches and
+#: offers only `main`, as if the repository had neither.
+#:
+#: Two defences here. The long TTL means a manual Check normally spends 2 calls, not 5; and a failed
+#: fetch KEEPS the last known-good list rather than replacing it with nothing — the point of the
+#: picker is to name versions, and last hour's list of versions is still true.
+_META_CACHE: dict = {"at": 0.0, "releases": None, "latest_release": None, "branches": None}
+_META_TTL = 1800  # 30 minutes
+
+
+async def _load_version_metadata(client, result: dict, force: bool = False) -> None:
+    """Fill `releases`, `latest_release` and `branches`, from cache when it is fresh.
+
+    Serves from the cache even when a fetch fails, which is what stops a rate-limited instance from
+    presenting itself as a repository with no releases.
+    """
+    import time
+
+    now = time.time()
+    stale = force or _META_CACHE["releases"] is None or (now - _META_CACHE["at"]) >= _META_TTL
+    if stale:
+        releases = await _fetch_releases(client)
+        branches = await _fetch_branches(client)
+        # Only overwrite on SUCCESS. `None` means the call failed; [] is a real, empty answer.
+        if releases is not None:
+            _META_CACHE["releases"] = releases
+            _META_CACHE["latest_release"] = next(
+                (r for r in releases if r["is_release"] and not r["prerelease"]),
+                next(iter(releases), None))
+        if branches is not None:
+            _META_CACHE["branches"] = branches
+        if releases is not None or branches is not None:
+            _META_CACHE["at"] = now
+
+    # Copies: `_finalize_versions` stamps `is_current` on the release rows, and mutating the cached
+    # objects would make a stale "you are running this one" survive the next update.
+    result["releases"] = [dict(r) for r in (_META_CACHE["releases"] or [])]
+    result["latest_release"] = (dict(_META_CACHE["latest_release"])
+                                if _META_CACHE["latest_release"] else None)
+    result["branches"] = [dict(b) for b in (_META_CACHE["branches"] or [])]
+
+
+async def _fetch_releases(client):
+    """Published versions, or None when the lookup failed.
 
     TWO endpoints, because neither alone is enough. `/releases` carries the human metadata (title,
     date, prerelease, notes URL) but NOT the commit a tag points at — and without a commit the panel
-    cannot say which release is RUNNING, so a pinned instance had no way to know it was up to date.
-    `/tags` carries the sha. They are joined on the tag name.
+    cannot say which release is RUNNING. `/tags` carries the sha. They are joined on the tag name.
 
-    A tag with no release row is still listed — it is installable, and a project that tags before it
+    A tag with no release row is still listed: it is installable, and a project that tags before it
     writes release notes should not look versionless. `is_release` says which is which.
 
-    Failures are swallowed HERE (they used to be swallowed at the call site): an admin who cannot see
-    the release list must still be able to see, and take, a normal update. The calls cost 2 of
-    GitHub's 60 unauthenticated requests an hour, and the whole result is cached for `_UPDATE_TTL`.
+    None vs []: None means "we could not find out" and preserves whatever we knew before; [] means
+    the repository genuinely has no tags.
     """
     try:
         tags_r = await client.get(
@@ -238,7 +281,7 @@ async def _load_releases(client, result: dict) -> None:
         tags_r.raise_for_status()
         sha_by_tag = {t["name"]: t["commit"]["sha"] for t in tags_r.json() if t.get("commit")}
     except Exception:      # noqa: BLE001 — see docstring
-        return
+        return None
 
     meta: dict[str, dict] = {}
     try:
@@ -257,43 +300,31 @@ async def _load_releases(client, result: dict) -> None:
     except Exception:      # noqa: BLE001 — tags alone are still usable
         pass
 
-    releases = []
-    for tag, sha in sha_by_tag.items():
-        m = meta.get(tag, {})
-        releases.append({
-            "tag": tag, "sha": sha, "name": m.get("name") or tag,
-            "published_at": m.get("published_at"), "prerelease": m.get("prerelease", False),
-            "url": m.get("url"), "is_release": tag in meta,
-        })
     # GitHub returns tags newest-first; keep that order rather than parsing versions ourselves —
     # "v1.10 vs v1.9" is exactly the comparison a naive sort gets wrong.
-    result["releases"] = releases
-    result["latest_release"] = next(
-        (r for r in releases if r["is_release"] and not r["prerelease"]),
-        next(iter(releases), None))
+    return [{
+        "tag": tag, "sha": sha, "name": (meta.get(tag) or {}).get("name") or tag,
+        "published_at": (meta.get(tag) or {}).get("published_at"),
+        "prerelease": (meta.get(tag) or {}).get("prerelease", False),
+        "url": (meta.get(tag) or {}).get("url"), "is_release": tag in meta,
+    } for tag, sha in sha_by_tag.items()]
 
 
-async def _load_branches(client, result: dict) -> None:
-    """Fill `branches` — every branch on the repo except `main`, which has its own option.
+async def _fetch_branches(client):
+    """Every branch except `main`, which has its own option — or None when the lookup failed.
 
-    Deliberately a LIST rather than a text box: a typo in a free-text ref fails several minutes into
-    an update, in a container, as "No such version". Offering the real names makes the wrong answer
+    A LIST rather than a text box: a typo in a free-text ref fails several minutes into an update,
+    inside a container, as "No such version". Offering the real names makes the wrong answer
     unreachable rather than merely discouraged.
-
-    This is an advanced target and the UI says so. It exists because it is how a feature branch gets
-    tested on a real instance — the alternative is SSH and a hand-run script, which is the dependency
-    this panel exists to remove. Swallows failures like `_load_releases`.
     """
     try:
         r = await client.get(f"https://api.github.com/repos/{GEODEPLOY_REPO}/branches",
                              params={"per_page": 50})
         r.raise_for_status()
-        result["branches"] = [
-            {"name": b["name"], "sha": (b.get("commit") or {}).get("sha")}
-            for b in r.json() if b.get("name") and b["name"] != "main"
-        ]
+        return [{"name": b["name"], "sha": (b.get("commit") or {}).get("sha")}
+                for b in r.json() if b.get("name") and b["name"] != "main"]
     except Exception:      # noqa: BLE001 — see docstring
-        return
+        return None
 
 
 def _repo_host_dir(client):
@@ -886,7 +917,9 @@ async def reload_martin(_: User = Depends(require_admin), db: AsyncSession = Dep
     layers = [{"schema_name": l.schema_name, "table_name": l.table_name,
                "geometry_column": l.geometry_column, "id_column": l.id_column, "crs": l.crs}
               for l in result.scalars().all()]
-    await regenerate_config(layers)
+    # force: this endpoint IS the manual restart. It must act even when the config is byte-identical
+    # to what is on disk, which is the usual case when someone reaches for it.
+    await regenerate_config(layers, force=True)
     return {"status": "ok", "tables": len(layers)}
 
 

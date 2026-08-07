@@ -131,6 +131,76 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   permalink it serves, never a substitute for the bbox queries.
 
 ## Last updated
+2026-08-06e (**the 3D-bar defaults come from the DATA, and "Unknown" no longer reaches the buffer**.
+After the SQL and Martin-config fixes, bars STILL showed nothing: 240 country centroids with
+latitude as the height field means the tallest bar is 90 m and the default footprint was 30 m — about
+three thousandths of a pixel at world zoom. Correct in every layer of the stack, invisible on screen.
+`symbology.pillar_radius(style, bbox)` now derives the footprint from the layer's own extent
+(`extent_metres`/400 — world → 100 km, a city → 36 m, i.e. street scale unchanged) and an
+author-chosen radius still wins. The editor mirrors it (`lib/symbology.pillarRadius`) so the number
+shown is the number rendered. The height MULTIPLIER is deliberately left alone at ×1: an earlier
+pass auto-derived it from the field's max, which was tuned on one throwaway test field — deriving a
+default from the data is right, inferring INTENT from it is not.
+Also `portal_generator._is_point`: `_geom_kind` FALLS BACK to "point" for an unrecognised type, and
+`"Unknown"` is a real stored value (Fiona reports it for any generic/mixed shapefile header) — that
+fallback sent a polygon layer to the pillar function, which buffered administrative polygons into
+self-intersecting rings. The fallback stays as a RENDERING default; anything acting on the geometry
+must ask `_is_point`. Both the pillar SOURCE and the pillar LAYER use it — emitting one without the
+other points a layer at a missing source and MapLibre drops it. Plus `_lonlat_bounds`: raster sources
+now declare `bounds`, so MapLibre stops requesting whole-world tiles that the tile server 404s;
+range-checked because the ingest bbox reprojection falls back to the SOURCE CRS, and a projected
+bbox there would hide the layer entirely.)
+2026-08-06d (**`pillars.py`: the tile function never worked** — it failed on EVERY request with
+`syntax error at or near "%"`, so 3D point bars drew nothing from the day they shipped. The body used
+`%%1$I` inside a `format()`, which renders a literal `%1$I` awaiting a SECOND format pass that did
+not exist; the `USING` clause could not substitute for it (it binds `$1` parameters and cannot quote
+an identifier at all). Rewritten as ONE positional pass. While in there: attributes are now listed
+EXPLICITLY instead of `t.*` — which put the source point geometry in the tile beside the buffered
+polygon, giving `ST_AsMVT` two geometry columns — the tile envelope is computed once in plpgsql and
+passed as `%L::geometry`, the bbox test compares `t.geom && ST_Transform(env, srid)` so the spatial
+INDEX can be used (it was transforming every row instead), the guard requires a real
+`geometry`/`geography` column (`pg_authid.rolname` passed the old existence-only check and produced a
+Postgres error rather than an empty tile), and the function is `STABLE`, not `IMMUTABLE` — it reads
+tables. **The tests are the point:** all 12 asserted on `CREATE_SQL` as TEXT and all 12 passed against
+SQL that could not run. CI has PostGIS, so it now installs the function and calls it.
+`martin.py`: `_ensure_pillar_function` reports whether it CREATED the function, `_write_config`
+reports whether the config CHANGED, and Martin is restarted only when one of those is true — a
+restart drops in-flight tiles. `main.py::lifespan` rebuilds the config at startup
+(`_refresh_martin_sources`), because it was previously written only when the layer list changed, so
+an updated instance never learned about a new tile source. See notes_for_future.md.)
+2026-08-06c (`symbology.py`: `outline_color()` and `marker_outline()` — `NO_OUTLINE` ("none") means
+draw none, absent means the default, so existing portals are untouched. MapLibre has no transparent
+-outline keyword, so a polygon expresses "none" by OMITTING `fill-outline-color`; a marker expresses
+it by not stroking. Marker outline width is a RATIO of the radius and is part of `marker_image_id`,
+since it changes the pixels — two differently-ringed markers must not share one image.)
+2026-08-06b (**new `pillars.py` — 3D for POINT layers**. MapLibre extrudes FILLS, so there is no
+point form of `fill-extrusion`: the geometry has to become a polygon. ONE shared Martin FUNCTION
+source (`geodeploy.point_pillars`) buffers a layer's points by a radius in METRES (via `geography` —
+a degree buffer is a different real size at every latitude) and returns them as MVT polygons, which
+`fill-extrusion` then raises. The layer is named by QUERY PARAMETERS on the tile URL, so one function
+serves every layer instead of DDL per upload. That URL is PUBLIC on a published portal, so the
+function validates schema/table/geom against `information_schema` before interpolating them and
+`%I`-quotes them as well. `martin._ensure_pillar_function` installs it (CREATE OR REPLACE,
+non-fatal) from the same place that writes the config naming it, so the two cannot drift.
+Deliberately NOT deck.gl's ColumnLayer for these: PostGIS layers render through Martin into MapLibre,
+and switching renderer when 3D is ticked would need a second implementation of identify, visibility
+and z-order. GeoParquet points are deck-rendered and their half is NOT built — the editor hides the
+control for them rather than showing one that does nothing.)
+2026-08-06 (**new `symbology.py` — data-driven styling**. THE source of truth for turning a layer's
+friendly style keys into MapLibre expressions: `classify` (quantile/equal/jenks-by-k-means),
+`build_classes`/`build_categories`, `color_expression` (`step`/`match`), `size_expression`
+(`interpolate`), `extrusion_paint` (`fill-extrusion`), `legend_entries`, plus the point-marker set
+(`marker_image_id`/`icon_image_expression`/`marker_images`/`icon_size_expression`). Points keep their
+SHAPE under a classification: `icon-image` is data-driven in MapLibre, so the style emits one image
+per class and selects between them with the same step/match the colour uses. (An earlier version
+switched to a `circle` layer and lost the shape — rejected; see notes_for_future.) Pure and DB-free because
+`ui/src/lib/symbology.js` is its line-by-line twin and three of the four renderers are JavaScript;
+`tests/test_symbology.py` pins the expressions as literals for both. Two decisions worth keeping:
+class breaks have OPEN outer edges (data added after styling still draws), and a break at the column
+minimum is dropped rather than shipped as an empty class. `portal_generator` bakes
+`geodeploy:legend` from `legend_entries` so portal.js renders a legend it never re-derives.
+`duckdb_engine.field_stats` + `routers/data/vector.field-stats` supply the distribution; the
+classifier stays server-side so the editor and the portal cannot disagree.)
 2026-07-30 (V-14 `catalog` archetype in `resolve_layout` — it previously ALIASED to webmap, which is
 why selecting it did nothing; `layers_info` gains `layer_id` and is baked to `style.geodeploy.catalog`)
 2026-08-01 (`backup.py`: `BucketMissing` + `create_destination_bucket`)

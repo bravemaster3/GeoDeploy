@@ -19,6 +19,19 @@
   <style>{{THEME_CSS}}</style>
 </head>
 <body>
+<!-- First-paint loader. In the MARKUP rather than created by portal.js, because its whole job is to
+     cover the window from the very first paint — an element added once the runtime has parsed would
+     appear after the thing it is meant to hide. portal.js (`loading`) removes it when the map and
+     this archetype's panels are actually ready; it is never dismissed on a timer, except for a long
+     backstop so a portal can never be held hostage by one broken piece. -->
+<div id="gd-loading" class="gd-space">
+  <div id="gd-loading-box">
+    <div id="gd-loading-orb"><span></span></div>
+    <div id="gd-loading-title">{{TITLE}}</div>
+    <div id="gd-loading-sub">Loading portal…</div>
+  </div>
+</div>
+
 <!-- Access gate — shown by JS when ACCESS_TYPE != 'public' -->
 <div id="access-gate" style="display:none">
   <div id="access-gate-box">

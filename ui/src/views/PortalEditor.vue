@@ -530,6 +530,19 @@ import { usePortalsStore } from '@/stores/portals'
 import { useDataStore } from '@/stores/data'
 import { listTemplates, listBasemaps, getRasterStats, getVectorFeatures, identifyVectorFeatures, uploadPortalAsset, previewPortal, syncSession } from '@/api'
 import { useMaplibre } from '@/composables/useMaplibre'
+// Aliased on import so every call site in this 2000-line file reads as "the shared symbology",
+// not as a local helper someone might be tempted to tweak in place. The Python twin is
+// services/symbology.py and the two must stay identical (CLAUDE.md parity rule).
+import {
+  NO_OUTLINE,
+  colorExpression as symColorExpression,
+  sizeExpression as symSizeExpression,
+  extrusionPaint as symExtrusionPaint,
+  isExtruded as symIsExtruded,
+  iconImageExpression as symIconImageExpression,
+  iconSizeExpression as symIconSizeExpression,
+  markerImages as symMarkerImages,
+} from '@/lib/symbology'
 import { capturePortalThumbnail } from '@/composables/portalThumbnail'
 import maplibregl from 'maplibre-gl'
 import { MapboxOverlay } from '@deck.gl/mapbox'
@@ -611,7 +624,7 @@ const _ARCH_DEFAULTS = {
   storymap: { regions: { layerList: { side: 'left', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: true, legend: true, basemap: true, about: false, story: true } },
   // V-14 catalog: the dataset list is the page and the map is a panel beside it, so layerCatalog is
   // off (the facet rail replaces the switcher) and `catalog` carries the split.
-  catalog:  { regions: { layerList: { side: 'left', mode: 'docked', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, catalog: { scope: 'portal', mapSide: 'right', mapWidth: 50, railWidth: 20, perPage: 12 } }, panels: { catalog: true, layerCatalog: false, legend: true, basemap: true, about: false, story: false } },
+  catalog:  { regions: { layerList: { side: 'right', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, catalog: { scope: 'portal', mapSide: 'right', mapWidth: 50, railWidth: 20, perPage: 12 } }, panels: { catalog: true, layerCatalog: false, legend: true, basemap: true, about: false, story: false } },
 }
 // `webmap+catalog` is still UNBUILT and degrades to a working map on purpose. `catalog` used to be
 // here too, which is why choosing it silently rendered a plain web map.
@@ -1345,7 +1358,7 @@ function makeDeckLayer(cfg) {
   const geom = (layer?.geometry_type || '').toLowerCase()
   const rgb = hexToRgb(cfg.style?.color || '#3b82f6')
   const opacity = cfg.opacity ?? 1.0
-  const outline = hexToRgb(cfg.style?.outline_color || '#1d4ed8')
+  const outline = hexToRgb(_safeOutline(cfg.style?.outline_color))
   const isPoly = geom.includes('polygon'), isLine = geom.includes('line')
   if (data.__overview) {
     // Large-scale representation: partition grid shaded by feature density (see portal.js twin).
@@ -1361,12 +1374,28 @@ function makeDeckLayer(cfg) {
       getLineWidth: 0.5,
     })
   }
+  // 3D for a deck-rendered POLYGON layer. GeoParquet layers emit no MapLibre layer, so
+  // `fill-extrusion` never reaches them — deck extrudes them directly. Mirrors
+  // templates/shared/portal.js::makeDeckLayer; if these disagree the preview shows a style the
+  // portal will not render. Points are excluded (deck extrudes polygons; a pillar needs the
+  // geometry buffered, which only the PostGIS tile path does).
+  const ex = cfg.style?.extrusion || {}
+  const extruded = isPoly && !!ex.enabled && !!ex.field
+  // "none" is a sentinel, not a colour — hex-parsing it yields NaN, which deck renders as BLACK.
+  const noOutline = cfg.style?.outline_color === NO_OUTLINE
+  const exScale = Number(ex.scale) || 1
   return new GeoJsonLayer({
     id: `deck_${cfg.layer_id}`,
     data,
     pickable: false,
     filled: !isLine,
-    stroked: true,
+    // Lines ARE their stroke, so noOutline must not erase them — it is a POLYGON outline setting.
+    stroked: isLine || (!extruded && !(isPoly && noOutline)),
+    extruded,
+    // Non-numeric or missing → 0, not NaN: NaN propagates into the mesh and drops the whole layer.
+    getElevation: extruded
+      ? (f) => { const v = Number((f.properties || {})[ex.field]); return (isFinite(v) ? v : 0) * exScale }
+      : 0,
     getFillColor: [...rgb, Math.round(255 * opacity * (isPoly ? (cfg.style?.fill_opacity ?? 0.45) : 1))],
     getLineColor: isPoly ? [...outline, Math.round(255 * opacity)] : [...rgb, Math.round(255 * opacity)],
     lineWidthUnits: 'pixels',
@@ -1378,6 +1407,11 @@ function makeDeckLayer(cfg) {
     pointRadiusMinPixels: 2,
   })
 }
+
+// "none" is a sentinel, not a colour: hexToRgb would return NaN components and deck renders those
+// as BLACK — the most visible outline available, for the setting that asks for none. `stroked` is
+// what actually removes it; this only guarantees no NaN ever reaches the GPU.
+function _safeOutline(v) { return (!v || v === NO_OUTLINE) ? '#1d4ed8' : v }
 
 // 3D-Z: transform Z (scale·z+offset) so deck.gl's GeoJsonLayer draws at altitude (mirror portal.js).
 function transformElevationGeojson(geojson, elev) {
@@ -1398,7 +1432,7 @@ function makeElevationDeckLayer(cfg, idx) {
   const geom = (cfg.geometry || 'line').toLowerCase()
   const isPoly = geom.includes('polygon'), isLine = geom.includes('line')
   const rgb = hexToRgb(cfg.style?.color || '#3b82f6')
-  const outline = hexToRgb(cfg.style?.outline_color || '#1d4ed8')
+  const outline = hexToRgb(_safeOutline(cfg.style?.outline_color))
   const opacity = cfg.opacity ?? 1.0
   return new GeoJsonLayer({
     id: `deck_elev_${idx}`, data, pickable: false, filled: !isLine, stroked: true,
@@ -1551,6 +1585,7 @@ async function onPreviewClick(e) {
 // edits (band/colour/etc.) must NOT yank the view — setStyle keeps the current camera.
 let viewInitialized = false
 let lastStyleJson = ''  // last applied MapLibre style → skip redundant setStyle repaints (each = a flash)
+let pitched3D = false   // the one automatic tilt when an extruded layer first appears
 // When the catalog arrives from /api/basemaps (or changes), refresh the picker's list and, if the
 // chosen basemap's tiles differ, rebuild the preview.
 watch(basemapCatalog, () => basemapControl?.refresh())
@@ -1563,6 +1598,14 @@ watch([layerConfigs, layerTree, loaded, basemap, basemapCatalog, ready], () => {
   // layers live outside the MapLibre style, so refreshDeck runs regardless.
   const json = JSON.stringify(style)
   if (json !== lastStyleJson) { lastStyleJson = json; applyStyle(style) }
+  // Straight down, an extruded polygon and a plain fill are the same shape — so turning 3D on
+  // while looking at a flat preview appears to do NOTHING. Tilt once, the first time an extrusion
+  // shows up, and never again: after that the camera is the author's to place (the same reasoning
+  // as the camera watcher above, which only moves on the first build).
+  if (!pitched3D && style.layers.some(l => l.type === 'fill-extrusion')) {
+    pitched3D = true
+    if (map.value && map.value.getPitch() === 0) map.value.easeTo({ pitch: 45, duration: 600 })
+  }
   refreshDeck(false)  // rebuild deck layers (fetch only newly-appeared geoparquet layers)
   if (!viewInitialized) {
     if (savedView.value) { jumpTo(savedView.value); viewInitialized = true }
@@ -1579,7 +1622,7 @@ watch(loaded, (v) => {
     if (!e.id || !e.id.startsWith('gd-pt-') || map.value.hasImage(e.id)) return
     const spec = markerSpecs[e.id]
     if (!spec) return
-    const im = markerImage(spec.shape, spec.color, spec.size)
+    const im = markerImage(spec.shape, spec.color, spec.size, spec.outline, spec.outline_width)
     try { map.value.addImage(e.id, im, { pixelRatio: im.pixelRatio }) } catch { /* ignore */ }
   })
   // deck.gl overlay (once): a control so it survives setStyle; refetch the viewport on pan/zoom.
@@ -1633,8 +1676,12 @@ function crossPts(cx, cy, r) {
   const t = r * 0.38
   return [[-t, -r], [t, -r], [t, -t], [r, -t], [r, t], [t, t], [t, r], [-t, r], [-t, t], [-r, t], [-r, -t], [-t, -t]].map(d => [cx + d[0], cy + d[1]])
 }
-function markerImage(shape, color, size) {
-  const dpr = 2, r = Math.max(3, Number(size) || 5), stroke = Math.max(1, r * 0.28)
+function markerImage(shape, color, size, outline, outlineWidth) {
+  const dpr = 2, r = Math.max(3, Number(size) || 5)
+  // Outline width is a RATIO of the radius (see portal.js) so it stays proportional when a layer is
+  // resized; 0.28 reproduces the old hard-coded stroke exactly.
+  const ow = outlineWidth == null ? 0.28 : Number(outlineWidth)
+  const stroke = Math.max(0, r * (isFinite(ow) ? ow : 0.28))
   const dim = 80  // fixed canvas (see portal.js): constant dims let updateImage handle size changes
   const cv = document.createElement('canvas')
   cv.width = dim * dpr; cv.height = dim * dpr
@@ -1649,7 +1696,9 @@ function markerImage(shape, color, size) {
   else if (shape === 'cross') { crossPts(cx, cy, r).forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])); ctx.closePath() }
   else ctx.arc(cx, cy, r, 0, Math.PI * 2)
   ctx.fillStyle = color || '#3b82f6'; ctx.fill()
-  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = stroke; ctx.stroke()
+  // null = draw no outline; undefined = unspecified, i.e. the white default markers always had.
+  const oc = outline === undefined ? '#ffffff' : outline
+  if (oc && stroke > 0) { ctx.strokeStyle = oc; ctx.lineWidth = stroke; ctx.stroke() }
   const d = ctx.getImageData(0, 0, dim * dpr, dim * dpr)
   return { width: dim * dpr, height: dim * dpr, data: d.data, pixelRatio: dpr }
 }
@@ -1785,36 +1834,83 @@ function buildPreviewStyle() {
         expandBounds(layer.bbox)
         continue
       }
-      const color = cfg.style?.color || '#3b82f6'
+      const st = cfg.style || {}
       const opacity = cfg.opacity ?? 1.0
       const geom = (layer.geometry_type || '').toLowerCase()
+      // Colour may be a data-driven EXPRESSION (graduated / categorized). `lib/symbology` is the
+      // twin of services/symbology.py, so the preview and the published portal classify features
+      // identically — see the parity note in that file.
+      const color = symColorExpression(st)
 
       if (geom.includes('polygon')) {
-        style.layers.push({
-          id: srcId, type: 'fill', source: srcId, 'source-layer': sourceLayer,
-          paint: {
+        if (symIsExtruded(st)) {
+          // 3D: a different layer TYPE, not a paint variation. Needs pitch to be visible at all —
+          // `ensurePitchFor3D` below tilts the preview the first time an extrusion appears.
+          style.layers.push({
+            id: srcId, type: 'fill-extrusion', source: srcId, 'source-layer': sourceLayer,
+            paint: symExtrusionPaint(st, opacity),
+          })
+        } else {
+          // MapLibre has no transparent-outline keyword: you get no outline by omitting the
+          // property. Mirrors portal_generator._vector_layer.
+          const fillPaint = {
             'fill-color': color,
-            'fill-opacity': opacity * (cfg.style?.fill_opacity ?? 0.45),
-            'fill-outline-color': cfg.style?.outline_color || '#1d4ed8',
-          },
-        })
+            'fill-opacity': opacity * (st.fill_opacity ?? 0.45),
+          }
+          // `fill-antialias: false`, not an omission: an omitted fill-outline-color MATCHES the
+          // fill colour (the spec default), which is why "None" drew a visible edge. Mirrors
+          // portal_generator._vector_layer.
+          if (st.outline_color === NO_OUTLINE) fillPaint['fill-antialias'] = false
+          else fillPaint['fill-outline-color'] = st.outline_color || '#1d4ed8'
+          style.layers.push({
+            id: srcId, type: 'fill', source: srcId, 'source-layer': sourceLayer, paint: fillPaint,
+          })
+        }
       } else if (geom.includes('line')) {
-        const linePaint = { 'line-color': color, 'line-width': cfg.style?.line_width ?? 2, 'line-opacity': opacity }
-        if (cfg.style?.lineType === 'dashed') linePaint['line-dasharray'] = [2, 1.5]
-        else if (cfg.style?.lineType === 'dotted') linePaint['line-dasharray'] = [0.4, 1.8]
+        const linePaint = {
+          'line-color': color,
+          'line-width': symSizeExpression(st, st.line_width ?? 2),
+          'line-opacity': opacity,
+        }
+        if (st.lineType === 'dashed') linePaint['line-dasharray'] = [2, 1.5]
+        else if (st.lineType === 'dotted') linePaint['line-dasharray'] = [0.4, 1.8]
         style.layers.push({
           id: srcId, type: 'line', source: srcId, 'source-layer': sourceLayer, paint: linePaint,
         })
+      } else if (symIsExtruded(st) && layer.storage_backend !== 'geoparquet') {
+        // POINTS IN 3D: pillars. MapLibre extrudes fills only, so the geometry has to become a
+        // polygon — the shared Martin function buffers the points by a radius in metres and serves
+        // them as one. A SECOND source beside the normal one, so toggling 3D off changes nothing
+        // else. Mirrors portal_generator._vector_layer / the pillar source it adds.
+        const pillarSrc = `${srcId}-pillars`
+        const r = Math.min(Math.max(Number(st.extrusion?.radius) || 30, 0.5), 100000)
+        const qs = new URLSearchParams({
+          schema: layer.schema_name, table: layer.table_name,
+          geom: layer.geometry_column || 'geom', radius: String(Math.round(r * 100) / 100),
+        })
+        style.sources[pillarSrc] = {
+          type: 'vector',
+          tiles: [`${location.origin}/tiles/point_pillars/{z}/{x}/{y}?${qs}`],
+          minzoom: 0, maxzoom: 22,
+        }
+        style.layers.push({
+          id: srcId, type: 'fill-extrusion', source: pillarSrc, 'source-layer': 'pillars',
+          paint: symExtrusionPaint(st, opacity),
+        })
       } else {
-        // Points render as a symbol layer with a runtime-generated icon (so shapes
-        // work on raster basemaps). Icon id encodes the style so it refreshes on change.
-        const shape = cfg.style?.marker || 'circle'
-        const mSize = cfg.style?.radius ?? 5
-        const iconId = `gd-pt-${layer.id}-${shape}-${String(color).replace('#', '')}-${mSize}`
-        markerSpecs[iconId] = { shape, color, size: mSize }
+        // Points render as a symbol layer with generated canvas icons, so marker SHAPES work on any
+        // basemap. A classified layer keeps its shape: `icon-image` is data-driven, so we register
+        // one image per class and let MapLibre pick. Mirrors portal_generator._vector_layer — if
+        // these disagree, the preview shows a style the portal will not render.
+        symMarkerImages(st).forEach((im) => { markerSpecs[im.id] = im })
         style.layers.push({
           id: srcId, type: 'symbol', source: srcId, 'source-layer': sourceLayer,
-          layout: { 'icon-image': iconId, 'icon-allow-overlap': true, 'icon-ignore-placement': true },
+          layout: {
+            'icon-image': symIconImageExpression(st),
+            'icon-size': symIconSizeExpression(st),
+            'icon-allow-overlap': true,
+            'icon-ignore-placement': true,
+          },
           paint: { 'icon-opacity': opacity },
         })
       }

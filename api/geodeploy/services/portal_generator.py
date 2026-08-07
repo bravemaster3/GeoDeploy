@@ -7,6 +7,8 @@ from ..config import get_settings
 from .martin import get_tile_url as vector_tile_url
 from .titiler import get_tile_url as raster_tile_url
 from . import external_sources as ext_svc
+from . import pillars
+from . import symbology
 
 
 # ── Basemap catalog — THE single source of truth ─────────────────────────────────────────────────
@@ -131,6 +133,15 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                         "line_width": dstyle.get("line_width", 2),
                         "radius": dstyle.get("radius", 5),
                         "visible": cfg.get("visible", True),
+                        # 3D for a deck-rendered POLYGON layer. These emit no MapLibre layer, so
+                        # `fill-extrusion` never reaches them — deck's GeoJsonLayer is asked for
+                        # `extruded`/`getElevation` instead (portal.js::makeDeckLayer). Points are
+                        # excluded: deck extrudes polygons, and a point pillar needs the geometry
+                        # buffered first, which only the PostGIS tile path does today.
+                        "extrusion": ((cfg.get("style") or {}).get("extrusion")
+                                      if (symbology.is_extruded(cfg.get("style") or {})
+                                          and _geom_kind(layer.geometry_type) == "polygon")
+                                      else None),
                         "bbox": json.loads(layer.bbox) if layer.bbox else None,
                         # Client-side duckdb-wasm read path (root-relative; portal.js
                         # absolutifies). Only prepped (partitioned-prefix) layers carry a
@@ -163,6 +174,30 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                     "minzoom": 0,
                     "maxzoom": 22,
                 }
+            # A point layer in 3D reads from a SECOND source: the same table, buffered into polygons
+            # by the shared Martin function (services/pillars). Added beside the normal one rather
+            # than replacing it, so toggling 3D off needs no source change.
+            _st = cfg.get("style") or {}
+            # `_is_point`, not `_geom_kind(...) == "point"`: _geom_kind FALLS BACK to point for a
+            # type it does not recognise, and "Unknown" is a real value — Fiona reports it for any
+            # shapefile with a generic or mixed header. That fallback sent a polygon layer through
+            # here, and the tile function then buffered administrative polygons into
+            # self-intersecting rings. Buffering geometry we cannot identify is never right, so this
+            # gate demands a positive answer.
+            if (symbology.is_extruded(_st)
+                    and _is_point(layer.geometry_type)
+                    and getattr(layer, "storage_backend", "postgis") != "geoparquet"):
+                sources[f"{source_id}-pillars"] = {
+                    "type": "vector",
+                    "tiles": [pillars.tile_url(layer.schema_name, layer.table_name,
+                                               layer.geometry_column or "geom",
+                                               # The layer's own extent sets the default bar width:
+                                               # a fixed 30 m is invisible on anything wider than a
+                                               # town, which is what "3D does nothing" looked like.
+                                               symbology.pillar_radius(_st, layer.bbox))],
+                    "minzoom": 0,
+                    "maxzoom": 22,
+                }
             ml_layers = _vector_layers(source_id, layer, cfg)
             meta = {
                 "geodeploy:name": layer.name,
@@ -174,6 +209,20 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 "geodeploy:marker": (cfg.get("style") or {}).get("marker", "circle"),
                 "geodeploy:markerColor": (cfg.get("style") or {}).get("color", "#3b82f6"),
                 "geodeploy:markerSize": (cfg.get("style") or {}).get("radius", 5),
+                # EVERY marker bitmap this layer needs — one per class for a classified point layer.
+                # Baked so the runtime can create them all up front; discovering them one
+                # `styleimagemissing` at a time makes markers pop in as each class first scrolls
+                # into view.
+                "geodeploy:markerImages": symbology.marker_images(cfg.get("style") or {}),
+                # The legend for a classified layer, BAKED rather than re-derived at runtime.
+                # portal.js renders these entries; it does not read `classes`/`categories` and build
+                # its own labels. One description, one legend — a legend that disagrees with the map
+                # is worse than none, and the only way to guarantee it agrees is to derive both from
+                # the same call (`symbology.legend_entries`, which also feeds the editor).
+                # Empty for a single-symbol layer, which is what the swatch already covers.
+                "geodeploy:legend": symbology.legend_entries(cfg.get("style") or {}),
+                # 3D is worth announcing: the runtime opens the map tilted when any layer has it.
+                "geodeploy:extruded": symbology.is_extruded(cfg.get("style") or {}),
             }
             # A raw-paint passthrough can emit several sub-layers (fill + outline, …). Only the FIRST
             # carries the full geodeploy:* metadata so the switcher lists the layer once; the rest carry
@@ -207,6 +256,13 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 )],
                 "tileSize": 256,
             }
+            # Where the data actually IS. Without this MapLibre requests tiles across the whole
+            # viewport at every zoom, and the tile server answers 404 for every one that misses the
+            # raster — a console full of failed requests, and real traffic spent proving that a COG
+            # covering one country does not cover the Pacific. `bounds` stops them being asked for.
+            _rb = _lonlat_bounds(layer.bbox)
+            if _rb:
+                sources[source_id]["bounds"] = _rb
             # Base opacity + an optional raster-paint passthrough (GeoLibre import carries
             # brightness/contrast/saturation/hue in style.paint; GeoDeploy's own UI sets none of these).
             raster_paint = {"raster-opacity": cfg.get("opacity", 1.0)}
@@ -417,9 +473,13 @@ _LAYOUT_ARCHETYPES = {
     # /api/stac at runtime rather than baked, so adding a dataset does not require a re-publish.
     "catalog": {
         "regions": {
-            # Kept for merge-shape compatibility with the other archetypes; the catalog does not
-            # render a layer switcher (see panels.layerCatalog below).
-            "layerList": {"side": "left", "mode": "docked", "collapsed": True,
+            # `layerCatalog` is off by default here (the facet rail is the browse surface), but an
+            # author CAN turn it on — so these settings have to be the ones that work when they do.
+            # FLOATING and on the map's side: the horizontal space of a catalog page belongs to the
+            # results, so a docked column would be taken out of the map's half, and the map is the
+            # only part of the page a layer list means anything to. Collapsed, like every other
+            # archetype — one tap on the on-map toggle opens it.
+            "layerList": {"side": "right", "mode": "floating", "collapsed": True,
                           "width": None, "x": None, "y": None},
             "controls": {"position": "top-right"},
             "header": {"style": "bar"},
@@ -1290,23 +1350,46 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
     style = cfg.get("style", {})
     opacity = cfg.get("opacity", 1.0)
     source_layer = _source_layer_name(layer)
+    # Colour may now be a data-driven EXPRESSION rather than a string (graduated / categorized).
+    # `services/symbology` computes it, and `ui/src/lib/symbology.js` computes the same thing for
+    # the editor preview and the runtime — one description, four renderers (CLAUDE.md parity rule).
+    color = symbology.color_expression(style)
 
     if "polygon" in geom:
+        # 3D: polygons extruded by a numeric property. A separate layer TYPE, not a paint variation,
+        # so it has to be decided here rather than patched onto the fill below.
+        if symbology.is_extruded(style):
+            return {
+                "id": f"vector-{layer.id}",
+                "type": "fill-extrusion",
+                "source": source_id,
+                "source-layer": source_layer,
+                "paint": symbology.extrusion_paint(style, opacity),
+            }
+        fill_paint = {
+            "fill-color": color,
+            "fill-opacity": opacity * style.get("fill_opacity", 0.45),
+        }
+        # Removing a fill's outline is `fill-antialias: false`, NOT omitting fill-outline-color.
+        # Omitting it makes the outline MATCH FILL-COLOR (the spec's default), which is why "None"
+        # produced a visible dark edge instead of none — reported as "it drew a black outline".
+        # A `fill` layer always strokes its own edge; antialias is the switch that stops it.
+        _outline = symbology.outline_color(style)
+        if _outline:
+            fill_paint["fill-outline-color"] = _outline
+        else:
+            fill_paint["fill-antialias"] = False
         return {
             "id": f"vector-{layer.id}",
             "type": "fill",
             "source": source_id,
             "source-layer": source_layer,
-            "paint": {
-                "fill-color": style.get("color", "#3b82f6"),
-                "fill-opacity": opacity * style.get("fill_opacity", 0.45),
-                "fill-outline-color": style.get("outline_color", "#1d4ed8"),
-            },
+            "paint": fill_paint,
         }
     if "line" in geom:
         paint = {
-            "line-color": style.get("color", "#3b82f6"),
-            "line-width": style.get("line_width", 2),
+            "line-color": color,
+            "line-width": symbology.size_expression(style, style.get("line_width", 2)),
             "line-opacity": opacity,
         }
         line_type = style.get("lineType")
@@ -1321,16 +1404,42 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
             "source-layer": source_layer,
             "paint": paint,
         }
-    # point / unknown — rendered as a symbol layer with a runtime-generated icon
-    # (portal.js / the editor build the image from the marker metadata). This lets
-    # points use shapes (circle/square/triangle/diamond/star/cross) on raster basemaps.
+    # POINTS IN 3D: a pillar standing at each location. MapLibre extrudes FILLS only, so there is no
+    # point form of fill-extrusion — the geometry has to become a polygon. `services/pillars` serves
+    # exactly that: one shared Martin FUNCTION buffers the points by a radius in metres and returns
+    # them as polygons, so the layer keeps the renderer it already had (MapLibre, from a tile source)
+    # and every cross-cutting behaviour around it — identify, z-order, visibility — is unchanged.
+    # Routing these through deck.gl instead would mean a layer changes RENDERER when 3D is ticked.
+    #
+    # The `_is_point` test MUST match the one guarding the pillar SOURCE in generate_style — this
+    # layer reads from that source, so a layer emitted without it points at a source that does not
+    # exist and MapLibre drops the layer entirely. Two conditions, one decision: keep them identical.
+    if (symbology.is_extruded(style)
+            and _is_point(layer.geometry_type)
+            and getattr(layer, "storage_backend", "postgis") != "geoparquet"):
+        return {
+            "id": f"vector-{layer.id}",
+            "type": "fill-extrusion",
+            "source": f"{source_id}-pillars",
+            "source-layer": pillars.SOURCE_LAYER,
+            "paint": symbology.extrusion_paint(style, opacity),
+        }
+    # point / unknown — a symbol layer with runtime-generated canvas icons, which is what lets points
+    # use shapes (circle/square/triangle/diamond/star/cross) on any basemap.
+    #
+    # A classified layer keeps its shape: `icon-image` is DATA-DRIVEN in MapLibre, so the style emits
+    # one image per class and selects between them with the same `step`/`match` the colour uses. See
+    # the note above `symbology.marker_image_id` for why this beats an SDF icon (mushy edges) and why
+    # falling back to a `circle` layer — the first implementation — was wrong: losing the marker
+    # shape the moment you classify is not a trade anyone asked for.
     return {
         "id": f"vector-{layer.id}",
         "type": "symbol",
         "source": source_id,
         "source-layer": source_layer,
         "layout": {
-            "icon-image": f"gd-pt-{layer.id}",
+            "icon-image": symbology.icon_image_expression(style),
+            "icon-size": symbology.icon_size_expression(style),
             "icon-allow-overlap": True,
             "icon-ignore-placement": True,
         },
@@ -1340,8 +1449,33 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
     }
 
 
+def _lonlat_bounds(raw) -> list[float] | None:
+    """A stored bbox as MapLibre source `bounds` — [w, s, e, n] in lon/lat — or None.
+
+    Raster bboxes are reprojected to EPSG:4326 at ingest (`cog_converter._read_meta`), but that
+    reprojection has a fallback that keeps the SOURCE CRS when it fails. A projected bbox here would
+    be far outside lon/lat range and would hide the layer completely rather than merely leaving the
+    404s in place, so the range check is what makes this safe to apply blindly: anything that is not
+    plausibly lon/lat is dropped and the source simply carries no bounds, exactly as before.
+    """
+    try:
+        b = json.loads(raw) if isinstance(raw, str) else raw
+        w, s, e, n = (float(v) for v in b)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not (-180.0 <= w < e <= 180.0 and -90.0 <= s < n <= 90.0):
+        return None
+    return [w, s, e, n]
+
+
 def _geom_kind(geometry_type: str | None) -> str:
-    """Normalize a PostGIS/Fiona geometry type to point|line|polygon."""
+    """Normalize a PostGIS/Fiona geometry type to point|line|polygon.
+
+    NOTE the fallback: an unrecognised type answers "point". That is a rendering default and it is
+    kept — a symbol is the least destructive way to draw something unidentified. It is NOT a
+    statement that the layer holds points, so anything that would act on the geometry itself must
+    ask `_is_point` instead. See the pillar source in `generate_style`.
+    """
     g = (geometry_type or "").lower()
     if "polygon" in g:
         return "polygon"
@@ -1350,6 +1484,12 @@ def _geom_kind(geometry_type: str | None) -> str:
     if "point" in g:
         return "point"
     return "point"
+
+
+def _is_point(geometry_type: str | None) -> bool:
+    """True only when the type POSITIVELY says point — never for an unknown or missing one."""
+    g = (geometry_type or "").lower()
+    return "point" in g and "polygon" not in g and "line" not in g
 
 
 def _expand_bounds(bounds: list, bbox: list) -> None:

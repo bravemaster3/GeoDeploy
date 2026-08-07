@@ -272,6 +272,38 @@ def _write_geo_footer(writer, geom_types, bbox, covering_col=None, crs_projjson=
         writer.add_key_value_metadata({"geo": json.dumps(geo)})
 
 
+#: `ST_GeometryType()` spelling → the name we store (Fiona/OGC spelling, which every consumer
+#: already substring-matches on). Curves and collections are absent deliberately: nothing downstream
+#: knows how to draw them, and claiming a kind we cannot render is worse than admitting we do not
+#: know — an unresolved layer keeps whatever the file declared.
+_PG_GEOM_TYPE = {
+    "ST_Point": "Point", "ST_MultiPoint": "MultiPoint",
+    "ST_LineString": "LineString", "ST_MultiLineString": "MultiLineString",
+    "ST_Polygon": "Polygon", "ST_MultiPolygon": "MultiPolygon",
+}
+#: Rows read to decide the layer's geometry type. Bounded on purpose — see the call site. Large
+#: enough that a layer whose first rows are unrepresentative still classifies correctly, small
+#: enough to be an index-free read of a few thousand rows on any table size.
+_GEOM_TYPE_SAMPLE = 5000
+
+#: Precedence for a MIXED layer, matching `_kind_from_types`: polygon beats line beats point. A
+#: layer holding both polygons and their label points is a polygon layer to anyone looking at it.
+_PG_GEOM_ORDER = ("ST_MultiPolygon", "ST_Polygon", "ST_MultiLineString", "ST_LineString",
+                  "ST_MultiPoint", "ST_Point")
+
+
+def _geom_type_from_postgis(pg_types: set) -> str | None:
+    """The single geometry type to record, from the DISTINCT ST_GeometryType() values in a table.
+
+    None when nothing recognisable came back — an empty table, or a layer of curves/collections —
+    in which case the caller keeps the type the source file declared.
+    """
+    for t in _PG_GEOM_ORDER:
+        if t in pg_types:
+            return _PG_GEOM_TYPE[t]
+    return None
+
+
 def _kind_from_types(geom_types) -> str:
     """Pick the catalog's single point/line/polygon kind from the set of GeoParquet type names
     (polygon > line > point, matching how mixed layers usually want to be treated)."""
@@ -539,6 +571,33 @@ def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir:
                     f"FROM {_q(schema)}.{_q(table)}) s")
         b = cur.fetchone()
         bbox = [b[0], b[1], b[2], b[3]] if b and b[0] is not None else None
+
+        # THE GEOMETRY TYPE COMES FROM THE DATA, not from the file header.
+        #
+        # `src.schema["geometry"]` above is the type the LAYER DECLARES, and a shapefile whose
+        # header says wkbUnknown — or that mixes types — makes Fiona hand back the literal string
+        # "Unknown". That string was stored verbatim and then guessed at differently by every
+        # consumer: portal_generator._geom_kind falls through to "point", so a polygon layer
+        # rendered through the point path, and with 3D enabled it reached the pillar tile function,
+        # which buffered administrative polygons into self-intersecting rings (on screen: orange
+        # shards). The editor meanwhile resolved it to 'unknown' and showed a different set of
+        # controls. One bad value, three different interpretations.
+        #
+        # The rows are already loaded here, so just ask them — but ask a BOUNDED number of them.
+        # `SELECT DISTINCT ... LIMIT 16` reads the whole table: proving there are only N distinct
+        # values means visiting every row, so a 2-million-feature import would pay a full scan to
+        # learn what its first row could have told it. A sample cannot prove a layer is
+        # single-typed, and it does not need to — this picks which of point/line/polygon to draw,
+        # and `_geom_type_from_postgis` already resolves a mixed sample by precedence.
+        try:
+            cur.execute(f"SELECT ST_GeometryType(geom) FROM {_q(schema)}.{_q(table)} "
+                        f"WHERE geom IS NOT NULL LIMIT {_GEOM_TYPE_SAMPLE}")
+            resolved = _geom_type_from_postgis({r[0] for r in cur.fetchall()})
+            if resolved:
+                geom_type = resolved
+        except Exception:
+            logger.warning("could not resolve the geometry type from the data; keeping %r",
+                           geom_type, exc_info=True)
         conn.commit()
     except Exception:
         conn.rollback()

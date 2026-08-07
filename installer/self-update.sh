@@ -104,6 +104,48 @@ apply_nginx() {
   fi
 }
 
+
+# ── Did the new code ACTUALLY get deployed? ───────────────────────────────────────────────────────
+# A health check proves the stack is UP, not that it is NEW. An old-but-healthy API answers /health
+# perfectly, so an update whose build silently produced nothing reported success — and `record_sha`
+# had already moved the marker, so the dashboard showed the new version running over the old code.
+# Every signal said "updated" while nothing had changed.
+#
+# Observed 2026-08-06, not hypothetical: geodeploy/api:latest was 47 hours old after an update to a
+# commit merged 2 hours earlier, both `geodeploy-api` and `celery` were running pre-fix code, and the
+# panel read "Up to date". The consequence was a bug the operator had already been told was fixed.
+#
+# The check is deliberately NARROW, so it cannot cry wolf:
+#   * it only complains when the build CONTEXT for that image changed between the two commits — a
+#     docs-only or templates-only update legitimately produces no new image, and must stay silent;
+#   * and it separately verifies the running CONTAINER is on the image we just built, which catches
+#     "built fine, recreated nothing".
+image_id() { docker image inspect -f '{{.Id}}' "$1" 2>/dev/null || echo none; }
+container_image_id() { # compose service name
+  local cid; cid=$(docker compose ps -q "$1" 2>/dev/null | head -1)
+  [ -n "$cid" ] && docker inspect -f '{{.Image}}' "$cid" 2>/dev/null || echo none
+}
+# Did anything under <path> change between the old and new commit?
+context_changed() { # path
+  [ -n "$(git diff --name-only "$OLD_SHA" "$NEW_SHA" -- "$1" 2>/dev/null)" ]
+}
+
+# Returns a human-readable problem, or nothing at all when the deploy is sound.
+verify_deployed() { # image_tag  context_path  before_image_id  service...
+  local tag="$1" ctx="$2" before="$3" after svc; shift 3
+  after=$(image_id "$tag")
+  if context_changed "$ctx" && [ "$before" = "$after" ] && [ "$after" != none ]; then
+    echo "$ctx/ changed between ${OLD_SHA:0:7} and ${NEW_SHA:0:7} but $tag was not rebuilt"
+    return
+  fi
+  for svc in "$@"; do
+    if [ "$(container_image_id "$svc")" != "$after" ]; then
+      echo "$svc is not running the image that was just built ($tag)"
+      return
+    fi
+  done
+}
+
 healthy() {
   local i
   for i in $(seq 1 "$HEALTH_TRIES"); do
@@ -169,12 +211,28 @@ if ! git fetch --tags --force --prune-tags origin >/dev/null 2>&1; then
 fi
 git remote prune origin >/dev/null 2>&1 || true   # a branch deleted upstream must stop resolving
 
-# Resolve BEFORE resetting, so a typo'd or missing tag fails while the checkout is still intact
+# Resolve BEFORE resetting, so a typo'd or missing ref fails while the checkout is still intact
 # rather than half-applied.
-if ! git rev-parse --verify "${TARGET}^{commit}" >/dev/null 2>&1; then
-  write_status error "No such version: ${TARGET}. Check the release exists."; exit 1
+#
+# Try the REMOTE-TRACKING ref first. A branch this checkout has never been on exists ONLY as
+# `refs/remotes/origin/<name>` — the bare name resolves to nothing — so `feat/whatever` failed as
+# "No such version" even though the fetch above had just brought it down. `main` and tags hid the
+# bug: the API rewrites `main` to `origin/main`, and a tag IS local after `--tags`.
+#
+# Remote before local, deliberately: if a stale local branch of the same name exists (left by a
+# manual checkout), the remote is the one the operator means.
+TARGET_COMMIT=""
+for _cand in "refs/remotes/origin/${TARGET#origin/}" "refs/tags/$TARGET" "$TARGET"; do
+  if TARGET_COMMIT="$(git rev-parse -q --verify "${_cand}^{commit}" 2>/dev/null)" && [ -n "$TARGET_COMMIT" ]; then
+    break
+  fi
+  TARGET_COMMIT=""
+done
+if [ -z "$TARGET_COMMIT" ]; then
+  write_status error "No such version: ${TARGET}. Expected a release tag (e.g. v1.0), a branch, 'main', or a commit."
+  exit 1
 fi
-if ! git reset --hard "$TARGET" >/dev/null 2>&1; then write_status error "git update failed."; exit 1; fi
+if ! git reset --hard "$TARGET_COMMIT" >/dev/null 2>&1; then write_status error "git update failed."; exit 1; fi
 NEW_SHA="$(git rev-parse HEAD)"
 if [ "$NEW_SHA" = "$OLD_SHA" ]; then
   # Keep the deployed-commit marker honest even on a no-op — a manual `git pull` moves HEAD but leaves
@@ -190,6 +248,9 @@ if [ "$NEW_SHA" = "$OLD_SHA" ]; then
 fi
 
 write_status running "Building the new version"
+# Image ids BEFORE the build, so "did this actually produce anything" is answerable afterwards.
+BEFORE_api=$(image_id geodeploy/api:latest)
+BEFORE_ui=$(image_id geodeploy/ui:latest)
 if ! docker compose build; then rollback "$OLD_SHA" "Build failed"; exit 1; fi
 
 write_status running "Restarting services"
@@ -204,6 +265,19 @@ ensure_nginx_mount_synced # …and recreate nginx if its data/portals mount dive
 
 write_status running "Checking health"
 if ! healthy; then rollback "$OLD_SHA" "Unhealthy after update"; exit 1; fi
+
+# HEALTHY IS NOT THE SAME AS UPDATED — see the note above `image_id`. Verify the new code is really
+# what is running before claiming so, and if it is not, put the version marker BACK. A wrong marker
+# is worse than a failed update: it tells the operator (and the next debugging session) that a fix
+# is deployed when it is not.
+DEPLOY_PROBLEM=$(verify_deployed geodeploy/api:latest api "$BEFORE_api" geodeploy-api celery)
+[ -z "$DEPLOY_PROBLEM" ] && DEPLOY_PROBLEM=$(verify_deployed geodeploy/ui:latest ui "$BEFORE_ui" geodeploy-ui)
+if [ -n "$DEPLOY_PROBLEM" ]; then
+  record_sha "$OLD_SHA"
+  record_ref "$OLD_REF"
+  write_status error "Update did not take effect: ${DEPLOY_PROBLEM}. The code on disk is ${NEW_SHA:0:7} but the running containers are not. Try: docker compose build --no-cache geodeploy-api geodeploy-ui && docker compose up -d --force-recreate geodeploy-api geodeploy-ui celery"
+  exit 1
+fi
 
 # Re-assert the markers (cheap, idempotent): the pre-recreate write above is the one that matters,
 # this just guarantees the file/env agree if anything in between rewrote .env.

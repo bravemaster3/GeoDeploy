@@ -1,10 +1,13 @@
 """Martin tile server config generation and lifecycle management."""
 import asyncio
+import logging
 import os
 import docker
 import yaml
 from .. import state_db
 from ..config import get_settings
+
+_log = logging.getLogger(__name__)
 
 
 def _pg_creds(settings) -> dict:
@@ -47,16 +50,83 @@ def _pg_sync_dsn(settings) -> str:
             f"@{c['postgis_host']}:{c['postgis_port']}/{c['postgis_db']}{ssl}")
 
 
-async def regenerate_config(layers: list[dict]) -> None:
+async def regenerate_config(layers: list[dict], force: bool = False) -> None:
     """
     Rebuild martin-config.yaml from the current layer list and signal Martin to reload.
     layers: [{"schema": str, "table": str, "id_column": str}]
+    force: restart Martin even when nothing changed (the operator's "Reload Martin" button).
     """
     settings = get_settings()
     layers = await _attach_properties(layers, settings)
+    installed = await _ensure_pillar_function(settings)
     config = _build_config(layers, settings)
-    _write_config(config, settings.martin_config_path)
-    await _reload_martin()
+    changed = _write_config(config, settings.martin_config_path)
+    # Restarting Martin drops every in-flight tile request, so do it only when it can change what
+    # Martin serves: the config differs, or the pillar function did not exist when Martin last
+    # resolved its sources, OR its body changed — Martin CACHES TILES in memory, so a corrected
+    # function otherwise keeps serving the tiles it already built from the old one.
+    #
+    # `force` is for the operator's "Reload Martin" button, whose entire purpose is to restart a
+    # Martin that is misbehaving for reasons the config cannot show. Skipping the restart there
+    # because nothing changed on disk would take away the one manual recovery there is.
+    if force or changed or installed:
+        await _reload_martin()
+
+
+def _pillar_body(create_sql: str) -> str:
+    """The function body from a `CREATE OR REPLACE FUNCTION … AS $$ … $$` statement.
+
+    Split on the OUTER `$$` only. The body itself contains a `$f$ … $f$` dollar-quoted string (the
+    dynamic SQL template), which uses a different tag precisely so it cannot terminate this one.
+    """
+    parts = create_sql.split("$$")
+    return parts[1] if len(parts) > 2 else create_sql
+
+
+async def _ensure_pillar_function(settings) -> bool:
+    """Create/refresh the shared `geodeploy.point_pillars` tile function (3D pillars for points).
+
+    Done HERE rather than in a migration because it must exist wherever Martin's config names it,
+    and this is the one place that writes that config — so the two cannot drift apart. `CREATE OR
+    REPLACE` makes it idempotent and self-healing: an instance restored from an older snapshot gets
+    the current definition on the next config rebuild, with no operator action.
+
+    Non-fatal. A database that refuses the DDL (a read-only replica, a locked-down role) must not
+    stop the tile config for every OTHER layer from being written — the pillars source simply
+    returns nothing and 3D points do not draw.
+
+    Returns True when Martin has to be RESTARTED: either the function did not exist (so Martin
+    resolved its sources without it), or its BODY changed.
+
+    The body case is not obvious and cost a real bug. Martin resolves a function source by name at
+    startup and executes the current body per request, so a replaced body takes effect immediately —
+    which is what an earlier version of this comment said, and it stopped there. But **Martin caches
+    tiles in memory** (its `--cache-size` is on by default). A corrected function therefore keeps
+    serving the OLD tiles to anyone who had already requested them, and the fix looks like it did
+    not work: the operator sees a deployed instance still drawing the broken geometry, with nothing
+    in any log to explain it. Comparing `prosrc` catches exactly that.
+    """
+    from . import pillars
+
+    import asyncpg
+    conn = None
+    try:
+        conn = await asyncpg.connect(_pg_sync_dsn(settings), timeout=10)
+        current = await conn.fetchval(
+            """SELECT p.prosrc FROM pg_proc p
+               JOIN pg_namespace n ON n.oid = p.pronamespace
+               WHERE n.nspname = $1 AND p.proname = $2""",
+            pillars.SCHEMA, pillars.FUNCTION,
+        )
+        await conn.execute(pillars.CREATE_SQL)
+        # `prosrc` is the body between the outer $$ delimiters — exactly what CREATE_SQL wraps.
+        return (current or "").strip() != _pillar_body(pillars.CREATE_SQL).strip()
+    except Exception as exc:      # noqa: BLE001 — see docstring
+        _log.warning("could not install the 3D pillar tile function: %s", exc)
+        return False
+    finally:
+        if conn is not None:
+            await conn.close()
 
 
 def _srid_from_crs(crs) -> int:
@@ -133,13 +203,35 @@ def _build_config(layers: list[dict], settings) -> dict:
     # auto-discovers instead, finds whatever PostGIS itself exposes, and stays up.
     if tables:
         postgres["tables"] = tables
+    # The 3D-pillar function source. ONE entry serves every point layer — the layer is named by
+    # query parameters on the tile URL (services/pillars) — so this does not grow with the catalog.
+    # Listed explicitly because naming `tables` above turns OFF Martin's auto-discovery, which would
+    # otherwise have found the function on its own.
+    from . import pillars
+    postgres["functions"] = {
+        pillars.FUNCTION: {"schema": pillars.SCHEMA, "function": pillars.FUNCTION},
+    }
     return {"listen_addresses": "0.0.0.0:3000", "postgres": postgres}
 
 
-def _write_config(config: dict, path: str) -> None:
+def _write_config(config: dict, path: str) -> bool:
+    """Write the config, returning whether it actually DIFFERS from what was already there.
+
+    The caller restarts Martin on a change, and a restart drops in-flight tile requests — so
+    "nothing changed" is worth knowing. Compared as rendered YAML rather than as dicts, because the
+    rendered text is what Martin reads.
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    rendered = yaml.dump(config, default_flow_style=False, allow_unicode=True)
+    try:
+        with open(path) as f:
+            if f.read() == rendered:
+                return False
+    except OSError:
+        pass          # no config yet (or unreadable) — write it and treat that as a change
     with open(path, "w") as f:
-        yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+        f.write(rendered)
+    return True
 
 
 async def _reload_martin() -> None:

@@ -190,6 +190,17 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
+2026-08-06 (**the geometry type now comes from the DATA, not the file header**. `_ingest_via_copy`
+took `src.schema["geometry"]` from Fiona, and a shapefile with a generic or mixed header makes that
+the literal string `"Unknown"` — stored verbatim, then guessed at differently by every consumer:
+`portal_generator._geom_kind` falls back to `"point"`, so a POLYGON layer rendered through the point
+path and, with 3D ticked, reached the pillar tile function, which buffered administrative polygons
+into self-intersecting rings (on screen: orange shards across France). The editor meanwhile resolved
+it to `'unknown'` and offered a different set of controls. One bad value, three interpretations.
+After the COPY the rows are already loaded, so ingest asks `SELECT DISTINCT ST_GeometryType(geom)`
+(LIMIT 16 — classifying a layer does not need a full scan) and `_geom_type_from_postgis` picks
+polygon > line > point, matching `_kind_from_types`. Nothing recognisable — an empty table, curves,
+collections — keeps whatever the file declared.)
 2026-08-06 (`restore.py`: `restore_snapshot` now also **regenerates Martin's config and republishes
 every published portal**, and restores this instance's own STORAGE credentials into `setup_config`
 alongside its database ones. Both were in `run_restore`, around the shared function — so the demo

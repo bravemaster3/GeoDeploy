@@ -116,11 +116,15 @@
         </div>
 
         <!-- Deployments -->
+        <!-- h-96 + overflow, matching the Logs tab. These lists only GROW: every update adds a
+             deployment and an instance has dozens of settings, so an unbounded panel pushes the
+             rest of the Settings page off the screen and makes the tab bar itself scroll away. A
+             fixed viewport with its own scrollbar keeps the panel a constant size whatever it holds. -->
         <div v-else-if="tab === 'deployments'" class="p-4">
           <div v-if="!deployments.length" class="py-8 text-center text-sm text-muted-foreground/70">
             No deployments recorded yet.
           </div>
-          <div v-else class="space-y-2">
+          <div v-else class="space-y-2 h-96 overflow-y-auto pr-1">
             <div v-for="d in deployments" :key="d.id"
               class="border-l-2 rounded-r-lg bg-muted/30 px-4 py-3"
               :class="d.status === 'success' ? 'border-emerald-500'
@@ -167,6 +171,10 @@
 
           <div v-if="envLoading" class="py-8 text-center text-sm text-muted-foreground/70">Loading…</div>
           <div v-else class="space-y-3">
+            <!-- Only the VARIABLE LIST scrolls: the notice above explains what this tab is, and the
+                 Save/Apply row below is the whole point of being here. Scrolling the entire tab
+                 would push both out of reach as the list grows — and it only grows. -->
+            <div class="space-y-3 max-h-[26rem] overflow-y-auto pr-1">
             <div v-for="v in envVars" :key="v.key" class="rounded-lg border p-3"
               :class="v.danger ? 'border-red-500/40 bg-red-500/5' : 'border-border'">
               <div class="flex items-start justify-between gap-3">
@@ -189,6 +197,8 @@
                 Default <span class="font-mono">{{ v.default || 'automatic' }}</span>
                 · takes effect after restarting {{ v.services.join(' + ') }}
               </p>
+            </div>
+
             </div>
 
             <div class="flex items-center gap-2 pt-1 flex-wrap">

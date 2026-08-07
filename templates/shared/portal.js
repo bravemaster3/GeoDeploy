@@ -58,7 +58,7 @@
     storymap: { regions: { layerList: { side: 'left', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'minimal' } }, panels: { layerCatalog: true, legend: true, basemap: true, about: false, story: true } },
     // V-14 catalog: a BROWSE surface. The dataset list is the page and the map is a panel beside it,
     // so layerCatalog is off (the facet rail replaces the switcher) and `catalog` carries the split.
-    catalog:  { regions: { layerList: { side: 'left', mode: 'docked', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, catalog: { scope: 'portal', mapSide: 'right', mapWidth: 50, railWidth: 20, perPage: 12 } }, panels: { catalog: true, layerCatalog: false, legend: true, basemap: true, about: false, story: false } },
+    catalog:  { regions: { layerList: { side: 'right', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, catalog: { scope: 'portal', mapSide: 'right', mapWidth: 50, railWidth: 20, perPage: 12 } }, panels: { catalog: true, layerCatalog: false, legend: true, basemap: true, about: false, story: false } },
   };
   // `webmap+catalog` is still UNBUILT and degrades to a working map on purpose — a blank shell would
   // be worse. `catalog` used to be here too, which is why choosing it silently rendered a web map.
@@ -109,6 +109,14 @@
       const cp = document.getElementById('catalog-panel');
       if (cp) cp.style.display = '';
     }
+    // The layer list is hidden by whether its PANEL is enabled, not by which archetype is in play.
+    // It used to be hidden by a CSS rule keyed on the catalog archetype, which meant a catalog
+    // portal that switched "Layer catalog" on got nothing: the list was built and then hidden by a
+    // rule that could not see the choice. Keyed on the panel, every archetype behaves the same way
+    // and the author's choice is the only thing that decides.
+    // (The opening collapsed state is applied further down, where the sidebar handlers are wired.)
+    const sb = document.getElementById('sidebar');
+    if (sb && !L.panels.layerCatalog) sb.style.display = 'none';
   }
   const LAYOUT = resolveLayout(STYLE.geodeploy && STYLE.geodeploy.layout);
   applyLayoutAttrs(LAYOUT);
@@ -235,6 +243,68 @@
     sidebar.classList.add('collapsed');
   }, true);
 
+  /**
+   * ── First-paint gate ──────────────────────────────────────────────────────────────────────────
+   *
+   * A portal used to assemble itself in front of the visitor: the map painted as soon as its tiles
+   * arrived, and the catalog rail / story column / layer list appeared afterwards, in whatever order
+   * they happened to finish. On a catalog that gap is the whole point of the page — a map with no
+   * list beside it — and it is worst on exactly the connections where it is most visible.
+   *
+   * So `#gd-loading` (in the markup, painted before this script even parses) covers the window until
+   * the pieces are READY. Readiness, not a timer: every gate is registered up front and cleared by
+   * the thing it names, so the cover lifts when the last one reports in, however long that takes.
+   *
+   * Two rules that keep this from becoming its own bug:
+   *   1. Register every gate SYNCHRONOUSLY, before any of them can be cleared. A set that empties
+   *      because the next gate had not been added yet would lift the cover early.
+   *   2. Clear a gate unconditionally — in a `finally`, or on the line after the try/catch. A gate
+   *      that only clears on success turns any one broken panel into a portal that never appears.
+   * The backstop timeout is for what neither rule can cover: a piece that never calls back at all.
+   */
+  const loading = (function () {
+    const el = document.getElementById('gd-loading');
+    const gates = {};
+    let released = false;
+    function hide() {
+      if (released) return;
+      released = true;
+      if (!el) return;
+      el.classList.add('gd-loading-out');
+      // Removed rather than left transparent: it covers the viewport, and a stale overlay with
+      // pointer-events still resolving would eat the first click on the map.
+      setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 420);
+    }
+    function ready(name) {
+      if (!gates[name]) return;
+      delete gates[name];
+      if (Object.keys(gates).length === 0) hide();
+    }
+    return {
+      need: function (name) { if (!released) gates[name] = true; },
+      ready: ready,
+      hide: hide,
+      waiting: function () { return Object.keys(gates); },
+    };
+  })();
+  // The access gate is its OWN full-window surface and sits above this one; a visitor who has to
+  // sign in should not be looking at a loader behind it.
+  (function () {
+    const g = document.getElementById('access-gate');
+    if (g && g.style.display && g.style.display !== 'none') loading.hide();
+  })();
+  loading.need('map');       // the load handler ran to completion (panels mounted)
+  loading.need('render');    // MapLibre has finished drawing the opening view
+  if (LAYOUT.archetype === 'catalog') loading.need('catalog');
+  if (LAYOUT.archetype === 'storymap') loading.need('story');
+  // Backstop. NOT the mechanism — the gates above are — but a portal must never be held hostage by
+  // one piece that fails in a way that skips its own clear (a hard error inside MapLibre, a style
+  // that never finishes). Generous enough that a slow connection reaches readiness first.
+  setTimeout(function () {
+    if (loading.waiting().length) console.warn('[geodeploy] still waiting on', loading.waiting());
+    loading.hide();
+  }, 15000);
+
   // ── Map init ────────────────────────────────────────────
   const map = new maplibregl.Map({
     container: 'map',
@@ -242,6 +312,10 @@
     center: [0, 20],
     zoom: 2,
     attributionControl: false,
+    // Above MapLibre's default of 60. Extruded buildings and 3D bars are only legible from a low
+    // angle, and 60 still looks down on them; 75 is a view along the ground without the horizon
+    // filling the frame.
+    maxPitch: 75,
     // Needed for getCanvas().toDataURL() to return pixels rather than a blank image: WebGL is free
     // to discard the drawing buffer after compositing unless asked not to. It costs real rendering
     // performance, so it is enabled ONLY in the editor preview, which is where the publish snapshot
@@ -257,6 +331,12 @@
   // Generate point-marker icons on demand (also covers the first render gap).
   map.on('styleimagemissing', function (e) {
     if (!e.id || e.id.indexOf('gd-pt-') !== 0 || map.hasImage(e.id)) return;
+    // The id CARRIES its parameters (gd-pt-<shape>-<hex>-<size>), so any missing image can be built
+    // from the id alone. It used to be looked up from the layer's metadata, which only worked while
+    // a layer had exactly ONE icon — a classified point layer has one per class, and `icon-image`
+    // is a data-driven expression selecting between them.
+    const spec = parseMarkerImageId(e.id);
+    if (spec) { setMarkerImage(e.id, spec.shape, spec.color, spec.size, spec.outline, spec.outlineWidth); return; }
     const l = (STYLE.layers || []).find(x => x.layout && x.layout['icon-image'] === e.id);
     const m = (l && l.metadata) || {};
     setMarkerImage(e.id, m['geodeploy:marker'] || 'circle', m['geodeploy:markerColor'] || '#3b82f6', m['geodeploy:markerSize'] || 5);
@@ -281,10 +361,87 @@
   function applyProjection(name) {
     if (!name || typeof map.setProjection !== 'function') return;
     try { map.setProjection({ type: name }); } catch (e) {}
+    // Caught SEPARATELY, and never allowed to escape. `applyProjection` is called from inside
+    // `map.on('load')`, which is where the control cluster and every input handler are wired up —
+    // so anything that throws here would abort the REST of that handler and leave the map half
+    // built: some controls present, others missing, and interactions in whatever state they were
+    // in. The sky is decoration; it must not be able to take navigation down with it.
+    try { applySpace(name === 'globe'); } catch (e) { /* decoration only */ }
+  }
+
+  /**
+   * The globe hangs in SPACE, not in a dark rectangle.
+   *
+   * Two independent pieces, because they cover different parts of the picture and either can be
+   * unavailable:
+   *
+   *  1. `setSky` (MapLibre v5) paints the ATMOSPHERE — the luminous rim that makes the planet read
+   *     as a sphere with air around it rather than a flat circle. Wrapped in try/catch and a
+   *     capability check: a portal bundle published before this shipped runs an older maplibre from
+   *     its own bundle, and must not throw here.
+   *  2. A CSS starfield on the map CONTAINER, behind the canvas, which is what shows through
+   *     wherever the canvas is transparent (everything beyond the atmosphere). Stars are not part of
+   *     the MapLibre style spec at all, so this is the only way to have any.
+   *
+   * Toggled OFF for mercator: a flat map covering the whole viewport would never show it, and a
+   * star texture behind a partially-transparent basemap would tint it.
+   */
+  /**
+   * Apply the sky/starfield from the map's CURRENT projection, whatever set it.
+   *
+   * `applyProjection` is only one of the ways a portal reaches globe mode — MapLibre's own globe
+   * control is another, and it changes the projection directly. Reading the map instead of tracking
+   * our own intent means every route is covered, including ones added later.
+   */
+  function syncSpace() {
+    let type = null;
+    try {
+      const p = map.getProjection && map.getProjection();
+      type = p && (typeof p === 'string' ? p : p.type);
+    } catch (e) { return; }        // older maplibre with no getProjection — leave it alone
+    applySpace(type === 'globe');
+  }
+
+  function applySpace(on) {
+    var el = map.getContainer && map.getContainer();
+    if (el) el.classList.toggle('gd-space', !!on);
+    if (typeof map.setSky !== 'function') return;
+    try {
+      map.setSky(on ? {
+        // Brighter than the first pass, which sat so close to black that the planet read as a
+        // cut-out. The limb is the whole effect — it is what makes a circle look like a lit sphere
+        // with air around it — so it gets a strong, slightly cyan blue and a wider blend into space.
+        'sky-color': '#0c1330',            // deep space, not pure black — black looks like a hole
+        'sky-horizon-blend': 0.62,
+        'horizon-color': '#a8d4ff',        // the atmospheric limb
+        'horizon-fog-blend': 0.72,
+        'fog-color': '#0c1330',
+        'fog-ground-blend': 0.1,
+        // Fade the atmosphere out as you zoom in: it belongs to the view of a PLANET, and at street
+        // level it would just be a blue wash over the map.
+        'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 4, 0.7, 7, 0],
+      } : {
+        'atmosphere-blend': 0,
+      });
+    } catch (e) { /* older maplibre in an existing bundle — the starfield still applies */ }
   }
 
   const bounds = STYLE.geodeploy?.bounds;
   const savedView = STYLE.geodeploy?.view;
+
+  /**
+   * A `fill-extrusion` layer is INVISIBLE on a flat map — straight down, an extruded polygon and a
+   * plain fill are the same shape. So a portal whose author enabled 3D and pinned a top-down view
+   * (which is what pinning does by default) would publish looking exactly like the 2D version, and
+   * read as "the 3D feature is broken".
+   *
+   * Opening tilted only when the author did NOT choose a pitch: an explicit 0 that the author set
+   * while looking at their 3D layer is a decision, and this must not overrule it. `pitch == null`
+   * means "never pinned", which is the case that needs the help.
+   */
+  const has3D = (STYLE.layers || []).some(function (l) { return l && l.type === 'fill-extrusion'; });
+  const DEFAULT_3D_PITCH = 45;
+
   if (savedView && Array.isArray(savedView.center) && savedView.center.length === 2) {
     // Admin pinned a specific extent/zoom during portal creation — honour it exactly.
     try {
@@ -292,7 +449,7 @@
         center: savedView.center,
         zoom: savedView.zoom != null ? savedView.zoom : 2,
         bearing: savedView.bearing || 0,
-        pitch: savedView.pitch || 0,
+        pitch: savedView.pitch != null ? savedView.pitch : (has3D ? DEFAULT_3D_PITCH : 0),
       });
       applyProjection(savedView.projection);
     } catch (e) { /* ignore — keep default view */ }
@@ -301,8 +458,11 @@
       map.fitBounds([[bounds[0], bounds[1]], [bounds[2], bounds[3]]], {
         padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 },
         duration: 0,
+        pitch: has3D ? DEFAULT_3D_PITCH : 0,
       });
     } catch (e) { /* ignore — keep default view */ }
+  } else if (has3D) {
+    try { map.setPitch(DEFAULT_3D_PITCH); } catch (e) { /* ignore */ }
   }
 
   // ── deck.gl overlay for GeoParquet layers ───────────────
@@ -387,7 +547,11 @@
     if (!st || !st.visible || !st.data) return null;
     const geom = (d.geometry || '').toLowerCase();
     const isPoly = geom.indexOf('polygon') !== -1, isLine = geom.indexOf('line') !== -1;
-    const rgb = deckHexToRgb(d.color), outline = deckHexToRgb(d.outline_color || '#1d4ed8');
+    // "none" is a SENTINEL, not a colour. Feeding it to the hex parser gave NaN components, which
+    // deck renders as BLACK — so asking for no outline produced the most visible outline available.
+    const noOutline = d.outline_color === 'none';
+    const rgb = deckHexToRgb(d.color);
+    const outline = deckHexToRgb(noOutline ? '#000000' : (d.outline_color || '#1d4ed8'));
     const op = d.opacity != null ? d.opacity : 1;
     if (st.data.__arrowTable) {
       // GeoArrow detail: the Arrow table is consumed zero-copy by @geoarrow/deck.gl-layers —
@@ -395,16 +559,29 @@
       const t = st.data.__arrowTable;
       if (isLine) {
         return new DK.geo.GeoArrowPathLayer({
-          id: 'deck_' + d.layer_id, data: t, pickable: false,
+          id: 'deck_' + d.layer_id, data: t, pickable: true,
           getColor: rgb.concat(Math.round(255 * op)),
           getWidth: d.line_width != null ? d.line_width : 2,
           widthUnits: 'pixels', widthMinPixels: d.line_width || 2,
         });
       }
       if (isPoly) {
+        // 3D through the ARROW path too. This is the transport an untiled GeoParquet layer actually
+        // uses, so extruding only in the GeoJSON branch below meant "3D does nothing" for exactly
+        // the layers the feature was added for.
+        //
+        // A GeoArrow accessor is an Arrow COLUMN, not a function — `getElevation` takes the vector
+        // straight from the table. The × multiplier therefore rides on `elevationScale` rather than
+        // being folded into the accessor, which is what the prop is for anyway. No column of that
+        // name (renamed, or a re-prep that dropped it) → no extrusion, rather than a flat mesh.
+        const aex = d.extrusion || {};
+        const acol = (aex.enabled && aex.field && t.getChild) ? t.getChild(aex.field) : null;
         return new DK.geo.GeoArrowPolygonLayer({
-          id: 'deck_' + d.layer_id, data: t, pickable: false,
-          filled: true, stroked: true,
+          id: 'deck_' + d.layer_id, data: t, pickable: true,
+          filled: true, stroked: !acol && !noOutline,   // walls plus an outline is a smudge at any pitch
+          extruded: !!acol,
+          getElevation: acol || undefined,
+          elevationScale: Number(aex.scale) || 1,
           getFillColor: rgb.concat(Math.round(255 * op * (d.fill_opacity != null ? d.fill_opacity : 0.45))),
           getLineColor: outline.concat(Math.round(255 * op)),
           lineWidthUnits: 'pixels',
@@ -413,7 +590,7 @@
         });
       }
       return new DK.geo.GeoArrowScatterplotLayer({
-        id: 'deck_' + d.layer_id, data: t, pickable: false,
+        id: 'deck_' + d.layer_id, data: t, pickable: true,
         getFillColor: rgb.concat(Math.round(255 * op)),
         radiusUnits: 'pixels',
         getRadius: d.radius != null ? d.radius : 5,
@@ -422,6 +599,8 @@
     }
     if (st.data.__overview) {
       // Large-scale representation: the manifest's partition grid shaded by feature density.
+      // Deliberately NOT pickable, unlike the detail layers: a density cell is not a feature, so a
+      // pointer cursor over it would promise a click that does nothing.
       return new DK.GeoJsonLayer({
         id: 'deck_' + d.layer_id,
         data: st.data,
@@ -434,12 +613,34 @@
         getLineWidth: 0.5,
       });
     }
+    // 3D for a deck-rendered POLYGON layer. A GeoParquet layer emits no MapLibre layer at all
+    // (portal_generator returns a deck descriptor instead), so `fill-extrusion` never reaches it —
+    // extrusion has to be asked of deck directly. GeoJsonLayer does it natively for polygons:
+    // `extruded` + `getElevation`, no geometry change and no extra layer type.
+    //
+    // POINTS are not handled here. deck extrudes polygons, not points, and the vendored bundle has
+    // no ColumnLayer — so a point pillar needs the geometry buffered first, which is what the
+    // PostGIS path does in the tile server. Until that is mirrored here, the editor hides 3D for
+    // deck-rendered point layers rather than offering something that does nothing.
+    const ex = d.extrusion || {};
+    const extruded = isPoly && !!ex.enabled && !!ex.field;
+    const exScale = Number(ex.scale) || 1;
     return new DK.GeoJsonLayer({
       id: 'deck_' + d.layer_id,
       data: st.data,
-      pickable: false,
+      // Picking is what lets the cursor become a pointer over a GeoParquet
+      // feature: these layers have no MapLibre layer for queryRenderedFeatures to find.
+      pickable: true,
       filled: !isLine,
-      stroked: true,
+      // Lines ARE their stroke, so `noOutline` must not erase a line layer — it is a POLYGON
+      // outline setting. Extruded polygons drop it too (walls plus an outline is a smudge).
+      stroked: isLine || (!extruded && !(isPoly && noOutline)),
+      extruded: extruded,
+      // A feature missing the property, or holding a non-numeric one, becomes 0 rather than NaN —
+      // NaN propagates into the mesh and drops the whole layer, not just that feature.
+      getElevation: extruded
+        ? function (f) { const v = Number((f.properties || {})[ex.field]); return (isFinite(v) ? v : 0) * exScale; }
+        : 0,
       getFillColor: rgb.concat(Math.round(255 * op * (isPoly ? (d.fill_opacity != null ? d.fill_opacity : 0.45) : 1))),
       getLineColor: (isPoly ? outline : rgb).concat(Math.round(255 * op)),
       lineWidthUnits: 'pixels',
@@ -1057,10 +1258,32 @@
     if (LAYOUT.panels.basemap) setupBasemaps();  // adds the basemap/home/zoom-all/draw-zoom/tools cluster (CTRL_POS)
     // Globe/2D projection toggle (MapLibre v5 native — no Cesium, no token). Guarded so a
     // cached v4 script can't crash the portal.
-    if (maplibregl.GlobeControl) map.addControl(new maplibregl.GlobeControl(), CTRL_POS);
-    map.addControl(new maplibregl.NavigationControl({ showCompass: true }), CTRL_POS);  // zoom below them
+    if (maplibregl.GlobeControl) {
+      map.addControl(new maplibregl.GlobeControl(), CTRL_POS);
+      // MapLibre's own globe button flips the projection ITSELF — it never goes through
+      // applyProjection, which is the only thing that was telling applySpace about it. So switching
+      // to the globe with that button gave a planet on a flat black panel: the sky and the starfield
+      // are ours, and nothing had told them the projection changed. Sync from the map's ACTUAL
+      // projection rather than from whatever we last set, so any route into globe mode is covered.
+      try { syncSpace(); } catch (e) { /* decoration only */ }
+      try { map.on('projectiontransition', syncSpace); } catch (e) { /* not in older maplibre */ }
+      // The event above is not in every v5 build, so also watch the button itself. Deferred a tick
+      // because the control sets the projection after the click handler it registered first.
+      setTimeout(function () {
+        const btn = document.querySelector('.maplibregl-ctrl-globe, button.maplibregl-ctrl-globe-enabled');
+        if (btn) btn.addEventListener('click', function () { setTimeout(syncSpace, 0); });
+      }, 0);
+    }
+    // `visualizePitch` makes the compass a TILT handle as well as a rotate one (drag it up/down) and
+    // shows the current pitch on the needle. Without it the only way to tilt is right-drag or
+    // ctrl-drag, which nothing on the page advertises — so a 3D portal looked flat and unfixable.
+    map.addControl(new maplibregl.NavigationControl({ showCompass: true, visualizePitch: true }), CTRL_POS);
+    try { map.addControl(new TiltControl(), CTRL_POS); } catch (e) { console.warn('[geodeploy] tilt control failed', e); }
     // V-11 storymap: build the scrollytelling narrative that drives the camera + layer state.
-    if (LAYOUT.archetype === 'storymap') { try { setupStory(); } catch (e) { console.warn('[geodeploy] story failed', e); } }
+    if (LAYOUT.archetype === 'storymap') {
+      try { setupStory(); } catch (e) { console.warn('[geodeploy] story failed', e); }
+      loading.ready('story');   // outside the catch: a story that fails must still reveal the map
+    }
     // The pinned projection is applied at construction too, but a style load can reset it — the style
     // spec carries its own projection and MapLibre applies that when the style becomes live, which
     // silently put a globe portal back on mercator. Re-applying here is the point where the map is
@@ -1068,9 +1291,25 @@
     if (savedView && savedView.projection) applyProjection(savedView.projection);
     // V-14 catalog: build the browse surface. AFTER initDeck() so GeoParquet layers already have a
     // deckState entry — the cards seed their on/off state from it.
-    if (LAYOUT.archetype === 'catalog') { try { setupCatalog(); } catch (e) { console.warn('[geodeploy] catalog failed', e); } }
+    if (LAYOUT.archetype === 'catalog') {
+      try { setupCatalog(); } catch (e) { console.warn('[geodeploy] catalog failed', e); }
+      loading.ready('catalog');   // outside the catch, for the same reason as the story panel
+    }
     // R2: when rendered as the editor's preview (?edit=1), open the postMessage channel + click-to-place.
     try { setupEditMode(); } catch (e) { console.warn('[geodeploy] edit mode failed', e); }
+    // Everything this handler mounts now exists. The cover still waits on 'render' — the map has to
+    // have DRAWN the opening view, not merely been told what to draw.
+    loading.ready('map');
+  });
+  // MapLibre is idle once it has finished rendering everything it can for the current view: tiles
+  // fetched, layers painted. That is the earliest honest moment to call the map "shown".
+  map.once('idle', function () {
+    loading.ready('render');
+    // 'idle' strictly follows the 'load' handlers, so by here that handler has either finished (and
+    // already cleared this) or thrown partway through. Clearing it again costs nothing and means a
+    // single unguarded step in that sequence degrades to "a portal missing one panel" rather than
+    // "a portal stuck behind a loading screen until the backstop fires".
+    loading.ready('map');
   });
 
   const resetBtn = document.getElementById('reset-styling');
@@ -1263,8 +1502,13 @@
     else if (shape === 'cross') { const a = crossPoints(cx, cy, r).split(' '); a.forEach((pt, i) => { const xy = pt.split(','); i ? ctx.lineTo(+xy[0], +xy[1]) : ctx.moveTo(+xy[0], +xy[1]); }); ctx.closePath(); }
     else { ctx.arc(cx, cy, r, 0, Math.PI * 2); }
   }
-  function markerImage(shape, color, size) {
-    const dpr = 2, r = Math.max(3, Number(size) || 5), stroke = Math.max(1, r * 0.28);
+  function markerImage(shape, color, size, outline, outlineWidth) {
+    const dpr = 2, r = Math.max(3, Number(size) || 5);
+    // A RATIO of the radius, not pixels: a 3 px ring around a 4 px dot and around a 20 px dot are
+    // different symbols, and resizing a layer should keep the outline in proportion. 0.28 is what
+    // the old hard-coded stroke was, so an unstyled marker is pixel-identical to before.
+    const ow = (outlineWidth == null ? 0.28 : Number(outlineWidth));
+    const stroke = Math.max(0, r * (isFinite(ow) ? ow : 0.28));
     // Fixed canvas size (fits the max marker radius) so every icon for a layer shares
     // dimensions — that lets map.updateImage() work when only the SIZE changes.
     const dim = 80;
@@ -1274,14 +1518,42 @@
     ctx.scale(dpr, dpr); ctx.lineJoin = 'round';
     drawMarkerPath(ctx, shape, dim / 2, dim / 2, r);
     ctx.fillStyle = color || '#3b82f6'; ctx.fill();
-    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = stroke; ctx.stroke();
+    // No outline is a real choice — `outline === null` means draw none, which is different from
+    // "not specified" (undefined → the white default every marker used to have).
+    const oc = outline === undefined ? '#ffffff' : outline;
+    if (oc && stroke > 0) { ctx.strokeStyle = oc; ctx.lineWidth = stroke; ctx.stroke(); }
     const d = ctx.getImageData(0, 0, dim * dpr, dim * dpr);
     return { width: dim * dpr, height: dim * dpr, data: d.data, pixelRatio: dpr };
   }
-  function setMarkerImage(imgId, shape, color, size) {
-    const im = markerImage(shape, color, size);
-    try { if (map.hasImage(imgId)) map.updateImage(imgId, im); else map.addImage(imgId, im, { pixelRatio: im.pixelRatio }); }
-    catch (e) { try { if (map.hasImage(imgId)) map.removeImage(imgId); map.addImage(imgId, im, { pixelRatio: im.pixelRatio }); } catch (e2) {} }
+  // Twin of ui/src/lib/symbology.js::parseMarkerImageId — the id is the spec.
+  function parseMarkerImageId(id) {
+    // gd-pt-<shape>-<hex>-<size>-<outlineHex|none>-<widthRatio>. The trailing pair is optional so an
+    // id baked into a portal published before outlines were configurable still parses — it then
+    // draws with the old white stroke, which is what that portal looked like.
+    const m = /^gd-pt-([a-z]+)-([0-9a-f]{3,8})-([0-9.]+)(?:-(none|[0-9a-f]{3,8})-([0-9.]+))?$/
+      .exec(String(id || ''));
+    if (!m) return null;
+    return {
+      shape: m[1], color: '#' + m[2], size: parseFloat(m[3]),
+      outline: m[4] === undefined ? undefined : (m[4] === 'none' ? null : '#' + m[4]),
+      outlineWidth: m[5] === undefined ? undefined : parseFloat(m[5]),
+    };
+  }
+  function setMarkerImage(imgId, shape, color, size, outline, outlineWidth) {
+    // The WHOLE body is guarded, not just the add/update. `markerImage()` builds a canvas — it can
+    // fail (no 2D context in a restricted browser, an unknown shape, a zero-sized canvas) and it
+    // used to sit OUTSIDE the try, so a single bad image threw out of `ensurePointImages`, which
+    // runs seven lines into `map.on('load')` — aborting the rest of that handler, where the control
+    // cluster and every input binding are set up. The map would then load, draw, and simply not
+    // respond properly: a missing marker must never cost you navigation.
+    //
+    // This got sharper when a classified layer began registering one image PER CLASS: many more
+    // chances to hit it, on a code path that had only ever created one.
+    try {
+      const im = markerImage(shape, color, size, outline, outlineWidth);
+      try { if (map.hasImage(imgId)) map.updateImage(imgId, im); else map.addImage(imgId, im, { pixelRatio: im.pixelRatio }); }
+      catch (e) { try { if (map.hasImage(imgId)) map.removeImage(imgId); map.addImage(imgId, im, { pixelRatio: im.pixelRatio }); } catch (e2) {} }
+    } catch (e) { /* one marker is not worth the map */ }
   }
   // SVG mirror of a marker shape, for the list/legend swatch.
   function markerSvg(shape, c) {
@@ -1295,12 +1567,22 @@
   }
   // Build/refresh icon images for every point (symbol) layer from its metadata.
   function ensurePointImages() {
-    (STYLE.layers || []).forEach(l => {
+    // Per-layer guard for the same reason as above: this runs inside map.on('load'), so anything
+    // escaping it takes the control setup with it.
+    (STYLE.layers || []).forEach(l => { try {
       if (l.type !== 'symbol' || !l.layout || !l.layout['icon-image'] || !l.metadata) return;
+      // A classified point layer declares one image per class in geodeploy:markerImages. Create
+      // them ALL now: leaving it to styleimagemissing means each class's markers pop in the first
+      // time that class scrolls into view, which looks like the map is still loading.
+      const all = l.metadata['geodeploy:markerImages'];
+      if (Array.isArray(all) && all.length) {
+        all.forEach(function (im) { setMarkerImage(im.id, im.shape, im.color, im.size, im.outline, im.outline_width); });
+        return;
+      }
       if (l.metadata['geodeploy:marker'] === undefined) return;
       setMarkerImage(l.layout['icon-image'], l.metadata['geodeploy:marker'] || 'circle',
         l.metadata['geodeploy:markerColor'] || '#3b82f6', l.metadata['geodeploy:markerSize'] || 5);
-    });
+    } catch (e) { /* one layer's icons are not worth the rest of the load handler */ } });
   }
 
   // All MapLibre layer ids that make up ONE catalog layer. Usually just the primary, but a
@@ -1378,7 +1660,7 @@
         '</div>' +
         (type === 'raster' && !meta['geodeploy:external']
           ? '<div class="layer-legend" data-legend="' + layer.id + '">' + rasterLegendHtml(layer) + '</div>'
-          : '');
+          : vectorLegendHtml(meta['geodeploy:legend'], geom));
       container.appendChild(card);
     });
 
@@ -2020,6 +2302,28 @@
     return (l && l.metadata['geodeploy:bands']) || 1;
   }
 
+  /**
+   * The legend for a CLASSIFIED vector layer, from `geodeploy:legend` baked into the style.
+   *
+   * Deliberately a renderer and nothing more: it does not read `classes`/`categories` and build its
+   * own labels. The entries come from `services/symbology.legend_entries`, the same call the editor
+   * shows while you are styling — so the published legend cannot drift from the published map, and
+   * neither can drift from what you saw when you made it.
+   *
+   * Empty for a single-symbol layer: the swatch beside the name already says everything there is
+   * to say, and a one-row legend repeating it is noise.
+   */
+  function vectorLegendHtml(entries, geom) {
+    if (!Array.isArray(entries) || !entries.length) return '';
+    const rows = entries.map(function (e) {
+      return '<div class="legend-class">' +
+        '<span class="legend-chip" style="background:' + escHtml(e.color || '#999') + '"></span>' +
+        '<span class="legend-label">' + escHtml(e.label == null ? '' : String(e.label)) + '</span>' +
+        '</div>';
+    }).join('');
+    return '<div class="layer-legend legend-classes">' + rows + '</div>';
+  }
+
   function rasterLegendHtml(layer) {
     const srcId = layer.source;
     const st = (typeof rasterState !== 'undefined' && rasterState[srcId]) || {};
@@ -2404,15 +2708,71 @@
     document.getElementById('attr-panel').classList.remove('open');
   });
 
-  // Pointer cursor over interactive vector layers
+  // ── Pointer cursor over anything clickable ────────────────────────────────────────────────────
+  // A portal draws its vector layers through TWO renderers, and the cursor has to speak for both.
+  // MapLibre layers answer `queryRenderedFeatures`; GeoParquet layers emit no MapLibre layer at all
+  // (portal_generator returns a deck descriptor instead), so no query will ever find them and they
+  // showed the pan cursor over every feature — which is most of what a modern portal displays.
+  //
+  // Deck features are hit-tested with deck's own picking, the only thing that knows where they are.
+  // That is why the deck layers are `pickable` (see buildDeckLayer); the density OVERVIEW stays
+  // unpickable on purpose — a grid cell is not a feature and clicking one does nothing.
+  let pickTimer = null, deckHit = false;
+  function setCursor(c) {
+    // One writer. The draw-box and area-select modes own the cursor while they are active and set
+    // it to crosshair themselves; this must not fight them.
+    if (drawing || dzActive) return;
+    map.getCanvas().style.cursor = c;
+  }
+  // Debounced, not throttled — this matters on the layers deck actually exists for. A pick is a
+  // render pass over the pickable layers, and `mousemove` fires far faster than the screen updates;
+  // running one per animation frame would mean ~60 picking passes a second over a multi-million-row
+  // GeoArrow layer for the entire time the pointer is moving, which is most of the cost of the
+  // interaction people notice. Nobody is asking "is there a feature here?" WHILE sweeping across the
+  // map — they ask when they stop. So: pick once the pointer settles, and cancel outright if it
+  // moves again. Panning and sweeping now cost nothing at all.
+  const PICK_SETTLE_MS = 70;
+  function deckHover(pt) {
+    if (!deckOverlay) return;
+    if (pickTimer) clearTimeout(pickTimer);
+    pickTimer = setTimeout(function () {
+      pickTimer = null;
+      let hit = false;
+      try {
+        const info = deckOverlay.pickObject({ x: pt.x, y: pt.y, radius: 4 });
+        hit = !!(info && info.object);
+      } catch (e) { hit = false; }   // older bundle without pickObject, or a layer mid-update
+      if (hit !== deckHit) { deckHit = hit; setCursor(hit ? 'pointer' : ''); }
+    }, PICK_SETTLE_MS);
+  }
   map.on('mousemove', e => {
     if (drawing) return;  // keep the crosshair while drawing a selection box
     const vectorLayerIds = (STYLE.layers || [])
       .filter(l => l.metadata && l.metadata['geodeploy:type'] === 'vector')
+      // Only ids the LIVE style actually has. `queryRenderedFeatures` rejects the whole call when
+      // one id is unknown — it does not skip that layer — so a single stale id from the baked style
+      // would silently disable the pointer cursor for every layer in the portal.
+      .filter(l => { try { return !!map.getLayer(l.id); } catch (err) { return false; } })
       .map(l => l.id);
-    if (!vectorLayerIds.length) { map.getCanvas().style.cursor = ''; return; }
-    const f = map.queryRenderedFeatures(e.point, { layers: vectorLayerIds });
-    map.getCanvas().style.cursor = f.length ? 'pointer' : '';
+    const f = vectorLayerIds.length
+      ? map.queryRenderedFeatures(e.point, { layers: vectorLayerIds })
+      : [];
+    if (f.length) {
+      // A MapLibre feature wins outright — and any pick already queued has to be dropped, or it
+      // would land a moment later and overwrite this with its own (stale) answer.
+      if (pickTimer) { clearTimeout(pickTimer); pickTimer = null; }
+      deckHit = false;
+      setCursor('pointer');
+      return;
+    }
+    setCursor('');
+    deckHover(e.point);
+  });
+  // Leaving the canvas cancels a queued pick: it would resolve against a pointer position that is
+  // no longer on the map.
+  map.on('mouseout', function () {
+    if (pickTimer) { clearTimeout(pickTimer); pickTimer = null; }
+    deckHit = false;
   });
 
   // ── Coordinate readout (bottom-right) ───────────────────
@@ -2649,6 +3009,42 @@
       return this._c;
     }
     onRemove() { if (this._c) this._c.remove(); }
+  }
+
+  // ── Tilt ──────────────────────────────────────────────────────────────────────────────────────
+  // A one-click way into (and out of) the tilted view. MapLibre can already pitch by right-drag,
+  // ctrl-drag or dragging the compass, but none of those are discoverable — so a portal with 3D
+  // buildings or bars in it presented no way to look at them from the side, which reads as the 3D
+  // itself being broken. This is a TOGGLE rather than a slider: the two useful states are "flat" and
+  // "in perspective", and anything between them is the compass's job.
+  const TILT_PITCH = 60;      // enough for buildings to have visible sides, short of maxPitch (75)
+  const TILT_ON_AT = 5;       // degrees below which the map counts as flat
+  let tiltBtn = null;
+  function tiltIcon() {
+    // A plane seen in perspective, with a raised block standing on it.
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" ' +
+      'stroke-linejoin="round" stroke-linecap="round">' +
+      '<path d="M2 17l10 4 10-4-10-4-10 4z"/>' +
+      '<path d="M9 15.8V9h6v4.4"/><path d="M9 9l3-2 3 2"/></svg>';
+  }
+  function syncTilt() {
+    if (tiltBtn) tiltBtn.classList.toggle('active', map.getPitch() >= TILT_ON_AT);
+  }
+  function toggleTilt() {
+    const flat = map.getPitch() < TILT_ON_AT;
+    map.easeTo({ pitch: flat ? TILT_PITCH : 0, duration: 550 });
+  }
+  class TiltControl {
+    onAdd() {
+      this._c = ctrlButton('gd-tilt-btn', 'Tilt the map (3D view)', tiltIcon(), toggleTilt);
+      tiltBtn = this._c.querySelector('button');
+      // Reflect pitch reached ANY other way — the compass, a keyboard drag, a storymap section that
+      // pins its own camera — so the button never contradicts the map.
+      map.on('pitchend', syncTilt);
+      syncTilt();
+      return this._c;
+    }
+    onRemove() { map.off('pitchend', syncTilt); if (this._c) this._c.remove(); }
   }
 
   // On-map layer-list toggle. It is a REAL MapLibre control added at the layer-list corner (top-left
@@ -3059,6 +3455,13 @@
   }
   function hideHint() { const h = document.getElementById('gd-hint'); if (h) h.style.display = 'none'; }
 
+  /** Do two [w, s, e, n] boxes overlap? Touching edges count — a layer ending exactly on the line
+   *  the user drew is in the selection. One implementation, used by every layer kind, so vectors,
+   *  rasters and GeoParquet cannot disagree about what "inside the box" means. */
+  function bboxOverlaps(bb, box) {
+    return !(bb[2] < box[0] || bb[0] > box[2] || bb[3] < box[1] || bb[1] > box[3]);
+  }
+
   function openDownloadDialog(bbox, pixBox) {
     const slug = (window.GEODEPLOY && window.GEODEPLOY.slug) || (location.pathname.split('/').filter(Boolean)[1] || '');
 
@@ -3072,13 +3475,28 @@
       // drops one of them from the download list.
       const key = (l.metadata['geodeploy:external'] ? 'ext' : type) + '-' + id;
       if (seen.has(key)) return;
-      let hit = false;
-      if (type === 'vector') {
+      // GEOGRAPHIC overlap, not a screen-space query.
+      //
+      // This used to be `queryRenderedFeatures(pixBox, …)` for vectors, and it broke completely on
+      // the globe: `pixBox` is an axis-aligned SCREEN rectangle between the two projected drag
+      // corners, and on a globe the region between those corners is a curved quadrilateral — so the
+      // query looked somewhere else entirely and reported "No layers intersect the selected area"
+      // over an area full of features. It was also wrong in 2D in a quieter way: it asked what is
+      // RENDERED, so a layer whose tiles had not arrived yet was silently left out of the download.
+      //
+      // The bbox is baked into every layer's metadata and is what the raster and GeoParquet branches
+      // already use. It is coarser — a layer whose extent overlaps but has no features inside the
+      // box will be offered and export nothing — but that matches how the other two behave, and the
+      // SERVER does the real clip either way. Offering an empty download beats hiding a real one.
+      const bb = l.metadata['geodeploy:bbox'];
+      let hit;
+      if (Array.isArray(bb) && bb.length === 4) {
+        hit = bboxOverlaps(bb, bbox);
+      } else if (type === 'vector') {
+        // No bbox recorded — fall back to the rendered query rather than dropping the layer.
         try { hit = map.queryRenderedFeatures(pixBox, { layers: [l.id] }).length > 0; } catch (e) { hit = true; }
       } else {
-        const bb = l.metadata['geodeploy:bbox'];
-        hit = Array.isArray(bb) && bb.length === 4 &&
-          !(bb[2] < bbox[0] || bb[0] > bbox[2] || bb[3] < bbox[1] || bb[1] > bbox[3]);
+        hit = false;
       }
       if (!hit) return;
       seen.add(key);
@@ -3093,8 +3511,7 @@
       const st = deckState[d.layer_id];
       if (st && !st.visible) return;
       const bb = d.bbox;
-      const hit = !(Array.isArray(bb) && bb.length === 4) ||
-        !(bb[2] < bbox[0] || bb[0] > bbox[2] || bb[3] < bbox[1] || bb[1] > bbox[3]);
+      const hit = !(Array.isArray(bb) && bb.length === 4) || bboxOverlaps(bb, bbox);
       if (!hit) return;
       seen.add(key);
       items.push({ id: d.layer_id, type: 'vector', backend: 'geoparquet',
@@ -3418,12 +3835,25 @@
     function activeRefs() {
       return Object.keys(onMap).filter(function (ref) { return onMap[ref] && byRef[ref]; });
     }
+    // Opens CLOSED. This sits ON the map, and on a catalog the map is already the smaller half of
+    // the page — a list that grows with every dataset switched on eats the view it is describing.
+    // The header still carries the count, so "3 layers on the map" is legible without opening it.
+    // Session state, not persisted: it belongs to this visit's browsing, not to the portal.
+    let activeOpen = false;
     function renderActive() {
       const refs = activeRefs();
       if (!refs.length) { $active.style.display = 'none'; $active.innerHTML = ''; return; }
       $active.style.display = '';
+      // Re-rendered from scratch on every change, so the open/closed state has to be re-applied
+      // here rather than left on the DOM — otherwise switching a layer on silently reopens it.
+      $active.classList.toggle('collapsed', !activeOpen);
       $active.innerHTML =
-        '<div class="cat-active-h"><span>On map</span><span class="cat-active-n">' + refs.length + '</span></div>' +
+        '<button type="button" class="cat-active-h" aria-expanded="' + (activeOpen ? 'true' : 'false') + '">' +
+          '<svg class="cat-active-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+            'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>' +
+          '<span>On map</span><span class="cat-active-n">' + refs.length + '</span>' +
+        '</button>' +
+        '<div class="cat-active-body">' +
         refs.map(function (ref) {
           const r = byRef[ref];
           const canZoom = !!(r.bbox && r.bbox.length === 4);
@@ -3433,9 +3863,13 @@
             (canZoom ? '<button class="cat-active-b" data-act="zoom" title="Zoom to this layer">&#9678;</button>' : '') +
             '<button class="cat-active-b" data-act="off" title="Remove from map">&times;</button>' +
             '</div>';
-        }).join('');
+        }).join('') +
+        '</div>';
     }
     $active.addEventListener('click', function (e) {
+      // The header toggles the list. Checked before the row actions: it is the one control that is
+      // not a [data-act], and it must work whether the list is open or closed.
+      if (e.target.closest('.cat-active-h')) { activeOpen = !activeOpen; renderActive(); return; }
       const b = e.target.closest('[data-act]');
       if (!b) return;
       const row = b.closest('.cat-active-row');

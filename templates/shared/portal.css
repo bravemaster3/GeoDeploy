@@ -79,14 +79,27 @@
     /* ── Sidebar ─────────────────────────────────────────── */
     #sidebar {
       width: var(--sidebar-w); flex-shrink: 0; background: var(--bg);
-      border-right: 1px solid var(--border); overflow-y: auto; overflow-x: hidden;
+      border-right: 1px solid var(--border); overflow: hidden;
       transition: transform .2s ease, width .2s ease;
       display: flex; flex-direction: column;
     }
     #sidebar.collapsed {
       width: 0; overflow: hidden; border-right: none;
     }
-    #sidebar-inner { padding: 16px; min-width: var(--sidebar-w); }
+    /* The LIST scrolls, not the whole panel. With a long catalog the search box, the
+       expand/collapse-all row and Reset styling used to scroll away with it, so filtering a list
+       meant scrolling back to the top to reach the box you were typing in. Only #layer-list moves
+       now; everything around it stays put.
+
+       This needs the flex chain to be allowed to SHRINK — `min-height: 0` at every level. Without
+       it a flex item's automatic minimum size is its content, so the list simply grows and pushes
+       the panel taller instead of scrolling. That is the whole trick, and it is why the rule set is
+       three selectors rather than one `overflow-y: auto`. */
+    #sidebar-inner {
+      padding: 16px; min-width: var(--sidebar-w);
+      display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0;
+    }
+    #layer-list { overflow-y: auto; overflow-x: hidden; flex: 1 1 auto; min-height: 0; }
 
     /* ── V-11 Template Experiences: region-driven layout ───────────────────
        portal.js sets data-* on <body> from the resolved manifest (style.geodeploy.layout):
@@ -100,7 +113,7 @@
     body[data-layerlist="floating"] #sidebar {
       position: absolute; top: 12px; bottom: auto; left: 12px; width: var(--sidebar-w);
       max-height: calc(100% - 24px); z-index: 20; border: 1px solid var(--border);
-      border-radius: var(--radius); box-shadow: var(--shadow-lg); overflow-y: auto; overflow-x: hidden;
+      border-radius: var(--radius); box-shadow: var(--shadow-lg); overflow: hidden;
     }
     /* Floating list keeps the content from forcing width so a narrow resize doesn't overflow (C4/C5). */
     body[data-layerlist="floating"] #sidebar-inner { min-width: 0; }
@@ -155,8 +168,18 @@
     }
     .gd-float-resize:hover { opacity: 1; }
 
-    /* Layer-list actions row (setupLayerSearch): expand/collapse-all · Reset styling · About. */
-    .layer-actions-row { justify-content: space-between; }
+    /* Layer-list actions row (setupLayerSearch): expand/collapse-all · Reset styling · About.
+       With no FOLDERS the left group is empty, so `space-between` pushed the two icons to the far
+       right with nothing to anchor them — they read as buttons floating over the list rather than a
+       toolbar belonging to it. A rule under the row ties them to the list they act on, and the
+       min-height keeps that rule in the same place whether or not the folder buttons are present. */
+    .layer-actions-row {
+      justify-content: space-between;
+      min-height: 26px;
+      padding-bottom: 5px;
+      margin-bottom: 7px;
+      border-bottom: 1px solid var(--border);
+    }
     .layer-actions-row .la-left, .layer-actions-row .la-right { display: flex; align-items: center; gap: 3px; }
     .la-icon {
       width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
@@ -183,6 +206,9 @@
        vanishes and returns makes the whole cluster jump and shifts every button below it. */
     .gd-navback-btn:disabled, .gd-navfwd-btn:disabled { opacity: .35; cursor: default; }
     .gd-drawzoom-btn.active { color: #fff; background: var(--accent); }
+    /* Tilt reflects the map's actual pitch, however it was reached — the compass and a storymap
+       section change it too, and a button that disagreed with the map would be worse than none. */
+    .gd-tilt-btn.active { color: #fff; background: var(--accent); }
 
     /* R2 edit-mode: click-to-place slot overlay (only shown inside the editor iframe). */
     .gd-place-overlay { position: absolute; inset: 0; z-index: 60; display: flex; }
@@ -345,6 +371,18 @@
       display: flex; align-items: center; justify-content: center;
     }
     .layer-legend { margin-top: 8px; }
+    /* Classified vector legend (portal.js::vectorLegendHtml). Indented to the layer NAME rather
+       than the card edge, so it reads as belonging to that layer and not to the list. */
+    .legend-classes { display: flex; flex-direction: column; gap: 2px; padding-left: 46px; }
+    .legend-class { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .legend-chip {
+      width: 11px; height: 11px; border-radius: 2px; flex-shrink: 0;
+      border: 1px solid rgba(0,0,0,.25);
+    }
+    .legend-label {
+      font-size: 10.5px; color: var(--text-muted); white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums;
+    }
     .legend-bar { height: 10px; border-radius: 3px; border: 1px solid var(--border); }
     .legend-range {
       display: flex; justify-content: space-between;
@@ -831,7 +869,13 @@
        Colours come from the same --accent/--surface/--border tokens as the rest of the portal, so a
        branded portal (R3 theme) stays branded and dark mode needs no extra rules. */
     body[data-archetype="catalog"] #layout { flex-direction: row; }
-    body[data-archetype="catalog"] #sidebar { display: none; }   /* the facet rail replaces it */
+    /* The layer list is NOT hidden here any more. It used to be — "the facet rail replaces it" —
+       which meant a catalog portal that turned "Layer catalog" on built a list and then had it
+       hidden by a rule that could not see the choice, with no way to reach it. portal.js now hides
+       the panel when `panels.layerCatalog` is off, which is the same default (catalog ships with it
+       off) and honours an author who turns it on. On a catalog the list FLOATS over the map panel:
+       the page's horizontal space already belongs to the results, so a docked column would come out
+       of the map's half. */
     body[data-archetype="catalog"] #sidebar-toggle { display: none; }
     /* --cat-map-w is set by portal.js from regions.catalog.mapWidth (author choice, clamped 30–60%).
        The fallback keeps a portal published before the option existed at its original split. */
@@ -1074,18 +1118,35 @@
        the two never collide, and portal.js hides it entirely when nothing is switched on. */
     #cat-active {
       position: absolute; top: 10px; left: 10px; z-index: 20;
-      width: 200px; max-height: calc(100% - 20px); overflow-y: auto;
+      width: 200px; max-height: calc(100% - 20px); overflow: hidden;
       background: var(--bg); border: 1px solid var(--border);
       border-radius: 9px; box-shadow: var(--shadow-lg);
       font-size: 12px;
+      display: flex; flex-direction: column;
     }
     body[data-controls-side="left"] #cat-active { left: auto; right: 10px; }
+    /* The header is a BUTTON: this list opens closed (it sits on the map, and on a catalog the map
+       is already the smaller half of the page), so it needs its own way back open. */
     .cat-active-h {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 7px 10px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 6px;
+      width: 100%; padding: 7px 10px; border: none; border-bottom: 1px solid var(--border);
+      background: none; cursor: pointer; text-align: left;
+      font-family: inherit;
       font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
       color: var(--text-muted);
     }
+    .cat-active-h:hover { color: var(--text); }
+    .cat-active-h > span:first-of-type { flex: 1; }
+    .cat-active-caret {
+      width: 13px; height: 13px; flex-shrink: 0; transition: transform .18s ease;
+    }
+    #cat-active.collapsed .cat-active-caret { transform: rotate(-90deg); }
+    #cat-active.collapsed { max-height: none; }
+    #cat-active.collapsed .cat-active-h { border-bottom: none; }
+    #cat-active.collapsed .cat-active-body { display: none; }
+    /* The ROWS scroll, not the panel: the header (and its count) stays put, and a long list can
+       never grow past the map it is drawn on. */
+    .cat-active-body { overflow-y: auto; overflow-x: hidden; min-height: 0; flex: 1 1 auto; }
     .cat-active-n {
       font-size: 10px; font-weight: 600; color: var(--accent);
       background: var(--accent-light); border-radius: 999px; padding: 1px 6px; letter-spacing: 0;
@@ -1140,6 +1201,127 @@
       .cat-facet { min-width: 112px; }
       .cat-head { padding: 12px 16px 10px; }
       .cat-main { padding: 14px 16px 20px; }
+    }
+
+    /* ── Globe: the planet hangs in SPACE ─────────────────
+       Added by portal.js::applySpace when the projection is `globe`, and removed for mercator (a
+       flat map fills the viewport, so this would never be seen, and a star texture behind a
+       semi-transparent basemap would tint it).
+
+       Painted on the CONTAINER, behind the canvas: MapLibre's sky renders the atmosphere, but
+       everything beyond it is transparent and would otherwise fall through to a flat dark panel —
+       which is what "the globe looks like it is in a dark box" actually is. Stars are not in the
+       MapLibre style spec at all, so CSS is the only place they can come from.
+
+       Star layers at different sizes and spacings give parallax-free depth cheaply; a single
+       repeating layer reads as a regular grid, which the eye notices immediately. `background-size`
+       is prime-ish per layer so the tiles do not line up into a visible lattice.
+
+       Brightened + enriched (2026-08-06d): the first pass was TOO dark and empty to read as space —
+       a nearly black panel with a few specks. Now there are eight star layers rather than five, the
+       brightest stars carry a small halo (a second, wider stop in the same gradient) so they read as
+       light sources instead of dots, and the flat "galactic wash" became a diagonal MILKY WAY band
+       plus two coloured nebulae. Still pure CSS gradients: no image request, and nothing here is
+       ever fetched or decoded.
+
+       The one animation is a very slow drift of the star layers (four minutes for one tile), which
+       makes the field feel like a sky rather than wallpaper. It moves `background-position` on an
+       element that is already composited, and it is dropped entirely under
+       `prefers-reduced-motion` — a map is not a screensaver. */
+    #map-wrap.gd-space, .gd-space {
+      background-color: #070b1a;
+      background-image:
+        /* Bright foreground stars, each with a halo. */
+        radial-gradient(1.6px 1.6px at 22% 31%, rgba(255,255,255,1), rgba(180,210,255,.35) 45%, transparent 75%),
+        radial-gradient(1.8px 1.8px at 83% 62%, rgba(226,238,255,1), rgba(150,190,255,.32) 45%, transparent 75%),
+        radial-gradient(1.5px 1.5px at 47% 12%, rgba(255,247,230,1), rgba(255,220,160,.30) 45%, transparent 75%),
+        /* Mid-field. */
+        radial-gradient(1.2px 1.2px at 68% 12%, rgba(255,255,255,.92), transparent 62%),
+        radial-gradient(1.1px 1.1px at 12% 66%, rgba(255,244,224,.85), transparent 62%),
+        radial-gradient(1.1px 1.1px at 58% 84%, rgba(210,228,255,.85), transparent 62%),
+        /* Dust: small and dense, so the gaps between the bright stars are not empty. */
+        radial-gradient(.9px .9px at 45% 78%, rgba(255,255,255,.7), transparent 60%),
+        radial-gradient(.8px .8px at 8% 22%, rgba(255,255,255,.6), transparent 60%),
+        /* The Milky Way, on a diagonal — a straight horizontal band reads as a defect. */
+        linear-gradient(102deg, transparent 34%, rgba(126,150,225,.20) 45%,
+                        rgba(186,196,255,.26) 50%, rgba(126,150,225,.20) 55%, transparent 66%),
+        /* Coloured nebulae, well apart so neither dominates. */
+        radial-gradient(115% 78% at 26% 18%, rgba(72,116,215,.34), transparent 68%),
+        radial-gradient(85% 65% at 80% 80%, rgba(150,84,196,.26), transparent 70%),
+        radial-gradient(60% 50% at 62% 38%, rgba(38,190,190,.14), transparent 72%);
+      background-size:
+        271px 263px, 419px 401px, 347px 359px,
+        197px 211px, 157px 163px, 233px 227px,
+        331px 317px, 139px 149px,
+        100% 100%, 100% 100%, 100% 100%, 100% 100%;
+      background-repeat:
+        repeat, repeat, repeat, repeat, repeat, repeat, repeat, repeat,
+        no-repeat, no-repeat, no-repeat, no-repeat;
+      animation: gd-star-drift 240s linear infinite;
+    }
+    @keyframes gd-star-drift {
+      /* Only the repeating star layers move; the four full-size washes are pinned with `0 0`. */
+      to {
+        background-position:
+          271px 263px, -419px 401px, 347px -359px,
+          -197px 211px, 157px 163px, -233px -227px,
+          331px 317px, -139px 149px,
+          0 0, 0 0, 0 0, 0 0;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #map-wrap.gd-space, .gd-space { animation: none; }
+    }
+    /* The canvas must not paint its own opaque backdrop over the stars. */
+    .gd-space .maplibregl-canvas { background: transparent; }
+
+    /* ── First-paint loader ──────────────────────────────────
+       Every archetype used to assemble itself in front of the visitor: the map painted as soon as
+       its tiles arrived, and the catalog rail, story column and layer list appeared after it, in
+       whatever order they finished. This covers that until the pieces are actually ready (portal.js
+       `loading`) — readiness, never a timer.
+
+       It reuses `.gd-space`, so what the visitor waits on is the same sky the globe hangs in. */
+    #gd-loading {
+      position: fixed; inset: 0; z-index: 190;
+      display: flex; align-items: center; justify-content: center;
+      opacity: 1; transition: opacity .38s ease;
+    }
+    #gd-loading.gd-loading-out { opacity: 0; pointer-events: none; }
+    #gd-loading-box { text-align: center; padding: 24px; max-width: 80vw; }
+    /* A planet with an orbiting moon — the one shape that says "a map of a world is coming". */
+    #gd-loading-orb {
+      width: 76px; height: 76px; margin: 0 auto 22px; position: relative;
+      border-radius: 50%;
+      background:
+        radial-gradient(circle at 32% 28%, #7fd0ff 0%, #3b82f6 42%, #1e3a8a 78%, #0f1f4d 100%);
+      box-shadow: 0 0 34px rgba(90,150,255,.55), inset -8px -6px 18px rgba(0,0,0,.45);
+      animation: gd-orb-pulse 2.6s ease-in-out infinite;
+    }
+    #gd-loading-orb span {
+      position: absolute; inset: -14px; border-radius: 50%;
+      border: 1px solid rgba(150,190,255,.28);
+      animation: gd-orb-spin 3.4s linear infinite;
+    }
+    #gd-loading-orb span::after {
+      content: ''; position: absolute; top: -4px; left: 50%; width: 8px; height: 8px;
+      margin-left: -4px; border-radius: 50%; background: #dbeafe;
+      box-shadow: 0 0 10px rgba(219,234,254,.9);
+    }
+    @keyframes gd-orb-spin { to { transform: rotate(360deg); } }
+    @keyframes gd-orb-pulse {
+      0%, 100% { box-shadow: 0 0 34px rgba(90,150,255,.55), inset -8px -6px 18px rgba(0,0,0,.45); }
+      50%      { box-shadow: 0 0 46px rgba(120,175,255,.75), inset -8px -6px 18px rgba(0,0,0,.45); }
+    }
+    #gd-loading-title {
+      color: #eaf1ff; font-size: 17px; font-weight: 600; letter-spacing: .01em;
+      text-shadow: 0 1px 12px rgba(0,0,0,.6);
+    }
+    #gd-loading-sub {
+      color: rgba(198,215,245,.78); font-size: 12.5px; margin-top: 7px; letter-spacing: .03em;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #gd-loading-orb, #gd-loading-orb span { animation: none; }
     }
 
     /* ── Theme override slot ─────────────────────────────── */

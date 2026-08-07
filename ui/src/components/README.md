@@ -31,6 +31,10 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
   `TERMINAL_ALLOWED` here mirrors `admin.py`; the SERVER enforces it, so drift is cosmetic.
   Streaming polls only while the box is ticked AND the Logs tab is open — an unattended tail would
   otherwise hit the Docker socket forever.
+  **Fixed heights (2026-08-06):** Deployments scrolls inside `h-96` like Logs, and Environment
+  scrolls only its VARIABLE LIST — the notice above and the Save/Apply row below stay put, because
+  scrolling the whole tab would push the buttons (the reason you are on that tab) out of reach.
+  These lists only grow; an unbounded panel pushed the rest of the Settings page off the screen.
 - `infra/ConnectionDetails.vue` — owner-only "here are your PostGIS and MinIO credentials" card.
   Fetches nothing until **Show** is pressed (the request is audited, so an automatic load would fill
   the log with views nobody performed); secrets are masked with a reveal + copy per field. The
@@ -64,6 +68,25 @@ All dialogs (`UploadModal`, `AddSourceModal`, `DiscoverModal`, `portal/CreatePor
   icon logic in `views/PortalEditor.vue` + `templates/shared/portal.js` — change all three together.
 
 ## Last updated
+2026-08-06c (`portal/LayerPanel.vue`: outline controls. Polygons AND points can now set an outline
+colour or **None** — previously a polygon always had a blue one and a point a hard-coded white one.
+Points also get a thickness, expressed as a PROPORTION of the marker so it survives a resize; past
+~60% the fill is hidden and the marker reads as a RING, which the panel says rather than leaving you
+to find out. `NO_OUTLINE` is the sentinel string `"none"`, never `""` — an uninitialised colour input
+yields `""`, and treating that as "no outline" would silently strip outlines from layers nobody
+styled. The popover widened 230→288px; it had grown a mode picker, field, class controls, an
+editable legend, marker and outline controls and a 3D block, and the labelled rows were wrapping.)
+2026-08-06b (`portal/LayerPanel.vue`: **data-driven symbology**. The popover gains Single /
+Graduated / Categories, a field picker (numeric-only for graduated; the geometry column never
+offered), class count + method + ramp, and an EDITABLE legend whose swatches are the colours the map
+will actually use. Class breaks are requested from `GET /data/vector/{ref}/field-stats` and never
+computed here — the classifier reads the whole column, and a second implementation in the browser
+would be two versions of one decision. `refreshClasses(over)` takes the control that just changed,
+because the style prop has not updated yet when it runs (reading it back classifies with the
+previous value: the classic one-step-lag bug). Polygons also gain a 3D "extrude by a field" control,
+hidden when the layer has no numeric column. The row swatch now shows the MIDDLE class via
+`lib/symbology.representativeColor` — the flat `color` is unused under a classification, and a
+swatch showing a colour that appears nowhere on the map is a small lie told constantly.)
 2026-08-06 (`infra/ConnectionDetails.vue` documented + it now shows which source each credential
 group came from — issue #2)
 2026-07-29 (new `data/ShareLinksModal.vue` + a link button on VectorRow/RasterRow — the per-layer

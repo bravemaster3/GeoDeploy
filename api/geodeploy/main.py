@@ -76,6 +76,17 @@ async def lifespan(app: FastAPI):
                         settings.storage_region)
             except Exception:
                 log.exception("could not publish runtime credentials for the worker")
+            # Martin's config is only rebuilt when the LAYER LIST changes, so an instance that
+            # updates without uploading anything keeps whatever config was written under the
+            # PREVIOUS version — including one written before a tile source existed. That is how
+            # 3D point bars could be fully implemented and still serve nothing: the
+            # `geodeploy.point_pillars` function source was never added to the running config.
+            # Rebuilding here makes the tile config self-healing on restart, like the credentials
+            # above, and it is cheap — Martin is only restarted if the config actually changed.
+            try:
+                await _refresh_martin_sources()
+            except Exception:
+                log.exception("could not refresh the Martin tile configuration")
         except Exception as exc:
             log.warning("state database not reachable yet (%s) — serving the setup wizard "
                         "until it is", exc)
@@ -237,6 +248,31 @@ def _apply_schema_migrations(conn) -> None:
             conn.execute(text(sql))
         except Exception:
             pass  # Column already exists
+
+
+async def _refresh_martin_sources() -> None:
+    """Rebuild martin-config.yaml from the current layer list at startup.
+
+    Same list the `/admin/reload-martin` endpoint builds — this just stops it being something an
+    operator has to know to click. Non-fatal by construction: the caller wraps it, and
+    `regenerate_config` already swallows a failure to reach the database or Docker.
+    """
+    from sqlalchemy import select
+    from . import database
+    from .models import VectorLayer
+    from .services.martin import regenerate_config
+
+    if database.AsyncSessionLocal is None:
+        return
+    async with database.AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(VectorLayer).where(VectorLayer.status == "ready",
+                                      VectorLayer.storage_backend == "postgis")
+        )
+        layers = [{"schema_name": l.schema_name, "table_name": l.table_name,
+                   "geometry_column": l.geometry_column, "id_column": l.id_column, "crs": l.crs}
+                  for l in result.scalars().all()]
+    await regenerate_config(layers)
 
 
 def _ensure_martin_config(settings) -> None:

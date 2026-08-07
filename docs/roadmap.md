@@ -109,9 +109,9 @@ of who did what.</p>
 
 </div>
 
-<div class="gd-rel now tail" markdown>
+<div class="gd-rel done" markdown>
 ### Finishing v1.0
-<span class="gd-when">In progress</span>
+<span class="gd-when">Shipped</span>
 
 <p class="gd-goal">The last of it: verifying on real hardware what the tests can only check in
 parts, then the release notes and the tag.</p>
@@ -122,7 +122,30 @@ parts, then the release notes and the tag.</p>
 - [x] Release notes
 - [x] **A clean install verified from scratch** on fresh machines — all four combinations of
       managed/external PostGIS and managed/external object storage
-- [ ] An upgrade exercised between two tagged versions — which needs the first tag to exist
+- [ ] An upgrade exercised between two tagged versions — v1.0 → v1.1 is the first chance to do it
+
+</div>
+
+<div class="gd-rel now tail" markdown>
+### v1.1 — maps that show what the data says
+<span class="gd-when">In progress</span>
+
+<p class="gd-goal">A portal could show <em>where</em> things are. This is the release where it can
+show <em>what they are</em> — and where choosing a version to run stops being a matter of SSH.</p>
+
+- [x] **Data-driven symbology** — colour from a field: categorized for text values, graduated for
+      numbers (quantile, equal-interval, natural breaks), with a legend that matches because the
+      legend *is* the class list
+- [x] **Classified points keep their marker shape** — a star stays a star when it is coloured by a
+      field
+- [x] **Outlines that can be none**, and point outlines with a thickness — which is how a ring is drawn
+- [x] **3D**: polygons extruded by a field, points as bars, a tilt control, and a starfield behind
+      the globe
+- [x] **Portals load as one piece** instead of assembling themselves in front of the visitor
+- [x] **Choose which version to install** — main, the latest release, a specific release, or any
+      branch; and the updater verifies the new code is actually running
+- [x] Backup history can be tidied; large uploads survive a restore
+- [ ] An upgrade exercised between two tagged versions (v1.0 → v1.1)
 
 </div>
 
@@ -157,9 +180,11 @@ trip — edit in the tool you prefer, publish back.</p>
 - [ ] Measure distance and area; **print composer** to PDF with legend, scale bar, attribution
 - [ ] Swipe compare, and permalinks that restore view and layer state
 - [ ] Draw a box to *filter* a catalog, not only to download
-- [ ] **Data-driven symbology** — colour and size from a field: categorized for text
-      values, graduated for numbers, with a legend that matches
+- [x] **Data-driven symbology** — shipped in v1.1 (colour by field, with a matching legend).
+      **Size** from a field is the half still to come
 - [ ] Rule-based and expression symbology; a wider template gallery
+- [ ] **Labels from a field**, and heatmap / cluster renderers — the obvious next renderers now that
+      a layer's style can depend on its data
 - [ ] Multi-file and archive uploads (`.tar.gz` alongside `.zip`)
 - [ ] **Choose what a restore replaces** — files, portal assets and database as separate choices,
       instead of all-or-nothing. (Restoring layers *without* users is a different, harder thing:

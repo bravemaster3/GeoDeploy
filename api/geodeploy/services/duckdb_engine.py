@@ -1323,3 +1323,56 @@ def build_manifest(s3_key: str, creds: dict | None = None, bucket: str | None = 
         }
     finally:
         conn.close()
+
+
+def field_stats(s3_key: str, field: str, sample: int = 100_000,
+                distinct_limit: int = 60, creds: dict | None = None,
+                bucket: str | None = None) -> dict:
+    """Statistics for ONE attribute of a GeoParquet layer, for the symbology classifier.
+
+    Returns `{"kind": "numeric"|"categorical", "count", "min", "max", "values"|"categories"}`.
+
+    Why a SAMPLE and not the whole column: classing exists to make a readable map, and a legend has
+    five or seven classes. Breaks computed from 100k values and from 20M are the same breaks to any
+    precision a legend can show, while the second query is one an editor cannot wait for. The count
+    returned is the sampled count, and the endpoint says so.
+
+    Numeric columns come back as raw VALUES rather than pre-computed breaks because the classifier
+    (`services/symbology.classify`) must produce identical results wherever it runs — computing
+    quantiles here and k-means there would be two implementations of one decision.
+    """
+    settings = get_settings()
+    bkt = bucket or settings.storage_bucket
+    meta_path, src = _parquet_paths(f"s3://{bkt}/{s3_key}")
+    sample = max(1_000, min(int(sample), 500_000))
+
+    conn = _connect_read(creds)
+    try:
+        cols = {r[0]: r[1] for r in conn.execute(f"DESCRIBE SELECT * FROM {src}").fetchall()}
+        if field not in cols:
+            raise ValueError(f"No such field: {field}")
+        col, dtype = _q(field), (cols[field] or "").upper()
+        numeric = any(t in dtype for t in
+                      ("INT", "DECIMAL", "DOUBLE", "FLOAT", "REAL", "HUGEINT", "NUMERIC"))
+
+        if numeric:
+            rows = conn.execute(
+                f"SELECT {col} FROM {src} WHERE {col} IS NOT NULL LIMIT {sample}").fetchall()
+            values = [float(r[0]) for r in rows if r[0] is not None]
+            if not values:
+                return {"kind": "numeric", "count": 0, "min": None, "max": None, "values": []}
+            return {"kind": "numeric", "count": len(values), "sampled": len(values) >= sample,
+                    "min": min(values), "max": max(values), "values": values}
+
+        # Categorical: the distinct values BY FREQUENCY, so the commonest get the first and most
+        # distinguishable colours, and a long tail is truncated rather than making an unreadable
+        # legend of 400 entries (everything past the cap falls into the style's "Other" colour).
+        rows = conn.execute(
+            f"SELECT CAST({col} AS VARCHAR) AS v, COUNT(*) AS n FROM {src} "
+            f"WHERE {col} IS NOT NULL GROUP BY 1 ORDER BY n DESC LIMIT {int(distinct_limit) + 1}"
+        ).fetchall()
+        cats = [{"value": r[0], "count": int(r[1])} for r in rows[:distinct_limit]]
+        return {"kind": "categorical", "count": len(cats),
+                "truncated": len(rows) > distinct_limit, "categories": cats}
+    finally:
+        conn.close()

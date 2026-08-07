@@ -202,6 +202,84 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-07c (**Download-by-area hit-tested the SCREEN, so it found nothing on the globe.**
+`openDownloadDialog` decided which layers to offer with `queryRenderedFeatures(pixBox, …)` —
+`pixBox` being an axis-aligned SCREEN rectangle between the two projected drag corners. On a globe
+the region between those corners is a curved quadrilateral, so the query looked somewhere else and
+reported "No layers intersect the selected area" over an area full of features. It was also quietly
+wrong in 2D: it asked what is RENDERED, so a layer whose tiles had not arrived was left out of the
+download. Now one `bboxOverlaps()` over the baked `geodeploy:bbox`, shared by vector, raster and
+GeoParquet (they each had their own copy of the comparison, and the vector one was the odd one out).
+Coarser — an overlapping extent with no features inside exports nothing — but that is how rasters
+already behaved, and the SERVER does the real clip. Offering an empty download beats hiding a real
+one. `queryRenderedFeatures` survives only as the fallback for a layer with no baked bbox.)
+2026-08-07b (`.layer-actions-row` reads as a TOOLBAR, not floating buttons. With no folders the
+`.la-left` group is empty, so `justify-content: space-between` pushed Reset-styling and About to the
+far right with nothing anchoring them — they hovered over the list rather than belonging to it. A
+bottom rule ties them to the list they act on; `min-height` keeps that rule in the same place whether
+or not the folder expand/collapse buttons are present.)
+2026-08-06d (**first-paint loader · tilt · brighter space · the list scrolls**. `#gd-loading` lives in
+`shared/layout.html`, not in portal.js — its job is to cover the window from the FIRST paint, and an
+element created once the runtime has parsed appears after the thing it hides. portal.js's `loading`
+clears it on READINESS: gates registered synchronously up front (`map`, `render`, plus `catalog` /
+`story` per archetype) and cleared by the piece that owns each — `map` at the end of the load
+handler, `render` on the map's first `idle`. Two rules make it safe: register every gate before any
+can clear, and clear OUTSIDE the try/catch, so one broken panel cannot make a portal that never
+appears. The 15 s timeout is a backstop for a piece that never calls back, not the mechanism. Deck
+(GeoParquet) data is deliberately NOT gated — it streams and has its own indicator.
+**Tilt:** `NavigationControl` gains `visualizePitch` (drag the compass to pitch) and a `TiltControl`
+button toggles 0 ↔ 60°; `maxPitch` raised 60 → 75. Nothing on the page previously advertised
+right-drag, so a 3D portal looked flat and unfixable. The button reflects `pitchend`, so it can never
+contradict the map. **Space** is brighter: 8 star layers with halos on the bright ones, a diagonal
+Milky Way, three nebulae, and a 4-minute drift (dropped under `prefers-reduced-motion`); the sky's
+horizon limb went `#7fb2ff` → `#a8d4ff`.
+**Catalog "On map" legend (`#cat-active`)** — the box listing what a visitor has switched on — now
+COLLAPSES and opens closed, with the count still on the header, and its rows scroll rather than the
+whole panel. It sits on the map, and on a catalog the map is already the smaller half of the page,
+so a list that grew with every dataset ate the view it described. State is per-visit and re-applied
+on each render (the panel is rebuilt from `onMap` on every change, so it cannot live on the DOM).
+**Layer list:** `#layer-list` is now the scroll container (needs `min-height:0` down the flex chain)
+so the search box and action row stay put while a long list scrolls. Separately, the catalog
+archetype no longer hides `#sidebar` in CSS — portal.js hides it when `panels.layerCatalog` is off,
+so a catalog author who turns it ON now gets a list (floating, on the map's side, collapsed) instead
+of one built and then hidden by a rule that could not see the choice.
+**Pointer cursor over features:** the hover handler covered MapLibre layers only, so GeoParquet
+layers — which emit no MapLibre layer for `queryRenderedFeatures` to find — showed the pan cursor
+over every feature. Deck DETAIL layers are now `pickable` and hit-tested with `deckOverlay.pickObject`
+(one pick per animation frame; a pick is a render pass and mousemove far outruns the screen). The
+density OVERVIEW stays unpickable — a grid cell is not a feature. `setCursor` is the single writer
+and defers to the draw-box / area-select modes, which own the cursor while active. The MapLibre
+query now also drops ids the live style lacks: `queryRenderedFeatures` rejects the WHOLE call on one
+unknown id rather than skipping that layer.)
+2026-08-06c (`markerImage` takes an OUTLINE (colour + width) — the white stroke was hard-coded. Width
+is a RATIO of the radius so it stays proportional when a layer is resized (0.28 = the old value, so
+an unstyled marker is pixel-identical); a thick one hides the fill, which is how a RING is drawn.
+`null` means draw none, `undefined` means unspecified → the old white. The marker image ID carries
+both, because they change the pixels — otherwise two differently-ringed markers collide on one image;
+`parseMarkerImageId` treats the pair as OPTIONAL so ids baked into portals published before this
+still parse and draw as they did. Also: `GeoArrowPolygonLayer` extrudes — that is the transport an
+UNTILED GeoParquet layer uses, so extruding only in the GeoJSON branch meant 3D did nothing for
+exactly the layers it was added for. A GeoArrow accessor is an Arrow COLUMN, so getElevation takes
+the vector and the × multiplier rides on `elevationScale`.)
+2026-08-06b (**`map.on('load')` is a guarded sequence — keep it that way**. Every step in it is
+wrapped in its own try/catch with a console.warn, because anything escaping aborts the REST of the
+handler — which is where `setupBasemaps()` adds the control cluster and the interaction wiring
+happens. A map in that state loads, paints and does not respond. `ensurePointImages()` was its first
+line and the only unguarded one; it became far riskier when a classified layer started registering
+one icon PER CLASS, and `markerImage()` sat outside the try inside `setMarkerImage`. Now guarded at
+both levels, as is the `applySpace()` call in `applyProjection` (also reached from that handler).
+Also: deck-rendered POLYGON layers extrude via GeoJsonLayer `extruded`/`getElevation` — GeoParquet
+layers emit no MapLibre layer, so `fill-extrusion` never reaches them; outline is disabled when
+extruded, and a non-numeric height becomes 0 rather than NaN, which would drop the whole mesh.)
+2026-08-06 (**data-driven symbology + 3D + space**: `portal.js::vectorLegendHtml` renders the
+`geodeploy:legend` baked into the style — a RENDERER only, it never rebuilds labels from
+classes/categories, so the published legend cannot drift from the published map. `applySpace()`
+gives globe mode a MapLibre sky (atmospheric limb, faded out by zoom) plus a CSS starfield on the
+container: the sky draws the atmosphere and everything beyond it is TRANSPARENT, which is why the
+globe used to sit in a flat dark panel; stars are not in the MapLibre style spec so CSS is the only
+source. A portal containing a `fill-extrusion` layer opens at 45° pitch — straight down, an extruded
+polygon and a plain fill are the same shape — but only when the author never pinned a pitch, since
+an explicit 0 chosen while looking at a 3D layer is a decision.)
 2026-07-30 (V-11 polish, 2nd pass: story-map wheel now ZOOMS the map over the open map and only scrolls
 the narrative over the story column [`setupStory` hit-tests the pointer against the panel's opaque band in
 a capture-phase wheel listener; `scrollZoom` re-enabled]; the up/down "more" chevrons are bigger [42px,
