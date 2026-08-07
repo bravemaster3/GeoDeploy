@@ -14,7 +14,7 @@ Three surfaces, three jobs:
 |---|---|---|
 | **OGC API - Features** | reading features in any GIS (QGIS, ArcGIS, FME, GDAL) | `/api/ogc` |
 | **STAC** | discovering what an instance holds, and where each asset lives | `/api/stac` |
-| **Tiles** (XYZ · TileJSON · PMTiles · COG) | drawing big layers fast | per-layer, see below |
+| **Tiles** (WMTS · XYZ · TileJSON · PMTiles · COG) | drawing big layers fast | per-layer, see below |
 
 In the app, the **Share links** panel (link icon on any ready layer in *My Data*) hands you the
 right URL for each of these, labelled with the exact menu path in each tool.
@@ -118,10 +118,17 @@ filtering, no transactions, no OGC API - Tiles or Records — and `/api/ogc/conf
   `/vsicurl/https://YOUR-HOST/api/data/raster/{id}/cog`. Range requests fetch only the tiles
   and overviews you look at (this is the modern replacement for WCS).
 - **Download:** the same URL fetched normally returns the whole GeoTIFF.
-- **XYZ tiles (display only):** the item's `tiles` asset is a TiTiler tile template — paste it
-  into a QGIS *XYZ Tiles* connection or any web map.
-- **TileJSON (preferred over raw XYZ):** `…/api/data/raster/{id}/tilejson` wraps that template with
-  the layer's **bounds** and saved styling, so clients can *zoom to layer* — a bare XYZ URL cannot.
+- **WMTS — the one to use in QGIS:** `…/api/data/raster/{id}/wmts`, added under *Layer ▸ Add Layer ▸
+  Add WMS/WMTS Layer ▸ New*. It carries the layer's **extent**, so **Zoom to Layer** goes to the
+  data. QGIS does not read TileJSON for a raster, which is why an XYZ connection leaves it guessing
+  at the whole world.
+- **TileJSON — the one to use in MapLibre, deck.gl or GeoLibre:**
+  `…/api/data/raster/{id}/tilejson` wraps the tile template with the layer's **bounds** and saved
+  styling.
+- **XYZ tiles (display only, no extent):** the item's `tiles` asset is a TiTiler tile template —
+  paste it into a QGIS *XYZ Tiles* connection or any web map. Prefer WMTS or TileJSON above: a bare
+  `{z}/{x}/{y}` template has nowhere to carry an extent, so nothing that reads it can zoom to the
+  layer. Tiles outside the raster come back transparent rather than as errors.
 
 ### Vector layers served from PostGIS
 
