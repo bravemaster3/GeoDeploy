@@ -284,6 +284,12 @@
               <span class="text-muted-foreground">Start in 3D globe</span>
               <input type="checkbox" :checked="startsInGlobe" @change="e => setGlobe(e.target.checked)" />
             </label>
+            <!-- Same story as the globe: pitch was already part of the pinned view, but the only way
+                 to set it was to right-drag the preview, which nothing advertises. -->
+            <label class="flex items-center justify-between cursor-pointer">
+              <span class="text-muted-foreground">Start tilted</span>
+              <input type="checkbox" :checked="startsTilted" @change="e => setTilt(e.target.checked)" />
+            </label>
             <label v-if="!isStory && !isCatalog" class="flex items-center justify-between cursor-pointer">
               <span class="text-muted-foreground">Start collapsed</span>
               <input type="checkbox" :checked="resolvedLayout.regions.layerList.collapsed"
@@ -2110,6 +2116,20 @@ function setGlobe(on) {
   // Optimistic: the iframe reports the real camera back within a frame, but a portal that has never
   // reported one yet would otherwise leave the box unticked after a click.
   if (lastView.value) lastView.value = { ...lastView.value, projection: on ? 'globe' : 'mercator' }
+}
+
+// The on-map tilt control's two states, as an authoring decision. Mirrors portal.js TILT_PITCH /
+// TILT_ON_AT — a pitch is "tilted" when it is past the threshold, not only when it equals 60, so
+// a camera the author dragged to some other angle still reads as tilted here.
+const TILT_PITCH = 60
+const TILT_ON_AT = 5
+const startsTilted = computed(() =>
+  ((lastView.value?.pitch ?? savedView.value?.pitch) || 0) >= TILT_ON_AT)
+function setTilt(on) {
+  postToFrame({ type: 'tilt', value: on })
+  // Optimistic for the same reason as setGlobe, plus one of its own: the preview EASES over half a
+  // second, so waiting for moveend would leave the box visibly lagging the click.
+  if (lastView.value) lastView.value = { ...lastView.value, pitch: on ? TILT_PITCH : 0 }
 }
 
 function currentView() {

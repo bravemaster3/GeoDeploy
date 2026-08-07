@@ -3289,6 +3289,13 @@
         applyProjection(d.value === 'globe' ? 'globe' : 'mercator');
         post({ type: 'view', view: currentViewObj() });
       }
+      // The editor's "Start tilted" toggle — the same two states as the on-map tilt control, so the
+      // pinned view can carry a perspective the author chose rather than one they had to right-drag
+      // into. easeTo fires moveend, so the camera reports itself back (no explicit post needed, and
+      // syncTilt keeps the on-map button in step).
+      else if (d.type === 'tilt') {
+        try { map.easeTo({ pitch: d.value ? TILT_PITCH : 0, duration: 550 }); } catch (err) {}
+      }
       else if (d.type === 'fitbbox' && Array.isArray(d.bbox) && d.bbox.length === 4) {
         try { map.fitBounds([[d.bbox[0], d.bbox[1]], [d.bbox[2], d.bbox[3]]], { padding: 30, duration: 500 }); } catch (err) {}
       }
