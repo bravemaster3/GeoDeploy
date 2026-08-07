@@ -202,6 +202,17 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-07c (**Download-by-area hit-tested the SCREEN, so it found nothing on the globe.**
+`openDownloadDialog` decided which layers to offer with `queryRenderedFeatures(pixBox, …)` —
+`pixBox` being an axis-aligned SCREEN rectangle between the two projected drag corners. On a globe
+the region between those corners is a curved quadrilateral, so the query looked somewhere else and
+reported "No layers intersect the selected area" over an area full of features. It was also quietly
+wrong in 2D: it asked what is RENDERED, so a layer whose tiles had not arrived was left out of the
+download. Now one `bboxOverlaps()` over the baked `geodeploy:bbox`, shared by vector, raster and
+GeoParquet (they each had their own copy of the comparison, and the vector one was the odd one out).
+Coarser — an overlapping extent with no features inside exports nothing — but that is how rasters
+already behaved, and the SERVER does the real clip. Offering an empty download beats hiding a real
+one. `queryRenderedFeatures` survives only as the fallback for a layer with no baked bbox.)
 2026-08-07b (`.layer-actions-row` reads as a TOOLBAR, not floating buttons. With no folders the
 `.la-left` group is empty, so `justify-content: space-between` pushed Reset-styling and About to the
 far right with nothing anchoring them — they hovered over the list rather than belonging to it. A

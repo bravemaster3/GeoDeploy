@@ -3455,6 +3455,13 @@
   }
   function hideHint() { const h = document.getElementById('gd-hint'); if (h) h.style.display = 'none'; }
 
+  /** Do two [w, s, e, n] boxes overlap? Touching edges count — a layer ending exactly on the line
+   *  the user drew is in the selection. One implementation, used by every layer kind, so vectors,
+   *  rasters and GeoParquet cannot disagree about what "inside the box" means. */
+  function bboxOverlaps(bb, box) {
+    return !(bb[2] < box[0] || bb[0] > box[2] || bb[3] < box[1] || bb[1] > box[3]);
+  }
+
   function openDownloadDialog(bbox, pixBox) {
     const slug = (window.GEODEPLOY && window.GEODEPLOY.slug) || (location.pathname.split('/').filter(Boolean)[1] || '');
 
@@ -3468,13 +3475,28 @@
       // drops one of them from the download list.
       const key = (l.metadata['geodeploy:external'] ? 'ext' : type) + '-' + id;
       if (seen.has(key)) return;
-      let hit = false;
-      if (type === 'vector') {
+      // GEOGRAPHIC overlap, not a screen-space query.
+      //
+      // This used to be `queryRenderedFeatures(pixBox, …)` for vectors, and it broke completely on
+      // the globe: `pixBox` is an axis-aligned SCREEN rectangle between the two projected drag
+      // corners, and on a globe the region between those corners is a curved quadrilateral — so the
+      // query looked somewhere else entirely and reported "No layers intersect the selected area"
+      // over an area full of features. It was also wrong in 2D in a quieter way: it asked what is
+      // RENDERED, so a layer whose tiles had not arrived yet was silently left out of the download.
+      //
+      // The bbox is baked into every layer's metadata and is what the raster and GeoParquet branches
+      // already use. It is coarser — a layer whose extent overlaps but has no features inside the
+      // box will be offered and export nothing — but that matches how the other two behave, and the
+      // SERVER does the real clip either way. Offering an empty download beats hiding a real one.
+      const bb = l.metadata['geodeploy:bbox'];
+      let hit;
+      if (Array.isArray(bb) && bb.length === 4) {
+        hit = bboxOverlaps(bb, bbox);
+      } else if (type === 'vector') {
+        // No bbox recorded — fall back to the rendered query rather than dropping the layer.
         try { hit = map.queryRenderedFeatures(pixBox, { layers: [l.id] }).length > 0; } catch (e) { hit = true; }
       } else {
-        const bb = l.metadata['geodeploy:bbox'];
-        hit = Array.isArray(bb) && bb.length === 4 &&
-          !(bb[2] < bbox[0] || bb[0] > bbox[2] || bb[3] < bbox[1] || bb[1] > bbox[3]);
+        hit = false;
       }
       if (!hit) return;
       seen.add(key);
@@ -3489,8 +3511,7 @@
       const st = deckState[d.layer_id];
       if (st && !st.visible) return;
       const bb = d.bbox;
-      const hit = !(Array.isArray(bb) && bb.length === 4) ||
-        !(bb[2] < bbox[0] || bb[0] > bbox[2] || bb[3] < bbox[1] || bb[1] > bbox[3]);
+      const hit = !(Array.isArray(bb) && bb.length === 4) || bboxOverlaps(bb, bbox);
       if (!hit) return;
       seen.add(key);
       items.push({ id: d.layer_id, type: 'vector', backend: 'geoparquet',
