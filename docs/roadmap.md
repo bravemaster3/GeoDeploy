@@ -122,13 +122,15 @@ parts, then the release notes and the tag.</p>
 - [x] Release notes
 - [x] **A clean install verified from scratch** on fresh machines — all four combinations of
       managed/external PostGIS and managed/external object storage
-- [ ] An upgrade exercised between two tagged versions — v1.0 → v1.1 is the first chance to do it
+- [x] **An upgrade exercised on a live instance** — v1.1 installed from the in-app updater's
+      release channel. (Strictly this was branch → v1.1 rather than v1.0 → v1.1; it drives the same
+      machinery — fetch tags, resolve the target, reset, rebuild, verify the new code is running.)
 
 </div>
 
-<div class="gd-rel now tail" markdown>
+<div class="gd-rel done" markdown>
 ### v1.1 — maps that show what the data says
-<span class="gd-when">In progress</span>
+<span class="gd-when">Shipped · 2026-08-07</span>
 
 <p class="gd-goal">A portal could show <em>where</em> things are. This is the release where it can
 show <em>what they are</em> — and where choosing a version to run stops being a matter of SSH.</p>
@@ -145,7 +147,32 @@ show <em>what they are</em> — and where choosing a version to run stops being 
 - [x] **Choose which version to install** — main, the latest release, a specific release, or any
       branch; and the updater verifies the new code is actually running
 - [x] Backup history can be tidied; large uploads survive a restore
-- [ ] An upgrade exercised between two tagged versions (v1.0 → v1.1)
+- [x] Installed from the release channel on a live instance
+- [x] **Fixes found by using it**: a bar near the antimeridian striped the whole planet; a shapefile
+      declaring "Unknown" geometry took the point path; rasters requested tiles across the whole
+      world; download-by-area found nothing on the globe
+
+</div>
+
+<div class="gd-rel now tail" markdown>
+### v1.2 — the CLI, and getting data back out
+<span class="gd-when">Next</span>
+
+<p class="gd-goal">v1.1 made a portal say what the data means. This one is about reaching an instance
+without a browser, and about being able to take your data with you.</p>
+
+- [ ] **A real CLI**, not an example script — every argument the API takes, the v1.1 symbology
+      included, with its own section in the docs and tests so it is verified without anyone
+      checking by hand
+- [ ] **Styling that travels** — portal and layer style interchange with GeoLibre and QGIS, for
+      every layer type. The CLI is the natural surface for it, so the two are designed together
+- [ ] **Download a backup**, and **restore from disk** — state-only (small, covers a bad restore or
+      a botched update) separately from the full copy including objects. Restore uploads to a
+      staging prefix and reuses the existing restore path rather than growing a second one
+- [ ] Collapsible legend entries in the layer list, with a collapse-all ([#9](https://github.com/bravemaster3/GeoDeploy/issues/9))
+- [ ] Class count stops snapping back, and the 9-vs-12 ceiling agrees with the server ([#10](https://github.com/bravemaster3/GeoDeploy/issues/10))
+- [ ] **Invert a colour ramp** ([#11](https://github.com/bravemaster3/GeoDeploy/issues/11))
+- [ ] **Size from a field**, and **labels** — the half of data-driven symbology v1.1 did not ship
 
 </div>
 
@@ -180,11 +207,10 @@ trip — edit in the tool you prefer, publish back.</p>
 - [ ] Measure distance and area; **print composer** to PDF with legend, scale bar, attribution
 - [ ] Swipe compare, and permalinks that restore view and layer state
 - [ ] Draw a box to *filter* a catalog, not only to download
-- [x] **Data-driven symbology** — shipped in v1.1 (colour by field, with a matching legend).
-      **Size** from a field is the half still to come
+- [x] **Data-driven symbology** — shipped in v1.1. Size-from-a-field and labels are scheduled in
+      v1.2, above
 - [ ] Rule-based and expression symbology; a wider template gallery
-- [ ] **Labels from a field**, and heatmap / cluster renderers — the obvious next renderers now that
-      a layer's style can depend on its data
+- [ ] **Heatmap and cluster renderers** — the other renderers a data-driven style makes possible
 - [ ] Multi-file and archive uploads (`.tar.gz` alongside `.zip`)
 - [ ] **Choose what a restore replaces** — files, portal assets and database as separate choices,
       instead of all-or-nothing. (Restoring layers *without* users is a different, harder thing:
