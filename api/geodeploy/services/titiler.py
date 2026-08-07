@@ -14,6 +14,7 @@ def get_tile_url(
     algorithm: str | None = None,
     zfactor: float | str | None = None,
     bidx: list | None = None,
+    band_count: int | None = None,
     settings=None,
 ) -> str:
     """
@@ -33,9 +34,23 @@ def get_tile_url(
     cog_url = f"s3://{settings.storage_bucket}/{s3_key}"
     url = f"/raster/cog/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}?url={cog_url}"
     bands = [b for b in (bidx or []) if b is not None]
+    # A PNG carries at most four channels, and TiTiler appends the dataset mask as alpha. So a
+    # 4-band multispectral raster — a drone Sequoia is GRE/RED/REG/NIR — asks the PNG driver for
+    # FIVE, and EVERY tile 500s:
+    #   "PNG driver doesn't support 5 bands. Must be 1 (grey), 2 (grey+alpha), 3 (rgb) or 4 (rgba)"
+    # With no band selection TiTiler reads them all, so a raster with more than three bands needs an
+    # explicit default. The first three are a false-colour composite for a multispectral sensor and
+    # plain RGB for ordinary imagery — either way it renders, and the band pickers can change it.
+    if not bands and band_count and band_count > 3:
+        bands = [1, 2, 3]
     for b in bands:
         url += f"&bidx={b}"
-    if rescale:
+    # `rescale` is a stretch over the DATA range, and TiTiler applies it AFTER the algorithm. Feed it
+    # a hillshade — which is already a finished 0–255 relief image — and every pixel saturates to one
+    # value: a flat tile that reads as "hillshade is not rendering". Measured on a vegetation index
+    # whose range is 0.5563–0.9477: hillshade alone returns a 15 kB tile, hillshade + that rescale
+    # returns 623 bytes of uniform colour. Exactly the reasoning that already drops `colormap` below.
+    if rescale and algorithm != "hillshade":
         url += f"&rescale={rescale}"
     if algorithm:
         url += f"&algorithm={algorithm}"

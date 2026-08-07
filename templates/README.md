@@ -205,6 +205,36 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-07g (**the catalog's "On map" list shows real symbology, and the phone layout stops starving
+the results.** The list is a catalog portal's ONLY legend (the layer switcher is a separate panel),
+and each row carried a 7px dot coloured by KIND — so three point layers on screen were three
+identical blue dots. `activeSwatch(ref, rec)` now resolves the row through the same `legendSwatch`
+the layer list uses, handling all three cases: MapLibre layers (colour/geometry/dash/marker from the
+style), **deck/GeoParquet layers checked FIRST** (they have no style layer to find, only a
+`DECK_LAYERS` entry), and rasters. **Rasters deliberately do NOT use `legendSwatch`** — its raster
+branch is `geomIcon('raster')`, a grid, which at 18px in a 200px panel was the largest thing in the
+row and identical for every raster. They get a colour-RAMP chip from `LEGEND_GRADIENTS` instead,
+which is what actually tells two rasters apart; hillshade reads grey, which it is. CSS: `.cat-active-sw`
+(fixed 18px box so names stay aligned) + `.cat-active-ramp`, replacing `.cat-active-dot`.
+**Phone catalog (portal.css ≤640px):** filters now sit BESIDE the results (rail 42%) instead of a
+22vh strip above them — the old stack split the one scarce axis three ways and the result list, the
+point of the page, got the smallest share. Tablet/desktop rules untouched.)
+2026-08-07f (**the raster popover now OPENS showing what is on the map.** New `effectiveHillshade` /
+`effectiveZfactor` / `effectiveColormap` / `effectiveRescale` beside `effectiveBidx`: viewer session
+state first, else the params baked into the tile URL. Only `bidx` did this, so a portal published
+with hillshade opened the popover UNCHECKED with Z 1, contradicting the map behind it. Second, worse
+fault from the same gap: `applyRaster` rebuilt the URL from `rasterState` ALONE, so touching one
+control discarded every baked param the viewer had not touched — pick a palette, lose the author's
+stretch. `applyRaster` and `rasterLegendHtml` now read through the same helpers, so popover, map and
+legend cannot disagree. Stretch inputs render disabled under hillshade (mirrors `LayerPanel`).
+`undefined` means "untouched" and is deliberately distinct from a viewer's empty value, which must
+NOT resurrect the baked one.)
+2026-08-07e (**`applyRaster` no longer stretches a hillshade.** TiTiler applies `rescale` AFTER the
+algorithm and a hillshade is already 0–255, so a data-range stretch flattens it to one colour. This
+path was only accidentally right — it rebuilds the URL from `baseFull.split('&')[0]`, dropping the
+layer's baked rescale, which is why ticking Hillshade in the published legend worked while the editor
+sidebar produced a blank layer. A viewer who pressed **Auto** and then ticked Hillshade hit the bug
+here too. Mirrors `services/titiler.py::get_tile_url`.)
 2026-08-07d (**"Start tilted" is now an authoring choice, not a right-drag.** `setupEditMode` gained a
 `tilt` message that eases the preview between 0 and `TILT_PITCH` (60°); the editor checkbox mirrors
 the on-map `TiltControl`, and the resulting pitch is pinned with the rest of the camera. Published

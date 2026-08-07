@@ -141,7 +141,24 @@
     if (logo.kind === 'none') return;
     let el;
     if (logo.kind === 'custom' && logo.url) {
-      el = document.createElement('img'); el.src = logo.url; el.alt = '';
+      if (logo.tint) {
+        // Tinted: the file becomes a MASK and the accent shows through it, so an uploaded mark
+        // takes the theme colour the way the built-in presets do (those are inline SVG using
+        // `currentColor`, which an <img> cannot inherit). A dark-on-transparent logo — the usual
+        // export — is otherwise invisible against a dark header.
+        //
+        // Masking rather than inlining the SVG is deliberate. Inlining would give real
+        // `currentColor`, but it puts an uploaded document in the page's DOM, where a <script> or
+        // an `on*` attribute inside it would run with the portal's origin. A mask reads only the
+        // alpha channel: nothing in the file is ever parsed as markup. It costs multi-colour —
+        // which tinting was going to flatten anyway — and it works for a transparent PNG too.
+        el = document.createElement('span');
+        const u = 'url("' + String(logo.url).replace(/["\\]/g, '\\$&') + '")';
+        el.style.webkitMaskImage = u; el.style.maskImage = u;
+        el.className = 'gd-logo-tint';
+      } else {
+        el = document.createElement('img'); el.src = logo.url; el.alt = '';
+      }
     } else {
       el = document.createElement('span'); el.innerHTML = LOGO_PRESETS[logo.id] || LOGO_PRESETS.layers;
     }
@@ -2297,6 +2314,40 @@
     const st = rasterState[srcId] || {};
     return Array.isArray(st.bidx) ? st.bidx : bakedBidx(srcId);
   }
+  // ── What is ACTUALLY on the map, per control ─────────────────────────────────────────────────
+  // Viewer's session choice first, else what the author baked into the tile URL. Only `bidx` did
+  // this before, which caused two related faults: the popover OPENED showing defaults (hillshade
+  // unchecked, Z 1, empty stretch, grayscale) no matter how the portal was published; and because
+  // `applyRaster` rebuilt the URL from `rasterState` alone, touching any ONE control then discarded
+  // every baked param the viewer had not touched — changing the palette silently dropped the
+  // author's stretch. Both surfaces now read through these, so the popover, the map and the legend
+  // cannot disagree.
+  //
+  // `undefined` means "viewer has not touched this" — distinct from a viewer's deliberate empty
+  // value, which must NOT resurrect the baked one.
+  function effectiveHillshade(srcId) {
+    const st = rasterState[srcId] || {};
+    if (st.hillshade !== undefined) return !!st.hillshade;
+    return parseRasterParams(srcId).algorithm === 'hillshade';
+  }
+  function effectiveZfactor(srcId) {
+    const st = rasterState[srcId] || {};
+    if (st.zfactor !== undefined && st.zfactor !== '') return st.zfactor;
+    const m = /^b1\*([0-9.]+)$/.exec(parseRasterParams(srcId).expression || '');
+    return m ? m[1] : 1;
+  }
+  function effectiveColormap(srcId) {
+    const st = rasterState[srcId] || {};
+    if (st.colormap !== undefined) return st.colormap || '';
+    return parseRasterParams(srcId).colormap_name || '';
+  }
+  /** "min,max" or '' — as a STRING, since that is what the tile URL wants. */
+  function effectiveRescale(srcId) {
+    const st = rasterState[srcId] || {};
+    if (st.min != null && st.min !== '' && st.max != null && st.max !== '') return st.min + ',' + st.max;
+    if (st.min !== undefined || st.max !== undefined) return '';  // viewer cleared it — respect that
+    return parseRasterParams(srcId).rescale || '';
+  }
   function rasterBandCount(srcId) {
     const l = STYLE.layers.find(x => x.source === srcId && x.metadata && x.metadata['geodeploy:type'] === 'raster');
     return (l && l.metadata['geodeploy:bands']) || 1;
@@ -2330,11 +2381,10 @@
     const bidx = Array.isArray(st.bidx) ? st.bidx : bakedBidx(srcId);
     if (bidx.length === 3)  // RGB composite — a colormap gradient would be misleading
       return '<div class="legend-range"><span>RGB composite</span><span>bands ' + escHtml(bidx.join(' / ')) + '</span></div>';
-    const baked = parseRasterParams(srcId);
-    const cmap = st.hillshade ? 'gray' : (st.colormap !== undefined ? (st.colormap || '') : (baked.colormap_name || ''));
-    const rescale = (st.min != null && st.min !== '' && st.max != null && st.max !== '')
-      ? (st.min + ',' + st.max) : (baked.rescale || '');
-    const p = rescale.split(',');
+    // Through the same helpers as the popover and the tile URL — three surfaces that must agree
+    // about what is on the map. Hillshade always reads as a grey ramp: it IS a grey relief image.
+    const cmap = effectiveHillshade(srcId) ? 'gray' : effectiveColormap(srcId);
+    const p = effectiveRescale(srcId).split(',');
     const mn = (p[0] !== undefined && p[0] !== '') ? p[0] : 'min';
     const mx = (p[1] !== undefined && p[1] !== '') ? p[1] : 'max';
     const grad = LEGEND_GRADIENTS[cmap] || LEGEND_GRADIENTS.gray;
@@ -2439,40 +2489,61 @@
           '<select class="rstyle-band" data-src="' + src + '">' + bandOpts(cur[0] || 1) + '</select></div>';
       }
     }
+    // Every control opens showing what is ON THE MAP (author's published styling, or the viewer's
+    // own change). These used to render hard-coded defaults, so a portal published with hillshade
+    // opened the popover with the box UNCHECKED and Z 1 — contradicting the map behind it.
+    const cmapSel = effectiveColormap(src);
     if (bands === 1 || mode === 'single') {
       html += '<div class="layer-style-field"><label>Palette</label>' +
-        '<select class="rstyle-colormap" data-src="' + src + '"><option value="">Grayscale</option>' +
-        PORTAL_COLORMAPS.map(c => '<option value="' + c + '">' + c + '</option>').join('') +
+        '<select class="rstyle-colormap" data-src="' + src + '"><option value=""' + (cmapSel ? '' : ' selected') + '>Grayscale</option>' +
+        PORTAL_COLORMAPS.map(c => '<option value="' + c + '"' + (c === cmapSel ? ' selected' : '') + '>' + c + '</option>').join('') +
         '</select></div>';
       html += '<label class="layer-style-field" style="cursor:pointer">' +
-        '<input type="checkbox" class="rstyle-hillshade" data-src="' + src + '"> Hillshade</label>';
+        '<input type="checkbox" class="rstyle-hillshade" data-src="' + src + '"' +
+        (effectiveHillshade(src) ? ' checked' : '') + '> Hillshade</label>';
       html += '<div class="layer-style-field" title="Hillshade vertical exaggeration"><label>Z</label>' +
-        '<input class="rstyle-zfactor" data-src="' + src + '" type="number" min="0.1" max="10" step="0.1" value="1"></div>';
+        '<input class="rstyle-zfactor" data-src="' + src + '" type="number" min="0.1" max="10" step="0.1" value="' +
+        escHtml(String(effectiveZfactor(src))) + '"></div>';
     }
-    html += '<div class="layer-style-field"><label>Stretch</label>' +
-      '<input class="rstyle-min" data-src="' + src + '" type="number" placeholder="min">' +
-      '<input class="rstyle-max" data-src="' + src + '" type="number" placeholder="max">' +
-      '<button type="button" class="rstyle-auto" data-src="' + src + '" title="Auto stretch from raster statistics">Auto</button></div>';
+    // Stretch does nothing under hillshade (the relief is already 0-255 and TiTiler applies rescale
+    // AFTER the algorithm), so it is shown disabled rather than as an inviting empty box.
+    const hs = effectiveHillshade(src);
+    const rs = effectiveRescale(src).split(',');
+    const dis = hs ? ' disabled' : '';
+    html += '<div class="layer-style-field"' + (hs ? ' title="Not used while Hillshade is on"' : '') + '><label>Stretch</label>' +
+      '<input class="rstyle-min" data-src="' + src + '" type="number" placeholder="min" value="' + escHtml(String(rs[0] || '')) + '"' + dis + '>' +
+      '<input class="rstyle-max" data-src="' + src + '" type="number" placeholder="max" value="' + escHtml(String(rs[1] || '')) + '"' + dis + '>' +
+      '<button type="button" class="rstyle-auto" data-src="' + src + '" title="Auto stretch from raster statistics"' + dis + '>Auto</button></div>';
     return '<div class="layer-style-row" data-style-for="' + layer.id + '">' + html + '</div>';
   }
 
   // Rebuild a raster source's tile URL from the viewer's chosen params (session only)
   const rasterState = {};
   function applyRaster(srcId) {
-    const st = rasterState[srcId] || {};
     const baseFull = (STYLE.sources[srcId] && STYLE.sources[srcId].tiles && STYLE.sources[srcId].tiles[0]) || '';
     if (!baseFull) return;
     const base = baseFull.split('&')[0];  // keep up to ?url=s3://... (s3 key has no '&')
     const params = [];
-    // Preserve the admin's baked band selection unless the viewer overrode it.
-    const bidx = Array.isArray(st.bidx) ? st.bidx : bakedBidx(srcId);
+    // EVERY param is rebuilt from the effective* helpers, not from `st` alone. Reading `st` directly
+    // meant that changing one control dropped every baked param the viewer had not touched — pick a
+    // palette and the author's stretch vanished, because it was never in `rasterState` to begin with.
+    const bidx = effectiveBidx(srcId);
     bidx.forEach(b => params.push('bidx=' + b));
-    if (st.min != null && st.min !== '' && st.max != null && st.max !== '') params.push('rescale=' + st.min + ',' + st.max);
-    if (st.hillshade) {
+    const hillshade = effectiveHillshade(srcId);
+    // Not when hillshading: TiTiler applies rescale AFTER the algorithm, and a hillshade is already
+    // a finished 0-255 relief image, so a data-range stretch flattens it to one colour.
+    // Mirrors services/titiler.py::get_tile_url.
+    if (!hillshade) {
+      const rescale = effectiveRescale(srcId);
+      if (rescale) params.push('rescale=' + rescale);
+    }
+    if (hillshade) {
       params.push('algorithm=hillshade');
-      if (st.zfactor && Number(st.zfactor) !== 1) params.push('expression=b1*' + st.zfactor);
-    } else if (st.colormap && bidx.length !== 3) {  // colormap is ignored for an RGB composite
-      params.push('colormap_name=' + st.colormap);
+      const z = effectiveZfactor(srcId);
+      if (Number(z) !== 1) params.push('expression=b1*' + z);
+    } else {
+      const cmap = effectiveColormap(srcId);
+      if (cmap && bidx.length !== 3) params.push('colormap_name=' + cmap);  // ignored for RGB
     }
     const url = base + (params.length ? '&' + params.join('&') : '');
     const src = map.getSource(srcId);
@@ -2576,7 +2647,9 @@
     const deckTol = Math.max(Math.abs(tp2.lng - tp1.lng) / 2, 1e-7);
 
     // ── Raster identify section ──
-    const rasters = visibleRasterLayers();
+    // Pass the click point: a raster that does not cover it has nothing to say, and asking anyway
+    // costs a 500 per raster per click (TiTiler PointOutsideBounds).
+    const rasters = visibleRasterLayers(e.lngLat);
     if (!vectorHtml && !rasters.length && !deckQ.length) return;
 
     const loading = (rasters.length || deckQ.length)
@@ -2634,10 +2707,32 @@
     if (btn) btn.addEventListener('click', () => openAttrPanel(mapLayerId, layerName));
   }
 
-  function visibleRasterLayers() {
+  /**
+   * Does this raster actually cover the clicked point?
+   *
+   * TiTiler's `/cog/point` raises `PointOutsideBounds` for a point off the edge of the data, and
+   * that surfaces as a 500. So clicking anywhere on the map fired one request per visible raster and
+   * every raster that does not cover that spot answered 500 — a wall of red in the console on every
+   * single click, and real work asked of the tile server to be told what we already knew.
+   *
+   * The answer is not to swallow the 500 (`fetchRasterPoint` already does, which is exactly why this
+   * stayed invisible) but to not ask: the extent is baked into the layer as `geodeploy:bbox`.
+   *
+   * No bbox → ASK. A layer whose extent was never recorded must still be identifiable; a 500 from
+   * one of those is the old behaviour, not a regression.
+   */
+  function rasterCoversPoint(layer, lngLat) {
+    const b = layer.metadata && layer.metadata['geodeploy:bbox'];
+    if (!Array.isArray(b) || b.length < 4) return true;
+    return lngLat.lng >= b[0] && lngLat.lng <= b[2] && lngLat.lat >= b[1] && lngLat.lat <= b[3];
+  }
+
+  function visibleRasterLayers(lngLat) {
     return (STYLE.layers || []).filter(l => {
       if (!l.metadata || l.metadata['geodeploy:type'] !== 'raster') return false;
       if (!map.getLayer(l.id)) return false;
+      // Only when identifying at a point — a caller with no point wants every visible raster.
+      if (lngLat && !rasterCoversPoint(l, lngLat)) return false;
       try { return map.getLayoutProperty(l.id, 'visibility') !== 'none'; } catch (e) { return true; }
     });
   }
@@ -3243,6 +3338,79 @@
     // 'idle' matters — tiles and the deck.gl overlay load asynchronously, and capturing before then
     // yields a half-drawn map or bare basemap. The reply ALWAYS goes out, with dataUrl null on
     // failure, so the editor never waits on a message that will not arrive.
+    /**
+     * The space backdrop, painted into a 2D canvas.
+     *
+     * The starfield is a CSS background on the map CONTAINER, *behind* a transparent canvas (see
+     * applySpace + portal.css `.gd-space`). `map.getCanvas().toDataURL()` reads the WebGL canvas
+     * ALONE, so a globe thumbnail came out with the planet floating on transparency — and whatever
+     * displayed it showed through, which is the green band behind the earth on the portal card.
+     * CSS cannot be rasterised into the capture, so the backdrop is repainted here.
+     *
+     * Deliberately deterministic: a seeded PRNG places the stars, so re-publishing a portal does not
+     * silently produce a different picture. Mirrors the colours in portal.css `.gd-space` — keep the
+     * two in step, or the thumbnail stops looking like the portal it links to.
+     */
+    function paintSpaceBackdrop(ctx, w, h) {
+      ctx.fillStyle = '#070b1a';
+      ctx.fillRect(0, 0, w, h);
+      // Nebula washes, in the CSS order (blue upper-left, violet lower-right, faint teal centre).
+      [[0.26, 0.18, 1.15, 'rgba(72,116,215,.34)'],
+       [0.80, 0.80, 0.85, 'rgba(150,84,196,.26)'],
+       [0.62, 0.38, 0.60, 'rgba(38,190,190,.14)']].forEach(function (n) {
+        const r = Math.max(w, h) * n[2] * 0.5;
+        const g = ctx.createRadialGradient(w * n[0], h * n[1], 0, w * n[0], h * n[1], r);
+        g.addColorStop(0, n[3]);
+        g.addColorStop(1, 'transparent');
+        ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+      });
+      // The Milky Way, on a diagonal — a horizontal band reads as a defect.
+      ctx.save();
+      ctx.translate(w / 2, h / 2); ctx.rotate(12 * Math.PI / 180); ctx.translate(-w / 2, -h / 2);
+      const mw = ctx.createLinearGradient(0, h * 0.34, 0, h * 0.66);
+      mw.addColorStop(0, 'transparent');
+      mw.addColorStop(0.5, 'rgba(186,196,255,.26)');
+      mw.addColorStop(1, 'transparent');
+      ctx.fillStyle = mw; ctx.fillRect(-w, 0, w * 3, h);
+      ctx.restore();
+      // Stars. LCG rather than Math.random so the field is identical on every capture.
+      let seed = 20260807;
+      const rnd = function () { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+      const count = Math.round((w * h) / 2600);
+      for (let i = 0; i < count; i++) {
+        const x = rnd() * w, y = rnd() * h, t = rnd();
+        const rad = t > 0.96 ? 1.6 : t > 0.82 ? 1.1 : 0.8;
+        const alpha = t > 0.96 ? 1 : t > 0.82 ? 0.9 : 0.6;
+        const tint = t > 0.96 ? '255,247,230' : t > 0.9 ? '210,228,255' : '255,255,255';
+        if (t > 0.96) {  // brightest stars carry a halo, as in the CSS
+          const halo = ctx.createRadialGradient(x, y, 0, x, y, rad * 3.5);
+          halo.addColorStop(0, 'rgba(' + tint + ',.45)');
+          halo.addColorStop(1, 'transparent');
+          ctx.fillStyle = halo;
+          ctx.beginPath(); ctx.arc(x, y, rad * 3.5, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.fillStyle = 'rgba(' + tint + ',' + alpha + ')';
+        ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+
+    /** The map canvas, flattened onto whatever is behind it. Returns the source canvas untouched
+     *  when there is nothing behind it to lose (mercator paints its own opaque backdrop). */
+    function snapshotCanvas() {
+      const src = map.getCanvas();
+      // Ask the SAME element applySpace writes to (`map.getContainer()`), not `#map-wrap` — the CSS
+      // matches either, so guessing the wrong one here would silently skip the backdrop.
+      const wrap = map.getContainer && map.getContainer();
+      if (!wrap || !wrap.classList.contains('gd-space')) return src;
+      const out = document.createElement('canvas');
+      out.width = src.width; out.height = src.height;
+      const ctx = out.getContext('2d');
+      if (!ctx) return src;
+      paintSpaceBackdrop(ctx, out.width, out.height);
+      ctx.drawImage(src, 0, 0);
+      return out;
+    }
+
     function sendSnapshot(requestId) {
       // The reason travels WITH the reply. Discarding it made every failure look identical from the
       // dashboard — a tainted canvas (SecurityError, from a tile server that sent no CORS header),
@@ -3257,7 +3425,7 @@
         done = true;
         try {
           map.triggerRepaint();
-          const url = map.getCanvas().toDataURL('image/webp', 0.75);
+          const url = snapshotCanvas().toDataURL('image/webp', 0.75);
           // toDataURL can succeed and still hand back a 1x1 placeholder if the drawing buffer was
           // already cleared — say so rather than letting it fail a size check three layers up.
           reply(url, url && url.length > 2048 ? null : 'canvas produced no image (' +
@@ -3835,6 +4003,46 @@
     records.forEach(function (r) { const ref = refOf(r); if (ref) byRef[ref] = r; });
 
     const $active = document.createElement('div');
+    /**
+     * The "on map" row's swatch: the layer's ACTUAL symbology, not a dot coloured by kind.
+     *
+     * This list is the only legend a catalog portal has — the layer switcher is a different panel —
+     * and a row saying "vector" told you nothing about which of three point layers on screen was
+     * which. It resolves through the same `legendSwatch` the layer list uses, so the two agree.
+     *
+     * RASTERS get a palette chip instead of `legendSwatch`'s raster icon. That icon is a grid, and
+     * at this size in a 200px panel it is both the largest thing in the row and the least
+     * informative — every raster gets an identical square. The colour ramp is what actually
+     * distinguishes them, and it fits in the same space. Hillshade reads as grey, which it is.
+     */
+    function activeSwatch(ref, rec) {
+      const parts = String(ref).split(':'), kind = parts[0], lid = parts[1];
+      if (kind === 'raster') {
+        const l = (STYLE.layers || []).find(function (x) {
+          return x.metadata && x.metadata['geodeploy:type'] === 'raster'
+            && String(x.metadata['geodeploy:layer_id']) === String(lid);
+        });
+        const src = l && l.source;
+        const cmap = src ? (effectiveHillshade(src) ? 'gray' : effectiveColormap(src)) : '';
+        const grad = LEGEND_GRADIENTS[cmap] || LEGEND_GRADIENTS.gray;
+        return '<span class="cat-active-sw cat-active-ramp" style="background:' + grad + '"></span>';
+      }
+      // GeoParquet layers live in deckState, not the style — check them before the MapLibre layers,
+      // since a deck layer has no style layer to find.
+      const d = (typeof DECK_LAYERS !== 'undefined' ? DECK_LAYERS : [])
+        .find(function (x) { return String(x.layer_id) === String(lid); });
+      if (d) return '<span class="cat-active-sw">' + legendSwatch(d.geometry || 'point', d.color, null, 'circle') + '</span>';
+      const layer = (STYLE.layers || []).find(function (x) {
+        const m = x.metadata || {};
+        return layerRefType(x) === kind && String(m['geodeploy:layer_id']) === String(lid);
+      });
+      if (!layer) return '<span class="cat-active-sw"></span>';
+      const m = layer.metadata || {};
+      return '<span class="cat-active-sw">' +
+        legendSwatch(m['geodeploy:geometry'] || 'point', getLayerColor(layer),
+                     dashKind(layer.paint), m['geodeploy:marker'] || 'circle') + '</span>';
+    }
+
     $active.id = 'cat-active';
     $active.style.display = 'none';
     (document.getElementById('map-wrap') || document.body).appendChild($active);
@@ -3865,7 +4073,7 @@
           const r = byRef[ref];
           const canZoom = !!(r.bbox && r.bbox.length === 4);
           return '<div class="cat-active-row" data-ref="' + ref + '">' +
-            '<span class="cat-active-dot cat-b-' + (r.kind === 'raster' ? 'raster' : 'vector') + '"></span>' +
+            activeSwatch(ref, r) +
             '<span class="cat-active-t" title="' + escHtml(r.name) + '">' + escHtml(r.name) + '</span>' +
             (canZoom ? '<button class="cat-active-b" data-act="zoom" title="Zoom to this layer">&#9678;</button>' : '') +
             '<button class="cat-active-b" data-act="off" title="Remove from map">&times;</button>' +

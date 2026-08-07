@@ -63,6 +63,19 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 - Raster layer `bbox` from the API is in source CRS (not lon/lat) — using it directly for `fitToBbox` can throw "Invalid LngLat" (see tasks/raster notes). Prefer zooming via vector bounds or TiTiler TileJSON.
 
 ## Last updated
+2026-08-07c (**the INVISIBLE legacy map was flooding the console with raster 404s.** `#portal-preview-map`
+is mounted behind the iframe at `opacity-0` and its comment claims "the build watch is neutered so it
+loads no data" — it is NOT: `ready.value = true` (line ~1163) lets the deep watcher run `applyStyle`,
+proven by a user stack trace ending `_diffStyle → setStyle → p → lc.deep`. `buildPreviewStyle` set no
+`bounds` on raster sources, so MapLibre asked for tiles across the whole viewport and TiTiler 404'd
+every one that missed — for a drone orthomosaic a few hundred metres wide, nearly all of them. New
+module-level `lonLatBbox()` mirrors `portal_generator._lonlat_bounds` (same range check, same reason:
+a projected bbox in `bounds` would HIDE the layer) and `expandBounds` now shares it. **Still open:**
+an invisible map fetching tiles at all is waste — properly neutering the watch is the deeper fix, not
+done here because what else depends on `map.value` having a live style is unverified.)
+2026-08-07b (`PortalEditor.rasterTilesUrl`: skips `rescale` under `algorithm === 'hillshade'`,
+mirroring `services/titiler.py::get_tile_url` — TiTiler applies the stretch after the algorithm, and
+a hillshade is already 0–255, so the layer's own data range flattened it to one colour.)
 2026-08-07 (`PortalEditor`: **"Start tilted"** beside "Start in 3D globe" in the Layout panel.
 `initial_view` always carried `pitch`, but the only way to set it was right-dragging the preview —
 the same invisibility the globe toggle fixed. `setTilt` posts `{type:'tilt'}` to the preview iframe

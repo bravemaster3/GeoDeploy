@@ -45,6 +45,42 @@ def _pg_type(fiona_type) -> str:
     return _PG_TYPE.get(str(fiona_type).lower().split(":")[0], "TEXT")
 
 
+#: Web Mercator's latitude limit. EPSG:3857 is undefined past this, and PROJ does not merely lose
+#: precision there — it refuses.
+MERCATOR_MAX_LAT = 85.05112878
+
+
+def _store_geom_sql(store_srid: int) -> str:
+    """The geometry expression for the staging → table INSERT, clipped to the Mercator band (§0g).
+
+    Martin tiles in EPSG:3857, which is undefined beyond ±85.0511°. A dataset reaching the pole —
+    any world countries layer, because of Antarctica — makes PostGIS raise
+
+        transform: tolerance condition error (-20)     [lwgeom_pg.c]
+
+    inside Martin's OWN ST_Transform. Martin then answers 500 for every tile at every zoom, so the
+    layer never draws. Nothing about the ingest looks wrong when this happens: the layer reports
+    `ready` and its TileJSON is fine, because the failure is per-TILE and lives in the tile server.
+
+    `csv_import` has clamped for this since 2026-06-04. §0g recorded that `vector_ingest` had not,
+    and named this exact expression as the fix; it stayed deferred until a shapefile with Antarctica
+    finally reproduced it.
+
+    Only geographic storage is touched. A projected SRID has no lat/lon pole to clamp and clipping
+    it against a 4326 envelope would be nonsense. The CASE keeps `ST_Intersection` off rows that do
+    not need it — it is expensive AND it rewrites geometry, so it must not run on data that is
+    already inside the band.
+    """
+    if store_srid != 4326:
+        return f"ST_SetSRID(geom, {store_srid})"
+    return (
+        f"CASE WHEN ST_YMax(geom) > {MERCATOR_MAX_LAT} OR ST_YMin(geom) < -{MERCATOR_MAX_LAT} "
+        f"THEN ST_Intersection(ST_SetSRID(geom, 4326), "
+        f"ST_MakeEnvelope(-180, -{MERCATOR_MAX_LAT}, 180, {MERCATOR_MAX_LAT}, 4326)) "
+        f"ELSE ST_SetSRID(geom, 4326) END"
+    )
+
+
 def _srid_of(crs_wkt) -> int | None:
     if not crs_wkt:
         return None
@@ -543,7 +579,7 @@ def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir:
 
     # Store geometry in its native SRID — NO ST_Transform (client_tr already handled the unknown-EPSG
     # fallback to 4326, so `store_srid` is always the CRS the WKB coordinates are already in).
-    geom_sql = f"ST_SetSRID(geom, {store_srid})"
+    geom_sql = _store_geom_sql(store_srid)
     stg = f"{table}_stg"
     coldefs = ", ".join(f"{_q(db)} {_pg_type(col_schema[src])}" for src, db in zip(cols, db_cols))
     copycols = ", ".join(_q(db) for db in db_cols)

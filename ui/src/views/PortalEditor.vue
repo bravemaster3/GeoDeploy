@@ -230,13 +230,21 @@
               :class="currentLogo().kind === 'custom' ? 'border-primary text-primary' : ''" title="Upload custom">
               <img v-if="currentLogo().kind === 'custom' && currentLogo().url" :src="currentLogo().url" alt="" class="max-w-full max-h-full object-contain rounded" />
               <span v-else class="text-sm">↑</span>
-              <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" class="hidden" @change="uploadLogo" />
+              <input type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" class="hidden" @change="uploadLogo" />
             </label>
             <button @click="setLogoNone" title="No logo"
               class="w-8 h-8 rounded border text-xs"
               :class="currentLogo().kind === 'none' ? 'border-primary text-primary bg-primary/10' : 'border-border text-muted-foreground'">∅</button>
           </div>
-          <p class="text-[10px] text-muted-foreground/60 mt-1">Recommended: a small square/wide mark, ~30px tall.</p>
+          <label v-if="currentLogo().kind === 'custom'" class="flex items-center justify-between text-xs mt-2 cursor-pointer">
+            <span class="text-muted-foreground">Tint to theme colour</span>
+            <input type="checkbox" :checked="!!currentLogo().tint" @change="e => setLogoTint(e.target.checked)" />
+          </label>
+          <p class="text-[10px] text-muted-foreground/60 mt-1">
+            {{ currentLogo().kind === 'custom' && currentLogo().tint
+               ? 'The mark is drawn in the accent colour — its own colours are ignored. Best for a monochrome logo.'
+               : 'Recommended: a small square/wide mark, ~30px tall. SVG stays sharp at any size.' }}
+          </p>
         </section>
 
         <!-- Layout section (V-11). The EXPERIENCE picker used to live here, far below Template —
@@ -609,12 +617,19 @@ const LOGO_PRESET_IDS = ['layers', 'globe', 'pin', 'compass']
 function currentLogo() { return theme.value.logo || { kind: 'preset', id: 'layers' } }
 function setLogoPreset(id) { setTheme({ logo: { kind: 'preset', id } }) }
 function setLogoNone() { setTheme({ logo: { kind: 'none' } }) }
+function setLogoTint(on) { setTheme({ logo: Object.assign({}, currentLogo(), { tint: !!on }) }) }
 async function uploadLogo(e) {
   const file = e.target.files && e.target.files[0]
   if (!file || !portal.value) { if (e.target) e.target.value = ''; return }
   try {
     const { data } = await uploadPortalAsset(portal.value.id, file)
-    if (data && data.url) setTheme({ logo: { kind: 'custom', url: data.url } })
+    // Tint defaults ON for SVG. An SVG logo is nearly always a monochrome mark exported dark on
+    // transparent, which is invisible against a dark header — the default that surprises least is
+    // the one that shows up. A raster upload is more often a full-colour picture, so it defaults off.
+    if (data && data.url) {
+      const isSvg = /\.svg($|\?)/i.test(data.url) || file.type === 'image/svg+xml'
+      setTheme({ logo: { kind: 'custom', url: data.url, tint: isSvg } })
+    }
   } catch (err) { /* ignore */ }
   e.target.value = ''
 }
@@ -1788,9 +1803,7 @@ function buildPreviewStyle() {
   // projected raster) so "fit"/zoom-to-all covers all layers, not just the last one.
   let bounds = null
   const expandBounds = (b) => {
-    const ok = Array.isArray(b) && b.length === 4 &&
-      b[0] >= -180 && b[2] <= 180 && b[0] < b[2] && b[1] >= -90 && b[3] <= 90 && b[1] < b[3]
-    if (!ok) return
+    if (!lonLatBbox(b)) return
     bounds = bounds
       ? [Math.min(bounds[0], b[0]), Math.min(bounds[1], b[1]), Math.max(bounds[2], b[2]), Math.max(bounds[3], b[3])]
       : b.slice()
@@ -1928,8 +1941,21 @@ function buildPreviewStyle() {
       if (!layer || layer.status !== 'ready' || !layer.tile_url) continue
 
       const srcId = `raster_${layer.id}`
-      const absTileUrl = rasterTilesUrl(layer.tile_url, cfg.style)
+      const absTileUrl = rasterTilesUrl(layer.tile_url, cfg.style, layer.band_count)
       style.sources[srcId] = { type: 'raster', tiles: [absTileUrl], tileSize: 256 }
+      // Where the data actually IS — the published style has carried this for a while, this map
+      // never did. Without it MapLibre asks for tiles across the whole viewport at every zoom and
+      // the tile server 404s every one that misses the raster. For a drone orthomosaic a few
+      // hundred metres wide that is nearly every tile on screen, which is what filled the console.
+      const rbounds = lonLatBbox(layer.bbox)
+      if (rbounds) {
+        style.sources[srcId].bounds = rbounds
+        // And how far OUT to bother asking. Mirrors portal_generator._min_zoom_for: `bounds` stops
+        // tiles that MISS the raster, not a tile that hits it and spans a continent — and a z3 tile
+        // of a drone orthomosaic took long enough that nginx returned 504, which hangs the map.
+        const mz = minZoomFor(rbounds)
+        if (mz) style.sources[srcId].minzoom = mz
+      }
       style.layers.push({
         id: srcId, type: 'raster', source: srcId,
         paint: { 'raster-opacity': cfg.opacity ?? 1.0, ...(cfg.style?.paint || {}) },
@@ -1971,13 +1997,44 @@ function buildPreviewStyle() {
   return { style, bounds }
 }
 
+/**
+ * A stored bbox as [w, s, e, n] in lon/lat, or null. Mirrors
+ * `portal_generator._lonlat_bounds` — including WHY the range check exists: a raster bbox is
+ * reprojected to EPSG:4326 at ingest, but that reprojection falls back to the SOURCE CRS when it
+ * fails. Projected metres used as MapLibre `bounds` would hide the layer completely, which is far
+ * worse than the 404s being fixed, so anything not plausibly lon/lat is dropped.
+ */
+function lonLatBbox(b) {
+  return (Array.isArray(b) && b.length === 4 &&
+    b[0] >= -180 && b[2] <= 180 && b[0] < b[2] &&
+    b[1] >= -90 && b[3] <= 90 && b[1] < b[3]) ? b.slice(0, 4) : null
+}
+
+// The lowest zoom worth requesting tiles at, from the layer's extent. Mirrors
+// services/portal_generator.py::_min_zoom_for — a tile spans 360/2^z degrees, so the layer first
+// fits in one tile at log2(360/width); four levels of slack keeps it visible as a speck before we
+// stop asking. 0 (falsy) = continent-sized, leave unrestricted.
+const MINZOOM_SLACK = 4
+function minZoomFor(b) {
+  const width = Math.max(b[2] - b[0], b[3] - b[1])
+  if (!(width > 0)) return 0
+  const fitsAt = width < 360 ? Math.log2(360 / width) : 0
+  return Math.max(0, Math.min(Math.trunc(fitsAt) - MINZOOM_SLACK, 18))
+}
+
 // Build a raster tile URL from the layer's base URL + the configured raster style.
-function rasterTilesUrl(baseTileUrl, style) {
+function rasterTilesUrl(baseTileUrl, style, bandCount) {
   const base = (baseTileUrl || '').split('&')[0]  // s3 key has no '&', so this keeps ?url=...
   const params = []
-  const bands = Array.isArray(style?.bidx) ? style.bidx.filter(b => b != null) : []
+  let bands = Array.isArray(style?.bidx) ? style.bidx.filter(b => b != null) : []
+  // Mirrors services/titiler.py::get_tile_url. A PNG holds at most four channels and TiTiler adds
+  // the mask as alpha, so a 4-band multispectral raster asks the driver for five and every tile
+  // 500s. With no band selection TiTiler reads them all — hence an explicit default.
+  if (!bands.length && bandCount > 3) bands = [1, 2, 3]
   bands.forEach(b => params.push(`bidx=${b}`))
-  if (style?.rescale) params.push(`rescale=${style.rescale}`)
+  // Mirrors services/titiler.py::get_tile_url — a hillshade is already a finished 0-255 relief
+  // image, and TiTiler applies rescale AFTER the algorithm, so a data-range stretch flattens it.
+  if (style?.rescale && style?.algorithm !== 'hillshade') params.push(`rescale=${style.rescale}`)
   if (style?.algorithm) {
     params.push(`algorithm=${style.algorithm}`)
     if (style.algorithm === 'hillshade' && style.zfactor && Number(style.zfactor) !== 1) {

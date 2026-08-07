@@ -331,23 +331,29 @@
               </div>
             </template>
 
-            <div>
+            <!-- Stretch is disabled under hillshade: the algorithm returns a finished 0–255 relief
+                 image and TiTiler applies rescale AFTER it, so a data-range stretch would flatten
+                 the shading to one colour. Saying so beats letting the control look available. -->
+            <div :class="isHillshade ? 'opacity-50' : ''">
               <div class="flex items-center justify-between mb-0.5">
                 <label class="text-xs text-muted-foreground">Stretch (min / max)</label>
-                <button @click="autoStretch" :disabled="autoStretching"
+                <button @click="autoStretch" :disabled="autoStretching || isHillshade"
                   class="text-xs text-primary hover:text-primary/80 font-medium disabled:opacity-50"
                   title="Compute min/max from the raster (2–98th percentile)">
                   {{ autoStretching ? 'Computing…' : '⚡ Auto' }}
                 </button>
               </div>
               <div class="flex items-center gap-2">
-                <input type="number" :value="rescaleMin" @input="setRescale('min', $event.target.value)" placeholder="min"
-                  class="w-16 text-xs border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+                <input type="number" :value="rescaleMin" :disabled="isHillshade" @input="setRescale('min', $event.target.value)" placeholder="min"
+                  class="w-16 text-xs border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/60 disabled:opacity-50" />
                 <span class="text-muted-foreground/40">–</span>
-                <input type="number" :value="rescaleMax" @input="setRescale('max', $event.target.value)" placeholder="max"
-                  class="w-16 text-xs border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+                <input type="number" :value="rescaleMax" :disabled="isHillshade" @input="setRescale('max', $event.target.value)" placeholder="max"
+                  class="w-16 text-xs border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/60 disabled:opacity-50" />
               </div>
-              <p class="text-[10px] text-muted-foreground/70 mt-0.5">For non-8-bit imagery (e.g. 0–4095). Blank = default.</p>
+              <p class="text-[10px] text-muted-foreground/70 mt-0.5">
+                {{ isHillshade ? 'Not used while Hillshade is on — the shading is already 0–255.'
+                               : 'For non-8-bit imagery (e.g. 0–4095). Blank = default.' }}
+              </p>
             </div>
           </template>
 
@@ -707,6 +713,8 @@ function setSingleBand(val) {
   emitStyle({ bidx: [parseInt(val)] })
 }
 
+// Hillshade returns its own 0–255 image, so the stretch controls below do nothing while it is on.
+const isHillshade = computed(() => props.config.style?.algorithm === 'hillshade')
 const rescaleMin = computed(() => (props.config.style?.rescale || '').split(',')[0] || '')
 const rescaleMax = computed(() => (props.config.style?.rescale || '').split(',')[1] || '')
 const autoStretching = ref(false)

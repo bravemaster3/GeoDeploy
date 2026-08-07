@@ -68,6 +68,11 @@ All dialogs (`UploadModal`, `AddSourceModal`, `DiscoverModal`, `portal/CreatePor
   icon logic in `views/PortalEditor.vue` + `templates/shared/portal.js` — change all three together.
 
 ## Last updated
+2026-08-07 (`portal/LayerPanel.vue`: the **Stretch (min/max)** inputs and ⚡ Auto are **disabled while
+Hillshade is on**, with the hint swapped to say why. The algorithm returns a finished 0–255 relief
+image and TiTiler applies `rescale` after it, so a stretch there silently flattened the shading —
+the control looked available and did the opposite of nothing. Backend rule lives in
+`services/titiler.py::get_tile_url`; see `api/geodeploy/services/README.md` 2026-08-07b.)
 2026-08-06c (`portal/LayerPanel.vue`: outline controls. Polygons AND points can now set an outline
 colour or **None** — previously a polygon always had a blue one and a point a hard-coded white one.
 Points also get a thickness, expressed as a PROPORTION of the marker so it survives a resize; past

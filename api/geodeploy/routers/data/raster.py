@@ -52,6 +52,7 @@ async def list_layers(user: User = Depends(require_scope("data:read")), db: Asyn
                 algorithm=ds.get("algorithm"),
                 zfactor=ds.get("zfactor"),
                 bidx=ds.get("bidx"),
+                band_count=l.band_count,
             )
         out.append(obj)
     return out
@@ -373,7 +374,8 @@ async def raster_tilejson(layer_ref: str, request: Request, db: AsyncSession = D
         "scheme": "xyz",
         "tiles": [base + raster_tile_url(
             layer.s3_key, colormap=ds.get("colormap"), rescale=ds.get("rescale"),
-            algorithm=ds.get("algorithm"), zfactor=ds.get("zfactor"), bidx=ds.get("bidx"))],
+            algorithm=ds.get("algorithm"), zfactor=ds.get("zfactor"), bidx=ds.get("bidx"),
+            band_count=layer.band_count)],
         "minzoom": 0,
         "maxzoom": 22,
     }
@@ -394,6 +396,126 @@ async def raster_tilejson(layer_ref: str, request: Request, db: AsyncSession = D
         tj["center"] = [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2, 0]
     return JSONResponse(tj, headers={"Access-Control-Allow-Origin": "*",
                                      "Cache-Control": "public, max-age=300"})
+
+
+#: WebMercatorQuad, the tile grid every XYZ/slippy client already uses. QGIS will not zoom to a
+#: layer from a `ScaleDenominator`-less capabilities document, so the matrix set is written out in
+#: full rather than referenced by identifier.
+_WMQ_TOP_LEFT = "-20037508.3427892 20037508.3427892"
+_WMQ_SCALE_0 = 559082264.028717
+_WMTS_MAX_ZOOM = 24
+
+
+def _wmts_matrix_set() -> str:
+    rows = []
+    for z in range(_WMTS_MAX_ZOOM + 1):
+        rows.append(
+            "      <TileMatrix>\n"
+            f"        <ows:Identifier>{z}</ows:Identifier>\n"
+            f"        <ScaleDenominator>{_WMQ_SCALE_0 / (2 ** z):.9f}</ScaleDenominator>\n"
+            f"        <TopLeftCorner>{_WMQ_TOP_LEFT}</TopLeftCorner>\n"
+            "        <TileWidth>256</TileWidth>\n"
+            "        <TileHeight>256</TileHeight>\n"
+            f"        <MatrixWidth>{2 ** z}</MatrixWidth>\n"
+            f"        <MatrixHeight>{2 ** z}</MatrixHeight>\n"
+            "      </TileMatrix>"
+        )
+    return "\n".join(rows)
+
+
+@router.get("/{layer_ref}/wmts")
+async def raster_wmts(layer_ref: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """PUBLIC WMTS GetCapabilities for a shared raster — the one URL QGIS can zoom to.
+
+    QGIS does not read TileJSON for a RASTER layer, so the bounds that make "Zoom to Layer" work
+    reach it through `ows:WGS84BoundingBox` in a capabilities document instead. An XYZ connection
+    cannot carry them at all — the template has nowhere to put an extent — which is why adding the
+    XYZ link left QGIS guessing at the whole world.
+
+    Why not TiTiler's own `/cog/…/WMTSCapabilities.xml`? Exactly the reason given on the TileJSON
+    route above: its self-referencing URLs are built from the container's internal origin
+    (`http://titiler:8000/…`), so they carry the wrong host and no `/raster` prefix. This emits the
+    same document against the public origin, with the layer's saved styling baked into the tile
+    template.
+    """
+    import json
+    from xml.sax.saxutils import escape, quoteattr
+
+    from fastapi.responses import Response
+
+    result = await db.execute(select(RasterLayer).where(by_ref(RasterLayer, layer_ref)))
+    layer = result.scalar_one_or_none()
+    if not layer or layer.status != "ready" or not layer.is_public or not layer.s3_key:
+        raise HTTPException(404, "No shared raster for this layer.")
+
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("host") or request.url.netloc
+    base = f"{proto}://{host}"
+    ds = json.loads(layer.default_style) if layer.default_style else {}
+
+    # The XYZ template, re-labelled with WMTS's placeholders. `&` inside it MUST be escaped or the
+    # document is not well-formed XML and QGIS rejects the whole connection.
+    tmpl = base + raster_tile_url(
+        layer.s3_key, colormap=ds.get("colormap"), rescale=ds.get("rescale"),
+        algorithm=ds.get("algorithm"), zfactor=ds.get("zfactor"), bidx=ds.get("bidx"),
+        band_count=layer.band_count)
+    tmpl = (tmpl.replace("{z}", "{TileMatrix}").replace("{x}", "{TileCol}")
+                .replace("{y}", "{TileRow}"))
+
+    bbox = None
+    try:
+        bbox = json.loads(layer.bbox) if layer.bbox else None
+    except ValueError:
+        bbox = None
+    if not (isinstance(bbox, list) and len(bbox) == 4):
+        bbox = await _titiler_bounds(layer.s3_key)
+    # Without an extent QGIS falls back to the whole world, which is the behaviour this endpoint
+    # exists to fix — but a document with no bbox still beats no document.
+    bbox_xml = ""
+    if bbox:
+        bbox_xml = (
+            "      <ows:WGS84BoundingBox crs=\"urn:ogc:def:crs:OGC:2:84\">\n"
+            f"        <ows:LowerCorner>{bbox[0]} {bbox[1]}</ows:LowerCorner>\n"
+            f"        <ows:UpperCorner>{bbox[2]} {bbox[3]}</ows:UpperCorner>\n"
+            "      </ows:WGS84BoundingBox>\n"
+        )
+    abstract = f"      <ows:Abstract>{escape(layer.abstract)}</ows:Abstract>\n" if layer.abstract else ""
+
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<Capabilities xmlns="http://www.opengis.net/wmts/1.0"\n'
+        '  xmlns:ows="http://www.opengis.net/ows/1.1"\n'
+        '  xmlns:xlink="http://www.w3.org/1999/xlink" version="1.0.0">\n'
+        "  <ows:ServiceIdentification>\n"
+        f"    <ows:Title>{escape(layer.name)}</ows:Title>\n"
+        "    <ows:ServiceType>OGC WMTS</ows:ServiceType>\n"
+        "    <ows:ServiceTypeVersion>1.0.0</ows:ServiceTypeVersion>\n"
+        "  </ows:ServiceIdentification>\n"
+        "  <Contents>\n"
+        "    <Layer>\n"
+        f"      <ows:Title>{escape(layer.name)}</ows:Title>\n"
+        f"{abstract}"
+        f"      <ows:Identifier>{escape(str(layer.id))}</ows:Identifier>\n"
+        f"{bbox_xml}"
+        "      <Style isDefault=\"true\"><ows:Identifier>default</ows:Identifier></Style>\n"
+        "      <Format>image/png</Format>\n"
+        "      <TileMatrixSetLink>\n"
+        "        <TileMatrixSet>WebMercatorQuad</TileMatrixSet>\n"
+        "      </TileMatrixSetLink>\n"
+        "      <ResourceURL format=\"image/png\" resourceType=\"tile\"\n"
+        f"        template={quoteattr(tmpl)}/>\n"
+        "    </Layer>\n"
+        "    <TileMatrixSet>\n"
+        "      <ows:Identifier>WebMercatorQuad</ows:Identifier>\n"
+        "      <ows:SupportedCRS>urn:ogc:def:crs:EPSG::3857</ows:SupportedCRS>\n"
+        f"{_wmts_matrix_set()}\n"
+        "    </TileMatrixSet>\n"
+        "  </Contents>\n"
+        "</Capabilities>\n"
+    )
+    return Response(xml, media_type="application/xml",
+                    headers={"Access-Control-Allow-Origin": "*",
+                             "Cache-Control": "public, max-age=300"})
 
 
 async def _titiler_bounds(s3_key: str) -> list[float] | None:
