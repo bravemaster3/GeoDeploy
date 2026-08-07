@@ -63,14 +63,24 @@ async def regenerate_config(layers: list[dict], force: bool = False) -> None:
     changed = _write_config(config, settings.martin_config_path)
     # Restarting Martin drops every in-flight tile request, so do it only when it can change what
     # Martin serves: the config differs, or the pillar function did not exist when Martin last
-    # resolved its sources. A function whose BODY changed needs no restart — Martin resolves the
-    # source by name at startup and runs the current body per request.
+    # resolved its sources, OR its body changed — Martin CACHES TILES in memory, so a corrected
+    # function otherwise keeps serving the tiles it already built from the old one.
     #
     # `force` is for the operator's "Reload Martin" button, whose entire purpose is to restart a
     # Martin that is misbehaving for reasons the config cannot show. Skipping the restart there
     # because nothing changed on disk would take away the one manual recovery there is.
     if force or changed or installed:
         await _reload_martin()
+
+
+def _pillar_body(create_sql: str) -> str:
+    """The function body from a `CREATE OR REPLACE FUNCTION … AS $$ … $$` statement.
+
+    Split on the OUTER `$$` only. The body itself contains a `$f$ … $f$` dollar-quoted string (the
+    dynamic SQL template), which uses a different tag precisely so it cannot terminate this one.
+    """
+    parts = create_sql.split("$$")
+    return parts[1] if len(parts) > 2 else create_sql
 
 
 async def _ensure_pillar_function(settings) -> bool:
@@ -85,8 +95,16 @@ async def _ensure_pillar_function(settings) -> bool:
     stop the tile config for every OTHER layer from being written — the pillars source simply
     returns nothing and 3D points do not draw.
 
-    Returns True when the function did NOT exist beforehand, i.e. Martin last resolved its sources
-    without it and has to be restarted to pick the source up.
+    Returns True when Martin has to be RESTARTED: either the function did not exist (so Martin
+    resolved its sources without it), or its BODY changed.
+
+    The body case is not obvious and cost a real bug. Martin resolves a function source by name at
+    startup and executes the current body per request, so a replaced body takes effect immediately —
+    which is what an earlier version of this comment said, and it stopped there. But **Martin caches
+    tiles in memory** (its `--cache-size` is on by default). A corrected function therefore keeps
+    serving the OLD tiles to anyone who had already requested them, and the fix looks like it did
+    not work: the operator sees a deployed instance still drawing the broken geometry, with nothing
+    in any log to explain it. Comparing `prosrc` catches exactly that.
     """
     from . import pillars
 
@@ -94,14 +112,15 @@ async def _ensure_pillar_function(settings) -> bool:
     conn = None
     try:
         conn = await asyncpg.connect(_pg_sync_dsn(settings), timeout=10)
-        existed = await conn.fetchval(
-            """SELECT EXISTS (SELECT 1 FROM pg_proc p
-                              JOIN pg_namespace n ON n.oid = p.pronamespace
-                              WHERE n.nspname = $1 AND p.proname = $2)""",
+        current = await conn.fetchval(
+            """SELECT p.prosrc FROM pg_proc p
+               JOIN pg_namespace n ON n.oid = p.pronamespace
+               WHERE n.nspname = $1 AND p.proname = $2""",
             pillars.SCHEMA, pillars.FUNCTION,
         )
         await conn.execute(pillars.CREATE_SQL)
-        return not existed
+        # `prosrc` is the body between the outer $$ delimiters — exactly what CREATE_SQL wraps.
+        return (current or "").strip() != _pillar_body(pillars.CREATE_SQL).strip()
     except Exception as exc:      # noqa: BLE001 — see docstring
         _log.warning("could not install the 3D pillar tile function: %s", exc)
         return False
