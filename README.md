@@ -33,8 +33,9 @@ domain, and no per-seat pricing.
 
 ## What it is
 
-One command gives you a complete spatial stack on a single Linux server: a spatial database, object
-storage, vector and raster tile services, a web dashboard, and the portals you publish from it.
+One command gives you a complete spatial stack on a single Linux server: **PostGIS**, object
+storage, **Martin** for vector tiles and **TiTiler** for rasters, a web dashboard, and the portals
+you publish from it.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/bravemaster3/geodeploy/main/installer/install.sh | bash
