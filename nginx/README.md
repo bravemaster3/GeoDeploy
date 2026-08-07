@@ -24,4 +24,19 @@ The single public entrypoint. Reverse-proxies the SPA, the API, the two tile ser
 - HTTPS/443 is stubbed but not wired (no automated certbot flow yet).
 
 ## Last updated
+2026-08-07 (**a tile that misses the raster is EMPTY, not missing.** TiTiler answers 404 for a tile
+outside the COG bounds — correct for an API, wrong for a tile pyramid, where the off-the-edge tiles
+are a normal part of the grid a client requests. A portal can be told where the data is (MapLibre
+source `bounds`, our TileJSON), but a **bare XYZ URL carries no metadata**, so QGIS/GeoLibre/Leaflet
+given the XYZ link cannot avoid asking, and every ask became a console error. A new REGEX location
+`~ ^/raster/cog/tiles/` (regex beats the `/raster/` prefix location, which stays for everything else)
+sets `proxy_intercept_errors on` + `error_page 404 = @blank_tile`, and `@blank_tile` uses nginx's
+built-in `empty_gif` — a 1x1 transparent GIF every raster client decodes, no asset to ship. Scoped to
+the TILES path deliberately: `/cog/info`, `/cog/statistics` and `/cog/point` keep returning real
+errors, since blanking those would hide genuine failures. CORS headers are repeated with `always` on
+the named location or they are dropped on the error-derived path and a cross-origin client sees a
+CORS failure instead of a blank tile. Verified against a live TiTiler: out-of-bounds → 200 image/gif
+43 B with `Access-Control-Allow-Origin: *`; in-bounds → 200 image/png, unchanged.
+**Deploying a change to THIS file needs `apply_nginx`, not a bare reload** — the single-file mount
+goes stale (see notes_for_future).)
 2026-06-04
