@@ -51,11 +51,16 @@ def vector_links(layer, base: str) -> list[dict]:
               hint="GDAL/ogr2ogr: use OAPIF:<this URL>. In QGIS you connect to the SERVICE url "
                    "below and pick the layer from the list.",
               primary=True),
-        _link("ogc-service", "OGC API - Features — service endpoint", f"{base}/api/ogc",
+        # Named for its SCOPE, not its role. "service endpoint" sat next to "this layer" and read as
+        # a synonym, so it was copied expecting one dataset and opened the whole list. The scope is
+        # not a leak — /api/ogc lists only layers explicitly shared as public (ogcapi._public_layers)
+        # — but it is a surprise, and the label is where that gets settled.
+        _link("ogc-service", "OGC API - Features — ALL your public layers", f"{base}/api/ogc",
               fmt="OGC API - Features landing page",
               tools=["QGIS", "ArcGIS Pro", "FME"],
-              hint="QGIS: Layer ▸ Add Layer ▸ Add OGC API - Features Layer ▸ New ▸ paste this as "
-                   "the URL, then choose this layer from the collection list."),
+              hint="Not just this layer: this is the service, and it lists every layer you have "
+                   "shared publicly. It is what QGIS needs — Layer ▸ Add Layer ▸ Add OGC API - "
+                   "Features Layer ▸ New ▸ paste this, then pick this layer from the list."),
         _link("ogc-items", "Features as GeoJSON (bbox-filtered, paged)",
               f"{base}/api/ogc/collections/vector-{public_ref(layer)}/items?limit=1000",
               fmt="GeoJSON", tools=["any HTTP client", "Python", "R"],
