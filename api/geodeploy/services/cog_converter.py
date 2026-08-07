@@ -7,12 +7,24 @@ from rasterio.enums import Resampling
 from rasterio.shutil import copy as rio_copy
 
 OVERVIEW_LEVELS = [2, 4, 8, 16, 32, 64]
+# A classic TIFF cannot exceed 4 GB — the offsets in its header are 32-bit. Past that, GDAL fails
+# mid-write with "TIFFAppendToStrip:Maximum TIFF file size exceeded", which surfaced here as a
+# rasterio CPLE_AppDefinedError out of build_overviews rather than as a size error, because the
+# overviews are what pushes a large-but-legal raster over the line (they add roughly a third).
+#
+# IF_SAFER rather than YES: GDAL switches to BigTIFF whenever the UNCOMPRESSED image would exceed
+# 2 GB, which leaves comfortable room for the overviews on top, while a raster small enough to be a
+# classic TIFF stays one. That matters because BigTIFF is still refused by some older desktop GIS,
+# and these files are downloadable — so the format is part of what we hand the user, not just an
+# internal detail.
+BIGTIFF = "IF_SAFER"
 COG_PROFILE = {
     "driver": "GTiff",
     "tiled": True,
     "blockxsize": 512,
     "blockysize": 512,
     "compress": "lzw",
+    "bigtiff": BIGTIFF,
 }
 
 
@@ -46,6 +58,11 @@ def convert_to_cog(src_path: str, dst_path: str) -> None:
                                         dir=os.path.dirname(src_path)) as tmp:
             tmp_path = tmp.name
 
+        # The temp copy needs BigTIFF too, and it is the one that actually failed: overviews are
+        # written INTO this file (r+ below), so its format is fixed at creation. A classic TIFF here
+        # cannot be rescued later by the final copy's setting. Set in the dict rather than passed as
+        # a kwarg — a BigTIFF source could carry `bigtiff` in its own profile and collide.
+        profile["bigtiff"] = BIGTIFF
         with rasterio.open(src_path) as src:
             rio_copy(src, tmp_path, **profile)
 
