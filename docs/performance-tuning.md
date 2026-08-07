@@ -84,32 +84,45 @@ A healthy run logs the FlatGeobuf conversion, then tippecanoe's progress, then `
 path can't run it logs a warning and continues via the slower fallback (`via geojsonseq`) — tiling
 still completes.
 
-## Running on a small server (2 GB)
+## Add swap — on every server
 
-GeoDeploy runs on a 2 CPU / 2 GB VPS. Nine containers on that much memory leaves little headroom,
-so two things need saying plainly.
+This is the single most useful thing you can do to a GeoDeploy host, at any size, and it takes one
+minute.
 
-### Swap is not optional — and this is not only a 2 GB concern
+**Building** the dashboard needs far more memory than running it does, and every update builds. With
+no swap the kernel kills the build part-way: the update appears to hang, and you are left with
+stopped containers and no new image. Ingesting a large file can reach the same wall from the other
+direction.
 
-**Building** the dashboard needs far more memory than running it, and an update builds. With no swap
-the kernel kills the build part-way: the update appears to hang and you are left with stopped
-containers and no new image.
+Most cloud images ship with **no swap at all, at any size** — so check before assuming you are
+unaffected:
 
-Most cloud images ship with **no swap at all**, at any size. Check with `free -m` before you believe
-you are unaffected — a 4 GB server with no swap and a worker mid-conversion can hit the same wall.
-The smaller the machine, the sooner; on 2 GB it is close to certain. Add swap once:
+```bash
+free -m          # the Swap row: total 0 means you have none
+```
+
+Add it once, and it survives reboots:
 
 ```bash
 fallocate -l 2G /swapfile && chmod 600 /swapfile
 mkswap /swapfile && swapon /swapfile
 echo '/swapfile none swap sw 0 0' >> /etc/fstab   # survives a reboot
+swapon --show                                    # confirm
 ```
 
-Confirm it took with `swapon --show`, or `free -m` — the Swap row should no longer read zero.
+2 GB of swap is enough for the build on any server we have tested. Use `dd` instead of `fallocate`
+if your filesystem does not support it (`dd if=/dev/zero of=/swapfile bs=1M count=2048`).
 
-Swap here is insurance rather than a performance trade: the pages it absorbs are mostly idle build
-memory, so a build that previously died tends to complete at close to normal speed. On a 2 CPU /
-2 GB VPS the difference measured was between *killed* and *finished*, not between fast and slow.
+Swap here is insurance, not a performance trade: the pages it absorbs are mostly idle build memory,
+so a build that previously died tends to finish at close to normal speed. On a 2 CPU / 2 GB VPS the
+measured difference was between *killed* and *finished*, not between fast and slow. On a 4 GB server
+with no swap, a worker mid-conversion can hit the same wall — the bigger the machine, the later it
+happens, not the less it matters.
+
+## Running on a small server (2 GB)
+
+GeoDeploy runs on a 2 CPU / 2 GB VPS. Nine containers on that much memory leaves little headroom, so
+beyond the swap above, one more thing needs saying plainly.
 
 ### One worker process, not two
 
