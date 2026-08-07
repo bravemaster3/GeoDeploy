@@ -260,6 +260,19 @@ deliberately NOT visibility-filtered (published portals depend on them).
 - No rate limiting beyond nginx; no pagination on list endpoints (fine at current scale).
 
 ## Last updated
+2026-08-07b (`portals.py`: **SVG accepted for portal assets** — a raster logo goes soft on any retina
+display or larger header, and line art is what a logo IS. Added to `_ASSET_EXTENSIONS` and to the
+`portal_asset` filename allow-list. **Security:** an SVG is a document, not a picture — it can carry
+`<script>`, and this route serves it from the portal's own origin. Inside an `<img>` that never runs,
+but nothing stops a visitor opening the asset URL directly, where an uploaded file would execute with
+the portal's origin. So `.svg` responses now carry
+`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox` plus `nosniff`;
+rendering as an image needs none of those, so nothing legitimate is affected. **Not yet done:**
+TINTING an uploaded logo to the accent the way the built-in presets are (they are inline SVG using
+`currentColor`; an uploaded file is an `<img>` and cannot inherit it). The route is a CSS
+`mask-image` + `background: var(--accent)`, which colours by alpha and works for SVG and transparent
+PNG alike — but it flattens a multi-colour logo to one colour, so it has to be the author's choice,
+not automatic.)
 2026-08-07 (`data/raster.py`: **`GET /{ref}/wmts` — the extent, for QGIS.** QGIS does not read
 TileJSON for a RASTER layer, and an XYZ template has nowhere to put an extent, so "Zoom to Layer"
 went to the whole world. WMTS carries `ows:WGS84BoundingBox`, which QGIS zooms to. Same reason we

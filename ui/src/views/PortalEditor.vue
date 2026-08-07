@@ -230,7 +230,7 @@
               :class="currentLogo().kind === 'custom' ? 'border-primary text-primary' : ''" title="Upload custom">
               <img v-if="currentLogo().kind === 'custom' && currentLogo().url" :src="currentLogo().url" alt="" class="max-w-full max-h-full object-contain rounded" />
               <span v-else class="text-sm">↑</span>
-              <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" class="hidden" @change="uploadLogo" />
+              <input type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" class="hidden" @change="uploadLogo" />
             </label>
             <button @click="setLogoNone" title="No logo"
               class="w-8 h-8 rounded border text-xs"

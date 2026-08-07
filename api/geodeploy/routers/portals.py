@@ -406,7 +406,9 @@ async def preview_portal(portal_id: int, req: PortalPreview,
 # Images embedded in the About page (uploaded from the editor's WYSIWYG). Served by the public
 # GET below because both the editor preview and the published about.html reference them by URL.
 # SVG is deliberately excluded (script-capable when opened directly).
-_ASSET_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+# `.svg` is here for LOGOS, which are line art: a raster logo goes soft the moment a display is
+# retina or the header grows. See `portal_asset` for why serving it needs a CSP.
+_ASSET_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 _MAX_ASSET_SIZE = 15 * 1024 * 1024  # 15 MB
 # Portal images (About page + story sections) travel through the API, not direct-to-storage, so
 # this has to stay well under any proxy/CDN request-body cap in front of the instance — 15 MB is
@@ -507,7 +509,7 @@ async def portal_asset(portal_id: int, filename: str):
     pattern to arbitrary names, so the guard stays an allow-list."""
     import re
     from fastapi.responses import FileResponse
-    if not (re.fullmatch(r"[0-9a-f]{32}\.(png|jpe?g|gif|webp)", filename)
+    if not (re.fullmatch(r"[0-9a-f]{32}\.(png|jpe?g|gif|webp|svg)", filename)
             or re.fullmatch(r"thumbnail-[0-9a-f]{12}\.webp", filename)
             or filename == "thumbnail.webp"):      # legacy fixed name, still served if present
         raise HTTPException(404, "Not found.")
@@ -515,7 +517,18 @@ async def portal_asset(portal_id: int, filename: str):
     path = f"{settings.data_dir}/portal_assets/{portal_id}/{filename}"
     if not os.path.isfile(path):
         raise HTTPException(404, "Not found.")
-    return FileResponse(path, headers={"Cache-Control": "public, max-age=86400, immutable"})
+    headers = {"Cache-Control": "public, max-age=86400, immutable",
+               # Never let the browser decide this is HTML.
+               "X-Content-Type-Options": "nosniff"}
+    if filename.endswith(".svg"):
+        # An SVG is a DOCUMENT, not just a picture: it can carry <script>, and this route serves it
+        # from the portal's own origin. Inside an <img> that script never runs, but nothing stops a
+        # visitor opening the asset URL directly — at which point an uploaded file would execute
+        # with the portal's origin. The CSP shuts that path: no scripts, no external fetches, and
+        # `sandbox` drops same-origin privileges even for what remains. Rendering as an image is
+        # unaffected, since an image needs none of it.
+        headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    return FileResponse(path, headers=headers)
 
 
 @router.post("/{portal_id}/unpublish", response_model=PortalOut)
