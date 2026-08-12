@@ -24,7 +24,7 @@ import json
 import os
 import sys
 import tempfile
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from .errors import ConfigError
 
@@ -133,6 +133,32 @@ def normalize_url(url: str) -> str:
     if not rest:
         raise ConfigError("Instance URL has no host: {0}".format(url))
     return "{0}://{1}".format(scheme, rest.rstrip("/"))
+
+
+def split_portal_url(value: str) -> Tuple[Optional[str], str]:
+    """A portal reference → `(instance URL or None, slug)`.
+
+    Accepts a bare slug (`field-sites-2026`) or the URL a person copies out of the address bar
+    (`https://gd.example.org/portals/field-sites-2026/`, with or without a trailing
+    `style.json`). The URL already names its instance, so demanding the slug be cut out of it by
+    hand — and the instance be supplied a second time — is friction with nothing behind it.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        raise ConfigError("A portal is required: a slug, or the URL of a published portal.")
+    if "://" not in raw:
+        if "/portals/" not in raw:
+            return None, raw.strip("/")          # a plain slug, which is the common case
+        raw = "https://" + raw                   # `host/portals/slug` pasted without the scheme
+    head, sep, tail = raw.partition("/portals/")
+    if not sep:
+        raise ConfigError(
+            "That does not look like a portal URL: {0}\n"
+            "Expected something like https://gd.example.org/portals/<slug>/".format(value))
+    slug = tail.strip("/").split("/")[0]
+    if not slug:
+        raise ConfigError("That portal URL has no slug: {0}".format(value))
+    return normalize_url(head), slug
 
 
 # ── The config file ──────────────────────────────────────────────────────────────────────────────

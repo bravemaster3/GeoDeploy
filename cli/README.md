@@ -22,7 +22,10 @@ User documentation is `docs/cli.md`; this file is the technical note.
 - `config.py` — profiles + credentials. **Tokens never enter `config.json`**: OS keyring when there
   is one, else `credentials.json` at 0600 in a 0700 directory, written atomically. `normalize_url`
   collapses `…/api`, trailing slashes and a bare host to one origin, so a credential saved under one
-  spelling is found under another. `resolve()` = flag → env → profile, for URL and token separately.
+  spelling is found under another. `split_portal_url` does the same job for a published portal's
+  URL → `(origin, slug)`, so a link copied out of the address bar is a valid portal reference
+  anywhere a slug is (`browse --portal`, and `Portals.get`, which every portal command goes
+  through). `resolve()` = flag → env → profile, for URL and token separately.
 - `uploads.py` — the routing table (below) plus both transports: multipart-through-the-API, and
   presign/chunked direct-to-storage with per-part retry and abort-on-failure.
 - `layers.py` — the two layer kinds, and `Layers.resolve` (id | uid | `vector-3` | name; ambiguity
@@ -51,7 +54,7 @@ no account. `_LayerBase.export_to_file()` drives the queue-poll-download of a bu
   styling flags, shared by the three commands that take them, and `resolve_layer(..., public_ok=)`
   which decides between the authenticated list and the public index.
 
-`tests/` — 263 tests against a real HTTP server (`conftest.FakeInstance`) that records what arrived
+`tests/` — 281 tests against a real HTTP server (`conftest.FakeInstance`) that records what arrived
 on the wire. `pyproject.toml` — packaging; console script `geodeploy`.
 
 ## Dependencies / relationships

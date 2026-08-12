@@ -131,6 +131,15 @@ class TestPortalDocument:
         with pytest.raises(NotFoundError):
             client.portals.get("no-such-portal")
 
+    def test_get_by_its_published_url(self, client, server):
+        """So `portals publish <url>` works on the link you copied, not on a slug you retyped."""
+        assert client.portals.get(server + "/portals/field-sites-2026/")["id"] == 3
+
+    def test_a_url_from_another_instance_is_refused(self, client):
+        with pytest.raises(ValidationError) as exc:
+            client.portals.get("https://elsewhere.example.org/portals/field-sites-2026/")
+        assert "elsewhere.example.org" in str(exc.value)
+
     def test_round_trip_drops_server_owned_fields(self):
         """`slug` is derived from the title and `published` is not settable; sending them back
         would be at best ignored and at worst a 422."""

@@ -179,6 +179,14 @@ public:
 geodeploy browse --portal field-sites-2026
 ```
 
+**A portal's URL works everywhere its slug does** — paste the link straight out of the address bar
+and the instance comes with it, so there is nothing to log in to and nothing to retype:
+
+```bash
+geodeploy browse https://geodeploy.example.org/portals/5b5c627cfd/
+geodeploy portals publish https://geodeploy.example.org/portals/5b5c627cfd/   # with a token
+```
+
 With a token in play the same command adds what *you* can see beyond the public surface. That is
 the two-mode behaviour a desktop plugin needs, which is why it lives here rather than only in one.
 

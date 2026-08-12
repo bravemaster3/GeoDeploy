@@ -430,6 +430,37 @@ class TestBrowse:
         assert "Vector (PostGIS)" not in out
 
 
+class TestBrowseAPortal:
+    """A portal URL names its own instance. Pasting one must not also require --url or a login."""
+
+    def test_a_pasted_portal_url_needs_nothing_else(self, run, home, server):
+        code, out, err = run("browse", "--portal", server + "/portals/field-sites-2026/")
+        assert code == EXIT_OK
+        assert "Field sites 2026" in out
+        assert "roads" in out
+        assert "basemap" not in out          # the template's own layer, not the author's data
+
+    def test_the_url_alone_is_enough_as_the_positional(self, run, home, server):
+        code, out, err = run("browse", server + "/portals/field-sites-2026/style.json")
+        assert code == EXIT_OK
+        assert "Field sites 2026" in out
+
+    def test_a_slug_still_works_against_the_active_profile(self, run, logged_in):
+        code, out, err = run("browse", "--portal", "field-sites-2026")
+        assert code == EXIT_OK
+        assert "Field sites 2026" in out
+
+    def test_an_unknown_portal_explains_itself(self, run, home, server):
+        code, out, err = run("browse", "--portal", server + "/portals/nope/")
+        assert code == EXIT_GENERIC
+        assert "Public portals only" in err
+
+    def test_a_url_that_is_not_a_portal_is_a_usage_error(self, run, home, server):
+        code, out, err = run("browse", "--portal", "https://gd.example.org/layers/roads")
+        assert code != EXIT_OK
+        assert "does not look like a portal URL" in err
+
+
 class TestLayerDownload:
     def test_a_vector_layer_defaults_to_a_built_geopackage(self, run, logged_in, instance,
                                                            tmp_path):

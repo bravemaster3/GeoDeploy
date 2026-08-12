@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional
 
+from .config import split_portal_url
 from .errors import NotFoundError, ValidationError
 
 ACCESS_TYPES = ("public", "password", "organization", "owner")
@@ -42,8 +43,15 @@ class Portals(object):
         return rows
 
     def get(self, ref: Any) -> Dict[str, Any]:
-        """A portal by id, or by slug/title — the CLI should not force people to look up ids."""
+        """A portal by id, slug, title, or its published URL — the CLI should not force people to
+        look up ids, nor to edit a URL they just copied out of the address bar."""
         text = str(ref).strip()
+        if "/portals/" in text:
+            origin, text = split_portal_url(text)
+            if origin and origin != self._c.url:
+                raise ValidationError(
+                    400, "That portal is on {0}, but this command is talking to {1}.".format(
+                        origin, self._c.url))
         if text.isdigit():
             return self._c.get("/portals/{0}".format(int(text)))
         rows = self.list()

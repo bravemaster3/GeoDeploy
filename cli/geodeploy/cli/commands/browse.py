@@ -7,6 +7,7 @@ plugin needs, and the reason this exists in the client rather than only in a plu
 """
 from __future__ import annotations
 
+from ...config import split_portal_url
 from ...errors import GeoDeployError, NotFoundError
 from ..main import add_command
 from ..output import EXIT_GENERIC, EXIT_OK
@@ -24,14 +25,17 @@ examples:
   geodeploy browse https://geodeploy.example.org      anyone can run this
   geodeploy browse                                    the instance you are logged in to
   geodeploy browse --portal field-sites-2026          what one portal contains
+  geodeploy browse https://gd.example.org/portals/5b5c627cfd/    a portal URL, pasted whole
   geodeploy browse --json | jq '.layers.raster'       machine-readable
 
 With a token stored (or --token), it also reports what that token can see beyond the public
 surface, which is usually the point of having one.
 """)
     parser.add_argument("instance", nargs="?",
-                        help="instance URL (default: the active profile)")
-    parser.add_argument("--portal", help="show one portal's layers, read from its published style")
+                        help="instance URL, or a published portal's URL "
+                             "(default: the active profile)")
+    parser.add_argument("--portal", metavar="SLUG_OR_URL",
+                        help="show one portal's layers, read from its published style")
     parser.add_argument("--kind", choices=["raster", "postgis", "geoparquet"],
                         help="only this kind of layer")
     parser.add_argument("--links", action="store_true",
@@ -39,8 +43,16 @@ surface, which is usually the point of having one.
 
 
 def cmd_browse(ctx, args) -> int:
-    if args.instance:
-        args.url = args.instance          # the positional is just a friendlier --url
+    instance = args.instance
+    if instance and not args.portal and "/portals/" in instance:
+        # A portal's own URL, pasted whole. It names both the instance and the portal, so it does
+        # not need --portal and must not be read as an instance URL.
+        instance, args.portal = split_portal_url(instance)
+    elif args.portal:
+        origin, args.portal = split_portal_url(args.portal)
+        instance = instance or origin     # a full portal URL brings its instance with it
+    if instance:
+        args.url = instance               # the positional is just a friendlier --url
         ctx._resolved = None              # re-resolve against it
     client = ctx.client(auth_required=False)
     out = ctx.out

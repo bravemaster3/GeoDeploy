@@ -40,6 +40,33 @@ class TestNormalizeUrl:
             cfg.normalize_url(bad)
 
 
+class TestSplitPortalUrl:
+    """People copy the whole URL out of the address bar. That has to be an accepted input."""
+
+    @pytest.mark.parametrize("given", [
+        "https://gd.example.org/portals/5b5c627cfd/",
+        "https://gd.example.org/portals/5b5c627cfd",
+        "https://gd.example.org/portals/5b5c627cfd/style.json",
+        "https://gd.example.org/portals/5b5c627cfd/index.html",
+        "gd.example.org/portals/5b5c627cfd/",
+    ])
+    def test_a_portal_url_yields_both_halves(self, given):
+        assert cfg.split_portal_url(given) == ("https://gd.example.org", "5b5c627cfd")
+
+    def test_a_bare_slug_names_no_instance(self):
+        assert cfg.split_portal_url("field-sites-2026") == (None, "field-sites-2026")
+
+    def test_a_subpath_deployment_keeps_its_prefix(self):
+        assert cfg.split_portal_url("https://example.org/gis/portals/abc") == (
+            "https://example.org/gis", "abc")
+
+    @pytest.mark.parametrize("bad", ["", "   ", "https://gd.example.org/layers/roads",
+                                     "https://gd.example.org/portals/"])
+    def test_rejects_what_is_not_a_portal(self, bad):
+        with pytest.raises(ConfigError):
+            cfg.split_portal_url(bad)
+
+
 class TestProfiles:
     def test_round_trip(self, home):
         config = cfg.Config.load()

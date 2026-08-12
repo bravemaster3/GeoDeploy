@@ -132,6 +132,7 @@ class FakeInstance(object):
             (r"/data/sources", self._sources),
             (r"/data/sources/(\d+)", lambda m, mo, *a: (200, {"ok": True})),
             (r"/portals", self._portals),
+            (r"/portals/([\w-]+)/style\.json", self._portal_style),
             (r"/portals/(\d+)", self._portal),
             (r"/portals/(\d+)/publish", self._publish),
             (r"/portals/(\d+)/unpublish", self._unpublish),
@@ -294,6 +295,19 @@ class FakeInstance(object):
                  "layer_count": 1, "url": base + "/portals/field-sites-2026/",
                  "style_url": base + "/portals/field-sites-2026/style.json",
                  "thumbnail_url": None, "published_at": "2026-08-01T00:00:00"}]
+
+    def _portal_style(self, method, match, query, headers, body):
+        """A published portal's own style.json — served outside /api, like the real bundle."""
+        if match.group(1) != "field-sites-2026":
+            return 404, {"detail": "No such portal."}
+        return 200, {
+            "version": 8,
+            "sources": {"basemap": {"type": "raster"}, "roads-src": {"type": "vector"}},
+            "layers": [{"id": "basemap", "type": "raster", "source": "basemap"},
+                       {"id": "roads", "type": "line", "source": "roads-src"}],
+            "geodeploy": {"title": "Field sites 2026", "bounds": [11.0, 55.0, 12.0, 56.0],
+                          "deckLayers": []},
+        }
 
     def _export_start(self, method, match, query, headers, body):
         payload = json.loads(body or b"{}")
