@@ -298,4 +298,10 @@ export const listBasemaps = () => api.get('/basemaps')
 // Admin
 export const getServiceHealth = () => api.get('/admin/health')
 export const getStorageStats = () => api.get('/admin/storage-stats')
+
+// Whether this instance publishes GET /api/public — the anonymous list of its public portals and
+// public layers that a browse client (or the QGIS plugin) reads. Discoverability, not access:
+// everything it lists is already reachable by link.
+export const getPublicIndex = () => api.get('/admin/public-index')
+export const setPublicIndex = (enabled) => api.put('/admin/public-index', { enabled })
 export const controlService = (name, action) => api.post(`/admin/services/${name}/${action}`)

@@ -101,6 +101,23 @@ class Admin(object):
         """Connection details for the managed PostGIS/MinIO. Owner-only, and audited."""
         return self._get("/admin/credentials")
 
+    # ── the public listing ──────────────────────────────────────────────────────────────────────
+
+    def public_index(self) -> Dict[str, Any]:
+        """Whether this instance publishes `GET /api/public` — its anonymous index."""
+        return self._get("/admin/public-index")
+
+    def set_public_index(self, enabled: bool) -> Dict[str, Any]:
+        """List, or stop listing, what this instance publishes.
+
+        Discoverability, not access: a published public portal stays reachable by its link either
+        way. Audited, because "why did our datasets stop appearing" deserves an answer.
+        """
+        try:
+            return self._c.put("/admin/public-index", {"enabled": bool(enabled)})
+        except PermissionError_ as exc:
+            raise _session_only(exc)
+
     # ── audit ───────────────────────────────────────────────────────────────────────────────────
 
     def audit(self, limit: int = 20, offset: int = 0, action: Optional[str] = None,

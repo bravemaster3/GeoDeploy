@@ -192,6 +192,42 @@
         </div>
       </section>
 
+      <!-- Public listing. Sits under Storage because both answer "what is on this instance?" —
+           one for the operator, one for everybody else. -->
+      <section v-if="auth.isAdmin" class="card overflow-hidden">
+        <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
+          <span class="w-9 h-9 rounded-lg bg-sky-500/15 text-sky-400 flex items-center justify-center flex-shrink-0">
+            <ServerIcon class="w-5 h-5" />
+          </span>
+          <div class="flex-1 min-w-0">
+            <h2 class="text-sm font-semibold text-foreground">Public listing</h2>
+            <p class="text-xs text-muted-foreground/70">Whether this instance can be browsed from outside</p>
+          </div>
+        </header>
+        <div class="p-5 space-y-3">
+          <label class="flex items-start gap-3 text-sm cursor-pointer">
+            <input type="checkbox" class="w-4 h-4 mt-0.5" :checked="publicIndex.enabled"
+                   :disabled="publicIndex.saving" @change="savePublicIndex($event.target.checked)" />
+            <span>
+              <span class="font-medium text-foreground">List what this instance publishes</span>
+              <span class="block text-xs text-muted-foreground/80 mt-1">
+                Lets anyone see your <strong>published public portals</strong> and
+                <strong>layers shared as public</strong> from the instance URL alone — which is how
+                the QGIS plugin and other tools browse it. Private layers and portals that are
+                password-protected, members-only or owner-only are never listed.
+              </span>
+            </span>
+          </label>
+          <p class="text-xs text-muted-foreground/70">
+            This changes whether they can be <em>found</em>, not who can open them: a published
+            public portal stays reachable by its link either way. Turned off, the listing endpoint
+            answers nothing at all.
+          </p>
+          <p v-if="publicIndex.error" class="text-xs text-red-400">{{ publicIndex.error }}</p>
+          <p v-else-if="publicIndex.saved" class="text-xs text-green-400">Saved.</p>
+        </div>
+      </section>
+
       <!-- Below Storage on purpose: this is where someone goes wondering "what ARE my credentials?"
            after seeing how much space they use. Owner-only, and it fetches nothing until asked. -->
       <ConnectionDetails v-if="auth.isOwner" />
@@ -872,7 +908,8 @@ import api, { changePassword, logoutAll, controlService, getEmailSettings, sendT
               listRestoreRuns,
               listBackupRuns, startBackup, listStoredBackups, deleteStoredBackup,
               deleteBackupRun, clearBackupRuns,
-              restorePreflight, startRestore } from '@/api'
+              restorePreflight, startRestore,
+              getPublicIndex, setPublicIndex } from '@/api'
 import TokenModal from '@/components/users/TokenModal.vue'
 import InfrastructurePanel from '@/components/infra/InfrastructurePanel.vue'
 
@@ -1395,6 +1432,7 @@ onMounted(() => {
     loadOidc()
     checkUpdates()
     loadBackups()
+    loadPublicIndex()
   }
 })
 
@@ -1619,6 +1657,40 @@ const emailHasPassword = ref(false)
 const emailConfigured = ref(false)
 const emailBusy = ref(null)   // null | 'save' | 'test'
 const emailMsg = ref(null)
+
+// ── Public listing ───────────────────────────────────────────────────────────────────────────
+// Optimistic on purpose: a checkbox that waits for a round trip before moving feels broken. It is
+// put back if the server refuses, and the refusal is shown.
+const publicIndex = reactive({ enabled: true, saving: false, saved: false, error: '' })
+
+async function loadPublicIndex() {
+  try {
+    const { data } = await getPublicIndex()
+    publicIndex.enabled = data.enabled !== false
+  } catch {
+    // An instance that predates this setting has no endpoint for it; the default is "listed",
+    // which is also what the API assumes, so showing it ticked is honest.
+  }
+}
+
+async function savePublicIndex(enabled) {
+  const previous = publicIndex.enabled
+  publicIndex.enabled = enabled
+  publicIndex.saving = true
+  publicIndex.error = ''
+  publicIndex.saved = false
+  try {
+    const { data } = await setPublicIndex(enabled)
+    publicIndex.enabled = data.enabled !== false
+    publicIndex.saved = true
+    setTimeout(() => { publicIndex.saved = false }, 2500)
+  } catch (err) {
+    publicIndex.enabled = previous
+    publicIndex.error = err.response?.data?.detail || 'Could not save that setting.'
+  } finally {
+    publicIndex.saving = false
+  }
+}
 
 async function loadEmail() {
   try {

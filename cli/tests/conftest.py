@@ -143,6 +143,7 @@ class FakeInstance(object):
                 {"id": "vector-aaaaaaaaaaaa", "title": "roads"}]})),
             (r"/ogc/conformance", lambda *a: (200, {"conformsTo": ["core", "geojson"]})),
             (r"/stac/collections", lambda *a: (200, {"collections": [{"id": "vectors"}]})),
+            (r"/admin/public-index", self._public_index_setting),
             (r"/admin/health", lambda *a: (200, [{"name": "api", "status": "healthy",
                                                   "controllable": False}])),
             (r"/admin/storage-stats", lambda *a: (200, {"used_bytes": 1024, "postgis_bytes": 512,
@@ -311,6 +312,11 @@ class FakeInstance(object):
         if data is None:
             return 404, {"detail": "That export is not ready (or has been swept)."}
         return 200, data
+
+    def _public_index_setting(self, method, match, query, headers, body):
+        if method == "PUT":
+            self.public_index_enabled = bool(json.loads(body or b"{}").get("enabled"))
+        return 200, {"enabled": self.public_index_enabled}
 
     def _field_stats(self, method, match, query, headers, body):
         field = (query.get("field") or [""])[0]

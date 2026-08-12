@@ -462,3 +462,33 @@ class TestLayerDownload:
         code, out, err = run("--url", server, "layers", "download", "roads", "-o", str(target))
         assert code == EXIT_OK
         assert target.exists()
+
+
+class TestPublicListingToggle:
+    """The switch that decides whether `browse` finds anything — reachable from the CLI, not only
+    from the API, because an operator should never have to reach for curl."""
+
+    def test_it_reports_the_current_state(self, run, logged_in):
+        code, out, err = run("admin", "public-index", "--json")
+        assert code == EXIT_OK
+        assert json.loads(out) == {"enabled": True}
+
+    def test_turning_it_off_and_on(self, run, logged_in, instance):
+        run("admin", "public-index", "--off")
+        assert instance.public_index_enabled is False
+        code, out, err = run("browse")
+        assert code == EXIT_GENERIC          # the index is gone…
+        code, out, err = run("portals", "list")
+        assert code == EXIT_OK               # …but the instance is unaffected
+
+        run("admin", "public-index", "--on")
+        assert instance.public_index_enabled is True
+
+    def test_it_explains_what_off_means(self, run, logged_in):
+        code, out, err = run("admin", "public-index", "--off")
+        assert "reachable by their links" in err
+
+    def test_on_and_off_together_is_a_usage_error(self, run, logged_in):
+        with pytest.raises(SystemExit) as caught:
+            run("admin", "public-index", "--on", "--off")
+        assert caught.value.code == EXIT_USAGE

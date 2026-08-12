@@ -40,8 +40,12 @@ Each portal entry carries a `style_url`: the published bundle's own `style.json`
 source and layer in that portal. One anonymous fetch describes the whole map.
 
 Only what has been deliberately shared appears — a published *public* portal, a layer whose
-visibility is *public*. An operator can also turn the index off in Settings, which makes the
-endpoint answer 404: published portals stay reachable by link, they are simply not listed.
+visibility is *public*.
+
+An admin can turn the listing off in **Settings → Infrastructure → Public listing** (or with
+`geodeploy admin public-index --off`), which makes the endpoint answer 404. That changes whether
+your portals can be *found*, not who may open them: a published public portal stays reachable by
+its link either way.
 
 ## Downloading a whole layer
 

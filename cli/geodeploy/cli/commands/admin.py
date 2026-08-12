@@ -62,6 +62,21 @@ def register(subparsers) -> None:
     backups.add_argument("--run", action="store_true", help="start a backup now")
     backups.add_argument("-n", "--limit", type=int, default=10)
 
+    listing = add_command(group, "public-index", cmd_public_index,
+                          "show or change whether this instance is publicly browsable",
+                          epilog="""examples:
+  geodeploy admin public-index            is it listed?
+  geodeploy admin public-index --off      stop listing (links keep working)
+  geodeploy admin public-index --on
+
+Listing controls whether anyone can DISCOVER your published public portals and public layers from
+the instance URL — what `geodeploy browse` and the QGIS plugin read. It does not change who may
+open them: a public portal stays reachable by its link either way.
+""")
+    state = listing.add_mutually_exclusive_group()
+    state.add_argument("--on", dest="enabled", action="store_true", default=None)
+    state.add_argument("--off", dest="enabled", action="store_false", default=None)
+
     add_command(group, "credentials", cmd_credentials,
                 "connection details for the managed PostGIS and MinIO (owner only, audited)")
 
@@ -237,6 +252,23 @@ def cmd_backups(ctx, args) -> int:
     ctx.out.render(client.admin.backup_runs(limit=args.limit),
                    ["id", "started_at", "status", "trigger", "size_bytes", "error_message"],
                    empty="No backup runs recorded.")
+    return EXIT_OK
+
+
+def cmd_public_index(ctx, args) -> int:
+    client = _admin(ctx)
+    if args.enabled is None:
+        state = client.admin.public_index()
+    else:
+        state = client.admin.set_public_index(args.enabled)
+    ctx.out.render(state, ["enabled"])
+    if not ctx.out.json_mode:
+        if state.get("enabled"):
+            ctx.out.success("This instance is listed — `geodeploy browse {0}` shows what anyone "
+                            "can see.".format(ctx.resolved.url))
+        else:
+            ctx.out.success("Not listed. Published public portals stay reachable by their links; "
+                            "they are simply not enumerated.")
     return EXIT_OK
 
 

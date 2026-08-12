@@ -439,6 +439,7 @@ geodeploy portals download-area 3 "11.8,57.6,12.1,57.8" -o gothenburg.zip --form
     geodeploy admin update v1.3.0 --watch
     geodeploy admin backups --run
     geodeploy admin audit --action portal --since 2026-08-01T00:00:00Z
+    geodeploy admin public-index --off      # stop listing this instance publicly
     ```
 
     All of these need a password session (see above). `geodeploy users …` does not — it is

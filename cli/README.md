@@ -51,7 +51,7 @@ no account. `_LayerBase.export_to_file()` drives the queue-poll-download of a bu
   styling flags, shared by the three commands that take them, and `resolve_layer(..., public_ok=)`
   which decides between the authenticated list and the public index.
 
-`tests/` — 259 tests against a real HTTP server (`conftest.FakeInstance`) that records what arrived
+`tests/` — 263 tests against a real HTTP server (`conftest.FakeInstance`) that records what arrived
 on the wire. `pyproject.toml` — packaging; console script `geodeploy`.
 
 ## Dependencies / relationships
