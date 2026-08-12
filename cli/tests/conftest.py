@@ -300,13 +300,33 @@ class FakeInstance(object):
         """A published portal's own style.json — served outside /api, like the real bundle."""
         if match.group(1) != "field-sites-2026":
             return 404, {"detail": "No such portal."}
+        base = "http://127.0.0.1"
         return 200, {
             "version": 8,
-            "sources": {"basemap": {"type": "raster"}, "roads-src": {"type": "vector"}},
-            "layers": [{"id": "basemap", "type": "raster", "source": "basemap"},
-                       {"id": "roads", "type": "line", "source": "roads-src"}],
+            "sources": {
+                "basemap": {"type": "raster", "tiles": ["https://tiles.example/{z}/{x}/{y}.png"]},
+                "vector_1": {"type": "vector", "tiles": [base + "/tiles/vector_1/{z}/{x}/{y}.pbf"]},
+                "vector_3": {"type": "vector", "tiles": [base + "/tiles/vector_3/{z}/{x}/{y}.pbf"]},
+                "raster_2": {"type": "raster", "tiles": [base + "/cog/2/{z}/{x}/{y}.png"]},
+            },
+            "layers": [
+                {"id": "basemap", "type": "raster", "source": "basemap"},
+                {"id": "vector-1", "type": "line", "source": "vector_1",
+                 "metadata": {"geodeploy:name": "Roads", "geodeploy:layer_id": 1,
+                              "geodeploy:geometry": "linestring"}},
+                {"id": "vector-3", "type": "fill", "source": "vector_3",
+                 "metadata": {"geodeploy:name": "Plots", "geodeploy:layer_id": 3,
+                              "geodeploy:geometry": "polygon"}},
+                {"id": "vector-3-outline", "type": "line", "source": "vector_3",
+                 "metadata": {"geodeploy:layer_id": 3, "geodeploy:part": True}},
+                {"id": "raster-2", "type": "raster", "source": "raster_2",
+                 "layout": {"visibility": "none"},
+                 "metadata": {"geodeploy:name": "DEM", "geodeploy:layer_id": 2,
+                              "geodeploy:geometry": "raster"}},
+            ],
             "geodeploy": {"title": "Field sites 2026", "bounds": [11.0, 55.0, 12.0, 56.0],
-                          "deckLayers": []},
+                          "deckLayers": [{"id": "deck-7", "name": "Trees",
+                                          "url": base + "/data/trees.parquet"}]},
         }
 
     def _export_start(self, method, match, query, headers, body):

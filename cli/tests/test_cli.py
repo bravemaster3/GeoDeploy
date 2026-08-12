@@ -437,8 +437,24 @@ class TestBrowseAPortal:
         code, out, err = run("browse", "--portal", server + "/portals/field-sites-2026/")
         assert code == EXIT_OK
         assert "Field sites 2026" in out
-        assert "roads" in out
+        assert "Roads" in out
         assert "basemap" not in out          # the template's own layer, not the author's data
+
+    def test_layers_are_named_the_way_the_portal_names_them(self, run, home, server):
+        code, out, err = run("browse", "--portal", "field-sites-2026", "--url", server)
+        assert "Roads" in out and "Plots" in out and "DEM" in out
+        assert "Trees" in out                       # a GeoParquet layer, drawn by deck.gl
+        assert out.count("Plots") == 1              # not once per MapLibre layer it is drawn with
+        assert "vector-3-outline" not in out        # …and its outline is not a layer of its own
+
+    def test_a_layer_that_starts_switched_off_says_so(self, run, home, server):
+        code, out, err = run("browse", "--portal", "field-sites-2026", "--url", server)
+        assert "VISIBLE" in out.upper()
+
+    def test_links_prints_the_url_behind_each_layer(self, run, home, server):
+        code, out, err = run("browse", "--portal", "field-sites-2026", "--url", server, "--links")
+        assert "/tiles/vector_1/{z}/{x}/{y}.pbf" in out
+        assert "/data/trees.parquet" in out
 
     def test_the_url_alone_is_enough_as_the_positional(self, run, home, server):
         code, out, err = run("browse", server + "/portals/field-sites-2026/style.json")

@@ -159,16 +159,66 @@ def _one_portal(ctx, client, args) -> int:
     out.out(out.bold(meta.get("title") or slug))
     out.out(out.dim("{0}/portals/{1}/".format(client.url, slug)))
     out.out("")
-    rows = []
-    for layer in style.get("layers") or []:
+
+    sources = style.get("sources") or {}
+    rows, urls = [], {}
+    for layer in _data_layers(style):
+        lmeta = layer.get("metadata") or {}
         source = layer.get("source")
-        if not source or source in ("basemap", "composite"):
-            continue        # the basemap the template ships, not the author's data
-        rows.append({"id": layer.get("id"), "type": layer.get("type"), "source": source})
+        row = {"name": lmeta.get("geodeploy:name") or layer.get("id"),
+               "kind": lmeta.get("geodeploy:geometry") or layer.get("type"),
+               "id": layer.get("id"),
+               "visible": "no" if _hidden(layer) else "yes"}
+        rows.append(row)
+        urls[row["id"]] = _source_url(sources.get(source) or {})
     for deck in meta.get("deckLayers") or []:
-        rows.append({"id": deck.get("id") or deck.get("name"), "type": "deck.gl (GeoParquet)",
-                     "source": deck.get("url") or deck.get("manifest")})
-    out.table(rows, ["id", "type", "source"], )
+        ident = deck.get("id") or deck.get("name")
+        rows.append({"name": deck.get("name") or ident, "kind": "GeoParquet (deck.gl)",
+                     "id": ident, "visible": "no" if deck.get("visible") is False else "yes"})
+        urls[ident] = deck.get("url") or deck.get("manifest") or ""
+
+    columns = ["name", "kind", "id"]
+    if any(r["visible"] == "no" for r in rows):
+        columns.append("visible")       # only worth a column when something is actually off
+    out.table(rows, columns)
+
+    if args.links:
+        out.out("")
+        for row in rows:
+            if urls.get(row["id"]):
+                out.out("  {0}  {1}".format(out.bold(row["name"]), urls[row["id"]]))
     if meta.get("bounds"):
         out.info("Extent: {0}".format(meta["bounds"]))
+    if not args.links:
+        out.info("`--links` adds the data URL behind each layer.")
     return EXIT_OK
+
+
+def _data_layers(style):
+    """The author's layers, without the basemap's and without counting one layer twice.
+
+    A layer can be drawn by several MapLibre layers (a fill plus its outline, a polygon plus its
+    3D pillars); the generator flags the extras `geodeploy:part` and puts the metadata on the
+    first, which is exactly the rule the portal's own layer switcher follows.
+    """
+    layers = style.get("layers") or []
+    tagged = [l for l in layers
+              if (l.get("metadata") or {}).get("geodeploy:layer_id") is not None
+              and not (l.get("metadata") or {}).get("geodeploy:part")]
+    if tagged:
+        return tagged
+    # An older bundle, published before the metadata existed: fall back to "not the basemap".
+    return [l for l in layers
+            if l.get("source") and l.get("source") not in ("basemap", "composite")]
+
+
+def _hidden(layer):
+    return ((layer.get("layout") or {}).get("visibility")) == "none"
+
+
+def _source_url(source):
+    """Where a MapLibre source actually reads from — a tile template, a TileJSON or inline data."""
+    tiles = source.get("tiles")
+    if tiles:
+        return tiles[0]
+    return source.get("url") or (source.get("data") if isinstance(source.get("data"), str) else "")

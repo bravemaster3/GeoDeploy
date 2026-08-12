@@ -176,8 +176,20 @@ To look inside one portal — its layers and their sources — read its publishe
 public:
 
 ```bash
-geodeploy browse --portal field-sites-2026
+$ geodeploy browse --portal field-sites-2026
+Field sites 2026
+https://geodeploy.example.org/portals/field-sites-2026/
+
+NAME     KIND                   ID         VISIBLE
+Roads    linestring             vector-1   yes
+Plots    polygon                vector-3   yes
+DEM      raster                 raster-2   no
+Trees    GeoParquet (deck.gl)   deck-7     yes
 ```
+
+The names are the ones the portal itself shows, a layer drawn by several map layers (a fill and its
+outline, a polygon and its 3D pillars) is listed once, and `--links` adds the data URL behind each
+one. `VISIBLE` appears only when a layer starts switched off.
 
 **A portal's URL works everywhere its slug does** — paste the link straight out of the address bar
 and the instance comes with it, so there is nothing to log in to and nothing to retype:
