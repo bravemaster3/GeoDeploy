@@ -17,6 +17,10 @@ geodeploy portals create "Field sites 2026" --publish
 this pulls in nothing else — and a QGIS plugin can vendor the same client without asking anyone to
 pip-install into QGIS.
 
+If your shell cannot find `geodeploy` after installing, pip's scripts directory is not on your
+`PATH` — `python -m geodeploy` works regardless, and `pipx install geodeploy` or a virtual
+environment avoids it.
+
 ## What it covers
 
 - **Uploads** — shapefile, GeoPackage, GeoJSON, CSV (X/Y or WKT), GeoParquet, GeoTIFF. Many files

@@ -44,6 +44,38 @@ geodeploy portals create "Field sites 2026" --publish
 
 Check it: `geodeploy --version`.
 
+!!! tip "`geodeploy: command not found` after a successful install"
+    pip installed the package, but the folder it puts commands in is not on your `PATH`. This
+    happens when pip says *"Defaulting to user installation because normal site-packages is not
+    writeable"* — the per-user scripts folder is not the one the Python installer added.
+
+    **It always works as a module**, whatever your `PATH` says:
+
+    ```bash
+    python -m geodeploy --version
+    ```
+
+    To get the short name back, add the directory pip named in its warning to your `PATH`:
+
+    === "Windows (PowerShell)"
+
+        ```powershell
+        $scripts = "$env:APPDATA\Python\Python3xx\Scripts"   # the path pip printed
+        [Environment]::SetEnvironmentVariable('Path',
+          [Environment]::GetEnvironmentVariable('Path','User') + ";$scripts", 'User')
+        ```
+
+        Reopen the terminal afterwards.
+
+    === "macOS / Linux"
+
+        ```bash
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.profile
+        ```
+
+    Installing into a **virtual environment**, or with **pipx**, avoids this entirely — both manage
+    the directory for you.
+
 ## Signing in
 
 Create a token in the dashboard — **Settings → API tokens → Create token** — pick its scopes and an
