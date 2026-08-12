@@ -14,6 +14,34 @@ class Catalog(object):
     def __init__(self, client: Any):
         self._c = client
 
+    # ── the instance index ──────────────────────────────────────────────────────────────────────
+
+    def public(self) -> Dict[str, Any]:
+        """Everything this instance offers anonymously: public portals, and public layers grouped
+        by storage kind (`raster`, `postgis`, `geoparquet`).
+
+        This is the "paste a URL and see what is there" call — the first screen of a plugin. An
+        instance may switch its index off, in which case this raises `NotFoundError`: that is a
+        decision ("no index here"), distinct from an empty one ("nothing published").
+        """
+        return self._c.get("/public", auth=False)
+
+    def public_portals(self) -> List[Dict[str, Any]]:
+        return self._c.get("/public/portals", auth=False) or []
+
+    def portal_style(self, style_url: str) -> Dict[str, Any]:
+        """A published portal's own `style.json` — sources, layers, folder tree, bounds.
+
+        The whole portal in one anonymous fetch, which is what makes "open this portal in QGIS"
+        possible without a token. The URL comes from `public()`; it is a static file in the
+        published bundle, not an API route.
+        """
+        response = self._c.send_absolute("GET", style_url)
+        if response.status >= 400:
+            from .errors import from_status
+            raise from_status(response.status, "Could not read the portal style.", response.url)
+        return response.json()
+
     # ── OGC API - Features ──────────────────────────────────────────────────────────────────────
 
     def collections(self) -> List[Dict[str, Any]]:

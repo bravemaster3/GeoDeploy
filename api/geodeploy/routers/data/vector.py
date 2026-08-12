@@ -16,6 +16,7 @@ from ...models import Portal, UploadJob, User, VectorLayer
 from ...schemas import DefaultStyle, JobStatus, LayerRename, PortalRefOut, SharingUpdate, VectorLayerOut
 from ...services import martin as martin_svc
 from ...tasks.vector_ingest import ingest_vector
+from . import exports
 from ..common import (apply_sharing, demo_upload_cap, busy_job_progress, by_ref, creator_names, portals_using,
                       prune_layer_from_portals, record_audit, visible_to)
 
@@ -915,6 +916,36 @@ async def _pmtiles_key(layer_ref: str, db: AsyncSession) -> str | None:
         return None
     _PMTILES_KEY_CACHE[layer_ref] = layer.pmtiles_key
     return layer.pmtiles_key
+
+
+# ── Whole-layer / clipped download ────────────────────────────────────────────────────────────
+# PUBLIC on the same terms as the other per-layer artifacts (`_publicly_readable`): a layer that is
+# shared, or shown by a published portal. See routers/data/exports.py for why this exists at all —
+# a PostGIS vector layer was the one thing an outside client could not simply download.
+
+@router.post("/{layer_ref}/export", status_code=202)
+async def start_vector_export(layer_ref: str, req: exports.LayerExportRequest,
+                              db: AsyncSession = Depends(get_db)):
+    """Queue a download of this layer. No bbox = the whole layer; a bbox clips it."""
+    result = await db.execute(select(VectorLayer).where(by_ref(VectorLayer, layer_ref)))
+    layer = result.scalar_one_or_none()
+    if not layer or layer.status != "ready" or not await _publicly_readable(layer, db):
+        raise HTTPException(404, "Layer not found.")
+    bbox = exports.validate_bbox(req.bbox)
+    return exports.start(exports.vector_item(layer, req.format), bbox, req.target_crs)
+
+
+@router.get("/{layer_ref}/export-status/{job_id}")
+async def vector_export_status(layer_ref: str, job_id: str):
+    return exports.status(job_id)
+
+
+@router.get("/{layer_ref}/export-download/{job_id}")
+async def vector_export_download(layer_ref: str, job_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(VectorLayer).where(by_ref(VectorLayer, layer_ref)))
+    layer = result.scalar_one_or_none()
+    name = slugify(layer.name, separator="_") if layer else "export"
+    return exports.download(job_id, "{0}.zip".format(name or "export"))
 
 
 @router.get("/{layer_ref}/pmtiles")

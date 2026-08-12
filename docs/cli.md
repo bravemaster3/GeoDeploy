@@ -117,6 +117,47 @@ never stored — what is kept is the same 7-day session the browser gets, alongs
 
 ---
 
+## Browsing an instance
+
+The one command that needs no account. Give it a URL and it prints what that instance publishes:
+
+```bash
+$ geodeploy browse https://geodeploy.example.org
+https://geodeploy.example.org
+2 public portal(s), 7 public layer(s)
+
+Portals
+SLUG               TITLE             EXPERIENCE  LAYERS  URL
+field-sites-2026   Field sites 2026  webmap      4       https://…/portals/field-sites-2026/
+soil-catalogue     Soil catalogue    catalog     12      https://…/portals/soil-catalogue/
+
+Vector (PostGIS) — 3
+ID            NAME     GEOMETRY    FEATURES  CRS         LICENCE
+a7f3c91b04e2  Roads    linestring  12,480    EPSG:4326   CC-BY-4.0
+…
+```
+
+`--links` prints every access URL for each layer, `--kind` narrows to `raster`, `postgis` or
+`geoparquet`, and `--json` gives you the index as it comes.
+
+To look inside one portal — its layers and their sources — read its published style, which is also
+public:
+
+```bash
+geodeploy browse --portal field-sites-2026
+```
+
+With a token in play the same command adds what *you* can see beyond the public surface. That is
+the two-mode behaviour a desktop plugin needs, which is why it lives here rather than only in one.
+
+!!! info "What counts as public"
+    Portals that are **published** with access `public`, and layers explicitly shared as
+    **public**. A password, organization or owner portal is never listed, and neither is a private
+    layer. An instance can also switch its index off entirely — then `browse` says so rather than
+    pretending the instance is empty.
+
+---
+
 ## Uploading
 
 One command handles every format and any number of files:
@@ -193,9 +234,35 @@ ambiguous name is an error, never a guess.
 geodeploy layers rename roads "Main roads"
 geodeploy layers share roads --visibility public --license CC-BY-4.0 --attribution "SLU"
 geodeploy layers links roads               # the URL for each tool, labelled
-geodeploy layers download dem -o dem.tif   # the COG itself
 geodeploy layers delete roads --yes
 ```
+
+### Downloading a layer
+
+```bash
+geodeploy layers download roads                      # the whole layer, as a GeoPackage
+geodeploy layers download roads --format csv
+geodeploy layers download parcels --format geoparquet --crs native
+geodeploy layers download roads --bbox 11.8,57.6,12.1,57.8    # just that area
+geodeploy layers download dem                        # the Cloud-Optimized GeoTIFF itself
+```
+
+Two different mechanisms sit behind that one command, and it matters which you get:
+
+| Format | How it arrives |
+| --- | --- |
+| `cog`, `pmtiles` | the stored file, streamed as-is — instant, no server work |
+| `gpkg`, `csv`, `geojson`, `geoparquet` | **built by the instance as a job**, and arrives as a zip |
+
+A built export carries a `MANIFEST.txt` recording the extent, the CRS and the row cap that applied.
+Read it for a large layer: an export that hit the cap looks exactly like a complete one otherwise.
+
+`--crs native` keeps the layer's own CRS where the format can carry it (GeoPackage, CSV,
+GeoParquet). GeoJSON is always EPSG:4326, as the format requires.
+
+**This works without a token** for a layer that is public — including by name, which the CLI
+resolves through the instance's public index. It is how someone with no account takes a copy of
+data you have shared.
 
 `--visibility public` is the opt-in that puts a layer in the [STAC catalog and OGC API -
 Features](data-access.md). Nothing is public by default. `layers links` then prints the URL to hand

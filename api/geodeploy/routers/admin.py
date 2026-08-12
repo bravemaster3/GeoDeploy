@@ -1074,6 +1074,36 @@ async def update_email_settings(body: EmailSettings,
     return _email_out(cfg)
 
 
+class PublicIndexSettings(BaseModel):
+    """Whether this instance answers `GET /api/public` — see routers/public.py."""
+
+    enabled: bool
+
+
+@router.get("/public-index")
+async def get_public_index(_: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    """Is the anonymous instance index published? (Default: yes.)"""
+    cfg = await _get_config(db)
+    return {"enabled": bool(getattr(cfg, "public_index_enabled", True))}
+
+
+@router.put("/public-index")
+async def set_public_index(body: PublicIndexSettings, user: User = Depends(require_admin),
+                           db: AsyncSession = Depends(get_db)):
+    """Turn the anonymous index on or off.
+
+    It changes DISCOVERABILITY, not access: a published public portal stays reachable by its link
+    either way. Audited, because "why did our datasets stop appearing in the plugin" should have an
+    answer that is not archaeology.
+    """
+    cfg = await _get_config(db)
+    cfg.public_index_enabled = bool(body.enabled)
+    await db.commit()
+    await record_audit(db, user, "admin.public_index", "instance", None,
+                       {"enabled": bool(body.enabled)})
+    return {"enabled": bool(body.enabled)}
+
+
 @router.post("/email-settings/test")
 async def test_email(user: User = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     """Send a test email to the calling admin. Raises the relay's actual error back to the UI —

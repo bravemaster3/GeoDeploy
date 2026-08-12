@@ -34,6 +34,8 @@ class FakeInstance(object):
         self.multiparts = {}        # upload_id -> {key, parts:{n: bytes}, aborted: bool}
         self.jobs = {}              # job_id -> [status dicts to return, last one repeats]
         self.fail_next = None       # (status, detail) injected into the next API call
+        self.exports = {}           # export job id -> the bytes its download returns
+        self.public_index_enabled = True
         self.token_forbidden = set()  # path prefixes that reject token auth, like /admin
         self.vector_layers = [
             {"id": 1, "uid": "aaaaaaaaaaaa", "name": "roads", "layer_type": "vector",
@@ -118,6 +120,13 @@ class FakeInstance(object):
             (r"/data/(vector|raster)/(\d+)/links", self._links),
             (r"/data/(vector|raster)/(\d+)", self._delete_layer),
             (r"/data/vector/(\S+)/features", self._features),
+            (r"/data/raster/(\S+)/cog", lambda *a: (200, b"II-pretend-GeoTIFF-bytes")),
+            (r"/data/vector/(\S+)/pmtiles", lambda *a: (200, b"PMTiles pretend")),
+            (r"/public", self._public),
+            (r"/public/portals", self._public_portals),
+            (r"/data/(vector|raster)/(\S+)/export", self._export_start),
+            (r"/data/(vector|raster)/(\S+)/export-status/([\w-]+)", self._export_status),
+            (r"/data/(vector|raster)/(\S+)/export-download/([\w-]+)", self._export_download),
             (r"/data/vector/(\d+)/tile", lambda *a: (202, self._new_job(1, "vector"))),
             (r"/data/vector/(\d+)/reprocess", lambda *a: (202, self._new_job(1, "vector"))),
             (r"/data/sources", self._sources),
@@ -248,6 +257,60 @@ class FakeInstance(object):
         ]
         first = dict(self.jobs[job_id][0])
         return first
+
+    # ── the public index + per-layer export ─────────────────────────────────────────────────────
+
+    def _public(self, method, match, query, headers, body):
+        if not self.public_index_enabled:
+            return 404, {"detail": "This instance does not publish a public index."}
+        base = "http://127.0.0.1"
+        return 200, {
+            "geodeploy": {"url": base, "api": base + "/api"},
+            "counts": {"portals": 1, "postgis": 1, "geoparquet": 0, "raster": 1},
+            "portals": self._public_portal_rows(),
+            "layers": {
+                "postgis": [{"id": "aaaaaaaaaaaa", "name": "roads", "kind": "postgis",
+                             "geometry_type": "linestring", "feature_count": 1200,
+                             "crs": "EPSG:4326", "keywords": ["transport"], "license": "CC-BY-4.0",
+                             "links": [{"label": "OGC API - Features", "url": base + "/api/ogc"}],
+                             "download": base + "/api/data/vector/aaaaaaaaaaaa/export"}],
+                "geoparquet": [],
+                "raster": [{"id": "cccccccccccc", "name": "dem", "kind": "raster",
+                            "band_count": 1, "crs": "EPSG:3006", "keywords": [], "links": [],
+                            "download": base + "/api/data/raster/cccccccccccc/cog"}],
+            },
+            "catalogs": {"stac": base + "/api/stac", "ogc_features": base + "/api/ogc"},
+        }
+
+    def _public_portals(self, method, match, query, headers, body):
+        if not self.public_index_enabled:
+            return 404, {"detail": "This instance does not publish a public index."}
+        return 200, self._public_portal_rows()
+
+    def _public_portal_rows(self):
+        base = "http://127.0.0.1"
+        return [{"slug": "field-sites-2026", "title": "Field sites 2026", "experience": "webmap",
+                 "layer_count": 1, "url": base + "/portals/field-sites-2026/",
+                 "style_url": base + "/portals/field-sites-2026/style.json",
+                 "thumbnail_url": None, "published_at": "2026-08-01T00:00:00"}]
+
+    def _export_start(self, method, match, query, headers, body):
+        payload = json.loads(body or b"{}")
+        self.last_export = payload
+        if match.group(1) == "raster" and not payload.get("bbox"):
+            return 400, {"detail": "A raster export needs a bbox. … GET /api/data/raster/x/cog"}
+        job_id = uuid.uuid4().hex
+        self.exports[job_id] = b"PK pretend zip"
+        return 202, {"job_id": job_id}
+
+    def _export_status(self, method, match, query, headers, body):
+        return 200, {"status": "ready" if match.group(3) in self.exports else "queued"}
+
+    def _export_download(self, method, match, query, headers, body):
+        data = self.exports.get(match.group(3))
+        if data is None:
+            return 404, {"detail": "That export is not ready (or has been swept)."}
+        return 200, data
 
     def _field_stats(self, method, match, query, headers, body):
         field = (query.get("field") or [""])[0]

@@ -10,13 +10,17 @@ import os
 import subprocess
 import tempfile
 import zipfile
+from datetime import datetime, timezone
 
 from ..celery_app import celery_app
 from ..config import get_settings
 
 log = logging.getLogger(__name__)
 
-FEATURE_CAP = 50000          # max features per vector layer
+FEATURE_CAP = 50000          # max features per vector layer, for a BBOX clip
+# A whole-layer download is a different request: 50k would silently hand back a fraction of a
+# large layer and call it the layer. Env-tunable because the honest ceiling depends on the box.
+FULL_EXPORT_CAP = int(os.getenv("EXPORT_FEATURE_CAP", "1000000"))
 MAX_PIXELS = 16_000_000      # raster output cap (~4000x4000) — bigger selections are downsampled
 
 
@@ -31,6 +35,20 @@ def _env_sql(srid: int) -> str:
     even for a 4326 output, now that geometry may be stored natively."""
     return (f"ST_Transform(ST_MakeEnvelope(%s,%s,%s,%s,4326), {int(srid)})" if int(srid) != 4326
             else "ST_MakeEnvelope(%s,%s,%s,%s,4326)")
+
+
+def _filter(b, srid: int):
+    """`(WHERE clause, params, row cap)` for a clip — or for the whole layer when `b` is None.
+
+    A whole-layer export deliberately emits NO spatial predicate rather than a world envelope: a
+    world envelope transformed into a projected CRS is undefined near the poles, so it would drop
+    rows from exactly the datasets (national, polar) where nobody would notice.
+    """
+    if b is None:
+        return "", (), FULL_EXPORT_CAP
+    env = _env_sql(srid)
+    return (f"WHERE geom && {env} AND ST_Intersects(geom, {env})",
+            (b[0], b[1], b[2], b[3], b[0], b[1], b[2], b[3]), FEATURE_CAP)
 
 
 def _table_srid(cur, schema: str, table: str) -> int:
@@ -48,7 +66,7 @@ def _geom_out(srid: int, out_srid: int) -> str:
 
 
 def _vec_geojson(cur, schema: str, table: str, b, srid: int, out_srid: int) -> str:
-    env = _env_sql(srid)
+    where, params, cap = _filter(b, srid)
     sql = (
         "SELECT jsonb_build_object('type','FeatureCollection','features',"
         "COALESCE(jsonb_agg(f.feat), '[]'::jsonb))::text FROM ("
@@ -56,24 +74,24 @@ def _vec_geojson(cur, schema: str, table: str, b, srid: int, out_srid: int) -> s
         f"    'geometry', ST_AsGeoJSON({_geom_out(srid, out_srid)})::jsonb,"
         "    'properties', to_jsonb(t) - 'geom') AS feat"
         f'  FROM "{schema}"."{table}" t'
-        f"  WHERE geom && {env} AND ST_Intersects(geom, {env})"
-        f"  LIMIT {FEATURE_CAP}"
+        f"  {where}"
+        f"  LIMIT {cap}"
         ") f"
     )
-    cur.execute(sql, (b[0], b[1], b[2], b[3], b[0], b[1], b[2], b[3]))
+    cur.execute(sql, params)
     row = cur.fetchone()
     return row[0] if row and row[0] else '{"type":"FeatureCollection","features":[]}'
 
 
 def _vec_csv(cur, schema: str, table: str, b, srid: int, out_srid: int) -> str:
     import csv
-    env = _env_sql(srid)
+    where, params, cap = _filter(b, srid)
     sql = (
         f"SELECT (to_jsonb(t) - 'geom')::text AS props, ST_AsText({_geom_out(srid, out_srid)}) AS wkt "
         f'FROM "{schema}"."{table}" t '
-        f"WHERE geom && {env} AND ST_Intersects(geom, {env}) LIMIT {FEATURE_CAP}"
+        f"{where} LIMIT {cap}"
     )
-    cur.execute(sql, (b[0], b[1], b[2], b[3], b[0], b[1], b[2], b[3]))
+    cur.execute(sql, params)
     cols, recs = [], []
     for props_text, wkt in cur.fetchall():
         props = json.loads(props_text)
@@ -101,10 +119,12 @@ def _gpq_features(s3_key: str, b, settings, keep_native: bool = False) -> list[d
     from .raster_ingest import _get_storage_creds
     # Storage creds from SQLite (§0f) — celery env is unreliable.
     creds = _get_storage_creds()
-    fc = duckdb_engine.query_features_geojson(s3_key, list(b), FEATURE_CAP, creds, keep_native=keep_native)
+    cap = FEATURE_CAP if b is not None else FULL_EXPORT_CAP
+    fc = duckdb_engine.query_features_geojson(s3_key, list(b) if b else None, cap, creds,
+                                              keep_native=keep_native)
     feats = fc.get("features", [])
-    if keep_native:
-        return feats  # already pruned to the bbox in the file CRS; geometries are native
+    if keep_native or b is None:
+        return feats  # already pruned (or unfiltered, for a whole-layer download)
     sel = shp_box(b[0], b[1], b[2], b[3])
     kept = []
     for f in feats:
@@ -129,7 +149,9 @@ def _gpq_parquet(s3_key: str, b, settings) -> bytes:
     creds = _get_storage_creds()
     with tempfile.TemporaryDirectory() as td:
         out = os.path.join(td, "clip.parquet")
-        duckdb_engine.copy_features_parquet(s3_key, list(b), FEATURE_CAP, out, creds)
+        duckdb_engine.copy_features_parquet(s3_key, list(b) if b else None,
+                                            FEATURE_CAP if b is not None else FULL_EXPORT_CAP,
+                                            out, creds)
         with open(out, "rb") as f:
             return f.read()
 
@@ -232,15 +254,46 @@ def _clip_raster(s3_key: str, b, settings) -> bytes:
                 return memfile.read()
 
 
+def _manifest(items: list[dict], bbox: str | None, target_crs: str, files: list[str]) -> str:
+    """A plain-text note inside the zip: what was asked for, and the cap that applied.
+
+    An export that hit the row cap looks exactly like a complete one — same formats, same file
+    names, fewer rows. Saying so in the archive is the cheapest place to be honest, because the zip
+    outlives the HTTP response that produced it.
+    """
+    cap = FEATURE_CAP if bbox else FULL_EXPORT_CAP
+    lines = [
+        "GeoDeploy export",
+        "generated: {0}".format(datetime.now(timezone.utc).isoformat(timespec="seconds")),
+        "extent:    {0}".format("bbox " + bbox + " (EPSG:4326)" if bbox else "whole layer, no clip"),
+        "CRS:       {0}".format("native where the format allows" if target_crs == "native"
+                                else "EPSG:4326"),
+        "row cap:   {0} features per vector layer — a layer reaching exactly this number was "
+        "TRUNCATED".format(cap),
+        "",
+        "layers requested:",
+    ]
+    for it in items:
+        lines.append("  - {0} ({1}{2})".format(it.get("name"), it.get("type"),
+                                               ", " + it["format"] if it.get("format") else ""))
+    lines += ["", "files:"] + ["  - " + f for f in files]
+    return "\n".join(lines) + "\n"
+
+
 @celery_app.task(bind=True, name="geodeploy.tasks.export.export_bundle")
-def export_bundle(self, bbox: str, items: list[dict], target_crs: str = "4326") -> dict:
+def export_bundle(self, bbox: str | None, items: list[dict], target_crs: str = "4326") -> dict:
     """items: [{type:'vector', schema, table, name, format} |
               {type:'geoparquet', s3_key, crs, name, format} | {type:'raster', s3_key, name}]
     target_crs: '4326' (default) or 'native' → GeoPackage/CSV carry the layer's native CRS (lossless);
-    GeoJSON is always EPSG:4326 (RFC 7946)."""
+    GeoJSON is always EPSG:4326 (RFC 7946).
+
+    `bbox` None = the WHOLE layer (the "download this dataset" path, added 2026-08-12) rather than a
+    map-view clip. Rasters still require one: a whole raster is already a single file and is served
+    as it stands from `GET /api/data/raster/{ref}/cog`, so re-encoding it through here would burn
+    worker time to produce a worse copy."""
     settings = get_settings()
     native = (target_crs == "native")
-    b = tuple(float(v) for v in bbox.split(","))
+    b = tuple(float(v) for v in bbox.split(",")) if bbox else None
     exports_dir = f"{settings.data_dir}/temp/exports"
     os.makedirs(exports_dir, exist_ok=True)
     out_path = os.path.join(exports_dir, f"{self.request.id}.zip")
@@ -319,6 +372,10 @@ def export_bundle(self, bbox: str, items: list[dict], target_crs: str = "4326") 
                     else:
                         z.writestr(fn(base, "geojson"), _gpq_geojson(feats))
                 else:  # raster
+                    if b is None:
+                        log.info("Whole-raster export skipped for %s — /cog serves the file itself.",
+                                 it.get("name"))
+                        continue
                     try:
                         data = _clip_raster(it["s3_key"], b, settings)
                     except ValueError:
@@ -328,6 +385,7 @@ def export_bundle(self, bbox: str, items: list[dict], target_crs: str = "4326") 
                         log.exception("Raster clip failed for %s", it.get("name"))
                         raise
                     z.writestr(fn(_safe(it.get("name")) + "_clip", "tif"), data)
+            z.writestr("MANIFEST.txt", _manifest(items, bbox, target_crs, sorted(used)))
             cur.close()
     except Exception:
         if os.path.exists(tmp_path):

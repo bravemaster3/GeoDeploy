@@ -178,6 +178,32 @@ deliberately NOT visibility-filtered (published portals depend on them).
   ids, OGC collection ids); authenticated/admin routes stay on the integer id. Contract pinned in
   `test_ogcapi.py` ("Stable public ids").
 
+- `public.py` — **PUBLIC instance index** at `/api/public` (+ `/public/portals`), 2026-08-12. The
+  one call that answers "what does this instance offer?" from a URL alone, which is the first screen
+  of the QGIS plugin and of any browse client: published portals whose `access_type == "public"`,
+  and `is_public` ready layers **grouped by storage kind** (`raster` / `postgis` / `geoparquet`),
+  each with `services/share_links.py`'s own URLs so this cannot drift from the Share links panel.
+  Portals are addressed by SLUG, never the integer id, and carry `style_url` — the published
+  bundle's `style.json`, which describes the whole portal in one anonymous fetch.
+  **Why it exists:** `GET /portals` is `portal:read`-scoped, so nothing let an anonymous client
+  discover portals; layers were already discoverable via STAC/OGC. **Exposure rule:** this turns
+  "reachable by link" into "findable", so `SetupConfig.public_index_enabled` (default **TRUE**,
+  admin-toggled at `GET/PUT /admin/public-index`, audited) can switch it off — and then it 404s
+  rather than returning an empty list, so a client can tell "no index here" from "nothing
+  published". `index_enabled()` treats NULL/absent as ON: an instance upgraded into the feature must
+  not silently unlist what it already published. Tests: `test_public_index.py`.
+- `data/exports.py` — **per-layer download** (2026-08-12): `POST /data/{vector,raster}/{ref}/export`
+  + `export-status/{job_id}` + `export-download/{job_id}`, wrapping the SAME `tasks/export.py`
+  machinery the portal area-export uses, with the **bbox made optional**. Closes the one real gap in
+  the public read surface: a raster (`/cog`) and a GeoParquet layer (`/parquet/…`) could always be
+  fetched whole, but a **PostGIS vector layer had no file** — `features.geojson` caps at 50k and
+  OAPIF pages. PUBLIC on the same terms as the other artifacts (`_publicly_readable` for vector,
+  `is_public` for raster), so nothing new is exposed. **No bbox = no spatial predicate at all**, not
+  a world envelope: transforming ±180 into a projected CRS is undefined near the poles and would
+  silently drop rows. Whole-layer exports use `FULL_EXPORT_CAP` (1M, `EXPORT_FEATURE_CAP`) rather
+  than the 50k clip cap, and every zip carries a `MANIFEST.txt` naming the cap, because a truncated
+  export is indistinguishable from a complete one. A RASTER export requires a bbox — the whole file
+  is already `/cog`. Tests: `test_layer_export.py`.
 - `ogcapi.py` — **PUBLIC OGC API - Features (Part 1: Core)** at `/api/ogc` (2026-07-29). The
   **widest-reach read surface we have**: QGIS ("Add OGC API - Features Layer"), ArcGIS Pro, FME and
   anything on GDAL's `OAPIF` driver consume it natively — unlike TileJSON/PMTiles, which only the
@@ -260,6 +286,8 @@ deliberately NOT visibility-filtered (published portals depend on them).
 - No rate limiting beyond nginx; no pagination on list endpoints (fine at current scale).
 
 ## Last updated
+2026-08-12 (`public.py` — the anonymous instance index, with the admin toggle; `data/exports.py` —
+whole-layer and clipped downloads for both layer kinds. Both added to `main.py`'s `_PUBLIC_CORS`.)
 2026-08-07b (`portals.py`: **SVG accepted for portal assets** — a raster logo goes soft on any retina
 display or larger header, and line art is what a logo IS. Added to `_ASSET_EXTENSIONS` and to the
 `portal_asset` filename allow-list. **Security:** an SVG is a document, not a picture — it can carry

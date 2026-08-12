@@ -101,6 +101,61 @@ class _LayerBase(object):
         published ones, so no ghost layer is left on a live map)."""
         return self._c.delete("{0}/{1}".format(self.base, int(layer_id)))
 
+    # -- download --------------------------------------------------------------------------------
+
+    def export(self, ref: Any, format: Optional[str] = None, bbox: Optional[str] = None,
+               target_crs: str = "4326") -> Dict[str, Any]:
+        """Queue a file export of this layer. No bbox = the whole layer.
+
+        Public on the same terms as the layer's other artifacts, so this works with no token for a
+        shared layer — which is the point: it is how an outside client downloads a PostGIS layer,
+        the one backend that has no file to fetch directly.
+        """
+        body = {"format": format, "bbox": bbox, "target_crs": target_crs}
+        return self._c.post("{0}/{1}/export".format(self.base, ref),
+                            {k: v for k, v in body.items() if v is not None}, auth=False)
+
+    def export_status(self, ref: Any, job_id: str) -> Dict[str, Any]:
+        return self._c.get("{0}/{1}/export-status/{2}".format(self.base, ref, job_id), auth=False)
+
+    def export_download(self, ref: Any, job_id: str, sink) -> Any:
+        return self._c.download("{0}/{1}/export-download/{2}".format(self.base, ref, job_id),
+                                sink, auth=False)
+
+    def export_to_file(self, ref: Any, path: str, format: Optional[str] = None,
+                       bbox: Optional[str] = None, target_crs: str = "4326",
+                       interval: float = 2.0, timeout: Optional[float] = 1800.0,
+                       on_status: Optional[Any] = None) -> str:
+        """Queue, wait, download. Returns the path written (a zip: an export may be several files).
+
+        Waiting is the caller's time either way — the work is a Celery job — so doing it here keeps
+        the common case to one line for both a script and a plugin.
+        """
+        import time
+
+        from .errors import GeoDeployError
+
+        job_id = (self.export(ref, format, bbox, target_crs) or {}).get("job_id")
+        if not job_id:
+            raise GeoDeployError("The instance did not return an export job id.")
+        started = time.time()
+        while True:
+            state = (self.export_status(ref, job_id) or {}).get("status")
+            if on_status:
+                on_status(state)
+            if state == "ready":
+                break
+            if state in ("error", "failed"):
+                raise GeoDeployError("The export failed on the server.")
+            if timeout is not None and time.time() - started > timeout:
+                raise GeoDeployError(
+                    "The export is still running after {0:.0f}s. It continues on the server; "
+                    "poll export_status(job_id={1!r}).".format(time.time() - started, job_id))
+            time.sleep(interval)
+        with open(path, "wb") as fh:
+            self.export_download(ref, job_id, fh)
+        return path
+
 
 class VectorLayers(_LayerBase):
     kind = "vector"
@@ -224,6 +279,38 @@ class Layers(object):
             raise ValidationError(400, "{0!r} matches several layers: {1}. Use the id.".format(
                 ref, names))
         raise NotFoundError(404, "No layer matching {0!r}.".format(ref))
+
+    def resolve_public(self, ref: Any, kind: Optional[str] = None) -> Dict[str, Any]:
+        """Resolve a layer WITHOUT a credential, from the instance's public index.
+
+        Without this, an anonymous client could only ever address a layer by its opaque uid — but
+        the public artifacts are readable by anyone, so "download the layer called roads" should
+        work for anyone too. Only public layers are visible here, which is the correct limit.
+        """
+        text = str(ref).strip()
+        index = self._c.catalog.public() or {}
+        rows = []
+        for group, entries in (index.get("layers") or {}).items():
+            layer_type = "raster" if group == "raster" else "vector"
+            if kind and kind != layer_type:
+                continue
+            for entry in entries:
+                rows.append(dict(entry, layer_type=layer_type, uid=entry.get("id")))
+
+        for row in rows:
+            if str(row.get("id")) == text:
+                return row
+        matches = [r for r in rows if (r.get("name") or "").lower() == text.lower()]
+        if len(matches) == 1:
+            return matches[0]
+        partial = [r for r in rows if text.lower() in (r.get("name") or "").lower()]
+        if len(partial) == 1:
+            return partial[0]
+        if len(matches or partial) > 1:
+            raise ValidationError(400, "{0!r} matches several public layers; use the id.".format(ref))
+        raise NotFoundError(
+            404, "No PUBLIC layer matching {0!r}. Only shared layers are visible without a "
+                 "token — log in to reach the rest.".format(ref))
 
     def api(self, layer_type: str):
         """The namespace for a layer kind — lets kind-agnostic code stay short."""

@@ -73,6 +73,7 @@ URLs to hand to someone who just wants the data:
 
 | Path | Standard |
 | --- | --- |
+| `/api/public` | This instance's own index: published public portals, and public layers by kind |
 | `/api/ogc` | **OGC API - Features** — the landing page QGIS, ArcGIS Pro, FME and GDAL connect to |
 | `/api/stac` | STAC 1.0.0 catalog of layers and their assets |
 | `/api/data/vector/{uid}/…` | PMTiles, TileJSON, GeoJSON and GeoParquet artifacts |

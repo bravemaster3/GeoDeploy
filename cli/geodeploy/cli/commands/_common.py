@@ -208,9 +208,20 @@ def layer_ref_arg(parser, name: str = "layer", help_text: Optional[str] = None) 
                         help="disambiguate when a vector and a raster share a name")
 
 
-def resolve_layer(ctx, args, ref_attr: str = "layer") -> Dict[str, Any]:
+def resolve_layer(ctx, args, ref_attr: str = "layer", public_ok: bool = False) -> Dict[str, Any]:
+    """Find the layer a command was pointed at, by id, uid or name.
+
+    `public_ok` marks a command that works on public data alone (downloads, links to shared
+    artifacts). With no credential those resolve through the instance's PUBLIC INDEX instead of the
+    authenticated layer list, so `geodeploy --url … layers download roads` works for someone who
+    has no account — which is the whole point of a public layer.
+    """
     ref = getattr(args, ref_attr)
-    return ctx.client().layers.resolve(ref, getattr(args, "layer_type", None))
+    kind = getattr(args, "layer_type", None)
+    info = ctx.resolved
+    if public_ok and not (info.token or info.jwt):
+        return ctx.client(auth_required=False).layers.resolve_public(ref, kind)
+    return ctx.client().layers.resolve(ref, kind)
 
 
 def parse_fields(value: Optional[str]) -> Optional[List[str]]:

@@ -33,7 +33,13 @@ User documentation is `docs/cli.md`; this file is the technical note.
   arguments. **Classification maths is NOT reimplemented**: `classify()` reads
   `GET /data/vector/{ref}/field-stats`, so the CLI cannot disagree with the editor about which class
   a feature is in.
-- `jobs.py`, `sources.py`, `imports.py`, `admin.py`, `catalog.py`, `errors.py`.
+- `catalog.py` — the public surfaces, including `public()` (the instance index behind
+  `geodeploy browse`) and `portal_style()`, which reads a published portal's own `style.json`.
+- `jobs.py`, `sources.py`, `imports.py`, `admin.py`, `errors.py`.
+
+`Layers.resolve_public()` is the anonymous twin of `resolve()`: with no credential a layer is looked
+up in the public index, so `geodeploy --url … layers download roads` works by NAME for someone with
+no account. `_LayerBase.export_to_file()` drives the queue-poll-download of a built export.
 
 **The CLI** (`geodeploy/cli/`) — the only part allowed to print:
 - `main.py` — argparse root, `Context` (formatter + lazy client), and the single place exceptions
@@ -41,10 +47,11 @@ User documentation is `docs/cli.md`; this file is the technical note.
 - `output.py` — `Formatter` (stdout = the answer, stderr = commentary, `--json` = one document),
   tables, progress bar, `EXIT_*` constants.
 - `commands/` — one module per group (`auth`, `upload`, `layers`, `portals`, `sources`, `imports`,
-  `jobs`, `catalog`, `admin`), each with `register(subparsers)`. `_common.py` holds the styling
-  flags, shared by the three commands that take them.
+  `jobs`, `catalog`, `admin`, `browse`), each with `register(subparsers)`. `_common.py` holds the
+  styling flags, shared by the three commands that take them, and `resolve_layer(..., public_ok=)`
+  which decides between the authenticated list and the public index.
 
-`tests/` — 243 tests against a real HTTP server (`conftest.FakeInstance`) that records what arrived
+`tests/` — 259 tests against a real HTTP server (`conftest.FakeInstance`) that records what arrived
 on the wire. `pyproject.toml` — packaging; console script `geodeploy`.
 
 ## Dependencies / relationships
@@ -95,6 +102,9 @@ python -m twine upload dist/*
 from source rather than trusted.
 
 ## Current status & known issues
+- `geodeploy browse` and `layers download` depend on API endpoints added in the same branch
+  (`/api/public`, `/data/{kind}/{ref}/export`). An older instance answers 404 for both; the browse
+  command says so, but `layers download` for a built format will simply fail against one.
 - Built 2026-08-12 on branch `feat/cli`; **not yet exercised against a live instance** — every test
   runs against the in-repo fake. First real run should be `upload --dry-run`, then a small upload,
   then a portal round trip.
@@ -109,4 +119,5 @@ from source rather than trusted.
   `cancel`, typed errors, no printing) are in place and tested.
 
 ## Last updated
-2026-08-12 (created — packaged CLI + Python client, replacing `examples/geodeploy_cli.py`)
+2026-08-12 (created — packaged CLI + Python client, replacing `examples/geodeploy_cli.py`; then
+`browse` + anonymous layer download on top of the new `/api/public` and per-layer export endpoints)

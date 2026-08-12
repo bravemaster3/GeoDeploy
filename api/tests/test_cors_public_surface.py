@@ -33,6 +33,15 @@ UID = "488c2c7f55d7"          # a real-shaped uid: hex, letters AND digits
     "/api/data/raster/12/cog",
     f"/api/data/raster/{UID}/cog",
     f"/api/data/raster/{UID}/tilejson",
+    # The anonymous instance index (2026-08-12) — a browse client reads it cross-origin.
+    "/api/public",
+    "/api/public/portals",
+    # Per-layer downloads: queued, polled and fetched from a browser like any other artifact.
+    f"/api/data/vector/{UID}/export",
+    f"/api/data/vector/{UID}/export-status/9f1c2b3a-4d5e-6f70-8192-a3b4c5d6e7f8",
+    f"/api/data/vector/{UID}/export-download/9f1c2b3a-4d5e-6f70-8192-a3b4c5d6e7f8",
+    f"/api/data/raster/{UID}/export",
+    "/api/data/raster/12/export-status/9f1c2b3a-4d5e-6f70-8192-a3b4c5d6e7f8",
     # Discovery + the standards surface.
     "/api/stac",
     "/api/stac/collections/vectors/items/vector-" + UID,
@@ -54,6 +63,8 @@ def test_public_surface_is_cors_matched(path):
     "/api/auth/login",
     "/api/backups/settings",
     "/api/ogcx",                          # must not leak past the `ogc` alternative
+    "/api/publicx",                       # nor past `public`
+    "/api/admin/public-index",            # the TOGGLE is admin-only, not part of the public surface
 ])
 def test_private_surface_is_not_wildcard_cors(path):
     """Wildcard CORS on an authenticated route would let any origin read a logged-in user's data.

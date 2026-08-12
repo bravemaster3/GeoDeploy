@@ -14,6 +14,7 @@ from ...schemas import JobStatus, LayerRename, PortalRefOut, RasterDefaultStyle,
 from ...services import share_links
 from ...services.titiler import get_tile_url as raster_tile_url, COLORMAPS
 from ...tasks.raster_ingest import ingest_raster
+from . import exports
 from ..common import (apply_sharing, demo_upload_cap, busy_job_progress, by_ref, creator_names, portals_using,
                       prune_layer_from_portals, record_audit, visible_to)
 
@@ -306,6 +307,36 @@ async def rename_layer(
     await record_audit(db, user, "raster.rename", "raster", layer.id,
                        {"from": old_name, "to": layer.name})
     return RasterLayerOut.from_orm_json(layer)
+
+
+# ── Clipped download ──────────────────────────────────────────────────────────────────────────
+# A bbox is REQUIRED here: the whole raster is already a single file, streamed by range request
+# from /cog, so a "whole raster export" would spend worker minutes re-encoding a worse copy.
+
+@router.post("/{layer_ref}/export", status_code=202)
+async def start_raster_export(layer_ref: str, req: exports.LayerExportRequest,
+                              db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(RasterLayer).where(by_ref(RasterLayer, layer_ref)))
+    layer = result.scalar_one_or_none()
+    if not layer or layer.status != "ready" or not layer.is_public or not layer.s3_key:
+        raise HTTPException(404, "No shared raster for this layer.")
+    bbox = exports.validate_bbox(req.bbox)
+    return exports.start(exports.raster_item(layer, req.format, bbox), bbox,
+                         req.target_crs)
+
+
+@router.get("/{layer_ref}/export-status/{job_id}")
+async def raster_export_status(layer_ref: str, job_id: str):
+    return exports.status(job_id)
+
+
+@router.get("/{layer_ref}/export-download/{job_id}")
+async def raster_export_download(layer_ref: str, job_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(RasterLayer).where(by_ref(RasterLayer, layer_ref)))
+    layer = result.scalar_one_or_none()
+    from slugify import slugify
+    name = slugify(layer.name, separator="_") if layer else "export"
+    return exports.download(job_id, "{0}.zip".format(name or "export"))
 
 
 @router.get("/{layer_ref}/cog")

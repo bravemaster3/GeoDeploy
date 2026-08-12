@@ -384,3 +384,81 @@ class TestAdminAndCatalog:
     def test_users_list_works_with_a_token(self, run, logged_in):
         code, out, err = run("users", "list", "--json")
         assert json.loads(out)[0]["role"] == "owner"
+
+
+class TestBrowse:
+    """The anonymous entry point: paste a URL, see what is there. No credential involved."""
+
+    def test_needs_no_credential_at_all(self, run, home, server):
+        code, out, err = run("browse", server)
+        assert code == EXIT_OK
+        assert "Field sites 2026" in out          # the public portal
+        assert "roads" in out and "dem" in out    # public layers, by kind
+
+    def test_it_groups_layers_by_storage_kind(self, run, home, server):
+        code, out, err = run("browse", server)
+        assert "Vector (PostGIS)" in out
+        assert "Raster (COG)" in out
+
+    def test_json_is_the_index_itself(self, run, home, server):
+        code, out, err = run("browse", server, "--json")
+        payload = json.loads(out)
+        assert set(payload["layers"]) == {"postgis", "geoparquet", "raster"}
+        assert payload["portals"][0]["slug"] == "field-sites-2026"
+
+    def test_it_uses_the_active_profile_when_no_url_is_given(self, run, logged_in):
+        code, out, err = run("browse")
+        assert code == EXIT_OK
+
+    def test_with_a_token_it_also_reports_the_private_view(self, run, logged_in):
+        code, out, err = run("browse")
+        assert "With your token" in err
+
+    def test_without_one_it_says_the_view_is_anonymous(self, run, home, server):
+        code, out, err = run("browse", server)
+        assert "anonymous view" in err
+
+    def test_an_instance_with_the_index_off_explains_itself(self, run, home, server, instance):
+        instance.public_index_enabled = False
+        code, out, err = run("browse", server)
+        assert code == EXIT_GENERIC
+        assert "does not publish a public index" in err
+
+    def test_filtering_to_one_kind(self, run, home, server):
+        code, out, err = run("browse", server, "--kind", "raster")
+        assert "Raster (COG)" in out
+        assert "Vector (PostGIS)" not in out
+
+
+class TestLayerDownload:
+    def test_a_vector_layer_defaults_to_a_built_geopackage(self, run, logged_in, instance,
+                                                           tmp_path):
+        target = tmp_path / "roads.zip"
+        code, out, err = run("layers", "download", "roads", "-o", str(target))
+        assert code == EXIT_OK
+        assert instance.last_export["format"] == "gpkg"
+        assert "bbox" not in instance.last_export       # whole layer, not a clip
+        assert target.read_bytes().startswith(b"PK")
+
+    def test_a_bbox_and_a_native_crs_are_passed_through(self, run, logged_in, instance, tmp_path):
+        run("layers", "download", "roads", "-o", str(tmp_path / "x.zip"),
+            "--format", "csv", "--bbox", "11,55,12,56", "--crs", "native")
+        assert instance.last_export == {"format": "csv", "bbox": "11,55,12,56",
+                                        "target_crs": "native"}
+
+    def test_a_raster_defaults_to_its_cog(self, run, logged_in, instance, tmp_path):
+        target = tmp_path / "dem.tif"
+        code, out, err = run("layers", "download", "dem", "--type", "raster", "-o", str(target))
+        assert code == EXIT_OK
+        assert instance.requests_to("/cog"), "the stored file should stream, not be rebuilt"
+
+    def test_asking_for_a_cog_from_a_vector_layer_is_refused(self, run, logged_in, tmp_path):
+        code, out, err = run("layers", "download", "roads", "--format", "cog",
+                             "-o", str(tmp_path / "x.tif"))
+        assert code == EXIT_GENERIC
+
+    def test_a_public_layer_downloads_without_a_token(self, run, home, server, tmp_path):
+        target = tmp_path / "roads.zip"
+        code, out, err = run("--url", server, "layers", "download", "roads", "-o", str(target))
+        assert code == EXIT_OK
+        assert target.exists()

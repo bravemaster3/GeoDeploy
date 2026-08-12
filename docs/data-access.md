@@ -8,16 +8,63 @@ GeoTIFF, XYZ tiles, and GeoParquet — discovered through a built-in **STAC cata
 standards-based **OGC API - Features** service (the WFS successor) so any GIS can read a layer
 with no GeoDeploy-specific knowledge.
 
-Three surfaces, three jobs:
+Four surfaces, four jobs:
 
 | Surface | For | Start at |
 |---|---|---|
+| **Instance index** | seeing what an instance publishes, from nothing but its URL | `/api/public` |
 | **OGC API - Features** | reading features in any GIS (QGIS, ArcGIS, FME, GDAL) | `/api/ogc` |
 | **STAC** | discovering what an instance holds, and where each asset lives | `/api/stac` |
 | **Tiles** (WMTS · XYZ · TileJSON · PMTiles · COG) | drawing big layers fast | per-layer, see below |
 
 In the app, the **Share links** panel (link icon on any ready layer in *My Data*) hands you the
 right URL for each of these, labelled with the exact menu path in each tool.
+
+## Start from the URL alone
+
+`GET /api/public` answers "what does this instance offer?" with no credentials: the **published
+public portals**, and the **public layers grouped by kind** — `raster`, `postgis`, `geoparquet` —
+each with the access URLs that suit it.
+
+```bash
+curl https://geodeploy.example.org/api/public | jq '.layers.postgis[].name'
+```
+
+Or, with the [command line](cli.md), which formats it and needs no account either:
+
+```bash
+geodeploy browse https://geodeploy.example.org
+```
+
+Each portal entry carries a `style_url`: the published bundle's own `style.json`, listing every
+source and layer in that portal. One anonymous fetch describes the whole map.
+
+Only what has been deliberately shared appears — a published *public* portal, a layer whose
+visibility is *public*. An operator can also turn the index off in Settings, which makes the
+endpoint answer 404: published portals stay reachable by link, they are simply not listed.
+
+## Downloading a whole layer
+
+A raster and a GeoParquet layer are files, so they download directly (`/cog`, `/parquet/…`). A
+PostGIS layer is a table, so the instance builds the file for you:
+
+```bash
+# queue it, poll it, fetch it — or let the CLI do all three
+geodeploy layers download roads --format gpkg
+```
+
+```
+POST /api/data/vector/{id}/export        {"format": "gpkg"}      → {"job_id": …}
+GET  /api/data/vector/{id}/export-status/{job_id}                → queued|processing|ready|error
+GET  /api/data/vector/{id}/export-download/{job_id}              → a zip
+```
+
+Formats: `gpkg`, `csv`, `geojson`, and `geoparquet` for file-backed layers. Add a `bbox` to clip to
+an area, and `"target_crs": "native"` to keep the layer's own CRS where the format can carry it.
+The zip includes a `MANIFEST.txt` recording the extent, the CRS and the row cap that applied — an
+export that hit the cap otherwise looks exactly like a complete one.
+
+Public layers export without a token, on the same terms as their other artifacts.
 
 **About the identifiers in these URLs.** A layer is addressed by a short opaque id such as
 `vector-a7f3c91b04e2` — deliberately not a row number. Row numbers get reused when a layer is

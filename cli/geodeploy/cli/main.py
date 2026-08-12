@@ -133,8 +133,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="_group", metavar="<command>")
 
-    from .commands import admin, auth, catalog, imports, jobs, layers, portals, sources, upload
-    for module in (auth, upload, layers, portals, sources, imports, jobs, catalog, admin):
+    from .commands import (admin, auth, browse, catalog, imports, jobs, layers, portals,
+                           sources, upload)
+    for module in (auth, browse, upload, layers, portals, sources, imports, jobs,
+                   catalog, admin):
         module.register(subparsers)
     return parser
 

@@ -92,6 +92,13 @@ class SetupConfig(Base):
     backup_include_objects: Mapped[bool] = mapped_column(Boolean, default=True)
     backup_include_state: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # Whether `GET /api/public` answers (2026-08-12) — the anonymous index of public portals and
+    # public layers that a QGIS plugin or any "browse this instance" client starts from. Default
+    # ON: publishing a portal as `public` already says it may be seen, and a geoportal nobody can
+    # browse is a filing cabinet. Off makes the endpoint 404, leaving every published portal
+    # reachable by link but unlisted.
+    public_index_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
 

@@ -92,12 +92,27 @@ examples:
     identify.add_argument("--tolerance", type=float, default=1e-4)
     identify.add_argument("--limit", type=int, default=10)
 
-    download = add_command(group, "download", cmd_download,
-                           "download the layer's own file (COG for rasters, PMTiles for tiled "
-                           "vectors)")
+    download = add_command(group, "download", cmd_download, "download a layer as a file",
+                           epilog="""examples:
+  geodeploy layers download roads                 the whole layer, GeoPackage
+  geodeploy layers download roads --format csv
+  geodeploy layers download parcels --format geoparquet --crs native
+  geodeploy layers download roads --bbox 11,55,12,56    just that area
+  geodeploy layers download dem                   the Cloud-Optimized GeoTIFF itself
+
+gpkg / csv / geojson / geoparquet are built by the instance as a job and arrive as a zip. cog and
+pmtiles are the stored file, streamed as-is.
+""")
     layer_ref_arg(download)
     download.add_argument("-o", "--output", help="output path (default: the layer name)")
-    download.add_argument("--format", choices=["auto", "cog", "pmtiles", "geojson"], default="auto")
+    download.add_argument("--format",
+                          choices=["auto", "gpkg", "csv", "geojson", "geoparquet", "cog",
+                                   "pmtiles"],
+                          default="auto",
+                          help="auto = GeoPackage for a vector layer, the COG for a raster")
+    download.add_argument("--bbox", help="minx,miny,maxx,maxy in EPSG:4326 (default: everything)")
+    download.add_argument("--crs", choices=["4326", "native"], default="4326",
+                          help="native keeps the layer's own CRS where the format can carry it")
 
     tile = add_command(group, "tile", cmd_tile, "(re)generate a vector layer's PMTiles archive")
     layer_ref_arg(tile)
@@ -225,37 +240,52 @@ def cmd_identify(ctx, args) -> int:
 
 
 def cmd_download(ctx, args) -> int:
-    layer = resolve_layer(ctx, args)
-    client = ctx.client()
+    """Two very different mechanisms behind one command.
+
+    A COG or a PMTiles archive already IS a file: it streams straight out of storage. A GeoPackage
+    or a CSV has to be built, so the instance does it as a job and hands back a zip. `auto` picks
+    the one that gives you the data rather than a rendering of it.
+    """
+    layer = resolve_layer(ctx, args, public_ok=True)
+    client = ctx.client(auth_required=False)
     ref = layer.get("uid") or layer["id"]
+    api = client.layers.api(layer["layer_type"])
     kind = args.format
     if kind == "auto":
-        if layer["layer_type"] == "raster":
-            kind = "cog"
-        elif layer.get("pmtiles_key"):
-            kind = "pmtiles"
-        else:
-            kind = "geojson"
+        kind = "cog" if layer["layer_type"] == "raster" else "gpkg"
 
-    if kind == "geojson":
-        data = client.vector.features(layer["id"], limit=1000000)
-        path = args.output or "{0}.geojson".format(_safe(layer["name"]))
-        write_json_file(path, data)
-        ctx.out.success("Wrote {0} ({1} features).".format(path, len(data.get("features") or [])))
+    if kind in ("cog", "pmtiles"):
+        if kind == "cog" and layer["layer_type"] != "raster":
+            ctx.out.error("A COG is a raster thing; {0} is a vector layer.".format(layer["name"]))
+            return EXIT_GENERIC
+        path = args.output or "{0}.{1}".format(_safe(layer["name"]),
+                                               "tif" if kind == "cog" else "pmtiles")
+        endpoint = ("/data/raster/{0}/cog" if kind == "cog"
+                    else "/data/vector/{0}/pmtiles").format(ref)
+        progress = ctx.out.progress(path)
+        try:
+            with open(path, "wb") as fh:
+                client.download(endpoint, _Counting(fh, progress), auth=False)
+        except GeoDeployError:
+            progress.finish()
+            raise
+        progress.finish()
+        ctx.out.render({"ok": True, "file": path, "format": kind})
+        if not ctx.out.json_mode:
+            ctx.out.success("Wrote {0}.".format(path))
         return EXIT_OK
 
-    path = args.output or "{0}.{1}".format(_safe(layer["name"]),
-                                           "tif" if kind == "cog" else "pmtiles")
-    endpoint = ("/data/raster/{0}/cog" if kind == "cog" else "/data/vector/{0}/pmtiles").format(ref)
-    progress = ctx.out.progress(path)
-    try:
-        with open(path, "wb") as fh:
-            client.download(endpoint, _Counting(fh, progress))
-    except GeoDeployError:
-        progress.finish()
-        raise
-    progress.finish()
-    ctx.out.success("Wrote {0}.".format(path))
+    # Built server-side: the result is a zip, because an export can be more than one file (and
+    # carries a MANIFEST.txt saying whether the row cap truncated it).
+    path = args.output or "{0}.zip".format(_safe(layer["name"]))
+    ctx.out.info("Building {0} on the instance{1}…".format(
+        kind, " for " + args.bbox if args.bbox else " (whole layer)"))
+    api.export_to_file(ref, path, format=kind, bbox=args.bbox, target_crs=args.crs,
+                       on_status=lambda state: ctx.out.debug("export: {0}".format(state)))
+    ctx.out.render({"ok": True, "file": path, "format": kind})
+    if not ctx.out.json_mode:
+        ctx.out.success("Wrote {0}.".format(path))
+        ctx.out.info("Read MANIFEST.txt inside it if the layer is large — it records the row cap.")
     return EXIT_OK
 
 
