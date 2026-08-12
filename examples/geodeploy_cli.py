@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """GeoDeploy CLI — a thin reference client for the GeoDeploy API using a scoped API token (A-03).
 
+SUPERSEDED by the packaged client in `cli/` (`pip install -e cli/`, then `geodeploy --help`), which
+covers the whole API — multi-file uploads of any size, data-driven symbology, portals, the catalog
+and instance administration — and is documented at docs/cli.md. This script still works and is kept
+as the smallest possible worked example of the request shapes: one file, one dependency, easy to
+read end to end. New scripting should use the package.
+
 It exercises the real endpoints the GeoLibre / QGIS plugins build on: authenticate, list layers and
 portals, upload a dataset, and open a portal in edit mode (get config -> edit -> put) or publish it.
 Deliberately dependency-light (just `requests`) so it's easy to lift into a plugin.

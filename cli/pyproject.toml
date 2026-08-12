@@ -1,0 +1,76 @@
+[build-system]
+# 77 is the floor for PEP 639: `license` as an SPDX expression and `license-files` as globs.
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geodeploy"
+description = "Command-line client and Python API for GeoDeploy — upload spatial data, build and publish portals."
+# The PyPI front page is its own file: README.md in this folder is the repository's technical note
+# for contributors (see CLAUDE.md), which is not what someone landing on the project page wants.
+readme = "PYPI.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Koffi Dodji Noumonvi" }]
+keywords = ["gis", "geospatial", "postgis", "geoparquet", "cog", "maplibre", "qgis", "stac",
+            "ogc-api-features", "geodeploy"]
+
+# 3.9 is the floor because the QGIS plugin VENDORS this package: QGIS 3.28 LTR ships Python 3.9,
+# and a plugin cannot pip-install anything on a user's machine. Everything here therefore runs on
+# 3.9 — `from __future__ import annotations` in every module, no match statements, no PEP 604
+# unions evaluated at runtime. No upper bound, deliberately: capping it would break installs on
+# every Python released after this one.
+requires-python = ">=3.9"
+
+# NO RUNTIME DEPENDENCIES, deliberately. Same reason: the QGIS plugin drops `geodeploy/` into its
+# own folder and imports it, so anything depended on here would have to be vendored too. urllib
+# makes every request this client sends, including streamed multi-gigabyte uploads.
+dependencies = []
+
+# The version lives in ONE place — `geodeploy/__init__.py` — because the user agent, `--version`
+# and the package metadata must never disagree about what is installed.
+dynamic = ["version"]
+
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Science/Research",
+  "Intended Audience :: System Administrators",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: GIS",
+  "Topic :: Utilities",
+  "Typing :: Typed",
+]
+# NOTE: no "License :: OSI Approved :: …" classifier. Under PEP 639 the SPDX `license` field above
+# is the declaration, and setuptools REFUSES a build that gives both.
+
+[project.urls]
+Homepage = "https://github.com/bravemaster3/GeoDeploy"
+Documentation = "https://docs-geodeploy.kndev.org/cli/"
+Repository = "https://github.com/bravemaster3/GeoDeploy"
+Issues = "https://github.com/bravemaster3/GeoDeploy/issues"
+Changelog = "https://github.com/bravemaster3/GeoDeploy/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+geodeploy = "geodeploy.cli.main:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "geodeploy.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["geodeploy*"]
+
+[tool.setuptools.package-data]
+geodeploy = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,11 @@
+GeoDeploy
+Copyright 2026 Koffi Dodji Noumonvi
+
+This product includes software developed for the GeoDeploy project
+(https://github.com/bravemaster3/GeoDeploy).
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+GeoDeploy runs alongside third-party services (PostGIS, MinIO, Martin, TiTiler,
+Redis, nginx) and bundles third-party libraries, each under its own licence.
+Those services run as separate processes; their licences are unaffected by this one.

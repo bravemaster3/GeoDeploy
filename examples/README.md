@@ -1,9 +1,13 @@
 # examples/
 
 ## Purpose
-Reference clients for the GeoDeploy API using **scoped API tokens** (A-03). These are the crib sheet
-the GeoLibre (`E-02`) and QGIS (`E-05`) plugins build on: authenticate headlessly, push data, and
-create / edit / publish portals — the same API the dashboard uses, no browser session.
+Reference clients for the GeoDeploy API using **scoped API tokens** (A-03) — the crib sheet for the
+request shapes, kept small enough to read end to end.
+
+> **The real client now lives in [`../cli/`](../cli/)** (`pip install -e cli/` → `geodeploy`), and
+> is documented at `docs/cli.md`. It covers the whole API rather than a sample of it, and it is the
+> Python client the QGIS plugin (`E-05`) imports. `geodeploy_cli.py` below still works and is
+> retained as a one-file example; new scripting should use the package.
 
 ## Contents
 - `geodeploy_cli.py` — a thin `requests`-based CLI. Commands: `whoami`, `layers [--raster]`,
@@ -52,9 +56,11 @@ can `publish` but not `upload`. Send the token as `Authorization: Bearer <token>
   that `layer_configs` shape (the deep fidelity work is `E-02`/`E-05`, not here).
 
 ## Current status & known issues
-- `upload` uses the API-passthrough multipart route (good to ~2 GB). Very large files use the
-  presign/direct-to-storage flow — not wrapped by this reference CLI yet.
-- No packaging (single script by design). A published `geodeploy` PyPI client can come with the plugins.
+- **Superseded.** `upload` here uses the API-passthrough multipart route, which a proxy in front of
+  the instance will cut at ~100 MB; the packaged CLI routes anything over 48 MB direct to storage in
+  parts. It also has no data-driven symbology, no catalog/admin commands and no profiles.
+- Kept deliberately: one file, one dependency (`requests`), no packaging — the fastest way to see
+  what a request to this API looks like.
 
 ## Last updated
-2026-07-17 — initial CLI (A-03 API tokens).
+2026-08-12 — superseded by `cli/`; kept as the minimal worked example.
