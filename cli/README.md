@@ -95,7 +95,8 @@ both. The version is single-sourced from `geodeploy/__init__.py` (`dynamic = ["v
 repo convention in CLAUDE.md), which is not what someone landing on PyPI wants to read; `PYPI.md` is
 the user-facing front page. Keep both current.
 
-The name `geodeploy` was unregistered on PyPI as of 2026-08-12. To cut a release:
+The name `geodeploy` was unregistered on PyPI as of 2026-08-13 (re-check immediately before the
+first upload — anyone can claim it). To cut a release:
 
 ```bash
 cd cli
@@ -107,6 +108,12 @@ python -m twine upload dist/*
 
 `dist/` and `build/` are git-ignored. The sdist carries the tests, so the release can be verified
 from source rather than trusted.
+
+**Versioning.** The CLI's number tracks the GeoDeploy release it ships with, so it must not claim a
+release that has not happened: the first upload is `1.3.0b1`, and `1.3.0` follows when v1.3 tags. A
+version on PyPI can never be re-uploaded — deleting it does not free the number — so a pre-release
+is the only way to test the real index without spending the one that matters. `pip install
+geodeploy` skips pre-releases unless asked with `--pre`.
 
 ## The row cap, and the two ways around it
 
