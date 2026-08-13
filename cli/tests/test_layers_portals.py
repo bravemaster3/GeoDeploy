@@ -30,8 +30,8 @@ class TestLayerResolution:
         assert client.layers.resolve("cccccccccccc")["name"] == "dem"
 
     def test_by_stable_uid(self, client):
-        # uid, not the integer id, is what public URLs use: SQLite reuses a deleted row's id, so a
-        # bookmarked integer can come back as a DIFFERENT dataset.
+        # uid, not the integer id, is what public URLs use: an integer is unique only within one
+        # layer kind and one database, so it renumbers on a restore or a move between instances.
         assert client.layers.resolve("aaaaaaaaaaaa")["name"] == "roads"
 
     def test_by_prefixed_reference(self, client):

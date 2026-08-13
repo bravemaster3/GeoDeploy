@@ -22,10 +22,11 @@ logger = logging.getLogger(__name__)
 def by_ref(model, ref):
     """Match a layer by its STABLE PUBLIC `uid` or its legacy integer id.
 
-    Public URLs now carry `uid` (`models.new_uid` — integer ids get reused after a delete and
-    would silently repoint saved links at another dataset). Old links must keep working, so every
-    public lookup accepts either form, and a `vector-`/`raster-` prefix is tolerated so a STAC item
-    id or an OGC API - Features collection id can be passed straight through.
+    Public URLs carry `uid` (`models.new_uid`). The integer is accepted only so links minted before
+    that column existed keep resolving — nothing emits one now (`share_links.public_ref`). Keep it
+    that way: an integer id is unique only within one kind and one database, so it says nothing
+    durable about *which* dataset a saved link meant. A `vector-`/`raster-` prefix is tolerated so a
+    STAC item id or an OGC API - Features collection id can be passed straight through.
 
     Returns a SQLAlchemy condition; combine it with `visible_to(...)` on authenticated routes.
     """

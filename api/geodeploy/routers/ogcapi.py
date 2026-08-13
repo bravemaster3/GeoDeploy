@@ -63,8 +63,8 @@ def _root(base: str) -> str:
 
 def _cid(layer) -> str:
     """Collection id = `vector-<uid>`, mirroring the STAC item id. The layer's STABLE identifier,
-    never the integer PK — ids are reused after a delete and would silently repoint a saved
-    collection URL at a different dataset (models.new_uid)."""
+    never the integer PK — that renumbers on a restore or a move between instances, which would
+    silently repoint a saved collection URL at a different dataset (models.new_uid)."""
     return f"vector-{getattr(layer, 'uid', None) or layer.id}"
 
 

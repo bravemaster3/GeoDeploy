@@ -1,10 +1,10 @@
 """Data layers — vector, raster, and the resolver that lets you name one.
 
 The API addresses a layer three ways and they are not interchangeable: authenticated routes take
-the integer **id**, public routes take the stable **uid** (`models.new_uid`, 12 hex chars — integer
-ids can be reused after a delete, so a shared URL must never use one), and a person thinks in
-**names**. `Layers.resolve` accepts all three plus a `vector-3` / `raster-7` prefix, so every
-command in the CLI can take whatever the user has to hand.
+the integer **id**, public routes take the stable **uid** (`models.new_uid`, 12 hex chars — an
+integer is unique only within one layer kind and one database, so a shared URL must never use
+one), and a person thinks in **names**. `Layers.resolve` accepts all three plus a `vector-3` /
+`raster-7` prefix, so every command in the CLI can take whatever the user has to hand.
 """
 from __future__ import annotations
 

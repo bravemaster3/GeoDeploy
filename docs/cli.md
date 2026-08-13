@@ -287,8 +287,10 @@ Ambiguity is always an error, never a guess, and there are two kinds of it:
   and a raster. Asked for a bare `1` when both exist, the CLI refuses and tells you to write
   `vector-1` or `raster-1`.
 
-In scripts, prefer the **uid** (`a7f3c91b04e2`): it is unique across both kinds, it survives a
-rename, and it is what the public URLs use.
+In scripts, prefer the **uid** (`a7f3c91b04e2`), which `layers list` shows in its own column: it is
+unique across both kinds, it survives a rename, and it is what every public URL uses. An integer id
+is meaningful only inside one layer kind and one database — restore an instance elsewhere and the
+numbers change, while the uids do not.
 
 ```bash
 geodeploy layers rename roads "Main roads"

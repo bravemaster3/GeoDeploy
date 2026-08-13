@@ -15,8 +15,12 @@ from ..output import EXIT_GENERIC, EXIT_OK, human_size
 from ._common import (add_style_args, confirm, layer_ref_arg, parse_fields, resolve_layer,
                       style_from_args, write_json_file)
 
-LIST_COLUMNS = ["layer_type", "id", "name", "status", "geometry_type", "feature_count",
-                "storage_backend", "visibility", "created_by"]
+# `uid` earns its width: it is the identifier every public URL uses, it is unique across both
+# layer kinds (integer ids are two separate sequences), and it survives a rename or a restore that
+# renumbers everything. A listing that shows only the integer teaches people to script with the one
+# handle that is none of those things.
+LIST_COLUMNS = ["layer_type", "id", "uid", "name", "status", "geometry_type", "feature_count",
+                "storage_backend", "visibility"]
 
 
 def register(subparsers) -> None:

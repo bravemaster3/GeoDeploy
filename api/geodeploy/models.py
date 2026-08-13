@@ -12,14 +12,19 @@ from .database import Base
 def new_uid() -> str:
     """A layer's STABLE PUBLIC identifier.
 
-    Integer primary keys must never appear in shareable URLs. SQLite assigns them as rowid
-    aliases WITHOUT the AUTOINCREMENT keyword, so deleting the highest-id row frees that id for
-    the next insert: delete a shared layer, create another, and every saved link to
+    Integer primary keys must never appear in shareable URLs.
+
+    The original reason was SQLite, which assigns them as rowid aliases WITHOUT the AUTOINCREMENT
+    keyword: deleting the highest-id row freed that id for the next insert, so a saved link to
     `.../vector-3` — a STAC item, an OGC API - Features collection, a `/vsicurl/` COG pasted into
-    someone's QGIS project — silently resolves to a DIFFERENT dataset. No error, wrong data.
-    Postgres sequences would fix the reuse, but not the wider problem: integer keys are only
-    meaningful within one database, so a restore or an instance-to-instance move renumbers
-    everything and invalidates every published URL.
+    someone's QGIS project — could silently resolve to a DIFFERENT dataset. No error, wrong data.
+    State moved to Postgres on 2026-07-30 and its sequences never hand a number back, so that
+    particular failure is gone.
+
+    The reason the uid stays is the wider one: an integer key is meaningful only within ONE kind
+    (vector and raster are separate sequences, so "1" is routinely two layers) and ONE database, so
+    a restore or an instance-to-instance move renumbers everything and invalidates every published
+    URL. A published identifier has to outlive the row number that happens to back it today.
 
     12 hex chars from `secrets`: collision-free in practice, unguessable, and URL-safe.
     """

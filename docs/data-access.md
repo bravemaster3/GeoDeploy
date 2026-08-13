@@ -123,9 +123,11 @@ raising it far trades a truncated download for a worker that runs out of memory.
 above.
 
 **About the identifiers in these URLs.** A layer is addressed by a short opaque id such as
-`vector-a7f3c91b04e2` — deliberately not a row number. Row numbers get reused when a layer is
-deleted, which would make an old link quietly return someone else's data; the opaque id is stable
-for the life of the layer and 404s honestly once it is gone. Links that used numbers still work.
+`vector-a7f3c91b04e2` — deliberately not a row number. A row number is unique only within one layer
+kind and one database: vector and raster are numbered separately, and a restore or a move to
+another instance renumbers everything, which would make old links quietly return someone else's
+data. The opaque id is stable for the life of the layer and 404s honestly once it is gone. Links
+that used numbers still work, but nothing hands one out. **Store the opaque id**, not the number.
 
 ## Sharing a layer (admin)
 

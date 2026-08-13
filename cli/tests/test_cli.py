@@ -172,6 +172,13 @@ class TestLayerCommands:
         assert "roads" in out and "dem" in out
         assert "NAME" in out                       # a header, so the columns are readable
 
+    def test_the_listing_shows_the_stable_uid(self, run, logged_in):
+        """The integer is unique only within one kind and one database. If the listing shows only
+        that, people script with it — so the durable handle has to be on screen."""
+        code, out, err = run("layers", "list")
+        assert "UID" in out
+        assert "aaaaaaaaaaaa" in out and "cccccccccccc" in out
+
     def test_processing_layers_show_their_progress(self, run, logged_in):
         code, out, err = run("layers", "list")
         assert "42%" in out
