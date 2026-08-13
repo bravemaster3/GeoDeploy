@@ -1,0 +1,176 @@
+name: Publish CLI
+
+# Publishes the `geodeploy` package (cli/) to PyPI using TRUSTED PUBLISHING: PyPI verifies a
+# short-lived OIDC token minted by GitHub for this exact repository, workflow and environment, so
+# there is no API token stored anywhere — nothing to leak, nothing to rotate, and a stolen repo
+# secret cannot be used to publish because there is no secret.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# ONE-TIME SETUP on PyPI (Your projects → geodeploy → Publishing, or, before the first upload,
+# Account → Publishing → "Add a pending publisher"). The four values must match EXACTLY, or the
+# upload is rejected with "invalid-publisher":
+#
+#     Owner:            bravemaster3
+#     Repository:       GeoDeploy
+#     Workflow name:    publish-cli.yml          ← this file's NAME, not the `name:` above
+#     Environment:      pypi                     ← and `testpypi` for the rehearsal publisher
+#
+# Do the same at test.pypi.org (a separate account, separate 2FA) if you want the rehearsal path.
+# The first upload of a NEW project uses a "pending publisher"; PyPI converts it into a normal one
+# once the project exists.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+#
+# Trigger: a tag of the form `cli-v1.3.0b1`. A DEDICATED prefix, not the repository's `v1.3` release
+# tags, because the two do not always move together — the CLI's first upload is a pre-release that
+# exists before v1.3 does, and a CLI-only fix must be releasable without re-tagging the whole
+# platform. `workflow_dispatch` runs the same pipeline against TestPyPI on demand.
+
+on:
+  push:
+    tags:
+      - "cli-v*"
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Where to publish"
+        required: true
+        default: testpypi
+        type: choice
+        options: [testpypi, pypi]
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Gate ───────────────────────────────────────────────────────────────────────────────────────
+  # Build and verify BEFORE any publisher job runs. A version on PyPI can never be re-uploaded —
+  # deleting it does not free the number — so everything that can be checked must be checked while
+  # the mistake is still free to fix.
+  build:
+    name: Build and verify
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # 3.9 is the package's floor (the QGIS plugin vendors it, QGIS 3.28 LTR ships 3.9). Test
+          # on the floor: a 3.10+ syntax slip would otherwise reach PyPI and break exactly the
+          # consumer the constraint exists for.
+          python-version: "3.9"
+          cache: pip
+
+      - name: Install
+        working-directory: cli
+        run: pip install -e ".[dev]"
+
+      - name: Run the test suite
+        working-directory: cli
+        # CI already runs this on every push to main, but a TAG is not a push to main: it can point
+        # at any commit, including one that never went through a pull request.
+        run: python -m pytest tests -q
+
+      - name: The console script runs
+        run: |
+          geodeploy --version
+          geodeploy --help > /dev/null
+
+      - name: Read the packaged version
+        id: version
+        working-directory: cli
+        # Single-sourced in geodeploy/__init__.py; read it from the INSTALLED metadata rather than
+        # by parsing the file, so this reports what a user would actually get.
+        run: |
+          set -euo pipefail
+          version=$(python -c "import importlib.metadata as m; print(m.version('geodeploy'))")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "packaged version: $version"
+
+      - name: The tag must match the packaged version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        # The failure this prevents: tagging `cli-v1.3.0` while __init__.py still says 1.3.0b1, and
+        # publishing a beta under the release number. Unfixable afterwards.
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#cli-v}"
+          if [ "$tag" != "$VERSION" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} says $tag, but the package is $VERSION."
+            echo "::error::Fix cli/geodeploy/__init__.py or the tag, then try again."
+            exit 1
+          fi
+          echo "tag $GITHUB_REF_NAME matches $VERSION"
+
+      - name: Build sdist and wheel
+        working-directory: cli
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+
+      - name: Check the metadata
+        working-directory: cli
+        # twine's own validation: a README that does not render becomes an unreadable project page,
+        # and PyPI rejects it at upload — after the version number has been spent.
+        run: python -m twine check dist/*
+
+      - name: The wheel installs clean, with no dependencies
+        # `--no-deps` is the assertion, not an optimisation: this package promises zero runtime
+        # dependencies, and an accidental one would install silently without it.
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/verify
+          /tmp/verify/bin/pip install --quiet --no-deps cli/dist/*.whl
+          /tmp/verify/bin/geodeploy --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: cli/dist/
+
+  # ── Rehearsal ──────────────────────────────────────────────────────────────────────────────────
+  testpypi:
+    name: Publish to TestPyPI
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/geodeploy
+    permissions:
+      id-token: write        # the OIDC token IS the credential — nothing else is needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # TestPyPI accumulates rehearsals; a re-run of the same version should not fail the job.
+          skip-existing: true
+
+  # ── The real thing ─────────────────────────────────────────────────────────────────────────────
+  pypi:
+    name: Publish to PyPI
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+    runs-on: ubuntu-latest
+    environment:
+      # Add a required reviewer to this environment in Settings → Environments if you want a human
+      # to approve every upload. The job then waits rather than publishing.
+      name: pypi
+      url: https://pypi.org/p/geodeploy
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        # No `skip-existing` here, deliberately: on the real index, "this version already exists"
+        # means something is wrong and the run should say so rather than pass quietly.

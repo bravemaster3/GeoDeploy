@@ -102,14 +102,26 @@ repo convention in CLAUDE.md), which is not what someone landing on PyPI wants t
 the user-facing front page. Keep both current.
 
 The name `geodeploy` was unregistered on PyPI as of 2026-08-13 (re-check immediately before the
-first upload — anyone can claim it). To cut a release:
+first upload — anyone can claim it).
+
+**Releases go through `.github/workflows/publish-cli.yml`, not from a laptop.** It uses PyPI's
+Trusted Publishing: no API token exists to leak or rotate, and the workflow gates the upload on the
+test suite, on `twine check`, on a clean `--no-deps` install, and on the **tag matching the packaged
+version**. Cutting a release is therefore:
+
+```bash
+# 1. bump the one line in geodeploy/__init__.py, commit, merge
+# 2. tag it — the prefix is `cli-v`, not the platform's `v1.3`
+git tag cli-v1.3.0b1 && git push origin cli-v1.3.0b1
+```
+
+Use the workflow's manual run (`Actions → Publish CLI → Run workflow → testpypi`) to rehearse
+against TestPyPI first. Building by hand is still the way to CHECK a change without releasing it:
 
 ```bash
 cd cli
 python -m build                     # sdist + wheel into dist/
 python -m twine check dist/*        # must pass before anything is uploaded
-python -m twine upload --repository testpypi dist/*    # rehearse
-python -m twine upload dist/*
 ```
 
 `dist/` and `build/` are git-ignored. The sdist carries the tests, so the release can be verified
