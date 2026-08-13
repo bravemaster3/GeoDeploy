@@ -39,6 +39,36 @@ def safe_name(s: str, fallback: str = "col") -> str:
     return s[:60]
 
 
+#: Column names the FINAL table injects itself — `id serial primary key` and the geometry column.
+#: A CSV header matching either one must be renamed, or `CREATE TABLE` gets the name twice.
+RESERVED_COLUMNS = ("id", "geom")
+
+
+def safe_columns(fields: list[str]) -> dict[str, str]:
+    """CSV header → Postgres column names: sanitised, de-duplicated, and clear of the two names the
+    table adds for itself.
+
+    The bug this exists for: a CSV carrying a column called `id` — which is most CSVs anyone
+    exports — produced `CREATE TABLE (id serial primary key, id bigint, …)`, and Postgres refused
+    it with *column "id" specified more than once*. The import failed at 45%, well after the upload
+    had been accepted, naming a column the user never duplicated.
+
+    Such a column now becomes `id_1`, exactly as a duplicated HEADER already did — renaming an
+    attribute is a visible, explainable outcome; losing the import is not.
+    """
+    safe: dict[str, str] = {}
+    used = set(RESERVED_COLUMNS)
+    for f in fields:
+        s = safe_name(f)
+        base, n = s, 1
+        while s in used:
+            s = f"{base}_{n}"
+            n += 1
+        used.add(s)
+        safe[f] = s
+    return safe
+
+
 # Delimiter is chosen by the user (comma default); auto-sniffing is unreliable.
 _DELIM_CHAR = {"comma": ",", "semicolon": ";", "tab": "\t", "pipe": "|", "space": " "}
 
@@ -112,13 +142,7 @@ def _load_copy(path: str, schema: str, table: str, x_col: str | None, y_col: str
     elif x_col not in fields or y_col not in fields:
         raise ValueError("Selected X/Y columns are not in the CSV header.")
 
-    safe, used = {}, set()
-    for f in fields:
-        s = safe_name(f)
-        base, n = s, 1
-        while s in used:
-            s = f"{base}_{n}"; n += 1
-        used.add(s); safe[f] = s
+    safe = safe_columns(fields)
 
     srid = int(srid) or 4326
     # NATIVE-CRS STORAGE: store in the user-picked SRID. Only for 4326 do we apply the Web-Mercator

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
 from ...database import get_db
-from ...deps import require_scope
+from ...deps import require_scope, resolve_optional_user
 from ...models import RasterLayer, UploadJob, User
 from ...schemas import JobStatus, LayerRename, PortalRefOut, RasterDefaultStyle, RasterLayerOut, SharingUpdate
 from ...services import share_links
@@ -376,7 +376,7 @@ async def raster_cog(layer_ref: str, request: Request, db: AsyncSession = Depend
 
 
 @router.get("/{layer_ref}/legend")
-async def raster_legend(layer_ref: str, db: AsyncSession = Depends(get_db)):
+async def raster_legend(layer_ref: str, request: Request, db: AsyncSession = Depends(get_db)):
     """PUBLIC legend for a shared raster: the colormap and the value range it is stretched over.
 
     A raster legend is a continuous ramp, not a list of swatches, so this reports the ingredients a
@@ -389,8 +389,17 @@ async def raster_legend(layer_ref: str, db: AsyncSession = Depends(get_db)):
 
     result = await db.execute(select(RasterLayer).where(by_ref(RasterLayer, layer_ref)))
     layer = result.scalar_one_or_none()
-    if not layer or layer.status != "ready" or not layer.is_public:
+    if not layer or layer.status != "ready":
         raise HTTPException(404, "No shared raster for this layer.")
+    if not layer.is_public:
+        # Same correction as the vector route: a signed-in caller reads the legend of a raster they
+        # can see. `is_public` alone 404s the owner of their own organization layer.
+        user = await resolve_optional_user(request, db)
+        allowed = user is not None and (await db.execute(
+            select(RasterLayer.id).where(RasterLayer.id == layer.id,
+                                         visible_to(user, RasterLayer)))).scalar_one_or_none()
+        if not allowed:
+            raise HTTPException(404, "No shared raster for this layer.")
 
     style = {}
     if layer.default_style:

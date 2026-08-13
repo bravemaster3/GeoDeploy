@@ -171,3 +171,35 @@ async def resolve_cookie_user(request: Request, db: AsyncSession) -> User | None
     """Best-effort user resolution from the session COOKIE (see SESSION_COOKIE). Powers the portal
     access gate's nginx auth_request, where the credential arrives as a cookie, not a header."""
     return await _user_from_token(request.cookies.get(SESSION_COOKIE), db)
+
+
+async def resolve_optional_user(request: Request, db: AsyncSession) -> User | None:
+    """The caller's identity when they have one, None when they do not — for a route that answers
+    EVERYONE, but answers an authenticated caller with more.
+
+    The public per-layer artifacts (tiles, COG, legend) gate on `_publicly_readable`, which is
+    right for an anonymous visitor and wrong for a signed-in one: it 404s a layer the caller can
+    see perfectly well in the dashboard. This closes that gap without turning a public route into
+    an authenticated one.
+
+    Two deliberate choices. An INVALID or expired credential reads as anonymous rather than 401 —
+    the route is public, and failing a request that would have succeeded with no header at all is
+    the worse answer. And an API token without `data:read` also reads as anonymous, so a token can
+    never see more than the scopes it was granted, which is the same deny-by-default posture
+    `require_scope` enforces.
+
+    Delegates to `get_current_user` rather than re-implementing it: API-token vs JWT, revocation,
+    expiry and the `token_version` check are all rules that must not exist twice.
+    """
+    auth = request.headers.get("Authorization", "")
+    raw = auth[7:].strip() if auth[:7].lower() == "bearer " else None
+    if raw:
+        try:
+            user = await get_current_user(request, raw, db)
+        except HTTPException:
+            return None
+        tok = getattr(request.state, "api_token", None)
+        if tok is not None and "data:read" not in (tok.scopes or "").split():
+            return None
+        return user
+    return await resolve_cookie_user(request, db)
