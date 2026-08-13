@@ -125,11 +125,16 @@ class _LayerBase(object):
     def export_to_file(self, ref: Any, path: str, format: Optional[str] = None,
                        bbox: Optional[str] = None, target_crs: str = "4326",
                        interval: float = 2.0, timeout: Optional[float] = 1800.0,
-                       on_status: Optional[Any] = None) -> str:
+                       on_status: Optional[Any] = None,
+                       on_ready: Optional[Any] = None) -> str:
         """Queue, wait, download. Returns the path written (a zip: an export may be several files).
 
         Waiting is the caller's time either way — the work is a Celery job — so doing it here keeps
         the common case to one line for both a script and a plugin.
+
+        `on_ready(status)` receives the final status document, whose `truncated` list names any
+        file that stopped at the server's row cap. A caller that ignores it gets a file that looks
+        complete and is not, so the CLI does not ignore it.
         """
         import time
 
@@ -140,10 +145,13 @@ class _LayerBase(object):
             raise GeoDeployError("The instance did not return an export job id.")
         started = time.time()
         while True:
-            state = (self.export_status(ref, job_id) or {}).get("status")
+            status = self.export_status(ref, job_id) or {}
+            state = status.get("status")
             if on_status:
                 on_status(state)
             if state == "ready":
+                if on_ready:
+                    on_ready(status)
                 break
             if state in ("error", "failed"):
                 raise GeoDeployError("The export failed on the server.")
@@ -178,6 +186,75 @@ class VectorLayers(_LayerBase):
 
     def tilejson(self, ref: Any) -> Dict[str, Any]:
         return self._c.get("/data/vector/{0}/tilejson".format(ref), auth=False)
+
+    # -- the whole GeoParquet dataset, straight from storage ---------------------------------------
+
+    def parquet_manifest(self, ref: Any) -> Dict[str, Any]:
+        """The partition map of a prepared GeoParquet layer: grid, CRS, columns and file keys.
+
+        Raises `NotFoundError` when the layer has no partitioned dataset — a PostGIS layer, or a
+        single `.parquet` uploaded as-is. Callers treat that as "use the export job instead".
+        """
+        return self._c.get("/data/vector/{0}/parquet/manifest.json".format(ref), auth=False)
+
+    def parquet_parts(self, manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Every partition file the manifest lists, flattened and in a stable order."""
+        parts: List[Dict[str, Any]] = []
+        for cell, entries in sorted((manifest.get("cells") or {}).items(),
+                                    key=lambda kv: (len(kv[0]), kv[0])):
+            for entry in entries or []:
+                key = entry.get("key")
+                if not key:
+                    continue
+                if key.startswith("/") or ".." in key.split("/") or ":" in key:
+                    # The key becomes a local path. The server is not hostile, but a path from
+                    # over the network must not be able to name a file outside the target folder.
+                    raise ValidationError(400, "Refusing a suspicious partition key: {0!r}".format(key))
+                parts.append({"cell": cell, "key": key, "rows": entry.get("rows")})
+        return parts
+
+    def download_dataset(self, ref: Any, directory: str,
+                         on_file: Optional[Any] = None) -> Dict[str, Any]:
+        """Download a prepared GeoParquet layer WHOLE — manifest plus every partition file.
+
+        This is the complete, lossless, **uncapped** copy: the files are what the instance stores,
+        byte for byte, with no worker, no row limit and no format conversion. `layers export` is
+        the other path, and the one to use for a clip or another format; it builds a new file and
+        stops at the server's row cap, which for exactly these layers (the big ones — GeoParquet is
+        where the millions of features live) is a real ceiling.
+
+        The result reads directly in DuckDB or GDAL:
+
+            SELECT * FROM read_parquet('<directory>/**/*.parquet')
+        """
+        import json as _json
+        import os
+
+        manifest = self.parquet_manifest(ref)
+        parts = self.parquet_parts(manifest)
+        if not parts:
+            raise NotFoundError(404, "That GeoParquet dataset lists no partition files.")
+
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, "manifest.json"), "w", encoding="utf-8") as fh:
+            _json.dump(manifest, fh, indent=1)
+
+        written, done_bytes = [], 0
+        for index, part in enumerate(parts):
+            dest = os.path.join(directory, *part["key"].split("/"))
+            parent = os.path.dirname(dest)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(dest, "wb") as fh:
+                self._c.download("/data/vector/{0}/parquet/{1}".format(ref, part["key"]),
+                                 fh, auth=False)
+            written.append(dest)
+            done_bytes += os.path.getsize(dest)
+            if on_file:                       # (files done, files total, this part, bytes so far)
+                on_file(index + 1, len(parts), part, done_bytes)
+        return {"directory": directory, "files": written, "parts": len(written),
+                "bytes": done_bytes, "rows": manifest.get("feature_count"),
+                "crs": manifest.get("crs")}
 
     def field_stats(self, ref: Any, field: str, classes: int = 5, method: str = "quantile",
                     ramp: str = "viridis") -> Dict[str, Any]:
@@ -258,9 +335,21 @@ class Layers(object):
                     break
         rows = self.list(kind)
 
-        for row in rows:                                   # id or uid
-            if str(row.get("id")) == text or str(row.get("uid") or "") == text:
-                return row
+        by_uid = [r for r in rows if str(r.get("uid") or "") == text]
+        if by_uid:
+            return by_uid[0]                               # uids are unique across both kinds
+        by_id = [r for r in rows if str(r.get("id")) == text]
+        if len(by_id) == 1:
+            return by_id[0]
+        if len(by_id) > 1:
+            # Vector and raster ids are two separate sequences, so "1" can be two different
+            # layers. Returning whichever the listing happened to put first is how you download a
+            # vector while asking for a raster.
+            raise ValidationError(
+                400, "Layer id {0} is ambiguous — vector and raster layers are numbered "
+                     "separately. Use {1}, or the layer's uid.".format(
+                         text, " or ".join(sorted(
+                             "{0}-{1}".format(r.get("layer_type"), r.get("id")) for r in by_id))))
         exact = [r for r in rows if (r.get("name") or "") == text]
         if len(exact) == 1:
             return exact[0]

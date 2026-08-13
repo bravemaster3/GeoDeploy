@@ -6,9 +6,10 @@ and looking up `7` is what a machine does.
 from __future__ import annotations
 
 import json
+import os
 import sys
 
-from ...errors import GeoDeployError, ValidationError
+from ...errors import GeoDeployError, NotFoundError, ValidationError
 from ..main import add_command, group_parser
 from ..output import EXIT_GENERIC, EXIT_OK, human_size
 from ._common import (add_style_args, confirm, layer_ref_arg, parse_fields, resolve_layer,
@@ -96,12 +97,14 @@ examples:
                            epilog="""examples:
   geodeploy layers download roads                 the whole layer, GeoPackage
   geodeploy layers download roads --format csv
-  geodeploy layers download parcels --format geoparquet --crs native
+  geodeploy layers download parcels               a GeoParquet layer: its own files, uncapped
   geodeploy layers download roads --bbox 11,55,12,56    just that area
   geodeploy layers download dem                   the Cloud-Optimized GeoTIFF itself
 
-gpkg / csv / geojson / geoparquet are built by the instance as a job and arrive as a zip. cog and
-pmtiles are the stored file, streamed as-is.
+cog, pmtiles and a whole GeoParquet layer are the STORED files, streamed as they are: complete,
+lossless and not subject to any row cap. gpkg / csv / geojson (and any clipped export) are BUILT by
+the instance as a job and arrive as a zip; those stop at the server's row cap, which the command
+reports when it happens.
 """)
     layer_ref_arg(download)
     download.add_argument("-o", "--output", help="output path (default: the layer name)")
@@ -251,8 +254,20 @@ def cmd_download(ctx, args) -> int:
     ref = layer.get("uid") or layer["id"]
     api = client.layers.api(layer["layer_type"])
     kind = args.format
+    geoparquet_layer = layer.get("storage_backend") == "geoparquet"
     if kind == "auto":
-        kind = "cog" if layer["layer_type"] == "raster" else "gpkg"
+        if layer["layer_type"] == "raster":
+            kind = "cog"
+        else:
+            # A GeoParquet layer's own files are the best copy of it there is: complete, lossless
+            # and not subject to the export row cap. Building a GeoPackage from them by default
+            # would be slower AND worse.
+            kind = "geoparquet" if geoparquet_layer else "gpkg"
+
+    if kind == "geoparquet" and geoparquet_layer and not args.bbox:
+        done = _download_parquet_dataset(ctx, client, layer, ref, args)
+        if done is not None:
+            return done
 
     if kind in ("cog", "pmtiles"):
         if kind == "cog" and layer["layer_type"] != "raster":
@@ -280,12 +295,71 @@ def cmd_download(ctx, args) -> int:
     path = args.output or "{0}.zip".format(_safe(layer["name"]))
     ctx.out.info("Building {0} on the instance{1}…".format(
         kind, " for " + args.bbox if args.bbox else " (whole layer)"))
+    cut = []
     api.export_to_file(ref, path, format=kind, bbox=args.bbox, target_crs=args.crs,
-                       on_status=lambda state: ctx.out.debug("export: {0}".format(state)))
-    ctx.out.render({"ok": True, "file": path, "format": kind})
+                       on_status=lambda state: ctx.out.debug("export: {0}".format(state)),
+                       on_ready=lambda status: cut.extend(status.get("truncated") or []))
+    ctx.out.render({"ok": True, "file": path, "format": kind, "truncated": cut})
     if not ctx.out.json_mode:
         ctx.out.success("Wrote {0}.".format(path))
-        ctx.out.info("Read MANIFEST.txt inside it if the layer is large — it records the row cap.")
+    if cut:
+        # Not a warning buried in the archive: the whole failure mode is that a truncated export
+        # LOOKS finished. Say it on stderr, and leave a non-zero exit for anything scripted.
+        # In --json mode the report is already IN the document (stdout stays one document), so the
+        # exit code carries it there.
+        if not ctx.out.json_mode:
+            for item in cut:
+                ctx.out.error("INCOMPLETE — {0} stopped at the server's {1:,}-row cap.".format(
+                    item.get("file"), item.get("cap") or 0))
+            ctx.out.error(
+                "The rows you have are whichever the scan reached first.",
+                hint=("Complete instead: `geodeploy layers download {0}` (the stored GeoParquet "
+                      "files, uncapped)".format(layer["name"]) if geoparquet_layer else
+                      "Complete instead: ogr2ogr -f GPKG out.gpkg \"OAPIF:{0}/api/ogc\" {1} — "
+                      "paged, no cap. Or ask for a --bbox.".format(client.url, layer["name"])))
+        return EXIT_GENERIC
+    if not ctx.out.json_mode:
+        ctx.out.info("MANIFEST.txt inside the zip records the row counts.")
+    return EXIT_OK
+
+
+def _download_parquet_dataset(ctx, client, layer, ref, args):
+    """The whole GeoParquet layer, straight from storage — no export job, no row cap.
+
+    Returns None when this layer has no partitioned dataset (a single uploaded `.parquet`, or a
+    re-prep that has not run), so the caller falls back to building one.
+    """
+    directory = args.output or "{0}_parquet".format(_safe(layer["name"]))
+    try:
+        manifest = client.vector.parquet_manifest(ref)
+        parts = client.vector.parquet_parts(manifest)
+    except NotFoundError:
+        ctx.out.debug("No partition manifest for this layer; building an export instead.")
+        return None
+    if not parts:
+        return None
+
+    ctx.out.info("{0} partition file(s), {1} — reading the stored files, not rebuilding them.".format(
+        len(parts), "{0:,} features".format(manifest["feature_count"])
+        if manifest.get("feature_count") else "row count unknown"))
+    progress = ctx.out.progress(directory)
+
+    def tick(done, total, part, done_bytes):
+        # Bytes, not files: partitions differ wildly in size, so "3/27 files" would jump around
+        # while a rate in MB/s answers the only question anyone has during a big download.
+        progress.label = "{0}  {1}/{2} files".format(directory, done, total)
+        progress.update(done_bytes)
+
+    result = client.vector.download_dataset(ref, directory, on_file=tick)
+    progress.finish()
+    ctx.out.render({"ok": True, "directory": result["directory"], "files": result["parts"],
+                    "format": "geoparquet", "rows": result.get("rows"), "truncated": []})
+    if not ctx.out.json_mode:
+        ctx.out.success("Wrote {0} file(s) to {1}{2}.".format(
+            result["parts"], directory, os.sep))
+        ctx.out.info("Complete and uncapped. Read it with:")
+        ctx.out.info("  SELECT * FROM read_parquet('{0}/**/*.parquet')".format(
+            directory.replace("\\", "/")))
     return EXIT_OK
 
 

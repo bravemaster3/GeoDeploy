@@ -172,14 +172,87 @@ class TestTheTaskItself:
 
     def test_the_manifest_says_which_cap_applied(self):
         text = export_task._manifest([{"name": "Roads", "type": "vector", "format": "gpkg"}],
-                                     None, "4326", ["roads.gpkg"])
+                                     None, "4326", ["roads.gpkg"], {"roads.gpkg": 12480}, [])
         assert "whole layer, no clip" in text
         assert str(export_task.FULL_EXPORT_CAP) in text
-        assert "TRUNCATED" in text          # an export that hit the cap must say so in the zip
-        assert "roads.gpkg" in text
+        assert "complete:  yes" in text
+        assert "roads.gpkg — 12,480 rows" in text
+        assert "TRUNCATED" not in text       # nothing was cut: do not cry wolf
 
     def test_the_manifest_records_a_clip(self):
         text = export_task._manifest([{"name": "Roads", "type": "vector", "format": "csv"}],
                                      "11,55,12,56", "native", ["roads.csv"])
         assert "bbox 11,55,12,56" in text
         assert "native" in text
+
+
+class TestTruncationIsVisible:
+    """A capped export has the same file names and formats as a complete one, and fewer rows. The
+    ONLY thing separating "your data" from "some of your data" is being told."""
+
+    def _cut(self):
+        cap = export_task.FULL_EXPORT_CAP
+        return export_task._manifest(
+            [{"name": "Parcels", "type": "geoparquet", "format": "geoparquet"}],
+            None, "4326", ["parcels.parquet"], {"parcels.parquet": cap},
+            [{"file": "parcels.parquet", "rows": cap, "cap": cap}])
+
+    def test_the_manifest_says_the_export_is_incomplete(self):
+        text = self._cut()
+        assert "complete:  NO" in text
+        assert "WARNING — THIS EXPORT IS INCOMPLETE." in text
+        assert "parcels.parquet — 1,000,000 rows  — TRUNCATED AT THE CAP" in text
+
+    def test_it_names_the_uncapped_alternatives(self):
+        """A warning that leaves you stuck is only half of one."""
+        text = self._cut()
+        assert "ogr2ogr" in text and "OAPIF:" in text          # paged, any size
+        assert "parquet/manifest.json" in text                 # the stored files
+        assert "read_parquet" in text
+        assert "--bbox" in text or "bbox" in text
+        assert "EXPORT_FEATURE_CAP" in text                    # and the operator's lever
+
+    def test_a_complete_export_carries_none_of_that(self):
+        text = export_task._manifest([{"name": "Roads", "type": "vector", "format": "gpkg"}],
+                                     None, "4326", ["roads.gpkg"], {"roads.gpkg": 3}, [])
+        assert "INCOMPLETE" not in text and "ogr2ogr" not in text
+
+    @staticmethod
+    def _finished_export(tmp_path, monkeypatch, report=None):
+        """A ready export on disk, with the data dir pointed at tmp_path.
+
+        `data_dir` is a read-only property, so the settings OBJECT cannot be patched; the route's
+        own `get_settings` is the seam.
+        """
+        from types import SimpleNamespace
+
+        from geodeploy.routers.data import exports as exports_router
+        exports = tmp_path / "temp" / "exports"
+        exports.mkdir(parents=True)
+        (exports / (_Task.id + ".zip")).write_bytes(b"PK")
+        if report is not None:
+            (exports / (_Task.id + ".json")).write_text(json.dumps(report))
+        monkeypatch.setattr(exports_router, "get_settings",
+                            lambda: SimpleNamespace(data_dir=str(tmp_path)))
+
+    async def test_the_status_route_reports_it(self, client, layers, tmp_path, monkeypatch):
+        """So a client knows BEFORE it hands the file to someone — the zip's own manifest is only
+        read by whoever opens the zip."""
+        self._finished_export(tmp_path, monkeypatch, {
+            "rows": {"parcels.parquet": 1000000},
+            "truncated": [{"file": "parcels.parquet", "rows": 1000000, "cap": 1000000}]})
+
+        r = await client.get("/api/data/vector/aaaaaaaaaaaa/export-status/" + _Task.id)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "ready"
+        assert body["truncated"][0]["file"] == "parcels.parquet"
+        assert body["truncated"][0]["cap"] == 1000000
+
+    async def test_an_export_with_no_report_reads_as_complete(self, client, layers, tmp_path,
+                                                              monkeypatch):
+        """Zips built before the report existed, and every export that was not truncated."""
+        self._finished_export(tmp_path, monkeypatch)
+
+        r = await client.get("/api/data/vector/aaaaaaaaaaaa/export-status/" + _Task.id)
+        assert r.json() == {"status": "ready", "truncated": []}

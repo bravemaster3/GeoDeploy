@@ -35,6 +35,8 @@ class FakeInstance(object):
         self.jobs = {}              # job_id -> [status dicts to return, last one repeats]
         self.fail_next = None       # (status, detail) injected into the next API call
         self.exports = {}           # export job id -> the bytes its download returns
+        self.export_truncated = []  # what export-status reports as cut short by the row cap
+        self.last_export = None     # the body of the most recent export request, or None
         self.public_index_enabled = True
         self.token_forbidden = set()  # path prefixes that reject token auth, like /admin
         self.vector_layers = [
@@ -49,6 +51,10 @@ class FakeInstance(object):
              "status": "processing", "progress": 42, "current_step": "Converting",
              "geometry_type": "point", "feature_count": None, "storage_backend": "geoparquet",
              "visibility": "private", "is_public": False, "columns": []},
+            {"id": 4, "uid": "dddddddddddd", "name": "parcels", "layer_type": "vector",
+             "status": "ready", "geometry_type": "polygon", "feature_count": 2_400_000,
+             "storage_backend": "geoparquet", "visibility": "public", "is_public": True,
+             "crs": "EPSG:3006", "file_size": 40_000_000, "created_by": "Koffi", "columns": []},
         ]
         self.raster_layers = [
             {"id": 1, "uid": "cccccccccccc", "name": "dem", "layer_type": "raster",
@@ -122,6 +128,8 @@ class FakeInstance(object):
             (r"/data/vector/(\S+)/features", self._features),
             (r"/data/raster/(\S+)/cog", lambda *a: (200, b"II-pretend-GeoTIFF-bytes")),
             (r"/data/vector/(\S+)/pmtiles", lambda *a: (200, b"PMTiles pretend")),
+            (r"/data/vector/([\w.-]+)/parquet/manifest\.json", self._parquet_manifest),
+            (r"/data/vector/([\w.-]+)/parquet/(.+)", self._parquet_object),
             (r"/public", self._public),
             (r"/public/portals", self._public_portals),
             (r"/data/(vector|raster)/(\S+)/export", self._export_start),
@@ -339,7 +347,28 @@ class FakeInstance(object):
         return 202, {"job_id": job_id}
 
     def _export_status(self, method, match, query, headers, body):
-        return 200, {"status": "ready" if match.group(3) in self.exports else "queued"}
+        if match.group(3) not in self.exports:
+            return 200, {"status": "queued"}
+        return 200, {"status": "ready", "truncated": list(self.export_truncated)}
+
+    #: The prepared-GeoParquet layers this fake serves partition files for.
+    PARQUET = {"dddddddddddd", "4", "parcels"}
+
+    def _parquet_manifest(self, method, match, query, headers, body):
+        if match.group(1) not in self.PARQUET:
+            return 404, {"detail": "No parquet dataset for this layer."}
+        return 200, {
+            "version": 1, "crs": "EPSG:3006", "geometry_column": "geometry",
+            "bbox": [11.0, 55.0, 12.0, 56.0], "feature_count": 2_400_000,
+            "grid": {"grid": 4}, "columns": [{"name": "id", "type": "bigint"}],
+            "cells": {"0": [{"key": "__cell=0/part0.parquet", "rows": 1_200_000}],
+                      "1": [{"key": "__cell=1/part0.parquet", "rows": 1_200_000}]},
+        }
+
+    def _parquet_object(self, method, match, query, headers, body):
+        if match.group(1) not in self.PARQUET:
+            return 404, {"detail": "No parquet dataset for this layer."}
+        return 200, b"PAR1 pretend " + match.group(2).encode()
 
     def _export_download(self, method, match, query, headers, body):
         data = self.exports.get(match.group(3))

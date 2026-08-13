@@ -23,6 +23,7 @@ range request; re-encoding it through a worker would spend minutes to produce a 
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 
@@ -109,17 +110,21 @@ def start(item: dict, bbox: str | None, target_crs: str) -> dict:
 
 
 def status(job_id: str) -> dict:
-    """queued | processing | ready | error — the portal export's contract, unchanged.
+    """queued | processing | ready | error — the portal export's contract, plus `truncated`.
 
     Readiness is the EXISTENCE of the finished file, not the task state: the task writes to a
     `.part` and renames atomically, so a file that is there is a file that is complete, and the
     answer survives a worker restart that loses the result backend entry.
+
+    A ready export also reports which files hit the row cap, read from the `{id}.json` the task
+    writes beside the zip. Same reason the state is read off the filesystem: the result backend may
+    be gone, and a caller that is told only "ready" cannot know it is holding a partial dataset.
     """
     from ...celery_app import celery_app
     _check_job_id(job_id)
     settings = get_settings()
     if os.path.exists("{0}/temp/exports/{1}.zip".format(settings.data_dir, job_id)):
-        return {"status": "ready"}
+        return {"status": "ready", "truncated": _report(job_id, settings)}
     state = celery_app.AsyncResult(job_id).state
     if state == "FAILURE":
         return {"status": "error"}
@@ -135,6 +140,20 @@ def download(job_id: str, filename: str) -> FileResponse:
     if not os.path.exists(path):
         raise HTTPException(404, "That export is not ready (or has been swept).")
     return FileResponse(path, media_type="application/zip", filename=filename)
+
+
+def _report(job_id: str, settings) -> list[dict]:
+    """The truncation report beside the zip: `[{file, rows, cap}]`, empty when nothing was cut.
+
+    An export produced before this existed has no report; that reads as "nothing truncated", which
+    is the same answer callers got then and is right for the overwhelming majority of exports.
+    """
+    path = "{0}/temp/exports/{1}.json".format(settings.data_dir, job_id)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f).get("truncated") or []
+    except (OSError, ValueError):
+        return []
 
 
 def _check_job_id(job_id: str) -> None:

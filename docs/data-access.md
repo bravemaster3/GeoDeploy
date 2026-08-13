@@ -65,10 +65,62 @@ GET  /api/data/vector/{id}/export-download/{job_id}              → a zip
 
 Formats: `gpkg`, `csv`, `geojson`, and `geoparquet` for file-backed layers. Add a `bbox` to clip to
 an area, and `"target_crs": "native"` to keep the layer's own CRS where the format can carry it.
-The zip includes a `MANIFEST.txt` recording the extent, the CRS and the row cap that applied — an
-export that hit the cap otherwise looks exactly like a complete one.
+The zip includes a `MANIFEST.txt` recording the extent, the CRS and the **row count of every file**
+it contains.
 
 Public layers export without a token, on the same terms as their other artifacts.
+
+### Layers bigger than a million features
+
+A built export is capped — **1,000,000 features** per layer for a whole layer, **50,000** for a
+bbox clip — because the archive is assembled in worker memory. When the cap bites, the export says
+so in three places: `MANIFEST.txt`, the `truncated` list on the status response, and the CLI's exit
+code. It is never silent.
+
+The cap applies only to files the instance *builds*. Every complete path is either paged or already
+a file, and none of them is capped:
+
+=== "OGC API - Features (any layer)"
+
+    Paged, and GDAL follows the paging itself — this is the general answer for a large PostGIS
+    layer:
+
+    ```bash
+    ogr2ogr -f GPKG roads.gpkg "OAPIF:https://geodeploy.example.org/api/ogc" roads
+    ```
+
+    ```python
+    # or page it yourself: follow rel="next" until it stops appearing
+    url = "https://geodeploy.example.org/api/ogc/collections/vector-a7f3.../items?limit=10000"
+    ```
+
+    Requires OGC sharing enabled on the layer (`geodeploy layers share roads --ogc`).
+
+=== "GeoParquet layers"
+
+    The stored files, byte for byte — no server-side work at all:
+
+    ```bash
+    geodeploy layers download parcels          # manifest + every partition, into a folder
+    ```
+
+    ```sql
+    -- or straight from DuckDB, no download step
+    SELECT count(*) FROM read_parquet(
+      'https://geodeploy.example.org/api/data/vector/<uid>/parquet/*.parquet');
+    ```
+
+=== "Rasters"
+
+    Already one file:
+
+    ```bash
+    curl -O https://geodeploy.example.org/api/data/raster/<uid>/cog
+    ```
+
+An administrator can raise the cap with `EXPORT_FEATURE_CAP` on the API and worker containers, but
+raising it far trades a truncated download for a worker that runs out of memory. Prefer the paths
+above.
 
 **About the identifiers in these URLs.** A layer is addressed by a short opaque id such as
 `vector-a7f3c91b04e2` — deliberately not a row number. Row numbers get reused when a layer is

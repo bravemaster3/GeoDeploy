@@ -29,7 +29,11 @@ User documentation is `docs/cli.md`; this file is the technical note.
 - `uploads.py` — the routing table (below) plus both transports: multipart-through-the-API, and
   presign/chunked direct-to-storage with per-part retry and abort-on-failure.
 - `layers.py` — the two layer kinds, and `Layers.resolve` (id | uid | `vector-3` | name; ambiguity
-  raises rather than guessing).
+  raises rather than guessing — including a **bare integer that exists in both kinds**, since
+  vector and raster ids are separate sequences and "1" is routinely two different layers).
+  `download_dataset()` pulls a prepared GeoParquet layer's manifest + every partition straight from
+  storage: complete, lossless and **not subject to the export row cap**, which is why
+  `layers download` prefers it over queueing an export for those layers.
 - `portals.py` — portal CRUD and `layer_configs` surgery. `layer_configs[0]` = top of the list =
   drawn on top. `editable_config()` drops server-owned fields before a round-trip PUT.
 - `styles.py` — the style vocabulary of `api/geodeploy/services/symbology.py`, assembled from plain
@@ -54,7 +58,7 @@ no account. `_LayerBase.export_to_file()` drives the queue-poll-download of a bu
   styling flags, shared by the three commands that take them, and `resolve_layer(..., public_ok=)`
   which decides between the authenticated list and the public index.
 
-`tests/` — 284 tests against a real HTTP server (`conftest.FakeInstance`) that records what arrived
+`tests/` — 297 tests against a real HTTP server (`conftest.FakeInstance`) that records what arrived
 on the wire. `pyproject.toml` — packaging; console script `geodeploy`.
 
 ## Dependencies / relationships
@@ -103,6 +107,24 @@ python -m twine upload dist/*
 
 `dist/` and `build/` are git-ignored. The sdist carries the tests, so the release can be verified
 from source rather than trusted.
+
+## The row cap, and the two ways around it
+
+A **built** export (`gpkg`/`csv`/`geojson`, or anything clipped) stops at `FULL_EXPORT_CAP`
+(1,000,000 features, env-tunable) for a whole layer and `FEATURE_CAP` (50,000) for a bbox clip,
+because the worker assembles the archive in memory. The failure mode this creates is not the cap —
+it is that a truncated export has the same names and formats as a complete one. So:
+
+- the task records the row count of every file it writes, marks the ones that reached the cap in
+  `MANIFEST.txt` (with the uncapped alternatives spelled out), and writes `{job_id}.json` beside
+  the zip;
+- `GET …/export-status/{job_id}` reports `truncated: [{file, rows, cap}]` from that file;
+- `layers download` prints `INCOMPLETE`, names the alternative, and **exits non-zero**.
+
+The uncapped paths, which the CLI prefers automatically where it can: a prepared **GeoParquet**
+layer's own partition files (`download_dataset`, no worker involved), and **OGC API - Features**
+paging for PostGIS (`ogr2ogr -f GPKG out.gpkg "OAPIF:<instance>/api/ogc" <layer>` — not wrapped by
+the CLI yet; see below).
 
 ## Current status & known issues
 - `geodeploy browse` and `layers download` depend on API endpoints added in the same branch

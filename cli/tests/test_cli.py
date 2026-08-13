@@ -511,6 +511,78 @@ class TestLayerDownload:
         assert target.exists()
 
 
+class TestTruncatedExport:
+    """A capped export looks exactly like a complete one. The command must not let that pass."""
+
+    def test_it_fails_loudly_when_the_server_reports_a_cap(self, run, logged_in, instance,
+                                                           tmp_path):
+        instance.export_truncated = [{"file": "roads.gpkg", "rows": 1000000, "cap": 1000000}]
+        code, out, err = run("layers", "download", "roads", "-o", str(tmp_path / "roads.zip"))
+        assert code == EXIT_GENERIC              # a script must be able to notice
+        assert "INCOMPLETE" in err
+        assert "1,000,000" in err
+        assert (tmp_path / "roads.zip").exists()  # the partial file is still written, not hidden
+
+    def test_it_points_at_the_uncapped_route(self, run, logged_in, instance, tmp_path):
+        instance.export_truncated = [{"file": "roads.gpkg", "rows": 1000000, "cap": 1000000}]
+        code, out, err = run("layers", "download", "roads", "-o", str(tmp_path / "roads.zip"))
+        assert "OAPIF:" in err and "ogr2ogr" in err
+
+    def test_json_mode_carries_the_report(self, run, logged_in, instance, tmp_path):
+        instance.export_truncated = [{"file": "roads.gpkg", "rows": 1000000, "cap": 1000000}]
+        code, out, err = run("layers", "download", "roads", "-o", str(tmp_path / "roads.zip"),
+                             "--json")
+        assert json.loads(out)["truncated"][0]["file"] == "roads.gpkg"
+
+    def test_an_untruncated_export_says_nothing_of_the_sort(self, run, logged_in, tmp_path):
+        code, out, err = run("layers", "download", "roads", "-o", str(tmp_path / "roads.zip"))
+        assert code == EXIT_OK
+        assert "INCOMPLETE" not in err
+
+
+class TestGeoParquetDirectDownload:
+    """A prepared GeoParquet layer already exists as files. Rebuilding it through the worker is
+    slower, lossy at the row cap, and pointless."""
+
+    def test_it_reads_the_stored_files_instead_of_queueing_an_export(self, run, logged_in,
+                                                                     instance, tmp_path):
+        target = tmp_path / "parcels"
+        code, out, err = run("layers", "download", "parcels", "-o", str(target))
+        assert code == EXIT_OK
+        assert instance.last_export is None, "no export job should have been queued"
+        assert (target / "manifest.json").exists()
+        assert (target / "__cell=0" / "part0.parquet").read_bytes().startswith(b"PAR1")
+        assert (target / "__cell=1" / "part0.parquet").exists()
+
+    def test_it_says_how_to_read_what_it_wrote(self, run, logged_in, tmp_path):
+        code, out, err = run("layers", "download", "parcels", "-o", str(tmp_path / "p"))
+        assert "read_parquet" in err
+        assert "2,400,000 features" in err
+
+    def test_json_mode_reports_the_directory(self, run, logged_in, tmp_path):
+        code, out, err = run("layers", "download", "parcels", "-o", str(tmp_path / "p"), "--json")
+        payload = json.loads(out)
+        assert payload["files"] == 2 and payload["format"] == "geoparquet"
+        assert payload["truncated"] == []
+
+    def test_a_bbox_still_goes_through_the_export_job(self, run, logged_in, instance, tmp_path):
+        """A clip is real work — only the WHOLE layer is already a file."""
+        run("layers", "download", "parcels", "--bbox", "11,55,12,56",
+            "-o", str(tmp_path / "p.zip"), "--format", "geoparquet")
+        assert instance.last_export["bbox"] == "11,55,12,56"
+
+    def test_a_postgis_layer_is_unaffected(self, run, logged_in, instance, tmp_path):
+        code, out, err = run("layers", "download", "roads", "-o", str(tmp_path / "roads.zip"))
+        assert instance.last_export["format"] == "gpkg"
+
+    def test_a_geoparquet_layer_without_a_manifest_falls_back_to_the_export(self, run, logged_in,
+                                                                           instance, tmp_path):
+        instance.PARQUET = set()          # e.g. a single .parquet uploaded as-is
+        code, out, err = run("layers", "download", "parcels", "-o", str(tmp_path / "p.zip"))
+        assert code == EXIT_OK
+        assert instance.last_export is not None
+
+
 class TestPublicListingToggle:
     """The switch that decides whether `browse` finds anything — reachable from the CLI, not only
     from the API, because an operator should never have to reach for curl."""

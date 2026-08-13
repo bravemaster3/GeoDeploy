@@ -65,11 +65,14 @@ def _geom_out(srid: int, out_srid: int) -> str:
     return "geom" if int(srid) == int(out_srid) else f"ST_Transform(geom, {int(out_srid)})"
 
 
-def _vec_geojson(cur, schema: str, table: str, b, srid: int, out_srid: int) -> str:
+def _vec_geojson(cur, schema: str, table: str, b, srid: int, out_srid: int) -> tuple[str, int]:
+    """`(GeoJSON text, row count)`. The count comes back from the same query — `count(*)` over the
+    already-aggregated subquery is free, and without it a truncated export is indistinguishable
+    from a complete one."""
     where, params, cap = _filter(b, srid)
     sql = (
         "SELECT jsonb_build_object('type','FeatureCollection','features',"
-        "COALESCE(jsonb_agg(f.feat), '[]'::jsonb))::text FROM ("
+        "COALESCE(jsonb_agg(f.feat), '[]'::jsonb))::text, count(*) FROM ("
         "  SELECT jsonb_build_object('type','Feature',"
         f"    'geometry', ST_AsGeoJSON({_geom_out(srid, out_srid)})::jsonb,"
         "    'properties', to_jsonb(t) - 'geom') AS feat"
@@ -80,10 +83,12 @@ def _vec_geojson(cur, schema: str, table: str, b, srid: int, out_srid: int) -> s
     )
     cur.execute(sql, params)
     row = cur.fetchone()
-    return row[0] if row and row[0] else '{"type":"FeatureCollection","features":[]}'
+    if not (row and row[0]):
+        return '{"type":"FeatureCollection","features":[]}', 0
+    return row[0], int(row[1] or 0)
 
 
-def _vec_csv(cur, schema: str, table: str, b, srid: int, out_srid: int) -> str:
+def _vec_csv(cur, schema: str, table: str, b, srid: int, out_srid: int) -> tuple[str, int]:
     import csv
     where, params, cap = _filter(b, srid)
     sql = (
@@ -105,10 +110,10 @@ def _vec_csv(cur, schema: str, table: str, b, srid: int, out_srid: int) -> str:
     w.writeheader()
     for rec in recs:
         w.writerow(rec)
-    return buf.getvalue()
+    return buf.getvalue(), len(recs)
 
 
-def _gpq_features(s3_key: str, b, settings, keep_native: bool = False) -> list[dict]:
+def _gpq_features(s3_key: str, b, settings, keep_native: bool = False) -> tuple[list[dict], int]:
     """Clip a GeoParquet layer to the bbox via DuckDB (covering/partition-pruned viewport query).
     `keep_native=True` → geometries come back in the file's OWN CRS (lossless download); the exact
     4326-intersects refinement is then skipped (the covering prune, done in the file CRS, already
@@ -123,8 +128,12 @@ def _gpq_features(s3_key: str, b, settings, keep_native: bool = False) -> list[d
     fc = duckdb_engine.query_features_geojson(s3_key, list(b) if b else None, cap, creds,
                                               keep_native=keep_native)
     feats = fc.get("features", [])
+    # `read` is what DuckDB returned, BEFORE the refinement below. Truncation is a property of the
+    # read, not of what survived the intersects test — a clip that drops rows on purpose is not the
+    # same thing as a cap that dropped them silently.
+    read = len(feats)
     if keep_native or b is None:
-        return feats  # already pruned (or unfiltered, for a whole-layer download)
+        return feats, read  # already pruned (or unfiltered, for a whole-layer download)
     sel = shp_box(b[0], b[1], b[2], b[3])
     kept = []
     for f in feats:
@@ -133,11 +142,11 @@ def _gpq_features(s3_key: str, b, settings, keep_native: bool = False) -> list[d
                 kept.append(f)
         except Exception:  # noqa: BLE001 — a single bad geometry shouldn't kill the export
             continue
-    return kept
+    return kept, read
 
 
-def _gpq_parquet(s3_key: str, b, settings) -> bytes:
-    """Clip a GeoParquet layer to the bbox and return GeoParquet BYTES for the zip.
+def _gpq_parquet(s3_key: str, b, settings) -> tuple[bytes, int]:
+    """Clip a GeoParquet layer to the bbox and return `(GeoParquet bytes, row count)`.
 
     Written to a temp file because pyarrow writes parquet to a path, then read back — parquet is a
     random-access format with a footer, so it cannot be streamed into the archive as it is produced.
@@ -149,11 +158,11 @@ def _gpq_parquet(s3_key: str, b, settings) -> bytes:
     creds = _get_storage_creds()
     with tempfile.TemporaryDirectory() as td:
         out = os.path.join(td, "clip.parquet")
-        duckdb_engine.copy_features_parquet(s3_key, list(b) if b else None,
-                                            FEATURE_CAP if b is not None else FULL_EXPORT_CAP,
-                                            out, creds)
+        rows = duckdb_engine.copy_features_parquet(
+            s3_key, list(b) if b else None,
+            FEATURE_CAP if b is not None else FULL_EXPORT_CAP, out, creds)
         with open(out, "rb") as f:
-            return f.read()
+            return f.read(), int(rows or 0)
 
 
 def _gpq_geojson(feats: list[dict]) -> str:
@@ -254,29 +263,68 @@ def _clip_raster(s3_key: str, b, settings) -> bytes:
                 return memfile.read()
 
 
-def _manifest(items: list[dict], bbox: str | None, target_crs: str, files: list[str]) -> str:
-    """A plain-text note inside the zip: what was asked for, and the cap that applied.
+def _manifest(items: list[dict], bbox: str | None, target_crs: str, files: list[str],
+              rows: dict[str, int] | None = None,
+              truncated: list[dict] | None = None) -> str:
+    """A plain-text note inside the zip: what was asked for, what came out, and — when the cap bit —
+    how to get the data COMPLETE instead.
 
-    An export that hit the row cap looks exactly like a complete one — same formats, same file
-    names, fewer rows. Saying so in the archive is the cheapest place to be honest, because the zip
-    outlives the HTTP response that produced it.
+    An export that hit the row cap looks exactly like a complete one: same formats, same file
+    names, fewer rows. Stating the cap was never enough, because the reader still cannot tell
+    whether it applied to *them*; the per-file counts below are the part that answers that.
     """
     cap = FEATURE_CAP if bbox else FULL_EXPORT_CAP
+    rows = rows or {}
+    truncated = truncated or []
     lines = [
         "GeoDeploy export",
         "generated: {0}".format(datetime.now(timezone.utc).isoformat(timespec="seconds")),
         "extent:    {0}".format("bbox " + bbox + " (EPSG:4326)" if bbox else "whole layer, no clip"),
         "CRS:       {0}".format("native where the format allows" if target_crs == "native"
                                 else "EPSG:4326"),
-        "row cap:   {0} features per vector layer — a layer reaching exactly this number was "
-        "TRUNCATED".format(cap),
+        "row cap:   {0} features per vector layer".format(cap),
+        "complete:  {0}".format("NO — see the warning below" if truncated else "yes"),
         "",
         "layers requested:",
     ]
     for it in items:
         lines.append("  - {0} ({1}{2})".format(it.get("name"), it.get("type"),
                                                ", " + it["format"] if it.get("format") else ""))
-    lines += ["", "files:"] + ["  - " + f for f in files]
+    lines += ["", "files:"]
+    for f in files:
+        if f in rows:
+            mark = "  — TRUNCATED AT THE CAP" if any(t["file"] == f for t in truncated) else ""
+            lines.append("  - {0} — {1:,} rows{2}".format(f, rows[f], mark))
+        else:
+            lines.append("  - " + f)
+    if truncated:
+        lines += ["", "─" * 78, "WARNING — THIS EXPORT IS INCOMPLETE.", ""]
+        for t in truncated:
+            lines.append("  {0} stopped at the {1:,}-row cap.".format(t["file"], t["cap"]))
+        lines += [
+            "",
+            "The rows you have are the ones the scan reached first — not a sample, and not the",
+            "first N by any meaningful order. Do not treat this file as the dataset.",
+            "",
+            "Complete alternatives, none of which is capped:",
+            "",
+            "  1. OGC API - Features — paged, and GDAL follows the paging itself:",
+            "       ogr2ogr -f GPKG out.gpkg \"OAPIF:<instance>/api/ogc\" <layer>",
+            "     (the layer must have OGC sharing enabled)",
+            "",
+            "  2. GeoParquet layers — read the source files straight from storage:",
+            "       <instance>/api/data/vector/<uid>/parquet/manifest.json",
+            "       then each partition it lists, or in DuckDB:",
+            "       SELECT * FROM read_parquet('<instance>/api/data/vector/<uid>/parquet/*.parquet')",
+            "",
+            "  3. Ask for a smaller area: the same export with a bbox returns everything inside it",
+            "     (up to {0:,} features per layer).".format(FEATURE_CAP),
+            "",
+            "An administrator can also raise EXPORT_FEATURE_CAP, but the cap exists because the",
+            "archive is assembled in worker memory — raising it far trades a truncated download",
+            "for a failed one.",
+            "─" * 78,
+        ]
     return "\n".join(lines) + "\n"
 
 
@@ -302,6 +350,8 @@ def export_bundle(self, bbox: str | None, items: list[dict], target_crs: str = "
     tmp_path = out_path + ".part"
 
     used: set[str] = set()
+    row_counts: dict[str, int] = {}
+    truncated: list[dict] = []
 
     def fn(base: str, ext: str) -> str:
         name = f"{base}.{ext}"
@@ -311,6 +361,18 @@ def export_bundle(self, bbox: str | None, items: list[dict], target_crs: str = "
             i += 1
         used.add(name)
         return name
+
+    def put(z, name: str, payload, rows: int, cap: int) -> None:
+        """Write one layer's file and record what it actually contains.
+
+        `rows == cap` is the only signal available that the LIMIT bit: the query cannot report how
+        many rows it did NOT return. Equality is therefore treated as truncation, which over-warns
+        for a layer of exactly `cap` features — the harmless direction to be wrong in.
+        """
+        z.writestr(name, payload)
+        row_counts[name] = rows
+        if rows >= cap:
+            truncated.append({"file": name, "rows": rows, "cap": cap})
 
     import psycopg2
     # Build the DSN from the SQLite setup_config (authoritative) rather than env settings —
@@ -334,43 +396,50 @@ def export_bundle(self, bbox: str | None, items: list[dict], target_crs: str = "
                     srid = _table_srid(cur, it["schema"], it["table"])
                     # GeoJSON is ALWAYS 4326 (RFC 7946). CSV/GPKG carry the native SRID when requested.
                     out_srid = srid if (native and fmt in ("csv", "gpkg")) else 4326
+                    cap = FEATURE_CAP if b is not None else FULL_EXPORT_CAP
                     if fmt == "csv":
-                        z.writestr(fn(base, "csv"), _vec_csv(cur, it["schema"], it["table"], b, srid, out_srid))
+                        csv_text, n = _vec_csv(cur, it["schema"], it["table"], b, srid, out_srid)
+                        put(z, fn(base, "csv"), csv_text, n, cap)
                     elif fmt == "gpkg":
-                        gj = _vec_geojson(cur, it["schema"], it["table"], b, srid, out_srid)
+                        gj, n = _vec_geojson(cur, it["schema"], it["table"], b, srid, out_srid)
                         try:
-                            z.writestr(fn(base, "gpkg"), _gj_to_gpkg(gj, base, f"EPSG:{out_srid}"))
+                            put(z, fn(base, "gpkg"), _gj_to_gpkg(gj, base, f"EPSG:{out_srid}"), n, cap)
                         except Exception as e:
                             log.warning("GeoPackage export failed for %s, falling back to GeoJSON: %s", base, e)
-                            z.writestr(fn(base, "geojson"), gj)
+                            put(z, fn(base, "geojson"), gj, n, cap)
                     else:
-                        z.writestr(fn(base, "geojson"), _vec_geojson(cur, it["schema"], it["table"], b, srid, 4326))
+                        gj, n = _vec_geojson(cur, it["schema"], it["table"], b, srid, 4326)
+                        put(z, fn(base, "geojson"), gj, n, cap)
                 elif it.get("type") == "geoparquet":
                     base = _safe(it.get("name"))
                     fmt = it.get("format", "geojson")
                     # native only for CSV/GPKG; GeoJSON must be 4326.
                     keep_native = native and fmt in ("csv", "gpkg")
+                    cap = FEATURE_CAP if b is not None else FULL_EXPORT_CAP
                     # The parquet path never needs decoded features — computing them would undo the
                     # entire point of it.
-                    feats = ([] if fmt == "geoparquet"
-                             else _gpq_features(it["s3_key"], b, settings, keep_native=keep_native))
+                    feats, n = (([], 0) if fmt == "geoparquet"
+                                else _gpq_features(it["s3_key"], b, settings,
+                                                   keep_native=keep_native))
                     out_crs = (it.get("crs") or "EPSG:4326") if keep_native else "EPSG:4326"
                     if fmt == "geoparquet":
                         # Parquet-to-parquet inside DuckDB: no GeoJSON materialisation, no shapely
                         # round-trip, geometry stays WKB in the file's own CRS. Lossless and the
                         # cheapest of the four, which is why it is offered only where it applies.
-                        z.writestr(fn(base, "parquet"), _gpq_parquet(it["s3_key"], b, settings))
+                        data, n = _gpq_parquet(it["s3_key"], b, settings)
+                        put(z, fn(base, "parquet"), data, n, cap)
                     elif fmt == "csv":
-                        z.writestr(fn(base, "csv"), _gpq_csv(feats))
+                        put(z, fn(base, "csv"), _gpq_csv(feats), n, cap)
                     elif fmt == "gpkg":
                         gj = _gpq_geojson(feats)
                         try:
-                            z.writestr(fn(base, "gpkg"), _gj_to_gpkg(gj, base, out_crs))
+                            put(z, fn(base, "gpkg"), _gj_to_gpkg(gj, base, out_crs), n, cap)
                         except Exception as e:
                             log.warning("GeoPackage export failed for %s, falling back to GeoJSON: %s", base, e)
-                            z.writestr(fn(base, "geojson"), _gpq_geojson(_gpq_features(it["s3_key"], b, settings)))
+                            again, n = _gpq_features(it["s3_key"], b, settings)
+                            put(z, fn(base, "geojson"), _gpq_geojson(again), n, cap)
                     else:
-                        z.writestr(fn(base, "geojson"), _gpq_geojson(feats))
+                        put(z, fn(base, "geojson"), _gpq_geojson(feats), n, cap)
                 else:  # raster
                     if b is None:
                         log.info("Whole-raster export skipped for %s — /cog serves the file itself.",
@@ -385,7 +454,8 @@ def export_bundle(self, bbox: str | None, items: list[dict], target_crs: str = "
                         log.exception("Raster clip failed for %s", it.get("name"))
                         raise
                     z.writestr(fn(_safe(it.get("name")) + "_clip", "tif"), data)
-            z.writestr("MANIFEST.txt", _manifest(items, bbox, target_crs, sorted(used)))
+            z.writestr("MANIFEST.txt", _manifest(items, bbox, target_crs, sorted(used),
+                                                 row_counts, truncated))
             cur.close()
     except Exception:
         if os.path.exists(tmp_path):
@@ -394,5 +464,17 @@ def export_bundle(self, bbox: str | None, items: list[dict], target_crs: str = "
     finally:
         conn.close()
 
+    # The report goes down BEFORE the zip is published: readiness is the existence of {id}.zip, so
+    # writing it after would leave a window where a client can download a truncated export and be
+    # told nothing is wrong. Best-effort — a missing report must never fail an export that worked.
+    try:
+        with open(out_path[: -len(".zip")] + ".json", "w", encoding="utf-8") as f:
+            json.dump({"rows": row_counts, "truncated": truncated}, f)
+    except Exception:  # noqa: BLE001
+        log.warning("Could not write the export report for %s", self.request.id, exc_info=True)
+
     os.replace(tmp_path, out_path)  # atomic publish — only now does status flip to "ready"
-    return {"path": out_path}
+    if truncated:
+        log.warning("Export %s hit the row cap: %s", self.request.id,
+                    ", ".join(t["file"] for t in truncated))
+    return {"path": out_path, "truncated": truncated, "rows": row_counts}

@@ -11,7 +11,23 @@ class TestLayerResolution:
     """A layer can be named by id, uid or name. Ambiguity is an error, never a silent pick."""
 
     def test_by_integer_id(self, client):
-        assert client.layers.resolve(1)["name"] == "roads"
+        assert client.layers.resolve(2)["name"] == "field sites"
+
+    def test_an_id_that_exists_in_BOTH_kinds_is_refused(self, client):
+        """vector 1 and raster 1 are different layers — ids are per-kind sequences. Returning
+        whichever the listing happened to put first is how you download a vector while asking for
+        a raster, and nothing in the output would tell you."""
+        with pytest.raises(ValidationError) as caught:
+            client.layers.resolve("1")
+        assert "vector-1" in str(caught.value) and "raster-1" in str(caught.value)
+
+    def test_and_the_kind_resolves_it_either_way(self, client):
+        assert client.layers.resolve("raster-1")["name"] == "dem"
+        assert client.layers.resolve(1, kind="raster")["name"] == "dem"
+        assert client.layers.resolve(1, kind="vector")["name"] == "roads"
+
+    def test_a_uid_is_never_ambiguous(self, client):
+        assert client.layers.resolve("cccccccccccc")["name"] == "dem"
 
     def test_by_stable_uid(self, client):
         # uid, not the integer id, is what public URLs use: SQLite reuses a deleted row's id, so a
@@ -45,7 +61,7 @@ class TestLayerResolution:
 
     def test_integer_id_beats_a_name_that_looks_like_one(self, client, instance):
         instance.vector_layers.append(dict(instance.vector_layers[0], id=7, uid="e" * 12, name="1"))
-        assert client.layers.resolve(1)["name"] == "roads"
+        assert client.layers.resolve(1, "vector")["name"] == "roads"
 
 
 class TestLayerListing:
@@ -54,9 +70,12 @@ class TestLayerListing:
         assert {r["layer_type"] for r in rows} == {"vector", "raster"}
 
     def test_filters(self, client):
-        assert len(client.layers.list("vector", status="ready")) == 1
-        assert len(client.layers.list(query="field")) == 1
-        assert len(client.layers.list(visibility="public")) == 1
+        # By name rather than by count: the fixture set grows, and a count assertion turns that
+        # into a failure in a test about filtering.
+        assert {r["name"] for r in client.layers.list("vector", status="ready")} == {
+            "roads", "parcels"}
+        assert [r["name"] for r in client.layers.list(query="field")] == ["field sites"]
+        assert {r["name"] for r in client.layers.list(visibility="public")} == {"parcels", "dem"}
 
     def test_sharing_requires_something_to_change(self, client):
         with pytest.raises(ValidationError):

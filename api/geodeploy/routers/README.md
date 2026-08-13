@@ -201,9 +201,13 @@ deliberately NOT visibility-filtered (published portals depend on them).
   `is_public` for raster), so nothing new is exposed. **No bbox = no spatial predicate at all**, not
   a world envelope: transforming ±180 into a projected CRS is undefined near the poles and would
   silently drop rows. Whole-layer exports use `FULL_EXPORT_CAP` (1M, `EXPORT_FEATURE_CAP`) rather
-  than the 50k clip cap, and every zip carries a `MANIFEST.txt` naming the cap, because a truncated
-  export is indistinguishable from a complete one. A RASTER export requires a bbox — the whole file
-  is already `/cog`. Tests: `test_layer_export.py`.
+  than the 50k clip cap. **Truncation is reported, not merely warned about** (2026-08-13): the task
+  writes `{job_id}.json` beside the zip and `status()` returns `truncated: [{file, rows, cap}]`
+  from it, so a client knows before it hands the file on — `MANIFEST.txt` is only read by whoever
+  opens the archive, and a capped export is otherwise indistinguishable from a complete one. The
+  report is written BEFORE the zip is renamed into place, because readiness is the zip's existence.
+  A RASTER export requires a bbox — the whole file is already `/cog`. Tests:
+  `test_layer_export.py`.
 - `ogcapi.py` — **PUBLIC OGC API - Features (Part 1: Core)** at `/api/ogc` (2026-07-29). The
   **widest-reach read surface we have**: QGIS ("Add OGC API - Features Layer"), ArcGIS Pro, FME and
   anything on GDAL's `OAPIF` driver consume it natively — unlike TileJSON/PMTiles, which only the

@@ -279,8 +279,16 @@ geodeploy layers usage roads               # which portals use it
 ```
 
 **You can name a layer any way you have it**: its id (`7`), its stable public id
-(`a7f3c91b04e2`), a `vector-7` reference, or its name — a unique part of the name is enough. An
-ambiguous name is an error, never a guess.
+(`a7f3c91b04e2`), a `vector-7` reference, or its name — a unique part of the name is enough.
+Ambiguity is always an error, never a guess, and there are two kinds of it:
+
+- **Two layers with the same name.** The command lists the candidates with their ids and stops.
+- **A plain number.** Vector and raster ids are *separate sequences*, so `1` can be both a vector
+  and a raster. Asked for a bare `1` when both exist, the CLI refuses and tells you to write
+  `vector-1` or `raster-1`.
+
+In scripts, prefer the **uid** (`a7f3c91b04e2`): it is unique across both kinds, it survives a
+rename, and it is what the public URLs use.
 
 ```bash
 geodeploy layers rename roads "Main roads"
@@ -292,25 +300,43 @@ geodeploy layers delete roads --yes
 ### Downloading a layer
 
 ```bash
-geodeploy layers download roads                      # the whole layer, as a GeoPackage
+geodeploy layers download roads                      # PostGIS layer → a built GeoPackage
+geodeploy layers download parcels                    # GeoParquet layer → its own files, uncapped
 geodeploy layers download roads --format csv
-geodeploy layers download parcels --format geoparquet --crs native
 geodeploy layers download roads --bbox 11.8,57.6,12.1,57.8    # just that area
 geodeploy layers download dem                        # the Cloud-Optimized GeoTIFF itself
 ```
 
 Two different mechanisms sit behind that one command, and it matters which you get:
 
-| Format | How it arrives |
+| What you ask for | How it arrives |
 | --- | --- |
-| `cog`, `pmtiles` | the stored file, streamed as-is — instant, no server work |
-| `gpkg`, `csv`, `geojson`, `geoparquet` | **built by the instance as a job**, and arrives as a zip |
-
-A built export carries a `MANIFEST.txt` recording the extent, the CRS and the row cap that applied.
-Read it for a large layer: an export that hit the cap looks exactly like a complete one otherwise.
+| `cog`, `pmtiles`, a whole **GeoParquet** layer | the **stored files**, streamed as they are — no server work, no row cap, lossless |
+| `gpkg`, `csv`, `geojson`, or anything **clipped** | **built by the instance as a job**, and arrives as a zip |
 
 `--crs native` keeps the layer's own CRS where the format can carry it (GeoPackage, CSV,
 GeoParquet). GeoJSON is always EPSG:4326, as the format requires.
+
+For a GeoParquet layer, `download` writes a **folder** — the dataset manifest plus every partition
+file, exactly as the instance stores them. Read it with one line:
+
+```sql
+SELECT * FROM read_parquet('parcels_parquet/**/*.parquet');
+```
+
+!!! warning "A built export is capped, and says so"
+    The instance builds an export in worker memory, so it stops at **1,000,000 features** for a
+    whole layer (**50,000** for a bbox clip). If your layer reaches that, the command prints
+    `INCOMPLETE`, names the file, **exits non-zero**, and points you at an uncapped route —
+    and `MANIFEST.txt` inside the zip repeats it with the row count of every file.
+
+    A truncated export is not a sample: the rows are whichever the scan reached first. For layers
+    that big use `geodeploy layers download` on a GeoParquet layer (above), or OGC API - Features,
+    which is paged and unlimited:
+
+    ```bash
+    ogr2ogr -f GPKG roads.gpkg "OAPIF:https://geodeploy.example.org/api/ogc" roads
+    ```
 
 **This works without a token** for a layer that is public — including by name, which the CLI
 resolves through the instance's public index. It is how someone with no account takes a copy of
