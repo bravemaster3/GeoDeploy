@@ -69,8 +69,11 @@ on the wire. `pyproject.toml` — packaging; console script `geodeploy`.
 
 ## Dependencies / relationships
 - **Zero runtime dependencies, Python 3.9+.** Both constraints exist for the QGIS plugin, which
-  vendors this package and cannot pip-install anything (QGIS 3.28 LTR ships Python 3.9). Do not add
-  a dependency here without moving it into an extra.
+  vendors this package and cannot pip-install anything on a user's machine. The floor is set by the
+  **oldest QGIS anyone still runs**, not the current one — institutions pin a release for years —
+  so it reaches back through several LTR lines rather than tracking today's. Current QGIS ships a
+  much newer Python; that is not the constraint. Do not add a dependency here without moving it
+  into an extra.
 - Consumes `api/geodeploy/routers/` — see that folder's README for the permission model. Nothing in
   the API imports this.
 - **GeoLibre does not use this package**: its plugin is browser TypeScript
@@ -102,14 +105,26 @@ repo convention in CLAUDE.md), which is not what someone landing on PyPI wants t
 the user-facing front page. Keep both current.
 
 The name `geodeploy` was unregistered on PyPI as of 2026-08-13 (re-check immediately before the
-first upload — anyone can claim it). To cut a release:
+first upload — anyone can claim it).
+
+**Releases go through `.github/workflows/publish-cli.yml`, not from a laptop.** It uses PyPI's
+Trusted Publishing: no API token exists to leak or rotate, and the workflow gates the upload on the
+test suite, on `twine check`, on a clean `--no-deps` install, and on the **tag matching the packaged
+version**. Cutting a release is therefore:
+
+```bash
+# 1. bump the one line in geodeploy/__init__.py, commit, merge
+# 2. tag it — the prefix is `cli-v`, not the platform's `v1.3`
+git tag cli-v1.3.0b1 && git push origin cli-v1.3.0b1
+```
+
+Use the workflow's manual run (`Actions → Publish CLI → Run workflow → testpypi`) to rehearse
+against TestPyPI first. Building by hand is still the way to CHECK a change without releasing it:
 
 ```bash
 cd cli
 python -m build                     # sdist + wheel into dist/
 python -m twine check dist/*        # must pass before anything is uploaded
-python -m twine upload --repository testpypi dist/*    # rehearse
-python -m twine upload dist/*
 ```
 
 `dist/` and `build/` are git-ignored. The sdist carries the tests, so the release can be verified
@@ -154,7 +169,27 @@ the CLI yet; see below).
   `portals export/import` round trip is the seam it would build on. Deliberately deferred.
 - No shell completion.
 - The QGIS plugin does not exist yet; the seams it needs (pluggable transport, progress callbacks,
-  `cancel`, typed errors, no printing) are in place and tested.
+  `cancel`, typed errors, no printing, and `styles.Style` for reading a style back) are in place and
+  tested.
+  **Which URL it should hand QGIS is two questions, not one.** For DISPLAY of a heavy layer,
+  **PMTiles** is the fastest thing we serve — pre-tiled, range-requested, no per-pan query — and it
+  is what `layers links` should offer first for a big GeoParquet layer. But PMTiles is a *rendering*
+  format: generalised geometry, tile-clipped features, attributes trimmed to what the tiles carry.
+  For DATA — full attributes, exact geometry, analysis, editing — the answer is OGC API - Features,
+  the GeoParquet partitions, or a built export. A plugin that offers only one of the two will be
+  wrong half the time, so the layer-add dialog needs both, labelled for what they are.
+  Caveat: reading PMTiles needs a GDAL with the support (3.8+), which rules out the oldest QGIS the
+  Python floor above deliberately still supports — so the display path must degrade to OAPIF rather
+  than assume it.
+  **Measured on the maintainer's two installs (2026-08-13)**, which is why this is a rule and not a
+  worry: one reports Python **3.9.5** / GDAL **3.7.2** (no PMTiles — and the exact Python the floor
+  above exists for), the other Python **3.12.12** / GDAL **3.12.1** (PMTiles fine). Both are in
+  daily use. So `metadata.txt` should say `qgisMinimumVersion=3.28` (the oldest QGIS whose Python
+  is ≥ 3.9) and the plugin should branch on `gdal.VersionInfo()` at RUNTIME rather than refusing to
+  install — blocking the old one would lock out precisely the pinned installs this package's
+  constraints were chosen to serve.
+  Develop and demo on the NEWEST QGIS; that is a different decision from what the plugin refuses to
+  run on, and only the second one is visible to a user with an old install.
 
 ## Last updated
 2026-08-12 (created — packaged CLI + Python client, replacing `examples/geodeploy_cli.py`; then

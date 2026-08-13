@@ -15,11 +15,15 @@ authors = [{ name = "Koffi Dodji Noumonvi" }]
 keywords = ["gis", "geospatial", "postgis", "geoparquet", "cog", "maplibre", "qgis", "stac",
             "ogc-api-features", "geodeploy"]
 
-# 3.9 is the floor because the QGIS plugin VENDORS this package: QGIS 3.28 LTR ships Python 3.9,
-# and a plugin cannot pip-install anything on a user's machine. Everything here therefore runs on
-# 3.9 — `from __future__ import annotations` in every module, no match statements, no PEP 604
-# unions evaluated at runtime. No upper bound, deliberately: capping it would break installs on
-# every Python released after this one.
+# 3.9 is the floor because the QGIS plugin VENDORS this package — it drops `geodeploy/` into its own
+# folder and imports it, and a plugin cannot pip-install anything on a user's machine. So the floor
+# is set by the OLDEST QGIS anyone still runs, not by the current one: institutional installs sit on
+# a pinned release for years, and 3.9 reaches back through several LTR lines. (Do not read this as
+# "QGIS ships 3.9" — current releases ship far newer; the point is that WE cannot choose which one
+# the user has.) Everything here therefore runs on 3.9: `from __future__ import annotations` in every
+# module, no match statements, no PEP 604 unions evaluated at runtime. The cost is small and the CI
+# matrix pins it. No upper bound, deliberately: capping it would break installs on every Python
+# released after this one.
 requires-python = ">=3.9"
 
 # NO RUNTIME DEPENDENCIES, deliberately. Same reason: the QGIS plugin drops `geodeploy/` into its
