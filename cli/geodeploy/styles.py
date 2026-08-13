@@ -247,6 +247,170 @@ def _validate(style: Dict[str, Any]) -> None:
             raise ValidationError(400, "{0} is a fraction between 0 and 1.".format(key))
 
 
+class Style(object):
+    """A stored style, READ. The reverse direction of `build_style`.
+
+    `build_style` exists so a caller can assemble the vocabulary; nothing existed to take it apart
+    again, so anything rendering a GeoDeploy layer somewhere else — the QGIS plugin first — had to
+    reach into the dict and re-decide what `color_mode: "graduated"` implies, which keys are
+    authoritative, and what a missing one defaults to. That is a second definition of the
+    vocabulary, in a project that already keeps three surfaces in step by hand.
+
+    So this is a READER, not a schema: it never rejects, never fills in a server default it cannot
+    know, and keeps `.raw` so a caller can reach anything not modelled here. `to_dict()` returns the
+    original dict, which is what makes build → parse → build lossless.
+    """
+
+    __slots__ = ("raw",)
+
+    def __init__(self, style: Optional[Dict[str, Any]] = None):
+        self.raw = dict(style or {})
+
+    # -- what kind of symbology is this ------------------------------------------------------------
+
+    @property
+    def mode(self) -> str:
+        """`single` | `graduated` | `categorized` — never None, so a caller can switch on it."""
+        return self.raw.get("color_mode") or "single"
+
+    @property
+    def field(self) -> Optional[str]:
+        """The attribute the colours are driven by, or None for a single symbol."""
+        return self.raw.get("color_field") if self.mode != "single" else None
+
+    @property
+    def is_data_driven(self) -> bool:
+        return bool(self.field) and self.mode in ("graduated", "categorized")
+
+    # -- the pieces a renderer needs ---------------------------------------------------------------
+
+    @property
+    def color(self) -> Optional[str]:
+        return self.raw.get("color")
+
+    @property
+    def classes(self) -> List[Dict[str, Any]]:
+        """`[{min, max, color}]` for a graduated style. `min`/`max` may be None at the ends — that
+        is an OPEN bucket ("< 10", "≥ 90"), not missing data."""
+        return [c for c in (self.raw.get("classes") or []) if isinstance(c, dict)]
+
+    @property
+    def categories(self) -> List[Dict[str, Any]]:
+        """`[{value, color}]` for a categorized style. Anything not listed takes `other_color`."""
+        return [c for c in (self.raw.get("categories") or []) if isinstance(c, dict)]
+
+    @property
+    def other_color(self) -> Optional[str]:
+        return self.raw.get("other_color")
+
+    @property
+    def size(self) -> Optional[Dict[str, Any]]:
+        """`{"field": …, "stops": [[value, size], …]}` when size is data-driven, else None.
+
+        Both halves are required: a field with no stops cannot be interpolated, and stops with no
+        field have nothing to read.
+        """
+        field, stops = self.raw.get("size_field"), self.raw.get("size_stops")
+        if not field or not stops:
+            return None
+        return {"field": field, "stops": [list(s) for s in stops if len(s) == 2]}
+
+    @property
+    def extrusion(self) -> Optional[Dict[str, Any]]:
+        """The 3D block when it is switched ON. `{"enabled": False}` reads as None: a renderer that
+        checks truthiness on the dict alone would extrude a layer the author turned off."""
+        ext = self.raw.get("extrusion")
+        if isinstance(ext, dict) and ext.get("enabled"):
+            return dict(ext)
+        return None
+
+    # -- raster ------------------------------------------------------------------------------------
+
+    @property
+    def colormap(self) -> Optional[str]:
+        return self.raw.get("colormap")
+
+    @property
+    def rescale(self) -> Optional[List[float]]:
+        """The stretch as numbers. Stored as TiTiler wants it — the string "min,max" — so a caller
+        that wants to compute with it should not have to parse it again."""
+        value = self.raw.get("rescale")
+        if isinstance(value, str):
+            try:
+                return [float(v) for v in value.split(",")]
+            except ValueError:
+                return None
+        if isinstance(value, (list, tuple)) and len(value) == 2:
+            try:
+                return [float(v) for v in value]
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    # -- output --------------------------------------------------------------------------------------
+
+    def legend(self) -> List[Dict[str, Any]]:
+        """Swatches and labels, WITHOUT asking the server — mirrors `symbology.legend_entries`.
+
+        Prefer `client.vector.legend(ref)`: the server's answer is the one the portal drew. This is
+        for a caller that already holds a style dict (a portal's layer_config, an unsaved edit in a
+        dialog) and cannot make a request per keystroke. The two agree; `test_styles_jobs` pins the
+        labels against the server's format.
+        """
+        if self.mode == "graduated":
+            out = []
+            for c in self.classes:
+                lo, hi = c.get("min"), c.get("max")
+                if lo is None and hi is None:
+                    label = "all"
+                elif lo is None:
+                    label = "< {0}".format(_legend_num(hi))
+                elif hi is None:
+                    label = "≥ {0}".format(_legend_num(lo))
+                else:
+                    label = "{0} – {1}".format(_legend_num(lo), _legend_num(hi))
+                out.append({"color": c.get("color"), "label": label})
+            return out
+        if self.mode == "categorized":
+            out = [{"color": c.get("color"), "label": str(c.get("value"))} for c in self.categories]
+            if out:
+                out.append({"color": self.other_color or "#9ca3af", "label": "Other"})
+            return out
+        return []
+
+    def to_dict(self) -> Dict[str, Any]:
+        """The style as stored — unchanged, so `build_style(**…)` round-trips through this."""
+        return dict(self.raw)
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "<Style {0}>".format(describe(self.raw))
+
+
+def parse(style: Optional[Dict[str, Any]]) -> Style:
+    """Read a stored style dict. Accepts a layer's `default_style` wrapper or the inner style."""
+    if isinstance(style, dict) and "style" in style and isinstance(style["style"], dict):
+        # A layer record carries {opacity, style: {...}, popup_fields}; a portal layer_config the
+        # same. Taking either means a caller never has to remember which one they are holding.
+        return Style(style["style"])
+    return Style(style)
+
+
+#: The package-level name. `styles.parse` reads well inside this module; at the top level, next to
+#: `Client`, a bare `parse` says nothing about what it parses.
+parse_style = parse
+
+
+def _legend_num(value: Any) -> str:
+    """Legend numbers, formatted as `symbology._num` does — an integer stays an integer."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number == int(number) and abs(number) < 1e15:
+        return str(int(number))
+    return "{0:,.2f}".format(number).rstrip("0").rstrip(".")
+
+
 def describe(style: Dict[str, Any]) -> str:
     """A one-line human summary of a style — what a table cell shows."""
     if not style:

@@ -52,7 +52,10 @@ def _supports_color(stream) -> bool:
 #: Typographic characters, and what to write instead on a console that cannot encode them.
 #: A Windows console still running code page 437 raises UnicodeEncodeError on "✓" — which would
 #: turn a SUCCESSFUL command into a traceback. Degrading the glyph is the only acceptable failure.
-_FALLBACKS = {"✓": "OK", "→": "->", "—": "-", "…": "...", "·": "-", "≥": ">=", "≤": "<="}
+#: `–` (EN dash) is not the same character as `—` (EM dash) and both reach a console: the em dash
+#: from our own output, the en dash from the SERVER, inside graduated legend labels ("10 – 90").
+_FALLBACKS = {"✓": "OK", "→": "->", "—": "-", "–": "-", "…": "...", "·": "-",
+              "≥": ">=", "≤": "<="}
 
 
 def _encodable(stream) -> bool:

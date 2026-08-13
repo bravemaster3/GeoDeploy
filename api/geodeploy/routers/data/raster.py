@@ -375,6 +375,49 @@ async def raster_cog(layer_ref: str, request: Request, db: AsyncSession = Depend
                              media_type="image/tiff", headers=headers)
 
 
+@router.get("/{layer_ref}/legend")
+async def raster_legend(layer_ref: str, db: AsyncSession = Depends(get_db)):
+    """PUBLIC legend for a shared raster: the colormap and the value range it is stretched over.
+
+    A raster legend is a continuous ramp, not a list of swatches, so this reports the ingredients a
+    renderer needs to draw one — `colormap`, `rescale` and the band — rather than pretending to be
+    the vector legend. The point is the same as the vector route: the numbers on a QGIS legend
+    should be the numbers the portal used, and the only way to guarantee that is to read them from
+    the layer rather than re-derive them from the file.
+    """
+    import json
+
+    result = await db.execute(select(RasterLayer).where(by_ref(RasterLayer, layer_ref)))
+    layer = result.scalar_one_or_none()
+    if not layer or layer.status != "ready" or not layer.is_public:
+        raise HTTPException(404, "No shared raster for this layer.")
+
+    style = {}
+    if layer.default_style:
+        try:
+            style = json.loads(layer.default_style).get("style") or {}
+        except ValueError:
+            style = {}
+    rescale = style.get("rescale")
+    if isinstance(rescale, str):
+        # Stored as TiTiler wants it ("min,max"); a client wants numbers.
+        try:
+            rescale = [float(v) for v in rescale.split(",")]
+        except ValueError:
+            rescale = None
+    return {
+        "layer": layer.name,
+        "ref": layer.uid or str(layer.id),
+        "kind": "raster",
+        "ramp": True,                       # continuous, so `entries` would be a lie
+        "colormap": style.get("colormap"),
+        "rescale": rescale,
+        "algorithm": style.get("algorithm"),
+        "bidx": style.get("bidx"),
+        "band_count": layer.band_count,
+    }
+
+
 @router.get("/{layer_ref}/tilejson")
 async def raster_tilejson(layer_ref: str, request: Request, db: AsyncSession = Depends(get_db)):
     """PUBLIC TileJSON (3.0.0) for a shared raster — the ONE URL other tools add directly.

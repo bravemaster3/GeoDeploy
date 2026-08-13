@@ -359,13 +359,13 @@ _PUBLIC_CORS = re.compile(
     # 488c2c7f55d7) since 2026-07-29 — a digits-only pattern silently stopped matching them, so
     # the header was never added and every browser client (GeoLibre, web maps) rejected a response
     # the server had served perfectly (206 with no ACAO). Pinned by test_cors_public_surface.
-    r"|data/vector/[\w.-]+/(pmtiles|features\.geojson|features\.arrow|tilejson|identify)"
+    r"|data/vector/[\w.-]+/(pmtiles|features\.geojson|features\.arrow|tilejson|identify|legend)"
     r"|data/vector/[\w.-]+/parquet/.*"     # duckdb-wasm / GDAL read partition files cross-origin
     # Whole-layer / clipped downloads: same public terms as the artifacts above, and a browser
     # client polls the status endpoint cross-origin while the export runs.
     r"|data/(vector|raster)/[\w.-]+/export"
     r"|data/(vector|raster)/[\w.-]+/export-(status|download)/[\w-]+"
-    r"|data/raster/[\w.-]+/(cog|tilejson|statistics))$"
+    r"|data/raster/[\w.-]+/(cog|tilejson|statistics|legend))$"
 )
 
 

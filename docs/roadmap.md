@@ -187,9 +187,10 @@ TileJSON was valid, and only the tile server's log knew otherwise.</p>
 <p class="gd-goal">v1.2 made the data readable by other tools. This one is about reaching an instance
 without a browser, and about being able to take a copy with you.</p>
 
-- [ ] **A real CLI**, not an example script — every argument the API takes, the v1.1 symbology
+- [x] **A real CLI**, not an example script — every argument the API takes, the v1.1 symbology
       included, with its own section in the docs and tests so it is verified without anyone
-      checking by hand
+      checking by hand. Also the Python client the QGIS plugin is built on: zero dependencies,
+      Python 3.9+, so a plugin can vendor it
 - [ ] **Styling that travels** — portal and layer style interchange with GeoLibre and QGIS, for
       every layer type. The CLI is the natural surface for it, so the two are designed together
 - [ ] **Download a backup**, and **restore from disk** — state-only (small, covers a bad restore or
@@ -201,7 +202,11 @@ without a browser, and about being able to take a copy with you.</p>
 - [ ] **A raster's zoom range read from the file, not guessed from its extent** — today a small
       high-resolution layer stops drawing below a computed floor, with nothing saying why
       ([#17](https://github.com/bravemaster3/GeoDeploy/issues/17))
-- [ ] **Size from a field**, and **labels** — the half of data-driven symbology v1.1 did not ship
+- [ ] **Size from a field** — bigger markers for bigger values, thicker lines for busier roads.
+      The instance already draws it and the CLI already sets it; what is missing is a control in
+      the dashboard ([#21](https://github.com/bravemaster3/GeoDeploy/issues/21))
+- [ ] **Labels** — the other half of data-driven symbology v1.1 did not ship, and unlike size this
+      one does not exist anywhere yet
 
 </div>
 
@@ -221,7 +226,6 @@ trip — edit in the tool you prefer, publish back.</p>
 - [ ] Style import from QGIS and GeoLibre, so nobody restyles from scratch
 - [ ] Style interchange — adopt an external MapLibre style, and emit one
 - [ ] Write-back: expose a layer as editable GeoJSON and re-ingest the edit
-- [ ] A packaged `geodeploy` CLI, for scripted uploads and publishing
 - [ ] Catalog **search**, so a client can discover a dataset rather than fetch a known URL
 
 </div>

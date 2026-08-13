@@ -76,6 +76,15 @@ examples:
     stats.add_argument("--method", choices=["quantile", "equal", "jenks"], default="quantile")
     stats.add_argument("--ramp", default="viridis")
 
+    legend = add_command(group, "legend", cmd_legend,
+                         "the swatches and labels this layer's style produces",
+                         epilog="""\
+The legend is computed by the INSTANCE, from the same function the portal and the About page use,
+so what you see here is what a published map shows. A raster answers with its colour ramp and the
+value range it is stretched over, since a continuous ramp has no swatches.
+""")
+    layer_ref_arg(legend)
+
     links = add_command(group, "links", cmd_links,
                         "share URLs for this layer, labelled by the tool each one suits")
     layer_ref_arg(links)
@@ -163,6 +172,37 @@ def cmd_show(ctx, args) -> int:
         if layer.get("file_size"):
             layer["file_size"] = human_size(layer["file_size"])
     ctx.out.render(layer)
+    return EXIT_OK
+
+
+def cmd_legend(ctx, args) -> int:
+    """What a legend for this layer shows — asked of the server, not derived here.
+
+    A legend that disagrees with the map is worse than no legend, and the only way to guarantee
+    agreement is for one implementation to produce both.
+    """
+    layer = resolve_layer(ctx, args, public_ok=True)
+    client = ctx.client(auth_required=False)
+    ref = layer.get("uid") or layer["id"]
+    legend = client.layers.api(layer["layer_type"]).legend(ref)
+
+    if ctx.out.json_mode:
+        ctx.out.json(legend)
+        return EXIT_OK
+    if legend.get("ramp"):
+        ctx.out.record(legend, ["layer", "colormap", "rescale", "algorithm", "bidx", "band_count"])
+        ctx.out.info("A raster legend is a continuous ramp, so there are no swatches to list.")
+        return EXIT_OK
+    ctx.out.out(ctx.out.bold(legend.get("layer") or ""))
+    mode = legend.get("color_mode") or "single"
+    ctx.out.out(ctx.out.dim("{0}{1}".format(
+        mode, " on " + legend["field"] if legend.get("field") else "")))
+    ctx.out.out("")
+    ctx.out.table(legend.get("entries") or [], ["color", "label"])
+    size = legend.get("size")
+    if size:
+        ctx.out.info("Size varies with {0}: {1}".format(
+            size.get("field"), ", ".join("{0}→{1}px".format(v, s) for v, s in size["stops"])))
     return EXIT_OK
 
 

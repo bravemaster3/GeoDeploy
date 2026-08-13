@@ -31,9 +31,12 @@ from .errors import (  # noqa: E402
     ValidationError,
 )
 from .jobs import JobFailed, JobTimeout  # noqa: E402
+from .styles import Style, parse_style  # noqa: E402
 
 __all__ = [
     "Client",
+    "Style",
+    "parse_style",
     "GeoDeployError",
     "APIError",
     "AuthError",
