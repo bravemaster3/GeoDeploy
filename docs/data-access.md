@@ -8,10 +8,11 @@ GeoTIFF, XYZ tiles, and GeoParquet — discovered through a built-in **STAC cata
 standards-based **OGC API - Features** service (the WFS successor) so any GIS can read a layer
 with no GeoDeploy-specific knowledge.
 
-Three surfaces, three jobs:
+Four surfaces, four jobs:
 
 | Surface | For | Start at |
 |---|---|---|
+| **Instance index** | seeing what an instance publishes, from nothing but its URL | `/api/public` |
 | **OGC API - Features** | reading features in any GIS (QGIS, ArcGIS, FME, GDAL) | `/api/ogc` |
 | **STAC** | discovering what an instance holds, and where each asset lives | `/api/stac` |
 | **Tiles** (WMTS · XYZ · TileJSON · PMTiles · COG) | drawing big layers fast | per-layer, see below |
@@ -19,10 +20,114 @@ Three surfaces, three jobs:
 In the app, the **Share links** panel (link icon on any ready layer in *My Data*) hands you the
 right URL for each of these, labelled with the exact menu path in each tool.
 
+## Start from the URL alone
+
+`GET /api/public` answers "what does this instance offer?" with no credentials: the **published
+public portals**, and the **public layers grouped by kind** — `raster`, `postgis`, `geoparquet` —
+each with the access URLs that suit it.
+
+```bash
+curl https://geodeploy.example.org/api/public | jq '.layers.postgis[].name'
+```
+
+Or, with the [command line](cli.md), which formats it and needs no account either:
+
+```bash
+geodeploy browse https://geodeploy.example.org
+```
+
+Each portal entry carries a `style_url`: the published bundle's own `style.json`, listing every
+source and layer in that portal. One anonymous fetch describes the whole map.
+
+Only what has been deliberately shared appears — a published *public* portal, a layer whose
+visibility is *public*.
+
+An admin can turn the listing off in **Settings → Infrastructure → Public listing** (or with
+`geodeploy admin public-index --off`), which makes the endpoint answer 404. That changes whether
+your portals can be *found*, not who may open them: a published public portal stays reachable by
+its link either way.
+
+## Downloading a whole layer
+
+A raster and a GeoParquet layer are files, so they download directly (`/cog`, `/parquet/…`). A
+PostGIS layer is a table, so the instance builds the file for you:
+
+```bash
+# queue it, poll it, fetch it — or let the CLI do all three
+geodeploy layers download roads --format gpkg
+```
+
+```
+POST /api/data/vector/{id}/export        {"format": "gpkg"}      → {"job_id": …}
+GET  /api/data/vector/{id}/export-status/{job_id}                → queued|processing|ready|error
+GET  /api/data/vector/{id}/export-download/{job_id}              → a zip
+```
+
+Formats: `gpkg`, `csv`, `geojson`, and `geoparquet` for file-backed layers. Add a `bbox` to clip to
+an area, and `"target_crs": "native"` to keep the layer's own CRS where the format can carry it.
+The zip includes a `MANIFEST.txt` recording the extent, the CRS and the **row count of every file**
+it contains.
+
+Public layers export without a token, on the same terms as their other artifacts.
+
+### Layers bigger than a million features
+
+A built export is capped — **1,000,000 features** per layer for a whole layer, **50,000** for a
+bbox clip — because the archive is assembled in worker memory. When the cap bites, the export says
+so in three places: `MANIFEST.txt`, the `truncated` list on the status response, and the CLI's exit
+code. It is never silent.
+
+The cap applies only to files the instance *builds*. Every complete path is either paged or already
+a file, and none of them is capped:
+
+=== "OGC API - Features (any layer)"
+
+    Paged, and GDAL follows the paging itself — this is the general answer for a large PostGIS
+    layer:
+
+    ```bash
+    ogr2ogr -f GPKG roads.gpkg "OAPIF:https://geodeploy.example.org/api/ogc" roads
+    ```
+
+    ```python
+    # or page it yourself: follow rel="next" until it stops appearing
+    url = "https://geodeploy.example.org/api/ogc/collections/vector-a7f3.../items?limit=10000"
+    ```
+
+    Requires OGC sharing enabled on the layer (`geodeploy layers share roads --ogc`).
+
+=== "GeoParquet layers"
+
+    The stored files, byte for byte — no server-side work at all:
+
+    ```bash
+    geodeploy layers download parcels          # manifest + every partition, into a folder
+    ```
+
+    ```sql
+    -- or straight from DuckDB, no download step
+    SELECT count(*) FROM read_parquet(
+      'https://geodeploy.example.org/api/data/vector/<uid>/parquet/*.parquet');
+    ```
+
+=== "Rasters"
+
+    Already one file:
+
+    ```bash
+    curl -O https://geodeploy.example.org/api/data/raster/<uid>/cog
+    ```
+
+An administrator can raise the cap with `EXPORT_FEATURE_CAP` on the API and worker containers, but
+raising it far trades a truncated download for a worker that runs out of memory. Prefer the paths
+above.
+
 **About the identifiers in these URLs.** A layer is addressed by a short opaque id such as
-`vector-a7f3c91b04e2` — deliberately not a row number. Row numbers get reused when a layer is
-deleted, which would make an old link quietly return someone else's data; the opaque id is stable
-for the life of the layer and 404s honestly once it is gone. Links that used numbers still work.
+`vector-a7f3c91b04e2` — deliberately not a row number. A row number is unique only within one layer
+kind and one database: vector and raster are numbered separately, and a restore or a move to
+another instance renumbers everything, which would make old links quietly return someone else's
+data. The opaque id is stable for the life of the layer and 404s honestly once it is gone. Links
+that used numbers still work, but nothing hands one out. **Store the opaque id**, not the number.
 
 ## Sharing a layer (admin)
 

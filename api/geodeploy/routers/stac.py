@@ -142,8 +142,9 @@ def _common_properties(layer) -> dict:
 
 
 def _ref(layer) -> str:
-    """The layer's STABLE public identifier for URLs and item ids (models.new_uid). Integer ids are
-    reused after a delete, which would silently repoint a bookmarked STAC item at another dataset."""
+    """The layer's STABLE public identifier for URLs and item ids (models.new_uid). Integer ids
+    renumber on a restore or a move between instances, which would silently repoint a bookmarked
+    STAC item at another dataset."""
     return getattr(layer, "uid", None) or str(layer.id)
 
 

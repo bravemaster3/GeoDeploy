@@ -12,14 +12,19 @@ from .database import Base
 def new_uid() -> str:
     """A layer's STABLE PUBLIC identifier.
 
-    Integer primary keys must never appear in shareable URLs. SQLite assigns them as rowid
-    aliases WITHOUT the AUTOINCREMENT keyword, so deleting the highest-id row frees that id for
-    the next insert: delete a shared layer, create another, and every saved link to
+    Integer primary keys must never appear in shareable URLs.
+
+    The original reason was SQLite, which assigns them as rowid aliases WITHOUT the AUTOINCREMENT
+    keyword: deleting the highest-id row freed that id for the next insert, so a saved link to
     `.../vector-3` — a STAC item, an OGC API - Features collection, a `/vsicurl/` COG pasted into
-    someone's QGIS project — silently resolves to a DIFFERENT dataset. No error, wrong data.
-    Postgres sequences would fix the reuse, but not the wider problem: integer keys are only
-    meaningful within one database, so a restore or an instance-to-instance move renumbers
-    everything and invalidates every published URL.
+    someone's QGIS project — could silently resolve to a DIFFERENT dataset. No error, wrong data.
+    State moved to Postgres on 2026-07-30 and its sequences never hand a number back, so that
+    particular failure is gone.
+
+    The reason the uid stays is the wider one: an integer key is meaningful only within ONE kind
+    (vector and raster are separate sequences, so "1" is routinely two layers) and ONE database, so
+    a restore or an instance-to-instance move renumbers everything and invalidates every published
+    URL. A published identifier has to outlive the row number that happens to back it today.
 
     12 hex chars from `secrets`: collision-free in practice, unguessable, and URL-safe.
     """
@@ -91,6 +96,13 @@ class SetupConfig(Base):
     backup_include_postgis: Mapped[bool] = mapped_column(Boolean, default=True)
     backup_include_objects: Mapped[bool] = mapped_column(Boolean, default=True)
     backup_include_state: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Whether `GET /api/public` answers (2026-08-12) — the anonymous index of public portals and
+    # public layers that a QGIS plugin or any "browse this instance" client starts from. Default
+    # ON: publishing a portal as `public` already says it may be seen, and a geoportal nobody can
+    # browse is a filing cabinet. Off makes the endpoint 404, leaving every published portal
+    # reachable by link but unlisted.
+    public_index_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())

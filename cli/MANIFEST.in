@@ -1,0 +1,6 @@
+# The sdist should be enough to run the tests from, so a packager or a distro can verify the
+# release rather than take the wheel on trust. LICENSE, NOTICE and PYPI.md come in automatically
+# from the metadata; the tests do not.
+recursive-include tests *.py
+include README.md
+global-exclude __pycache__/* *.py[cod]

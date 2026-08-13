@@ -68,6 +68,7 @@ nav:
       - Uploading data: uploading.md
   - Sharing your data:
       - Access from other tools: data-access.md
+      - Command line: cli.md
       - API reference: api-reference.md
   - Operating:
       - Updating: updating.md

@@ -11,7 +11,7 @@ from starlette.responses import Response
 from .config import get_settings
 from . import database
 from .database import Base
-from .routers import (setup, auth, auth_oidc, portals, stac, templates, admin, basemaps, users,
+from .routers import (public, setup, auth, auth_oidc, portals, stac, templates, admin, basemaps, users,
                       tokens, audit, interop, ogcapi, backups)
 from .routers.data import vector, raster, sources, discover
 # The migration list lives in its own module because the Celery worker re-applies it after a
@@ -353,6 +353,7 @@ app.add_middleware(
 _PUBLIC_CORS = re.compile(
     r"^/api/(stac(/.*)?"
     r"|ogc(/.*)?"        # OGC API - Features: the whole tree is public, unauthenticated read
+    r"|public(/.*)?"     # the anonymous instance index: portals + public layers by kind
 
     # `[\w.-]+`, NOT `\d+`. Public URLs address a layer by its stable `uid` (hex, e.g.
     # 488c2c7f55d7) since 2026-07-29 — a digits-only pattern silently stopped matching them, so
@@ -360,6 +361,10 @@ _PUBLIC_CORS = re.compile(
     # the server had served perfectly (206 with no ACAO). Pinned by test_cors_public_surface.
     r"|data/vector/[\w.-]+/(pmtiles|features\.geojson|features\.arrow|tilejson|identify)"
     r"|data/vector/[\w.-]+/parquet/.*"     # duckdb-wasm / GDAL read partition files cross-origin
+    # Whole-layer / clipped downloads: same public terms as the artifacts above, and a browser
+    # client polls the status endpoint cross-origin while the export runs.
+    r"|data/(vector|raster)/[\w.-]+/export"
+    r"|data/(vector|raster)/[\w.-]+/export-(status|download)/[\w-]+"
     r"|data/raster/[\w.-]+/(cog|tilejson|statistics))$"
 )
 
@@ -433,7 +438,7 @@ async def _public_data_cors(request, call_next):
 for router in [setup.router, auth.router, auth_oidc.router, users.router, tokens.router,
                audit.router, portals.router, templates.router, admin.router, basemaps.router,
                vector.router, raster.router, sources.router, discover.router, stac.router,
-               ogcapi.router, interop.router, backups.router]:
+               ogcapi.router, interop.router, backups.router, public.router]:
     app.include_router(router, prefix="/api")
 
 # Serve published portals as static files

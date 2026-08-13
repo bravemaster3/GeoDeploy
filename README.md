@@ -106,6 +106,7 @@ Full documentation: **<https://docs-geodeploy.kndev.org/>**
 | [Portals and experiences](https://docs-geodeploy.kndev.org/portals/) | Web map, story map, catalog; layout and access |
 | [Users, roles and sharing](https://docs-geodeploy.kndev.org/users-and-sharing/) | Roles, visibility, tokens, audit log |
 | [Access from other tools](https://docs-geodeploy.kndev.org/data-access/) | QGIS, DuckDB, Python — which standard for which job |
+| [Command line](https://docs-geodeploy.kndev.org/cli/) | `pip install geodeploy` — upload, style, publish and administer from a shell |
 | [API reference](https://docs-geodeploy.kndev.org/api-reference/) | Tokens, scopes, and the live OpenAPI docs |
 | [Updating](https://docs-geodeploy.kndev.org/updating/) | Self-update, services, the Infrastructure panel |
 | [Backups and restore](https://docs-geodeploy.kndev.org/backups/) | Scheduled backups and in-app restore |

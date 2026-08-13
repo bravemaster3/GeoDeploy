@@ -57,6 +57,42 @@ jobs:
           POSTGIS_USER: geodeploy
           POSTGIS_PASSWORD: test
 
+  cli:
+    name: CLI tests
+    runs-on: ubuntu-latest
+
+    # No services and no install of the API: the suite runs the client against a fake instance it
+    # starts itself (cli/tests/conftest.py), so it is seconds rather than minutes.
+    strategy:
+      matrix:
+        # 3.9 is the floor because the QGIS plugin vendors this package and QGIS 3.28 LTR ships
+        # 3.9; if a syntax or stdlib feature newer than that creeps in, this job is what catches it.
+        python-version: ["3.9", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        working-directory: cli
+        # `.[dev]` and nothing else — the package has no runtime dependencies, and this job failing
+        # on a missing wheel would mean one had been added by accident.
+        run: pip install -e ".[dev]"
+
+      - name: Run tests
+        working-directory: cli
+        run: python -m pytest tests -q
+
+      - name: The console script runs
+        run: |
+          geodeploy --version
+          geodeploy --help > /dev/null
+
   ui:
     name: UI build
     runs-on: ubuntu-latest

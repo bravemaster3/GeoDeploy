@@ -54,6 +54,8 @@ PG_MIGRATIONS = [
            ALTER TABLE raster_layers ALTER COLUMN file_size TYPE BIGINT;
          END IF;
        END $$""",
+    # The anonymous instance index (`GET /api/public`). Default TRUE: publishing a portal as
+    # 'public' already says it may be seen, and a geoportal that cannot be browsed is a filing
+    # cabinet. An operator who wants their public portal reachable-but-unlisted turns this off.
+    "ALTER TABLE setup_config ADD COLUMN public_index_enabled BOOLEAN DEFAULT TRUE",
 ]
-
-

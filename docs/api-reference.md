@@ -44,13 +44,17 @@ user and their tokens weaken with them.
 
 ## Command line
 
-A worked client lives in the repository at
-[`examples/geodeploy_cli.py`](https://github.com/bravemaster3/GeoDeploy/blob/main/examples/geodeploy_cli.py)
-— whoami, upload, portal get/set, add and remove layers, set sharing, publish. It is a real script
-against the same API you would use, and the starting point for automating anything.
+There is a packaged client — **[`geodeploy`](cli.md)** — that covers this API rather than
+demonstrating it: upload (any format, any size, many files at once), layers, styling including
+data-driven symbology, portals, publishing, the public catalog, and instance administration.
 
-A proper packaged **`geodeploy` CLI** is being built from it, so this becomes an install rather than a
-file to copy.
+```bash
+pip install geodeploy
+geodeploy login https://geodeploy.example.org --token gdp_…
+```
+
+It is also an importable Python client with no dependencies, which is what the QGIS plugin is built
+on. See **[The command line](cli.md)**.
 
 !!! note "Where this is going"
     The API exists so GeoDeploy is not a place your work gets stuck. Planned next:
@@ -69,6 +73,7 @@ URLs to hand to someone who just wants the data:
 
 | Path | Standard |
 | --- | --- |
+| `/api/public` | This instance's own index: published public portals, and public layers by kind |
 | `/api/ogc` | **OGC API - Features** — the landing page QGIS, ArcGIS Pro, FME and GDAL connect to |
 | `/api/stac` | STAC 1.0.0 catalog of layers and their assets |
 | `/api/data/vector/{uid}/…` | PMTiles, TileJSON, GeoJSON and GeoParquet artifacts |

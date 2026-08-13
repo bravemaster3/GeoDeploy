@@ -30,7 +30,8 @@ def _link(id_, label, url, *, fmt, tools, hint, primary=False, download=False):
 def public_ref(layer) -> str:
     """The identifier a layer is addressed by in PUBLIC URLs: its stable `uid`, falling back to the
     integer id only for a row predating the uid migration. Never build a shareable URL from `id`
-    directly — ids get reused after a delete (models.new_uid)."""
+    directly: it is unique only within one layer kind and one database, so a restore or a move to
+    another instance renumbers it and every published link points somewhere else (models.new_uid)."""
     return getattr(layer, "uid", None) or str(layer.id)
 
 
