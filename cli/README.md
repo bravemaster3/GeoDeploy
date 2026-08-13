@@ -69,8 +69,11 @@ on the wire. `pyproject.toml` — packaging; console script `geodeploy`.
 
 ## Dependencies / relationships
 - **Zero runtime dependencies, Python 3.9+.** Both constraints exist for the QGIS plugin, which
-  vendors this package and cannot pip-install anything (QGIS 3.28 LTR ships Python 3.9). Do not add
-  a dependency here without moving it into an extra.
+  vendors this package and cannot pip-install anything on a user's machine. The floor is set by the
+  **oldest QGIS anyone still runs**, not the current one — institutions pin a release for years —
+  so it reaches back through several LTR lines rather than tracking today's. Current QGIS ships a
+  much newer Python; that is not the constraint. Do not add a dependency here without moving it
+  into an extra.
 - Consumes `api/geodeploy/routers/` — see that folder's README for the permission model. Nothing in
   the API imports this.
 - **GeoLibre does not use this package**: its plugin is browser TypeScript
@@ -166,7 +169,18 @@ the CLI yet; see below).
   `portals export/import` round trip is the seam it would build on. Deliberately deferred.
 - No shell completion.
 - The QGIS plugin does not exist yet; the seams it needs (pluggable transport, progress callbacks,
-  `cancel`, typed errors, no printing) are in place and tested.
+  `cancel`, typed errors, no printing, and `styles.Style` for reading a style back) are in place and
+  tested.
+  **Which URL it should hand QGIS is two questions, not one.** For DISPLAY of a heavy layer,
+  **PMTiles** is the fastest thing we serve — pre-tiled, range-requested, no per-pan query — and it
+  is what `layers links` should offer first for a big GeoParquet layer. But PMTiles is a *rendering*
+  format: generalised geometry, tile-clipped features, attributes trimmed to what the tiles carry.
+  For DATA — full attributes, exact geometry, analysis, editing — the answer is OGC API - Features,
+  the GeoParquet partitions, or a built export. A plugin that offers only one of the two will be
+  wrong half the time, so the layer-add dialog needs both, labelled for what they are.
+  Caveat: reading PMTiles needs a GDAL with the support (3.8+), which rules out the oldest QGIS the
+  Python floor above deliberately still supports — so the display path must degrade to OAPIF rather
+  than assume it.
 
 ## Last updated
 2026-08-12 (created — packaged CLI + Python client, replacing `examples/geodeploy_cli.py`; then
