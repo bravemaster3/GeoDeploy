@@ -27,7 +27,14 @@ Vue 3 single-page dashboard — the browser-only control panel for setup, data u
 ## Current status & known issues
 - Phases 0–1 features are present (setup, data manager, portal builder/editor, templates gallery, settings). **GeoParquet display via deck.gl is now wired** (editor preview + published portal); DuckDB filter/analysis UI is still Phase 2 (not built). deck.gl deps (`deck.gl`, `@deck.gl/mapbox`, `@deck.gl/layers`) are in `package.json`.
 - The preview-vs-published parity is a recurring footgun: a fix in `PortalEditor.vue` often needs a mirror fix in `portal_generator.py` (and `templates/.../layout.html`). See `notes_temp/notes_for_future.md`.
+- `src/lib/symbology.js` is the **line-by-line twin** of `api/.../services/symbology.py`, and the two
+  drifted once already without anyone noticing: sampling a ramp used `Math.round()` here and
+  `round()` there, which disagree on `.5` (half-up vs half-to-even), so every 5- and 9-class ramp
+  produced a different fourth colour. It was invisible only because nothing imported `rampColors`
+  yet. Both now use `x + 0.5` truncated, and `api/tests/test_symbology.py` pins literal colour lists
+  as the contract. **When you touch either file, run the parity check, not just the tests.**
 - `vite.config.js` dev proxy must stay aligned with `nginx/nginx.conf` (prefix stripping + titiler port 80).
 
 ## Last updated
-2026-06-11
+2026-08-13 (ramp reverse toggle + swatch strip in `components/portal/LayerPanel.vue`; class-count
+ceiling raised 9 → 12 to match the server; the symbology-twin rounding fix above)

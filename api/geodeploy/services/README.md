@@ -222,6 +222,15 @@ Deliberately NOT deck.gl's ColumnLayer for these: PostGIS layers render through 
 and switching renderer when 3D is ticked would need a second implementation of identify, visibility
 and z-order. GeoParquet points are deck-rendered and their half is NOT built — the editor hides the
 control for them rather than showing one that does nothing.)
+2026-08-13 (`ramp_colors(name, count, reverse=False)` — reversing a ramp is a FLAG
+(`color_ramp_reverse` in the style, `?reverse=` on `field-stats`), never a second table of reversed
+ramps: which end means "high" is a cartographic choice, and nine ramps would become eighteen. The
+sampled OUTPUT is reversed, not the stop list, so a reversed ramp is the same colours backwards.
+**While adding it, the twins were found to already disagree**: sampling used `round()`, which is
+half-to-EVEN in Python and half-UP in JavaScript, so every 5- and 9-class ramp picked a different
+stop in `ui/src/lib/symbology.js` than here. Latent only because nothing in the UI called
+`rampColors` yet. Both now use `x + 0.5` truncated — one formula, expressible identically in either
+language — and `test_symbology` pins three literal colour lists as the contract between them.)
 2026-08-06 (**new `symbology.py` — data-driven styling**. THE source of truth for turning a layer's
 friendly style keys into MapLibre expressions: `classify` (quantile/equal/jenks-by-k-means),
 `build_classes`/`build_categories`, `color_expression` (`step`/`match`), `size_expression`

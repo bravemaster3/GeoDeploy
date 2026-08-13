@@ -50,6 +50,8 @@ _SIMPLE_KEYS = (
     ("other_color", "other_color"),
     ("color_field", "color_field"),
     ("color_mode", "color_mode"),
+    ("color_ramp", "color_ramp"),
+    ("color_ramp_reverse", "color_ramp_reverse"),
     ("size_field", "size_field"),
     ("size_mode", "size_mode"),
 )
@@ -191,6 +193,7 @@ def _edge(text: str) -> Optional[float]:
 
 def classify(client: Any, layer_ref: Any, field: str, mode: Optional[str] = None,
              classes: int = 5, method: str = "quantile", ramp: str = "viridis",
+             reverse: bool = False,
              base: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Ask the server to classify `field`, and fold the answer into a style dict.
 
@@ -205,7 +208,8 @@ def classify(client: Any, layer_ref: Any, field: str, mode: Optional[str] = None
     if ramp not in RAMPS:
         raise ValidationError(400, "Unknown colour ramp {0!r}. Known: {1}".format(
             ramp, ", ".join(RAMPS)))
-    stats = client.vector.field_stats(layer_ref, field, classes=classes, method=method, ramp=ramp)
+    stats = client.vector.field_stats(layer_ref, field, classes=classes, method=method, ramp=ramp,
+                                      reverse=reverse)
     suggestion = (stats or {}).get("suggestion") or {}
     kind = (stats or {}).get("kind")
     resolved = mode or suggestion.get("color_mode") or (
@@ -214,6 +218,10 @@ def classify(client: Any, layer_ref: Any, field: str, mode: Optional[str] = None
     style = dict(base or {})
     style["color_field"] = field
     style["color_mode"] = resolved
+    style["color_ramp"] = ramp
+    # Recorded so the direction survives a re-classify: the class COLOURS are stored per class, so
+    # without this a later change of method or class count would silently un-reverse the ramp.
+    style["color_ramp_reverse"] = bool(reverse)
     if resolved == "graduated":
         found = suggestion.get("classes") or []
         if not found:
@@ -302,6 +310,16 @@ class Style(object):
     @property
     def other_color(self) -> Optional[str]:
         return self.raw.get("other_color")
+
+    @property
+    def ramp(self) -> Optional[str]:
+        """The ramp the classes were generated from, when one was recorded. The class colours are
+        stored per class, so this is provenance — not what a renderer should read to draw."""
+        return self.raw.get("color_ramp")
+
+    @property
+    def ramp_reversed(self) -> bool:
+        return bool(self.raw.get("color_ramp_reverse"))
 
     @property
     def size(self) -> Optional[Dict[str, Any]]:

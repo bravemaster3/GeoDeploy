@@ -47,6 +47,8 @@ def add_style_args(parser, raster: bool = True) -> None:
     driven.add_argument("--classes", type=int, default=None,
                         help="how many classes to compute (2-12, default 5)")
     driven.add_argument("--ramp", choices=RAMPS, help="colour ramp for computed classes")
+    driven.add_argument("--reverse-ramp", action="store_true",
+                        help="run the ramp the other way (light end for the low values)")
     driven.add_argument("--class-breaks",
                         help="explicit classes instead of computing them: '0-10:#fee,10-50:#f00' "
                              "(* is an open edge)")
@@ -99,7 +101,8 @@ def style_from_args(args, client=None, layer_ref: Optional[Any] = None,
         style, stats = styles_mod.classify(
             client, layer_ref, args.color_field, mode=getattr(args, "color_mode", None),
             classes=getattr(args, "classes", None) or 5, method=args.classify,
-            ramp=getattr(args, "ramp", None) or "viridis", base=style)
+            ramp=getattr(args, "ramp", None) or "viridis",
+            reverse=bool(getattr(args, "reverse_ramp", False)), base=style)
         if out is not None:
             count = len(style.get("classes") or style.get("categories") or [])
             out.info("Classified {0} on {1}: {2} {3} from {4} values.".format(

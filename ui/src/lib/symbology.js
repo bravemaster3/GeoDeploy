@@ -48,16 +48,22 @@ export const DEFAULT_COLOR = '#3b82f6'
 export const DEFAULT_OTHER_COLOR = '#9ca3af'
 
 /** `count` colours sampled evenly from a named ramp. Nearest-stop, matching ramp_colors(). */
-export function rampColors(name, count) {
+export function rampColors(name, count, reverse = false) {
   const stops = RAMPS[name] || RAMPS.viridis
   if (count <= 0) return []
   if (count === 1) return [stops[Math.floor(stops.length / 2)]]
   const out = []
   for (let i = 0; i < count; i++) {
     const pos = (i * (stops.length - 1)) / (count - 1)
-    out.push(stops[Math.round(pos)])
+    // `Math.floor(pos + 0.5)` — the twin of `int(pos + 0.5)` in symbology.ramp_colors. Math.round()
+    // rounds half UP and Python's round() rounds half to EVEN, so the two disagreed at every .5
+    // position: a 5-class viridis differed in its fourth colour. Same formula, no drift.
+    out.push(stops[Math.floor(pos + 0.5)])
   }
-  return out
+  // Reverse the sampled OUTPUT, not the stop list — the twin of symbology.ramp_colors, which must
+  // produce the identical array or the editor preview and the published portal disagree about which
+  // class is which colour.
+  return reverse ? out.reverse() : out
 }
 
 /**

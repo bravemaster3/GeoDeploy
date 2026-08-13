@@ -405,6 +405,66 @@ def test_an_unknown_ramp_falls_back_rather_than_failing():
     assert sym.ramp_colors("no-such-ramp", 3) == sym.ramp_colors("viridis", 3)
 
 
+def test_the_sampled_colours_are_pinned_against_the_javascript_twin():
+    """Literal, because the twin is `ui/src/lib/symbology.js::rampColors` and it cannot be imported
+    here — this list IS the contract between them.
+
+    It caught a real divergence: the sampling used `round()`, which in Python rounds half to EVEN
+    and in JavaScript rounds half UP, so at every `.5` position the two picked different stops —
+    every 5- and 9-class ramp, in all nine ramps. Both now use `x + 0.5` truncated, which is
+    expressible identically in either language. If this test fails, the JS file has drifted and the
+    editor preview no longer matches what the portal publishes.
+    """
+    assert sym.ramp_colors("viridis", 5) == [
+        "#440154", "#365c8d", "#277f8e", "#4ac16d", "#fde725"]
+    assert sym.ramp_colors("magma", 5) == [
+        "#000004", "#8c2981", "#de4968", "#fecf92", "#fcfdbf"]
+    assert sym.ramp_colors("blues", 9) == [
+        "#f7fbff", "#deebf7", "#c6dbef", "#c6dbef", "#9ecae1",
+        "#6baed6", "#3182bd", "#3182bd", "#08519c"]
+
+
+# ── Reversing a ramp (issue #11) ─────────────────────────────────────────────────────────────────
+# Which end means "high" is a cartographic choice, not a property of the ramp. Stored as a FLAG
+# rather than as reversed copies in the table: nine ramps would become eighteen and the picker a
+# wall. `ui/src/lib/symbology.js::rampColors` is the twin and must reverse identically.
+
+def test_reversing_returns_the_same_colours_in_the_opposite_order():
+    """The SAMPLED output is reversed, not the stop list — so a reversed ramp is the same colours
+    backwards, not a differently-sampled ramp."""
+    for n in (2, 3, 5, 9, 12):
+        forward = sym.ramp_colors("viridis", n)
+        assert sym.ramp_colors("viridis", n, reverse=True) == forward[::-1]
+
+
+def test_reversing_twice_is_the_identity():
+    assert sym.ramp_colors("magma", 6, reverse=True)[::-1] == sym.ramp_colors("magma", 6)
+
+
+def test_a_single_class_is_unaffected_by_direction():
+    """One colour has no ends to swap; reversing must not pick a different stop."""
+    assert sym.ramp_colors("blues", 1, reverse=True) == sym.ramp_colors("blues", 1)
+
+
+def test_classes_carry_the_reversed_colours_with_the_same_breaks():
+    """Reversing changes which class is which COLOUR and nothing else — the breaks are the
+    classifier's business and must not move."""
+    values = [float(v) for v in range(1, 101)]
+    forward = sym.build_classes(values, "quantile", 5, "viridis")
+    reversed_ = sym.build_classes(values, "quantile", 5, "viridis", reverse=True)
+    assert [c["min"] for c in forward] == [c["min"] for c in reversed_]
+    assert [c["max"] for c in forward] == [c["max"] for c in reversed_]
+    assert [c["color"] for c in reversed_] == [c["color"] for c in forward][::-1]
+
+
+def test_categories_can_be_reversed_too():
+    values = ["a", "b", "c", "d"]
+    forward = sym.build_categories(values, "viridis")
+    flipped = sym.build_categories(values, "viridis", reverse=True)
+    assert [c["value"] for c in flipped] == values          # order of VALUES is unchanged
+    assert [c["color"] for c in flipped] == [c["color"] for c in forward][::-1]
+
+
 # ── 3D bar defaults come from the DATA ───────────────────────────────────────────────────────────
 # A point has no size, so BOTH the width and the height of a bar come from defaults — and a fixed
 # default is right at exactly one scale. 240 country centroids with the old fixed 30 m radius drew

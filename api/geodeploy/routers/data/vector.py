@@ -778,6 +778,7 @@ async def field_stats(
     classes: int = 5,
     method: str = "quantile",
     ramp: str = "viridis",
+    reverse: bool = False,
     user: User = Depends(require_scope("data:read")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -834,7 +835,9 @@ async def field_stats(
     if stats.get("kind") == "numeric":
         stats["suggestion"] = {
             "color_mode": "graduated",
-            "classes": symbology.build_classes(stats.get("values") or [], method, classes, ramp),
+            "color_ramp_reverse": reverse,   # echoed so a client stores the direction it asked for
+            "classes": symbology.build_classes(stats.get("values") or [], method, classes, ramp,
+                                               reverse),
         }
         # The raw sample is for the classifier, not for the browser: tens of thousands of numbers
         # would be the bulk of this response and the UI never reads them.
@@ -842,8 +845,9 @@ async def field_stats(
     else:
         stats["suggestion"] = {
             "color_mode": "categorized",
+            "color_ramp_reverse": reverse,
             "categories": symbology.build_categories(
-                [c["value"] for c in stats.get("categories") or []]),
+                [c["value"] for c in stats.get("categories") or []], reverse=reverse),
         }
     return stats
 

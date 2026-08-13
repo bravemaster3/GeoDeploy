@@ -68,7 +68,7 @@
                 <div v-if="colorMode === 'graduated' && config.style?.color_field" class="flex gap-1.5">
                   <label class="flex-1">
                     <span class="text-[11px] text-muted-foreground">Classes</span>
-                    <input type="number" min="2" max="9" :value="classCount" @change="setClassCount($event.target.value)"
+                    <input type="number" min="2" max="12" :value="classCount" @change="setClassCount($event.target.value)"
                       class="w-full text-xs border border-border rounded px-1.5 py-1 mt-0.5" />
                   </label>
                   <label class="flex-[1.4]">
@@ -82,18 +82,31 @@
                   </label>
                 </div>
 
-                <label v-if="colorMode === 'graduated' && config.style?.color_field" class="block">
+                <div v-if="colorMode === 'graduated' && config.style?.color_field" class="block">
                   <span class="text-[11px] text-muted-foreground">Colour ramp</span>
-                  <select :value="ramp" @change="setRamp($event.target.value)"
-                    class="w-full text-xs border border-border rounded px-1.5 py-1 mt-0.5">
-                    <optgroup label="Sequential">
-                      <option v-for="r in SEQUENTIAL" :key="r" :value="r">{{ r }}</option>
-                    </optgroup>
-                    <optgroup label="Diverging (has a midpoint)">
-                      <option v-for="r in DIVERGING" :key="r" :value="r">{{ r }}</option>
-                    </optgroup>
-                  </select>
-                </label>
+                  <div class="flex items-center gap-1 mt-0.5">
+                    <select :value="ramp" @change="setRamp($event.target.value)"
+                      class="flex-1 min-w-0 text-xs border border-border rounded px-1.5 py-1">
+                      <optgroup label="Sequential">
+                        <option v-for="r in SEQUENTIAL" :key="r" :value="r">{{ r }}</option>
+                      </optgroup>
+                      <optgroup label="Diverging (has a midpoint)">
+                        <option v-for="r in DIVERGING" :key="r" :value="r">{{ r }}</option>
+                      </optgroup>
+                    </select>
+                    <!-- Which end means "high" is a cartographic choice, not a property of the
+                         ramp: on a dark basemap the light end often belongs to the low values. -->
+                    <button type="button" @click="toggleRampReverse"
+                      :aria-pressed="rampReverse"
+                      :title="rampReverse ? 'Ramp reversed — click to restore' : 'Reverse the ramp'"
+                      class="shrink-0 text-xs border border-border rounded px-1.5 py-1"
+                      :class="rampReverse ? 'bg-primary/15 border-primary/40' : ''">⇄</button>
+                  </div>
+                  <div class="flex h-1.5 mt-1 rounded overflow-hidden" aria-hidden="true">
+                    <span v-for="(c, i) in rampPreview" :key="i" class="flex-1"
+                      :style="{ backgroundColor: c }"></span>
+                  </div>
+                </div>
 
                 <p v-if="statsBusy" class="text-[11px] text-muted-foreground/70">Reading the field…</p>
                 <p v-else-if="statsError" class="text-[11px] text-red-400">{{ statsError }}</p>
@@ -394,8 +407,8 @@ import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps, getRaste
          getFieldStats } from '@/api'
 // The shared symbology vocabulary — twin of api/geodeploy/services/symbology.py. The swatch and
 // the legend here must describe exactly what the published portal will draw.
-import { RAMPS, DIVERGING, NO_OUTLINE, markerOutline, legendEntries, representativeColor,
-         pillarRadius } from '@/lib/symbology'
+import { RAMPS, DIVERGING, NO_OUTLINE, markerOutline, legendEntries, rampColors,
+         representativeColor, pillarRadius } from '@/lib/symbology'
 import { TrashIcon, LocateIcon } from '@/views/icons'
 
 const props = defineProps({ config: Object })
@@ -538,6 +551,9 @@ const colorMode = computed(() => props.config.style?.color_mode || 'single')
 const classCount = computed(() => (props.config.style?.classes || []).length || 5)
 const classMethod = computed(() => props.config.style?.class_method || 'quantile')
 const ramp = computed(() => props.config.style?.color_ramp || 'viridis')
+const rampReverse = computed(() => !!props.config.style?.color_ramp_reverse)
+// The swatch strip under the picker: what the classes WILL look like, in the current direction.
+const rampPreview = computed(() => rampColors(ramp.value, 7, rampReverse.value))
 
 // Fields worth offering. The geometry column is never a symbology field, and a column of unique
 // ids classifies into as many classes as there are rows — offering them invites a useless map.
@@ -576,9 +592,14 @@ function pickColorField(field) {
   emitStyle({ color_field: field, classes: [], categories: [] })
   if (field) refreshClasses({ color_field: field })
 }
-function setClassCount(n) { refreshClasses({ classes_n: Math.max(2, Math.min(9, parseInt(n) || 5)) }) }
+// 12, not 9: the server clamps `classes` to 12 in routers/data/vector.py, and a control that stops
+// at 9 silently refuses counts the classifier would have produced (issue #10).
+function setClassCount(n) { refreshClasses({ classes_n: Math.max(2, Math.min(12, parseInt(n) || 5)) }) }
 function setMethod(m) { refreshClasses({ class_method: m }) }
 function setRamp(r) { refreshClasses({ color_ramp: r }) }
+// Reversing has to REGENERATE the class colours, not just flip the legend swatches: the colours are
+// stored per class and are individually editable, so the stored list is the truth (issue #11).
+function toggleRampReverse() { refreshClasses({ color_ramp_reverse: !rampReverse.value }) }
 
 /**
  * Ask the server to classify the chosen field and apply the result.
@@ -595,17 +616,22 @@ async function refreshClasses(over = {}) {
   statsBusy.value = true
   statsError.value = ''
   try {
+    // `??`, not `||`: turning the reverse OFF passes false, which `||` would discard and the
+    // toggle would only ever work in one direction.
+    const reverse = over.color_ramp_reverse ?? rampReverse.value
     const { data } = await getFieldStats(props.config.layer_id, {
       field,
       classes: over.classes_n || classCount.value,
       method: over.class_method || classMethod.value,
       ramp: over.color_ramp || ramp.value,
+      reverse,
     })
     truncatedCats.value = !!data.truncated
     const patch = {
       color_mode: mode,
       color_field: field,
       color_ramp: over.color_ramp || ramp.value,
+      color_ramp_reverse: reverse,
       class_method: over.class_method || classMethod.value,
     }
     // A text column cannot be graduated and a numeric one is usually not meant to be categorical.

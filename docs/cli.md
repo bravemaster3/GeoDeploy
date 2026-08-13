@@ -403,6 +403,17 @@ breaks) with the same code the portal editor and the published map use, so a CLI
 in exactly the classes the editor would show. Ramps: `viridis` `magma` `blues` `reds` `greens`
 `oranges` `rdbu` `brbg` `spectral`.
 
+**`--reverse-ramp`** runs the ramp the other way — the light end for the low values, which is what
+a dark basemap usually wants, and how a diverging ramp is flipped to match a convention your
+readers already have:
+
+```bash
+geodeploy portals style 3 parcels --color-field pop --classify quantile --ramp blues --reverse-ramp
+```
+
+The direction is stored with the style, so re-classifying later (a different method, more classes)
+keeps it.
+
 Size and 3D work the same way:
 
 ```bash

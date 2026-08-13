@@ -266,7 +266,7 @@ class VectorLayers(_LayerBase):
                 "crs": manifest.get("crs")}
 
     def field_stats(self, ref: Any, field: str, classes: int = 5, method: str = "quantile",
-                    ramp: str = "viridis") -> Dict[str, Any]:
+                    ramp: str = "viridis", reverse: bool = False) -> Dict[str, Any]:
         """Distribution of ONE attribute plus a ready-made classification `suggestion`.
 
         The classification maths lives on the server (`services/symbology.py`) and is shared with
@@ -275,8 +275,12 @@ class VectorLayers(_LayerBase):
         two implementations of quantile breaks would eventually disagree, and the disagreement
         would only be visible on a published map.
         """
-        return self._c.get("/data/vector/{0}/field-stats".format(ref),
-                           {"field": field, "classes": classes, "method": method, "ramp": ramp})
+        params = {"field": field, "classes": classes, "method": method, "ramp": ramp}
+        if reverse:
+            # Only when asked: an older instance has no `reverse` parameter, and sending
+            # `reverse=false` to it would be a pointless difference in every request.
+            params["reverse"] = "true"
+        return self._c.get("/data/vector/{0}/field-stats".format(ref), params)
 
     def tile(self, layer_id: Any) -> Dict[str, Any]:
         """(Re)generate the layer's PMTiles archive — the fallback display path for heavy layers."""
