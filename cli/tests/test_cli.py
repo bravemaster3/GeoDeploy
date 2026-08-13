@@ -179,6 +179,26 @@ class TestLayerCommands:
         assert "UID" in out
         assert "aaaaaaaaaaaa" in out and "cccccccccccc" in out
 
+    def test_legend_comes_from_the_instance(self, run, logged_in, instance):
+        """Not recomputed here: a legend that disagrees with the published map is worse than
+        none, and only one implementation can guarantee agreement."""
+        code, out, err = run("layers", "legend", "roads")
+        assert code == EXIT_OK
+        assert "graduated on pop" in out
+        assert "10 – 90" in out or "10 - 90" in out       # en dash, or its cp437 fallback
+        assert instance.requests_to("/legend"), "it must ASK, not derive"
+
+    def test_a_raster_legend_reports_its_ramp(self, run, logged_in):
+        code, out, err = run("layers", "legend", "raster-1")
+        assert code == EXIT_OK
+        assert "viridis" in out
+        assert "continuous ramp" in err                   # no swatches to list, and it says why
+
+    def test_legend_needs_no_token_for_a_public_layer(self, run, home, server):
+        code, out, err = run("--url", server, "layers", "legend", "roads", "--json")
+        assert code == EXIT_OK
+        assert json.loads(out)["field"] == "pop"
+
     def test_processing_layers_show_their_progress(self, run, logged_in):
         code, out, err = run("layers", "list")
         assert "42%" in out

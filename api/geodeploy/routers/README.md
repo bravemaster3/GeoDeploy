@@ -253,6 +253,17 @@ deliberately NOT visibility-filtered (published portals depend on them).
   missing nginx's `/raster` prefix). Bakes the layer's saved styling into the tile template and
   carries **`bounds`** (from the stored EPSG:4326 bbox; TiTiler `/cog/info` only as a fallback for
   legacy rows) — bounds are the whole point: a bare XYZ URL has none, so "zoom to layer" fails.
+- **`GET /data/{vector,raster}/{ref}/legend`** — **PUBLIC** legend for the layer's default style
+  (2026-08-13), on the same terms as the other artifacts. Vector returns
+  `{color_mode, field, entries[{color,label}], size}` straight from
+  `services.symbology.legend_entries` — the function the published portal and the About page
+  already read, exposed so that a THIRD renderer (the QGIS plugin) does not re-derive class labels
+  and drift on where a break falls or how a number rounds. Same argument as `/field-stats`: ask,
+  do not recompute. Two deliberate details: a **single-symbol** layer gets a one-entry legend here
+  (`legend_entries` returns `[]`, but a caller drawing a legend still needs a swatch), and a
+  **raster** answers `{ramp: true, colormap, rescale, algorithm, bidx}` — a continuous ramp has no
+  swatches, and pretending otherwise would invent buckets nobody chose. `rescale` comes back as
+  numbers though it is stored as TiTiler's `"min,max"`. Tests: `test_legend_endpoint.py`.
 - **Sharing endpoints** (authed, editor+): `PUT /data/vector/{id}/sharing` + `PUT /data/raster/{id}/sharing`
   (`SharingUpdate`: partial `{visibility, abstract, keywords, license, attribution}` — legacy
   `is_public` bool still accepted, mapped to visibility). `PUT /data/sources/{id}/sharing` takes

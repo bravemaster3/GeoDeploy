@@ -28,6 +28,9 @@ UID = "488c2c7f55d7"          # a real-shaped uid: hex, letters AND digits
     f"/api/data/vector/{UID}/identify",
     f"/api/data/vector/{UID}/parquet/manifest.json",
     f"/api/data/vector/{UID}/parquet/__cell=137/data_0.parquet",
+    # The legend (2026-08-13): a browser-side renderer draws swatches from it cross-origin.
+    f"/api/data/vector/{UID}/legend",
+    f"/api/data/raster/{UID}/legend",
     # Legacy integer ids must keep working — links shared before uids exist in the wild.
     "/api/data/vector/12/pmtiles",
     "/api/data/raster/12/cog",

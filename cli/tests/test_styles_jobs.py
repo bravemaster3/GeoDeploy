@@ -136,6 +136,85 @@ class TestDescribe:
         assert "3D" in styles.describe({"extrusion": {"enabled": True, "field": "h"}})
 
 
+class TestStyleModel:
+    """`build_style` writes the vocabulary; `Style` reads it back. The QGIS plugin depends on the
+    reading half, so anything it needs must come off the model rather than out of the raw dict."""
+
+    GRADUATED = {"color_mode": "graduated", "color_field": "pop",
+                 "classes": [{"min": None, "max": 10, "color": "#eff3ff"},
+                             {"min": 10, "max": 90, "color": "#6baed6"},
+                             {"min": 90, "max": None, "color": "#08519c"}]}
+
+    def test_a_single_symbol_reads_as_single(self):
+        style = styles.parse({"color": "#111", "radius": 5})
+        assert style.mode == "single"
+        assert style.field is None and style.is_data_driven is False
+        assert style.color == "#111"
+
+    def test_missing_and_empty_styles_do_not_explode(self):
+        for empty in (None, {}, {"style": {}}):
+            assert styles.parse(empty).mode == "single"
+            assert styles.parse(empty).classes == []
+
+    def test_it_accepts_the_layer_record_wrapper(self):
+        """A layer carries {opacity, style: {...}}; a portal layer_config the same. Taking either
+        means a caller never has to remember which one it is holding."""
+        assert styles.parse({"opacity": 1.0, "style": self.GRADUATED}).field == "pop"
+        assert styles.parse(self.GRADUATED).field == "pop"
+
+    def test_graduated_exposes_its_classes(self):
+        style = styles.parse(self.GRADUATED)
+        assert style.mode == "graduated" and style.is_data_driven
+        assert len(style.classes) == 3
+        assert style.classes[0]["max"] == 10 and style.classes[0]["min"] is None
+
+    def test_categorized_exposes_categories_and_the_other_colour(self):
+        style = styles.parse({"color_mode": "categorized", "color_field": "kind",
+                              "categories": [{"value": "forest", "color": "#0a0"}],
+                              "other_color": "#999"})
+        assert [c["value"] for c in style.categories] == ["forest"]
+        assert style.other_color == "#999"
+
+    def test_size_needs_both_halves(self):
+        assert styles.parse({"size_field": "pop"}).size is None       # nothing to interpolate
+        assert styles.parse({"size_stops": [[0, 2]]}).size is None    # nothing to read
+        size = styles.parse({"size_field": "pop", "size_stops": [[0, 2], [100, 12]]}).size
+        assert size == {"field": "pop", "stops": [[0, 2], [100, 12]]}
+
+    def test_extrusion_switched_off_reads_as_none(self):
+        """A renderer checking truthiness on the dict alone would extrude a layer the author
+        turned off."""
+        assert styles.parse({"extrusion": {"enabled": False, "field": "h"}}).extrusion is None
+        assert styles.parse({"extrusion": {"enabled": True, "field": "h"}}).extrusion["field"] == "h"
+
+    def test_rescale_comes_back_as_numbers(self):
+        assert styles.parse({"rescale": "0,255"}).rescale == [0.0, 255.0]
+        assert styles.parse({"rescale": [1, 2]}).rescale == [1.0, 2.0]
+        assert styles.parse({"rescale": "nonsense"}).rescale is None
+
+    def test_build_then_parse_then_build_is_lossless(self):
+        built = styles.build_style(color="#111", color_field="pop", classes=self.GRADUATED["classes"],
+                                   size_field="pop", size_stops="0:2,100:12", marker="star")
+        assert styles.build_style(styles.parse(built).to_dict()) == built
+
+    def test_the_local_legend_matches_the_server_format(self):
+        """Pinned against `services.symbology.legend_entries`: an EN dash, open-ended buckets, and
+        an integer that stays an integer."""
+        assert styles.parse(self.GRADUATED).legend() == [
+            {"color": "#eff3ff", "label": "< 10"},
+            {"color": "#6baed6", "label": "10 – 90"},
+            {"color": "#08519c", "label": "≥ 90"},
+        ]
+
+    def test_a_categorized_legend_ends_with_other(self):
+        legend = styles.parse({"color_mode": "categorized", "color_field": "k",
+                               "categories": [{"value": "a", "color": "#111"}]}).legend()
+        assert [e["label"] for e in legend] == ["a", "Other"]
+
+    def test_a_single_symbol_has_no_legend_entries(self):
+        assert styles.parse({"color": "#111"}).legend() == []
+
+
 class TestJobs:
     def test_wait_returns_the_final_status(self, client):
         created = client.vector.tile(1)

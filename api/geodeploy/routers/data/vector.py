@@ -574,6 +574,51 @@ async def vector_features_public(
     return await _viewport_geojson(layer, bbox, limit)
 
 
+@router.get("/{layer_ref}/legend")
+async def vector_legend(layer_ref: str, db: AsyncSession = Depends(get_db)):
+    """PUBLIC legend for a vector layer's default style — the swatches and labels, computed once.
+
+    `services.symbology.legend_entries` already decides what a legend shows, and the portal and the
+    About page read it. Nothing exposed it, so any OTHER renderer — the QGIS plugin above all — had
+    to re-derive class labels from `default_style` and would eventually disagree with the map about
+    where a break falls or how a number is rounded. Same argument as `/field-stats`: the client asks
+    rather than recomputes.
+
+    Single-symbol layers get a one-entry legend here (using the layer's own name), where
+    `legend_entries` returns `[]` — a caller drawing a legend still needs a swatch, and inventing
+    one per renderer is how they drift.
+    """
+    from ...services import symbology
+
+    result = await db.execute(select(VectorLayer).where(by_ref(VectorLayer, layer_ref)))
+    layer = result.scalar_one_or_none()
+    if not await _publicly_readable(layer, db):
+        raise HTTPException(404, "Layer not found.")
+
+    style = {}
+    if layer.default_style:
+        try:
+            style = json.loads(layer.default_style).get("style") or {}
+        except ValueError:
+            style = {}
+    entries = symbology.legend_entries(style)
+    mode = style.get("color_mode") or "single"
+    if not entries:
+        entries = [{"color": style.get("color") or symbology.DEFAULT_COLOR, "label": layer.name}]
+    return {
+        "layer": layer.name,
+        "ref": layer.uid or str(layer.id),
+        "kind": "vector",
+        "geometry_type": layer.geometry_type,
+        "color_mode": mode,
+        "field": style.get("color_field") if mode != "single" else None,
+        "entries": entries,
+        # Size-from-field is a second visual dimension a legend may want to show separately.
+        "size": ({"field": style.get("size_field"), "stops": style.get("size_stops")}
+                 if style.get("size_field") and style.get("size_stops") else None),
+    }
+
+
 @router.get("/{layer_ref}/tilejson")
 async def vector_tilejson(layer_ref: str, request: Request, db: AsyncSession = Depends(get_db)):
     """PUBLIC TileJSON (3.0.0) for a PostGIS vector layer — the ONE URL other tools add directly as a

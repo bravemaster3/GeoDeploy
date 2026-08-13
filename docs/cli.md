@@ -275,8 +275,13 @@ geodeploy layers list --query roads        # match name, abstract or keywords
 geodeploy layers show roads                # one layer, in full
 geodeploy layers fields roads              # its attribute columns
 geodeploy layers stats roads --field pop   # the distribution of one attribute
+geodeploy layers legend roads              # the swatches and labels its style produces
 geodeploy layers usage roads               # which portals use it
 ```
+
+`legend` is computed by the **instance**, using the same function the published portal and the
+About page use, so what you see is what a map shows. A raster answers with its colour ramp and the
+value range it is stretched over, because a continuous ramp has no swatches to list.
 
 **You can name a layer any way you have it**: its id (`7`), its stable public id
 (`a7f3c91b04e2`), a `vector-7` reference, or its name — a unique part of the name is enough.
@@ -619,6 +624,40 @@ and certificate settings:
 ```python
 gd = Client(url, token=token, transport=MyQgisTransport())   # any .send(Request) -> Response
 ```
+
+### Reading a style
+
+A plugin that renders a GeoDeploy layer in another tool has to understand the style, not just carry
+it. `parse_style()` reads one without you reaching into the dict:
+
+```python
+from geodeploy import parse_style
+
+layer = gd.layers.resolve("cities")
+style = parse_style(layer["default_style"])     # accepts the layer record or the inner style
+
+style.mode              # 'single' | 'graduated' | 'categorized'
+style.field             # the attribute the colours are driven by, or None
+style.classes           # [{min, max, color}] — min/max None at the ends means an OPEN bucket
+style.categories        # [{value, color}], with style.other_color for everything else
+style.size              # {'field': 'pop', 'stops': [[0, 4], [1000000, 24]]} or None
+style.extrusion         # the 3D block, or None when the author switched it off
+style.rescale           # a raster stretch, as numbers
+style.raw               # anything not modelled above
+```
+
+It never rejects and never invents a default it cannot know, and `style.to_dict()` returns the
+original, so `build_style` → `parse_style` → `build_style` round-trips unchanged.
+
+For the legend, prefer asking the instance — that answer is the one the published portal drew:
+
+```python
+gd.vector.legend("cities")      # {'entries': [{'color': …, 'label': '10 – 90'}], …}
+gd.raster.legend("dem")         # a ramp: colormap, rescale, algorithm, bidx
+```
+
+`style.legend()` computes the same labels locally, for a caller holding an unsaved style that has
+no URL to ask about yet.
 
 ---
 

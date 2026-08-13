@@ -128,6 +128,8 @@ class FakeInstance(object):
             (r"/data/vector/(\S+)/features", self._features),
             (r"/data/raster/(\S+)/cog", lambda *a: (200, b"II-pretend-GeoTIFF-bytes")),
             (r"/data/vector/(\S+)/pmtiles", lambda *a: (200, b"PMTiles pretend")),
+            (r"/data/vector/([\w.-]+)/legend", self._vector_legend),
+            (r"/data/raster/([\w.-]+)/legend", self._raster_legend),
             (r"/data/vector/([\w.-]+)/parquet/manifest\.json", self._parquet_manifest),
             (r"/data/vector/([\w.-]+)/parquet/(.+)", self._parquet_object),
             (r"/public", self._public),
@@ -303,6 +305,22 @@ class FakeInstance(object):
                  "layer_count": 1, "url": base + "/portals/field-sites-2026/",
                  "style_url": base + "/portals/field-sites-2026/style.json",
                  "thumbnail_url": None, "published_at": "2026-08-01T00:00:00"}]
+
+    def _vector_legend(self, method, match, query, headers, body):
+        """The server's legend, en dash and all — the exact characters `symbology._num` emits."""
+        return 200, {
+            "layer": "roads", "ref": "aaaaaaaaaaaa", "kind": "vector",
+            "geometry_type": "linestring", "color_mode": "graduated", "field": "pop",
+            "entries": [{"color": "#eff3ff", "label": "< 10"},
+                        {"color": "#6baed6", "label": "10 – 90"},
+                        {"color": "#08519c", "label": "≥ 90"}],
+            "size": {"field": "pop", "stops": [[0, 2], [1000, 12]]},
+        }
+
+    def _raster_legend(self, method, match, query, headers, body):
+        return 200, {"layer": "dem", "ref": "cccccccccccc", "kind": "raster", "ramp": True,
+                     "colormap": "viridis", "rescale": [0.0, 255.0], "algorithm": None,
+                     "bidx": None, "band_count": 1}
 
     def _portal_style(self, method, match, query, headers, body):
         """A published portal's own style.json — served outside /api, like the real bundle."""

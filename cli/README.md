@@ -36,10 +36,16 @@ User documentation is `docs/cli.md`; this file is the technical note.
   `layers download` prefers it over queueing an export for those layers.
 - `portals.py` — portal CRUD and `layer_configs` surgery. `layer_configs[0]` = top of the list =
   drawn on top. `editable_config()` drops server-owned fields before a round-trip PUT.
-- `styles.py` — the style vocabulary of `api/geodeploy/services/symbology.py`, assembled from plain
-  arguments. **Classification maths is NOT reimplemented**: `classify()` reads
+- `styles.py` — the style vocabulary of `api/geodeploy/services/symbology.py`, in both directions.
+  `build_style()` **assembles** it from plain arguments; `parse()`/`Style` **reads** one back
+  (mode, field, classes, categories, size, extrusion, rescale) so a consumer — the QGIS plugin —
+  does not re-decide what `color_mode: "graduated"` implies. `Style` is a reader, not a schema: it
+  never rejects and keeps `.raw`, and `to_dict()` makes build → parse → build lossless.
+  **Classification maths is NOT reimplemented**: `classify()` reads
   `GET /data/vector/{ref}/field-stats`, so the CLI cannot disagree with the editor about which class
-  a feature is in.
+  a feature is in. Same rule for legends — `vector.legend()` asks the instance, and
+  `Style.legend()` is the local twin for a style that has no URL yet (an unsaved edit), pinned
+  against the server's exact labels in `test_styles_jobs`.
 - `catalog.py` — the public surfaces, including `public()` (the instance index behind
   `geodeploy browse`) and `portal_style()`, which reads a published portal's own `style.json`.
 - `jobs.py`, `sources.py`, `imports.py`, `admin.py`, `errors.py`.
@@ -58,7 +64,7 @@ no account. `_LayerBase.export_to_file()` drives the queue-poll-download of a bu
   styling flags, shared by the three commands that take them, and `resolve_layer(..., public_ok=)`
   which decides between the authenticated list and the public index.
 
-`tests/` — 298 tests against a real HTTP server (`conftest.FakeInstance`) that records what arrived
+`tests/` — 314 tests against a real HTTP server (`conftest.FakeInstance`) that records what arrived
 on the wire. `pyproject.toml` — packaging; console script `geodeploy`.
 
 ## Dependencies / relationships

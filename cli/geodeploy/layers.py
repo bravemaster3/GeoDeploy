@@ -187,6 +187,15 @@ class VectorLayers(_LayerBase):
     def tilejson(self, ref: Any) -> Dict[str, Any]:
         return self._c.get("/data/vector/{0}/tilejson".format(ref), auth=False)
 
+    def legend(self, ref: Any) -> Dict[str, Any]:
+        """The swatches and labels for this layer's default style, as the SERVER computes them.
+
+        `styles.Style.legend()` produces the same thing locally; this is the authoritative copy —
+        the portal draws from the same function — so anything that has to match a published map
+        should ask rather than derive.
+        """
+        return self._c.get("/data/vector/{0}/legend".format(ref), auth=False)
+
     # -- the whole GeoParquet dataset, straight from storage ---------------------------------------
 
     def parquet_manifest(self, ref: Any) -> Dict[str, Any]:
@@ -299,6 +308,11 @@ class RasterLayers(_LayerBase):
 
     def tilejson(self, ref: Any) -> Dict[str, Any]:
         return self._c.get("/data/raster/{0}/tilejson".format(ref), auth=False)
+
+    def legend(self, ref: Any) -> Dict[str, Any]:
+        """A raster legend is a continuous RAMP, so this returns the ingredients to draw one —
+        `colormap`, `rescale`, `algorithm`, `bidx` — not a list of swatches."""
+        return self._c.get("/data/raster/{0}/legend".format(ref), auth=False)
 
     def wmts(self, ref: Any) -> str:
         """The WMTS capabilities document — the URL to paste into QGIS, because it is the only one

@@ -151,6 +151,17 @@ class TestLegacyConsoles:
         assert "a - b" in text
         text.encode("cp437")          # the real assertion: this would have raised
 
+    def test_a_server_legend_label_survives_cp437(self):
+        """Graduated labels come from the SERVER and carry an EN dash and ≥ — characters this
+        client never types itself, so they have to be in the fallback map too."""
+        out, err = self.Cp437IO(), self.Cp437IO()
+        fmt = Formatter(stdout=out, stderr=err)
+        fmt.table([{"color": "#6baed6", "label": "10 – 90"},
+                   {"color": "#08519c", "label": "≥ 90"}], ["color", "label"])
+        text = out.getvalue()
+        assert "10 - 90" in text and ">= 90" in text
+        text.encode("cp437")          # the real assertion: this would have raised
+
     def test_utf8_consoles_keep_the_real_glyphs(self):
         class Utf8IO(io.StringIO):
             encoding = "utf-8"
