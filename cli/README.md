@@ -181,6 +181,15 @@ the CLI yet; see below).
   Caveat: reading PMTiles needs a GDAL with the support (3.8+), which rules out the oldest QGIS the
   Python floor above deliberately still supports — so the display path must degrade to OAPIF rather
   than assume it.
+  **Measured on the maintainer's two installs (2026-08-13)**, which is why this is a rule and not a
+  worry: one reports Python **3.9.5** / GDAL **3.7.2** (no PMTiles — and the exact Python the floor
+  above exists for), the other Python **3.12.12** / GDAL **3.12.1** (PMTiles fine). Both are in
+  daily use. So `metadata.txt` should say `qgisMinimumVersion=3.28` (the oldest QGIS whose Python
+  is ≥ 3.9) and the plugin should branch on `gdal.VersionInfo()` at RUNTIME rather than refusing to
+  install — blocking the old one would lock out precisely the pinned installs this package's
+  constraints were chosen to serve.
+  Develop and demo on the NEWEST QGIS; that is a different decision from what the plugin refuses to
+  run on, and only the second one is visible to a user with an old install.
 
 ## Last updated
 2026-08-12 (created — packaged CLI + Python client, replacing `examples/geodeploy_cli.py`; then
