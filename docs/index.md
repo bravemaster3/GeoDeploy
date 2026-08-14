@@ -120,6 +120,21 @@ directly, with no export step.
 
 [Access from other tools](data-access.md){ .md-button }
 
+## Or with a terminal, if you prefer one
+
+```bash
+pip install geodeploy
+geodeploy login https://your-instance.org --token gdp_…
+geodeploy upload roads.gpkg sites.csv dem.tif --wait
+geodeploy portals create "Field sites 2026" --publish
+```
+
+Everything the dashboard does, scriptable: uploads of any size, data-driven symbology, portals,
+publishing, the public catalog, and instance administration. No dependencies and Python 3.9+, so
+it is also the client a QGIS plugin can vendor as-is.
+
+[The command line](cli.md){ .md-button }
+
 ## Run it without a terminal
 
 Service logs, backups to a separate destination, an in-app restore, and one-button updates.

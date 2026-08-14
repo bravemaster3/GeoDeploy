@@ -4,6 +4,63 @@ Notable changes, newest first. Versions are **major.minor** — `v1.0`, `v1.1`, 
 `v2.0`. The minor number moves for anything shipped, features or fixes; the major changes when an
 upgrade needs manual work.
 
+## v1.3 — 2026-08-14
+
+### Reach your instance without a browser
+
+- **A packaged command-line client — `pip install geodeploy`.** Uploads of any format and any size
+  (multi-gigabyte files go straight to object storage in parallel presigned parts), layers, portals,
+  data-driven symbology, publishing, the public catalog, jobs, users and instance administration.
+  Every command takes `--json`, and exit codes separate an authentication problem from a network one
+  from a server one, so a scheduled job can alert on the right thing.
+- **It is also a Python client**, with no dependencies and a Python 3.9 floor, because the QGIS
+  plugin will vendor it rather than pip-install into someone's QGIS.
+- **Start from a URL alone.** `GET /api/public` is an anonymous index of what an instance
+  publishes — public portals, and public layers grouped by how they are stored — so a desktop client
+  can browse an instance before anyone signs in. An admin can switch the listing off in
+  **Settings → Infrastructure**; it defaults to listed.
+
+### Take a copy with you
+
+- **Download any layer, whole.** A PostGIS table is built into a GeoPackage, CSV or GeoJSON; a
+  GeoParquet layer comes straight from its own partition files — complete, lossless and with no
+  worker involved; a raster is its COG.
+- **A truncated export now says so.** A built export stops at a row cap so the worker cannot run out
+  of memory, and until now a capped download looked exactly like a complete one. The row count of
+  every file is in `MANIFEST.txt`, in the job status, and in the CLI's non-zero exit — with the
+  uncapped alternatives named.
+
+### Symbology
+
+- **Size from a field** — bigger markers for bigger values, thicker lines for busier roads. The
+  instance had drawn this since v1.1 with no way to set it outside the API.
+- **Invert a colour ramp**, as a checkbox that recolours instantly.
+- **Style a layer in My Data**, not only inside a portal — the same panel, reused. What you save
+  there is what a portal picks up when the layer is added.
+- **Legends collapse** in a published portal's layer list, and the class count stops snapping back
+  to whatever the classifier returned.
+- **A legend anyone can read**: `GET /api/data/{kind}/{ref}/legend` serves the swatches and labels
+  the portal draws, so no other renderer has to re-derive them.
+
+### Fixes found by using it
+
+- **A CSV with an `id` column could not be imported.** The destination table adds its own `id`, so
+  the load failed at 45% with "column id specified more than once" — for most CSVs anyone exports.
+- **The legend 404'd for the owner of their own layer** when it was not public.
+- **Share links sent QGIS to a URL it cannot open** — the OGC *collection* was promoted where QGIS
+  needs the *service*. A tiled GeoParquet layer now leads with its PMTiles archive, which QGIS opens
+  through *Add Vector Layer*.
+- **A raster's zoom floor is measured, not guessed** — read from the file's overview pyramid at
+  ingest instead of inferred from its extent, so a small high-resolution layer stops vanishing when
+  you zoom out.
+- **Story maps work on a phone**: portrait puts the map above a sideways-scrolling narrative, and
+  the control cluster stops running off a landscape screen.
+- **One failing schema migration no longer disables every migration after it.** They shared a
+  transaction, and Postgres aborts the whole thing on the first error — silently, because each
+  statement was wrapped in its own `try`.
+- **HEAD works on every route.** FastAPI does not add it to a GET route, so every endpoint answered
+  405 to a probe.
+
 ## v1.2 — 2026-08-07
 
 ### From an upload to a map anyone can open

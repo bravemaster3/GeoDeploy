@@ -40,6 +40,13 @@ def stac_item_url(base: str, kind: str, layer) -> str:
     return f"{base}/api/stac/collections/{kind}/items/{kind[:-1]}-{public_ref(layer)}"
 
 
+def _has_pmtiles(layer) -> bool:
+    """A tiled GeoParquet layer — the case where a rendering link beats a feature service."""
+    return (getattr(layer, "storage_backend", "postgis") != "postgis"
+            and bool(getattr(layer, "pmtiles_key", None))
+            and getattr(layer, "tile_status", None) == "ready")
+
+
 def vector_links(layer, base: str) -> list[dict]:
     # OGC API - Features FIRST: it is the one standard every GIS reads natively (QGIS, ArcGIS Pro,
     # FME, anything on GDAL's OAPIF driver), it carries real attributes, and it works the same for
@@ -62,7 +69,10 @@ def vector_links(layer, base: str) -> list[dict]:
         _link("ogc-service", "OGC API - Features — ALL your public layers", f"{base}/api/ogc",
               fmt="OGC API - Features landing page",
               tools=["QGIS", "ArcGIS Pro", "FME"],
-              primary=True,
+              # Recommended UNLESS this layer has PMTiles — see the reorder at the end of the
+              # function. For a multi-million-feature GeoParquet layer, paging OAPIF into QGIS is
+              # minutes of waiting where the archive draws immediately.
+              primary=not _has_pmtiles(layer),
               hint="Not just this layer: this is the service, and it lists every layer you have "
                    "shared publicly. It is what QGIS needs — Layer ▸ Add Layer ▸ Add OGC API - "
                    "Features Layer ▸ New ▸ paste this, then pick this layer from the list."),
@@ -95,14 +105,15 @@ def vector_links(layer, base: str) -> list[dict]:
             # never understood the prefix. GeoDeploy's OWN portals still emit `pmtiles://…` inside
             # their MapLibre style — see portal_generator — which is correct and unrelated to this.
             links.append(_link(
-                "pmtiles", "PMTiles archive (fast rendering)", f"{api}/pmtiles",
-                fmt="PMTiles (vector)", tools=["GeoLibre", "MapLibre", "download", "GDAL"],
-                hint="Paste as-is — no pmtiles:// prefix (that is a MapLibre-internal protocol "
-                     "handler, not part of any address). In QGIS this does NOT go in Add Vector "
-                     "Tile Layer (that dialog builds an XYZ template and an archive is one file); "
-                     "open it with GDAL 3.8+ as /vsicurl/<this URL>. For attributes and queries "
-                     "prefer the OGC API - Features service above — PMTiles is generalized per "
-                     "zoom."))
+                "pmtiles", "PMTiles archive — fastest way to draw this layer", f"{api}/pmtiles",
+                fmt="PMTiles (vector)", tools=["QGIS", "GeoLibre", "MapLibre", "GDAL"],
+                primary=True,
+                hint="QGIS: Layer > Add Layer > ADD VECTOR LAYER and paste this URL as-is — GDAL "
+                     "3.8+ opens it with its PMTiles driver (verified: driver=PMTiles, 1 layer). "
+                     "NOT Add Vector TILE Layer: that dialog builds an XYZ template and an archive "
+                     "is one file. No pmtiles:// prefix and no /vsicurl/ needed. For attributes and "
+                     "queries prefer the OGC API - Features service above — tiles are generalized "
+                     "per zoom."))
         links.append(_link(
             "features-geojson", "Viewport features (GeoDeploy native)",
             f"{api}/features.geojson?bbox=minx,miny,maxx,maxy&limit=50000",
@@ -120,6 +131,16 @@ def vector_links(layer, base: str) -> list[dict]:
                 fmt="JSON", tools=["DuckDB", "GDAL/ogr2ogr", "pyarrow"],
                 hint=f"Partition grid + file keys; each file is then at {api}/parquet/<key> "
                      "(HTTP Range supported)."))
+    # A tiled GeoParquet layer LEADS with PMTiles. These layers are the big ones — that is why they
+    # are GeoParquet — and for them the honest first answer is the one that draws: QGIS opens the
+    # archive through Add Vector Layer in seconds, where OAPIF pages millions of features one screen
+    # at a time. OGC API - Features stays directly below it for full attributes and queries, which
+    # tiles cannot give: they are generalized per zoom and clipped to tile boundaries.
+    for i, l in enumerate(links):
+        if l.get("id") == "pmtiles":
+            links.insert(0, links.pop(i))
+            break
+
     links.append(_link(
         "stac", "STAC item (metadata + all assets)", stac_item_url(base, "vectors", layer),
         fmt="STAC 1.0 Item", tools=["QGIS 3.40+", "stac-browser", "pystac-client"],

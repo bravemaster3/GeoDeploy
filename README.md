@@ -58,6 +58,10 @@ couple of minutes later. No terminal, no Docker knowledge, no database configura
   embeds in another site with one `<iframe>`.
 - **Share data properly.** Layers you mark public are readable by standard clients over open
   standards, so QGIS, Python and R consume them directly with no export step.
+- **Work without the browser.** `pip install geodeploy` gives you a command-line client covering the
+  whole API — upload many files at once, style with data-driven symbology, build and publish a
+  portal, administer the instance. It is also the zero-dependency Python client the QGIS plugin is
+  built on.
 - **Work as a team.** Roles from viewer to owner, per-layer visibility, invitation links, scoped API
   tokens, and an audit log of who changed what.
 - **Operate it from the browser.** Service logs, a terminal, scheduled backups to a separate

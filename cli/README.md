@@ -131,10 +131,10 @@ python -m twine check dist/*        # must pass before anything is uploaded
 from source rather than trusted.
 
 **Versioning.** The CLI's number tracks the GeoDeploy release it ships with, so it must not claim a
-release that has not happened: the first upload is `1.3.0b1`, and `1.3.0` follows when v1.3 tags. A
-version on PyPI can never be re-uploaded — deleting it does not free the number — so a pre-release
-is the only way to test the real index without spending the one that matters. `pip install
-geodeploy` skips pre-releases unless asked with `--pre`.
+release that has not happened. `1.3.0b1` went up first for exactly that reason — a version on PyPI
+can never be re-uploaded, and deleting it does not free the number, so a pre-release is the only way
+to test the real index without spending the one that matters. `1.3.0` followed when v1.3 tagged.
+Do the same next time: `1.4.0bN` while v1.4 is unreleased, then the final.
 
 ## The row cap, and the two ways around it
 

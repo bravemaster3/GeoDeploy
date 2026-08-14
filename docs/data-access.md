@@ -215,20 +215,20 @@ filtering, no transactions, no OGC API - Tiles or Records — and `/api/ogc/conf
 > field or an address bar. To load a layer *into QGIS*, use OGC API - Features — PMTiles is a
 > rendering format.
 >
-> **In QGIS, use the right dialog.** *Add Vector Tile Layer ▸ New Generic Connection* builds an XYZ
-> template (`type=xyz&url=…{z}/{x}/{y}`) and cannot describe a single-file archive — it answers
-> *"Invalid Data Source"*. What works, on GDAL 3.8+ (QGIS 3.34 and later), is opening the archive
-> directly:
+> **In QGIS, use *Add Vector Layer* — not *Add Vector Tile Layer*.** Paste the plain URL:
 >
-> ```python
-> # QGIS ▸ Plugins ▸ Python Console
-> from osgeo import ogr
-> ds = ogr.Open("/vsicurl/https://YOUR-HOST/api/data/vector/{uid}/pmtiles")
+> ```
+> https://YOUR-HOST/api/data/vector/{uid}/pmtiles
 > ```
 >
-> — verified against a live instance, returning the `geodeploy` layer. Older GDAL cannot read
-> PMTiles at all. For most QGIS work OGC API - Features is still the better route: it carries
-> attributes and is not generalized per zoom.
+> GDAL 3.8+ (QGIS 3.34 and later) opens it with its PMTiles driver — verified against a live
+> instance: `driver=PMTiles`, one layer, features readable. No `pmtiles://` prefix and no
+> `/vsicurl/` needed, though `/vsicurl/<url>` works too. *Add Vector **Tile** Layer* cannot open it
+> at all: that dialog builds an XYZ template (`type=xyz&url=…{z}/{x}/{y}`) and an archive is a single
+> file, so it answers *"Invalid Data Source"*. Older GDAL cannot read PMTiles at all.
+>
+> For most QGIS work OGC API - Features is still the better route: it carries full attributes and is
+> not generalized per zoom.
 
 ## Consuming the assets
 

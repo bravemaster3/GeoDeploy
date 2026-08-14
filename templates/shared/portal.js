@@ -1499,6 +1499,15 @@
       const up = document.createElement('div'); up.className = 'gd-story-more gd-story-up'; up.innerHTML = chevron('up');
       const down = document.createElement('div'); down.className = 'gd-story-more gd-story-down'; down.innerHTML = chevron('down');
       mw.appendChild(up); mw.appendChild(down);
+      function setArrowGlyphs() {
+        // The CSS moves these to the sides in portrait; the SVG has to follow, or a "next section"
+        // control points downwards while the strip scrolls sideways.
+        const sideways = isSideways();
+        up.innerHTML = chevron(sideways ? 'left' : 'up');
+        down.innerHTML = chevron(sideways ? 'right' : 'down');
+      }
+      setArrowGlyphs();
+      try { horizontal.addEventListener('change', setArrowGlyphs); } catch (e) {}
       function updateArrows() {
         if (isSideways()) {
           up.classList.toggle('show', panel.scrollLeft > 6);
@@ -1524,7 +1533,10 @@
     }
   }
   function chevron(dir) {
-    const pts = dir === 'up' ? '6 15 12 9 18 15' : '6 9 12 15 18 9';
+    const pts = dir === 'up' ? '6 15 12 9 18 15'
+      : dir === 'down' ? '6 9 12 15 18 9'
+      : dir === 'left' ? '15 6 9 12 15 18'
+      : '9 6 15 12 9 18';
     return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="' + pts + '"/></svg>';
   }
 
