@@ -273,6 +273,49 @@ async def test_share_links_lead_with_ogc_features(client, db):
 
 
 @pytest.mark.asyncio
+async def test_a_tiled_geoparquet_layer_leads_with_pmtiles(client, db):
+    """These are the BIG layers — that is why they are GeoParquet — and for them the honest first
+    answer is the one that draws. QGIS opens the archive through Add Vector Layer in seconds, where
+    OAPIF pages millions of features a screen at a time. Verified against a live instance: GDAL
+    reports driver=PMTiles and reads features straight from the plain URL."""
+    from geodeploy.services.share_links import vector_links
+
+    class _Tiled:
+        id, uid, name = 9, "abc123abc123", "big"
+        storage_backend, pmtiles_key, tile_status = "geoparquet", "k.pmtiles", "ready"
+        schema_name = table_name = columns = s3_key = None
+        is_public, visibility = True, "public"
+
+    links = vector_links(_Tiled(), "https://example.org")
+    assert links[0]["id"] == "pmtiles", "the fastest path should be first, not buried"
+    assert links[0]["primary"] is True
+    assert "QGIS" in links[0]["tools"]
+    # Case-insensitive: the hint capitalises the menu name for emphasis, and pinning the shouting
+    # would make this a test of formatting rather than of content.
+    assert "add vector layer" in links[0]["hint"].lower()   # the dialog that actually works
+    assert "add vector tile layer" in links[0]["hint"].lower()  # …and the one that does not
+    # Only ONE thing may wear the badge, or "recommended" means nothing.
+    assert [l["id"] for l in links if l.get("primary")] == ["pmtiles"]
+    # …and the feature service is still right there for attributes, which tiles cannot carry.
+    assert "ogc-service" in [l["id"] for l in links]
+
+
+@pytest.mark.asyncio
+async def test_an_untiled_geoparquet_layer_still_leads_with_the_service(client, db):
+    """No archive, no shortcut: OAPIF is the answer again."""
+    from geodeploy.services.share_links import vector_links
+
+    class _Untiled:
+        id, uid, name = 10, "def456def456", "small"
+        storage_backend, pmtiles_key, tile_status = "geoparquet", None, None
+        schema_name = table_name = columns = s3_key = None
+        is_public, visibility = True, "public"
+
+    links = vector_links(_Untiled(), "https://example.org")
+    assert [l["id"] for l in links if l.get("primary")] == ["ogc-service"]
+
+
+@pytest.mark.asyncio
 async def test_share_links_flag_a_non_public_layer(client, db):
     await _seed(db)
     body = (await client.get(f"/api/data/vector/{ORG_PG}/links", headers=_auth())).json()
