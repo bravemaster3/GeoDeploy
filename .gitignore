@@ -55,3 +55,6 @@ vendor/
 # Scratch portal-config dumps written by examples/geodeploy_cli.py (portal-get)
 examples/*.json
 examples/.venv/
+
+# The built plugin archive — produced by integrations/qgis-plugin/scripts/build.py
+integrations/qgis-plugin/dist/
