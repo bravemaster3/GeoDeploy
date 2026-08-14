@@ -114,10 +114,46 @@ def _read_meta(ds) -> dict:
         "nodata_value": float(nodata) if nodata is not None else None,
         "width": ds.width,
         "height": ds.height,
+        # Overview decimation factors ([2, 4, 8, …]) of band 1. What they answer is "how cheaply can
+        # this be drawn zoomed OUT" — see `low_zoom_is_cheap`.
+        "overviews": list(ds.overviews(1) or []),
         # dtype of band 1 — drives whether a default display rescale is needed (non-8-bit data renders
         # black on tile servers that assume 0–255, so ingest computes a stretch for those).
         "dtype": str(ds.dtypes[0]) if ds.dtypes else None,
     }
+
+
+#: A zoomed-out request is cheap when the pyramid has an overview at or below this many pixels on
+#: its longest side — one small read, whatever area the tile covers.
+_CHEAP_OVERVIEW_PX = 1024
+
+
+def low_zoom_is_cheap(width: int | None, height: int | None, overviews: list | None) -> bool:
+    """Can this raster be drawn at a low zoom without a big read? (issue #17)
+
+    The minzoom floor exists because a z3 tile of a drone orthomosaic once took long enough that
+    nginx returned 504, and a hanging tile costs the whole portal. But the floor is computed from
+    the layer's EXTENT, which is only a proxy: what actually decides the cost is whether the file
+    has an overview small enough to answer from directly.
+
+    A COG we built always has one — the converter writes a full pyramid — so for those the floor is
+    guesswork that hides a small high-resolution layer at zooms where someone might legitimately be
+    looking, with no message and nothing in the console. An imported file with no overviews keeps
+    the floor, because for that one the original reasoning still holds.
+    """
+    if not width or not height:
+        return False
+    longest = max(int(width), int(height))
+    if longest <= _CHEAP_OVERVIEW_PX:
+        return True                      # small enough that the full read IS the cheap read
+    for factor in (overviews or []):
+        try:
+            if factor and longest / float(factor) <= _CHEAP_OVERVIEW_PX:
+                return True
+        except (TypeError, ValueError, ZeroDivisionError):
+            # A driver can report anything; a display hint must not raise inside ingest.
+            continue
+    return False
 
 
 def inspect(path: str) -> dict:

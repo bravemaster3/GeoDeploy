@@ -222,6 +222,13 @@ Deliberately NOT deck.gl's ColumnLayer for these: PostGIS layers render through 
 and switching renderer when 3D is ticked would need a second implementation of identify, visibility
 and z-order. GeoParquet points are deck-rendered and their half is NOT built — the editor hides the
 control for them rather than showing one that does nothing.)
+2026-08-13b (`cog_converter.low_zoom_is_cheap` + `portal_generator.raster_minzoom` — issue #17. The
+raster minzoom floor was computed from the layer's EXTENT, a proxy; what decides whether a
+zoomed-out tile is expensive is the file's OVERVIEW PYRAMID. Measured at ingest on the CONVERTED
+COG (the pyramid is what conversion adds, so reading `meta` from the original would answer the
+wrong question) and stored as `raster_layers.low_zoom_ok`. True → no floor; NULL/False → the
+heuristic. NULL is deliberately not False: existing layers keep today's behaviour until they are
+re-ingested, which is the conservative direction for a guard against a page-wide hang.)
 2026-08-13 (`ramp_colors(name, count, reverse=False)` — reversing a ramp is a FLAG
 (`color_ramp_reverse` in the style, `?reverse=` on `field-stats`), never a second table of reversed
 ramps: which end means "high" is a cartographic choice, and nine ramps would become eighteen. The

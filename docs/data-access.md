@@ -214,6 +214,12 @@ filtering, no transactions, no OGC API - Tiles or Records — and `/api/ogc/conf
 > in *code*; it belongs inside a style source (GeoDeploy's own portals emit it), never in a UI
 > field or an address bar. To load a layer *into QGIS*, use OGC API - Features — PMTiles is a
 > rendering format.
+>
+> Specifically, **QGIS's *Add Vector Tile Layer* cannot open a PMTiles URL**: that dialog builds an
+> XYZ template (`type=xyz&url=…{z}/{x}/{y}`) and an archive is a single file, so it answers
+> *"Invalid Data Source"*. GDAL 3.8+ ships a PMTiles driver and reads it as
+> `/vsicurl/<the plain URL>`; older GDAL — including what QGIS 3.28-era installs bundle — cannot
+> read PMTiles at all.
 
 ## Consuming the assets
 

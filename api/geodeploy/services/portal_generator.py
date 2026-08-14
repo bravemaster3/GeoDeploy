@@ -271,7 +271,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 # MapLibre then sits waiting on that tile, the portal's load handler never settles,
                 # and the whole page hangs on the loading screen until the 15s backstop. A 504 is
                 # far worse than a 404: the 404 is instant, this one costs the entire page.
-                _mz = _min_zoom_for(_rb)
+                _mz = raster_minzoom(layer, _rb)
                 if _mz:
                     sources[source_id]["minzoom"] = _mz
             # Base opacity + an optional raster-paint passthrough (GeoLibre import carries
@@ -1513,6 +1513,24 @@ def _min_zoom_for(bounds: list[float]) -> int:
         return 0
     fits_at = math.log2(360.0 / width) if width < 360 else 0
     return max(0, min(int(fits_at) - _MINZOOM_SLACK, 18))
+
+
+def raster_minzoom(layer, bounds) -> int:
+    """The `minzoom` to write for this raster source — 0 meaning "write none" (issue #17).
+
+    The floor above is computed from the layer's EXTENT, which is a proxy for cost. `low_zoom_ok` is
+    the measurement: taken at ingest from the file's own overview pyramid
+    (`cog_converter.low_zoom_is_cheap`). When the file can answer a zoomed-out tile from a small
+    overview, the 504 the floor exists to prevent cannot happen, and keeping the floor only makes a
+    small high-resolution layer disappear below a computed zoom with no message.
+
+    `None` — every layer ingested before the measurement existed — keeps the heuristic. So this
+    changes nothing for an existing instance until its rasters are re-ingested, which is the
+    conservative direction for a guard that was protecting against a page-wide hang.
+    """
+    if getattr(layer, "low_zoom_ok", None) is True:
+        return 0
+    return _min_zoom_for(bounds)
 
 
 def _geom_kind(geometry_type: str | None) -> str:

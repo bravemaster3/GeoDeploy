@@ -447,6 +447,10 @@ class RasterLayerOut(BaseModel):
     bbox: list[float] | None
     band_count: int | None
     nodata_value: float | None
+    # Whether a zoomed-out tile is cheap for this file (issue #17). Exposed so the CLI and a
+    # plugin can explain why a layer does or does not draw at low zoom, rather than the
+    # answer living only inside the published style.
+    low_zoom_ok: bool | None = None
     file_size: int | None
     status: str
     error_message: str | None

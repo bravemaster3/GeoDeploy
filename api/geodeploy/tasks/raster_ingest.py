@@ -12,7 +12,8 @@ from botocore.client import Config
 from .. import state_db
 from ..celery_app import celery_app
 from ..config import get_settings
-from ..services.cog_converter import convert_to_cog, inspect as inspect_raster, is_cog
+from ..services.cog_converter import (convert_to_cog, inspect as inspect_raster, is_cog,
+                                      low_zoom_is_cheap)
 
 
 def _get_storage_creds() -> dict:
@@ -191,6 +192,18 @@ def ingest_raster(self, job_id: str, layer_id: int, file_path: str, s3_key: str)
             rescale = _default_rescale(s3_key, settings)
             if rescale:
                 extra["default_style"] = json.dumps({"rescale": rescale})
+        # Whether a zoomed-out tile is cheap is a property of the FILE — its overview pyramid — not
+        # of its extent, so it is decided once here rather than guessed from the bounding box at
+        # every publish (issue #17). Read from the COG we are about to serve, NOT from `meta`: that
+        # describes the ORIGINAL, and the pyramid is what conversion just added.
+        try:
+            cog_meta = inspect_raster(cog_path)
+            extra["low_zoom_ok"] = bool(low_zoom_is_cheap(
+                cog_meta.get("width"), cog_meta.get("height"), cog_meta.get("overviews")))
+        except Exception:
+            # Never fail an otherwise-good ingest over a display hint; absent means "use the
+            # extent heuristic", which is what every existing layer already does.
+            extra["low_zoom_ok"] = None
         _update_layer(layer_id,
                       status="ready",
                       crs=meta["crs"],
