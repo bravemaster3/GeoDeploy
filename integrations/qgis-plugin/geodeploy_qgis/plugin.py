@@ -1,0 +1,323 @@
+"""The QGIS-facing half: a dock that lists an instance's layers, adds them, and uploads back.
+
+Three principles this file exists to keep:
+
+1. **Anonymous works.** A URL with no token lists what the instance publishes. Signing in adds to
+   that; it is not the price of entry.
+2. **Nothing blocks the UI.** Listing and uploading run in `QgsTask`, because a plugin that freezes
+   QGIS while a 2 GB upload runs is a plugin people uninstall.
+3. **Nothing here knows HTTP.** Every request goes through the vendored client — the same code the
+   CLI runs — so the plugin cannot drift from it.
+"""
+from __future__ import annotations
+
+from qgis.core import (Qgis, QgsApplication, QgsProject, QgsRasterLayer, QgsTask,
+                       QgsVectorLayer)
+from qgis.PyQt.QtCore import Qt, pyqtSignal
+from qgis.PyQt.QtWidgets import (QAbstractItemView, QAction, QCheckBox, QComboBox, QDockWidget,
+                                 QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar,
+                                 QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+
+from . import sources, symbology
+from .connection import GeoDeployError, Instance, saved_instances
+
+PLUGIN_NAME = "GeoDeploy"
+
+
+class _Job(QgsTask):
+    """Run one client call off the UI thread. `finished_ok(result)` / `failed(message)`."""
+
+    def __init__(self, description, fn):
+        super().__init__(description, QgsTask.CanCancel)
+        self._fn = fn
+        self.result = None
+        self.error = ""
+
+    def run(self):
+        try:
+            self.result = self._fn()
+            return True
+        except GeoDeployError as exc:
+            self.error = str(exc)
+        except Exception as exc:                      # noqa: BLE001 - surface, never crash QGIS
+            self.error = f"{type(exc).__name__}: {exc}"
+        return False
+
+
+class GeoDeployDock(QDockWidget):
+    def __init__(self, iface):
+        super().__init__(PLUGIN_NAME)
+        self.iface = iface
+        self.instance: Instance | None = None
+        self._rows: list[dict] = []
+
+        body = QWidget()
+        outer = QVBoxLayout(body)
+        outer.setContentsMargins(8, 8, 8, 8)
+
+        # -- connect ------------------------------------------------------------------------------
+        row = QHBoxLayout()
+        self.url = QComboBox()
+        self.url.setEditable(True)
+        self.url.setPlaceholderText("https://your-instance.org")
+        for url, _token in saved_instances():         # whatever `geodeploy login` already stored
+            self.url.addItem(url)
+        row.addWidget(self.url, 1)
+        self.connect_btn = QPushButton("Connect")
+        self.connect_btn.clicked.connect(self.connect_to_instance)
+        row.addWidget(self.connect_btn)
+        outer.addLayout(row)
+
+        self.token = QLineEdit()
+        self.token.setPlaceholderText("API token (optional — public data needs none)")
+        self.token.setEchoMode(QLineEdit.Password)
+        outer.addWidget(self.token)
+
+        self.status = QLabel("Not connected.")
+        self.status.setWordWrap(True)
+        outer.addWidget(self.status)
+
+        # -- layers -------------------------------------------------------------------------------
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["Layer", "Kind", "Features"])
+        self.tree.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.tree.itemDoubleClicked.connect(lambda *_: self.add_selected())
+        outer.addWidget(self.tree, 1)
+
+        self.styled = QCheckBox("Apply the layer's GeoDeploy symbology")
+        self.styled.setChecked(True)
+        outer.addWidget(self.styled)
+
+        self.attributes = QCheckBox("Prefer full attributes over drawing speed")
+        self.attributes.setToolTip(
+            "A tiled layer draws immediately but carries generalized geometry and only the "
+            "attributes the tiles hold. Tick this to read the features themselves instead.")
+        outer.addWidget(self.attributes)
+
+        add = QPushButton("Add to map")
+        add.clicked.connect(self.add_selected)
+        outer.addWidget(add)
+
+        # -- upload -------------------------------------------------------------------------------
+        self.upload_btn = QPushButton("Upload the active layer…")
+        self.upload_btn.clicked.connect(self.upload_active)
+        outer.addWidget(self.upload_btn)
+
+        self.push_style = QCheckBox("Send its styling too")
+        self.push_style.setChecked(True)
+        self.push_style.setToolTip(
+            "Save the QGIS renderer as the layer's default style, so a portal built from it looks "
+            "like what you see here.")
+        outer.addWidget(self.push_style)
+
+        self.progress = QProgressBar()
+        self.progress.setVisible(False)
+        outer.addWidget(self.progress)
+
+        self.setWidget(body)
+
+    # -- helpers -----------------------------------------------------------------------------------
+
+    def _say(self, text, level=Qgis.Info):
+        self.status.setText(text)
+        self.iface.messageBar().pushMessage(PLUGIN_NAME, text, level=level, duration=6)
+
+    def _busy(self, on: bool):
+        self.progress.setVisible(on)
+        self.progress.setRange(0, 0 if on else 1)
+        self.connect_btn.setEnabled(not on)
+
+    # -- connect -----------------------------------------------------------------------------------
+
+    def connect_to_instance(self):
+        url = (self.url.currentText() or "").strip()
+        if not url:
+            self._say("Enter the instance URL first.", Qgis.Warning)
+            return
+        token = (self.token.text() or "").strip() or None
+        if not token:
+            # A token stored by `geodeploy login` counts as being signed in here.
+            for saved_url, saved_token in saved_instances():
+                if saved_url.rstrip("/") == url.rstrip("/").replace("http://", "https://"):
+                    token = saved_token
+                    break
+        try:
+            self.instance = Instance(url, token)
+        except Exception as exc:                      # noqa: BLE001 - a bad URL is a message
+            self._say(f"That URL will not do: {exc}", Qgis.Critical)
+            return
+        self._busy(True)
+        self._run(_Job("GeoDeploy: connecting", self.instance.check), self._connected)
+
+    def _connected(self, job):
+        self._busy(False)
+        if job.error:
+            self._say(job.error, Qgis.Critical)
+            return
+        info = job.result or {}
+        who = f"signed in as {info.get('user')}" if info.get("authenticated") else "not signed in"
+        extra = ("" if info.get("index_available")
+                 else " — this instance does not publish an index, so only what your token can see "
+                      "will be listed")
+        self._say(f"{info.get('url')} — {who}. "
+                  f"{info.get('public_layers', 0)} public layer(s), "
+                  f"{info.get('public_portals', 0)} public portal(s).{extra}")
+        self.refresh_layers()
+
+    def refresh_layers(self):
+        if not self.instance:
+            return
+        self._busy(True)
+        self._run(_Job("GeoDeploy: listing layers", self.instance.layers), self._listed)
+
+    def _listed(self, job):
+        self._busy(False)
+        if job.error:
+            self._say(job.error, Qgis.Critical)
+            return
+        self._rows = job.result or []
+        self.tree.clear()
+        groups: dict[str, QTreeWidgetItem] = {}
+        for row in self._rows:
+            backend = row.get("storage_backend") or row.get("layer_type") or "other"
+            label = {"postgis": "Vector (PostGIS)", "geoparquet": "Vector (GeoParquet)",
+                     "raster": "Raster (COG)"}.get(backend, backend)
+            parent = groups.get(label)
+            if parent is None:
+                parent = QTreeWidgetItem(self.tree, [label])
+                parent.setExpanded(True)
+                groups[label] = parent
+            count = row.get("feature_count")
+            item = QTreeWidgetItem(parent, [row.get("name") or "?",
+                                            row.get("geometry_type") or backend,
+                                            f"{count:,}" if isinstance(count, int) else ""])
+            item.setData(0, Qt.UserRole, row)
+        if not self._rows:
+            self._say("Nothing to list. Public data needs no account; a token shows the rest.")
+
+    # -- add ---------------------------------------------------------------------------------------
+
+    def _selected_row(self) -> dict | None:
+        items = self.tree.selectedItems()
+        return items[0].data(0, Qt.UserRole) if items else None
+
+    def add_selected(self):
+        row = self._selected_row()
+        if not row:
+            self._say("Pick a layer first.", Qgis.Warning)
+            return
+        source = sources.describe(row, prefer_attributes=self.attributes.isChecked())
+        if not source:
+            self._say("That layer offers nothing QGIS can read yet.", Qgis.Warning)
+            return
+
+        name = row.get("name") or "GeoDeploy layer"
+        if source["kind"] == "cog":
+            layer = QgsRasterLayer(source["uri"], name, "gdal")
+        else:
+            layer = QgsVectorLayer(source["uri"], name, source["provider"])
+        if not layer.isValid():
+            self._say(f"QGIS could not open the {source['kind']} source for {name}.", Qgis.Critical)
+            return
+
+        QgsProject.instance().addMapLayer(layer)
+        applied = ""
+        if self.styled.isChecked() and source["kind"] != "cog":
+            style = (row.get("default_style") or {}).get("style") if row.get("default_style") else None
+            if style is None and self.instance:
+                # A public row carries no style; ask for the layer's legend-bearing style instead.
+                try:
+                    ref = row.get("uid") or row.get("id")
+                    style = ((self.instance.client.layers.resolve(ref) or {})
+                             .get("default_style") or {}).get("style")
+                except GeoDeployError:
+                    style = None
+            if style and symbology.apply_to_qgis(layer, style):
+                applied = ", styled as the portal draws it"
+        self._say(f"Added {name} — {source['why']}{applied}.")
+
+    # -- upload ------------------------------------------------------------------------------------
+
+    def upload_active(self):
+        if not self.instance:
+            self._say("Connect to an instance first.", Qgis.Warning)
+            return
+        if not self.instance.token:
+            self._say("Uploading needs a token with data:write. Public browsing does not.",
+                      Qgis.Warning)
+            return
+        layer = self.iface.activeLayer()
+        if layer is None:
+            self._say("Select a layer in the Layers panel first.", Qgis.Warning)
+            return
+        path = layer.source().split("|")[0]
+        if not path or path.startswith(("http", "/vsicurl", "url=")):
+            self._say("Only a layer backed by a local file can be uploaded — this one is remote.",
+                      Qgis.Warning)
+            return
+
+        style = symbology.from_qgis(layer) if self.push_style.isChecked() else {}
+        client = self.instance.client
+
+        def work():
+            result = client.uploads.upload(path, wait=True)
+            if style and getattr(result, "layer_id", None):
+                # Styling travels with the upload: the portal then shows what the author saw,
+                # instead of the next default colour in the palette.
+                api = client.layers.api(result.plan.layer_type)
+                api.set_default_style(result.layer_id, {"opacity": 1.0, "style": style,
+                                                        "popup_fields": []})
+            return result
+
+        self._busy(True)
+        self._say(f"Uploading {layer.name()}… large files go straight to storage.")
+        self._run(_Job("GeoDeploy: uploading", work), self._uploaded)
+
+    def _uploaded(self, job):
+        self._busy(False)
+        if job.error:
+            self._say(job.error, Qgis.Critical)
+            return
+        result = job.result
+        name = getattr(getattr(result, "plan", None), "name", "the layer")
+        self._say(f"Uploaded {name}." + (" Styling sent with it." if self.push_style.isChecked()
+                                         else ""))
+        self.refresh_layers()
+
+    # -- task plumbing ------------------------------------------------------------------------------
+
+    def _run(self, job, on_done):
+        job.taskCompleted.connect(lambda: on_done(job))
+        job.taskTerminated.connect(lambda: on_done(job))
+        # Keep a reference: QgsTaskManager takes ownership, but Python must not collect the closure.
+        self._job = job
+        QgsApplication.taskManager().addTask(job)
+
+
+class GeoDeployPlugin:
+    def __init__(self, iface):
+        self.iface = iface
+        self.dock = None
+        self.action = None
+
+    def initGui(self):              # noqa: N802 - the name QGIS calls
+        self.action = QAction(PLUGIN_NAME, self.iface.mainWindow())
+        self.action.triggered.connect(self.show)
+        self.iface.addPluginToWebMenu(PLUGIN_NAME, self.action)
+        self.iface.addToolBarIcon(self.action)
+
+    def unload(self):
+        if self.dock is not None:
+            self.iface.removeDockWidget(self.dock)
+            self.dock = None
+        if self.action is not None:
+            self.iface.removePluginWebMenu(PLUGIN_NAME, self.action)
+            self.iface.removeToolBarIcon(self.action)
+            self.action = None
+
+    def show(self):
+        if self.dock is None:
+            self.dock = GeoDeployDock(self.iface)
+            self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dock)
+        self.dock.show()
+        self.dock.raise_()

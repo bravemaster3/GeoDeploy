@@ -1,0 +1,25 @@
+[general]
+name=GeoDeploy
+qgisMinimumVersion=3.28
+description=Browse a GeoDeploy instance, add its layers, and publish layers back to it.
+about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. This plugin connects
+    QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
+    using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
+    files, which go straight to object storage. Pure Python, no external dependencies.
+version=0.1.0
+author=Koffi Dodji Noumonvi
+email=noumonvikoffidodji@hotmail.fr
+
+tracker=https://github.com/bravemaster3/GeoDeploy/issues
+repository=https://github.com/bravemaster3/GeoDeploy
+homepage=https://docs-geodeploy.kndev.org/
+category=Web
+icon=icon.png
+experimental=True
+deprecated=False
+license=Apache-2.0
+
+; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
+; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
+changelog=0.1.0 - First release: browse an instance (public data without an account), add vector and
+    raster layers, upload the active layer.
