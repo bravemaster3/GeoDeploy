@@ -254,11 +254,15 @@ deliberately NOT visibility-filtered (published portals depend on them).
   carries **`bounds`** (from the stored EPSG:4326 bbox; TiTiler `/cog/info` only as a fallback for
   legacy rows) — bounds are the whole point: a bare XYZ URL has none, so "zoom to layer" fails.
 - **HEAD works on every GET route** (2026-08-14, `main._HeadAsGet`). FastAPI's `APIRoute` does not
-  add HEAD to a GET route, so every endpoint here answered **405** — and **`/vsicurl/` probes a URL
-  with HEAD**, so GDAL (and therefore QGIS, ogr2ogr, anything on GDAL) could not open `/cog`,
-  `/pmtiles` or a parquet partition. It failed as "not recognized as being in a supported file
-  format", which reads like a broken file. The middleware runs the GET and drops the body; headers,
-  including Content-Length and Content-Range, pass through. Tests: `test_head_requests.py`.
+  add HEAD to a GET route (plain Starlette's `Route` does), so every endpoint answered **405** — non
+  conformant, and some clients probe with HEAD before fetching. The middleware runs the GET and
+  drops the body; headers, including Content-Length and Content-Range, pass through. Tests:
+  `test_head_requests.py`.
+  **What it does NOT explain:** GDAL was never blocked by it. Verified against a live instance
+  BEFORE the fix — `ogr.Open("/vsicurl/…/pmtiles")` opened fine, because `/vsicurl/` tolerates a 405
+  probe and falls back to a ranged GET. (A container test that said otherwise was getting 403 from
+  Cloudflare, which GDAL reports with the same "not recognized as being in a supported file format"
+  message.)
 - **`GET /data/{vector,raster}/{ref}/legend`** — **PUBLIC** legend for the layer's default style
   (2026-08-13), on the same terms as the other artifacts. Vector returns
   `{color_mode, field, entries[{color,label}], size}` straight from
