@@ -52,6 +52,7 @@ _SIMPLE_KEYS = (
     ("color_mode", "color_mode"),
     ("color_ramp", "color_ramp"),
     ("color_ramp_reverse", "color_ramp_reverse"),
+    ("classes_n", "classes_n"),
     ("size_field", "size_field"),
     ("size_mode", "size_mode"),
 )
@@ -222,6 +223,11 @@ def classify(client: Any, layer_ref: Any, field: str, mode: Optional[str] = None
     # Recorded so the direction survives a re-classify: the class COLOURS are stored per class, so
     # without this a later change of method or class count would silently un-reverse the ramp.
     style["color_ramp_reverse"] = bool(reverse)
+    # What was ASKED for, which is not always what came back — repeated values collapse a break, and
+    # some columns yield one class however many you request. The editor shows this number in its
+    # Classes box; storing it here means a CLI-classified layer opens in the browser showing the
+    # count you asked for rather than the count you got.
+    style["classes_n"] = int(classes)
     if resolved == "graduated":
         found = suggestion.get("classes") or []
         if not found:
@@ -310,6 +316,14 @@ class Style(object):
     @property
     def other_color(self) -> Optional[str]:
         return self.raw.get("other_color")
+
+    @property
+    def requested_classes(self) -> Optional[int]:
+        """How many classes were ASKED for. `len(style.classes)` is how many came back, and the two
+        differ whenever repeated values collapse a break — so a UI that shows the second number as
+        the input fights the user (issue #10)."""
+        value = self.raw.get("classes_n")
+        return int(value) if isinstance(value, (int, float)) else None
 
     @property
     def ramp(self) -> Optional[str]:

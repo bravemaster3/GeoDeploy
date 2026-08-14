@@ -34,6 +34,14 @@
     >
       <LinkIcon class="w-4 h-4" />
     </button>
+    <!-- Style: colormap, stretch, hillshade — the layer's DEFAULT, editable here rather than only
+         inside a portal (issue #23). -->
+    <button v-if="auth.canEdit && layer.status === 'ready'" @click="showStyle = true"
+      class="p-1.5 rounded transition-all opacity-0 group-hover:opacity-100 text-muted-foreground/70 hover:text-primary"
+      title="Default style — colormap and stretch"
+    >
+      <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r="2.5"/><circle cx="18" cy="13" r="2.5"/><circle cx="6.5" cy="10.5" r="2.5"/><circle cx="10" cy="18" r="2.5"/><path d="M12 2a10 10 0 1 0 0 20c1.1 0 2-.9 2-2 0-1.4-1-1.9-1-3 0-.6.4-1 1-1h2a5 5 0 0 0 5-5c0-5-4.5-9-9-9z"/></svg>
+    </button>
     <!-- Sharing: workspace visibility (private / organization / public catalog + raw COG) -->
     <button v-if="auth.canEdit && layer.status === 'ready'" @click="showSharing = true"
       class="p-1.5 rounded transition-all"
@@ -49,6 +57,7 @@
     </button>
     <SharingModal v-if="showSharing" :layer="layer" layer-type="raster" @close="showSharing = false" />
     <ShareLinksModal v-if="showLinks" :layer="layer" layer-type="raster" @close="showLinks = false" />
+    <StyleModal v-if="showStyle" :layer="layer" layer-type="raster" @close="showStyle = false" />
   </div>
 </template>
 
@@ -60,6 +69,7 @@ import { useDataStore } from '@/stores/data'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
 import SharingModal from '@/components/data/SharingModal.vue'
 import ShareLinksModal from '@/components/data/ShareLinksModal.vue'
+import StyleModal from '@/components/data/StyleModal.vue'
 
 const props = defineProps({ layer: Object })
 defineEmits(['delete'])
@@ -67,6 +77,7 @@ defineEmits(['delete'])
 const auth = useAuthStore()
 const dataStore = useDataStore()
 const showSharing = ref(false)
+const showStyle = ref(false)
 const showLinks = ref(false)
 
 // Inline rename

@@ -53,6 +53,20 @@
   input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="file"]):not([type="submit"]):not([type="button"]) {
     @apply bg-background text-foreground;
   }
+
+  /* Colour swatches (the class colours in the symbology legend). A native colour input draws its
+     own chrome — a padded wrapper AND an inner border — so at swatch size there is more frame than
+     colour, and telling two classes apart gets hard. Strip both: the square IS the colour, and the
+     element's own border supplies the single hairline that keeps a pale class visible. */
+  input[type="color"] {
+    -webkit-appearance: none;
+    appearance: none;
+    padding: 0;
+    background: none;
+  }
+  input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+  input[type="color"]::-webkit-color-swatch { border: none; border-radius: 3px; }
+  input[type="color"]::-moz-color-swatch { border: none; border-radius: 3px; }
 }
 
 @layer components {
