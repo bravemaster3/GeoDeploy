@@ -11,11 +11,10 @@ Zero runtime dependencies, Python 3.9+, so the QGIS plugin can vendor this packa
 """
 from __future__ import annotations
 
-# A PyPI version can never be re-uploaded, so the FIRST upload is a pre-release: it proves the
-# packaging against the real index without spending the number this ships under. `pip install
-# geodeploy` ignores it (pre-releases need --pre), so nobody gets it by accident. Becomes 1.3.0
-# when GeoDeploy v1.3 tags — the CLI's version tracks the release it belongs to.
-__version__ = "1.3.0b1"
+# The CLI's version tracks the GeoDeploy release it ships with. A PyPI version can never be
+# re-uploaded, so a number is only spent once the release it names exists: 1.3.0b1 proved the
+# packaging against the real index, and this is the release it was rehearsing for.
+__version__ = "1.3.0"
 
 from .client import Client  # noqa: E402  (after __version__ — the user agent reads it)
 from .errors import (  # noqa: E402

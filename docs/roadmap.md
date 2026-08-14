@@ -1,6 +1,6 @@
 # Roadmap
 
-GeoDeploy is at **v1.2**. Everything under *In v1.0* and in the releases after it is built and
+GeoDeploy is at **v1.3**. Everything under *In v1.0* and in the releases after it is built and
 running in production; the groups at the end are what comes next.
 
 <div class="gd-legend" markdown>
@@ -180,9 +180,9 @@ TileJSON was valid, and only the tile server's log knew otherwise.</p>
 
 </div>
 
-<div class="gd-rel now tail" markdown>
+<div class="gd-rel done" markdown>
 ### v1.3 — the CLI, and getting data back out
-<span class="gd-when">Next</span>
+<span class="gd-when">Shipped · 2026-08-14</span>
 
 <p class="gd-goal">v1.2 made the data readable by other tools. This one is about reaching an instance
 without a browser, and about being able to take a copy with you.</p>
@@ -190,21 +190,43 @@ without a browser, and about being able to take a copy with you.</p>
 - [x] **A real CLI**, not an example script — every argument the API takes, the v1.1 symbology
       included, with its own section in the docs and tests so it is verified without anyone
       checking by hand. Also the Python client the QGIS plugin is built on: zero dependencies,
-      Python 3.9+, so a plugin can vendor it
+      Python 3.9+, so a plugin can vendor it. On PyPI: `pip install geodeploy`
+- [x] **Download any layer, whole** — a PostGIS table built to GeoPackage/CSV/GeoJSON, a GeoParquet
+      layer straight from its own partition files (uncapped, lossless, no worker), a raster as its
+      COG. A built export that hits the row cap now SAYS so, in the archive, in the job status and
+      in the CLI's exit code
+- [x] **An anonymous index of what an instance publishes** (`/api/public`) — public portals and
+      public layers by kind, so a plugin can start from a URL alone
+- [x] **A legend anyone can read** (`/api/data/{kind}/{ref}/legend`) — the swatches and labels the
+      portal draws, served rather than re-derived by each renderer
+- [x] Collapsible legend entries in the layer list, with a collapse-all ([#9](https://github.com/bravemaster3/GeoDeploy/issues/9))
+- [x] Class count stops snapping back, and the ceiling agrees with the server ([#10](https://github.com/bravemaster3/GeoDeploy/issues/10))
+- [x] **Invert a colour ramp** ([#11](https://github.com/bravemaster3/GeoDeploy/issues/11))
+- [x] **A raster's zoom floor read from the file** — measured from its overview pyramid at ingest
+      instead of guessed from its extent ([#17](https://github.com/bravemaster3/GeoDeploy/issues/17))
+- [x] **Size from a field** — bigger markers for bigger values, thicker lines for busier roads ([#21](https://github.com/bravemaster3/GeoDeploy/issues/21))
+- [x] **Style a layer in My Data**, not only inside a portal — the same panel, reused ([#23](https://github.com/bravemaster3/GeoDeploy/issues/23))
+- [x] **Story maps that work on a phone** — portrait stacks the map above a sideways-scrolling
+      narrative; the control cluster stops running off a landscape screen ([#27](https://github.com/bravemaster3/GeoDeploy/issues/27))
+- [x] **Fixes found by using it**: a CSV with an `id` column could not be imported at all; the
+      legend 404'd for the owner of their own layer; the share links sent QGIS to a URL it cannot
+      open; and one failing schema migration silently disabled every migration after it
+
+</div>
+
+<div class="gd-rel now tail" markdown>
+### v1.4 — into the tools you already use
+<span class="gd-when">Next</span>
+
+<p class="gd-goal">The CLI made an instance reachable without a browser. This one puts it inside the
+desktop GIS people already have open.</p>
+
+- [ ] **A QGIS plugin** — browse the catalog, add a layer, style it, publish back. Built on the
+      packaged client, which is why that client has no dependencies and runs on Python 3.9
 - [ ] **Styling that travels** — portal and layer style interchange with GeoLibre and QGIS, for
-      every layer type. The CLI is the natural surface for it, so the two are designed together
+      every layer type
 - [ ] **Download a backup**, and **restore from disk** — state-only (small, covers a bad restore or
-      a botched update) separately from the full copy including objects. Restore uploads to a
-      staging prefix and reuses the existing restore path rather than growing a second one
-- [ ] Collapsible legend entries in the layer list, with a collapse-all ([#9](https://github.com/bravemaster3/GeoDeploy/issues/9))
-- [ ] Class count stops snapping back, and the 9-vs-12 ceiling agrees with the server ([#10](https://github.com/bravemaster3/GeoDeploy/issues/10))
-- [ ] **Invert a colour ramp** ([#11](https://github.com/bravemaster3/GeoDeploy/issues/11))
-- [ ] **A raster's zoom range read from the file, not guessed from its extent** — today a small
-      high-resolution layer stops drawing below a computed floor, with nothing saying why
-      ([#17](https://github.com/bravemaster3/GeoDeploy/issues/17))
-- [ ] **Size from a field** — bigger markers for bigger values, thicker lines for busier roads.
-      The instance already draws it and the CLI already sets it; what is missing is a control in
-      the dashboard ([#21](https://github.com/bravemaster3/GeoDeploy/issues/21))
+      a botched update) separately from the full copy including objects
 - [ ] **Labels** — the other half of data-driven symbology v1.1 did not ship, and unlike size this
       one does not exist anywhere yet
 
@@ -221,10 +243,10 @@ without a browser, and about being able to take a copy with you.</p>
 <p class="gd-goal">Your data can already leave GeoDeploy in open formats. This is the return
 trip — edit in the tool you prefer, publish back.</p>
 
-- [ ] **QGIS plugin** — browse the catalog, add a layer, publish back
+<p class="gd-goal">The QGIS plugin and style interchange moved UP into v1.4 above; what is left here
+is the rest of the round trip, not yet scheduled.</p>
+
 - [ ] **Push from GeoLibre** — a "Publish to GeoDeploy" plugin and a `.geolibre.json` importer
-- [ ] Style import from QGIS and GeoLibre, so nobody restyles from scratch
-- [ ] Style interchange — adopt an external MapLibre style, and emit one
 - [ ] Write-back: expose a layer as editable GeoJSON and re-ingest the edit
 - [ ] Catalog **search**, so a client can discover a dataset rather than fetch a known URL
 
