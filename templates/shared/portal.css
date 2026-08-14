@@ -1389,10 +1389,38 @@
         max-height: calc(100vh - 12px);
         align-content: flex-start;
       }
-      body[data-controls-side="left"] .maplibregl-ctrl-top-left { align-content: flex-start; }
-      .maplibregl-ctrl-group { margin-bottom: 4px !important; }
+      /* Extra columns must grow INWARD. The right-hand cluster is anchored to the right edge, so
+         wrapping forwards put the second column off-screen — which is why two columns still hid
+         controls. `wrap-reverse` stacks new columns towards the middle of the map instead. */
+      .maplibregl-ctrl-top-right { flex-wrap: wrap-reverse; align-content: flex-end; }
+      /* A GROUP is one flex item, so a group taller than the screen cannot be split by wrapping its
+         parent — the buttons at its bottom stay unreachable however many columns there are. Let the
+         group wrap its own buttons too. */
+      .maplibregl-ctrl-group {
+        margin-bottom: 4px !important;
+        display: flex; flex-direction: column; flex-wrap: wrap;
+        max-height: calc(100vh - 16px);
+      }
+      .maplibregl-ctrl-top-right .maplibregl-ctrl-group { flex-wrap: wrap-reverse; }
       /* A flyout must not run off a short screen either. */
       .gd-basemap-menu, .gd-tools-menu { max-height: calc(100vh - 24px); overflow-y: auto; }
+    }
+
+    /* PORTRAIT: the cluster is a tall single column over a short map, and the bottom of it ends up
+       behind the narrative strip (the screenshot showed the globe and zoom buttons under it). Cap it
+       to the map area and let it wrap inward there too. */
+    @media (max-width: 640px) and (orientation: portrait) {
+      body[data-archetype="storymap"] .maplibregl-ctrl-top-right,
+      body[data-archetype="storymap"] .maplibregl-ctrl-top-left {
+        display: flex; flex-direction: column; flex-wrap: wrap-reverse;
+        max-height: calc(56vh - 16px);        /* the map is 100vh - 44vh of strip */
+        align-content: flex-end;
+      }
+      body[data-archetype="storymap"] .maplibregl-ctrl-top-left { align-content: flex-start; }
+      body[data-archetype="storymap"] .maplibregl-ctrl-group {
+        display: flex; flex-direction: column; flex-wrap: wrap-reverse;
+        max-height: calc(56vh - 20px);
+      }
     }
 
     @media (prefers-reduced-motion: reduce) {
