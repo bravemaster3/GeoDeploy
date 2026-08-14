@@ -4,6 +4,21 @@ Notable changes, newest first. Versions are **major.minor** — `v1.0`, `v1.1`, 
 `v2.0`. The minor number moves for anything shipped, features or fixes; the major changes when an
 upgrade needs manual work.
 
+## v1.3.1 — 2026-08-14
+
+A hotfix, and the first patch-level release. The major.minor convention above holds for planned
+work; a restore that aborts on any instance with a PostGIS layer should not have to wait for v1.4.
+
+- **A restore no longer fails on `DROP EXTENSION postgis`.** `pg_restore --clean` emits a DROP for
+  everything the dump creates, and Postgres refuses to drop PostGIS while geometry columns still
+  exist — which is true of every instance with a PostGIS vector layer. That refusal is the outcome
+  we want and pg_restore continues past it, but we classified it as a fatal error and aborted the
+  whole restore. It went unnoticed because the path was proven on a GeoParquet-only instance: no
+  geometry columns, nothing depending on the extension, so the DROP succeeded. **Not a v1.3
+  regression** — the bug predates it and was found when a demo instance's hourly reset hit it.
+- **`/health` reports the real version.** It returned a hardcoded `0.3.0`, which had been wrong
+  since v1.0 — on the one endpoint whose job is to say what is running.
+
 ## v1.3 — 2026-08-14
 
 ### Reach your instance without a browser

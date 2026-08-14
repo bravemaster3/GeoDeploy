@@ -316,7 +316,7 @@ def _ensure_martin_config(settings) -> None:
 
 app = FastAPI(
     title="GeoDeploy API",
-    version="1.3.0",
+    version="1.3.1",
     description="Self-hosted spatial data management and geoportal builder",
     lifespan=lifespan,
     # nginx proxies ONLY `/api/` to this app; every other path falls through to the SPA. At
