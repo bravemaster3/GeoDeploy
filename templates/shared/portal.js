@@ -1439,13 +1439,29 @@
       }
       if (s && s.layers) applyStoryLayers(s.layers);
     }
-    const io = new IntersectionObserver(function (entries) {
-      // Pick the most-centered intersecting section (rootMargin narrows the trigger band to mid-screen).
-      let best = null;
-      entries.forEach(function (en) { if (en.isIntersecting && (!best || en.intersectionRatio > best.intersectionRatio)) best = en; });
-      if (best) activate(parseInt(best.target.dataset.idx, 10), true);
-    }, { rootMargin: '-45% 0px -45% 0px', threshold: [0, 0.5, 1] });
-    sections.forEach(function (el) { io.observe(el); });
+    // Issue #27: on a phone in PORTRAIT the narrative is a bottom strip that scrolls SIDEWAYS (see
+    // portal.css). Same media query on both sides, so the layout and the behaviour cannot disagree.
+    const horizontal = window.matchMedia('(max-width: 640px) and (orientation: portrait)');
+    function isSideways() { return document.body.dataset.archetype === 'storymap' && horizontal.matches; }
+
+    let io = null;
+    function observeSections() {
+      if (io) io.disconnect();
+      // Narrow the trigger band to the middle of whichever axis is scrolling.
+      const margin = isSideways() ? '0px -45% 0px -45%' : '-45% 0px -45% 0px';
+      io = new IntersectionObserver(function (entries) {
+        // Pick the most-centered intersecting section.
+        let best = null;
+        entries.forEach(function (en) { if (en.isIntersecting && (!best || en.intersectionRatio > best.intersectionRatio)) best = en; });
+        if (best) activate(parseInt(best.target.dataset.idx, 10), true);
+      }, { rootMargin: margin, threshold: [0, 0.5, 1] });
+      sections.forEach(function (el) { io.observe(el); });
+    }
+    observeSections();
+    // Rotating the phone swaps the axis; without this the trigger band stays on the old one and
+    // sections stop activating.
+    try { horizontal.addEventListener('change', observeSections); }
+    catch (e) { try { horizontal.addListener(observeSections); } catch (e2) {} }
     // E4: in the editor preview each edit reloads the iframe — DON'T fly to section 0 (it yanks the
     // author's map away). Just mark it active; the baked initial_view keeps the author's camera.
     // Sections default to opacity .35 and the ACTIVE one goes to 1 through a transition. On load that
@@ -1471,7 +1487,8 @@
         // wheel zoom. The panel is pointer-events:none, so we hit-test the pointer against its box.
         const inX = e.clientX >= r.left && e.clientX <= r.right;
         if (!inX || e.clientY < r.top || e.clientY > r.bottom) return;  // over the map → MapLibre zooms
-        panel.scrollTop += e.deltaY;
+        if (isSideways()) panel.scrollLeft += (e.deltaY || e.deltaX);
+        else panel.scrollTop += e.deltaY;
         e.preventDefault();
         e.stopPropagation();                    // don't let the map zoom too
       }, { passive: false, capture: true });
@@ -1483,12 +1500,26 @@
       const down = document.createElement('div'); down.className = 'gd-story-more gd-story-down'; down.innerHTML = chevron('down');
       mw.appendChild(up); mw.appendChild(down);
       function updateArrows() {
-        up.classList.toggle('show', panel.scrollTop > 6);
-        down.classList.toggle('show', panel.scrollTop + panel.clientHeight < panel.scrollHeight - 6);
+        if (isSideways()) {
+          up.classList.toggle('show', panel.scrollLeft > 6);
+          down.classList.toggle('show', panel.scrollLeft + panel.clientWidth < panel.scrollWidth - 6);
+        } else {
+          up.classList.toggle('show', panel.scrollTop > 6);
+          down.classList.toggle('show', panel.scrollTop + panel.clientHeight < panel.scrollHeight - 6);
+        }
       }
       panel.addEventListener('scroll', updateArrows);
-      up.addEventListener('click', function () { panel.scrollBy({ top: -panel.clientHeight * 0.8, behavior: 'smooth' }); });
-      down.addEventListener('click', function () { panel.scrollBy({ top: panel.clientHeight * 0.8, behavior: 'smooth' }); });
+      // One page = one section when snapping sideways, so a tap lands on a section rather than
+      // between two.
+      up.addEventListener('click', function () {
+        if (isSideways()) panel.scrollBy({ left: -panel.clientWidth * 0.86, behavior: 'smooth' });
+        else panel.scrollBy({ top: -panel.clientHeight * 0.8, behavior: 'smooth' });
+      });
+      down.addEventListener('click', function () {
+        if (isSideways()) panel.scrollBy({ left: panel.clientWidth * 0.86, behavior: 'smooth' });
+        else panel.scrollBy({ top: panel.clientHeight * 0.8, behavior: 'smooth' });
+      });
+      try { horizontal.addEventListener('change', updateArrows); } catch (e) {}
       setTimeout(updateArrows, 120);
     }
   }
