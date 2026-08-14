@@ -11,7 +11,7 @@ from slugify import slugify
 
 from ...config import get_settings
 from ...database import get_db
-from ...deps import require_scope
+from ...deps import require_scope, resolve_optional_user
 from ...models import Portal, UploadJob, User, VectorLayer
 from ...schemas import DefaultStyle, JobStatus, LayerRename, PortalRefOut, SharingUpdate, VectorLayerOut
 from ...services import martin as martin_svc
@@ -574,8 +574,31 @@ async def vector_features_public(
     return await _viewport_geojson(layer, bbox, limit)
 
 
+async def _legend_readable(layer, request: Request, db: AsyncSession) -> bool:
+    """Public, or visible to whoever is asking.
+
+    `_publicly_readable` alone was wrong here in a way live testing found immediately: the OWNER of
+    an organization layer, holding a valid token, got a 404 for the legend of their own data. Every
+    other per-layer artifact is a rendering the public can already see, so public-only is right for
+    them; a legend is metadata a signed-in user reads in the dashboard, and the plugin asks for it
+    with exactly the credential the dashboard uses.
+    """
+    if layer is None:
+        return False
+    if await _publicly_readable(layer, db):
+        return True
+    user = await resolve_optional_user(request, db)
+    if user is None:
+        return False
+    # Re-query THROUGH the visibility filter rather than re-deciding what it means here — A-02 lives
+    # in `visible_to`, and a second copy would drift from it.
+    allowed = await db.execute(
+        select(VectorLayer.id).where(VectorLayer.id == layer.id, visible_to(user, VectorLayer)))
+    return allowed.scalar_one_or_none() is not None
+
+
 @router.get("/{layer_ref}/legend")
-async def vector_legend(layer_ref: str, db: AsyncSession = Depends(get_db)):
+async def vector_legend(layer_ref: str, request: Request, db: AsyncSession = Depends(get_db)):
     """PUBLIC legend for a vector layer's default style — the swatches and labels, computed once.
 
     `services.symbology.legend_entries` already decides what a legend shows, and the portal and the
@@ -592,7 +615,7 @@ async def vector_legend(layer_ref: str, db: AsyncSession = Depends(get_db)):
 
     result = await db.execute(select(VectorLayer).where(by_ref(VectorLayer, layer_ref)))
     layer = result.scalar_one_or_none()
-    if not await _publicly_readable(layer, db):
+    if not await _legend_readable(layer, request, db):
         raise HTTPException(404, "Layer not found.")
 
     style = {}
