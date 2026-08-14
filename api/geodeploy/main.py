@@ -100,11 +100,20 @@ async def lifespan(app: FastAPI):
 def _apply_pg_migrations(conn) -> None:
     """Apply the additive column migrations. Each runs independently so one failure cannot block the
     rest, and a failure is logged rather than fatal — the API must keep serving (and the wizard must
-    stay reachable) even if a migration cannot be applied."""
+    stay reachable) even if a migration cannot be applied.
+
+    "Independently" needs a SAVEPOINT, which is what `begin_nested` opens. The try/except alone did
+    NOT deliver it: Postgres aborts the entire transaction on the first failed statement, so every
+    later migration then fails with "current transaction is aborted" — and the except swallowed
+    that too, silently. It shipped exactly that way: one statement missing `IF NOT EXISTS` failed on
+    every instance that already had the column, and the column added AFTER it was never created, so
+    `/data/raster` answered 500 on a real deploy. One statement, one savepoint, one rollback.
+    """
     from sqlalchemy import text
     for stmt in _PG_MIGRATIONS:
         try:
-            conn.execute(text(stmt))
+            with conn.begin_nested():
+                conn.execute(text(stmt))
         except Exception:
             log.exception("schema migration failed: %s", stmt)
 
