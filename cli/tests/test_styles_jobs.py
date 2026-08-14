@@ -108,6 +108,19 @@ class TestClassify:
         assert query["classes"] == ["7"] and query["method"] == ["jenks"]
         assert query["ramp"] == ["magma"]
 
+    def test_the_ramp_direction_is_asked_for_and_recorded(self, client, instance):
+        """Recorded in the style because the class COLOURS are stored per class: without it, a
+        later change of method or class count would silently un-reverse the ramp."""
+        style, _ = styles.classify(client, 1, "pop", ramp="magma", reverse=True)
+        assert style["color_ramp"] == "magma" and style["color_ramp_reverse"] is True
+        assert instance.requests_to("field-stats")[0]["query"]["reverse"] == ["true"]
+
+    def test_the_default_direction_is_not_sent_at_all(self, client, instance):
+        """An older instance has no `reverse` parameter; sending the default would be a pointless
+        difference in every request."""
+        styles.classify(client, 1, "pop")
+        assert "reverse" not in instance.requests_to("field-stats")[0]["query"]
+
     def test_unknown_method_and_ramp_fail_locally(self, client):
         with pytest.raises(ValidationError):
             styles.classify(client, 1, "pop", method="kmeans")
@@ -180,6 +193,13 @@ class TestStyleModel:
         assert styles.parse({"size_stops": [[0, 2]]}).size is None    # nothing to read
         size = styles.parse({"size_field": "pop", "size_stops": [[0, 2], [100, 12]]}).size
         assert size == {"field": "pop", "stops": [[0, 2], [100, 12]]}
+
+    def test_the_ramp_and_its_direction_are_readable(self):
+        """Provenance for a plugin offering "reverse" as a control — the drawn colours still come
+        from `classes`, which is what a renderer reads."""
+        style = styles.parse({"color_ramp": "magma", "color_ramp_reverse": True})
+        assert style.ramp == "magma" and style.ramp_reversed is True
+        assert styles.parse({}).ramp is None and styles.parse({}).ramp_reversed is False
 
     def test_extrusion_switched_off_reads_as_none(self):
         """A renderer checking truthiness on the dict alone would extrude a layer the author

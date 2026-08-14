@@ -58,4 +58,8 @@ PG_MIGRATIONS = [
     # 'public' already says it may be seen, and a geoportal that cannot be browsed is a filing
     # cabinet. An operator who wants their public portal reachable-but-unlisted turns this off.
     "ALTER TABLE setup_config ADD COLUMN public_index_enabled BOOLEAN DEFAULT TRUE",
+    # Raster low-zoom cost, read from the COG's overview pyramid at ingest (issue #17). Nullable with
+    # NO default on purpose: NULL means "not measured", which is different from False and is what
+    # keeps every existing layer on the extent heuristic until it is re-ingested.
+    "ALTER TABLE raster_layers ADD COLUMN IF NOT EXISTS low_zoom_ok BOOLEAN",
 ]

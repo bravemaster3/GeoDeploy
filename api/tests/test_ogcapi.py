@@ -256,10 +256,20 @@ async def test_share_links_lead_with_ogc_features(client, db):
     assert r.status_code == 200
     body = r.json()
     assert body["public"] is True
-    assert body["links"][0]["id"] == "ogc-features"       # the recommended one, first
-    assert body["links"][0]["primary"] is True
     ids = [l["id"] for l in body["links"]]
-    assert {"ogc-service", "ogc-items", "tilejson", "stac"} <= set(ids)
+    assert {"ogc-features", "ogc-service", "ogc-items", "tilejson", "stac"} <= set(ids)
+
+    # The PRIMARY link is the SERVICE, not the collection. It used to be the other way round, and a
+    # desktop user followed it into a dead end: QGIS's "Add OGC API - Features Layer" connects to a
+    # service and lists its collections, so a collection URL produces an empty list and no error.
+    # The collection link stays (GDAL takes `OAPIF:<collection>` happily) but is not the one led with.
+    primary = [l for l in body["links"] if l.get("primary")]
+    assert [l["id"] for l in primary] == ["ogc-service"]
+    service = next(l for l in body["links"] if l["id"] == "ogc-service")
+    assert service["url"].endswith("/api/ogc")
+    assert "QGIS" in service["tools"]
+    collection = next(l for l in body["links"] if l["id"] == "ogc-features")
+    assert "QGIS" not in collection["tools"], "labelling a collection for QGIS is what misled"
 
 
 @pytest.mark.asyncio

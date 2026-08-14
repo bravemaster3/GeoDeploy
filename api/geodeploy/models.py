@@ -319,6 +319,12 @@ class RasterLayer(Base):
     bbox: Mapped[str | None] = mapped_column(Text)
     band_count: Mapped[int | None] = mapped_column(Integer)
     nodata_value: Mapped[float | None] = mapped_column(Float)
+    # Can this raster be drawn zoomed OUT without an expensive read? Decided at ingest from the
+    # file's overview pyramid (cog_converter.low_zoom_is_cheap), because the alternative — guessing
+    # from the layer's EXTENT — hides a small high-resolution layer at zooms where someone might
+    # legitimately be looking, with no message. NULL on layers ingested before this existed, which
+    # keeps the old extent heuristic for them. Issue #17.
+    low_zoom_ok: Mapped[bool | None] = mapped_column(Boolean)
     file_size: Mapped[int | None] = mapped_column(BigInteger)   # BIGINT: a single raster or GeoParquet can exceed int4's 2.1 GB
     status: Mapped[str] = mapped_column(String(16), default="processing")
     error_message: Mapped[str | None] = mapped_column(Text)

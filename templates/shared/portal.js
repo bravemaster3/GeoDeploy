@@ -1439,13 +1439,29 @@
       }
       if (s && s.layers) applyStoryLayers(s.layers);
     }
-    const io = new IntersectionObserver(function (entries) {
-      // Pick the most-centered intersecting section (rootMargin narrows the trigger band to mid-screen).
-      let best = null;
-      entries.forEach(function (en) { if (en.isIntersecting && (!best || en.intersectionRatio > best.intersectionRatio)) best = en; });
-      if (best) activate(parseInt(best.target.dataset.idx, 10), true);
-    }, { rootMargin: '-45% 0px -45% 0px', threshold: [0, 0.5, 1] });
-    sections.forEach(function (el) { io.observe(el); });
+    // Issue #27: on a phone in PORTRAIT the narrative is a bottom strip that scrolls SIDEWAYS (see
+    // portal.css). Same media query on both sides, so the layout and the behaviour cannot disagree.
+    const horizontal = window.matchMedia('(max-width: 640px) and (orientation: portrait)');
+    function isSideways() { return document.body.dataset.archetype === 'storymap' && horizontal.matches; }
+
+    let io = null;
+    function observeSections() {
+      if (io) io.disconnect();
+      // Narrow the trigger band to the middle of whichever axis is scrolling.
+      const margin = isSideways() ? '0px -45% 0px -45%' : '-45% 0px -45% 0px';
+      io = new IntersectionObserver(function (entries) {
+        // Pick the most-centered intersecting section.
+        let best = null;
+        entries.forEach(function (en) { if (en.isIntersecting && (!best || en.intersectionRatio > best.intersectionRatio)) best = en; });
+        if (best) activate(parseInt(best.target.dataset.idx, 10), true);
+      }, { rootMargin: margin, threshold: [0, 0.5, 1] });
+      sections.forEach(function (el) { io.observe(el); });
+    }
+    observeSections();
+    // Rotating the phone swaps the axis; without this the trigger band stays on the old one and
+    // sections stop activating.
+    try { horizontal.addEventListener('change', observeSections); }
+    catch (e) { try { horizontal.addListener(observeSections); } catch (e2) {} }
     // E4: in the editor preview each edit reloads the iframe — DON'T fly to section 0 (it yanks the
     // author's map away). Just mark it active; the baked initial_view keeps the author's camera.
     // Sections default to opacity .35 and the ACTIVE one goes to 1 through a transition. On load that
@@ -1471,7 +1487,8 @@
         // wheel zoom. The panel is pointer-events:none, so we hit-test the pointer against its box.
         const inX = e.clientX >= r.left && e.clientX <= r.right;
         if (!inX || e.clientY < r.top || e.clientY > r.bottom) return;  // over the map → MapLibre zooms
-        panel.scrollTop += e.deltaY;
+        if (isSideways()) panel.scrollLeft += (e.deltaY || e.deltaX);
+        else panel.scrollTop += e.deltaY;
         e.preventDefault();
         e.stopPropagation();                    // don't let the map zoom too
       }, { passive: false, capture: true });
@@ -1483,12 +1500,26 @@
       const down = document.createElement('div'); down.className = 'gd-story-more gd-story-down'; down.innerHTML = chevron('down');
       mw.appendChild(up); mw.appendChild(down);
       function updateArrows() {
-        up.classList.toggle('show', panel.scrollTop > 6);
-        down.classList.toggle('show', panel.scrollTop + panel.clientHeight < panel.scrollHeight - 6);
+        if (isSideways()) {
+          up.classList.toggle('show', panel.scrollLeft > 6);
+          down.classList.toggle('show', panel.scrollLeft + panel.clientWidth < panel.scrollWidth - 6);
+        } else {
+          up.classList.toggle('show', panel.scrollTop > 6);
+          down.classList.toggle('show', panel.scrollTop + panel.clientHeight < panel.scrollHeight - 6);
+        }
       }
       panel.addEventListener('scroll', updateArrows);
-      up.addEventListener('click', function () { panel.scrollBy({ top: -panel.clientHeight * 0.8, behavior: 'smooth' }); });
-      down.addEventListener('click', function () { panel.scrollBy({ top: panel.clientHeight * 0.8, behavior: 'smooth' }); });
+      // One page = one section when snapping sideways, so a tap lands on a section rather than
+      // between two.
+      up.addEventListener('click', function () {
+        if (isSideways()) panel.scrollBy({ left: -panel.clientWidth * 0.86, behavior: 'smooth' });
+        else panel.scrollBy({ top: -panel.clientHeight * 0.8, behavior: 'smooth' });
+      });
+      down.addEventListener('click', function () {
+        if (isSideways()) panel.scrollBy({ left: panel.clientWidth * 0.86, behavior: 'smooth' });
+        else panel.scrollBy({ top: panel.clientHeight * 0.8, behavior: 'smooth' });
+      });
+      try { horizontal.addEventListener('change', updateArrows); } catch (e) {}
       setTimeout(updateArrows, 120);
     }
   }
@@ -1680,6 +1711,17 @@
           : vectorLegendHtml(meta['geodeploy:legend'], geom));
       container.appendChild(card);
     });
+
+    container.querySelectorAll('.legend-toggle').forEach(btn => {
+      btn.addEventListener('click', e => setLegendCollapsed(
+        e.currentTarget.closest('.layer-legend'),
+        e.currentTarget.getAttribute('aria-expanded') === 'true'));
+    });
+    // Expanded for ONE classified layer, collapsed beyond that: with a single legend the
+    // classification is usually the point of the map, and with several the layer NAMES — the thing
+    // you click — get pushed off screen. Only the initial state; the buttons win afterwards.
+    const legends = container.querySelectorAll('.legend-classes');
+    if (legends.length > 1) legends.forEach(el => setLegendCollapsed(el, true));
 
     container.querySelectorAll('.layer-eye').forEach(btn => {
       btn.addEventListener('click', e => {
@@ -1965,12 +2007,36 @@
         '<button type="button" class="lg-expand-all la-icon" title="Expand all" aria-label="Expand all folders"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 13 12 18 17 13"/><polyline points="7 6 12 11 17 6"/></svg></button>' +
         '<button type="button" class="lg-collapse-all la-icon" title="Collapse all" aria-label="Collapse all folders"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/></svg></button>';
     }
+    // "Show me less" belongs in ONE place, so the legend control sits in the same row as the folder
+    // one. Offered only when there is a legend to hide.
+    const hasLegends = !!container.querySelector('.legend-classes');
+    if (hasLegends) {
+      left.insertAdjacentHTML('beforeend',
+        '<button type="button" class="lg-legends la-icon" title="Show / hide all legends" ' +
+        'aria-label="Show or hide all legends" aria-pressed="false">' +
+        '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" ' +
+        'stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/>' +
+        '<line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>' +
+        '<circle cx="3.5" cy="6" r="1.5"/><circle cx="3.5" cy="12" r="1.5"/>' +
+        '<circle cx="3.5" cy="18" r="1.5"/></svg></button>');
+    }
     acts.appendChild(left);
     acts.appendChild(right);
     parent.insertBefore(acts, container);
     if (hasGroups) {
       acts.querySelector('.lg-expand-all').addEventListener('click', function () { setAllGroups(false); });
       acts.querySelector('.lg-collapse-all').addEventListener('click', function () { setAllGroups(true); });
+    }
+    if (hasLegends) {
+      const btn = acts.querySelector('.lg-legends');
+      // One button that flips, rather than a pair: the state is knowable (are any expanded?), so a
+      // second button would spend width on something the first can answer.
+      btn.addEventListener('click', function () {
+        const anyOpen = !!document.querySelector(
+          '#layer-list .legend-toggle[aria-expanded="true"]');
+        setAllLegends(anyOpen);
+        btn.setAttribute('aria-pressed', anyOpen ? 'true' : 'false');
+      });
     }
     // Relocate the Reset-styling button (from layout.html) into the row — moves the node + its handler.
     const reset = document.getElementById('reset-styling');
@@ -1981,6 +2047,23 @@
       right.appendChild(reset);
     }
     // The About link is appended into `.la-right` by buildAboutPanel (runs after this).
+  }
+  function setLegendCollapsed(legend, collapsed) {
+    if (!legend) return;
+    const body = legend.querySelector(':scope > .legend-body');
+    const btn = legend.querySelector(':scope > .legend-toggle');
+    if (body) body.style.display = collapsed ? 'none' : '';
+    if (btn) {
+      btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      btn.title = collapsed ? 'Show these classes' : 'Hide these classes';
+      const caret = btn.querySelector('.legend-caret');
+      if (caret) caret.textContent = collapsed ? '▸' : '▾';
+    }
+  }
+  function setAllLegends(collapsed) {
+    const container = document.getElementById('layer-list');
+    if (!container) return;
+    container.querySelectorAll('.legend-classes').forEach(el => setLegendCollapsed(el, collapsed));
   }
   function setAllGroups(collapsed) {
     const container = document.getElementById('layer-list');
@@ -2372,7 +2455,15 @@
         '<span class="legend-label">' + escHtml(e.label == null ? '' : String(e.label)) + '</span>' +
         '</div>';
     }).join('');
-    return '<div class="layer-legend legend-classes">' + rows + '</div>';
+    // A count button, then the classes. Collapsing is a DISPLAY state and nothing else: the entries
+    // come from `geodeploy:legend`, baked at publish from the same class list the map draws, and are
+    // never rebuilt here — that is what stops a published legend drifting from its map.
+    const head = '<button type="button" class="legend-toggle" aria-expanded="true" ' +
+      'title="Hide these classes">' +
+      '<span class="legend-caret" aria-hidden="true">▾</span>' +
+      '<span class="legend-count">' + entries.length + ' classes</span></button>';
+    return '<div class="layer-legend legend-classes">' + head +
+      '<div class="legend-body">' + rows + '</div></div>';
   }
 
   function rasterLegendHtml(layer) {

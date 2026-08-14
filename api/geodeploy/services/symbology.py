@@ -79,13 +79,19 @@ DEFAULT_COLOR = "#3b82f6"
 DEFAULT_OTHER_COLOR = "#9ca3af"
 
 
-def ramp_colors(name: str, count: int) -> list[str]:
-    """`count` colours sampled evenly from a named ramp.
+def ramp_colors(name: str, count: int, reverse: bool = False) -> list[str]:
+    """`count` colours sampled evenly from a named ramp, optionally end-to-end reversed.
 
     Nearest-stop sampling, not channel interpolation: the ramps above are already perceptually
     tuned, and a hand-rolled RGB blend between two of their stops can leave the uniform path — the
     property that makes them worth using. For the class counts a legend can actually be read at
     (3–9) the sampled stops are visually distinct anyway.
+
+    `reverse` is a FLAG rather than a second table of reversed ramps: which end means "high" is a
+    cartographic choice (a dark basemap often wants the light end for low values), and doubling nine
+    ramps into eighteen would turn the picker into a wall. Reversing the sampled OUTPUT rather than
+    the stop list keeps the sampling positions identical, so a reversed ramp is exactly the same
+    colours in the opposite order — not a differently-sampled one.
     """
     stops = RAMPS.get(name) or RAMPS["viridis"]
     if count <= 0:
@@ -95,8 +101,12 @@ def ramp_colors(name: str, count: int) -> list[str]:
     out = []
     for i in range(count):
         pos = i * (len(stops) - 1) / (count - 1)
-        out.append(stops[int(round(pos))])
-    return out
+        # `int(pos + 0.5)`, NOT `round()`. Python's round() is round-half-to-EVEN and JavaScript's
+        # Math.round() is round-half-UP, so the twin in ui/src/lib/symbology.js picked a different
+        # stop wherever `pos` landed on .5 — which is every 5- and 9-class ramp, in all nine ramps.
+        # Half-up is expressible identically in both languages, so the two cannot drift again.
+        out.append(stops[int(pos + 0.5)])
+    return out[::-1] if reverse else out
 
 
 # ── Classification ───────────────────────────────────────────────────────────────────────────────
@@ -195,7 +205,8 @@ def _usable(breaks: list[float], lo: float, hi: float) -> list[float]:
     return [b for b in breaks if lo < b <= hi]
 
 
-def build_classes(values: list[float], method: str, count: int, ramp: str) -> list[dict]:
+def build_classes(values: list[float], method: str, count: int, ramp: str,
+                  reverse: bool = False) -> list[dict]:
     """Breaks + ramp → the `classes` list the style stores and the legend reads.
 
     `min` of the first class and `max` of the last are `None`, matching the open outer edges
@@ -206,20 +217,21 @@ def build_classes(values: list[float], method: str, count: int, ramp: str) -> li
         vals = [v for v in values if v is not None]
         if not vals:
             return []
-        return [{"min": None, "max": None, "color": ramp_colors(ramp, 1)[0]}]
-    colors = ramp_colors(ramp, len(breaks) + 1)
+        return [{"min": None, "max": None, "color": ramp_colors(ramp, 1, reverse)[0]}]
+    colors = ramp_colors(ramp, len(breaks) + 1, reverse)
     edges = [None, *breaks, None]
     return [{"min": edges[i], "max": edges[i + 1], "color": colors[i]}
             for i in range(len(breaks) + 1)]
 
 
-def build_categories(values: list, ramp: str | None = None) -> list[dict]:
+def build_categories(values: list, ramp: str | None = None,
+                     reverse: bool = False) -> list[dict]:
     """Distinct values → categories, in the order given (the stats endpoint returns them by
     frequency, so the commonest gets the first, most distinguishable colour)."""
     out = []
     for i, v in enumerate(values):
         if ramp and ramp in RAMPS:
-            colors = ramp_colors(ramp, max(len(values), 1))
+            colors = ramp_colors(ramp, max(len(values), 1), reverse)
             color = colors[i] if i < len(colors) else DEFAULT_OTHER_COLOR
         else:
             color = CATEGORY_COLORS[i % len(CATEGORY_COLORS)]

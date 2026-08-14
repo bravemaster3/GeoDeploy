@@ -44,6 +44,15 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
   operator's question (user call, 2026-08-06).
 - `portal/CreatePortalModal.vue` — new-portal dialog (title, description, access); creates via the portals store then routes to the editor.
 - `portal/LayerPanel.vue` (resolves vector/raster/**external** layers from the data store; external sources get an opacity-only popover, plus a colour picker for WFS vector) — **thin row** mirroring the published portal: drag handle (reorder is wired in `PortalEditor.vue`) · eye/eye-off (`update {visible}`) · **symbol swatch** that opens a **teleported symbology popover** · name · zoom · remove. The popover holds: opacity; vector colour/fill/outline/width; **line type** (solid/dashed/dotted); **point marker shape** (circle/square/triangle/diamond/star/cross) + size; popup-field picker; **raster band selection** (multiband → RGB composite with R/G/B band pickers, or single band) + palette/hillshade/Z (single-band output) and stretch/rescale (all); save/use default. Band selection stores `style.bidx` (`[n]` single, `[r,g,b]` RGB). The list swatch (`geomSvg`/`markerSvg`) draws the actual symbol (colour, dash, marker shape). Emits `update`/`remove`/`zoom`.
+  **Two hosts, one control** (issue #23): `standalone` renders the symbology body ALONE — no row, no
+  popover chrome, no default-style actions — via `<Teleport :disabled>`, which is what lets
+  `data/StyleModal.vue` reuse it in My Data instead of a second styling UI growing there. The panel
+  stays host-agnostic: it takes a `config` and emits patches; the HOST decides where they are saved
+  (portal `layer_configs`, or `PUT /data/{kind}/{id}/default-style`).
+  Also holds **size-by-a-field** for points and lines (`size_mode`/`size_field`/`size_stops`, issue
+  #21 — the instance had drawn it since v1.1 with no way to set it) and the ramp **Reverse**
+  checkbox, which flips the stored class colours locally: a reversed ramp is the same colours
+  backwards, so no request is needed and hand-edited colours survive.
 - `portal/PortalCard.vue` — portal tile in the builder grid (edit/publish/view/unpublish/delete).
 - `shared/StatusBadge.vue` — colored processing/ready/error pill.
 - `shared/StorageBar.vue` — used/total storage bar (Settings).

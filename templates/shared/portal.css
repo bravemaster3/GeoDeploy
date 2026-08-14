@@ -387,9 +387,23 @@
        than the card edge, so it reads as belonging to that layer and not to the list. */
     .legend-classes { display: flex; flex-direction: column; gap: 2px; padding-left: 46px; }
     .legend-class { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .legend-body { display: flex; flex-direction: column; gap: 2px; }
+    /* The collapse control. Deliberately quiet — it is a way to get the class list out of the way,
+       not a thing to look at, so it reads as a caption until hovered. */
+    .legend-toggle {
+      display: flex; align-items: center; gap: 4px; margin: 0 0 2px; padding: 0;
+      background: none; border: 0; cursor: pointer; font: inherit; font-size: 10px;
+      color: var(--muted, #6b7280); opacity: .8;
+    }
+    .legend-toggle:hover { opacity: 1; text-decoration: underline; }
+    .legend-caret { font-size: 9px; line-height: 1; }
+    /* The hairline is an INSET shadow, not a border: a border on an 11px box is drawn inside it
+       (border-box), so a fifth of the swatch was frame rather than colour and two nearby classes
+       were hard to tell apart. The shadow keeps the full square coloured and still separates a pale
+       class from the panel behind it. */
     .legend-chip {
-      width: 11px; height: 11px; border-radius: 2px; flex-shrink: 0;
-      border: 1px solid rgba(0,0,0,.25);
+      width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0;
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,.28);
     }
     .legend-label {
       font-size: 10.5px; color: var(--text-muted); white-space: nowrap;
@@ -448,6 +462,18 @@
       width: 24px; height: 22px; padding: 0; border: 1px solid var(--border);
       border-radius: 4px; cursor: pointer; background: none;
     }
+    /* A native colour input draws its OWN chrome inside the box — a padded wrapper and an inner
+       border — which at swatch size leaves more frame than colour. Strip both here and in the
+       dashboard (ui/src/style.css) so the square is the colour it stands for. */
+    .layer-style-color, .layer-marker-color {
+      -webkit-appearance: none; appearance: none;
+    }
+    .layer-style-color::-webkit-color-swatch-wrapper,
+    .layer-marker-color::-webkit-color-swatch-wrapper { padding: 0; }
+    .layer-style-color::-webkit-color-swatch,
+    .layer-marker-color::-webkit-color-swatch { border: none; border-radius: 3px; }
+    .layer-style-color::-moz-color-swatch,
+    .layer-marker-color::-moz-color-swatch { border: none; border-radius: 3px; }
     .layer-style-size, .rstyle-min, .rstyle-max, .rstyle-zfactor {
       width: 54px; font-size: 11px; padding: 2px 5px; font-family: inherit;
       border: 1px solid var(--border); border-radius: 4px;
@@ -1313,6 +1339,62 @@
           0 0, 0 0, 0 0, 0 0;
       }
     }
+    /* ── Story maps on a phone (issue #27) ──────────────────────────────────────────────────────
+       PORTRAIT: the narrative is a bottom STRIP that scrolls sideways, with the map above it. The
+       desktop layout is a tall column overlaying the left 46vw, which on a narrow screen leaves the
+       map no room and sits under the control cluster. Stacking is the standard answer, and swiping
+       sideways is what a phone reader expects for "next section".
+       The JS half (portal.js::setupStory) switches the wheel axis, the IntersectionObserver's root
+       margin and the chevrons to match — it reads the same media query, so the two cannot disagree. */
+    @media (max-width: 640px) and (orientation: portrait) {
+      body[data-archetype="storymap"] #story-panel {
+        top: auto; left: 0; right: 0; bottom: 0;
+        width: 100%; height: 44vh; max-height: 44vh;
+        padding: 10px 12px 14px;
+        display: flex; flex-direction: row; align-items: stretch; gap: 12px;
+        overflow-x: auto; overflow-y: hidden;
+        scroll-snap-type: x mandatory;          /* one section per swipe */
+        overscroll-behavior-x: contain;         /* don't chain to the page/browser back-gesture */
+        background: linear-gradient(0deg, var(--story-bg, var(--bg)) 84%, transparent);
+      }
+      /* The gradient's direction is horizontal on desktop; both side-anchored variants would fight
+         the bottom strip, so they are overridden together. */
+      body[data-layerlist-side="right"][data-archetype="storymap"] #story-panel {
+        left: 0; right: 0;
+        background: linear-gradient(0deg, var(--story-bg, var(--bg)) 84%, transparent);
+      }
+      body[data-archetype="storymap"] .story-section {
+        flex: 0 0 86vw; max-width: 86vw; margin: 0;
+        scroll-snap-align: center;
+        overflow-y: auto;                        /* a long section still scrolls, downward */
+        -webkit-overflow-scrolling: touch;
+      }
+      body[data-layerlist-side="right"][data-archetype="storymap"] .story-section { margin-left: 0; }
+      /* Chevrons become left/right and sit beside the strip, clear of the map controls. */
+      body[data-archetype="storymap"] .gd-story-more { left: auto; right: auto; }
+      body[data-archetype="storymap"] .gd-story-up { top: auto; bottom: calc(44vh / 2 - 21px); left: 8px; }
+      body[data-archetype="storymap"] .gd-story-down { bottom: calc(44vh / 2 - 21px); right: 8px; }
+      /* Keep the map's own controls above the strip rather than behind it. */
+      body[data-archetype="storymap"] .maplibregl-ctrl-bottom-right,
+      body[data-archetype="storymap"] .maplibregl-ctrl-bottom-left { bottom: calc(44vh + 6px); }
+    }
+
+    /* LANDSCAPE on a phone (~360px tall): the control cluster is a single vertical stack and simply
+       does not fit, so the controls at the bottom are unreachable. Let it WRAP into a second column
+       instead — nothing is hidden, nothing shrinks below a comfortable touch target, and no control
+       moves somewhere the user has to learn about. */
+    @media (max-height: 480px) {
+      .maplibregl-ctrl-top-right, .maplibregl-ctrl-top-left {
+        display: flex; flex-direction: column; flex-wrap: wrap;
+        max-height: calc(100vh - 12px);
+        align-content: flex-start;
+      }
+      body[data-controls-side="left"] .maplibregl-ctrl-top-left { align-content: flex-start; }
+      .maplibregl-ctrl-group { margin-bottom: 4px !important; }
+      /* A flyout must not run off a short screen either. */
+      .gd-basemap-menu, .gd-tools-menu { max-height: calc(100vh - 24px); overflow-y: auto; }
+    }
+
     @media (prefers-reduced-motion: reduce) {
       #map-wrap.gd-space, .gd-space { animation: none; }
     }

@@ -45,13 +45,16 @@ def vector_links(layer, base: str) -> list[dict]:
     # FME, anything on GDAL's OAPIF driver), it carries real attributes, and it works the same for
     # both storage backends. Tiles/PMTiles below are for RENDERING speed, not interchange.
     links: list[dict] = [
-        _link("ogc-features", "OGC API - Features — this layer",
+        # NOT primary, and NOT labelled for QGIS. A desktop client connects to the SERVICE and picks
+        # a layer; pasting a COLLECTION url into QGIS's "Add OGC API - Features Layer" dialog
+        # produces an empty list and no error, which is exactly what happened to the first person
+        # who tried it — because this link was the promoted one and named QGIS first.
+        _link("ogc-features", "OGC API - Features — this layer (for GDAL)",
               f"{base}/api/ogc/collections/vector-{public_ref(layer)}",
               fmt="OGC API - Features (GeoJSON)",
-              tools=["QGIS", "ArcGIS Pro", "FME", "GDAL/ogr2ogr"],
-              hint="GDAL/ogr2ogr: use OAPIF:<this URL>. In QGIS you connect to the SERVICE url "
-                   "below and pick the layer from the list.",
-              primary=True),
+              tools=["GDAL/ogr2ogr", "Python", "R"],
+              hint="For GDAL: ogr2ogr out.gpkg \"OAPIF:<this URL>\". QGIS and ArcGIS cannot connect "
+                   "to a single collection — use the service URL below and pick this layer."),
         # Named for its SCOPE, not its role. "service endpoint" sat next to "this layer" and read as
         # a synonym, so it was copied expecting one dataset and opened the whole list. The scope is
         # not a leak — /api/ogc lists only layers explicitly shared as public (ogcapi._public_layers)
@@ -59,6 +62,7 @@ def vector_links(layer, base: str) -> list[dict]:
         _link("ogc-service", "OGC API - Features — ALL your public layers", f"{base}/api/ogc",
               fmt="OGC API - Features landing page",
               tools=["QGIS", "ArcGIS Pro", "FME"],
+              primary=True,
               hint="Not just this layer: this is the service, and it lists every layer you have "
                    "shared publicly. It is what QGIS needs — Layer ▸ Add Layer ▸ Add OGC API - "
                    "Features Layer ▸ New ▸ paste this, then pick this layer from the list."),
@@ -93,10 +97,12 @@ def vector_links(layer, base: str) -> list[dict]:
             links.append(_link(
                 "pmtiles", "PMTiles archive (fast rendering)", f"{api}/pmtiles",
                 fmt="PMTiles (vector)", tools=["GeoLibre", "MapLibre", "download", "GDAL"],
-                hint="Paste as-is. A MapLibre style source needs the pmtiles:// protocol prefix "
-                     "added in code, but no UI field wants it. GDAL builds with PMTiles support "
-                     "read it via /vsicurl/. To load this layer INTO QGIS, prefer the OGC API - "
-                     "Features link above \u2014 PMTiles is a rendering format."))
+                hint="Paste as-is — no pmtiles:// prefix (that is a MapLibre-internal protocol "
+                     "handler, not part of any address). In QGIS this does NOT go in Add Vector "
+                     "Tile Layer (that dialog builds an XYZ template and an archive is one file); "
+                     "open it with GDAL 3.8+ as /vsicurl/<this URL>. For attributes and queries "
+                     "prefer the OGC API - Features service above — PMTiles is generalized per "
+                     "zoom."))
         links.append(_link(
             "features-geojson", "Viewport features (GeoDeploy native)",
             f"{api}/features.geojson?bbox=minx,miny,maxx,maxy&limit=50000",

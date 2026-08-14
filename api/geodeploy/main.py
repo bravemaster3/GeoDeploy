@@ -408,6 +408,44 @@ class _DemoUploadCap:
         await self.app(scope, receive, send)
 
 
+class _HeadAsGet:
+    """Answer HEAD on every GET route, by running the GET and dropping the body.
+
+    FastAPI's `APIRoute` does NOT add HEAD to a GET route (plain Starlette's `Route` does), so every
+    endpoint here answered **405** to HEAD. That is not a formality: **`/vsicurl/` opens a URL with a
+    HEAD request**, so GDAL — and therefore QGIS, ogr2ogr and anything else built on it — could not
+    open a single GeoDeploy artifact. `ogrinfo /vsicurl/…/pmtiles` failed with "not recognized as
+    being in a supported file format", which reads like a broken file and is really a 405 on a probe.
+    The COG path our own documentation recommends for QGIS was affected too.
+
+    PURE ASGI for the reason `_DemoUploadCap` documents above: a second `BaseHTTPMiddleware` broke
+    dependency teardown once and silently rolled back commits.
+
+    Headers — Content-Length and Content-Range included — are passed through untouched, which is
+    what a HEAD is FOR; only the body bytes are dropped. A streamed response is still produced
+    server-side, but the probes that matter here are small metadata reads.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or scope.get("method") != "HEAD":
+            await self.app(scope, receive, send)
+            return
+
+        scope = dict(scope, method="GET")
+
+        async def send_without_body(message):
+            if message.get("type") == "http.response.body":
+                # Keep the message (the protocol needs it) but empty, and never ask for more.
+                message = {"type": "http.response.body", "body": b"", "more_body": False}
+            await send(message)
+
+        await self.app(scope, receive, send_without_body)
+
+
+app.add_middleware(_HeadAsGet)
 app.add_middleware(_DemoUploadCap)
 
 

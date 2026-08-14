@@ -1,30 +1,38 @@
 <template>
-  <div class="flex items-center gap-1.5 py-1 px-1 rounded hover:bg-muted/60">
-    <span class="text-muted-foreground/40 cursor-grab flex-shrink-0 flex items-center" draggable="true"
-      @dragstart="$emit('dragstart', $event)" @dragend="$emit('dragend', $event)"
-      title="Drag to reorder / into a folder" v-html="dragSvg"></span>
-    <button @click="toggleVisible" class="text-muted-foreground/70 hover:text-foreground flex-shrink-0 flex items-center"
-      :class="{ 'opacity-50': !visible }" :title="visible ? 'Hide' : 'Show'" v-html="visible ? eyeSvg : eyeOffSvg"></button>
-    <button ref="swatchBtn" @click.stop="toggleStyle"
-      class="flex-shrink-0 flex items-center justify-center w-[22px] h-[22px] rounded hover:bg-muted"
-      :class="config.layer_type === 'raster' ? 'text-amber-400' : ''" :title="geomLabel" v-html="geomSvg"></button>
-    <span class="text-xs font-medium flex-1 truncate" :class="visible ? '' : 'text-muted-foreground/70'" :title="layerName">{{ layerName }}</span>
-    <button @click="$emit('zoom')" class="text-muted-foreground/70 hover:text-primary flex-shrink-0" title="Zoom to layer">
-      <LocateIcon class="w-3.5 h-3.5" />
-    </button>
-    <button @click="$emit('remove')" class="text-muted-foreground/70 hover:text-red-500 flex-shrink-0" title="Remove">
-      <TrashIcon class="w-3.5 h-3.5" />
-    </button>
+  <!-- Two hosts, one control (issue #23). In a PORTAL this is a row in the layer list whose swatch
+       opens a teleported popover. In MY DATA there is no list and no map — the same symbology body
+       is rendered in place inside a modal, editing the layer's DEFAULT style. `standalone` is the
+       only difference, because a second styling UI is a second place for the vocabulary to drift. -->
+  <div :class="standalone ? '' : 'flex items-center gap-1.5 py-1 px-1 rounded hover:bg-muted/60'">
+    <template v-if="!standalone">
+      <span class="text-muted-foreground/40 cursor-grab flex-shrink-0 flex items-center" draggable="true"
+        @dragstart="$emit('dragstart', $event)" @dragend="$emit('dragend', $event)"
+        title="Drag to reorder / into a folder" v-html="dragSvg"></span>
+      <button @click="toggleVisible" class="text-muted-foreground/70 hover:text-foreground flex-shrink-0 flex items-center"
+        :class="{ 'opacity-50': !visible }" :title="visible ? 'Hide' : 'Show'" v-html="visible ? eyeSvg : eyeOffSvg"></button>
+      <button ref="swatchBtn" @click.stop="toggleStyle"
+        class="flex-shrink-0 flex items-center justify-center w-[22px] h-[22px] rounded hover:bg-muted"
+        :class="config.layer_type === 'raster' ? 'text-amber-400' : ''" :title="geomLabel" v-html="geomSvg"></button>
+      <span class="text-xs font-medium flex-1 truncate" :class="visible ? '' : 'text-muted-foreground/70'" :title="layerName">{{ layerName }}</span>
+      <button @click="$emit('zoom')" class="text-muted-foreground/70 hover:text-primary flex-shrink-0" title="Zoom to layer">
+        <LocateIcon class="w-3.5 h-3.5" />
+      </button>
+      <button @click="$emit('remove')" class="text-muted-foreground/70 hover:text-red-500 flex-shrink-0" title="Remove">
+        <TrashIcon class="w-3.5 h-3.5" />
+      </button>
+    </template>
 
-    <!-- Symbology popover (opens from the swatch) -->
-    <Teleport to="body">
-      <div v-if="showStyle" ref="popEl" :style="popStyle"
-        class="fixed z-[60] bg-card border border-border rounded-lg shadow-xl text-foreground/85">
-        <div class="flex items-center justify-between gap-2 px-3 py-2 border-b border-border/60 text-xs font-semibold">
+    <!-- Symbology popover (opens from the swatch) — rendered IN PLACE when standalone. -->
+    <Teleport to="body" :disabled="standalone">
+      <div v-if="showStyle || standalone" ref="popEl" :style="standalone ? null : popStyle"
+        :class="standalone
+          ? 'text-foreground/85'
+          : 'fixed z-[60] bg-card border border-border rounded-lg shadow-xl text-foreground/85'">
+        <div v-if="!standalone" class="flex items-center justify-between gap-2 px-3 py-2 border-b border-border/60 text-xs font-semibold">
           <span class="truncate">{{ layerName }}</span>
           <button @click="showStyle = false" class="text-muted-foreground/70 hover:text-foreground text-lg leading-none flex-shrink-0">&times;</button>
         </div>
-        <div class="px-3 py-2.5 space-y-3 max-h-[70vh] overflow-auto">
+        <div class="space-y-3" :class="standalone ? '' : 'px-3 py-2.5 max-h-[70vh] overflow-auto'">
 
           <!-- Opacity (all layers) -->
           <div>
@@ -68,7 +76,7 @@
                 <div v-if="colorMode === 'graduated' && config.style?.color_field" class="flex gap-1.5">
                   <label class="flex-1">
                     <span class="text-[11px] text-muted-foreground">Classes</span>
-                    <input type="number" min="2" max="9" :value="classCount" @change="setClassCount($event.target.value)"
+                    <input type="number" min="2" max="12" :value="classCount" @change="setClassCount($event.target.value)"
                       class="w-full text-xs border border-border rounded px-1.5 py-1 mt-0.5" />
                   </label>
                   <label class="flex-[1.4]">
@@ -82,18 +90,34 @@
                   </label>
                 </div>
 
-                <label v-if="colorMode === 'graduated' && config.style?.color_field" class="block">
+                <div v-if="colorMode === 'graduated' && config.style?.color_field" class="block">
                   <span class="text-[11px] text-muted-foreground">Colour ramp</span>
-                  <select :value="ramp" @change="setRamp($event.target.value)"
-                    class="w-full text-xs border border-border rounded px-1.5 py-1 mt-0.5">
-                    <optgroup label="Sequential">
-                      <option v-for="r in SEQUENTIAL" :key="r" :value="r">{{ r }}</option>
-                    </optgroup>
-                    <optgroup label="Diverging (has a midpoint)">
-                      <option v-for="r in DIVERGING" :key="r" :value="r">{{ r }}</option>
-                    </optgroup>
-                  </select>
-                </label>
+                  <div class="flex items-center gap-1 mt-0.5">
+                    <select :value="ramp" @change="setRamp($event.target.value)"
+                      class="flex-1 min-w-0 text-xs border border-border rounded px-1.5 py-1">
+                      <optgroup label="Sequential">
+                        <option v-for="r in SEQUENTIAL" :key="r" :value="r">{{ r }}</option>
+                      </optgroup>
+                      <optgroup label="Diverging (has a midpoint)">
+                        <option v-for="r in DIVERGING" :key="r" :value="r">{{ r }}</option>
+                      </optgroup>
+                    </select>
+                  </div>
+                  <div class="flex items-center justify-between gap-2 mt-1">
+                    <div class="flex h-2 flex-1 rounded overflow-hidden" aria-hidden="true">
+                      <span v-for="(c, i) in rampPreview" :key="i" class="flex-1"
+                        :style="{ backgroundColor: c }"></span>
+                    </div>
+                    <!-- Which end means "high" is a cartographic choice, not a property of the
+                         ramp: on a dark basemap the light end often belongs to the low values. -->
+                    <label class="flex items-center gap-1 text-[11px] text-muted-foreground
+                                  cursor-pointer shrink-0">
+                      <input type="checkbox" :checked="rampReverse"
+                        @change="toggleRampReverse" class="cursor-pointer" />
+                      Reverse
+                    </label>
+                  </div>
+                </div>
 
                 <p v-if="statsBusy" class="text-[11px] text-muted-foreground/70">Reading the field…</p>
                 <p v-else-if="statsError" class="text-[11px] text-red-400">{{ statsError }}</p>
@@ -104,13 +128,20 @@
                   <div v-for="(e, i) in legend" :key="i" class="flex items-center gap-1.5">
                     <input type="color" :value="e.color" @input="setEntryColor(i, $event.target.value)"
                       :disabled="e.isOther"
-                      class="w-4 h-4 rounded border border-border cursor-pointer p-0 flex-shrink-0 disabled:opacity-60" />
+                      class="w-5 h-5 rounded border border-border/50 cursor-pointer p-0 flex-shrink-0 disabled:opacity-60" />
                     <span class="text-[11px] text-muted-foreground truncate">{{ e.label }}</span>
                   </div>
                 </div>
                 <p v-if="truncatedCats" class="text-[11px] text-amber-300/80">
                   Showing the {{ (config.style?.categories || []).length }} commonest values; the rest
                   draw in the “Other” colour.
+                </p>
+                <!-- Says what happened instead of silently rewriting the box. Repeated values
+                     collapse a break, so a column can legitimately yield fewer classes than asked
+                     — one on a live instance yields exactly one, whatever you request. -->
+                <p v-if="fewerThanAsked" class="text-[11px] text-amber-300/80">
+                  {{ producedClasses }} of {{ classCount }} classes — the rest would be empty,
+                  because this column's values repeat.
                 </p>
               </div>
             </div>
@@ -210,6 +241,41 @@
                   At this thickness the fill is hidden — the marker reads as a ring.
                 </p>
               </div>
+            </div>
+
+            <!-- Size from a field (issue #21). The instance has drawn this since v1.1 — an
+                 `interpolate` over `size_field` for circle-radius and line-width, and `icon-size`
+                 for marker shapes — but nothing in the dashboard could set it, so it was reachable
+                 only from the CLI. Points and lines only: a polygon has no width to vary. -->
+            <div v-if="canSizeByField" class="pt-1 border-t border-border/50 space-y-1.5">
+              <label class="text-xs text-muted-foreground">
+                {{ geomType === 'point' ? 'Size by a field' : 'Width by a field' }}
+              </label>
+              <select :value="sizeField || ''" @change="pickSizeField($event.target.value)"
+                class="w-full text-xs border border-border rounded px-1.5 py-1">
+                <option value="">Fixed {{ geomType === 'point' ? 'size' : 'width' }}</option>
+                <option v-for="f in numericFields" :key="f.name" :value="f.name">{{ f.name }}</option>
+              </select>
+              <div v-if="sizeField" class="flex items-center gap-1.5">
+                <label class="flex-1">
+                  <span class="text-[11px] text-muted-foreground">Smallest</span>
+                  <input type="number" min="0.5" max="60" step="0.5" :value="sizePx[0]"
+                    @change="setSizePx(0, $event.target.value)"
+                    class="w-full text-xs border border-border rounded px-1.5 py-1 mt-0.5" />
+                </label>
+                <label class="flex-1">
+                  <span class="text-[11px] text-muted-foreground">Largest</span>
+                  <input type="number" min="0.5" max="60" step="0.5" :value="sizePx[1]"
+                    @change="setSizePx(1, $event.target.value)"
+                    class="w-full text-xs border border-border rounded px-1.5 py-1 mt-0.5" />
+                </label>
+              </div>
+              <p v-if="sizeField && sizeRange" class="text-[11px] text-muted-foreground/70">
+                {{ sizeRange[0] }} → {{ sizeRange[1] }} maps to {{ sizePx[0] }} → {{ sizePx[1] }} px.
+              </p>
+              <p v-else-if="sizeField && sizeBusy" class="text-[11px] text-muted-foreground/70">
+                Reading the field…
+              </p>
             </div>
 
             <!-- 3D. Polygons extrude directly (MapLibre raises a fill); POINTS become pillars —
@@ -374,8 +440,10 @@
             </p>
           </template>
 
-          <!-- Default style actions (not applicable to external sources) -->
-          <div v-if="config.layer_type !== 'external'" class="flex items-center gap-2 pt-1 border-t border-border/60">
+          <!-- Default style actions (not applicable to external sources). Hidden when standalone:
+               in My Data this IS the default style, so "use default" and "save as default" would be
+               a control acting on itself — the host's own Save button writes it. -->
+          <div v-if="config.layer_type !== 'external' && !standalone" class="flex items-center gap-2 pt-1 border-t border-border/60">
             <button v-if="layer?.default_style" @click="useDefault" class="text-xs text-primary hover:text-primary/80 font-medium"
               title="Apply saved default style to this portal">↩ Use default</button>
             <button @click="saveDefault" :disabled="savingDefault" class="text-xs text-muted-foreground hover:text-foreground ml-auto"
@@ -394,11 +462,16 @@ import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps, getRaste
          getFieldStats } from '@/api'
 // The shared symbology vocabulary — twin of api/geodeploy/services/symbology.py. The swatch and
 // the legend here must describe exactly what the published portal will draw.
-import { RAMPS, DIVERGING, NO_OUTLINE, markerOutline, legendEntries, representativeColor,
-         pillarRadius } from '@/lib/symbology'
+import { RAMPS, DIVERGING, NO_OUTLINE, markerOutline, legendEntries, rampColors,
+         representativeColor, pillarRadius } from '@/lib/symbology'
 import { TrashIcon, LocateIcon } from '@/views/icons'
 
-const props = defineProps({ config: Object })
+const props = defineProps({
+  config: Object,
+  // Render the symbology body ALONE, without the layer row, the popover chrome or the
+  // default-style actions — for a host that is not a portal layer list (My Data).
+  standalone: { type: Boolean, default: false },
+})
 const emit = defineEmits(['remove', 'update', 'zoom', 'dragstart', 'dragend'])
 
 const dataStore = useDataStore()
@@ -535,9 +608,21 @@ const statsError = ref('')
 const truncatedCats = ref(false)
 
 const colorMode = computed(() => props.config.style?.color_mode || 'single')
-const classCount = computed(() => (props.config.style?.classes || []).length || 5)
+// The REQUESTED count, not the produced one. Reading it back from `classes.length` meant the box
+// showed whatever came back: a column whose values tie (a real one on a live instance returns ONE
+// class however many you ask for) snapped the input to 1 and there was no way to ask for more —
+// the control fought the user. `classes_n` is what was asked; the note below says what happened.
+const classCount = computed(() =>
+  props.config.style?.classes_n || (props.config.style?.classes || []).length || 5)
+const producedClasses = computed(() => (props.config.style?.classes || []).length)
+const fewerThanAsked = computed(() =>
+  colorMode.value === 'graduated' && producedClasses.value > 0
+  && producedClasses.value < classCount.value)
 const classMethod = computed(() => props.config.style?.class_method || 'quantile')
 const ramp = computed(() => props.config.style?.color_ramp || 'viridis')
+const rampReverse = computed(() => !!props.config.style?.color_ramp_reverse)
+// The swatch strip under the picker: what the classes WILL look like, in the current direction.
+const rampPreview = computed(() => rampColors(ramp.value, 7, rampReverse.value))
 
 // Fields worth offering. The geometry column is never a symbology field, and a column of unique
 // ids classifies into as many classes as there are rows — offering them invites a useless map.
@@ -576,9 +661,35 @@ function pickColorField(field) {
   emitStyle({ color_field: field, classes: [], categories: [] })
   if (field) refreshClasses({ color_field: field })
 }
-function setClassCount(n) { refreshClasses({ classes_n: Math.max(2, Math.min(9, parseInt(n) || 5)) }) }
+// 12, not 9: the server clamps `classes` to 12 in routers/data/vector.py, and a control that stops
+// at 9 silently refuses counts the classifier would have produced (issue #10).
+function setClassCount(n) { refreshClasses({ classes_n: Math.max(2, Math.min(12, parseInt(n) || 5)) }) }
 function setMethod(m) { refreshClasses({ class_method: m }) }
 function setRamp(r) { refreshClasses({ color_ramp: r }) }
+/**
+ * Flip the ramp — INSTANTLY, and without asking the server (issue #11).
+ *
+ * A reversed ramp is by construction the same colours in the opposite order (`ramp_colors` reverses
+ * its sampled output), so reversing the STORED class colours is exactly equal to re-classifying with
+ * `reverse=true` — and it is equal for hand-edited colours too, which a re-classify would discard.
+ * That makes the round trip pure latency: the map recolours on the next tick instead of after a
+ * request that can also fail.
+ *
+ * The flag is still stored, so a later change of method or class count keeps the direction.
+ */
+function toggleRampReverse() {
+  const style = props.config.style || {}
+  const patch = { color_ramp_reverse: !rampReverse.value }
+  if ((style.classes || []).length) {
+    const colors = style.classes.map(c => c.color).reverse()
+    patch.classes = style.classes.map((c, i) => ({ ...c, color: colors[i] }))
+  }
+  if ((style.categories || []).length) {
+    const colors = style.categories.map(c => c.color).reverse()
+    patch.categories = style.categories.map((c, i) => ({ ...c, color: colors[i] }))
+  }
+  emitStyle(patch)
+}
 
 /**
  * Ask the server to classify the chosen field and apply the result.
@@ -595,18 +706,24 @@ async function refreshClasses(over = {}) {
   statsBusy.value = true
   statsError.value = ''
   try {
+    // `??`, not `||`: turning the reverse OFF passes false, which `||` would discard and the
+    // toggle would only ever work in one direction.
+    const reverse = over.color_ramp_reverse ?? rampReverse.value
     const { data } = await getFieldStats(props.config.layer_id, {
       field,
       classes: over.classes_n || classCount.value,
       method: over.class_method || classMethod.value,
       ramp: over.color_ramp || ramp.value,
+      reverse,
     })
     truncatedCats.value = !!data.truncated
     const patch = {
       color_mode: mode,
       color_field: field,
       color_ramp: over.color_ramp || ramp.value,
+      color_ramp_reverse: reverse,
       class_method: over.class_method || classMethod.value,
+      classes_n: over.classes_n || classCount.value,
     }
     // A text column cannot be graduated and a numeric one is usually not meant to be categorical.
     // Follow the DATA rather than refusing: the mode switches, and the legend shows what happened.
@@ -647,6 +764,62 @@ function setEntryColor(i, color) {
 //     same rule as hiding it when a layer has no numeric field.
 // GeoParquet POLYGONS are fine and offered: deck's GeoJsonLayer extrudes them directly
 // (`extruded` + `getElevation`), and a PMTiles-tiled one takes the normal MapLibre path.
+// ── Size from a field (issue #21) ────────────────────────────────────────────────────────────────
+// The style keys are `size_mode: 'proportional'` + `size_field` + `size_stops`, exactly as
+// services/symbology.py reads them; two stops, because the server interpolates LINEARLY between
+// them and a size legend is only honest if it is a straight line.
+const canSizeByField = computed(() =>
+  !!numericFields.value.length && (geomType.value === 'point' || geomType.value === 'line'))
+const sizeField = computed(() =>
+  (props.config.style?.size_mode === 'proportional' && props.config.style?.size_field) || '')
+const sizeStops = computed(() => {
+  const s = props.config.style?.size_stops
+  return Array.isArray(s) && s.length === 2 ? s : null
+})
+// The data values the two stops sit at, and the pixel sizes they map to.
+const sizeRange = computed(() => sizeStops.value ? [sizeStops.value[0][0], sizeStops.value[1][0]] : null)
+const sizePx = computed(() => sizeStops.value
+  ? [sizeStops.value[0][1], sizeStops.value[1][1]]
+  : (geomType.value === 'point' ? [4, 20] : [1, 8]))
+const sizeBusy = ref(false)
+
+async function pickSizeField(field) {
+  if (!field) {
+    // `size_mode` back to fixed AND the field cleared: leaving a stale field behind means the next
+    // person to switch it on inherits a column they never chose.
+    emitStyle({ size_mode: 'fixed', size_field: null, size_stops: null })
+    return
+  }
+  sizeBusy.value = true
+  try {
+    // The server already knows the column's min and max — asking beats guessing a range, and it is
+    // the same endpoint the colour classification uses.
+    const { data } = await getFieldStats(props.config.layer_id, { field, classes: 2 })
+    const lo = data.min ?? 0
+    const hi = data.max ?? (lo + 1)
+    const px = sizePx.value
+    emitStyle({
+      size_mode: 'proportional',
+      size_field: field,
+      // Equal values would make MapLibre's interpolate stops non-ascending, which throws.
+      size_stops: [[lo, px[0]], [hi > lo ? hi : lo + 1, px[1]]],
+    })
+  } catch (e) {
+    statsError.value = e?.response?.data?.detail || 'Could not read that field.'
+  } finally {
+    sizeBusy.value = false
+  }
+}
+
+function setSizePx(index, value) {
+  const stops = sizeStops.value
+  if (!stops) return
+  const px = Math.max(0.5, Math.min(60, parseFloat(value) || 1))
+  const next = stops.map(s => s.slice())
+  next[index][1] = px
+  emitStyle({ size_stops: next })
+}
+
 const canExtrude = computed(() => {
   if (!numericFields.value.length) return false
   if (geomType.value === 'line') return false
