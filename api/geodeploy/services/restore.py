@@ -89,6 +89,30 @@ def download(cfg, key: str, name: str, dest_path: str) -> int:
     return os.path.getsize(dest_path)
 
 
+#: Lines pg_restore prints under `--clean` that are NOT failures.
+#:
+#: `cannot drop extension postgis because other objects depend on it` is the one that matters. The
+#: dump contains `CREATE EXTENSION postgis`, so `--clean` emits a matching DROP — which Postgres
+#: refuses whenever the live database still holds geometry columns, i.e. on ANY instance with a
+#: PostGIS vector layer. The refusal is the outcome we want: PostGIS must stay installed, and
+#: pg_restore carries on regardless. Treating it as fatal aborted the whole restore.
+#:
+#: It went unnoticed because a GeoParquet-only instance has no geometry columns, so nothing depends
+#: on the extension and the DROP succeeds — the restore path was proven on exactly the instance
+#: shape that cannot hit this.
+_BENIGN_RESTORE_ERRORS = (
+    "does not exist",
+    "cannot drop extension",
+    "must be owner of extension",       # a managed Postgres refuses the drop for a different reason
+    "extension \"postgis\" already exists",
+)
+
+
+def _benign(line: str) -> bool:
+    low = line.lower()
+    return any(marker.lower() in low for marker in _BENIGN_RESTORE_ERRORS)
+
+
 def restore_database(dump_path: str) -> dict:
     """`pg_restore --clean --if-exists` over the live database.
 
@@ -109,10 +133,11 @@ def restore_database(dump_path: str) -> dict:
     # failure is judged on stderr content, not the code alone.
     err = (proc.stderr or "").strip()
     fatal = [l for l in err.splitlines() if "error:" in l.lower()
-             and "does not exist" not in l.lower()]
+             and not _benign(l)]
     if fatal:
         raise RuntimeError("pg_restore failed: " + "; ".join(fatal[:5]))
-    return {"warnings": len(err.splitlines()), "fatal": 0}
+    tolerated = [l for l in err.splitlines() if "error:" in l.lower()]
+    return {"warnings": len(err.splitlines()), "fatal": 0, "tolerated": len(tolerated)}
 
 
 def restore_objects(cfg, key: str, on_progress=None) -> dict:

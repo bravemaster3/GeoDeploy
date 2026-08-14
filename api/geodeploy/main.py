@@ -316,7 +316,7 @@ def _ensure_martin_config(settings) -> None:
 
 app = FastAPI(
     title="GeoDeploy API",
-    version="1.3.0",
+    version="1.3.1",
     description="Self-hosted spatial data management and geoportal builder",
     lifespan=lifespan,
     # nginx proxies ONLY `/api/` to this app; every other path falls through to the SPA. At
@@ -501,4 +501,7 @@ if os.path.exists(templates_dir):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "0.3.0"}
+    # Read the app's version rather than repeating it: this string was still "0.3.0" through v1.0,
+    # v1.1, v1.2 and v1.3, so the one endpoint you hit to ask "what is running?" answered with a
+    # number that had been wrong for four releases.
+    return {"status": "ok", "version": app.version}
