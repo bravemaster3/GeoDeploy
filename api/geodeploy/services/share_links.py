@@ -97,12 +97,12 @@ def vector_links(layer, base: str) -> list[dict]:
             links.append(_link(
                 "pmtiles", "PMTiles archive (fast rendering)", f"{api}/pmtiles",
                 fmt="PMTiles (vector)", tools=["GeoLibre", "MapLibre", "download", "GDAL"],
-                hint="Paste as-is — no pmtiles:// prefix (that is a MapLibre-internal protocol "
-                     "handler, not part of any address). In QGIS this does NOT go in Add Vector "
-                     "Tile Layer (that dialog builds an XYZ template and an archive is one file); "
-                     "open it with GDAL 3.8+ as /vsicurl/<this URL>. For attributes and queries "
-                     "prefer the OGC API - Features service above — PMTiles is generalized per "
-                     "zoom."))
+                hint="QGIS: Layer > Add Layer > ADD VECTOR LAYER and paste this URL as-is — GDAL "
+                     "3.8+ opens it with its PMTiles driver (verified: driver=PMTiles, 1 layer). "
+                     "NOT Add Vector TILE Layer: that dialog builds an XYZ template and an archive "
+                     "is one file. No pmtiles:// prefix and no /vsicurl/ needed. For attributes and "
+                     "queries prefer the OGC API - Features service above — tiles are generalized "
+                     "per zoom."))
         links.append(_link(
             "features-geojson", "Viewport features (GeoDeploy native)",
             f"{api}/features.geojson?bbox=minx,miny,maxx,maxy&limit=50000",
