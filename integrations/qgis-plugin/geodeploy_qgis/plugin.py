@@ -259,8 +259,14 @@ class GeoDeployDock(QDockWidget):
                              .get("default_style") or {}).get("style")
                 except GeoDeployError:
                     style = None
-            if style and symbology.apply_to_qgis(layer, style):
-                applied = ", styled as the portal draws it"
+            if style:
+                applied = (", styled as the portal draws it"
+                           if symbology.apply_to_qgis(layer, style)
+                           else " — but its saved style could not be applied; the reason is in "
+                                "View > Panels > Log Messages, under GeoDeploy")
+            else:
+                # Distinguish "has no style" from "has one we failed to use". The first is normal.
+                applied = " (no saved style on this layer)"
         self._say(f"Added {name} — {source['why']}{applied}.")
 
     # -- upload ------------------------------------------------------------------------------------

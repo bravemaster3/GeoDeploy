@@ -103,6 +103,15 @@ def _label(lo, hi) -> str:
     return f"{num(lo)} – {num(hi)}"
 
 
+def _log(message: str) -> None:
+    """Into QGIS's Log Messages panel, under our own tab — the place a user can be pointed to."""
+    try:
+        from qgis.core import Qgis, QgsMessageLog
+        QgsMessageLog.logMessage(message, "GeoDeploy", Qgis.Warning)
+    except Exception:                   # noqa: BLE001 - logging must never raise
+        pass
+
+
 def apply_to_qgis(qgis_layer, style: dict) -> bool:
     """Render `qgis_layer` the way GeoDeploy renders it. True when a renderer was set.
 
@@ -150,8 +159,14 @@ def apply_to_qgis(qgis_layer, style: dict) -> bool:
             qgis_layer.setRenderer(QgsSingleSymbolRenderer(symbol))
             qgis_layer.triggerRepaint()
             return True
-    except Exception:                   # noqa: BLE001 - a style must never stop a layer loading
+    except Exception as exc:            # noqa: BLE001 - a style must never stop a layer loading
+        # Never stop the layer, but never disappear either. Swallowed silently, a failure here is
+        # indistinguishable from a layer that simply has no style — which is exactly how "no saved
+        # symbology ever displays" arrived with nothing in the console to act on.
+        _log("Could not apply the saved style: {0}: {1}".format(type(exc).__name__, exc))
         return False
+    _log("The saved style produced no renderer (mode={0!r}, field={1!r}).".format(
+        model.mode, model.field))
     return False
 
 
