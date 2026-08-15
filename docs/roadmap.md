@@ -283,8 +283,16 @@ which parts are worth having and where the numbers come from.
       `<iframe>`, and readable on a phone, where a dashboard is mostly numbers and the map is
       smallest.
 
-Worth settling before building: whether an element's data source is a LAYER or a saved query, since
-that decides whether a dashboard can outlive the layer it was built on.
+- [ ] **Linked or detached, chosen per dashboard and explained where the choice is made.** A
+      *linked* dashboard reads its layers live, so when the data is updated the numbers move with
+      it — that is the interesting one, and the default. A *detached* dashboard is built on saved
+      queries: it keeps reporting what it reported, and changes at the source do not reach it,
+      which is what a published figure sometimes has to do. The distinction has to be stated in the
+      editor in those terms, because "layer or saved query" is a storage detail and "does this
+      update itself?" is the actual question being asked.
+
+The linked case is the one that earns the feature: a dashboard that goes stale the moment the data
+moves is a screenshot with extra steps.
 
 </div>
 
