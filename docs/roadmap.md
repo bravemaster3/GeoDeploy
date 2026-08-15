@@ -253,6 +253,42 @@ is the rest of the round trip, not yet scheduled.</p>
 </div>
 
 <div class="gd-rel" markdown>
+### A fourth experience: dashboards
+<span class="gd-when">Planned</span>
+
+<p class="gd-goal">Today a portal is a map with panels around it. A dashboard inverts that: the map
+becomes one small element among charts, indicators and filters, for the questions a reader asks of
+the DATA rather than of the geography.</p>
+
+The shape is well established — indicators, charts, selectors and a map, where interacting with one
+element filters the others — so the work is less about inventing an interface than about deciding
+which parts are worth having and where the numbers come from.
+
+- [ ] **The archetype itself**: `dashboard` alongside webmap / storymap / catalog, with a layout of
+      resizable cells rather than a map plus panels. `resolve_layout` already carries archetypes and
+      regions, so this is a new layout rather than a new renderer.
+- [ ] **Elements**: indicator (one number, optionally against a target), chart (bar, line, pie),
+      table, text, and the map. Each bound to a layer and an aggregate — count, sum, mean, min, max,
+      grouped by a field.
+- [ ] **Cross-filtering — the thing that makes a dashboard a dashboard.** Selecting a bar, a table
+      row or features on the map filters every other element. Without it this is a page of pictures.
+- [ ] **Filter by the map's extent**, so panning re-computes the numbers for what is on screen.
+- [ ] **Selectors** — a dropdown, a date range, a search box — that filter elements without needing
+      a click on the map.
+- [ ] **Aggregates computed server-side.** `/field-stats` already does this for both backends
+      (SQL for PostGIS, DuckDB for GeoParquet); a dashboard needs the same idea generalised to
+      grouped aggregates with a filter. Sending a million features to the browser to count them is
+      the failure mode to design against.
+- [ ] **Published like any other portal** — one URL, the four access tiers, embeddable in an
+      `<iframe>`, and readable on a phone, where a dashboard is mostly numbers and the map is
+      smallest.
+
+Worth settling before building: whether an element's data source is a LAYER or a saved query, since
+that decides whether a dashboard can outlive the layer it was built on.
+
+</div>
+
+<div class="gd-rel" markdown>
 ### Cartography and portal tools
 <span class="gd-when">Planned</span>
 
