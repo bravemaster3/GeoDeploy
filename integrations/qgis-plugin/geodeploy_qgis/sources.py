@@ -2,17 +2,22 @@
 
 A GeoDeploy layer is published through several surfaces at once, and they are not interchangeable:
 
-* **PMTiles** is the fastest way to DRAW a large vector layer — pre-tiled, range-requested, no
-  per-pan query — and QGIS opens the archive through the ordinary vector-layer path on GDAL 3.8+.
-  It is a *rendering* format: geometry is generalized per zoom, features are clipped to tile
-  boundaries, and attributes are only what the tiles carry.
-* **OGC API - Features** is the DATA: full attributes, exact geometry, paged. QGIS has read it
-  natively since 3.16. For millions of features it is slow, which is exactly when PMTiles wins.
+* **PMTiles** is one pre-generalized archive, opened through the ordinary vector-layer path on
+  GDAL 3.8+ (with `/vsicurl/` — see below). Geometry is generalized per zoom, features are clipped
+  to tile boundaries, and attributes are only what the tiles carry.
+* **OGC API - Features** is the DATA: full attributes, exact geometry. QGIS has read it natively
+  since 3.16, and its provider is VIEWPORT-DRIVEN — it asks the server for the extent on screen.
 * **COG** is a raster, read by range request through `/vsicurl/`.
 
-So the rule below is "fastest thing that answers the question being asked", and the caller can
-override it — a user who wants attributes on a 2-million-feature layer should be able to say so and
-wait.
+A correction worth stating plainly, because the first version of this file got it wrong and the
+error is easy to repeat: **PMTiles being fast in MapLibre does not make it fast in QGIS.** A web map
+fetches only the tiles under the viewport. OGR does not — it opens the archive as an ordinary
+dataset and reads every feature at the archive's zoom level, with no notion of a viewport. So
+PMTiles is one bounded download with no per-pan server round-trip, while OAPIF asks the server again
+on every pan but only ever for what is visible. Which of those is "faster" depends on the layer and
+on how the user moves around it, and neither is universally right.
+
+So the rule below is a default, not a verdict, and the caller can override it.
 """
 from __future__ import annotations
 
@@ -58,9 +63,13 @@ def describe(layer: dict, prefer_attributes: bool = False) -> dict | None:
     if tiled and not prefer_attributes and gdal_supports_pmtiles():
         return {
             "kind": "pmtiles",
-            "uri": f"{base}/api/data/vector/{ref}/pmtiles",
+            # `/vsicurl/` is not optional. Handed the bare URL, GDAL looks for a file of that name
+            # on disk and fails with "does not exist in the file system" — it says so itself, and
+            # suggests this prefix. It is also what QGIS's own Add Vector Layer builds when you give
+            # it an HTTP(S) source, which is why adding one by hand worked where this did not.
+            "uri": f"/vsicurl/{base}/api/data/vector/{ref}/pmtiles",
             "provider": "ogr",
-            "why": "pre-tiled, so a large layer draws immediately (generalized per zoom)",
+            "why": "one pre-generalized archive, read by range request instead of re-queried",
         }
 
     # OAPIF is addressed by COLLECTION here, not by the service: QGIS's own dialog needs the service

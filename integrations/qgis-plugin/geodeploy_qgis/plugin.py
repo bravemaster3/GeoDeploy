@@ -93,8 +93,10 @@ class GeoDeployDock(QDockWidget):
 
         self.attributes = QCheckBox("Prefer full attributes over drawing speed")
         self.attributes.setToolTip(
-            "A tiled layer draws immediately but carries generalized geometry and only the "
-            "attributes the tiles hold. Tick this to read the features themselves instead.")
+            "Off: one pre-generalized archive, downloaded once — generalized geometry, and only "
+            "the attributes the tiles carry.\n"
+            "On: OGC API - Features, which QGIS re-queries for the extent on screen — exact "
+            "geometry and every attribute, at a server round-trip per pan.")
         outer.addWidget(self.attributes)
 
         add = QPushButton("Add to map")
@@ -121,9 +123,24 @@ class GeoDeployDock(QDockWidget):
 
     # -- helpers -----------------------------------------------------------------------------------
 
-    def _say(self, text, level=Qgis.Info):
+    def _say(self, text, level=Qgis.Info, bar=True):
+        """`bar=False` for progress: the dock label updates, the message bar does not.
+
+        QGIS's message bar is a STACK. Pushing "Uploading…" and then pushing a failure on top means
+        that when the failure expires the progress message is RESTORED — so an upload that was
+        rejected ended by announcing itself as under way. Progress belongs on the dock's own label,
+        which is overwritten in place; only outcomes go to the bar, and each one clears what is
+        behind it so nothing stale can resurface.
+        """
         self.status.setText(text)
-        self.iface.messageBar().pushMessage(PLUGIN_NAME, text, level=level, duration=6)
+        if not bar:
+            return
+        bar_widget = self.iface.messageBar()
+        bar_widget.clearWidgets()
+        # A warning or an error waits to be dismissed. Six seconds is fine for "done"; it is not
+        # fine for the one message that explains why the thing you asked for did not happen.
+        duration = 0 if level in (Qgis.Warning, Qgis.Critical) else 6
+        bar_widget.pushMessage(PLUGIN_NAME, text, level=level, duration=duration)
 
     def _busy(self, on: bool):
         self.progress.setVisible(on)
@@ -162,9 +179,16 @@ class GeoDeployDock(QDockWidget):
         extra = ("" if info.get("index_available")
                  else " — this instance does not publish an index, so only what your token can see "
                       "will be listed")
-        self._say(f"{info.get('url')} — {who}. "
-                  f"{info.get('public_layers', 0)} public layer(s), "
-                  f"{info.get('public_portals', 0)} public portal(s).{extra}")
+        # Signed in, lead with what the TOKEN can see; the public numbers are a subset of it and
+        # saying only those made a full instance look nearly empty.
+        if info.get("visible_layers") is None:
+            counts = (f"{info.get('public_layers', 0)} public layer(s), "
+                      f"{info.get('public_portals', 0)} public portal(s).")
+        else:
+            counts = (f"{info['visible_layers']} layer(s) and {info['visible_portals']} portal(s) "
+                      f"you can see, of which {info.get('public_layers', 0)} and "
+                      f"{info.get('public_portals', 0)} are public.")
+        self._say(f"{info.get('url')} — {who}. {counts}{extra}")
         self.refresh_layers()
 
     def refresh_layers(self):
@@ -256,7 +280,7 @@ class GeoDeployDock(QDockWidget):
         try:
             # Not `layer.source()`: a filtered layer's file holds MORE than the layer does, and a
             # memory or PostGIS layer has no file at all. `prepare` writes those out first.
-            path, temporary = export.prepare(layer, on_status=lambda t: self._say(t))
+            path, temporary = export.prepare(layer, on_status=lambda t: self._say(t, bar=False))
         except export.NotUploadable as exc:
             self._say(str(exc), Qgis.Warning)
             return
@@ -280,7 +304,7 @@ class GeoDeployDock(QDockWidget):
             return result
 
         self._busy(True)
-        self._say(f"Uploading {layer.name()}… large files go straight to storage.")
+        self._say(f"Uploading {layer.name()}… large files go straight to storage.", bar=False)
         self._run(_Job("GeoDeploy: uploading", work), self._uploaded)
 
     def _uploaded(self, job):

@@ -84,12 +84,26 @@ class Instance:
         except GeoDeployError:
             index = {}
         counts = index.get("counts") or {}
+        # What a TOKEN can see is the number that matters once you are signed in. Reporting only the
+        # public counts told someone holding an editor token that their instance had "4 layers" when
+        # it had forty — the public index is, by design, the smallest view of the instance.
+        visible_layers = visible_portals = None
+        if self.token:
+            try:
+                visible_layers = len(self.layers())
+                visible_portals = len(self.portals())
+            except GeoDeployError:
+                # A token that cannot list is still a valid connection: say nothing rather than
+                # claim zero, and let the listing below report the real error.
+                visible_layers = visible_portals = None
         return {
             "url": self.url,
             "authenticated": bool(who),
             "user": (who or {}).get("email") or (who or {}).get("name"),
             "public_layers": sum(v for k, v in counts.items() if k != "portals"),
             "public_portals": counts.get("portals", 0),
+            "visible_layers": visible_layers,
+            "visible_portals": visible_portals,
             "index_available": bool(index),
         }
 
