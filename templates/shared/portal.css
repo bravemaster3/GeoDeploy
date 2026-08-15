@@ -409,6 +409,25 @@
       font-size: 10.5px; color: var(--text-muted); white-space: nowrap;
       overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums;
     }
+    /* "Colour by <field>" / "Size by <field>". A row of swatches without the column name shows
+       THAT something varies without saying what — the caption is what makes a legend a statement
+       rather than a puzzle. Quiet, because it is context and not the content. */
+    .legend-by {
+      font-size: 10px; color: var(--muted, #6b7280); margin: 1px 0 3px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .legend-field { color: var(--text-muted); font-weight: 600; }
+    /* Size symbology is a second dimension and can appear WITH graduated colour, so it sits below
+       the classes with a rule between rather than replacing them. */
+    .legend-size { margin-top: 5px; padding-top: 4px; border-top: 1px solid var(--border); }
+    .legend-size-row { display: flex; align-items: flex-end; gap: 14px; }
+    .legend-size-item { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+    /* Fixed height so the two ends sit on one baseline however different their sizes are —
+       otherwise the small end floats in the middle of the row. */
+    .legend-size-swatch {
+      display: flex; align-items: flex-end; justify-content: center;
+      min-height: 30px; min-width: 30px;
+    }
     .legend-bar { height: 10px; border-radius: 3px; border: 1px solid var(--border); }
     .legend-range {
       display: flex; justify-content: space-between;

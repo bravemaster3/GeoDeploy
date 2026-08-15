@@ -630,6 +630,47 @@ def legend_entries(style: dict) -> list[dict]:
     return []
 
 
+def size_legend(style: dict) -> dict | None:
+    """What a legend must show about SIZE, or None when size does not vary.
+
+    Colour and size are independent dimensions — colouring by population while sizing by area is a
+    normal thing to want, and `color_mode` is deliberately separate from `size_mode`. A legend that
+    shows only the colours therefore describes half the map, and the half it omits is the one
+    driving how big things are.
+
+    Returned as the two ENDS plus the field, not every stop: the size expression interpolates
+    linearly (see `_size_expression`), so the ends define the whole scale, and a legend that listed
+    intermediate stops would imply steps that the map does not draw.
+    """
+    if (style.get("size_mode") or "fixed") != "proportional":
+        return None
+    field = (style.get("size_field") or "").strip()
+    stops = [s for s in (style.get("size_stops") or [])
+             if isinstance(s, (list, tuple)) and len(s) == 2]
+    if not field or len(stops) < 2:
+        return None
+    ordered = sorted(stops, key=lambda s: s[0])
+    lo, hi = ordered[0], ordered[-1]
+    return {
+        "field": field,
+        "min_value": lo[0], "min_size": lo[1],
+        "max_value": hi[0], "max_size": hi[1],
+        "min_label": _num(lo[0]), "max_label": _num(hi[0]),
+    }
+
+
+def color_field(style: dict) -> str | None:
+    """The column driving colour, or None for a single symbol.
+
+    A legend that shows five colours without naming what they measure is a puzzle: the reader can
+    see that something varies but not what.
+    """
+    mode = style.get("color_mode") or "single"
+    if mode in ("graduated", "categorized"):
+        return (style.get("color_field") or "").strip() or None
+    return None
+
+
 def _num(v) -> str:
     """Legend numbers: trim a float that is really an integer, and keep the rest short."""
     try:

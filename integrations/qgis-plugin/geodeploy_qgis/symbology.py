@@ -25,7 +25,9 @@ try:                                    # pragma: no cover - only present inside
     from qgis.core import (QgsCategorizedSymbolRenderer, QgsGraduatedSymbolRenderer,
                            QgsRendererCategory, QgsRendererRange, QgsSimpleFillSymbolLayer,
                            QgsSimpleLineSymbolLayer, QgsSimpleMarkerSymbolLayer, QgsSymbol,
-                           QgsSingleSymbolRenderer, QgsClassificationRange)
+                           QgsSingleSymbolRenderer, QgsClassificationRange,
+                           QgsMultiBandColorRenderer, QgsSingleBandGrayRenderer,
+                           QgsSingleBandPseudoColorRenderer)
     from qgis.PyQt.QtCore import Qt
     from qgis.PyQt.QtGui import QColor
     QGIS = True
@@ -217,6 +219,110 @@ def apply_to_qgis(qgis_layer, style: dict) -> bool:
 
 def _hex(color) -> str:
     return color.name() if hasattr(color, "name") else str(color)
+
+
+def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
+    """A GeoDeploy RASTER default style from a QGIS raster renderer.
+
+    A different shape entirely from the vector one — `{colormap, rescale, bidx}`, not classes — so
+    it is a separate function rather than a branch inside `from_qgis`. Sending the vector shape for
+    a raster is what made "Send its styling too" silently do nothing for GeoTIFFs.
+
+    What travels, in order of how faithfully it survives:
+
+    * **`rescale`** — exact, and the part that matters most. Non-8-bit data renders BLACK on a tile
+      server that assumes 0–255, so the min/max stretch is the difference between a visible layer
+      and a black rectangle. QGIS knows the numbers; there is no reason to make the server guess
+      them again.
+    * **`bidx`** — exact. Which band, or which three for an RGB composite.
+    * **`colormap`** — best effort. QGIS colour ramps and TiTiler colormaps are different
+      catalogues that happen to share many names (viridis, magma, terrain, …), so the name is sent
+      ONLY when the server confirms it has one by that name. `colormaps` is that list; without it
+      no colormap is claimed, because a wrong one is worse than the default.
+    """
+    if not QGIS or qgis_layer is None:
+        return {}
+    renderer = qgis_layer.renderer() if hasattr(qgis_layer, "renderer") else None
+    if renderer is None:
+        return {}
+    style = {}
+    try:
+        if isinstance(renderer, QgsMultiBandColorRenderer):
+            bands = [renderer.redBand(), renderer.greenBand(), renderer.blueBand()]
+            if all(isinstance(b, int) and b > 0 for b in bands):
+                style["bidx"] = bands
+            # One stretch for the composite: TiTiler takes a single rescale, and the red band's is
+            # the closest honest single answer when the three differ.
+            lo, hi = _enhancement_range(renderer.redContrastEnhancement())
+            if lo is not None:
+                style["rescale"] = "{0},{1}".format(_trim(lo), _trim(hi))
+            return style
+
+        if isinstance(renderer, QgsSingleBandGrayRenderer):
+            band = renderer.grayBand()
+            if isinstance(band, int) and band > 0:
+                style["bidx"] = [band]
+            lo, hi = _enhancement_range(renderer.contrastEnhancement())
+            if lo is not None:
+                style["rescale"] = "{0},{1}".format(_trim(lo), _trim(hi))
+            return style
+
+        if isinstance(renderer, QgsSingleBandPseudoColorRenderer):
+            band = renderer.band()
+            if isinstance(band, int) and band > 0:
+                style["bidx"] = [band]
+            lo, hi = renderer.classificationMin(), renderer.classificationMax()
+            if _finite(lo) and _finite(hi) and hi > lo:
+                style["rescale"] = "{0},{1}".format(_trim(lo), _trim(hi))
+            name = _ramp_name(renderer)
+            if name and colormaps and name in colormaps:
+                style["colormap"] = name
+            elif name:
+                _log("QGIS ramp {0!r} has no colormap of that name on the instance — sending the "
+                     "stretch without it.".format(name))
+            return style
+    except Exception as exc:            # noqa: BLE001 - never block an upload over styling
+        _log("Could not read this raster's symbology: {0}: {1}".format(type(exc).__name__, exc))
+        return {}
+    return style
+
+
+def _finite(v) -> bool:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return False
+    return f == f and f not in (float("inf"), float("-inf"))
+
+
+def _trim(v) -> str:
+    """A stretch is a URL parameter — keep it short and free of float noise."""
+    f = float(v)
+    return str(int(f)) if f == int(f) else repr(round(f, 6))
+
+
+def _enhancement_range(enhancement):
+    """`(min, max)` from a contrast enhancement, or `(None, None)` when it has no usable one."""
+    if enhancement is None:
+        return (None, None)
+    lo, hi = enhancement.minimumValue(), enhancement.maximumValue()
+    if _finite(lo) and _finite(hi) and hi > lo:
+        return (lo, hi)
+    return (None, None)
+
+
+def _ramp_name(renderer) -> str | None:
+    """The lower-cased name of the renderer's colour ramp, if it has a named one."""
+    try:
+        shader = renderer.shader()
+        fn = shader.rasterShaderFunction() if shader else None
+        ramp = fn.sourceColorRamp() if fn and hasattr(fn, "sourceColorRamp") else None
+        # `type()` is the ramp KIND ("gradient", "cpt-city", …); cpt-city ramps carry a real name.
+        name = getattr(ramp, "schemeName", None)
+        name = name() if callable(name) else None
+        return (name or "").strip().lower() or None
+    except Exception:                   # noqa: BLE001 - a missing ramp is not an error
+        return None
 
 
 def from_qgis(qgis_layer) -> dict:

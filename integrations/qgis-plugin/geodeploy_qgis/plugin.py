@@ -152,6 +152,21 @@ class GeoDeployDock(QDockWidget):
         duration = 0 if level in (Qgis.Warning, Qgis.Critical) else 6
         bar_widget.pushMessage(PLUGIN_NAME, text, level=level, duration=duration)
 
+    def _colormaps(self):
+        """The colormap names this instance actually has, fetched once.
+
+        A QGIS ramp name is only sent as a colormap when the server confirms it knows one by that
+        name — the two catalogues overlap but are not the same, and a wrong colormap is worse than
+        the default. Cached because it cannot change during a session, and returned empty on
+        failure so a styling nicety never costs an upload.
+        """
+        if getattr(self, "_colormap_cache", None) is None:
+            try:
+                self._colormap_cache = set(self.instance.client.raster.colormaps() or [])
+            except Exception:           # noqa: BLE001 - no colormap is not a failed upload
+                self._colormap_cache = set()
+        return self._colormap_cache
+
     def _busy(self, on: bool):
         self.progress.setVisible(on)
         self.progress.setRange(0, 0 if on else 1)
@@ -314,7 +329,15 @@ class GeoDeployDock(QDockWidget):
             except export.NotUploadable as exc:
                 refused.append("{0}: {1}".format(layer.name(), exc))
                 continue
-            style = symbology.from_qgis(layer) if self.push_style.isChecked() else {}
+            # A raster's default style is a DIFFERENT shape — {colormap, rescale, bidx}, not
+            # classes — so it needs its own translation. Sending the vector shape is what made
+            # "Send its styling too" quietly do nothing for a GeoTIFF.
+            if not self.push_style.isChecked():
+                style = {}
+            elif isinstance(layer, QgsRasterLayer):
+                style = symbology.raster_from_qgis(layer, self._colormaps())
+            else:
+                style = symbology.from_qgis(layer)
             jobs.append((layer.name(), path, temporary, style))
 
         if not jobs:
@@ -326,7 +349,7 @@ class GeoDeployDock(QDockWidget):
         total = len(jobs)
 
         def work():
-            uploaded, failed = [], list(refused)
+            uploaded, styled, failed = [], [], list(refused)
             for index, (name, path, temporary, style) in enumerate(jobs, start=1):
                 # Reported from the worker thread: a queue that looks frozen for four of five files
                 # is worse than no progress at all.
@@ -336,10 +359,14 @@ class GeoDeployDock(QDockWidget):
                     if style and getattr(result, "layer_id", None):
                         # Styling travels with the upload: the portal then shows what the author
                         # saw, instead of the next default colour in the palette.
-                        api = client.layers.api(result.plan.layer_type)
-                        api.set_default_style(result.layer_id,
-                                              {"opacity": 1.0, "style": style,
-                                               "popup_fields": []})
+                        kind = result.plan.layer_type
+                        api = client.layers.api(kind)
+                        # The two kinds take different bodies. A raster's IS the style; a vector's
+                        # wraps it, alongside opacity and popup fields.
+                        body = (dict(style, opacity=1.0) if kind == "raster"
+                                else {"opacity": 1.0, "style": style, "popup_fields": []})
+                        api.set_default_style(result.layer_id, body)
+                        styled.append(name)
                     uploaded.append(name)
                 except Exception as exc:            # noqa: BLE001 - one bad layer, not the batch
                     # Four good layers must still arrive when the third one is broken.
@@ -348,7 +375,7 @@ class GeoDeployDock(QDockWidget):
                     if temporary:
                         # A multi-gigabyte export is not left behind in temp because upload failed.
                         shutil.rmtree(os.path.dirname(path), ignore_errors=True)
-            return {"uploaded": uploaded, "failed": failed}
+            return {"uploaded": uploaded, "styled": styled, "failed": failed}
 
         self._busy(True)
         self._say("Uploading {0} layer(s)… large files go straight to storage.".format(total),
@@ -363,7 +390,17 @@ class GeoDeployDock(QDockWidget):
         result = job.result or {}
         uploaded = result.get("uploaded") or []
         failed = result.get("failed") or []
-        styling = " Styling sent with them." if (uploaded and self.push_style.isChecked()) else ""
+        styled = result.get("styled") or []
+        # Only claim what was actually sent. A renderer we cannot translate produces no style, and
+        # saying "styling sent" anyway is how a silent no-op passes for a feature.
+        if styled and len(styled) == len(uploaded):
+            styling = " Styling sent with " + ("it." if len(styled) == 1 else "them.")
+        elif styled:
+            styling = f" Styling sent for {len(styled)} of {len(uploaded)}."
+        elif uploaded and self.push_style.isChecked():
+            styling = " No styling was sent — this renderer has no GeoDeploy equivalent."
+        else:
+            styling = ""
 
         if uploaded and not failed:
             what = uploaded[0] if len(uploaded) == 1 else f"{len(uploaded)} layers"
