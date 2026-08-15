@@ -1720,7 +1720,8 @@
         '</div>' +
         (type === 'raster' && !meta['geodeploy:external']
           ? '<div class="layer-legend" data-legend="' + layer.id + '">' + rasterLegendHtml(layer) + '</div>'
-          : vectorLegendHtml(meta['geodeploy:legend'], geom));
+          : vectorLegendHtml(meta['geodeploy:legend'], geom,
+                             meta['geodeploy:legendField'], meta['geodeploy:sizeLegend'], color));
       container.appendChild(card);
     });
 
@@ -2459,14 +2460,47 @@
    * Empty for a single-symbol layer: the swatch beside the name already says everything there is
    * to say, and a one-row legend repeating it is noise.
    */
-  function vectorLegendHtml(entries, geom) {
-    if (!Array.isArray(entries) || !entries.length) return '';
+  // A size scale, drawn as the two ENDS of the ramp. The size expression interpolates linearly, so
+  // the ends describe the whole scale; listing intermediate stops would imply steps the map does
+  // not draw. Points show as circles of the real radius, lines as strokes of the real width — the
+  // legend has to look like the map, not merely report numbers about it.
+  function sizeLegendHtml(size, geom, color) {
+    if (!size || !size.field) return '';
+    const swatch = function (px) {
+      const d = Math.max(2, Math.min(28, Number(px) || 2));
+      if (geom === 'line')
+        return '<span class="legend-size-swatch"><span style="display:block;width:26px;height:' +
+          d + 'px;border-radius:' + (d / 2) + 'px;background:' + escHtml(color || '#999') + '"></span></span>';
+      return '<span class="legend-size-swatch"><span style="display:block;width:' + (d * 2) +
+        'px;height:' + (d * 2) + 'px;border-radius:50%;background:' + escHtml(color || '#999') +
+        '"></span></span>';
+    };
+    return '<div class="legend-size">' +
+      '<div class="legend-by">Size by <span class="legend-field">' + escHtml(size.field) + '</span></div>' +
+      '<div class="legend-size-row">' +
+        '<span class="legend-size-item">' + swatch(size.min_size) +
+          '<span class="legend-label">' + escHtml(String(size.min_label)) + '</span></span>' +
+        '<span class="legend-size-item">' + swatch(size.max_size) +
+          '<span class="legend-label">' + escHtml(String(size.max_label)) + '</span></span>' +
+      '</div></div>';
+  }
+
+  function vectorLegendHtml(entries, geom, field, size, color) {
+    const sizeHtml = sizeLegendHtml(size, geom, color);
+    // Size can vary while colour does not — they are independent dimensions — so a layer with no
+    // classes may still have a legend worth showing.
+    if (!Array.isArray(entries) || !entries.length)
+      return sizeHtml ? '<div class="layer-legend legend-classes">' + sizeHtml + '</div>' : '';
     const rows = entries.map(function (e) {
       return '<div class="legend-class">' +
         '<span class="legend-chip" style="background:' + escHtml(e.color || '#999') + '"></span>' +
         '<span class="legend-label">' + escHtml(e.label == null ? '' : String(e.label)) + '</span>' +
         '</div>';
     }).join('');
+    // Naming the COLUMN turns a row of colours into a statement: without it a reader can see that
+    // something varies but not what.
+    const by = field ? '<div class="legend-by">Colour by <span class="legend-field">' +
+      escHtml(field) + '</span></div>' : '';
     // A count button, then the classes. Collapsing is a DISPLAY state and nothing else: the entries
     // come from `geodeploy:legend`, baked at publish from the same class list the map draws, and are
     // never rebuilt here — that is what stops a published legend drifting from its map.
@@ -2475,7 +2509,7 @@
       '<span class="legend-caret" aria-hidden="true">▾</span>' +
       '<span class="legend-count">' + entries.length + ' classes</span></button>';
     return '<div class="layer-legend legend-classes">' + head +
-      '<div class="legend-body">' + rows + '</div></div>';
+      '<div class="legend-body">' + by + rows + sizeHtml + '</div></div>';
   }
 
   function rasterLegendHtml(layer) {

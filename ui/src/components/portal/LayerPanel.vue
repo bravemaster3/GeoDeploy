@@ -124,6 +124,11 @@
 
                 <!-- The legend, editable. Each swatch is the actual colour the map will use, so this
                      doubles as the preview of the classification. -->
+                <!-- Name the COLUMN. Swatches alone show that something varies without saying
+                     what, and the published legend now says it — these two must agree. -->
+                <p v-if="legend.length && colorField" class="text-[11px] text-muted-foreground/70">
+                  Colour by <span class="font-medium text-muted-foreground">{{ colorField }}</span>
+                </p>
                 <div v-if="legend.length" class="space-y-0.5 max-h-40 overflow-y-auto pr-1">
                   <div v-for="(e, i) in legend" :key="i" class="flex items-center gap-1.5">
                     <input type="color" :value="e.color" @input="setEntryColor(i, $event.target.value)"
@@ -276,6 +281,30 @@
               <p v-else-if="sizeField && sizeBusy" class="text-[11px] text-muted-foreground/70">
                 Reading the field…
               </p>
+              <!-- The same two-ended scale the published legend draws, so what is configured here
+                   and what a reader sees there are visibly the same thing. Two ends only: the size
+                   expression interpolates linearly, and drawing intermediate steps would imply
+                   classes the map does not have. -->
+              <div v-if="sizeField && sizeRange" class="flex items-end gap-4 pt-1">
+                <div v-for="(end, i) in [0, 1]" :key="i"
+                  class="flex flex-col items-center gap-1 min-w-[34px]">
+                  <span class="flex items-end justify-center" style="min-height:30px">
+                    <span v-if="geomType === 'line'" :style="{
+                      display: 'block', width: '26px',
+                      height: Math.max(2, Math.min(28, sizePx[end])) + 'px',
+                      borderRadius: (Math.max(2, Math.min(28, sizePx[end])) / 2) + 'px',
+                      background: baseColor }" />
+                    <span v-else :style="{
+                      display: 'block',
+                      width: (Math.max(2, Math.min(28, sizePx[end])) * 2) + 'px',
+                      height: (Math.max(2, Math.min(28, sizePx[end])) * 2) + 'px',
+                      borderRadius: '50%', background: baseColor }" />
+                  </span>
+                  <span class="text-[10.5px] text-muted-foreground tabular-nums">
+                    {{ sizeRange[end] }}
+                  </span>
+                </div>
+              </div>
             </div>
 
             <!-- 3D. Polygons extrude directly (MapLibre raises a fill); POINTS become pillars —
@@ -634,6 +663,17 @@ const numericFields = computed(() => styleFields.value.filter(
 // offered for both because a numeric-looking code (a zone, a year) is legitimately categorical.
 const colorFields = computed(() =>
   colorMode.value === 'graduated' ? numericFields.value : styleFields.value)
+
+// The column actually driving colour — null for a single symbol, where naming a field would be a
+// lie. Mirrors `services/symbology.color_field`, which is what the published legend uses.
+const colorField = computed(() =>
+  colorMode.value === 'single' ? null : (props.config.style?.color_field || null))
+
+// The colour a size swatch is drawn in. A data-driven layer has no single colour, so the first
+// class stands for the layer — the swatch is demonstrating SIZE, and an arbitrary blue would read
+// as if the layer were blue.
+const baseColor = computed(() =>
+  (legend.value[0] && legend.value[0].color) || props.config.style?.color || '#3b82f6')
 
 const legend = computed(() => {
   const entries = legendEntries(props.config.style || {})

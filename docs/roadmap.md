@@ -297,6 +297,33 @@ moves is a screenshot with extra steps.
 </div>
 
 <div class="gd-rel" markdown>
+### A page for a layer
+<span class="gd-when">Planned</span>
+
+<p class="gd-goal">My Data lists layers but never shows you one. To actually LOOK at a layer today
+you have to build a portal around it — which is a strange price for answering "what is in this
+file?"</p>
+
+- [ ] **Click a layer, get its page.** A map of just that layer, at its own extent, with the
+      basemap and the ordinary map controls.
+- [ ] **What it is**: geometry type, feature count, CRS, extent, size on disk, when it was
+      uploaded and by whom, and the fields with their types.
+- [ ] **How it is served**: whether it is tiled and how far, whether a GeoParquet layer is
+      partitioned, whether a raster has overviews and what its zoom floor is — the facts that
+      decide whether it draws well, currently visible only through the API.
+- [ ] **Its symbology, edited and saved here** — the same panel the portal editor uses, writing the
+      same default style. Styling a layer already works from My Data; this puts it next to the map
+      it affects instead of in a modal with nothing to preview against.
+- [ ] **The attribute table**, paged, with a click-through from a feature on the map.
+- [ ] **Everything that already exists about a layer, in one place**: its share links, its
+      download formats, which portals use it, and its sharing settings.
+
+The page has no new backend behind it — layer metadata, `/field-stats`, `/legend`, share links and
+the tile URLs are all already served. This is about giving them somewhere to be seen together.
+
+</div>
+
+<div class="gd-rel" markdown>
 ### Cartography and portal tools
 <span class="gd-when">Planned</span>
 

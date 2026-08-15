@@ -221,6 +221,12 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 # the same call (`symbology.legend_entries`, which also feeds the editor).
                 # Empty for a single-symbol layer, which is what the swatch already covers.
                 "geodeploy:legend": symbology.legend_entries(cfg.get("style") or {}),
+                # The COLUMN behind the colours, and the size scale — both baked here for the same
+                # reason as the entries: the runtime must not re-derive what the map already knows.
+                # Added as separate keys rather than folded into the array above so that a portal
+                # published by an older version stays readable (they are simply absent).
+                "geodeploy:legendField": symbology.color_field(cfg.get("style") or {}),
+                "geodeploy:sizeLegend": symbology.size_legend(cfg.get("style") or {}),
                 # 3D is worth announcing: the runtime opens the map tilted when any layer has it.
                 "geodeploy:extruded": symbology.is_extruded(cfg.get("style") or {}),
             }
