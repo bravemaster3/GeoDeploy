@@ -211,6 +211,13 @@ const admin = reactive({ name: '', email: '', password: '' })
 onMounted(async () => {
   try {
     const { data } = await getSetupStatus()
+    // Reached directly (a bookmark, or a redirect from before this check existed) on an instance
+    // that is installed but whose database is down. Everything below reads as "nothing configured
+    // yet" in that state, so the wizard would offer to set up a server that is already set up.
+    if (data.database_unreachable) {
+      router.replace('/database-down')
+      return
+    }
     if (data.admin_created) {
       router.push('/login')
     } else if (data.storage_configured) {
