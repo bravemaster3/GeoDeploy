@@ -50,7 +50,10 @@ Thumbs.db
 # Local-only working directory: reference clones and anything else not part of GeoDeploy.
 # One recursive entry ON PURPOSE — naming the individual clones here would put them in a public
 # file, which is the opposite of keeping them local.
-vendor/
+# ROOT ONLY — note the leading slash. Unanchored, this matched a directory of this name at ANY
+# depth, including integrations/qgis-plugin/geodeploy_qgis/vendor/, which holds the client the
+# plugin SHIPS: it built fine locally and reached CI with nothing inside it.
+/vendor/
 
 # Scratch portal-config dumps written by examples/geodeploy_cli.py (portal-get)
 examples/*.json
