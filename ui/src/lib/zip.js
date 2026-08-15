@@ -164,19 +164,54 @@ const extOf = (name) => name.slice(name.lastIndexOf('.')).toLowerCase()
  * uploading a fragment that cannot possibly ingest.
  */
 export function inspectShapefileSelection(fileList) {
-  const files = Array.from(fileList || [])
-  const shp = files.filter((f) => extOf(f.name) === '.shp')
-  if (shp.length === 0) return null
-  if (shp.length > 1) {
+  const sets = groupShapefiles(fileList)
+  if (!sets.length) return null
+  if (sets.length > 1) {
     return { stem: null, files: [], missing: [], error:
-      'Select one shapefile at a time — this selection has ' + shp.length + ' .shp files.' }
+      'Select one shapefile at a time — this selection has ' + sets.length + ' .shp files.' }
   }
+  return { ...sets[0], error: null }
+}
 
-  const stem = stemOf(shp[0].name)
-  // Case-insensitively: half the world's shapefiles are called ROADS.SHP.
-  const lower = stem.toLowerCase()
-  const members = files.filter((f) => stemOf(f.name).toLowerCase() === lower)
-  const present = new Set(members.map((f) => extOf(f.name)))
-  const missing = REQUIRED_PARTS.filter((p) => !present.has(p))
-  return { stem, files: members, missing, error: null }
+/**
+ * EVERY shapefile in a selection, one entry per `.shp`, as `{stem, files, missing}`.
+ *
+ * A batch upload of five shapefiles is a normal thing to want, and grouping by stem is the only
+ * way to know which sidecar belongs to which dataset — the files arrive as one flat list with no
+ * folder structure, because that is all a file input gives you.
+ */
+export function groupShapefiles(fileList) {
+  const files = Array.from(fileList || [])
+  const out = []
+  for (const shp of files.filter((f) => extOf(f.name) === '.shp')) {
+    const stem = stemOf(shp.name)
+    // Case-insensitively: half the world's shapefiles are called ROADS.SHP.
+    const lower = stem.toLowerCase()
+    const members = files.filter((f) => stemOf(f.name).toLowerCase() === lower)
+    const present = new Set(members.map((f) => extOf(f.name)))
+    out.push({ stem, files: members, missing: REQUIRED_PARTS.filter((p) => !present.has(p)) })
+  }
+  return out
+}
+
+/**
+ * Split a selection into what to upload: each shapefile as one zip-to-be, everything else as
+ * itself. Files belonging to a shapefile are consumed, so a stray `.dbf` is never uploaded alone.
+ */
+export function planSelection(fileList) {
+  const files = Array.from(fileList || [])
+  const sets = groupShapefiles(files)
+  const claimed = new Set()
+  for (const set of sets) for (const f of set.files) claimed.add(f)
+  return { shapefiles: sets, others: files.filter((f) => !claimed.has(f)) }
+}
+
+/** Zip one grouped shapefile into a `File` named after its stem. */
+export async function zipShapefileSet(set) {
+  const entries = []
+  for (const f of set.files) {
+    entries.push({ name: f.name, data: new Uint8Array(await f.arrayBuffer()) })
+  }
+  const blob = await buildZip(entries)
+  return new File([blob], `${set.stem}.zip`, { type: 'application/zip' })
 }

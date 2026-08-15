@@ -9,8 +9,41 @@
         <button @click="$emit('close')" class="text-muted-foreground/70 hover:text-foreground text-xl leading-none">&times;</button>
       </div>
 
+      <!-- Batch: one row per file, so a failure in the middle is visible and named rather than
+           replaced by whatever the last file did. -->
+      <div v-if="batch.length" class="space-y-2">
+        <p class="text-sm text-muted-foreground">
+          {{ batch.filter(b => b.state === 'done').length }} of {{ batch.length }} uploaded
+        </p>
+        <ul class="space-y-1 max-h-56 overflow-y-auto">
+          <li v-for="(item, i) in batch" :key="item.name + i"
+              class="flex items-center gap-2 text-sm">
+            <span class="w-4 flex-shrink-0 text-center" aria-hidden="true">
+              <span v-if="item.state === 'done'" class="text-emerald-400">✓</span>
+              <span v-else-if="item.state === 'failed'" class="text-red-400">✕</span>
+              <span v-else-if="item.state === 'uploading'" class="text-primary">•</span>
+              <span v-else class="text-muted-foreground/50">·</span>
+            </span>
+            <span class="truncate" :class="item.state === 'failed' ? 'text-red-400' : ''">
+              {{ item.name }}
+            </span>
+            <span v-if="item.state === 'uploading'" class="ml-auto text-xs text-muted-foreground">
+              {{ uploadProgress }}%
+            </span>
+          </li>
+        </ul>
+        <p v-if="batchIndex >= 0" class="text-xs text-muted-foreground">
+          Uploading one at a time — each is processed in the background as it arrives.
+        </p>
+        <!-- The queue has finished and something failed. Without a way back the list is a
+             dead end: the only exit would be closing the modal and starting over. -->
+        <div v-else class="flex justify-end pt-1">
+          <button @click="resetBatch" class="btn-secondary text-sm">Upload more</button>
+        </div>
+      </div>
+
       <!-- Upload progress -->
-      <div v-if="uploading" class="space-y-3">
+      <div v-else-if="uploading" class="space-y-3">
         <div class="flex justify-between text-sm">
           <span class="text-muted-foreground">{{ fileName }}</span>
           <span class="font-medium">{{ uploadProgress }}%</span>
@@ -138,7 +171,7 @@ import { UploadIcon } from '@/views/icons'
 import { useUpload, LARGE_UPLOAD_THRESHOLD } from '@/composables/useUpload'
 import { useDataStore } from '@/stores/data'
 import { uploadCsvFile } from '@/api'
-import { buildZip, inspectShapefileSelection } from '@/lib/zip'
+import { planSelection, zipShapefileSet } from '@/lib/zip'
 
 const props = defineProps({ type: String })
 const emit = defineEmits(['close'])
@@ -148,6 +181,10 @@ const fileName = ref('')
 // Zipping a shapefile set happens before any request, so it needs its own "busy": `uploading`
 // belongs to the upload itself and a large .dbf takes a visible moment to read and compress.
 const packaging = ref(false)
+// One row per file when several were selected, so a batch shows what succeeded and what did not
+// instead of collapsing to a single "uploading…".
+const batch = ref([])
+const batchIndex = ref(-1)
 // A missing .prj does not stop the upload — it changes what the user should check afterwards.
 const warning = ref('')
 // True from the instant an upload succeeds until the modal closes. `uploading` goes false as soon as
@@ -207,49 +244,58 @@ function parseCsvHeader(file) {
 }
 
 async function handleFile(file) {
+  const ok = await uploadOne(file)
+  if (ok) finishAndClose()
+}
+
+/**
+ * Upload ONE file and report whether it worked. Does not close the modal: in a batch, the next file
+ * follows, and closing on the first success would abandon the rest mid-flight.
+ *
+ * Returns false for CSV, which cannot be uploaded unattended — it needs its X/Y columns and CRS
+ * chosen first, and `handleFile`'s caller shows that form.
+ */
+async function uploadOne(file) {
   const lower = file.name.toLowerCase()
   // CSV needs X/Y/CRS first — show the options form instead of uploading immediately.
   if (props.type === 'vector' && lower.endsWith('.csv')) {
     csvFile.value = file
     csvName.value = file.name.replace(/\.csv$/i, '')
     parseCsvHeader(file)
-    return
+    return false
   }
   // GeoParquet uploads DIRECT to storage (presigned) — never through the API.
   if (props.type === 'vector' && (lower.endsWith('.parquet') || lower.endsWith('.geoparquet'))) {
     if (file.size > MAX_GEOPARQUET) {
       error.value = 'File exceeds the 10 GB limit.'
-      return
+      return false
     }
     fileName.value = file.name
     try {
       await uploadGeoParquet(file, file.name.replace(/\.(geo)?parquet$/i, ''))
-      finishAndClose()
-    } catch { /* error shown via `error` */ }
-    return
+      return true
+    } catch { return false }
   }
   fileName.value = file.name
   // Big RASTERS also bypass the API: a GeoTIFF over the CDN's request-body cap never reaches it.
   if (props.type === 'raster' && file.size >= LARGE_UPLOAD_THRESHOLD) {
     try {
       await uploadLargeRaster(file, file.name.replace(/\.[^.]+$/, ''))
-      finishAndClose()
-    } catch { /* error shown via `error` */ }
-    return
+      return true
+    } catch { return false }
   }
   // Vector files too big for a single request upload direct-to-storage and convert to GeoParquet
   // in the background instead of being rejected.
   if (props.type === 'vector' && file.size >= LARGE_UPLOAD_THRESHOLD) {
     try {
       await uploadLargeVector(file, file.name.replace(/\.[^.]+$/, ''))
-      finishAndClose()
-    } catch { /* error shown via `error` */ }
-    return
+      return true
+    } catch { return false }
   }
   try {
     await uploadFile(file, props.type)
-    finishAndClose()
-  } catch { /* error shown via `error` */ }
+    return true
+  } catch { return false }
 }
 
 async function importCsv() {
@@ -304,43 +350,93 @@ function onFileChange(e) {
 async function takeSelection(fileList) {
   const files = Array.from(fileList || [])
   if (!files.length) return
-  const shapefile = inspectShapefileSelection(files)
-  if (!shapefile) {
-    handleFile(files[0])
-    return
-  }
-  if (shapefile.error) {
-    error.value = shapefile.error
-    return
-  }
-  if (shapefile.missing.length) {
-    error.value =
-      `A shapefile needs its sidecar files: ${shapefile.missing.join(' and ')} ` +
-      `${shapefile.missing.length > 1 ? 'are' : 'is'} missing. Select them together with the ` +
-      '.shp — they are one dataset, not one file.'
-    return
-  }
   error.value = ''
-  packaging.value = true
-  try {
-    const entries = []
-    for (const f of shapefile.files) {
-      entries.push({ name: f.name, data: new Uint8Array(await f.arrayBuffer()) })
-    }
-    const blob = await buildZip(entries)
-    // Named after the .shp, so the layer is called what the user expects.
-    const zipped = new File([blob], `${shapefile.stem}.zip`, { type: 'application/zip' })
-    if (!shapefile.files.some((f) => f.name.toLowerCase().endsWith('.prj'))) {
-      // Recoverable — the CRS can be set after upload — but silence becomes a mystery when the
-      // layer draws in the wrong hemisphere.
-      warning.value = 'No .prj was included, so this layer has no CRS of its own. You may need to ' +
-        'set it after upload.'
-    }
-    handleFile(zipped)
-  } catch (err) {
-    error.value = err.message || 'Could not package the shapefile.'
-  } finally {
-    packaging.value = false
+  warning.value = ''
+
+  const { shapefiles, others } = planSelection(files)
+
+  // Refuse an incomplete shapefile before anything is sent: a .shp without its .shx/.dbf cannot
+  // ingest, so uploading it only moves the failure somewhere less useful.
+  const broken = shapefiles.filter((set) => set.missing.length)
+  if (broken.length) {
+    error.value = broken.map((set) =>
+      `${set.stem}: missing ${set.missing.join(' and ')}`).join('; ') +
+      '. A shapefile needs its sidecar files — select them together with the .shp.'
+    return
   }
+
+  // CSV cannot ride along in a batch: it needs its X/Y columns and CRS chosen, per file.
+  const csvs = others.filter((f) => f.name.toLowerCase().endsWith('.csv'))
+  if (csvs.length && (others.length + shapefiles.length) > 1) {
+    error.value = 'A CSV has to be imported on its own — it needs its X/Y columns and CRS chosen ' +
+      'first. Upload the others, then the CSV separately.'
+    return
+  }
+
+  let queue = []
+  if (shapefiles.length) {
+    packaging.value = true
+    try {
+      for (const set of shapefiles) {
+        queue.push(await zipShapefileSet(set))
+        if (!set.files.some((f) => f.name.toLowerCase().endsWith('.prj'))) {
+          // Recoverable — the CRS can be set afterwards — but silence about it becomes a mystery
+          // when the layer draws in the wrong hemisphere.
+          warning.value = `${set.stem} has no .prj, so it carries no CRS of its own. ` +
+            'You may need to set it after upload.'
+        }
+      }
+    } catch (err) {
+      error.value = err.message || 'Could not package the shapefile.'
+      return
+    } finally {
+      packaging.value = false
+    }
+  }
+  queue = queue.concat(others)
+
+  if (queue.length === 1) {
+    handleFile(queue[0])           // one file: the CSV form and every existing path, unchanged
+    return
+  }
+  await runQueue(queue)
 }
+
+/**
+ * Upload several files one after another.
+ *
+ * Sequentially on purpose. Each upload already parallelises its own parts for anything large, so
+ * running files concurrently would compete for the same bandwidth without finishing the set any
+ * sooner — and it would make the progress bar meaningless.
+ *
+ * One failure does not stop the rest. Eight files where the third is corrupt should upload seven
+ * and tell you about the third, not stop at two.
+ */
+function resetBatch() {
+  batch.value = []
+  batchIndex.value = -1
+  error.value = ''
+  warning.value = ''
+  fileName.value = ''
+}
+
+async function runQueue(files) {
+  batch.value = files.map((f) => ({ name: f.name, state: 'pending' }))
+  for (let i = 0; i < files.length; i++) {
+    batchIndex.value = i
+    batch.value[i].state = 'uploading'
+    error.value = ''
+    const ok = await uploadOne(files[i])
+    batch.value[i].state = ok ? 'done' : 'failed'
+    batch.value[i].message = ok ? '' : (error.value || 'Upload failed.')
+  }
+  batchIndex.value = -1
+  const failed = batch.value.filter((b) => b.state === 'failed')
+  error.value = failed.length
+    ? `${failed.length} of ${files.length} did not upload: ` +
+      failed.map((f) => f.name).join(', ')
+    : ''
+  if (!failed.length) finishAndClose()
+}
+
 </script>
