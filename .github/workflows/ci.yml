@@ -93,6 +93,49 @@ jobs:
           geodeploy --version
           geodeploy --help > /dev/null
 
+  qgis-plugin:
+    name: QGIS plugin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # The floor the plugin actually has to run on: it vendors the client, and the oldest QGIS
+          # anyone still runs ships 3.9.
+          python-version: "3.9"
+
+      - name: The vendored client matches cli/geodeploy
+        # A plugin cannot pip-install, so the client ships inside the zip. This is what stops that
+        # copy drifting from the package it was taken from — the failure mode that let the Python
+        # and JavaScript symbology twins disagree for months.
+        run: python integrations/qgis-plugin/scripts/vendor.py --check
+
+      - name: The plugin imports on the floor version
+        # Not a QGIS test — the qgis module is not installable here. It proves the pure-Python half
+        # (client wiring, source selection) parses and imports on 3.9, which is where a syntax slip
+        # would otherwise reach a user's QGIS unnoticed.
+        working-directory: integrations/qgis-plugin/geodeploy_qgis
+        run: |
+          python -c "import ast, pathlib; [ast.parse(p.read_text(encoding='utf-8')) for p in pathlib.Path('.').rglob('*.py')]"
+          python -c "import sys; sys.path.insert(0, '.'); import connection, sources; print('ok')"
+
+      - name: metadata.txt has what plugins.qgis.org requires
+        run: |
+          python - <<'PY'
+          import configparser, sys
+          c = configparser.ConfigParser()
+          c.read("integrations/qgis-plugin/geodeploy_qgis/metadata.txt", encoding="utf-8")
+          g = c["general"]
+          required = ["name", "qgisMinimumVersion", "description", "about", "version",
+                      "author", "email", "repository", "tracker"]
+          missing = [k for k in required if not g.get(k)]
+          if missing:
+              sys.exit(f"metadata.txt is missing: {missing}")
+          print("metadata.txt ok —", g["name"], g["version"])
+          PY
+
   ui:
     name: UI build
     runs-on: ubuntu-latest

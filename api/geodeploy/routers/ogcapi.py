@@ -9,8 +9,8 @@ Why this exists alongside STAC and TileJSON:
   * **This** is DATA ACCESS — every collection is one layer, every item one real feature with its
     attributes, filterable by bbox and paged. QGIS ("Layer ▸ Add Layer ▸ Add OGC API - Features"),
     ArcGIS Pro, FME, and anything on GDAL (the `OAPIF` driver) consume it natively, which makes it
-    the widest-reach surface we have — and the standards gap versus GeoLens (notes: GeoLens leads on
-    OGC/metadata standards).
+    the widest-reach surface we have — and the one place where matching what other catalog servers
+    already offer is worth real effort.
 
 Scope of the conformance we CLAIM (`CONFORMS` below): Core + GeoJSON only. No CRS negotiation
 (everything is EPSG:4326 / OGC:CRS84), no CQL2, no transactions. Do not add a class here without
