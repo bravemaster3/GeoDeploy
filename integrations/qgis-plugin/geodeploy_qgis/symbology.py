@@ -45,6 +45,51 @@ _MARKERS = {
 }
 
 
+def _size_stops(style: dict):
+    """`(field, in_min, in_max, out_min, out_max)` for a proportional size, or None."""
+    if (style.get("size_mode") or "fixed") != "proportional":
+        return None
+    field = (style.get("size_field") or "").strip()
+    stops = [s for s in (style.get("size_stops") or [])
+             if isinstance(s, (list, tuple)) and len(s) == 2]
+    if not field or len(stops) < 2:
+        return None
+    ordered = sorted(stops, key=lambda s: s[0])
+    lo, hi = ordered[0], ordered[-1]
+    if hi[0] == lo[0]:
+        return None                     # a zero-width input range divides by zero in scale_linear
+    return (field, lo[0], hi[0], lo[1], hi[1])
+
+
+def _apply_data_defined_size(symbol, layer0, style: dict) -> None:
+    """Drive marker size / line width from a field, the way the portal does.
+
+    GeoDeploy interpolates linearly between two stops, so `scale_linear` is the exact equivalent —
+    not an approximation. The unit conversions are the same ones the fixed sizes use: a marker's
+    QGIS size is a DIAMETER against GeoDeploy's radius, and a line's width is in mm against pixels.
+    """
+    spec = _size_stops(style)
+    if spec is None:
+        return
+    field, in_lo, in_hi, out_lo, out_hi = spec
+    try:
+        from qgis.core import QgsProperty, QgsSymbolLayer
+    except ImportError:                 # pragma: no cover
+        return
+    try:
+        if isinstance(layer0, QgsSimpleMarkerSymbolLayer):
+            expr = 'scale_linear("{0}", {1}, {2}, {3}, {4})'.format(
+                field, in_lo, in_hi, out_lo * 2, out_hi * 2)
+            symbol.setDataDefinedSize(QgsProperty.fromExpression(expr))
+        elif isinstance(layer0, QgsSimpleLineSymbolLayer):
+            expr = 'scale_linear("{0}", {1}, {2}, {3}, {4})'.format(
+                field, in_lo, in_hi, out_lo / 4.0, out_hi / 4.0)
+            layer0.setDataDefinedProperty(QgsSymbolLayer.PropertyStrokeWidth,
+                                          QgsProperty.fromExpression(expr))
+    except Exception as exc:            # noqa: BLE001 - a size must never stop a layer drawing
+        _log("Could not apply size-by-field ({0}): {1}".format(field, exc))
+
+
 def _symbol_for(qgis_layer, color: str | None, style: dict):
     """A single symbol of the right geometry kind, coloured and sized from `style`."""
     symbol = QgsSymbol.defaultSymbol(qgis_layer.geometryType())
@@ -55,6 +100,11 @@ def _symbol_for(qgis_layer, color: str | None, style: dict):
     layer0 = symbol.symbolLayer(0) if symbol.symbolLayerCount() else None
     if layer0 is None:
         return symbol
+
+    # Size FROM A FIELD, which is independent of colour: a layer can be graduated by one column
+    # and sized by another, and applying only the colours dropped half the symbology on the floor.
+    # A fixed size is set below; this overrides it with an expression when the style has one.
+    _apply_data_defined_size(symbol, layer0, style)
 
     if isinstance(layer0, QgsSimpleMarkerSymbolLayer):
         shape = _MARKERS.get((style.get("marker") or "circle").lower())
@@ -281,8 +331,28 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
                 _log("QGIS ramp {0!r} has no colormap of that name on the instance — sending the "
                      "stretch without it.".format(name))
             return style
+
+        # Anything else — paletted, hillshade, a renderer from a plugin. The band selection and the
+        # stretch are still worth having even when the colouring cannot travel: the stretch is what
+        # keeps non-8-bit data from rendering as a black rectangle, and it is the part users notice.
+        bands = renderer.usesBands() if hasattr(renderer, "usesBands") else []
+        bands = [b for b in (bands or []) if isinstance(b, int) and b > 0]
+        if bands:
+            style["bidx"] = bands[:3] if len(bands) >= 3 else bands[:1]
+        lo, hi = (None, None)
+        if hasattr(renderer, "contrastEnhancement"):
+            lo, hi = _enhancement_range(renderer.contrastEnhancement())
+        if lo is not None:
+            style["rescale"] = "{0},{1}".format(_trim(lo), _trim(hi))
+        # Name the class. "No GeoDeploy equivalent" without saying what it saw is the kind of
+        # message that costs a round trip to diagnose.
+        _log("Raster renderer {0} is not fully translatable{1}.".format(
+            type(renderer).__name__,
+            " — sent its bands and stretch" if style else ", and exposed no bands or stretch"))
+        return style
     except Exception as exc:            # noqa: BLE001 - never block an upload over styling
-        _log("Could not read this raster's symbology: {0}: {1}".format(type(exc).__name__, exc))
+        _log("Could not read this raster's symbology ({0}): {1}: {2}".format(
+            type(renderer).__name__, type(exc).__name__, exc))
         return {}
     return style
 

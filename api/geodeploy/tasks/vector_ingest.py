@@ -81,6 +81,26 @@ def _store_geom_sql(store_srid: int) -> str:
     )
 
 
+def _geom_column(store_srid: int, has_z: bool) -> str:
+    """The geometry column type for the destination table.
+
+    `geometry(Geometry, srid)` is TWO-dimensional. One 3D feature — most shapefiles digitised from
+    a DEM, every GPS track — made the whole INSERT fail with "Geometry has Z dimension but column
+    does not", after the untyped staging table had accepted it without complaint.
+    """
+    return f"geometry(GeometryZ,{store_srid})" if has_z else f"geometry(Geometry,{store_srid})"
+
+
+def _geom_value(geom_sql: str, has_z: bool) -> str:
+    """The INSERT expression: forced to 3D when the layer has any Z at all.
+
+    Force3D even though Z was DETECTED, because one file can mix 2D and 3D features and the typmod
+    rejects the 2D ones just as firmly. Padding a missing Z with 0 keeps the layer loadable;
+    flattening everything to match the 2D features would discard real measurements.
+    """
+    return f"ST_Force3D({geom_sql})" if has_z else geom_sql
+
+
 def _srid_of(crs_wkt) -> int | None:
     if not crs_wkt:
         return None
@@ -594,10 +614,28 @@ def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir:
         with open(tmp_csv, "r", encoding="utf-8", newline="") as fh:
             cur.copy_expert(
                 f"COPY {_q(schema)}.{_q(stg)} ({copycols}, geom) FROM STDIN WITH (FORMAT csv)", fh)
+        # Z, IF THE DATA HAS IT.
+        #
+        # `geometry(Geometry, srid)` is a TWO-dimensional type, so a single 3D feature made the
+        # whole INSERT fail with "Geometry has Z dimension but column does not" — which is most
+        # shapefiles digitised from a DEM, and every GPS track. The staging table is untyped and
+        # accepted them happily; the failure only appeared on the way into the real one.
+        #
+        # Asking the loaded rows is the only reliable answer: a shapefile header declares a type
+        # that the features do not have to honour (see the geometry-type note below, same lesson).
+        cur.execute(f"SELECT bool_or(ST_NDims(geom) > 2) FROM {_q(schema)}.{_q(stg)} "
+                    f"WHERE geom IS NOT NULL")
+        row = cur.fetchone()
+        has_z = bool(row and row[0])
+        # Force3D even though Z was detected: one file can mix 2D and 3D features, and the typmod
+        # rejects the 2D ones just as firmly. Padding a missing Z with 0 keeps the whole layer
+        # loadable; dropping Z from everything to match the 2D features would discard real data.
+        geom_expr = _geom_value(geom_sql, has_z)
+        geom_col = _geom_column(store_srid, has_z)
         cur.execute(f"CREATE TABLE {_q(schema)}.{_q(table)} "
-                    f"(id serial primary key, {coldefs}, geom geometry(Geometry,{store_srid}))")
+                    f"(id serial primary key, {coldefs}, geom {geom_col})")
         cur.execute(f"INSERT INTO {_q(schema)}.{_q(table)} ({copycols}, geom) "
-                    f"SELECT {copycols}, {geom_sql} FROM {_q(schema)}.{_q(stg)}")
+                    f"SELECT {copycols}, {geom_expr} FROM {_q(schema)}.{_q(stg)}")
         cur.execute(f"DROP TABLE {_q(schema)}.{_q(stg)}")
         cur.execute(f"CREATE INDEX {_q(table + '_geom_idx')} ON {_q(schema)}.{_q(table)} USING GIST (geom)")
         # bbox is stored in EPSG:4326 app-wide (map fit / viewport), even when the geometry is native —

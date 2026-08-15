@@ -59,6 +59,7 @@ class GeoDeployDock(QDockWidget):
         self.iface = iface
         self.instance: Instance | None = None
         self._rows: list[dict] = []
+        self._portals: list[dict] = []
 
         body = QWidget()
         outer = QVBoxLayout(body)
@@ -105,11 +106,12 @@ class GeoDeployDock(QDockWidget):
             "geometry and every attribute, at a server round-trip per pan.")
         outer.addWidget(self.attributes)
 
-        add = QPushButton("Add to map")
-        add.clicked.connect(self.add_selected)
-        outer.addWidget(add)
+        self.add_btn = QPushButton("Add to map")
+        self.add_btn.clicked.connect(self.add_selected)
+        outer.addWidget(self.add_btn)
+        self.tree.itemSelectionChanged.connect(self._on_selection_changed)
 
-        # -- upload -------------------------------------------------------------------------------
+    # -- upload -------------------------------------------------------------------------------
         self.upload_btn = QPushButton("Upload selected layer(s)…")
         self.upload_btn.setToolTip(
             "Uploads every layer selected in the Layers panel, one after another — or the active "
@@ -151,6 +153,49 @@ class GeoDeployDock(QDockWidget):
         # fine for the one message that explains why the thing you asked for did not happen.
         duration = 0 if level in (Qgis.Warning, Qgis.Critical) else 6
         bar_widget.pushMessage(PLUGIN_NAME, text, level=level, duration=duration)
+
+    def _install_auth(self):
+        """Attach the token to QGIS's OWN requests for this instance's host.
+
+        A layer added as OGC API - Features is fetched by QGIS, not by us — so our token never
+        reached it, and a private layer could not be opened however valid the credential was.
+        QGIS's provider URI has no documented way to carry a header, but the network manager
+        accepts a request PREPROCESSOR, which is the supported way for a plugin to add one.
+
+        Scoped to the exact host of the connected instance. A preprocessor sees every request QGIS
+        makes — basemaps, other servers, plugin updates — and a bearer token must never leave the
+        host it belongs to.
+        """
+        if not self.instance or not self.instance.token:
+            return
+        try:
+            from qgis.core import QgsNetworkAccessManager
+            from qgis.PyQt.QtCore import QUrl
+        except ImportError:             # pragma: no cover - QGIS always has these
+            return
+        if not hasattr(QgsNetworkAccessManager, "setRequestPreprocessor"):
+            # Older QGIS: private layers over OAPIF will not open, but everything else works.
+            self._say("This QGIS is too old to attach a token to its own requests, so private "
+                      "layers cannot be added as OGC API - Features. Public layers are fine.",
+                      Qgis.Warning)
+            return
+        host = (QUrl(self.instance.url).host() or "").lower()
+        token = self.instance.token
+        if not host:
+            return
+
+        def add_token(request):
+            try:
+                if (request.url().host() or "").lower() == host:
+                    request.setRawHeader(b"Authorization",
+                                         ("Bearer " + token).encode("utf-8"))
+            except Exception:           # noqa: BLE001 - never break QGIS networking
+                pass
+
+        try:
+            QgsNetworkAccessManager.setRequestPreprocessor(add_token)
+        except Exception as exc:        # noqa: BLE001
+            symbology._log("Could not install the auth preprocessor: {0}".format(exc))
 
     def _colormaps(self):
         """The colormap names this instance actually has, fetched once.
@@ -200,6 +245,9 @@ class GeoDeployDock(QDockWidget):
             self._say(job.error, Qgis.Critical)
             return
         info = job.result or {}
+        # Before any layer is added: an OAPIF layer is fetched by QGIS itself, so the token has to
+        # be on QGIS's requests, not only on ours.
+        self._install_auth()
         who = f"signed in as {info.get('user')}" if info.get("authenticated") else "not signed in"
         extra = ("" if info.get("index_available")
                  else " — this instance does not publish an index, so only what your token can see "
@@ -220,14 +268,26 @@ class GeoDeployDock(QDockWidget):
         if not self.instance:
             return
         self._busy(True)
-        self._run(_Job("GeoDeploy: listing layers", self.instance.layers), self._listed)
+
+        def work():
+            layers = self.instance.layers()
+            try:
+                portals = self.instance.portals()
+            except GeoDeployError:
+                # A portal listing that fails must not cost you the layer listing.
+                portals = []
+            return {"layers": layers, "portals": portals}
+
+        self._run(_Job("GeoDeploy: listing", work), self._listed)
 
     def _listed(self, job):
         self._busy(False)
         if job.error:
             self._say(job.error, Qgis.Critical)
             return
-        self._rows = job.result or []
+        result = job.result or {}
+        self._rows = result.get("layers") or []
+        self._portals = result.get("portals") or []
         self.tree.clear()
         groups: dict[str, QTreeWidgetItem] = {}
         for row in self._rows:
@@ -244,7 +304,22 @@ class GeoDeployDock(QDockWidget):
                                             row.get("geometry_type") or backend,
                                             f"{count:,}" if isinstance(count, int) else ""])
             item.setData(0, Qt.UserRole, row)
-        if not self._rows:
+        # Portals last: they are things to LOOK at rather than add, so they sit below the data.
+        if self._portals:
+            parent = QTreeWidgetItem(self.tree, ["Portals"])
+            parent.setExpanded(True)
+            for portal in self._portals:
+                slug = portal.get("slug") or ""
+                published = portal.get("is_published", portal.get("published"))
+                item = QTreeWidgetItem(parent, [
+                    portal.get("title") or portal.get("name") or slug,
+                    portal.get("experience") or portal.get("archetype") or "portal",
+                    "published" if published else "draft"])
+                # Marked so a double-click opens it instead of trying to add it as a layer.
+                item.setData(0, Qt.UserRole, {"_portal": True, "slug": slug,
+                                              "_base": self.instance.url if self.instance else ""})
+
+        if not self._rows and not self._portals:
             self._say("Nothing to list. Public data needs no account; a token shows the rest.")
 
     # -- add ---------------------------------------------------------------------------------------
@@ -253,10 +328,18 @@ class GeoDeployDock(QDockWidget):
         items = self.tree.selectedItems()
         return items[0].data(0, Qt.UserRole) if items else None
 
+    def _on_selection_changed(self):
+        """A portal cannot be added to the map, so the button says what it WILL do instead."""
+        row = self._selected_row() or {}
+        self.add_btn.setText("Open portal in browser" if row.get("_portal") else "Add to map")
+
     def add_selected(self):
         row = self._selected_row()
         if not row:
             self._say("Pick a layer first.", Qgis.Warning)
+            return
+        if row.get("_portal"):
+            self._open_portal(row)
             return
         source = sources.describe(row, prefer_attributes=self.attributes.isChecked())
         if not source:
@@ -298,6 +381,22 @@ class GeoDeployDock(QDockWidget):
         self._say(f"Added {name} — {source['why']}{applied}.")
 
     # -- upload ------------------------------------------------------------------------------------
+
+    def _open_portal(self, row):
+        """A portal is a published web map — QGIS cannot render one, so open it where it lives."""
+        base = (row.get("_base") or "").rstrip("/")
+        slug = row.get("slug") or ""
+        if not base or not slug:
+            self._say("That portal has no address yet — publish it first.", Qgis.Warning)
+            return
+        url = f"{base}/p/{slug}"
+        try:
+            from qgis.PyQt.QtCore import QUrl
+            from qgis.PyQt.QtGui import QDesktopServices
+            QDesktopServices.openUrl(QUrl(url))
+            self._say(f"Opened {url} in your browser.")
+        except Exception as exc:        # noqa: BLE001 - still give them the address
+            self._say(f"Open it at {url} ({exc}).", Qgis.Warning)
 
     def upload_active(self):
         if not self.instance:
