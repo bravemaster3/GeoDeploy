@@ -591,11 +591,17 @@ def pillar_radius(style: dict, bbox=None) -> float:
 
 
 def legend_entries(style: dict) -> list[dict]:
-    """What a legend should show for this layer: `[{color, label}]`, or [] for single symbols.
+    """What a legend should show for this layer: `[{color, label, …}]`, or [] for single symbols.
 
     Built here rather than in each renderer for the same reason as the expressions: a legend that
     disagrees with the map is worse than no legend, and the only way to guarantee it agrees is to
     derive both from one description.
+
+    Graduated entries also carry the raw `min`/`max`, and categorized entries the raw `value`,
+    alongside the formatted label. A renderer that has to REBUILD symbology — the QGIS plugin, for
+    a layer it can only see anonymously — otherwise has to parse those numbers back out of a
+    display string containing an EN dash and `≥`, which is precisely the re-derivation this
+    function exists to stop. Drawing a legend needs the label; being the map needs the number.
     """
     mode = style.get("color_mode") or "single"
     if mode == "graduated":
@@ -610,13 +616,16 @@ def legend_entries(style: dict) -> list[dict]:
                 label = f"≥ {_num(lo)}"
             else:
                 label = f"{_num(lo)} – {_num(hi)}"
-            out.append({"color": c.get("color"), "label": label})
+            out.append({"color": c.get("color"), "label": label, "min": lo, "max": hi})
         return out
     if mode == "categorized":
-        out = [{"color": c.get("color"), "label": str(c.get("value"))}
+        out = [{"color": c.get("color"), "label": str(c.get("value")), "value": c.get("value")}
                for c in style.get("categories") or []]
         if out:
-            out.append({"color": style.get("other_color") or DEFAULT_OTHER_COLOR, "label": "Other"})
+            # "Other" carries no value on purpose: it is the fallback for everything NOT listed,
+            # and a renderer needs to be able to tell it apart from a category whose value is null.
+            out.append({"color": style.get("other_color") or DEFAULT_OTHER_COLOR, "label": "Other",
+                        "value": None, "other": True})
         return out
     return []
 

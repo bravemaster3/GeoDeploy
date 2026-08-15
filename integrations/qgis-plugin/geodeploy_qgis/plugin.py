@@ -252,12 +252,15 @@ class GeoDeployDock(QDockWidget):
         if self.styled.isChecked() and source["kind"] != "cog":
             style = (row.get("default_style") or {}).get("style") if row.get("default_style") else None
             if style is None and self.instance:
-                # A public row carries no style; ask for the layer's legend-bearing style instead.
+                # A public row carries no style. `layers.resolve` needs a token, so for anonymous
+                # browsing — the plugin's headline promise — it can only fail, and every public
+                # layer arrived unstyled. `/legend` is PUBLIC and is what the portal draws from.
                 try:
                     ref = row.get("uid") or row.get("id")
-                    style = ((self.instance.client.layers.resolve(ref) or {})
-                             .get("default_style") or {}).get("style")
-                except GeoDeployError:
+                    legend = self.instance.client.layers.legend(ref)
+                    style = symbology.style_from_legend(legend)
+                except GeoDeployError as exc:
+                    symbology._log(f"Could not read the legend for {name}: {exc}")
                     style = None
             if style:
                 applied = (", styled as the portal draws it"

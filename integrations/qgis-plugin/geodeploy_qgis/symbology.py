@@ -103,6 +103,49 @@ def _label(lo, hi) -> str:
     return f"{num(lo)} – {num(hi)}"
 
 
+def style_from_legend(legend: dict) -> dict:
+    """Rebuild a style dict from the PUBLIC legend endpoint.
+
+    Anonymous browsing is the plugin's headline promise, and styling it used to be impossible: the
+    style lives on `default_style`, which only the authenticated layer endpoints return, so every
+    public layer arrived in QGIS unstyled. `/legend` is public and is what the portal itself draws
+    from, so it is the right source — and since it now carries the raw `min`/`max`/`value` next to
+    each formatted label, nothing has to be parsed back out of a display string.
+    """
+    if not legend:
+        return {}
+    entries = legend.get("entries") or []
+    mode = legend.get("color_mode") or "single"
+    style = {}
+    size = legend.get("size") or {}
+    if size.get("field") and size.get("stops"):
+        style["size_mode"] = "proportional"
+        style["size_field"] = size["field"]
+        style["size_stops"] = size["stops"]
+
+    if mode == "graduated":
+        classes = [{"min": e.get("min"), "max": e.get("max"), "color": e.get("color")}
+                   for e in entries if not e.get("other")]
+        if classes:
+            style.update(color_mode="graduated", color_field=legend.get("field"), classes=classes)
+            return style
+    elif mode == "categorized":
+        cats = [{"value": e.get("value"), "color": e.get("color")}
+                for e in entries if not e.get("other")]
+        other = next((e for e in entries if e.get("other")), None)
+        if cats:
+            style.update(color_mode="categorized", color_field=legend.get("field"),
+                         categories=cats)
+            if other:
+                style["other_color"] = other.get("color")
+            return style
+
+    # Single symbol — the legend carries one swatch built from the layer's own colour.
+    if entries:
+        style["color"] = entries[0].get("color")
+    return style
+
+
 def _log(message: str) -> None:
     """Into QGIS's Log Messages panel, under our own tab — the place a user can be pointed to."""
     try:
