@@ -1,7 +1,34 @@
 import json
+import math
 from datetime import datetime
-from typing import Any, Literal
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from typing import Annotated, Any, Literal
+from pydantic import AfterValidator, BaseModel, EmailStr, Field, field_validator
+
+
+# ── Non-finite floats ────────────────────────────────────────────────────────
+# NaN and infinity have no JSON literal, and Starlette serialises responses with `allow_nan=False`.
+# So ONE of them anywhere in a LIST response raises ValueError while the response is being built:
+# the endpoint 500s entirely and the client sees no layers at all, not one bad layer. A float32
+# GeoTIFF's nodata is very often NaN — which is how a single upload emptied My Data — and
+# reprojecting bounds can yield inf. Both are scrubbed on the way out.
+
+def _finite(value: float | None) -> float | None:
+    """A number that cannot be transmitted is worth less than no number at all."""
+    if value is None:
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _finite_bbox(value: list[float] | None) -> list[float] | None:
+    """Bounds are all-or-nothing: three good corners and one NaN cannot be fitted to, and a
+    partial box would silently mis-zoom a map rather than fall back to a default view."""
+    if not value:
+        return value
+    return value if all(isinstance(v, (int, float)) and math.isfinite(v) for v in value) else None
+
+
+FiniteFloat = Annotated[float | None, AfterValidator(_finite)]
+BBox = Annotated[list[float] | None, AfterValidator(_finite_bbox)]
 
 
 # ── Setup ────────────────────────────────────────────────────────────────────
@@ -387,7 +414,7 @@ class VectorLayerOut(BaseModel):
     schema_name: str
     crs: str | None
     feature_count: int | None
-    bbox: list[float] | None
+    bbox: BBox
     columns: list[dict[str, str]] | None
     geometry_type: str | None
     file_size: int | None
@@ -444,9 +471,9 @@ class RasterLayerOut(BaseModel):
     name: str
     s3_key: str
     crs: str | None
-    bbox: list[float] | None
+    bbox: BBox
     band_count: int | None
-    nodata_value: float | None
+    nodata_value: FiniteFloat
     # Whether a zoomed-out tile is cheap for this file (issue #17). Exposed so the CLI and a
     # plugin can explain why a layer does or does not draw at low zoom, rather than the
     # answer living only inside the published style.
@@ -503,7 +530,7 @@ class ExternalSourceOut(BaseModel):
     image_format: str | None
     attribution: str | None
     geometry_type: str | None
-    bbox: list[float] | None
+    bbox: BBox
     visibility: str = "organization"
     created_at: datetime
     tile_url: str | None = None       # raster sources: MapLibre tiles[] template
