@@ -117,10 +117,15 @@
       >
         <UploadIcon class="w-8 h-8 text-muted-foreground/70 mx-auto mb-3" />
         <p class="text-sm font-medium text-foreground/85">Drop file here or click to browse</p>
+        <p v-if="type === 'vector'" class="text-xs text-muted-foreground/70 mt-1">
+          Shapefile: select the .shp <em>together with</em> its .shx, .dbf and .prj — they are one dataset
+        </p>
         <p class="text-xs text-muted-foreground/70 mt-1">{{ accept }}</p>
-        <input ref="fileInput" type="file" class="hidden" :accept="acceptAttr" @change="onFileChange" />
+        <input ref="fileInput" type="file" class="hidden" multiple :accept="acceptAttr" @change="onFileChange" />
       </div>
 
+      <div v-if="packaging" class="text-sm text-muted-foreground">Packaging the shapefile…</div>
+      <div v-if="warning" class="text-sm text-amber-400 bg-amber-500/15 p-3 rounded-lg">{{ warning }}</div>
       <div v-if="error" class="text-sm text-red-400 bg-red-500/15 p-3 rounded-lg">{{ error }}</div>
     </div>
   </div>
@@ -133,12 +138,18 @@ import { UploadIcon } from '@/views/icons'
 import { useUpload, LARGE_UPLOAD_THRESHOLD } from '@/composables/useUpload'
 import { useDataStore } from '@/stores/data'
 import { uploadCsvFile } from '@/api'
+import { buildZip, inspectShapefileSelection } from '@/lib/zip'
 
 const props = defineProps({ type: String })
 const emit = defineEmits(['close'])
 
 const fileInput = ref(null)
 const fileName = ref('')
+// Zipping a shapefile set happens before any request, so it needs its own "busy": `uploading`
+// belongs to the upload itself and a large .dbf takes a visible moment to read and compress.
+const packaging = ref(false)
+// A missing .prj does not stop the upload — it changes what the user should check afterwards.
+const warning = ref('')
 // True from the instant an upload succeeds until the modal closes. `uploading` goes false as soon as
 // the request resolves, so without this flag the template has no branch to show during the closing
 // delay and falls through to the dropzone.
@@ -167,7 +178,7 @@ const csvReady = computed(() => csvColumns.value.length &&
   (csvGeomMode.value === 'wkt' ? !!csvWkt.value : (!!csvX.value && !!csvY.value)))
 
 const acceptMap = {
-  vector: { accept: 'Shapefile (.zip), GeoJSON, GeoPackage (.gpkg), GeoParquet (.parquet), CSV (X/Y points or WKT geometry)', acceptAttr: '.zip,.geojson,.json,.gpkg,.parquet,.geoparquet,.csv' },
+  vector: { accept: 'Shapefile (.shp + sidecars, or .zip), GeoJSON, GeoPackage (.gpkg), GeoParquet (.parquet), CSV (X/Y points or WKT geometry)', acceptAttr: '.zip,.geojson,.json,.gpkg,.parquet,.geoparquet,.csv,.shp,.shx,.dbf,.prj,.cpg,.qpj,.sbn,.sbx,.qix,.fix' },
   raster: { accept: 'GeoTIFF (.tif / .tiff)', acceptAttr: '.tif,.tiff' },
 }
 const MAX_GEOPARQUET = 10 * 1024 * 1024 * 1024  // 10 GB
@@ -276,12 +287,60 @@ async function importCsv() {
 }
 
 function onDrop(e) {
-  const file = e.dataTransfer.files[0]
-  if (file) handleFile(file)
+  takeSelection(e.dataTransfer.files)
 }
 
 function onFileChange(e) {
-  const file = e.target.files[0]
-  if (file) handleFile(file)
+  takeSelection(e.target.files)
+}
+
+/**
+ * A selection may be one ordinary file, or the several files that make up ONE shapefile.
+ *
+ * The browser cannot read the files next to the one you picked — there is no API for it, and there
+ * should not be — so the set has to be selected, and the .zip the server already ingests is built
+ * here. Anything that is not a shapefile takes exactly the path it did before.
+ */
+async function takeSelection(fileList) {
+  const files = Array.from(fileList || [])
+  if (!files.length) return
+  const shapefile = inspectShapefileSelection(files)
+  if (!shapefile) {
+    handleFile(files[0])
+    return
+  }
+  if (shapefile.error) {
+    error.value = shapefile.error
+    return
+  }
+  if (shapefile.missing.length) {
+    error.value =
+      `A shapefile needs its sidecar files: ${shapefile.missing.join(' and ')} ` +
+      `${shapefile.missing.length > 1 ? 'are' : 'is'} missing. Select them together with the ` +
+      '.shp — they are one dataset, not one file.'
+    return
+  }
+  error.value = ''
+  packaging.value = true
+  try {
+    const entries = []
+    for (const f of shapefile.files) {
+      entries.push({ name: f.name, data: new Uint8Array(await f.arrayBuffer()) })
+    }
+    const blob = await buildZip(entries)
+    // Named after the .shp, so the layer is called what the user expects.
+    const zipped = new File([blob], `${shapefile.stem}.zip`, { type: 'application/zip' })
+    if (!shapefile.files.some((f) => f.name.toLowerCase().endsWith('.prj'))) {
+      // Recoverable — the CRS can be set after upload — but silence becomes a mystery when the
+      // layer draws in the wrong hemisphere.
+      warning.value = 'No .prj was included, so this layer has no CRS of its own. You may need to ' +
+        'set it after upload.'
+    }
+    handleFile(zipped)
+  } catch (err) {
+    error.value = err.message || 'Could not package the shapefile.'
+  } finally {
+    packaging.value = false
+  }
 }
 </script>
