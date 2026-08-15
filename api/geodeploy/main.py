@@ -9,6 +9,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response
 
 from .config import get_settings
+from .json_safe import SafeJSONResponse
 from . import database
 from .database import Base
 from .routers import (public, setup, auth, auth_oidc, portals, stac, templates, admin, basemaps, users,
@@ -319,6 +320,9 @@ app = FastAPI(
     version="1.3.1",
     description="Self-hosted spatial data management and geoportal builder",
     lifespan=lifespan,
+    # Every response, not only the ones we thought to guard: a NaN anywhere in the content used to
+    # 500 the whole endpoint while it was being serialised. See geodeploy/json_safe.py.
+    default_response_class=SafeJSONResponse,
     # nginx proxies ONLY `/api/` to this app; every other path falls through to the SPA. At
     # FastAPI's defaults (`/openapi.json`, `/docs`) the schema was therefore unreachable from
     # outside — the request returned the UI's index.html with content-type text/html. That broke

@@ -649,7 +649,7 @@ async def vector_tilejson(layer_ref: str, request: Request, db: AsyncSession = D
     It carries the absolute {z}/{x}/{y} tile URL (https-aware), bounds, and the `vector_layers` entry
     with the source-layer name + fields — so the consumer doesn't have to know any of that. CORS-open
     (public metadata), like /tiles/."""
-    from fastapi.responses import JSONResponse
+    from ...json_safe import SafeJSONResponse
 
     result = await db.execute(select(VectorLayer).where(by_ref(VectorLayer, layer_ref)))
     layer = result.scalar_one_or_none()
@@ -683,7 +683,7 @@ async def vector_tilejson(layer_ref: str, request: Request, db: AsyncSession = D
     if bbox:
         tj["bounds"] = bbox
         tj["center"] = [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2, 0]
-    return JSONResponse(tj, headers={"Access-Control-Allow-Origin": "*",
+    return SafeJSONResponse(tj, headers={"Access-Control-Allow-Origin": "*",
                                      "Cache-Control": "public, max-age=300"})
 
 

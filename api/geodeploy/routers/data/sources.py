@@ -7,7 +7,7 @@ CORS). The provider's licence applies — `attribution` is surfaced on the map.
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import JSONResponse
+from ...json_safe import SafeJSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -150,4 +150,4 @@ async def source_features(source_id: int, db: AsyncSession = Depends(get_db)):
         gj = await ext.fetch_wfs_geojson(src)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"Upstream WFS error: {exc}") from exc
-    return JSONResponse(gj)
+    return SafeJSONResponse(gj)

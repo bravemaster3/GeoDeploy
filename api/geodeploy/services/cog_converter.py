@@ -1,4 +1,5 @@
 """Cloud-Optimised GeoTIFF conversion and inspection using rasterio."""
+import math
 import os
 import tempfile
 
@@ -107,11 +108,19 @@ def _read_meta(ds) -> dict:
             bbox = [b.left, b.bottom, b.right, b.top]  # fall back to source CRS
     else:
         bbox = [b.left, b.bottom, b.right, b.top]
+    if not all(math.isfinite(v) for v in bbox):
+        bbox = [b.left, b.bottom, b.right, b.top]  # reprojection produced inf/NaN — keep source CRS
+    # A float raster's nodata is very often NaN, which cannot be transmitted as JSON and is not a
+    # value anyone can act on. Store nothing rather than a number that breaks every response that
+    # includes this layer. TiTiler reads nodata from the file itself, so nothing renders differently.
+    nodata_f = float(nodata) if nodata is not None else None
+    if nodata_f is not None and not math.isfinite(nodata_f):
+        nodata_f = None
     return {
         "crs": crs_str,
         "bbox": bbox,
         "band_count": ds.count,
-        "nodata_value": float(nodata) if nodata is not None else None,
+        "nodata_value": nodata_f,
         "width": ds.width,
         "height": ds.height,
         # Overview decimation factors ([2, 4, 8, …]) of band 1. What they answer is "how cheaply can
