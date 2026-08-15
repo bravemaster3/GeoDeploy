@@ -11,6 +11,9 @@ Three principles this file exists to keep:
 """
 from __future__ import annotations
 
+import os
+import shutil
+
 from qgis.core import (Qgis, QgsApplication, QgsProject, QgsRasterLayer, QgsTask,
                        QgsVectorLayer)
 from qgis.PyQt.QtCore import Qt, pyqtSignal
@@ -18,7 +21,7 @@ from qgis.PyQt.QtWidgets import (QAbstractItemView, QAction, QCheckBox, QComboBo
                                  QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar,
                                  QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from . import sources, symbology
+from . import export, sources, symbology
 from .connection import GeoDeployError, Instance, saved_instances
 
 PLUGIN_NAME = "GeoDeploy"
@@ -250,17 +253,24 @@ class GeoDeployDock(QDockWidget):
         if layer is None:
             self._say("Select a layer in the Layers panel first.", Qgis.Warning)
             return
-        path = layer.source().split("|")[0]
-        if not path or path.startswith(("http", "/vsicurl", "url=")):
-            self._say("Only a layer backed by a local file can be uploaded — this one is remote.",
-                      Qgis.Warning)
+        try:
+            # Not `layer.source()`: a filtered layer's file holds MORE than the layer does, and a
+            # memory or PostGIS layer has no file at all. `prepare` writes those out first.
+            path, temporary = export.prepare(layer, on_status=lambda t: self._say(t))
+        except export.NotUploadable as exc:
+            self._say(str(exc), Qgis.Warning)
             return
 
         style = symbology.from_qgis(layer) if self.push_style.isChecked() else {}
         client = self.instance.client
 
         def work():
-            result = client.uploads.upload(path, wait=True)
+            try:
+                result = client.uploads.upload(path, wait=True)
+            finally:
+                if temporary:
+                    # A multi-gigabyte export is not left behind in temp because an upload failed.
+                    shutil.rmtree(os.path.dirname(path), ignore_errors=True)
             if style and getattr(result, "layer_id", None):
                 # Styling travels with the upload: the portal then shows what the author saw,
                 # instead of the next default colour in the palette.

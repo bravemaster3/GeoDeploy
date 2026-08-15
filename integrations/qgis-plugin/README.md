@@ -20,6 +20,7 @@ fastest source it offers, and upload a QGIS layer back — with its styling. Sit
   - `sources.py` — which URL to hand QGIS. PMTiles for a tiled layer (fastest to draw, needs
     GDAL ≥ 3.8, checked at runtime), OGC API - Features otherwise or when the user asks for
     attributes, `/vsicurl/…/cog` for rasters.
+  - `export.py` — what to actually upload for a given layer.
   - `symbology.py` — GeoDeploy style ⇄ QGIS renderer, **both directions**. Classification is never
     recomputed here: breaks are read from the style or from the renderer, and new breaks come from
     the instance's `/field-stats`, exactly as the CLI does.
@@ -56,8 +57,12 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
 - No icon yet (`icon.png` is referenced by `metadata.txt` and must exist before upload).
 - Styling covers single symbol, graduated and categorized. **Size-from-a-field is not translated
   yet** in either direction, though the instance and the CLI both support it.
-- Uploading requires a local file source; a layer already streaming from a remote URL is refused
-  rather than round-tripped.
+- Uploading writes the layer out first (`export.py`) rather than reading `layer.source()` as a
+  path: a FILTERED layer's file holds more than the layer does, and a memory or PostGIS layer has no
+  file at all. A plain unfiltered file is sent as-is, so nothing is re-encoded needlessly. A remote
+  layer is refused with a reason, and so is one with unsaved edits.
+- A RASTER still needs a local file: re-encoding one here would mean choosing compression and
+  resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
 2026-08-14 (created — browse, add, upload, and styling in both directions)
