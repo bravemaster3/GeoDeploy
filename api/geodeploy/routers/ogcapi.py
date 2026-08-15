@@ -24,7 +24,7 @@ import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
+from ..json_safe import SafeJSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
@@ -156,7 +156,7 @@ def _collection(layer, base: str) -> dict:
 @router.get("")
 async def landing(request: Request):
     base = _base(request)
-    return JSONResponse({
+    return SafeJSONResponse({
         "title": "GeoDeploy — OGC API - Features",
         "description": "Publicly shared vector layers of this GeoDeploy instance, served as OGC "
                        "API - Features collections (GeoJSON, EPSG:4326).",
@@ -179,13 +179,13 @@ async def landing(request: Request):
 
 @router.get("/conformance")
 async def conformance():
-    return JSONResponse({"conformsTo": CONFORMS}, headers=CORS)
+    return SafeJSONResponse({"conformsTo": CONFORMS}, headers=CORS)
 
 
 @router.get("/collections")
 async def collections(request: Request, db: AsyncSession = Depends(get_db)):
     base = _base(request)
-    return JSONResponse({
+    return SafeJSONResponse({
         "collections": [_collection(l, base) for l in await _public_layers(db)],
         "links": [
             {"rel": "self", "href": f"{_root(base)}/collections", "type": "application/json"},
@@ -197,7 +197,7 @@ async def collections(request: Request, db: AsyncSession = Depends(get_db)):
 @router.get("/collections/{cid}")
 async def collection(cid: str, request: Request, db: AsyncSession = Depends(get_db)):
     layer = await _get_layer(cid, db)
-    return JSONResponse(_collection(layer, _base(request)), headers=CORS)
+    return SafeJSONResponse(_collection(layer, _base(request)), headers=CORS)
 
 
 # ── Features ─────────────────────────────────────────────────────────────────────────────────
@@ -246,7 +246,7 @@ async def items(cid: str, request: Request, bbox: str | None = None, limit: int 
     }
     if matched is not None:
         doc["numberMatched"] = matched
-    return JSONResponse(doc, media_type=GEOJSON, headers=CORS)
+    return SafeJSONResponse(doc, media_type=GEOJSON, headers=CORS)
 
 
 @router.get("/collections/{cid}/items/{fid}")
@@ -266,7 +266,7 @@ async def item(cid: str, fid: str, request: Request, db: AsyncSession = Depends(
         {"rel": "self", "href": f"{_root(base)}/collections/{cid}/items/{fid}", "type": GEOJSON},
         {"rel": "collection", "href": f"{_root(base)}/collections/{cid}", "type": "application/json"},
     ]
-    return JSONResponse(feature, media_type=GEOJSON, headers=CORS)
+    return SafeJSONResponse(feature, media_type=GEOJSON, headers=CORS)
 
 
 # ── PostGIS backend ──────────────────────────────────────────────────────────────────────────

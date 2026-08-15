@@ -97,3 +97,47 @@ def test_metadata_never_returns_non_finite():
     meta = _read_meta(_DS())
     assert meta["nodata_value"] is None
     assert all(math.isfinite(v) for v in meta["bbox"])
+
+
+# ── The response layer ────────────────────────────────────────────────────────
+# Field guards cannot close this: a non-finite float also arrives from stored style breaks and
+# from the user's OWN data, served through OGC API - Features. These cover the general case.
+
+def test_safe_response_survives_nan_anywhere():
+    from geodeploy.json_safe import SafeJSONResponse
+
+    body = SafeJSONResponse({
+        "type": "FeatureCollection",
+        "features": [{"type": "Feature",
+                      "properties": {"depth": float("nan"), "name": "site 1", "n": 3},
+                      "geometry": {"type": "Point", "coordinates": [11.0, 55.0]}}],
+    }).body
+    parsed = json.loads(body)                      # strict: json.loads rejects nothing, but…
+    assert "NaN" not in body.decode()              # …the wire must not carry a bare NaN token
+    props = parsed["features"][0]["properties"]
+    assert props["depth"] is None
+    assert props["name"] == "site 1" and props["n"] == 3
+
+
+def test_safe_response_leaves_ordinary_content_untouched():
+    """The scrub is only paid when it is needed; normal responses must be byte-identical."""
+    from starlette.responses import JSONResponse
+    from geodeploy.json_safe import SafeJSONResponse
+
+    content = {"a": [1, 2.5, "x", None, True], "b": {"c": -0.0}}
+    assert SafeJSONResponse(content).body == JSONResponse(content).body
+
+
+def test_scrub_handles_nesting_and_infinity():
+    from geodeploy.json_safe import scrub
+
+    assert scrub({"a": [float("inf"), {"b": float("-inf")}]}) == {"a": [None, {"b": None}]}
+    assert scrub((1.0, float("nan"))) == [1.0, None]
+
+
+def test_the_app_uses_it_by_default():
+    """Wiring, not behaviour: without this the guard silently protects nothing."""
+    from geodeploy.json_safe import SafeJSONResponse
+    from geodeploy.main import app
+
+    assert app.router.default_response_class.__name__ == SafeJSONResponse.__name__

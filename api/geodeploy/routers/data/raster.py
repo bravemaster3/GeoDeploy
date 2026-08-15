@@ -440,7 +440,7 @@ async def raster_tilejson(layer_ref: str, request: Request, db: AsyncSession = D
     layer" work in GeoLibre/QGIS. Bounds come from the stored EPSG:4326 bbox (see
     `cog_converter.inspect` — it reprojects); when a legacy row has none we ask TiTiler once."""
     import json
-    from fastapi.responses import JSONResponse
+    from ...json_safe import SafeJSONResponse
 
     result = await db.execute(select(RasterLayer).where(by_ref(RasterLayer, layer_ref)))
     layer = result.scalar_one_or_none()
@@ -477,7 +477,7 @@ async def raster_tilejson(layer_ref: str, request: Request, db: AsyncSession = D
     if bbox:
         tj["bounds"] = bbox
         tj["center"] = [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2, 0]
-    return JSONResponse(tj, headers={"Access-Control-Allow-Origin": "*",
+    return SafeJSONResponse(tj, headers={"Access-Control-Allow-Origin": "*",
                                      "Cache-Control": "public, max-age=300"})
 
 
