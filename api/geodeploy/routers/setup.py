@@ -128,10 +128,19 @@ async def setup_status():
             config = await _get_or_create_config(db)
             has_admin = bool((await db.execute(select(User))).scalars().first())
         except Exception:
-            # Engine configured but the schema/server isn't reachable yet (a container still
-            # starting, wrong creds in .env). Report "not set up" rather than 500 the wizard.
+            # Engine configured but the schema/server isn't reachable (a container still starting,
+            # one that has been stopped, wrong creds in .env). Report "not set up" rather than 500
+            # the wizard — but SAY WHICH, because the two look identical from here and are opposite
+            # situations. `.env` holding a host is proof this instance was installed: the wizard
+            # wrote it. An installed instance whose database is merely down must never be offered
+            # the setup wizard, which reads as "your data is gone" and invites a re-install as the
+            # remedy. The database is the only thing that knows the rest, so everything else stays
+            # false; the flag is what stops the UI drawing the wrong conclusion from that.
+            settings = get_settings()
+            installed = bool((settings.postgis_host or "").strip())
             return SetupStatus(completed=False, postgis_configured=False,
-                               storage_configured=False, admin_created=False, email_enabled=False)
+                               storage_configured=False, admin_created=False, email_enabled=False,
+                               database_unreachable=installed)
         return SetupStatus(
             completed=config.completed,
             postgis_configured=bool(config.postgis_host),

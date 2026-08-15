@@ -41,6 +41,13 @@ class SetupStatus(BaseModel):
     # Outgoing email configured (C-08a) — the login page uses this to decide whether to
     # offer "Forgot password?" (without email, self-service reset can't deliver anything).
     email_enabled: bool = False
+    # TRUE when this instance is already installed but its database cannot be reached right now.
+    # Everything above is false in that case — not because nothing is configured, but because the
+    # answers live in the database we cannot read. Without this flag the UI cannot tell a fresh
+    # server from a broken one, and shows an operator the SETUP WIZARD while their data is sitting
+    # intact on disk. That is the most alarming screen we could possibly show, and it invites a
+    # re-install as the fix.
+    database_unreachable: bool = False
 
 
 class ConfigureDBRequest(BaseModel):

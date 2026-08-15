@@ -4,6 +4,7 @@ import { getSetupStatus } from '@/api'
 
 const routes = [
   { path: '/setup', component: () => import('@/views/SetupWizard.vue'), meta: { public: true } },
+  { path: '/database-down', component: () => import('@/views/DatabaseDown.vue'), meta: { public: true } },
   { path: '/login', component: () => import('@/views/Login.vue'), meta: { public: true } },
   { path: '/accept-invite', component: () => import('@/views/AcceptInvite.vue'), meta: { public: true } },
   { path: '/reset-password', component: () => import('@/views/ResetPassword.vue'), meta: { public: true } },
@@ -36,6 +37,10 @@ router.beforeEach(async (to) => {
   // Check setup before anything else so the 401 interceptor can't race ahead
   try {
     const { data } = await getSetupStatus()
+    // An installed instance whose database is merely down reports everything as false, because the
+    // answers live in that database. Sending it to the setup wizard tells an operator their data is
+    // gone and invites a re-install as the fix — check this BEFORE `completed`.
+    if (data.database_unreachable) return '/database-down'
     if (!data.completed) return '/setup'
   } catch {
     // API unreachable — fall through
