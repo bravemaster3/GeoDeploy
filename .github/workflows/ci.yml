@@ -121,6 +121,13 @@ jobs:
           python -c "import ast, pathlib; [ast.parse(p.read_text(encoding='utf-8')) for p in pathlib.Path('.').rglob('*.py')]"
           python -c "import sys; sys.path.insert(0, '.'); import connection, sources; print('ok')"
 
+      - name: The plugin loads the way QGIS loads it
+        # Importing is not enough, and shipping proved it: a patch that rewrote one method deleted
+        # `upload_active` with it. Every module still imported, CI was green, and the plugin died
+        # on the first click with AttributeError — because that name is only resolved when the dock
+        # is CONSTRUCTED. This builds the dock and checks every signal target exists.
+        run: python integrations/qgis-plugin/scripts/smoke.py
+
       - name: metadata.txt has what plugins.qgis.org requires
         run: |
           python - <<'PY'
