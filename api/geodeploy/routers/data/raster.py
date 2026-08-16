@@ -54,6 +54,7 @@ async def list_layers(user: User = Depends(require_scope("data:read")), db: Asyn
                 zfactor=ds.get("zfactor"),
                 bidx=ds.get("bidx"),
                 color_classes=ds.get("color_classes"),
+                colormap_reverse=bool(ds.get("colormap_reverse")),
                 band_count=l.band_count,
             )
         out.append(obj)
@@ -435,6 +436,8 @@ async def raster_legend(layer_ref: str, request: Request, db: AsyncSession = Dep
                     for c in (style.get("color_classes") or [])],
         "color_classes": style.get("color_classes") or None,
         "colormap": style.get("colormap"),
+        # Without this a client draws the ramp forwards and its legend contradicts the map.
+        "colormap_reverse": bool(style.get("colormap_reverse")),
         "rescale": rescale,
         "algorithm": style.get("algorithm"),
         "bidx": style.get("bidx"),
@@ -474,6 +477,7 @@ async def raster_tilejson(layer_ref: str, request: Request, db: AsyncSession = D
             layer.s3_key, colormap=ds.get("colormap"), rescale=ds.get("rescale"),
             algorithm=ds.get("algorithm"), zfactor=ds.get("zfactor"), bidx=ds.get("bidx"),
             color_classes=ds.get("color_classes"),
+            colormap_reverse=bool(ds.get("colormap_reverse")),
             band_count=layer.band_count)],
         "minzoom": 0,
         "maxzoom": 22,
@@ -558,6 +562,7 @@ async def raster_wmts(layer_ref: str, request: Request, db: AsyncSession = Depen
         layer.s3_key, colormap=ds.get("colormap"), rescale=ds.get("rescale"),
         algorithm=ds.get("algorithm"), zfactor=ds.get("zfactor"), bidx=ds.get("bidx"),
         color_classes=ds.get("color_classes"),
+        colormap_reverse=bool(ds.get("colormap_reverse")),
         band_count=layer.band_count)
     tmpl = (tmpl.replace("{z}", "{TileMatrix}").replace("{x}", "{TileCol}")
                 .replace("{y}", "{TileRow}"))

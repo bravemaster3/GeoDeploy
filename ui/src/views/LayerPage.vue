@@ -21,7 +21,7 @@
     </template>
   </div>
 
-  <div v-else class="space-y-5">
+  <div v-else class="space-y-5 p-4 sm:p-6 max-w-[1600px] mx-auto">
     <!-- Header ------------------------------------------------------------------------------ -->
     <div class="flex items-start justify-between gap-4 flex-wrap">
       <div class="min-w-0">
@@ -36,7 +36,7 @@
           <input v-else ref="nameInput" v-model="draftName" @keyup.enter="commitRename"
             @keyup.esc="renaming = false" @blur="commitRename"
             class="input text-2xl font-semibold py-0.5" />
-          <button v-if="auth.canEdit && !renaming" @click="startRename"
+          <button v-if="auth.canEdit && !renaming && !isExternal" @click="startRename"
             class="text-muted-foreground/60 hover:text-foreground text-sm" title="Rename layer">✎</button>
         </div>
         <p class="text-xs text-muted-foreground/70 mt-1">
@@ -53,84 +53,85 @@
       </div>
     </div>
 
-    <!-- Map + facts ------------------------------------------------------------------------- -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
-      <div class="lg:col-span-2 card overflow-hidden">
-        <div ref="mapEl" class="w-full h-[460px] bg-muted/40" />
-        <p v-if="mapNote" class="text-xs text-amber-300/90 px-4 py-2 border-t border-border/60">
-          {{ mapNote }}
-        </p>
-      </div>
+    <!-- The map, full width. A fixed side column left a tall void next to it whenever a layer had
+         no legend and no metadata, which is most of them — the facts read better as a row of cards
+         under the map, and they reflow instead of stacking into one narrow strip. -->
+    <div class="card overflow-hidden">
+      <div id="gd-layer-map" class="w-full h-[52vh] min-h-[340px] bg-muted/40" />
+      <p v-if="mapNote" class="text-xs text-amber-300/90 px-4 py-2 border-t border-border/60">
+        {{ mapNote }}
+      </p>
+    </div>
 
-      <div class="space-y-5">
-        <section class="card p-4">
-          <h2 class="text-sm font-semibold mb-3">What it is</h2>
-          <dl class="space-y-1.5 text-sm">
-            <Fact label="Geometry" :value="layer.geometry_type" />
-            <Fact label="Features" :value="layer.feature_count?.toLocaleString()" />
-            <Fact label="Bands" :value="layer.band_count" />
-            <Fact label="CRS" :value="layer.crs" mono />
-            <Fact label="Size" :value="prettySize" />
-            <Fact label="Extent" :value="prettyExtent" mono
-              hint="West, south, east, north in EPSG:4326" />
-          </dl>
+    <!-- Facts ---------------------------------------------------------------------------------- -->
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5 items-start">
+      <section class="card p-4">
+        <h2 class="text-sm font-semibold mb-3">What it is</h2>
+        <dl class="space-y-1.5 text-sm">
+          <Fact label="Geometry" :value="layer.geometry_type" />
+          <Fact label="Features" :value="layer.feature_count?.toLocaleString()" />
+          <Fact label="Bands" :value="layer.band_count" />
+          <Fact label="CRS" :value="layer.crs" mono />
+          <Fact label="Size" :value="prettySize" />
+          <Fact label="Extent" :value="prettyExtent" mono
+            hint="West, south, east, north in EPSG:4326" />
+        </dl>
         </section>
 
         <section class="card p-4">
-          <h2 class="text-sm font-semibold mb-3">How it is served</h2>
-          <dl class="space-y-1.5 text-sm">
-            <Fact label="Storage" :value="storageLabel" />
-            <Fact label="Tiles" :value="tilesLabel" />
-            <Fact v-if="isRaster" label="Zoom floor"
-              :value="layer.low_zoom_ok === false ? 'High zoom only' : 'Draws when zoomed out'"
-              hint="Measured from the file's overview pyramid at ingest" />
-            <Fact v-if="isRaster && rasterStyle.colormap" label="Colormap" :value="rasterStyle.colormap" />
-            <Fact v-if="isRaster && rasterStyle.rescale" label="Stretch" :value="rasterStyle.rescale" mono />
-          </dl>
+        <h2 class="text-sm font-semibold mb-3">How it is served</h2>
+        <dl class="space-y-1.5 text-sm">
+          <Fact label="Storage" :value="storageLabel" />
+          <Fact label="Tiles" :value="tilesLabel" />
+          <Fact v-if="isRaster" label="Zoom floor"
+            :value="layer.low_zoom_ok === false ? 'High zoom only' : 'Draws when zoomed out'"
+            hint="Measured from the file's overview pyramid at ingest" />
+          <Fact v-if="isRaster && rasterStyle.colormap" label="Colormap" :value="rasterStyle.colormap" />
+          <Fact v-if="isRaster && rasterStyle.rescale" label="Stretch" :value="rasterStyle.rescale" mono />
+        </dl>
         </section>
 
         <section v-if="hasDescription" class="card p-4">
-          <h2 class="text-sm font-semibold mb-3">Metadata</h2>
-          <dl class="space-y-1.5 text-sm">
-            <Fact label="Licence" :value="layer.license" />
-            <Fact label="Attribution" :value="layer.attribution" />
-            <Fact label="Keywords" :value="layer.keywords" />
-          </dl>
-          <p v-if="layer.abstract" class="text-xs text-muted-foreground mt-2 whitespace-pre-line">
-            {{ layer.abstract }}
-          </p>
-          <p class="text-[11px] text-muted-foreground/60 mt-2">
-            Edited under Sharing — it travels with the layer into STAC, OGC API and the catalog.
-          </p>
+        <h2 class="text-sm font-semibold mb-3">Metadata</h2>
+        <dl class="space-y-1.5 text-sm">
+          <Fact label="Licence" :value="layer.license" />
+          <Fact label="Attribution" :value="layer.attribution" />
+          <Fact label="Keywords" :value="layer.keywords" />
+        </dl>
+        <p v-if="layer.abstract" class="text-xs text-muted-foreground mt-2 whitespace-pre-line">
+          {{ layer.abstract }}
+        </p>
+        <p class="text-[11px] text-muted-foreground/60 mt-2">
+          Edited under Sharing — it travels with the layer into STAC, OGC API and the catalog.
+        </p>
         </section>
 
         <section v-if="legend.length" class="card p-4">
-          <h2 class="text-sm font-semibold mb-1">Legend</h2>
-          <p v-if="colorField" class="text-[11px] text-muted-foreground/70 mb-2">
-            Colour by <span class="font-medium text-muted-foreground">{{ colorField }}</span>
-          </p>
-          <div class="space-y-1 max-h-52 overflow-y-auto pr-1">
-            <div v-for="(e, i) in legend" :key="i" class="flex items-center gap-2">
-              <span class="w-3.5 h-3.5 rounded-sm flex-shrink-0 ring-1 ring-black/25"
-                :style="{ background: e.color }" />
-              <span class="text-xs text-muted-foreground truncate">{{ e.label }}</span>
-            </div>
+        <h2 class="text-sm font-semibold mb-1">Legend</h2>
+        <p v-if="colorField" class="text-[11px] text-muted-foreground/70 mb-2">
+          Colour by <span class="font-medium text-muted-foreground">{{ colorField }}</span>
+        </p>
+        <div class="space-y-1 max-h-52 overflow-y-auto pr-1">
+          <div v-for="(e, i) in legend" :key="i" class="flex items-center gap-2">
+            <span class="w-3.5 h-3.5 rounded-sm flex-shrink-0 ring-1 ring-black/25"
+              :style="{ background: e.color }" />
+            <span class="text-xs text-muted-foreground truncate">{{ e.label }}</span>
           </div>
-        </section>
-      </div>
+        </div>
+      </section>
     </div>
 
     <!-- Actions ------------------------------------------------------------------------------ -->
     <section class="card p-4">
-      <h2 class="text-sm font-semibold mb-3">Do something with it</h2>
+      <h2 class="text-sm font-semibold mb-3">Actions</h2>
       <div class="flex flex-wrap gap-2">
-        <button v-if="auth.canEdit && ready" @click="showStyle = true" class="btn-secondary text-sm">
+        <button v-if="auth.canEdit && ready && !isExternal" @click="showStyle = true" class="btn-secondary text-sm">
           Style
         </button>
-        <button v-if="ready" @click="showLinks = true" class="btn-secondary text-sm">
+        <button v-if="ready && !isExternal" @click="showLinks = true" class="btn-secondary text-sm">
           Share links
         </button>
-        <button v-if="auth.canEdit && ready" @click="showSharing = true" class="btn-secondary text-sm">
+        <button v-if="auth.canEdit && ready && !isExternal" @click="showSharing = true" class="btn-secondary text-sm">
           {{ visibilityLabel === 'Public' ? 'Sharing — public' : 'Sharing' }}
         </button>
         <button v-if="auth.canEdit && ready" @click="showPortal = true" class="btn-primary text-sm">
@@ -155,22 +156,21 @@
 
     <!-- Fields -------------------------------------------------------------------------------- -->
     <section v-if="fields.length" class="card p-4">
-      <h2 class="text-sm font-semibold mb-3">Fields <span class="text-muted-foreground/60 font-normal">({{ fields.length }})</span></h2>
-      <div class="overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead>
-            <tr class="text-left text-xs text-muted-foreground/70 border-b border-border/60">
-              <th class="py-1.5 pr-4 font-medium">Name</th>
-              <th class="py-1.5 font-medium">Type</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="f in fields" :key="f.name" class="border-b border-border/30 last:border-0">
-              <td class="py-1.5 pr-4 font-mono text-xs">{{ f.name }}</td>
-              <td class="py-1.5 text-muted-foreground text-xs">{{ f.type }}</td>
-            </tr>
-          </tbody>
-        </table>
+      <button class="flex items-center gap-2 w-full text-left" @click="fieldsOpen = !fieldsOpen">
+        <span class="text-xs text-muted-foreground/60">{{ fieldsOpen ? '▾' : '▸' }}</span>
+        <h2 class="text-sm font-semibold">
+          Fields <span class="text-muted-foreground/60 font-normal">({{ fields.length }})</span>
+        </h2>
+      </button>
+      <!-- Two or three columns, not one row per field: a table of 8 fields took more of the page
+           than the map, and a layer with 40 would have been unusable. -->
+      <div v-if="fieldsOpen"
+        class="mt-3 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-x-6 gap-y-1 max-h-64 overflow-y-auto pr-1">
+        <div v-for="f in fields" :key="f.name"
+          class="flex items-baseline justify-between gap-3 border-b border-border/25 py-1">
+          <span class="font-mono text-xs truncate" :title="f.name">{{ f.name }}</span>
+          <span class="text-[11px] text-muted-foreground/70 flex-shrink-0">{{ f.type }}</span>
+        </div>
       </div>
     </section>
 
@@ -184,13 +184,14 @@
 </template>
 
 <script setup>
-import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, h, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
-import maplibregl from 'maplibre-gl'
 
 import { useDataStore } from '@/stores/data'
 import { useAuthStore } from '@/stores/auth'
+import { useMaplibre } from '@/composables/useMaplibre'
 import { buildMapStyle, lonLatBbox } from '@/lib/mapStyle'
+import { registerMarkerImages, setMarkerSpecs } from '@/lib/markerImage'
 import { DEFAULT_BASEMAP } from '@/lib/basemaps'
 import { legendEntries, representativeColor } from '@/lib/symbology'
 import StyleModal from '@/components/data/StyleModal.vue'
@@ -216,22 +217,34 @@ const router = useRouter()
 const dataStore = useDataStore()
 const auth = useAuthStore()
 
-const kind = computed(() => (route.params.kind === 'raster' ? 'raster' : 'vector'))
-const isRaster = computed(() => kind.value === 'raster')
-const isVector = computed(() => kind.value === 'vector')
+const kind = computed(() => ['raster', 'external'].includes(route.params.kind)
+  ? route.params.kind : 'vector')
+const isExternal = computed(() => kind.value === 'external')
+// An external RASTER source draws through the raster path; a vector one through the vector path.
+// `kind` is what the layer_config calls it, which is 'external' for both.
+const isRaster = computed(() => kind.value === 'raster'
+  || (isExternal.value && layer.value?.kind === 'raster'))
+const isVector = computed(() => !isRaster.value && !isExternal.value)
 
 const layer = computed(() => {
-  const id = Number(route.params.id)
-  const list = isRaster.value ? dataStore.rasterLayers : dataStore.vectorLayers
-  return list.find(l => l.id === id) || null
+  // The URL carries the UID: integer ids are per-kind sequences that renumber on a restore, so a
+  // bookmarked /data/vector/12 could come back pointing at a different layer. An integer is still
+  // accepted, for links made before this and for anyone typing one by hand.
+  const ref_ = String(route.params.id || '')
+  const list = kind.value === 'external' ? dataStore.externalSources
+    : (kind.value === 'raster' ? dataStore.rasterLayers : dataStore.vectorLayers)
+  return list.find(l => l.uid === ref_) || list.find(l => String(l.id) === ref_) || null
 })
-const ready = computed(() => layer.value?.status === 'ready')
+const ready = computed(() => isExternal.value || layer.value?.status === 'ready')
 
 // A vector's default style nests the visual part under `style`; a raster's is flat. Same split the
 // API stores, so this is where it is unpacked rather than in three places downstream.
 const vectorStyle = computed(() => (layer.value?.default_style?.style) || {})
 const rasterStyle = computed(() => layer.value?.default_style || {})
-const styleForMap = computed(() => (isRaster.value ? rasterStyle.value : vectorStyle.value))
+const styleForMap = computed(() => {
+  if (isExternal.value) return {}      // the remote service decides how it draws
+  return isRaster.value ? rasterStyle.value : vectorStyle.value
+})
 
 const legend = computed(() => (isVector.value ? legendEntries(vectorStyle.value) : []))
 const colorField = computed(() =>
@@ -250,13 +263,18 @@ const portalSeed = computed(() => ({
   style: styleForMap.value, popup_fields: [],
 }))
 
-const kindLabel = computed(() => isRaster.value
+const kindLabel = computed(() => isExternal.value
+  ? `External ${layer.value?.kind || ''} · ${(layer.value?.source_type || '').toUpperCase()}`
+  : isRaster.value
   ? 'Raster'
   : (layer.value?.storage_backend === 'geoparquet' ? 'Vector · GeoParquet' : 'Vector · PostGIS'))
-const storageLabel = computed(() => isRaster.value
+const storageLabel = computed(() => isExternal.value
+  ? 'Served by another organisation'
+  : isRaster.value
   ? 'Cloud-Optimized GeoTIFF'
   : (layer.value?.storage_backend === 'geoparquet' ? 'GeoParquet in object storage' : 'PostGIS table'))
 const tilesLabel = computed(() => {
+  if (isExternal.value) return 'From the remote service'
   if (isRaster.value) return 'TiTiler, rendered on demand'
   if (layer.value?.storage_backend === 'geoparquet') {
     return layer.value?.tile_status === 'ready' ? 'PMTiles archive' : 'Not tiled'
@@ -283,9 +301,12 @@ const prettyExtent = computed(() => {
 })
 
 // -- the map ---------------------------------------------------------------------------------
-const mapEl = ref(null)
+// Through the shared composable, not a hand-rolled maplibregl.Map: it is what registers the
+// `pmtiles://` protocol (a tiled GeoParquet layer fails with 'URL scheme "pmtiles" is not
+// supported' without it), and it owns the map's lifecycle and the globe/zoom controls.
+const { map, loaded, applyStyle, fitToBbox } = useMaplibre('gd-layer-map',
+  { version: 8, sources: {}, layers: [] })
 const mapNote = ref('')
-let map = null
 
 /** The layer as a portal would configure it — one entry, drawn by the shared builder. */
 function configFor(l) {
@@ -300,7 +321,7 @@ function configFor(l) {
 
 function renderMap() {
   const l = layer.value
-  if (!l || !mapEl.value) return
+  if (!l || !map.value || !loaded.value) return
 
   // An untiled GeoParquet layer draws through the portal's data view (deck.gl over a viewport
   // query), which this page does not run. Saying so beats an empty basemap that looks broken.
@@ -309,34 +330,25 @@ function renderMap() {
     ? 'This GeoParquet layer is not tiled, so there is nothing to draw here yet. Tile it for a preview.'
     : ''
 
-  const { style, bounds } = buildMapStyle({
+  const { style, bounds, markerSpecs } = buildMapStyle({
     configs: [configFor(l)],
-    layers: isVector.value ? [l] : [],
-    rasters: isRaster.value ? [l] : [],
-    sources: [],
+    layers: (isVector.value && !isExternal.value) ? [l] : [],
+    rasters: (isRaster.value && !isExternal.value) ? [l] : [],
+    sources: isExternal.value ? [l] : [],
     basemap: DEFAULT_BASEMAP,
   })
-
-  if (map) { map.setStyle(style); fit(bounds); return }
-  map = new maplibregl.Map({ container: mapEl.value, style, center: [0, 20], zoom: 1.4,
-                             attributionControl: { compact: true } })
-  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
-  map.on('load', () => fit(bounds))
-}
-
-function fit(bounds) {
-  const b = lonLatBbox(bounds) || lonLatBbox(layer.value?.bbox)
-  if (b && map) map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 36, duration: 0, maxZoom: 16 })
+  // Points are symbol layers whose icons are generated on demand — without this they draw nothing.
+  registerMarkerImages(map.value, markerSpecs)
+  setMarkerSpecs(map.value, markerSpecs)
+  applyStyle(style)
+  fitToBbox(lonLatBbox(bounds) || lonLatBbox(l.bbox))
 }
 
 onMounted(async () => {
   if (!dataStore.vectorLayers.length && !dataStore.rasterLayers.length) await dataStore.refresh()
-  await nextTick()
-  renderMap()
 })
-onBeforeUnmount(() => { if (map) { map.remove(); map = null } })
-// Re-render when the layer arrives, when its style changes, or when the route moves to another one.
-watch([layer, styleForMap], () => renderMap(), { deep: true })
+// The map is created on mount by the composable, so wait for it AND for the layer to arrive.
+watch([loaded, layer, styleForMap], () => renderMap(), { deep: true, immediate: true })
 
 // -- actions ---------------------------------------------------------------------------------
 const showStyle = ref(false)
@@ -344,6 +356,7 @@ const showSharing = ref(false)
 const showLinks = ref(false)
 const showPortal = ref(false)
 const confirmDelete = ref(false)
+const fieldsOpen = ref(true)
 const tiling = ref(false)
 const restarting = ref(false)
 
@@ -366,9 +379,13 @@ async function commitRename() {
   else await dataStore.renameVector(layer.value.id, name)
 }
 
-function onStyleClosed() {
+async function onStyleClosed() {
   showStyle.value = false
-  renderMap()            // the map is the preview of what was just saved
+  // Pull the saved style back before redrawing. Without this the map rebuilt from the layer the
+  // store still held, so a just-saved raster could come back looking unchanged — or briefly not
+  // at all — until the page was reloaded by hand.
+  await dataStore.refresh()
+  renderMap()
 }
 
 async function onTile() {
@@ -381,7 +398,8 @@ async function onReprocess() {
 }
 async function onDelete() {
   confirmDelete.value = false
-  if (isRaster.value) await dataStore.removeRaster(layer.value.id)
+  if (isExternal.value) await dataStore.removeExternal(layer.value.id)
+  else if (isRaster.value) await dataStore.removeRaster(layer.value.id)
   else await dataStore.removeVector(layer.value.id)
   router.push('/data')
 }

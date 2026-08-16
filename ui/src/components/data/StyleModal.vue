@@ -70,6 +70,7 @@ const config = ref({
     ? { ...(ds.style || {}) }
     : {
         colormap: ds.colormap || null,
+        colormap_reverse: !!ds.colormap_reverse,
         rescale: ds.rescale || null,
         algorithm: ds.algorithm || null,
         zfactor: ds.zfactor ?? null,
@@ -92,6 +93,7 @@ async function save() {
       : {
           opacity: c.opacity,
           colormap: c.style?.colormap || null,
+          colormap_reverse: !!c.style?.colormap_reverse,
           rescale: c.style?.rescale || null,
           algorithm: c.style?.algorithm || null,
           zfactor: c.style?.zfactor ?? null,

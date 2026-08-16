@@ -7,7 +7,7 @@
           @keyup.enter="saveName" @keyup.esc="cancelEdit" @blur="saveName"
           class="text-sm font-medium bg-transparent border border-primary/60 rounded px-1 py-0.5 flex-1 min-w-0 focus:outline-none" />
         <template v-else>
-          <RouterLink :to="`/data/vector/${layer.id}`"
+          <RouterLink :to="`/data/vector/${layer.uid || layer.id}`"
             class="text-sm font-medium truncate hover:text-primary hover:underline"
             title="Open this layer's page">{{ layer.name }}</RouterLink>
           <button v-if="auth.canEdit" @click="startEdit" title="Rename layer"

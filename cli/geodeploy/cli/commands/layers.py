@@ -58,6 +58,7 @@ examples:
   geodeploy layers style sites --marker star --radius 6 --outline-color none
   geodeploy layers style parcels --color-field pop --classify jenks --classes 6 --ramp magma
   geodeploy layers style dem --colormap terrain --rescale 0,2400
+  geodeploy layers style depth --colormap blues --reverse-colormap
 """)
     layer_ref_arg(style)
     style.add_argument("--popup-fields", help="comma-separated attribute names for popups")
@@ -190,7 +191,8 @@ def cmd_legend(ctx, args) -> int:
         ctx.out.json(legend)
         return EXIT_OK
     if legend.get("ramp"):
-        ctx.out.record(legend, ["layer", "colormap", "rescale", "algorithm", "bidx", "band_count"])
+        ctx.out.record(legend, ["layer", "colormap", "colormap_reverse", "rescale", "algorithm",
+                                "bidx", "band_count"])
         ctx.out.info("A raster legend is a continuous ramp, so there are no swatches to list.")
         return EXIT_OK
     ctx.out.out(ctx.out.bold(legend.get("layer") or ""))
@@ -467,7 +469,7 @@ def cmd_style(ctx, args) -> int:
     else:
         # The raster default-style body is flat: colormap/rescale/algorithm live at the top level.
         body = {"opacity": body["opacity"]}
-        for key in ("colormap", "rescale", "algorithm", "zfactor", "bidx"):
+        for key in ("colormap", "colormap_reverse", "rescale", "algorithm", "zfactor", "bidx"):
             if style.get(key) is not None:
                 body[key] = style[key]
 

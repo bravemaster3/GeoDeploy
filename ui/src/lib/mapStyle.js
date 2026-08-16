@@ -29,6 +29,9 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
    * reverse, because MapLibre paints later layers on top — the same reversal the generator does.
    */
   const bm = basemap
+  // Icon id -> spec, for the caller to register on its map. Returned rather than written to an
+  // outer variable: this function is pure, and a closure write is exactly what broke when it moved.
+  const markerSpecs = {}
   const style = {
     version: 8,
     glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
@@ -237,7 +240,7 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
     }
   }
 
-  return { style, bounds }
+  return { style, bounds, markerSpecs }
 }
 
 
@@ -278,7 +281,10 @@ export function rasterTilesUrl(baseTileUrl, style, bandCount) {
       params.push(`expression=b1*${style.zfactor}`)
     }
   } else if (style?.colormap && bands.length !== 3) {
-    params.push(`colormap_name=${style.colormap}`)
+    // Mirrors services/titiler.py: matplotlib spells a reversed ramp with an `_r` suffix, and the
+    // flag is the single source of truth — a stored `viridis_r` with reverse off is forward.
+    const base_ = style.colormap.endsWith('_r') ? style.colormap.slice(0, -2) : style.colormap
+    params.push(`colormap_name=${style.colormap_reverse ? base_ + '_r' : base_}`)
   }
   const url = base + (params.length ? '&' + params.join('&') : '')
   return url.startsWith('/') ? location.origin + url : url

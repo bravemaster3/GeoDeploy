@@ -474,6 +474,10 @@ class RasterDefaultStyle(BaseModel):
     # like the vector `categories` list on purpose, so both kinds of "this value is that colour"
     # read the same way.
     color_classes: list[dict] | None = None
+    # Flip whichever palette is in use — the named ramp, or the explicit classes. Stored as a fact
+    # about the style rather than baked into the name, so the palette a person picked is still the
+    # palette the UI shows selected.
+    colormap_reverse: bool = False
 
 
 class RasterLayerOut(BaseModel):

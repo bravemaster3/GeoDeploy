@@ -331,9 +331,14 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
             lo, hi = renderer.classificationMin(), renderer.classificationMax()
             if _finite(lo) and _finite(hi) and hi > lo:
                 style["rescale"] = "{0},{1}".format(_trim(lo), _trim(hi))
-            name = _ramp_name(renderer)
+            name, inverted = _ramp_name(renderer)
             if name and colormaps and name in colormaps:
                 style["colormap"] = name
+                if inverted:
+                    # QGIS inverts a ramp in place; GeoDeploy keeps the palette's name and a
+                    # separate flag, so the two agree about WHICH ramp while disagreeing about
+                    # its direction only where that is recorded.
+                    style["colormap_reverse"] = True
             elif name:
                 _log("QGIS ramp {0!r} has no colormap of that name on the instance — sending the "
                      "stretch without it.".format(name))
@@ -450,8 +455,13 @@ def _enhancement_range(enhancement):
     return (None, None)
 
 
-def _ramp_name(renderer) -> str | None:
-    """The lower-cased name of the renderer's colour ramp, if it has a named one."""
+def _ramp_name(renderer):
+    """`(name, inverted)` for the renderer's colour ramp — lower-cased, or `(None, False)`.
+
+    QGIS reverses a ramp by INVERTING it in place, so the direction is a property of the ramp
+    object rather than part of its name. GeoDeploy keeps the two apart, which is what lets the
+    palette a user chose stay recognisable in the UI after they flip it.
+    """
     try:
         shader = renderer.shader()
         fn = shader.rasterShaderFunction() if shader else None
@@ -459,9 +469,15 @@ def _ramp_name(renderer) -> str | None:
         # `type()` is the ramp KIND ("gradient", "cpt-city", …); cpt-city ramps carry a real name.
         name = getattr(ramp, "schemeName", None)
         name = name() if callable(name) else None
-        return (name or "").strip().lower() or None
+        inverted = False
+        for attr in ("isInverted", "inverted"):
+            probe = getattr(ramp, attr, None)
+            if callable(probe):
+                inverted = bool(probe())
+                break
+        return ((name or "").strip().lower() or None, inverted)
     except Exception:                   # noqa: BLE001 - a missing ramp is not an error
-        return None
+        return (None, False)
 
 
 def from_qgis(qgis_layer) -> dict:

@@ -226,6 +226,7 @@ def _raster_assets(layer, base: str) -> dict:
         colormap=default.get("colormap"), rescale=default.get("rescale"),
         algorithm=default.get("algorithm"), zfactor=default.get("zfactor"),
         bidx=default.get("bidx"), color_classes=default.get("color_classes"),
+        colormap_reverse=bool(default.get("colormap_reverse")),
         band_count=layer.band_count,
     )
     return {
