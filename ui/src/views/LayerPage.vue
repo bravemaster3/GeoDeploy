@@ -153,9 +153,24 @@
           <Fact label="Bands" :value="layer.band_count" />
           <Fact label="CRS" :value="layer.crs" mono />
           <Fact label="Size" :value="prettySize" />
-          <Fact label="Extent" :value="prettyExtent" mono
-            hint="West, south, east, north in EPSG:4326" />
         </dl>
+        <!-- Four numbers separated by commas is a puzzle: which one is north? Putting them on a
+             box says it without a legend, and the box's shape hints at the layer's own. -->
+        <div v-if="extent" class="mt-3 pt-3 border-t border-border/40">
+          <p class="text-xs text-muted-foreground/70 mb-2">
+            Extent <span class="opacity-60">(EPSG:4326)</span>
+          </p>
+          <div class="flex flex-col items-center gap-1 text-[11px] font-mono tabular-nums">
+            <span class="text-muted-foreground">{{ extent.north }}</span>
+            <div class="flex items-center gap-2 w-full">
+              <span class="text-muted-foreground text-right flex-1">{{ extent.west }}</span>
+              <span class="border border-primary/50 bg-primary/10 rounded-sm flex-shrink-0"
+                :style="{ width: extent.boxW + 'px', height: extent.boxH + 'px' }" />
+              <span class="text-muted-foreground flex-1">{{ extent.east }}</span>
+            </div>
+            <span class="text-muted-foreground">{{ extent.south }}</span>
+          </div>
+        </div>
         </section>
 
         <section class="card p-4">
@@ -189,38 +204,59 @@
     </div>
 
     <!-- Actions ------------------------------------------------------------------------------ -->
-    <section v-if="layer" class="card p-4">
-      <h2 class="text-sm font-semibold mb-3">Actions</h2>
-      <div class="flex flex-wrap gap-2">
-        <button v-if="auth.canEdit && ready && !isExternal" @click="showStyle = true" class="btn-secondary text-sm">
-          Style
+    <!-- The same icons the list rows use, so an action means the same thing in both places and the
+         row stays one line instead of a wall of buttons. Every one has a tooltip: an icon nobody
+         can name is worse than a word. -->
+    <section v-if="layer" class="card p-3">
+      <div class="flex items-center gap-1 flex-wrap">
+        <button v-if="auth.canEdit && ready && !isExternal" @click="showStyle = true"
+          class="gd-act" title="Default style — colour, size, classification">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
+            <circle cx="13.5" cy="6.5" r="2.5" /><circle cx="18" cy="13" r="2.5" />
+            <circle cx="6.5" cy="10.5" r="2.5" /><circle cx="10" cy="18" r="2.5" />
+            <path d="M12 2a10 10 0 1 0 0 20c1.1 0 2-.9 2-2 0-1.4-1-1.9-1-3 0-.6.4-1 1-1h2a5 5 0 0 0 5-5c0-5-4.5-9-9-9z" />
+          </svg>
         </button>
-        <button v-if="ready && !isExternal" @click="showLinks = true" class="btn-secondary text-sm">
-          Share links
+
+        <button v-if="ready && !isExternal" @click="showLinks = true"
+          class="gd-act" title="Share links — use this layer in QGIS, GeoLibre, MapLibre…">
+          <LinkIcon class="w-4 h-4" />
         </button>
-        <button v-if="auth.canEdit && ready && !isExternal" @click="showSharing = true" class="btn-secondary text-sm">
-          Visibility &amp; metadata
+
+        <button v-if="auth.canEdit && ready && !isExternal" @click="showSharing = true"
+          class="gd-act" :title="`Visibility and metadata — currently ${visibilityLabel.toLowerCase()}`">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
+            <circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" />
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+          </svg>
         </button>
+
+        <button v-if="auth.canEdit && canTile && ready" @click="onTile" :disabled="tiling"
+          class="gd-act disabled:opacity-40"
+          :title="layer.tile_status === 'ready' ? 'Re-tile for fast display (regenerate PMTiles)'
+                                                : 'Tile for fast seamless display (PMTiles)'">
+          <LayersIcon class="w-4 h-4" :class="tiling ? 'animate-pulse' : ''" />
+        </button>
+
+        <button v-if="auth.canEdit && isVector && !isExternal" @click="onReprocess"
+          :disabled="restarting" class="gd-act disabled:opacity-40"
+          title="Restart processing — re-convert from the uploaded file, no re-upload needed">
+          <RefreshIcon class="w-4 h-4" :class="restarting ? 'animate-spin' : ''" />
+        </button>
+
+        <div class="w-px h-6 bg-border mx-1" aria-hidden="true" />
+
+        <!-- The one action that creates something stays a labelled button: it is the reason most
+             people are on this page, and an icon would hide it. -->
         <button v-if="auth.canEdit && ready" @click="showPortal = true" class="btn-primary text-sm">
           Create a portal from this layer
         </button>
-        <!-- PMTiles tiling is a GEOPARQUET thing. A PostGIS layer is already served as vector
-             tiles by Martin, so the button did nothing and implied the layer was somehow slower
-             than it is. Same condition My Data uses. -->
-        <button v-if="auth.canEdit && canTile && ready" @click="onTile" :disabled="tiling"
-          class="btn-secondary text-sm disabled:opacity-60"
-          :title="layer.tile_status === 'ready' ? 'Regenerate the PMTiles archive' : 'Tile for fast display'">
-          {{ tiling ? 'Tiling…' : (layer.tile_status === 'ready' ? 'Re-tile' : 'Tile for fast display') }}
-        </button>
-        <button v-if="auth.canEdit && isVector && !isExternal" @click="onReprocess"
-          :disabled="restarting"
-          class="btn-secondary text-sm disabled:opacity-60"
-          title="Re-convert from the uploaded file — no re-upload needed">
-          {{ restarting ? 'Restarting…' : 'Reprocess' }}
-        </button>
+
         <button v-if="auth.canEdit" @click="confirmDelete = true"
-          class="btn-secondary text-sm text-red-400 hover:text-red-300 ml-auto">
-          Delete
+          class="gd-act hover:text-red-400 ml-auto" title="Delete layer">
+          <TrashIcon class="w-4 h-4" />
         </button>
       </div>
     </section>
@@ -271,6 +307,7 @@ import ShareLinksModal from '@/components/data/ShareLinksModal.vue'
 import ConfirmDeleteModal from '@/components/data/ConfirmDeleteModal.vue'
 import CreatePortalModal from '@/components/portal/CreatePortalModal.vue'
 import LegendSwatch from '@/components/LegendSwatch.vue'
+import { LinkIcon, TrashIcon, RefreshIcon, LayersIcon } from '@/views/icons'
 
 // A label/value row. Rendered rather than templated because it must vanish entirely when the value
 // is absent — a "Bands: —" line on a vector layer is noise pretending to be information.
@@ -422,9 +459,18 @@ const prettySize = computed(() => {
   while (n >= 1024 && i < units.length - 1) { n /= 1024; i += 1 }
   return `${n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)} ${units[i]}`
 })
-const prettyExtent = computed(() => {
+/** The extent as a little box: the four edges labelled, sized to the layer's own aspect ratio. */
+const extent = computed(() => {
   const b = lonLatBbox(layer.value?.bbox)
-  return b ? b.map(v => Number(v).toFixed(4)).join(', ') : null
+  if (!b) return null
+  const fmt = v => Number(v).toFixed(4)
+  // A shape, not a scale drawing — clamped so a very thin layer is still a visible rectangle.
+  const w = Math.abs(b[2] - b[0]) || 1
+  const h = Math.abs(b[3] - b[1]) || 1
+  const ratio = Math.min(Math.max(w / h, 0.35), 2.8)
+  const boxH = 46
+  return { west: fmt(b[0]), south: fmt(b[1]), east: fmt(b[2]), north: fmt(b[3]),
+           boxH, boxW: Math.round(boxH * ratio) }
 })
 
 // -- the map ---------------------------------------------------------------------------------
@@ -563,3 +609,11 @@ async function onDelete() {
   router.push('/data')
 }
 </script>
+
+<style scoped>
+/* One class for every icon action, so they are the same size and hit-area as the list rows'. */
+.gd-act {
+  @apply p-2 rounded-lg border border-border bg-card text-muted-foreground
+         hover:text-foreground hover:bg-muted transition-colors;
+}
+</style>

@@ -57,6 +57,8 @@ export const CopyIcon = { render: () => h('svg', { viewBox: '0 0 24 24', fill: '
   h('rect', { x: 9, y: 9, width: 13, height: 13, rx: 2 }),
   h('path', { d: 'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' }),
 ]) }
+// Stacked tiles — the PMTiles action, and the closest thing to "pre-cut into pieces".
+export const LayersIcon = icon('M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5')
 export const RefreshIcon = icon('M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15')
 export const MailIcon = { render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
   h('rect', { x: 2, y: 4, width: 20, height: 16, rx: 2 }),
