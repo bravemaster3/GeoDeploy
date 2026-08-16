@@ -658,6 +658,124 @@ class GeoDeployDock(QDockWidget):
                   base + "/p/" + str(doc.get("slug")) + detail)
         self.refresh_layers()
 
+    def upload_active(self):
+        if not self.instance:
+            self._say("Connect to an instance first.", Qgis.Warning)
+            return
+        if not self.instance.token:
+            self._say("Uploading needs a token with data:write. Public browsing does not.",
+                      Qgis.Warning)
+            return
+        # Whatever is SELECTED in the Layers panel, falling back to the active layer. Sending five
+        # layers is a normal thing to want, and doing it one at a time means five round trips
+        # through this dialog.
+        layers = list(self.iface.layerTreeView().selectedLayers() or [])
+        if not layers:
+            active = self.iface.activeLayer()
+            if active is None:
+                self._say("Select one or more layers in the Layers panel first.", Qgis.Warning)
+                return
+            layers = [active]
+
+        jobs = []           # (name, path, temporary, style)
+        refused = []
+        for layer in layers:
+            try:
+                # Not `layer.source()`: a filtered layer's file holds MORE than the layer does, and
+                # a memory or PostGIS layer has no file at all. `prepare` writes those out first.
+                path, temporary = export.prepare(
+                    layer, on_status=lambda t: self._say(t, bar=False))
+            except export.NotUploadable as exc:
+                refused.append("{0}: {1}".format(layer.name(), exc))
+                continue
+            # A raster's default style is a DIFFERENT shape — {colormap, rescale, bidx}, not
+            # classes — so it needs its own translation. Sending the vector shape is what made
+            # "Send its styling too" quietly do nothing for a GeoTIFF.
+            if not self.push_style.isChecked():
+                style = {}
+            elif isinstance(layer, QgsRasterLayer):
+                style = symbology.raster_from_qgis(layer, self._colormaps())
+            else:
+                style = symbology.from_qgis(layer)
+            jobs.append((layer.name(), path, temporary, style))
+
+        if not jobs:
+            # Everything was refused — say why, for each, rather than a generic failure.
+            self._say(" | ".join(refused) or "Nothing could be uploaded.", Qgis.Warning)
+            return
+
+        client = self.instance.client
+        total = len(jobs)
+
+        def work():
+            uploaded, styled, failed = [], [], list(refused)
+            for index, (name, path, temporary, style) in enumerate(jobs, start=1):
+                # Reported from the worker thread: a queue that looks frozen for four of five files
+                # is worse than no progress at all.
+                self._progress.emit("Uploading {0} ({1} of {2})…".format(name, index, total))
+                try:
+                    result = client.uploads.upload(path, wait=True)
+                    if style and getattr(result, "layer_id", None):
+                        # Styling travels with the upload: the portal then shows what the author
+                        # saw, instead of the next default colour in the palette.
+                        kind = result.plan.layer_type
+                        api = client.layers.api(kind)
+                        # The two kinds take different bodies. A raster's IS the style; a vector's
+                        # wraps it, alongside opacity and popup fields.
+                        body = (dict(style, opacity=1.0) if kind == "raster"
+                                else {"opacity": 1.0, "style": style, "popup_fields": []})
+                        api.set_default_style(result.layer_id, body)
+                        styled.append(name)
+                    uploaded.append(name)
+                except Exception as exc:            # noqa: BLE001 - one bad layer, not the batch
+                    # Four good layers must still arrive when the third one is broken.
+                    failed.append("{0}: {1}".format(name, exc))
+                finally:
+                    if temporary:
+                        # A multi-gigabyte export is not left behind in temp because upload failed.
+                        shutil.rmtree(os.path.dirname(path), ignore_errors=True)
+            return {"uploaded": uploaded, "styled": styled, "failed": failed}
+
+        self._busy(True)
+        self._say("Uploading {0} layer(s)… large files go straight to storage.".format(total),
+                  bar=False)
+        self._run(_Job("GeoDeploy: uploading", work), self._uploaded)
+
+    def _uploaded(self, job):
+        self._busy(False)
+        if job.error:
+            self._say(job.error, Qgis.Critical)
+            return
+        result = job.result or {}
+        uploaded = result.get("uploaded") or []
+        failed = result.get("failed") or []
+        styled = result.get("styled") or []
+        # Only claim what was actually sent. A renderer we cannot translate produces no style, and
+        # saying "styling sent" anyway is how a silent no-op passes for a feature.
+        if styled and len(styled) == len(uploaded):
+            styling = " Styling sent with " + ("it." if len(styled) == 1 else "them.")
+        elif styled:
+            styling = f" Styling sent for {len(styled)} of {len(uploaded)}."
+        elif uploaded and self.push_style.isChecked():
+            styling = " No styling was sent — this renderer has no GeoDeploy equivalent."
+        else:
+            styling = ""
+
+        if uploaded and not failed:
+            what = uploaded[0] if len(uploaded) == 1 else f"{len(uploaded)} layers"
+            self._say(f"Uploaded {what}.{styling}")
+        elif uploaded and failed:
+            # Partial success is its own outcome. Reporting it as failure hides work that landed;
+            # reporting it as success hides work that did not.
+            self._say(f"Uploaded {len(uploaded)}, but {len(failed)} did not: " + " | ".join(failed),
+                      Qgis.Warning)
+        else:
+            self._say(" | ".join(failed) or "Nothing was uploaded.", Qgis.Critical)
+        if uploaded:
+            self.refresh_layers()
+
+    # -- task plumbing ------------------------------------------------------------------------------
+
     # -- task plumbing ------------------------------------------------------------------------------
 
     def _run(self, job, on_done):
