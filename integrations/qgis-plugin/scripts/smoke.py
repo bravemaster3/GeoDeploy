@@ -130,7 +130,27 @@ def main() -> int:
         return 1
     print("all {0} wired methods exist: {1}".format(len(wired), ", ".join(sorted(wired))))
 
-    # 3. The plugin object QGIS instantiates, and the menu wiring it does at startup.
+    # 3. Every `self.something(...)` CALL, not only signal targets. `_open_portal` was deleted by
+    #    the same patch that took `upload_active`, and survived the first version of this check
+    #    because it is called from `add_selected` rather than wired to a button — so the plugin
+    #    still crashed, just one click further in.
+    called = set(re.findall(r"self\.(_?[a-z]\w*)\(", source))
+    assigned = set(re.findall(r"self\.(\w+)\s*=", source))
+    defined = set(re.findall(r"^    def (\w+)", source, re.M))
+    # Methods the dock inherits from QDockWidget. The stub bases are deliberately NOT permissive at
+    # class level (that is what made the first version of this check useless), so real Qt methods
+    # have to be named. A short, explicit list beats a check that passes for everything.
+    QT_INHERITED = {"setWidget", "show", "raise_", "hide", "setWindowTitle", "widget"}
+    absent = sorted(c for c in called
+                    if c not in defined and c not in assigned and c not in QT_INHERITED
+                    and not hasattr(plugin_mod.GeoDeployDock, c)
+                    and not hasattr(plugin_mod.GeoDeployPlugin, c))
+    if absent:
+        print("CALLED but never defined: {0}".format(", ".join(absent)))
+        return 1
+    print("all {0} self-calls resolve".format(len(called)))
+
+    # 4. The plugin object QGIS instantiates, and the menu wiring it does at startup.
     plugin_mod.GeoDeployPlugin(Any()).initGui()
     print("initGui ran")
     return 0
