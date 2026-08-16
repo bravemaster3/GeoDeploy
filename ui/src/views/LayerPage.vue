@@ -41,11 +41,64 @@
         </p>
       </div>
 
-      <div class="flex items-center gap-2 flex-wrap">
+      <!-- Status and actions on one line, beside the title and ABOVE the map. In a card of their
+           own they had a strip of empty space to themselves; here they read as a toolbar for the
+           thing named next to them, which is what they are. -->
+      <div class="flex items-center gap-2 flex-wrap justify-end">
         <span class="badge" :class="statusClass">{{ layer.status }}</span>
         <span v-if="layer.tile_status === 'ready'" class="badge badge-muted"
           title="Tiled to PMTiles — renders as fast static vector tiles">Tiled</span>
         <span class="badge badge-muted">{{ visibilityLabel }}</span>
+        <div class="w-px h-6 bg-border mx-1" aria-hidden="true" />
+      <button v-if="auth.canEdit && ready && !isExternal" @click="showStyle = true"
+        class="gd-act" title="Default style — colour, size, classification">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
+          <circle cx="13.5" cy="6.5" r="2.5" /><circle cx="18" cy="13" r="2.5" />
+          <circle cx="6.5" cy="10.5" r="2.5" /><circle cx="10" cy="18" r="2.5" />
+          <path d="M12 2a10 10 0 1 0 0 20c1.1 0 2-.9 2-2 0-1.4-1-1.9-1-3 0-.6.4-1 1-1h2a5 5 0 0 0 5-5c0-5-4.5-9-9-9z" />
+        </svg>
+      </button>
+
+      <button v-if="ready && !isExternal" @click="showLinks = true"
+        class="gd-act" title="Share links — use this layer in QGIS, GeoLibre, MapLibre…">
+        <LinkIcon class="w-4 h-4" />
+      </button>
+
+      <button v-if="auth.canEdit && ready && !isExternal" @click="showSharing = true"
+        class="gd-act" :title="`Visibility and metadata — currently ${visibilityLabel.toLowerCase()}`">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
+          <circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" />
+          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+        </svg>
+      </button>
+
+      <button v-if="auth.canEdit && canTile && ready" @click="onTile" :disabled="tiling"
+        class="gd-act disabled:opacity-40"
+        :title="layer.tile_status === 'ready' ? 'Re-tile for fast display (regenerate PMTiles)'
+                                              : 'Tile for fast seamless display (PMTiles)'">
+        <LayersIcon class="w-4 h-4" :class="tiling ? 'animate-pulse' : ''" />
+      </button>
+
+      <button v-if="auth.canEdit && isVector && !isExternal" @click="onReprocess"
+        :disabled="restarting" class="gd-act disabled:opacity-40"
+        title="Restart processing — re-convert from the uploaded file, no re-upload needed">
+        <RefreshIcon class="w-4 h-4" :class="restarting ? 'animate-spin' : ''" />
+      </button>
+
+      <div class="w-px h-6 bg-border mx-1" aria-hidden="true" />
+
+      <!-- The one action that creates something stays a labelled button: it is the reason most
+           people are on this page, and an icon would hide it. -->
+      <button v-if="auth.canEdit && ready" @click="showPortal = true" class="btn-primary text-sm">
+        Create a portal from this layer
+      </button>
+
+      <button v-if="auth.canEdit" @click="confirmDelete = true"
+        class="gd-act hover:text-red-400 ml-auto" title="Delete layer">
+        <TrashIcon class="w-4 h-4" />
+      </button>
       </div>
     </div>
 
@@ -154,13 +207,15 @@
           <Fact label="CRS" :value="layer.crs" mono />
           <Fact label="Size" :value="prettySize" />
         </dl>
-        <!-- Four numbers separated by commas is a puzzle: which one is north? Putting them on a
-             box says it without a legend, and the box's shape hints at the layer's own. -->
-        <div v-if="extent" class="mt-3 pt-3 border-t border-border/40">
-          <p class="text-xs text-muted-foreground/70 mb-2">
-            Extent <span class="opacity-60">(EPSG:4326)</span>
-          </p>
-          <div class="flex flex-col items-center gap-1 text-[11px] font-mono tabular-nums">
+        </section>
+
+        <!-- Its own card: the extent is a picture, and pinning it under the facts left one column
+             tall and the next half empty. Three boxes of similar height line up instead. -->
+        <section v-if="extent" class="card p-4">
+          <h2 class="text-sm font-semibold mb-3">
+            Where it is <span class="text-muted-foreground/60 font-normal text-xs">(EPSG:4326)</span>
+          </h2>
+          <div class="flex flex-col items-center gap-1 text-[11px] font-mono tabular-nums py-1">
             <span class="text-muted-foreground">{{ extent.north }}</span>
             <div class="flex items-center gap-2 w-full">
               <span class="text-muted-foreground text-right flex-1">{{ extent.west }}</span>
@@ -170,7 +225,6 @@
             </div>
             <span class="text-muted-foreground">{{ extent.south }}</span>
           </div>
-        </div>
         </section>
 
         <section class="card p-4">
@@ -202,64 +256,6 @@
         </section>
 
     </div>
-
-    <!-- Actions ------------------------------------------------------------------------------ -->
-    <!-- The same icons the list rows use, so an action means the same thing in both places and the
-         row stays one line instead of a wall of buttons. Every one has a tooltip: an icon nobody
-         can name is worse than a word. -->
-    <section v-if="layer" class="card p-3">
-      <div class="flex items-center gap-1 flex-wrap">
-        <button v-if="auth.canEdit && ready && !isExternal" @click="showStyle = true"
-          class="gd-act" title="Default style — colour, size, classification">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-            stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
-            <circle cx="13.5" cy="6.5" r="2.5" /><circle cx="18" cy="13" r="2.5" />
-            <circle cx="6.5" cy="10.5" r="2.5" /><circle cx="10" cy="18" r="2.5" />
-            <path d="M12 2a10 10 0 1 0 0 20c1.1 0 2-.9 2-2 0-1.4-1-1.9-1-3 0-.6.4-1 1-1h2a5 5 0 0 0 5-5c0-5-4.5-9-9-9z" />
-          </svg>
-        </button>
-
-        <button v-if="ready && !isExternal" @click="showLinks = true"
-          class="gd-act" title="Share links — use this layer in QGIS, GeoLibre, MapLibre…">
-          <LinkIcon class="w-4 h-4" />
-        </button>
-
-        <button v-if="auth.canEdit && ready && !isExternal" @click="showSharing = true"
-          class="gd-act" :title="`Visibility and metadata — currently ${visibilityLabel.toLowerCase()}`">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-            stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
-            <circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" />
-            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-          </svg>
-        </button>
-
-        <button v-if="auth.canEdit && canTile && ready" @click="onTile" :disabled="tiling"
-          class="gd-act disabled:opacity-40"
-          :title="layer.tile_status === 'ready' ? 'Re-tile for fast display (regenerate PMTiles)'
-                                                : 'Tile for fast seamless display (PMTiles)'">
-          <LayersIcon class="w-4 h-4" :class="tiling ? 'animate-pulse' : ''" />
-        </button>
-
-        <button v-if="auth.canEdit && isVector && !isExternal" @click="onReprocess"
-          :disabled="restarting" class="gd-act disabled:opacity-40"
-          title="Restart processing — re-convert from the uploaded file, no re-upload needed">
-          <RefreshIcon class="w-4 h-4" :class="restarting ? 'animate-spin' : ''" />
-        </button>
-
-        <div class="w-px h-6 bg-border mx-1" aria-hidden="true" />
-
-        <!-- The one action that creates something stays a labelled button: it is the reason most
-             people are on this page, and an icon would hide it. -->
-        <button v-if="auth.canEdit && ready" @click="showPortal = true" class="btn-primary text-sm">
-          Create a portal from this layer
-        </button>
-
-        <button v-if="auth.canEdit" @click="confirmDelete = true"
-          class="gd-act hover:text-red-400 ml-auto" title="Delete layer">
-          <TrashIcon class="w-4 h-4" />
-        </button>
-      </div>
-    </section>
 
     <!-- Fields -------------------------------------------------------------------------------- -->
     <section v-if="fields.length" class="card p-4">
