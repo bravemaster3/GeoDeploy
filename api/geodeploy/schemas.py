@@ -468,6 +468,12 @@ class RasterDefaultStyle(BaseModel):
     algorithm: str | None = None     # e.g. "hillshade" (single-band)
     zfactor: float | None = None     # hillshade vertical exaggeration
     bidx: list[int] | None = None    # band selection: [n] single-band, [r,g,b] RGB composite
+    # A colour per pixel VALUE, for data that is classified rather than continuous — land cover,
+    # soil types, a QGIS paletted raster. `colormap` names a gradient, and a gradient cannot
+    # describe a classification: interpolating between class 3 and class 4 means nothing. Shaped
+    # like the vector `categories` list on purpose, so both kinds of "this value is that colour"
+    # read the same way.
+    color_classes: list[dict] | None = None
 
 
 class RasterLayerOut(BaseModel):

@@ -155,6 +155,7 @@ def raster_links(layer, base: str, default_style: dict | None = None) -> list[di
     tile_url = base + titiler_svc.get_tile_url(
         layer.s3_key, colormap=ds.get("colormap"), rescale=ds.get("rescale"),
         algorithm=ds.get("algorithm"), zfactor=ds.get("zfactor"), bidx=ds.get("bidx"),
+        color_classes=ds.get("color_classes"),
         band_count=getattr(layer, "band_count", None))
     return [
         _link("tilejson", "TileJSON — raster tiles", f"{api}/tilejson",

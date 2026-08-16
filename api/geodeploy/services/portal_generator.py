@@ -259,6 +259,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                     algorithm=rstyle.get("algorithm"),
                     zfactor=rstyle.get("zfactor"),
                     bidx=rstyle.get("bidx"),
+                    color_classes=rstyle.get("color_classes"),
                     band_count=layer.band_count,
                 )],
                 "tileSize": 256,

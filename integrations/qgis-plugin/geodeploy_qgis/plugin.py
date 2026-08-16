@@ -21,7 +21,7 @@ from qgis.PyQt.QtWidgets import (QAbstractItemView, QAction, QCheckBox, QComboBo
                                  QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar,
                                  QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from . import export, portals as portal_sync, sources, symbology
+from . import diffdialog, export, portals as portal_sync, sources, symbology
 from .connection import GeoDeployError, Instance, saved_instances
 
 PLUGIN_NAME = "GeoDeploy"
@@ -98,7 +98,7 @@ class GeoDeployDock(QDockWidget):
         self.styled.setChecked(True)
         outer.addWidget(self.styled)
 
-        self.attributes = QCheckBox("Prefer full attributes over drawing speed")
+        self.attributes = QCheckBox("Prefer the real data over the styled view")
         self.attributes.setToolTip(
             "Vector — off: one pre-generalized archive, downloaded once, carrying only the "
             "attributes the tiles hold. On: OGC API - Features, re-queried for the extent on "
@@ -112,7 +112,7 @@ class GeoDeployDock(QDockWidget):
         outer.addWidget(self.add_btn)
         self.tree.itemSelectionChanged.connect(self._on_selection_changed)
 
-    # -- upload -------------------------------------------------------------------------------
+        # -- portals ----------------------------------------------------------------------------
         self.open_group_btn = QPushButton("Open portal as a group")
         self.open_group_btn.setToolTip(
             "Every layer of the selected portal, in its order and with the portal's own styling, "
@@ -127,6 +127,7 @@ class GeoDeployDock(QDockWidget):
         self.push_group_btn.clicked.connect(self.push_group)
         outer.addWidget(self.push_group_btn)
 
+        # -- upload -----------------------------------------------------------------------------
         self.upload_btn = QPushButton("Upload selected layer(s)…")
         self.upload_btn.setToolTip(
             "Uploads every layer selected in the Layers panel, one after another — or the active "
@@ -493,7 +494,13 @@ class GeoDeployDock(QDockWidget):
                   Qgis.Warning if missing else Qgis.Info)
 
     def push_group(self):
-        """Push the selected QGIS group back as a portal, updating the one it came from."""
+        """Push the selected QGIS group back as a portal — after showing exactly what will change.
+
+        Republishing has several consequences that are not equally reversible: removing a layer
+        from a portal is one click to undo, uploading a 2 GB file is not, and publishing a layer
+        you were only inspecting is not either. So nothing happens until the plan has been read and
+        approved, and the two consequential parts are separate opt-ins rather than one blanket OK.
+        """
         if not self.instance or not self.instance.token:
             self._say("Pushing a portal needs a token with write access.", Qgis.Warning)
             return
@@ -505,6 +512,8 @@ class GeoDeployDock(QDockWidget):
                       "portal.", Qgis.Warning)
             return
         group = groups[0]
+        portal_id, title = portal_sync.group_portal(group)
+        client = self.instance.client
 
         def style_for(qgis_layer, layer_type):
             if not self.push_style.isChecked():
@@ -513,23 +522,73 @@ class GeoDeployDock(QDockWidget):
                 return symbology.raster_from_qgis(qgis_layer, self._colormaps())
             return symbology.from_qgis(qgis_layer)
 
+        # What the portal looks like NOW, so the plan is a real comparison rather than a guess.
+        current = []
+        if portal_id is not None:
+            try:
+                current = (client.portals.get(portal_id) or {}).get("layer_configs") or []
+            except GeoDeployError as exc:
+                self._say(f"Could not read the portal to compare against: {exc}", Qgis.Critical)
+                return
+
         try:
-            configs, skipped = portal_sync.configs_from_group(group, style_for)
+            plan = portal_sync.plan_push(group, style_for, current)
         except Exception as exc:            # noqa: BLE001 - never crash QGIS over a layer tree
-            self._say("Could not read that group: " + str(exc), Qgis.Critical)
+            self._say(f"Could not read that group: {exc}", Qgis.Critical)
             return
 
-        portal_id, title = portal_sync.group_portal(group)
-        verb = "Updating" if portal_id else "Creating"
-        client = self.instance.client
-        self._skipped = skipped
+        go, upload_new, drop_removed = diffdialog.confirm(
+            self, title or "Untitled portal",
+            {"unchanged": plan["unchanged"], "restyled": plan["restyled"], "added": plan["added"],
+             "uploads": [name for name, _layer, _node in plan["uploads"]],
+             "removed": plan["removed"], "rename": plan.get("rename")},
+            creating=portal_id is None)
+        if not go:
+            self._say("Nothing was pushed.", bar=False)
+            return
+
+        uploads = list(plan["uploads"]) if upload_new else []
+        keep_removed = [] if drop_removed else [
+            cfg for cfg in current
+            if (int(cfg.get("layer_id")), str(cfg.get("layer_type")))
+            not in {(c["layer_id"], c["layer_type"]) for c in plan["configs"]}]
+        instance_url = self.instance.url
 
         def work():
-            return portal_sync.push(client, group, configs)
+            sent = []
+            for name, qgis_layer, _node in uploads:
+                # Upload, then TAG the QGIS layer with the id it was given. The tag is what makes
+                # the next push see it as an existing layer rather than a new one all over again.
+                path, temporary = export.prepare(qgis_layer)
+                try:
+                    result = client.uploads.upload(path, wait=True)
+                finally:
+                    if temporary:
+                        shutil.rmtree(os.path.dirname(path), ignore_errors=True)
+                if not getattr(result, "layer_id", None):
+                    continue
+                kind = result.plan.layer_type
+                portal_sync.tag_layer(qgis_layer, instance_url, result.layer_id, kind)
+                style = style_for(qgis_layer, kind)
+                if style:
+                    body = (dict(style, opacity=1.0) if kind == "raster"
+                            else {"opacity": 1.0, "style": style, "popup_fields": []})
+                    client.layers.api(kind).set_default_style(result.layer_id, body)
+                sent.append(name)
+
+            # Re-plan AFTER the uploads: the new layers are tagged now, so this puts them in their
+            # place in the group's order rather than making the caller reconstruct it.
+            final = portal_sync.plan_push(group, style_for, current)
+            configs = final["configs"] + keep_removed
+            # The rename was listed in the dialog and approved with everything else.
+            new_title = (plan.get("rename") or (None, None))[1]
+            doc = portal_sync.push(client, group, configs, new_title=new_title)
+            return {"portal": doc, "uploaded": sent, "kept": len(keep_removed),
+                    "skipped": [n for n, _l, _x in final["uploads"]]}
 
         self._busy(True)
-        self._say(verb + " portal " + str(title) + " from " + str(len(configs)) + " layer(s)...",
-                  bar=False)
+        verb = "Updating" if portal_id else "Creating"
+        self._say(verb + " portal " + str(title) + "...", bar=False)
         self._run(_Job("GeoDeploy: pushing portal", work), self._group_pushed)
 
     def _group_pushed(self, job):
@@ -537,149 +596,20 @@ class GeoDeployDock(QDockWidget):
         if job.error:
             self._say(job.error, Qgis.Critical)
             return
-        doc = job.result or {}
-        skipped = getattr(self, "_skipped", [])
-        note = ""
-        if skipped:
-            note = (" Skipped " + str(len(skipped)) + ": " + ", ".join(skipped[:3]) +
-                    " - these are not on the instance yet, so upload them first.")
+        result = job.result or {}
+        doc = result.get("portal") or {}
+        bits = []
+        if result.get("uploaded"):
+            bits.append("uploaded " + str(len(result["uploaded"])))
+        if result.get("kept"):
+            bits.append("kept " + str(result["kept"]) + " you chose not to remove")
+        if result.get("skipped"):
+            bits.append("left out " + ", ".join(result["skipped"][:3]))
+        detail = (" (" + "; ".join(bits) + ")") if bits else ""
         base = self.instance.url.rstrip("/") if self.instance else ""
         self._say("Portal " + str(doc.get("title")) + " published: " +
-                  base + "/p/" + str(doc.get("slug")) + note,
-                  Qgis.Warning if skipped else Qgis.Info)
+                  base + "/p/" + str(doc.get("slug")) + detail)
         self.refresh_layers()
-
-    def _open_portal(self, row):
-        """A portal is a published web map — QGIS cannot render one, so open it where it lives."""
-        base = (row.get("_base") or "").rstrip("/")
-        slug = row.get("slug") or ""
-        if not base or not slug:
-            self._say("That portal has no address yet — publish it first.", Qgis.Warning)
-            return
-        url = f"{base}/p/{slug}"
-        try:
-            from qgis.PyQt.QtCore import QUrl
-            from qgis.PyQt.QtGui import QDesktopServices
-            QDesktopServices.openUrl(QUrl(url))
-            self._say(f"Opened {url} in your browser.")
-        except Exception as exc:        # noqa: BLE001 - still give them the address
-            self._say(f"Open it at {url} ({exc}).", Qgis.Warning)
-
-    def upload_active(self):
-        if not self.instance:
-            self._say("Connect to an instance first.", Qgis.Warning)
-            return
-        if not self.instance.token:
-            self._say("Uploading needs a token with data:write. Public browsing does not.",
-                      Qgis.Warning)
-            return
-        # Whatever is SELECTED in the Layers panel, falling back to the active layer. Sending five
-        # layers is a normal thing to want, and doing it one at a time means five round trips
-        # through this dialog.
-        layers = list(self.iface.layerTreeView().selectedLayers() or [])
-        if not layers:
-            active = self.iface.activeLayer()
-            if active is None:
-                self._say("Select one or more layers in the Layers panel first.", Qgis.Warning)
-                return
-            layers = [active]
-
-        jobs = []           # (name, path, temporary, style)
-        refused = []
-        for layer in layers:
-            try:
-                # Not `layer.source()`: a filtered layer's file holds MORE than the layer does, and
-                # a memory or PostGIS layer has no file at all. `prepare` writes those out first.
-                path, temporary = export.prepare(
-                    layer, on_status=lambda t: self._say(t, bar=False))
-            except export.NotUploadable as exc:
-                refused.append("{0}: {1}".format(layer.name(), exc))
-                continue
-            # A raster's default style is a DIFFERENT shape — {colormap, rescale, bidx}, not
-            # classes — so it needs its own translation. Sending the vector shape is what made
-            # "Send its styling too" quietly do nothing for a GeoTIFF.
-            if not self.push_style.isChecked():
-                style = {}
-            elif isinstance(layer, QgsRasterLayer):
-                style = symbology.raster_from_qgis(layer, self._colormaps())
-            else:
-                style = symbology.from_qgis(layer)
-            jobs.append((layer.name(), path, temporary, style))
-
-        if not jobs:
-            # Everything was refused — say why, for each, rather than a generic failure.
-            self._say(" | ".join(refused) or "Nothing could be uploaded.", Qgis.Warning)
-            return
-
-        client = self.instance.client
-        total = len(jobs)
-
-        def work():
-            uploaded, styled, failed = [], [], list(refused)
-            for index, (name, path, temporary, style) in enumerate(jobs, start=1):
-                # Reported from the worker thread: a queue that looks frozen for four of five files
-                # is worse than no progress at all.
-                self._progress.emit("Uploading {0} ({1} of {2})…".format(name, index, total))
-                try:
-                    result = client.uploads.upload(path, wait=True)
-                    if style and getattr(result, "layer_id", None):
-                        # Styling travels with the upload: the portal then shows what the author
-                        # saw, instead of the next default colour in the palette.
-                        kind = result.plan.layer_type
-                        api = client.layers.api(kind)
-                        # The two kinds take different bodies. A raster's IS the style; a vector's
-                        # wraps it, alongside opacity and popup fields.
-                        body = (dict(style, opacity=1.0) if kind == "raster"
-                                else {"opacity": 1.0, "style": style, "popup_fields": []})
-                        api.set_default_style(result.layer_id, body)
-                        styled.append(name)
-                    uploaded.append(name)
-                except Exception as exc:            # noqa: BLE001 - one bad layer, not the batch
-                    # Four good layers must still arrive when the third one is broken.
-                    failed.append("{0}: {1}".format(name, exc))
-                finally:
-                    if temporary:
-                        # A multi-gigabyte export is not left behind in temp because upload failed.
-                        shutil.rmtree(os.path.dirname(path), ignore_errors=True)
-            return {"uploaded": uploaded, "styled": styled, "failed": failed}
-
-        self._busy(True)
-        self._say("Uploading {0} layer(s)… large files go straight to storage.".format(total),
-                  bar=False)
-        self._run(_Job("GeoDeploy: uploading", work), self._uploaded)
-
-    def _uploaded(self, job):
-        self._busy(False)
-        if job.error:
-            self._say(job.error, Qgis.Critical)
-            return
-        result = job.result or {}
-        uploaded = result.get("uploaded") or []
-        failed = result.get("failed") or []
-        styled = result.get("styled") or []
-        # Only claim what was actually sent. A renderer we cannot translate produces no style, and
-        # saying "styling sent" anyway is how a silent no-op passes for a feature.
-        if styled and len(styled) == len(uploaded):
-            styling = " Styling sent with " + ("it." if len(styled) == 1 else "them.")
-        elif styled:
-            styling = f" Styling sent for {len(styled)} of {len(uploaded)}."
-        elif uploaded and self.push_style.isChecked():
-            styling = " No styling was sent — this renderer has no GeoDeploy equivalent."
-        else:
-            styling = ""
-
-        if uploaded and not failed:
-            what = uploaded[0] if len(uploaded) == 1 else f"{len(uploaded)} layers"
-            self._say(f"Uploaded {what}.{styling}")
-        elif uploaded and failed:
-            # Partial success is its own outcome. Reporting it as failure hides work that landed;
-            # reporting it as success hides work that did not.
-            self._say(f"Uploaded {len(uploaded)}, but {len(failed)} did not: " + " | ".join(failed),
-                      Qgis.Warning)
-        else:
-            self._say(" | ".join(failed) or "Nothing was uploaded.", Qgis.Critical)
-        if uploaded:
-            self.refresh_layers()
 
     # -- task plumbing ------------------------------------------------------------------------------
 

@@ -272,6 +272,12 @@ def _hex(color) -> str:
     return color.name() if hasattr(color, "name") else str(color)
 
 
+#: Must match `services/titiler.MAX_COLOR_CLASSES`. The mapping rides in the URL of every tile
+#: request, so the ceiling is set by what a proxy accepts, not by taste — 128 classes is ~5 kB,
+#: against nginx's default 8 kB request line.
+MAX_COLOR_CLASSES = 128
+
+
 def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
     """A GeoDeploy RASTER default style from a QGIS raster renderer.
 
@@ -358,19 +364,41 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
             return style
 
         if isinstance(renderer, QgsPalettedRasterRenderer):
-            # NOT representable. A paletted raster gives each value its own colour, while a
-            # GeoDeploy raster style carries a NAMED continuous colormap — there is nowhere to put
-            # a per-value palette. Send the band so the right one is displayed, and say plainly
-            # what did not travel instead of implying the colours came across.
+            # A colour per pixel VALUE — land cover, soil types, any classification. A named
+            # colormap cannot express this (interpolating between class 3 and class 4 is
+            # meaningless), so GeoDeploy carries the mapping itself and TiTiler renders from it.
             try:
                 band = renderer.band()
                 if isinstance(band, int) and band > 0:
                     style["bidx"] = [band]
             except (TypeError, AttributeError):
                 pass
-            _log("Paletted rasters keep per-value colours, which a GeoDeploy raster style cannot "
-                 "express (it carries a named colormap). The band was sent; choose a colormap on "
-                 "the layer instead.")
+            classes = []
+            for cls in (renderer.classes() or []):
+                try:
+                    value = int(cls.value)
+                except (TypeError, ValueError, AttributeError):
+                    continue
+                colour = getattr(cls, "color", None)
+                if colour is None:
+                    continue
+                # Alpha travels: "no data" in a classification is usually a transparent class, and
+                # dropping that would paint it over everything underneath.
+                classes.append({"value": value,
+                                "color": "#{0:02x}{1:02x}{2:02x}{3:02x}".format(
+                                    colour.red(), colour.green(), colour.blue(), colour.alpha())})
+            if len(classes) > MAX_COLOR_CLASSES:
+                # Truncating a classification would silently mis-colour part of the map, so refuse
+                # the colours and keep the band: a grey raster is obviously unstyled, where a
+                # half-coloured one looks finished and is wrong.
+                _log("This raster has {0} classes; GeoDeploy carries at most {1} because the "
+                     "mapping travels in every tile request. The colours were not sent — the band "
+                     "was.".format(len(classes), MAX_COLOR_CLASSES))
+                return style
+            if classes:
+                style["color_classes"] = classes
+            else:
+                _log("This paletted raster exposed no readable classes; only its band was sent.")
             return style
 
         # Anything else — a renderer from a plugin, or a QGIS class we have not met. The band and the
