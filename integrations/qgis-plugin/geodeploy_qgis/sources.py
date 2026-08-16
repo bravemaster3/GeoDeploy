@@ -89,6 +89,21 @@ def describe(layer: dict, prefer_attributes: bool = False) -> dict | None:
         #
         # It is also the only styled source an ANONYMOUS caller can use: the public index omits
         # `tile_url`, so without this a public raster fell back to the COG and arrived unstyled.
+        # WMTS FIRST, because QGIS speaks it natively and the instance labels the link "for QGIS".
+        #
+        # An XYZ layer is a bare tile template: QGIS knows no extent and no zoom range, so it asks
+        # for z0/z1/z2 tiles that miss the raster entirely, retries each three times, and fills the
+        # log with failures while showing nothing. The WMTS capabilities carry the layer's
+        # WGS84BoundingBox and its tile matrix set, so QGIS asks only for tiles that exist.
+        wmts = _link(layer, "wmts") or f"{base}/api/data/raster/{ref}/wmts"
+        if wmts and not prefer_attributes:
+            return {
+                "kind": "wmts",
+                "wmts_url": wmts,
+                "provider": "wms",      # WMTS is served through the WMS provider
+                "why": "server-rendered tiles with the layer's own bounds, coloured as GeoDeploy draws it",
+            }
+
         tilejson = _link(layer, "tilejson") or f"{base}/api/data/raster/{ref}/tilejson"
         if tilejson and not prefer_attributes:
             return {

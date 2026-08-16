@@ -88,6 +88,19 @@ class Instance:
         except Exception as exc:        # noqa: BLE001 - surfaced as a plugin message
             raise GeoDeployError("Could not read {0}: {1}".format(url, exc))
 
+    def fetch_text(self, url: str) -> str:
+        """GET a URL on this instance as text — WMTS capabilities are XML, not JSON."""
+        from urllib.request import Request, urlopen
+
+        headers = {"User-Agent": self._c_user_agent(), "Accept": "application/xml, text/xml, */*"}
+        if self.token:
+            headers["Authorization"] = "Bearer {0}".format(self.token)
+        try:
+            with urlopen(Request(url, headers=headers), timeout=30) as response:  # noqa: S310
+                return response.read().decode("utf-8", "replace")
+        except Exception as exc:        # noqa: BLE001 - surfaced as a plugin message
+            raise GeoDeployError("Could not read {0}: {1}".format(url, exc))
+
     def published_style(self, slug: str) -> dict:
         """A published portal's own style.json — served to anyone, no credential involved.
 

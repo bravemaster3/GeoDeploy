@@ -479,7 +479,17 @@ class GeoDeployDock(QDockWidget):
             if self.instance:
                 portal_sync.tag_layer(layer, self.instance.url, row.get("id"), "vector")
             return layer
-        if source["kind"] == "tilejson":
+        if source["kind"] == "wmts":
+            layer = self._raster_from_wmts(source["wmts_url"], name)
+            if layer is None:
+                # Fall back rather than fail: a bare tile template still draws, it just asks for
+                # tiles that do not exist at low zoom.
+                tj = source.get("tilejson_url") or (
+                    source["wmts_url"].rsplit("/", 1)[0] + "/tilejson")
+                layer = self._raster_from_tilejson(tj, name)
+            if layer is None:
+                return None
+        elif source["kind"] == "tilejson":
             layer = self._raster_from_tilejson(source["tilejson_url"], name)
             if layer is None:
                 return None
@@ -511,6 +521,12 @@ class GeoDeployDock(QDockWidget):
         kind, url = src.get("kind"), (src.get("url") or "").strip()
         if not kind or not url:
             return None
+        # A portal's style.json stores tile URLs RELATIVE ("/raster/cog/tiles/…") because the portal
+        # page resolves them against its own origin. QGIS has no such origin, so every tile request
+        # went out hostless and failed three times over — which is what filled the log with retries
+        # while the layer showed nothing.
+        if url.startswith("/") and self.instance:
+            url = self.instance.url.rstrip("/") + url
         try:
             if kind == "raster-xyz":
                 uri = _xyz_uri(url)
@@ -531,6 +547,50 @@ class GeoDeployDock(QDockWidget):
             portal_sync.tag_layer(layer, self.instance.url, cfg.get("layer_id"),
                                   cfg.get("layer_type") or "vector")
         return layer
+
+    def _raster_from_wmts(self, url, name):
+        """A raster layer from the instance's WMTS capabilities.
+
+        Read rather than assumed: the document names the layer identifier, its style, its format
+        and its tile matrix set, and QGIS needs all four in the URI. Guessing any of them produces
+        a layer that looks valid and draws nothing.
+        """
+        try:
+            import xml.etree.ElementTree as ET
+            from qgis.core import QgsDataSourceUri
+
+            text = self.instance.fetch_text(url) if self.instance else None
+            if not text:
+                return None
+            root = ET.fromstring(text)
+            ns = {"wmts": "http://www.opengis.net/wmts/1.0",
+                  "ows": "http://www.opengis.net/ows/1.1"}
+            node = root.find(".//wmts:Contents/wmts:Layer", ns)
+            if node is None:
+                return None
+            identifier = node.findtext("ows:Identifier", default="", namespaces=ns).strip()
+            matrix = node.findtext(".//wmts:TileMatrixSetLink/wmts:TileMatrixSet",
+                                   default="WebMercatorQuad", namespaces=ns).strip()
+            fmt = (node.findtext("wmts:Format", default="image/png", namespaces=ns) or "").strip()
+            style = node.findtext(".//wmts:Style/ows:Identifier", default="default",
+                                  namespaces=ns).strip()
+            if not identifier:
+                return None
+
+            uri = QgsDataSourceUri()
+            uri.setParam("url", url)
+            uri.setParam("layers", identifier)
+            uri.setParam("styles", style or "default")
+            uri.setParam("format", fmt or "image/png")
+            uri.setParam("tileMatrixSet", matrix or "WebMercatorQuad")
+            uri.setParam("crs", "EPSG:3857")
+            # 7 = "use the server's own DPI handling", which is what QGIS's own WMTS dialog sets.
+            uri.setParam("dpiMode", "7")
+            built = QgsRasterLayer(bytes(uri.encodedUri()).decode("utf-8"), name, "wms")
+            return built if built.isValid() else None
+        except Exception as exc:        # noqa: BLE001 - fall back to the tile template
+            symbology._log("Could not read the raster's WMTS: {0}".format(exc))
+            return None
 
     def _raster_from_tilejson(self, url, name):
         """A styled raster layer from the instance's TileJSON: template, zooms and bounds.
