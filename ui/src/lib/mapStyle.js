@@ -29,6 +29,9 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
    * reverse, because MapLibre paints later layers on top — the same reversal the generator does.
    */
   const bm = basemap
+  // Icon id -> spec, for the caller to register on its map. Returned rather than written to an
+  // outer variable: this function is pure, and a closure write is exactly what broke when it moved.
+  const markerSpecs = {}
   const style = {
     version: 8,
     glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
@@ -237,7 +240,7 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
     }
   }
 
-  return { style, bounds }
+  return { style, bounds, markerSpecs }
 }
 
 

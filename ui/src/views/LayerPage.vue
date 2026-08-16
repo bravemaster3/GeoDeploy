@@ -21,7 +21,7 @@
     </template>
   </div>
 
-  <div v-else class="space-y-5">
+  <div v-else class="space-y-5 p-4 sm:p-6 max-w-[1600px] mx-auto">
     <!-- Header ------------------------------------------------------------------------------ -->
     <div class="flex items-start justify-between gap-4 flex-wrap">
       <div class="min-w-0">
@@ -56,7 +56,7 @@
     <!-- Map + facts ------------------------------------------------------------------------- -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
       <div class="lg:col-span-2 card overflow-hidden">
-        <div ref="mapEl" class="w-full h-[460px] bg-muted/40" />
+        <div id="gd-layer-map" class="w-full h-[460px] bg-muted/40" />
         <p v-if="mapNote" class="text-xs text-amber-300/90 px-4 py-2 border-t border-border/60">
           {{ mapNote }}
         </p>
@@ -122,7 +122,7 @@
 
     <!-- Actions ------------------------------------------------------------------------------ -->
     <section class="card p-4">
-      <h2 class="text-sm font-semibold mb-3">Do something with it</h2>
+      <h2 class="text-sm font-semibold mb-3">Actions</h2>
       <div class="flex flex-wrap gap-2">
         <button v-if="auth.canEdit && ready" @click="showStyle = true" class="btn-secondary text-sm">
           Style
@@ -155,22 +155,21 @@
 
     <!-- Fields -------------------------------------------------------------------------------- -->
     <section v-if="fields.length" class="card p-4">
-      <h2 class="text-sm font-semibold mb-3">Fields <span class="text-muted-foreground/60 font-normal">({{ fields.length }})</span></h2>
-      <div class="overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead>
-            <tr class="text-left text-xs text-muted-foreground/70 border-b border-border/60">
-              <th class="py-1.5 pr-4 font-medium">Name</th>
-              <th class="py-1.5 font-medium">Type</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="f in fields" :key="f.name" class="border-b border-border/30 last:border-0">
-              <td class="py-1.5 pr-4 font-mono text-xs">{{ f.name }}</td>
-              <td class="py-1.5 text-muted-foreground text-xs">{{ f.type }}</td>
-            </tr>
-          </tbody>
-        </table>
+      <button class="flex items-center gap-2 w-full text-left" @click="fieldsOpen = !fieldsOpen">
+        <span class="text-xs text-muted-foreground/60">{{ fieldsOpen ? '▾' : '▸' }}</span>
+        <h2 class="text-sm font-semibold">
+          Fields <span class="text-muted-foreground/60 font-normal">({{ fields.length }})</span>
+        </h2>
+      </button>
+      <!-- Two or three columns, not one row per field: a table of 8 fields took more of the page
+           than the map, and a layer with 40 would have been unusable. -->
+      <div v-if="fieldsOpen"
+        class="mt-3 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-x-6 gap-y-1 max-h-64 overflow-y-auto pr-1">
+        <div v-for="f in fields" :key="f.name"
+          class="flex items-baseline justify-between gap-3 border-b border-border/25 py-1">
+          <span class="font-mono text-xs truncate" :title="f.name">{{ f.name }}</span>
+          <span class="text-[11px] text-muted-foreground/70 flex-shrink-0">{{ f.type }}</span>
+        </div>
       </div>
     </section>
 
@@ -184,13 +183,14 @@
 </template>
 
 <script setup>
-import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, h, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
-import maplibregl from 'maplibre-gl'
 
 import { useDataStore } from '@/stores/data'
 import { useAuthStore } from '@/stores/auth'
+import { useMaplibre } from '@/composables/useMaplibre'
 import { buildMapStyle, lonLatBbox } from '@/lib/mapStyle'
+import { registerMarkerImages, setMarkerSpecs } from '@/lib/markerImage'
 import { DEFAULT_BASEMAP } from '@/lib/basemaps'
 import { legendEntries, representativeColor } from '@/lib/symbology'
 import StyleModal from '@/components/data/StyleModal.vue'
@@ -221,9 +221,12 @@ const isRaster = computed(() => kind.value === 'raster')
 const isVector = computed(() => kind.value === 'vector')
 
 const layer = computed(() => {
-  const id = Number(route.params.id)
+  // The URL carries the UID: integer ids are per-kind sequences that renumber on a restore, so a
+  // bookmarked /data/vector/12 could come back pointing at a different layer. An integer is still
+  // accepted, for links made before this and for anyone typing one by hand.
+  const ref_ = String(route.params.id || '')
   const list = isRaster.value ? dataStore.rasterLayers : dataStore.vectorLayers
-  return list.find(l => l.id === id) || null
+  return list.find(l => l.uid === ref_) || list.find(l => String(l.id) === ref_) || null
 })
 const ready = computed(() => layer.value?.status === 'ready')
 
@@ -283,9 +286,12 @@ const prettyExtent = computed(() => {
 })
 
 // -- the map ---------------------------------------------------------------------------------
-const mapEl = ref(null)
+// Through the shared composable, not a hand-rolled maplibregl.Map: it is what registers the
+// `pmtiles://` protocol (a tiled GeoParquet layer fails with 'URL scheme "pmtiles" is not
+// supported' without it), and it owns the map's lifecycle and the globe/zoom controls.
+const { map, loaded, applyStyle, fitToBbox } = useMaplibre('gd-layer-map',
+  { version: 8, sources: {}, layers: [] })
 const mapNote = ref('')
-let map = null
 
 /** The layer as a portal would configure it — one entry, drawn by the shared builder. */
 function configFor(l) {
@@ -300,7 +306,7 @@ function configFor(l) {
 
 function renderMap() {
   const l = layer.value
-  if (!l || !mapEl.value) return
+  if (!l || !map.value || !loaded.value) return
 
   // An untiled GeoParquet layer draws through the portal's data view (deck.gl over a viewport
   // query), which this page does not run. Saying so beats an empty basemap that looks broken.
@@ -309,34 +315,25 @@ function renderMap() {
     ? 'This GeoParquet layer is not tiled, so there is nothing to draw here yet. Tile it for a preview.'
     : ''
 
-  const { style, bounds } = buildMapStyle({
+  const { style, bounds, markerSpecs } = buildMapStyle({
     configs: [configFor(l)],
     layers: isVector.value ? [l] : [],
     rasters: isRaster.value ? [l] : [],
     sources: [],
     basemap: DEFAULT_BASEMAP,
   })
-
-  if (map) { map.setStyle(style); fit(bounds); return }
-  map = new maplibregl.Map({ container: mapEl.value, style, center: [0, 20], zoom: 1.4,
-                             attributionControl: { compact: true } })
-  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right')
-  map.on('load', () => fit(bounds))
-}
-
-function fit(bounds) {
-  const b = lonLatBbox(bounds) || lonLatBbox(layer.value?.bbox)
-  if (b && map) map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 36, duration: 0, maxZoom: 16 })
+  // Points are symbol layers whose icons are generated on demand — without this they draw nothing.
+  registerMarkerImages(map.value, markerSpecs)
+  setMarkerSpecs(map.value, markerSpecs)
+  applyStyle(style)
+  fitToBbox(lonLatBbox(bounds) || lonLatBbox(l.bbox))
 }
 
 onMounted(async () => {
   if (!dataStore.vectorLayers.length && !dataStore.rasterLayers.length) await dataStore.refresh()
-  await nextTick()
-  renderMap()
 })
-onBeforeUnmount(() => { if (map) { map.remove(); map = null } })
-// Re-render when the layer arrives, when its style changes, or when the route moves to another one.
-watch([layer, styleForMap], () => renderMap(), { deep: true })
+// The map is created on mount by the composable, so wait for it AND for the layer to arrive.
+watch([loaded, layer, styleForMap], () => renderMap(), { deep: true, immediate: true })
 
 // -- actions ---------------------------------------------------------------------------------
 const showStyle = ref(false)
@@ -344,6 +341,7 @@ const showSharing = ref(false)
 const showLinks = ref(false)
 const showPortal = ref(false)
 const confirmDelete = ref(false)
+const fieldsOpen = ref(true)
 const tiling = ref(false)
 const restarting = ref(false)
 
