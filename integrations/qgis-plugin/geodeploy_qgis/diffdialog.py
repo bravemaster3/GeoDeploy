@@ -59,8 +59,20 @@ def confirm(parent, portal_title: str, plan: dict, creating: bool):
     dialog.setWindowTitle(("Create portal " if creating else "Update portal ") + portal_title)
     layout = QVBoxLayout(dialog)
 
-    headline = ("This will CREATE the portal “{0}”." if creating
-                else "This will UPDATE the published portal “{0}”.").format(portal_title)
+    uploads_n = len(plan.get("uploads") or [])
+    existing_n = (len(plan.get("unchanged") or []) + len(plan.get("restyled") or [])
+                  + len(plan.get("added") or []))
+    if creating and uploads_n and not existing_n:
+        # The "start in QGIS, end with a URL" case. Everything here is a local file, so the whole
+        # group is about to be UPLOADED before the portal can exist — that is a much bigger action
+        # than "publish a portal", and the headline should say so before the file sizes do.
+        headline = ("None of these {0} layer(s) are on the instance yet. All of them will be "
+                    "UPLOADED, then the portal “{1}” will be created and published.").format(
+                        uploads_n, portal_title)
+    elif creating:
+        headline = "This will CREATE the portal “{0}”.".format(portal_title)
+    else:
+        headline = "This will UPDATE the published portal “{0}”.".format(portal_title)
     label = QLabel(headline)
     label.setWordWrap(True)
     layout.addWidget(label)

@@ -598,7 +598,10 @@ class GeoDeployDock(QDockWidget):
 
         def work():
             sent = []
-            for name, qgis_layer, _node in uploads:
+            for index, (name, qgis_layer, _node) in enumerate(uploads, start=1):
+                # Reported from the worker thread: publishing a group of five files is a long
+                # operation, and silence through it reads as a hang.
+                self._progress.emit("Uploading {0} ({1} of {2})…".format(name, index, len(uploads)))
                 # Upload, then TAG the QGIS layer with the id it was given. The tag is what makes
                 # the next push see it as an existing layer rather than a new one all over again.
                 path, temporary = export.prepare(qgis_layer)
@@ -620,6 +623,7 @@ class GeoDeployDock(QDockWidget):
 
             # Re-plan AFTER the uploads: the new layers are tagged now, so this puts them in their
             # place in the group's order rather than making the caller reconstruct it.
+            self._progress.emit("Publishing the portal…")
             final = portal_sync.plan_push(group, style_for, current)
             configs = final["configs"] + keep_removed
             # The rename was listed in the dialog and approved with everything else.
