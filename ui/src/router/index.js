@@ -16,6 +16,9 @@ const routes = [
     children: [
       { path: '', redirect: '/data' },
       { path: 'data', component: () => import('@/views/DataManager.vue') },
+      // One layer, on its own page. `kind` is vector|raster because the two are separate
+      // id sequences — layer 1 exists twice, and the URL has to say which one.
+      { path: 'data/:kind(vector|raster)/:id', component: () => import('@/views/LayerPage.vue') },
       { path: 'portals', component: () => import('@/views/PortalBuilder.vue') },
       { path: 'portals/:id/edit', component: () => import('@/views/PortalEditor.vue'), meta: { requiresEditor: true } },
       { path: 'templates', component: () => import('@/views/TemplateGallery.vue') },

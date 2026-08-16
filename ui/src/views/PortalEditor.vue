@@ -558,6 +558,7 @@ import {
   markerImages as symMarkerImages,
 } from '@/lib/symbology'
 import { buildMapStyle, lonLatBbox, rasterTilesUrl } from '@/lib/mapStyle'
+import { BASEMAPS } from '@/lib/basemaps'
 import { capturePortalThumbnail } from '@/composables/portalThumbnail'
 import maplibregl from 'maplibre-gl'
 import { MapboxOverlay } from '@deck.gl/mapbox'
@@ -900,36 +901,7 @@ const basemap = ref(null)  // chosen basemap catalog id; null → first catalog 
 // one-place change on the server. The inline list is only an instant bootstrap/offline fallback so
 // the preview never flashes blank before the fetch resolves. (Declared here — above the watches
 // that reference it at setup time — to avoid a temporal-dead-zone error.)
-const basemapCatalog = ref([
-  { id: 'positron', name: 'Positron',
-    tiles: ['https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png'],
-    attribution: '© OpenStreetMap © CARTO',
-    thumb: 'https://a.basemaps.cartocdn.com/light_all/4/8/5.png' },
-  { id: 'voyager', name: 'Voyager',
-    tiles: ['https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png', 'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png'],
-    attribution: '© OpenStreetMap © CARTO',
-    thumb: 'https://a.basemaps.cartocdn.com/rastertiles/voyager/4/8/5.png' },
-  { id: 'dark', name: 'Dark Matter',
-    tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'],
-    attribution: '© OpenStreetMap © CARTO',
-    thumb: 'https://a.basemaps.cartocdn.com/dark_all/4/8/5.png' },
-  { id: 'osm', name: 'OpenStreetMap',
-    tiles: ['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png', 'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png'],
-    attribution: '© OpenStreetMap contributors',
-    thumb: 'https://a.tile.openstreetmap.org/4/8/5.png' },
-  { id: 'topo', name: 'OpenTopoMap',
-    tiles: ['https://a.tile.opentopomap.org/{z}/{x}/{y}.png', 'https://b.tile.opentopomap.org/{z}/{x}/{y}.png'],
-    attribution: '© OpenStreetMap, SRTM | © OpenTopoMap (CC-BY-SA)',
-    thumb: 'https://a.tile.opentopomap.org/4/8/5.png' },
-  { id: 'satellite', name: 'Satellite',
-    tiles: ['https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-    attribution: 'Imagery © Esri, Maxar, Earthstar Geographics',
-    thumb: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/4/5/8' },
-  { id: 'esri-topo', name: 'Esri Topographic',
-    tiles: ['https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}'],
-    attribution: '© Esri',
-    thumb: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/4/5/8' },
-])
+const basemapCatalog = ref(BASEMAPS)
 
 // Drag-to-reorder layers (top of list = top of map)
 const dragIndex = ref(null)
