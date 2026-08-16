@@ -136,9 +136,41 @@ def configs_from_published_style(style_doc: dict, style_from_legend) -> list[dic
             "opacity": meta.get("geodeploy:opacity", 1.0),
             "style": style_from_legend(legend) or {},
             "popup_fields": [],
+            # WHERE THE DATA COMES FROM, taken from the portal's own style.
+            #
+            # A public portal may include layers that are not themselves published — that is a
+            # normal thing to do, and the portal serves them because the PORTAL is public. Looking
+            # each one up in the public layer index therefore found nothing and the group opened
+            # empty. The style already names the source the portal itself draws from, and it is
+            # readable by anyone who can read the portal.
+            "source": _source_of(style_doc, ml),
         })
     configs.reverse()
     return configs
+
+
+def _source_of(style_doc: dict, ml_layer: dict):
+    """`{kind, url, source_layer}` for one baked layer, or None.
+
+    Only the shapes the generator actually emits: PMTiles for a tiled GeoParquet layer, an XYZ
+    template for PostGIS vector tiles and for rasters.
+    """
+    src_id = ml_layer.get("source")
+    src = ((style_doc.get("sources") or {}).get(src_id) or {}) if src_id else {}
+    if not src:
+        return None
+    url = (src.get("url") or "").strip()
+    tiles = src.get("tiles") or []
+    if src.get("type") == "vector":
+        if url.startswith("pmtiles://"):
+            return {"kind": "pmtiles", "url": url[len("pmtiles://"):],
+                    "source_layer": ml_layer.get("source-layer")}
+        if tiles:
+            return {"kind": "vector-tiles", "url": tiles[0],
+                    "source_layer": ml_layer.get("source-layer")}
+    if src.get("type") == "raster" and tiles:
+        return {"kind": "raster-xyz", "url": tiles[0], "source_layer": None}
+    return None
 
 
 def _mode_of(meta: dict) -> str:
