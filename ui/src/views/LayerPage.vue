@@ -19,8 +19,8 @@
        map ever appeared. The layer-dependent parts wait; the container does not. -->
   <div class="space-y-5 p-4 sm:p-6 max-w-[1600px] mx-auto">
     <!-- Header ------------------------------------------------------------------------------ -->
-    <div v-if="layer" class="flex items-start justify-between gap-4 flex-wrap">
-      <div class="min-w-0">
+    <div v-if="layer" class="min-w-0">
+      <div>
         <RouterLink to="/data"
           class="text-xs text-muted-foreground/70 hover:text-foreground inline-flex items-center gap-1">
           <span aria-hidden="true">←</span> My Data
@@ -39,12 +39,12 @@
           {{ kindLabel }}<span v-if="layer.created_by"> · added by {{ layer.created_by }}</span>
           <span v-if="layer.created_at"> · {{ new Date(layer.created_at).toLocaleDateString() }}</span>
         </p>
-      </div>
+    </div>
 
-      <!-- Status and actions on one line, beside the title and ABOVE the map. In a card of their
-           own they had a strip of empty space to themselves; here they read as a toolbar for the
-           thing named next to them, which is what they are. -->
-      <div class="flex items-center gap-2 flex-wrap justify-end">
+    <!-- The toolbar is its own row, directly above the map it acts on — the title belongs with
+         the layer's identity, and the actions belong with the thing they change. Sharing one row
+         put the buttons level with the back link, which reads as page navigation. -->
+    <div v-if="layer" class="flex items-center gap-2 flex-wrap justify-end -mb-2">
         <span class="badge" :class="statusClass">{{ layer.status }}</span>
         <span v-if="layer.tile_status === 'ready'" class="badge badge-muted"
           title="Tiled to PMTiles — renders as fast static vector tiles">Tiled</span>
