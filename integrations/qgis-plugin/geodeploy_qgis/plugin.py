@@ -438,9 +438,26 @@ class GeoDeployDock(QDockWidget):
         if not self.instance:
             return
         ref = row.get("id") or row.get("slug")
+        slug = row.get("slug")
+        instance = self.instance
 
         def work():
-            return self.instance.client.portals.get(ref)
+            # With a token, ask the API — it is authoritative and covers unpublished portals.
+            if instance.token and ref is not None:
+                try:
+                    return instance.client.portals.get(ref)
+                except GeoDeployError:
+                    pass                # fall through: a published portal is readable anyway
+            # Without one, read what the portal PUBLISHES. Looking at a public portal should never
+            # require an account; only changing it should.
+            if not slug:
+                raise GeoDeployError("This portal has no published address to read.")
+            doc = instance.published_style(slug)
+            return {"id": row.get("id"), "slug": slug,
+                    "title": row.get("title") or row.get("name") or slug,
+                    "layer_configs": portal_sync.configs_from_published_style(
+                        doc, symbology.style_from_legend),
+                    "_anonymous": True}
 
         self._busy(True)
         self._say("Opening " + str(row.get("title") or "the portal") + "...", bar=False)
@@ -459,32 +476,57 @@ class GeoDeployDock(QDockWidget):
 
         project = QgsProject.instance()
         group = project.layerTreeRoot().insertGroup(0, doc.get("title") or "GeoDeploy portal")
-        group.setCustomProperty(portal_sync.P_PORTAL_ID, str(doc.get("id")))
+        # Only tag the portal id when we could actually write back to it. Tagging a read-only copy
+        # would offer an "update" that is going to be refused, which is worse than not offering it.
+        if doc.get("id") is not None and self.instance and self.instance.token:
+            group.setCustomProperty(portal_sync.P_PORTAL_ID, str(doc.get("id")))
         group.setCustomProperty(portal_sync.P_PORTAL_TITLE, doc.get("title") or "")
 
         added, missing = 0, []
-        # In order: layer_configs[0] is the TOP of the portal's list, and adding to the group in
-        # the same order puts it at the top here too. No reversal anywhere.
-        for cfg in configs:
-            layer_row = self._row_for(cfg.get("layer_id"), cfg.get("layer_type"))
-            if layer_row is None:
-                missing.append(str(cfg.get("layer_id")))
-                continue
-            source = sources.describe(layer_row, prefer_attributes=self.attributes.isChecked())
-            if not source:
-                missing.append(str(layer_row.get("name") or cfg.get("layer_id")))
-                continue
-            layer = self._build_layer(layer_row, source, layer_row.get("name") or "layer")
-            if layer is None:
-                missing.append(str(layer_row.get("name") or cfg.get("layer_id")))
-                continue
-            project.addMapLayer(layer, False)      # False: placed into the group, not the root
-            node = group.addLayer(layer)
-            node.setItemVisibilityChecked(bool(cfg.get("visible", True)))
-            style = (cfg.get("style") or {}) if self.styled.isChecked() else {}
-            if style and cfg.get("layer_type") != "raster":
-                symbology.apply_to_qgis(layer, style)
-            added += 1
+        by_key = {(int(c.get("layer_id")), str(c.get("layer_type"))): c for c in configs
+                  if c.get("layer_id") is not None}
+
+        def place(node_list, parent):
+            """The portal's folder tree, as QGIS sub-groups. Folders are a real structure the
+            author built, so they come across as folders rather than being flattened."""
+            nonlocal added
+            for item in node_list:
+                if item.get("children") is not None:
+                    sub = parent.addGroup(item.get("name") or "Folder")
+                    sub.setCustomProperty(portal_sync.P_FOLDER_ID, str(item.get("id") or ""))
+                    sub.setExpanded(not item.get("collapsed"))
+                    place(item.get("children") or [], sub)
+                    continue
+                key = (int(item.get("layer_id")), str(item.get("layer_type") or "vector"))
+                cfg = by_key.get(key)
+                if cfg is None:
+                    continue
+                layer_row = self._row_for(cfg.get("layer_id"), cfg.get("layer_type"))
+                if layer_row is None:
+                    missing.append(str(cfg.get("name") or cfg.get("layer_id")))
+                    continue
+                source = sources.describe(layer_row,
+                                          prefer_attributes=self.attributes.isChecked())
+                if not source:
+                    missing.append(str(layer_row.get("name") or cfg.get("layer_id")))
+                    continue
+                layer = self._build_layer(layer_row, source, layer_row.get("name") or "layer")
+                if layer is None:
+                    missing.append(str(layer_row.get("name") or cfg.get("layer_id")))
+                    continue
+                project.addMapLayer(layer, False)   # False: placed into the group, not the root
+                tree_node = parent.addLayer(layer)
+                tree_node.setItemVisibilityChecked(bool(cfg.get("visible", True)))
+                style = (cfg.get("style") or {}) if self.styled.isChecked() else {}
+                if style and cfg.get("layer_type") != "raster":
+                    symbology.apply_to_qgis(layer, style)
+                added += 1
+
+        # A portal with no folders is a flat list — the configs themselves, in order.
+        # layer_configs[0] is the TOP, and adding in the same order puts it at the top here too.
+        tree = doc.get("layer_groups") or [
+            {"layer_id": c.get("layer_id"), "layer_type": c.get("layer_type")} for c in configs]
+        place(tree, group)
 
         note = ""
         if missing:
@@ -582,7 +624,8 @@ class GeoDeployDock(QDockWidget):
             configs = final["configs"] + keep_removed
             # The rename was listed in the dialog and approved with everything else.
             new_title = (plan.get("rename") or (None, None))[1]
-            doc = portal_sync.push(client, group, configs, new_title=new_title)
+            doc = portal_sync.push(client, group, configs, new_title=new_title,
+                                   tree=final.get("tree"))
             return {"portal": doc, "uploaded": sent, "kept": len(keep_removed),
                     "skipped": [n for n, _l, _x in final["uploads"]]}
 

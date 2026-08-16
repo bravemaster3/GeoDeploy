@@ -69,6 +69,23 @@ class Instance:
                 pass
         return (self.client.catalog.public() or {}).get("portals") or []
 
+    def published_style(self, slug: str) -> dict:
+        """A published portal's own style.json — served to anyone, no credential involved.
+
+        Reading a portal through `/api/portals/<id>` needs a token. A PUBLISHED portal is public by
+        definition, and this is the document its own web page loads, so it is the honest source for
+        "show me this portal" without an account.
+        """
+        import json
+        from urllib.request import urlopen
+
+        url = "{0}/portals/{1}/style.json".format(self.url.rstrip("/"), slug)
+        try:
+            with urlopen(url, timeout=30) as response:      # noqa: S310 - our own instance URL
+                return json.loads(response.read().decode("utf-8"))
+        except Exception as exc:        # noqa: BLE001 - surfaced as a plugin message
+            raise GeoDeployError("Could not read the published portal at {0}: {1}".format(url, exc))
+
     def check(self) -> dict:
         """Prove the connection works, and say what kind it is — shown in the dock's header.
 
