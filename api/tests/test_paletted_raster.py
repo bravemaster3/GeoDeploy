@@ -188,3 +188,41 @@ async def test_a_continuous_raster_is_still_a_ramp(client, db, auth):
     assert body["ramp"] is True
     assert body["entries"] == []
     assert body["colormap"] == "viridis"
+
+
+# ── Reversing a palette ───────────────────────────────────────────────────────────────────────
+# Not cosmetic: a ramp read the wrong way inverts the map's meaning. Depth, deprivation and error
+# all conventionally run dark-for-high, which is the opposite of most sequential ramps.
+
+def test_a_named_ramp_reverses_with_the_matplotlib_suffix():
+    url = get_tile_url("r/x.tif", colormap="viridis", colormap_reverse=True, settings=_S())
+    assert _params(url)["colormap_name"] == ["viridis_r"]
+
+
+def test_reversing_is_idempotent_on_an_already_suffixed_name():
+    """A stored `viridis_r` must not become `viridis_r_r`, which names no colormap at all."""
+    url = get_tile_url("r/x.tif", colormap="viridis_r", colormap_reverse=True, settings=_S())
+    assert _params(url)["colormap_name"] == ["viridis_r"]
+
+
+def test_not_reversing_a_suffixed_name_unwinds_it():
+    """The flag is the single source of truth, so `viridis_r` + reverse=False is forward."""
+    url = get_tile_url("r/x.tif", colormap="viridis_r", colormap_reverse=False, settings=_S())
+    assert _params(url)["colormap_name"] == ["viridis"]
+
+
+def test_explicit_classes_reverse_by_re_pairing_the_colours():
+    """There is no name to suffix, so the COLOURS move and the values stay put."""
+    url = get_tile_url("r/x.tif", colormap_reverse=True, settings=_S(), color_classes=[
+        {"value": 1, "color": "#ff0000"},
+        {"value": 2, "color": "#00ff00"},
+        {"value": 3, "color": "#0000ff"}])
+    cm = json.loads(_params(url)["colormap"][0])
+    assert cm["1"] == [0, 0, 255, 255]      # was blue at the top, now at the bottom
+    assert cm["2"] == [0, 255, 0, 255]      # the middle is its own mirror
+    assert cm["3"] == [255, 0, 0, 255]
+
+
+def test_reverse_is_inert_without_a_palette():
+    url = get_tile_url("r/x.tif", colormap_reverse=True, settings=_S())
+    assert "colormap_name" not in _params(url) and "colormap" not in _params(url)

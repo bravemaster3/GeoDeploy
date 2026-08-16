@@ -260,6 +260,7 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                     zfactor=rstyle.get("zfactor"),
                     bidx=rstyle.get("bidx"),
                     color_classes=rstyle.get("color_classes"),
+                    colormap_reverse=bool(rstyle.get("colormap_reverse")),
                     band_count=layer.band_count,
                 )],
                 "tileSize": 256,

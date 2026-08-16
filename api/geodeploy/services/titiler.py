@@ -19,6 +19,7 @@ def get_tile_url(
     bidx: list | None = None,
     band_count: int | None = None,
     color_classes: list | None = None,
+    colormap_reverse: bool = False,
     settings=None,
 ) -> str:
     """
@@ -28,6 +29,9 @@ def get_tile_url(
       output (a colormap may apply); three bands → an RGB composite (colormap ignored).
       Empty/None lets TiTiler pick its default bands.
     - colormap: a TiTiler colormap name (single-band data only).
+    - colormap_reverse: flip the ramp. Low values take the colour high values had — which is what
+      you want whenever the convention runs the other way (depth, deprivation, error), and it is
+      not a cosmetic preference: a reversed ramp read as forward inverts the map's meaning.
     - color_classes: [{"value": n, "color": "#rrggbb"}] — an EXPLICIT colour per pixel value, for
       data that is classified rather than continuous (land cover, soil types, a QGIS paletted
       raster). Takes precedence over `colormap`, which can only describe a gradient.
@@ -71,14 +75,18 @@ def get_tile_url(
     # colormap only makes sense for single-band output (one selected band, or a
     # single-band raster). It is ignored when an algorithm or an RGB composite is active.
     elif len(bands) != 3:
-        explicit = _explicit_colormap(color_classes)
+        explicit = _explicit_colormap(color_classes, colormap_reverse)
         if explicit:
             # A CLASSIFIED raster — land cover, soil types, a QGIS paletted layer — has a colour
             # per VALUE, which no named gradient can express: interpolating between class 3 and
             # class 4 is meaningless. TiTiler takes the mapping itself as JSON.
             url += f"&colormap={quote(explicit, safe='')}"
         elif colormap:
-            url += f"&colormap_name={colormap}"
+            # matplotlib — and so rio-tiler, and so TiTiler — spells a reversed ramp with an `_r`
+            # suffix. Appended rather than stored that way, so the stored style still names the
+            # palette a person chose and "reversed" stays a separate, toggleable fact.
+            name = colormap[:-2] if colormap.endswith("_r") else colormap
+            url += f"&colormap_name={name}_r" if colormap_reverse else f"&colormap_name={name}"
     return url
 
 
@@ -94,7 +102,7 @@ def get_tile_url(
 MAX_COLOR_CLASSES = 128
 
 
-def _explicit_colormap(color_classes) -> str | None:
+def _explicit_colormap(color_classes, reverse: bool = False) -> str | None:
     """`{"3": [r,g,b,a], …}` as compact JSON, or None when there is nothing usable.
 
     Silently skips entries that are not a number-plus-colour rather than failing the whole tile
@@ -102,6 +110,13 @@ def _explicit_colormap(color_classes) -> str | None:
     """
     if not color_classes:
         return None
+    if reverse:
+        # No name to suffix, so the colours themselves are re-paired with the values in the
+        # opposite order — the values keep their places, the ramp runs the other way.
+        entries = list(color_classes[:MAX_COLOR_CLASSES])
+        colours = [e.get("color") if isinstance(e, dict) else None for e in entries][::-1]
+        color_classes = [dict(e, color=c) if isinstance(e, dict) else e
+                         for e, c in zip(entries, colours)]
     mapping = {}
     for entry in color_classes[:MAX_COLOR_CLASSES]:
         if not isinstance(entry, dict):

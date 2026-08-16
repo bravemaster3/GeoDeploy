@@ -36,7 +36,7 @@
           <input v-else ref="nameInput" v-model="draftName" @keyup.enter="commitRename"
             @keyup.esc="renaming = false" @blur="commitRename"
             class="input text-2xl font-semibold py-0.5" />
-          <button v-if="auth.canEdit && !renaming" @click="startRename"
+          <button v-if="auth.canEdit && !renaming && !isExternal" @click="startRename"
             class="text-muted-foreground/60 hover:text-foreground text-sm" title="Rename layer">✎</button>
         </div>
         <p class="text-xs text-muted-foreground/70 mt-1">
@@ -53,84 +53,85 @@
       </div>
     </div>
 
-    <!-- Map + facts ------------------------------------------------------------------------- -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
-      <div class="lg:col-span-2 card overflow-hidden">
-        <div id="gd-layer-map" class="w-full h-[460px] bg-muted/40" />
-        <p v-if="mapNote" class="text-xs text-amber-300/90 px-4 py-2 border-t border-border/60">
-          {{ mapNote }}
-        </p>
-      </div>
+    <!-- The map, full width. A fixed side column left a tall void next to it whenever a layer had
+         no legend and no metadata, which is most of them — the facts read better as a row of cards
+         under the map, and they reflow instead of stacking into one narrow strip. -->
+    <div class="card overflow-hidden">
+      <div id="gd-layer-map" class="w-full h-[52vh] min-h-[340px] bg-muted/40" />
+      <p v-if="mapNote" class="text-xs text-amber-300/90 px-4 py-2 border-t border-border/60">
+        {{ mapNote }}
+      </p>
+    </div>
 
-      <div class="space-y-5">
-        <section class="card p-4">
-          <h2 class="text-sm font-semibold mb-3">What it is</h2>
-          <dl class="space-y-1.5 text-sm">
-            <Fact label="Geometry" :value="layer.geometry_type" />
-            <Fact label="Features" :value="layer.feature_count?.toLocaleString()" />
-            <Fact label="Bands" :value="layer.band_count" />
-            <Fact label="CRS" :value="layer.crs" mono />
-            <Fact label="Size" :value="prettySize" />
-            <Fact label="Extent" :value="prettyExtent" mono
-              hint="West, south, east, north in EPSG:4326" />
-          </dl>
+    <!-- Facts ---------------------------------------------------------------------------------- -->
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5 items-start">
+      <section class="card p-4">
+        <h2 class="text-sm font-semibold mb-3">What it is</h2>
+        <dl class="space-y-1.5 text-sm">
+          <Fact label="Geometry" :value="layer.geometry_type" />
+          <Fact label="Features" :value="layer.feature_count?.toLocaleString()" />
+          <Fact label="Bands" :value="layer.band_count" />
+          <Fact label="CRS" :value="layer.crs" mono />
+          <Fact label="Size" :value="prettySize" />
+          <Fact label="Extent" :value="prettyExtent" mono
+            hint="West, south, east, north in EPSG:4326" />
+        </dl>
         </section>
 
         <section class="card p-4">
-          <h2 class="text-sm font-semibold mb-3">How it is served</h2>
-          <dl class="space-y-1.5 text-sm">
-            <Fact label="Storage" :value="storageLabel" />
-            <Fact label="Tiles" :value="tilesLabel" />
-            <Fact v-if="isRaster" label="Zoom floor"
-              :value="layer.low_zoom_ok === false ? 'High zoom only' : 'Draws when zoomed out'"
-              hint="Measured from the file's overview pyramid at ingest" />
-            <Fact v-if="isRaster && rasterStyle.colormap" label="Colormap" :value="rasterStyle.colormap" />
-            <Fact v-if="isRaster && rasterStyle.rescale" label="Stretch" :value="rasterStyle.rescale" mono />
-          </dl>
+        <h2 class="text-sm font-semibold mb-3">How it is served</h2>
+        <dl class="space-y-1.5 text-sm">
+          <Fact label="Storage" :value="storageLabel" />
+          <Fact label="Tiles" :value="tilesLabel" />
+          <Fact v-if="isRaster" label="Zoom floor"
+            :value="layer.low_zoom_ok === false ? 'High zoom only' : 'Draws when zoomed out'"
+            hint="Measured from the file's overview pyramid at ingest" />
+          <Fact v-if="isRaster && rasterStyle.colormap" label="Colormap" :value="rasterStyle.colormap" />
+          <Fact v-if="isRaster && rasterStyle.rescale" label="Stretch" :value="rasterStyle.rescale" mono />
+        </dl>
         </section>
 
         <section v-if="hasDescription" class="card p-4">
-          <h2 class="text-sm font-semibold mb-3">Metadata</h2>
-          <dl class="space-y-1.5 text-sm">
-            <Fact label="Licence" :value="layer.license" />
-            <Fact label="Attribution" :value="layer.attribution" />
-            <Fact label="Keywords" :value="layer.keywords" />
-          </dl>
-          <p v-if="layer.abstract" class="text-xs text-muted-foreground mt-2 whitespace-pre-line">
-            {{ layer.abstract }}
-          </p>
-          <p class="text-[11px] text-muted-foreground/60 mt-2">
-            Edited under Sharing — it travels with the layer into STAC, OGC API and the catalog.
-          </p>
+        <h2 class="text-sm font-semibold mb-3">Metadata</h2>
+        <dl class="space-y-1.5 text-sm">
+          <Fact label="Licence" :value="layer.license" />
+          <Fact label="Attribution" :value="layer.attribution" />
+          <Fact label="Keywords" :value="layer.keywords" />
+        </dl>
+        <p v-if="layer.abstract" class="text-xs text-muted-foreground mt-2 whitespace-pre-line">
+          {{ layer.abstract }}
+        </p>
+        <p class="text-[11px] text-muted-foreground/60 mt-2">
+          Edited under Sharing — it travels with the layer into STAC, OGC API and the catalog.
+        </p>
         </section>
 
         <section v-if="legend.length" class="card p-4">
-          <h2 class="text-sm font-semibold mb-1">Legend</h2>
-          <p v-if="colorField" class="text-[11px] text-muted-foreground/70 mb-2">
-            Colour by <span class="font-medium text-muted-foreground">{{ colorField }}</span>
-          </p>
-          <div class="space-y-1 max-h-52 overflow-y-auto pr-1">
-            <div v-for="(e, i) in legend" :key="i" class="flex items-center gap-2">
-              <span class="w-3.5 h-3.5 rounded-sm flex-shrink-0 ring-1 ring-black/25"
-                :style="{ background: e.color }" />
-              <span class="text-xs text-muted-foreground truncate">{{ e.label }}</span>
-            </div>
+        <h2 class="text-sm font-semibold mb-1">Legend</h2>
+        <p v-if="colorField" class="text-[11px] text-muted-foreground/70 mb-2">
+          Colour by <span class="font-medium text-muted-foreground">{{ colorField }}</span>
+        </p>
+        <div class="space-y-1 max-h-52 overflow-y-auto pr-1">
+          <div v-for="(e, i) in legend" :key="i" class="flex items-center gap-2">
+            <span class="w-3.5 h-3.5 rounded-sm flex-shrink-0 ring-1 ring-black/25"
+              :style="{ background: e.color }" />
+            <span class="text-xs text-muted-foreground truncate">{{ e.label }}</span>
           </div>
-        </section>
-      </div>
+        </div>
+      </section>
     </div>
 
     <!-- Actions ------------------------------------------------------------------------------ -->
     <section class="card p-4">
       <h2 class="text-sm font-semibold mb-3">Actions</h2>
       <div class="flex flex-wrap gap-2">
-        <button v-if="auth.canEdit && ready" @click="showStyle = true" class="btn-secondary text-sm">
+        <button v-if="auth.canEdit && ready && !isExternal" @click="showStyle = true" class="btn-secondary text-sm">
           Style
         </button>
-        <button v-if="ready" @click="showLinks = true" class="btn-secondary text-sm">
+        <button v-if="ready && !isExternal" @click="showLinks = true" class="btn-secondary text-sm">
           Share links
         </button>
-        <button v-if="auth.canEdit && ready" @click="showSharing = true" class="btn-secondary text-sm">
+        <button v-if="auth.canEdit && ready && !isExternal" @click="showSharing = true" class="btn-secondary text-sm">
           {{ visibilityLabel === 'Public' ? 'Sharing — public' : 'Sharing' }}
         </button>
         <button v-if="auth.canEdit && ready" @click="showPortal = true" class="btn-primary text-sm">
@@ -216,25 +217,34 @@ const router = useRouter()
 const dataStore = useDataStore()
 const auth = useAuthStore()
 
-const kind = computed(() => (route.params.kind === 'raster' ? 'raster' : 'vector'))
-const isRaster = computed(() => kind.value === 'raster')
-const isVector = computed(() => kind.value === 'vector')
+const kind = computed(() => ['raster', 'external'].includes(route.params.kind)
+  ? route.params.kind : 'vector')
+const isExternal = computed(() => kind.value === 'external')
+// An external RASTER source draws through the raster path; a vector one through the vector path.
+// `kind` is what the layer_config calls it, which is 'external' for both.
+const isRaster = computed(() => kind.value === 'raster'
+  || (isExternal.value && layer.value?.kind === 'raster'))
+const isVector = computed(() => !isRaster.value && !isExternal.value)
 
 const layer = computed(() => {
   // The URL carries the UID: integer ids are per-kind sequences that renumber on a restore, so a
   // bookmarked /data/vector/12 could come back pointing at a different layer. An integer is still
   // accepted, for links made before this and for anyone typing one by hand.
   const ref_ = String(route.params.id || '')
-  const list = isRaster.value ? dataStore.rasterLayers : dataStore.vectorLayers
+  const list = kind.value === 'external' ? dataStore.externalSources
+    : (kind.value === 'raster' ? dataStore.rasterLayers : dataStore.vectorLayers)
   return list.find(l => l.uid === ref_) || list.find(l => String(l.id) === ref_) || null
 })
-const ready = computed(() => layer.value?.status === 'ready')
+const ready = computed(() => isExternal.value || layer.value?.status === 'ready')
 
 // A vector's default style nests the visual part under `style`; a raster's is flat. Same split the
 // API stores, so this is where it is unpacked rather than in three places downstream.
 const vectorStyle = computed(() => (layer.value?.default_style?.style) || {})
 const rasterStyle = computed(() => layer.value?.default_style || {})
-const styleForMap = computed(() => (isRaster.value ? rasterStyle.value : vectorStyle.value))
+const styleForMap = computed(() => {
+  if (isExternal.value) return {}      // the remote service decides how it draws
+  return isRaster.value ? rasterStyle.value : vectorStyle.value
+})
 
 const legend = computed(() => (isVector.value ? legendEntries(vectorStyle.value) : []))
 const colorField = computed(() =>
@@ -253,13 +263,18 @@ const portalSeed = computed(() => ({
   style: styleForMap.value, popup_fields: [],
 }))
 
-const kindLabel = computed(() => isRaster.value
+const kindLabel = computed(() => isExternal.value
+  ? `External ${layer.value?.kind || ''} · ${(layer.value?.source_type || '').toUpperCase()}`
+  : isRaster.value
   ? 'Raster'
   : (layer.value?.storage_backend === 'geoparquet' ? 'Vector · GeoParquet' : 'Vector · PostGIS'))
-const storageLabel = computed(() => isRaster.value
+const storageLabel = computed(() => isExternal.value
+  ? 'Served by another organisation'
+  : isRaster.value
   ? 'Cloud-Optimized GeoTIFF'
   : (layer.value?.storage_backend === 'geoparquet' ? 'GeoParquet in object storage' : 'PostGIS table'))
 const tilesLabel = computed(() => {
+  if (isExternal.value) return 'From the remote service'
   if (isRaster.value) return 'TiTiler, rendered on demand'
   if (layer.value?.storage_backend === 'geoparquet') {
     return layer.value?.tile_status === 'ready' ? 'PMTiles archive' : 'Not tiled'
@@ -317,9 +332,9 @@ function renderMap() {
 
   const { style, bounds, markerSpecs } = buildMapStyle({
     configs: [configFor(l)],
-    layers: isVector.value ? [l] : [],
-    rasters: isRaster.value ? [l] : [],
-    sources: [],
+    layers: (isVector.value && !isExternal.value) ? [l] : [],
+    rasters: (isRaster.value && !isExternal.value) ? [l] : [],
+    sources: isExternal.value ? [l] : [],
     basemap: DEFAULT_BASEMAP,
   })
   // Points are symbol layers whose icons are generated on demand — without this they draw nothing.
@@ -364,9 +379,13 @@ async function commitRename() {
   else await dataStore.renameVector(layer.value.id, name)
 }
 
-function onStyleClosed() {
+async function onStyleClosed() {
   showStyle.value = false
-  renderMap()            // the map is the preview of what was just saved
+  // Pull the saved style back before redrawing. Without this the map rebuilt from the layer the
+  // store still held, so a just-saved raster could come back looking unchanged — or briefly not
+  // at all — until the page was reloaded by hand.
+  await dataStore.refresh()
+  renderMap()
 }
 
 async function onTile() {
@@ -379,7 +398,8 @@ async function onReprocess() {
 }
 async function onDelete() {
   confirmDelete.value = false
-  if (isRaster.value) await dataStore.removeRaster(layer.value.id)
+  if (isExternal.value) await dataStore.removeExternal(layer.value.id)
+  else if (isRaster.value) await dataStore.removeRaster(layer.value.id)
   else await dataStore.removeVector(layer.value.id)
   router.push('/data')
 }

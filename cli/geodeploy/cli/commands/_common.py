@@ -77,6 +77,11 @@ def add_style_args(parser, raster: bool = True) -> None:
     if raster:
         rast = parser.add_argument_group("raster")
         rast.add_argument("--colormap", help="TiTiler colormap, e.g. viridis (see `layers colormaps`)")
+        rast.add_argument("--reverse-colormap", dest="colormap_reverse", action="store_true",
+                          default=None,
+                          help="flip the palette (low values take the colour high values had)")
+        rast.add_argument("--no-reverse-colormap", dest="colormap_reverse", action="store_false",
+                          help="undo --reverse-colormap")
         rast.add_argument("--rescale", help="stretch as 'min,max' (see `layers stats` for a suggestion)")
         rast.add_argument("--algorithm", help="e.g. hillshade (single-band)")
         rast.add_argument("--zfactor", type=float, help="hillshade vertical exaggeration")
@@ -112,7 +117,8 @@ def style_from_args(args, client=None, layer_ref: Optional[Any] = None,
 
     kwargs = {}  # type: Dict[str, Any]
     for name in ("color", "fill_opacity", "outline_color", "outline_width", "line_width",
-                 "radius", "marker", "line_type", "colormap", "rescale", "algorithm", "zfactor",
+                 "radius", "marker", "line_type", "colormap", "colormap_reverse",
+                 "rescale", "algorithm", "zfactor",
                  "color_field", "color_mode", "size_field", "other_color", "size_stops",
                  "extrude_field", "extrude_scale", "extrude_base", "extrude_color",
                  "extrude_opacity", "extrude_radius"):

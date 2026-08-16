@@ -3,7 +3,9 @@
     <div class="w-8 h-8 rounded-md flex items-center justify-center text-[10px] font-bold flex-shrink-0"
       :class="badgeClass">{{ source.source_type.toUpperCase() }}</div>
     <div class="flex-1 min-w-0">
-      <div class="text-sm font-medium truncate">{{ source.name }}</div>
+      <RouterLink :to="`/data/external/${source.id}`"
+        class="text-sm font-medium truncate block hover:text-primary hover:underline"
+        title="Open this source's page">{{ source.name }}</RouterLink>
       <div class="text-xs text-muted-foreground flex gap-3 mt-0.5">
         <span class="uppercase">{{ source.kind }}</span>
         <span v-if="source.geometry_type">{{ source.geometry_type }}</span>
@@ -27,6 +29,7 @@
 </template>
 
 <script setup>
+import { RouterLink } from 'vue-router'
 import { computed, ref } from 'vue'
 import { TrashIcon } from '@/views/icons'
 import { useAuthStore } from '@/stores/auth'

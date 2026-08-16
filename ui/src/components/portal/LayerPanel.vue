@@ -410,6 +410,15 @@
                   <option value="">None (grayscale)</option>
                   <option v-for="cm in colormaps" :key="cm" :value="cm">{{ cm }}</option>
                 </select>
+                <!-- Reversing is not a preference: depth, deprivation and error all read
+                     dark-for-high, which is the opposite of most sequential ramps. -->
+                <label v-if="config.style?.colormap"
+                  class="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer mt-1.5">
+                  <input type="checkbox" :checked="!!config.style?.colormap_reverse"
+                    @change="emitStyle({ colormap_reverse: $event.target.checked })"
+                    class="accent-primary" />
+                  Reverse the palette
+                </label>
               </div>
               <div class="flex items-center gap-3">
                 <label class="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
