@@ -73,6 +73,8 @@ def _apply_data_defined_size(symbol, layer0, style: dict) -> None:
     if spec is None:
         return
     field, in_lo, in_hi, out_lo, out_hi = spec
+    # The stops are pixel sizes like every other size here, so the symbol must already be measured
+    # in pixels (`_use_pixels`, called by `_symbol_for` before this).
     try:
         from qgis.core import QgsProperty, QgsSymbolLayer
     except ImportError:                 # pragma: no cover
@@ -84,11 +86,33 @@ def _apply_data_defined_size(symbol, layer0, style: dict) -> None:
             symbol.setDataDefinedSize(QgsProperty.fromExpression(expr))
         elif isinstance(layer0, QgsSimpleLineSymbolLayer):
             expr = 'scale_linear("{0}", {1}, {2}, {3}, {4})'.format(
-                field, in_lo, in_hi, out_lo / 4.0, out_hi / 4.0)
+                field, in_lo, in_hi, out_lo, out_hi)
             layer0.setDataDefinedProperty(QgsSymbolLayer.PropertyStrokeWidth,
                                           QgsProperty.fromExpression(expr))
     except Exception as exc:            # noqa: BLE001 - a size must never stop a layer drawing
         _log("Could not apply size-by-field ({0}): {1}".format(field, exc))
+
+
+def _use_pixels(symbol, layer0) -> None:
+    """Measure this symbol in pixels, which is what GeoDeploy's numbers mean.
+
+    QGIS defaults to millimetres. A GeoDeploy radius of 5 (px) set as 10 mm draws about four times
+    too large at a normal DPI — the difference between "the same map" and "a map covered in blobs".
+    Both the symbol and its layer are told, because QGIS keeps the unit on each.
+    """
+    try:
+        from qgis.core import QgsUnitTypes
+        px = QgsUnitTypes.RenderPixels
+    except Exception:                   # noqa: BLE001 - very old QGIS: leave the default
+        return
+    for target, setter in ((symbol, "setSizeUnit"), (layer0, "setSizeUnit"),
+                           (symbol, "setWidthUnit"), (layer0, "setWidthUnit")):
+        fn = getattr(target, setter, None)
+        if callable(fn):
+            try:
+                fn(px)
+            except Exception:           # noqa: BLE001 - not every symbol layer has both
+                pass
 
 
 def _symbol_for(qgis_layer, color: str | None, style: dict):
@@ -114,9 +138,12 @@ def _symbol_for(qgis_layer, color: str | None, style: dict):
                 layer0.setShape(QgsSimpleMarkerSymbolLayer.decodeShape(shape)[0])
             except Exception:           # noqa: BLE001 - shape names shift between QGIS versions
                 pass
+        _use_pixels(symbol, layer0)
         if style.get("radius"):
-            # GeoDeploy's radius is a pixel radius; QGIS marker size is a diameter in mm-ish units.
-            # Doubling keeps the relative sizes right, which is what a reader compares.
+            # GeoDeploy's radius is in PIXELS and QGIS's size is a DIAMETER — so double it, and
+            # (above) tell QGIS the number is pixels. Without that it is read as millimetres, and a
+            # radius of 5 becomes a 10 mm marker: roughly four times too big on screen, which is
+            # exactly how it looked.
             symbol.setSize(float(style["radius"]) * 2)
         outline = style.get("outline_color")
         if outline and outline != "none":
@@ -124,8 +151,11 @@ def _symbol_for(qgis_layer, color: str | None, style: dict):
         elif outline == "none":
             layer0.setStrokeStyle(Qt.NoPen)
     elif isinstance(layer0, QgsSimpleLineSymbolLayer):
+        _use_pixels(symbol, layer0)
         if style.get("line_width"):
-            layer0.setWidth(float(style["line_width"]) / 4.0)   # px → mm, roughly
+            # In pixels now (see `_use_pixels`), so the width IS the width — no mm conversion, and
+            # no divide-by-four fudge that was only ever right at one screen DPI.
+            layer0.setWidth(float(style["line_width"]))
         dash = (style.get("lineType") or "solid").lower()
         if dash == "dashed":
             layer0.setPenStyle(Qt.DashLine)

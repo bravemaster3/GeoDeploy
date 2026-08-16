@@ -51,6 +51,25 @@ def _plain_file_source(layer) -> str | None:
     return source if os.path.isfile(source) else None
 
 
+def check(layer) -> None:
+    """Raise `NotUploadable` if this layer cannot be sent — WITHOUT exporting anything.
+
+    The picker needs to know before the user chooses, and writing a two-gigabyte GeoPackage to find
+    out would be a strange way to populate a list.
+    """
+    if isinstance(layer, QgsRasterLayer):
+        if not _plain_file_source(layer):
+            raise NotUploadable("served from elsewhere, not a local file")
+        return
+    if not isinstance(layer, QgsVectorLayer):
+        raise NotUploadable("not a vector or raster layer")
+    if layer.isEditable() and layer.isModified():
+        raise NotUploadable("has unsaved edits")
+    source = layer.source() or ""
+    if source.startswith(("http://", "https://", "/vsicurl", "url=")):
+        raise NotUploadable("served from elsewhere, not a local file")
+
+
 def prepare(layer, on_status=None) -> tuple[str, bool]:
     """`(path, is_temporary)` for a layer ready to upload.
 

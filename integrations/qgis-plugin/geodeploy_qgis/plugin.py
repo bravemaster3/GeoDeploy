@@ -21,7 +21,8 @@ from qgis.PyQt.QtWidgets import (QAbstractItemView, QAction, QCheckBox, QComboBo
                                  QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar,
                                  QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from . import diffdialog, export, portals as portal_sync, sources, symbology
+from . import (diffdialog, export, portals as portal_sync, sources, symbology,
+               uploadpicker)
 from .connection import GeoDeployError, Instance, saved_instances
 
 PLUGIN_NAME = "GeoDeploy"
@@ -45,6 +46,25 @@ class _Job(QgsTask):
         except Exception as exc:                      # noqa: BLE001 - surface, never crash QGIS
             self.error = f"{type(exc).__name__}: {exc}"
         return False
+
+
+def _xyz_uri(tile_url: str) -> str | None:
+    """An XYZ provider URI built by QGIS itself.
+
+    `QgsDataSourceUri` owns the escaping rules, and ours has to survive a template whose own query
+    string contains `?`, `&` and `://`. Letting QGIS encode it removes the only untested step
+    between a tile endpoint that provably returns PNGs and a layer that draws nothing.
+    """
+    try:
+        from qgis.core import QgsDataSourceUri
+        uri = QgsDataSourceUri()
+        uri.setParam("type", "xyz")
+        uri.setParam("url", tile_url)
+        uri.setParam("zmin", "0")
+        uri.setParam("zmax", "22")
+        return bytes(uri.encodedUri()).decode("utf-8")
+    except Exception:                   # noqa: BLE001 - fall back to the hand-built string
+        return None
 
 
 class GeoDeployDock(QDockWidget):
@@ -213,6 +233,35 @@ class GeoDeployDock(QDockWidget):
         except Exception as exc:        # noqa: BLE001
             symbology._log("Could not install the auth preprocessor: {0}".format(exc))
 
+    def _capture_canvas(self):
+        """The map canvas as a WebP file, or None. Used as the portal's card image.
+
+        WebP because that is what the endpoint stores and serves it as — handing it PNG bytes under
+        a .webp name works by content sniffing, which is not something to rely on. Falls back to
+        PNG only if this Qt has no WebP writer.
+        """
+        try:
+            import tempfile
+            canvas = self.iface.mapCanvas()
+            if canvas is None:
+                return None
+            image = canvas.grab().toImage()
+            # A card, not a poster: the dashboard shows these small, and a 4K screenshot would be
+            # megabytes of nothing.
+            try:
+                from qgis.PyQt.QtCore import Qt as _Qt
+                image = image.scaledToWidth(1200, _Qt.SmoothTransformation)
+            except Exception:           # noqa: BLE001 - full size is still usable
+                pass
+            for suffix, fmt in ((".webp", "WEBP"), (".png", "PNG")):
+                path = os.path.join(tempfile.mkdtemp(prefix="geodeploy-thumb-"), "thumb" + suffix)
+                if image.save(path, fmt, 82 if fmt == "WEBP" else -1):
+                    return path
+            return None
+        except Exception as exc:        # noqa: BLE001 - a picture is never worth a failed publish
+            symbology._log("Could not capture the map for the portal thumbnail: {0}".format(exc))
+            return None
+
     def _colormaps(self):
         """The colormap names this instance actually has, fetched once.
 
@@ -378,7 +427,12 @@ class GeoDeployDock(QDockWidget):
                 # layer arrived unstyled. `/legend` is PUBLIC and is what the portal draws from.
                 try:
                     ref = row.get("uid") or row.get("id")
-                    legend = self.instance.client.layers.legend(ref)
+                    # `legend` is defined on the VECTOR and RASTER namespaces, not on the
+                    # kind-agnostic `layers` helper — asking the latter is an AttributeError, which
+                    # is what every unstyled layer was really hitting.
+                    kind = "raster" if (row.get("layer_type") == "raster"
+                                        or row.get("storage_backend") == "raster") else "vector"
+                    legend = self.instance.client.layers.api(kind).legend(ref)
                     style = symbology.style_from_legend(legend)
                 except GeoDeployError as exc:
                     symbology._log(f"Could not read the legend for {name}: {exc}")
@@ -402,17 +456,44 @@ class GeoDeployDock(QDockWidget):
         layer each entry is, and matching by name would break the first time someone renames one.
         """
         if source["kind"] in ("cog", "xyz"):
-            layer = QgsRasterLayer(source["uri"], name, source["provider"])
+            uri = source["uri"]
+            if source["kind"] == "xyz" and source.get("tile_url"):
+                uri = _xyz_uri(source["tile_url"]) or uri
+            layer = QgsRasterLayer(uri, name, source["provider"])
         else:
             layer = QgsVectorLayer(source["uri"], name, source["provider"])
         if not layer.isValid():
             return None
+        if source["kind"] == "xyz":
+            # AN XYZ LAYER HAS NO EXTENT OF ITS OWN. It is a global tile pyramid, so QGIS reports
+            # the whole world and "Zoom to layer" flies to everything — which is what made zooming
+            # to a raster land on some other layer entirely. The instance knows the real bounds, so
+            # tell QGIS them.
+            self._set_raster_extent(layer, row.get("bbox"))
         if self.instance:
             is_raster = (row.get("layer_type") == "raster"
                          or row.get("storage_backend") == "raster")
             portal_sync.tag_layer(layer, self.instance.url, row.get("id"),
                                   "raster" if is_raster else "vector")
         return layer
+
+    @staticmethod
+    def _set_raster_extent(layer, bbox):
+        """Give a tile layer the layer's own bounds, in the map's CRS."""
+        if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
+            return
+        try:
+            from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform,
+                                   QgsProject, QgsRectangle)
+            rect = QgsRectangle(float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+            # The bbox is EPSG:4326 app-wide; an XYZ layer is Web Mercator.
+            src = QgsCoordinateReferenceSystem("EPSG:4326")
+            if layer.crs().isValid() and layer.crs() != src:
+                rect = QgsCoordinateTransform(src, layer.crs(),
+                                              QgsProject.instance()).transformBoundingBox(rect)
+            layer.setExtent(rect)
+        except Exception as exc:        # noqa: BLE001 - a wrong zoom is not worth a failed add
+            symbology._log("Could not set the raster's extent: {0}".format(exc))
 
     def _row_for(self, layer_id, layer_type):
         """The listing row matching a portal layer_config entry."""
@@ -595,6 +676,9 @@ class GeoDeployDock(QDockWidget):
             if (int(cfg.get("layer_id")), str(cfg.get("layer_type")))
             not in {(c["layer_id"], c["layer_type"]) for c in plan["configs"]}]
         instance_url = self.instance.url
+        # Grabbed here, on the GUI thread, because a canvas cannot be touched from a worker — and
+        # because right now it shows exactly what is being published.
+        thumbnail = self._capture_canvas()
 
         def work():
             sent = []
@@ -630,6 +714,20 @@ class GeoDeployDock(QDockWidget):
             new_title = (plan.get("rename") or (None, None))[1]
             doc = portal_sync.push(client, group, configs, new_title=new_title,
                                    tree=final.get("tree"))
+            # The card image. The dashboard captures its own map at publish time, so a portal
+            # published from anywhere else had a blank card — which makes it look unfinished in the
+            # one place people browse portals. Never fatal: a missing picture is not a failed
+            # publish.
+            if thumbnail and doc.get("id"):
+                try:
+                    client.portals.upload_thumbnail(doc["id"], thumbnail)
+                except Exception as exc:        # noqa: BLE001
+                    symbology._log("Portal published; its thumbnail did not upload: {0}".format(exc))
+                finally:
+                    try:
+                        os.unlink(thumbnail)
+                    except OSError:
+                        pass
             return {"portal": doc, "uploaded": sent, "kept": len(keep_removed),
                     "skipped": [n for n, _l, _x in final["uploads"]]}
 
@@ -658,6 +756,22 @@ class GeoDeployDock(QDockWidget):
                   base + "/p/" + str(doc.get("slug")) + detail)
         self.refresh_layers()
 
+    def _open_portal(self, row):
+        """A portal is a published web map — QGIS cannot render one, so open it where it lives."""
+        base = (row.get("_base") or "").rstrip("/")
+        slug = row.get("slug") or ""
+        if not base or not slug:
+            self._say("That portal has no address yet — publish it first.", Qgis.Warning)
+            return
+        url = f"{base}/p/{slug}"
+        try:
+            from qgis.PyQt.QtCore import QUrl
+            from qgis.PyQt.QtGui import QDesktopServices
+            QDesktopServices.openUrl(QUrl(url))
+            self._say(f"Opened {url} in your browser.")
+        except Exception as exc:        # noqa: BLE001 - still give them the address
+            self._say(f"Open it at {url} ({exc}).", Qgis.Warning)
+
     def upload_active(self):
         if not self.instance:
             self._say("Connect to an instance first.", Qgis.Warning)
@@ -676,6 +790,24 @@ class GeoDeployDock(QDockWidget):
                 self._say("Select one or more layers in the Layers panel first.", Qgis.Warning)
                 return
             layers = [active]
+
+        # ASK FIRST. Which layers go is the user's call, and a layer that cannot be sent should be
+        # visible with its reason rather than turning into an error after the fact.
+        candidates = []
+        for layer in layers:
+            try:
+                export.check(layer)
+                candidates.append((layer.name(), None))
+            except export.NotUploadable as exc:
+                candidates.append((layer.name(), str(exc)))
+        chosen = uploadpicker.choose(self, candidates)
+        if chosen is None:
+            self._say("Nothing was uploaded.", bar=False)
+            return
+        if not chosen:
+            self._say("No layers were selected to upload.", Qgis.Warning)
+            return
+        layers = [l for l in layers if l.name() in set(chosen)]
 
         jobs = []           # (name, path, temporary, style)
         refused = []

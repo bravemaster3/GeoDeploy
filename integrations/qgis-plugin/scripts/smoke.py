@@ -104,7 +104,8 @@ def main() -> int:
     sys.path.insert(0, PLUGIN_DIR)
 
     import importlib
-    modules = ("connection", "sources", "symbology", "export", "portals", "diffdialog", "plugin")
+    modules = ("connection", "sources", "symbology", "export", "portals", "diffdialog",
+               "uploadpicker", "plugin")
     for name in modules:
         importlib.import_module("geodeploy_qgis." + name)
     print("imported {0} modules".format(len(modules)))

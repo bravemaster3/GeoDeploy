@@ -77,14 +77,27 @@ class Instance:
         "show me this portal" without an account.
         """
         import json
-        from urllib.request import urlopen
+        from urllib.request import Request, urlopen
 
         url = "{0}/portals/{1}/style.json".format(self.url.rstrip("/"), slug)
+        # A User-Agent is not optional here. urllib sends "Python-urllib/3.x" by default, and a
+        # Cloudflare-fronted instance answers that with 403 — measured: the same URL returns 200 to
+        # curl and to a browser, 403 to urllib. The portal is public; it was the client that looked
+        # suspicious. Named after the tool, like the API client's own agent.
+        request = Request(url, headers={"User-Agent": self._c_user_agent(),
+                                        "Accept": "application/json"})
         try:
-            with urlopen(url, timeout=30) as response:      # noqa: S310 - our own instance URL
+            with urlopen(request, timeout=30) as response:  # noqa: S310 - our own instance URL
                 return json.loads(response.read().decode("utf-8"))
         except Exception as exc:        # noqa: BLE001 - surfaced as a plugin message
             raise GeoDeployError("Could not read the published portal at {0}: {1}".format(url, exc))
+
+    def _c_user_agent(self) -> str:
+        """The same agent string the API client sends, so one instance sees one tool."""
+        try:
+            return self.client.user_agent
+        except Exception:               # noqa: BLE001 - never fail over a header
+            return "geodeploy-qgis"
 
     def check(self) -> dict:
         """Prove the connection works, and say what kind it is — shown in the dock's header.
