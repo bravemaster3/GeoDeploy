@@ -1721,7 +1721,8 @@
         (type === 'raster' && !meta['geodeploy:external']
           ? '<div class="layer-legend" data-legend="' + layer.id + '">' + rasterLegendHtml(layer) + '</div>'
           : vectorLegendHtml(meta['geodeploy:legend'], geom,
-                             meta['geodeploy:legendField'], meta['geodeploy:sizeLegend'], color));
+                             meta['geodeploy:legendField'], meta['geodeploy:sizeLegend'], color,
+                             meta['geodeploy:lineType'], meta['geodeploy:marker']));
       container.appendChild(card);
     });
 
@@ -2485,15 +2486,19 @@
       '</div></div>';
   }
 
-  function vectorLegendHtml(entries, geom, field, size, color) {
+  function vectorLegendHtml(entries, geom, field, size, color, dash, shape) {
     const sizeHtml = sizeLegendHtml(size, geom, color);
     // Size can vary while colour does not — they are independent dimensions — so a layer with no
     // classes may still have a legend worth showing.
     if (!Array.isArray(entries) || !entries.length)
       return sizeHtml ? '<div class="layer-legend legend-classes">' + sizeHtml + '</div>' : '';
+    // The SHAPE of the thing, not a square standing in for it. A line layer's classes are lines,
+    // a point layer's are its marker — which is part of the symbology, so a square swatch actively
+    // misreports a layer drawn with stars. `legendSwatch` is the same function the layer's own
+    // swatch button uses; it was simply never reached from here.
     const rows = entries.map(function (e) {
       return '<div class="legend-class">' +
-        '<span class="legend-chip" style="background:' + escHtml(e.color || '#999') + '"></span>' +
+        legendSwatch(geom, e.color || '#999', dash, shape) +
         '<span class="legend-label">' + escHtml(e.label == null ? '' : String(e.label)) + '</span>' +
         '</div>';
     }).join('');

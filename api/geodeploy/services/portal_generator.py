@@ -207,6 +207,9 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 "geodeploy:bbox": json.loads(layer.bbox) if layer.bbox else None,
                 "geodeploy:geometry": _geom_kind(layer.geometry_type),
                 "geodeploy:marker": (cfg.get("style") or {}).get("marker", "circle"),
+                # The legend draws a line layer's classes AS LINES, dashed the way the map dashes
+                # them — so the dash has to travel with the rest of the symbology.
+                "geodeploy:lineType": (cfg.get("style") or {}).get("lineType", "solid"),
                 "geodeploy:markerColor": (cfg.get("style") or {}).get("color", "#3b82f6"),
                 "geodeploy:markerSize": (cfg.get("style") or {}).get("radius", 5),
                 # EVERY marker bitmap this layer needs — one per class for a classified point layer.

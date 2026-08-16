@@ -26,8 +26,8 @@
           <span aria-hidden="true">←</span> My Data
         </RouterLink>
         <div class="flex items-center gap-2 mt-1">
-          <span class="w-3 h-3 rounded-sm flex-shrink-0 ring-1 ring-black/20"
-            :style="{ background: swatch }" :title="`Drawn in ${swatch}`" />
+          <LegendSwatch :geom="swatchGeom" :color="swatch" :marker="markerShape"
+            :dash="lineDash" :size="18" />
           <h1 v-if="!renaming" class="text-2xl font-semibold truncate">{{ layer.name }}</h1>
           <input v-else ref="nameInput" v-model="draftName" @keyup.enter="commitRename"
             @keyup.esc="renaming = false" @blur="commitRename"
@@ -57,13 +57,13 @@
         <div id="gd-layer-map" class="w-full h-[52vh] min-h-[340px] bg-muted/40" />
         <!-- The legend, in the map where a portal keeps it — above the zoom controls, and closed
              until asked for, because on most layers it is one swatch. -->
-        <div v-if="layer" class="absolute top-2.5 right-2.5 z-10 max-w-[15rem]">
+        <div v-if="layer" class="absolute top-2.5 left-2.5 z-10 max-w-[15rem]">
           <button @click="legendOpen = !legendOpen"
             class="w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium
                    bg-card/95 border border-border shadow backdrop-blur hover:bg-muted"
             :title="legendOpen ? 'Hide the legend' : 'Show the legend'">
-            <span class="w-3 h-3 rounded-sm flex-shrink-0 ring-1 ring-black/25"
-              :style="{ background: swatch }" />
+            <LegendSwatch :geom="swatchGeom" :color="swatch" :marker="markerShape"
+              :dash="lineDash" :size="16" />
             <span class="truncate">Legend</span>
             <span class="ml-auto text-muted-foreground/70" aria-hidden="true">
               {{ legendOpen ? '▾' : '▸' }}
@@ -78,8 +78,8 @@
             </p>
             <div v-if="legend.length" class="space-y-1">
               <div v-for="(e, i) in legend" :key="i" class="flex items-center gap-2">
-                <span class="w-3 h-3 rounded-sm flex-shrink-0 ring-1 ring-black/25"
-                  :style="{ background: e.color }" />
+                <LegendSwatch :geom="swatchGeom" :color="e.color" :marker="markerShape"
+                  :dash="lineDash" :size="16" />
                 <span class="text-[11px] text-muted-foreground truncate">{{ e.label }}</span>
               </div>
             </div>
@@ -91,9 +91,34 @@
               </div>
             </div>
             <div v-else class="flex items-center gap-2">
-              <span class="w-3 h-3 rounded-sm flex-shrink-0 ring-1 ring-black/25"
-                :style="{ background: swatch }" />
+              <LegendSwatch :geom="swatchGeom" :color="swatch" :marker="markerShape"
+                :dash="lineDash" :size="16" />
               <span class="text-[11px] text-muted-foreground">Single symbol</span>
+            </div>
+            <!-- Size varies independently of colour, so a legend showing only classes
+                 describes half the map. Two ends, because the size expression interpolates. -->
+            <div v-if="sizeLegend" class="mt-2 pt-2 border-t border-border/50">
+              <p class="text-[11px] text-muted-foreground/70 mb-1">
+                Size by <span class="font-medium">{{ sizeLegend.field }}</span>
+              </p>
+              <div class="flex items-end gap-4">
+                <div v-for="(end, i) in sizeLegend.ends" :key="i"
+                  class="flex flex-col items-center gap-1">
+                  <span class="flex items-end justify-center" style="min-height:26px">
+                    <span v-if="swatchGeom === 'line'" :style="{
+                      display: 'block', width: '22px',
+                      height: Math.max(2, Math.min(22, end.px)) + 'px',
+                      borderRadius: (Math.max(2, Math.min(22, end.px)) / 2) + 'px',
+                      background: swatch }" />
+                    <span v-else :style="{
+                      display: 'block',
+                      width: (Math.max(2, Math.min(13, end.px)) * 2) + 'px',
+                      height: (Math.max(2, Math.min(13, end.px)) * 2) + 'px',
+                      borderRadius: '50%', background: swatch }" />
+                  </span>
+                  <span class="text-[10px] text-muted-foreground/80 tabular-nums">{{ end.value }}</span>
+                </div>
+              </div>
             </div>
             <p class="text-[10px] text-muted-foreground/60 mt-1.5 pt-1.5 border-t border-border/50">
               Dashed outline = the layer's extent
@@ -118,7 +143,7 @@
     <!-- Facts. `auto-fit` rather than a fixed column count: with two cards in a four-column grid
          two thirds of the row was empty. They now share the width they have. -->
     <div v-if="layer"
-      class="grid gap-5 items-start"
+      class="grid gap-5"
       style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr))">
       <section class="card p-4">
         <h2 class="text-sm font-semibold mb-3">What it is</h2>
@@ -241,6 +266,7 @@ import SharingModal from '@/components/data/SharingModal.vue'
 import ShareLinksModal from '@/components/data/ShareLinksModal.vue'
 import ConfirmDeleteModal from '@/components/data/ConfirmDeleteModal.vue'
 import CreatePortalModal from '@/components/portal/CreatePortalModal.vue'
+import LegendSwatch from '@/components/LegendSwatch.vue'
 
 // A label/value row. Rendered rather than templated because it must vanish entirely when the value
 // is absent — a "Bands: —" line on a vector layer is noise pretending to be information.
@@ -317,6 +343,30 @@ const rampCss = computed(() => {
 const rampRange = computed(() => {
   const parts = String(rasterStyle.value.rescale || '').split(',')
   return parts.length === 2 ? parts : ['min', 'max']
+})
+
+// What KIND of thing this layer draws, for the swatch shape.
+const swatchGeom = computed(() => {
+  if (isRaster.value) return 'raster'
+  const g = (layer.value?.geometry_type || '').toLowerCase()
+  if (g.includes('line')) return 'line'
+  if (g.includes('polygon')) return 'polygon'
+  return 'point'
+})
+const markerShape = computed(() => vectorStyle.value.marker || 'circle')
+const lineDash = computed(() => vectorStyle.value.lineType || 'solid')
+
+/** The two ends of a proportional size scale — mirrors services/symbology.size_legend. */
+const sizeLegend = computed(() => {
+  const st = vectorStyle.value
+  if ((st.size_mode || 'fixed') !== 'proportional') return null
+  const stops = (st.size_stops || []).filter(x => Array.isArray(x) && x.length === 2)
+  if (!st.size_field || stops.length < 2) return null
+  const ordered = [...stops].sort((a, b) => a[0] - b[0])
+  const lo = ordered[0], hi = ordered[ordered.length - 1]
+  return { field: st.size_field,
+           ends: [{ value: lo[0], px: Number(lo[1]) || 2 },
+                  { value: hi[0], px: Number(hi[1]) || 8 }] }
 })
 
 const swatch = computed(() => (isRaster.value ? '#64748b' : representativeColor(vectorStyle.value)))
