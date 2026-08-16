@@ -74,6 +74,11 @@ def describe(layer: dict, prefer_attributes: bool = False) -> dict | None:
             url = tiles if tiles.startswith("http") else f"{base}{tiles}"
             return {
                 "kind": "xyz",
+                # The TEMPLATE, unencoded. The provider URI is assembled by QgsDataSourceUri in
+                # `plugin._build_layer`, because hand-rolling the percent-encoding of a URL that
+                # itself carries a query string (`?url=s3://…&rescale=…`) is the one part of this
+                # path that was never verified — and the server side provably works.
+                "tile_url": url,
                 "uri": f"type=xyz&url={quote(url, safe='')}&zmin=0&zmax=22",
                 "provider": "wms",          # QGIS serves XYZ through the WMS provider
                 "why": "server-rendered tiles, coloured exactly as GeoDeploy draws it",

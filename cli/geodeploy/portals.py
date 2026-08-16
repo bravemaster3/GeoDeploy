@@ -136,6 +136,19 @@ class Portals(object):
 
     # ── layers on a portal ──────────────────────────────────────────────────────────────────────
 
+    def upload_thumbnail(self, portal_id: Any, path: str) -> Dict[str, Any]:
+        """The card image for this portal — the picture shown wherever it is listed.
+
+        The dashboard captures its map canvas at publish time; anything else that publishes a
+        portal has to supply its own, or the card stays blank. Separate from `upload_asset`: a
+        portal has exactly one thumbnail, and the server replaces the previous one.
+        """
+        from .transport import MultipartBody
+        body = MultipartBody(file_path=path, filename=os.path.basename(path))
+        return self._c.request("POST", "/portals/{0}/thumbnail".format(int(portal_id)),
+                               body=body, content_type=body.content_type,
+                               timeout=self._c.upload_timeout)
+
     def layers(self, portal: Any) -> List[Dict[str, Any]]:
         """The portal's layer configs, top of the list first."""
         doc = portal if isinstance(portal, dict) else self.get(portal)
