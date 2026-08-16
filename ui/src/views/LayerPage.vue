@@ -13,17 +13,13 @@
   about the layer it describes.
 -->
 <template>
-  <div v-if="!layer" class="p-8 text-center text-muted-foreground">
-    <p v-if="dataStore.loading">Loading…</p>
-    <template v-else>
-      <p class="text-sm">That layer is not here any more.</p>
-      <RouterLink to="/data" class="btn-secondary mt-4 inline-flex">Back to My Data</RouterLink>
-    </template>
-  </div>
-
-  <div v-else class="space-y-5 p-4 sm:p-6 max-w-[1600px] mx-auto">
+  <!-- ONE root that always renders. The map is created on mount by `useMaplibre`, so its
+       container has to be in the DOM by then — gating the whole page on the layer meant that on a
+       hard refresh (store still empty) MapLibre threw "Container 'gd-layer-map' not found" and no
+       map ever appeared. The layer-dependent parts wait; the container does not. -->
+  <div class="space-y-5 p-4 sm:p-6 max-w-[1600px] mx-auto">
     <!-- Header ------------------------------------------------------------------------------ -->
-    <div class="flex items-start justify-between gap-4 flex-wrap">
+    <div v-if="layer" class="flex items-start justify-between gap-4 flex-wrap">
       <div class="min-w-0">
         <RouterLink to="/data"
           class="text-xs text-muted-foreground/70 hover:text-foreground inline-flex items-center gap-1">
@@ -57,14 +53,73 @@
          no legend and no metadata, which is most of them — the facts read better as a row of cards
          under the map, and they reflow instead of stacking into one narrow strip. -->
     <div class="card overflow-hidden">
-      <div id="gd-layer-map" class="w-full h-[52vh] min-h-[340px] bg-muted/40" />
+      <div class="relative">
+        <div id="gd-layer-map" class="w-full h-[52vh] min-h-[340px] bg-muted/40" />
+        <!-- The legend, in the map where a portal keeps it — above the zoom controls, and closed
+             until asked for, because on most layers it is one swatch. -->
+        <div v-if="layer" class="absolute top-2.5 right-2.5 z-10 max-w-[15rem]">
+          <button @click="legendOpen = !legendOpen"
+            class="w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium
+                   bg-card/95 border border-border shadow backdrop-blur hover:bg-muted"
+            :title="legendOpen ? 'Hide the legend' : 'Show the legend'">
+            <span class="w-3 h-3 rounded-sm flex-shrink-0 ring-1 ring-black/25"
+              :style="{ background: swatch }" />
+            <span class="truncate">Legend</span>
+            <span class="ml-auto text-muted-foreground/70" aria-hidden="true">
+              {{ legendOpen ? '▾' : '▸' }}
+            </span>
+          </button>
+          <div v-if="legendOpen"
+            class="mt-1 p-2 rounded-md bg-card/95 border border-border shadow backdrop-blur
+                   max-h-[40vh] overflow-y-auto">
+            <p class="text-[11px] text-muted-foreground/80 truncate mb-1">{{ layer.name }}</p>
+            <p v-if="colorField" class="text-[11px] text-muted-foreground/70 mb-1">
+              Colour by <span class="font-medium">{{ colorField }}</span>
+            </p>
+            <div v-if="legend.length" class="space-y-1">
+              <div v-for="(e, i) in legend" :key="i" class="flex items-center gap-2">
+                <span class="w-3 h-3 rounded-sm flex-shrink-0 ring-1 ring-black/25"
+                  :style="{ background: e.color }" />
+                <span class="text-[11px] text-muted-foreground truncate">{{ e.label }}</span>
+              </div>
+            </div>
+            <!-- A raster ramp is continuous: a strip, not swatches. -->
+            <div v-else-if="isRaster && rampCss" class="space-y-1">
+              <div class="h-3 rounded" :style="{ background: rampCss }" />
+              <div class="flex justify-between text-[10px] text-muted-foreground/80 tabular-nums">
+                <span>{{ rampRange[0] }}</span><span>{{ rampRange[1] }}</span>
+              </div>
+            </div>
+            <div v-else class="flex items-center gap-2">
+              <span class="w-3 h-3 rounded-sm flex-shrink-0 ring-1 ring-black/25"
+                :style="{ background: swatch }" />
+              <span class="text-[11px] text-muted-foreground">Single symbol</span>
+            </div>
+            <p class="text-[10px] text-muted-foreground/60 mt-1.5 pt-1.5 border-t border-border/50">
+              Dashed outline = the layer's extent
+            </p>
+          </div>
+        </div>
+      </div>
       <p v-if="mapNote" class="text-xs text-amber-300/90 px-4 py-2 border-t border-border/60">
         {{ mapNote }}
       </p>
     </div>
 
-    <!-- Facts ---------------------------------------------------------------------------------- -->
-    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5 items-start">
+    <!-- Not found / still loading. Below the map, which stays mounted. -->
+    <div v-if="!layer" class="card p-8 text-center text-muted-foreground">
+      <p v-if="dataStore.loading" class="text-sm">Loading…</p>
+      <template v-else>
+        <p class="text-sm">That layer is not here any more.</p>
+        <RouterLink to="/data" class="btn-secondary mt-4 inline-flex">Back to My Data</RouterLink>
+      </template>
+    </div>
+
+    <!-- Facts. `auto-fit` rather than a fixed column count: with two cards in a four-column grid
+         two thirds of the row was empty. They now share the width they have. -->
+    <div v-if="layer"
+      class="grid gap-5 items-start"
+      style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr))">
       <section class="card p-4">
         <h2 class="text-sm font-semibold mb-3">What it is</h2>
         <dl class="space-y-1.5 text-sm">
@@ -106,23 +161,10 @@
         </p>
         </section>
 
-        <section v-if="legend.length" class="card p-4">
-        <h2 class="text-sm font-semibold mb-1">Legend</h2>
-        <p v-if="colorField" class="text-[11px] text-muted-foreground/70 mb-2">
-          Colour by <span class="font-medium text-muted-foreground">{{ colorField }}</span>
-        </p>
-        <div class="space-y-1 max-h-52 overflow-y-auto pr-1">
-          <div v-for="(e, i) in legend" :key="i" class="flex items-center gap-2">
-            <span class="w-3.5 h-3.5 rounded-sm flex-shrink-0 ring-1 ring-black/25"
-              :style="{ background: e.color }" />
-            <span class="text-xs text-muted-foreground truncate">{{ e.label }}</span>
-          </div>
-        </div>
-      </section>
     </div>
 
     <!-- Actions ------------------------------------------------------------------------------ -->
-    <section class="card p-4">
+    <section v-if="layer" class="card p-4">
       <h2 class="text-sm font-semibold mb-3">Actions</h2>
       <div class="flex flex-wrap gap-2">
         <button v-if="auth.canEdit && ready && !isExternal" @click="showStyle = true" class="btn-secondary text-sm">
@@ -132,7 +174,7 @@
           Share links
         </button>
         <button v-if="auth.canEdit && ready && !isExternal" @click="showSharing = true" class="btn-secondary text-sm">
-          {{ visibilityLabel === 'Public' ? 'Sharing — public' : 'Sharing' }}
+          Visibility &amp; metadata
         </button>
         <button v-if="auth.canEdit && ready" @click="showPortal = true" class="btn-primary text-sm">
           Create a portal from this layer
@@ -250,6 +292,33 @@ const legend = computed(() => (isVector.value ? legendEntries(vectorStyle.value)
 const colorField = computed(() =>
   (vectorStyle.value.color_mode && vectorStyle.value.color_mode !== 'single')
     ? vectorStyle.value.color_field : null)
+// A CSS gradient standing in for the raster's colormap. Approximate on purpose — it is a key for
+// reading the map, not a second renderer — and it follows the same reverse flag the tiles use.
+const RAMP_STOPS = {
+  viridis: ['#440154', '#3b528b', '#21918c', '#5ec962', '#fde725'],
+  plasma: ['#0d0887', '#7e03a8', '#cc4778', '#f89540', '#f0f921'],
+  inferno: ['#000004', '#57106e', '#bc3754', '#f98e09', '#fcffa4'],
+  magma: ['#000004', '#51127c', '#b73779', '#fc8961', '#fcfdbf'],
+  cividis: ['#00224e', '#35456c', '#666970', '#9c8f5f', '#fee838'],
+  gray: ['#000000', '#ffffff'],
+  terrain: ['#333399', '#00b0b0', '#4ddb4d', '#f2f28c', '#8c5a3b'],
+  rdylgn: ['#a50026', '#f46d43', '#ffffbf', '#66bd63', '#006837'],
+  rdbu: ['#67001f', '#f7f7f7', '#053061'],
+  spectral: ['#9e0142', '#fdae61', '#ffffbf', '#66c2a5', '#5e4fa2'],
+}
+const rampCss = computed(() => {
+  if (!isRaster.value) return null
+  const name = (rasterStyle.value.colormap || '').replace(/_r$/, '').toLowerCase()
+  let stops = RAMP_STOPS[name]
+  if (!stops) return null
+  if (rasterStyle.value.colormap_reverse) stops = [...stops].reverse()
+  return `linear-gradient(to right, ${stops.join(', ')})`
+})
+const rampRange = computed(() => {
+  const parts = String(rasterStyle.value.rescale || '').split(',')
+  return parts.length === 2 ? parts : ['min', 'max']
+})
+
 const swatch = computed(() => (isRaster.value ? '#64748b' : representativeColor(vectorStyle.value)))
 
 const fields = computed(() => (layer.value?.columns || []).filter(c => c?.name))
@@ -319,6 +388,36 @@ function configFor(l) {
   }
 }
 
+/**
+ * The layer's extent, as a dashed outline.
+ *
+ * Worth drawing even when the layer itself is on screen, and essential when it is not: a
+ * GeoParquet layer that has no preview, or a small raster on a world view, is otherwise an empty
+ * map with no clue whether the data is missing or merely elsewhere. The outline says "it is there,
+ * and this is where".
+ */
+function addExtentOutline(style, bbox) {
+  const b = lonLatBbox(bbox)
+  if (!b) return
+  style.sources['gd-extent'] = {
+    type: 'geojson',
+    data: {
+      type: 'Feature',
+      properties: {},
+      geometry: {
+        type: 'Polygon',
+        coordinates: [[[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]], [b[0], b[1]]]],
+      },
+    },
+  }
+  // Appended last so it sits ON TOP of the layer rather than under it.
+  style.layers.push({
+    id: 'gd-extent-line', type: 'line', source: 'gd-extent',
+    paint: { 'line-color': '#22c55e', 'line-width': 1.5, 'line-dasharray': [3, 2],
+             'line-opacity': 0.9 },
+  })
+}
+
 function renderMap() {
   const l = layer.value
   if (!l || !map.value || !loaded.value) return
@@ -337,6 +436,7 @@ function renderMap() {
     sources: isExternal.value ? [l] : [],
     basemap: DEFAULT_BASEMAP,
   })
+  addExtentOutline(style, l.bbox)
   // Points are symbol layers whose icons are generated on demand — without this they draw nothing.
   registerMarkerImages(map.value, markerSpecs)
   setMarkerSpecs(map.value, markerSpecs)
@@ -357,6 +457,7 @@ const showLinks = ref(false)
 const showPortal = ref(false)
 const confirmDelete = ref(false)
 const fieldsOpen = ref(true)
+const legendOpen = ref(false)
 const tiling = ref(false)
 const restarting = ref(false)
 

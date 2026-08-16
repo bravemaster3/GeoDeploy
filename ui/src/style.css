@@ -93,6 +93,15 @@
   .label {
     @apply block text-sm font-medium text-foreground/85 mb-1;
   }
+  /* A small status chip. Without a surface behind them, three of these in a row read as three
+     loose words rather than as labels of anything. */
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium
+           border border-border bg-muted/60 text-muted-foreground whitespace-nowrap;
+  }
+  .badge-success { @apply border-emerald-500/30 bg-emerald-500/15 text-emerald-300; }
+  .badge-error   { @apply border-red-500/30 bg-red-500/15 text-red-300; }
+  .badge-muted   { @apply border-border bg-muted/60 text-muted-foreground; }
 }
 
 /* MapLibre controls in the (dark-by-default) dashboard — the editor preview's zoom/compass/globe.
