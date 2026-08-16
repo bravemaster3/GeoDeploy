@@ -433,9 +433,21 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
                     # separate flag, so the two agree about WHICH ramp while disagreeing about
                     # its direction only where that is recorded.
                     style["colormap_reverse"] = True
-            elif name:
-                _log("QGIS ramp {0!r} has no colormap of that name on the instance — sending the "
-                     "stretch without it.".format(name))
+            else:
+                # NO NAME TO SEND. A ramp built in the QGIS dialog is a plain gradient with no
+                # scheme name at all — which is most of them — so "send the name" quietly sent
+                # nothing and the raster arrived looking unstyled despite the styling being right
+                # there. The shader knows its actual colour stops; send those instead.
+                classes = _shader_classes(renderer)
+                if classes:
+                    style["color_classes"] = classes
+                elif name:
+                    _log("QGIS ramp {0!r} has no colormap of that name on the instance, and its "
+                         "stops are not per-value — only the stretch was sent.".format(name))
+                else:
+                    _log("This raster's colour ramp has no name and no per-value stops, so only "
+                         "the stretch travelled. GeoDeploy carries either a NAMED palette or a "
+                         "colour per value; a custom continuous gradient is neither.")
             return style
 
         if isinstance(renderer, QgsHillshadeRenderer):
@@ -523,6 +535,43 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
             type(renderer).__name__, type(exc).__name__, exc))
         return {}
     return style
+
+
+def _shader_classes(renderer):
+    """`[{value, color}]` from a pseudocolour shader's own stops, or None.
+
+    QGIS lists the ramp as value/colour pairs whatever the ramp is made of, which is exactly the
+    shape GeoDeploy stores. It only carries integer values, so a classification (land cover, soil,
+    a DISCRETE or EXACT ramp) travels intact while a continuous float gradient cannot — that one is
+    reported rather than rounded into something the map never showed.
+    """
+    try:
+        shader = renderer.shader()
+        fn = shader.rasterShaderFunction() if shader else None
+        items = fn.colorRampItemList() if fn and hasattr(fn, "colorRampItemList") else []
+    except Exception:                   # noqa: BLE001 - a shader we cannot read is not an error
+        return None
+    if not items:
+        return None
+
+    classes = []
+    for item in items:
+        value, colour = getattr(item, "value", None), getattr(item, "color", None)
+        if value is None or colour is None or not _finite(value):
+            continue
+        # Integral only: TiTiler maps a colour to a pixel VALUE, so 3.7 has nothing to key on.
+        if float(value) != int(float(value)):
+            return None
+        classes.append({"value": int(float(value)),
+                        "color": "#{0:02x}{1:02x}{2:02x}{3:02x}".format(
+                            colour.red(), colour.green(), colour.blue(), colour.alpha())})
+    if not classes:
+        return None
+    if len(classes) > MAX_COLOR_CLASSES:
+        _log("This ramp has {0} stops; GeoDeploy carries at most {1}, so only the stretch was "
+             "sent.".format(len(classes), MAX_COLOR_CLASSES))
+        return None
+    return classes
 
 
 def _finite(v) -> bool:

@@ -772,7 +772,7 @@ class GeoDeployDock(QDockWidget):
                 # the next push see it as an existing layer rather than a new one all over again.
                 path, temporary = export.prepare(qgis_layer)
                 try:
-                    result = client.uploads.upload(path, wait=True)
+                    result = client.uploads.upload(path, name=name, wait=True)
                 finally:
                     if temporary:
                         shutil.rmtree(os.path.dirname(path), ignore_errors=True)
@@ -1000,7 +1000,7 @@ class GeoDeployDock(QDockWidget):
                 # is worse than no progress at all.
                 self._progress.emit("Uploading {0} ({1} of {2})…".format(name, index, total))
                 try:
-                    result = client.uploads.upload(path, wait=True)
+                    result = client.uploads.upload(path, name=name, wait=True)
                     if style and getattr(result, "layer_id", None):
                         # Styling travels with the upload: the portal then shows what the author
                         # saw, instead of the next default colour in the palette.
