@@ -204,12 +204,16 @@
         <button v-if="auth.canEdit && ready" @click="showPortal = true" class="btn-primary text-sm">
           Create a portal from this layer
         </button>
-        <button v-if="auth.canEdit && isVector && ready" @click="onTile" :disabled="tiling"
+        <!-- PMTiles tiling is a GEOPARQUET thing. A PostGIS layer is already served as vector
+             tiles by Martin, so the button did nothing and implied the layer was somehow slower
+             than it is. Same condition My Data uses. -->
+        <button v-if="auth.canEdit && canTile && ready" @click="onTile" :disabled="tiling"
           class="btn-secondary text-sm disabled:opacity-60"
           :title="layer.tile_status === 'ready' ? 'Regenerate the PMTiles archive' : 'Tile for fast display'">
           {{ tiling ? 'Tiling…' : (layer.tile_status === 'ready' ? 'Re-tile' : 'Tile for fast display') }}
         </button>
-        <button v-if="auth.canEdit && isVector" @click="onReprocess" :disabled="restarting"
+        <button v-if="auth.canEdit && isVector && !isExternal" @click="onReprocess"
+          :disabled="restarting"
           class="btn-secondary text-sm disabled:opacity-60"
           title="Re-convert from the uploaded file — no re-upload needed">
           {{ restarting ? 'Restarting…' : 'Reprocess' }}
@@ -346,6 +350,10 @@ const rampRange = computed(() => {
 })
 
 // What KIND of thing this layer draws, for the swatch shape.
+// Only a GeoParquet layer has PMTiles to build; PostGIS is already tiled by Martin.
+const canTile = computed(() =>
+  isVector.value && !isExternal.value && layer.value?.storage_backend === 'geoparquet')
+
 const swatchGeom = computed(() => {
   if (isRaster.value) return 'raster'
   const g = (layer.value?.geometry_type || '').toLowerCase()
