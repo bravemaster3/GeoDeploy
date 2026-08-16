@@ -21,7 +21,7 @@ from qgis.PyQt.QtWidgets import (QAbstractItemView, QAction, QCheckBox, QComboBo
                                  QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar,
                                  QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from . import export, sources, symbology
+from . import export, portals as portal_sync, sources, symbology
 from .connection import GeoDeployError, Instance, saved_instances
 
 PLUGIN_NAME = "GeoDeploy"
@@ -100,10 +100,11 @@ class GeoDeployDock(QDockWidget):
 
         self.attributes = QCheckBox("Prefer full attributes over drawing speed")
         self.attributes.setToolTip(
-            "Off: one pre-generalized archive, downloaded once — generalized geometry, and only "
-            "the attributes the tiles carry.\n"
-            "On: OGC API - Features, which QGIS re-queries for the extent on screen — exact "
-            "geometry and every attribute, at a server round-trip per pan.")
+            "Vector — off: one pre-generalized archive, downloaded once, carrying only the "
+            "attributes the tiles hold. On: OGC API - Features, re-queried for the extent on "
+            "screen, with exact geometry and every attribute.\n"
+            "Raster — off: server-rendered tiles, coloured exactly as GeoDeploy draws them. "
+            "On: the GeoTIFF itself, with real pixel values, drawn using QGIS's own defaults.")
         outer.addWidget(self.attributes)
 
         self.add_btn = QPushButton("Add to map")
@@ -112,6 +113,20 @@ class GeoDeployDock(QDockWidget):
         self.tree.itemSelectionChanged.connect(self._on_selection_changed)
 
     # -- upload -------------------------------------------------------------------------------
+        self.open_group_btn = QPushButton("Open portal as a group")
+        self.open_group_btn.setToolTip(
+            "Every layer of the selected portal, in its order and with the portal's own styling, "
+            "as one QGIS group. Restyle it and push it back.")
+        self.open_group_btn.clicked.connect(self.open_portal_as_group)
+        outer.addWidget(self.open_group_btn)
+
+        self.push_group_btn = QPushButton("Push group to portal")
+        self.push_group_btn.setToolTip(
+            "Turn the selected QGIS group into a portal. A group opened from a portal UPDATES that "
+            "portal; any other group creates a new one.")
+        self.push_group_btn.clicked.connect(self.push_group)
+        outer.addWidget(self.push_group_btn)
+
         self.upload_btn = QPushButton("Upload selected layer(s)…")
         self.upload_btn.setToolTip(
             "Uploads every layer selected in the Layers panel, one after another — or the active "
@@ -347,11 +362,8 @@ class GeoDeployDock(QDockWidget):
             return
 
         name = row.get("name") or "GeoDeploy layer"
-        if source["kind"] == "cog":
-            layer = QgsRasterLayer(source["uri"], name, "gdal")
-        else:
-            layer = QgsVectorLayer(source["uri"], name, source["provider"])
-        if not layer.isValid():
+        layer = self._build_layer(row, source, name)
+        if layer is None:
             self._say(f"QGIS could not open the {source['kind']} source for {name}.", Qgis.Critical)
             return
 
@@ -381,6 +393,161 @@ class GeoDeployDock(QDockWidget):
         self._say(f"Added {name} — {source['why']}{applied}.")
 
     # -- upload ------------------------------------------------------------------------------------
+
+    def _build_layer(self, row, source, name):
+        """One layer from a described source, tagged with its GeoDeploy identity.
+
+        The tag is what makes the portal round trip safe: a group pushed back has to know WHICH
+        layer each entry is, and matching by name would break the first time someone renames one.
+        """
+        if source["kind"] in ("cog", "xyz"):
+            layer = QgsRasterLayer(source["uri"], name, source["provider"])
+        else:
+            layer = QgsVectorLayer(source["uri"], name, source["provider"])
+        if not layer.isValid():
+            return None
+        if self.instance:
+            is_raster = (row.get("layer_type") == "raster"
+                         or row.get("storage_backend") == "raster")
+            portal_sync.tag_layer(layer, self.instance.url, row.get("id"),
+                                  "raster" if is_raster else "vector")
+        return layer
+
+    def _row_for(self, layer_id, layer_type):
+        """The listing row matching a portal layer_config entry."""
+        for row in self._rows:
+            kind = "raster" if (row.get("layer_type") == "raster"
+                                or row.get("storage_backend") == "raster") else "vector"
+            if str(row.get("id")) == str(layer_id) and kind == layer_type:
+                return row
+        return None
+
+    def open_portal_as_group(self):
+        """Every layer of a portal, in its order, styled as the portal styles it, in one group.
+
+        A portal IS an ordered styled list of layers, which is what a group is — so this is a
+        direct mapping rather than an interpretation. Styles come from the PORTAL's own
+        layer_config, not from the layer's default: a portal may deliberately draw a layer
+        differently from how it is stored, and that difference is the thing worth carrying across.
+        """
+        row = self._selected_row()
+        if not row or not row.get("_portal"):
+            self._say("Select a portal in the list first.", Qgis.Warning)
+            return
+        if not self.instance:
+            return
+        ref = row.get("id") or row.get("slug")
+
+        def work():
+            return self.instance.client.portals.get(ref)
+
+        self._busy(True)
+        self._say("Opening " + str(row.get("title") or "the portal") + "...", bar=False)
+        self._run(_Job("GeoDeploy: opening portal", work), self._portal_opened)
+
+    def _portal_opened(self, job):
+        self._busy(False)
+        if job.error:
+            self._say(job.error, Qgis.Critical)
+            return
+        doc = job.result or {}
+        configs = doc.get("layer_configs") or []
+        if not configs:
+            self._say("That portal has no layers yet.", Qgis.Warning)
+            return
+
+        project = QgsProject.instance()
+        group = project.layerTreeRoot().insertGroup(0, doc.get("title") or "GeoDeploy portal")
+        group.setCustomProperty(portal_sync.P_PORTAL_ID, str(doc.get("id")))
+        group.setCustomProperty(portal_sync.P_PORTAL_TITLE, doc.get("title") or "")
+
+        added, missing = 0, []
+        # In order: layer_configs[0] is the TOP of the portal's list, and adding to the group in
+        # the same order puts it at the top here too. No reversal anywhere.
+        for cfg in configs:
+            layer_row = self._row_for(cfg.get("layer_id"), cfg.get("layer_type"))
+            if layer_row is None:
+                missing.append(str(cfg.get("layer_id")))
+                continue
+            source = sources.describe(layer_row, prefer_attributes=self.attributes.isChecked())
+            if not source:
+                missing.append(str(layer_row.get("name") or cfg.get("layer_id")))
+                continue
+            layer = self._build_layer(layer_row, source, layer_row.get("name") or "layer")
+            if layer is None:
+                missing.append(str(layer_row.get("name") or cfg.get("layer_id")))
+                continue
+            project.addMapLayer(layer, False)      # False: placed into the group, not the root
+            node = group.addLayer(layer)
+            node.setItemVisibilityChecked(bool(cfg.get("visible", True)))
+            style = (cfg.get("style") or {}) if self.styled.isChecked() else {}
+            if style and cfg.get("layer_type") != "raster":
+                symbology.apply_to_qgis(layer, style)
+            added += 1
+
+        note = ""
+        if missing:
+            note = " " + str(len(missing)) + " could not be opened (" + ", ".join(missing[:3]) + ")."
+        self._say("Opened " + str(doc.get("title")) + " as a group - " + str(added) +
+                  " layer(s)." + note + " Restyle it, then use Push group to portal.",
+                  Qgis.Warning if missing else Qgis.Info)
+
+    def push_group(self):
+        """Push the selected QGIS group back as a portal, updating the one it came from."""
+        if not self.instance or not self.instance.token:
+            self._say("Pushing a portal needs a token with write access.", Qgis.Warning)
+            return
+        view = self.iface.layerTreeView()
+        nodes = view.selectedNodes() if view else []
+        groups = [n for n in nodes if hasattr(n, "addLayer")]
+        if len(groups) != 1:
+            self._say("Select exactly one GROUP in the Layers panel - that group becomes the "
+                      "portal.", Qgis.Warning)
+            return
+        group = groups[0]
+
+        def style_for(qgis_layer, layer_type):
+            if not self.push_style.isChecked():
+                return {}
+            if layer_type == "raster":
+                return symbology.raster_from_qgis(qgis_layer, self._colormaps())
+            return symbology.from_qgis(qgis_layer)
+
+        try:
+            configs, skipped = portal_sync.configs_from_group(group, style_for)
+        except Exception as exc:            # noqa: BLE001 - never crash QGIS over a layer tree
+            self._say("Could not read that group: " + str(exc), Qgis.Critical)
+            return
+
+        portal_id, title = portal_sync.group_portal(group)
+        verb = "Updating" if portal_id else "Creating"
+        client = self.instance.client
+        self._skipped = skipped
+
+        def work():
+            return portal_sync.push(client, group, configs)
+
+        self._busy(True)
+        self._say(verb + " portal " + str(title) + " from " + str(len(configs)) + " layer(s)...",
+                  bar=False)
+        self._run(_Job("GeoDeploy: pushing portal", work), self._group_pushed)
+
+    def _group_pushed(self, job):
+        self._busy(False)
+        if job.error:
+            self._say(job.error, Qgis.Critical)
+            return
+        doc = job.result or {}
+        skipped = getattr(self, "_skipped", [])
+        note = ""
+        if skipped:
+            note = (" Skipped " + str(len(skipped)) + ": " + ", ".join(skipped[:3]) +
+                    " - these are not on the instance yet, so upload them first.")
+        base = self.instance.url.rstrip("/") if self.instance else ""
+        self._say("Portal " + str(doc.get("title")) + " published: " +
+                  base + "/p/" + str(doc.get("slug")) + note,
+                  Qgis.Warning if skipped else Qgis.Info)
+        self.refresh_layers()
 
     def _open_portal(self, row):
         """A portal is a published web map — QGIS cannot render one, so open it where it lives."""

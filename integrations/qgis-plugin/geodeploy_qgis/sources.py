@@ -7,7 +7,10 @@ A GeoDeploy layer is published through several surfaces at once, and they are no
   to tile boundaries, and attributes are only what the tiles carry.
 * **OGC API - Features** is the DATA: full attributes, exact geometry. QGIS has read it natively
   since 3.16, and its provider is VIEWPORT-DRIVEN — it asks the server for the extent on screen.
-* **COG** is a raster, read by range request through `/vsicurl/`.
+* **COG** is a raster's real pixel values, read by range request through `/vsicurl/` — and
+  rendered by QGIS's own defaults, NOT by GeoDeploy's styling.
+* **Raster tiles** are the same raster as the portal draws it: colormap, stretch and band choice
+  baked in by the server. A picture, not measurements.
 
 A correction worth stating plainly, because the first version of this file got it wrong and the
 error is easy to repeat: **PMTiles being fast in MapLibre does not make it fast in QGIS.** A web map
@@ -20,6 +23,8 @@ on how the user moves around it, and neither is universally right.
 So the rule below is a default, not a verdict, and the caller can override it.
 """
 from __future__ import annotations
+
+from urllib.parse import quote
 
 # GDAL gained its PMTiles driver in 3.8. Below that the archive cannot be opened at all, so the
 # choice is not a preference — it is availability. Checked at runtime rather than assumed from the
@@ -52,11 +57,33 @@ def describe(layer: dict, prefer_attributes: bool = False) -> dict | None:
         return None
 
     if layer.get("layer_type") == "raster" or layer.get("kind") == "raster":
+        # THE COG IS THE DATA; THE TILES ARE THE PICTURE.
+        #
+        # Opening the COG gives real pixel values — what analysis needs — but QGIS then renders it
+        # with ITS defaults, so a raster carefully coloured in GeoDeploy arrives as a grey stretch
+        # and looks unstyled. The tile URL is the opposite: the server bakes the colormap, rescale,
+        # band selection and hillshade into the image, so it looks exactly like the portal, but the
+        # pixels are display colours and the values are gone.
+        #
+        # Neither is "correct", so the same switch that chooses attributes over speed for a vector
+        # chooses values over appearance here.
+        tiles = (layer.get("tile_url") or "").strip()
+        if tiles and not prefer_attributes:
+            # Relative to the instance (that is how the API returns it), and QGIS's XYZ provider
+            # wants the template URL-encoded inside the connection string.
+            url = tiles if tiles.startswith("http") else f"{base}{tiles}"
+            return {
+                "kind": "xyz",
+                "uri": f"type=xyz&url={quote(url, safe='')}&zmin=0&zmax=22",
+                "provider": "wms",          # QGIS serves XYZ through the WMS provider
+                "why": "server-rendered tiles, coloured exactly as GeoDeploy draws it",
+            }
         return {
             "kind": "cog",
             "uri": f"/vsicurl/{base}/api/data/raster/{ref}/cog",
             "provider": "gdal",
-            "why": "the Cloud-Optimized GeoTIFF itself, read by range request",
+            "why": ("the Cloud-Optimized GeoTIFF itself — real pixel values, drawn with QGIS's own "
+                    "defaults rather than GeoDeploy's styling"),
         }
 
     tiled = bool(layer.get("pmtiles_key")) or layer.get("tile_status") == "ready"

@@ -27,7 +27,8 @@ try:                                    # pragma: no cover - only present inside
                            QgsSimpleLineSymbolLayer, QgsSimpleMarkerSymbolLayer, QgsSymbol,
                            QgsSingleSymbolRenderer, QgsClassificationRange,
                            QgsMultiBandColorRenderer, QgsSingleBandGrayRenderer,
-                           QgsSingleBandPseudoColorRenderer)
+                           QgsSingleBandPseudoColorRenderer, QgsHillshadeRenderer,
+                           QgsPalettedRasterRenderer)
     from qgis.PyQt.QtCore import Qt
     from qgis.PyQt.QtGui import QColor
     QGIS = True
@@ -332,7 +333,47 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
                      "stretch without it.".format(name))
             return style
 
-        # Anything else — paletted, hillshade, a renderer from a plugin. The band selection and the
+        if isinstance(renderer, QgsHillshadeRenderer):
+            # Exactly representable: GeoDeploy asks TiTiler for a hillshade of the same band, and
+            # `zfactor` is the same vertical exaggeration QGIS calls Z factor. Azimuth and altitude
+            # have no equivalent in the raster style, so a non-default sun position is announced
+            # rather than dropped in silence.
+            band = renderer.band()
+            if isinstance(band, int) and band > 0:
+                style["bidx"] = [band]
+            style["algorithm"] = "hillshade"
+            try:
+                z = float(renderer.zFactor())
+                if _finite(z) and z > 0:
+                    style["zfactor"] = z
+            except (TypeError, ValueError):
+                pass
+            try:
+                az, alt = float(renderer.azimuth()), float(renderer.altitude())
+                if abs(az - 315.0) > 0.5 or abs(alt - 45.0) > 0.5:
+                    _log("This hillshade uses azimuth {0:g}/altitude {1:g}; GeoDeploy renders the "
+                         "standard 315/45, so the shading will differ.".format(az, alt))
+            except (TypeError, ValueError, AttributeError):
+                pass
+            return style
+
+        if isinstance(renderer, QgsPalettedRasterRenderer):
+            # NOT representable. A paletted raster gives each value its own colour, while a
+            # GeoDeploy raster style carries a NAMED continuous colormap — there is nowhere to put
+            # a per-value palette. Send the band so the right one is displayed, and say plainly
+            # what did not travel instead of implying the colours came across.
+            try:
+                band = renderer.band()
+                if isinstance(band, int) and band > 0:
+                    style["bidx"] = [band]
+            except (TypeError, AttributeError):
+                pass
+            _log("Paletted rasters keep per-value colours, which a GeoDeploy raster style cannot "
+                 "express (it carries a named colormap). The band was sent; choose a colormap on "
+                 "the layer instead.")
+            return style
+
+        # Anything else — a renderer from a plugin, or a QGIS class we have not met. The band and the
         # stretch are still worth having even when the colouring cannot travel: the stretch is what
         # keeps non-8-bit data from rendering as a black rectangle, and it is the part users notice.
         bands = renderer.usesBands() if hasattr(renderer, "usesBands") else []
@@ -346,7 +387,7 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
             style["rescale"] = "{0},{1}".format(_trim(lo), _trim(hi))
         # Name the class. "No GeoDeploy equivalent" without saying what it saw is the kind of
         # message that costs a round trip to diagnose.
-        _log("Raster renderer {0} is not fully translatable{1}.".format(
+        _log("Raster renderer {0} is not translatable{1}.".format(
             type(renderer).__name__,
             " — sent its bands and stretch" if style else ", and exposed no bands or stretch"))
         return style
