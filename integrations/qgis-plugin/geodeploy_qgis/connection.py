@@ -69,6 +69,25 @@ class Instance:
                 pass
         return (self.client.catalog.public() or {}).get("portals") or []
 
+    def fetch_json(self, url: str) -> dict:
+        """GET any URL on this instance as JSON, with the token when there is one.
+
+        The layer surfaces (TileJSON, WMTS, legends) are ordinary URLs rather than client methods,
+        and a private layer's are behind the credential — so this carries it, and the same
+        User-Agent as everything else.
+        """
+        import json
+        from urllib.request import Request, urlopen
+
+        headers = {"User-Agent": self._c_user_agent(), "Accept": "application/json"}
+        if self.token:
+            headers["Authorization"] = "Bearer {0}".format(self.token)
+        try:
+            with urlopen(Request(url, headers=headers), timeout=30) as response:  # noqa: S310
+                return json.loads(response.read().decode("utf-8"))
+        except Exception as exc:        # noqa: BLE001 - surfaced as a plugin message
+            raise GeoDeployError("Could not read {0}: {1}".format(url, exc))
+
     def published_style(self, slug: str) -> dict:
         """A published portal's own style.json — served to anyone, no credential involved.
 

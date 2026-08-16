@@ -82,27 +82,35 @@ def _apply_data_defined_size(symbol, layer0, style: dict) -> None:
     try:
         if isinstance(layer0, QgsSimpleMarkerSymbolLayer):
             expr = 'scale_linear("{0}", {1}, {2}, {3}, {4})'.format(
-                field, in_lo, in_hi, out_lo * 2, out_hi * 2)
+                field, in_lo, in_hi, out_lo * 2 * CSS_PX_TO_POINTS, out_hi * 2 * CSS_PX_TO_POINTS)
             symbol.setDataDefinedSize(QgsProperty.fromExpression(expr))
         elif isinstance(layer0, QgsSimpleLineSymbolLayer):
             expr = 'scale_linear("{0}", {1}, {2}, {3}, {4})'.format(
-                field, in_lo, in_hi, out_lo, out_hi)
+                field, in_lo, in_hi, out_lo * CSS_PX_TO_POINTS, out_hi * CSS_PX_TO_POINTS)
             layer0.setDataDefinedProperty(QgsSymbolLayer.PropertyStrokeWidth,
                                           QgsProperty.fromExpression(expr))
     except Exception as exc:            # noqa: BLE001 - a size must never stop a layer drawing
         _log("Could not apply size-by-field ({0}): {1}".format(field, exc))
 
 
-def _use_pixels(symbol, layer0) -> None:
-    """Measure this symbol in pixels, which is what GeoDeploy's numbers mean.
+#: GeoDeploy's sizes are CSS pixels — what MapLibre draws with, and device-INDEPENDENT (1/96 inch).
+#: QGIS's "pixels" are RENDER pixels, which on a scaled or high-DPI display are physically smaller,
+#: so the same number came out too small. Points are device-independent too (1/72 inch), so one CSS
+#: pixel is 0.75 pt and the symbol keeps its size on screen wherever it is drawn.
+CSS_PX_TO_POINTS = 0.75
 
-    QGIS defaults to millimetres. A GeoDeploy radius of 5 (px) set as 10 mm draws about four times
-    too large at a normal DPI — the difference between "the same map" and "a map covered in blobs".
-    Both the symbol and its layer are told, because QGIS keeps the unit on each.
+
+def _use_points(symbol, layer0) -> None:
+    """Measure this symbol in POINTS, so it matches the size GeoDeploy draws.
+
+    Millimetres (the QGIS default) made a radius of 5 into a 10 mm marker — roughly four times too
+    big. Render pixels fixed that but went too far the other way on a scaled display, because they
+    are device pixels while GeoDeploy's are CSS pixels. Points are the unit that means the same
+    thing on both sides.
     """
     try:
         from qgis.core import QgsUnitTypes
-        px = QgsUnitTypes.RenderPixels
+        pt = QgsUnitTypes.RenderPoints
     except Exception:                   # noqa: BLE001 - very old QGIS: leave the default
         return
     for target, setter in ((symbol, "setSizeUnit"), (layer0, "setSizeUnit"),
@@ -110,7 +118,7 @@ def _use_pixels(symbol, layer0) -> None:
         fn = getattr(target, setter, None)
         if callable(fn):
             try:
-                fn(px)
+                fn(pt)
             except Exception:           # noqa: BLE001 - not every symbol layer has both
                 pass
 
@@ -138,24 +146,24 @@ def _symbol_for(qgis_layer, color: str | None, style: dict):
                 layer0.setShape(QgsSimpleMarkerSymbolLayer.decodeShape(shape)[0])
             except Exception:           # noqa: BLE001 - shape names shift between QGIS versions
                 pass
-        _use_pixels(symbol, layer0)
+        _use_points(symbol, layer0)
         if style.get("radius"):
             # GeoDeploy's radius is in PIXELS and QGIS's size is a DIAMETER — so double it, and
             # (above) tell QGIS the number is pixels. Without that it is read as millimetres, and a
             # radius of 5 becomes a 10 mm marker: roughly four times too big on screen, which is
             # exactly how it looked.
-            symbol.setSize(float(style["radius"]) * 2)
+            symbol.setSize(float(style["radius"]) * 2 * CSS_PX_TO_POINTS)
         outline = style.get("outline_color")
         if outline and outline != "none":
             layer0.setStrokeColor(QColor(outline))
         elif outline == "none":
             layer0.setStrokeStyle(Qt.NoPen)
     elif isinstance(layer0, QgsSimpleLineSymbolLayer):
-        _use_pixels(symbol, layer0)
+        _use_points(symbol, layer0)
         if style.get("line_width"):
             # In pixels now (see `_use_pixels`), so the width IS the width — no mm conversion, and
             # no divide-by-four fudge that was only ever right at one screen DPI.
-            layer0.setWidth(float(style["line_width"]))
+            layer0.setWidth(float(style["line_width"]) * CSS_PX_TO_POINTS)
         dash = (style.get("lineType") or "solid").lower()
         if dash == "dashed":
             layer0.setPenStyle(Qt.DashLine)
@@ -306,6 +314,62 @@ def _hex(color) -> str:
 #: request, so the ceiling is set by what a proxy accepts, not by taste — 128 classes is ~5 kB,
 #: against nginx's default 8 kB request line.
 MAX_COLOR_CLASSES = 128
+
+
+def apply_to_vector_tiles(tile_layer, row: dict, source_layer: str | None) -> bool:
+    """Colour a vector TILE layer with the layer's own colour.
+
+    QGIS renders vector tiles through `QgsVectorTileBasicRenderer`, which takes styles per geometry
+    type rather than a feature renderer — so the classified symbology `apply_to_qgis` builds does
+    not apply here. This is the honest subset: the right colour and the right geometry, instead of
+    whichever colour QGIS picked at random.
+
+    Anything richer needs the feature data, which is what "prefer the real data" is for.
+    """
+    if not QGIS:
+        return False
+    try:
+        from qgis.core import (QgsVectorTileBasicRenderer, QgsVectorTileBasicRendererStyle,
+                               QgsSymbol, QgsWkbTypes)
+        from qgis.PyQt.QtGui import QColor
+    except ImportError:                 # pragma: no cover - older QGIS
+        return False
+
+    style = ((row.get("default_style") or {}).get("style")
+             if isinstance(row.get("default_style"), dict) else {}) or {}
+    colour = QColor(style.get("color") or "#3b82f6")
+    geom = (row.get("geometry_type") or "").lower()
+    if "polygon" in geom:
+        kinds = [(QgsWkbTypes.PolygonGeometry, QgsSymbol.Fill)]
+    elif "line" in geom:
+        kinds = [(QgsWkbTypes.LineGeometry, QgsSymbol.Line)]
+    else:
+        kinds = [(QgsWkbTypes.PointGeometry, QgsSymbol.Marker)]
+
+    try:
+        styles = []
+        for geometry_type, symbol_type in kinds:
+            symbol = QgsSymbol.defaultSymbol(geometry_type)
+            if symbol is None:
+                continue
+            symbol.setColor(colour)
+            entry = QgsVectorTileBasicRendererStyle("geodeploy", source_layer or "", geometry_type)
+            entry.setSymbol(symbol)
+            entry.setEnabled(True)
+            styles.append(entry)
+        if not styles:
+            return False
+        renderer = QgsVectorTileBasicRenderer()
+        renderer.setStyles(styles)
+        tile_layer.setRenderer(renderer)
+        tile_layer.triggerRepaint()
+        if style.get("color_mode") in ("graduated", "categorized"):
+            _log("Drawn as vector tiles for speed, so only the base colour was applied. Tick "
+                 "'Prefer the real data' to get the full classified symbology.")
+        return True
+    except Exception as exc:            # noqa: BLE001 - never stop a layer loading over a colour
+        _log("Could not style the vector tiles: {0}".format(exc))
+        return False
 
 
 def raster_from_qgis(qgis_layer, colormaps=None) -> dict:

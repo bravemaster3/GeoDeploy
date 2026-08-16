@@ -15,7 +15,7 @@ import os
 import shutil
 
 from qgis.core import (Qgis, QgsApplication, QgsProject, QgsRasterLayer, QgsTask,
-                       QgsVectorLayer)
+                       QgsVectorLayer, QgsVectorTileLayer)
 from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import (QAbstractItemView, QAction, QCheckBox, QComboBox, QDockWidget,
                                  QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar,
@@ -48,7 +48,7 @@ class _Job(QgsTask):
         return False
 
 
-def _xyz_uri(tile_url: str) -> str | None:
+def _xyz_uri(tile_url: str, zmin=None, zmax=None) -> str | None:
     """An XYZ provider URI built by QGIS itself.
 
     `QgsDataSourceUri` owns the escaping rules, and ours has to survive a template whose own query
@@ -60,8 +60,8 @@ def _xyz_uri(tile_url: str) -> str | None:
         uri = QgsDataSourceUri()
         uri.setParam("type", "xyz")
         uri.setParam("url", tile_url)
-        uri.setParam("zmin", "0")
-        uri.setParam("zmax", "22")
+        uri.setParam("zmin", str(int(zmin)) if zmin is not None else "0")
+        uri.setParam("zmax", str(int(zmax)) if zmax is not None else "22")
         return bytes(uri.encodedUri()).decode("utf-8")
     except Exception:                   # noqa: BLE001 - fall back to the hand-built string
         return None
@@ -155,6 +155,13 @@ class GeoDeployDock(QDockWidget):
             "rest still go.")
         self.upload_btn.clicked.connect(self.upload_active)
         outer.addWidget(self.upload_btn)
+
+        self.save_style_btn = QPushButton("Save styling to GeoDeploy")
+        self.save_style_btn.setToolTip(
+            "Send the selected layer's CURRENT QGIS styling to the layer it came from, as its "
+            "default style. No re-upload — the data is already there.")
+        self.save_style_btn.clicked.connect(self.save_style)
+        outer.addWidget(self.save_style_btn)
 
         self.push_style = QCheckBox("Send its styling too")
         self.push_style.setChecked(True)
@@ -375,7 +382,12 @@ class GeoDeployDock(QDockWidget):
             parent.setExpanded(True)
             for portal in self._portals:
                 slug = portal.get("slug") or ""
+                # A portal in the PUBLIC index is published by definition — that is what being
+                # in it means. The anonymous listing has no `published` field, so reading one gave
+                # every public portal the word "draft".
                 published = portal.get("is_published", portal.get("published"))
+                if published is None:
+                    published = bool(portal.get("published_at") or portal.get("url"))
                 item = QTreeWidgetItem(parent, [
                     portal.get("title") or portal.get("name") or slug,
                     portal.get("experience") or portal.get("archetype") or "portal",
@@ -455,7 +467,23 @@ class GeoDeployDock(QDockWidget):
         The tag is what makes the portal round trip safe: a group pushed back has to know WHICH
         layer each entry is, and matching by name would break the first time someone renames one.
         """
-        if source["kind"] in ("cog", "xyz"):
+        if source["kind"] == "vector-tiles":
+            uri = _xyz_uri(source["uri"])
+            layer = QgsVectorTileLayer(uri, name) if uri else None
+            if layer is None or not layer.isValid():
+                return None
+            # A vector tile layer is not a feature layer: QGIS renders it through a different
+            # renderer entirely, so `apply_to_qgis` cannot style it. Give it the layer's own colour
+            # at least, rather than QGIS's random one, and say what was not applied.
+            symbology.apply_to_vector_tiles(layer, row, source.get("source_layer"))
+            if self.instance:
+                portal_sync.tag_layer(layer, self.instance.url, row.get("id"), "vector")
+            return layer
+        if source["kind"] == "tilejson":
+            layer = self._raster_from_tilejson(source["tilejson_url"], name)
+            if layer is None:
+                return None
+        elif source["kind"] in ("cog", "xyz"):
             uri = source["uri"]
             if source["kind"] == "xyz" and source.get("tile_url"):
                 uri = _xyz_uri(source["tile_url"]) or uri
@@ -475,6 +503,57 @@ class GeoDeployDock(QDockWidget):
                          or row.get("storage_backend") == "raster")
             portal_sync.tag_layer(layer, self.instance.url, row.get("id"),
                                   "raster" if is_raster else "vector")
+        return layer
+
+    def _layer_from_portal_source(self, cfg, name):
+        """One layer built from the source the PORTAL draws it from."""
+        src = cfg.get("source") or {}
+        kind, url = src.get("kind"), (src.get("url") or "").strip()
+        if not kind or not url:
+            return None
+        try:
+            if kind == "raster-xyz":
+                uri = _xyz_uri(url)
+                layer = QgsRasterLayer(uri, name, "wms") if uri else None
+            elif kind == "pmtiles":
+                layer = QgsVectorLayer("/vsicurl/" + url, name, "ogr")
+            elif kind == "vector-tiles":
+                uri = _xyz_uri(url)
+                layer = QgsVectorTileLayer(uri, name) if uri else None
+            else:
+                return None
+        except Exception as exc:        # noqa: BLE001 - one layer must not stop the group
+            symbology._log("Could not build {0} from the portal's source: {1}".format(name, exc))
+            return None
+        if layer is None or not layer.isValid():
+            return None
+        if self.instance:
+            portal_sync.tag_layer(layer, self.instance.url, cfg.get("layer_id"),
+                                  cfg.get("layer_type") or "vector")
+        return layer
+
+    def _raster_from_tilejson(self, url, name):
+        """A styled raster layer from the instance's TileJSON: template, zooms and bounds.
+
+        Everything a tile layer is missing comes from this one document — which is why the server
+        publishes it and labels it for QGIS. Nothing here is derived: the template is the server's,
+        and so are the bounds that make "zoom to layer" land on the data.
+        """
+        try:
+            doc = self.instance.fetch_json(url) if self.instance else None
+        except GeoDeployError as exc:
+            symbology._log("Could not read the raster's TileJSON: {0}".format(exc))
+            return None
+        tiles = (doc or {}).get("tiles") or []
+        if not tiles:
+            return None
+        uri = _xyz_uri(tiles[0], doc.get("minzoom"), doc.get("maxzoom"))
+        if not uri:
+            return None
+        layer = QgsRasterLayer(uri, name, "wms")
+        if not layer.isValid():
+            return None
+        self._set_raster_extent(layer, doc.get("bounds"))
         return layer
 
     @staticmethod
@@ -582,18 +661,21 @@ class GeoDeployDock(QDockWidget):
                 cfg = by_key.get(key)
                 if cfg is None:
                     continue
+                label = str(cfg.get("name") or cfg.get("layer_id"))
                 layer_row = self._row_for(cfg.get("layer_id"), cfg.get("layer_type"))
-                if layer_row is None:
-                    missing.append(str(cfg.get("name") or cfg.get("layer_id")))
-                    continue
-                source = sources.describe(layer_row,
-                                          prefer_attributes=self.attributes.isChecked())
-                if not source:
-                    missing.append(str(layer_row.get("name") or cfg.get("layer_id")))
-                    continue
-                layer = self._build_layer(layer_row, source, layer_row.get("name") or "layer")
+                if layer_row is not None:
+                    source = sources.describe(layer_row,
+                                              prefer_attributes=self.attributes.isChecked())
+                    layer = (self._build_layer(layer_row, source,
+                                               layer_row.get("name") or "layer")
+                             if source else None)
+                else:
+                    # Not in the listing: a layer that is not itself published, on a portal that
+                    # is. The portal's own style says where it draws from, and that source is
+                    # readable by anyone who can read the portal — which is the whole point.
+                    layer = self._layer_from_portal_source(cfg, label)
                 if layer is None:
-                    missing.append(str(layer_row.get("name") or cfg.get("layer_id")))
+                    missing.append(label)
                     continue
                 project.addMapLayer(layer, False)   # False: placed into the group, not the root
                 tree_node = parent.addLayer(layer)
@@ -758,12 +840,17 @@ class GeoDeployDock(QDockWidget):
 
     def _open_portal(self, row):
         """A portal is a published web map — QGIS cannot render one, so open it where it lives."""
-        base = (row.get("_base") or "").rstrip("/")
-        slug = row.get("slug") or ""
-        if not base or not slug:
-            self._say("That portal has no address yet — publish it first.", Qgis.Warning)
-            return
-        url = f"{base}/p/{slug}"
+        # The instance publishes the portal's OWN url; `/p/<slug>` was a guess, and it lands on
+        # the dashboard's SPA — which sends a signed-out visitor to the login page for a portal
+        # that is public.
+        url = (row.get("url") or "").strip()
+        if not url:
+            base = (row.get("_base") or "").rstrip("/")
+            slug = row.get("slug") or ""
+            if not base or not slug:
+                self._say("That portal has no address yet — publish it first.", Qgis.Warning)
+                return
+            url = f"{base}/portals/{slug}/"
         try:
             from qgis.PyQt.QtCore import QUrl
             from qgis.PyQt.QtGui import QDesktopServices
@@ -771,6 +858,73 @@ class GeoDeployDock(QDockWidget):
             self._say(f"Opened {url} in your browser.")
         except Exception as exc:        # noqa: BLE001 - still give them the address
             self._say(f"Open it at {url} ({exc}).", Qgis.Warning)
+
+    def save_style(self):
+        """Push the selected layer's QGIS styling back as its GeoDeploy default style.
+
+        Restyling a layer you already have should not mean uploading it again. Only layers that
+        CAME from an instance can be saved this way — they carry the id, so there is no guessing
+        which layer on the server is meant.
+        """
+        if not self.instance or not self.instance.token:
+            self._say("Saving a style needs a token with write access.", Qgis.Warning)
+            return
+        view = self.iface.layerTreeView()
+        chosen = [l for l in (view.selectedLayers() if view else []) if l is not None]
+        if not chosen:
+            active = self.iface.activeLayer()
+            chosen = [active] if active is not None else []
+        if not chosen:
+            self._say("Select a layer that came from this instance.", Qgis.Warning)
+            return
+
+        jobs, skipped = [], []
+        for layer in chosen:
+            identity = portal_sync.layer_identity(layer)
+            if identity is None:
+                skipped.append(layer.name())
+                continue
+            layer_id, kind = identity
+            style = (symbology.raster_from_qgis(layer, self._colormaps()) if kind == "raster"
+                     else symbology.from_qgis(layer))
+            if not style:
+                skipped.append("{0} (nothing translatable)".format(layer.name()))
+                continue
+            jobs.append((layer.name(), layer_id, kind, style))
+
+        if not jobs:
+            self._say("Nothing to save: " + (", ".join(skipped) or "no layer from this instance") +
+                      ". A layer must have been ADDED from GeoDeploy to be saved back to it.",
+                      Qgis.Warning)
+            return
+
+        client = self.instance.client
+
+        def work():
+            saved = []
+            for name, layer_id, kind, style in jobs:
+                body = (dict(style, opacity=1.0) if kind == "raster"
+                        else {"opacity": 1.0, "style": style, "popup_fields": []})
+                client.layers.api(kind).set_default_style(layer_id, body)
+                saved.append(name)
+            return {"saved": saved, "skipped": skipped}
+
+        self._busy(True)
+        self._say("Saving styling for {0} layer(s)…".format(len(jobs)), bar=False)
+        self._run(_Job("GeoDeploy: saving style", work), self._style_saved)
+
+    def _style_saved(self, job):
+        self._busy(False)
+        if job.error:
+            self._say(job.error, Qgis.Critical)
+            return
+        result = job.result or {}
+        saved, skipped = result.get("saved") or [], result.get("skipped") or []
+        note = " Skipped: " + ", ".join(skipped[:3]) + "." if skipped else ""
+        self._say("Saved styling for " + ", ".join(saved[:3]) +
+                  (" and {0} more".format(len(saved) - 3) if len(saved) > 3 else "") + "." + note,
+                  Qgis.Warning if skipped else Qgis.Info)
+        self.refresh_layers()
 
     def upload_active(self):
         if not self.instance:

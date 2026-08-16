@@ -53,6 +53,11 @@ def _stub_qgis():
             return _Any()
 
     for name in ("Qgis", "QgsApplication", "QgsProject", "QgsRasterLayer", "QgsVectorLayer",
+                 "QgsVectorTileLayer", "QgsDataSourceUri", "QgsUnitTypes",
+                 "QgsVectorTileBasicRenderer", "QgsVectorTileBasicRendererStyle",
+                 "QgsWkbTypes",
+                 "QgsCoordinateReferenceSystem", "QgsCoordinateTransform",
+                 "QgsRectangle",
                  "QgsCategorizedSymbolRenderer", "QgsGraduatedSymbolRenderer", "QgsRendererCategory",
                  "QgsRendererRange", "QgsSimpleFillSymbolLayer", "QgsSimpleLineSymbolLayer",
                  "QgsSimpleMarkerSymbolLayer", "QgsSymbol", "QgsSingleSymbolRenderer",
