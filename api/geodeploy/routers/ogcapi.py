@@ -32,7 +32,8 @@ from starlette.concurrency import run_in_threadpool
 from ..config import get_settings
 from ..database import get_db
 from ..models import VectorLayer
-from .common import by_ref
+from .common import by_ref, visible_to
+from ..deps import resolve_optional_user
 
 router = APIRouter(prefix="/ogc", tags=["ogc-api-features"])
 
@@ -105,20 +106,54 @@ def _parse_bbox(raw: str | None) -> list[float] | None:
     return parts
 
 
-async def _public_layers(db: AsyncSession) -> list[VectorLayer]:
-    result = await db.execute(select(VectorLayer).where(
-        VectorLayer.status == "ready", VectorLayer.is_public == True))  # noqa: E712
+async def _readable_layers(request: Request, db: AsyncSession) -> list[VectorLayer]:
+    """Public layers, PLUS whatever the caller's credential lets them see.
+
+    This surface used to be public-only, whatever you sent with it. Someone holding an editor token
+    could list a private layer everywhere else in GeoDeploy and then be told it did not exist here
+    — and since this is how QGIS adds a layer with full attributes, "add my own layer to QGIS" only
+    worked if the layer was published to the world first. A token is an identity; the answer should
+    depend on it.
+    """
+    user = await resolve_optional_user(request, db)
+    where = (VectorLayer.is_public == True) if user is None else visible_to(user, VectorLayer)  # noqa: E712
+    result = await db.execute(select(VectorLayer).where(VectorLayer.status == "ready", where))
     return list(result.scalars().all())
 
 
-async def _get_layer(cid: str, db: AsyncSession) -> VectorLayer:
+async def _get_layer(cid: str, request: Request, db: AsyncSession) -> VectorLayer:
     # `by_ref` accepts the uid AND the legacy integer id (with or without the `vector-` prefix),
     # so collection URLs shared before the uid migration keep working.
     result = await db.execute(select(VectorLayer).where(by_ref(VectorLayer, cid)))
     layer = result.scalar_one_or_none()
-    if not layer or layer.status != "ready" or not layer.is_public:
+    if not layer or layer.status != "ready":
         raise HTTPException(404, "No such collection.")
+    if not layer.is_public:
+        user = await resolve_optional_user(request, db)
+        if user is None:
+            raise HTTPException(404, "No such collection.")
+        # Re-ask with the visibility rule applied, so this route cannot become the one place where
+        # sharing is decided differently from everywhere else.
+        allowed = await db.execute(select(VectorLayer.id).where(
+            VectorLayer.id == layer.id, visible_to(user, VectorLayer)))
+        if allowed.scalar_one_or_none() is None:
+            raise HTTPException(404, "No such collection.")
     return layer
+
+
+def _cors(layer_or_none=None) -> dict:
+    """CORS + cache headers for a response whose CONTENT may depend on the credential.
+
+    `Vary: Authorization` is not optional here. A CDN sits in front of these instances, and without
+    it the first authenticated response would be cached and then served to anonymous callers — a
+    private layer handed out to the world by the cache, from code that filtered correctly.
+    A response carrying anything non-public is marked `private` so it is not stored at all.
+    """
+    headers = dict(CORS)
+    headers["Vary"] = "Authorization"
+    if layer_or_none is not None and not getattr(layer_or_none, "is_public", False):
+        headers["Cache-Control"] = "private, no-store"
+    return headers
 
 
 def _collection(layer, base: str) -> dict:
@@ -186,18 +221,18 @@ async def conformance():
 async def collections(request: Request, db: AsyncSession = Depends(get_db)):
     base = _base(request)
     return SafeJSONResponse({
-        "collections": [_collection(l, base) for l in await _public_layers(db)],
+        "collections": [_collection(l, base) for l in await _readable_layers(request, db)],
         "links": [
             {"rel": "self", "href": f"{_root(base)}/collections", "type": "application/json"},
             {"rel": "root", "href": _root(base), "type": "application/json"},
         ],
-    }, headers=CORS)
+    }, headers=_cors())
 
 
 @router.get("/collections/{cid}")
 async def collection(cid: str, request: Request, db: AsyncSession = Depends(get_db)):
-    layer = await _get_layer(cid, db)
-    return SafeJSONResponse(_collection(layer, _base(request)), headers=CORS)
+    layer = await _get_layer(cid, request, db)
+    return SafeJSONResponse(_collection(layer, _base(request)), headers=_cors(layer))
 
 
 # ── Features ─────────────────────────────────────────────────────────────────────────────────
@@ -210,7 +245,7 @@ async def items(cid: str, request: Request, bbox: str | None = None, limit: int 
     `limit` is capped at MAX_LIMIT — a client that wants everything follows `rel="next"` (which is
     what QGIS/ogr2ogr do). `numberMatched` is best-effort: exact for a bbox query, the stored
     feature count for an unfiltered one, and omitted when counting would be too expensive."""
-    layer = await _get_layer(cid, db)
+    layer = await _get_layer(cid, request, db)
     qb = _parse_bbox(bbox)
     limit = max(1, min(int(limit), MAX_LIMIT))
     offset = max(0, int(offset))
@@ -246,7 +281,7 @@ async def items(cid: str, request: Request, bbox: str | None = None, limit: int 
     }
     if matched is not None:
         doc["numberMatched"] = matched
-    return SafeJSONResponse(doc, media_type=GEOJSON, headers=CORS)
+    return SafeJSONResponse(doc, media_type=GEOJSON, headers=_cors(layer))
 
 
 @router.get("/collections/{cid}/items/{fid}")
@@ -254,7 +289,7 @@ async def item(cid: str, fid: str, request: Request, db: AsyncSession = Depends(
     """A single feature by its id. The id is the table's primary key for a PostGIS layer; for a
     file-backed (GeoParquet) layer it is an `id`-like column when the dataset has one — otherwise
     single-feature access isn't addressable and this 404s (the collection still pages fine)."""
-    layer = await _get_layer(cid, db)
+    layer = await _get_layer(cid, request, db)
     if layer.storage_backend == "geoparquet":
         feature = await _geoparquet_item(layer, fid)
     else:
@@ -266,7 +301,7 @@ async def item(cid: str, fid: str, request: Request, db: AsyncSession = Depends(
         {"rel": "self", "href": f"{_root(base)}/collections/{cid}/items/{fid}", "type": GEOJSON},
         {"rel": "collection", "href": f"{_root(base)}/collections/{cid}", "type": "application/json"},
     ]
-    return SafeJSONResponse(feature, media_type=GEOJSON, headers=CORS)
+    return SafeJSONResponse(feature, media_type=GEOJSON, headers=_cors(layer))
 
 
 # ── PostGIS backend ──────────────────────────────────────────────────────────────────────────

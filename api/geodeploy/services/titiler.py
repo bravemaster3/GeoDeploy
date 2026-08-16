@@ -1,4 +1,7 @@
 """TiTiler integration — raster tile URL construction."""
+import json
+from urllib.parse import quote
+
 from ..config import get_settings
 
 COLORMAPS = [
@@ -15,6 +18,7 @@ def get_tile_url(
     zfactor: float | str | None = None,
     bidx: list | None = None,
     band_count: int | None = None,
+    color_classes: list | None = None,
     settings=None,
 ) -> str:
     """
@@ -24,6 +28,9 @@ def get_tile_url(
       output (a colormap may apply); three bands → an RGB composite (colormap ignored).
       Empty/None lets TiTiler pick its default bands.
     - colormap: a TiTiler colormap name (single-band data only).
+    - color_classes: [{"value": n, "color": "#rrggbb"}] — an EXPLICIT colour per pixel value, for
+      data that is classified rather than continuous (land cover, soil types, a QGIS paletted
+      raster). Takes precedence over `colormap`, which can only describe a gradient.
     - rescale: "min,max" stretch applied before display (needed for non-8-bit data).
     - algorithm: a TiTiler algorithm such as "hillshade" (single-band DEM data).
     - zfactor: vertical exaggeration for hillshade — applied as a pre-scale expression
@@ -63,9 +70,68 @@ def get_tile_url(
                 url += f"&expression=b1*{z}"
     # colormap only makes sense for single-band output (one selected band, or a
     # single-band raster). It is ignored when an algorithm or an RGB composite is active.
-    elif colormap and len(bands) != 3:
-        url += f"&colormap_name={colormap}"
+    elif len(bands) != 3:
+        explicit = _explicit_colormap(color_classes)
+        if explicit:
+            # A CLASSIFIED raster — land cover, soil types, a QGIS paletted layer — has a colour
+            # per VALUE, which no named gradient can express: interpolating between class 3 and
+            # class 4 is meaningless. TiTiler takes the mapping itself as JSON.
+            url += f"&colormap={quote(explicit, safe='')}"
+        elif colormap:
+            url += f"&colormap_name={colormap}"
     return url
+
+
+#: Every class travels in the URL of EVERY tile request, so the mapping cannot be unbounded — and
+#: the limit is set by what a proxy will accept, not by taste. Percent-encoded JSON costs ~36 bytes
+#: per class, so 256 classes produced a 9.2 kB request line: past nginx's default 8 kB
+#: `large_client_header_buffers`, which would have meant every tile failing and the layer silently
+#: never drawing. 128 lands near 4.6 kB, with room for a long object key.
+#:
+#: It is also far more than real classifications need — CORINE has 44 classes, NLCD about 20,
+#: ESA WorldCover 11. Data with more distinct values than this is continuous in all but name, and a
+#: named colormap is the right tool for it.
+MAX_COLOR_CLASSES = 128
+
+
+def _explicit_colormap(color_classes) -> str | None:
+    """`{"3": [r,g,b,a], …}` as compact JSON, or None when there is nothing usable.
+
+    Silently skips entries that are not a number-plus-colour rather than failing the whole tile
+    URL: a single bad class must not take the layer off the map.
+    """
+    if not color_classes:
+        return None
+    mapping = {}
+    for entry in color_classes[:MAX_COLOR_CLASSES]:
+        if not isinstance(entry, dict):
+            continue
+        rgba = _rgba(entry.get("color"))
+        value = entry.get("value")
+        if rgba is None or value is None:
+            continue
+        try:
+            key = int(value)
+        except (TypeError, ValueError):
+            continue
+        mapping[str(key)] = rgba
+    if not mapping:
+        return None
+    return json.dumps(mapping, separators=(",", ":"))
+
+
+def _rgba(color) -> list | None:
+    """`#rrggbb` (or `#rrggbbaa`) to `[r, g, b, a]`. TiTiler wants 0–255 with alpha."""
+    if not isinstance(color, str):
+        return None
+    text = color.strip().lstrip("#")
+    if len(text) not in (6, 8):
+        return None
+    try:
+        parts = [int(text[i:i + 2], 16) for i in range(0, len(text), 2)]
+    except ValueError:
+        return None
+    return parts if len(parts) == 4 else parts + [255]
 
 
 def get_tilejson_url(s3_key: str, settings=None) -> str:

@@ -53,6 +53,7 @@ async def list_layers(user: User = Depends(require_scope("data:read")), db: Asyn
                 algorithm=ds.get("algorithm"),
                 zfactor=ds.get("zfactor"),
                 bidx=ds.get("bidx"),
+                color_classes=ds.get("color_classes"),
                 band_count=l.band_count,
             )
         out.append(obj)
@@ -401,12 +402,20 @@ async def raster_legend(layer_ref: str, request: Request, db: AsyncSession = Dep
         if not allowed:
             raise HTTPException(404, "No shared raster for this layer.")
 
+    # A RASTER's default style is stored FLAT — {opacity, colormap, rescale, …} — where a vector's
+    # nests the visual part under "style". This route was written against the vector shape, so
+    # `.get("style")` was always missing and every field came back null: verified on a live
+    # instance, where a raster with `rescale: "0.0,2.0"` reported `rescale: null`. The legend has
+    # therefore never told a renderer anything it did not already have to guess.
+    #
+    # Both shapes are read, flat first, so nothing depends on which version wrote the row.
     style = {}
     if layer.default_style:
         try:
-            style = json.loads(layer.default_style).get("style") or {}
+            stored = json.loads(layer.default_style) or {}
         except ValueError:
-            style = {}
+            stored = {}
+        style = stored if "style" not in stored else (stored.get("style") or {})
     rescale = style.get("rescale")
     if isinstance(rescale, str):
         # Stored as TiTiler wants it ("min,max"); a client wants numbers.
@@ -418,7 +427,13 @@ async def raster_legend(layer_ref: str, request: Request, db: AsyncSession = Dep
         "layer": layer.name,
         "ref": layer.uid or str(layer.id),
         "kind": "raster",
-        "ramp": True,                       # continuous, so `entries` would be a lie
+        # A CLASSIFIED raster is not a ramp. Saying it is would make every renderer draw a
+        # gradient over land-cover codes — a legend that disagrees with the map it describes.
+        "ramp": not bool(style.get("color_classes")),
+        "entries": [{"value": c.get("value"), "color": c.get("color"),
+                     "label": str(c.get("label") or c.get("value"))}
+                    for c in (style.get("color_classes") or [])],
+        "color_classes": style.get("color_classes") or None,
         "colormap": style.get("colormap"),
         "rescale": rescale,
         "algorithm": style.get("algorithm"),
@@ -458,6 +473,7 @@ async def raster_tilejson(layer_ref: str, request: Request, db: AsyncSession = D
         "tiles": [base + raster_tile_url(
             layer.s3_key, colormap=ds.get("colormap"), rescale=ds.get("rescale"),
             algorithm=ds.get("algorithm"), zfactor=ds.get("zfactor"), bidx=ds.get("bidx"),
+            color_classes=ds.get("color_classes"),
             band_count=layer.band_count)],
         "minzoom": 0,
         "maxzoom": 22,
@@ -541,6 +557,7 @@ async def raster_wmts(layer_ref: str, request: Request, db: AsyncSession = Depen
     tmpl = base + raster_tile_url(
         layer.s3_key, colormap=ds.get("colormap"), rescale=ds.get("rescale"),
         algorithm=ds.get("algorithm"), zfactor=ds.get("zfactor"), bidx=ds.get("bidx"),
+        color_classes=ds.get("color_classes"),
         band_count=layer.band_count)
     tmpl = (tmpl.replace("{z}", "{TileMatrix}").replace("{x}", "{TileCol}")
                 .replace("{y}", "{TileRow}"))
@@ -652,7 +669,19 @@ async def save_default_style(
     layer = result.scalar_one_or_none()
     if not layer:
         raise HTTPException(404, "Layer not found.")
-    layer.default_style = json.dumps(body.model_dump())
+    # MERGE, do not replace. `model_dump()` fills every field the model knows about, so a client
+    # that has not been taught about a newer one — the web UI's raster panel does not yet edit
+    # `color_classes` — silently sent null for it and DESTROYED a paletted raster's palette just by
+    # saving an unrelated change. `exclude_unset` keeps only what the caller actually sent, so a
+    # field can still be cleared deliberately (send it as null) but never by omission.
+    stored = {}
+    if layer.default_style:
+        try:
+            stored = json.loads(layer.default_style) or {}
+        except ValueError:
+            stored = {}
+    stored.update(body.model_dump(exclude_unset=True))
+    layer.default_style = json.dumps(stored)
     await db.commit()
     await db.refresh(layer)
     return RasterLayerOut.from_orm_json(layer)

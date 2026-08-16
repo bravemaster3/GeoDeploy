@@ -27,7 +27,8 @@ try:                                    # pragma: no cover - only present inside
                            QgsSimpleLineSymbolLayer, QgsSimpleMarkerSymbolLayer, QgsSymbol,
                            QgsSingleSymbolRenderer, QgsClassificationRange,
                            QgsMultiBandColorRenderer, QgsSingleBandGrayRenderer,
-                           QgsSingleBandPseudoColorRenderer)
+                           QgsSingleBandPseudoColorRenderer, QgsHillshadeRenderer,
+                           QgsPalettedRasterRenderer)
     from qgis.PyQt.QtCore import Qt
     from qgis.PyQt.QtGui import QColor
     QGIS = True
@@ -45,6 +46,51 @@ _MARKERS = {
 }
 
 
+def _size_stops(style: dict):
+    """`(field, in_min, in_max, out_min, out_max)` for a proportional size, or None."""
+    if (style.get("size_mode") or "fixed") != "proportional":
+        return None
+    field = (style.get("size_field") or "").strip()
+    stops = [s for s in (style.get("size_stops") or [])
+             if isinstance(s, (list, tuple)) and len(s) == 2]
+    if not field or len(stops) < 2:
+        return None
+    ordered = sorted(stops, key=lambda s: s[0])
+    lo, hi = ordered[0], ordered[-1]
+    if hi[0] == lo[0]:
+        return None                     # a zero-width input range divides by zero in scale_linear
+    return (field, lo[0], hi[0], lo[1], hi[1])
+
+
+def _apply_data_defined_size(symbol, layer0, style: dict) -> None:
+    """Drive marker size / line width from a field, the way the portal does.
+
+    GeoDeploy interpolates linearly between two stops, so `scale_linear` is the exact equivalent —
+    not an approximation. The unit conversions are the same ones the fixed sizes use: a marker's
+    QGIS size is a DIAMETER against GeoDeploy's radius, and a line's width is in mm against pixels.
+    """
+    spec = _size_stops(style)
+    if spec is None:
+        return
+    field, in_lo, in_hi, out_lo, out_hi = spec
+    try:
+        from qgis.core import QgsProperty, QgsSymbolLayer
+    except ImportError:                 # pragma: no cover
+        return
+    try:
+        if isinstance(layer0, QgsSimpleMarkerSymbolLayer):
+            expr = 'scale_linear("{0}", {1}, {2}, {3}, {4})'.format(
+                field, in_lo, in_hi, out_lo * 2, out_hi * 2)
+            symbol.setDataDefinedSize(QgsProperty.fromExpression(expr))
+        elif isinstance(layer0, QgsSimpleLineSymbolLayer):
+            expr = 'scale_linear("{0}", {1}, {2}, {3}, {4})'.format(
+                field, in_lo, in_hi, out_lo / 4.0, out_hi / 4.0)
+            layer0.setDataDefinedProperty(QgsSymbolLayer.PropertyStrokeWidth,
+                                          QgsProperty.fromExpression(expr))
+    except Exception as exc:            # noqa: BLE001 - a size must never stop a layer drawing
+        _log("Could not apply size-by-field ({0}): {1}".format(field, exc))
+
+
 def _symbol_for(qgis_layer, color: str | None, style: dict):
     """A single symbol of the right geometry kind, coloured and sized from `style`."""
     symbol = QgsSymbol.defaultSymbol(qgis_layer.geometryType())
@@ -55,6 +101,11 @@ def _symbol_for(qgis_layer, color: str | None, style: dict):
     layer0 = symbol.symbolLayer(0) if symbol.symbolLayerCount() else None
     if layer0 is None:
         return symbol
+
+    # Size FROM A FIELD, which is independent of colour: a layer can be graduated by one column
+    # and sized by another, and applying only the colours dropped half the symbology on the floor.
+    # A fixed size is set below; this overrides it with an expression when the style has one.
+    _apply_data_defined_size(symbol, layer0, style)
 
     if isinstance(layer0, QgsSimpleMarkerSymbolLayer):
         shape = _MARKERS.get((style.get("marker") or "circle").lower())
@@ -221,6 +272,12 @@ def _hex(color) -> str:
     return color.name() if hasattr(color, "name") else str(color)
 
 
+#: Must match `services/titiler.MAX_COLOR_CLASSES`. The mapping rides in the URL of every tile
+#: request, so the ceiling is set by what a proxy accepts, not by taste — 128 classes is ~5 kB,
+#: against nginx's default 8 kB request line.
+MAX_COLOR_CLASSES = 128
+
+
 def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
     """A GeoDeploy RASTER default style from a QGIS raster renderer.
 
@@ -281,8 +338,90 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
                 _log("QGIS ramp {0!r} has no colormap of that name on the instance — sending the "
                      "stretch without it.".format(name))
             return style
+
+        if isinstance(renderer, QgsHillshadeRenderer):
+            # Exactly representable: GeoDeploy asks TiTiler for a hillshade of the same band, and
+            # `zfactor` is the same vertical exaggeration QGIS calls Z factor. Azimuth and altitude
+            # have no equivalent in the raster style, so a non-default sun position is announced
+            # rather than dropped in silence.
+            band = renderer.band()
+            if isinstance(band, int) and band > 0:
+                style["bidx"] = [band]
+            style["algorithm"] = "hillshade"
+            try:
+                z = float(renderer.zFactor())
+                if _finite(z) and z > 0:
+                    style["zfactor"] = z
+            except (TypeError, ValueError):
+                pass
+            try:
+                az, alt = float(renderer.azimuth()), float(renderer.altitude())
+                if abs(az - 315.0) > 0.5 or abs(alt - 45.0) > 0.5:
+                    _log("This hillshade uses azimuth {0:g}/altitude {1:g}; GeoDeploy renders the "
+                         "standard 315/45, so the shading will differ.".format(az, alt))
+            except (TypeError, ValueError, AttributeError):
+                pass
+            return style
+
+        if isinstance(renderer, QgsPalettedRasterRenderer):
+            # A colour per pixel VALUE — land cover, soil types, any classification. A named
+            # colormap cannot express this (interpolating between class 3 and class 4 is
+            # meaningless), so GeoDeploy carries the mapping itself and TiTiler renders from it.
+            try:
+                band = renderer.band()
+                if isinstance(band, int) and band > 0:
+                    style["bidx"] = [band]
+            except (TypeError, AttributeError):
+                pass
+            classes = []
+            for cls in (renderer.classes() or []):
+                try:
+                    value = int(cls.value)
+                except (TypeError, ValueError, AttributeError):
+                    continue
+                colour = getattr(cls, "color", None)
+                if colour is None:
+                    continue
+                # Alpha travels: "no data" in a classification is usually a transparent class, and
+                # dropping that would paint it over everything underneath.
+                classes.append({"value": value,
+                                "color": "#{0:02x}{1:02x}{2:02x}{3:02x}".format(
+                                    colour.red(), colour.green(), colour.blue(), colour.alpha())})
+            if len(classes) > MAX_COLOR_CLASSES:
+                # Truncating a classification would silently mis-colour part of the map, so refuse
+                # the colours and keep the band: a grey raster is obviously unstyled, where a
+                # half-coloured one looks finished and is wrong.
+                _log("This raster has {0} classes; GeoDeploy carries at most {1} because the "
+                     "mapping travels in every tile request. The colours were not sent — the band "
+                     "was.".format(len(classes), MAX_COLOR_CLASSES))
+                return style
+            if classes:
+                style["color_classes"] = classes
+            else:
+                _log("This paletted raster exposed no readable classes; only its band was sent.")
+            return style
+
+        # Anything else — a renderer from a plugin, or a QGIS class we have not met. The band and the
+        # stretch are still worth having even when the colouring cannot travel: the stretch is what
+        # keeps non-8-bit data from rendering as a black rectangle, and it is the part users notice.
+        bands = renderer.usesBands() if hasattr(renderer, "usesBands") else []
+        bands = [b for b in (bands or []) if isinstance(b, int) and b > 0]
+        if bands:
+            style["bidx"] = bands[:3] if len(bands) >= 3 else bands[:1]
+        lo, hi = (None, None)
+        if hasattr(renderer, "contrastEnhancement"):
+            lo, hi = _enhancement_range(renderer.contrastEnhancement())
+        if lo is not None:
+            style["rescale"] = "{0},{1}".format(_trim(lo), _trim(hi))
+        # Name the class. "No GeoDeploy equivalent" without saying what it saw is the kind of
+        # message that costs a round trip to diagnose.
+        _log("Raster renderer {0} is not translatable{1}.".format(
+            type(renderer).__name__,
+            " — sent its bands and stretch" if style else ", and exposed no bands or stretch"))
+        return style
     except Exception as exc:            # noqa: BLE001 - never block an upload over styling
-        _log("Could not read this raster's symbology: {0}: {1}".format(type(exc).__name__, exc))
+        _log("Could not read this raster's symbology ({0}): {1}: {2}".format(
+            type(renderer).__name__, type(exc).__name__, exc))
         return {}
     return style
 

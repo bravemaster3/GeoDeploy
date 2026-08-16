@@ -391,3 +391,69 @@ async def test_uid_is_generated_for_new_layers(db):
     await db.commit()
     layer = (await db.execute(sel(VL).where(VL.id == 99))).scalar_one()
     assert layer.uid and len(layer.uid) == 12 and layer.uid != "99"
+
+
+# ── The credential decides what exists ────────────────────────────────────────────────────────
+# This surface was public-only whatever you sent with it. Someone holding an editor token could
+# list a private layer everywhere else in GeoDeploy and be told it did not exist here — and since
+# OAPIF is how QGIS adds a layer with full attributes, "add my own layer to QGIS" only worked if
+# the layer had been published to the world first. Measured on a live instance before the fix: the
+# token could see 14 layers; OAPIF offered 8, with or without it.
+
+@pytest.mark.asyncio
+async def test_a_token_widens_the_collection_list(client, db):
+    await _seed(db)
+    # By TITLE, not id: a layer seeded without an explicit uid gets a generated one, and the
+    # document always reports the canonical uid rather than whatever was asked for.
+    anon = {c["title"] for c in (await client.get("/api/ogc/collections")).json()["collections"]}
+    owner = {c["title"] for c in
+             (await client.get("/api/ogc/collections", headers=_auth())).json()["collections"]}
+    assert "Internal" not in anon
+    assert "Internal" in owner
+    assert anon < owner, "a credential must only ever ADD to what is visible"
+
+
+@pytest.mark.asyncio
+async def test_a_private_collection_is_readable_with_a_token(client, db):
+    await _seed(db)
+    cid = f"vector-{ORG_PG}"
+    assert (await client.get(f"/api/ogc/collections/{cid}")).status_code == 404
+    r = await client.get(f"/api/ogc/collections/{cid}", headers=_auth())
+    assert r.status_code == 200
+    # Requested by the legacy integer id; answered with the canonical uid, as elsewhere.
+    assert r.json()["title"] == "Internal"
+    assert r.json()["id"].startswith("vector-")
+
+
+@pytest.mark.asyncio
+async def test_an_unready_layer_is_404_even_with_a_token(client, db):
+    """Authentication widens visibility, not readiness — a half-ingested table has nothing to serve."""
+    await _seed(db)
+    r = await client.get(f"/api/ogc/collections/vector-{PROCESSING}", headers=_auth())
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_a_private_response_is_never_stored_by_a_shared_cache(client, db):
+    """A CDN sits in front of these instances. Without `Vary`, the first authenticated response
+    would be cached and then handed to anonymous callers — correct filtering undone by the cache."""
+    await _seed(db)
+    r = await client.get(f"/api/ogc/collections/vector-{ORG_PG}", headers=_auth())
+    assert r.status_code == 200
+    assert r.headers.get("vary", "").lower() == "authorization"
+    cache = r.headers.get("cache-control", "")
+    assert "private" in cache and "no-store" in cache
+
+
+@pytest.mark.asyncio
+async def test_the_collections_list_varies_on_authorization(client, db):
+    await _seed(db)
+    r = await client.get("/api/ogc/collections")
+    assert r.headers.get("vary", "").lower() == "authorization"
+
+
+def test_public_responses_stay_shared_cacheable():
+    """The public path keeps its shared caching — that is what makes the anonymous catalog cheap,
+    and nothing about it depends on a credential."""
+    headers = ogcapi._cors(type("L", (), {"is_public": True})())
+    assert "public" in headers["Cache-Control"] and headers["Vary"] == "Authorization"

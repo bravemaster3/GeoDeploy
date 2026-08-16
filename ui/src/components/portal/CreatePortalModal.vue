@@ -47,6 +47,9 @@ import { usePortalsStore } from '@/stores/portals'
 import { useRouter } from 'vue-router'
 
 const emit = defineEmits(['close', 'created'])
+// Optional layer_configs to start the portal with — how "create a portal from THIS layer" works
+// without a second create path. Empty by default, which is the plain "New portal" behaviour.
+const props = defineProps({ seedLayers: { type: Array, default: () => [] } })
 const portalsStore = usePortalsStore()
 const router = useRouter()
 const busy = ref(false)
@@ -58,7 +61,7 @@ const form = reactive({
   template_id: 'minimal',
   access_type: 'public',
   access_password: '',
-  layer_configs: [],
+  layer_configs: [...props.seedLayers],
 })
 
 async function submit() {
