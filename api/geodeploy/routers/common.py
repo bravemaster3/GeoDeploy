@@ -36,12 +36,17 @@ def by_ref(model, ref):
     conds = []
     if raw:
         conds.append(model.uid == raw)
-    # A uid is hex, so it CAN be all digits — check both rather than either/or.
+    # A uid is hex, so it CAN be all digits — check both rather than either/or. But only when the
+    # number FITS the id column: `id` is a 32-bit integer in Postgres, and comparing it to a bigger
+    # value is not "no match", it is a DataError — a 500 where the caller should have seen a 404.
+    # A twelve-digit uid is a perfectly ordinary uid, and one turned up in testing straight away.
     if raw.isdigit():
         try:
-            conds.append(model.id == int(raw))
+            number = int(raw)
         except ValueError:
-            pass
+            number = None
+        if number is not None and -2147483648 <= number <= 2147483647:
+            conds.append(model.id == number)
     if not conds:
         return model.id == -1        # matches nothing, without special-casing at every call site
     return or_(*conds)

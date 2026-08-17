@@ -311,6 +311,14 @@ deliberately NOT visibility-filtered (published portals depend on them).
 - No rate limiting beyond nginx; no pagination on list endpoints (fine at current scale).
 
 ## Last updated
+2026-08-17d (`data/raster.py`: **`/cog` is no longer public-or-nothing.** It required `is_public` with
+no authenticated path, so an unshared raster's pixels were unreachable by everyone including its
+owner. That is not a download nicety: server-rendered tiles are colour, not values, so the COG is the
+only way a raster's bands reach QGIS — and therefore the only way to restyle one. Now `is_public` OR a
+signed-in user that `visible_to` already permits, which grants nothing new and stops withholding
+pixels from people already entitled to them. Still stricter than the DESCRIPTION endpoints
+(`_describable`, which also accepts "drawn by a published portal"): being shown a picture in a portal
+is not a licence to download the source data.)
 2026-08-17c (`public.py`: new **`GET /api/public/layers/{kind}/{ref}`** — ONE public layer in the
 shape the layer page reads, so a public layer has a shareable address (the QGIS plugin's "Open in
 GeoDeploy", and the new public UI route `/layers/:kind/:id`). Same readability rule as the display

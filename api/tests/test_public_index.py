@@ -299,3 +299,68 @@ class TestOnePublicLayer:
         # request sees the new value.
         r = await client.get("/api/public/layers/vector/aaaaaaaaaaaa")
         assert r.status_code == 404, r.status_code
+
+
+class TestRasterCogAccess:
+    """`GET /api/data/raster/{ref}/cog` — the GeoTIFF, and who may read it.
+
+    Not a cosmetic permission: server-rendered tiles are colour rather than values, so this file is
+    the ONLY way to get a raster's real bands into QGIS, and therefore the only way to restyle one.
+    Requiring `is_public` with no authenticated path meant the owner of an unshared raster could not
+    open their own pixels — reported as "I am still unable to change a raster's symbology from QGIS".
+    """
+
+    @pytest.fixture(autouse=True)
+    def _fake_storage(self, monkeypatch):
+        """Stand in for object storage. What is under test is the AUTHORIZATION decision, and CI has
+        no MinIO — without this the route gets past the gate and then dies inside boto3, which reads
+        as a failure of the thing that actually worked."""
+        class _Body:
+            def iter_chunks(self, size):
+                yield b"II*"                # a plausible-enough TIFF opening
+
+        class _S3:
+            def get_object(self, **kw):
+                return {"Body": _Body(), "ContentLength": 4}
+
+        import geodeploy.services.minio as minio
+        monkeypatch.setattr(minio, "get_s3_client", lambda *a, **k: _S3())
+
+    async def test_a_shared_raster_is_readable_anonymously(self, client, seeded):
+        r = await client.get("/api/data/raster/eeeeeeeeeeee/cog")
+        assert r.status_code == 200, r.text
+
+    async def test_an_unshared_raster_is_404_anonymously(self, client, seeded, db):
+        db.add(RasterLayer(id=2, user_id=1, uid="ffffffffffff", name="Private DEM",
+                           s3_key="rasters/1/x/private.tif", status="ready", is_public=False,
+                           visibility="organization", band_count=1))
+        await db.commit()
+        assert (await client.get("/api/data/raster/ffffffffffff/cog")).status_code == 404
+
+    async def test_an_unshared_raster_is_readable_by_a_signed_in_user(self, client, seeded, db):
+        # An ALL-DIGIT uid on purpose: a uid is hex, so this is ordinary, and `by_ref` also tries it
+        # as an integer id — where it overflowed the 32-bit column and produced a 500 instead of a
+        # lookup. Keeping it here keeps that fixed.
+        db.add(RasterLayer(id=3, user_id=1, uid="999999999999", name="Org DEM",
+                           s3_key="rasters/1/x/org.tif", status="ready", is_public=False,
+                           visibility="organization", band_count=1))
+        await db.commit()
+        r = await client.get("/api/data/raster/999999999999/cog", headers=_as(1))
+        assert r.status_code == 200, ("a member may see this layer, so its pixels too", r.text)
+
+
+class TestRefLookup:
+    """`by_ref` — a reference that cannot possibly match must 404, never 500.
+
+    `id` is a 32-bit column. A number larger than that is not "no match" to Postgres, it is a
+    DataError, and the caller gets a 500 for what is really a bad address. All-digit uids are
+    ordinary (a uid is hex), so this is reachable from a normal URL, not just a hostile one.
+    """
+
+    async def test_an_oversized_number_is_a_404(self, client, seeded):
+        for ref in ("999999999999999999999", "2147483648", "-2147483649"):
+            r = await client.get("/api/public/layers/vector/" + ref)
+            assert r.status_code == 404, (ref, r.status_code)
+
+    async def test_a_number_inside_the_range_still_resolves(self, client, seeded):
+        assert (await client.get("/api/public/layers/vector/1")).status_code == 200
