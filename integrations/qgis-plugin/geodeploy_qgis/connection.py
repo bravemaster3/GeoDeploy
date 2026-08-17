@@ -122,18 +122,34 @@ class Instance:
             except GeoDeployError:
                 pass                    # already recorded in the cache; the caller degrades
 
-    def fetch_text(self, url: str) -> str:
-        """GET a URL on this instance as text — WMTS capabilities are XML, not JSON."""
+    def fetch_text(self, url: str, cache: bool = True) -> str:
+        """GET a URL on this instance as text — WMTS capabilities are XML, not JSON.
+
+        Cached like `fetch_json`, and for the same reason: this is read on the GUI thread every time
+        a raster is added, and a capabilities document describes the raster rather than its pixels.
+        """
         from urllib.request import Request, urlopen
 
+        key = "text:" + url
+        if cache and key in self._doc_cache:
+            hit = self._doc_cache[key]
+            if isinstance(hit, Exception):
+                raise hit
+            return hit
         headers = {"User-Agent": self._c_user_agent(), "Accept": "application/xml, text/xml, */*"}
         if self.token:
             headers["Authorization"] = "Bearer {0}".format(self.token)
         try:
             with urlopen(Request(url, headers=headers), timeout=30) as response:  # noqa: S310
-                return response.read().decode("utf-8", "replace")
+                body = response.read().decode("utf-8", "replace")
         except Exception as exc:        # noqa: BLE001 - surfaced as a plugin message
-            raise GeoDeployError("Could not read {0}: {1}".format(url, exc))
+            error = GeoDeployError("Could not read {0}: {1}".format(url, exc))
+            if cache:
+                self._doc_cache[key] = error
+            raise error
+        if cache:
+            self._doc_cache[key] = body
+        return body
 
     def published_style(self, slug: str) -> dict:
         """A published portal's own style.json — served to anyone, no credential involved.

@@ -635,18 +635,24 @@ class GeoDeployDock(QDockWidget):
                     {"tilejson_url": f"{base}/api/data/vector/{ref}/tilejson"}, name) \
                     if base and ref else (None, {})
                 if layer is not None:
-                    layer.setCustomProperty(symbology.P_SOURCE_LAYER,
-                                            doc.get("_source_layer") or "")
+                    layer.setCustomProperty(
+                        symbology.P_SOURCE_LAYER,
+                        src.get("source_layer") or doc.get("_source_layer") or "")
                     self._set_tile_extent(layer, doc.get("bounds"))
                 else:
                     # An instance too old to publish that TileJSON: the archive still draws, slowly.
                     layer = QgsVectorLayer("/vsicurl/" + url, name, "ogr")
             elif kind == "vector-tiles":
                 layer, doc = self._vector_tiles({"uri": url, "tilejson_url": (
-                    f"{base}/api/data/vector/{ref}/tilejson" if base and ref else None)}, name)
+                    f"{base}/api/data/vector/{ref}/tilejson" if base and ref else None)},
+                    name, prefer_uri=True)
                 if layer is not None:
-                    layer.setCustomProperty(symbology.P_SOURCE_LAYER,
-                                            doc.get("_source_layer") or "")
+                    # THE PORTAL'S source-layer first. It names the layer inside the very tiles this
+                    # URL serves, and the two can differ: Martin publishes `<schema>.<table>` while
+                    # a 3D point layer is drawn from a `pillars` function source entirely.
+                    layer.setCustomProperty(
+                        symbology.P_SOURCE_LAYER,
+                        src.get("source_layer") or doc.get("_source_layer") or "")
                     self._set_tile_extent(layer, doc.get("bounds"))
             else:
                 return None
@@ -724,7 +730,7 @@ class GeoDeployDock(QDockWidget):
             symbology._log("Could not read the raster's WMTS: {0}".format(exc))
             return None
 
-    def _vector_tiles(self, source, name):
+    def _vector_tiles(self, source, name, prefer_uri: bool = False):
         """`(layer, tilejson)` for a vector-tile source, described by the server rather than guessed.
 
         THE SLOWNESS WAS HERE, and it was not the tiles' fault. A vector-tile layer built from a
@@ -748,7 +754,13 @@ class GeoDeployDock(QDockWidget):
                 symbology._log("Could not read the TileJSON for {0}: {1}".format(name, exc))
                 doc = {}
         tiles = (doc or {}).get("tiles") or []
-        template = tiles[0] if tiles else source.get("uri")
+        # `prefer_uri` is for a source the PORTAL named. The layer's TileJSON describes the layer's
+        # own tiles, and a portal does not always draw from those: a 3D point layer is served by a
+        # `pillars` function that buffers the points into polygons, so following the TileJSON there
+        # would quietly swap the portal's tiles for different ones. The TileJSON is still read — for
+        # the zoom range and the bounds, which the bare template has no room for.
+        template = (source.get("uri") or (tiles[0] if tiles else None)) if prefer_uri else (
+            tiles[0] if tiles else source.get("uri"))
         if not template:
             return None, {}
         uri = _xyz_uri(template, (doc or {}).get("minzoom"), (doc or {}).get("maxzoom"))
@@ -961,7 +973,16 @@ class GeoDeployDock(QDockWidget):
                     # THE PORTAL'S style wins over the layer's default here — that is what opening
                     # a portal means. Through the dispatcher, so a tile layer gets the tile
                     # renderer instead of silently keeping the colour it was born with.
-                    symbology.apply(layer, style, layer_row or {})
+                    #
+                    # The GEOMETRY has to come with it. A portal may show a layer that is not in
+                    # the public listing, and `layer_row` is then None — so the renderer was left
+                    # guessing, guessed "point", and drew polygons as a dot per vertex. The
+                    # published style records the geometry; prefer it, since it describes the very
+                    # tiles being drawn.
+                    row_for_style = dict(layer_row or {})
+                    if cfg.get("geometry_type"):
+                        row_for_style["geometry_type"] = cfg["geometry_type"]
+                    symbology.apply(layer, style, row_for_style)
                 added += 1
 
         # A portal with no folders is a flat list — the configs themselves, in order.

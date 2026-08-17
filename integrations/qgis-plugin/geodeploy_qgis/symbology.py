@@ -418,13 +418,25 @@ def apply_to_vector_tiles(tile_layer, row: dict, source_layer: str | None,
         (row.get("default_style") or {}).get("style")
         if isinstance(row.get("default_style"), dict) else {}) or {}
 
+    # WHICH GEOMETRY, and never a guess. A tile renderer's style is bound to ONE geometry type, and
+    # QGIS honours that binding literally: give a line layer a point style and it draws a marker at
+    # every vertex — a road network arriving as a carpet of dots — and give a point layer a fill
+    # style and it draws nothing at all. Defaulting the unknown case to "point" is what produced
+    # both. When the geometry is genuinely unknown, every type gets a style instead, so whatever the
+    # tiles hold is drawn with a symbol that suits it; a tile layer may legitimately carry more than
+    # one geometry anyway.
     geom = (row.get("geometry_type") or "").lower()
     if "polygon" in geom:
-        geometry_type = QgsWkbTypes.PolygonGeometry
+        geometry_types = [QgsWkbTypes.PolygonGeometry]
     elif "line" in geom:
-        geometry_type = QgsWkbTypes.LineGeometry
+        geometry_types = [QgsWkbTypes.LineGeometry]
+    elif "point" in geom:
+        geometry_types = [QgsWkbTypes.PointGeometry]
     else:
-        geometry_type = QgsWkbTypes.PointGeometry
+        geometry_types = [QgsWkbTypes.PolygonGeometry, QgsWkbTypes.LineGeometry,
+                          QgsWkbTypes.PointGeometry]
+        if geom:
+            _log("Unrecognised geometry {0!r}; styling every geometry type.".format(geom))
 
     model = None
     try:
@@ -434,18 +446,24 @@ def apply_to_vector_tiles(tile_layer, row: dict, source_layer: str | None,
         model = None
 
     def _style(name, colour, expression):
-        # THE SAME symbol builder the feature path uses — marker shape, radius, line width, dash,
-        # fill opacity and data-defined size all included. A second implementation here is how the
-        # two surfaces would start drawing the same layer differently.
-        symbol = _symbol_of(geometry_type, colour, style)
-        if symbol is None:
-            return None
-        entry = QgsVectorTileBasicRendererStyle(name, source_layer or "", geometry_type)
-        entry.setSymbol(symbol)
-        entry.setEnabled(True)
-        if expression:
-            entry.setFilterExpression(expression)
-        return entry
+        """One renderer entry per geometry type this layer may hold — usually exactly one."""
+        out = []
+        for geometry_type in geometry_types:
+            # THE SAME symbol builder the feature path uses — marker shape, radius, line width,
+            # dash, fill opacity and data-defined size all included. A second implementation here
+            # is how the two surfaces would start drawing the same layer differently.
+            symbol = _symbol_of(geometry_type, colour, style)
+            if symbol is None:
+                continue
+            entry = QgsVectorTileBasicRendererStyle(
+                name if len(geometry_types) == 1 else "{0}-{1}".format(name, geometry_type),
+                source_layer or "", geometry_type)
+            entry.setSymbol(symbol)
+            entry.setEnabled(True)
+            if expression:
+                entry.setFilterExpression(expression)
+            out.append(entry)
+        return out
 
     styles = []
     try:
@@ -462,26 +480,20 @@ def apply_to_vector_tiles(tile_layer, row: dict, source_layer: str | None,
                     # data falls through every filter and disappears.
                     op = "<=" if i == len(model.classes) - 1 else "<"
                     parts.append("{0} {1} {2}".format(field, op, hi))
-                entry = _style("class-{0}".format(i), cls.get("color"), " AND ".join(parts) or None)
-                if entry:
-                    styles.append(entry)
+                styles.extend(_style("class-{0}".format(i), cls.get("color"),
+                                     " AND ".join(parts) or None))
         elif model is not None and model.mode == "categorized" and model.field and model.categories:
             for i, cat in enumerate(model.categories):
                 value = cat.get("value")
                 literal = ("'" + str(value).replace("'", "''") + "'"
                            if not isinstance(value, (int, float)) else str(value))
-                entry = _style("cat-{0}".format(i), cat.get("color"),
-                               '"{0}" = {1}'.format(model.field, literal))
-                if entry:
-                    styles.append(entry)
-            # Everything not listed, drawn in the same "other" colour the map uses.
-            other = _style("other", model.other_color or "#9ca3af", None)
-            if other:
-                styles.insert(0, other)      # first = drawn underneath the named categories
+                styles.extend(_style("cat-{0}".format(i), cat.get("color"),
+                                     '"{0}" = {1}'.format(model.field, literal)))
+            # Everything not listed, drawn in the same "other" colour the map uses. First in the
+            # list = drawn underneath the named categories.
+            styles[:0] = _style("other", model.other_color or "#9ca3af", None)
         if not styles:
-            single = _style("geodeploy", (style or {}).get("color") or "#3b82f6", None)
-            if single:
-                styles.append(single)
+            styles.extend(_style("geodeploy", (style or {}).get("color") or "#3b82f6", None))
         if not styles:
             return False
 

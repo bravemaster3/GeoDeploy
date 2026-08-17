@@ -136,6 +136,11 @@ def configs_from_published_style(style_doc: dict, style_from_legend) -> list[dic
             "layer_id": layer_id,
             "layer_type": meta.get("geodeploy:type") or "vector",
             "name": meta.get("geodeploy:name"),
+            # POINT / LINE / POLYGON, and it matters more than it looks. A vector-tile renderer
+            # takes one symbol PER GEOMETRY TYPE, so getting it wrong does not mean a wrong colour
+            # — it means a polygon drawn with a marker symbol, i.e. a dot at every vertex, or
+            # nothing at all. The published style records it and the plugin was not reading it.
+            "geometry_type": _geometry_of(ml, meta),
             # MapLibre omits `visibility` when a layer is shown, so absent means visible.
             "visible": ((ml.get("layout") or {}).get("visibility") or "visible") != "none",
             "opacity": meta.get("geodeploy:opacity", 1.0),
@@ -152,6 +157,22 @@ def configs_from_published_style(style_doc: dict, style_from_legend) -> list[dic
         })
     configs.reverse()
     return configs
+
+
+#: What is actually IN the tiles, by the MapLibre layer type that draws them. This is the authority,
+#: not `geodeploy:geometry` — which describes the SOURCE. A 3D point layer is drawn as
+#: `fill-extrusion` from a `pillars` function source that serves POLYGONS (the points, buffered), so
+#: the source says "point" while the tiles hold polygons; trusting the source there draws nothing.
+_GEOMETRY_BY_ML_TYPE = {
+    "fill": "polygon", "fill-extrusion": "polygon",
+    "line": "line",
+    "circle": "point", "symbol": "point", "heatmap": "point",
+}
+
+
+def _geometry_of(ml_layer: dict, meta: dict) -> str | None:
+    """The geometry these tiles hold, preferring how they are DRAWN over what the source says."""
+    return _GEOMETRY_BY_ML_TYPE.get(ml_layer.get("type")) or meta.get("geodeploy:geometry")
 
 
 def _baked_style(ml_layer: dict, meta: dict, legend: dict, style_from_legend) -> dict:
@@ -192,7 +213,13 @@ def _baked_style(ml_layer: dict, meta: dict, legend: dict, style_from_legend) ->
             style.setdefault(prop, meta[key])
 
     kind = ml_layer.get("type")
-    if kind == "fill":
+    if kind == "fill-extrusion":
+        # A 3D layer. QGIS draws it flat, which is honest — the colour is the part that carries.
+        style.setdefault("color", plain(paint.get("fill-extrusion-color")) or style.get("color"))
+        baked = plain(paint.get("fill-extrusion-opacity"))
+        if baked is not None and layer_opacity:
+            style.setdefault("fill_opacity", min(1.0, float(baked) / layer_opacity))
+    elif kind == "fill":
         style.setdefault("color", plain(paint.get("fill-color")) or style.get("color"))
         outline = plain(paint.get("fill-outline-color"))
         if outline:
