@@ -155,3 +155,76 @@ assert not isinstance(s.get("color"), list), "a MapLibre expression must never b
 print("classified       -> classes from the legend, expression never mistaken for a colour")
 
 print("\nALL PUBLISHED-STYLE CASES PASS")
+
+# ── the AUTHENTICATED document, and the asymmetry that bit it ─────────────────────────────────
+# `PortalOut.LayerConfig` is {layer_id, layer_type, visible, opacity, style, popup_fields}: no
+# `source`, no `geometry_type`, no `name`. Every fix that read those from the published style
+# therefore covered the anonymous path only — a portal opened WITH a token still drew its rasters in
+# the layer's default style, and still had to guess geometry from a listing lookup. `enrich_from_
+# published` merges the missing keys in, and must never touch the API's own values.
+enrich_from_published = portals["enrich_from_published"]
+
+
+class FakeInstance:
+    def __init__(self, doc, fail=False):
+        self._doc, self.fail, self.calls = doc, fail, 0
+
+    def published_style(self, slug):
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("style.json is unreachable")
+        return self._doc
+
+
+API_DOC = {
+    "id": 13, "slug": "abc", "title": "Web map", "published": True,
+    "layer_configs": [
+        # A raster whose PORTAL styling is a terrain colormap; the API config states the style but
+        # gives no source, which is what left the plugin building it from the layer's default.
+        {"layer_id": 1, "layer_type": "raster", "visible": True, "opacity": 0.6,
+         "style": {"colormap": "terrain", "rescale": "264.9,298.33"}, "popup_fields": []},
+        # A vector the portal draws differently from its default.
+        {"layer_id": 3, "layer_type": "vector", "visible": True, "opacity": 1.0,
+         "style": {"color": "#10b981", "fill_opacity": 0.45}, "popup_fields": []},
+    ],
+}
+
+inst = FakeInstance(STYLE_DOC)
+out = enrich_from_published(json.loads(json.dumps(API_DOC)), inst, style_from_legend)
+by_id = {(c["layer_id"], c["layer_type"]): c for c in out["layer_configs"]}
+
+raster = by_id[(1, "raster")]
+assert raster["source"]["kind"] == "raster-xyz", raster
+assert "rescale=0,1" in raster["source"]["url"], "the PORTAL's tile template, styling and all"
+assert raster["opacity"] == 0.6, "the API's own opacity must survive"
+assert raster["style"] == {"colormap": "terrain", "rescale": "264.9,298.33"}, "style untouched"
+print("authed raster    -> gains the portal's source, keeps the API's style and opacity")
+
+vector = by_id[(3, "vector")]
+assert vector["geometry_type"] == "polygon", vector
+assert vector["source"]["kind"] == "pmtiles", vector
+assert vector["name"] == "example", "a failed layer is named, not numbered"
+# The API's style is authoritative for vectors and must NOT be replaced by the baked one.
+assert vector["style"] == {"color": "#10b981", "fill_opacity": 0.45}, vector
+print("authed vector    -> gains geometry/source/name, style left alone")
+
+# An UNPUBLISHED portal has no style.json to read, and must not be asked for one.
+unpub = enrich_from_published(dict(json.loads(json.dumps(API_DOC)), published=False),
+                              FakeInstance(STYLE_DOC), style_from_legend)
+assert unpub["layer_configs"][0].get("source") is None
+print("unpublished      -> nothing merged, nothing fetched")
+
+# An unreachable style.json must degrade, not raise — the API document is perfectly usable.
+degraded = enrich_from_published(json.loads(json.dumps(API_DOC)),
+                                 FakeInstance(STYLE_DOC, fail=True), style_from_legend)
+assert len(degraded["layer_configs"]) == 2
+print("unreachable      -> degrades to the API document")
+
+# A layer the published style does not mention (added since publishing) is left as it is.
+extra = json.loads(json.dumps(API_DOC))
+extra["layer_configs"].append({"layer_id": 99, "layer_type": "vector", "style": {}})
+out = enrich_from_published(extra, FakeInstance(STYLE_DOC), style_from_legend)
+assert out["layer_configs"][-1].get("geometry_type") is None
+print("unknown layer    -> untouched")
+
+print("\nALL AUTHENTICATED-PARITY CASES PASS")

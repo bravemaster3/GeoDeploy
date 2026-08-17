@@ -849,7 +849,8 @@ class GeoDeployDock(QDockWidget):
             # With a token, ask the API — it is authoritative and covers unpublished portals.
             if instance.token and ref is not None:
                 try:
-                    return instance.client.portals.get(ref)
+                    return portal_sync.enrich_from_published(
+                        instance.client.portals.get(ref), instance, symbology.style_from_legend)
                 except GeoDeployError:
                     pass                # fall through: a published portal is readable anyway
             # Without one, read what the portal PUBLISHES. Looking at a public portal should never
@@ -936,15 +937,19 @@ class GeoDeployDock(QDockWidget):
                     continue
                 label = str(cfg.get("name") or cfg.get("layer_id"))
                 layer_row = self._row_for(cfg.get("layer_id"), cfg.get("layer_type"))
-                is_raster = cfg.get("layer_type") == "raster"
                 layer = None
-                if is_raster and (cfg.get("source") or {}).get("url"):
-                    # THE PORTAL'S OWN TILES. A raster is styled by the server, and the portal bakes
-                    # its colormap, stretch, band choice and hillshade into the tile URL — so the
-                    # SAME raster reads `&colormap_name=terrain` in one portal, a bare `&rescale=`
-                    # in another and `&algorithm=hillshade&expression=b1*5.0` in a third. Building
-                    # it from the layer's own listing entry instead gave everyone the layer's
-                    # DEFAULT style, which is not what any of those portals shows.
+                if (cfg.get("source") or {}).get("url"):
+                    # THE PORTAL'S OWN SOURCE, for every layer type, because that is what "open the
+                    # portal" means.
+                    #
+                    # For a RASTER it is the styling: the server colours these, and the portal bakes
+                    # its colormap, stretch, band choice and hillshade into the tile URL — the same
+                    # raster reads `&colormap_name=terrain` in one portal, a bare `&rescale=` in
+                    # another and `&algorithm=hillshade&expression=b1*5.0` in a third. For a VECTOR
+                    # it is which tiles: a 3D point layer is drawn from a `pillars` function that
+                    # buffers the points into polygons, and nothing in the layer's own listing entry
+                    # points there. Either way, going through the layer's entry instead draws
+                    # something the portal does not show.
                     layer = self._layer_from_portal_source(cfg, label)
                 if layer is None and layer_row is not None:
                     source = sources.describe(layer_row,

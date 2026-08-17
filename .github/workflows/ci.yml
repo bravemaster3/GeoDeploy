@@ -138,7 +138,7 @@ jobs:
       - name: The plugin picks the fast source, and degrades when it is absent
         run: python integrations/qgis-plugin/scripts/test_sources.py
 
-      - name: An anonymous portal is rebuilt with the PORTAL's styling
+      - name: A portal opens the same way with and without a token
         # The style.json path has no token and no API behind it, so nothing else catches a portal
         # that opens in the layers' default colours or quietly loses a layer to a clashing id.
         run: python integrations/qgis-plugin/scripts/test_published_style.py

@@ -65,6 +65,21 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
+2026-08-17f (**the two portal paths were not the same path, and every 0.1.5 fix covered only one.**
+`PortalOut.LayerConfig` is `{layer_id, layer_type, visible, opacity, style, popup_fields}` — no
+`source`, no `geometry_type`, no `name`. Everything read from the published style.json therefore
+applied to the ANONYMOUS path alone: with a token, a portal's rasters still opened in the layer's
+default colours (the complaint "fixed" in 0.1.3), geometry still depended on a `_row_for` lookup, and
+a layer that failed was reported by its numeric id ("1 could not be opened (9)"). New
+`portals.enrich_from_published` merges `source`/`geometry_type`/`name` in from style.json for a
+PUBLISHED portal, adding keys only — the API's style, visibility and opacity are authoritative and
+untouched — and degrading to the API document when style.json cannot be read. An unpublished portal
+has nothing to merge, which is honest: its rasters are not served under any styling yet.
+`place` now prefers the portal's source for EVERY layer type, not just rasters: a 3D point layer is
+drawn from a `pillars` function whose tiles hold polygons, and nothing in the layer's own listing
+entry points there. Also fixed a latent `AttributeError` — `portals.py` called `_log`, which it does
+not define (`_note` now does, lazily). Tests: the authenticated-parity block in
+`scripts/test_published_style.py`.)
 2026-08-17e (**polygons drew as a dot per vertex, or not at all.** A `QgsVectorTileBasicRendererStyle`
 is bound to ONE geometry type and QGIS honours that literally: a marker symbol over line data draws
 a marker at every vertex (a road network as a carpet of dots — the reported screenshot), a fill
