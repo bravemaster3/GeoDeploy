@@ -661,4 +661,62 @@ assert layer.renderer().classificationMin() == 12.0, layer.renderer().classifica
 assert layer.renderer().classificationMax() == 88.0
 print("no stretch     -> QGIS's own range reused, the raster never read")
 
+# ── forward compatibility: a raster property this plugin has never met ───────────────────────────
+#
+# Contour styling is planned — `algorithm: "contours"` with `increment` and `thickness` — and the
+# question that decides whether it round-trips on the day it lands is what happens to a key nothing
+# here recognises. It must SURVIVE (an allowlist would drop it, and the layer would lose it the
+# first time anyone opened it in QGIS) and it must be COMPARED (dropping it from the comparison
+# would make a real change to one invisible).
+future = {"algorithm": "contours", "increment": 25, "thickness": 2, "rescale": "0,3000",
+          "bidx": [1]}
+assert raster_style_of(dict(future, opacity=0.7)) == future, raster_style_of(dict(future))
+assert comparable_style(future)["increment"] == 25, comparable_style(future)
+assert comparable_style(future) != comparable_style(dict(future, increment=50))
+# An algorithm other than hillshade still takes a stretch — TiTiler only drops one for hillshade,
+# because that comes back as finished relief. Getting this wrong would lose a contour range.
+assert comparable_style(future)["rescale"] == "0,3000", comparable_style(future)
+assert "rescale" not in comparable_style({"algorithm": "hillshade", "rescale": "0,3000"})
+# And an unrecognised algorithm must not be dressed up as a colouring QGIS can draw.
+assert raster_to_qgis(RasterLayer(), future) is not None
+print("future keys    -> an unknown raster property survives and is still compared")
+
+# ── the raster styles that actually exist, taken off a live instance ─────────────────────────────
+#
+# Read from geodeploy-lite on 2026-08-17: every raster's stored `default_style`, exactly as the API
+# returns it — nulls and all, because that is what a reader has to survive. Offline fixtures, but
+# not invented ones.
+LIVE_RASTERS = [
+    ("Degfert_DEM", {"algorithm": None, "bidx": [1], "color_classes": None, "colormap": None,
+                     "colormap_reverse": False, "opacity": 1.0, "zfactor": None,
+                     "rescale": "182.789993,315.959992"}),
+    # The raster from the report that started this: a reversed named ramp over a 0–2 stretch.
+    ("FINAL_MICROTOPO3-SLU202237", {"algorithm": None, "bidx": None, "color_classes": None,
+                                    "colormap": "plasma", "colormap_reverse": True,
+                                    "opacity": 1.0, "rescale": "0.0,2.0", "zfactor": None}),
+    ("rvi-2023-2024-9", {"algorithm": None, "bidx": None, "colormap": None,
+                         "colormap_reverse": False, "opacity": 1.0, "rescale": "0.5563,0.9477"}),
+    ("Degfert_DEM_restr", {"algorithm": "hillshade", "bidx": None, "colormap": None,
+                           "colormap_reverse": False, "opacity": 1.0, "zfactor": 5.0,
+                           "rescale": "264.9,298.33"}),
+    ("RVI_2023_2024", {"algorithm": None, "bidx": None, "colormap": "viridis",
+                       "colormap_reverse": False, "opacity": 1.0, "rescale": "0.5563,0.9477"}),
+]
+for name, stored in LIVE_RASTERS:
+    # `opacity` is applied separately and the nulls mean "not set"; both are the reader's job.
+    style = raster_style_of(stored)
+    assert "opacity" not in style and None not in style.values(), style
+    read, _ = round_trip(style)
+    same(style, merge_style(style, read), "live raster {0!r} would report a phantom change"
+         .format(name))
+print("live rasters   -> {0} real styles round-trip with no phantom change"
+      .format(len(LIVE_RASTERS)))
+
+# The two Degfert_DEM copies differ in the LAST DIGIT of their stretch — 315.959992 against
+# 315.959991 — which is real float noise off the same source raster. They must not compare equal,
+# or a genuine restretch that small would be invisible.
+assert comparable_style({"rescale": "182.789993,315.959992"}) != comparable_style(
+    {"rescale": "182.789993,315.959991"})
+print("float noise    -> a stretch differing in the last digit is still a difference")
+
 print("\nALL RASTER SYMBOLOGY CASES PASS")

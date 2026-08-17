@@ -130,6 +130,13 @@ DEFAULT_FILL_OPACITY = 0.45
 DEFAULT_FILL_OUTLINE = "#1d4ed8"
 #: A line with no stated width is 2 CSS px on the map.
 DEFAULT_LINE_WIDTH = 2
+#: And the colour every renderer falls back to — `symbology.DEFAULT_COLOR` on the instance.
+DEFAULT_COLOR = "#3b82f6"
+#: The footprint of an extruded POINT when the style names none, in metres. Mirrors
+#: `services/symbology.DEFAULT_PILLAR_RADIUS_M` and `services/pillars.DEFAULT_RADIUS_M`. The
+#: instance derives a better one from the layer's own extent when it has the bbox to do it with;
+#: this is only the floor, for a style that reaches QGIS without one.
+DEFAULT_PILLAR_RADIUS_M = 30.0
 
 
 def _number(value, default):
@@ -372,15 +379,20 @@ def raster_style_of(stored) -> dict:
     field as null on a live instance. Reading only `["style"]` here had the same effect one layer
     up: a raster with a stored colormap looked like a raster with no style at all.
 
-    Both shapes are read, nested first, and the result is filtered to the keys a raster style is
-    made of — so `opacity`, which is applied separately and is not part of the colouring, never
-    arrives dressed as one.
+    Both shapes are read, nested first, and the envelope keys are removed — `opacity`, which is
+    applied separately and is not part of the colouring, plus the two a nested style wraps itself in.
+
+    EVERYTHING ELSE IS KEPT, including keys this plugin has never heard of. An allowlist would have
+    been tidier and would silently drop the next raster property GeoDeploy grows — contour
+    `increment` and `thickness` are already planned — so the layer would lose it the first time
+    anybody opened it in QGIS. A key we cannot translate still travels, untouched.
     """
     if not isinstance(stored, dict):
         return {}
     inner = stored.get("style")
     source = inner if isinstance(inner, dict) and inner else stored
-    return {k: v for k, v in source.items() if k in _RASTER_KEYS and v is not None}
+    return {k: v for k, v in source.items()
+            if v is not None and k not in ("opacity", "style", "popup_fields")}
 
 
 def _rescale_text(rescale) -> str | None:
@@ -518,6 +530,10 @@ def comparable_style(style: dict | None) -> dict:
                            if isinstance(item, dict)]
     # DERIVED, not chosen: `classes_n` is `len(classes)`, and only one side bothers to write it.
     merged.pop("classes_n", None)
+    # 3D, reduced to what is actually drawn — an extrusion switched off is the same map as none.
+    extrusion = _comparable_extrusion(merged.pop("extrusion", None))
+    if extrusion:
+        merged["extrusion"] = extrusion
     # A CLASSIFIED layer's single colour is not drawn — the classes are. Keeping it in the comparison
     # made an untouched categorized layer look edited, because the read-back fills it from the
     # catch-all entry while the stored style never had one.
@@ -532,6 +548,13 @@ def comparable_style(style: dict | None) -> dict:
 
 #: Every key a RASTER style is made of. A style holding any of them is a raster's; none of them
 #: appears in a vector style, so the two shapes can never be mistaken for one another.
+#:
+#: THIS LIST IS ALSO WHAT A RASTER READ-BACK CLEARS (see `merge_style`): QGIS shows one renderer at
+#: a time, so a raster that came back as a colormap is no longer a hillshade. A key OUTSIDE the list
+#: survives a push untouched, which is the safe default for anything this plugin has not met — so
+#: when contour styling lands (`algorithm: "contours"` with `increment` and `thickness`), adding
+#: those two names here is what makes switching AWAY from contours clear them too. Until then they
+#: would linger harmlessly: TiTiler ignores them without the algorithm that reads them.
 _RASTER_KEYS = ("colormap", "colormap_reverse", "rescale", "bidx", "color_classes",
                 "algorithm", "zfactor")
 
@@ -569,7 +592,10 @@ def _comparable_raster(style: dict | None) -> dict:
     the same phantom-edit problem the vector side already solved, one shape along.
     """
     style = style or {}
-    out = {}
+    # ANYTHING THIS DOES NOT KNOW ABOUT IS CARRIED THROUGH, not dropped. A key it cannot classify
+    # might well be drawn — contour `increment` and `thickness` are already planned — and dropping
+    # it here would make a real change to one invisible to every comparison in the plugin.
+    out = {k: v for k, v in style.items() if k not in _RASTER_KEYS and v is not None}
     bands = _bands_of(style)
     if bands and bands != [1]:
         # BAND 1 IS WHAT "NO BAND" MEANS. QGIS has no concept of unset here either: a renderer is
@@ -581,14 +607,21 @@ def _comparable_raster(style: dict | None) -> dict:
         out["bidx"] = bands
     algorithm = (style.get("algorithm") or "").strip().lower()
     if algorithm:
-        # A hillshade is computed from the terrain and comes back as finished relief, so TiTiler
-        # drops BOTH the colormap and the stretch for one — feeding it a stretch saturates every
-        # pixel to a single value. Nothing about how it would otherwise be coloured is drawn.
+        # ANY algorithm replaces the colouring — `get_tile_url` skips the colormap entirely when one
+        # is set — but only a HILLSHADE drops the stretch, because it comes back as finished 0–255
+        # relief and stretching that saturates every pixel to one value. Stated as two separate
+        # rules rather than one, so the contours algorithm (which does take a stretch) is right the
+        # day it arrives instead of quietly losing its range.
         out["algorithm"] = algorithm
-        try:
-            out["zfactor"] = round(float(style.get("zfactor") or 1.0), 6)
-        except (TypeError, ValueError):
-            out["zfactor"] = 1.0
+        if algorithm == "hillshade":
+            try:
+                out["zfactor"] = round(float(style.get("zfactor") or 1.0), 6)
+            except (TypeError, ValueError):
+                out["zfactor"] = 1.0
+            return out
+        rescale = _rescale_text(style.get("rescale"))
+        if rescale:
+            out["rescale"] = rescale
         return out
     rescale = _rescale_text(style.get("rescale"))
     if rescale:
@@ -609,6 +642,42 @@ def _comparable_raster(style: dict | None) -> dict:
         out["colormap"] = name.lower()
         if reverse:
             out["colormap_reverse"] = True
+    return out
+
+
+def _comparable_extrusion(ex):
+    """A 3D block reduced to what a viewer would see, or None when nothing is extruded.
+
+    The two rules are the same ones the 2D side uses, applied to `services/symbology.is_extruded`:
+    an extrusion that is switched OFF draws exactly like no extrusion at all, and a height driven by
+    a COLUMN means the fixed `height` beside it is not drawn — keeping either in the comparison
+    would report an edit that changes nothing on the map.
+    """
+    if not isinstance(ex, dict) or not ex.get("enabled"):
+        return None
+    if not (ex.get("field") or ex.get("height")):
+        return None                     # enabled with no height is drawn flat — the same as off
+    out = {"enabled": True}
+    field = str(ex.get("field") or "").strip()
+    if field:
+        out["field"] = field
+        out["scale"] = round(_number(ex.get("scale"), 1.0), 6)
+    else:
+        out["height"] = round(_number(ex.get("height"), 0.0), 6)
+    base = ex.get("base")
+    if isinstance(base, str) and base.strip():
+        out["base"] = base.strip()      # a FIELD name, which is data and not case-folded
+    elif _number(base, 0.0):
+        out["base"] = round(_number(base, 0.0), 6)
+    if ex.get("color"):
+        out["color"] = str(ex["color"]).strip().lower()
+    opacity = round(_number(ex.get("opacity"), 1.0), 3)
+    if opacity != 1.0:
+        out["opacity"] = opacity
+    if ex.get("radius") not in (None, ""):
+        # POINTS only: the footprint the tile server buffers a point into. A polygon has area
+        # already, so nothing writes one for it and nothing reads one back.
+        out["radius"] = round(_number(ex.get("radius"), DEFAULT_PILLAR_RADIUS_M), 6)
     return out
 
 
@@ -663,6 +732,22 @@ def merge_style(stored: dict | None, read_back: dict | None) -> dict:
             "size_mode" in fresh and fresh["size_mode"] != "proportional"):
         for key in ("size_field", "size_stops"):
             base.pop(key, None)
+    if isinstance(fresh.get("extrusion"), dict):
+        # EXTRUSION MERGES KEY BY KEY, not wholesale. QGIS reads back only the part of a 3D block it
+        # can hold — a cylinder has a length, not a column — so replacing the whole dict with what
+        # was read would delete the field, the scale and the opacity that QGIS never saw. The same
+        # reasoning as `merge_style` itself, one level down.
+        merged_ex = dict(base.get("extrusion") or {})
+        fresh_ex = {k: v for k, v in fresh["extrusion"].items() if v is not None}
+        # …but a change of height SOURCE still has to clear the other one, or a layer switched from
+        # a column to a fixed height keeps the column, and `extrusion_paint` prefers the column.
+        if fresh_ex.get("field"):
+            merged_ex.pop("height", None)
+        elif "height" in fresh_ex:
+            merged_ex.pop("field", None)
+            merged_ex.pop("scale", None)
+        merged_ex.update(fresh_ex)
+        fresh = dict(fresh, extrusion=merged_ex)
     base.update(fresh)
     return base
 
@@ -706,6 +791,12 @@ def apply_to_qgis(qgis_layer, style: dict) -> bool:
         return False
     from geodeploy import parse_style
     model = parse_style(style)
+
+    # 3D FIRST, and separately: it is a second renderer hung beside the 2D one, not a variant of it,
+    # so a layer that is both extruded and graduated needs both set. Doing it here rather than in
+    # every caller is the same reasoning as `apply` dispatching on layer type — every path that
+    # styles a feature layer gets it without having to remember.
+    apply_3d(qgis_layer, style)
 
     try:
         if model.mode == "graduated" and model.field and model.classes:
@@ -1113,6 +1204,437 @@ def _record_colormap(qgis_layer, name, stops) -> None:
             qgis_layer.setCustomProperty(P_COLORMAP_SIG, "")
     except Exception:                   # noqa: BLE001 - a note we cannot store is not an error
         pass
+
+
+# ── 3D: extrusion, both directions ───────────────────────────────────────────────────────────────
+#
+# GeoDeploy draws 3D as MapLibre `fill-extrusion`, from one style key:
+#
+#     extrusion {enabled, field, height, scale, base, color, opacity, radius}
+#
+# `field` × `scale` is the height when a column drives it, `height` when a number does. `base` is a
+# number or another field. `radius` is METRES and applies to POINTS only: a point has no area, so
+# `services/pillars` buffers it into a footprint server-side and the tiles that reach a viewer hold
+# POLYGONS. That is why a 3D point layer's tiles say "polygon" while its source says "point".
+#
+# QGIS models the same thing as a 3D RENDERER hung beside the 2D one — `QgsPolygon3DSymbol` with an
+# extrusion height, or `QgsPoint3DSymbol` shaped as a cylinder — which is why 3D needs a FEATURE
+# layer: a vector-tile layer has no such renderer to read, and that is the honest reason the restyle
+# path exists.
+#
+# UNITS ARE NOT CONVERTED, deliberately. GeoDeploy's heights and radii are metres; QGIS 3D measures
+# in the project's map units. Those agree exactly in a projected CRS in metres and do not in a
+# geographic one — and converting would need the project CRS, would be lossy in both directions, and
+# would mean the number a user typed is not the number that comes back. So the number travels
+# unchanged and the mismatch is stated rather than papered over.
+
+#: The 3D classes are not in one module across versions — `qgis._3d` for most of 3.x, with parts
+#: migrating to `qgis.core`. Probed rather than imported, so a QGIS that keeps them elsewhere loses
+#: 3D and nothing else.
+_3D_MODULES = ("qgis._3d", "qgis.core")
+_3D_CACHE: dict = {}
+
+
+def _qgis3d(name):
+    """A 3D class by name, from wherever this QGIS keeps it. None when it has none."""
+    if name in _3D_CACHE:
+        return _3D_CACHE[name]
+    found = None
+    for module in _3D_MODULES:
+        try:
+            import importlib
+            found = getattr(importlib.import_module(module), name, None)
+        except ImportError:             # pragma: no cover - a QGIS built without 3D
+            found = None
+        if found is not None:
+            break
+    _3D_CACHE[name] = found
+    return found
+
+
+def _3d_enum(class_name, *candidates):
+    """An enum member spelled any of `candidates`, on the class or on its nested `Property`/`Shape`.
+
+    QGIS moved these twice: `QgsAbstract3DSymbol.PropertyExtrusionHeight` became
+    `QgsAbstract3DSymbol.Property.ExtrusionHeight`, and `QgsPoint3DSymbol.Cylinder` became
+    `Qgis.Point3DShape.Cylinder`. Both spellings are asked for rather than one being assumed,
+    because guessing wrong here does not fail loudly — it silently applies no 3D at all.
+    """
+    holders = [_qgis3d(class_name)]
+    holders += [getattr(holders[0], attr, None) for attr in ("Property", "Shape")
+                if holders[0] is not None]
+    for holder in holders:
+        if holder is None:
+            continue
+        for candidate in candidates:
+            value = getattr(holder, candidate, None)
+            if value is not None:
+                return value
+    return None
+
+
+#: Where a layer remembers the extrusion it was GIVEN, and what that looked like once QGIS held it.
+#: Same device as `P_COLORMAP`, for the same reason: QGIS cannot express every GeoDeploy extrusion —
+#: a point's height driven by a column has no equivalent in a cylinder's fixed length — so reading
+#: the symbol back would report a fixed height and the merge would then DELETE the column. The
+#: recorded spec is returned unchanged while the symbol still matches it, and only a real edit in
+#: QGIS is read as one.
+P_EXTRUSION = "geodeploy/extrusion"
+P_EXTRUSION_SIG = "geodeploy/extrusion_sig"
+
+#: `"field" * 2.5` — the height expression written for a column-driven extrusion, read back.
+_HEIGHT_EXPRESSION = re.compile(
+    r'^\s*"(?P<field>[^"]+)"\s*(?:\*\s*(?P<scale>-?[\d.eE+]+)\s*)?$')
+
+
+def _extrusion_of(style: dict) -> dict:
+    """The extrusion block of a style, as a dict. Empty when there is none."""
+    ex = (style or {}).get("extrusion")
+    return dict(ex) if isinstance(ex, dict) else {}
+
+
+def is_extruded(style: dict) -> bool:
+    """Whether this style asks for 3D — the same test `services/symbology.is_extruded` makes.
+
+    Enabled ALONE is not enough: a layer with the box ticked and no height set draws flat, and
+    treating it as 3D here would put a zero-height symbol on a layer the map draws in 2D.
+    """
+    ex = _extrusion_of(style)
+    return bool(ex.get("enabled")) and bool(ex.get("field") or ex.get("height"))
+
+
+def _height_expression(ex: dict):
+    """`("field" * scale)` for a column-driven height, or None."""
+    field = str(ex.get("field") or "").strip()
+    if not field:
+        return None
+    scale = _number(ex.get("scale"), 1.0) or 1.0
+    return '"{0}"'.format(field) if scale == 1.0 else '"{0}" * {1:g}'.format(field, scale)
+
+
+def _set_data_defined(symbol, key, expression) -> bool:
+    """Drive one 3D symbol property from an expression. False when this QGIS cannot."""
+    if key is None:
+        return False
+    try:
+        from qgis.core import QgsProperty
+        properties = symbol.dataDefinedProperties()
+        properties.setProperty(key, QgsProperty.fromExpression(expression))
+        symbol.setDataDefinedProperties(properties)
+        return True
+    except Exception:                   # noqa: BLE001 - 3D is a bonus, never a blocker
+        return False
+
+
+def _data_defined_expression(symbol, key):
+    """The expression driving a 3D symbol property, or None."""
+    if key is None:
+        return None
+    try:
+        prop = symbol.dataDefinedProperties().property(key)
+        if prop is None or not prop.isActive():
+            return None
+        return prop.expressionString() or None
+    except Exception:                   # noqa: BLE001 - a property we cannot read is absent
+        return None
+
+
+def _set_material(symbol, colour: str) -> None:
+    """Colour a 3D symbol. QGIS renamed the setter, so both names are tried."""
+    settings_cls = _qgis3d("QgsPhongMaterialSettings")
+    qcolor = _qcolor(colour)
+    if settings_cls is None or qcolor is None:
+        return
+    try:
+        material = settings_cls()
+        material.setDiffuse(qcolor)
+        # An unlit 3D volume reads as a silhouette; QGIS's own default ambient is nearly black, so
+        # a dark ambient under a bright diffuse turns every extrusion into a shadow of itself.
+        if hasattr(material, "setAmbient"):
+            material.setAmbient(QColor(int(qcolor.red() * 0.35), int(qcolor.green() * 0.35),
+                                       int(qcolor.blue() * 0.35)))
+        for setter in ("setMaterialSettings", "setMaterial"):
+            fn = getattr(symbol, setter, None)
+            if callable(fn):
+                fn(material)
+                return
+    except Exception:                   # noqa: BLE001 - a colour is not worth losing the 3D over
+        pass
+
+
+def _material_color(symbol):
+    """A 3D symbol's diffuse colour as `#rrggbb`, or None."""
+    for getter in ("materialSettings", "material"):
+        fn = getattr(symbol, getter, None)
+        if not callable(fn):
+            continue
+        try:
+            material = fn()
+            diffuse = material.diffuse() if hasattr(material, "diffuse") else None
+            if diffuse is not None:
+                return diffuse.name().lower()
+        except Exception:               # noqa: BLE001 - try the other spelling
+            continue
+    return None
+
+
+def apply_3d(qgis_layer, style: dict, geometry: str | None = None) -> bool:
+    """Give a FEATURE layer the 3D symbol its GeoDeploy style describes. True when one was set.
+
+    Called from `apply_to_qgis`, so every path that styles a feature layer gets 3D without having
+    to remember to ask — the same reasoning as `apply` dispatching on layer type.
+
+    A style with no extrusion CLEARS any 3D renderer this plugin set, rather than leaving one
+    standing: turning 3D off in GeoDeploy and reopening the layer has to actually turn it off, or
+    the two disagree and the next push argues about which is right.
+    """
+    if not QGIS or qgis_layer is None:
+        return False
+    setter = getattr(qgis_layer, "setRenderer3D", None)
+    if not callable(setter):
+        return False
+    ex = _extrusion_of(style)
+    if not is_extruded(style):
+        try:
+            if qgis_layer.customProperty(P_EXTRUSION):
+                setter(None)            # ours to clear; a renderer we never set is left alone
+            _record_extrusion(qgis_layer, None, None)
+        except Exception:               # noqa: BLE001 - never fail a style over the 3D it lacks
+            pass
+        return False
+
+    renderer_cls = _qgis3d("QgsVectorLayer3DRenderer")
+    if renderer_cls is None:
+        _log("This QGIS has no 3D support, so the layer's extrusion was not applied — it is still "
+             "stored, and pushing from here will not remove it.", level="info")
+        return False
+
+    kind = (geometry or _geometry_name(qgis_layer) or "polygon").lower()
+    symbol = _point_3d(ex, style) if kind.startswith("point") else _polygon_3d(ex, style)
+    if symbol is None:
+        return False
+    try:
+        qgis_layer.setRenderer3D(renderer_cls(symbol))
+    except Exception as exc:            # noqa: BLE001 - 3D must never stop a layer loading
+        _log("Could not apply the 3D extrusion: {0}: {1}".format(type(exc).__name__, exc))
+        return False
+    # Recorded together: the spec asked for, and what QGIS actually ended up holding.
+    _record_extrusion(qgis_layer, ex, _read_3d_symbol(symbol, kind))
+    return True
+
+
+def _polygon_3d(ex: dict, style: dict):
+    """A `QgsPolygon3DSymbol` for an extruded polygon layer."""
+    cls = _qgis3d("QgsPolygon3DSymbol")
+    if cls is None:
+        return None
+    symbol = cls()
+    # The fixed height either way: it is what the layer draws at when no column drives it, and the
+    # fallback QGIS falls back TO when a data-defined expression cannot be evaluated for a feature.
+    symbol.setExtrusionHeight(_number(ex.get("height"), 0.0))
+    expression = _height_expression(ex)
+    if expression and not _set_data_defined(symbol, _3d_property_key("extrusion"), expression):
+        # DATA-DEFINED IS WHAT MAKES IT THE SAME MAP: MapLibre reads the column per feature, and one
+        # averaged height would draw a city of identical blocks.
+        _log("This QGIS cannot drive an extrusion height from a field, so {0!r} was drawn at a flat "
+             "height. The field is still stored, and still drawn in GeoDeploy."
+             .format(ex.get("field")))
+    base = ex.get("base")
+    if isinstance(base, str) and base.strip():
+        _set_data_defined(symbol, _3d_property_key("height"),
+                          _height_expression({"field": base, "scale": ex.get("scale")}))
+    elif hasattr(symbol, "setHeight"):
+        symbol.setHeight(_number(base, 0.0))
+    _set_material(symbol, ex.get("color") or style.get("color") or DEFAULT_COLOR)
+    return symbol
+
+
+def _point_3d(ex: dict, style: dict):
+    """A `QgsPoint3DSymbol` — a cylinder, matching the pillars the tile server generates.
+
+    A CYLINDER because that is what `services/pillars` builds: the point is buffered into a round
+    footprint and extruded, so a box here would be a different map. `radius` is the footprint the
+    style names, in metres, and `length` the height.
+    """
+    cls = _qgis3d("QgsPoint3DSymbol")
+    if cls is None:
+        return None
+    symbol = cls()
+    shape = _3d_enum("QgsPoint3DSymbol", "Cylinder") or _3d_enum("Qgis", "Point3DShape")
+    if shape is None:
+        shape = _3d_enum("Qgis", "Cylinder")
+    try:
+        if shape is not None and hasattr(symbol, "setShape"):
+            symbol.setShape(shape)
+    except Exception:                   # noqa: BLE001 - the default shape still draws something
+        pass
+    height = _number(ex.get("height"), 0.0)
+    expression = _height_expression(ex)
+    if expression:
+        # A cylinder's LENGTH is a shape property, not a data-defined one in most QGIS builds, so a
+        # column-driven pillar cannot be drawn per-feature here. It is attempted anyway (newer
+        # builds accept it) and the recorded spec is what travels back, so the column is never lost
+        # to this limitation — see `P_EXTRUSION`.
+        _set_data_defined(symbol, _3d_property_key("extrusion"), expression)
+    if hasattr(symbol, "setShapeProperties"):
+        try:
+            symbol.setShapeProperties({"shape": "Cylinder",
+                                       "radius": _number(ex.get("radius"), DEFAULT_PILLAR_RADIUS_M),
+                                       "length": height})
+        except Exception:               # noqa: BLE001 - shape properties differ between builds
+            pass
+    _set_material(symbol, ex.get("color") or style.get("color") or DEFAULT_COLOR)
+    return symbol
+
+
+def _3d_property_key(which: str):
+    if which == "extrusion":
+        return _3d_enum("QgsAbstract3DSymbol", "ExtrusionHeight", "PropertyExtrusionHeight")
+    return _3d_enum("QgsAbstract3DSymbol", "Height", "PropertyHeight")
+
+
+def _read_3d_symbol(symbol, kind: str) -> dict:
+    """What a 3D symbol is CURRENTLY drawing, as GeoDeploy extrusion keys.
+
+    One function, used twice: to record what QGIS ended up holding when a style was applied, and to
+    read it again later. Using the same reader for both is what makes the comparison meaningful — a
+    separate "signature" routine would eventually disagree with the reader and every layer would
+    look edited.
+    """
+    out: dict = {}
+    if symbol is None:
+        return out
+    expression = _data_defined_expression(symbol, _3d_property_key("extrusion"))
+    match = _HEIGHT_EXPRESSION.match(expression or "")
+    if match:
+        out["field"] = match.group("field")
+        scale = _number(match.group("scale"), 1.0)
+        if scale != 1.0:
+            out["scale"] = round(scale, 6)
+    if kind.startswith("point"):
+        properties = {}
+        getter = getattr(symbol, "shapeProperties", None)
+        if callable(getter):
+            try:
+                properties = dict(getter() or {})
+            except Exception:           # noqa: BLE001 - unreadable shape properties are absent
+                properties = {}
+        height = _number(properties.get("length"), None)
+        radius = _number(properties.get("radius"), None)
+        if height is not None:
+            out["height"] = round(height, 6)
+        if radius is not None:
+            out["radius"] = round(radius, 6)
+    else:
+        height = _number(getattr(symbol, "extrusionHeight", lambda: None)(), None)
+        if height is not None:
+            out["height"] = round(height, 6)
+        base_expression = _data_defined_expression(symbol, _3d_property_key("height"))
+        base_match = _HEIGHT_EXPRESSION.match(base_expression or "")
+        if base_match:
+            out["base"] = base_match.group("field")
+        else:
+            base = _number(getattr(symbol, "height", lambda: None)(), None)
+            if base:
+                out["base"] = round(base, 6)
+    colour = _material_color(symbol)
+    if colour:
+        out["color"] = colour
+    return out
+
+
+def _record_extrusion(qgis_layer, spec, applied) -> None:
+    """Remember the extrusion a layer was given, and how QGIS ended up holding it."""
+    if not hasattr(qgis_layer, "setCustomProperty"):
+        return
+    try:
+        import json
+        if spec:
+            qgis_layer.setCustomProperty(P_EXTRUSION, json.dumps(spec, sort_keys=True, default=str))
+            qgis_layer.setCustomProperty(P_EXTRUSION_SIG,
+                                         json.dumps(applied or {}, sort_keys=True, default=str))
+        else:
+            qgis_layer.setCustomProperty(P_EXTRUSION, "")
+            qgis_layer.setCustomProperty(P_EXTRUSION_SIG, "")
+    except Exception:                   # noqa: BLE001 - a note we cannot store is not an error
+        pass
+
+
+def extrusion_from_qgis(qgis_layer, geometry: str | None = None):
+    """The `extrusion` block for a layer's current 3D renderer, or None when there is nothing to say.
+
+    THREE ANSWERS, AND THE DIFFERENCE MATTERS:
+
+    * **None** — this layer cannot carry the question. A vector-TILE layer has no 3D renderer, and
+      a QGIS without 3D has none either; reporting "no extrusion" for those would DELETE a portal's
+      3D on the next push, which is the same mistake as pushing an empty raster style over a
+      colormap.
+    * **`{"enabled": False}`** — a feature layer whose 3D was switched off in QGIS. That is a real
+      edit and must travel.
+    * **the block** — what it is drawing now, or the spec it was given if that is still what it
+      holds. The recorded spec wins whenever the symbol still matches it, because QGIS cannot
+      express every GeoDeploy extrusion and reading it back would quietly flatten a column-driven
+      point pillar into a fixed height.
+    """
+    if not QGIS or qgis_layer is None:
+        return None
+    getter = getattr(qgis_layer, "renderer3D", None)
+    if not callable(getter):
+        return None                     # not a layer that can hold 3D — say nothing about it
+    try:
+        renderer = getter()
+    except Exception:                   # noqa: BLE001 - a renderer we cannot read is unknown
+        return None
+    symbol = None
+    if renderer is not None:
+        symbol_getter = getattr(renderer, "symbol", None)
+        symbol = symbol_getter() if callable(symbol_getter) else None
+    if symbol is None:
+        # Nothing 3D on the layer. Only worth reporting when this plugin PUT something there — for
+        # any other layer, silence is the truthful answer rather than "the user removed it".
+        try:
+            if qgis_layer.customProperty(P_EXTRUSION):
+                return {"enabled": False}
+        except Exception:               # noqa: BLE001
+            pass
+        return None
+
+    kind = (geometry or _geometry_name(qgis_layer) or "polygon").lower()
+    current = _read_3d_symbol(symbol, kind)
+    try:
+        import json
+        recorded = qgis_layer.customProperty(P_EXTRUSION) or ""
+        signature = qgis_layer.customProperty(P_EXTRUSION_SIG) or ""
+        if recorded and signature and json.dumps(current, sort_keys=True, default=str) == signature:
+            spec = json.loads(recorded)
+            if isinstance(spec, dict):
+                return dict(spec, enabled=True)
+    except Exception:                   # noqa: BLE001 - fall through to what QGIS is showing
+        pass
+    if not current:
+        return None
+    return dict(current, enabled=True)
+
+
+def _geometry_name(qgis_layer):
+    """"point" / "line" / "polygon" for a feature layer, or None.
+
+    A vector-tile layer records its geometry on the layer (`P_GEOMETRY`) because it cannot be asked;
+    a feature layer can be, and `geometryType()` is the enum QGIS answers with.
+    """
+    recorded = None
+    try:
+        recorded = qgis_layer.customProperty(P_GEOMETRY) or None
+    except Exception:                   # noqa: BLE001
+        recorded = None
+    if recorded:
+        return str(recorded).lower()
+    try:
+        from qgis.core import QgsWkbTypes
+        return {QgsWkbTypes.PointGeometry: "point", QgsWkbTypes.LineGeometry: "line",
+                QgsWkbTypes.PolygonGeometry: "polygon"}.get(qgis_layer.geometryType())
+    except Exception:                   # noqa: BLE001 - not a feature layer
+        return None
 
 
 # ── QGIS → GeoDeploy ─────────────────────────────────────────────────────────────────────────────
@@ -1743,6 +2265,16 @@ def from_qgis(qgis_layer) -> dict:
     if renderer is None:
         return {}
 
+    def with_3d(style: dict) -> dict:
+        """The 2D style plus whatever the layer's 3D renderer says — see `extrusion_from_qgis`.
+
+        Added to every return path rather than to one of them, because a layer can be extruded AND
+        graduated: 3D is a second renderer, and reading only the one the first branch happened to
+        match is how half a style goes missing.
+        """
+        extrusion = extrusion_from_qgis(qgis_layer)
+        return dict(style, extrusion=extrusion) if extrusion is not None else style
+
     try:
         if isinstance(renderer, QgsGraduatedSymbolRenderer):
             classes = []
@@ -1755,8 +2287,9 @@ def from_qgis(qgis_layer) -> dict:
                     "color": _hex(rng.symbol().color()),
                 })
             if classes:
-                return {"color_mode": "graduated", "color_field": renderer.classAttribute(),
-                        "classes": classes, "classes_n": len(classes)}
+                return with_3d({"color_mode": "graduated",
+                                "color_field": renderer.classAttribute(),
+                                "classes": classes, "classes_n": len(classes)})
 
         if isinstance(renderer, QgsCategorizedSymbolRenderer):
             categories, other = [], None
@@ -1771,14 +2304,14 @@ def from_qgis(qgis_layer) -> dict:
                          "categories": categories}
                 if other:
                     style["other_color"] = other
-                return style
+                return with_3d(style)
 
         symbol = renderer.symbol() if isinstance(renderer, QgsSingleSymbolRenderer) else None
         if symbol is None and hasattr(renderer, "symbols"):
             symbols = renderer.symbols(None)
             symbol = symbols[0] if symbols else None
         if symbol is not None:
-            return dict({"color_mode": "single"}, **_style_from_symbol(symbol))
+            return with_3d(dict({"color_mode": "single"}, **_style_from_symbol(symbol)))
     except Exception:                   # noqa: BLE001 - never block an upload over styling
         return {}
     return {}

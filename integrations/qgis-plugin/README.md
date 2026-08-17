@@ -60,11 +60,18 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   QGIS session as the real test.
 - `experimental=True` in `metadata.txt` until that happens.
 - No icon yet (`icon.png` is referenced by `metadata.txt` and must exist before upload).
-- Styling covers single symbol, graduated and categorized for vectors, and colormap / stretch /
-  band / colour-per-value / hillshade for rasters — **both directions**. Size-from-a-field
-  round-trips too. **3D extrusion does not yet**: it survives a push (`merge_style` preserves it)
-  but QGIS's 3D symbols are not read or written, so it cannot be edited here. That is the next
-  round — see `notes_temp/notes_for_future.md`.
+- Styling covers single symbol, graduated and categorized for vectors, colormap / stretch / band /
+  colour-per-value / hillshade for rasters, and **3D extrusion for polygons and points** — all
+  **both directions**. Size-from-a-field round-trips too.
+- **What cannot round-trip, and why:** a POLYGON's outline WIDTH. GeoDeploy draws a fill's outline
+  with MapLibre's `fill-outline-color`, which is always 1 px — there is no width to carry, so
+  writing one from QGIS would promise something no portal can draw. A LINE's width and a point
+  marker's stroke width (a ratio of the radius) both do round-trip.
+- **3D units are not converted.** GeoDeploy's extrusion heights and pillar radii are metres; QGIS 3D
+  measures in the project's map units. Those agree exactly in a projected CRS in metres and do not
+  in a geographic one. The number travels unchanged rather than being transformed, because
+  converting would need the project CRS and would make the number a user typed differ from the one
+  that comes back.
 - **Which renderer QGIS offers is decided by the SOURCE, not by us.** Server-rendered raster tiles
   arrive as one band of RGBA ("Singleband color data" — nothing to classify), and vector tiles get
   `QgsVectorTileBasicRenderer`, which has no categorized or graduated mode. The **Source** picker
@@ -78,6 +85,38 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
+2026-08-17n (**3D extrusion now travels both ways, for polygons AND points — and it was verified
+against the live instance rather than only against stubs.** `merge_style` already PRESERVED the
+`extrusion` key through a push, which is the floor: it meant a restyle from QGIS did not delete 3D,
+but 3D could not be edited there either. Now `apply_3d` writes it (`QgsPolygon3DSymbol` with an
+extrusion height, or `QgsPoint3DSymbol` shaped as the CYLINDER `services/pillars` actually builds a
+point into) and `extrusion_from_qgis` reads it back.
+*The hard part is that QGIS cannot express every GeoDeploy extrusion.* A cylinder has one length, so
+a point whose height comes from a COLUMN has no equivalent — and reading the symbol back naively
+reports a fixed height, which `merge_style` would then treat as "the user replaced the column" and
+DELETE it. So the applied spec is recorded on the layer (`P_EXTRUSION`) beside what QGIS ended up
+holding, and returned unchanged while the two still match; only a real edit is read as one. Same
+device as `P_COLORMAP`, and the same reason: QGIS is not a lossless container for someone else's
+style. `opacity` survives the same way.
+*Three answers, not two:* `extrusion_from_qgis` returns None for a layer that cannot hold 3D (a
+vector-TILE layer, or a QGIS without 3D) so a push cannot delete a portal's extrusion; `{"enabled":
+False}` for a feature layer whose 3D was switched off, which is a real edit; and the block itself
+otherwise. `with_3d` is applied to EVERY `from_qgis` return path, not just the single-symbol one —
+the live instance has extrusions on categorized and graduated layers, and reading only the branch
+the 2D renderer matched would have dropped them.
+*Verified live* (geodeploy-lite, read-only): **40 vector styles and 12 raster styles round-trip with
+zero phantom changes**, including all 7 real extrusions. Two of those cases no amount of reasoning
+produced — `CO` is stored `{"enabled": true}` with NO height (GeoDeploy draws it flat, so QGIS must
+too), and a world-scale point layer carries `radius: 10000000`, which is why the plugin's 30 m
+fallback footprint must never be written back into a style that named none. Both are now fixtures in
+`scripts/test_3d_symbology.py`.
+*Also, from the same live read:* the raster `/legend` route reported no `zfactor`, so a PUBLIC
+hillshade — whose only styling source is that route — opened flat instead of at its stored
+exaggeration. Fixed in `routers/data/raster.py`; **needs an API deploy to take effect**.
+*And forward work for contour styling:* `raster_style_of` and `comparable_style` now carry keys this
+plugin has never met instead of dropping them, and only a HILLSHADE drops the stretch (any other
+algorithm keeps it) — so `algorithm: "contours"` with `increment`/`thickness` round-trips the day it
+lands. `_RASTER_KEYS` says what to add there when it does.)
 2026-08-17m (**"raster symbology can't be changed, and for polygons I can only change fill colour"
 — neither was a symbology limit. It was the SOURCE.** QGIS decides which renderer to offer from the
 layer TYPE: server-rendered raster tiles reach it as one band of RGBA, so Symbology shows

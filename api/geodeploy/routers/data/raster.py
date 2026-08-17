@@ -508,6 +508,12 @@ async def raster_legend(layer_ref: str, request: Request, db: AsyncSession = Dep
         "colormap_reverse": bool(style.get("colormap_reverse")),
         "rescale": rescale,
         "algorithm": style.get("algorithm"),
+        # A hillshade without its Z FACTOR is a different hillshade. The exaggeration is the whole
+        # visible difference between `b1*1` and `b1*5` relief, and this route is the only styling a
+        # PUBLIC raster has — a client falling back to it drew flat terrain where the portal shows
+        # a modelled surface. Verified on the live instance, where `Degfert_DEM_restr` is stored
+        # with `zfactor: 5.0` and reported it nowhere.
+        "zfactor": style.get("zfactor"),
         "bidx": style.get("bidx"),
         "band_count": layer.band_count,
     }
