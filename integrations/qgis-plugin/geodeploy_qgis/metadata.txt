@@ -6,7 +6,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.1.11
+version=0.1.12
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -21,7 +21,15 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.1.11 - Change detection is right in both directions. Changing only a symbol's STROKE
+changelog=0.1.12 - Rasters can finally be restyled, and every symbol property now travels. A
+    raster's real bands come from its GeoTIFF, and that file was refused unless the layer was shared
+    publicly - so for a private raster there was no way to restyle it at all. It is now readable by
+    anyone who may see the layer, and the plugin gives GDAL the token (scoped to your instance) so
+    /vsicurl/ can use it. Tick "Prefer the real data over the styled view", restyle, then "Save
+    styling to GeoDeploy". Marker outline WIDTH and shape, and size-by-field, are now applied and read
+    back like everything else, and a push no longer deletes styling QGIS cannot draw (3D extrusion,
+    imported paint, popup fields) - it updates what it understands and leaves the rest.
+    0.1.11 - Change detection is right in both directions. Changing only a symbol's STROKE
     (or its marker shape) is now noticed - before, only the fill was read, so a stroke-only edit came
     back byte-identical and reported "unchanged". And opening a portal and pushing it straight back no
     longer reports every layer as restyled: a style read out of QGIS is always complete while a stored

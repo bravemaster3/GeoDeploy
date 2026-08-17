@@ -302,6 +302,40 @@ class GeoDeployDock(QDockWidget):
             QgsNetworkAccessManager.setRequestPreprocessor(add_token)
         except Exception as exc:        # noqa: BLE001
             symbology._log("Could not install the auth preprocessor: {0}".format(exc))
+        self._install_gdal_auth()
+
+    def _install_gdal_auth(self):
+        """Attach the token to GDAL's OWN requests for this host, which Qt's preprocessor never sees.
+
+        `/vsicurl/` does not go through `QgsNetworkAccessManager` — GDAL has its own HTTP stack — so
+        everything read that way arrived unauthenticated. That is the COG, which is the only surface
+        a raster's real band values come from, and therefore the only way to restyle a raster in
+        QGIS: for a raster that was not shared publicly it could not be opened at all.
+
+        PATH-SPECIFIC, never global. `GDAL_HTTP_HEADERS` as a config option applies to every host
+        GDAL talks to, which would send this instance's bearer token to any `/vsicurl/` URL in the
+        project. Scoped to this instance's prefix or not set at all.
+        """
+        if not (self.instance and self.instance.token):
+            return
+        try:
+            from osgeo import gdal
+        except ImportError:             # pragma: no cover - QGIS always ships GDAL
+            return
+        setter = getattr(gdal, "SetPathSpecificOption", None)
+        if not callable(setter):
+            # GDAL < 3.6 has only the global option, and a token that leaks to other hosts is worse
+            # than a private raster that will not open. Say which it is.
+            symbology._log("This GDAL is too old to scope an auth header to one host, so private "
+                           "rasters cannot be opened as GeoTIFFs. Public ones are fine.",
+                           level="info")
+            return
+        try:
+            prefix = "/vsicurl/" + self.instance.url.rstrip("/")
+            setter(prefix, "GDAL_HTTP_HEADERS",
+                   "Authorization: Bearer {0}".format(self.instance.token))
+        except Exception as exc:        # noqa: BLE001 - never block a connection over this
+            symbology._log("Could not give GDAL the token: {0}".format(exc))
 
     def _capture_canvas(self):
         """The map canvas as a WebP file, or None. Used as the portal's card image.

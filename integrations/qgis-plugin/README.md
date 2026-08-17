@@ -65,6 +65,27 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
+2026-08-17l (**a raster could not be restyled at all, and three symbol properties never travelled.**
+*The raster blocker was server-side and two layers deep:* the only source of a raster's real band
+values is its COG, and `routers/data/raster.py::raster_cog` required `is_public` with NO authenticated
+path — so the owner of an unshared raster could not open their own pixels, and "tick Prefer the real
+data and restyle the GeoTIFF" was advice that could not be followed. Now readable by any signed-in
+user `visible_to` already lets see the layer. **And GDAL needed the token separately:** `/vsicurl/`
+does not go through `QgsNetworkAccessManager`, so the Qt request preprocessor never touched it. New
+`_install_gdal_auth` sets `GDAL_HTTP_HEADERS` **path-specifically** for the instance's prefix —
+never the global option, which would send this instance's bearer token to every `/vsicurl/` URL in
+the project. GDAL < 3.6 has only the global option, so it declines and says so.
+*Properties:* `outline_width` is a RATIO of the marker radius (`markerImage` draws
+`lineWidth = radius * ratio`, default 0.28) and was neither applied nor read — the plugin wrote a flat
+1 px, i.e. ratio 0.2, and a width change was invisible. Reported as "stroke color now works well, but
+stroke width doesn't seem to be saved". Marker SHAPE and size-BY-FIELD (`_size_from_qgis`, parsing the
+`scale_linear` expression `_apply_data_defined_size` writes) now round-trip too.
+*And a push stopped deleting things:* `symbology.merge_style` lays the read-back visual keys OVER the
+stored style, so 3D extrusion, imported MapLibre paint and popup fields survive a restyle from QGIS
+instead of being replaced by the subset QGIS can express. A change of colour or size MODE still clears
+the previous mode's leftovers.
+`comparable_style` covers the new keys, folds integer-vs-float class bounds, and ignores the derived
+`classes_n`. Tests: 7 full styles round-trip with no phantom change, plus every property individually.)
 2026-08-17k (**change detection was wrong in both directions, and the user diagnosed it exactly: "when
 I only change the symbol fill it detects the change; when I only change the stroke colour it doesn't."**
 *Missed edits:* `_style_from_symbol` read the fill colour, the size and the dash — and never the

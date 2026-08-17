@@ -389,15 +389,34 @@ async def raster_export_download(layer_ref: str, job_id: str, db: AsyncSession =
 
 
 @router.get("/{layer_ref}/cog")
-async def raster_cog(layer_ref: str, request: Request, db: AsyncSession = Depends(get_db)):
-    """PUBLIC range proxy for the layer's Cloud-Optimized GeoTIFF — ONLY when the admin shared
-    the layer (`is_public`). This is what makes `/vsicurl/https://host/api/data/raster/{id}/cog`
-    work in QGIS/GDAL (full pixel access, the modern WCS — notes §0h) and gives a direct
-    download URL. Same pmtiles/parquet proxy pattern: Range → 206, creds stay server-side."""
+async def raster_cog(layer_ref: str, request: Request, db: AsyncSession = Depends(get_db),
+                     user: User | None = Depends(resolve_optional_user)):
+    """Range proxy for the layer's Cloud-Optimized GeoTIFF — the modern WCS (notes §0h).
+
+    This is what makes `/vsicurl/https://host/api/data/raster/{id}/cog` work in QGIS/GDAL with full
+    pixel access, and it is a direct download URL. Same pmtiles/parquet proxy pattern: Range → 206,
+    creds stay server-side.
+
+    PUBLIC when the layer is shared — and readable by a SIGNED-IN user who may see the layer, which
+    it was not before. That omission had a consequence far from here: server-rendered tiles are
+    colour rather than values, so the only way to restyle a raster in QGIS is to open this GeoTIFF,
+    and for any raster that was not shared publicly the owner could not open it AT ALL. "I am still
+    unable to change a raster's symbology from QGIS" was, for a private raster, exactly this 404.
+    `visible_to` is the same rule the rest of the authenticated surface uses, so this grants nothing
+    new — it stops withholding the pixels from people already entitled to them.
+    """
     result = await db.execute(select(RasterLayer).where(by_ref(RasterLayer, layer_ref)))
     layer = result.scalar_one_or_none()
-    if not layer or layer.status != "ready" or not layer.is_public or not layer.s3_key:
+    if not layer or layer.status != "ready" or not layer.s3_key:
         raise HTTPException(404, "No shared raster for this layer.")
+    if not layer.is_public:
+        allowed = False
+        if user is not None:
+            allowed = (await db.execute(
+                select(RasterLayer.id).where(RasterLayer.id == layer.id,
+                                             visible_to(user, RasterLayer)))).scalar_one_or_none()
+        if not allowed:
+            raise HTTPException(404, "No shared raster for this layer.")
 
     from starlette.concurrency import run_in_threadpool
     from fastapi.responses import StreamingResponse

@@ -361,6 +361,15 @@ def plan_push(group, style_for, current_configs) -> dict:
             seen.add((layer_id, layer_type))
             was = before.get((layer_id, layer_type))
             style = style_for(qgis_layer, layer_type) or {}
+            if style and (was or {}).get("style"):
+                # LAID OVER what the portal has, not swapped for it. A GeoDeploy style holds things
+                # QGIS cannot draw — 3D extrusion, raw MapLibre paint, popup fields — and replacing
+                # the whole style with the readable part deletes them. See `symbology.merge_style`.
+                try:
+                    from .symbology import merge_style
+                    style = merge_style(was["style"], style)
+                except Exception:       # noqa: BLE001 - outside QGIS, send what was read
+                    pass
             if not style and (was or {}).get("style"):
                 # AN UNREADABLE STYLE MUST NOT ERASE THE PORTAL'S.
                 #

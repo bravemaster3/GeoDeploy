@@ -107,13 +107,34 @@ CSS_PX_TO_POINTS = 0.75
 #: the defaults a layer with no saved style is ALREADY being drawn with in a browser, so matching
 #: them is what makes QGIS and the portal show the same map.
 DEFAULT_POINT_RADIUS = 5
-DEFAULT_POINT_STROKE = 1
+#: A marker's outline width is a RATIO OF ITS RADIUS, not a pixel width: `lib/markerImage.js` draws
+#: `lineWidth = radius * ratio`, and `services/symbology.marker_outline` says the same. 0.28 is what
+#: both use when a style omits it. The plugin used to write a flat 1 px — ratio 0.2 at the default
+#: radius, so a slightly thinner ring than the portal draws, and a width the user could not change
+#: because it was never read back either.
+DEFAULT_MARKER_OUTLINE_RATIO = 0.28
+DEFAULT_MARKER_OUTLINE = "#ffffff"
 #: And the polygon ones. `fill-opacity: opacity * style.get("fill_opacity", 0.45)` in
 #: portal_generator — so a polygon with no stated opacity is drawn at 45% on every portal there is.
 DEFAULT_FILL_OPACITY = 0.45
 DEFAULT_FILL_OUTLINE = "#1d4ed8"
 #: A line with no stated width is 2 CSS px on the map.
 DEFAULT_LINE_WIDTH = 2
+
+
+def _number(value, default):
+    """A finite float, or `default`. Styles arrive from JSON, a dialog and a QGIS getter."""
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return default
+    return out if out == out and out not in (float("inf"), float("-inf")) else default
+
+
+def _outline_px(style: dict) -> float:
+    """A marker's outline width in CSS pixels: `radius * outline_width`, the ratio the map uses."""
+    ratio = max(0.0, min(1.0, _number(style.get("outline_width"), DEFAULT_MARKER_OUTLINE_RATIO)))
+    return _number(style.get("radius"), DEFAULT_POINT_RADIUS) * ratio
 
 
 def _set_stroke_width(layer0, width: float) -> None:
@@ -199,12 +220,12 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
         if outline == "none":
             layer0.setStrokeStyle(Qt.NoPen)
         else:
-            # A WHITE hairline by default, because that is what the map draws
-            # (`circle-stroke-color: #ffffff`, `circle-stroke-width: 1`) — and because QGIS's own
+            # A WHITE ring by default, because that is what the map draws — and because QGIS's own
             # default is a dark grey outline, which on a small marker covers the fill completely
             # and turns every point black whatever colour the style asked for.
-            layer0.setStrokeColor(QColor(outline or "#ffffff"))
-            _set_stroke_width(layer0, DEFAULT_POINT_STROKE * CSS_PX_TO_POINTS)
+            layer0.setStrokeColor(QColor(outline or DEFAULT_MARKER_OUTLINE))
+            # radius (CSS px) x ratio = the stroke in CSS px, then into points like every other size.
+            _set_stroke_width(layer0, _outline_px(style) * CSS_PX_TO_POINTS)
     elif isinstance(layer0, QgsSimpleLineSymbolLayer):
         _use_points(symbol, layer0)
         # Always set, defaulted to the map's `line-width: 2` — QGIS's own default is 0.26 mm, a
@@ -326,6 +347,8 @@ _STYLE_DEFAULTS = {
     "lineType": "solid",
     "fill_opacity": DEFAULT_FILL_OPACITY,
     "outline_color": "",                # geometry-dependent, so normalised below rather than here
+    "outline_width": DEFAULT_MARKER_OUTLINE_RATIO,
+    "size_mode": "fixed",
 }
 
 
@@ -349,7 +372,16 @@ def comparable_style(style: dict | None) -> dict:
     # collapse to one token rather than being compared as colours.
     if merged.get("outline_color") in ("", None, "#ffffff", DEFAULT_FILL_OUTLINE):
         merged["outline_color"] = "default"
-    for key in ("radius", "line_width", "fill_opacity"):
+    # A layer sized by a FIELD: the field and the two stops are what a viewer sees, and a stop read
+    # back out of an expression carries float noise, so they are rounded like every other number.
+    if merged.get("size_mode") != "proportional":
+        merged.pop("size_field", None)
+        merged.pop("size_stops", None)
+    elif isinstance(merged.get("size_stops"), list):
+        merged["size_stops"] = [[round(_number(a, 0), 3), round(_number(b, 0), 2)]
+                                for a, b in (pair for pair in merged["size_stops"]
+                                             if isinstance(pair, (list, tuple)) and len(pair) == 2)]
+    for key in ("radius", "line_width", "fill_opacity", "outline_width"):
         try:
             merged[key] = round(float(merged[key]), 3)
         except (TypeError, ValueError):
@@ -364,16 +396,64 @@ def comparable_style(style: dict | None) -> dict:
     # and folding them here would hide a real change and mislabel the map.
     for key in ("classes", "categories"):
         if isinstance(merged.get(key), list):
-            merged[key] = [
-                {k: (v.strip().lower() if k == "color" and isinstance(v, str) else v)
-                 for k, v in item.items()}
-                for item in merged[key] if isinstance(item, dict)]
+            merged[key] = [_comparable_class(item) for item in merged[key]
+                           if isinstance(item, dict)]
+    # DERIVED, not chosen: `classes_n` is `len(classes)`, and only one side bothers to write it.
+    merged.pop("classes_n", None)
     # A CLASSIFIED layer's single colour is not drawn — the classes are. Keeping it in the comparison
     # made an untouched categorized layer look edited, because the read-back fills it from the
     # catch-all entry while the stored style never had one.
     if merged.get("color_mode") in ("graduated", "categorized"):
         merged.pop("color", None)
+    # An outline that is switched OFF has no width to compare — and QGIS reports whatever width the
+    # pen had before it was disabled, which is not a difference a viewer can see.
+    if merged.get("outline_color") == "none":
+        merged.pop("outline_width", None)
     return merged
+
+
+def _comparable_class(item: dict) -> dict:
+    """One class or category, with its colour case-folded and its BOUNDS as floats.
+
+    A break written as `10` by a dialog and read back as `10.0` from QGIS is the same break; compared
+    as written it is a change. The category `value` is left exactly as it is — it is data, and "10"
+    and 10 really are different categories.
+    """
+    out = {}
+    for key, value in item.items():
+        if key == "color" and isinstance(value, str):
+            out[key] = value.strip().lower()
+        elif key in ("min", "max") and value is not None:
+            out[key] = _number(value, value)
+        else:
+            out[key] = value
+    return out
+
+
+def merge_style(stored: dict | None, read_back: dict | None) -> dict:
+    """`read_back` laid over `stored`, so properties QGIS cannot express are not DELETED by a push.
+
+    A GeoDeploy style holds more than QGIS can draw: 3D extrusion, raw MapLibre paint from a GeoLibre
+    import, popup fields. Replacing the whole style with what QGIS could read would silently drop all
+    of it — the same mistake as pushing `{}` over a raster's colormap, one level down. So a push
+    UPDATES the visual keys it understands and leaves the rest alone.
+
+    A change of `color_mode` still has to clear the previous mode's leftovers, or a layer switched
+    from graduated to single would keep a `classes` list that nothing draws and everything compares.
+    """
+    base = dict(stored or {})
+    fresh = {k: v for k, v in (read_back or {}).items() if v is not None}
+    if not fresh:
+        return base
+    if fresh.get("color_mode") and fresh["color_mode"] != base.get("color_mode"):
+        for key in ("classes", "classes_n", "categories", "other_color", "color_field"):
+            base.pop(key, None)
+    if fresh.get("size_mode") == "fixed" or (
+            "size_mode" in fresh and fresh["size_mode"] != "proportional"):
+        for key in ("size_field", "size_stops"):
+            base.pop(key, None)
+    base.update(fresh)
+    return base
 
 
 def apply(qgis_layer, style: dict, row: dict | None = None) -> bool:
@@ -1095,6 +1175,20 @@ def _style_from_symbol(symbol) -> dict:
         shape = _shape_name(layer0)
         if shape:
             style["marker"] = shape
+        # …and the outline WIDTH, back out of pixels into the ratio the map stores. Reported as
+        # "stroke color now works well, but stroke width doesn't seem to be saved" — it was never
+        # read, and never applied either.
+        stroke_pt = None
+        for getter in ("strokeWidth", "outlineWidth"):
+            fn = getattr(layer0, getter, None)
+            if callable(fn):
+                stroke_pt = _number(fn(), None)
+                if stroke_pt is not None:
+                    break
+        radius = style.get("radius") or DEFAULT_POINT_RADIUS
+        if stroke_pt is not None and radius:
+            ratio = stroke_pt / CSS_PX_TO_POINTS / float(radius)
+            style["outline_width"] = round(max(0.0, min(1.0, ratio)), 3)
     elif isinstance(layer0, QgsSimpleLineSymbolLayer):
         width = number(layer0.width)
         if width is not None:
@@ -1107,7 +1201,49 @@ def _style_from_symbol(symbol) -> dict:
         if opacity is not None:
             style["fill_opacity"] = round(opacity, 3)
         style["outline_color"] = _stroke_of(layer0)
+    style.update(_size_from_qgis(symbol, layer0))
     return style
+
+
+#: The expression `_apply_data_defined_size` writes, read back. Same shape, so the same five numbers
+#: come out — otherwise a layer sized BY A FIELD lost that on the way home, and the comparison then
+#: reported it as an edit nobody made.
+_SCALE_LINEAR = re.compile(
+    r'^\s*scale_linear\(\s*"(?P<field>[^"]+)"\s*,\s*(?P<in_lo>-?[\d.eE+]+)\s*,'
+    r'\s*(?P<in_hi>-?[\d.eE+]+)\s*,\s*(?P<out_lo>-?[\d.eE+]+)\s*,'
+    r'\s*(?P<out_hi>-?[\d.eE+]+)\s*\)\s*$')
+
+
+def _size_from_qgis(symbol, layer0) -> dict:
+    """`{size_mode, size_field, size_stops}` when the symbol is sized by a field, else `{}`."""
+    expression = None
+    try:
+        from qgis.core import QgsSymbolLayer
+        for holder, getter, key in (
+                (symbol, "dataDefinedSize", None),
+                (layer0, "dataDefinedProperty", QgsSymbolLayer.PropertyStrokeWidth)):
+            fn = getattr(holder, getter, None)
+            if not callable(fn):
+                continue
+            prop = fn() if key is None else fn(key)
+            text = getattr(prop, "expressionString", lambda: "")()
+            if text:
+                expression = str(text)
+                break
+    except Exception:                   # noqa: BLE001 - a size is never worth failing a read
+        return {}
+    if not expression:
+        return {}
+    m = _SCALE_LINEAR.match(expression)
+    if not m:
+        return {}
+    scale = 2 * CSS_PX_TO_POINTS if isinstance(layer0, QgsSimpleMarkerSymbolLayer) else CSS_PX_TO_POINTS
+    return {
+        "size_mode": "proportional",
+        "size_field": m.group("field"),
+        "size_stops": [[round(float(m.group("in_lo")), 6), round(float(m.group("out_lo")) / scale, 3)],
+                       [round(float(m.group("in_hi")), 6), round(float(m.group("out_hi")) / scale, 3)]],
+    }
 
 
 def _stroke_of(layer0) -> str:

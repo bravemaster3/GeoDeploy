@@ -51,6 +51,7 @@ class _SymbolLayer:
         self.stroke = None
         self.stroke_width = None
         self.pen = None
+        self.data_defined = None
 
     def setWidth(self, w):
         self._width = w
@@ -63,11 +64,24 @@ class _SymbolLayer:
         # Missing it here is how the first run of this test passed while the stroke went unset.
         self.stroke_width = w
 
+    def strokeWidth(self):
+        # And the GETTER, which QGIS has too. Without it the reader found no width to read and the
+        # round trip lost `outline_width` while the test looked like the code was at fault.
+        return self.stroke_width
+
     def setStrokeColor(self, c):
         self.stroke = c
 
+    def strokeColor(self):
+        # A GETTER, as in QGIS. Its absence made `_stroke_of` fall to its except branch and return
+        # "", which reads as "no outline stated" — so a stroke colour looked lost in the round trip.
+        return self.stroke if self.stroke is not None else _QColor("#000000")
+
     def setStrokeStyle(self, s):
         self.pen = s
+
+    def strokeStyle(self):
+        return self.pen if self.pen is not None else 1   # 1 = Qt.SolidLine
 
     def setPenStyle(self, s):
         self.pen = s
@@ -78,18 +92,30 @@ class _SymbolLayer:
     def setDataDefinedProperty(self, key, prop):
         self.data_defined = prop
 
+    def dataDefinedProperty(self, key):
+        return self.data_defined
+
 
 class QgsSimpleMarkerSymbolLayer(_SymbolLayer):
     def __init__(self):
         super().__init__()
-        self.shape = None
+        self._shape = None
 
     @staticmethod
     def decodeShape(name):
         return (name, True)
 
+    @staticmethod
+    def encodeShape(shape):
+        # The inverse, which QGIS also has. Missing it, `_shape_name` returned None and the marker
+        # SHAPE quietly failed to round-trip.
+        return shape
+
     def setShape(self, shape):
-        self.shape = shape
+        self._shape = shape
+
+    def shape(self):
+        return self._shape
 
 
 class QgsSimpleLineSymbolLayer(_SymbolLayer):
@@ -110,6 +136,7 @@ class _Symbol:
         self._color = _QColor("#000000")
         self._size = None
         self._opacity = 1.0
+        self._data_defined = None
         self._layer = _LAYER_FOR[geometry_type]()
 
     def setColor(self, c):
@@ -133,7 +160,12 @@ class _Symbol:
         return self._opacity
 
     def setDataDefinedSize(self, p):
-        self.data_defined = p
+        self._data_defined = p
+
+    def dataDefinedSize(self):
+        # QGIS returns a QgsProperty here; `_size_from_qgis` reads its expression back to recover
+        # size-by-field. Without the getter the round trip silently dropped it.
+        return self._data_defined
 
     def symbolLayerCount(self):
         return 1
@@ -201,6 +233,24 @@ for name in ("QgsCategorizedSymbolRenderer", "QgsGraduatedSymbolRenderer", "QgsR
              "QgsSingleBandPseudoColorRenderer", "QgsPalettedRasterRenderer", "QgsUnitTypes"):
     setattr(core, name, type(name, (_Stub,), {}))
 core.QgsUnitTypes.RenderPoints = 3
+
+
+class _Property:
+    """QgsProperty, as far as this needs it: an expression in, the same expression out."""
+
+    def __init__(self, expression=""):
+        self._e = expression
+
+    @staticmethod
+    def fromExpression(expression):
+        return _Property(expression)
+
+    def expressionString(self):
+        return self._e
+
+
+core.QgsProperty = _Property
+core.QgsSymbolLayer = type("QgsSymbolLayer", (), {"PropertyStrokeWidth": 42})
 core.QgsSymbol = QgsSymbol
 core.QgsSimpleMarkerSymbolLayer = QgsSimpleMarkerSymbolLayer
 core.QgsSimpleLineSymbolLayer = QgsSimpleLineSymbolLayer
@@ -315,8 +365,11 @@ assert out[0].symbol().size() == 5 * 2 * 0.75, ("a point with no radius must tak
                                             "(circle-radius 5), not QGIS's number under our unit")
 stroke = out[0].symbol().symbolLayer(0)
 assert stroke.stroke.name() == "#ffffff", "the map draws circle-stroke-color #ffffff"
-assert stroke.stroke_width == 1 * 0.75, "…at circle-stroke-width 1"
-print("styleless point -> portal defaults: radius 5, white 1px stroke")
+# The outline width is a RATIO OF THE RADIUS, not a pixel width: `markerImage` draws
+# `lineWidth = radius * ratio`, default 0.28. A flat 1 px — what this used to assert — is ratio 0.2
+# at the default radius, so the plugin drew a thinner ring than the portal.
+assert stroke.stroke_width == 5 * 0.28 * 0.75, stroke.stroke_width
+print("styleless point -> portal defaults: radius 5, white ring at 0.28 x radius")
 
 # An explicit outline still wins over the default.
 out = styles_for({"geometry_type": "point"}, {"color": "#3b82f6", "outline_color": "#000000"})
@@ -642,3 +695,88 @@ assert not differs({"color": "#3b82f6", "outline_color": "#ffffff"},
 print("cosmetic only      -> not reported")
 
 print("\nALL CHANGE-DETECTION CASES PASS")
+
+
+# ── EVERY property at once: written, read back, and compared ───────────────────────────────────
+# Asked for directly: "can we make sure that all these work at once?" So this walks the whole
+# supported set rather than the one that last broke.
+merge_style = ns["merge_style"]
+
+# The outline WIDTH travels. Reported as "stroke color now works well, but stroke width doesn't seem
+# to be saved" — it was neither applied nor read, and the map stores it as a ratio of the radius.
+out = round_trip({"geometry_type": "point"},
+                 {"color": "#3b82f6", "radius": 10, "outline_color": "#000000",
+                  "outline_width": 0.6})
+assert out["outline_width"] == 0.6, out
+assert out["radius"] == 10 and out["outline_color"] == "#000000", out
+print("outline width      -> survives the round trip as a ratio")
+
+base = {"color": "#3b82f6", "radius": 5, "outline_color": "#000000", "outline_width": 0.28}
+assert differs(base, dict(base, outline_width=0.6)), "a width change must register"
+assert not differs(base, dict(base))
+print("outline width      -> a change to it is detected")
+
+# SIZE BY A FIELD: the writer emits a scale_linear expression, so it has to read back out of one.
+sized = {"color": "#ef4444", "radius": 5, "size_mode": "proportional",
+         "size_field": "longitude", "size_stops": [[-176.2, 1], [178, 5]]}
+out = round_trip({"geometry_type": "point"}, sized)
+assert out.get("size_mode") == "proportional" and out.get("size_field") == "longitude", out
+assert out["size_stops"][0][1] == 1 and out["size_stops"][1][1] == 5, out
+assert not differs(sized, out), (sized, out)
+print("size by field      -> read back, and an untouched layer is not reported")
+assert differs(sized, dict(sized, size_field="latitude"))
+assert differs(sized, dict(sized, size_stops=[[-176.2, 2], [178, 9]]))
+assert differs(sized, {k: v for k, v in sized.items() if k != "size_mode"})
+print("size by field      -> field, stops and switching it off all detected")
+
+# MERGE, not replace: a push must not delete what QGIS cannot draw.
+stored = {"color": "#10b981", "fill_opacity": 0.45,
+          "extrusion": {"height_field": "h", "radius": 30},          # 3D — QGIS draws it flat
+          "maplibre": {"layers": [{"type": "fill", "paint": {"fill-color": "#123"}}]},
+          "popup_fields": ["name"]}
+merged = merge_style(stored, {"color": "#ff0000", "fill_opacity": 0.9, "color_mode": "single"})
+assert merged["color"] == "#ff0000" and merged["fill_opacity"] == 0.9, merged
+assert merged["extrusion"] == stored["extrusion"], "3D must survive a restyle from QGIS"
+assert merged["maplibre"] == stored["maplibre"], "imported raw paint must survive"
+assert merged["popup_fields"] == ["name"], "popup fields must survive"
+print("merge              -> keeps extrusion, raw paint and popup fields")
+
+# …but a change of MODE clears the previous mode's leftovers, which nothing would draw.
+was_graduated = {"color_mode": "graduated", "color_field": "pop",
+                 "classes": [{"min": None, "max": 10, "color": "#111111"}], "classes_n": 1}
+merged = merge_style(was_graduated, {"color_mode": "single", "color": "#ff0000"})
+assert "classes" not in merged and "color_field" not in merged, merged
+print("merge              -> a mode change drops the old mode's keys")
+
+# Switching size-by-field off clears the field and stops.
+merged = merge_style(sized, {"size_mode": "fixed", "color": "#ef4444"})
+assert "size_field" not in merged and "size_stops" not in merged, merged
+print("merge              -> fixed size drops the field and stops")
+
+# An empty read-back changes nothing at all — the raster case, one level down.
+assert merge_style(stored, {}) == stored
+assert merge_style(stored, None) == stored
+print("merge              -> nothing read means nothing changed")
+
+# Finally: EVERY supported visual property, one layer at a time, round-tripped and compared.
+cases = [
+    ("point",       {"color": "#3b82f6", "radius": 7, "marker": "square",
+                     "outline_color": "#112233", "outline_width": 0.4}),
+    ("point",       {"color": "#3b82f6", "radius": 4, "outline_color": "none"}),
+    ("LineString",  {"color": "#d1ba23", "line_width": 3, "lineType": "dotted"}),
+    ("MultiPolygon", {"color": "#10b981", "fill_opacity": 0.7, "outline_color": "#1d4ed8"}),
+    ("MultiPolygon", {"color": "#10b981", "outline_color": "none"}),
+    ("point",       {"color_mode": "categorized", "color_field": "k", "radius": 6,
+                     "categories": [{"value": "a", "color": "#111111"},
+                                    {"value": 2, "color": "#222222"}],
+                     "other_color": "#999999"}),
+    ("LineString",  {"color_mode": "graduated", "color_field": "pop", "line_width": 4,
+                     "classes": [{"min": None, "max": 10, "color": "#fee5d9"},
+                                 {"min": 10, "max": 90, "color": "#a50f15"}]}),
+]
+for geom, style in cases:
+    readback = round_trip({"geometry_type": geom}, style)
+    assert not differs(style, readback), (geom, style, readback)
+print("all properties     ->", len(cases), "styles round-trip with no phantom change")
+
+print("\nALL FULL-FIDELITY CASES PASS")

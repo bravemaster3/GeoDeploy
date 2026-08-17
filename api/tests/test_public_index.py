@@ -299,3 +299,34 @@ class TestOnePublicLayer:
         # request sees the new value.
         r = await client.get("/api/public/layers/vector/aaaaaaaaaaaa")
         assert r.status_code == 404, r.status_code
+
+
+class TestRasterCogAccess:
+    """`GET /api/data/raster/{ref}/cog` — the GeoTIFF, and who may read it.
+
+    Not a cosmetic permission: server-rendered tiles are colour rather than values, so this file is
+    the ONLY way to get a raster's real bands into QGIS, and therefore the only way to restyle one.
+    Requiring `is_public` with no authenticated path meant the owner of an unshared raster could not
+    open their own pixels — reported as "I am still unable to change a raster's symbology from QGIS".
+    """
+
+    async def test_a_shared_raster_is_readable_anonymously(self, client, seeded):
+        # Reaching storage is not what is under test; the authorization decision is. A shared layer
+        # must get PAST the 404 gate.
+        r = await client.get("/api/data/raster/eeeeeeeeeeee/cog")
+        assert r.status_code != 404, r.text
+
+    async def test_an_unshared_raster_is_404_anonymously(self, client, seeded, db):
+        db.add(RasterLayer(id=2, user_id=1, uid="ffffffffffff", name="Private DEM",
+                           s3_key="rasters/1/x/private.tif", status="ready", is_public=False,
+                           visibility="organization", band_count=1))
+        await db.commit()
+        assert (await client.get("/api/data/raster/ffffffffffff/cog")).status_code == 404
+
+    async def test_an_unshared_raster_is_readable_by_a_signed_in_user(self, client, seeded, db):
+        db.add(RasterLayer(id=3, user_id=1, uid="999999999999", name="Org DEM",
+                           s3_key="rasters/1/x/org.tif", status="ready", is_public=False,
+                           visibility="organization", band_count=1))
+        await db.commit()
+        r = await client.get("/api/data/raster/999999999999/cog", headers=_as(1))
+        assert r.status_code != 404, ("a member may see this layer, so its pixels too", r.text)
