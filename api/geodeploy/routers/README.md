@@ -403,3 +403,9 @@ layer only when `is_public` OR it is in a PUBLISHED portal (`_publicly_readable`
 on publish/unpublish/share/delete in vector.py and portals.py); previously any layer was readable by
 id. Regression tests in `api/tests/test_security.py`.)
 2026-07-11 (identify endpoint; CSV WKT geometry; large-vector direct upload + convert; GeoParquet discovery/import; export-bundle resolves geoparquet layers)
+2026-08-17 (raster `/legend` now reports `zfactor` and the contour parameters. It is the ONLY styling
+a public raster has, so what it omits, a client cannot draw: a hillshade published at `zfactor: 5.0`
+reported nothing and opened flat in QGIS — found by diffing what the plugin reconstructs against what
+the live instance stores. `portals.py`'s catalog-extra path stopped hand-listing raster style keys
+(it had dropped `color_classes` and `colormap_reverse`) and reads `titiler.STYLE_KEYS`; every raster
+tile URL is now built by `titiler.tile_url_from_style`.)

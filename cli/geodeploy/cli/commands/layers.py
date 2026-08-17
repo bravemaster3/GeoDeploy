@@ -12,6 +12,7 @@ import sys
 from ...errors import GeoDeployError, NotFoundError, ValidationError
 from ..main import add_command, group_parser
 from ..output import EXIT_GENERIC, EXIT_OK, human_size
+from ...styles import RASTER_STYLE_KEYS
 from ._common import (add_style_args, confirm, layer_ref_arg, parse_fields, resolve_layer,
                       style_from_args, write_json_file)
 
@@ -192,7 +193,7 @@ def cmd_legend(ctx, args) -> int:
         return EXIT_OK
     if legend.get("ramp"):
         ctx.out.record(legend, ["layer", "colormap", "colormap_reverse", "rescale", "algorithm",
-                                "bidx", "band_count"])
+                                "zfactor", "increment", "thickness", "bidx", "band_count"])
         ctx.out.info("A raster legend is a continuous ramp, so there are no swatches to list.")
         return EXIT_OK
     ctx.out.out(ctx.out.bold(legend.get("layer") or ""))
@@ -469,7 +470,7 @@ def cmd_style(ctx, args) -> int:
     else:
         # The raster default-style body is flat: colormap/rescale/algorithm live at the top level.
         body = {"opacity": body["opacity"]}
-        for key in ("colormap", "colormap_reverse", "rescale", "algorithm", "zfactor", "bidx"):
+        for key in RASTER_STYLE_KEYS:
             if style.get(key) is not None:
                 body[key] = style[key]
 

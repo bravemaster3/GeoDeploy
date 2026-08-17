@@ -420,19 +420,53 @@
                   Reverse the palette
                 </label>
               </div>
-              <div class="flex items-center gap-3">
-                <label class="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
-                  <input type="checkbox" :checked="config.style?.algorithm === 'hillshade'"
-                    @change="emitStyle({ algorithm: $event.target.checked ? 'hillshade' : null })" class="accent-primary flex-shrink-0" />
-                  Hillshade
-                </label>
-                <div v-if="config.style?.algorithm === 'hillshade'" class="flex items-center gap-1.5" title="Vertical exaggeration (Z factor)">
-                  <label class="text-xs text-muted-foreground">Z</label>
-                  <input type="number" min="0.1" max="10" step="0.1" :value="config.style?.zfactor ?? 1"
-                    @input="emitStyle({ zfactor: parseFloat($event.target.value) || 1 })"
-                    class="w-14 text-xs border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+              <!-- ONE CHOICE, not two checkboxes: TiTiler takes a single `algorithm`, so hillshade
+                   and contours are mutually exclusive and a pair of ticks would let the user ask
+                   for something that cannot be rendered. -->
+              <div>
+                <label class="text-xs text-muted-foreground">Terrain rendering</label>
+                <select :value="config.style?.algorithm || ''"
+                  @change="setAlgorithm($event.target.value)"
+                  class="mt-0.5 w-full text-xs border border-border rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary/60">
+                  <option value="">None</option>
+                  <option value="hillshade">Hillshade</option>
+                  <option value="contours">Contour lines</option>
+                </select>
+              </div>
+              <div v-if="config.style?.algorithm === 'hillshade'" class="flex items-center gap-1.5"
+                title="Vertical exaggeration (Z factor)">
+                <label class="text-xs text-muted-foreground">Z factor</label>
+                <input type="number" min="0.1" max="10" step="0.1" :value="config.style?.zfactor ?? 1"
+                  @input="emitStyle({ zfactor: parseFloat($event.target.value) || 1 })"
+                  class="w-14 text-xs border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+              </div>
+              <div v-if="config.style?.algorithm === 'contours'" class="flex items-end gap-2">
+                <div class="flex-1">
+                  <label class="text-xs text-muted-foreground" title="Spacing between contour lines, in the raster's own units">
+                    Interval
+                  </label>
+                  <input type="number" min="0" step="any" :value="config.style?.increment ?? 35"
+                    @input="emitStyle({ increment: parseFloat($event.target.value) || null })"
+                    class="mt-0.5 w-full text-xs border border-border rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+                </div>
+                <div class="w-20">
+                  <label class="text-xs text-muted-foreground">Line width</label>
+                  <input type="number" min="1" max="10" step="1" :value="config.style?.thickness ?? 1"
+                    @input="emitStyle({ thickness: parseInt($event.target.value, 10) || null })"
+                    class="mt-0.5 w-full text-xs border border-border rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary/60" />
                 </div>
               </div>
+              <!-- The stretch is not decoration under contours: it is the range the coloured relief
+                   behind the lines is drawn over. Without it TiTiler spans −12000–8000 m and a
+                   survey DEM comes out one flat colour, so say what the numbers are doing. -->
+              <p v-if="config.style?.algorithm === 'contours'" class="text-xs text-muted-foreground">
+                Lines every {{ config.style?.increment ?? 35 }} units, over the stretch below —
+                that range colours the relief behind them.
+                <button v-if="!config.style?.rescale" @click="autoStretch" :disabled="autoStretching"
+                  class="text-primary hover:text-primary/80 font-medium disabled:opacity-50">
+                  Set it automatically
+                </button>
+              </p>
             </template>
 
             <!-- Stretch is disabled under hillshade: the algorithm returns a finished 0–255 relief
@@ -456,7 +490,8 @@
               </div>
               <p class="text-[10px] text-muted-foreground/70 mt-0.5">
                 {{ isHillshade ? 'Not used while Hillshade is on — the shading is already 0–255.'
-                               : 'For non-8-bit imagery (e.g. 0–4095). Blank = default.' }}
+                   : isContours ? 'Under contours this is the elevation range the relief is coloured over — set it, or the whole raster draws as one flat band.'
+                   : 'For non-8-bit imagery (e.g. 0–4095). Blank = default.' }}
               </p>
             </div>
           </template>
@@ -502,6 +537,7 @@ import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps, getRaste
 // the legend here must describe exactly what the published portal will draw.
 import { RAMPS, DIVERGING, NO_OUTLINE, markerOutline, legendEntries, rampColors,
          representativeColor, pillarRadius } from '@/lib/symbology'
+import { rasterStyleOf } from '@/lib/mapStyle'
 import { TrashIcon, LocateIcon } from '@/views/icons'
 
 const props = defineProps({
@@ -937,6 +973,18 @@ function setSingleBand(val) {
 
 // Hillshade returns its own 0–255 image, so the stretch controls below do nothing while it is on.
 const isHillshade = computed(() => props.config.style?.algorithm === 'hillshade')
+const isContours = computed(() => props.config.style?.algorithm === 'contours')
+
+// Switching terrain rendering CLEARS the parameters of the mode being left. Keeping them would
+// leave a zfactor on a contour layer and an interval on a hillshade — invisible in the map, but
+// carried into every published portal, every share link and every round trip through QGIS, where
+// something eventually reads them back and reports a change nobody made.
+function setAlgorithm(value) {
+  const patch = { algorithm: value || null }
+  if (value !== 'hillshade') patch.zfactor = null
+  if (value !== 'contours') { patch.increment = null; patch.thickness = null; patch.minz = null; patch.maxz = null }
+  emitStyle(patch)
+}
 const rescaleMin = computed(() => (props.config.style?.rescale || '').split(',')[0] || '')
 const rescaleMax = computed(() => (props.config.style?.rescale || '').split(',')[1] || '')
 const autoStretching = ref(false)
@@ -985,14 +1033,7 @@ async function saveDefault() {
   try {
     const body = props.config.layer_type === 'vector'
       ? { opacity: props.config.opacity, style: props.config.style, popup_fields: props.config.popup_fields }
-      : {
-          opacity: props.config.opacity,
-          colormap: props.config.style?.colormap || null,
-          rescale: props.config.style?.rescale || null,
-          algorithm: props.config.style?.algorithm || null,
-          zfactor: props.config.style?.zfactor ?? null,
-          bidx: props.config.style?.bidx || null,
-        }
+      : { opacity: props.config.opacity, ...rasterStyleOf(props.config.style) }
     const fn = props.config.layer_type === 'vector' ? saveVectorDefaultStyle : saveRasterDefaultStyle
     const { data: updated } = await fn(layer.value.id, body)
     const list = props.config.layer_type === 'vector' ? dataStore.vectorLayers : dataStore.rasterLayers
@@ -1010,7 +1051,7 @@ function useDefault() {
     opacity: ds.opacity ?? 1.0,
     style: props.config.layer_type === 'vector'
       ? (ds.style ?? {})
-      : { colormap: ds.colormap || null, rescale: ds.rescale || null, algorithm: ds.algorithm || null, zfactor: ds.zfactor ?? null, bidx: ds.bidx || null },
+      : rasterStyleOf(ds),
     ...(props.config.layer_type === 'vector' ? { popup_fields: ds.popup_fields ?? [] } : {}),
   })
 }

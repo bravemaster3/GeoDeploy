@@ -557,7 +557,7 @@ import {
   iconSizeExpression as symIconSizeExpression,
   markerImages as symMarkerImages,
 } from '@/lib/symbology'
-import { buildMapStyle, lonLatBbox, rasterTilesUrl } from '@/lib/mapStyle'
+import { buildMapStyle, lonLatBbox, rasterStyleOf, rasterTilesUrl } from '@/lib/mapStyle'
 import { BASEMAPS } from '@/lib/basemaps'
 import { registerMarkerImages, setMarkerSpecs } from '@/lib/markerImage'
 import { capturePortalThumbnail } from '@/composables/portalThumbnail'
@@ -1782,12 +1782,8 @@ async function addLayer(layer) {
     // External vector (WFS) gets a colour; external raster (WMS/XYZ) has no style.
     style = layer.kind === 'vector' ? { color: nextColor() } : {}
   } else {
-    style = {}
-    if (ds?.colormap) style.colormap = ds.colormap
-    if (ds?.rescale) style.rescale = ds.rescale
-    if (ds?.algorithm) style.algorithm = ds.algorithm
-    if (ds?.zfactor != null) style.zfactor = ds.zfactor
-    if (Array.isArray(ds?.bidx) && ds.bidx.length) style.bidx = ds.bidx.slice()
+    // The layer's whole raster style, not a hand-picked five of it — see `rasterStyleOf`.
+    style = rasterStyleOf(ds)
   }
   // Add to the top of the list (and the top of the map).
   layerConfigs.value.unshift({

@@ -4,6 +4,35 @@ Notable changes, newest first. Versions are **major.minor** — `v1.0`, `v1.1`, 
 `v2.0`. The minor number moves for anything shipped, features or fixes; the major changes when an
 upgrade needs manual work.
 
+## Unreleased
+
+Symbology that survives a round trip — into QGIS and back, and into contour lines.
+
+- **A raster can be classified in QGIS.** Reported as "raster symbology can't be changed, I can't
+  classify", and the cause was not the symbology code: QGIS decides which renderer to offer from the
+  layer TYPE, and the plugin was handing it server-rendered tiles — one band of RGBA, which QGIS
+  calls "Singleband color data" and offers nothing to change. Vector tiles have the same shape of
+  limit: no categorized or graduated renderer at all. Opening the data instead used to be a
+  downgrade, because GeoDeploy's colours were dropped on the way; now the GeoTIFF arrives with its
+  colormap, stretch, band and classification already applied, a per-layer **Source** picker says
+  what each layer offers, and **Restyle this layer…** reopens one from its data in place.
+- **3D extrusion travels both ways, for polygons and points.** Heights driven by a column, fixed
+  heights, bases, colours, and the cylinder footprint of a point pillar. QGIS cannot express every
+  extrusion — a cylinder has one length — so what it cannot hold is recorded and handed back
+  untouched rather than being quietly flattened by the next push.
+- **Contour lines are a raster style**, everywhere raster symbology is edited: My Data, the layer
+  page, the portal editor, the published portal (with its own legend), the CLI and the QGIS plugin.
+  `--algorithm contours --increment 25`. The interval and line width are yours; the range the relief
+  behind the lines is coloured over comes from the layer's stretch, because the alternative — the
+  algorithm's own −12000–8000 m default — renders a survey DEM as one flat colour.
+- **Fixes found by comparing what each surface actually sends.** A classified raster or one with a
+  reversed palette lost exactly that when it was added to a portal from the catalog, when it was
+  drawn in the editor preview, and when a viewer touched any control in a published portal — three
+  separate hand-written key lists, each missing the same two keys. There is now one list per
+  language. Saving a style from QGIS also reset a layer's opacity to 1.0 and deleted its popup
+  fields; and the raster legend, which is the only styling a PUBLIC raster has, reported no
+  `zfactor`, so a published hillshade opened flat in every other tool.
+
 ## v1.3.1 — 2026-08-14
 
 A hotfix, and the first patch-level release. The major.minor convention above holds for planned

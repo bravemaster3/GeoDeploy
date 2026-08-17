@@ -49,6 +49,7 @@ import { ref } from 'vue'
 import LayerPanel from '@/components/portal/LayerPanel.vue'
 import { saveVectorDefaultStyle, saveRasterDefaultStyle } from '@/api'
 import { useDataStore } from '@/stores/data'
+import { rasterStyleOf } from '@/lib/mapStyle'
 
 const props = defineProps({ layer: Object, layerType: String })
 const emit = defineEmits(['close'])
@@ -68,14 +69,7 @@ const config = ref({
   opacity: ds.opacity ?? 1.0,
   style: props.layerType === 'vector'
     ? { ...(ds.style || {}) }
-    : {
-        colormap: ds.colormap || null,
-        colormap_reverse: !!ds.colormap_reverse,
-        rescale: ds.rescale || null,
-        algorithm: ds.algorithm || null,
-        zfactor: ds.zfactor ?? null,
-        bidx: ds.bidx || null,
-      },
+    : rasterStyleOf(ds),
   popup_fields: ds.popup_fields || [],
 })
 
@@ -90,15 +84,7 @@ async function save() {
     const c = config.value
     const body = props.layerType === 'vector'
       ? { opacity: c.opacity, style: c.style, popup_fields: c.popup_fields }
-      : {
-          opacity: c.opacity,
-          colormap: c.style?.colormap || null,
-          colormap_reverse: !!c.style?.colormap_reverse,
-          rescale: c.style?.rescale || null,
-          algorithm: c.style?.algorithm || null,
-          zfactor: c.style?.zfactor ?? null,
-          bidx: c.style?.bidx || null,
-        }
+      : { opacity: c.opacity, ...rasterStyleOf(c.style) }
     const fn = props.layerType === 'vector' ? saveVectorDefaultStyle : saveRasterDefaultStyle
     const { data: updated } = await fn(props.layer.id, body)
     // Keep the store in step so the row re-renders without a refetch.

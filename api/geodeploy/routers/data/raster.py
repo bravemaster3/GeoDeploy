@@ -12,7 +12,7 @@ from ...deps import require_scope, resolve_optional_user
 from ...models import RasterLayer, UploadJob, User
 from ...schemas import JobStatus, LayerRename, PortalRefOut, RasterDefaultStyle, RasterLayerOut, SharingUpdate
 from ...services import share_links
-from ...services.titiler import get_tile_url as raster_tile_url, COLORMAPS
+from ...services.titiler import tile_url_from_style as raster_tile_url, COLORMAPS
 from ...tasks.raster_ingest import ingest_raster
 from . import exports
 from ..common import (apply_sharing, demo_upload_cap, busy_job_progress, by_ref, creator_names, portals_using,
@@ -46,17 +46,7 @@ async def list_layers(user: User = Depends(require_scope("data:read")), db: Asyn
             obj.progress, obj.current_step = jobs[l.id]
         if l.status == "ready":
             ds = json.loads(l.default_style) if l.default_style else {}
-            obj.tile_url = raster_tile_url(
-                l.s3_key,
-                colormap=ds.get("colormap"),
-                rescale=ds.get("rescale"),
-                algorithm=ds.get("algorithm"),
-                zfactor=ds.get("zfactor"),
-                bidx=ds.get("bidx"),
-                color_classes=ds.get("color_classes"),
-                colormap_reverse=bool(ds.get("colormap_reverse")),
-                band_count=l.band_count,
-            )
+            obj.tile_url = raster_tile_url(l.s3_key, ds, band_count=l.band_count)
         out.append(obj)
     return out
 
@@ -514,6 +504,14 @@ async def raster_legend(layer_ref: str, request: Request, db: AsyncSession = Dep
         # a modelled surface. Verified on the live instance, where `Degfert_DEM_restr` is stored
         # with `zfactor: 5.0` and reported it nowhere.
         "zfactor": style.get("zfactor"),
+        # CONTOUR spacing and line width, and the range the background is coloured over. Same
+        # reasoning as `zfactor`: this route is the only styling a PUBLIC raster has, and contours
+        # drawn at the algorithm's default 35 m interval instead of the author's 10 m is a
+        # different map.
+        "increment": style.get("increment"),
+        "thickness": style.get("thickness"),
+        "minz": style.get("minz"),
+        "maxz": style.get("maxz"),
         "bidx": style.get("bidx"),
         "band_count": layer.band_count,
     }
@@ -547,12 +545,7 @@ async def raster_tilejson(layer_ref: str, request: Request, db: AsyncSession = D
         "tilejson": "3.0.0",
         "name": layer.name,
         "scheme": "xyz",
-        "tiles": [base + raster_tile_url(
-            layer.s3_key, colormap=ds.get("colormap"), rescale=ds.get("rescale"),
-            algorithm=ds.get("algorithm"), zfactor=ds.get("zfactor"), bidx=ds.get("bidx"),
-            color_classes=ds.get("color_classes"),
-            colormap_reverse=bool(ds.get("colormap_reverse")),
-            band_count=layer.band_count)],
+        "tiles": [base + raster_tile_url(layer.s3_key, ds, band_count=layer.band_count)],
         "minzoom": 0,
         "maxzoom": 22,
     }
@@ -632,12 +625,7 @@ async def raster_wmts(layer_ref: str, request: Request, db: AsyncSession = Depen
 
     # The XYZ template, re-labelled with WMTS's placeholders. `&` inside it MUST be escaped or the
     # document is not well-formed XML and QGIS rejects the whole connection.
-    tmpl = base + raster_tile_url(
-        layer.s3_key, colormap=ds.get("colormap"), rescale=ds.get("rescale"),
-        algorithm=ds.get("algorithm"), zfactor=ds.get("zfactor"), bidx=ds.get("bidx"),
-        color_classes=ds.get("color_classes"),
-        colormap_reverse=bool(ds.get("colormap_reverse")),
-        band_count=layer.band_count)
+    tmpl = base + raster_tile_url(layer.s3_key, ds, band_count=layer.band_count)
     tmpl = (tmpl.replace("{z}", "{TileMatrix}").replace("{x}", "{TileCol}")
                 .replace("{y}", "{TileRow}"))
 

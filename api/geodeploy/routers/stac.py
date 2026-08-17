@@ -221,12 +221,8 @@ def _vector_assets(layer, base: str) -> dict:
 
 def _raster_assets(layer, base: str) -> dict:
     default = json.loads(layer.default_style) if layer.default_style else {}
-    tile_url = titiler_svc.get_tile_url(
-        layer.s3_key,
-        colormap=default.get("colormap"), rescale=default.get("rescale"),
-        algorithm=default.get("algorithm"), zfactor=default.get("zfactor"),
-        bidx=default.get("bidx"), color_classes=default.get("color_classes"),
-        colormap_reverse=bool(default.get("colormap_reverse")),
+    tile_url = titiler_svc.tile_url_from_style(
+        layer.s3_key, default,
         band_count=layer.band_count,
     )
     return {

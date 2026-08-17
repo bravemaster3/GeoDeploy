@@ -85,6 +85,21 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
+2026-08-17o (**contour styling round-trips too — and it needed the record-and-verify device a THIRD
+time.** GeoDeploy grew `algorithm: "contours"` (with `increment`/`thickness`/`minz`/`maxz`), and QGIS
+has no renderer for it: QGIS makes contours with a processing algorithm that outputs a VECTOR layer.
+So the raster is drawn here with its stretch alone — honest — but reading THAT back reports a plain
+stretch, and `merge_style` treats a raster read-back as the whole colouring, so opening a contour
+layer and pushing it back would have turned it grey. `P_RASTER_ALGO` records the untranslatable keys
+with a signature of the renderer QGIS was actually given, and `with_algorithm` puts them back on
+every `raster_from_qgis` return path while that still matches; picking a palette or classifying the
+layer changes the renderer, the signature stops matching, and the replacement travels as the real
+edit it is. Hillshade is deliberately NOT recorded — it became a real renderer and reads back on its
+own, and shadowing it would restore a stale copy over a genuine change.
+`sources.raster_style_from_tile_url` also learned `algorithm_params`, since a portal drawing contours
+every 10 m carries that number nowhere else. `raster_style_of` and `comparable_style` now CARRY keys
+the plugin has never met rather than dropping them, so the next server-side property survives before
+anyone teaches the plugin about it.)
 2026-08-17n (**3D extrusion now travels both ways, for polygons AND points — and it was verified
 against the live instance rather than only against stubs.** `merge_style` already PRESERVED the
 `extrusion` key through a push, which is the floor: it meant a restyle from QGIS did not delete 3D,

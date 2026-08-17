@@ -15,6 +15,7 @@ from ..deps import require_scope, resolve_cookie_user
 from ..timeutil import naive_utcnow
 from ..models import ExternalSource, Portal, RasterLayer, User, VectorLayer
 from ..schemas import PortalCreate, PortalOut, PortalUpdate
+from ..services import titiler as titiler_svc
 from ..services.portal_generator import (build_portal_bundle, generate_style,
                                          read_deck_core_bbox, resolve_layout)
 from .common import creator_names, record_audit
@@ -86,8 +87,13 @@ async def _with_public_catalog_layers(db: AsyncSession, layer_configs: list[dict
                 ds = json.loads(layer.default_style) if layer.default_style else {}
             except (ValueError, TypeError):
                 ds = {}
+            # THE KEY LIST IS `titiler.STYLE_KEYS`, not a copy of it. Written out by hand, this one
+            # had already fallen behind twice: `color_classes` and `colormap_reverse` were both
+            # missing, so a CLASSIFIED raster or one with a reversed ramp lost exactly that when it
+            # was added to a portal from the catalog — the layer looked right in My Data and wrong
+            # the moment it was published, which is the hardest kind of difference to trace.
             style = dict(ds.get("style") or {}) if kind == "vector" else {
-                k: ds[k] for k in ("colormap", "rescale", "algorithm", "zfactor", "bidx") if ds.get(k) is not None
+                k: ds[k] for k in titiler_svc.STYLE_KEYS if ds.get(k) is not None
             }
             # Appended at the END so these draw BENEATH the author's own layers (configs are built in
             # reverse, so later entries sit lower).

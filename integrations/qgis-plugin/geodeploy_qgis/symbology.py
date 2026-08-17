@@ -460,6 +460,24 @@ P_GEOMETRY = "geodeploy/geometry"
 P_COLORMAP = "geodeploy/colormap"
 P_COLORMAP_SIG = "geodeploy/colormap_stops"
 
+#: And the raster styling QGIS HAS NO RENDERER FOR. `hillshade` maps onto `QgsHillshadeRenderer`;
+#: `contours` maps onto nothing — QGIS makes contours with a processing algorithm that outputs a
+#: VECTOR layer, not with a raster renderer — and the same will be true of the next server-side
+#: algorithm. Such a raster is drawn here with its stretch alone, which is honest, but reading THAT
+#: back would report a plain stretch and the merge would then delete the algorithm: opening a
+#: contour layer in QGIS and pushing it back would silently turn it into a grey raster.
+#:
+#: So the untranslatable part is recorded, with a signature of what QGIS was actually given, and
+#: handed back unchanged while that still matches. A user who genuinely restyles the layer — picks
+#: a palette, classifies it — changes the renderer, the signature stops matching, and the edit is
+#: reported as the real edit it is. Third use of the same device (`P_COLORMAP`, `P_EXTRUSION`),
+#: which is what it looks like when a lossy container is being used honestly.
+P_RASTER_ALGO = "geodeploy/raster_algorithm"
+P_RASTER_ALGO_SIG = "geodeploy/raster_algorithm_sig"
+
+#: The keys that belong to a server-side algorithm rather than to a renderer QGIS can build.
+_ALGORITHM_KEYS = ("algorithm", "increment", "thickness", "minz", "maxz", "zfactor")
+
 
 #: Every visual key, with the value the MAP supplies when a style omits it. Used only to COMPARE two
 #: styles — see `comparable_style`.
@@ -1061,6 +1079,12 @@ def raster_to_qgis(qgis_layer, style: dict) -> bool:
         # Recorded AFTER the renderer is in place: the name is only meaningful next to the colours
         # it produced, so the two are written together or not at all.
         _record_colormap(qgis_layer, colormap if colormap_sig else None, colormap_sig)
+        # And the server-side algorithm QGIS could not build a renderer for — see `P_RASTER_ALGO`.
+        # Hillshade is excluded because it DID become a renderer and reads back on its own.
+        untranslatable = {k: style[k] for k in _ALGORITHM_KEYS
+                          if style.get(k) is not None and algorithm_of(style) != "hillshade"}
+        _record_algorithm(qgis_layer, untranslatable if algorithm_of(style) not in ("", "hillshade")
+                          else None, _algorithm_signature(renderer))
         qgis_layer.triggerRepaint()
         return True
     except Exception as exc:            # noqa: BLE001 - a style must never stop a layer loading
@@ -1187,6 +1211,66 @@ def _default_range(qgis_layer, band):
     except Exception:                   # noqa: BLE001 - a range we cannot find is not an error
         pass
     return (0.0, 1.0)
+
+
+def algorithm_of(style) -> str:
+    """A style's server-side algorithm, lower-cased. `""` when it has none."""
+    return ((style or {}).get("algorithm") or "").strip().lower()
+
+
+def _algorithm_signature(renderer) -> str:
+    """What QGIS was given for a style it could not really draw — the renderer type and its band."""
+    if renderer is None:
+        return ""
+    band = None
+    for getter in ("band", "grayBand"):
+        fn = getattr(renderer, getter, None)
+        if callable(fn):
+            try:
+                band = fn()
+                break
+            except Exception:           # noqa: BLE001 - try the other spelling
+                continue
+    return "{0}:{1}".format(type(renderer).__name__, band)
+
+
+def _record_algorithm(qgis_layer, keys, signature) -> None:
+    """Remember a server-side algorithm QGIS has no renderer for — see `P_RASTER_ALGO`."""
+    if not hasattr(qgis_layer, "setCustomProperty"):
+        return
+    try:
+        import json
+        if keys:
+            qgis_layer.setCustomProperty(P_RASTER_ALGO, json.dumps(keys, sort_keys=True, default=str))
+            qgis_layer.setCustomProperty(P_RASTER_ALGO_SIG, signature or "")
+        else:
+            qgis_layer.setCustomProperty(P_RASTER_ALGO, "")
+            qgis_layer.setCustomProperty(P_RASTER_ALGO_SIG, "")
+    except Exception:                   # noqa: BLE001 - a note we cannot store is not an error
+        pass
+
+
+def _recorded_algorithm(qgis_layer, renderer) -> dict:
+    """The recorded algorithm keys, if QGIS is still showing what it was given. `{}` otherwise."""
+    if not hasattr(qgis_layer, "customProperty"):
+        return {}
+    try:
+        import json
+        recorded = qgis_layer.customProperty(P_RASTER_ALGO) or ""
+        signature = qgis_layer.customProperty(P_RASTER_ALGO_SIG) or ""
+        if not recorded:
+            return {}
+        if _algorithm_signature(renderer) != signature:
+            # The user built a real renderer over it — a palette, a classification. That REPLACES
+            # the algorithm, and saying so is the point of comparing rather than always restoring.
+            _log("This raster's {0} styling was replaced by the renderer you chose in QGIS, so it "
+                 "will no longer be drawn that way.".format(
+                     json.loads(recorded).get("algorithm", "server-side")), level="info")
+            return {}
+        keys = json.loads(recorded)
+        return keys if isinstance(keys, dict) else {}
+    except Exception:                   # noqa: BLE001 - an unreadable note is simply absent
+        return {}
 
 
 def _record_colormap(qgis_layer, name, stops) -> None:
@@ -1799,6 +1883,17 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
         return {}
     if renderer is None:
         return {}
+
+    def with_algorithm(read: dict) -> dict:
+        """`read`, plus any server-side algorithm QGIS has no renderer for — see `P_RASTER_ALGO`.
+
+        Applied to every return path below, because the algorithm is orthogonal to the renderer
+        that was built: a contour layer is drawn here as a plain stretch, and returning only that
+        stretch would let the merge clear `algorithm` and turn the layer grey.
+        """
+        recorded = _recorded_algorithm(qgis_layer, renderer)
+        return dict(read, **recorded) if recorded else read
+
     style = {}
     try:
         if isinstance(renderer, QgsMultiBandColorRenderer):
@@ -1810,7 +1905,7 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
             lo, hi = _enhancement_range(renderer.redContrastEnhancement())
             if lo is not None:
                 style["rescale"] = "{0},{1}".format(_trim(lo), _trim(hi))
-            return style
+            return with_algorithm(style)
 
         if isinstance(renderer, QgsSingleBandGrayRenderer):
             band = renderer.grayBand()
@@ -1819,7 +1914,7 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
             lo, hi = _enhancement_range(renderer.contrastEnhancement())
             if lo is not None:
                 style["rescale"] = "{0},{1}".format(_trim(lo), _trim(hi))
-            return style
+            return with_algorithm(style)
 
         if isinstance(renderer, QgsSingleBandPseudoColorRenderer):
             band = renderer.band()
@@ -1837,7 +1932,7 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
                 style["colormap"] = recorded
                 if recorded_reverse:
                     style["colormap_reverse"] = True
-                return style
+                return with_algorithm(style)
             name, inverted = _ramp_name(renderer)
             if name and colormaps and name in colormaps:
                 style["colormap"] = name
@@ -1861,7 +1956,7 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
                     _log("This raster's colour ramp has no name and no per-value stops, so only "
                          "the stretch travelled. GeoDeploy carries either a NAMED palette or a "
                          "colour per value; a custom continuous gradient is neither.")
-            return style
+            return with_algorithm(style)
 
         if isinstance(renderer, QgsHillshadeRenderer):
             # Exactly representable: GeoDeploy asks TiTiler for a hillshade of the same band, and
@@ -1885,7 +1980,7 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
                          "standard 315/45, so the shading will differ.".format(az, alt))
             except (TypeError, ValueError, AttributeError):
                 pass
-            return style
+            return with_algorithm(style)
 
         if isinstance(renderer, QgsPalettedRasterRenderer):
             # A colour per pixel VALUE — land cover, soil types, any classification. A named
@@ -1918,12 +2013,12 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
                 _log("This raster has {0} classes; GeoDeploy carries at most {1} because the "
                      "mapping travels in every tile request. The colours were not sent — the band "
                      "was.".format(len(classes), MAX_COLOR_CLASSES))
-                return style
+                return with_algorithm(style)
             if classes:
                 style["color_classes"] = classes
             else:
                 _log("This paletted raster exposed no readable classes; only its band was sent.")
-            return style
+            return with_algorithm(style)
 
         # Anything else — a renderer from a plugin, or a QGIS class we have not met. The band and the
         # stretch are still worth having even when the colouring cannot travel: the stretch is what
@@ -1942,7 +2037,7 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
         _log("Raster renderer {0} is not translatable{1}.".format(
             type(renderer).__name__,
             " — sent its bands and stretch" if style else ", and exposed no bands or stretch"))
-        return style
+        return with_algorithm(style)
     except Exception as exc:            # noqa: BLE001 - never block an upload over styling
         _log("Could not read this raster's symbology ({0}): {1}: {2}".format(
             type(renderer).__name__, type(exc).__name__, exc))

@@ -604,13 +604,22 @@ assert sources.raster_style_from_tile_url(
     base + "&algorithm=hillshade&expression=b1*5.0") == {"algorithm": "hillshade", "zfactor": 5.0}
 assert sources.raster_style_from_tile_url(base + "&bidx=1&bidx=2&bidx=3") == {"bidx": [1, 2, 3]}
 explicit = json.dumps({"2": [255, 0, 0, 255], "1": [0, 0, 255, 128]}, separators=(",", ":"))
-from urllib.parse import quote as _quote                                        # noqa: E402
+from urllib.parse import quote as _q                                            # noqa: E402
 assert sources.raster_style_from_tile_url(
-    base + "&colormap=" + _quote(explicit, safe="")) == {
+    base + "&colormap=" + _q(explicit, safe="")) == {
         "color_classes": [{"value": 1, "color": "#0000ff80"},
                           {"value": 2, "color": "#ff0000ff"}]}
 assert sources.raster_style_from_tile_url("") == {}
 assert sources.raster_style_from_tile_url(base) == {}
+# CONTOURS ride in one JSON blob, and the interval lives nowhere else — a portal drawing contours
+# every 10 m would otherwise reopen at the algorithm's own 35 m default.
+contour_url = (base + "&algorithm=contours&algorithm_params=" +
+               _q(json.dumps({"increment": 10.0, "thickness": 2, "minz": 182, "maxz": 316}),
+                  safe=""))
+assert sources.raster_style_from_tile_url(contour_url) == {
+    "algorithm": "contours", "increment": 10.0, "thickness": 2, "minz": 182, "maxz": 316}
+assert sources.raster_style_from_tile_url(base + "&algorithm=contours&algorithm_params=%7Bbroken") \
+    == {"algorithm": "contours"}, "an unreadable blob must not cost the algorithm"
 print("portal tiles   -> the baked colormap, stretch, bands and hillshade all read back")
 
 # What a portal's tile URL says must survive being applied and read again — that is the whole path
@@ -677,9 +686,38 @@ assert comparable_style(future) != comparable_style(dict(future, increment=50))
 # because that comes back as finished relief. Getting this wrong would lose a contour range.
 assert comparable_style(future)["rescale"] == "0,3000", comparable_style(future)
 assert "rescale" not in comparable_style({"algorithm": "hillshade", "rescale": "0,3000"})
-# And an unrecognised algorithm must not be dressed up as a colouring QGIS can draw.
-assert raster_to_qgis(RasterLayer(), future) is not None
 print("future keys    -> an unknown raster property survives and is still compared")
+
+# ── an algorithm QGIS has NO RENDERER FOR must survive the trip ──────────────────────────────────
+#
+# `hillshade` becomes a QgsHillshadeRenderer. `contours` becomes nothing: QGIS makes contours with a
+# processing algorithm that outputs a VECTOR layer, so the raster is drawn here with its stretch
+# alone. Reading THAT back would report a plain stretch, and the merge — which treats a raster
+# read-back as the whole colouring — would drop `algorithm` and turn a contour layer grey.
+layer = RasterLayer()
+assert raster_to_qgis(layer, future), "a contour raster should still draw, with its stretch"
+read = raster_from_qgis(layer, COLORMAPS)
+assert read.get("algorithm") == "contours", read
+assert read.get("increment") == 25 and read.get("thickness") == 2, read
+same(future, merge_style(future, read), "contour styling did not survive the round trip")
+print("contours       -> drawn as a stretch, and its algorithm comes back intact")
+
+# …but a real restyle in QGIS REPLACES it, and that has to travel as the replacement it is.
+layer = RasterLayer()
+raster_to_qgis(layer, future)
+raster_to_qgis(layer, {"colormap": "viridis", "rescale": "0,3000"})   # the user picks a palette
+read = raster_from_qgis(layer, COLORMAPS)
+assert "algorithm" not in read, read
+assert read.get("colormap") == "viridis", read
+assert "algorithm" not in merge_style(future, read), merge_style(future, read)
+print("contours off   -> choosing a renderer in QGIS replaces it, and the merge clears it")
+
+# A hillshade is NOT recorded this way — it becomes a real renderer and reads back on its own, so
+# recording it too would mean restoring a stale copy over a genuine edit.
+layer = RasterLayer()
+raster_to_qgis(layer, {"algorithm": "hillshade", "zfactor": 5.0, "bidx": [1]})
+assert not layer.customProperty(ns["P_RASTER_ALGO"]), "hillshade needs no note; it has a renderer"
+print("hillshade      -> left to its own renderer, not shadowed by a recorded copy")
 
 # ── the raster styles that actually exist, taken off a live instance ─────────────────────────────
 #

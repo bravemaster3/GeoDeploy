@@ -465,8 +465,17 @@ class RasterDefaultStyle(BaseModel):
     opacity: float = 1.0
     colormap: str | None = None
     rescale: str | None = None       # "min,max" stretch
-    algorithm: str | None = None     # e.g. "hillshade" (single-band)
+    algorithm: str | None = None     # "hillshade" or "contours" (single-band)
     zfactor: float | None = None     # hillshade vertical exaggeration
+    # CONTOURS. `increment` is the contour interval in the data's own units (metres for a DEM) and
+    # `thickness` the line width in pixels. `minz`/`maxz` are the range the coloured BACKGROUND is
+    # drawn over — TiTiler's contours is not lines on a blank page — and they default to `rescale`,
+    # because a raster's stretch is that range and asking for it twice would be asking twice. See
+    # `services/titiler._contour_params` for why the algorithm's own defaults cannot be used.
+    increment: float | None = None
+    thickness: int | None = None
+    minz: float | None = None
+    maxz: float | None = None
     bidx: list[int] | None = None    # band selection: [n] single-band, [r,g,b] RGB composite
     # A colour per pixel VALUE, for data that is classified rather than continuous — land cover,
     # soil types, a QGIS paletted raster. `colormap` names a gradient, and a gradient cannot

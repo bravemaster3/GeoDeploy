@@ -271,6 +271,18 @@ def raster_style_from_tile_url(url: str) -> dict:
                 style["zfactor"] = float(match.group(1))
             except ValueError:
                 pass
+        # CONTOURS and anything else parameterised the same way. TiTiler takes these as one JSON
+        # blob, and GeoDeploy stores them as flat style keys — so a portal drawing contours every
+        # 10 m has that number only here, and reopening the GeoTIFF to restyle it would otherwise
+        # come back at the algorithm's own 35 m default.
+        try:
+            extra = json.loads(unquote((query.get("algorithm_params") or ["{}"])[0]))
+        except ValueError:
+            extra = None
+        for key in ("increment", "thickness", "minz", "maxz"):
+            value = (extra or {}).get(key) if isinstance(extra, dict) else None
+            if isinstance(value, (int, float)):
+                style[key] = int(value) if key in ("thickness", "minz", "maxz") else float(value)
     name = (query.get("colormap_name") or [None])[0]
     if name:
         name = str(name)

@@ -1,5 +1,6 @@
 """TiTiler integration — raster tile URL construction."""
 import json
+import math
 from urllib.parse import quote
 
 from ..config import get_settings
@@ -20,6 +21,10 @@ def get_tile_url(
     band_count: int | None = None,
     color_classes: list | None = None,
     colormap_reverse: bool = False,
+    increment: float | str | None = None,
+    thickness: float | str | None = None,
+    minz: float | str | None = None,
+    maxz: float | str | None = None,
     settings=None,
 ) -> str:
     """
@@ -36,9 +41,12 @@ def get_tile_url(
       data that is classified rather than continuous (land cover, soil types, a QGIS paletted
       raster). Takes precedence over `colormap`, which can only describe a gradient.
     - rescale: "min,max" stretch applied before display (needed for non-8-bit data).
-    - algorithm: a TiTiler algorithm such as "hillshade" (single-band DEM data).
+    - algorithm: a TiTiler algorithm such as "hillshade" or "contours" (single-band DEM data).
     - zfactor: vertical exaggeration for hillshade — applied as a pre-scale expression
       (b1*z) so the DEM is exaggerated before the hillshade is computed.
+    - increment/thickness: CONTOUR spacing in data units, and line width in pixels.
+    - minz/maxz: the value range the contour BACKGROUND is coloured over. Defaults to `rescale`,
+      which is the only sane default — see below.
     """
     if settings is None:
         settings = get_settings()
@@ -61,7 +69,10 @@ def get_tile_url(
     # value: a flat tile that reads as "hillshade is not rendering". Measured on a vegetation index
     # whose range is 0.5563–0.9477: hillshade alone returns a 15 kB tile, hillshade + that rescale
     # returns 623 bytes of uniform colour. Exactly the reasoning that already drops `colormap` below.
-    if rescale and algorithm != "hillshade":
+    # CONTOURS CONSUMES THE STRETCH RATHER THAN BEING SUBJECT TO IT — see `_contour_params`. Sending
+    # it as `&rescale=` as well would restretch a finished RGB image, the same mistake hillshade
+    # already avoids.
+    if rescale and algorithm not in ("hillshade", "contours"):
         url += f"&rescale={rescale}"
     if algorithm:
         url += f"&algorithm={algorithm}"
@@ -72,6 +83,10 @@ def get_tile_url(
                 z = 1.0
             if z and z != 1.0:
                 url += f"&expression=b1*{z}"
+        elif algorithm == "contours":
+            params = _contour_params(increment, thickness, minz, maxz, rescale)
+            if params:
+                url += f"&algorithm_params={quote(params, safe='')}"
     # colormap only makes sense for single-band output (one selected band, or a
     # single-band raster). It is ignored when an algorithm or an RGB composite is active.
     elif len(bands) != 3:
@@ -90,6 +105,32 @@ def get_tile_url(
     return url
 
 
+#: Every key of a raster style that changes the PICTURE. `opacity` is not here: it is applied by the
+#: map, not by the tile server, and sending it would be a parameter TiTiler ignores.
+STYLE_KEYS = ("colormap", "colormap_reverse", "rescale", "algorithm", "zfactor", "bidx",
+              "color_classes", "increment", "thickness", "minz", "maxz")
+
+
+def tile_url_from_style(s3_key: str, style: dict | None, band_count: int | None = None,
+                        settings=None) -> str:
+    """`get_tile_url` from a stored raster style dict — the entry point every caller should use.
+
+    THE PROBLEM THIS SOLVES IS A COUNTING ONE. Seven places build a raster tile URL — the layer
+    listing, the public index, the TileJSON, STAC assets, share links, the portal generator — and
+    each hand-listed the same eight keyword arguments. Adding `colormap_reverse` meant editing seven
+    call sites correctly; adding the contour keys would have meant it again, and a call site that is
+    merely FORGOTTEN does not fail. It silently serves the layer in a style nobody chose, which is
+    exactly the class of bug that made a portal's raster draw in the layer's default colours.
+
+    One unpacking point, driven by `STYLE_KEYS`, so a new raster property reaches every surface the
+    moment the builder understands it.
+    """
+    style = style if isinstance(style, dict) else {}
+    kwargs = {k: style.get(k) for k in STYLE_KEYS}
+    kwargs["colormap_reverse"] = bool(style.get("colormap_reverse"))
+    return get_tile_url(s3_key, band_count=band_count, settings=settings, **kwargs)
+
+
 #: Every class travels in the URL of EVERY tile request, so the mapping cannot be unbounded — and
 #: the limit is set by what a proxy will accept, not by taste. Percent-encoded JSON costs ~36 bytes
 #: per class, so 256 classes produced a 9.2 kB request line: past nginx's default 8 kB
@@ -100,6 +141,68 @@ def get_tile_url(
 #: ESA WorldCover 11. Data with more distinct values than this is continuous in all but name, and a
 #: named colormap is the right tool for it.
 MAX_COLOR_CLASSES = 128
+
+
+#: TiTiler's own defaults for the contours algorithm. `minz`/`maxz` are the giveaway: they span the
+#: whole earth, from the Mariana Trench to Everest, because the algorithm is written for global DEMs.
+CONTOUR_INCREMENT = 35.0
+CONTOUR_THICKNESS = 1
+_CONTOUR_MINZ, _CONTOUR_MAXZ = -12000.0, 8000.0
+
+
+def _contour_params(increment, thickness, minz, maxz, rescale) -> str | None:
+    """`algorithm_params` JSON for the contours algorithm, or None when there is nothing to send.
+
+    WHY `minz`/`maxz` DEFAULT TO THE STRETCH, which is the whole reason this function exists rather
+    than three inline lines: TiTiler's contours does not draw lines on a blank page. It colours the
+    data across `minz`–`maxz` with a built-in terrain ramp and draws the lines ON that. Its defaults
+    span −12000 to 8000 m — the range of the planet — so a survey DEM covering 183–316 m falls
+    inside a single band of that ramp and renders as **a flat khaki rectangle with a few stray
+    lines**. Measured on this project's own instance: the same raster is one colour with the
+    defaults and a legible coloured relief once the range is its own.
+
+    GeoDeploy already knows that range — it is `rescale`, the stretch every raster carries and the
+    ⚡ Auto button computes — so contours borrows it instead of asking the user for the same two
+    numbers a second time. An explicit `minz`/`maxz` still wins, for the case where the contour
+    background should span something other than the data.
+    """
+    values: dict = {}
+    for key, value, default in (("increment", increment, CONTOUR_INCREMENT),
+                                ("thickness", thickness, CONTOUR_THICKNESS)):
+        try:
+            number = float(value) if value not in (None, "") else float(default)
+        except (TypeError, ValueError):
+            number = float(default)
+        if number > 0:
+            values[key] = int(number) if key == "thickness" else number
+    lo, hi = _range_of(minz, maxz, rescale)
+    if lo is not None:
+        # INTEGERS, and not by preference: TiTiler types `minz`/`maxz` as `int` and rejects the whole
+        # tile request with a 422 for a fractional one — `input_value=182.789993` — which matters
+        # because the stretch these borrow from is very often fractional (a stored DEM range here is
+        # `182.789993,315.959992`). Floor and ceil rather than round, so the band always WIDENS to
+        # contain the data instead of clipping the extremes to a flat colour.
+        values["minz"], values["maxz"] = math.floor(lo), math.ceil(hi)
+    return json.dumps(values, separators=(",", ":")) if values else None
+
+
+def _range_of(minz, maxz, rescale):
+    """`(minz, maxz)` from the explicit pair, else from the `"min,max"` stretch, else `(None, None)`."""
+    try:
+        if minz not in (None, "") and maxz not in (None, ""):
+            lo, hi = float(minz), float(maxz)
+            if hi > lo:
+                return (lo, hi)
+    except (TypeError, ValueError):
+        pass
+    if isinstance(rescale, str) and "," in rescale:
+        try:
+            lo, hi = (float(v) for v in rescale.split(",", 1))
+            if hi > lo:
+                return (lo, hi)
+        except (TypeError, ValueError):
+            pass
+    return (None, None)
 
 
 def _explicit_colormap(color_classes, reverse: bool = False) -> str | None:

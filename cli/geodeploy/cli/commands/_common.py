@@ -83,8 +83,19 @@ def add_style_args(parser, raster: bool = True) -> None:
         rast.add_argument("--no-reverse-colormap", dest="colormap_reverse", action="store_false",
                           help="undo --reverse-colormap")
         rast.add_argument("--rescale", help="stretch as 'min,max' (see `layers stats` for a suggestion)")
-        rast.add_argument("--algorithm", help="e.g. hillshade (single-band)")
+        rast.add_argument("--algorithm", help="hillshade or contours (single-band)")
         rast.add_argument("--zfactor", type=float, help="hillshade vertical exaggeration")
+        # Contours colours the data across its range with a built-in terrain ramp and draws the
+        # lines on that, so --rescale is not decoration here: without it the whole raster renders
+        # as one flat band. See services/titiler._contour_params.
+        rast.add_argument("--increment", type=float,
+                          help="contour interval, in the raster's own units (default 35)")
+        rast.add_argument("--thickness", type=int,
+                          help="contour line width in pixels (default 1)")
+        rast.add_argument("--minz", type=float,
+                          help="low end of the contour colour range (defaults to --rescale)")
+        rast.add_argument("--maxz", type=float,
+                          help="high end of the contour colour range (defaults to --rescale)")
         rast.add_argument("--bidx", help="band selection: '1' or '3,2,1' for an RGB composite")
 
     parser.add_argument("--style-json",
@@ -118,7 +129,7 @@ def style_from_args(args, client=None, layer_ref: Optional[Any] = None,
     kwargs = {}  # type: Dict[str, Any]
     for name in ("color", "fill_opacity", "outline_color", "outline_width", "line_width",
                  "radius", "marker", "line_type", "colormap", "colormap_reverse",
-                 "rescale", "algorithm", "zfactor",
+                 "rescale", "algorithm", "zfactor", "increment", "thickness", "minz", "maxz",
                  "color_field", "color_mode", "size_field", "other_color", "size_stops",
                  "extrude_field", "extrude_scale", "extrude_base", "extrude_color",
                  "extrude_opacity", "extrude_radius"):

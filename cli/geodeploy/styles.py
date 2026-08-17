@@ -31,6 +31,14 @@ COLOR_MODES = ("single", "graduated", "categorized")
 #: what an uninitialised colour input produces and would silently turn outlines off.
 NO_OUTLINE = "none"
 
+#: Every key a RASTER style is made of — the twin of `services/titiler.STYLE_KEYS` and of
+#: `ui/src/lib/mapStyle.RASTER_STYLE_KEYS`. `opacity` is not one of them: the map applies it, the
+#: tile server does not. Named once because the same list, written out by hand, had already fallen
+#: behind in four UI components, seven API call sites and this CLI — and a key that is merely
+#: FORGOTTEN does not fail. It quietly serves the layer in a style nobody chose.
+RASTER_STYLE_KEYS = ("colormap", "colormap_reverse", "rescale", "algorithm", "zfactor", "bidx",
+                     "color_classes", "increment", "thickness", "minz", "maxz")
+
 #: CLI/keyword name → the key the style dict actually uses. Only `line_type` differs, and it
 #: differs because the stored key is camelCase (`lineType`) for historical reasons.
 _SIMPLE_KEYS = (
@@ -46,6 +54,11 @@ _SIMPLE_KEYS = (
     ("rescale", "rescale"),
     ("algorithm", "algorithm"),
     ("zfactor", "zfactor"),
+    # Contours: spacing, line width, and the range its background relief is coloured over.
+    ("increment", "increment"),
+    ("thickness", "thickness"),
+    ("minz", "minz"),
+    ("maxz", "maxz"),
     ("bidx", "bidx"),
     ("other_color", "other_color"),
     ("color_field", "color_field"),

@@ -222,9 +222,12 @@ without a browser, and about being able to take a copy with you.</p>
 desktop GIS people already have open.</p>
 
 - [ ] **A QGIS plugin** — browse the catalog, add a layer, style it, publish back. Built on the
-      packaged client, which is why that client has no dependencies and runs on Python 3.9
+      packaged client, which is why that client has no dependencies and runs on Python 3.9.
+      *Built; not yet run in anger inside QGIS, and `experimental` until it has been*
 - [ ] **Styling that travels** — portal and layer style interchange with GeoLibre and QGIS, for
-      every layer type
+      every layer type. *Both directions now for vectors, rasters and 3D extrusion; the one thing
+      that cannot travel is a polygon's outline width, because a MapLibre fill outline is always
+      1 px wide*
 - [ ] **Download a backup**, and **restore from disk** — state-only (small, covers a bad restore or
       a botched update) separately from the full copy including objects
 - [ ] **Labels** — the other half of data-driven symbology v1.1 did not ship, and unlike size this

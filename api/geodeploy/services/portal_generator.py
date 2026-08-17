@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 from ..config import get_settings
 from .martin import get_tile_url as vector_tile_url
-from .titiler import get_tile_url as raster_tile_url
+from .titiler import tile_url_from_style as raster_tile_url
 from . import external_sources as ext_svc
 from . import pillars
 from . import symbology
@@ -269,17 +269,10 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
             rescale = rstyle.get("rescale") or dstyle.get("rescale")
             sources[source_id] = {
                 "type": "raster",
-                "tiles": [raster_tile_url(
-                    layer.s3_key,
-                    colormap=rstyle.get("colormap"),
-                    rescale=rescale,
-                    algorithm=rstyle.get("algorithm"),
-                    zfactor=rstyle.get("zfactor"),
-                    bidx=rstyle.get("bidx"),
-                    color_classes=rstyle.get("color_classes"),
-                    colormap_reverse=bool(rstyle.get("colormap_reverse")),
-                    band_count=layer.band_count,
-                )],
+                # The PORTAL's style, with the layer's stretch filled in when the portal names
+                # none — a raster with no stretch renders black, and the layer already knows its own.
+                "tiles": [raster_tile_url(layer.s3_key, dict(rstyle, rescale=rescale),
+                                          band_count=layer.band_count)],
                 "tileSize": 256,
             }
             # Where the data actually IS. Without this MapLibre requests tiles across the whole
