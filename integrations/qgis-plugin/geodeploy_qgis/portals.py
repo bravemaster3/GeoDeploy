@@ -22,6 +22,16 @@ from __future__ import annotations
 
 from .connection import GeoDeployError
 
+
+def _note(message: str) -> None:
+    """Say something in the QGIS log. Imported lazily because `symbology` imports nothing from here
+    but this module must not require QGIS to be importable at all — the tests load it standalone."""
+    try:
+        from .symbology import _log
+        _log(message)
+    except Exception:                   # noqa: BLE001 - a log line is never worth an exception
+        pass
+
 # Namespaced so nothing else in a QGIS project collides with them.
 P_LAYER_ID = "geodeploy/layer_id"
 P_LAYER_TYPE = "geodeploy/layer_type"
@@ -453,4 +463,49 @@ def push(client, group, configs, publish: bool = True, new_title: str | None = N
         group.setCustomProperty(P_PORTAL_TITLE, doc.get("title") or new_title or title or "")
     except Exception:                   # noqa: BLE001 - a tag is not worth failing a publish over
         pass
+    return doc
+
+
+def enrich_from_published(doc: dict, instance, style_from_legend) -> dict:
+    """Fill in what the API's `layer_configs` do not carry, from the portal's own published style.
+
+    THE ASYMMETRY THAT CAUSED A BUG. `PortalOut.LayerConfig` is `{layer_id, layer_type, visible,
+    opacity, style, popup_fields}` — no `source`, no `geometry_type`, no `name`. The published
+    style.json carries all three, because it has to: it IS the drawing instructions.
+
+    Without `source`, the group builder had nothing portal-specific to build a RASTER from and fell
+    back to the layer's own listing entry — so a portal drawing a DEM as `colormap_name=terrain`
+    opened in the layer's default grey, exactly the complaint that was fixed for the anonymous path
+    and not for this one. Without `geometry_type` it depended on the listing row matching, and
+    without `name` a layer that failed to open was reported by its numeric id.
+
+    The API's own values always win. This only ADDS keys, so the portal's authoritative styling and
+    visibility are untouched — and an unpublished portal simply has nothing to merge, which is
+    honest: its rasters are not being served under any styling yet.
+    """
+    if not doc.get("published") or not doc.get("slug"):
+        return doc
+    try:
+        baked = configs_from_published_style(
+            instance.published_style(doc["slug"]), style_from_legend)
+    except Exception as exc:            # noqa: BLE001 - the API document is still perfectly usable
+        _note("Could not read the published style for extra layer detail: {0}".format(exc))
+        return doc
+
+    by_key = {}
+    for cfg in baked:
+        try:
+            by_key[(int(cfg["layer_id"]), str(cfg.get("layer_type") or "vector"))] = cfg
+        except (TypeError, ValueError, KeyError):
+            continue
+    for cfg in (doc.get("layer_configs") or []):
+        try:
+            match = by_key.get((int(cfg.get("layer_id")), str(cfg.get("layer_type") or "vector")))
+        except (TypeError, ValueError):
+            continue
+        if not match:
+            continue
+        for key in ("source", "geometry_type", "name"):
+            if cfg.get(key) is None and match.get(key) is not None:
+                cfg[key] = match[key]
     return doc
