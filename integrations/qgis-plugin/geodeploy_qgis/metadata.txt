@@ -6,7 +6,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.1.4
+version=0.1.5
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -21,7 +21,13 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.1.4 - Opening a portal is much faster and looks like the portal. Layers are styled
+changelog=0.1.5 - Fixes layers drawn with the wrong kind of symbol. A vector-tile style is bound to
+    ONE geometry type, and the plugin was falling back to "point" whenever it could not tell - so
+    polygons and lines arrived as a dot at every vertex, or did not draw at all. The geometry is now
+    read from the portal's own published style (and from how the layer is DRAWN, so 3D layers work
+    too); where it is genuinely unknown, every geometry type gets a symbol instead of one being
+    guessed. A portal's own tiles are also no longer swapped for the layer's when the two differ.
+    0.1.4 - Opening a portal is much faster and looks like the portal. Layers are styled
     before they join the map instead of after (one redraw each, not two), the canvas is frozen while
     a group is assembled (one redraw for the whole portal, not one per layer), and the documents
     that describe a layer are fetched once and reused - in the background thread, not between

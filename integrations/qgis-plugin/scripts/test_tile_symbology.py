@@ -303,10 +303,35 @@ out = styles_for({"geometry_type": "Polygon"},
 assert len(out) == 1 and out[0].symbol.color == "#654321"
 print("no classes     -> falls back to one symbol")
 
-# An unknown geometry name is treated as points rather than dropping the layer's styling.
+# ── the geometry type is a BINDING, not a hint ────────────────────────────────────────────────
+# A tile renderer style only draws features of its own geometry type, and QGIS is literal about it:
+# a point style over line data draws a marker at every vertex (a road network as a carpet of dots),
+# and a fill style over point data draws nothing. Defaulting the unknown case to "point" produced
+# both. Unknown now means "style every type" — a tile layer can legitimately hold more than one.
 out = styles_for({"geometry_type": None}, {"color": "#123456"})
-assert out[0].geometry_type == QgsWkbTypes.PointGeometry
-print("unknown geom   -> points")
+assert sorted(s.geometry_type for s in out) == [QgsWkbTypes.PointGeometry,
+                                                QgsWkbTypes.LineGeometry,
+                                                QgsWkbTypes.PolygonGeometry], [s.geometry_type for s in out]
+assert len({s.name for s in out}) == 3, "each entry needs its own name"
+print("unknown geom   -> one style per geometry type, so nothing is mis-drawn")
+
+# A geometry that IS known binds to exactly that type and no other.
+for name, expected in (("MultiPolygon", QgsWkbTypes.PolygonGeometry),
+                       ("LineString", QgsWkbTypes.LineGeometry),
+                       ("point", QgsWkbTypes.PointGeometry),
+                       ("MULTIPOINT", QgsWkbTypes.PointGeometry)):
+    out = styles_for({"geometry_type": name}, {"color": "#123456"})
+    assert [s.geometry_type for s in out] == [expected], (name, [s.geometry_type for s in out])
+print("known geom     -> bound to exactly that type")
+
+# Classified + unknown geometry: every class still gets every type, and the filters survive.
+out = styles_for({"geometry_type": ""},
+                 {"color_mode": "categorized", "color_field": "k",
+                  "categories": [{"value": "a", "color": "#111111"},
+                                 {"value": "b", "color": "#222222"}]})
+assert len(out) == 9, len(out)          # (2 categories + other) x 3 geometry types
+assert sum(1 for s in out if s.filter == '"k" = ' + "'a'") == 3
+print("classified     -> classes x geometry types, filters intact")
 
 # The row's OWN stored style is used when the caller passes none — the add path relies on this.
 layer = TileLayer()

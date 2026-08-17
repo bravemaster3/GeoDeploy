@@ -65,6 +65,20 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
+2026-08-17e (**polygons drew as a dot per vertex, or not at all.** A `QgsVectorTileBasicRendererStyle`
+is bound to ONE geometry type and QGIS honours that literally: a marker symbol over line data draws
+a marker at every vertex (a road network as a carpet of dots — the reported screenshot), a fill
+symbol over point data draws nothing. `apply_to_vector_tiles` defaulted the unknown case to POINT,
+and the unknown case was the common one: `_row_for` matches on `id`, but the public index puts the
+UID there while portal configs carry numeric ids, so `layer_row` is **always None** on the anonymous
+path. Now `configs_from_published_style` carries `geometry_type`, taken from the **MapLibre layer
+type** (`_geometry_of`) rather than `geodeploy:geometry` — the source of a 3D point layer says
+"point" while its `pillars` tiles hold polygons — and `place` passes it through even when the row is
+missing. Genuinely unknown geometry gets a style per type rather than a guess.
+Also: `_vector_tiles(prefer_uri=True)` for portal sources, so a portal drawing from `pillars` is not
+silently redirected to the layer's own TileJSON; `_baked_style` reads `fill-extrusion-color`;
+`fetch_text` is cached like `fetch_json`. Verified across all six live portals: 25 layers, every one
+resolving geometry, source and colour.)
 2026-08-17c (**a portal's raster was drawn in the layer's DEFAULT style.** A raster is coloured by
 the server, and a portal bakes its colormap/stretch/band/hillshade into its OWN tile URL — proven on
 the live instance, where one `Degfert_DEM_restr.tif` appears as `&colormap_name=terrain` in one
