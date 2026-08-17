@@ -156,6 +156,14 @@ class GeoDeployDock(QDockWidget):
         self.add_btn = QPushButton("Add to map")
         self.add_btn.clicked.connect(self.add_selected)
         outer.addWidget(self.add_btn)
+
+        self.open_web_btn = QPushButton("Open in GeoDeploy")
+        self.open_web_btn.setToolTip(
+            "Open the selected layer's page on the instance, in your browser — the map, the "
+            "metadata, the fields and every share link. A public layer opens for anyone; a private "
+            "one asks you to sign in there.")
+        self.open_web_btn.clicked.connect(self.open_in_browser)
+        outer.addWidget(self.open_web_btn)
         self.tree.itemSelectionChanged.connect(self._on_selection_changed)
 
         # -- portals ----------------------------------------------------------------------------
@@ -438,7 +446,10 @@ class GeoDeployDock(QDockWidget):
     def _on_selection_changed(self):
         """A portal cannot be added to the map, so the button says what it WILL do instead."""
         row = self._selected_row() or {}
-        self.add_btn.setText("Open portal in browser" if row.get("_portal") else "Add to map")
+        is_portal = bool(row.get("_portal"))
+        self.add_btn.setText("Open portal in browser" if is_portal else "Add to map")
+        self.open_web_btn.setText("Open portal in GeoDeploy" if is_portal
+                                  else "Open layer in GeoDeploy")
 
     def add_selected(self):
         row = self._selected_row()
@@ -1148,6 +1159,45 @@ class GeoDeployDock(QDockWidget):
                   base + "/p/" + str(doc.get("slug")) + detail)
         self.refresh_layers()
 
+    def open_in_browser(self):
+        """Open the selected layer's (or portal's) page on the instance.
+
+        The plugin shows a layer's geometry and its symbology; the instance's own page shows what it
+        cannot — the metadata, the field list, the extent, the sharing state and every ready-made
+        link for other tools. Rather than describe all that in a dock, point at it.
+
+        `/layers/<kind>/<uid>` is the PUBLIC address for one layer: anyone may open a shared layer,
+        and a private one turns into a sign-in prompt on the instance, where the visitor may well
+        have access. That is the same rule the rest of the anonymous surface follows, and it is why
+        this does not need a token to be useful.
+        """
+        row = self._selected_row()
+        if not row:
+            self._say("Pick a layer or a portal first.", Qgis.Warning)
+            return
+        if row.get("_portal"):
+            self._open_portal(row)
+            return
+        base = (row.get("_base") or (self.instance.url if self.instance else "")).rstrip("/")
+        ref = row.get("uid") or row.get("id")
+        if not base or ref is None:
+            self._say("That layer has no address on the instance.", Qgis.Warning)
+            return
+        kind = "raster" if (row.get("layer_type") == "raster"
+                            or row.get("kind") == "raster"
+                            or row.get("storage_backend") == "raster") else "vector"
+        self._open_url("{0}/layers/{1}/{2}".format(base, kind, ref))
+
+    def _open_url(self, url):
+        """Hand a URL to the desktop browser, and never leave the user without the address."""
+        try:
+            from qgis.PyQt.QtCore import QUrl
+            from qgis.PyQt.QtGui import QDesktopServices
+            QDesktopServices.openUrl(QUrl(url))
+            self._say("Opened {0} in your browser.".format(url))
+        except Exception as exc:        # noqa: BLE001 - still give them the address
+            self._say("Open it at {0} ({1}).".format(url, exc), Qgis.Warning)
+
     def _open_portal(self, row):
         """A portal is a published web map — QGIS cannot render one, so open it where it lives."""
         # The instance publishes the portal's OWN url; `/p/<slug>` was a guess, and it lands on
@@ -1161,13 +1211,7 @@ class GeoDeployDock(QDockWidget):
                 self._say("That portal has no address yet — publish it first.", Qgis.Warning)
                 return
             url = f"{base}/portals/{slug}/"
-        try:
-            from qgis.PyQt.QtCore import QUrl
-            from qgis.PyQt.QtGui import QDesktopServices
-            QDesktopServices.openUrl(QUrl(url))
-            self._say(f"Opened {url} in your browser.")
-        except Exception as exc:        # noqa: BLE001 - still give them the address
-            self._say(f"Open it at {url} ({exc}).", Qgis.Warning)
+        self._open_url(url)
 
     def save_style(self):
         """Push the selected layer's QGIS styling back as its GeoDeploy default style.

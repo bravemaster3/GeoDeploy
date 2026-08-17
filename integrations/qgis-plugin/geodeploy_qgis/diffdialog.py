@@ -37,6 +37,13 @@ def summarise(plan: dict) -> str:
 
     section("Unchanged", plan.get("unchanged") or [])
     section("Restyled", plan.get("restyled") or [])
+    # Said out loud, because the alternative is a silent no-op the user reads as a failed restyle.
+    # A portal's raster is a server-rendered picture in QGIS — "Singleband color data", with nothing
+    # to change — so its styling cannot be read back out. The portal keeps what it had.
+    section("Style kept as the portal has it — QGIS's version could not be read "
+            "(a raster opened as portal tiles has no bands to restyle; tick “Prefer the real data "
+            "over the styled view” to open the GeoTIFF itself, restyle that, and use “Save styling "
+            "to GeoDeploy”)", plan.get("kept") or [])
     section("Added — already on the instance", plan.get("added") or [])
     section("New — not on the instance yet", plan.get("uploads") or [])
     section("Removed from the portal", plan.get("removed") or [])
@@ -61,7 +68,7 @@ def confirm(parent, portal_title: str, plan: dict, creating: bool):
 
     uploads_n = len(plan.get("uploads") or [])
     existing_n = (len(plan.get("unchanged") or []) + len(plan.get("restyled") or [])
-                  + len(plan.get("added") or []))
+                  + len(plan.get("kept") or []) + len(plan.get("added") or []))
     if creating and uploads_n and not existing_n:
         # The "start in QGIS, end with a URL" case. Everything here is a local file, so the whole
         # group is about to be UPLOADED before the portal can exist — that is a much bigger action

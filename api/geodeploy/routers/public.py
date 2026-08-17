@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..models import Portal, RasterLayer, SetupConfig, VectorLayer
 from ..services import share_links
+from .common import by_ref
 
 router = APIRouter(prefix="/public", tags=["public"])
 
@@ -78,6 +79,57 @@ async def public_index(request: Request, db: AsyncSession = Depends(get_db)) -> 
             "ogc_features": base + "/api/ogc",
         },
     }
+
+
+@router.get("/layers/{kind}/{layer_ref}")
+async def public_layer(kind: str, layer_ref: str, request: Request,
+                       db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+    """ONE public layer, in the shape the layer page reads — so a public layer has a shareable page.
+
+    The index above lists layers; nothing let an anonymous visitor look at one. That is what the
+    plugin's "Open in GeoDeploy" needs: a public layer should open for anybody, and a private one
+    should ask them to sign in — the same rule the rest of the anonymous surface follows.
+
+    Deliberately the SAME readability rule as the display endpoints (`_publicly_readable`): a layer
+    that is shared, or drawn by a published portal. It adds `default_style`, `columns` and
+    `tile_status` to what the index carries, because the page draws the layer and lists its fields;
+    it adds nothing about who uploaded it or where it is stored.
+    """
+    await _require_enabled(db)
+    base = _base_url(request)
+    if kind == "raster":
+        from .data.raster import _describable
+        row = (await db.execute(select(RasterLayer).where(by_ref(RasterLayer, layer_ref)))
+               ).scalar_one_or_none()
+        if not await _describable(row, db):
+            raise HTTPException(404, "No public layer at this address.")
+        out = _raster_out(row, base)
+        out.update({"uid": row.uid, "status": row.status, "band_count": row.band_count,
+                    "default_style": _style(row), "file_size": row.file_size,
+                    "width": getattr(row, "width", None), "height": getattr(row, "height", None),
+                    "nodata_value": getattr(row, "nodata_value", None)})
+        return out
+    if kind == "vector":
+        from .data.vector import _publicly_readable
+        row = (await db.execute(select(VectorLayer).where(by_ref(VectorLayer, layer_ref)))
+               ).scalar_one_or_none()
+        if not row or row.status != "ready" or not await _publicly_readable(row, db):
+            raise HTTPException(404, "No public layer at this address.")
+        out = _vector_out(row, base)
+        columns = []
+        if row.columns:
+            try:
+                columns = json.loads(row.columns)
+            except (ValueError, TypeError):
+                columns = []
+        out.update({"uid": row.uid, "status": row.status, "columns": columns,
+                    "storage_backend": getattr(row, "storage_backend", "postgis"),
+                    "tile_status": getattr(row, "tile_status", None),
+                    "schema_name": row.schema_name, "table_name": row.table_name,
+                    "file_size": row.file_size,
+                    "default_style": json.loads(row.default_style) if row.default_style else None})
+        return out
+    raise HTTPException(404, "Unknown layer kind.")
 
 
 @router.get("/portals")

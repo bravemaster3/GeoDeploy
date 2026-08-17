@@ -63,6 +63,15 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 - Raster layer `bbox` from the API is in source CRS (not lon/lat) — using it directly for `fitToBbox` can throw "Invalid LngLat" (see tasks/raster notes). Prefer zooming via vector bounds or TiTiler TileJSON.
 
 ## Last updated
+2026-08-17b (**`LayerPage.vue` now serves a PUBLIC route as well.** New `/layers/:kind/:id` sits
+OUTSIDE the app shell with `meta: { public: true }` — a shareable address for one dataset that must
+not depend on a session — while `/data/:kind/:id` inside the app is unchanged. On the public route
+the page resolves the session anyway (the router skips its auth check there, so nobody has asked yet)
+so a signed-in visitor following a public link still gets the edit actions; otherwise it loads from
+`GET /api/public/layers/{kind}/{ref}`. A 404 there means "not shared publicly", which the page turns
+into an invitation to sign in rather than an empty screen. The back link becomes "Sign in" when there
+is no session, since My Data is not somewhere that visitor can go. New `auth.isAuthenticated` — the
+store exposed only `user`, and code was already reading a property that did not exist.)
 2026-08-17 (`LayerPage.vue` + `components/data/VectorRow.vue` share the tiling control's icon and
 wording: new `TilesIcon` in `views/icons.js` (the four-square grid My Data always used — the page had
 reached for `LayersIcon`, so one action wore two symbols) and new **`lib/tiling.js`** holding

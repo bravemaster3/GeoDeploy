@@ -10,6 +10,14 @@ const routes = [
   { path: '/reset-password', component: () => import('@/views/ResetPassword.vue'), meta: { public: true } },
   { path: '/portal-gate', component: () => import('@/views/PortalGate.vue'), meta: { public: true } },
   { path: '/sso-callback', component: () => import('@/views/SsoCallback.vue'), meta: { public: true } },
+  // A PUBLIC layer page. Outside the app shell on purpose: it is a shareable address for one
+  // dataset, reachable by anyone the layer is shared with, and it must not depend on a session.
+  // `/data/:kind/:id` inside the app is the same component and stays the signed-in route; this one
+  // loads the layer from `/api/public/layers/...`, which serves only what is actually public — so a
+  // private layer 404s here and the page sends the visitor to sign in, where they may well be able
+  // to see it.
+  { path: '/layers/:kind(vector|raster|external)/:id',
+    component: () => import('@/views/LayerPage.vue'), meta: { public: true } },
   {
     path: '/',
     component: () => import('@/views/Layout.vue'),

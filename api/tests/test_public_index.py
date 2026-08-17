@@ -63,6 +63,12 @@ async def seeded(db):
                        s3_key="rasters/1/x/dem.tif", status="ready", is_public=True,
                        visibility="public", band_count=1, crs="EPSG:3006"))
     await db.commit()
+    # The published-portal id sets are MODULE-LEVEL caches, invalidated in production by the
+    # publish/share/delete paths. Nothing invalidates them between tests, so a set computed from
+    # another module's fixtures leaks in and makes a private layer here look portal-published —
+    # which is exactly how `test_a_private_layer_is_404_not_a_hint` saw a 200. Reset to this DB.
+    from geodeploy.routers.data.vector import invalidate_public_layers
+    invalidate_public_layers()
     yield db
 
 
@@ -210,3 +216,77 @@ class TestAdminToggleEndpoint:
                                  headers=headers)).json()
         assert rows["total"] >= 1
         assert rows["items"][0]["detail"] == {"enabled": False}
+
+
+class TestOnePublicLayer:
+    """`GET /api/public/layers/{kind}/{ref}` — the page behind the plugin's "Open in GeoDeploy".
+
+    The index says WHAT is public; this says what one of them IS, so a public layer has a shareable
+    address. Which makes its exposure rule the thing to pin: it must serve exactly what the display
+    endpoints already serve to anyone (shared, or drawn by a published portal) and nothing more.
+    """
+
+    async def test_a_shared_vector_is_served_with_what_the_page_needs(self, client, seeded):
+        body = (await client.get("/api/public/layers/vector/aaaaaaaaaaaa")).json()
+        assert body["name"] == "Roads"
+        assert body["uid"] == "aaaaaaaaaaaa"
+        assert body["status"] == "ready"
+        assert body["geometry_type"] == "linestring"        # the map needs it to pick a symbol
+        assert body["feature_count"] == 12
+        assert body["bbox"] == [11.0, 55.0, 24.0, 69.0]
+        assert body["crs"] == "EPSG:4326"
+        assert "columns" in body and "default_style" in body
+        assert body["links"], "the share links are the point of the page"
+
+    async def test_a_shared_raster_is_served(self, client, seeded):
+        body = (await client.get("/api/public/layers/raster/eeeeeeeeeeee")).json()
+        assert body["name"] == "Elevation" and body["band_count"] == 1
+        assert body["uid"] == "eeeeeeeeeeee" and body["status"] == "ready"
+
+    async def test_a_private_layer_is_404_not_a_hint(self, client, seeded):
+        # 'Internal' is organization-visibility. A signed-out visitor must not learn it exists, and
+        # the page turns this into "sign in and look again" rather than "no such layer".
+        r = await client.get("/api/public/layers/vector/cccccccccccc")
+        assert r.status_code == 404
+        assert "Internal" not in r.text
+
+    async def test_a_layer_that_is_not_ready_is_404(self, client, seeded):
+        assert (await client.get("/api/public/layers/vector/dddddddddddd")).status_code == 404
+
+    async def test_a_layer_shown_by_a_published_portal_resolves(self, client, seeded, db):
+        # The rule that matters most, and the one the raster endpoints used to get wrong: being
+        # drawn by a public portal is enough. Portal 1 draws vector 1; make that layer non-shared
+        # and it must STILL resolve, because the portal is published and public.
+        from geodeploy.routers.data.vector import invalidate_public_layers
+        layer = await db.get(VectorLayer, 1)
+        layer.is_public, layer.visibility = False, "organization"
+        await db.commit()
+        invalidate_public_layers()
+        assert (await client.get("/api/public/layers/vector/aaaaaaaaaaaa")).status_code == 200
+        # …and a layer no portal draws is still refused.
+        assert (await client.get("/api/public/layers/vector/cccccccccccc")).status_code == 404
+
+    async def test_by_integer_id_too_for_older_links(self, client, seeded):
+        assert (await client.get("/api/public/layers/vector/1")).status_code == 200
+
+    async def test_an_unknown_kind_is_refused(self, client, seeded):
+        assert (await client.get("/api/public/layers/nonsense/1")).status_code == 404
+
+    async def test_it_needs_no_credentials(self, client, seeded):
+        r = await client.get("/api/public/layers/vector/aaaaaaaaaaaa")
+        assert r.status_code == 200
+        assert "authorization" not in {k.lower() for k in r.request.headers}
+
+    async def test_the_index_switch_governs_it_too(self, client, seeded, db):
+        # If an operator turns the anonymous index off, this must go with it — otherwise the switch
+        # only hides the list while every layer stays individually addressable.
+        row = await db.get(SetupConfig, 1)
+        if row is None:
+            db.add(SetupConfig(id=1, public_index_enabled=False))
+        else:
+            row.public_index_enabled = False
+        await db.commit()
+        # `index_enabled` reads the row it is handed, so there is no cache to clear — the next
+        # request sees the new value.
+        r = await client.get("/api/public/layers/vector/aaaaaaaaaaaa")
+        assert r.status_code == 404, r.status_code
