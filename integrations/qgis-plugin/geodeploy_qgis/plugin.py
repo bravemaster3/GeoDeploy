@@ -144,7 +144,10 @@ class GeoDeployDock(QDockWidget):
         self.styled.setChecked(True)
         outer.addWidget(self.styled)
 
-        self.attributes = QCheckBox("Prefer the real data over the styled view")
+        # The label names the raster consequence outright: "why can I not restyle this raster" was
+        # answered only in a tooltip and in the log, and the answer IS this checkbox.
+        self.attributes = QCheckBox("Prefer the real data over the styled view "
+                                    "(needed to restyle a raster)")
         self.attributes.setToolTip(
             "Vector — off: one pre-generalized archive, downloaded once, carrying only the "
             "attributes the tiles hold. On: OGC API - Features, re-queried for the extent on "

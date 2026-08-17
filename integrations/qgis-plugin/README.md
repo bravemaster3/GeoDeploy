@@ -65,6 +65,28 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
+2026-08-17k (**change detection was wrong in both directions, and the user diagnosed it exactly: "when
+I only change the symbol fill it detects the change; when I only change the stroke colour it doesn't."**
+*Missed edits:* `_style_from_symbol` read the fill colour, the size and the dash — and never the
+STROKE, so a stroke-only edit produced an identical dict. It now reads `outline_color` (via
+`_stroke_of`, with `Qt.NoPen` → `"none"`) and the marker SHAPE (`_shape_name`, using
+`encodeShape`; a shape GeoDeploy cannot express is omitted rather than forced to the nearest match).
+*Phantom edits:* the mirror image, reported as "I changed only one style, but it says 3 were
+restyled". QGIS has no concept of "unset", so `_symbol_of` fills every gap with the map's default and
+a read-back style is always COMPLETE, while a stored one holds only the keys somebody chose. New
+`symbology.comparable_style` fills both sides from one table before comparison — and folds the two
+geometry-dependent outline defaults (`#ffffff` on a marker, `#1d4ed8` on a fill) into one token, folds
+colour case, and DROPS the top-level `color` for a classified layer, whose classes carry the colours.
+`portals._style_differs` compares through it. The reader also stopped inventing that colour: it was
+taking it from whichever entry came first — the catch-all, or class 0.
+One care point: category `value`s are DATA and are no longer case-folded with the colours; folding
+them would both hide a real change and mislabel the map.
+*Rasters:* unchanged and unchangeable by design — server-rendered tiles are colour, not values. The
+`attributes` checkbox label now says "(needed to restyle a raster)", since that checkbox IS the
+answer, and the explanation is logged at Info: three identical warnings for three rasters read as
+three failures. `_log` gained a level for exactly that.
+Tests: ~30 change-detection cases — every edit that must register, and every cosmetic difference that
+must not.)
 2026-08-17j (**a restyled POINT layer pushed back as no change at all.** QGIS's own vector-tile
 symbology editor keeps one UNFILTERED style per geometry type — Polygons, Lines, Points — and
 `style_from_vector_tiles` de-duplicated on the FILTER alone, so only the first survived: a user who
