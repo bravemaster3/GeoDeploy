@@ -63,6 +63,12 @@ async def seeded(db):
                        s3_key="rasters/1/x/dem.tif", status="ready", is_public=True,
                        visibility="public", band_count=1, crs="EPSG:3006"))
     await db.commit()
+    # The published-portal id sets are MODULE-LEVEL caches, invalidated in production by the
+    # publish/share/delete paths. Nothing invalidates them between tests, so a set computed from
+    # another module's fixtures leaks in and makes a private layer here look portal-published —
+    # which is exactly how `test_a_private_layer_is_404_not_a_hint` saw a 200. Reset to this DB.
+    from geodeploy.routers.data.vector import invalidate_public_layers
+    invalidate_public_layers()
     yield db
 
 

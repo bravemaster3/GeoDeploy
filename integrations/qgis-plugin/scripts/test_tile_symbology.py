@@ -11,6 +11,7 @@ asserts on what would have been handed to QGIS: one style per class, the right c
 that selects exactly that class — including the two edge cases that silently lose features, an open
 outer bound and an inclusive top break.
 """
+import json
 import sys
 import types
 
@@ -46,13 +47,16 @@ class _SymbolLayer:
     """
 
     def __init__(self):
-        self.width = None
+        self._width = None
         self.stroke = None
         self.stroke_width = None
         self.pen = None
 
     def setWidth(self, w):
-        self.width = w
+        self._width = w
+
+    def width(self):                    # a METHOD in QGIS
+        return self._width
 
     def setStrokeWidth(self, w):
         # A marker's OUTLINE width — a different setter from setWidth, which is a line's own width.
@@ -67,6 +71,9 @@ class _SymbolLayer:
 
     def setPenStyle(self, s):
         self.pen = s
+
+    def penStyle(self):
+        return self.pen if self.pen is not None else 1   # 1 = Qt.SolidLine
 
     def setDataDefinedProperty(self, key, prop):
         self.data_defined = prop
@@ -100,19 +107,30 @@ _LAYER_FOR = {0: QgsSimpleMarkerSymbolLayer, 1: QgsSimpleLineSymbolLayer,
 class _Symbol:
     def __init__(self, geometry_type):
         self.geometry_type = geometry_type
-        self.color = None
-        self.size = None
-        self.opacity = None
+        self._color = _QColor("#000000")
+        self._size = None
+        self._opacity = 1.0
         self._layer = _LAYER_FOR[geometry_type]()
 
     def setColor(self, c):
-        self.color = c.name() if hasattr(c, "name") else c
+        self._color = c if hasattr(c, "name") else _QColor(c)
+
+    # A METHOD, as in QGIS — the read-back path calls `symbol.color().name()`, so a plain string
+    # attribute here would have made the round-trip test pass against an API that does not exist.
+    def color(self):
+        return self._color
 
     def setSize(self, s):
-        self.size = s
+        self._size = s
+
+    def size(self):                     # a METHOD in QGIS, like color()
+        return self._size
 
     def setOpacity(self, o):
-        self.opacity = o
+        self._opacity = o
+
+    def opacity(self):
+        return self._opacity
 
     def setDataDefinedSize(self, p):
         self.data_defined = p
@@ -135,12 +153,9 @@ class QgsVectorTileBasicRendererStyle(_Stub):
         self.name = name
         self.source_layer = source_layer
         self.geometry_type = geometry_type
-        self.symbol = None
+        self._symbol = None
         self.filter = ""
         self.enabled = False
-
-    def setSymbol(self, s):
-        self.symbol = s
 
     def setEnabled(self, v):
         self.enabled = v
@@ -148,13 +163,30 @@ class QgsVectorTileBasicRendererStyle(_Stub):
     def setFilterExpression(self, e):
         self.filter = e
 
+    def filterExpression(self):
+        return self.filter
+
+    def isEnabled(self):
+        return self.enabled
+
+    def symbol(self):
+        return self._symbol
+
+    def setSymbol(self, s):             # noqa: F811 - replaces the simple setter above
+        self._symbol = s
+
 
 class QgsVectorTileBasicRenderer(_Stub):
     def __init__(self):
-        self.styles = []
+        self._styles = []
 
     def setStyles(self, styles):
-        self.styles = styles
+        self._styles = styles
+
+    # QGIS exposes the list as a METHOD; the read-back path calls it, so the stub must too or the
+    # round-trip test would pass against an API that does not exist.
+    def styles(self):
+        return self._styles
 
 
 for name in ("QgsCategorizedSymbolRenderer", "QgsGraduatedSymbolRenderer", "QgsRendererCategory",
@@ -208,7 +240,7 @@ def styles_for(row, style, source_layer="geodeploy"):
     ok = apply_to_vector_tiles(layer, row, source_layer, style)
     assert ok, "apply_to_vector_tiles refused the style"
     assert layer.repainted, "the layer was never repainted, so nothing would redraw"
-    return layer.renderer.styles
+    return layer.renderer.styles()
 
 
 # ── graduated ────────────────────────────────────────────────────────────────────────────────
@@ -223,7 +255,7 @@ style = {
 }
 out = styles_for(row, style)
 assert len(out) == 3, out
-assert [s.symbol.color for s in out] == ["#fee5d9", "#fb6a4a", "#a50f15"]
+assert [s.symbol().color().name() for s in out] == ["#fee5d9", "#fb6a4a", "#a50f15"]
 assert all(s.geometry_type == QgsWkbTypes.PolygonGeometry for s in out)
 assert all(s.source_layer == "geodeploy" and s.enabled for s in out)
 # An open LOWER edge must not become `>= None` — that class has to keep drawing everything below it.
@@ -232,7 +264,7 @@ assert out[1].filter == '"pop" >= 100 AND "pop" < 1000', out[1].filter
 # The TOP break is inclusive, or the single largest value in the layer matches nothing and vanishes.
 assert out[2].filter == '"pop" >= 1000 AND "pop" <= 9000', out[2].filter
 # The outline travelled through the shared symbol builder, not a tile-only copy of it.
-assert out[0].symbol.symbolLayer(0).stroke.name() == "#333333"
+assert out[0].symbol().symbolLayer(0).stroke.name() == "#333333"
 print("graduated      -> 3 filtered styles, open low edge and inclusive top break")
 
 # ── categorized ──────────────────────────────────────────────────────────────────────────────
@@ -248,14 +280,14 @@ style = {
 }
 out = styles_for(row, style)
 # "Other" first so the named categories draw ON TOP of it, matching the map's fallback colour.
-assert out[0].name == "other" and out[0].filter == "" and out[0].symbol.color == "#cccccc"
+assert out[0].name == "other" and out[0].filter == "" and out[0].symbol().color().name() == "#cccccc"
 assert [s.filter for s in out[1:]] == ['"surface" = \'paved\'',
                                        '"surface" = \'unpaved\'',
                                        '"surface" = \'O\'\'Hare\''], [s.filter for s in out[1:]]
 assert all(s.geometry_type == QgsWkbTypes.LineGeometry for s in out)
 # A quote in a value must be ESCAPED, not concatenated into a broken expression.
 assert out[3].filter.count("''") == 1
-assert out[1].symbol.symbolLayer(0).width == 2 * 0.75, "line width lost the CSS-px→pt conversion"
+assert out[1].symbol().symbolLayer(0).width() == 2 * 0.75, "line width lost the CSS-px→pt conversion"
 print("categorized    -> other + 3 filtered styles, quote escaped, width converted")
 
 # Numeric category values must NOT be quoted, or the filter never matches an integer column.
@@ -272,35 +304,35 @@ print("numeric values -> unquoted literals")
 # is dark grey, which at that size covers the fill entirely and turns every point black whatever
 # colour was asked for. Both symptoms, one screenshot, one cause.
 out = styles_for({"geometry_type": "point"}, {"color": "#3b82f6"})
-assert out[0].symbol.color == "#3b82f6"
-assert out[0].symbol.size == 5 * 2 * 0.75, ("a point with no radius must take the PORTAL's default "
+assert out[0].symbol().color().name() == "#3b82f6"
+assert out[0].symbol().size() == 5 * 2 * 0.75, ("a point with no radius must take the PORTAL's default "
                                             "(circle-radius 5), not QGIS's number under our unit")
-stroke = out[0].symbol.symbolLayer(0)
+stroke = out[0].symbol().symbolLayer(0)
 assert stroke.stroke.name() == "#ffffff", "the map draws circle-stroke-color #ffffff"
 assert stroke.stroke_width == 1 * 0.75, "…at circle-stroke-width 1"
 print("styleless point -> portal defaults: radius 5, white 1px stroke")
 
 # An explicit outline still wins over the default.
 out = styles_for({"geometry_type": "point"}, {"color": "#3b82f6", "outline_color": "#000000"})
-assert out[0].symbol.symbolLayer(0).stroke.name() == "#000000"
+assert out[0].symbol().symbolLayer(0).stroke.name() == "#000000"
 # …and "none" still means none.
 out = styles_for({"geometry_type": "point"}, {"color": "#3b82f6", "outline_color": "none"})
-assert out[0].symbol.symbolLayer(0).pen == 0, "outline_color 'none' must set NoPen"
+assert out[0].symbol().symbolLayer(0).pen == 0, "outline_color 'none' must set NoPen"
 print("point outline   -> explicit colour wins, 'none' means none")
 
 
 # ── single symbol, and the degrade paths ─────────────────────────────────────────────────────
 out = styles_for({"geometry_type": "Point"}, {"color": "#3388ff", "radius": 6, "marker": "square"})
 assert len(out) == 1 and out[0].filter == ""
-assert out[0].symbol.color == "#3388ff"
-assert out[0].symbol.size == 6 * 2 * 0.75, "point radius lost the diameter/points conversion"
+assert out[0].symbol().color().name() == "#3388ff"
+assert out[0].symbol().size() == 6 * 2 * 0.75, "point radius lost the diameter/points conversion"
 print("single symbol  -> one unfiltered style, radius converted")
 
 # A graduated style with NO classes must still draw — in its base colour, not refuse.
 out = styles_for({"geometry_type": "Polygon"},
                  {"color_mode": "graduated", "color_field": "pop", "classes": [],
                   "color": "#654321"})
-assert len(out) == 1 and out[0].symbol.color == "#654321"
+assert len(out) == 1 and out[0].symbol().color().name() == "#654321"
 print("no classes     -> falls back to one symbol")
 
 # ── the geometry type is a BINDING, not a hint ────────────────────────────────────────────────
@@ -340,7 +372,113 @@ assert apply_to_vector_tiles(
             "default_style": {"style": {"color_mode": "categorized", "color_field": "k",
                                         "categories": [{"value": "a", "color": "#abcdef"}]}}},
     "geodeploy")
-assert any(s.filter == '"k" = \'a\'' for s in layer.renderer.styles)
+assert any(s.filter == '"k" = \'a\'' for s in layer.renderer.styles())
 print("row default    -> read from default_style when no style is passed")
 
 print("\nALL VECTOR-TILE SYMBOLOGY CASES PASS")
+
+
+# ── ROUND TRIP: apply a style to tiles, read it back, and get the same style ──────────────────
+# The bug this catches is the one that made "restyle a portal group and push it" do nothing at all:
+# `from_qgis` reads FEATURE renderers, and a portal's vector layers are TILE layers, so it returned
+# {} and the push sent no style. Reading the tile renderer back is the fix; a round trip is the only
+# test that proves the two directions actually agree, and it immediately caught two conversions that
+# did not invert (a radius of 5 came back 3.75, a line width of 2 came back 6).
+style_from_vector_tiles = ns["style_from_vector_tiles"]
+
+
+class Renderer:
+    def __init__(self, styles):
+        self._s = styles
+
+    def styles(self):
+        return self._s
+
+
+class TileLayerWith:
+    def __init__(self, styles):
+        self._r = Renderer(styles)
+
+    def renderer(self):
+        return self._r
+
+
+def round_trip(row, style):
+    applied = styles_for(row, style)
+    return style_from_vector_tiles(TileLayerWith(applied))
+
+
+out = round_trip({"geometry_type": "point"}, {"color": "#3388ff", "radius": 6, "marker": "square"})
+assert out["color_mode"] == "single" and out["color"] == "#3388ff", out
+assert out["radius"] == 6, ("a radius must survive the trip, not shrink by CSS_PX_TO_POINTS", out)
+print("round trip point     ->", json.dumps(out))
+
+out = round_trip({"geometry_type": "LineString"},
+                 {"color": "#d1ba23", "line_width": 2, "lineType": "dashed"})
+assert out["color"] == "#d1ba23" and out["line_width"] == 2, out
+assert out["lineType"] == "dashed", out
+print("round trip line      ->", json.dumps(out))
+
+out = round_trip({"geometry_type": "MultiPolygon"},
+                 {"color_mode": "graduated", "color_field": "pop",
+                  "classes": [{"min": None, "max": 100, "color": "#fee5d9"},
+                              {"min": 100, "max": 1000, "color": "#fb6a4a"},
+                              {"min": 1000, "max": 9000, "color": "#a50f15"}]})
+assert out["color_mode"] == "graduated" and out["color_field"] == "pop", out
+assert [c["color"] for c in out["classes"]] == ["#fee5d9", "#fb6a4a", "#a50f15"], out
+assert out["classes"][0]["min"] is None, "an open lower edge must come back open"
+assert out["classes"][2]["max"] == 9000, out
+print("round trip graduated ->", len(out["classes"]), "classes, edges intact")
+
+out = round_trip({"geometry_type": "LineString"},
+                 {"color_mode": "categorized", "color_field": "surface",
+                  "categories": [{"value": "paved", "color": "#1f78b4"},
+                                 {"value": "O'Hare", "color": "#33a02c"}],
+                  "other_color": "#cccccc"})
+assert out["color_mode"] == "categorized" and out["color_field"] == "surface", out
+assert [c["value"] for c in out["categories"]] == ["paved", "O'Hare"], out
+assert out["other_color"] == "#cccccc", out
+print("round trip category  -> values and the escaped quote survive")
+
+out = round_trip({"geometry_type": "Point"},
+                 {"color_mode": "categorized", "color_field": "zone",
+                  "categories": [{"value": 1, "color": "#f00000"},
+                                 {"value": 2, "color": "#00f000"}]})
+assert [c["value"] for c in out["categories"]] == [1, 2], ("numbers must not come back as text", out)
+print("round trip numeric   -> stays numeric")
+
+# A filter nobody here wrote must NOT be half-parsed into a wrong classification.
+hand = styles_for({"geometry_type": "Polygon"}, {"color": "#123456"})
+hand[0].setFilterExpression('"a" > 1 OR "b" < 2')
+out = style_from_vector_tiles(TileLayerWith(hand))
+assert out["color_mode"] == "single" and out["color"] == "#123456", out
+print("foreign filter       -> degrades to one symbol, not a wrong class")
+
+# Two DIFFERENT fields is not a classification this wrote either. Needs two real categories: with
+# only one, repointing it is indistinguishable from a legitimate classification on that other field,
+# which is why the first version of this case failed — the premise was wrong, not the reader.
+two = styles_for({"geometry_type": "Polygon"},
+                 {"color_mode": "categorized", "color_field": "k",
+                  "categories": [{"value": "a", "color": "#111111"},
+                                 {"value": "b", "color": "#222222"}]})
+assert len(two) == 3, ("other + two categories", [e.name for e in two])
+two[-1].setFilterExpression('"other" = \'z\'')
+out = style_from_vector_tiles(TileLayerWith(two))
+assert out["color_mode"] == "single", out
+print("two fields           -> degrades to one symbol")
+
+# A classification on ONE field with several categories is of course kept.
+ok = styles_for({"geometry_type": "Polygon"},
+                {"color_mode": "categorized", "color_field": "k",
+                 "categories": [{"value": "a", "color": "#111111"},
+                                {"value": "b", "color": "#222222"}]})
+out = style_from_vector_tiles(TileLayerWith(ok))
+assert out["color_mode"] == "categorized" and len(out["categories"]) == 2, out
+print("two categories       -> kept")
+
+# Nothing to read is {} — "use the default" — never a half-built style.
+assert style_from_vector_tiles(TileLayerWith([])) == {}
+assert style_from_vector_tiles(None) == {}
+print("nothing to read      -> {}")
+
+print("\nALL ROUND-TRIP CASES PASS")

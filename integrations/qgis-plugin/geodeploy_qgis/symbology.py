@@ -19,6 +19,8 @@ right colour, because a layer drawn plainly is recoverable and a layer that refu
 """
 from __future__ import annotations
 
+import re
+
 from .connection import GeoDeployError  # noqa: F401  (re-exported for callers)
 
 try:                                    # pragma: no cover - only present inside QGIS
@@ -529,6 +531,17 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
     if not QGIS or qgis_layer is None:
         return {}
     renderer = qgis_layer.renderer() if hasattr(qgis_layer, "renderer") else None
+    # A PICTURE, NOT A RASTER. A portal's raster arrives as server-rendered tiles, which QGIS models
+    # as one band of RGBA — "Singleband color data" in the Symbology tab, with no render type to
+    # choose and nothing to stretch. There is genuinely no styling to read back, so say so plainly:
+    # silence here reads as "the push lost my changes", and pushing the empty result would REPLACE
+    # the portal's colormap with nothing (see portals.plan_push, which now refuses to).
+    if type(renderer).__name__ == "QgsSingleBandColorDataRenderer":
+        _log("This raster is drawn from the portal's own tiles, so QGIS holds it as colour, not as "
+             "values — there is no band styling to send back. To restyle it, add the layer with "
+             "'Prefer the real data over the styled view' (that opens the GeoTIFF), restyle that, "
+             "and use 'Save styling to GeoDeploy'.")
+        return {}
     if renderer is None:
         return {}
     style = {}
@@ -758,6 +771,120 @@ def _ramp_name(renderer):
         return (None, False)
 
 
+#: Filters `apply_to_vector_tiles` writes, read back. `"field" = 'value'` is a category; a pair of
+#: comparisons on one field is a class. Anchored so a hand-written filter this cannot understand
+#: falls through to a single symbol rather than being half-parsed into a wrong class.
+_CAT_FILTER = re.compile(
+    r"""^"(?P<field>[^"]+)"\s*=\s*(?P<value>'(?:[^']|'')*'|-?[0-9.]+)$""")
+_RANGE_PART = re.compile(
+    r"""^"(?P<field>[^"]+)"\s*(?P<op><=|<|>=|>)\s*(?P<value>-?[0-9.eE+]+)$""")
+
+
+def _unquote(literal: str):
+    """A filter literal back to a Python value, undoing the doubled quotes an escape needed."""
+    if literal.startswith("'") and literal.endswith("'"):
+        return literal[1:-1].replace("''", "'")
+    try:
+        number = float(literal)
+    except ValueError:
+        return literal
+    return int(number) if number == int(number) else number
+
+
+def _parse_range(expression: str):
+    """`("field", lo, hi)` for a class filter, or None. Open edges come back as None."""
+    parts = [p.strip() for p in re.split(r"\s+AND\s+", expression.strip(), flags=re.IGNORECASE)]
+    field, lo, hi = None, None, None
+    for part in parts:
+        m = _RANGE_PART.match(part)
+        if not m:
+            return None
+        if field is not None and m.group("field") != field:
+            return None                 # two fields is not a class this plugin wrote
+        field = m.group("field")
+        value = float(m.group("value"))
+        if m.group("op") in (">=", ">"):
+            lo = value
+        else:
+            hi = value
+    if field is None or (lo is None and hi is None):
+        return None
+    return field, lo, hi
+
+
+def style_from_vector_tiles(tile_layer) -> dict:
+    """The GeoDeploy style for a vector-TILE layer — the inverse of `apply_to_vector_tiles`.
+
+    WHY THIS IS NEEDED AT ALL. A portal's vector layers open as tiles, because that is what draws
+    fast and matches the portal. QGIS renders those through `QgsVectorTileBasicRenderer`, which is
+    not a feature renderer — so `from_qgis`, which reads `QgsSingleSymbolRenderer` and friends, found
+    nothing and returned `{}`. Restyling a layer in a portal group and pushing it therefore sent no
+    style at all: the change looked applied in QGIS and never arrived.
+
+    Each renderer entry carries a symbol and a FILTER, which is exactly how the classes were written
+    out, so they read back the same way: `"k" = 'a'` is a category, `"pop" >= 100 AND "pop" < 1000`
+    is a class. Anything this cannot recognise degrades to a single symbol in the first colour rather
+    than being guessed at — an approximation of somebody's classification is worse than none.
+    """
+    if not QGIS or tile_layer is None:
+        return {}
+    renderer = tile_layer.renderer() if hasattr(tile_layer, "renderer") else None
+    entries = list(renderer.styles()) if hasattr(renderer, "styles") else []
+    if not entries:
+        return {}
+
+    # One class may have been written once per geometry type (see `apply_to_vector_tiles`), so the
+    # FILTER identifies a class, not the entry. Keep the first of each.
+    seen, unique = set(), []
+    for entry in entries:
+        if hasattr(entry, "isEnabled") and not entry.isEnabled():
+            continue
+        expression = (entry.filterExpression() or "").strip()
+        if expression in seen:
+            continue
+        seen.add(expression)
+        unique.append((expression, entry))
+    if not unique:
+        return {}
+
+    visual = _style_from_symbol(unique[0][1].symbol()) if unique[0][1].symbol() else {}
+
+    categories, classes, field, other = [], [], None, None
+    for expression, entry in unique:
+        symbol = entry.symbol()
+        colour = _hex(symbol.color()) if symbol is not None else None
+        if not expression:
+            other = colour              # the unfiltered entry is the catch-all
+            continue
+        cat = _CAT_FILTER.match(expression)
+        if cat:
+            if field not in (None, cat.group("field")):
+                return dict(visual, color_mode="single")
+            field = cat.group("field")
+            categories.append({"value": _unquote(cat.group("value")), "color": colour})
+            continue
+        rng = _parse_range(expression)
+        if rng:
+            if field not in (None, rng[0]):
+                return dict(visual, color_mode="single")
+            field = rng[0]
+            classes.append({"min": rng[1], "max": rng[2], "color": colour})
+            continue
+        # A filter nobody here wrote: do not pretend to understand it.
+        return dict(visual, color_mode="single")
+
+    if classes and not categories:
+        classes.sort(key=lambda c: (c["min"] is not None, c["min"] if c["min"] is not None else 0))
+        return dict(visual, color_mode="graduated", color_field=field,
+                    classes=classes, classes_n=len(classes))
+    if categories and not classes:
+        style = dict(visual, color_mode="categorized", color_field=field, categories=categories)
+        if other:
+            style["other_color"] = other
+        return style
+    return dict(visual, color_mode="single")
+
+
 def from_qgis(qgis_layer) -> dict:
     """The GeoDeploy style dict for a QGIS layer's current renderer.
 
@@ -766,6 +893,15 @@ def from_qgis(qgis_layer) -> dict:
     """
     if not QGIS or qgis_layer is None:
         return {}
+    # A VECTOR-TILE LAYER IS NOT A FEATURE LAYER, and this is where forgetting that cost a whole
+    # feature: everything below reads feature renderers, so a portal group's layers — which are all
+    # tiles — returned {} and their restyling never reached the instance.
+    try:
+        from qgis.core import QgsVectorTileLayer
+        if isinstance(qgis_layer, QgsVectorTileLayer):
+            return style_from_vector_tiles(qgis_layer)
+    except ImportError:                 # pragma: no cover - older QGIS has no vector tiles
+        pass
     renderer = qgis_layer.renderer() if hasattr(qgis_layer, "renderer") else None
     if renderer is None:
         return {}
@@ -805,16 +941,34 @@ def from_qgis(qgis_layer) -> dict:
             symbols = renderer.symbols(None)
             symbol = symbols[0] if symbols else None
         if symbol is not None:
-            style = {"color_mode": "single", "color": _hex(symbol.color())}
-            layer0 = symbol.symbolLayer(0) if symbol.symbolLayerCount() else None
-            if isinstance(layer0, QgsSimpleMarkerSymbolLayer):
-                style["radius"] = round(float(symbol.size()) / 2.0, 2)
-            elif isinstance(layer0, QgsSimpleLineSymbolLayer):
-                style["line_width"] = round(float(layer0.width()) * 4.0, 2)
-                pen = layer0.penStyle()
-                style["lineType"] = ("dashed" if pen == Qt.DashLine
-                                     else "dotted" if pen == Qt.DotLine else "solid")
-            return style
+            return dict({"color_mode": "single"}, **_style_from_symbol(symbol))
     except Exception:                   # noqa: BLE001 - never block an upload over styling
         return {}
     return {}
+
+
+def _style_from_symbol(symbol) -> dict:
+    """Colour, size and dash from ONE QGIS symbol — the inverse of `_symbol_of`.
+
+    THE CONVERSIONS HAVE TO INVERT, and two of them did not. `_symbol_of` writes a marker's size as
+    `radius * 2 * CSS_PX_TO_POINTS` and a line's width as `line_width * CSS_PX_TO_POINTS`; this read
+    them back as `size / 2` and `width * 4`, left over from when sizes were in millimetres. A radius
+    of 5 round-tripped to 3.75 and a line width of 2 to 6 — so simply opening a layer and pushing it
+    back changed how it draws. Dividing by the same constant the writer multiplies by is the whole
+    fix, and `test_tile_symbology` now round-trips to keep it that way.
+    """
+    style = {"color": _hex(symbol.color())}
+    layer0 = symbol.symbolLayer(0) if symbol.symbolLayerCount() else None
+    if isinstance(layer0, QgsSimpleMarkerSymbolLayer):
+        style["radius"] = round(float(symbol.size()) / 2.0 / CSS_PX_TO_POINTS, 2)
+    elif isinstance(layer0, QgsSimpleLineSymbolLayer):
+        style["line_width"] = round(float(layer0.width()) / CSS_PX_TO_POINTS, 2)
+        pen = layer0.penStyle()
+        style["lineType"] = ("dashed" if pen == Qt.DashLine
+                             else "dotted" if pen == Qt.DotLine else "solid")
+    elif isinstance(layer0, QgsSimpleFillSymbolLayer):
+        try:
+            style["fill_opacity"] = round(float(symbol.opacity()), 3)
+        except Exception:               # noqa: BLE001 - not every build exposes it
+            pass
+    return style

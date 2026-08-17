@@ -65,6 +65,25 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
+2026-08-17h (**pushing a restyle from a portal group sent nothing, and for rasters it DELETED the
+portal's styling.** Two halves of one mistake: a portal's layers open as the surfaces that draw like
+the portal, and neither is what QGIS can read a style back out of.
+*Vectors:* `from_qgis` reads FEATURE renderers, and a portal group's vectors are `QgsVectorTileLayer`
+— so it returned `{}` and the restyle never left QGIS. New `style_from_vector_tiles` is the inverse of
+`apply_to_vector_tiles`: each renderer entry carries a symbol and the FILTER the class was written
+with, so `"k" = 'a'` reads back as a category and `"pop" >= 100 AND "pop" < 1000` as a class
+(`_CAT_FILTER`/`_parse_range`). A filter this did not write, or two fields in one classification,
+degrades to a single symbol rather than being half-parsed into somebody else's classification.
+*Rasters:* portal tiles are a picture — QGIS models them as `QgsSingleBandColorDataRenderer`,
+"Singleband color data", with no bands to stretch — so there is genuinely nothing to read.
+`plan_push` now KEEPS the portal's existing style whenever the QGIS side reads as empty, for vectors
+too: pushing `{}` replaced a portal's colormap with nothing, so an attempted restyle silently
+destroyed the styling it meant to change. The diff dialog reports these as "Style kept as the portal
+has it" with the way to actually restyle a raster (open the GeoTIFF, restyle, Save styling).
+Also: the size conversions did not invert — `_symbol_of` writes `radius * 2 * 0.75` while the reader
+used `size / 2` and `width * 4` (a leftover from millimetres), so a radius of 5 round-tripped to 3.75
+and a line width of 2 to 6. One shared `_style_from_symbol` now divides by the same constant the
+writer multiplies by, and `test_tile_symbology` round-trips every mode to keep it honest.)
 2026-08-17g (new **"Open in GeoDeploy"** button — `open_in_browser` opens `/layers/<kind>/<uid>`, the
 instance's own page for one layer, in the desktop browser; for a portal it opens the portal. The dock
 shows a layer's geometry and symbology, and the page shows what it cannot: metadata, field list,

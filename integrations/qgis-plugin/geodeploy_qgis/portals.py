@@ -324,13 +324,16 @@ def plan_push(group, style_for, current_configs) -> dict:
     * `added`     — in the group, already on the instance, not yet on the portal;
     * `uploads`   — in the group but NOT on the instance: local files, with nothing to reference
                     until they are uploaded. `(name, qgis_layer)` so the caller can send them;
-    * `removed`   — on the portal, no longer in the group.
+    * `removed`   — on the portal, no longer in the group;
+    * `kept`      — on the portal, and its QGIS styling could not be read, so the portal's own is
+                    left exactly as it was. Named so the dialog can say that out loud instead of
+                    reporting the layer as "unchanged", which would be true only by accident.
     """
     before = {}
     for cfg in (current_configs or []):
         before[(int(cfg.get("layer_id")), str(cfg.get("layer_type")))] = cfg
 
-    configs, uploads, unchanged, restyled, added = [], [], [], [], []
+    configs, uploads, unchanged, restyled, added, kept = [], [], [], [], [], []
     seen = set()
 
     def walk(node):
@@ -356,13 +359,29 @@ def plan_push(group, style_for, current_configs) -> dict:
                 continue
             layer_id, layer_type = identity
             seen.add((layer_id, layer_type))
+            was = before.get((layer_id, layer_type))
             style = style_for(qgis_layer, layer_type) or {}
+            if not style and (was or {}).get("style"):
+                # AN UNREADABLE STYLE MUST NOT ERASE THE PORTAL'S.
+                #
+                # A portal's raster is opened as server-rendered tiles — a picture — because that is
+                # the only way it looks like the portal. QGIS calls that "Singleband color data" and
+                # offers nothing to change: there are no bands to stretch, only RGBA. So
+                # `raster_from_qgis` has nothing to translate and returns {}, and pushing that
+                # REPLACED the portal's colormap and stretch with nothing. The raster then rendered
+                # unstretched, i.e. usually blank — a restyle attempt that silently destroyed the
+                # styling it was meant to change.
+                #
+                # Keeping what the portal already had is the only safe reading of "I could not tell".
+                # It applies to vectors too: a renderer this plugin cannot translate is not an
+                # instruction to clear the portal's styling.
+                style = was["style"]
+                kept.append(qgis_layer.name())
             entry = {"layer_id": layer_id, "layer_type": layer_type,
                      "visible": bool(child.isVisible()), "opacity": _opacity_of(qgis_layer),
                      "style": style, "popup_fields": []}
             configs.append(entry)
             tree.append({"layer_id": layer_id, "layer_type": layer_type})
-            was = before.get((layer_id, layer_type))
             if was is None:
                 added.append(qgis_layer.name())
             elif _style_differs(was, entry):
@@ -387,7 +406,7 @@ def plan_push(group, style_for, current_configs) -> dict:
 
     return {"configs": configs, "uploads": uploads, "unchanged": unchanged,
             "restyled": restyled, "added": added, "removed": removed, "rename": rename,
-            "tree": tree}
+            "tree": tree, "kept": kept}
 
 
 def _style_differs(before: dict, after: dict) -> bool:
