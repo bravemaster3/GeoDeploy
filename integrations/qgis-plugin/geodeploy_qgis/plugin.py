@@ -67,6 +67,32 @@ def _xyz_uri(tile_url: str, zmin=None, zmax=None) -> str | None:
         return None
 
 
+def _set_opacity(layer, opacity) -> None:
+    """Draw `layer` at the portal's opacity. Silent when there is nothing to apply.
+
+    Two APIs, because QGIS has two: `QgsMapLayer.setOpacity` covers vector, vector-tile and (from
+    3.18) raster layers, while an older QGIS puts a raster's opacity on its renderer. Trying both
+    is cheaper than version-sniffing and cannot be wrong.
+    """
+    try:
+        value = float(opacity)
+    except (TypeError, ValueError):
+        return
+    if not 0.0 <= value <= 1.0 or value == 1.0:
+        return                          # out of range, or nothing to change
+    try:
+        setter = getattr(layer, "setOpacity", None)
+        if callable(setter):
+            setter(value)
+        else:
+            renderer = getattr(layer, "renderer", lambda: None)()
+            if renderer is not None and hasattr(renderer, "setOpacity"):
+                renderer.setOpacity(value)
+        layer.triggerRepaint()
+    except Exception as exc:            # noqa: BLE001 - never fail an add over transparency
+        symbology._log("Could not set the opacity: {0}".format(exc))
+
+
 class GeoDeployDock(QDockWidget):
     # Progress arrives from the QgsTask's worker thread, and Qt widgets may only be touched on the
     # GUI thread. A signal is the crossing: emitting is safe from anywhere, and the connected slot
@@ -434,6 +460,10 @@ class GeoDeployDock(QDockWidget):
             return
 
         QgsProject.instance().addMapLayer(layer)
+        # The stored style is `{opacity, style: {...}, popup_fields}` — the plugin only ever read
+        # the inner `style`, so a layer saved at 50% arrived opaque.
+        if isinstance(row.get("default_style"), dict):
+            _set_opacity(layer, row["default_style"].get("opacity"))
         applied = ""
         if self.styled.isChecked() and source["kind"] != "cog":
             style = (row.get("default_style") or {}).get("style") if row.get("default_style") else None
@@ -569,13 +599,18 @@ class GeoDeployDock(QDockWidget):
             ref = cfg.get("layer_id")
             base = self.instance.url.rstrip("/") if self.instance else ""
             if kind == "raster-xyz":
-                # The instance publishes a TileJSON for the same raster, and it carries the bounds
-                # a bare template has none of — so "zoom to layer" works on a portal group too.
-                layer = (self._raster_from_tilejson(
-                    f"{base}/api/data/raster/{ref}/tilejson", name) if base and ref else None)
-                if layer is None:
-                    uri = _xyz_uri(url)
-                    layer = QgsRasterLayer(uri, name, "wms") if uri else None
+                # THE PORTAL'S OWN TEMPLATE, deliberately — not the layer's TileJSON. A raster is
+                # coloured by the server, and this URL is where that colouring lives: the same
+                # raster appears as `&colormap_name=terrain` in one portal and
+                # `&algorithm=hillshade&expression=b1*5.0` in another. Swapping in the layer's
+                # TileJSON would draw every portal in the layer's DEFAULT style, which is the one
+                # style none of them chose.
+                uri = _xyz_uri(url)
+                layer = QgsRasterLayer(uri, name, "wms") if uri else None
+                # The bounds still come from the instance, since a bare template has none — that
+                # part of the TileJSON is about WHERE the raster is, not how it is drawn.
+                if layer is not None and layer.isValid():
+                    self._set_tile_extent(layer, self._raster_bounds(ref))
             elif kind == "pmtiles":
                 # NOT the archive. A portal names it because MapLibre reads it a tile at a time;
                 # GDAL cannot, and opening one here is what made a portal group hang. The same
@@ -608,6 +643,26 @@ class GeoDeployDock(QDockWidget):
             portal_sync.tag_layer(layer, self.instance.url, cfg.get("layer_id"),
                                   cfg.get("layer_type") or "vector")
         return layer
+
+    def _raster_bounds(self, ref):
+        """WGS84 bounds for a raster, from the listing if we have it or the instance if we do not.
+
+        Only the bounds — the STYLING for a portal layer comes from the portal's own tile URL, and
+        reading both from the same document is how a portal ended up drawn in the layer's default
+        colours.
+        """
+        row = self._row_for(ref, "raster")
+        if row and row.get("bbox"):
+            return row["bbox"]
+        if not (self.instance and ref is not None):
+            return None
+        try:
+            doc = self.instance.fetch_json(
+                "{0}/api/data/raster/{1}/tilejson".format(self.instance.url.rstrip("/"), ref))
+            return (doc or {}).get("bounds")
+        except GeoDeployError as exc:
+            symbology._log("Could not read the raster's bounds: {0}".format(exc))
+            return None
 
     def _raster_from_wmts(self, url, name):
         """A raster layer from the instance's WMTS capabilities.
@@ -824,13 +879,23 @@ class GeoDeployDock(QDockWidget):
                     continue
                 label = str(cfg.get("name") or cfg.get("layer_id"))
                 layer_row = self._row_for(cfg.get("layer_id"), cfg.get("layer_type"))
-                if layer_row is not None:
+                is_raster = cfg.get("layer_type") == "raster"
+                layer = None
+                if is_raster and (cfg.get("source") or {}).get("url"):
+                    # THE PORTAL'S OWN TILES. A raster is styled by the server, and the portal bakes
+                    # its colormap, stretch, band choice and hillshade into the tile URL — so the
+                    # SAME raster reads `&colormap_name=terrain` in one portal, a bare `&rescale=`
+                    # in another and `&algorithm=hillshade&expression=b1*5.0` in a third. Building
+                    # it from the layer's own listing entry instead gave everyone the layer's
+                    # DEFAULT style, which is not what any of those portals shows.
+                    layer = self._layer_from_portal_source(cfg, label)
+                if layer is None and layer_row is not None:
                     source = sources.describe(layer_row,
                                               prefer_attributes=self.attributes.isChecked())
                     layer = (self._open_best(layer_row, source,
                                              layer_row.get("name") or "layer")[0]
                              if source else None)
-                else:
+                if layer is None and layer_row is None:
                     # Not in the listing: a layer that is not itself published, on a portal that
                     # is. The portal's own style says where it draws from, and that source is
                     # readable by anyone who can read the portal — which is the whole point.
@@ -841,6 +906,11 @@ class GeoDeployDock(QDockWidget):
                 project.addMapLayer(layer, False)   # False: placed into the group, not the root
                 tree_node = parent.addLayer(layer)
                 tree_node.setItemVisibilityChecked(bool(cfg.get("visible", True)))
+                # OPACITY IS PART OF THE PICTURE. The portal stores it per layer and the push path
+                # already sends it back, but nothing applied it on the way IN — so a half-transparent
+                # overlay opened solid, hid what it was drawn over, and pushing the group back then
+                # reported it as a change the user never made.
+                _set_opacity(layer, cfg.get("opacity"))
                 style = (cfg.get("style") or {}) if self.styled.isChecked() else {}
                 if style and cfg.get("layer_type") != "raster":
                     # THE PORTAL'S style wins over the layer's default here — that is what opening

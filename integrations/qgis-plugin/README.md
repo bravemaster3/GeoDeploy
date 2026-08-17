@@ -65,6 +65,21 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
+2026-08-17c (**a portal's raster was drawn in the layer's DEFAULT style.** A raster is coloured by
+the server, and a portal bakes its colormap/stretch/band/hillshade into its OWN tile URL — proven on
+the live instance, where one `Degfert_DEM_restr.tif` appears as `&colormap_name=terrain` in one
+portal and a bare `&rescale=264.9,298.33` in another, and `Degfert_DEM.tif` as
+`&algorithm=hillshade&expression=b1*5.0` in a third. `open_portal_as_group` now prefers
+`_layer_from_portal_source` for rasters, and that path keeps the PORTAL's template (an earlier edit
+had it reach for the layer's TileJSON, which would have reintroduced the default style); bounds come
+separately from `_raster_bounds`. **Opacity travels IN now too** — `_set_opacity`, applied from the
+portal's `layer_configs[].opacity` and from a layer's stored `default_style.opacity`. The push side
+already sent it, so a portal opened solid and then reported a change nobody made.
+**Push semantics, confirmed unchanged and correct:** `portals.push` writes `layer_configs` only, so
+restyling inside a group changes that PORTAL; "Save styling to GeoDeploy" writes the layer's DEFAULT
+style. **Units:** symbols are measured in POINTS — device-independent and constant across zoom, the
+same behaviour as the browser's CSS pixels. Nothing uses map units, which is the only thing that
+would resize on zoom; the "too small when zoomed in" report was the 0.1.2 size bug, not the unit.)
 2026-08-17b (**points were drawn at a third of their size, under a dark outline.** `_use_points`
 switches a symbol's unit to points but left QGIS's default marker NUMBER (2.0, meant as mm) standing,
 so a style that names a colour and no radius — which most do; `/legend` returns `{"color": "#3b82f6"}`

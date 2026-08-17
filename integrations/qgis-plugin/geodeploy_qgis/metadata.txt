@@ -6,7 +6,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.1.2
+version=0.1.3
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -21,7 +21,11 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.1.2 - Points are drawn at the size and colour the map draws them. A layer whose style
+changelog=0.1.3 - A raster opened as part of a portal is drawn the way THAT portal draws it, not
+    in the layer's default style - the portal bakes its colormap, stretch and hillshade into its own
+    tile URL, and the same raster can look different in two portals. Layer opacity now travels in as
+    well as out, so a half-transparent overlay opens half-transparent.
+    0.1.2 - Points are drawn at the size and colour the map draws them. A layer whose style
     names a colour but no radius kept QGIS's default marker number under our points unit - a third
     of the intended size - under QGIS's dark default outline, so styled point layers arrived as
     tiny black dots. They now take the portal's own defaults: radius 5, white 1px stroke.
