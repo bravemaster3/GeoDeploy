@@ -392,9 +392,13 @@ class GeoDeployDock(QDockWidget):
                     portal.get("title") or portal.get("name") or slug,
                     portal.get("experience") or portal.get("archetype") or "portal",
                     "published" if published else "draft"])
-                # Marked so a double-click opens it instead of trying to add it as a layer.
-                item.setData(0, Qt.UserRole, {"_portal": True, "slug": slug,
-                                              "_base": self.instance.url if self.instance else ""})
+                # THE WHOLE ROW, not a three-key summary of it. Keeping only the slug is what put
+                # random-looking ids in the QGIS layer list: the tree showed `title` (above) while
+                # everything downstream — the group name, the status messages — read `title` off
+                # this dict, found nothing, and fell back to the slug. Anonymous rows carry a title
+                # like authenticated ones do, so there was never a reason for the two to differ.
+                item.setData(0, Qt.UserRole, dict(portal, _portal=True, slug=slug,
+                                                  _base=self.instance.url if self.instance else ""))
 
         if not self._rows and not self._portals:
             self._say("Nothing to list. Public data needs no account; a token shows the rest.")
@@ -424,7 +428,7 @@ class GeoDeployDock(QDockWidget):
             return
 
         name = row.get("name") or "GeoDeploy layer"
-        layer = self._build_layer(row, source, name)
+        layer, source = self._open_best(row, source, name)
         if layer is None:
             self._say(f"QGIS could not open the {source['kind']} source for {name}.", Qgis.Critical)
             return
@@ -450,8 +454,11 @@ class GeoDeployDock(QDockWidget):
                     symbology._log(f"Could not read the legend for {name}: {exc}")
                     style = None
             if style:
+                # `symbology.apply` picks the renderer from the layer's TYPE — feature layers and
+                # vector-tile layers need different ones, and choosing here by source kind is how
+                # the two drifted apart before.
                 applied = (", styled as the portal draws it"
-                           if symbology.apply_to_qgis(layer, style)
+                           if symbology.apply(layer, style, row)
                            else " — but its saved style could not be applied; the reason is in "
                                 "View > Panels > Log Messages, under GeoDeploy")
             else:
@@ -461,6 +468,29 @@ class GeoDeployDock(QDockWidget):
 
     # -- upload ------------------------------------------------------------------------------------
 
+    def _open_best(self, row, source, name):
+        """`(layer, source)` — the best source that actually OPENS, falling back down the list.
+
+        The fast path is now the first thing tried for every layer, and the fast path is newer than
+        some of the instances this plugin talks to. Without this, asking an older instance for a
+        per-tile URL it does not publish would turn "slow" into "will not open at all" — a speed
+        fix that breaks compatibility is not a fix. Each attempt is logged, so a layer that quietly
+        took the slow road says why.
+        """
+        tried = []
+        while source is not None and len(tried) < 4:
+            layer = self._build_layer(row, source, name)
+            if layer is not None:
+                return layer, source
+            tried.append(source["kind"])
+            nxt = sources.fallback(row, source)
+            if nxt is None or nxt["kind"] in tried:
+                return None, source
+            symbology._log("{0}: the {1} source did not open; trying {2}.".format(
+                name, source["kind"], nxt["kind"]))
+            source = nxt
+        return None, source
+
     def _build_layer(self, row, source, name):
         """One layer from a described source, tagged with its GeoDeploy identity.
 
@@ -468,14 +498,22 @@ class GeoDeployDock(QDockWidget):
         layer each entry is, and matching by name would break the first time someone renames one.
         """
         if source["kind"] == "vector-tiles":
-            uri = _xyz_uri(source["uri"])
-            layer = QgsVectorTileLayer(uri, name) if uri else None
-            if layer is None or not layer.isValid():
+            layer, doc = self._vector_tiles(source, name)
+            if layer is None:
                 return None
-            # A vector tile layer is not a feature layer: QGIS renders it through a different
-            # renderer entirely, so `apply_to_qgis` cannot style it. Give it the layer's own colour
-            # at least, rather than QGIS's random one, and say what was not applied.
-            symbology.apply_to_vector_tiles(layer, row, source.get("source_layer"))
+            # The tile renderer needs the name of the layer INSIDE the tiles for every style it
+            # builds. Recorded on the layer so a later restyle — the portal-group path, "apply the
+            # portal's style" — does not have to rediscover it.
+            layer.setCustomProperty(symbology.P_SOURCE_LAYER,
+                                    doc.get("_source_layer") or source.get("source_layer") or "")
+            # Classified symbology DOES survive here: a tile renderer takes one style per class
+            # with a filter, which is the same shape the map's step/match expressions have.
+            symbology.apply(layer, (row.get("default_style") or {}).get("style")
+                            if isinstance(row.get("default_style"), dict) else None, row)
+            # A tile layer is a global pyramid, so QGIS reports the whole world and "zoom to layer"
+            # flies somewhere the data is not. Prefer the TileJSON's bounds — they come from the
+            # tiles themselves — and fall back to the row's.
+            self._set_tile_extent(layer, doc.get("bounds") or row.get("bbox"))
             if self.instance:
                 portal_sync.tag_layer(layer, self.instance.url, row.get("id"), "vector")
             return layer
@@ -507,7 +545,7 @@ class GeoDeployDock(QDockWidget):
             # the whole world and "Zoom to layer" flies to everything — which is what made zooming
             # to a raster land on some other layer entirely. The instance knows the real bounds, so
             # tell QGIS them.
-            self._set_raster_extent(layer, row.get("bbox"))
+            self._set_tile_extent(layer, row.get("bbox"))
         if self.instance:
             is_raster = (row.get("layer_type") == "raster"
                          or row.get("storage_backend") == "raster")
@@ -528,14 +566,37 @@ class GeoDeployDock(QDockWidget):
         if url.startswith("/") and self.instance:
             url = self.instance.url.rstrip("/") + url
         try:
+            ref = cfg.get("layer_id")
+            base = self.instance.url.rstrip("/") if self.instance else ""
             if kind == "raster-xyz":
-                uri = _xyz_uri(url)
-                layer = QgsRasterLayer(uri, name, "wms") if uri else None
+                # The instance publishes a TileJSON for the same raster, and it carries the bounds
+                # a bare template has none of — so "zoom to layer" works on a portal group too.
+                layer = (self._raster_from_tilejson(
+                    f"{base}/api/data/raster/{ref}/tilejson", name) if base and ref else None)
+                if layer is None:
+                    uri = _xyz_uri(url)
+                    layer = QgsRasterLayer(uri, name, "wms") if uri else None
             elif kind == "pmtiles":
-                layer = QgsVectorLayer("/vsicurl/" + url, name, "ogr")
+                # NOT the archive. A portal names it because MapLibre reads it a tile at a time;
+                # GDAL cannot, and opening one here is what made a portal group hang. The same
+                # tiles are served per-{z}/{x}/{y} through the layer's TileJSON.
+                layer, doc = self._vector_tiles(
+                    {"tilejson_url": f"{base}/api/data/vector/{ref}/tilejson"}, name) \
+                    if base and ref else (None, {})
+                if layer is not None:
+                    layer.setCustomProperty(symbology.P_SOURCE_LAYER,
+                                            doc.get("_source_layer") or "")
+                    self._set_tile_extent(layer, doc.get("bounds"))
+                else:
+                    # An instance too old to publish that TileJSON: the archive still draws, slowly.
+                    layer = QgsVectorLayer("/vsicurl/" + url, name, "ogr")
             elif kind == "vector-tiles":
-                uri = _xyz_uri(url)
-                layer = QgsVectorTileLayer(uri, name) if uri else None
+                layer, doc = self._vector_tiles({"uri": url, "tilejson_url": (
+                    f"{base}/api/data/vector/{ref}/tilejson" if base and ref else None)}, name)
+                if layer is not None:
+                    layer.setCustomProperty(symbology.P_SOURCE_LAYER,
+                                            doc.get("_source_layer") or "")
+                    self._set_tile_extent(layer, doc.get("bounds"))
             else:
                 return None
         except Exception as exc:        # noqa: BLE001 - one layer must not stop the group
@@ -592,6 +653,42 @@ class GeoDeployDock(QDockWidget):
             symbology._log("Could not read the raster's WMTS: {0}".format(exc))
             return None
 
+    def _vector_tiles(self, source, name):
+        """`(layer, tilejson)` for a vector-tile source, described by the server rather than guessed.
+
+        THE SLOWNESS WAS HERE, and it was not the tiles' fault. A vector-tile layer built from a
+        bare template gets `zmin=0&zmax=22`, which tells QGIS that tiles exist at every zoom — so
+        past the depth where the server actually has data it keeps requesting fresh tiles, gets
+        empty ones back, retries each three times, draws nothing and calls that a rendered frame.
+        That is "the layer vanishes when I zoom in", "endless loading" and the retry storms in the
+        log, all from one wrong number.
+
+        The TileJSON carries the real range. Told it, QGIS OVER-ZOOMS the deepest real tile instead
+        of asking for one that was never made — same picture, no request. It also carries the
+        bounds, so "zoom to layer" lands on the layer, and the name of the layer inside the tiles,
+        which the renderer needs before it can style anything.
+        """
+        doc = {}
+        url = source.get("tilejson_url")
+        if url:
+            try:
+                doc = self.instance.fetch_json(url) if self.instance else {}
+            except GeoDeployError as exc:
+                symbology._log("Could not read the TileJSON for {0}: {1}".format(name, exc))
+                doc = {}
+        tiles = (doc or {}).get("tiles") or []
+        template = tiles[0] if tiles else source.get("uri")
+        if not template:
+            return None, {}
+        uri = _xyz_uri(template, (doc or {}).get("minzoom"), (doc or {}).get("maxzoom"))
+        layer = QgsVectorTileLayer(uri, name) if uri else None
+        if layer is None or not layer.isValid():
+            return None, {}
+        vls = (doc or {}).get("vector_layers") or []
+        if vls and vls[0].get("id"):
+            doc = dict(doc, _source_layer=vls[0]["id"])
+        return layer, (doc or {})
+
     def _raster_from_tilejson(self, url, name):
         """A styled raster layer from the instance's TileJSON: template, zooms and bounds.
 
@@ -613,12 +710,16 @@ class GeoDeployDock(QDockWidget):
         layer = QgsRasterLayer(uri, name, "wms")
         if not layer.isValid():
             return None
-        self._set_raster_extent(layer, doc.get("bounds"))
+        self._set_tile_extent(layer, doc.get("bounds"))
         return layer
 
     @staticmethod
-    def _set_raster_extent(layer, bbox):
-        """Give a tile layer the layer's own bounds, in the map's CRS."""
+    def _set_tile_extent(layer, bbox):
+        """Give a tile layer the layer's own bounds, in the map's CRS.
+
+        Raster OR vector: both are global pyramids that report the whole world until told
+        otherwise, and both send "zoom to layer" to the wrong place without this.
+        """
         if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
             return
         try:
@@ -726,8 +827,8 @@ class GeoDeployDock(QDockWidget):
                 if layer_row is not None:
                     source = sources.describe(layer_row,
                                               prefer_attributes=self.attributes.isChecked())
-                    layer = (self._build_layer(layer_row, source,
-                                               layer_row.get("name") or "layer")
+                    layer = (self._open_best(layer_row, source,
+                                             layer_row.get("name") or "layer")[0]
                              if source else None)
                 else:
                     # Not in the listing: a layer that is not itself published, on a portal that
@@ -742,7 +843,10 @@ class GeoDeployDock(QDockWidget):
                 tree_node.setItemVisibilityChecked(bool(cfg.get("visible", True)))
                 style = (cfg.get("style") or {}) if self.styled.isChecked() else {}
                 if style and cfg.get("layer_type") != "raster":
-                    symbology.apply_to_qgis(layer, style)
+                    # THE PORTAL'S style wins over the layer's default here — that is what opening
+                    # a portal means. Through the dispatcher, so a tile layer gets the tile
+                    # renderer instead of silently keeping the colour it was born with.
+                    symbology.apply(layer, style, layer_row or {})
                 added += 1
 
         # A portal with no folders is a flat list — the configs themselves, in order.

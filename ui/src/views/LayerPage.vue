@@ -74,11 +74,12 @@
         </svg>
       </button>
 
-      <button v-if="auth.canEdit && canTile && ready" @click="onTile" :disabled="tiling"
-        class="gd-act disabled:opacity-40"
-        :title="layer.tile_status === 'ready' ? 'Re-tile for fast display (regenerate PMTiles)'
-                                              : 'Tile for fast seamless display (PMTiles)'">
-        <LayersIcon class="w-4 h-4" :class="tiling ? 'animate-pulse' : ''" />
+      <!-- The SAME grid icon and the same wording My Data uses for this action, from one shared
+           definition — it is one action and it should not look or read like two. -->
+      <button v-if="auth.canEdit && canTile && ready" @click="onTile"
+        :disabled="tiling || isTiling(layer)" class="gd-act disabled:opacity-40"
+        :title="tileTitle(layer)">
+        <TilesIcon class="w-4 h-4" :class="(tiling || isTiling(layer)) ? 'animate-pulse' : ''" />
       </button>
 
       <button v-if="auth.canEdit && isVector && !isExternal" @click="onReprocess"
@@ -303,7 +304,8 @@ import ShareLinksModal from '@/components/data/ShareLinksModal.vue'
 import ConfirmDeleteModal from '@/components/data/ConfirmDeleteModal.vue'
 import CreatePortalModal from '@/components/portal/CreatePortalModal.vue'
 import LegendSwatch from '@/components/LegendSwatch.vue'
-import { LinkIcon, TrashIcon, RefreshIcon, LayersIcon } from '@/views/icons'
+import { LinkIcon, TrashIcon, RefreshIcon, TilesIcon } from '@/views/icons'
+import { tileTitle, isTiling, confirmTiling } from '@/lib/tiling'
 
 // A label/value row. Rendered rather than templated because it must vanish entirely when the value
 // is absent — a "Bands: —" line on a vector layer is noise pretending to be information.
@@ -590,8 +592,13 @@ async function onStyleClosed() {
 }
 
 async function onTile() {
+  // Already tiled? Ask first — a restart discards a finished archive and re-runs a job that can
+  // take minutes. See lib/tiling.js; My Data asks the same question in the same words.
+  if (!confirmTiling(layer.value)) return
   tiling.value = true
-  try { await dataStore.tileVector(layer.value.id) } finally { tiling.value = false }
+  try { await dataStore.tileVector(layer.value.id) }
+  catch (e) { alert(e.response?.data?.detail || 'Could not start tiling.') }
+  finally { tiling.value = false }
 }
 async function onReprocess() {
   restarting.value = true

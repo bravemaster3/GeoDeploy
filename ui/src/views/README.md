@@ -63,6 +63,11 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 - Raster layer `bbox` from the API is in source CRS (not lon/lat) — using it directly for `fitToBbox` can throw "Invalid LngLat" (see tasks/raster notes). Prefer zooming via vector bounds or TiTiler TileJSON.
 
 ## Last updated
+2026-08-17 (`LayerPage.vue` + `components/data/VectorRow.vue` share the tiling control's icon and
+wording: new `TilesIcon` in `views/icons.js` (the four-square grid My Data always used — the page had
+reached for `LayersIcon`, so one action wore two symbols) and new **`lib/tiling.js`** holding
+`tileTitle`/`tileLabel`/`confirmTiling`. An already-tiled layer now reads **"Restart tiling"** and asks
+before it runs, because a restart discards a finished archive and re-runs a job that takes minutes.)
 2026-08-07c (**the INVISIBLE legacy map was flooding the console with raster 404s.** `#portal-preview-map`
 is mounted behind the iframe at `opacity-0` and its comment claims "the build watch is neutered so it
 loads no data" — it is NOT: `ready.value = true` (line ~1163) lets the deep watcher run `applyStyle`,

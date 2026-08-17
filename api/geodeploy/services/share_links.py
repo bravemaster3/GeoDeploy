@@ -98,6 +98,25 @@ def vector_links(layer, base: str) -> list[dict]:
             hint=f"Add as a VECTOR-tile source (not 'XYZ tiles' raster). Source-layer name: '{src}'."))
     else:
         if getattr(layer, "pmtiles_key", None) and getattr(layer, "tile_status", None) == "ready":
+            # THE ONE TO REACH FOR IN A DESKTOP GIS, and it goes first for a measured reason. The
+            # `pmtiles` link below is the whole archive, which MapLibre reads a tile at a time but
+            # GDAL does not: its PMTiles driver has no viewport, so QGIS's first question — how many
+            # features? — walks every tile at the deepest zoom. A five-feature layer on this project
+            # tiles to 2.17 million entries, so the archive path was slowest exactly where it looked
+            # safest. This TileJSON points at a per-tile endpoint that reads one tile per request.
+            links.append(_link(
+                "tilejson", "TileJSON — vector tiles (fast rendering)", f"{api}/tilejson",
+                fmt="TileJSON 3.0", tools=["QGIS", "GeoLibre", "MapLibre", "deck.gl", "OpenLayers"],
+                primary=True,
+                hint="QGIS: Layer ▸ Add Layer ▸ Add Vector Tile Layer ▸ New ▸ paste this as the "
+                     "TileJSON URL. It carries the tile template, the layer's bounds and the real "
+                     "zoom range, so only tiles that exist are ever requested. Tiles are "
+                     "generalized per zoom — for full attributes use OGC API - Features."))
+            links.append(_link(
+                "xyz-mvt", "XYZ vector tiles (MVT)", f"{api}/tiles/{{z}}/{{x}}/{{y}}",
+                fmt="Mapbox Vector Tile", tools=["MapLibre", "OpenLayers", "deck.gl"],
+                hint="The tile template behind the TileJSON above, if your client wants it bare. "
+                     "Add as a VECTOR-tile source, not as 'XYZ tiles' (that is for images)."))
             # The PLAIN https URL — no `pmtiles://`. That prefix is a protocol handler the MapLibre
             # GL JS library registers INTERNALLY; it is not part of any address a person pastes.
             # Every consumer-facing field expects the plain URL, GeoLibre's own PMTiles input
@@ -105,15 +124,13 @@ def vector_links(layer, base: str) -> list[dict]:
             # never understood the prefix. GeoDeploy's OWN portals still emit `pmtiles://…` inside
             # their MapLibre style — see portal_generator — which is correct and unrelated to this.
             links.append(_link(
-                "pmtiles", "PMTiles archive — fastest way to draw this layer", f"{api}/pmtiles",
-                fmt="PMTiles (vector)", tools=["QGIS", "GeoLibre", "MapLibre", "GDAL"],
-                primary=True,
-                hint="QGIS: Layer > Add Layer > ADD VECTOR LAYER and paste this URL as-is — GDAL "
-                     "3.8+ opens it with its PMTiles driver (verified: driver=PMTiles, 1 layer). "
-                     "NOT Add Vector TILE Layer: that dialog builds an XYZ template and an archive "
-                     "is one file. No pmtiles:// prefix and no /vsicurl/ needed. For attributes and "
-                     "queries prefer the OGC API - Features service above — tiles are generalized "
-                     "per zoom."))
+                "pmtiles", "PMTiles archive (the whole file)", f"{api}/pmtiles",
+                fmt="PMTiles (vector)", tools=["MapLibre", "GeoLibre", "GDAL", "pmtiles CLI"],
+                hint="One file holding every tile — for MapLibre's pmtiles:// protocol, or for "
+                     "copying the archive. No pmtiles:// prefix and no /vsicurl/ needed here. "
+                     "GDAL 3.8+ CAN open it directly, but do not do that in QGIS: the driver has "
+                     "no viewport and reads the entire archive to answer basic questions about it. "
+                     "Use the TileJSON above instead."))
         links.append(_link(
             "features-geojson", "Viewport features (GeoDeploy native)",
             f"{api}/features.geojson?bbox=minx,miny,maxx,maxy&limit=50000",
@@ -131,13 +148,16 @@ def vector_links(layer, base: str) -> list[dict]:
                 fmt="JSON", tools=["DuckDB", "GDAL/ogr2ogr", "pyarrow"],
                 hint=f"Partition grid + file keys; each file is then at {api}/parquet/<key> "
                      "(HTTP Range supported)."))
-    # A tiled GeoParquet layer LEADS with PMTiles. These layers are the big ones — that is why they
-    # are GeoParquet — and for them the honest first answer is the one that draws: QGIS opens the
-    # archive through Add Vector Layer in seconds, where OAPIF pages millions of features one screen
-    # at a time. OGC API - Features stays directly below it for full attributes and queries, which
-    # tiles cannot give: they are generalized per zoom and clipped to tile boundaries.
+    # A tiled layer LEADS with its TileJSON. These layers are the big ones — that is why they are
+    # GeoParquet — and the honest first answer is the one that draws a screenful at a time. OGC API
+    # - Features stays below it for full attributes and queries, which tiles cannot give: they are
+    # generalized per zoom and clipped to tile boundaries.
+    #
+    # This used to promote the PMTiles archive instead, on the reasoning that one bounded download
+    # beats paging OAPIF. That is true of MapLibre and false of every GDAL-based client, which reads
+    # the archive whole — so the promoted link was the slow one for the tools this list names first.
     for i, l in enumerate(links):
-        if l.get("id") == "pmtiles":
+        if l.get("id") == "tilejson":
             links.insert(0, links.pop(i))
             break
 

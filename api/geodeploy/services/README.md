@@ -131,6 +131,18 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   permalink it serves, never a substitute for the bbox queries.
 
 ## Last updated
+2026-08-17 (**new `pmtiles_reader.py` — one tile out of an archive, so tiled layers can be served as
+ordinary XYZ.** PMTiles v3 read-only, written by hand rather than pulled in as a dependency (fixed
+127-byte header, varint directories, a Hilbert curve, all frozen by the spec). Every read is an HTTP
+Range through a caller-supplied `fetch(offset, length)`; the header + root directory are cached per
+object key, so a tile costs ONE range read in the steady state. `forget(key)` on a re-tile.
+**Why it exists, measured:** GDAL's PMTiles driver is not viewport-driven — it presents the archive
+as one dataset, so a client's opening questions (feature count, extent) walk every tile at the
+deepest zoom. On geodeploy-lite a FIVE-FEATURE layer's archive holds 2,171,238 tile entries across
+z0–13 (tippecanoe's `--extend-zooms-if-still-dropping`), which is why QGIS hung worst on small
+layers. Consumed by `routers/data/vector.py::vector_pmtiles_tile` + `vector_tilejson`.
+`share_links.py`: a tiled GeoParquet layer now leads with **TileJSON**, not the archive — the archive
+link stays, relabelled for MapLibre/GDAL-copy use with a warning against opening it in QGIS.)
 2026-08-07c (**a 504 on one tile hangs the whole portal.** `bounds` stops MapLibre
 asking for tiles that MISS a raster; it does nothing about a tile that HITS it and spans a continent.
 A drone orthomosaic a few hundred metres across was still requested at z3 — one tile covering most of

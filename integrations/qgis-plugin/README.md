@@ -65,4 +65,22 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
+2026-08-17 (**speed and symbology, both measured.** `sources.describe` now sends EVERY vector layer
+down one viewport-driven path — a **TileJSON**, for PostGIS (Martin) and tiled GeoParquet (the new
+per-tile endpoint) alike — and `plugin._vector_tiles` READS it for the tile template, the real zoom
+range, the bounds and the name of the layer inside the tiles. The bare-template URI's `zmax=22` was
+the slowness: QGIS believed tiles existed at every zoom, kept requesting them past the depth the
+server has data, got empties back, retried each three times and drew nothing — "vanishes when I zoom
+in", "loading forever", and the retry storms in the log, all from one wrong number. Told the real
+range it over-zooms the deepest real tile instead. Opening a PMTiles archive through GDAL is now the
+LAST resort, not the first: the driver has no viewport (a five-feature layer = 2.17M tile entries).
+`sources.fallback` + `plugin._open_best` walk tiles → archive → OAPIF so an older instance still opens.
+**`symbology.apply_to_vector_tiles` now classifies** — one `QgsVectorTileBasicRendererStyle` per class
+with a filter expression, which is the same shape as the map's step/match expressions — through the
+SAME `_symbol_of` the feature path uses, so sizes/dashes/markers cannot drift. New **`symbology.apply`**
+is the single entry point: it picks the renderer from the layer's TYPE, which is what the portal-group
+path got wrong (it handed tile layers to `apply_to_qgis`, which silently did nothing). Tile layers get
+their real extent, so "zoom to layer" lands on the layer. Portal tree items keep the **whole portal
+row** — dropping everything but the slug is why QGIS group names showed ids while the dock showed
+titles. Tests: `scripts/test_tile_symbology.py`, `scripts/test_sources.py`, both in CI.)
 2026-08-14 (created — browse, add, upload, and styling in both directions)
