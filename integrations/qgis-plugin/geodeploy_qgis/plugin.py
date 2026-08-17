@@ -459,30 +459,17 @@ class GeoDeployDock(QDockWidget):
             self._say(f"QGIS could not open the {source['kind']} source for {name}.", Qgis.Critical)
             return
 
-        QgsProject.instance().addMapLayer(layer)
-        # The stored style is `{opacity, style: {...}, popup_fields}` — the plugin only ever read
-        # the inner `style`, so a layer saved at 50% arrived opaque.
-        if isinstance(row.get("default_style"), dict):
-            _set_opacity(layer, row["default_style"].get("opacity"))
+        # EVERYTHING BEFORE THE LAYER GOES ON THE MAP. Adding it first and styling it after is what
+        # made layers appear plain and then visibly change: QGIS starts rendering the moment a layer
+        # joins the project, so the whole canvas was drawn once with the default look, then again
+        # once the style landed. Two full renders per layer, and the first one wrong.
         applied = ""
+        if isinstance(row.get("default_style"), dict):
+            # The stored style is `{opacity, style: {...}, popup_fields}` — the plugin only ever
+            # read the inner `style`, so a layer saved at 50% arrived opaque.
+            _set_opacity(layer, row["default_style"].get("opacity"))
         if self.styled.isChecked() and source["kind"] != "cog":
-            style = (row.get("default_style") or {}).get("style") if row.get("default_style") else None
-            if style is None and self.instance:
-                # A public row carries no style. `layers.resolve` needs a token, so for anonymous
-                # browsing — the plugin's headline promise — it can only fail, and every public
-                # layer arrived unstyled. `/legend` is PUBLIC and is what the portal draws from.
-                try:
-                    ref = row.get("uid") or row.get("id")
-                    # `legend` is defined on the VECTOR and RASTER namespaces, not on the
-                    # kind-agnostic `layers` helper — asking the latter is an AttributeError, which
-                    # is what every unstyled layer was really hitting.
-                    kind = "raster" if (row.get("layer_type") == "raster"
-                                        or row.get("storage_backend") == "raster") else "vector"
-                    legend = self.instance.client.layers.api(kind).legend(ref)
-                    style = symbology.style_from_legend(legend)
-                except GeoDeployError as exc:
-                    symbology._log(f"Could not read the legend for {name}: {exc}")
-                    style = None
+            style = self._style_for_row(row, name)
             if style:
                 # `symbology.apply` picks the renderer from the layer's TYPE — feature layers and
                 # vector-tile layers need different ones, and choosing here by source kind is how
@@ -494,7 +481,36 @@ class GeoDeployDock(QDockWidget):
             else:
                 # Distinguish "has no style" from "has one we failed to use". The first is normal.
                 applied = " (no saved style on this layer)"
+        QgsProject.instance().addMapLayer(layer)
         self._say(f"Added {name} — {source['why']}{applied}.")
+
+    def _style_for_row(self, row, name):
+        """A layer's own saved style, from the row if it carries one or `/legend` if it does not.
+
+        A public row carries no style. `layers.resolve` needs a token, so for anonymous browsing —
+        the plugin's headline promise — it could only fail, and every public layer arrived unstyled.
+        `/legend` IS public and is what the portal draws from. Cached by `fetch_json`, so opening
+        several layers does not re-ask.
+        """
+        if isinstance(row.get("default_style"), dict):
+            style = row["default_style"].get("style")
+            if style:
+                return style
+        if not self.instance:
+            return None
+        try:
+            ref = row.get("uid") or row.get("id")
+            # `legend` is defined on the VECTOR and RASTER namespaces, not on the kind-agnostic
+            # `layers` helper — asking the latter is an AttributeError, which is what every
+            # unstyled layer was really hitting.
+            kind = "raster" if (row.get("layer_type") == "raster"
+                                or row.get("storage_backend") == "raster") else "vector"
+            legend = self.instance.fetch_json(
+                "{0}/api/data/{1}/{2}/legend".format(self.instance.url.rstrip("/"), kind, ref))
+            return symbology.style_from_legend(legend)
+        except GeoDeployError as exc:
+            symbology._log("Could not read the legend for {0}: {1}".format(name, exc))
+            return None
 
     # -- upload ------------------------------------------------------------------------------------
 
@@ -835,9 +851,29 @@ class GeoDeployDock(QDockWidget):
                         doc, symbology.style_from_legend),
                     "_anonymous": True}
 
+        def work_and_warm():
+            """The portal document, plus every per-layer document its build will need.
+
+            Layers must be CONSTRUCTED on the GUI thread, but the documents that describe them —
+            TileJSON, bounds — are ordinary HTTP. Fetching them during the build meant a dozen
+            blocking round trips one after another while QGIS was frozen. Doing it here, in the
+            worker that was already running, leaves the build with no I/O at all.
+            """
+            doc = work()
+            base = instance.url.rstrip("/")
+            urls = []
+            for cfg in (doc.get("layer_configs") or []):
+                lid = cfg.get("layer_id")
+                if lid is None:
+                    continue
+                kind = "raster" if cfg.get("layer_type") == "raster" else "vector"
+                urls.append("{0}/api/data/{1}/{2}/tilejson".format(base, kind, lid))
+            instance.prefetch(urls)
+            return doc
+
         self._busy(True)
         self._say("Opening " + str(row.get("title") or "the portal") + "...", bar=False)
-        self._run(_Job("GeoDeploy: opening portal", work), self._portal_opened)
+        self._run(_Job("GeoDeploy: opening portal", work_and_warm), self._portal_opened)
 
     def _portal_opened(self, job):
         self._busy(False)
@@ -851,6 +887,15 @@ class GeoDeployDock(QDockWidget):
             return
 
         project = QgsProject.instance()
+        # ONE REDRAW FOR THE WHOLE GROUP. QGIS re-renders the canvas every time a layer joins the
+        # project, so a seven-layer portal drew the entire map seven times — each one fetching
+        # tiles for every layer already placed. Freezing while the group is assembled is the
+        # standard way to say "tell me when I am done"; the `finally` guarantees it thaws even if
+        # one layer throws, because leaving a user's canvas frozen would be far worse than a slow
+        # open.
+        canvas = self.iface.mapCanvas() if self.iface else None
+        if canvas is not None:
+            canvas.freeze(True)
         group = project.layerTreeRoot().insertGroup(0, doc.get("title") or "GeoDeploy portal")
         # Only tag the portal id when we could actually write back to it. Tagging a read-only copy
         # would offer an "update" that is going to be refused, which is worse than not offering it.
@@ -923,7 +968,12 @@ class GeoDeployDock(QDockWidget):
         # layer_configs[0] is the TOP, and adding in the same order puts it at the top here too.
         tree = doc.get("layer_groups") or [
             {"layer_id": c.get("layer_id"), "layer_type": c.get("layer_type")} for c in configs]
-        place(tree, group)
+        try:
+            place(tree, group)
+        finally:
+            if canvas is not None:
+                canvas.freeze(False)
+                canvas.refresh()
 
         note = ""
         if missing:
