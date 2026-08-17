@@ -28,21 +28,40 @@ def links(*ids):
     return [{"id": i, "url": f"{BASE}/{i}"} for i in ids]
 
 
-# ── PostGIS: the TileJSON, which carries bounds and the real zoom range ───────────────────────
-got = sources.describe(row(storage_backend="postgis", links=links("tilejson", "xyz-mvt")))
-assert got["kind"] == "vector-tiles" and got["tilejson_url"] == f"{BASE}/tilejson", got
-print("postgis            -> vector-tiles via its published TileJSON")
+# ── PostGIS: the FEATURES by default ──────────────────────────────────────────────────────────
+# The default is a property of the BACKEND, not of the plugin. PostGIS holds the layers people
+# classify — the attribute table is the point, and Martin's tiles carry only what was baked into
+# them — so one opens ready to be styled by a column. The tiles are still one click away.
+pg = row(storage_backend="postgis", links=links("tilejson", "xyz-mvt"))
+assert sources.describe(pg)["kind"] == "oapif", sources.describe(pg)
+assert sources.prefers_attributes(pg) is True
+print("postgis            -> features, so it opens ready to classify by a field")
+
+# …and the tiles are still reachable, with the bounds and zoom range only a TileJSON carries.
+tiles = sources.describe(pg, prefer_attributes=False)
+assert tiles["kind"] == "vector-tiles" and tiles["tilejson_url"] == f"{BASE}/tilejson", tiles
+print("postgis, tiles     -> vector-tiles via its published TileJSON")
 
 # No links at all (an authenticated row, which carries fields instead) — derive the URL.
-got = sources.describe(row(storage_backend="postgis"))
+got = sources.describe(row(storage_backend="postgis"), prefer_attributes=False)
 assert got["tilejson_url"] == f"{BASE}/api/data/vector/abc123/tilejson", got
 print("postgis, no links  -> derived TileJSON URL")
 
+# BOTH surfaces are offered, with the backend's default first — the picker opens on entry 0.
+alts = sources.alternatives(pg)
+assert [(a["kind"], a["is_data"]) for a in alts] == [("oapif", True), ("vector-tiles", False)], alts
+print("postgis picker     -> features first, tiles second")
+
 # ── Tiled GeoParquet: tiles, NOT the archive ──────────────────────────────────────────────────
+# Tiled GeoParquet is the LARGE-data backend: those layers are tiled precisely because reading them
+# whole is not practical, so unlike PostGIS their default stays the tiles.
 tiled = row(storage_backend="geoparquet", tile_status="ready", links=links("pmtiles", "tilejson"))
 got = sources.describe(tiled)
 assert got["kind"] == "vector-tiles", got
-print("tiled geoparquet   -> vector-tiles, not the archive")
+assert sources.prefers_attributes(tiled) is False
+alts = sources.alternatives(tiled)
+assert [(a["kind"], a["is_data"]) for a in alts] == [("vector-tiles", False), ("oapif", True)], alts
+print("tiled geoparquet   -> vector-tiles, not the archive, and tiles stay the default")
 
 # The measured reason, restated as a test: the archive must never be the FIRST choice, because
 # GDAL reads it whole — a five-feature layer on the project's own instance tiles to 2.17M entries.

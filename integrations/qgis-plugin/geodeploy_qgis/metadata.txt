@@ -6,7 +6,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.1.15
+version=0.2.0
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -21,7 +21,18 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.1.15 - A classified raster's stretch is no longer compared. GeoDeploy does not
+changelog=0.2.0 - First public release. Browse a GeoDeploy instance (no account needed for public
+    data), add a layer using the fastest source it offers, open a whole portal as a styled QGIS
+    group, and upload back - including multi-gigabyte files. Styling travels BOTH WAYS for every
+    layer type: single symbol, graduated and categorized vectors; colormap, stretch, band, hillshade,
+    contours and colour-per-value rasters; 3D extrusion for polygons and points; size-from-a-field;
+    marker shape and stroke. A layer opens looking like the portal, and what you change goes home.
+    Which renderer QGIS offers depends on the SOURCE, so a per-layer Source picker and a
+    "Restyle this layer..." button get you onto the surface that can actually be restyled. A PostGIS
+    layer opens over OGC API - Features, ready to classify by a field; tiled GeoParquet keeps its
+    tiles. A portal opens either as it draws it, or editable - every layer from its own data with
+    the portal's styling painted on - so a portal's layers restyle exactly like single ones.
+    0.1.15 - A classified raster's stretch is no longer compared. GeoDeploy does not
     apply a stretch to a colour-per-value palette - the classes are matched on raw pixel values, and
     a stretch would change the very numbers they key on - so a stretch sitting beside one is not a
     visible difference and must not report the layer as restyled.

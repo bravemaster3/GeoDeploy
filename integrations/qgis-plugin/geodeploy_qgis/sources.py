@@ -63,16 +63,48 @@ def _link(layer: dict, link_id: str) -> str | None:
     return None
 
 
-def describe(layer: dict, prefer_attributes: bool = False) -> dict | None:
+def prefers_attributes(layer: dict) -> bool:
+    """Whether THIS layer's default source should be its data rather than its tiles.
+
+    THE DEFAULT IS A PROPERTY OF THE BACKEND, because the two backends are used for different
+    things and the right trade is not the same:
+
+    * **PostGIS** holds the layers people classify — the attribute table is the point, and Martin's
+      tiles carry only what was baked into them. Defaulting these to OGC API - Features means a
+      layer opens ready to be styled by a column, which is what most people do with one.
+    * **Tiled GeoParquet** is the large-data backend. Those layers are tiled precisely because
+      reading them whole is not practical, so their default stays the tiles.
+
+    A raster's default is unaffected: its picture and its values are different surfaces and the
+    picture is the one that looks like the portal.
+
+    The caller can always override — this decides which entry the Source picker opens on, not what
+    is possible.
+    """
+    if layer.get("layer_type") == "raster" or layer.get("kind") == "raster":
+        return False
+    if layer.get("storage_backend") == "postgis":
+        return True
+    return False
+
+
+def describe(layer: dict, prefer_attributes: bool | None = None) -> dict | None:
     """`{kind, uri, provider, why}` for the best source, or None when there is nothing to add.
 
     `layer` is a row from the instance's own listing (public index or authenticated list), so this
     works with or without a credential.
+
+    `prefer_attributes` is deliberately THREE-valued. `None` means "whatever this layer's backend
+    should default to" (see `prefers_attributes`); `True` and `False` are a choice somebody made and
+    are honoured as such. Two values would not do: with PostGIS now defaulting to features, `False`
+    has to still mean "give me the tiles" so the Source picker can offer both.
     """
     base = (layer.get("_base") or "").rstrip("/")
     ref = layer.get("uid") or layer.get("id")
     if not base or ref is None:
         return None
+    if prefer_attributes is None:
+        prefer_attributes = prefers_attributes(layer)
 
     if layer.get("layer_type") == "raster" or layer.get("kind") == "raster":
         # THE COG IS THE DATA; THE TILES ARE THE PICTURE.
@@ -189,8 +221,12 @@ def describe(layer: dict, prefer_attributes: bool = False) -> dict | None:
     # OAPIF is addressed by COLLECTION here, not by the service: QGIS's own dialog needs the service
     # and then asks the user to pick, but a URI built in code names the collection directly.
     why = "full attributes and exact geometry, paged by the server"
-    if not prefer_attributes and (layer.get("storage_backend") == "geoparquet"
-                                  or layer.get("kind") == "vector"):
+    if layer.get("storage_backend") == "postgis":
+        # The DEFAULT for PostGIS, so say what it costs as well as what it buys: this is the surface
+        # you can classify by a column, and it is re-queried on every pan where the tiles are not.
+        why += " — classify by any field here; switch to vector tiles if a large layer feels slow"
+    elif not prefer_attributes and (layer.get("storage_backend") == "geoparquet"
+                                    or layer.get("kind") == "vector"):
         # The one remaining slow default, and it is slow because the layer has no fast surface yet
         # — not because a faster one was passed over. Say so, since tiling is one click away.
         why += " — this layer is not tiled, so there is no faster source; tile it in My Data"
@@ -353,15 +389,20 @@ def alternatives(layer: dict) -> list[dict]:
     reason this list exists — it is the difference between a layer you can classify and one you can
     only look at — and it was previously buried in a checkbox that applied to every layer at once.
     """
-    out = []
-    primary = describe(layer)
-    if primary:
-        out.append(dict(primary, label=label(primary), is_data=False))
-    other = describe(layer, prefer_attributes=True)
-    if other and (not primary or other["kind"] != primary["kind"]):
-        out.append(dict(other, label=label(other), is_data=True))
-    elif primary and other and other["kind"] == primary["kind"]:
-        # The same surface both ways: a layer with only one source is not offering a choice, and
-        # saying it does would promise a restyle that cannot happen.
-        out[0]["is_data"] = True
-    return out
+    fast = describe(layer, prefer_attributes=False)      # tiles, or the server's picture
+    data = describe(layer, prefer_attributes=True)       # features, or the GeoTIFF
+    if fast and data and fast["kind"] == data["kind"]:
+        # ONE SURFACE, BOTH WAYS. An untiled GeoParquet layer has only its features; saying it
+        # offers a choice would promise a restyle that is already available.
+        return [dict(fast, label=label(fast), is_data=True)]
+    entries = []
+    if fast:
+        entries.append(dict(fast, label=label(fast), is_data=False))
+    if data:
+        entries.append(dict(data, label=label(data), is_data=True))
+    # THE BACKEND'S DEFAULT GOES FIRST, because the picker opens on entry 0 — see
+    # `prefers_attributes`. Ordering here rather than in the caller keeps "which is the default"
+    # one decision in one place.
+    if prefers_attributes(layer):
+        entries.sort(key=lambda e: not e["is_data"])
+    return entries

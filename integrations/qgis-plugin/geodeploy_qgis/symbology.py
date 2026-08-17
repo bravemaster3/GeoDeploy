@@ -574,7 +574,12 @@ def comparable_style(style: dict | None) -> dict:
 #: those two names here is what makes switching AWAY from contours clear them too. Until then they
 #: would linger harmlessly: TiTiler ignores them without the algorithm that reads them.
 _RASTER_KEYS = ("colormap", "colormap_reverse", "rescale", "bidx", "color_classes",
-                "algorithm", "zfactor")
+                "algorithm", "zfactor", "increment", "thickness", "minz", "maxz")
+
+#: TiTiler's own contour defaults, mirrored from `services/titiler`. Needed here only so that an
+#: absent interval and an explicitly written 35 compare as the same map.
+CONTOUR_INCREMENT = 35.0
+CONTOUR_THICKNESS = 1
 
 
 def _is_raster_style(style) -> bool:
@@ -640,6 +645,17 @@ def _comparable_raster(style: dict | None) -> dict:
         rescale = _rescale_text(style.get("rescale"))
         if rescale:
             out["rescale"] = rescale
+        # THE ALGORITHM'S OWN PARAMETERS. `_RASTER_KEYS` holds them so a change of algorithm clears
+        # them, which also meant they were filtered out of the comparison above — so changing a
+        # contour interval from 5 m to 25 m, which is the most visible edit a contour map has, was
+        # reported as "unchanged". Defaulted, because an absent value draws as TiTiler's default and
+        # `5` written explicitly is the same map as nothing written at all.
+        for key, default in (("increment", CONTOUR_INCREMENT), ("thickness", CONTOUR_THICKNESS)):
+            value = _number(style.get(key), default)
+            out[key] = round(value, 6) if key == "increment" else int(value)
+        for key in ("minz", "maxz"):
+            if style.get(key) is not None:
+                out[key] = round(_number(style.get(key), 0.0), 6)
         return out
     rescale = _rescale_text(style.get("rescale"))
     if rescale:

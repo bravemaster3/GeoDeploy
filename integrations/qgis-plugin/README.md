@@ -85,6 +85,27 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
+2026-08-18 (**the default source now follows the BACKEND, and a portal can be opened editable.**
+*Defaults:* PostGIS holds the layers people classify — the attribute table is the point, and Martin's
+tiles carry only what was baked into them — so a PostGIS layer now opens over OGC API - Features,
+ready to be styled by a column. Tiled GeoParquet is the large-data backend and keeps its tiles.
+`sources.describe` therefore takes a THREE-valued `prefer_attributes`: `None` means "this backend's
+default", `True`/`False` are a choice somebody made — two values would not do, because `False` has
+to still mean "give me the tiles" for the picker to offer both. `prefers_attributes()` is the one
+place that decision lives, and `alternatives()` orders the picker by it. The dock's sticky
+preference starts as `None` for the same reason: `False` would have overridden the new default on
+every layer.
+*Portals:* the Source picker is no longer blank for a portal — it offers **"As the portal draws it"**
+and **"Editable — each layer from its data"**. The editable group opens every layer from its own
+data (features, or the GeoTIFF) and then paints it with the PORTAL's styling, so all of QGIS's
+symbology applies to a portal layer exactly as it does to a single one, and `Push group to portal`
+sends it home. A raster's portal colours are parsed back out of its baked tile URL first, since that
+is where a portal records them. A layer whose data cannot be reached — not in the listing this token
+can see — still opens from the portal's tiles and is NAMED in the result, rather than silently
+arriving unrestylable.
+*And the contour parameters reached the comparison:* they live in `_RASTER_KEYS` so a change of
+algorithm clears them, which also filtered them out of `comparable_style` — so changing a contour
+interval from 5 m to 25 m, the most visible edit a contour map has, reported as "unchanged".)
 2026-08-17p (**class LABELS round-trip.** Values and colours already did; the reader built
 `{value, color}` and dropped the label, so pushing a classified raster back from QGIS replaced its
 classes with unlabelled ones and every legend — the layer page, every portal — fell back to bare

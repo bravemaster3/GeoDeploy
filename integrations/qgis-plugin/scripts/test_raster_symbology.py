@@ -741,6 +741,19 @@ assert read.get("increment") == 25 and read.get("thickness") == 2, read
 same(future, merge_style(future, read), "contour styling did not survive the round trip")
 print("contours       -> drawn as a stretch, and its algorithm comes back intact")
 
+# The INTERVAL is the most visible edit a contour map has, and it lives in `_RASTER_KEYS` so that a
+# change of algorithm clears it — which also filtered it out of the comparison, so changing 5 m to
+# 25 m reported as "unchanged" in the push dialog.
+assert comparable_style({"algorithm": "contours", "increment": 5}) !=     comparable_style({"algorithm": "contours", "increment": 25})
+assert comparable_style({"algorithm": "contours", "thickness": 1}) !=     comparable_style({"algorithm": "contours", "thickness": 3})
+# …but an absent interval draws as TiTiler's default, so writing that default explicitly is the
+# same map as writing nothing.
+same({"algorithm": "contours"}, {"algorithm": "contours", "increment": 35, "thickness": 1},
+     "the algorithm's own defaults are not an edit")
+# A hillshade has neither, and must not grow them.
+assert "increment" not in comparable_style({"algorithm": "hillshade", "zfactor": 2})
+print("contour params -> the interval and width are compared, defaults fold, hillshade unaffected")
+
 # …but a real restyle in QGIS REPLACES it, and that has to travel as the replacement it is.
 layer = RasterLayer()
 raster_to_qgis(layer, future)

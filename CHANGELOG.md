@@ -4,56 +4,89 @@ Notable changes, newest first. Versions are **major.minor** — `v1.0`, `v1.1`, 
 `v2.0`. The minor number moves for anything shipped, features or fixes; the major changes when an
 upgrade needs manual work.
 
-## Unreleased
+## v1.4 — 2026-08-17
 
-Symbology that survives a round trip — into QGIS and back, and into contour lines.
+### Into the tools you already use
 
-- **A raster can be classified in QGIS.** Reported as "raster symbology can't be changed, I can't
-  classify", and the cause was not the symbology code: QGIS decides which renderer to offer from the
-  layer TYPE, and the plugin was handing it server-rendered tiles — one band of RGBA, which QGIS
-  calls "Singleband color data" and offers nothing to change. Vector tiles have the same shape of
-  limit: no categorized or graduated renderer at all. Opening the data instead used to be a
-  downgrade, because GeoDeploy's colours were dropped on the way; now the GeoTIFF arrives with its
-  colormap, stretch, band and classification already applied, a per-layer **Source** picker says
-  what each layer offers, and **Restyle this layer…** reopens one from its data in place.
-- **3D extrusion travels both ways, for polygons and points.** Heights driven by a column, fixed
-  heights, bases, colours, and the cylinder footprint of a point pillar. QGIS cannot express every
-  extrusion — a cylinder has one length — so what it cannot hold is recorded and handed back
-  untouched rather than being quietly flattened by the next push.
-- **Contour lines are a raster style**, everywhere raster symbology is edited: My Data, the layer
-  page, the portal editor, the published portal (with its own legend), the CLI and the QGIS plugin.
-  `--algorithm contours --increment 25`. The interval and line width are yours; the range the relief
-  behind the lines is coloured over comes from the layer's stretch, because the alternative — the
-  algorithm's own −12000–8000 m default — renders a survey DEM as one flat colour.
-- **Unique-values symbology for rasters.** Integer rasters — land cover, soil types, a mask — are
-  classifications, and a colour ramp over them claims that the distance between class 3 and class 4
-  means something. **Read values** pulls the distinct pixel values off the raster and gives each one
-  a colour and a label you can edit; re-reading keeps the colours you already chose. A raster that
-  is actually continuous says so rather than being carved into classes. The renderer for this
-  already existed end to end; there was simply no way to build one.
-- **A classified raster drew only one of its classes.** Two faults, found on a three-class mask.
-  The stretch was still being sent alongside the value-lookup palette, and a stretch is exactly what
-  a value lookup cannot survive: it maps the data into 0–255 *before* the lookup, so classes 0/1/2
-  arrived as 0/127/255 and only the one whose number happened to still match a key drew — the rest
-  fell through to transparent. And a `reverse the palette` flag left over from a colour ramp was
-  re-pairing hand-picked class colours end for end, so class 0 was drawn in the colour chosen for
-  the highest class. The stretch is now shown as unavailable in that mode, with the reason.
-- **A class label travels with its class.** "Water" and "Trees" are the whole point of a
-  classification. The QGIS reader carried only the value and the colour, so pushing a land-cover
-  raster back replaced its classes with unlabelled ones; and a published portal carried no labels at
-  all, so its legend could only ever print the raw pixel values. Both now carry the name the author
-  wrote.
-- **The layer page's legend now describes what is on the map.** It read the layer's `colormap` and
-  nothing else, so a hillshade or a contour raster — neither of which uses that colormap — showed no
-  gradient at all and fell through to "Single symbol". It now shows the ramp the algorithm actually
-  draws with, the contour interval, and swatches for a classified raster.
-- **Fixes found by comparing what each surface actually sends.** A classified raster or one with a
-  reversed palette lost exactly that when it was added to a portal from the catalog, when it was
-  drawn in the editor preview, and when a viewer touched any control in a published portal — three
-  separate hand-written key lists, each missing the same two keys. There is now one list per
-  language. Saving a style from QGIS also reset a layer's opacity to 1.0 and deleted its popup
-  fields; and the raster legend, which is the only styling a PUBLIC raster has, reported no
-  `zfactor`, so a published hillshade opened flat in every other tool.
+- **A QGIS plugin.** Paste an instance URL and browse what it publishes — **no account needed for
+  public data** — then add a layer using the fastest source it offers, or open a whole portal as a
+  styled QGIS group. Upload back, including multi-gigabyte files, which go straight to object
+  storage. It vendors the same zero-dependency client the CLI is built on, so there is nothing to
+  pip-install into QGIS.
+- **Styling travels both ways, for every layer type.** Single symbol, graduated and categorized for
+  vectors; colormap, stretch, band, hillshade and colour-per-value for rasters; **3D extrusion for
+  polygons and points**; size-from-a-field; marker shape, stroke colour and stroke width. A layer
+  opens in QGIS looking like the portal, and what you change there goes home.
+- **A raster can actually be classified in QGIS.** Which renderer QGIS offers is decided by the
+  SOURCE, not by a setting: server-rendered tiles arrive as one band of RGBA — "Singleband color
+  data", nothing to classify — and vector tiles have no categorized or graduated renderer at all.
+  Opening the data instead used to cost you GeoDeploy's colours; now the GeoTIFF opens *with* its
+  colormap, stretch, band and classification applied. A per-layer **Source** picker says what each
+  layer offers, and **Restyle this layer…** reopens one from its data, in place, keeping its styling.
+- **A portal opens editable, too.** The Source picker offers a portal two ways: as it draws it —
+  the published tiles, fastest and exactly what a visitor sees — or with **every layer opened from
+  its own data and then painted with the portal's styling**. The second gives a portal's layers the
+  same full symbology a single layer has: classify by a field, build raster classes, edit 3D, then
+  push the group back.
+- **The default source follows the backend.** PostGIS layers open over OGC API - Features, ready to
+  be classified by a column, because that is what those layers are for. Tiled GeoParquet — the
+  large-data backend — keeps its tiles. Either is one click from the other.
+- **A push cannot delete what QGIS cannot draw.** 3D extrusion, imported MapLibre paint, popup
+  fields and server-side algorithms survive a restyle from QGIS instead of being replaced by the
+  subset QGIS can express — and opening a portal and pushing it straight back reports nothing
+  changed, rather than every layer as restyled.
+
+### Symbology
+
+- **Contour lines**, everywhere raster symbology is edited: My Data, the layer page, the portal
+  editor, the published portal with its own legend, the CLI and the plugin. The interval and line
+  width are yours; the range the relief behind the lines is coloured over comes from the layer's
+  stretch, because the algorithm's own default spans the whole planet and would render a survey DEM
+  as one flat colour.
+- **Unique values for rasters.** Integer rasters — land cover, soil types, a mask — are
+  classifications, and a ramp over them claims the distance between class 3 and class 4 means
+  something. **Read values** pulls the distinct pixel values off the raster and gives each a colour
+  and a label you can edit; re-reading keeps the colours you already chose. A raster that is
+  genuinely continuous says so instead of being carved into classes.
+- **The layer page's legend describes what is on the map** — the ramp the algorithm actually draws
+  with, the contour interval, and swatches for a classified raster. It previously read the layer's
+  colormap and nothing else, so a hillshade showed no gradient at all.
+
+### Fixes found by using it
+
+- **A classified raster drew only one of its classes.** The stretch was still being sent alongside
+  the value-lookup palette, and a stretch is what a value lookup cannot survive: it maps the data
+  into 0–255 *before* the lookup, so classes 0/1/2 arrived as 0/127/255 and only the one whose
+  number still matched a key drew. A stale "reverse the palette" flag was separately re-pairing
+  hand-picked class colours end for end.
+- **A raster's own pixels were refused to its owner.** The COG required the layer to be public, so
+  a private raster could not be opened for restyling by the person who uploaded it.
+- **Points drew at a third of their size**, under a dark outline that covered the fill — a unit
+  mismatch that made a styled point layer look like tiny black dots next to the same layer in a
+  browser.
+- **A portal's raster drew in the layer's default colours**, not the portal's. A raster is coloured
+  by the server, and a portal bakes its colormap and stretch into its own tile URL.
+- **A restyled point layer pushed back as no change**, because QGIS keeps one style per geometry
+  type and the reader took whichever came first.
+- **A stroke-only edit went unnoticed**, and untouched layers reported as restyled — change
+  detection was wrong in both directions.
+- **Saving a style from QGIS reset a layer's opacity and deleted its popup fields.**
+- **The raster legend omitted `zfactor`**, so a hillshade published with vertical exaggeration
+  opened flat in every other tool. That route is the only styling a public raster has.
+- **A classified raster or a reversed palette lost exactly that** when added to a portal from the
+  catalog, in the editor preview, and when a viewer touched any control in a published portal —
+  three separate hand-written key lists, each missing the same keys. There is now one list per
+  language.
+- **Vector tiles: a layer vanished when you zoomed in.** The plugin told QGIS tiles existed at every
+  zoom, so it kept asking past the depth the server has data, retried each three times and drew
+  nothing.
+- **The public layer page**, the map surviving a refresh, one redraw per layer instead of two, and a
+  portal group that opens with the portal's own folders, order and opacity.
+
+### CLI
+
+- `geodeploy layers style --algorithm contours --increment 25`, plus `--thickness`, `--minz`,
+  `--maxz` and `--reverse-colormap`. Published to PyPI as **1.4.0**.
 
 ## v1.3.1 — 2026-08-14
 

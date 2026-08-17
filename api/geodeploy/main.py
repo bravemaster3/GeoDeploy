@@ -317,7 +317,7 @@ def _ensure_martin_config(settings) -> None:
 
 app = FastAPI(
     title="GeoDeploy API",
-    version="1.3.1",
+    version="1.4",
     description="Self-hosted spatial data management and geoportal builder",
     lifespan=lifespan,
     # Every response, not only the ones we thought to guard: a NaN anywhere in the content used to
