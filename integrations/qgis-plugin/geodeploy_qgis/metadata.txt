@@ -6,7 +6,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.1.12
+version=0.1.13
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -21,7 +21,20 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.1.12 - Rasters can finally be restyled, and every symbol property now travels. A
+changelog=0.1.13 - Raster symbology is editable, 3D extrusion travels both ways, and contour
+    lines round-trip. Why a raster offered nothing to change: QGIS picks its renderer from the layer
+    TYPE, and server-rendered tiles arrive as one band of RGBA - "Singleband color data", no bands,
+    no classes. Vector tiles are the same shape of limit: no categorized or graduated renderer at
+    all. Opening the data instead used to cost you GeoDeploy's colours; now the GeoTIFF opens WITH
+    its colormap, stretch, band and classification applied, so you can classify it and send it back.
+    A per-layer Source picker replaces the old global checkbox, and a new "Restyle this layer..."
+    button reopens whatever is selected from its data, in place, keeping the styling it has. For a
+    portal's raster that styling is read out of the portal's own tile URL, so you restyle what the
+    portal shows rather than the layer's default. 3D EXTRUSION now applies and reads back for
+    polygons and points - heights from a field, fixed heights, bases, colours, and a point pillar's
+    footprint - and what QGIS cannot express is preserved rather than flattened by the next push.
+    Contour styling is carried the same way. Nothing is slower: the default source is unchanged.
+    0.1.12 - Rasters can finally be restyled, and every symbol property now travels. A
     raster's real bands come from its GeoTIFF, and that file was refused unless the layer was shared
     publicly - so for a private raster there was no way to restyle it at all. It is now readable by
     anyone who may see the layer, and the plugin gives GDAL the token (scoped to your instance) so

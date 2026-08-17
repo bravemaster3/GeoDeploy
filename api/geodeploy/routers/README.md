@@ -409,3 +409,11 @@ reported nothing and opened flat in QGIS — found by diffing what the plugin re
 the live instance stores. `portals.py`'s catalog-extra path stopped hand-listing raster style keys
 (it had dropped `color_classes` and `colormap_reverse`) and reads `titiler.STYLE_KEYS`; every raster
 tile URL is now built by `titiler.tile_url_from_style`.)
+2026-08-17b (new **`GET /data/raster/{id}/unique-values`** — the counterpart of `/stats`. `/stats`
+suggests a stretch for continuous data; this lists the distinct pixel VALUES of a classification, so
+a land-cover raster can be given a colour per class instead of a ramp that implies an order its
+codes do not have. TiTiler answers it with `categorical=true` (the histogram becomes one bin per
+value); bounded by `max_size` and by `MAX_COLOR_CLASSES`, and a raster with fractional or too many
+values is reported as **continuous with a reason** rather than truncated into a classification that
+would mis-colour most of the map. Verified against every raster on the live instance: the DEMs
+answer "continuous", and a 3-class mask answers `[0, 1, 2]`.)

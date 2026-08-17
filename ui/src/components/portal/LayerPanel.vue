@@ -402,7 +402,50 @@
 
             <!-- Palette + hillshade: single-band raster, or a multiband raster in single-band mode -->
             <template v-if="bandCount === 1 || bandMode === 'single'">
-              <div>
+              <!-- CONTINUOUS or CLASSIFIED — the same first question the vector side asks, and for
+                   the same reason: a ramp claims that the distance between two values is meaningful,
+                   which for land cover or soil codes it is not. -->
+              <div v-if="!isHillshade && !isContours">
+                <label class="text-xs text-muted-foreground">Values</label>
+                <div class="flex gap-1 mt-1">
+                  <button v-for="m in [{ value: 'ramp', label: 'Continuous' }, { value: 'classes', label: 'Unique values' }]"
+                    :key="m.value" type="button" @click="setRasterColorMode(m.value)"
+                    class="flex-1 text-[11px] py-1 rounded border transition-colors"
+                    :class="rasterColorMode === m.value
+                      ? 'border-primary/60 bg-primary/15 text-foreground'
+                      : 'border-border text-muted-foreground hover:text-foreground'">{{ m.label }}</button>
+                </div>
+              </div>
+
+              <div v-if="rasterColorMode === 'classes' && !isHillshade && !isContours" class="space-y-1.5">
+                <div class="flex items-center justify-between">
+                  <label class="text-xs text-muted-foreground">Classes</label>
+                  <button @click="loadUniqueValues" :disabled="loadingValues"
+                    class="text-xs text-primary hover:text-primary/80 font-medium disabled:opacity-50"
+                    title="Read the distinct pixel values from the raster">
+                    {{ loadingValues ? 'Reading…' : (rasterClasses.length ? '↻ Re-read' : '⚡ Read values') }}
+                  </button>
+                </div>
+                <p v-if="valuesNote" class="text-[10px] text-muted-foreground/80">{{ valuesNote }}</p>
+                <div v-if="rasterClasses.length" class="space-y-1 max-h-44 overflow-auto pr-0.5">
+                  <div v-for="(c, i) in rasterClasses" :key="c.value" class="flex items-center gap-1.5">
+                    <input type="color" :value="classHex(c.color)"
+                      @input="setClassColor(i, $event.target.value)"
+                      class="w-6 h-6 rounded border border-border cursor-pointer p-0 flex-shrink-0" />
+                    <span class="text-xs text-muted-foreground/80 tabular-nums w-10 flex-shrink-0">{{ c.value }}</span>
+                    <input type="text" :value="c.label ?? ''" placeholder="label"
+                      @input="setClassLabel(i, $event.target.value)"
+                      class="flex-1 min-w-0 text-xs border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+                  </div>
+                </div>
+                <!-- Transparency is how a "no data" class is expressed, and it has to be reachable:
+                     dropping it would paint that class over everything beneath the layer. -->
+                <p v-if="rasterClasses.length" class="text-[10px] text-muted-foreground/70">
+                  A colour per pixel value. Re-reading keeps the colours you have already chosen.
+                </p>
+              </div>
+
+              <div v-show="rasterColorMode !== 'classes' || isHillshade || isContours">
                 <label class="text-xs text-muted-foreground">Color palette</label>
                 <select :value="config.style?.colormap || ''" :disabled="config.style?.algorithm === 'hillshade'"
                   @change="emitStyle({ colormap: $event.target.value || null })"
@@ -532,6 +575,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useDataStore } from '@/stores/data'
 import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps, getRasterStats,
+         getRasterUniqueValues,
          getFieldStats } from '@/api'
 // The shared symbology vocabulary — twin of api/geodeploy/services/symbology.py. The swatch and
 // the legend here must describe exactly what the published portal will draw.
@@ -974,6 +1018,75 @@ function setSingleBand(val) {
 // Hillshade returns its own 0–255 image, so the stretch controls below do nothing while it is on.
 const isHillshade = computed(() => props.config.style?.algorithm === 'hillshade')
 const isContours = computed(() => props.config.style?.algorithm === 'contours')
+
+// ── Raster: continuous ramp, or a colour per VALUE ────────────────────────────────────────────
+// The mode is derived from the style rather than kept beside it, so re-opening the panel shows what
+// the layer actually is instead of whatever was last clicked.
+const rasterClasses = computed(() => props.config.style?.color_classes || [])
+const rasterColorMode = ref(rasterClasses.value.length ? 'classes' : 'ramp')
+const loadingValues = ref(false)
+const valuesNote = ref('')
+
+//: A colour per class, for a classification whose values have no order — the same qualitative set
+//: the vector side uses (`services/symbology.CATEGORY_COLORS`), because a sequential ramp over
+//: land-cover codes implies a ranking that is not there.
+const CLASS_COLORS = ['#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#a855f7', '#06b6d4',
+                      '#ec4899', '#84cc16', '#f97316', '#6366f1', '#14b8a6', '#eab308']
+
+function setRasterColorMode(mode) {
+  rasterColorMode.value = mode
+  valuesNote.value = ''
+  // Leaving classified mode CLEARS the classes: TiTiler gives an explicit mapping precedence over a
+  // named ramp, so classes left behind would keep drawing and the palette picker would do nothing.
+  if (mode !== 'classes' && rasterClasses.value.length) emitStyle({ color_classes: null })
+  else if (mode === 'classes' && !rasterClasses.value.length) loadUniqueValues()
+}
+
+function classHex(color) {
+  const text = String(color || '').trim()
+  return /^#[0-9a-fA-F]{6}/.test(text) ? text.slice(0, 7) : '#3b82f6'
+}
+function setClassColor(index, hex) {
+  const next = rasterClasses.value.map((c, i) => (i === index ? { ...c, color: hex } : c))
+  emitStyle({ color_classes: next })
+}
+function setClassLabel(index, label) {
+  const next = rasterClasses.value.map((c, i) => (i === index ? { ...c, label } : c))
+  emitStyle({ color_classes: next })
+}
+
+async function loadUniqueValues() {
+  if (!layer.value) return
+  loadingValues.value = true
+  valuesNote.value = ''
+  try {
+    const { data } = await getRasterUniqueValues(layer.value.id, singleBand.value || undefined)
+    if (!data?.categorical) {
+      // Said plainly rather than by returning nothing: "this raster is continuous" is the answer,
+      // not a failure, and the user needs it to stop looking for a classification that is not there.
+      valuesNote.value = data?.reason || 'This raster has no usable classes.'
+      return
+    }
+    // COLOURS ALREADY CHOSEN ARE KEPT. Re-reading after editing a colour is a normal thing to do
+    // (a new class appears, a count changes), and regenerating the whole palette would throw away
+    // the work every time.
+    const existing = new Map(rasterClasses.value.map(c => [String(c.value), c]))
+    const next = data.values.map((v, i) => {
+      const had = existing.get(String(v.value))
+      return {
+        value: v.value,
+        color: had?.color || CLASS_COLORS[i % CLASS_COLORS.length],
+        label: had?.label ?? String(v.value),
+      }
+    })
+    emitStyle({ color_classes: next, colormap: null })
+    valuesNote.value = `${next.length} value${next.length === 1 ? '' : 's'} in the raster.`
+  } catch (e) {
+    valuesNote.value = e?.response?.data?.detail || 'Could not read the raster values.'
+  } finally {
+    loadingValues.value = false
+  }
+}
 
 // Switching terrain rendering CLEARS the parameters of the mode being left. Keeping them would
 // leave a zfactor on a contour layer and an interval on a hillshade — invisible in the map, but

@@ -95,6 +95,79 @@ async def raster_stats(layer_id: int, user: User = Depends(require_scope("data:r
     return {"rescale": f"{round(min(mins), 4)},{round(max(maxs), 4)}"}
 
 
+@router.get("/{layer_id}/unique-values")
+async def raster_unique_values(layer_id: int, band: int = 1,
+                               user: User = Depends(require_scope("data:read")),
+                               db: AsyncSession = Depends(get_db)):
+    """The distinct pixel values of a CLASSIFIED raster — land cover, soil types, a mask.
+
+    The counterpart of `/stats`, which suggests a stretch for CONTINUOUS data. A classification is
+    the other kind of raster entirely: its numbers are labels, a gradient between class 3 and class
+    4 means nothing, and what a legend needs is the list of values actually present.
+
+    TiTiler answers this with `categorical=true`, which turns the histogram into one bin per unique
+    value. Bounded twice on the way out, because the question is only meaningful for a raster whose
+    values ARE classes: `max_size` caps the pixels sampled, and a raster with more distinct values
+    than GeoDeploy can colour is reported as continuous rather than truncated into a classification
+    that would mis-colour most of the map. This DEM answers 12,145 — which is the correct answer to
+    "are you categorical", and it is no.
+    """
+    from ...services.titiler import MAX_COLOR_CLASSES
+
+    result = await db.execute(
+        select(RasterLayer).where(RasterLayer.id == layer_id, visible_to(user, RasterLayer)))
+    layer = result.scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not found.")
+    if layer.status != "ready":
+        raise HTTPException(409, "Layer is not ready yet.")
+
+    import httpx
+    settings = get_settings()
+    cog_url = f"s3://{settings.storage_bucket}/{layer.s3_key}"
+    params = {"url": cog_url, "categorical": "true", "bidx": band,
+              # A SAMPLE, not the whole raster. A full read of a large COG to answer "which classes
+              # are in here" would hold the request open for minutes; a classification's values all
+              # appear in any decent sample, and the count only has to be right enough to decide
+              # whether this is categorical at all.
+              "max_size": 1024}
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.get(f"{settings.titiler_url}/cog/statistics", params=params)
+            r.raise_for_status()
+            stats = r.json()
+    except Exception as exc:
+        raise HTTPException(502, f"Could not read raster values: {exc}") from exc
+
+    band_stats = next((s for s in stats.values() if isinstance(s, dict)), None)
+    histogram = (band_stats or {}).get("histogram") or []
+    if len(histogram) < 2:
+        raise HTTPException(422, "No usable statistics returned.")
+    counts, values = histogram[0], histogram[1]
+
+    entries = []
+    for value, count in zip(values, counts):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        # INTEGERS ONLY. TiTiler maps a colour to a pixel VALUE, so 3.7 has nothing to key on — and
+        # a raster of fractional values is continuous whatever its histogram looks like.
+        if number != int(number):
+            return {"categorical": False, "values": [], "count": len(values),
+                    "reason": "This raster holds fractional values, so it is continuous — use a "
+                              "colour ramp and a stretch."}
+        entries.append({"value": int(number), "count": int(count or 0)})
+
+    entries = [e for e in entries if e["count"] > 0]
+    entries.sort(key=lambda e: e["value"])
+    if len(entries) > MAX_COLOR_CLASSES:
+        return {"categorical": False, "values": [], "count": len(entries),
+                "reason": f"{len(entries)} distinct values — more than the {MAX_COLOR_CLASSES} a "
+                          f"classification can carry, so this reads as continuous data."}
+    return {"categorical": True, "values": entries, "count": len(entries)}
+
+
 @router.post("/upload", response_model=JobStatus, status_code=202)
 async def upload_raster(
     file: UploadFile = File(...),

@@ -2556,6 +2556,29 @@
     // with its own built-in terrain ramp and ignores the layer's colormap entirely, so showing the
     // layer's palette here would be a legend describing a map nobody is looking at.
     const algorithm = effectiveAlgorithm(srcId);
+    // A raster classified by VALUE is a list of swatches, not a strip — interpolating between class
+    // 3 and class 4 means nothing, and a gradient would claim it does. The mapping is baked into the
+    // tile URL as `colormap={"3":[r,g,b,a]}`, which is the only place it exists on this page.
+    if (!algorithm) {
+      let mapping = null;
+      try { mapping = JSON.parse(parseRasterParams(srcId).colormap || 'null'); } catch (e) { mapping = null; }
+      if (mapping && typeof mapping === 'object' && Object.keys(mapping).length) {
+        // `legend-class` / `legend-label` are the classes the VECTOR legend already uses and
+        // portal.css already styles — a classified raster's legend is the same list, so it should
+        // look like one rather than inventing a second set of names with no CSS behind them.
+        return Object.keys(mapping)
+          .sort(function (a, b) { return Number(a) - Number(b); })
+          .map(function (key) {
+            const c = mapping[key] || [];
+            const css = 'rgba(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ',' +
+              ((c.length > 3 ? c[3] : 255) / 255) + ')';
+            return '<div class="legend-class">' +
+              '<span style="display:inline-block;width:14px;height:10px;border-radius:2px;' +
+              'border:1px solid var(--border);background:' + css + '"></span>' +
+              '<span class="legend-label">' + escHtml(String(key)) + '</span></div>';
+          }).join('');
+      }
+    }
     const cmap = algorithm === 'hillshade' ? 'gray'
       : algorithm === 'contours' ? 'terrain'
       : effectiveColormap(srcId);

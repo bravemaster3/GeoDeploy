@@ -25,6 +25,16 @@ Symbology that survives a round trip — into QGIS and back, and into contour li
   `--algorithm contours --increment 25`. The interval and line width are yours; the range the relief
   behind the lines is coloured over comes from the layer's stretch, because the alternative — the
   algorithm's own −12000–8000 m default — renders a survey DEM as one flat colour.
+- **Unique-values symbology for rasters.** Integer rasters — land cover, soil types, a mask — are
+  classifications, and a colour ramp over them claims that the distance between class 3 and class 4
+  means something. **Read values** pulls the distinct pixel values off the raster and gives each one
+  a colour and a label you can edit; re-reading keeps the colours you already chose. A raster that
+  is actually continuous says so rather than being carved into classes. The renderer for this
+  already existed end to end; there was simply no way to build one.
+- **The layer page's legend now describes what is on the map.** It read the layer's `colormap` and
+  nothing else, so a hillshade or a contour raster — neither of which uses that colormap — showed no
+  gradient at all and fell through to "Single symbol". It now shows the ramp the algorithm actually
+  draws with, the contour interval, and swatches for a classified raster.
 - **Fixes found by comparing what each surface actually sends.** A classified raster or one with a
   reversed palette lost exactly that when it was added to a portal from the catalog, when it was
   drawn in the editor preview, and when a viewer touched any control in a published portal — three

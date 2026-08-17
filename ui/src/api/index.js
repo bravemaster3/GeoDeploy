@@ -250,6 +250,10 @@ export const renameRasterLayer = (id, name) => api.put(`/data/raster/${id}/renam
 export const deleteRasterLayer = (id) => api.delete(`/data/raster/${id}`)
 export const listColormaps = () => api.get('/data/raster/colormaps')
 export const getRasterStats = (id) => api.get(`/data/raster/${id}/stats`)
+// The distinct pixel values of a CLASSIFIED raster. Answers `{categorical, values, reason}` — a
+// continuous raster is told apart from a classification here rather than by the caller guessing.
+export const getRasterUniqueValues = (id, band) =>
+  api.get(`/data/raster/${id}/unique-values`, { params: band ? { band } : {} })
 export const getRasterLinks = (id) => api.get(`/data/raster/${id}/links`)
 
 // Discover + import data already in the connected DB / storage (registers catalog entries, no copy)
