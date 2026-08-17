@@ -28,6 +28,8 @@ So the rule below is a default, not a verdict, and the caller can override it.
 """
 from __future__ import annotations
 
+import json
+import re
 from urllib.parse import quote
 
 # GDAL gained its PMTiles driver in 3.8. Below that the archive cannot be opened at all, so the
@@ -229,19 +231,125 @@ def fallback(layer: dict, failed: dict) -> dict | None:
     return None
 
 
+def raster_style_from_tile_url(url: str) -> dict:
+    """The GeoDeploy raster style baked into a tile template — the inverse of `titiler.get_tile_url`.
+
+    WHERE A PORTAL'S RASTER STYLING ACTUALLY LIVES. A raster is coloured by the server, so a portal
+    does not store a colormap beside the layer the way it stores a colour for a vector: it bakes the
+    choice into the tile URL, and the same GeoTIFF appears as `&colormap_name=terrain` in one portal,
+    a bare `&rescale=264.9,298.33` in another and `&algorithm=hillshade&expression=b1*5.0` in a
+    third. Read the layer's own default style instead and you draw the one styling no portal chose.
+
+    So when a portal's raster is reopened as its GeoTIFF to be restyled, this is what makes it open
+    looking like THAT portal. Anything unrecognised is skipped rather than guessed at.
+    """
+    from urllib.parse import parse_qs, unquote, urlparse
+
+    if not url:
+        return {}
+    try:
+        query = parse_qs(urlparse(url).query, keep_blank_values=False)
+    except Exception:                   # noqa: BLE001 - a URL we cannot parse simply has no style
+        return {}
+    style: dict = {}
+
+    bands = [int(b) for b in query.get("bidx", []) if str(b).strip().lstrip("-").isdigit()]
+    if bands:
+        style["bidx"] = bands
+    rescale = (query.get("rescale") or [None])[0]
+    if rescale and len(str(rescale).split(",")) == 2:
+        style["rescale"] = str(rescale)
+    algorithm = (query.get("algorithm") or [None])[0]
+    if algorithm:
+        style["algorithm"] = str(algorithm)
+        # `zfactor` travels as a pre-scale EXPRESSION, `b1*5.0`, because that is the only way to
+        # exaggerate a DEM before TiTiler computes relief from it.
+        expression = (query.get("expression") or [""])[0]
+        match = re.match(r"^\s*b\d+\s*\*\s*([0-9.]+)\s*$", str(expression))
+        if match:
+            try:
+                style["zfactor"] = float(match.group(1))
+            except ValueError:
+                pass
+    name = (query.get("colormap_name") or [None])[0]
+    if name:
+        name = str(name)
+        if name.endswith("_r"):
+            style["colormap"], style["colormap_reverse"] = name[:-2], True
+        else:
+            style["colormap"] = name
+    explicit = (query.get("colormap") or [None])[0]
+    if explicit:
+        # `{"3": [r,g,b,a]}` — an explicit colour per pixel value, which is how a classified raster
+        # travels. TiTiler takes the mapping itself because no named gradient can express one.
+        try:
+            mapping = json.loads(unquote(str(explicit)))
+        except ValueError:
+            mapping = None
+        classes = []
+        for value, rgba in sorted((mapping or {}).items(),
+                                  key=lambda kv: int(kv[0]) if str(kv[0]).lstrip("-").isdigit()
+                                  else 0):
+            if not isinstance(rgba, (list, tuple)) or len(rgba) < 3:
+                continue
+            try:
+                parts = [int(c) for c in rgba[:4]]
+            except (TypeError, ValueError):
+                continue
+            if len(parts) == 3:
+                parts.append(255)
+            classes.append({"value": int(value),
+                            "color": "#{0:02x}{1:02x}{2:02x}{3:02x}".format(*parts)})
+        if classes:
+            style["color_classes"] = classes
+            style.pop("colormap", None)         # the explicit mapping is what gets drawn
+    return style
+
+
 def _mvt_source_layer(layer: dict) -> str | None:
     """The layer name inside the tiles: Martin names it `<schema>.<table>`."""
     schema, table = layer.get("schema_name"), layer.get("table_name")
     return f"{schema}.{table}" if schema and table else None
 
 
+#: What each source IS, in the words a dropdown has room for. The `why` beside it in every
+#: described source is the sentence; this is the name. Both are shown — the name to choose by, the
+#: sentence to understand the choice — because "PMTiles" and "OAPIF" are not a choice a user can
+#: make without being told what they cost.
+_LABELS = {
+    "wmts": "Styled tiles — as GeoDeploy draws it",
+    "tilejson": "Styled tiles — as GeoDeploy draws it",
+    "xyz": "Styled tiles — as GeoDeploy draws it",
+    "cog": "The GeoTIFF — real values, restyle and classify",
+    "vector-tiles": "Vector tiles — fast, generalized per zoom",
+    "pmtiles": "Tile archive — one download, slow to open",
+    "oapif": "Features — every attribute, classify by field",
+}
+
+
+def label(source: dict) -> str:
+    """A short name for a described source, for a menu."""
+    return _LABELS.get((source or {}).get("kind"), (source or {}).get("kind") or "source")
+
+
 def alternatives(layer: dict) -> list[dict]:
-    """Every source this layer offers, best first — for a UI that lets the user choose."""
+    """Every source this layer offers, best first — for a UI that lets the user choose.
+
+    Each entry carries `label` and `is_data`, so a caller can present the choice without knowing
+    what a PMTiles archive is. `is_data` marks the surface holding real VALUES rather than a drawn
+    picture: the GeoTIFF for a raster, full features for a vector. That distinction is the entire
+    reason this list exists — it is the difference between a layer you can classify and one you can
+    only look at — and it was previously buried in a checkbox that applied to every layer at once.
+    """
     out = []
     primary = describe(layer)
     if primary:
-        out.append(primary)
+        out.append(dict(primary, label=label(primary), is_data=False))
     other = describe(layer, prefer_attributes=True)
     if other and (not primary or other["kind"] != primary["kind"]):
-        out.append(other)
+        out.append(dict(other, label=label(other), is_data=True))
+    elif primary and other and other["kind"] == primary["kind"]:
+        # The same surface both ways: a layer with only one source is not offering a choice, and
+        # saying it does would promise a restyle that cannot happen.
+        out[0]["is_data"] = True
     return out

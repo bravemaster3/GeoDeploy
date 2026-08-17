@@ -19,11 +19,16 @@ fastest source it offers, and upload a QGIS layer back — with its styling. Sit
     stored profiles, so `geodeploy login` at a shell is already a login here.
   - `sources.py` — which URL to hand QGIS. PMTiles for a tiled layer (fastest to draw, needs
     GDAL ≥ 3.8, checked at runtime), OGC API - Features otherwise or when the user asks for
-    attributes, `/vsicurl/…/cog` for rasters.
+    attributes, `/vsicurl/…/cog` for rasters. `alternatives()` returns every surface a layer
+    offers, each with a `label` and an `is_data` flag — that is what the dock's **Source** picker
+    shows. `raster_style_from_tile_url` reads a portal's baked raster styling back OUT of its tile
+    template, which is the only place a portal records how it colours a raster.
   - `export.py` — what to actually upload for a given layer.
-  - `symbology.py` — GeoDeploy style ⇄ QGIS renderer, **both directions**. Classification is never
-    recomputed here: breaks are read from the style or from the renderer, and new breaks come from
-    the instance's `/field-stats`, exactly as the CLI does.
+  - `symbology.py` — GeoDeploy style ⇄ QGIS renderer, **both directions, vector and raster**.
+    Classification is never recomputed here: breaks are read from the style or from the renderer,
+    and new breaks come from the instance's `/field-stats`, exactly as the CLI does. The raster half
+    is `raster_to_qgis` / `raster_from_qgis` (colormap, stretch, band, colour-per-value, hillshade),
+    and `comparable_style` folds both shapes so a round trip reports only real edits.
   - `vendor/geodeploy/` — the published client, checked in (see below).
 - `scripts/vendor.py` — refresh the vendored copy; `--check` in CI.
 
@@ -55,8 +60,16 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   QGIS session as the real test.
 - `experimental=True` in `metadata.txt` until that happens.
 - No icon yet (`icon.png` is referenced by `metadata.txt` and must exist before upload).
-- Styling covers single symbol, graduated and categorized. **Size-from-a-field is not translated
-  yet** in either direction, though the instance and the CLI both support it.
+- Styling covers single symbol, graduated and categorized for vectors, and colormap / stretch /
+  band / colour-per-value / hillshade for rasters — **both directions**. Size-from-a-field
+  round-trips too. **3D extrusion does not yet**: it survives a push (`merge_style` preserves it)
+  but QGIS's 3D symbols are not read or written, so it cannot be edited here. That is the next
+  round — see `notes_temp/notes_for_future.md`.
+- **Which renderer QGIS offers is decided by the SOURCE, not by us.** Server-rendered raster tiles
+  arrive as one band of RGBA ("Singleband color data" — nothing to classify), and vector tiles get
+  `QgsVectorTileBasicRenderer`, which has no categorized or graduated mode. The **Source** picker
+  and **"Restyle this layer…"** are the two ways to get onto a surface that can be restyled; the
+  default is still the fast one, so nothing is slower unless it is asked for.
 - Uploading writes the layer out first (`export.py`) rather than reading `layer.source()` as a
   path: a FILTERED layer's file holds more than the layer does, and a memory or PostGIS layer has no
   file at all. A plain unfiltered file is sent as-is, so nothing is re-encoded needlessly. A remote
@@ -65,6 +78,54 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
+2026-08-17m (**"raster symbology can't be changed, and for polygons I can only change fill colour"
+— neither was a symbology limit. It was the SOURCE.** QGIS decides which renderer to offer from the
+layer TYPE: server-rendered raster tiles reach it as one band of RGBA, so Symbology shows
+"Singleband color data" with no bands and no classes; vector tiles get `QgsVectorTileBasicRenderer`,
+a flat list of symbols with no categorized or graduated mode and no attribute statistics to classify
+from. Both are the right way to LOOK at a layer and neither can be restyled beyond a colour. Three
+changes, and the requirement driving all of them was *faithful both ways*:
+*1. `symbology.raster_to_qgis`* — the missing half. `raster_from_qgis` has read QGIS raster
+renderers for a while but nothing WROTE them, so `plugin.py` excluded the COG from styling
+(`source["kind"] != "cog"`) and "prefer the real data" was a TRADE: values or GeoDeploy's colours,
+never both. Now colormap → `QgsSingleBandPseudoColorRenderer` over the named ramp, `color_classes` →
+`QgsPalettedRasterRenderer`, `algorithm: hillshade` → `QgsHillshadeRenderer` at GeoDeploy's own
+315/45, three bands → `QgsMultiBandColorRenderer`, and a bare stretch → gray — chosen in the SAME
+ORDER `services/titiler.get_tile_url` chooses, or QGIS would show a colormap the portal ignores.
+**QGIS does not keep a ramp's NAME** (only ColorBrewer/cpt-city ramps answer `schemeName`; viridis
+and friends are anonymous gradients), so `P_COLORMAP` records it alongside the ramp's COLOURS and
+the name is believed only while those still match — forwards, or exactly reversed, which is how
+flipping the ramp in QGIS travels back as `colormap_reverse`. A different ramp means no name, not
+the last one we remember. Also new: `raster_style_from_legend` (a raster legend was being read by
+the VECTOR reader, which returned `{"color": …}` — a key no raster renderer can use, so a public
+raster could never arrive coloured), `raster_style_of` for the flat stored shape, `_qcolor`
+(**Qt reads `#rrggbbaa` as `#AARRGGBB`** — GeoDeploy writes alpha LAST, so a transparent "no data"
+class became opaque near-black), and raster branches in `comparable_style`/`merge_style`: a raster
+read-back is the WHOLE colouring, `bidx: [1]` and no band are the same picture, and a hillshade
+ignores the colormap so a stale one is not a difference.
+*2. A per-layer Source picker* replaces the global "prefer the real data" checkbox — the right
+question in the wrong place: it applied to whatever was added next, named no layer, and listed
+neither surface. `sources.alternatives` now labels each with `is_data`. The default is unchanged
+(the fast tiles), and a restyle deliberately does NOT make the data surface sticky.
+*3. "Restyle this layer…"* reopens the active layer from its data — GeoTIFF, or full features —
+carrying the styling it is wearing now, and replaces it IN PLACE (found by layer id, not
+`list.index`, whose wrapper comparison would have appended it to the end of a portal group and
+changed the portal's drawing order). For a portal raster the current styling is parsed out of the
+TILE URL (`sources.raster_style_from_tile_url`), because that is where a portal records how it
+colours a raster — reading the layer's default would restyle it to something no portal chose.
+*Speed, since the ask was "faithful, not slower":* the default source is untouched; a colormap with
+no stretch reuses the range QGIS already computed when it opened the raster rather than asking the
+provider for band statistics (range requests over the network on a remote COG — `_default_range`),
+and falls back to a bounded 250k-pixel sample only if that is absent. Adding a raster the ordinary
+way now also skips a pointless style fetch and no longer logs "saved style could not be applied" for
+every one of them — those tiles are already coloured by the server.
+*And two fidelity bugs found on the way:* "Save styling to GeoDeploy" sent `opacity: 1.0` and
+`popup_fields: []` hardcoded, so saving a colour from QGIS made a half-transparent layer opaque and
+DELETED its popup fields along with anything else QGIS cannot draw. It now merges over the stored
+style and sends the layer's real opacity, the same rule the portal push path already used.
+Tests: `scripts/test_raster_symbology.py` — 9 styles applied and read back through the comparison
+`_style_differs` uses, plus alpha, reversal, restretching, a swapped ramp, declined tile layers, the
+merge rules, both readers, the tile-URL parser and the no-statistics guarantee.)
 2026-08-17l (**a raster could not be restyled at all, and three symbol properties never travelled.**
 *The raster blocker was server-side and two layers deep:* the only source of a raster's real band
 values is its COG, and `routers/data/raster.py::raster_cog` required `is_public` with NO authenticated
