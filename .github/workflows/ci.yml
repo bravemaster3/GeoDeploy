@@ -128,6 +128,16 @@ jobs:
         # is CONSTRUCTED. This builds the dock and checks every signal target exists.
         run: python integrations/qgis-plugin/scripts/smoke.py
 
+      - name: Vector-tile symbology really classifies
+        # A tile layer that arrives in the right colour and nothing else looks styled and is not.
+        # QGIS is not installable here, so this stubs the tile renderer and asserts on the filter
+        # expressions handed to it — including the two edges that silently drop features, an open
+        # outer bound and an inclusive top break.
+        run: python integrations/qgis-plugin/scripts/test_tile_symbology.py
+
+      - name: The plugin picks the fast source, and degrades when it is absent
+        run: python integrations/qgis-plugin/scripts/test_sources.py
+
       - name: metadata.txt has what plugins.qgis.org requires
         run: |
           python - <<'PY'

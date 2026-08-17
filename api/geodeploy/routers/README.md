@@ -311,6 +311,16 @@ deliberately NOT visibility-filtered (published portals depend on them).
 - No rate limiting beyond nginx; no pagination on list endpoints (fine at current scale).
 
 ## Last updated
+2026-08-17 (`data/vector.py`: **`GET /{ref}/tiles/{z}/{x}/{y}`** — public XYZ vector tiles for a tiled
+GeoParquet layer, read a tile at a time from its PMTiles archive via `services/pmtiles_reader`. Same
+public terms as `/pmtiles` and Martin's `/tiles/` (a published portal is unauthenticated). **204, not
+404, for a tile the archive lacks** — sparse is normal and a 404 invites client retries. `vector_tilejson`
+now also serves **file-backed layers**, reading minzoom/maxzoom/bounds/layer-name from the archive
+header + metadata instead of guessing; and the PostGIS branch declares **`maxzoom: 18`, not 22** —
+Martin answers at any zoom, but a client that believes tiles exist at z22 fetches a fresh empty tile
+at every step past the real detail instead of over-zooming the last good one. Nothing in the UI,
+templates or `portal_generator` consumes this TileJSON — it is interop-only, so the portals are
+unaffected.)
 2026-08-12 (`public.py` — the anonymous instance index, with the admin toggle; `data/exports.py` —
 whole-layer and clipped downloads for both layer kinds. Both added to `main.py`'s `_PUBLIC_CORS`.)
 2026-08-07b (`portals.py`: **SVG accepted for portal assets** — a raster logo goes soft on any retina

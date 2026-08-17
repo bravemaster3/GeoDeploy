@@ -124,8 +124,19 @@ def _use_points(symbol, layer0) -> None:
 
 
 def _symbol_for(qgis_layer, color: str | None, style: dict):
-    """A single symbol of the right geometry kind, coloured and sized from `style`."""
-    symbol = QgsSymbol.defaultSymbol(qgis_layer.geometryType())
+    """A single symbol matching a LAYER's geometry kind, coloured and sized from `style`."""
+    return _symbol_of(qgis_layer.geometryType(), color, style)
+
+
+def _symbol_of(geometry_type, color: str | None, style: dict):
+    """A single symbol of the given geometry kind, coloured and sized from `style`.
+
+    Split out from `_symbol_for` for the vector-TILE renderer, which has no layer to ask: it takes
+    a geometry type directly. Everything below — marker shape, point radius, line width and dash,
+    fill opacity, data-defined size — has to behave identically for tiles and for features, so
+    there is one body and two ways in rather than two bodies that drift.
+    """
+    symbol = QgsSymbol.defaultSymbol(geometry_type)
     if symbol is None:
         return None
     if color:
@@ -246,6 +257,34 @@ def _log(message: str) -> None:
         pass
 
 
+#: Where a vector-tile layer remembers the name of the layer INSIDE its tiles. The tile renderer
+#: needs it for every style it builds, and only the code that read the TileJSON knows it — so it is
+#: written once, on the layer, rather than threaded through every caller that might restyle later.
+P_SOURCE_LAYER = "geodeploy/source_layer"
+
+
+def apply(qgis_layer, style: dict, row: dict | None = None) -> bool:
+    """Style ANY GeoDeploy layer — feature or vector tile — the way GeoDeploy draws it.
+
+    The one entry point every caller should use. A vector-TILE layer needs a completely different
+    renderer from a feature layer, and callers kept forgetting: the portal-group path handed tile
+    layers to `apply_to_qgis`, which silently did nothing, so a portal opened as a group came in
+    unstyled while the same layer added on its own came in styled. Deciding here, once, from the
+    layer's actual type is the only version of this that cannot rot.
+    """
+    if not QGIS or not style:
+        return False
+    try:
+        from qgis.core import QgsVectorTileLayer
+        is_tiles = isinstance(qgis_layer, QgsVectorTileLayer)
+    except ImportError:                 # pragma: no cover - older QGIS has no vector tiles
+        is_tiles = False
+    if is_tiles:
+        source_layer = qgis_layer.customProperty(P_SOURCE_LAYER) or None
+        return apply_to_vector_tiles(qgis_layer, row or {}, source_layer, style)
+    return apply_to_qgis(qgis_layer, style)
+
+
 def apply_to_qgis(qgis_layer, style: dict) -> bool:
     """Render `qgis_layer` the way GeoDeploy renders it. True when a renderer was set.
 
@@ -316,58 +355,104 @@ def _hex(color) -> str:
 MAX_COLOR_CLASSES = 128
 
 
-def apply_to_vector_tiles(tile_layer, row: dict, source_layer: str | None) -> bool:
-    """Colour a vector TILE layer with the layer's own colour.
+def apply_to_vector_tiles(tile_layer, row: dict, source_layer: str | None,
+                          style: dict | None = None) -> bool:
+    """Draw a vector TILE layer with the layer's real symbology — classes and all.
 
-    QGIS renders vector tiles through `QgsVectorTileBasicRenderer`, which takes styles per geometry
-    type rather than a feature renderer — so the classified symbology `apply_to_qgis` builds does
-    not apply here. This is the honest subset: the right colour and the right geometry, instead of
-    whichever colour QGIS picked at random.
+    QGIS renders tiles through `QgsVectorTileBasicRenderer`, which takes a LIST of styles, each with
+    its own filter expression. That is the same shape MapLibre's `step`/`match` expressions have, so
+    a graduated or categorized layer translates directly: one style per class, filtered to that
+    class's values. The earlier version only set a base colour and told the user to give up speed to
+    get their symbology back — a bad trade, and an unnecessary one.
 
-    Anything richer needs the feature data, which is what "prefer the real data" is for.
+    Falls back to a single style when there is nothing to classify, and returns False only when even
+    that is impossible.
     """
     if not QGIS:
         return False
     try:
         from qgis.core import (QgsVectorTileBasicRenderer, QgsVectorTileBasicRendererStyle,
-                               QgsSymbol, QgsWkbTypes)
-        from qgis.PyQt.QtGui import QColor
+                               QgsWkbTypes)
     except ImportError:                 # pragma: no cover - older QGIS
         return False
 
-    style = ((row.get("default_style") or {}).get("style")
-             if isinstance(row.get("default_style"), dict) else {}) or {}
-    colour = QColor(style.get("color") or "#3b82f6")
+    style = style if style is not None else (
+        (row.get("default_style") or {}).get("style")
+        if isinstance(row.get("default_style"), dict) else {}) or {}
+
     geom = (row.get("geometry_type") or "").lower()
     if "polygon" in geom:
-        kinds = [(QgsWkbTypes.PolygonGeometry, QgsSymbol.Fill)]
+        geometry_type = QgsWkbTypes.PolygonGeometry
     elif "line" in geom:
-        kinds = [(QgsWkbTypes.LineGeometry, QgsSymbol.Line)]
+        geometry_type = QgsWkbTypes.LineGeometry
     else:
-        kinds = [(QgsWkbTypes.PointGeometry, QgsSymbol.Marker)]
+        geometry_type = QgsWkbTypes.PointGeometry
 
+    model = None
     try:
-        styles = []
-        for geometry_type, symbol_type in kinds:
-            symbol = QgsSymbol.defaultSymbol(geometry_type)
-            if symbol is None:
-                continue
-            symbol.setColor(colour)
-            entry = QgsVectorTileBasicRendererStyle("geodeploy", source_layer or "", geometry_type)
-            entry.setSymbol(symbol)
-            entry.setEnabled(True)
-            styles.append(entry)
+        from geodeploy import parse_style
+        model = parse_style(style) if style else None
+    except Exception:                   # noqa: BLE001 - fall through to a single symbol
+        model = None
+
+    def _style(name, colour, expression):
+        # THE SAME symbol builder the feature path uses — marker shape, radius, line width, dash,
+        # fill opacity and data-defined size all included. A second implementation here is how the
+        # two surfaces would start drawing the same layer differently.
+        symbol = _symbol_of(geometry_type, colour, style)
+        if symbol is None:
+            return None
+        entry = QgsVectorTileBasicRendererStyle(name, source_layer or "", geometry_type)
+        entry.setSymbol(symbol)
+        entry.setEnabled(True)
+        if expression:
+            entry.setFilterExpression(expression)
+        return entry
+
+    styles = []
+    try:
+        if model is not None and model.mode == "graduated" and model.field and model.classes:
+            for i, cls in enumerate(model.classes):
+                # Open edges mean "everything below/above", exactly as they do on the map.
+                lo, hi = cls.get("min"), cls.get("max")
+                field = '"{0}"'.format(model.field)
+                parts = []
+                if lo is not None:
+                    parts.append("{0} >= {1}".format(field, lo))
+                if hi is not None:
+                    # The LAST class keeps its upper bound inclusive, or the largest value in the
+                    # data falls through every filter and disappears.
+                    op = "<=" if i == len(model.classes) - 1 else "<"
+                    parts.append("{0} {1} {2}".format(field, op, hi))
+                entry = _style("class-{0}".format(i), cls.get("color"), " AND ".join(parts) or None)
+                if entry:
+                    styles.append(entry)
+        elif model is not None and model.mode == "categorized" and model.field and model.categories:
+            for i, cat in enumerate(model.categories):
+                value = cat.get("value")
+                literal = ("'" + str(value).replace("'", "''") + "'"
+                           if not isinstance(value, (int, float)) else str(value))
+                entry = _style("cat-{0}".format(i), cat.get("color"),
+                               '"{0}" = {1}'.format(model.field, literal))
+                if entry:
+                    styles.append(entry)
+            # Everything not listed, drawn in the same "other" colour the map uses.
+            other = _style("other", model.other_color or "#9ca3af", None)
+            if other:
+                styles.insert(0, other)      # first = drawn underneath the named categories
+        if not styles:
+            single = _style("geodeploy", (style or {}).get("color") or "#3b82f6", None)
+            if single:
+                styles.append(single)
         if not styles:
             return False
+
         renderer = QgsVectorTileBasicRenderer()
         renderer.setStyles(styles)
         tile_layer.setRenderer(renderer)
         tile_layer.triggerRepaint()
-        if style.get("color_mode") in ("graduated", "categorized"):
-            _log("Drawn as vector tiles for speed, so only the base colour was applied. Tick "
-                 "'Prefer the real data' to get the full classified symbology.")
         return True
-    except Exception as exc:            # noqa: BLE001 - never stop a layer loading over a colour
+    except Exception as exc:            # noqa: BLE001 - never stop a layer loading over a style
         _log("Could not style the vector tiles: {0}".format(exc))
         return False
 

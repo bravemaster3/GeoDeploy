@@ -47,12 +47,9 @@
       @click="onTile" :disabled="tiling || layer.tile_status === 'tiling'"
       class="p-1.5 rounded transition-all text-muted-foreground/70 hover:text-violet-400 disabled:opacity-40"
       :class="layer.tile_status === 'tiling' ? '' : 'opacity-0 group-hover:opacity-100'"
-      :title="layer.tile_status === 'ready' ? 'Re-tile for fast display (regenerate PMTiles)' : 'Tile for fast seamless display (PMTiles)'"
+      :title="tileTitle(layer)"
     >
-      <svg class="w-4 h-4" :class="(tiling || layer.tile_status === 'tiling') ? 'animate-pulse' : ''"
-        viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
-        <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      <TilesIcon class="w-4 h-4" :class="(tiling || layer.tile_status === 'tiling') ? 'animate-pulse' : ''" />
     </button>
     <!-- Restart processing: a file-backed (GeoParquet) layer whose convert/prep stalled or failed —
          re-runs the right stage without a re-upload (e.g. the worker was restarted mid-job). Left of
@@ -106,7 +103,8 @@
 <script setup>
 import { RouterLink } from 'vue-router'
 import { computed, ref, nextTick } from 'vue'
-import { TrashIcon, RefreshIcon, LinkIcon } from '@/views/icons'
+import { TrashIcon, RefreshIcon, LinkIcon, TilesIcon } from '@/views/icons'
+import { tileTitle, confirmTiling } from '@/lib/tiling'
 import { useAuthStore } from '@/stores/auth'
 import { useDataStore } from '@/stores/data'
 import StatusBadge from '@/components/shared/StatusBadge.vue'
@@ -156,6 +154,7 @@ async function onReprocess() {
 }
 async function onTile() {
   if (tiling.value || props.layer.tile_status === 'tiling') return
+  if (!confirmTiling(props.layer)) return
   tiling.value = true
   try { await dataStore.tileVector(props.layer.id) }
   catch (e) { alert(e.response?.data?.detail || 'Could not start tiling.') }

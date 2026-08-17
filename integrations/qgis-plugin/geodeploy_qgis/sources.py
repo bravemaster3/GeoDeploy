@@ -137,41 +137,51 @@ def describe(layer: dict, prefer_attributes: bool = False) -> dict | None:
                     "defaults rather than GeoDeploy's styling"),
         }
 
-    # A tiled layer says so in three different ways depending on who is asking: the authenticated
-    # row carries `pmtiles_key`/`tile_status`, and the PUBLIC index carries neither — it advertises
-    # the archive as a link instead. Checking only the fields meant an anonymous caller silently
-    # got the slow path for a layer that had been tiled precisely to be fast.
-    pmtiles_link = _link(layer, "pmtiles")
-    tiled = bool(layer.get("pmtiles_key")) or layer.get("tile_status") == "ready" or bool(pmtiles_link)
-    if tiled and not prefer_attributes and gdal_supports_pmtiles():
-        return {
-            "kind": "pmtiles",
-            # `/vsicurl/` is not optional. Handed the bare URL, GDAL looks for a file of that name
-            # on disk and fails with "does not exist in the file system" — it says so itself, and
-            # suggests this prefix. It is also what QGIS's own Add Vector Layer builds when you give
-            # it an HTTP(S) source, which is why adding one by hand worked where this did not.
-            "uri": "/vsicurl/" + (pmtiles_link or f"{base}/api/data/vector/{ref}/pmtiles"),
-            "provider": "ogr",
-            "why": "one pre-generalized archive, read by range request instead of re-queried",
-        }
-
-    # POSTGIS: MARTIN'S VECTOR TILES, not OGC API - Features.
+    # VECTOR TILES, FOR BOTH BACKENDS, DESCRIBED BY A TILEJSON.
     #
-    # Both are offered; they are not close. Tiles are generalized per zoom, cut server-side and
-    # fetched for the viewport, so a 350k-feature road layer draws as fast as a small one. OAPIF
-    # asks the server for features and pages through them — exact and complete, and slow enough on
-    # a large layer that it reads as broken. Defaulting to the slower one was simply wrong.
+    # One path now covers PostGIS (Martin builds the tiles from the table) and tiled GeoParquet (the
+    # server reads them out of the PMTiles archive a tile at a time). The plugin does not need to
+    # know which: it reads the TileJSON, which carries the tile template, the bounds, the real zoom
+    # range and the name of the layer inside the tiles.
     #
-    # The trade is real and is what the checkbox is for: tiles carry generalized geometry and only
-    # the attributes the tiles hold, so "prefer the real data" still gets OAPIF.
-    mvt = _link(layer, "xyz-mvt")
-    if mvt and not prefer_attributes:
+    # Reading it rather than guessing is what fixes three separate complaints at once — "zoom to
+    # layer goes somewhere the layer is not" (no bounds), "nothing displays after zooming in"
+    # (requests past the deepest real zoom come back empty instead of over-zooming the last good
+    # tile), and the retry storms in the log.
+    tilejson = _link(layer, "tilejson")
+    tiled = (bool(layer.get("pmtiles_key")) or layer.get("tile_status") == "ready"
+             or bool(_link(layer, "pmtiles")))
+    if not tilejson and (layer.get("storage_backend") == "postgis" or tiled):
+        tilejson = f"{base}/api/data/vector/{ref}/tilejson"
+    if tilejson and not prefer_attributes:
         return {
             "kind": "vector-tiles",
-            "uri": mvt,
+            "tilejson_url": tilejson,
+            # Only used if the TileJSON cannot be read — see `_build_layer`.
+            "uri": _link(layer, "xyz-mvt") or "",
             "source_layer": layer.get("source_layer") or _mvt_source_layer(layer),
             "provider": "vectortile",
             "why": "vector tiles, generalized per zoom and fetched for the view",
+        }
+
+    # LAST RESORT FOR A TILED LAYER, and deliberately last.
+    #
+    # Opening the archive with GDAL looks like the obvious fast path and is the opposite. The driver
+    # has no viewport: it presents the archive as one dataset, so QGIS's opening questions — feature
+    # count, extent — walk every tile at the deepest zoom over HTTP. Measured on this project's own
+    # instance, a FIVE-FEATURE layer tiles to 2,171,238 entries across zooms 0–13, which is why the
+    # small layers hung worst. Only reached when the instance publishes no TileJSON (an older
+    # build), where it still beats paging millions of features through OAPIF.
+    pmtiles_link = _link(layer, "pmtiles")
+    if tiled and not prefer_attributes and pmtiles_link and gdal_supports_pmtiles():
+        return {
+            "kind": "pmtiles",
+            # `/vsicurl/` is not optional. Handed the bare URL, GDAL looks for a file of that name
+            # on disk and fails with "does not exist in the file system".
+            "uri": "/vsicurl/" + pmtiles_link,
+            "provider": "ogr",
+            "why": ("the whole tile archive — this instance publishes no TileJSON for it, so QGIS "
+                    "has to read the archive rather than a viewport, and opening it is slow"),
         }
 
     # OAPIF is addressed by COLLECTION here, not by the service: QGIS's own dialog needs the service
@@ -188,6 +198,35 @@ def describe(layer: dict, prefer_attributes: bool = False) -> dict | None:
         "provider": "OAPIF",
         "why": why,
     }
+
+
+def fallback(layer: dict, failed: dict) -> dict | None:
+    """The next source to try when `failed` could not be opened, or None when there is none left.
+
+    THE CASE THAT NEEDS THIS: an instance that has not been updated yet publishes no TileJSON for a
+    tiled GeoParquet layer. The plugin now asks for one first — rightly, it is the fast path — and
+    without a fallback that layer would simply refuse to open on every older instance, turning a
+    speed fix into a compatibility break. So a vector-tile source that fails drops to the archive
+    (slow, but it draws) and then to OGC API - Features (slower, but always there).
+    """
+    kind = (failed or {}).get("kind")
+    if kind == "vector-tiles":
+        pmtiles_link = _link(layer, "pmtiles")
+        tiled = (bool(layer.get("pmtiles_key")) or layer.get("tile_status") == "ready"
+                 or bool(pmtiles_link))
+        if tiled and pmtiles_link and gdal_supports_pmtiles():
+            return {
+                "kind": "pmtiles",
+                "uri": "/vsicurl/" + pmtiles_link,
+                "provider": "ogr",
+                "why": ("the whole tile archive — this instance publishes no per-tile URL for it, "
+                        "so QGIS has to read the archive, and opening it is slow"),
+            }
+    if kind in ("vector-tiles", "pmtiles"):
+        return describe(layer, prefer_attributes=True)
+    if kind in ("wmts", "tilejson", "xyz"):
+        return describe(layer, prefer_attributes=True)      # the COG
+    return None
 
 
 def _mvt_source_layer(layer: dict) -> str | None:

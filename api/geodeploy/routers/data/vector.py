@@ -655,14 +655,10 @@ async def vector_tilejson(layer_ref: str, request: Request, db: AsyncSession = D
     layer = result.scalar_one_or_none()
     if not await _publicly_readable(layer, db):
         raise HTTPException(404, "Layer not found.")
-    if getattr(layer, "storage_backend", "postgis") != "postgis":
-        raise HTTPException(404, "No vector-tile TileJSON for this layer (file-backed — use the "
-                                 "GeoParquet or PMTiles asset).")
 
     proto = request.headers.get("x-forwarded-proto") or request.url.scheme
     host = request.headers.get("host") or request.url.netloc
     base = f"{proto}://{host}"
-    src = f"{layer.schema_name}.{layer.table_name}"
     fields = {}
     if layer.columns:
         try:
@@ -670,13 +666,60 @@ async def vector_tilejson(layer_ref: str, request: Request, db: AsyncSession = D
                 fields[c["name"]] = c.get("type", "String")
         except (ValueError, KeyError, TypeError):
             pass
+
+    if getattr(layer, "storage_backend", "postgis") != "postgis":
+        # A TILED GeoParquet layer has a TileJSON too, pointing at the per-tile reader above. Until
+        # this existed the only vector-tile answer for these layers was "open the whole archive",
+        # which is the slow path this endpoint exists to replace — and the zoom range and bounds
+        # below are read from the archive itself rather than guessed, so a client knows exactly
+        # which tiles are worth asking for.
+        from ...services import pmtiles_reader
+
+        key = await _pmtiles_key(layer_ref, db)
+        if not key:
+            raise HTTPException(404, "No vector-tile TileJSON for this layer — it is file-backed "
+                                     "and not tiled yet. Tile it in My Data, or use the GeoParquet "
+                                     "asset.")
+        try:
+            fetch = _pmtiles_fetch(key)
+            header, _ = await run_in_threadpool(pmtiles_reader.open_archive, key, fetch)
+            meta = await run_in_threadpool(pmtiles_reader.metadata, key, fetch)
+        except Exception as exc:      # noqa: BLE001 - an unreadable archive is a missing TileJSON
+            raise HTTPException(404, f"Tiles unreadable: {exc}")
+        # tippecanoe names the layer inside the tiles; a consumer that guesses it draws nothing.
+        vector_layers = meta.get("vector_layers") or []
+        src = (vector_layers[0].get("id") if vector_layers else None) or "geodeploy"
+        from ...services.share_links import public_ref
+        api = f"{base}/api/data/vector/{public_ref(layer)}"
+        tj = {
+            "tilejson": "3.0.0",
+            "name": layer.name,
+            "scheme": "xyz",
+            "tiles": [f"{api}/tiles/{{z}}/{{x}}/{{y}}"],
+            "minzoom": header.min_zoom,
+            "maxzoom": header.max_zoom,
+            "bounds": header.bounds,
+            "center": [(header.min_lon + header.max_lon) / 2,
+                       (header.min_lat + header.max_lat) / 2, 0],
+            "vector_layers": vector_layers or [{"id": src, "fields": fields}],
+        }
+        return SafeJSONResponse(tj, headers={"Access-Control-Allow-Origin": "*",
+                                             "Cache-Control": "public, max-age=300"})
+
+    src = f"{layer.schema_name}.{layer.table_name}"
     tj = {
         "tilejson": "3.0.0",
         "name": layer.name,
         "scheme": "xyz",
         "tiles": [f"{base}/tiles/{src}/{{z}}/{{x}}/{{y}}"],
         "minzoom": 0,
-        "maxzoom": 22,
+        # NOT 22. Martin builds these tiles live from PostGIS, so it will answer at any zoom — but a
+        # client that believes tiles exist at z22 requests a fresh one at every zoom step past the
+        # point where they stop adding detail, and gets an empty tile back. Declaring the depth
+        # where the data is genuinely resolved lets QGIS and MapLibre OVER-ZOOM the last real tile
+        # instead: same picture, no request. Vector tiles scale without pixelating, which is what
+        # makes this safe.
+        "maxzoom": 18,
         "vector_layers": [{"id": src, "fields": fields}],
     }
     bbox = json.loads(layer.bbox) if layer.bbox else None
@@ -1055,6 +1098,62 @@ async def vector_pmtiles(layer_ref: str, request: Request, db: AsyncSession = De
     body = obj["Body"]
     return StreamingResponse(body.iter_chunks(256 * 1024), status_code=status,
                              media_type="application/octet-stream", headers=headers)
+
+
+def _pmtiles_fetch(key: str):
+    """A `fetch(offset, length) -> bytes` over the archive in object storage. SYNCHRONOUS —
+    `pmtiles_reader` is plain code, so the caller runs the whole lookup in a threadpool rather than
+    bouncing between loops for each of its one or two range reads."""
+    settings = get_settings()
+    from ...services.minio import get_s3_client
+    s3 = get_s3_client()
+
+    def fetch(offset: int, length: int) -> bytes:
+        obj = s3.get_object(Bucket=settings.storage_bucket, Key=key,
+                            Range=f"bytes={offset}-{offset + length - 1}")
+        return obj["Body"].read()
+    return fetch
+
+
+@router.get("/{layer_ref}/tiles/{z}/{x}/{y}")
+async def vector_pmtiles_tile(layer_ref: str, z: int, x: int, y: int,
+                              db: AsyncSession = Depends(get_db)):
+    """PUBLIC XYZ vector tiles for a tiled GeoParquet layer, read a tile at a time out of its
+    PMTiles archive.
+
+    THE POINT: a `{z}/{x}/{y}` URL is viewport-driven, and the archive is not. Handed the whole
+    archive, GDAL's PMTiles driver walks every tile at the deepest zoom just to answer "how many
+    features?" — on this project's own instance a FIVE-FEATURE layer tiles to 2.17 million entries,
+    which is why QGIS hung on small layers. Here the client asks for the four tiles under its
+    viewport and the server does one range read each (the header and root directory are cached).
+
+    Same public terms as `/pmtiles` and Martin's `/tiles/` — a published portal is unauthenticated,
+    so its display sources must be too. 204 for a tile the archive does not contain: sparse is
+    normal, and a 404 invites clients to retry.
+    """
+    from ...services import pmtiles_reader
+
+    key = await _pmtiles_key(layer_ref, db)
+    if not key:
+        raise HTTPException(404, "No tiles for this layer.")
+    try:
+        got = await run_in_threadpool(
+            pmtiles_reader.get_tile, key, _pmtiles_fetch(key), z, x, y)
+    except pmtiles_reader.PMTilesError as exc:
+        raise HTTPException(404, f"Tiles unreadable: {exc}")
+    except Exception:
+        # A re-tile repoints the layer at a new key; the cached one 404s at storage. Drop both
+        # caches so the next request re-reads, exactly as `/pmtiles` does.
+        _PMTILES_KEY_CACHE.pop(layer_ref, None)
+        pmtiles_reader.forget(key)
+        raise HTTPException(404, "Tiles not found.")
+
+    headers = {"Access-Control-Allow-Origin": "*",
+               "Cache-Control": "public, max-age=3600"}
+    if got is None:
+        return Response(status_code=204, headers=headers)
+    body, header = got
+    return Response(body, media_type=header.media_type, headers=headers)
 
 
 # layer_id → s3_key prefix for the parquet range proxy. Cached because duckdb-wasm issues MANY

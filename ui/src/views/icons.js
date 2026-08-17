@@ -59,6 +59,16 @@ export const CopyIcon = { render: () => h('svg', { viewBox: '0 0 24 24', fill: '
 ]) }
 // Stacked tiles — the PMTiles action, and the closest thing to "pre-cut into pieces".
 export const LayersIcon = icon('M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5')
+// Tiling — the four-square grid, NOT LayersIcon. My Data has drawn the "tile this layer" action as
+// this grid since it existed; the layer page reached for the stack of layers instead, so the same
+// action wore two symbols and the stack already means "a layer" everywhere else. Exported here so
+// the two places share one definition rather than each keeping an inline copy.
+export const TilesIcon = { render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
+  h('rect', { x: 3, y: 3, width: 7, height: 7 }),
+  h('rect', { x: 14, y: 3, width: 7, height: 7 }),
+  h('rect', { x: 14, y: 14, width: 7, height: 7 }),
+  h('rect', { x: 3, y: 14, width: 7, height: 7 }),
+]) }
 export const RefreshIcon = icon('M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15')
 export const MailIcon = { render: () => h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [
   h('rect', { x: 2, y: 4, width: 20, height: 16, rx: 2 }),
