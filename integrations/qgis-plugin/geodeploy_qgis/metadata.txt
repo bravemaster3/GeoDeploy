@@ -6,7 +6,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.1.1
+version=0.1.2
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -21,7 +21,11 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.1.1 - Vector layers are added through their TileJSON, so QGIS asks only for tiles that
+changelog=0.1.2 - Points are drawn at the size and colour the map draws them. A layer whose style
+    names a colour but no radius kept QGIS's default marker number under our points unit - a third
+    of the intended size - under QGIS's dark default outline, so styled point layers arrived as
+    tiny black dots. They now take the portal's own defaults: radius 5, white 1px stroke.
+    0.1.1 - Vector layers are added through their TileJSON, so QGIS asks only for tiles that
     exist: no more requests past the deepest real zoom, and "Zoom to layer" lands on the layer. A
     PMTiles archive is no longer opened whole (GDAL reads every tile at the deepest zoom to answer
     a feature count). Vector-tile layers now carry the layer's real symbology - graduated and
