@@ -253,12 +253,26 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
             layers_info.append(_layer_info(layer, "raster"))
             source_id = f"raster_{layer.id}"
             rstyle = cfg.get("style", {})
+            # A PORTAL WITH NO STRETCH FALLS BACK TO THE LAYER'S OWN.
+            #
+            # TiTiler needs a `rescale` for any raster whose values are not already 0-255: without
+            # one a float DEM or an index raster comes back essentially transparent. Measured on a
+            # live portal — two layers configured `bidx=1` with no rescale returned 206- and
+            # 514-byte tiles at the centre of their own bounds, against 27 kB for the hillshade
+            # beside them. Blank in the browser and blank in QGIS, while the SAME layer opened on its
+            # own looked right, because on its own it is drawn with its default style, which has one.
+            #
+            # So the portal keeps whatever it states, and states nothing only when the author never
+            # touched the stretch — in which case the layer's own is the honest answer, not a blank
+            # tile. An 8-bit RGB image has no rescale in either place and is unaffected.
+            dstyle = json.loads(layer.default_style) if layer.default_style else {}
+            rescale = rstyle.get("rescale") or dstyle.get("rescale")
             sources[source_id] = {
                 "type": "raster",
                 "tiles": [raster_tile_url(
                     layer.s3_key,
                     colormap=rstyle.get("colormap"),
-                    rescale=rstyle.get("rescale"),
+                    rescale=rescale,
                     algorithm=rstyle.get("algorithm"),
                     zfactor=rstyle.get("zfactor"),
                     bidx=rstyle.get("bidx"),

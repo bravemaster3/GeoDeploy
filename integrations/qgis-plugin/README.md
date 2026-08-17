@@ -65,6 +65,13 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
+2026-08-17g (new **"Open in GeoDeploy"** button — `open_in_browser` opens `/layers/<kind>/<uid>`, the
+instance's own page for one layer, in the desktop browser; for a portal it opens the portal. The dock
+shows a layer's geometry and symbology, and the page shows what it cannot: metadata, field list,
+extent, sharing state, and every ready-made link for other tools. The address is PUBLIC — see
+`routers/public.py::public_layer` and the new UI route — so a shared layer opens for anyone and a
+private one becomes a sign-in prompt on the instance, where the visitor may well have access. That is
+why the button needs no token to be useful. `_open_portal` now shares the one `_open_url` helper.)
 2026-08-17f (**the two portal paths were not the same path, and every 0.1.5 fix covered only one.**
 `PortalOut.LayerConfig` is `{layer_id, layer_type, visible, opacity, style, popup_fields}` — no
 `source`, no `geometry_type`, no `name`. Everything read from the published style.json therefore

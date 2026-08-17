@@ -311,6 +311,14 @@ deliberately NOT visibility-filtered (published portals depend on them).
 - No rate limiting beyond nginx; no pagination on list endpoints (fine at current scale).
 
 ## Last updated
+2026-08-17c (`public.py`: new **`GET /api/public/layers/{kind}/{ref}`** — ONE public layer in the
+shape the layer page reads, so a public layer has a shareable address (the QGIS plugin's "Open in
+GeoDeploy", and the new public UI route `/layers/:kind/:id`). Same readability rule as the display
+endpoints — `vector._publicly_readable` / `raster._describable`, i.e. shared OR drawn by a published
+portal — and governed by the same `_require_enabled` switch as the index, so turning the anonymous
+index off does not leave every layer individually addressable. Adds `default_style`, `columns` and
+`tile_status` to what the index carries (the page draws the layer and lists its fields); adds nothing
+about who uploaded it or where it is stored.)
 2026-08-17 (`data/vector.py`: **`GET /{ref}/tiles/{z}/{x}/{y}`** — public XYZ vector tiles for a tiled
 GeoParquet layer, read a tile at a time from its PMTiles archive via `services/pmtiles_reader`. Same
 public terms as `/pmtiles` and Martin's `/tiles/` (a published portal is unauthenticated). **204, not

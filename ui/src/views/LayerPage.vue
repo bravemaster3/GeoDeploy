@@ -21,9 +21,14 @@
     <!-- Header ------------------------------------------------------------------------------ -->
     <div v-if="layer" class="min-w-0">
       <div>
-        <RouterLink to="/data"
+        <RouterLink v-if="auth.isAuthenticated" to="/data"
           class="text-xs text-muted-foreground/70 hover:text-foreground inline-flex items-center gap-1">
           <span aria-hidden="true">←</span> My Data
+        </RouterLink>
+        <!-- Signed out, "My Data" is not somewhere this visitor can go. -->
+        <RouterLink v-else to="/login"
+          class="text-xs text-muted-foreground/70 hover:text-foreground inline-flex items-center gap-1">
+          Sign in <span aria-hidden="true">→</span>
         </RouterLink>
         <div class="flex items-center gap-2 mt-1">
           <LegendSwatch :geom="swatchGeom" :color="swatch" :marker="markerShape"
@@ -187,7 +192,8 @@
 
     <!-- Not found / still loading. Below the map, which stays mounted. -->
     <div v-if="!layer" class="card p-8 text-center text-muted-foreground">
-      <p v-if="dataStore.loading" class="text-sm">Loading…</p>
+      <p v-if="publicError" class="text-sm">{{ publicError }}</p>
+      <p v-else-if="dataStore.loading" class="text-sm">Loading…</p>
       <template v-else>
         <p class="text-sm">That layer is not here any more.</p>
         <RouterLink to="/data" class="btn-secondary mt-4 inline-flex">Back to My Data</RouterLink>
@@ -298,6 +304,7 @@ import { buildMapStyle, lonLatBbox } from '@/lib/mapStyle'
 import { registerMarkerImages, setMarkerSpecs } from '@/lib/markerImage'
 import { DEFAULT_BASEMAP } from '@/lib/basemaps'
 import { legendEntries, representativeColor } from '@/lib/symbology'
+import { getPublicLayer } from '@/api'
 import StyleModal from '@/components/data/StyleModal.vue'
 import SharingModal from '@/components/data/SharingModal.vue'
 import ShareLinksModal from '@/components/data/ShareLinksModal.vue'
@@ -333,6 +340,12 @@ const isRaster = computed(() => kind.value === 'raster'
   || (isExternal.value && layer.value?.kind === 'raster'))
 const isVector = computed(() => !isRaster.value && !isExternal.value)
 
+// Set only on the PUBLIC route, when the layer could not come from the store — see `onMounted`.
+const publicLayer = ref(null)
+const publicError = ref('')
+// `/layers/...` is the shareable public address; `/data/...` is the same page inside the app.
+const isPublicRoute = computed(() => route.path.startsWith('/layers/'))
+
 const layer = computed(() => {
   // The URL carries the UID: integer ids are per-kind sequences that renumber on a restore, so a
   // bookmarked /data/vector/12 could come back pointing at a different layer. An integer is still
@@ -340,7 +353,8 @@ const layer = computed(() => {
   const ref_ = String(route.params.id || '')
   const list = kind.value === 'external' ? dataStore.externalSources
     : (kind.value === 'raster' ? dataStore.rasterLayers : dataStore.vectorLayers)
-  return list.find(l => l.uid === ref_) || list.find(l => String(l.id) === ref_) || null
+  return list.find(l => l.uid === ref_) || list.find(l => String(l.id) === ref_)
+    || publicLayer.value || null
 })
 const ready = computed(() => isExternal.value || layer.value?.status === 'ready')
 
@@ -547,7 +561,36 @@ function renderMap() {
 }
 
 onMounted(async () => {
-  if (!dataStore.vectorLayers.length && !dataStore.rasterLayers.length) await dataStore.refresh()
+  // The router skips its auth check on a `public: true` route, so nobody has asked who this is yet.
+  // Ask now, and ignore a failure: a signed-in visitor following a public link should still get the
+  // full page with its edit actions, and a signed-out one is exactly who this route is for.
+  if (isPublicRoute.value && !auth.user) {
+    try { await auth.fetchMe() } catch { /* signed out, which is fine here */ }
+  }
+  // SIGNED IN: the store is the source, and it carries everything the actions need.
+  if (auth.isAuthenticated && !isPublicRoute.value) {
+    if (!dataStore.vectorLayers.length && !dataStore.rasterLayers.length) await dataStore.refresh()
+    return
+  }
+  // A signed-in visitor arriving by the PUBLIC link still gets the full page — try the store first
+  // so the edit actions light up, and fall back to the public endpoint if it has nothing.
+  if (auth.isAuthenticated) {
+    try {
+      if (!dataStore.vectorLayers.length && !dataStore.rasterLayers.length) await dataStore.refresh()
+    } catch { /* not fatal here: the public endpoint below serves anyone */ }
+    if (layer.value) return
+  }
+  try {
+    const { data } = await getPublicLayer(kind.value === 'raster' ? 'raster' : 'vector',
+                                          String(route.params.id || ''))
+    publicLayer.value = data
+  } catch (e) {
+    // 404 means "not public", which for a signed-out visitor is usually "sign in and look again"
+    // rather than "does not exist" — so say that instead of showing an empty page.
+    publicError.value = e.response?.status === 404
+      ? 'This layer is not shared publicly. Sign in to see whether you have access to it.'
+      : (e.response?.data?.detail || 'Could not load this layer.')
+  }
 })
 // The map is created on mount by the composable, so wait for it AND for the layer to arrive.
 watch([loaded, layer, styleForMap], () => renderMap(), { deep: true, immediate: true })

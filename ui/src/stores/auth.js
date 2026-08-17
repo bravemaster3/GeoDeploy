@@ -11,6 +11,9 @@ export const useAuthStore = defineStore('auth', () => {
   const isAdmin = computed(() => ['admin', 'owner'].includes(role.value))
   const isOwner = computed(() => role.value === 'owner')
   const canEdit = computed(() => ['editor', 'admin', 'owner'].includes(role.value))
+  // Is anybody signed in? Named because `auth.user` reads as "the user" even when it is null, and a
+  // page that serves signed-out visitors has to ask the question explicitly.
+  const isAuthenticated = computed(() => !!user.value)
 
   async function fetchMe() {
     const { data } = await getMe()
@@ -38,5 +41,6 @@ export const useAuthStore = defineStore('auth', () => {
     if (token) localStorage.setItem('geodeploy_token', token)
   }
 
-  return { user, role, isAdmin, isOwner, canEdit, fetchMe, loginUser, logout, setToken }
+  return { user, role, isAdmin, isOwner, canEdit, isAuthenticated,
+           fetchMe, loginUser, logout, setToken }
 })

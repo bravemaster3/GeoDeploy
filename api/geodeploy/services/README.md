@@ -131,6 +131,14 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   permalink it serves, never a substitute for the bbox queries.
 
 ## Last updated
+2026-08-17b (`portal_generator`: **a portal's raster with no `rescale` now inherits the layer's.**
+TiTiler needs a stretch for anything not already 0-255, and without one a float DEM or index raster
+comes back transparent. Measured on a live portal: two layers configured `bidx=1` with no rescale
+returned 206- and 514-byte tiles at the centre of their own bounds against 27 kB for the hillshade
+beside them — blank in the browser AND in QGIS, while the same layers opened standalone looked right,
+because standalone they use their default style, which has one. User-confirmed from both surfaces. A
+portal still keeps whatever stretch it states; it falls back only when it states none. An 8-bit RGB
+image has none in either place and is unaffected. **Takes effect on republish** — style.json is baked.)
 2026-08-17 (**new `pmtiles_reader.py` — one tile out of an archive, so tiled layers can be served as
 ordinary XYZ.** PMTiles v3 read-only, written by hand rather than pulled in as a dependency (fixed
 127-byte header, varint directories, a Hilbert curve, all frozen by the spec). Every read is an HTTP

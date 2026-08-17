@@ -299,6 +299,13 @@ export const listBasemaps = () => api.get('/basemaps')
 export const getServiceHealth = () => api.get('/admin/health')
 export const getStorageStats = () => api.get('/admin/storage-stats')
 
+// ONE public layer, for the public layer page (`/layers/:kind/:id`). Goes through `api` so the
+// baseURL and the auth header are the same as everywhere else — a signed-in visitor simply gets the
+// same answer, and a signed-out one gets it too, because the endpoint itself is anonymous. Only
+// layers that are shared or drawn by a published portal resolve; anything else 404s, and the page
+// turns that into an invitation to sign in.
+export const getPublicLayer = (kind, ref) => api.get(`/public/layers/${kind}/${ref}`)
+
 // Whether this instance publishes GET /api/public — the anonymous list of its public portals and
 // public layers that a browse client (or the QGIS plugin) reads. Discoverability, not access:
 // everything it lists is already reachable by link.
