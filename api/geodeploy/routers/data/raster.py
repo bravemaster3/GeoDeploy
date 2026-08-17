@@ -389,8 +389,7 @@ async def raster_export_download(layer_ref: str, job_id: str, db: AsyncSession =
 
 
 @router.get("/{layer_ref}/cog")
-async def raster_cog(layer_ref: str, request: Request, db: AsyncSession = Depends(get_db),
-                     user: User | None = Depends(resolve_optional_user)):
+async def raster_cog(layer_ref: str, request: Request, db: AsyncSession = Depends(get_db)):
     """Range proxy for the layer's Cloud-Optimized GeoTIFF — the modern WCS (notes §0h).
 
     This is what makes `/vsicurl/https://host/api/data/raster/{id}/cog` work in QGIS/GDAL with full
@@ -410,11 +409,14 @@ async def raster_cog(layer_ref: str, request: Request, db: AsyncSession = Depend
     if not layer or layer.status != "ready" or not layer.s3_key:
         raise HTTPException(404, "No shared raster for this layer.")
     if not layer.is_public:
-        allowed = False
-        if user is not None:
-            allowed = (await db.execute(
-                select(RasterLayer.id).where(RasterLayer.id == layer.id,
-                                             visible_to(user, RasterLayer)))).scalar_one_or_none()
+        # Resolved in the BODY, like the `/legend` route below — `resolve_optional_user` is a plain
+        # async helper taking `(request, db)`, not a FastAPI dependency. Wiring it through `Depends`
+        # makes FastAPI inspect its signature, find `db: AsyncSession` with no `Depends` default, and
+        # refuse to build the app at all.
+        user = await resolve_optional_user(request, db)
+        allowed = user is not None and (await db.execute(
+            select(RasterLayer.id).where(RasterLayer.id == layer.id,
+                                         visible_to(user, RasterLayer)))).scalar_one_or_none()
         if not allowed:
             raise HTTPException(404, "No shared raster for this layer.")
 
