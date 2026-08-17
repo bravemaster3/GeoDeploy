@@ -650,8 +650,7 @@ def _comparable_raster(style: dict | None) -> dict:
     if classes:
         # An explicit colour per value beats a named ramp in the tile URL, so the ramp is not drawn
         # and a stale one left beside it is not a difference.
-        out["color_classes"] = [{"value": c.get("value"), "color": _hex_rgba(c.get("color"))}
-                                for c in classes]
+        out["color_classes"] = [_comparable_raster_class(c) for c in classes]
         if style.get("colormap_reverse"):
             out["colormap_reverse"] = True
         return out
@@ -660,6 +659,25 @@ def _comparable_raster(style: dict | None) -> dict:
         out["colormap"] = name.lower()
         if reverse:
             out["colormap_reverse"] = True
+    return out
+
+
+def _comparable_raster_class(item: dict) -> dict:
+    """One class of a classified raster, reduced to what a viewer would see.
+
+    The LABEL is what a legend prints, so it is compared — but QGIS labels a class with its own
+    value when nothing else is given, and a raster whose classes were never named would otherwise
+    come back carrying `label: "3"` where the stored style had none and report as edited. Absent and
+    "the value as text" are the same legend, so they fold together.
+
+    The text itself is DATA, like a category value: "Water" and "water" are different labels and
+    case-folding them would hide a real edit and mislabel the map.
+    """
+    out = {"value": item.get("value"), "color": _hex_rgba(item.get("color"))}
+    label = item.get("label")
+    label = "" if label is None else str(label).strip()
+    if label and label != str(item.get("value")):
+        out["label"] = label
     return out
 
 
@@ -2003,9 +2021,19 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
                     continue
                 # Alpha travels: "no data" in a classification is usually a transparent class, and
                 # dropping that would paint it over everything underneath.
-                classes.append({"value": value,
-                                "color": "#{0:02x}{1:02x}{2:02x}{3:02x}".format(
-                                    colour.red(), colour.green(), colour.blue(), colour.alpha())})
+                entry = {"value": value,
+                         "color": "#{0:02x}{1:02x}{2:02x}{3:02x}".format(
+                             colour.red(), colour.green(), colour.blue(), colour.alpha())}
+                # AND THE LABEL. "Water" and "Trees" are the whole point of a classification, and
+                # dropping them here meant a push replaced the stored classes with unlabelled ones —
+                # the legend on the layer page and in every portal fell back to bare numbers. QGIS
+                # labels a class with its own value when nothing else is given, so that case is
+                # treated as no label rather than travelling as one.
+                label = getattr(cls, "label", None)
+                label = "" if label is None else str(label).strip()
+                if label and label != str(value):
+                    entry["label"] = label
+                classes.append(entry)
             if len(classes) > MAX_COLOR_CLASSES:
                 # Truncating a classification would silently mis-colour part of the map, so refuse
                 # the colours and keep the band: a grey raster is obviously unstyled, where a

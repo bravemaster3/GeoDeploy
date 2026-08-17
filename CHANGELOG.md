@@ -31,6 +31,11 @@ Symbology that survives a round trip — into QGIS and back, and into contour li
   a colour and a label you can edit; re-reading keeps the colours you already chose. A raster that
   is actually continuous says so rather than being carved into classes. The renderer for this
   already existed end to end; there was simply no way to build one.
+- **A class label travels with its class.** "Water" and "Trees" are the whole point of a
+  classification. The QGIS reader carried only the value and the colour, so pushing a land-cover
+  raster back replaced its classes with unlabelled ones; and a published portal carried no labels at
+  all, so its legend could only ever print the raw pixel values. Both now carry the name the author
+  wrote.
 - **The layer page's legend now describes what is on the map.** It read the layer's `colormap` and
   nothing else, so a hillshade or a contour raster — neither of which uses that colormap — showed no
   gradient at all and fell through to "Single symbol". It now shows the ramp the algorithm actually

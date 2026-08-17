@@ -85,6 +85,13 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
+2026-08-17p (**class LABELS round-trip.** Values and colours already did; the reader built
+`{value, color}` and dropped the label, so pushing a classified raster back from QGIS replaced its
+classes with unlabelled ones and every legend — the layer page, every portal — fell back to bare
+numbers. QGIS labels a class with its own value when nothing else is given, so that case folds to
+"no label" in `_comparable_raster_class`: a raster whose classes were never named must not report as
+edited on every push. The label text is DATA, like a category value, so its case is not folded —
+"Water" and "water" are a real difference.)
 2026-08-17o (**contour styling round-trips too — and it needed the record-and-verify device a THIRD
 time.** GeoDeploy grew `algorithm: "contours"` (with `increment`/`thickness`/`minz`/`maxz`), and QGIS
 has no renderer for it: QGIS makes contours with a processing algorithm that outputs a VECTOR layer.

@@ -310,6 +310,19 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                     "geodeploy:bbox": json.loads(layer.bbox) if layer.bbox else None,
                     "geodeploy:geometry": "raster",
                     "geodeploy:bands": layer.band_count,
+                    # THE CLASSES, WITH THEIR LABELS, for a raster coloured per pixel VALUE.
+                    #
+                    # The colours themselves are already in the tile URL (`colormap={"11":[…]}`),
+                    # which is what draws the map — but that mapping has nowhere to put a NAME, so a
+                    # published legend built from it can only print "11" where the author wrote
+                    # "Water". The vector side has carried `geodeploy:legend` for exactly this
+                    # reason; this is the raster twin of it.
+                    "geodeploy:classes": [
+                        {"value": c.get("value"), "color": c.get("color"),
+                         "label": str(c.get("label") if c.get("label") not in (None, "")
+                                      else c.get("value"))}
+                        for c in (rstyle.get("color_classes") or []) if isinstance(c, dict)
+                    ] or None,
                 },
             }
             if not cfg.get("visible", True):

@@ -481,6 +481,35 @@ assert cls.value == 7, cls.value
 assert (cls.color.red(), cls.color.alpha()) == (255, 128), (cls.color.red(), cls.color.alpha())
 print("paletted       -> value, colour and ALPHA all reach the class")
 
+# ── labels: what a legend actually prints ────────────────────────────────────────────────────────
+labelled = {"bidx": [1], "color_classes": [
+    {"value": 11, "color": "#419bdf", "label": "Water"},
+    {"value": 21, "color": "#397d49", "label": "Trees"},
+    {"value": 30, "color": "#88b053"}]}
+read, layer = round_trip(labelled)
+assert layer.renderer().classes()[0].label == "Water", "the label never reached QGIS"
+# THE WAY BACK is what was broken: the reader built {value, color} only, so a push replaced the
+# stored classes with unlabelled ones and every legend fell back to bare numbers.
+assert read["color_classes"][0].get("label") == "Water", read["color_classes"]
+assert read["color_classes"][1].get("label") == "Trees", read["color_classes"]
+same(labelled, read, "a labelled classification did not survive the round trip")
+# QGIS labels an unnamed class with its own value, so that must NOT come back as a label somebody
+# chose — otherwise a raster whose classes were never named reports as edited on every push.
+assert "label" not in read["color_classes"][2], read["color_classes"][2]
+same({"color_classes": [{"value": 30, "color": "#88b053"}]},
+     {"color_classes": [{"value": 30, "color": "#88b053", "label": "30"}]},
+     "a label that is just the value is the same legend as no label")
+# But a real one is a real difference: it is what the legend prints, and it is DATA, so its case is
+# not folded either.
+assert comparable_style({"color_classes": [{"value": 1, "color": "#fff", "label": "Water"}]}) != \
+    comparable_style({"color_classes": [{"value": 1, "color": "#fff", "label": "Lake"}]})
+assert comparable_style({"color_classes": [{"value": 1, "color": "#fff", "label": "Water"}]}) != \
+    comparable_style({"color_classes": [{"value": 1, "color": "#fff", "label": "water"}]})
+# And renaming one in QGIS travels back as the rename it is.
+layer.renderer().classes()[1].label = "Forest"
+assert raster_from_qgis(layer, COLORMAPS)["color_classes"][1]["label"] == "Forest"
+print("class labels   -> reach QGIS, come back, and a rename registers as a change")
+
 layer = RasterLayer()
 raster_to_qgis(layer, {"algorithm": "hillshade", "zfactor": 3.5, "bidx": [1]})
 shade = layer.renderer()

@@ -2560,6 +2560,19 @@
     // 3 and class 4 means nothing, and a gradient would claim it does. The mapping is baked into the
     // tile URL as `colormap={"3":[r,g,b,a]}`, which is the only place it exists on this page.
     if (!algorithm) {
+      // THE AUTHOR'S CLASSES FIRST, because they are the only place the LABELS exist. The tile URL
+      // carries `colormap={"11":[r,g,b,a]}` — enough to draw the map, with nowhere to put a name —
+      // so a legend built from it alone prints "11" where the author wrote "Water".
+      const baked = (layer.metadata && layer.metadata['geodeploy:classes']) || null;
+      if (Array.isArray(baked) && baked.length) {
+        return baked.map(function (c) {
+          return '<div class="legend-class">' +
+            '<span style="display:inline-block;width:14px;height:10px;border-radius:2px;' +
+            'border:1px solid var(--border);background:' + escHtml(String(c.color || '#999')) + '"></span>' +
+            '<span class="legend-label">' + escHtml(String(c.label == null ? c.value : c.label)) +
+            '</span></div>';
+        }).join('');
+      }
       let mapping = null;
       try { mapping = JSON.parse(parseRasterParams(srcId).colormap || 'null'); } catch (e) { mapping = null; }
       if (mapping && typeof mapping === 'object' && Object.keys(mapping).length) {
