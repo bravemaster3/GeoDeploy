@@ -69,10 +69,21 @@ def get_tile_url(
     # value: a flat tile that reads as "hillshade is not rendering". Measured on a vegetation index
     # whose range is 0.5563–0.9477: hillshade alone returns a 15 kB tile, hillshade + that rescale
     # returns 623 bytes of uniform colour. Exactly the reasoning that already drops `colormap` below.
+    # AN EXPLICIT COLOUR-PER-VALUE MAPPING IS KEYED ON THE RAW VALUES, so a stretch destroys it:
+    # `rescale` linearly maps the data into 0–255 before the lookup, so a classification of 0/1/2
+    # arrives as 0/127/255 and only the class whose number survives still matches a key — every
+    # other class falls through to transparent. Measured on a live float32 mask with classes
+    # 0/1/2: with the stretch, one class drew and the map was two-thirds empty; without it, all
+    # three drew, exactly as QGIS shows them.
+    explicit = _explicit_colormap(color_classes, colormap_reverse)
+    # …but only when it will actually be APPLIED. An algorithm or a three-band composite ignores the
+    # colormap entirely (see the branch below), and there the stretch is the only thing colouring
+    # the raster — dropping it for a palette that is not being used would leave neither.
+    uses_explicit = bool(explicit) and not algorithm and len(bands) != 3
     # CONTOURS CONSUMES THE STRETCH RATHER THAN BEING SUBJECT TO IT — see `_contour_params`. Sending
     # it as `&rescale=` as well would restretch a finished RGB image, the same mistake hillshade
     # already avoids.
-    if rescale and algorithm not in ("hillshade", "contours"):
+    if rescale and algorithm not in ("hillshade", "contours") and not uses_explicit:
         url += f"&rescale={rescale}"
     if algorithm:
         url += f"&algorithm={algorithm}"
@@ -90,7 +101,6 @@ def get_tile_url(
     # colormap only makes sense for single-band output (one selected band, or a
     # single-band raster). It is ignored when an algorithm or an RGB composite is active.
     elif len(bands) != 3:
-        explicit = _explicit_colormap(color_classes, colormap_reverse)
         if explicit:
             # A CLASSIFIED raster — land cover, soil types, a QGIS paletted layer — has a colour
             # per VALUE, which no named gradient can express: interpolating between class 3 and

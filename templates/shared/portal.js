@@ -2772,11 +2772,17 @@
     bidx.forEach(b => params.push('bidx=' + b));
     const algorithm = effectiveAlgorithm(srcId);
     const rescale = effectiveRescale(srcId);
+    // A CLASSIFIED raster's mapping is keyed on the RAW pixel values, so a stretch destroys it:
+    // rescale maps the data into 0-255 before the lookup, and a classification of 0/1/2 arrives as
+    // 0/127/255 where only one key still matches - the other classes fall through to transparent.
+    // Mirrors services/titiler.py::get_tile_url.
+    const bakedClasses = (!algorithm && parseRasterParams(srcId).colormap) || '';
     // Not when hillshading: TiTiler applies rescale AFTER the algorithm, and a hillshade is already
     // a finished 0-255 relief image, so a data-range stretch flattens it to one colour. Contours is
     // the same picture for a different reason — it returns finished RGB and CONSUMES the stretch as
     // the range its relief is coloured over. Mirrors services/titiler.py::get_tile_url.
-    if (algorithm !== 'hillshade' && algorithm !== 'contours' && rescale) {
+    const usesClasses = !!bakedClasses && !effectiveColormap(srcId) && bidx.length !== 3;
+    if (algorithm !== 'hillshade' && algorithm !== 'contours' && rescale && !usesClasses) {
       params.push('rescale=' + rescale);
     }
     if (algorithm === 'hillshade') {
@@ -2800,9 +2806,8 @@
       // A CLASSIFIED raster's colours live in a baked `colormap=` JSON mapping, which this used to
       // drop: touching any control rebuilt the URL without it and a land-cover layer fell back to
       // grayscale mid-session. Kept whenever the viewer has not chosen a named palette instead.
-      const baked = parseRasterParams(srcId).colormap;
       if (cmap && bidx.length !== 3) params.push('colormap_name=' + cmap);  // ignored for RGB
-      else if (!cmap && baked && bidx.length !== 3) params.push('colormap=' + encodeURIComponent(baked));
+      else if (usesClasses) params.push('colormap=' + encodeURIComponent(bakedClasses));
     }
     const url = base + (params.length ? '&' + params.join('&') : '');
     const src = map.getSource(srcId);

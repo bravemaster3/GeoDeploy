@@ -515,24 +515,25 @@
             <!-- Stretch is disabled under hillshade: the algorithm returns a finished 0–255 relief
                  image and TiTiler applies rescale AFTER it, so a data-range stretch would flatten
                  the shading to one colour. Saying so beats letting the control look available. -->
-            <div :class="isHillshade ? 'opacity-50' : ''">
+            <div :class="(isHillshade || isClassified) ? 'opacity-50' : ''">
               <div class="flex items-center justify-between mb-0.5">
                 <label class="text-xs text-muted-foreground">Stretch (min / max)</label>
-                <button @click="autoStretch" :disabled="autoStretching || isHillshade"
+                <button @click="autoStretch" :disabled="autoStretching || isHillshade || isClassified"
                   class="text-xs text-primary hover:text-primary/80 font-medium disabled:opacity-50"
                   title="Compute min/max from the raster (2–98th percentile)">
                   {{ autoStretching ? 'Computing…' : '⚡ Auto' }}
                 </button>
               </div>
               <div class="flex items-center gap-2">
-                <input type="number" :value="rescaleMin" :disabled="isHillshade" @input="setRescale('min', $event.target.value)" placeholder="min"
+                <input type="number" :value="rescaleMin" :disabled="isHillshade || isClassified" @input="setRescale('min', $event.target.value)" placeholder="min"
                   class="w-16 text-xs border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/60 disabled:opacity-50" />
                 <span class="text-muted-foreground/40">–</span>
-                <input type="number" :value="rescaleMax" :disabled="isHillshade" @input="setRescale('max', $event.target.value)" placeholder="max"
+                <input type="number" :value="rescaleMax" :disabled="isHillshade || isClassified" @input="setRescale('max', $event.target.value)" placeholder="max"
                   class="w-16 text-xs border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/60 disabled:opacity-50" />
               </div>
               <p class="text-[10px] text-muted-foreground/70 mt-0.5">
                 {{ isHillshade ? 'Not used while Hillshade is on — the shading is already 0–255.'
+                   : isClassified ? 'Not used with unique values — each class is matched on its raw pixel value, and a stretch would change those.'
                    : isContours ? 'Under contours this is the elevation range the relief is coloured over — set it, or the whole raster draws as one flat band.'
                    : 'For non-8-bit imagery (e.g. 0–4095). Blank = default.' }}
               </p>
@@ -1018,6 +1019,9 @@ function setSingleBand(val) {
 // Hillshade returns its own 0–255 image, so the stretch controls below do nothing while it is on.
 const isHillshade = computed(() => props.config.style?.algorithm === 'hillshade')
 const isContours = computed(() => props.config.style?.algorithm === 'contours')
+// A value-lookup palette is matched on the RAW pixel values, so the stretch is not applied to it —
+// see services/titiler.get_tile_url. Shown unavailable rather than as an inviting empty box.
+const isClassified = computed(() => (props.config.style?.color_classes || []).length > 0)
 
 // ── Raster: continuous ramp, or a colour per VALUE ────────────────────────────────────────────
 // The mode is derived from the style rather than kept beside it, so re-opening the panel shows what
@@ -1039,7 +1043,17 @@ function setRasterColorMode(mode) {
   // Leaving classified mode CLEARS the classes: TiTiler gives an explicit mapping precedence over a
   // named ramp, so classes left behind would keep drawing and the palette picker would do nothing.
   if (mode !== 'classes' && rasterClasses.value.length) emitStyle({ color_classes: null })
-  else if (mode === 'classes' && !rasterClasses.value.length) loadUniqueValues()
+  // Entering it clears the RAMP and its direction. `colormap_reverse` is not cosmetic here: the
+  // reverse flag re-pairs an explicit palette's colours with the values in the opposite order, so a
+  // flag left over from a reversed ramp silently swapped hand-picked class colours end for end —
+  // class 0's colour drew on the highest class. The checkbox that sets it is hidden in this mode,
+  // which is exactly why it has to be cleared rather than left to be found.
+  else if (mode === 'classes') {
+    if (props.config.style?.colormap || props.config.style?.colormap_reverse) {
+      emitStyle({ colormap: null, colormap_reverse: false })
+    }
+    if (!rasterClasses.value.length) loadUniqueValues()
+  }
 }
 
 function classHex(color) {
@@ -1079,7 +1093,9 @@ async function loadUniqueValues() {
         label: had?.label ?? String(v.value),
       }
     })
-    emitStyle({ color_classes: next, colormap: null })
+    // `colormap_reverse` off with them: it re-pairs an explicit palette end for end, so a flag left
+    // over from a reversed ramp would hand class 0 the colour chosen for the highest class.
+    emitStyle({ color_classes: next, colormap: null, colormap_reverse: false })
     valuesNote.value = `${next.length} value${next.length === 1 ? '' : 's'} in the raster.`
   } catch (e) {
     valuesNote.value = e?.response?.data?.detail || 'Could not read the raster values.'

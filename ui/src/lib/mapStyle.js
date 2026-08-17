@@ -357,7 +357,12 @@ export function rasterTilesUrl(baseTileUrl, style, bandCount) {
   // image, and TiTiler applies rescale AFTER the algorithm, so a data-range stretch flattens it.
   // Contours is the same picture for a different reason: it returns a finished RGB image, and it
   // CONSUMES the stretch as its colour range instead (see below).
-  if (style?.rescale && style?.algorithm !== 'hillshade' && style?.algorithm !== 'contours') {
+  // An explicit colour-per-VALUE mapping is keyed on the raw values, so a stretch destroys it:
+  // rescale maps the data into 0–255 before the lookup, and a classification of 0/1/2 arrives as
+  // 0/127/255 where only one key still matches. Mirrors services/titiler.py::get_tile_url.
+  const explicitCmap = explicitColormap(style?.color_classes, style?.colormap_reverse)
+  if (style?.rescale && style?.algorithm !== 'hillshade' && style?.algorithm !== 'contours'
+      && !explicitCmap) {
     params.push(`rescale=${style.rescale}`)
   }
   if (style?.algorithm) {
@@ -374,8 +379,7 @@ export function rasterTilesUrl(baseTileUrl, style, bandCount) {
     // layer coloured per pixel VALUE drew here in plain grayscale while the published portal drew
     // its classes. The editor is supposed to be the preview — a preview that disagrees with the
     // thing it previews is worse than none.
-    const explicit = explicitColormap(style?.color_classes, style?.colormap_reverse)
-    if (explicit) params.push(`colormap=${encodeURIComponent(explicit)}`)
+    if (explicitCmap) params.push(`colormap=${encodeURIComponent(explicitCmap)}`)
     else if (style?.colormap) {
       // Mirrors services/titiler.py: matplotlib spells a reversed ramp with an `_r` suffix, and the
       // flag is the single source of truth — a stored `viridis_r` with reverse off is forward.

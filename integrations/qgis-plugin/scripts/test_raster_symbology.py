@@ -510,6 +510,16 @@ layer.renderer().classes()[1].label = "Forest"
 assert raster_from_qgis(layer, COLORMAPS)["color_classes"][1]["label"] == "Forest"
 print("class labels   -> reach QGIS, come back, and a rename registers as a change")
 
+# A classified raster is matched on RAW pixel values, so the tile URL carries no stretch — and a
+# stretch that is not drawn is not a difference. (Reported as "unique values renders only the red":
+# rescale mapped a float mask of 0/1/2 to 0/127/255 and two of the three classes stopped matching.)
+same({"color_classes": [{"value": 1, "color": "#ff0000"}], "rescale": "0,2"},
+     {"color_classes": [{"value": 1, "color": "#ff0000"}]},
+     "a stretch is not applied to a value-lookup palette, so it is not a visible difference")
+assert "rescale" not in comparable_style({"color_classes": [{"value": 1, "color": "#ff0000"}],
+                                          "rescale": "0,2"})
+print("classified     -> the stretch is not drawn, so it is not compared")
+
 layer = RasterLayer()
 raster_to_qgis(layer, {"algorithm": "hillshade", "zfactor": 3.5, "bidx": [1]})
 shade = layer.renderer()

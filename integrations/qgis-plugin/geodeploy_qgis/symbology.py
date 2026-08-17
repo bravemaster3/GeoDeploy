@@ -649,7 +649,11 @@ def _comparable_raster(style: dict | None) -> dict:
     classes = [c for c in (style.get("color_classes") or []) if isinstance(c, dict)]
     if classes:
         # An explicit colour per value beats a named ramp in the tile URL, so the ramp is not drawn
-        # and a stale one left beside it is not a difference.
+        # and a stale one left beside it is not a difference. NEITHER IS THE STRETCH: the mapping is
+        # matched on raw pixel values and `get_tile_url` therefore omits `rescale` entirely — a
+        # stretch would remap the very values the classes are keyed on, which is what once left a
+        # three-class mask drawing only one of them.
+        out.pop("rescale", None)
         out["color_classes"] = [_comparable_raster_class(c) for c in classes]
         if style.get("colormap_reverse"):
             out["colormap_reverse"] = True

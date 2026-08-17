@@ -31,6 +31,13 @@ Symbology that survives a round trip — into QGIS and back, and into contour li
   a colour and a label you can edit; re-reading keeps the colours you already chose. A raster that
   is actually continuous says so rather than being carved into classes. The renderer for this
   already existed end to end; there was simply no way to build one.
+- **A classified raster drew only one of its classes.** Two faults, found on a three-class mask.
+  The stretch was still being sent alongside the value-lookup palette, and a stretch is exactly what
+  a value lookup cannot survive: it maps the data into 0–255 *before* the lookup, so classes 0/1/2
+  arrived as 0/127/255 and only the one whose number happened to still match a key drew — the rest
+  fell through to transparent. And a `reverse the palette` flag left over from a colour ramp was
+  re-pairing hand-picked class colours end for end, so class 0 was drawn in the colour chosen for
+  the highest class. The stretch is now shown as unavailable in that mode, with the reason.
 - **A class label travels with its class.** "Water" and "Trees" are the whole point of a
   classification. The QGIS reader carried only the value and the colour, so pushing a land-cover
   raster back replaced its classes with unlabelled ones; and a published portal carried no labels at

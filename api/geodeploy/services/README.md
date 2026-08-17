@@ -305,3 +305,11 @@ already had. New `tile_url_from_style` replaces seven hand-written kwarg lists; 
 already fallen behind (`routers/portals.py` dropped `color_classes` and `colormap_reverse`, so a
 classified raster added to a portal from the catalog lost its colours). Tests:
 `api/tests/test_raster_contours.py`.)
+2026-08-17b (**`rescale` is dropped for an explicit colour-per-value palette**, and it is the third
+member of that rule after hillshade and contours — for a third reason. A value lookup is keyed on the
+RAW pixel values, and `rescale` maps the data into 0–255 *before* the lookup: a float32 mask of
+0/1/2 arrives as 0/127/255, only the class whose number still matches a key draws, and the rest go
+transparent. Reported as "unique values renders only the red" and measured on that raster: one class
+with the stretch, all three without. Scoped to a palette that is actually APPLIED — an algorithm or a
+three-band composite ignores the colormap, and there the stretch is the only thing colouring the
+raster, so dropping it would leave neither.)

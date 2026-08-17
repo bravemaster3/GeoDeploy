@@ -6,7 +6,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.1.14
+version=0.1.15
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -21,7 +21,11 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.1.14 - Class LABELS now travel with a classified raster. "Water" and "Trees" are
+changelog=0.1.15 - A classified raster's stretch is no longer compared. GeoDeploy does not
+    apply a stretch to a colour-per-value palette - the classes are matched on raw pixel values, and
+    a stretch would change the very numbers they key on - so a stretch sitting beside one is not a
+    visible difference and must not report the layer as restyled.
+    0.1.14 - Class LABELS now travel with a classified raster. "Water" and "Trees" are
     the whole point of a classification, and the reader only carried the value and the colour - so
     pushing a land-cover raster back from QGIS replaced its classes with unlabelled ones and every
     legend fell back to bare numbers. A class QGIS labelled with its own value still counts as
