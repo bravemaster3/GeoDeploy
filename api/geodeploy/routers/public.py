@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..models import Portal, RasterLayer, SetupConfig, VectorLayer
 from ..services import share_links
+from ..services.titiler import get_tile_url as raster_tile_url
 from .common import by_ref
 
 router = APIRouter(prefix="/public", tags=["public"])
@@ -114,7 +115,6 @@ async def public_layer(kind: str, layer_ref: str, request: Request,
         # authenticated row builds it (`raster._raster_out` in routers/data/raster.py), from the
         # layer's default style, so the public page draws what My Data draws.
         out["catalog"] = base + "/api/stac"
-        from ...services.titiler import get_tile_url as raster_tile_url
         if row.status == "ready" and row.s3_key:
             out["tile_url"] = raster_tile_url(
                 row.s3_key, colormap=ds.get("colormap"), rescale=ds.get("rescale"),
