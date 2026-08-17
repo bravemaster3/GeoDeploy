@@ -6,7 +6,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.1.10
+version=0.1.11
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -21,7 +21,15 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.1.10 - Restyling a POINT layer and pushing it back now registers. QGIS's vector-tile
+changelog=0.1.11 - Change detection is right in both directions. Changing only a symbol's STROKE
+    (or its marker shape) is now noticed - before, only the fill was read, so a stroke-only edit came
+    back byte-identical and reported "unchanged". And opening a portal and pushing it straight back no
+    longer reports every layer as restyled: a style read out of QGIS is always complete while a stored
+    one holds only what you chose, so the two are now compared through the same defaults. A raster
+    drawn from server tiles still cannot be restyled in QGIS - the checkbox that opens the real
+    GeoTIFF now says so on its label, and the explanation is logged as information rather than as
+    three warnings that look like failures.
+    0.1.10 - Restyling a POINT layer and pushing it back now registers. QGIS's vector-tile
     symbology editor keeps one style per geometry type - polygons, lines, points - and the plugin read
     the first of them, so a changed marker came back as the untouched polygon colour: identical to the
     old style, so "Push group to portal" saw no change and "Save styling to GeoDeploy" appeared to do

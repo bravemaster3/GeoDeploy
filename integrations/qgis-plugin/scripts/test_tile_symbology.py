@@ -553,3 +553,92 @@ assert out["other_color"] == "#ff0000", ("the unfiltered POINT entry is the catc
 print("classified point   -> categories kept, point catch-all used")
 
 print("\nALL GEOMETRY-SELECTION CASES PASS")
+
+
+# ── DETECTION: what counts as a change, and what must not ──────────────────────────────────────
+# Two complaints, opposite in direction, one root cause — a style read out of QGIS is always COMPLETE
+# while a stored one holds only what somebody chose:
+#   * "I only change the stroke colour and it doesn't detect the change"  → the reader ignored strokes.
+#   * "I changed only one style, but it says 3 were restyled"             → filled-in defaults counted.
+comparable_style = ns["comparable_style"]
+
+
+def differs(before, after):
+    """`portals._style_differs`, in the one part that matters here."""
+    return comparable_style(before) != comparable_style(after)
+
+
+# A portal's stored style, and the same style after a round trip through QGIS. Nothing was edited, so
+# nothing may be reported.
+stored = {"color": "#10b981", "fill_opacity": 0.45, "outline_color": "#1d4ed8"}
+readback = round_trip({"geometry_type": "MultiPolygon"}, stored)
+assert not differs(stored, readback), (stored, readback)
+print("untouched polygon  -> no change reported")
+
+for geom, stored in (("point", {"color": "#ef4444", "radius": 1.0}),
+                     ("LineString", {"color": "#3b82f6", "line_width": 1.04}),
+                     ("point", {"color": "#3b82f6"}),                 # nothing but a colour
+                     ("MultiPolygon", {"color": "#e5b636"})):
+    readback = round_trip({"geometry_type": geom}, stored)
+    assert not differs(stored, readback), (geom, stored, readback)
+print("untouched, 4 shapes-> no change reported")
+
+# A classified layer, likewise.
+stored = {"color_mode": "categorized", "color_field": "Type",
+          "categories": [{"value": "Autochamber", "color": "#8c4ee3"},
+                         {"value": "Manual chamber", "color": "#6cefa2"}],
+          "other_color": "#eea26b"}
+readback = round_trip({"geometry_type": "point"}, stored)
+assert not differs(stored, readback), (stored, readback)
+# The category VALUES must survive as written — they are data, not colours.
+assert [c["value"] for c in readback["categories"]] == ["Autochamber", "Manual chamber"], readback
+print("untouched category -> no change reported, values kept verbatim")
+
+# ── …and every real edit MUST be reported ─────────────────────────────────────────────────────
+base_point = {"color": "#3b82f6", "radius": 5, "outline_color": "#ffffff", "marker": "circle"}
+edits = [
+    ("fill colour",   dict(base_point, color="#ff0000")),
+    ("stroke colour", dict(base_point, outline_color="#000000")),
+    ("stroke removed", dict(base_point, outline_color="none")),
+    ("radius",        dict(base_point, radius=9)),
+    ("marker shape",  dict(base_point, marker="square")),
+]
+for what, edited in edits:
+    assert differs(base_point, edited), ("an edit to the " + what + " must be reported", edited)
+print("point edits        ->", ", ".join(w for w, _ in edits), "all detected")
+
+base_line = {"color": "#3b82f6", "line_width": 2, "lineType": "solid"}
+for what, edited in (("colour", dict(base_line, color="#00ff00")),
+                     ("width", dict(base_line, line_width=6)),
+                     ("dash", dict(base_line, lineType="dashed"))):
+    assert differs(base_line, edited), what
+print("line edits         -> colour, width, dash all detected")
+
+base_fill = {"color": "#10b981", "fill_opacity": 0.45, "outline_color": "#1d4ed8"}
+for what, edited in (("colour", dict(base_fill, color="#123456")),
+                     ("opacity", dict(base_fill, fill_opacity=0.9)),
+                     ("outline", dict(base_fill, outline_color="#ff0000")),
+                     ("no outline", dict(base_fill, outline_color="none"))):
+    assert differs(base_fill, edited), what
+print("polygon edits      -> colour, opacity, outline, no-outline all detected")
+
+# A change to a CLASS's colour, or to the field, or a class added: all real.
+g = {"color_mode": "graduated", "color_field": "pop",
+     "classes": [{"min": None, "max": 100, "color": "#fee5d9"},
+                 {"min": 100, "max": None, "color": "#a50f15"}]}
+assert differs(g, {**g, "color_field": "area"})
+assert differs(g, {**g, "classes": [dict(g["classes"][0], color="#000000"), g["classes"][1]]})
+assert differs(g, {**g, "classes": g["classes"] + [{"min": 900, "max": None, "color": "#111111"}]})
+print("class edits        -> field, class colour, extra class all detected")
+
+# Cosmetic-only differences must NOT be reported: case, shorthand-vs-long, an explicitly stated
+# default, or a key written as null.
+assert not differs({"color": "#3B82F6"}, {"color": "#3b82f6"})
+assert not differs({"color": "#3b82f6"}, {"color": "#3b82f6", "radius": 5})
+assert not differs({"color": "#3b82f6"}, {"color": "#3b82f6", "lineType": "solid"})
+assert not differs({"color": "#3b82f6"}, {"color": "#3b82f6", "outline_color": None})
+assert not differs({"color": "#3b82f6", "outline_color": "#ffffff"},
+                   {"color": "#3b82f6", "outline_color": "#1d4ed8"})   # both mean "the default"
+print("cosmetic only      -> not reported")
+
+print("\nALL CHANGE-DETECTION CASES PASS")

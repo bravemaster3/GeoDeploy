@@ -418,11 +418,20 @@ def _style_differs(before: dict, after: dict) -> bool:
     """
     import json
 
+    try:
+        from .symbology import comparable_style
+    except Exception:                   # noqa: BLE001 - outside QGIS, compare the raw dicts
+        def comparable_style(style):
+            return style or {}
+
     def shape(cfg):
-        return json.dumps({"style": cfg.get("style") or {},
+        # COMPARED THROUGH THE SAME DEFAULTS. A style read back out of QGIS is always complete, while
+        # a stored one holds only what somebody chose — so comparing them as written reported every
+        # layer in a freshly opened portal as restyled. See `symbology.comparable_style`.
+        return json.dumps({"style": comparable_style(cfg.get("style")),
                            "visible": bool(cfg.get("visible", True)),
                            "opacity": round(float(cfg.get("opacity", 1.0) or 1.0), 3)},
-                          sort_keys=True)
+                          sort_keys=True, default=str)
 
     return shape(before) != shape(after)
 

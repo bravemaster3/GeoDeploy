@@ -288,11 +288,17 @@ def style_from_legend(legend: dict) -> dict:
     return style
 
 
-def _log(message: str) -> None:
-    """Into QGIS's Log Messages panel, under our own tab — the place a user can be pointed to."""
+def _log(message: str, level: str = "warning") -> None:
+    """Into QGIS's Log Messages panel, under our own tab — the place a user can be pointed to.
+
+    `level="info"` is for things that are EXPLANATIONS rather than faults. Three identical WARNINGs
+    for three rasters that simply cannot carry band styling read as three failures; they are one fact
+    about how a portal draws a raster, and the dialog already says what to do about it.
+    """
     try:
         from qgis.core import Qgis, QgsMessageLog
-        QgsMessageLog.logMessage(message, "GeoDeploy", Qgis.Warning)
+        QgsMessageLog.logMessage(message, "GeoDeploy",
+                                 Qgis.Info if level == "info" else Qgis.Warning)
     except Exception:                   # noqa: BLE001 - logging must never raise
         pass
 
@@ -307,6 +313,67 @@ P_SOURCE_LAYER = "geodeploy/source_layer"
 #: keeps one UNFILTERED style per geometry type, so reading "the first one" read a polygon symbol on
 #: a point layer — the wrong colour, identical to the old default, so an edit registered as no change.
 P_GEOMETRY = "geodeploy/geometry"
+
+
+#: Every visual key, with the value the MAP supplies when a style omits it. Used only to COMPARE two
+#: styles — see `comparable_style`.
+_STYLE_DEFAULTS = {
+    "color_mode": "single",
+    "color": "#3b82f6",
+    "radius": DEFAULT_POINT_RADIUS,
+    "marker": "circle",
+    "line_width": DEFAULT_LINE_WIDTH,
+    "lineType": "solid",
+    "fill_opacity": DEFAULT_FILL_OPACITY,
+    "outline_color": "",                # geometry-dependent, so normalised below rather than here
+}
+
+
+def comparable_style(style: dict | None) -> dict:
+    """A style reduced to what a viewer would SEE, for comparing two of them.
+
+    WHY A STORED STYLE AND A READ-BACK ONE CANNOT BE COMPARED DIRECTLY. QGIS has no concept of "unset":
+    `_symbol_of` fills every gap with the map's own default — radius 5, a white marker stroke, 45% fill
+    — so reading a symbol back always returns a COMPLETE style, while the stored one usually holds only
+    the few keys somebody actually chose. Compared raw, opening a portal and pushing it straight back
+    reported every layer as restyled; reported as "I changed only one style, but it says 3 were
+    restyled". Filling both sides from the same table is what makes the comparison mean "looks
+    different" instead of "is written differently".
+
+    Keys that do not apply to a geometry are harmless: both sides get them identically.
+    """
+    merged = dict(_STYLE_DEFAULTS)
+    merged.update({k: v for k, v in (style or {}).items() if v is not None})
+    # An outline is stated as a colour or the word "none", and the DEFAULT differs by geometry — white
+    # on a marker, #1d4ed8 on a fill. Either default reads as "the outline nobody chose", so both
+    # collapse to one token rather than being compared as colours.
+    if merged.get("outline_color") in ("", None, "#ffffff", DEFAULT_FILL_OUTLINE):
+        merged["outline_color"] = "default"
+    for key in ("radius", "line_width", "fill_opacity"):
+        try:
+            merged[key] = round(float(merged[key]), 3)
+        except (TypeError, ValueError):
+            merged[key] = None
+    # Colours differ only by case or shorthand surprisingly often (#FFF vs #ffffff); comparing them
+    # as written would report a change nobody made.
+    for key in ("color", "outline_color", "other_color"):
+        if isinstance(merged.get(key), str):
+            merged[key] = merged[key].strip().lower()
+    # The class lists carry their own colours, and those matter — keep them, case-folding ONLY the
+    # colour. A category's `value` is DATA: "Autochamber" and "autochamber" are different categories,
+    # and folding them here would hide a real change and mislabel the map.
+    for key in ("classes", "categories"):
+        if isinstance(merged.get(key), list):
+            merged[key] = [
+                {k: (v.strip().lower() if k == "color" and isinstance(v, str) else v)
+                 for k, v in item.items()}
+                for item in merged[key] if isinstance(item, dict)]
+    # A CLASSIFIED layer's single colour is not drawn — the classes are. Keeping it in the comparison
+    # made an untouched categorized layer look edited, because the read-back fills it from the
+    # catch-all entry while the stored style never had one.
+    if merged.get("color_mode") in ("graduated", "categorized"):
+        merged.pop("color", None)
+    return merged
 
 
 def apply(qgis_layer, style: dict, row: dict | None = None) -> bool:
@@ -543,10 +610,11 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
     # silence here reads as "the push lost my changes", and pushing the empty result would REPLACE
     # the portal's colormap with nothing (see portals.plan_push, which now refuses to).
     if type(renderer).__name__ == "QgsSingleBandColorDataRenderer":
-        _log("This raster is drawn from the portal's own tiles, so QGIS holds it as colour, not as "
-             "values — there is no band styling to send back. To restyle it, add the layer with "
-             "'Prefer the real data over the styled view' (that opens the GeoTIFF), restyle that, "
-             "and use 'Save styling to GeoDeploy'.")
+        _log("This raster is drawn from server-rendered tiles, so QGIS holds it as colour rather "
+             "than values — QGIS shows 'Singleband color data' and offers nothing to change, and "
+             "there is no band styling to read back. To restyle it, tick 'Prefer the real data over "
+             "the styled view' and add it again: that opens the GeoTIFF, with its real bands.",
+             level="info")
         return {}
     if renderer is None:
         return {}
@@ -913,12 +981,17 @@ def style_from_vector_tiles(tile_layer) -> dict:
         # A filter nobody here wrote: do not pretend to understand it.
         return dict(visual, color_mode="single")
 
+    # For a CLASSIFIED layer the top-level colour means nothing — the classes carry the colours, and
+    # `visual` took its `color` from whichever entry happened to be first (the catch-all, or class 0).
+    # Reporting that as the layer's colour is how an untouched categorized layer read as edited.
+    shape_only = {k: v for k, v in visual.items() if k != "color"}
     if classes and not categories:
         classes.sort(key=lambda c: (c["min"] is not None, c["min"] if c["min"] is not None else 0))
-        return dict(visual, color_mode="graduated", color_field=field,
+        return dict(shape_only, color_mode="graduated", color_field=field,
                     classes=classes, classes_n=len(classes))
     if categories and not classes:
-        style = dict(visual, color_mode="categorized", color_field=field, categories=categories)
+        style = dict(shape_only, color_mode="categorized", color_field=field,
+                     categories=categories)
         if other:
             style["other_color"] = other
         return style
@@ -1014,6 +1087,14 @@ def _style_from_symbol(symbol) -> dict:
         size = number(symbol.size)
         if size is not None:
             style["radius"] = round(size / 2.0 / CSS_PX_TO_POINTS, 2)
+        # THE OUTLINE, which this used to ignore entirely — so changing only a marker's stroke
+        # produced a byte-identical style and the push reported "unchanged". Reported exactly that
+        # way: "when I only change the symbol fill it detects the change; when I only change the
+        # stroke colour it doesn't."
+        style["outline_color"] = _stroke_of(layer0)
+        shape = _shape_name(layer0)
+        if shape:
+            style["marker"] = shape
     elif isinstance(layer0, QgsSimpleLineSymbolLayer):
         width = number(layer0.width)
         if width is not None:
@@ -1025,4 +1106,33 @@ def _style_from_symbol(symbol) -> dict:
         opacity = number(symbol.opacity)
         if opacity is not None:
             style["fill_opacity"] = round(opacity, 3)
+        style["outline_color"] = _stroke_of(layer0)
     return style
+
+
+def _stroke_of(layer0) -> str:
+    """A symbol layer's outline as GeoDeploy states it: a colour, or `"none"` for no outline."""
+    try:
+        if layer0.strokeStyle() == Qt.NoPen:
+            return "none"
+    except Exception:                   # noqa: BLE001 - not every symbol layer has one
+        pass
+    try:
+        return _hex(layer0.strokeColor())
+    except Exception:                   # noqa: BLE001
+        return ""
+
+
+def _shape_name(layer0):
+    """A marker's shape as one of GeoDeploy's names, or None when it is something else entirely.
+
+    Read back so changing the SHAPE registers as a change too. QGIS knows far more shapes than
+    GeoDeploy draws; one it cannot express is left out rather than forced to the nearest match, which
+    would quietly rewrite the user's symbol.
+    """
+    try:
+        name = QgsSimpleMarkerSymbolLayer.encodeShape(layer0.shape())
+    except Exception:                   # noqa: BLE001 - encodeShape moved between QGIS versions
+        return None
+    name = str(name).strip().lower()
+    return name if name in _MARKERS else None
