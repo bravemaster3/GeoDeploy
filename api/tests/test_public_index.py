@@ -310,11 +310,25 @@ class TestRasterCogAccess:
     open their own pixels — reported as "I am still unable to change a raster's symbology from QGIS".
     """
 
+    @pytest.fixture(autouse=True)
+    def _fake_storage(self, monkeypatch):
+        """Stand in for object storage. What is under test is the AUTHORIZATION decision, and CI has
+        no MinIO — without this the route gets past the gate and then dies inside boto3, which reads
+        as a failure of the thing that actually worked."""
+        class _Body:
+            def iter_chunks(self, size):
+                yield b"II*"                # a plausible-enough TIFF opening
+
+        class _S3:
+            def get_object(self, **kw):
+                return {"Body": _Body(), "ContentLength": 4}
+
+        import geodeploy.services.minio as minio
+        monkeypatch.setattr(minio, "get_s3_client", lambda *a, **k: _S3())
+
     async def test_a_shared_raster_is_readable_anonymously(self, client, seeded):
-        # Reaching storage is not what is under test; the authorization decision is. A shared layer
-        # must get PAST the 404 gate.
         r = await client.get("/api/data/raster/eeeeeeeeeeee/cog")
-        assert r.status_code != 404, r.text
+        assert r.status_code == 200, r.text
 
     async def test_an_unshared_raster_is_404_anonymously(self, client, seeded, db):
         db.add(RasterLayer(id=2, user_id=1, uid="ffffffffffff", name="Private DEM",
@@ -329,4 +343,4 @@ class TestRasterCogAccess:
                            visibility="organization", band_count=1))
         await db.commit()
         r = await client.get("/api/data/raster/999999999999/cog", headers=_as(1))
-        assert r.status_code != 404, ("a member may see this layer, so its pixels too", r.text)
+        assert r.status_code == 200, ("a member may see this layer, so its pixels too", r.text)
