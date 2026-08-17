@@ -605,6 +605,9 @@ class GeoDeployDock(QDockWidget):
             # portal's style" — does not have to rediscover it.
             layer.setCustomProperty(symbology.P_SOURCE_LAYER,
                                     doc.get("_source_layer") or source.get("source_layer") or "")
+            # Recorded for the way BACK: a tile layer cannot be asked what geometry it holds, and
+            # that answer decides which renderer entry is the user's when the style is read out.
+            layer.setCustomProperty(symbology.P_GEOMETRY, row.get("geometry_type") or "")
             # Classified symbology DOES survive here: a tile renderer takes one style per class
             # with a filter, which is the same shape the map's step/match expressions have.
             symbology.apply(layer, (row.get("default_style") or {}).get("style")
@@ -691,6 +694,8 @@ class GeoDeployDock(QDockWidget):
                     layer.setCustomProperty(
                         symbology.P_SOURCE_LAYER,
                         src.get("source_layer") or doc.get("_source_layer") or "")
+                    layer.setCustomProperty(symbology.P_GEOMETRY,
+                                            cfg.get("geometry_type") or "")
                     self._set_tile_extent(layer, doc.get("bounds"))
                 else:
                     # An instance too old to publish that TileJSON: the archive still draws, slowly.
@@ -706,6 +711,8 @@ class GeoDeployDock(QDockWidget):
                     layer.setCustomProperty(
                         symbology.P_SOURCE_LAYER,
                         src.get("source_layer") or doc.get("_source_layer") or "")
+                    layer.setCustomProperty(symbology.P_GEOMETRY,
+                                            cfg.get("geometry_type") or "")
                     self._set_tile_extent(layer, doc.get("bounds"))
             else:
                 return None

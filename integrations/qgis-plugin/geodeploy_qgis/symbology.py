@@ -302,6 +302,12 @@ def _log(message: str) -> None:
 #: written once, on the layer, rather than threaded through every caller that might restyle later.
 P_SOURCE_LAYER = "geodeploy/source_layer"
 
+#: And the layer's GEOMETRY, recorded for the way back out. A tile layer cannot be asked what it
+#: holds, and the answer decides which renderer entry is the user's: QGIS's own vector-tile editor
+#: keeps one UNFILTERED style per geometry type, so reading "the first one" read a polygon symbol on
+#: a point layer — the wrong colour, identical to the old default, so an edit registered as no change.
+P_GEOMETRY = "geodeploy/geometry"
+
 
 def apply(qgis_layer, style: dict, row: dict | None = None) -> bool:
     """Style ANY GeoDeploy layer — feature or vector tile — the way GeoDeploy draws it.
@@ -833,12 +839,46 @@ def style_from_vector_tiles(tile_layer) -> dict:
     if not entries:
         return {}
 
-    # One class may have been written once per geometry type (see `apply_to_vector_tiles`), so the
-    # FILTER identifies a class, not the entry. Keep the first of each.
+    # ONLY THE ENTRIES FOR THIS LAYER'S GEOMETRY.
+    #
+    # QGIS's own vector-tile symbology editor keeps one style per geometry type — Polygons, Lines,
+    # Points — all UNFILTERED. Reading them all and keeping the first meant a POINT layer's colour
+    # was read off the polygon entry: a colour the user had not touched, equal to the old default, so
+    # editing a point layer and pushing it registered as "no change" and published nothing. The
+    # geometry is recorded on the layer when the plugin builds it, precisely because the layer itself
+    # cannot be asked.
+    wanted = None
+    try:
+        recorded = (tile_layer.customProperty(P_GEOMETRY) or "")
+        recorded = str(recorded).lower()
+        from qgis.core import QgsWkbTypes
+        if "polygon" in recorded:
+            wanted = QgsWkbTypes.PolygonGeometry
+        elif "line" in recorded:
+            wanted = QgsWkbTypes.LineGeometry
+        elif "point" in recorded:
+            wanted = QgsWkbTypes.PointGeometry
+    except Exception:                   # noqa: BLE001 - fall through to every entry
+        wanted = None
+
+    enabled = [e for e in entries if not hasattr(e, "isEnabled") or e.isEnabled()]
+    if wanted is not None:
+        matching = [e for e in enabled
+                    if not hasattr(e, "geometryType") or e.geometryType() == wanted]
+        if matching:
+            enabled = matching
+    elif len({e.geometryType() for e in enabled if hasattr(e, "geometryType")}) > 1:
+        # No geometry recorded and the entries disagree: any choice would be a guess, and a guess
+        # here silently sends somebody a colour they never picked. Say so and send nothing, which
+        # `plan_push` turns into "keep what the portal already has".
+        _log("This tile layer has styles for several geometry types and no recorded geometry, so "
+             "which one is the layer's cannot be told — leaving its saved style alone.")
+        return {}
+
+    # One class may have been written once per geometry type (see `apply_to_vector_tiles`), so within
+    # one geometry the FILTER identifies a class. Keep the first of each.
     seen, unique = set(), []
-    for entry in entries:
-        if hasattr(entry, "isEnabled") and not entry.isEnabled():
-            continue
+    for entry in enabled:
         expression = (entry.filterExpression() or "").strip()
         if expression in seen:
             continue
@@ -959,16 +999,30 @@ def _style_from_symbol(symbol) -> dict:
     """
     style = {"color": _hex(symbol.color())}
     layer0 = symbol.symbolLayer(0) if symbol.symbolLayerCount() else None
+
+    def number(getter):
+        """A finite float from a Qt getter, or None. A missing size must not cost the COLOUR too —
+        losing a whole style over one unreadable number is the wrong trade, and it is the kind of
+        thing that differs between QGIS builds."""
+        try:
+            value = float(getter())
+        except (TypeError, ValueError):
+            return None
+        return value if value == value and value not in (float("inf"), float("-inf")) else None
+
     if isinstance(layer0, QgsSimpleMarkerSymbolLayer):
-        style["radius"] = round(float(symbol.size()) / 2.0 / CSS_PX_TO_POINTS, 2)
+        size = number(symbol.size)
+        if size is not None:
+            style["radius"] = round(size / 2.0 / CSS_PX_TO_POINTS, 2)
     elif isinstance(layer0, QgsSimpleLineSymbolLayer):
-        style["line_width"] = round(float(layer0.width()) / CSS_PX_TO_POINTS, 2)
+        width = number(layer0.width)
+        if width is not None:
+            style["line_width"] = round(width / CSS_PX_TO_POINTS, 2)
         pen = layer0.penStyle()
         style["lineType"] = ("dashed" if pen == Qt.DashLine
                              else "dotted" if pen == Qt.DotLine else "solid")
     elif isinstance(layer0, QgsSimpleFillSymbolLayer):
-        try:
-            style["fill_opacity"] = round(float(symbol.opacity()), 3)
-        except Exception:               # noqa: BLE001 - not every build exposes it
-            pass
+        opacity = number(symbol.opacity)
+        if opacity is not None:
+            style["fill_opacity"] = round(opacity, 3)
     return style
