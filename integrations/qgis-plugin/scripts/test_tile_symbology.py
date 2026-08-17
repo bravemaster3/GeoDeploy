@@ -166,6 +166,12 @@ class QgsVectorTileBasicRendererStyle(_Stub):
     def filterExpression(self):
         return self.filter
 
+    # A METHOD in QGIS. Exposed only as an attribute here at first, which made the reader's
+    # geometry filter — `if not hasattr(e, "geometryType")` — match every entry and hide the very
+    # bug this file was written to pin.
+    def geometryType(self):
+        return self.geometry_type
+
     def isEnabled(self):
         return self.enabled
 
@@ -396,16 +402,22 @@ class Renderer:
 
 
 class TileLayerWith:
-    def __init__(self, styles):
+    def __init__(self, styles, geometry=None):
         self._r = Renderer(styles)
+        self._props = {ns["P_GEOMETRY"]: geometry or ""}
 
     def renderer(self):
         return self._r
 
+    def customProperty(self, key, default=None):
+        return self._props.get(key, default)
+
 
 def round_trip(row, style):
     applied = styles_for(row, style)
-    return style_from_vector_tiles(TileLayerWith(applied))
+    # The plugin records the geometry on the layer when it builds one; the reader needs it to know
+    # which renderer entry is the layer's. See P_GEOMETRY.
+    return style_from_vector_tiles(TileLayerWith(applied, row.get("geometry_type")))
 
 
 out = round_trip({"geometry_type": "point"}, {"color": "#3388ff", "radius": 6, "marker": "square"})
@@ -482,3 +494,62 @@ assert style_from_vector_tiles(None) == {}
 print("nothing to read      -> {}")
 
 print("\nALL ROUND-TRIP CASES PASS")
+
+
+# ── THE REPORTED BUG: an edit to a POINT layer read back as the polygon entry ──────────────────
+# QGIS's own vector-tile symbology editor keeps one UNFILTERED style per geometry type. De-duplicating
+# on the filter alone therefore kept only the FIRST — so a user who changed the point marker had the
+# POLYGON colour read back: a colour they never touched, equal to the old default, so "push group to
+# portal" saw no change and published nothing, and "Save styling to GeoDeploy" appeared to do nothing.
+def qgis_editor_styles(colours):
+    """What QGIS leaves behind after editing a vector tile layer: one style per geometry, no filters."""
+    out = []
+    for geom, colour in ((QgsWkbTypes.PolygonGeometry, colours[0]),
+                         (QgsWkbTypes.LineGeometry, colours[1]),
+                         (QgsWkbTypes.PointGeometry, colours[2])):
+        entry = QgsVectorTileBasicRendererStyle("s", "", geom)
+        symbol = QgsSymbol.defaultSymbol(geom)
+        symbol.setColor(_QColor(colour))
+        entry.setSymbol(symbol)
+        entry.setEnabled(True)
+        entry.setFilterExpression("")
+        out.append(entry)
+    return out
+
+
+edited = qgis_editor_styles(["#aaaaaa", "#bbbbbb", "#ff0000"])
+out = style_from_vector_tiles(TileLayerWith(edited, "point"))
+assert out["color"] == "#ff0000", ("the POINT entry is the layer's; #aaaaaa is the polygon one", out)
+assert "fill_opacity" not in out, ("a point style must not pick up a fill's opacity", out)
+print("qgis-edited point  -> reads the point entry, not the first one")
+
+out = style_from_vector_tiles(TileLayerWith(edited, "MultiPolygon"))
+assert out["color"] == "#aaaaaa", out
+out = style_from_vector_tiles(TileLayerWith(edited, "LineString"))
+assert out["color"] == "#bbbbbb", out
+print("qgis-edited others -> line and polygon read their own entries")
+
+# No geometry recorded and the entries disagree: guessing would send a colour nobody picked, so it
+# sends nothing — which `plan_push` turns into "keep whatever the portal already has".
+assert style_from_vector_tiles(TileLayerWith(edited, None)) == {}
+print("geometry unknown   -> {} rather than a guess")
+
+# One unfiltered entry and no recorded geometry is unambiguous, so it still reads.
+one = qgis_editor_styles(["#aaaaaa", "#bbbbbb", "#ff0000"])[2:]
+assert style_from_vector_tiles(TileLayerWith(one, None))["color"] == "#ff0000"
+print("single entry       -> still read without a recorded geometry")
+
+# A classified POINT layer edited in QGIS keeps its filters; the geometry filter must not drop them.
+mixed = qgis_editor_styles(["#aaaaaa", "#bbbbbb", "#ff0000"])
+for value, colour in (("a", "#111111"), ("b", "#222222")):
+    e = QgsVectorTileBasicRendererStyle("c", "", QgsWkbTypes.PointGeometry)
+    sym = QgsSymbol.defaultSymbol(QgsWkbTypes.PointGeometry)
+    sym.setColor(_QColor(colour))
+    e.setSymbol(sym); e.setEnabled(True); e.setFilterExpression('"k" = \'%s\'' % value)
+    mixed.append(e)
+out = style_from_vector_tiles(TileLayerWith(mixed, "point"))
+assert out["color_mode"] == "categorized" and len(out["categories"]) == 2, out
+assert out["other_color"] == "#ff0000", ("the unfiltered POINT entry is the catch-all", out)
+print("classified point   -> categories kept, point catch-all used")
+
+print("\nALL GEOMETRY-SELECTION CASES PASS")

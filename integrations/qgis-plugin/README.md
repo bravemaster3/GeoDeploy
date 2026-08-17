@@ -65,6 +65,23 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
+2026-08-17j (**a restyled POINT layer pushed back as no change at all.** QGIS's own vector-tile
+symbology editor keeps one UNFILTERED style per geometry type — Polygons, Lines, Points — and
+`style_from_vector_tiles` de-duplicated on the FILTER alone, so only the first survived: a user who
+changed the point marker had the POLYGON entry read back, a colour they never touched and equal to the
+old default. `_style_differs` therefore saw nothing, "Push group to portal" published nothing, and
+"Save styling to GeoDeploy" stored the style it already had. Reproduced exactly with a stand-in for
+QGIS's editor output before changing anything.
+Fixed by recording the geometry ON the layer when the plugin builds it (`P_GEOMETRY`, set in
+`_build_layer` and both portal-source paths — a tile layer cannot be asked what it holds) and reading
+back only the entries for that geometry. With no geometry recorded and entries that disagree it now
+returns `{}` rather than guessing, which `plan_push` turns into "keep what the portal has" — a guess
+here would silently publish a colour nobody picked. `_style_from_symbol` also stopped losing a whole
+style to one unreadable number: a missing marker size now costs the radius, not the colour.
+**The stub was hiding it twice:** `QgsVectorTileBasicRendererStyle` exposed `geometry_type` as an
+attribute where QGIS has `geometryType()`, so the new geometry filter matched every entry and the test
+passed against the bug. Same lesson as `smoke.py` — a double has to be faithful about TYPES and about
+whether something is a method, not merely permissive.)
 2026-08-17i (**the public layer page actually works now, and the portal button does something
 different from the button next to it.**
 *Page:* the public row was missing two things the page needs — a raster's `tile_url` (`lib/mapStyle.js`
