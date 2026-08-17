@@ -72,7 +72,13 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
         // (rendered outside this MapLibre style — see refreshDeck), so EXCLUDE the layer here and
         // just keep its bbox for zoom-to-all. FALLBACK: a layer explicitly tiled (ready PMTiles)
         // renders via the pmtiles:// vector source instead.
-        if (!(layer.tile_status === 'ready' && layer.pmtiles_key)) { expandBounds(layer.bbox); continue }
+        // `tile_status === 'ready'` is the whole test. The tiling task sets it together with
+        // `pmtiles_key`, so also requiring the key added nothing — and it meant the PUBLIC layer
+        // page could not draw a tiled layer at all, because a public row deliberately carries no
+        // storage keys: the URL below is built from the layer's id, and the endpoint resolves the
+        // key server-side. Asking for a key we do not need in order to build a URL that does not
+        // use it is how a public page ended up with an empty map.
+        if (layer.tile_status !== 'ready') { expandBounds(layer.bbox); continue }
         style.sources[srcId] = { type: 'vector', url: `pmtiles://${location.origin}/api/data/vector/${layer.id}/pmtiles` }
         sourceLayer = 'geodeploy'
       } else {

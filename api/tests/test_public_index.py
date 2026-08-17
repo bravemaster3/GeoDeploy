@@ -237,11 +237,20 @@ class TestOnePublicLayer:
         assert body["crs"] == "EPSG:4326"
         assert "columns" in body and "default_style" in body
         assert body["links"], "the share links are the point of the page"
+        # The page shows the links panel WITHOUT calling the authed /links route, so the list and the
+        # catalog address both have to be here — otherwise a signed-out visitor gets a 401 in a panel
+        # whose contents were already available.
+        assert body["catalog"].endswith("/api/stac")
 
     async def test_a_shared_raster_is_served(self, client, seeded):
         body = (await client.get("/api/public/layers/raster/eeeeeeeeeeee")).json()
         assert body["name"] == "Elevation" and body["band_count"] == 1
         assert body["uid"] == "eeeeeeeeeeee" and body["status"] == "ready"
+        # WITHOUT THIS THE MAP IS EMPTY: `lib/mapStyle.js` skips a raster that has no `tile_url`, so
+        # the page would have shown the metadata beside a blank canvas.
+        assert "/raster/cog/tiles/" in body["tile_url"], body.get("tile_url")
+        assert "dem.tif" in body["tile_url"]
+        assert body["catalog"].endswith("/api/stac")
 
     async def test_a_private_layer_is_404_not_a_hint(self, client, seeded):
         # 'Internal' is organization-visibility. A signed-out visitor must not learn it exists, and

@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..models import Portal, RasterLayer, SetupConfig, VectorLayer
 from ..services import share_links
+from ..services.titiler import get_tile_url as raster_tile_url
 from .common import by_ref
 
 router = APIRouter(prefix="/public", tags=["public"])
@@ -104,10 +105,23 @@ async def public_layer(kind: str, layer_ref: str, request: Request,
         if not await _describable(row, db):
             raise HTTPException(404, "No public layer at this address.")
         out = _raster_out(row, base)
+        ds = _style(row) or {}
         out.update({"uid": row.uid, "status": row.status, "band_count": row.band_count,
-                    "default_style": _style(row), "file_size": row.file_size,
+                    "default_style": ds, "file_size": row.file_size,
                     "width": getattr(row, "width", None), "height": getattr(row, "height", None),
                     "nodata_value": getattr(row, "nodata_value", None)})
+        # THE MAP NEEDS THIS. `lib/mapStyle.js` skips any raster without a `tile_url` — so without
+        # it the public page rendered a raster's metadata beside an empty map. Built exactly as the
+        # authenticated row builds it (`raster._raster_out` in routers/data/raster.py), from the
+        # layer's default style, so the public page draws what My Data draws.
+        out["catalog"] = base + "/api/stac"
+        if row.status == "ready" and row.s3_key:
+            out["tile_url"] = raster_tile_url(
+                row.s3_key, colormap=ds.get("colormap"), rescale=ds.get("rescale"),
+                algorithm=ds.get("algorithm"), zfactor=ds.get("zfactor"), bidx=ds.get("bidx"),
+                color_classes=ds.get("color_classes"),
+                colormap_reverse=bool(ds.get("colormap_reverse")),
+                band_count=row.band_count)
         return out
     if kind == "vector":
         from .data.vector import _publicly_readable
@@ -122,6 +136,7 @@ async def public_layer(kind: str, layer_ref: str, request: Request,
                 columns = json.loads(row.columns)
             except (ValueError, TypeError):
                 columns = []
+        out["catalog"] = base + "/api/stac"
         out.update({"uid": row.uid, "status": row.status, "columns": columns,
                     "storage_backend": getattr(row, "storage_backend", "postgis"),
                     "tile_status": getattr(row, "tile_status", None),

@@ -6,7 +6,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.1.8
+version=0.1.9
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -21,7 +21,12 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.1.8 - Restyling a layer inside a portal group and pushing it back now works. A portal's
+changelog=0.1.9 - "Open in GeoDeploy" now opens a PORTAL in the editor rather than repeating what
+    "Open portal in browser" already does, and the actions that need a token (push a group, upload,
+    save styling, edit a portal) are disabled with the reason in their tooltip until you connect with
+    one. A public layer's page opens for anyone, with the map, the extent and the share links, and
+    without any of the buttons that would need an account.
+    0.1.8 - Restyling a layer inside a portal group and pushing it back now works. A portal's
     layers open as TILES, and QGIS renders those through a different renderer than a normal vector
     layer - so the styling was read from the wrong place and nothing was sent. It is now read back
     properly, classes and all. A raster opened from portal tiles has no bands to restyle ("Singleband
