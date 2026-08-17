@@ -121,9 +121,14 @@ def configs_from_published_style(style_doc: dict, style_from_legend) -> list[dic
     for ml in (style_doc.get("layers") or []):
         meta = ml.get("metadata") or {}
         layer_id = meta.get("geodeploy:layer_id")
-        if layer_id is None or layer_id in seen:
+        # KEYED BY ID **AND** TYPE. Vectors and rasters are numbered in separate sequences, so a
+        # portal holding vector 1 and raster 1 — an ordinary thing — had the second one swallowed
+        # as a duplicate of the first, and the group opened missing a layer with no error anywhere.
+        # Measured on a live portal: 7 layers in, 5 out.
+        key = (layer_id, meta.get("geodeploy:type") or "vector")
+        if layer_id is None or key in seen:
             continue
-        seen.add(layer_id)
+        seen.add(key)
         legend = {"color_mode": _mode_of(meta), "field": meta.get("geodeploy:legendField"),
                   "entries": meta.get("geodeploy:legend") or [],
                   "size": _size_of(meta.get("geodeploy:sizeLegend"))}
@@ -134,7 +139,7 @@ def configs_from_published_style(style_doc: dict, style_from_legend) -> list[dic
             # MapLibre omits `visibility` when a layer is shown, so absent means visible.
             "visible": ((ml.get("layout") or {}).get("visibility") or "visible") != "none",
             "opacity": meta.get("geodeploy:opacity", 1.0),
-            "style": style_from_legend(legend) or {},
+            "style": _baked_style(ml, meta, legend, style_from_legend),
             "popup_fields": [],
             # WHERE THE DATA COMES FROM, taken from the portal's own style.
             #
@@ -147,6 +152,76 @@ def configs_from_published_style(style_doc: dict, style_from_legend) -> list[dic
         })
     configs.reverse()
     return configs
+
+
+def _baked_style(ml_layer: dict, meta: dict, legend: dict, style_from_legend) -> dict:
+    """The style a PUBLISHED portal actually draws a layer with.
+
+    THE LEGEND IS ONLY HALF THE STORY, and the half that is usually empty. `geodeploy:legend` lists
+    the CLASSES of a graduated or categorized layer — for a single-symbol layer, which most are, it
+    is `[]`, so building the style from it alone produced `{}` and the plugin fell back to the
+    layer's own default. Measured on a live portal: `example` is drawn `#10b981` at 45% with a
+    `#1d4ed8` outline while its default style is plain `#3b82f6`, and `shapefiles_dresden` is drawn
+    `#3b82f6` against a default of `#d1ba23`. Two layers, two wrong colours, both public — which is
+    why "the portal looks different in QGIS" had nothing to do with permissions.
+
+    Everything needed is already in the document: the MapLibre `paint` block, and the
+    `geodeploy:*` metadata that carries what paint cannot express as a single value (the marker
+    shape, the dash pattern, and — for points baked as icons — the colour and radius themselves).
+    """
+    style = dict(style_from_legend(legend) or {})
+    paint = ml_layer.get("paint") or {}
+    layer_opacity = meta.get("geodeploy:opacity")
+    try:
+        layer_opacity = float(layer_opacity) if layer_opacity is not None else 1.0
+    except (TypeError, ValueError):
+        layer_opacity = 1.0
+
+    def plain(value):
+        """A literal paint value, or None when it is an EXPRESSION.
+
+        A classified layer bakes `["step", …]` / `["match", …]` into the colour. Those classes are
+        exactly what the legend carries, so they are read from there instead of parsed twice —
+        and a list must never be handed on as if it were a colour.
+        """
+        return value if isinstance(value, (str, int, float)) else None
+
+    # Shape and dash are metadata whichever geometry this is.
+    for key, prop in (("geodeploy:marker", "marker"), ("geodeploy:lineType", "lineType")):
+        if meta.get(key):
+            style.setdefault(prop, meta[key])
+
+    kind = ml_layer.get("type")
+    if kind == "fill":
+        style.setdefault("color", plain(paint.get("fill-color")) or style.get("color"))
+        outline = plain(paint.get("fill-outline-color"))
+        if outline:
+            style.setdefault("outline_color", outline)
+        baked = plain(paint.get("fill-opacity"))
+        if baked is not None and layer_opacity:
+            # The portal bakes `opacity * fill_opacity` into one number, and the layer opacity is
+            # applied separately in QGIS — so divide it back out or it would be applied twice.
+            style.setdefault("fill_opacity", min(1.0, float(baked) / layer_opacity))
+    elif kind == "line":
+        style.setdefault("color", plain(paint.get("line-color")) or style.get("color"))
+        width = plain(paint.get("line-width"))
+        if width is not None:
+            style.setdefault("line_width", width)
+    elif kind == "circle":
+        style.setdefault("color", plain(paint.get("circle-color")) or style.get("color"))
+        radius = plain(paint.get("circle-radius"))
+        if radius is not None:
+            style.setdefault("radius", radius)
+    elif kind == "symbol":
+        # Points drawn as ICONS: the paint block holds only `icon-opacity`, because the colour and
+        # size went into the generated image. The generator records both as metadata for exactly
+        # this reason — they ARE the style's `color` and `radius`.
+        if meta.get("geodeploy:markerColor"):
+            style.setdefault("color", meta["geodeploy:markerColor"])
+        if meta.get("geodeploy:markerSize") is not None:
+            style.setdefault("radius", meta["geodeploy:markerSize"])
+
+    return {k: v for k, v in style.items() if v is not None}
 
 
 def _source_of(style_doc: dict, ml_layer: dict):

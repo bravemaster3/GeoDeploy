@@ -50,6 +50,15 @@ def invalidate_public_layers() -> None:
     global _PUBLISHED_VECTOR_IDS
     _PUBLISHED_VECTOR_IDS = None
     _PMTILES_KEY_CACHE.clear()
+    # The raster side keeps the same kind of cache for its description endpoints, and the events
+    # that invalidate one invalidate the other — every caller already reaches for this function, so
+    # forwarding here is what stops the two from drifting. Imported lazily: raster.py imports from
+    # this module, so a top-level import would be circular.
+    try:
+        from .raster import invalidate_public_rasters
+        invalidate_public_rasters()
+    except ImportError:                 # pragma: no cover - only during a partial import
+        pass
     _PARQUET_PREFIX_CACHE.clear()
 
 

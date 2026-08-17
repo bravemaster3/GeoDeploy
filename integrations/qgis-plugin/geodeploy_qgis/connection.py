@@ -32,6 +32,10 @@ class Instance:
         self.url = normalize_url(url)
         self.token = token or None
         self.client = Client(self.url, token=self.token)
+        # url -> parsed document, or the GeoDeployError it failed with. Per CONNECTION, so
+        # reconnecting is the way to drop it — these describe layers, and a layer's description
+        # does not change while you are looking at it. See `fetch_json`.
+        self._doc_cache: dict = {}
 
     # -- discovery ---------------------------------------------------------------------------------
 
@@ -69,24 +73,54 @@ class Instance:
                 pass
         return (self.client.catalog.public() or {}).get("portals") or []
 
-    def fetch_json(self, url: str) -> dict:
+    def fetch_json(self, url: str, cache: bool = True) -> dict:
         """GET any URL on this instance as JSON, with the token when there is one.
 
         The layer surfaces (TileJSON, WMTS, legends) are ordinary URLs rather than client methods,
         and a private layer's are behind the credential — so this carries it, and the same
         User-Agent as everything else.
+
+        CACHED BY DEFAULT, and that is a speed fix rather than a nicety. These documents describe a
+        layer, not its data: a TileJSON, a legend, a set of bounds. Opening a seven-layer portal
+        asked for a dozen of them, one after another, and every one was a blocking round trip —
+        which is a large part of what "QGIS freezes for a while" was. They are re-read when the
+        instance is reconnected, which is the only moment they can meaningfully change.
         """
         import json
         from urllib.request import Request, urlopen
+
+        if cache and url in self._doc_cache:
+            hit = self._doc_cache[url]
+            if isinstance(hit, Exception):
+                raise hit               # a 404 is an answer too; do not ask again for it
+            return hit
 
         headers = {"User-Agent": self._c_user_agent(), "Accept": "application/json"}
         if self.token:
             headers["Authorization"] = "Bearer {0}".format(self.token)
         try:
             with urlopen(Request(url, headers=headers), timeout=30) as response:  # noqa: S310
-                return json.loads(response.read().decode("utf-8"))
+                doc = json.loads(response.read().decode("utf-8"))
         except Exception as exc:        # noqa: BLE001 - surfaced as a plugin message
-            raise GeoDeployError("Could not read {0}: {1}".format(url, exc))
+            error = GeoDeployError("Could not read {0}: {1}".format(url, exc))
+            if cache:
+                self._doc_cache[url] = error
+            raise error
+        if cache:
+            self._doc_cache[url] = doc
+        return doc
+
+    def prefetch(self, urls) -> None:
+        """Warm the cache for several documents. Safe to call from a WORKER thread — which is the
+        point: the layers themselves must be built on the GUI thread, so the network part is done
+        before that starts rather than one blocking request at a time in the middle of it."""
+        for url in urls:
+            if not url or url in self._doc_cache:
+                continue
+            try:
+                self.fetch_json(url)
+            except GeoDeployError:
+                pass                    # already recorded in the cache; the caller degrades
 
     def fetch_text(self, url: str) -> str:
         """GET a URL on this instance as text — WMTS capabilities are XML, not JSON."""

@@ -6,7 +6,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.1.3
+version=0.1.4
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -21,7 +21,14 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.1.3 - A raster opened as part of a portal is drawn the way THAT portal draws it, not
+changelog=0.1.4 - Opening a portal is much faster and looks like the portal. Layers are styled
+    before they join the map instead of after (one redraw each, not two), the canvas is frozen while
+    a group is assembled (one redraw for the whole portal, not one per layer), and the documents
+    that describe a layer are fetched once and reused - in the background thread, not between
+    layers. A portal opened WITHOUT an account now uses the portal's own colours, width, outline and
+    transparency rather than each layer's default style, and no longer loses a layer when a vector
+    and a raster share an id. Polygons are drawn at the map's 45% fill, lines at its default width.
+    0.1.3 - A raster opened as part of a portal is drawn the way THAT portal draws it, not
     in the layer's default style - the portal bakes its colormap, stretch and hillshade into its own
     tile URL, and the same raster can look different in two portals. Layer opacity now travels in as
     well as out, so a half-transparent overlay opens half-transparent.

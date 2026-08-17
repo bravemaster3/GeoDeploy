@@ -315,6 +315,53 @@ async def rename_layer(
 # A bbox is REQUIRED here: the whole raster is already a single file, streamed by range request
 # from /cog, so a "whole raster export" would spend worker minutes re-encoding a worse copy.
 
+# ── Public-read authorization for the raster DESCRIPTION endpoints ────────────────────────────
+# `is_public` alone is too strict for these, and the inconsistency was visible from outside: a
+# raster that is public only THROUGH a published portal serves its tiles (200) while its own
+# TileJSON and WMTS answered 404 — so a client could draw the raster but not discover where it is.
+# QGIS hit exactly that: "Could not read the raster's bounds: HTTP Error 404". The vector side has
+# always used the wider rule (`vector._publicly_readable`); this is the raster twin of it.
+#
+# Deliberately NOT applied to `/cog` or `/export`: those hand over the pixels, and "shown in a
+# portal" is a licence to look at a picture, not to download the source data.
+_PUBLISHED_RASTER_IDS: set[int] | None = None
+
+
+def invalidate_public_rasters() -> None:
+    global _PUBLISHED_RASTER_IDS
+    _PUBLISHED_RASTER_IDS = None
+
+
+async def _published_raster_ids(db: AsyncSession) -> set[int]:
+    global _PUBLISHED_RASTER_IDS
+    if _PUBLISHED_RASTER_IDS is None:
+        import json as _json
+        from ...models import Portal
+        rows = (await db.execute(
+            select(Portal.layer_configs).where(Portal.published == True))).scalars().all()  # noqa: E712
+        ids: set[int] = set()
+        for cfg in rows:
+            try:
+                configs = _json.loads(cfg) if isinstance(cfg, str) else (cfg or [])
+                for lc in configs:
+                    if lc.get("layer_id") is not None and lc.get("layer_type") == "raster":
+                        ids.add(int(lc["layer_id"]))
+            except (ValueError, TypeError, AttributeError):
+                continue
+        _PUBLISHED_RASTER_IDS = ids
+    return _PUBLISHED_RASTER_IDS
+
+
+async def _describable(layer, db: AsyncSession) -> bool:
+    """True if this raster's DESCRIPTION may be served anonymously: shared, or drawn by a
+    published portal. Mirrors `vector._publicly_readable`."""
+    if not layer or layer.status != "ready" or not layer.s3_key:
+        return False
+    if getattr(layer, "is_public", False):
+        return True
+    return layer.id in await _published_raster_ids(db)
+
+
 @router.post("/{layer_ref}/export", status_code=202)
 async def start_raster_export(layer_ref: str, req: exports.LayerExportRequest,
                               db: AsyncSession = Depends(get_db)):
@@ -462,7 +509,7 @@ async def raster_tilejson(layer_ref: str, request: Request, db: AsyncSession = D
 
     result = await db.execute(select(RasterLayer).where(by_ref(RasterLayer, layer_ref)))
     layer = result.scalar_one_or_none()
-    if not layer or layer.status != "ready" or not layer.is_public or not layer.s3_key:
+    if not await _describable(layer, db):
         raise HTTPException(404, "No shared raster for this layer.")
 
     proto = request.headers.get("x-forwarded-proto") or request.url.scheme
@@ -548,7 +595,7 @@ async def raster_wmts(layer_ref: str, request: Request, db: AsyncSession = Depen
 
     result = await db.execute(select(RasterLayer).where(by_ref(RasterLayer, layer_ref)))
     layer = result.scalar_one_or_none()
-    if not layer or layer.status != "ready" or not layer.is_public or not layer.s3_key:
+    if not await _describable(layer, db):
         raise HTTPException(404, "No shared raster for this layer.")
 
     proto = request.headers.get("x-forwarded-proto") or request.url.scheme

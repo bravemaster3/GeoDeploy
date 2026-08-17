@@ -106,6 +106,12 @@ CSS_PX_TO_POINTS = 0.75
 #: them is what makes QGIS and the portal show the same map.
 DEFAULT_POINT_RADIUS = 5
 DEFAULT_POINT_STROKE = 1
+#: And the polygon ones. `fill-opacity: opacity * style.get("fill_opacity", 0.45)` in
+#: portal_generator — so a polygon with no stated opacity is drawn at 45% on every portal there is.
+DEFAULT_FILL_OPACITY = 0.45
+DEFAULT_FILL_OUTLINE = "#1d4ed8"
+#: A line with no stated width is 2 CSS px on the map.
+DEFAULT_LINE_WIDTH = 2
 
 
 def _set_stroke_width(layer0, width: float) -> None:
@@ -199,10 +205,9 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
             _set_stroke_width(layer0, DEFAULT_POINT_STROKE * CSS_PX_TO_POINTS)
     elif isinstance(layer0, QgsSimpleLineSymbolLayer):
         _use_points(symbol, layer0)
-        if style.get("line_width"):
-            # In points now (see `_use_points`), so the width IS the width — no mm conversion, and
-            # no divide-by-four fudge that was only ever right at one screen DPI.
-            layer0.setWidth(float(style["line_width"]) * CSS_PX_TO_POINTS)
+        # Always set, defaulted to the map's `line-width: 2` — QGIS's own default is 0.26 mm, a
+        # hairline, so an unstyled line came out far thinner than the portal draws it.
+        layer0.setWidth(float(style.get("line_width") or DEFAULT_LINE_WIDTH) * CSS_PX_TO_POINTS)
         dash = (style.get("lineType") or "solid").lower()
         if dash == "dashed":
             layer0.setPenStyle(Qt.DashLine)
@@ -212,10 +217,15 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
         outline = style.get("outline_color")
         if outline == "none":
             layer0.setStrokeStyle(Qt.NoPen)
-        elif outline:
-            layer0.setStrokeColor(QColor(outline))
-        if style.get("fill_opacity") is not None:
-            symbol.setOpacity(float(style["fill_opacity"]))
+        else:
+            # The map's default outline, not QGIS's — `fill-outline-color: #1d4ed8` in
+            # portal_generator when the style names none.
+            layer0.setStrokeColor(QColor(outline or DEFAULT_FILL_OUTLINE))
+        # ALWAYS, and defaulted — the same mistake the point radius made. A polygon style rarely
+        # carries `fill_opacity`, and the map fills the gap with 0.45: every portal draws polygons
+        # translucent. Applying it only when present meant QGIS drew them SOLID, so a layer that is
+        # a soft wash in the browser arrived as a flat block of colour hiding everything under it.
+        symbol.setOpacity(float(style.get("fill_opacity", DEFAULT_FILL_OPACITY)))
     return symbol
 
 
