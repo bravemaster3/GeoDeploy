@@ -273,11 +273,19 @@ async def test_share_links_lead_with_ogc_features(client, db):
 
 
 @pytest.mark.asyncio
-async def test_a_tiled_geoparquet_layer_leads_with_pmtiles(client, db):
+async def test_a_tiled_geoparquet_layer_leads_with_its_tilejson(client, db):
     """These are the BIG layers — that is why they are GeoParquet — and for them the honest first
-    answer is the one that draws. QGIS opens the archive through Add Vector Layer in seconds, where
-    OAPIF pages millions of features a screen at a time. Verified against a live instance: GDAL
-    reports driver=PMTiles and reads features straight from the plain URL."""
+    answer is the one that draws a screenful at a time.
+
+    THIS TEST USED TO ASSERT THE OPPOSITE, and the reason is worth keeping. It promoted the PMTiles
+    ARCHIVE, on the reasoning that one bounded download beats paging OAPIF, and named QGIS as the
+    tool. That is true of MapLibre, which reads a tile at a time, and false of every GDAL-based
+    client: the PMTiles driver has no viewport, so QGIS's opening questions — feature count, extent
+    — walk every tile at the deepest zoom. Measured on the project's own instance, a FIVE-FEATURE
+    layer's archive holds 2,171,238 tile entries across z0-13, so the promoted link was the slow one
+    for exactly the tools it named. The per-tile endpoint the TileJSON points at is the fix; the
+    archive stays for MapLibre and for copying the file.
+    """
     from geodeploy.services.share_links import vector_links
 
     class _Tiled:
@@ -287,17 +295,22 @@ async def test_a_tiled_geoparquet_layer_leads_with_pmtiles(client, db):
         is_public, visibility = True, "public"
 
     links = vector_links(_Tiled(), "https://example.org")
-    assert links[0]["id"] == "pmtiles", "the fastest path should be first, not buried"
+    by_id = {l["id"]: l for l in links}
+    assert links[0]["id"] == "tilejson", "the viewport-driven path should be first, not buried"
     assert links[0]["primary"] is True
     assert "QGIS" in links[0]["tools"]
-    # Case-insensitive: the hint capitalises the menu name for emphasis, and pinning the shouting
-    # would make this a test of formatting rather than of content.
-    assert "add vector layer" in links[0]["hint"].lower()   # the dialog that actually works
-    assert "add vector tile layer" in links[0]["hint"].lower()  # …and the one that does not
+    assert links[0]["url"].endswith("/tilejson")
+    # The dialog that works for a TileJSON, named so nobody repeats the archive mistake by hand.
+    assert "add vector tile layer" in links[0]["hint"].lower()
     # Only ONE thing may wear the badge, or "recommended" means nothing.
-    assert [l["id"] for l in links if l.get("primary")] == ["pmtiles"]
+    assert [l["id"] for l in links if l.get("primary")] == ["tilejson"]
+    # The bare template is offered too, for a client that wants it without the wrapper.
+    assert by_id["xyz-mvt"]["url"].endswith("/tiles/{z}/{x}/{y}")
+    # The archive is still published — and no longer sold to QGIS users.
+    assert "pmtiles" in by_id and not by_id["pmtiles"].get("primary")
+    assert "QGIS" not in by_id["pmtiles"]["tools"]
     # …and the feature service is still right there for attributes, which tiles cannot carry.
-    assert "ogc-service" in [l["id"] for l in links]
+    assert "ogc-service" in by_id
 
 
 @pytest.mark.asyncio

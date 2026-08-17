@@ -156,10 +156,15 @@ def vector_links(layer, base: str) -> list[dict]:
     # This used to promote the PMTiles archive instead, on the reasoning that one bounded download
     # beats paging OAPIF. That is true of MapLibre and false of every GDAL-based client, which reads
     # the archive whole — so the promoted link was the slow one for the tools this list names first.
-    for i, l in enumerate(links):
-        if l.get("id") == "tilejson":
-            links.insert(0, links.pop(i))
-            break
+    #
+    # Guarded by `_has_pmtiles`, because a PostGIS layer publishes a `tilejson` link too and it is
+    # NOT the recommended one there — `ogc-service` keeps that badge, and promoting the TileJSON to
+    # the top would put the first link and the "recommended" mark on two different rows.
+    if _has_pmtiles(layer):
+        for i, l in enumerate(links):
+            if l.get("id") == "tilejson":
+                links.insert(0, links.pop(i))
+                break
 
     links.append(_link(
         "stac", "STAC item (metadata + all assets)", stac_item_url(base, "vectors", layer),
