@@ -99,6 +99,26 @@ def _apply_data_defined_size(symbol, layer0, style: dict) -> None:
 #: pixel is 0.75 pt and the symbol keeps its size on screen wherever it is drawn.
 CSS_PX_TO_POINTS = 0.75
 
+#: What the map draws a point as when its style says nothing: `circle-radius: 5` with a white 1 px
+#: stroke. Kept in step with `ui/src/lib/mapStyle.js`, `services/portal_generator.py` and
+#: `templates/shared/portal.js` — the same three surfaces the project's parity rule names. They are
+#: the defaults a layer with no saved style is ALREADY being drawn with in a browser, so matching
+#: them is what makes QGIS and the portal show the same map.
+DEFAULT_POINT_RADIUS = 5
+DEFAULT_POINT_STROKE = 1
+
+
+def _set_stroke_width(layer0, width: float) -> None:
+    """Set a marker's outline width, whatever this QGIS calls the setter."""
+    for name in ("setStrokeWidth", "setOutlineWidth"):
+        fn = getattr(layer0, name, None)
+        if callable(fn):
+            try:
+                fn(width)
+                return
+            except Exception:           # noqa: BLE001 - an outline is not worth failing the style
+                pass
+
 
 def _use_points(symbol, layer0) -> None:
     """Measure this symbol in POINTS, so it matches the size GeoDeploy draws.
@@ -158,21 +178,29 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
             except Exception:           # noqa: BLE001 - shape names shift between QGIS versions
                 pass
         _use_points(symbol, layer0)
-        if style.get("radius"):
-            # GeoDeploy's radius is in PIXELS and QGIS's size is a DIAMETER — so double it, and
-            # (above) tell QGIS the number is pixels. Without that it is read as millimetres, and a
-            # radius of 5 becomes a 10 mm marker: roughly four times too big on screen, which is
-            # exactly how it looked.
-            symbol.setSize(float(style["radius"]) * 2 * CSS_PX_TO_POINTS)
+        # ALWAYS set the size — never leave QGIS's default number standing under a unit we just
+        # changed. QGIS's default marker is 2.0 in MILLIMETRES; switching the unit to points turns
+        # the same 2.0 into 0.7 mm, a third of the size, which is how a styleless point layer came
+        # out as dots too small to see next to the same layer in a browser. The fallback is the
+        # portal's own default (`circle-radius: 5` in mapStyle.js, portal_generator and portal.js
+        # alike), so a layer with no saved radius matches the web instead of matching nothing.
+        #
+        # GeoDeploy's radius is in CSS PIXELS and QGIS's size is a DIAMETER, hence the doubling.
+        symbol.setSize(float(style.get("radius") or DEFAULT_POINT_RADIUS) * 2 * CSS_PX_TO_POINTS)
         outline = style.get("outline_color")
-        if outline and outline != "none":
-            layer0.setStrokeColor(QColor(outline))
-        elif outline == "none":
+        if outline == "none":
             layer0.setStrokeStyle(Qt.NoPen)
+        else:
+            # A WHITE hairline by default, because that is what the map draws
+            # (`circle-stroke-color: #ffffff`, `circle-stroke-width: 1`) — and because QGIS's own
+            # default is a dark grey outline, which on a small marker covers the fill completely
+            # and turns every point black whatever colour the style asked for.
+            layer0.setStrokeColor(QColor(outline or "#ffffff"))
+            _set_stroke_width(layer0, DEFAULT_POINT_STROKE * CSS_PX_TO_POINTS)
     elif isinstance(layer0, QgsSimpleLineSymbolLayer):
         _use_points(symbol, layer0)
         if style.get("line_width"):
-            # In pixels now (see `_use_pixels`), so the width IS the width — no mm conversion, and
+            # In points now (see `_use_points`), so the width IS the width — no mm conversion, and
             # no divide-by-four fudge that was only ever right at one screen DPI.
             layer0.setWidth(float(style["line_width"]) * CSS_PX_TO_POINTS)
         dash = (style.get("lineType") or "solid").lower()

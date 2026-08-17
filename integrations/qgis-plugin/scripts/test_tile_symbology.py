@@ -48,10 +48,16 @@ class _SymbolLayer:
     def __init__(self):
         self.width = None
         self.stroke = None
+        self.stroke_width = None
         self.pen = None
 
     def setWidth(self, w):
         self.width = w
+
+    def setStrokeWidth(self, w):
+        # A marker's OUTLINE width — a different setter from setWidth, which is a line's own width.
+        # Missing it here is how the first run of this test passed while the stroke went unset.
+        self.stroke_width = w
 
     def setStrokeColor(self, c):
         self.stroke = c
@@ -258,6 +264,30 @@ out = styles_for({"geometry_type": "Point"},
                   "categories": [{"value": 1, "color": "#f00"}, {"value": 2, "color": "#0f0"}]})
 assert out[1].filter == '"zone" = 1', out[1].filter
 print("numeric values -> unquoted literals")
+
+# ── the defaults a styleless point layer gets ────────────────────────────────────────────────
+# THE BUG THIS PINS: a real layer's style is often just {"color": "#3b82f6"} — no radius. QGIS's
+# default marker is 2.0 in MILLIMETRES, and `_use_points` switches the unit to points without
+# touching the number, so the same 2.0 became 0.7 mm: dots too small to see. QGIS's default outline
+# is dark grey, which at that size covers the fill entirely and turns every point black whatever
+# colour was asked for. Both symptoms, one screenshot, one cause.
+out = styles_for({"geometry_type": "point"}, {"color": "#3b82f6"})
+assert out[0].symbol.color == "#3b82f6"
+assert out[0].symbol.size == 5 * 2 * 0.75, ("a point with no radius must take the PORTAL's default "
+                                            "(circle-radius 5), not QGIS's number under our unit")
+stroke = out[0].symbol.symbolLayer(0)
+assert stroke.stroke.name() == "#ffffff", "the map draws circle-stroke-color #ffffff"
+assert stroke.stroke_width == 1 * 0.75, "…at circle-stroke-width 1"
+print("styleless point -> portal defaults: radius 5, white 1px stroke")
+
+# An explicit outline still wins over the default.
+out = styles_for({"geometry_type": "point"}, {"color": "#3b82f6", "outline_color": "#000000"})
+assert out[0].symbol.symbolLayer(0).stroke.name() == "#000000"
+# …and "none" still means none.
+out = styles_for({"geometry_type": "point"}, {"color": "#3b82f6", "outline_color": "none"})
+assert out[0].symbol.symbolLayer(0).pen == 0, "outline_color 'none' must set NoPen"
+print("point outline   -> explicit colour wins, 'none' means none")
+
 
 # ── single symbol, and the degrade paths ─────────────────────────────────────────────────────
 out = styles_for({"geometry_type": "Point"}, {"color": "#3388ff", "radius": 6, "marker": "square"})

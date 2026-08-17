@@ -65,6 +65,16 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
+2026-08-17b (**points were drawn at a third of their size, under a dark outline.** `_use_points`
+switches a symbol's unit to points but left QGIS's default marker NUMBER (2.0, meant as mm) standing,
+so a style that names a colour and no radius — which most do; `/legend` returns `{"color": "#3b82f6"}`
+— came out at 0.7 mm, under QGIS's default dark-grey outline, which at that size covers the fill.
+Tiny black dots where the browser drew visible blue ones, and only POINT layers were affected, which
+is why some layers looked styled and some did not. `_symbol_of` now ALWAYS sets the size, defaulting
+to the portal's own `circle-radius: 5`, with the white 1 px stroke the map draws
+(`DEFAULT_POINT_RADIUS`/`DEFAULT_POINT_STROKE`, kept in step with mapStyle.js / portal_generator /
+portal.js). Verified against the live instance: the anonymous `/legend` path resolves a style for
+every public layer, so it was never the styles that were missing.)
 2026-08-17 (**speed and symbology, both measured.** `sources.describe` now sends EVERY vector layer
 down one viewport-driven path — a **TileJSON**, for PostGIS (Martin) and tiled GeoParquet (the new
 per-tile endpoint) alike — and `plugin._vector_tiles` READS it for the tile template, the real zoom
