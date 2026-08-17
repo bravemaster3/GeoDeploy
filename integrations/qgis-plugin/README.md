@@ -65,6 +65,24 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
+2026-08-17i (**the public layer page actually works now, and the portal button does something
+different from the button next to it.**
+*Page:* the public row was missing two things the page needs — a raster's `tile_url` (`lib/mapStyle.js`
+skips a raster without one, so the page showed metadata beside an empty map) and the `links`/`catalog`
+the Share-links panel shows. `ShareLinksModal` now uses `props.layer.links` when the row carries them
+instead of calling the `data:read`-scoped `/links` route, which answered 401 for a signed-out visitor
+looking at links that were already loaded. `mapStyle` no longer demands `pmtiles_key` to draw a tiled
+GeoParquet layer: the tiling task sets it with `tile_status`, the URL is built from the layer id, and
+a public row deliberately carries no storage keys. Every write action on the page is behind
+`auth.canEdit`, so signed out there is nothing to press.
+*Portal button:* `open_in_browser` opens `/portals/<id>/edit` for a portal — "Add to map" already
+offers the published page, so two buttons doing that was one too many. It needs a session and the
+numeric id, and an anonymous listing has neither, so it is DISABLED with the reason rather than
+falling back to view mode. New `_apply_auth_ui` does the same for push-group / upload / save-styling:
+disabled until a token is connected, each keeping its own explanation under the "needs a token" note.
+*Test doubles:* `scripts/smoke.py`'s `_Any` returned itself from every method, so `toolTip() + "…"`
+and `selectedItems()[0]` failed where real Qt would not. It now returns the right TYPE for named
+string and list getters — the stub's job is to be faithful, not merely permissive.)
 2026-08-17h (**pushing a restyle from a portal group sent nothing, and for rasters it DELETED the
 portal's styling.** Two halves of one mistake: a portal's layers open as the surfaces that draw like
 the portal, and neither is what QGIS can read a style back out of.

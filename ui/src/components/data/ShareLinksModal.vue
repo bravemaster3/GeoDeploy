@@ -88,6 +88,19 @@ const error = ref('')
 const copied = ref('')
 
 onMounted(async () => {
+  // ALREADY HAVE THEM? Use them. The public layer page loads a layer from `/api/public/layers/...`,
+  // which carries the same `links` list — built by the same `services/share_links.py`. The fetch
+  // below needs `data:read`, so on that page it answered 401 and a signed-out visitor got "Could
+  // not load the links" for a layer whose links were already on screen's worth of data away.
+  if ((props.layer.links || []).length) {
+    links.value = props.layer.links
+    // A layer reachable through the public endpoint is public by definition, so the panel does not
+    // prompt to share it first.
+    isPublic.value = true
+    loaded.value = true
+    loading.value = false
+    return
+  }
   try {
     const fn = props.layerType === 'raster' ? getRasterLinks : getVectorLinks
     const { data } = await fn(props.layer.id)

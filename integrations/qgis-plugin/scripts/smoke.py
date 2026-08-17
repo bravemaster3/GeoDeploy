@@ -40,6 +40,18 @@ def _stub_qgis():
         def __getattr__(cls, name):
             return _Any()
 
+    #: Qt getters that return a STRING. `_Any` accepting everything is what makes this stub small,
+    #: but a method whose result is concatenated has to hand back the right TYPE or the stub fails
+    #: where real Qt would not — which it did, on `button.toolTip() + "…"`. Named rather than
+    #: guessed, so the stub stays honest about what it is pretending to be.
+    _STRING_GETTERS = {"toolTip", "text", "name", "windowTitle", "styleSheet", "placeholderText",
+                       "currentText", "objectName", "whatsThis", "statusTip"}
+    #: …and the ones that return a LIST. Same reasoning: `selectedItems()` is empty on a fresh dock,
+    #: and code that says `items[0] if items else None` is correct against Qt and crashed against a
+    #: stub that answered with a truthy object.
+    _LIST_GETTERS = {"selectedItems", "selectedLayers", "selectedNodes", "children", "styles",
+                     "symbolLayers", "ranges", "categories", "classes"}
+
     class _Any(metaclass=_AnyMeta):
         """Accepts anything: construction, attributes, calls, and signal connections."""
 
@@ -47,6 +59,10 @@ def _stub_qgis():
             pass
 
         def __getattr__(self, name):
+            if name in _STRING_GETTERS:
+                return lambda *a, **k: ""
+            if name in _LIST_GETTERS:
+                return lambda *a, **k: []
             return _Any()
 
         def __call__(self, *a, **k):

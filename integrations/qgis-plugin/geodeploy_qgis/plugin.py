@@ -197,6 +197,12 @@ class GeoDeployDock(QDockWidget):
         self.save_style_btn.clicked.connect(self.save_style)
         outer.addWidget(self.save_style_btn)
 
+        # The actions that genuinely need a credential, each with the explanation it already carries.
+        self._write_actions = [(b, b.toolTip()) for b in
+                               (self.push_group_btn, self.upload_btn, self.save_style_btn)]
+        # The dock opens NOT connected, so they start unavailable and say why.
+        self._apply_auth_ui()
+
         self.push_style = QCheckBox("Send its styling too")
         self.push_style.setChecked(True)
         self.push_style.setToolTip(
@@ -230,6 +236,26 @@ class GeoDeployDock(QDockWidget):
         # fine for the one message that explains why the thing you asked for did not happen.
         duration = 0 if level in (Qgis.Warning, Qgis.Critical) else 6
         bar_widget.pushMessage(PLUGIN_NAME, text, level=level, duration=duration)
+
+    def _apply_auth_ui(self):
+        """Enable the write actions only when there is a token to make them work.
+
+        They used to be permanently enabled and to answer a click with "this needs a token", which
+        is a worse way to say the same thing: the dock's whole promise is that anonymous browsing is
+        a first-class mode, so the parts that genuinely need a credential should look unavailable
+        rather than broken. The tooltip carries the reason, since a disabled button with no
+        explanation is its own kind of dead end.
+        """
+        signed_in = bool(self.instance and self.instance.token)
+        for button, own in self._write_actions:
+            button.setEnabled(signed_in)
+            # `own` is the button's real explanation, captured when the dock was built — kept in a
+            # plain list rather than a Qt property, which hands back a QVariant and would need
+            # coercing at every use.
+            button.setToolTip(own if signed_in else
+                              "Needs a token with write access — paste one above and connect "
+                              "again.\n\n" + own)
+        self._on_selection_changed()
 
     def _install_auth(self):
         """Attach the token to QGIS's OWN requests for this instance's host.
@@ -354,6 +380,7 @@ class GeoDeployDock(QDockWidget):
         # Before any layer is added: an OAPIF layer is fetched by QGIS itself, so the token has to
         # be on QGIS's requests, not only on ours.
         self._install_auth()
+        self._apply_auth_ui()
         who = f"signed in as {info.get('user')}" if info.get("authenticated") else "not signed in"
         extra = ("" if info.get("index_available")
                  else " — this instance does not publish an index, so only what your token can see "
@@ -447,9 +474,24 @@ class GeoDeployDock(QDockWidget):
         """A portal cannot be added to the map, so the button says what it WILL do instead."""
         row = self._selected_row() or {}
         is_portal = bool(row.get("_portal"))
+        signed_in = bool(self.instance and self.instance.token)
         self.add_btn.setText("Open portal in browser" if is_portal else "Add to map")
-        self.open_web_btn.setText("Open portal in GeoDeploy" if is_portal
-                                  else "Open layer in GeoDeploy")
+        if is_portal:
+            self.open_web_btn.setText("Edit portal in GeoDeploy")
+            # Editing is an authenticated action, so the button reflects that rather than offering
+            # something it will refuse.
+            can_edit = signed_in and row.get("id") is not None
+            self.open_web_btn.setEnabled(can_edit)
+            self.open_web_btn.setToolTip(
+                "Open this portal in GeoDeploy's editor." if can_edit
+                else "Editing a portal needs a token with write access — use “Open portal in "
+                     "browser” to see the published page.")
+        else:
+            self.open_web_btn.setText("Open layer in GeoDeploy")
+            self.open_web_btn.setEnabled(True)
+            self.open_web_btn.setToolTip(
+                "Open the layer's page on the instance — the map, the metadata, the fields and "
+                "every share link. A public layer opens for anyone.")
 
     def add_selected(self):
         row = self._selected_row()
@@ -1176,7 +1218,17 @@ class GeoDeployDock(QDockWidget):
             self._say("Pick a layer or a portal first.", Qgis.Warning)
             return
         if row.get("_portal"):
-            self._open_portal(row)
+            # A PORTAL OPENS IN THE EDITOR, not in view mode — "Add to map" already offers the
+            # published page, and two buttons doing the same thing is one button too many. Editing
+            # needs a session and the portal's numeric id, and an anonymous listing has neither, so
+            # the button is disabled in that case rather than opening something else instead.
+            base = (row.get("_base") or (self.instance.url if self.instance else "")).rstrip("/")
+            portal_id = row.get("id")
+            if not (self.instance and self.instance.token) or portal_id is None:
+                self._say("Editing a portal needs a token with write access. Without one, use "
+                          "“Open portal in browser” to see the published page.", Qgis.Warning)
+                return
+            self._open_url("{0}/portals/{1}/edit".format(base, portal_id))
             return
         base = (row.get("_base") or (self.instance.url if self.instance else "")).rstrip("/")
         ref = row.get("uid") or row.get("id")
