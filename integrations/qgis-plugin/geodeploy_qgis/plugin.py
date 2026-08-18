@@ -12,6 +12,7 @@ Three principles this file exists to keep:
 from __future__ import annotations
 
 import os
+import re
 import shutil
 
 from qgis.core import (Qgis, QgsApplication, QgsProject, QgsRasterLayer, QgsTask,
@@ -901,13 +902,23 @@ class GeoDeployDock(QDockWidget):
         a layer that looks valid and draws nothing.
         """
         try:
-            import xml.etree.ElementTree as ET
+            import xml.etree.ElementTree as ET      # noqa: S405 - see the entity check below
             from qgis.core import QgsDataSourceUri
 
             text = self.instance.fetch_text(url) if self.instance else None
             if not text:
                 return None
-            root = ET.fromstring(text)
+            # NO ENTITY DECLARATIONS. `xml.etree` is vulnerable to entity-expansion attacks
+            # ("billion laughs") and the fix everyone reaches for — defusedxml — is a dependency,
+            # which a QGIS plugin cannot add. A WMTS capabilities document has no legitimate use
+            # for a DOCTYPE or an ENTITY, so refusing one costs nothing and removes the class of
+            # attack rather than mitigating it. The document comes from the instance the user
+            # connected to, which is trusted-ish but not trusted.
+            if re.search(r"<!\s*(DOCTYPE|ENTITY)", text, re.IGNORECASE):
+                symbology._log("Refused a WMTS capabilities document that declares XML entities — "
+                               "{0}. The raster will be added from another source.".format(url))
+                return None
+            root = ET.fromstring(text)      # noqa: S314 - entity declarations refused above
             ns = {"wmts": "http://www.opengis.net/wmts/1.0",
                   "ows": "http://www.opengis.net/ows/1.1"}
             node = root.find(".//wmts:Contents/wmts:Layer", ns)
