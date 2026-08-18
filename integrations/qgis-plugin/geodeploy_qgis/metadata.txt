@@ -12,7 +12,7 @@ email=noumonvikoffidodji@hotmail.fr
 
 tracker=https://github.com/bravemaster3/GeoDeploy/issues
 repository=https://github.com/bravemaster3/GeoDeploy
-homepage=https://docs-geodeploy.kndev.org/
+homepage=https://docs-geodeploy.kndev.org/qgis/
 category=Web
 icon=icon.png
 experimental=True
