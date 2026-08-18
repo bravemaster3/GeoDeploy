@@ -12,6 +12,11 @@ layers — are separate opt-ins rather than one blanket "OK". Unchanged layers a
 """
 from __future__ import annotations
 
+try:                                    # a package, inside QGIS
+    from .compat import enum
+except ImportError:                     # pragma: no cover - exec'd standalone by the test harness
+    from compat import enum
+
 try:                                    # pragma: no cover - only present inside QGIS
     from qgis.PyQt.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QLabel, QVBoxLayout,
                                      QTextEdit)
@@ -119,7 +124,7 @@ def confirm(parent, portal_title: str, plan: dict, creating: bool):
     buttons.rejected.connect(dialog.reject)
     layout.addWidget(buttons)
 
-    if dialog.exec_() != QDialog.Accepted:
+    if dialog.exec() != enum(QDialog, "DialogCode", "Accepted"):
         return (False, False, False)
     return (True, upload_box.isChecked() and bool(uploads),
             drop_box.isChecked() and bool(removed))

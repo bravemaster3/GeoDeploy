@@ -349,7 +349,10 @@ sys.path.insert(0, os.path.join(HERE, "..", "geodeploy_qgis"))
 lines = open(os.path.join(HERE, "..", "geodeploy_qgis", "symbology.py"),
              encoding="utf-8").read().splitlines()
 src = "\n".join(l for l in lines if not l.startswith("from .connection"))
-ns = {}
+# A real module always has __name__, and the module under test now uses it: its
+# `from .compat import enum` needs a package context to fail as an ImportError so the
+# standalone fallback can take over. Without it Python raises KeyError instead.
+ns = {"__name__": "symbology"}
 exec(compile(src, "symbology", "exec"), ns)                                     # noqa: S102
 assert ns["QGIS"] is True, "the fake qgis.core was not picked up"
 assert ns["QGIS_RASTER"] is True, "the raster half of the qgis.core import did not resolve"

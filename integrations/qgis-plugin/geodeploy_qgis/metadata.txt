@@ -6,7 +6,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.3.2
+version=0.3.3
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -25,7 +25,12 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.3.2 - The 0.3.1 security declarations are applied inline instead of in a bundled
+changelog=0.3.3 - Ready for QGIS 4. Qt6 only reaches an enum member through its scope
+    (Qt.PenStyle.NoPen, not Qt.NoPen), so every one of the 94 places this plugin read an enum now
+    goes through a small resolver that asks for the scoped name and falls back to the flat one -
+    which keeps QGIS 3.28 working exactly as before. Dialogs call exec() rather than the removed
+    exec_(). No behaviour changes on QGIS 3.
+    0.3.2 - The 0.3.1 security declarations are applied inline instead of in a bundled
     .bandit file. plugins.qgis.org runs bandit with an explicit list of tests, and a config file
     that skips any of them makes bandit abort without scanning anything - which is what the 0.3.1
     scan report showed. Same declarations, same fixes, now honoured.

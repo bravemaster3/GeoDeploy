@@ -159,6 +159,12 @@ jobs:
         # that opens in the layers' default colours or quietly loses a layer to a clashing id.
         run: python integrations/qgis-plugin/scripts/test_published_style.py
 
+      - name: Enums resolve on Qt5 and Qt6 alike
+        # QGIS 4 is Qt6, where an enum member is only reachable through its scope. The migration
+        # touched 94 call sites; one flat `Qgis.Warning` typed later would be invisible until a user
+        # on QGIS 4 hit that path, so the test walks the AST of every module and refuses one.
+        run: python integrations/qgis-plugin/scripts/test_qt6_compat.py
+
       - name: The security scan plugins.qgis.org runs
         # Every upload is scanned, and a critical finding BLOCKS the version until a new one is
         # uploaded — so finding this here rather than there is the difference between a commit and
