@@ -171,7 +171,15 @@ jobs:
           missing = [k for k in required if not g.get(k)]
           if missing:
               sys.exit(f"metadata.txt is missing: {missing}")
-          print("metadata.txt ok —", g["name"], g["version"])
+          # EVERY key, not just the required ones. ConfigParser interpolates on get(), so a bare
+          # `%` anywhere — "45% fill" in a changelog entry — raises InterpolationSyntaxError for
+          # whoever reads that key. QGIS and plugins.qgis.org parse this file the same way, and the
+          # old check passed happily because it never read the changelog.
+          for key in g:
+              g.get(key)
+          if not g.get("tags"):
+              sys.exit("metadata.txt has no tags — they are how the Plugin Manager finds it")
+          print("metadata.txt ok —", g["name"], g["version"], "| tags:", g["tags"][:40])
           PY
 
   ui:
