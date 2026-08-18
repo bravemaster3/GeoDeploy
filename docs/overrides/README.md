@@ -12,6 +12,12 @@ domain, nothing else — because no page emitted Open Graph tags.
   `site_description`, and the URL to `page.canonical_url` (already absolute — which is what `og:`
   requires).
 
+## The card is designed for two sizes
+`og-image.png` is rendered at 1200x630 for a feed post, but the same file is also shown at roughly
+**120px wide** in composer previews, comments and DMs. At that scale only the mark and the wordmark
+survive, so those carry the composition and the supporting lines are deliberately few and large.
+Check any edit at thumbnail size before judging it full size.
+
 ## Dependencies / relationships
 - `mkdocs.yml` — `theme.custom_dir: docs/overrides`, and `overrides/` is listed in `exclude_docs` so
   MkDocs does not *also* copy this template into the built site as a page.
