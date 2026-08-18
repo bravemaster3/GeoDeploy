@@ -225,9 +225,9 @@ desktop GIS people already have open.</p>
       packaged client, which is why that client has no dependencies and runs on Python 3.9.
       *Built; not yet run in anger inside QGIS, and `experimental` until it has been*
 - [ ] **Styling that travels** — portal and layer style interchange with GeoLibre and QGIS, for
-      every layer type. *Both directions now for vectors, rasters and 3D extrusion; the one thing
-      that cannot travel is a polygon's outline width, because a MapLibre fill outline is always
-      1 px wide*
+      every layer type. *Both directions now for vectors and rasters, including a polygon's outline
+      width. 3D extrusion is carried safely but is not yet DRAWN by QGIS — see "Every symbol QGIS
+      can draw" below*
 - [ ] **Download a backup**, and **restore from disk** — state-only (small, covers a bad restore or
       a botched update) separately from the full copy including objects
 - [ ] **Labels** — the other half of data-driven symbology v1.1 did not ship, and unlike size this
@@ -259,13 +259,18 @@ is the rest of the round trip, not yet scheduled.</p>
 ### Every symbol QGIS can draw
 <span class="gd-when">Planned</span>
 
-<p class="gd-goal">v1.4 made styling travel both ways for the symbology GeoDeploy itself has: single
-symbol, graduated and categorized, size from a field, raster colormaps and classes, 3D extrusion,
-outlines. QGIS draws a great deal more than that, and today those symbols are quietly simplified on
-the way in. This is about closing that gap — and about being honest where it cannot be closed.</p>
+<p class="gd-goal">v1.4 made styling travel both ways for most of the symbology GeoDeploy itself
+has: single symbol, graduated and categorized, size from a field, raster colormaps, classes and
+contours, outlines. QGIS draws a great deal more than that, and today those symbols are quietly
+simplified on the way in. This is about closing that gap — and about being honest where it cannot be
+closed.</p>
 
 Two different problems wear the same coat, and separating them is most of the work:
 
+- [ ] **3D extrusion, drawn in QGIS.** GeoDeploy renders extrusion and the plugin carries it safely
+      — a round trip cannot delete a layer's 3D — but QGIS still draws those polygons FLAT in a 3D
+      map view, so 3D cannot be edited there. This is the first thing on this list, because unlike
+      the rest it is half-built rather than absent.
 - [ ] **Symbols a web map can draw, which simply are not wired up yet.** These are real round
       trips, each worth its own entry: **inverted polygons** (a mask — the world minus the layer,
       which is how you dim everything outside a study area), **2.5D** (QGIS's shadowed

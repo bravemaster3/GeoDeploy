@@ -6,7 +6,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.2.2
+version=0.3.0
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -21,11 +21,19 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.2.2 - Says why a 3D layer looks flat. QGIS can only extrude a FEATURE layer, so a
-    portal opened "as the portal draws it" - which hands QGIS vector tiles - shows 3D layers flat.
-    Nothing is lost and a push cannot delete the 3D; open the portal with Source set to "Editable",
-    or use "Restyle this layer...", to see and edit it. The plugin now says this instead of leaving
-    you to guess.
+changelog=0.3.0 - First public release. Browse a GeoDeploy instance (no account needed for public
+    data), add a layer using the fastest source it offers, open a whole portal as a styled QGIS
+    group, and upload back - including multi-gigabyte files. Styling travels BOTH WAYS: single
+    symbol, graduated and categorized vectors; colormap, stretch, band, hillshade, contours and
+    colour-per-value rasters; size-from-a-field; marker shape, stroke colour and width; a polygon's
+    outline width. A layer opens looking like the portal, and what you change goes home.
+    Which renderer QGIS offers depends on the SOURCE, so a per-layer Source picker and a
+    "Restyle this layer..." button get you onto the surface that can actually be restyled. A PostGIS
+    layer opens over OGC API - Features, ready to classify by a field; tiled GeoParquet keeps its
+    tiles. A portal opens either as it draws it, or editable - every layer from its own data with
+    the portal's styling painted on - so a portal's layers restyle exactly like single ones.
+    KNOWN LIMITATION: a layer's 3D extrusion is carried safely (opening one and pushing it back
+    does not remove it) but is NOT yet drawn in QGIS's 3D view, so 3D cannot be edited here.
     0.2.1 - A polygon's outline WIDTH now travels, which was the one property that could
     not: GeoDeploy draws a fill's edge as a real line layer now, so the number means something.
     0.2.0 - First public release. Browse a GeoDeploy instance (no account needed for public

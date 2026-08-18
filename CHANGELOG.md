@@ -14,9 +14,10 @@ upgrade needs manual work.
   storage. It vendors the same zero-dependency client the CLI is built on, so there is nothing to
   pip-install into QGIS.
 - **Styling travels both ways, for every layer type.** Single symbol, graduated and categorized for
-  vectors; colormap, stretch, band, hillshade and colour-per-value for rasters; **3D extrusion for
-  polygons and points**; size-from-a-field; marker shape, stroke colour and stroke width. A layer
-  opens in QGIS looking like the portal, and what you change there goes home.
+  vectors; colormap, stretch, band, hillshade, contours and colour-per-value for rasters;
+  size-from-a-field; marker shape, stroke colour and stroke width; a polygon's outline width. A
+  layer opens in QGIS looking like the portal, and what you change there goes home.
+  **3D extrusion is carried but not yet drawn in QGIS** — see the known limitations below.
 - **A raster can actually be classified in QGIS.** Which renderer QGIS offers is decided by the
   SOURCE, not by a setting: server-rendered tiles arrive as one band of RGBA — "Singleband color
   data", nothing to classify — and vector tiles have no categorized or graduated renderer at all.
@@ -35,6 +36,17 @@ upgrade needs manual work.
   fields and server-side algorithms survive a restyle from QGIS instead of being replaced by the
   subset QGIS can express — and opening a portal and pushing it straight back reports nothing
   changed, rather than every layer as restyled.
+
+### Known limitations
+
+- **3D extrusion is not drawn in QGIS's 3D view.** A layer's extrusion is stored, published and
+  rendered by GeoDeploy as before, and the plugin carries it safely through a round trip — opening
+  an extruded layer and pushing it back does not remove it. But QGIS itself still shows those
+  polygons flat, so 3D cannot be *edited* there yet. Tracked as part of "Every symbol QGIS can
+  draw" on the roadmap.
+- Symbology QGIS has and GeoDeploy does not — inverted polygons, 2.5D, hatch and gradient fills,
+  line offsets, markers along a line, multi-layer symbols, rule-based rendering, labels — is
+  simplified on the way into QGIS and not carried back. Same roadmap entry.
 
 ### Symbology
 

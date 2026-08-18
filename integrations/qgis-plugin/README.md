@@ -60,9 +60,17 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   QGIS session as the real test.
 - `experimental=True` in `metadata.txt` until that happens.
 - No icon yet (`icon.png` is referenced by `metadata.txt` and must exist before upload).
-- Styling covers single symbol, graduated and categorized for vectors, colormap / stretch / band /
-  colour-per-value / hillshade for rasters, and **3D extrusion for polygons and points** — all
-  **both directions**. Size-from-a-field round-trips too.
+- Styling covers single symbol, graduated and categorized for vectors, and colormap / stretch /
+  band / colour-per-value / hillshade / contours for rasters — **both directions**.
+  Size-from-a-field, marker shape, stroke colour and width, and a polygon's outline width too.
+- **3D EXTRUSION IS NOT DRAWN BY QGIS, and the code that tries is unverified.** `apply_3d` builds a
+  `QgsVectorLayer3DRenderer` and the round-trip tests pass against stubs, but in a real QGIS session
+  an extruded portal layer still renders FLAT in a 3D map view — reported after opening a 3D portal
+  editable, zooming in and adding the view. Do not describe this as working. What IS verified: the
+  extrusion is never LOST — `extrusion_from_qgis` returns None for a tile layer and the recorded
+  spec survives a push, so a round trip cannot delete a portal's 3D (proven against every extrusion
+  on the live instance). Candidate causes for whoever picks this up are in
+  `notes_temp/notes_for_future.md`; the feature is on the roadmap under "Every symbol QGIS can draw".
 - **What is NOT carried yet, and where it is tracked:** QGIS draws far more than GeoDeploy's
   vocabulary — inverted polygons, 2.5D, hatch and gradient fills, line offsets, markers along a
   line, multi-layer symbols, rule-based rendering, labels. Those are simplified on the way in and
@@ -95,6 +103,21 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
+2026-08-18c (**CORRECTION to the entry below: 3D extrusion does not draw in QGIS AT ALL, not merely
+on tiles.** Tested for real — a 3D portal opened editable, zoomed to, then View ▸ New 3D Map View —
+and the polygons are still FLAT. So the previous entry's implication, that the editable portal mode
+shows 3D, is wrong, and every claim that 3D "travels both ways" has been removed from the changelog,
+the plugin's published description and the roadmap. What survives scrutiny is narrower and still
+worth having: the extrusion is never LOST. `extrusion_from_qgis` returns None for a layer that
+cannot hold 3D, the recorded spec is returned unchanged while the symbol matches it, and all six
+live extrusions round-trip with no phantom change — so opening a portal and pushing it back cannot
+delete somebody's 3D. The DISPLAY half is unbuilt, and is now the first item under "Every symbol
+QGIS can draw" in `docs/roadmap.md`. Candidate causes — an unresolved `qgis._3d` import that logs
+at Info and returns False, terrain-relative altitude clamping, and above all the CRS units problem
+(in an EPSG:4326 project a height in metres is read as DEGREES) — are in
+`notes_temp/notes_for_future.md`. The lesson for this file: stub tests prove the code does what it
+was written to do, not that QGIS draws anything. Nothing may be described as working in QGIS until
+it has been seen working in QGIS.)
 2026-08-18b (**"3D extrusions don't show in the QGIS 3D view" — they cannot, on tiles, and the
 plugin now says so.** A `QgsVectorLayer3DRenderer` needs a FEATURE layer. A portal opened *as the
 portal draws it* hands QGIS vector tiles, `apply` routes those to `apply_to_vector_tiles`, and

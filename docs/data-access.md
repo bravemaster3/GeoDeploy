@@ -325,12 +325,19 @@ service in front of it: OGC API - Features instead of WFS, COG over Range instea
 XYZ/TileJSON instead of WMS, STAC instead of CSW. Keeping to those is what lets GeoDeploy run on a
 small server. Clients that specifically require the older protocols are out of scope.
 
+## In QGIS, without any of this
+
+There is a **GeoDeploy plugin for QGIS** (`integrations/qgis-plugin/`): paste an instance URL and
+browse what it publishes — no account needed for public data — add a layer using the fastest source
+it offers, open a whole portal as a styled group, and upload back. It carries symbology in both
+directions, so a layer opens looking like the portal and what you restyle there goes home. The
+protocols below are still what it uses underneath, and remain the right choice for anything
+scripted.
+
 ## Not yet implemented
 
 - Private catalog access via API token (shared layers are public; unshared layers are simply
   not listed).
-- A QGIS plugin (browse the catalog and add a layer in one click). The STAC connection already
-  covers most of this.
 - Single-file GeoParquet download of a partitioned dataset (merge-on-demand).
 - OGC API - Features extensions: CRS negotiation (Part 2), CQL2 filtering (Part 3), transactions,
   and property filters/queryables. Core + GeoJSON only, as `/api/ogc/conformance` states.
