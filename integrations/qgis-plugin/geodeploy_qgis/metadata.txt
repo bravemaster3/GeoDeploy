@@ -13,6 +13,10 @@ email=noumonvikoffidodji@hotmail.fr
 tracker=https://github.com/bravemaster3/GeoDeploy/issues
 repository=https://github.com/bravemaster3/GeoDeploy
 homepage=https://docs-geodeploy.kndev.org/qgis/
+; Tags are how somebody finds this in the Plugin Manager's search. The cookbook asks for
+; informative ones — "vector" tells a reader nothing, "geoparquet" tells them whether this is for
+; them — so these name the SURFACES and formats the plugin actually speaks.
+tags=web,cloud,server,upload,publish,style,symbology,portal,webmap,ogc,stac,cog,pmtiles,geoparquet,postgis
 category=Web
 icon=icon.png
 experimental=True
@@ -122,7 +126,7 @@ changelog=0.3.0 - First public release. Browse a GeoDeploy instance (no account 
     that describe a layer are fetched once and reused - in the background thread, not between
     layers. A portal opened WITHOUT an account now uses the portal's own colours, width, outline and
     transparency rather than each layer's default style, and no longer loses a layer when a vector
-    and a raster share an id. Polygons are drawn at the map's 45% fill, lines at its default width.
+    and a raster share an id. Polygons are drawn at the map's 0.45 fill opacity, lines at its default width.
     0.1.3 - A raster opened as part of a portal is drawn the way THAT portal draws it, not
     in the layer's default style - the portal bakes its colormap, stretch and hillshade into its own
     tile URL, and the same raster can look different in two portals. Layer opacity now travels in as
