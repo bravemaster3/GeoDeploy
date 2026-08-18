@@ -19,6 +19,8 @@ import {
   iconImageExpression as symIconImageExpression,
   iconSizeExpression as symIconSizeExpression,
   markerImages as symMarkerImages,
+  polygonOutlineWidth,
+  POLYGON_OUTLINE_WIDTH,
   NO_OUTLINE,
 } from '@/lib/symbology'
 
@@ -131,11 +133,31 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
           // `fill-antialias: false`, not an omission: an omitted fill-outline-color MATCHES the
           // fill colour (the spec default), which is why "None" drew a visible edge. Mirrors
           // portal_generator._vector_layer.
-          if (st.outline_color === NO_OUTLINE) fillPaint['fill-antialias'] = false
+          // A WIDER OUTLINE NEEDS ITS OWN LAYER. `fill-outline-color` is a colour with no width —
+          // a fill's edge is always one pixel — so anything wider is a `line` layer beside the
+          // fill, and the fill then stops drawing its own edge or the two are stacked. Emitted
+          // only above the hairline, so existing portals render byte-identically. Mirrors
+          // portal_generator._polygon_outline_layer.
+          const outlineWidth = polygonOutlineWidth(st)
+          const wantsOutlineLayer = st.outline_color !== NO_OUTLINE
+            && outlineWidth > POLYGON_OUTLINE_WIDTH
+          if (st.outline_color === NO_OUTLINE || wantsOutlineLayer) fillPaint['fill-antialias'] = false
           else fillPaint['fill-outline-color'] = st.outline_color || '#1d4ed8'
           style.layers.push({
             id: srcId, type: 'fill', source: srcId, 'source-layer': sourceLayer, paint: fillPaint,
           })
+          if (wantsOutlineLayer) {
+            style.layers.push({
+              id: `${srcId}-outline`, type: 'line', source: srcId, 'source-layer': sourceLayer,
+              paint: {
+                'line-color': st.outline_color || '#1d4ed8',
+                'line-width': outlineWidth,
+                // The layer's opacity, not the fill's: a 45% wash with a solid border is the
+                // ordinary way to draw a polygon.
+                'line-opacity': opacity,
+              },
+            })
+          }
         }
       } else if (geom.includes('line')) {
         const linePaint = {

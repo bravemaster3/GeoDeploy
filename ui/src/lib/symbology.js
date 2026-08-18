@@ -179,6 +179,22 @@ export function markerOutline(style = {}) {
   return [color, Math.min(Math.max(ratio, 0), 1)]
 }
 
+/** A POLYGON's outline width in CSS px. Twin of services/symbology.POLYGON_OUTLINE_WIDTH.
+ *
+ * 1 is what a MapLibre `fill` already draws: a fill strokes its own edge at a fixed hairline and
+ * `fill-outline-color` has no width, so every polygon published before this had a 1 px outline.
+ * Keeping the default there means those keep rendering exactly as they did.
+ *
+ * NOTE the key does double duty: on a POINT `outline_width` is a RATIO of the marker radius (see
+ * markerOutline), on a POLYGON it is pixels. The two are never read by the same code path. */
+export const POLYGON_OUTLINE_WIDTH = 1
+
+export function polygonOutlineWidth(style = {}) {
+  const w = Number(style.outline_width)
+  if (!Number.isFinite(w)) return POLYGON_OUTLINE_WIDTH
+  return Math.min(Math.max(w, 0), 40)
+}
+
 const _px = (v, d = 5) => {
   let n = Number(v == null ? d : v)
   if (!Number.isFinite(n)) n = d

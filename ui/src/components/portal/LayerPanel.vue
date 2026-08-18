@@ -173,6 +173,18 @@
                   </label>
                   <span v-if="!noOutline" class="text-xs text-muted-foreground/70 font-mono">{{ outlineSwatch('#1d4ed8') }}</span>
                 </div>
+                <!-- A polygon's outline WIDTH, in pixels — the same unit a line uses, because it is
+                     one. Anything above the default 1 is drawn as its own line layer beside the
+                     fill: a MapLibre fill strokes its own edge at a fixed hairline, so a width
+                     could not be honoured by the fill at all. -->
+                <div v-if="!noOutline" class="flex items-center gap-2 mt-1.5">
+                  <span class="text-[11px] text-muted-foreground flex-shrink-0">Width</span>
+                  <input type="number" min="0" max="20" step="0.5"
+                    :value="config.style?.outline_width ?? 1"
+                    @input="emitStyle({ outline_width: parseFloat($event.target.value) })"
+                    class="w-16 text-xs border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+                  <span class="text-xs text-muted-foreground/70">px</span>
+                </div>
               </div>
 
             </template>

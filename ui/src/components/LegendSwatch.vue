@@ -17,9 +17,12 @@
       :stroke="color" stroke-width="3" stroke-linecap="round"
       :stroke-dasharray="dash === 'dashed' ? '3 2' : (dash === 'dotted' ? '0.6 3' : undefined)" />
 
-    <!-- Polygon: a fill with its outline, at the same 45% the map uses. -->
+    <!-- Polygon: a fill with its outline, at the same 45% the map uses — and the outline's own
+         colour and width, since both are now things an author sets. The width is SCALED into the
+         swatch: this rect is 13x10, so a 12 px border on the map would swallow it whole. -->
     <rect v-else-if="geom === 'polygon'" x="2.5" y="4" width="13" height="10"
-      :fill="color" fill-opacity="0.45" :stroke="color" stroke-width="1.5" />
+      :fill="color" fill-opacity="0.45"
+      :stroke="outlineColor || color" :stroke-width="swatchOutlineWidth" />
 
     <!-- Raster: a small chequer, standing for a grid of cells. -->
     <g v-else-if="geom === 'raster'">
@@ -47,6 +50,10 @@ import { computed } from 'vue'
 
 const props = defineProps({
   geom: { type: String, default: 'point' },     // point | line | polygon | raster
+  // A polygon's outline, drawn as the map draws it. Absent means "the fill colour at the old
+  // fixed width", which is what every caller that has not been taught about outlines still gets.
+  outlineColor: { type: String, default: '' },
+  outlineWidth: { type: [Number, String], default: null },
   color: { type: String, default: '#3b82f6' },
   marker: { type: String, default: 'circle' },
   dash: { type: String, default: 'solid' },     // solid | dashed | dotted
@@ -56,6 +63,15 @@ const props = defineProps({
 const outline = { stroke: '#fff', 'stroke-width': 1.5, 'stroke-linejoin': 'round' }
 
 // Same construction as portal.js::starPoints / crossPoints, at the swatch's radius.
+// 1.5 is what this swatch has always drawn, so an unset width keeps every existing legend
+// pixel-identical; a real one is compressed into the swatch rather than scaled linearly, because
+// the useful signal is "thicker than default", not the exact pixel count.
+const swatchOutlineWidth = computed(() => {
+  const w = Number(props.outlineWidth)
+  if (!Number.isFinite(w)) return 1.5
+  return Math.max(0.5, Math.min(4, 1.5 + (w - 1) * 0.6))
+})
+
 const starPoints = computed(() => {
   const cx = 9, cy = 9, r = 6.5
   const pts = []

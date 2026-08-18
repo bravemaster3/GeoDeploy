@@ -410,8 +410,11 @@ def round_trip(style, geometry=QgsWkbTypes.PolygonGeometry):
     return extrusion_from_qgis(layer), layer
 
 
-def same(a, b, note=""):
-    ca, cb = comparable_style(a), comparable_style(b)
+def same(a, b, note="", geometry="polygon"):
+    """Compared as `portals._style_differs` compares — WITH the geometry, because `outline_width`
+    is a ratio of the radius on a point and a width in pixels on a polygon, so their defaults
+    differ and a comparison that cannot tell them apart reports every polygon as restyled."""
+    ca, cb = comparable_style(a, geometry), comparable_style(b, geometry)
     assert ca == cb, "{0}\n  applied: {1}\n  read   : {2}".format(note, ca, cb)
 
 

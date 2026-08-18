@@ -268,10 +268,20 @@ def _validate(style: Dict[str, Any]) -> None:
     mode = style.get("color_mode")
     if mode is not None and mode not in COLOR_MODES:
         raise ValidationError(400, "Colour mode must be one of {0}.".format(", ".join(COLOR_MODES)))
-    for key in ("fill_opacity", "outline_width"):
-        value = style.get(key)
-        if value is not None and not 0 <= float(value) <= 1:
-            raise ValidationError(400, "{0} is a fraction between 0 and 1.".format(key))
+    value = style.get("fill_opacity")
+    if value is not None and not 0 <= float(value) <= 1:
+        raise ValidationError(400, "fill_opacity is a fraction between 0 and 1.")
+    # `outline_width` MEANS TWO THINGS and this validator cannot see the geometry: on a POINT it is
+    # a fraction of the radius (0-1), on a POLYGON a width in CSS pixels. Refusing anything above 1
+    # made a polygon border impossible to set from here at all — "outline_width is a fraction
+    # between 0 and 1" for a perfectly ordinary 3 px edge. The renderers clamp for their own
+    # geometry (a marker ratio is capped at 1, a polygon width at 40), so the check here is only a
+    # sanity bound on a number that has no single unit.
+    value = style.get("outline_width")
+    if value is not None and not 0 <= float(value) <= 40:
+        raise ValidationError(
+            400, "outline_width is a fraction of the radius on points (0-1) and a width in pixels "
+                 "on polygons (up to 40).")
 
 
 class Style(object):

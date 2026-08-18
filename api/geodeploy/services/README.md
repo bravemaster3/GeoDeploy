@@ -313,3 +313,13 @@ transparent. Reported as "unique values renders only the red" and measured on th
 with the stretch, all three without. Scoped to a palette that is actually APPLIED — an algorithm or a
 three-band composite ignores the colormap, and there the stretch is the only thing colouring the
 raster, so dropping it would leave neither.)
+2026-08-18 (**a polygon's outline width is drawable at last.** `fill-outline-color` is a colour with
+no width — a MapLibre fill's edge is always one pixel — so `outline_width` had nowhere to go on a
+polygon and was documented as untravellable. `portal_generator._polygon_outline_layer` now emits a
+`line` layer beside the fill, and the fill drops to `fill-antialias: false` so the hairline is not
+drawn underneath it (which shows as a hard inner rim on a translucent wash). Emitted ONLY above the
+hairline — `symbology.needs_outline_layer` — so every polygon already published renders
+byte-identically. The key does double duty and the docstrings say so: `outline_width` is a RATIO of
+the radius on a point and a WIDTH IN PIXELS on a polygon; they are never read by the same branch,
+and a marker's 0.28 left on a polygon falls below the hairline and changes nothing. Tests:
+`api/tests/test_polygon_outline.py`.)

@@ -384,7 +384,7 @@ draws the lines on top of it, so without a range the whole raster comes out one 
 | --- | --- |
 | `--color` | polygon fill, line colour, or point colour |
 | `--fill-opacity`, `--opacity` | fill opacity; whole-layer opacity |
-| `--outline-color`, `--outline-width` | outline colour (`none` for no outline) and, on points, its width as a fraction of the radius — a wide one is how a ring is drawn |
+| `--outline-color`, `--outline-width` | outline colour (`none` for no outline) and its width. On **points** a fraction of the radius — a wide one is how a ring is drawn; on **polygons** a width in px (default 1) |
 | `--line-width`, `--line-type` | width in px; `solid` `dashed` `dotted` |
 | `--radius`, `--marker` | point size; `circle` `square` `triangle` `diamond` `star` `cross` |
 | `--colormap`, `--reverse-colormap`, `--rescale`, `--bidx` | raster: colour ramp, its direction, stretch, band selection |

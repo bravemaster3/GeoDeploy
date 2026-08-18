@@ -27,8 +27,9 @@ def add_style_args(parser, raster: bool = True) -> None:
     single.add_argument("--outline-color",
                         help="outline colour, or 'none' for no outline at all")
     single.add_argument("--outline-width", type=float,
-                        help="point outline width as a FRACTION of the radius (0-1, default 0.28) "
-                             "— a wide one on a small marker is how a ring is drawn")
+                        help="outline width. On POINTS a fraction of the radius (0-1, default "
+                             "0.28) — a wide one on a small marker is how a ring is drawn. On "
+                             "POLYGONS a width in px (default 1)")
     single.add_argument("--line-width", type=float, help="line width in px")
     single.add_argument("--radius", type=float, help="point radius in px")
     single.add_argument("--marker", choices=MARKERS, help="point marker shape")

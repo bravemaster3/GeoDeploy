@@ -1710,7 +1710,7 @@
         '<div class="layer-row">' +
           '<span class="layer-drag" title="Drag to reorder">' + dragIcon() + '</span>' +
           '<button class="layer-eye' + (visOn ? '' : ' off') + '" data-layer-id="' + layer.id + '" title="Hide / show" aria-label="Toggle visibility">' + eyeIcon(visOn) + '</button>' +
-          '<button class="layer-swatch-btn" data-swatch="' + layer.id + '" data-layer-id="' + layer.id + '" title="Symbology" aria-label="Edit symbology">' + legendSwatch(geom, color, dash, shape) + '</button>' +
+          '<button class="layer-swatch-btn" data-swatch="' + layer.id + '" data-layer-id="' + layer.id + '" title="Symbology" aria-label="Edit symbology">' + legendSwatch(geom, color, dash, shape, geom === 'polygon' ? bakedOutline(layer.id) : null) + '</button>' +
           '<span class="layer-name" title="' + escHtml(name) + '">' + escHtml(name) + '</span>' +
           '<button class="layer-zoom" data-layer-id="' + layer.id + '" title="Zoom to layer" aria-label="Zoom to layer"' + (canZoom ? '' : ' disabled') + '>' +
             '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
@@ -1722,7 +1722,8 @@
           ? '<div class="layer-legend" data-legend="' + layer.id + '">' + rasterLegendHtml(layer) + '</div>'
           : vectorLegendHtml(meta['geodeploy:legend'], geom,
                              meta['geodeploy:legendField'], meta['geodeploy:sizeLegend'], color,
-                             meta['geodeploy:lineType'], meta['geodeploy:marker']));
+                             meta['geodeploy:lineType'], meta['geodeploy:marker'],
+                             geom === 'polygon' ? bakedOutline(layer.id) : null));
       container.appendChild(card);
     });
 
@@ -2220,6 +2221,27 @@
         if (!isNaN(v)) map.setPaintProperty(id, prop, v);
       });
     });
+    root.querySelectorAll('.layer-outline-width').forEach(inp => {
+      inp.addEventListener('input', e => {
+        const fillId = e.target.dataset.layerId;
+        const w = parseFloat(e.target.value);
+        if (isNaN(w)) return;
+        const outId = ensureOutlineLayer(fillId);
+        if (outId) map.setPaintProperty(outId, 'line-width', w);
+      });
+    });
+    root.querySelectorAll('.layer-outline-color').forEach(inp => {
+      inp.addEventListener('input', e => {
+        const fillId = e.target.dataset.layerId;
+        // Whichever layer is drawing the edge: the published outline layer if there is one, the
+        // fill's own hairline if not — setting the wrong one silently does nothing.
+        if (map.getLayer(fillId + '-outline')) {
+          map.setPaintProperty(fillId + '-outline', 'line-color', e.target.value);
+        } else {
+          try { map.setPaintProperty(fillId, 'fill-outline-color', e.target.value); } catch (err) {}
+        }
+      });
+    });
     root.querySelectorAll('.layer-linetype').forEach(sel => {
       sel.addEventListener('change', e => {
         const id = e.target.dataset.layerId;
@@ -2371,18 +2393,45 @@
     if (!sw) return;
     let dash = 'solid';
     if (geomK === 'line') { try { dash = dashKind({ 'line-dasharray': map.getPaintProperty(id, 'line-dasharray') }); } catch (e) {} }
-    sw.innerHTML = legendSwatch(geomK, color, dash, shape);
+    sw.innerHTML = legendSwatch(geomK, color, dash, shape,
+      geomK === 'polygon' ? { color: polygonOutlineColor(id), width: polygonOutlineWidth(id) } : null);
   }
 
   // Legend swatch that mirrors the layer's actual symbol + colour (+ line dash / marker shape)
-  function legendSwatch(geom, color, dash, shape) {
+  /** A polygon's outline as PUBLISHED — `{color, width}` — or null.
+   *
+   * Read from STYLE rather than from the live map, because the layer list is built before the map
+   * has finished loading its layers and `getPaintProperty` would throw for every one of them. The
+   * outline lives in a sibling `-outline` line layer when the author set a width, and in the fill's
+   * own `fill-outline-color` when they did not. */
+  function bakedOutline(fillId) {
+    const layers = (STYLE && STYLE.layers) || [];
+    const line = layers.find(function (l) { return l.id === fillId + '-outline'; });
+    if (line && line.paint) {
+      return { color: line.paint['line-color'], width: line.paint['line-width'] };
+    }
+    const fill = layers.find(function (l) { return l.id === fillId; });
+    const c = fill && fill.paint && fill.paint['fill-outline-color'];
+    return typeof c === 'string' ? { color: c, width: 1 } : null;
+  }
+
+  function legendSwatch(geom, color, dash, shape, outline) {
     const c = color || '#3b82f6';
     if (geom === 'line') {
       const da = dash === 'dashed' ? ' stroke-dasharray="3 2"' : dash === 'dotted' ? ' stroke-dasharray="0.6 3"' : '';
       return '<svg width="18" height="18" viewBox="0 0 18 18"><line x1="2" y1="9" x2="16" y2="9" stroke="' + c + '" stroke-width="3" stroke-linecap="round"' + da + '/></svg>';
     }
-    if (geom === 'polygon')
-      return '<svg width="18" height="18" viewBox="0 0 18 18"><rect x="2.5" y="4" width="13" height="10" fill="' + c + '" fill-opacity="0.45" stroke="' + c + '" stroke-width="1.5"/></svg>';
+    if (geom === 'polygon') {
+      // The outline's own colour and width, when the caller knows them. 1.5 is what this swatch has
+      // always drawn, so a caller that does not keeps its legend pixel-identical; a real width is
+      // COMPRESSED into the swatch rather than scaled, because a 12 px border on the map would
+      // swallow a 13x10 rect whole and the useful signal is "thicker than default".
+      const oc = (outline && outline.color) || c;
+      const raw = outline && Number(outline.width);
+      const ow = isFinite(raw) ? Math.max(0.5, Math.min(4, 1.5 + (raw - 1) * 0.6)) : 1.5;
+      return '<svg width="18" height="18" viewBox="0 0 18 18"><rect x="2.5" y="4" width="13" ' +
+        'height="10" fill="' + c + '" fill-opacity="0.45" stroke="' + oc + '" stroke-width="' + ow + '"/></svg>';
+    }
     if (geom === 'raster')
       return geomIcon('raster');
     return '<svg width="18" height="18" viewBox="0 0 18 18">' + markerSvg(shape || 'circle', c) + '</svg>';
@@ -2513,7 +2562,7 @@
       '</div></div>';
   }
 
-  function vectorLegendHtml(entries, geom, field, size, color, dash, shape) {
+  function vectorLegendHtml(entries, geom, field, size, color, dash, shape, outline) {
     const sizeHtml = sizeLegendHtml(size, geom, color);
     // Size can vary while colour does not — they are independent dimensions — so a layer with no
     // classes may still have a legend worth showing.
@@ -2525,7 +2574,7 @@
     // swatch button uses; it was simply never reached from here.
     const rows = entries.map(function (e) {
       return '<div class="legend-class">' +
-        legendSwatch(geom, e.color || '#999', dash, shape) +
+        legendSwatch(geom, e.color || '#999', dash, shape, outline) +
         '<span class="legend-label">' + escHtml(e.label == null ? '' : String(e.label)) + '</span>' +
         '</div>';
     }).join('');
@@ -2662,10 +2711,63 @@
         `<select class="layer-linetype" data-layer-id="${layer.id}">` +
         opt('solid', 'Solid') + opt('dashed', 'Dashed') + opt('dotted', 'Dotted') + `</select></div>`;
     }
+    // A POLYGON'S OUTLINE WIDTH. A `fill` strokes its own edge at a fixed hairline, so anything
+    // wider is a separate `line` layer — published by portal_generator when the author set one, and
+    // created here on demand when they did not, so a viewer can still thicken a border.
+    let outlineField = '';
+    if (t === 'fill') {
+      outlineField = `<div class="layer-style-field"><label>Outline</label>` +
+        `<input class="layer-outline-color" type="color" value="${toHex(polygonOutlineColor(layer.id))}" ` +
+        `data-layer-id="${layer.id}">` +
+        `<input class="layer-outline-width" type="number" min="0" max="20" step="0.5" title="Outline width, px" ` +
+        `value="${polygonOutlineWidth(layer.id)}" data-layer-id="${layer.id}"></div>`;
+    }
     return `<div class="layer-style-row" data-style-for="${layer.id}">` +
         `<div class="layer-style-field"><label>Color</label>` +
         `<input class="layer-style-color" type="color" value="${toHex(color)}" ` +
-        `data-layer-id="${layer.id}" data-layer-type="${t}"></div>${sizeField}${lineType}</div>`;
+        `data-layer-id="${layer.id}" data-layer-type="${t}"></div>` +
+        `${sizeField}${lineType}${outlineField}</div>`;
+  }
+
+  /** The id of a polygon's outline layer, creating it if the author published none. */
+  function ensureOutlineLayer(fillId) {
+    const outId = fillId + '-outline';
+    if (map.getLayer(outId)) return outId;
+    const layers = (map.getStyle() || {}).layers || [];
+    const i = layers.findIndex(function (l) { return l.id === fillId; });
+    if (i < 0 || layers[i].type !== 'fill') return null;
+    let color = '#1d4ed8';
+    try { color = map.getPaintProperty(fillId, 'fill-outline-color') || color; } catch (e) {}
+    // Directly ABOVE the fill, not at the end of the style: appending would draw this polygon's
+    // border over every layer sitting above it in the portal's own order.
+    const before = layers[i + 1] && layers[i + 1].id;
+    const def = { id: outId, type: 'line', source: layers[i].source,
+                  paint: { 'line-color': color, 'line-width': 1 } };
+    if (layers[i]['source-layer']) def['source-layer'] = layers[i]['source-layer'];
+    try {
+      map.addLayer(def, before);
+      // Or the hairline is drawn underneath the new line — a hard inner edge on a soft fill.
+      map.setPaintProperty(fillId, 'fill-antialias', false);
+    } catch (e) { return null; }
+    return outId;
+  }
+
+  function polygonOutlineWidth(fillId) {
+    try {
+      const w = map.getPaintProperty(fillId + '-outline', 'line-width');
+      if (typeof w === 'number') return w;
+    } catch (e) {}
+    return 1;
+  }
+
+  function polygonOutlineColor(fillId) {
+    for (const [id, prop] of [[fillId + '-outline', 'line-color'], [fillId, 'fill-outline-color']]) {
+      try {
+        const c = map.getPaintProperty(id, prop);
+        if (typeof c === 'string') return c;
+      } catch (e) {}
+    }
+    return '#1d4ed8';
   }
 
   // Minimal controls for an external source: opacity lives in the popover header;

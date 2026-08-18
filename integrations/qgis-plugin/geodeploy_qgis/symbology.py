@@ -130,6 +130,10 @@ DEFAULT_FILL_OPACITY = 0.45
 DEFAULT_FILL_OUTLINE = "#1d4ed8"
 #: A line with no stated width is 2 CSS px on the map.
 DEFAULT_LINE_WIDTH = 2
+#: A POLYGON's outline with no stated width is 1 CSS px — what a MapLibre `fill` draws on its own
+#: edge, and therefore what every polygon published before outlines had a width looked like.
+#: Mirrors `services/symbology.POLYGON_OUTLINE_WIDTH`.
+DEFAULT_POLYGON_OUTLINE = 1
 #: And the colour every renderer falls back to — `symbology.DEFAULT_COLOR` on the instance.
 DEFAULT_COLOR = "#3b82f6"
 #: The footprint of an extruded POINT when the style names none, in metres. Mirrors
@@ -261,6 +265,13 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
             # The map's default outline, not QGIS's — `fill-outline-color: #1d4ed8` in
             # portal_generator when the style names none.
             layer0.setStrokeColor(QColor(outline or DEFAULT_FILL_OUTLINE))
+            # AND ITS WIDTH. On a POLYGON `outline_width` is a width in CSS pixels — the same unit a
+            # line uses, because it is one — where on a marker the same key is a RATIO of the
+            # radius. The two are never read by the same branch. 1 px is what a MapLibre fill's own
+            # edge draws, so an unset width is a hairline here too.
+            _use_points(symbol, layer0)
+            layer0.setWidth(_number(style.get("outline_width"), DEFAULT_POLYGON_OUTLINE)
+                            * CSS_PX_TO_POINTS)
         # ALWAYS, and defaulted — the same mistake the point radius made. A polygon style rarely
         # carries `fill_opacity`, and the map fills the gap with 0.45: every portal draws polygons
         # translucent. Applying it only when present meant QGIS drew them SOLID, so a layer that is
@@ -495,7 +506,7 @@ _STYLE_DEFAULTS = {
 }
 
 
-def comparable_style(style: dict | None) -> dict:
+def comparable_style(style: dict | None, geometry: str | None = None) -> dict:
     """A style reduced to what a viewer would SEE, for comparing two of them.
 
     WHY A STORED STYLE AND A READ-BACK ONE CANNOT BE COMPARED DIRECTLY. QGIS has no concept of "unset":
@@ -514,6 +525,17 @@ def comparable_style(style: dict | None) -> dict:
     if _is_raster_style(style):
         return _comparable_raster(style)
     merged = dict(_STYLE_DEFAULTS)
+    # `outline_width` MEANS TWO THINGS, and the default differs with them: on a POINT it is a ratio
+    # of the marker radius (0.28), on a POLYGON a width in CSS pixels (1, what a fill's own edge
+    # draws). Without the geometry the two cannot be told apart, and a polygon read back at its
+    # 1 px default would compare against a marker's 0.28 and report every polygon as restyled.
+    # Folding them into one token instead would be wrong the other way: a marker ratio of 1 is a
+    # solid RING, a real symbol somebody chose, and hiding that change would be worse.
+    # `in`, not `startswith`: GeoDeploy's geometry strings are "Polygon" AND "MultiPolygon", and
+    # the rest of the codebase tests them the same way (`"polygon" in geom` in portal_generator and
+    # mapStyle.js). Anchoring the match silently missed every multipart layer.
+    if "polygon" in str(geometry or "").lower():
+        merged["outline_width"] = DEFAULT_POLYGON_OUTLINE
     merged.update({k: v for k, v in (style or {}).items() if v is not None})
     # An outline is stated as a colour or the word "none", and the DEFAULT differs by geometry — white
     # on a marker, #1d4ed8 on a fill. Either default reads as "the outline nobody chose", so both
@@ -2521,6 +2543,13 @@ def _style_from_symbol(symbol) -> dict:
         if opacity is not None:
             style["fill_opacity"] = round(opacity, 3)
         style["outline_color"] = _stroke_of(layer0)
+        # The border WIDTH, which used to be dropped because GeoDeploy could not draw one: a
+        # MapLibre fill strokes its own edge at a fixed hairline. It draws one now (a `line` layer
+        # beside the fill), so the number is worth carrying — divided by the same constant the
+        # writer multiplies by, like every other size here.
+        width = number(layer0.width)
+        if width is not None:
+            style["outline_width"] = round(width / CSS_PX_TO_POINTS, 2)
     style.update(_size_from_qgis(symbol, layer0))
     return style
 

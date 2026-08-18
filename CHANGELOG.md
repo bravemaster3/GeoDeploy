@@ -38,6 +38,13 @@ upgrade needs manual work.
 
 ### Symbology
 
+- **Polygons have an outline WIDTH.** They never did, and the reason was structural: a MapLibre
+  `fill` strokes its own boundary and `fill-outline-color` is a colour with no width, so the edge
+  was always one pixel and a border could not be set anywhere. It is now drawn as its own line
+  layer beside the fill — in the portal, the editor preview, the layer page and the published
+  portal, with the legend swatch showing it — and it round-trips through QGIS and the CLI like
+  every other property. Existing portals are untouched: the extra layer appears only above the
+  hairline they already had.
 - **Contour lines**, everywhere raster symbology is edited: My Data, the layer page, the portal
   editor, the published portal with its own legend, the CLI and the plugin. The interval and line
   width are yours; the range the relief behind the lines is coloured over comes from the layer's

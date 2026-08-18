@@ -6,7 +6,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.2.0
+version=0.2.1
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -21,7 +21,9 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.2.0 - First public release. Browse a GeoDeploy instance (no account needed for public
+changelog=0.2.1 - A polygon's outline WIDTH now travels, which was the one property that could
+    not: GeoDeploy draws a fill's edge as a real line layer now, so the number means something.
+    0.2.0 - First public release. Browse a GeoDeploy instance (no account needed for public
     data), add a layer using the fastest source it offers, open a whole portal as a styled QGIS
     group, and upload back - including multi-gigabyte files. Styling travels BOTH WAYS for every
     layer type: single symbol, graduated and categorized vectors; colormap, stretch, band, hillshade,

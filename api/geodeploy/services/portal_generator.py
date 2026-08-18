@@ -1375,7 +1375,9 @@ def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
     entry supplies `type`/`paint`/`layout`/`filter`/`suffix`; we wire the layer id + source-layer."""
     raw = ((cfg.get("style") or {}).get("maplibre") or {}).get("layers")
     if not raw:
-        return [_vector_layer(source_id, layer, cfg)]
+        base = _vector_layer(source_id, layer, cfg)
+        outline = _polygon_outline_layer(source_id, layer, cfg, base)
+        return [base, outline] if outline else [base]
     source_layer = _source_layer_name(layer)
     out: list[dict] = []
     for i, entry in enumerate(raw):
@@ -1390,6 +1392,52 @@ def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
             ml["layout"] = dict(entry["layout"])
         out.append(ml)
     return out or [_vector_layer(source_id, layer, cfg)]
+
+
+def _polygon_outline_layer(source_id: str, layer, cfg: dict, base: dict) -> dict | None:
+    """A `line` layer drawing a polygon's outline, when it is wider than a fill's own edge.
+
+    WHY A SECOND LAYER AT ALL. A MapLibre `fill` strokes its own boundary, and
+    `fill-outline-color` is exactly that — a colour, with no width: the edge is always one pixel.
+    So an outline width could not be honoured by the fill at all, and for a long time this was
+    reported honestly as "a polygon's outline width cannot travel". It can; it just needs the
+    outline to be its own layer.
+
+    Emitted ONLY when the width exceeds that hairline (`symbology.needs_outline_layer`), so every
+    polygon already published keeps rendering byte-identically.
+
+    When it IS emitted the fill must stop drawing its own edge, or the outline is drawn twice — the
+    hairline underneath a wider line, which shows as a hard inner edge on a translucent fill. That
+    is `fill-antialias: false`, the same switch "no outline" uses, and it is set on the fill here
+    rather than in `_vector_layer` because only this function knows the decision was made.
+    """
+    geom = (layer.geometry_type or "").lower()
+    style = cfg.get("style") or {}
+    if "polygon" not in geom or base.get("type") != "fill":
+        return None                      # a 3D extrusion has no fill edge to widen
+    if not symbology.needs_outline_layer(style):
+        return None
+    paint = base.setdefault("paint", {})
+    paint.pop("fill-outline-color", None)
+    paint["fill-antialias"] = False
+    return {
+        "id": f"vector-{layer.id}-outline",
+        "type": "line",
+        "source": source_id,
+        "source-layer": _source_layer_name(layer),
+        "paint": {
+            "line-color": symbology.outline_color(style),
+            "line-width": symbology.outline_width_px(style),
+            # The outline follows the layer's own opacity, not the FILL's: a polygon drawn as a
+            # 45% wash with a solid border is the ordinary way to draw one, and tying the border to
+            # `fill_opacity` would make it fade with the wash.
+            "line-opacity": cfg.get("opacity", 1.0),
+        },
+        # No metadata here on purpose: the caller stamps it, giving the FIRST layer the full
+        # `geodeploy:*` block and every other one `{layer_id, part: True}` — which is what keeps the
+        # switcher listing this layer once while the eye toggle hides the outline with its fill.
+        # Setting any here would be overwritten, and would read as if it mattered.
+    }
 
 
 def _vector_layer(source_id: str, layer, cfg: dict) -> dict:

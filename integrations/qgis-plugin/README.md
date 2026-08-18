@@ -63,10 +63,12 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
 - Styling covers single symbol, graduated and categorized for vectors, colormap / stretch / band /
   colour-per-value / hillshade for rasters, and **3D extrusion for polygons and points** — all
   **both directions**. Size-from-a-field round-trips too.
-- **What cannot round-trip, and why:** a POLYGON's outline WIDTH. GeoDeploy draws a fill's outline
-  with MapLibre's `fill-outline-color`, which is always 1 px — there is no width to carry, so
-  writing one from QGIS would promise something no portal can draw. A LINE's width and a point
-  marker's stroke width (a ratio of the radius) both do round-trip.
+- **A polygon's outline WIDTH round-trips now too** — it used to be the one thing that could not,
+  because a MapLibre fill's edge is a fixed hairline. GeoDeploy draws it as a `line` layer beside
+  the fill, so the number is real and travels. Note the key means two things: `outline_width` is a
+  RATIO of the radius on a point and a WIDTH IN PIXELS on a polygon, which is why
+  `comparable_style` takes the geometry — without it a polygon read back at its 1 px default
+  compares against a marker's 0.28 and every polygon reports as restyled.
 - **3D units are not converted.** GeoDeploy's extrusion heights and pillar radii are metres; QGIS 3D
   measures in the project's map units. Those agree exactly in a projected CRS in metres and do not
   in a geographic one. The number travels unchanged rather than being transformed, because
