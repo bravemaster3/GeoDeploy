@@ -27,7 +27,7 @@ import threading
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from .errors import ValidationError
-from .transport import MultipartBody, ProgressReader, Request
+from .transport import MultipartBody, ProgressReader
 
 #: At or above this, bypass the API and upload direct to object storage. See the module docstring.
 LARGE_UPLOAD_THRESHOLD = 48 * 1024 * 1024

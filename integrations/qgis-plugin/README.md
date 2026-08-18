@@ -160,12 +160,20 @@ asks for the scoped name and falls back to the flat one. Every enum read goes th
 migration was mechanical across 94 sites and a single one typed later would be invisible until a
 user on QGIS 4 hit that path.
 
+The icon is the project's own logo (`ui/public/logo.png`, resized to 128px) rather than a drawn
+stand-in — `metadata.txt` requires one and a placeholder is what a reviewer notices first.
+
 **Do not apply the plugins.qgis.org Qt6 report verbatim.** It reports
 `QLineEdit.Password` as *"add 'EchoMode' before 'Password'"*, which reads as `Qt.EchoMode.Password`
 — a name that does not exist, because `EchoMode` belongs to `QLineEdit`. Every scope in the map was
 resolved against the real class instead. And not everything capitalised is an enum:
 `QgsVectorFileWriter.SaveVectorOptions` and `QgsColorRampShader.ColorRampItem` are classes, and
 scoping them would be a silent `AttributeError`.
+
+The first pass still missed six: `QDialogButtonBox.Ok`/`Cancel`, because the owner map in the fixer
+said `QMessageBox`. The AST guard did not catch them either — it only looks for the owners it has
+been told about, so an owner absent from that map is an owner unprotected. `QDialogButtonBox` is in
+it now, which is the actual lesson: the guard is only as wide as its list.
 
 ## The security scan
 Every upload to plugins.qgis.org is scanned (Bandit, detect-secrets, Flake8) and **a critical

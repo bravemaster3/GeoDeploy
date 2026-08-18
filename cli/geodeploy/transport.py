@@ -315,7 +315,6 @@ class UrllibTransport:
                              method_=request.method)
         try:
             with self._opener.open(req, timeout=request.timeout) as resp:
-                total = int(resp.headers.get("Content-Length") or 0)
                 read = 0
                 while True:
                     block = resp.read(chunk)

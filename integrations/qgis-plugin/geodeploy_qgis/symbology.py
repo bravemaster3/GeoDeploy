@@ -31,7 +31,7 @@ try:                                    # pragma: no cover - only present inside
     from qgis.core import (QgsCategorizedSymbolRenderer, QgsGraduatedSymbolRenderer,
                            QgsRendererCategory, QgsRendererRange, QgsSimpleFillSymbolLayer,
                            QgsSimpleLineSymbolLayer, QgsSimpleMarkerSymbolLayer, QgsSymbol,
-                           QgsSingleSymbolRenderer, QgsClassificationRange,
+                           QgsSingleSymbolRenderer,
                            QgsMultiBandColorRenderer, QgsSingleBandGrayRenderer,
                            QgsSingleBandPseudoColorRenderer, QgsHillshadeRenderer,
                            QgsPalettedRasterRenderer)
