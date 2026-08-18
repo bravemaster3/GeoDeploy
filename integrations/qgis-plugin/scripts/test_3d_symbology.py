@@ -533,6 +533,54 @@ assert merge_style({"extrusion": {"enabled": True, "field": "pop"}}, {"color": "
     "extrusion": {"enabled": True, "field": "pop"}, "color": "#ff0000"}
 print("never 3D       -> silence, so a push cannot delete a portal's extrusion")
 
+# ── a TILE layer cannot hold 3D, and must not pretend to ─────────────────────────────────────────
+#
+# Reported as "3D extrusions don't show in the QGIS 3D view". A `QgsVectorLayer3DRenderer` needs a
+# FEATURE layer; a portal opened as the portal draws it hands QGIS vector tiles, so the 3D view
+# shows flat polygons. The extrusion is not lost — it is still stored and a push will not remove it
+# — but nothing said so, which is indistinguishable from "not implemented".
+class TileLayer:
+    """A QgsVectorTileLayer, which `apply` must route away from the feature path."""
+
+    def __init__(self):
+        self._renderer3d = "untouched"
+        self._properties = {}
+
+    def name(self):
+        return "buildings"
+
+    def setRenderer(self, r):
+        pass
+
+    def triggerRepaint(self):
+        pass
+
+    def setRenderer3D(self, r):
+        self._renderer3d = r
+
+    def renderer3D(self):
+        return None
+
+    def customProperty(self, key, default=None):
+        return self._properties.get(key, default)
+
+    def setCustomProperty(self, key, value):
+        self._properties[key] = value
+
+
+core.QgsVectorTileLayer = TileLayer
+core.QgsRasterLayer = type("QgsRasterLayer", (), {})
+tiles = TileLayer()
+apply_module = ns["apply"]
+apply_module(tiles, {"color": "#3b82f6", "extrusion": {"enabled": True, "field": "h"}}, {})
+# It must not have been given a 3D renderer, and — just as important — the one it never had must
+# not have been CLEARED either, which is what a naive `setRenderer3D(None)` would do.
+assert tiles._renderer3d == "untouched", tiles._renderer3d
+# And the style is still readable: silence from a tile layer means "cannot answer", so the push
+# path keeps the portal's extrusion rather than deleting it.
+assert extrusion_from_qgis(tiles) is None
+print("tile layer     -> no 3D renderer, nothing cleared, and the stored extrusion survives")
+
 # Turning it off in GeoDeploy and reopening has to actually turn it off in QGIS.
 _, layer = round_trip({"extrusion": {"enabled": True, "height": 25.0}})
 assert apply_3d(layer, {"extrusion": {"enabled": False, "height": 25.0}}) is False

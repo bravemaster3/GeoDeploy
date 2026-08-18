@@ -855,6 +855,18 @@ def apply(qgis_layer, style: dict, row: dict | None = None) -> bool:
         # holds them as colour — and `raster_to_qgis` declines them rather than pretending.
         return raster_to_qgis(qgis_layer, style)
     if is_tiles:
+        # 3D CANNOT BE DRAWN ON TILES, and silence about that is how it reads as broken: the layer
+        # arrives with the right colours, QGIS's 3D view shows it flat, and nothing anywhere says
+        # why. A `QgsVectorLayer3DRenderer` needs a FEATURE layer — the extrusion is not lost (it
+        # is still stored, and a push from here will not remove it), it simply has no renderer to
+        # live on until the layer is opened from its data.
+        if is_extruded(style):
+            _log("{0} is drawn from vector tiles, which QGIS cannot extrude — the 3D view will "
+                 "show it flat. Open it from its DATA to see and edit the 3D: pick “Editable — "
+                 "each layer from its data” in Source before opening the portal, or select the "
+                 "layer and use “Restyle this layer…”. Its 3D styling is unchanged either way."
+                 .format(qgis_layer.name() if hasattr(qgis_layer, "name") else "This layer"),
+                 level="info")
         source_layer = qgis_layer.customProperty(P_SOURCE_LAYER) or None
         return apply_to_vector_tiles(qgis_layer, row or {}, source_layer, style)
     return apply_to_qgis(qgis_layer, style)

@@ -1128,6 +1128,7 @@ class GeoDeployDock(QDockWidget):
         # portal's tiles and half from its data would push back a mixture nobody chose.
         editable = self._prefer_data is True
         not_editable = []
+        flat_3d = []            # extruded layers opened as tiles, which QGIS draws flat
         by_key = {(int(c.get("layer_id")), str(c.get("layer_type"))): c for c in configs
                   if c.get("layer_id") is not None}
 
@@ -1230,6 +1231,11 @@ class GeoDeployDock(QDockWidget):
                     if cfg.get("geometry_type"):
                         row_for_style["geometry_type"] = cfg["geometry_type"]
                     symbology.apply(layer, style, row_for_style)
+                    # 3D needs a FEATURE layer to hang a renderer on. Opened as the portal draws it,
+                    # an extruded layer is a tile layer and QGIS's 3D view shows it flat — which
+                    # reads as "3D is not implemented" unless somebody says otherwise.
+                    if symbology.is_extruded(style) and not isinstance(layer, QgsVectorLayer):
+                        flat_3d.append(label)
                 added += 1
 
         # A portal with no folders is a flat list — the configs themselves, in order.
@@ -1253,11 +1259,15 @@ class GeoDeployDock(QDockWidget):
             note += (" " + str(len(not_editable)) + " opened as the portal's tiles and cannot be "
                      "restyled (" + ", ".join(not_editable[:3]) + ") - they are not in the layer "
                      "listing, so their data could not be reached.")
+        if flat_3d:
+            note += (" " + str(len(flat_3d)) + " has 3D extrusion that QGIS cannot draw on tiles ("
+                     + ", ".join(flat_3d[:3]) + ") - reopen the portal with Source set to "
+                     "“Editable” to see and edit it. The 3D itself is unchanged.")
         how = ("every layer from its data, so all of QGIS's symbology applies" if editable
                else "as the portal draws it")
         self._say("Opened " + str(doc.get("title")) + " as a group - " + str(added) +
                   " layer(s), " + how + "." + note + " Restyle it, then use Push group to portal.",
-                  Qgis.Warning if (missing or not_editable) else Qgis.Info)
+                  Qgis.Warning if (missing or not_editable or flat_3d) else Qgis.Info)
 
     def push_group(self):
         """Push the selected QGIS group back as a portal — after showing exactly what will change.

@@ -87,6 +87,18 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
+2026-08-18b (**"3D extrusions don't show in the QGIS 3D view" — they cannot, on tiles, and the
+plugin now says so.** A `QgsVectorLayer3DRenderer` needs a FEATURE layer. A portal opened *as the
+portal draws it* hands QGIS vector tiles, `apply` routes those to `apply_to_vector_tiles`, and
+`apply_3d` is never reached — so the 3D view shows flat polygons. Nothing was wrong and nothing was
+lost (the extrusion is still stored, and a push from a tile layer returns None, so it cannot be
+deleted), but silence about it is indistinguishable from "not implemented". Reported on a portal
+whose two GeoParquet polygon layers both carry real extrusions.
+Now: `apply` logs the reason and the fix at Info when it meets an extruded tile layer, and
+`open_portal_as_group` NAMES those layers in its result — "reopen with Source set to Editable to see
+and edit it. The 3D itself is unchanged." The editable portal mode already draws them properly,
+since it opens each layer from its data. `test_3d_symbology` pins the two halves that matter: a tile
+layer is given no 3D renderer, and the one it never had is not cleared either.)
 2026-08-18 (**the default source now follows the BACKEND, and a portal can be opened editable.**
 *Defaults:* PostGIS holds the layers people classify — the attribute table is the point, and Martin's
 tiles carry only what was baked into them — so a PostGIS layer now opens over OGC API - Features,
