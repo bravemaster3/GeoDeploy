@@ -43,6 +43,12 @@ fastest source it offers, and upload a QGIS layer back — with its styling. Sit
 - Consumes the API's public surface — `/api/public`, `/api/ogc`, `/pmtiles`, `/cog`, `/legend`,
   `/field-stats` — all of which exist because of this plugin. See `api/geodeploy/routers/README.md`.
 
+## User documentation
+`docs/qgis.md` — install (including the **Show also experimental plugins** setting, without which
+the plugin is invisible in the Plugin Manager), which QGIS version, connecting, the Source picker,
+portals, styling both ways, and the known limitations. That page is the one users read; this file is
+for whoever changes the code.
+
 ## Releasing
 plugins.qgis.org takes a **zip**, not a repository: the plugin may live in a subdirectory of a
 monorepo as long as `metadata.txt` links to publicly browsable code. Requirements that bite:
