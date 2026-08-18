@@ -4,6 +4,17 @@ Notable changes, newest first. Versions are **major.minor** — `v1.0`, `v1.1`, 
 `v2.0`. The minor number moves for anything shipped, features or fixes; the major changes when an
 upgrade needs manual work.
 
+## Unreleased
+
+- **A pasted GeoDeploy link now shows the GeoDeploy card.** The dashboard, every published portal
+  (with its own title and description) and the docs emit Open Graph tags against a shipped
+  1200x630 image, so a link posted to LinkedIn, Slack or Teams stops rendering as a bare title and
+  domain. Existing instances get the dashboard card from a normal update; **portals show theirs
+  once re-published**, since the tags are baked at publish time.
+- `installer/update.sh` now applies an `nginx.conf` change instead of skipping it. The file is a
+  single-file bind mount, so a running container stays on the old inode and `up -d` reports
+  "up-to-date" — the in-app updater already handled this, the manual script did not.
+
 ## v1.4 — 2026-08-17
 
 ### Into the tools you already use

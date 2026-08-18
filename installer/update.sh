@@ -28,4 +28,21 @@ echo -e "${GREEN}[geodeploy]${NC} Restarting services…"
 # services aren't affected by a code update anyway. NO --remove-orphans (would delete wizard containers).
 docker compose up -d geodeploy-api geodeploy-ui celery nginx redis
 
+# nginx.conf is a SINGLE-FILE bind mount and `git pull` rewrites it with a NEW inode, but a running
+# container stays bound to the OLD one — so the `up -d` above reports "up-to-date" and the change
+# silently never lands (this is the bug class that made CORS/route fixes look undeployed). Compare
+# what the container is actually serving to the host file and recreate only when they differ; an
+# unchanged config costs one `sha1sum` and nothing else. Mirrors `apply_nginx` in self-update.sh,
+# which is what the in-app "Update now" runs — keep the two in step.
+# `|| true` on both: this script runs under `set -euo pipefail`, so a failing substitution (nginx
+# not running) would abort the update at the very end instead of skipping a comparison it cannot
+# make. self-update.sh gets this for free — `local x=$(…)` masks the status inside a function; at
+# top level it does not.
+host_sum=$(sha1sum nginx/nginx.conf 2>/dev/null | cut -d' ' -f1 || true)
+cont_sum=$(docker compose exec -T nginx sha1sum /etc/nginx/nginx.conf 2>/dev/null | tr -d '\r' | cut -d' ' -f1 || true)
+if [ -n "$host_sum" ] && [ "$host_sum" != "$cont_sum" ]; then
+  echo -e "${GREEN}[geodeploy]${NC} nginx.conf changed — recreating nginx to re-mount it…"
+  docker compose up -d --force-recreate nginx
+fi
+
 echo -e "${GREEN}[geodeploy]${NC} Done. GeoDeploy updated."
