@@ -4,7 +4,9 @@ Browse a GeoDeploy instance from inside QGIS, add its layers, restyle them, and 
 without exporting anything.
 
 The plugin talks to the same public API as everything else, so nothing is special-cased for it: what
-it can see is what your account can see, and what it publishes is what a portal serves.
+it can see is what your account can see, and what it publishes is what a portal serves. It vendors
+the same Python client the [CLI](cli.md) is built on — so anything you can do here, you can also
+script. ([Which interface should I use?](api-reference.md#which-interface-should-i-use))
 
 ## Which QGIS you need
 

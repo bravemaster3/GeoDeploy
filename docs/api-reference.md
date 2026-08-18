@@ -14,6 +14,24 @@ Replace the host with your own instance, e.g. `https://geodeploy.example.org/api
 This page is deliberately a pointer rather than a copy of the endpoint list: a hand-written endpoint
 table is out of date the day after it is written.
 
+## Which interface should I use?
+
+Four ways in, all talking to the same API and enforcing the same permissions. Pick by what you are
+doing, not by what is most powerful:
+
+| | Reach for it when | Where |
+| --- | --- | --- |
+| **Dashboard** | you are looking at data, building a portal, or administering the instance | your instance in a browser |
+| **[QGIS plugin](qgis.md)** | the work is cartography — restyle a layer or a whole portal with QGIS's own tools, then publish back | Plugins ▸ Install from ZIP |
+| **[CLI](cli.md)** — `pip install geodeploy` | it should happen repeatedly or unattended: a nightly upload, a portal rebuilt in CI, a hundred files at once | any shell |
+| **Python client** — the same package | you are writing a script and want objects rather than parsing `--json` | `from geodeploy import Client` |
+| **HTTP API** | you are in another language, or building something GeoDeploy does not do | `/api/docs` |
+
+They are layers of one thing rather than alternatives: the QGIS plugin **vendors** the Python
+client, the CLI **is** that client with an argument parser, and the client is a thin wrapper over
+the HTTP API. Anything the plugin can do is therefore scriptable, and anything you can script is
+reachable from another language.
+
 ## Authenticating
 
 Two ways in:

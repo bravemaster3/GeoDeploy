@@ -5,7 +5,8 @@
 The CLI talks to the same API the dashboard uses, so anything you can do in the app you can script:
 a nightly upload from a field database, a portal rebuilt in CI, a hundred GeoTIFFs pushed in one
 command. It is also the Python client the **QGIS plugin** is built on, so what you learn here
-carries over.
+carries over. (Not sure which of the four interfaces you want?
+[Compare them](api-reference.md#which-interface-should-i-use).)
 
 ```bash
 pip install geodeploy
