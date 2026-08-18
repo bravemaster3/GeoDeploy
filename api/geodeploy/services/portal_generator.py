@@ -1,6 +1,7 @@
 """Assemble MapLibre GL JS style JSON and write the portal static bundle."""
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 from ..config import get_settings
@@ -786,6 +787,10 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
     # TITLE lands in both HTML text (<title>, header) and a JS string; escaping it for HTML also
     # makes the JS-string context safe (no raw " or < survives to break out).
     html = html.replace("{{TITLE}}", _esc(title))
+    # Link-preview tags go in ahead of everything already in <head> — see _social_meta.
+    html = re.sub(r"<head\b[^>]*>",
+                  lambda m: m.group(0) + "\n" + _social_meta(slug, title, description),
+                  html, count=1, flags=re.IGNORECASE)
 
     (portals_dir / "index.html").write_text(html, encoding="utf-8")
     (portals_dir / "style.json").write_text(json.dumps(full_style, indent=2), encoding="utf-8")
@@ -804,6 +809,37 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
 
 
 # ── About page (portals-as-documentation) ────────────────────────────────────
+
+def _social_meta(slug: str, title: str, description: str | None) -> str:
+    """The link-preview card for a published portal (LinkedIn / Slack / X / Teams / Discord).
+
+    Injected rather than templated: a portal renders through whichever layout.html its template
+    ships — including templates a user wrote — so a placeholder would exist only in the ones we
+    control, and a portal built from a community template would silently lose its card.
+
+    og:image and og:url must be ABSOLUTE, and at publish time nothing here knows the instance's
+    public domain (a bundle is also rebuilt by celery and by a restore, where there is no request
+    to read it from). Hence `__GEODEPLOY_ORIGIN__`, rewritten per request by nginx `sub_filter`.
+    """
+    text = re.sub(r"<[^>]+>", " ", description or "")      # the about text may carry HTML
+    text = re.sub(r"[#*`_>\[\]]", "", text)                # ...and markdown
+    text = " ".join(text.split())[:200].strip() or "A geoportal published with GeoDeploy."
+    tags = [
+        ("og:type", "website"),
+        ("og:site_name", "GeoDeploy"),
+        ("og:title", title),
+        ("og:description", text),
+        ("og:url", "__GEODEPLOY_ORIGIN__/portals/{0}/".format(slug)),
+        ("og:image", "__GEODEPLOY_ORIGIN__/og-image.png"),
+        ("og:image:type", "image/png"),
+        ("og:image:width", "1200"),
+        ("og:image:height", "630"),
+    ]
+    out = "".join('<meta property="{0}" content="{1}">'.format(k, _esc(v)) + "\n" for k, v in tags)
+    out += '<meta name="twitter:card" content="summary_large_image">' + "\n"
+    out += '<meta name="description" content="{0}">'.format(_esc(text)) + "\n"
+    return out
+
 
 def _esc(s) -> str:
     return (str(s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

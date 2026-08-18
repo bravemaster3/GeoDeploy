@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+<!--
+  Link previews for the docs (LinkedIn / Slack / X / Teams / Discord).
+
+  Material's own `social` plugin would render a card per page, but it needs Cairo + Pango system
+  libraries in the build image; this site is built by a plain `pip install mkdocs-material` in CI, so
+  the card is a shipped image instead (docs/assets/og-image.png — the same one every GeoDeploy
+  instance serves at /og-image.png).
+
+  `page.canonical_url` and `config.site_url` are already absolute, which is what og: requires.
+-->
+{% block extrahead %}
+  {% set og_title = page.title ~ " - " ~ config.site_name if page and page.title and not page.is_homepage else config.site_name %}
+  {% set og_desc = page.meta.description if page and page.meta and page.meta.description else config.site_description %}
+  {% set og_url = page.canonical_url if page and page.canonical_url else config.site_url %}
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="{{ config.site_name }}">
+  <meta property="og:title" content="{{ og_title }}">
+  <meta property="og:description" content="{{ og_desc }}">
+  <meta property="og:url" content="{{ og_url }}">
+  <meta property="og:image" content="{{ config.site_url }}assets/og-image.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="GeoDeploy - self-hosted spatial data platform and geoportal builder">
+  <meta name="twitter:card" content="summary_large_image">
+{% endblock %}

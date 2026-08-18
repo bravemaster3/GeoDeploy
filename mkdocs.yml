@@ -15,10 +15,13 @@ site_dir: site
 # docs/README.md is the folder's internal context note (see CLAUDE.md), not user documentation.
 exclude_docs: |
   README.md
+  overrides/
 
 theme:
   name: material
   language: en
+  # Only for the link-preview meta tags in main.html (og:image et al).
+  custom_dir: docs/overrides
   # The site is dark by default, so the dark-variant mark is the one shown in the header.
   logo: assets/logo-dark.svg
   favicon: assets/logo.svg
