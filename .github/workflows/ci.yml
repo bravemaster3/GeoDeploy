@@ -159,6 +159,28 @@ jobs:
         # that opens in the layers' default colours or quietly loses a layer to a clashing id.
         run: python integrations/qgis-plugin/scripts/test_published_style.py
 
+      - name: The security scan plugins.qgis.org runs
+        # Every upload is scanned, and a critical finding BLOCKS the version until a new one is
+        # uploaded — so finding this here rather than there is the difference between a commit and
+        # a burnt version number. Bandit auto-discovers the .bandit we ship, which declares the
+        # findings that are deliberate (and says why); anything else must be fixed.
+        working-directory: integrations/qgis-plugin/geodeploy_qgis
+        run: |
+          pip install --quiet bandit
+          python -m bandit -q -r . -f json > /tmp/bandit.json || true
+          python - <<'PY'
+          import json, sys
+          results = json.load(open("/tmp/bandit.json"))["results"]
+          if results:
+              for r in results:
+                  print("{0} {1} {2}:{3}  {4}".format(
+                      r["issue_severity"], r["test_id"], r["filename"], r["line_number"],
+                      r["issue_text"][:90]))
+              sys.exit("{0} unreviewed finding(s). Fix them, or declare them in "
+                       "geodeploy_qgis/.bandit with the reason.".format(len(results)))
+          print("bandit: clean, with the declarations in .bandit")
+          PY
+
       - name: metadata.txt has what plugins.qgis.org requires
         run: |
           python - <<'PY'

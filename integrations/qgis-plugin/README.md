@@ -152,6 +152,28 @@ rather than following the platform's — see the note in `CHANGELOG.md`.
 - A RASTER still needs a local file: re-encoding one here would mean choosing compression and
   resampling on the user's behalf, and ingest converts to COG anyway.
 
+## The security scan
+Every upload to plugins.qgis.org is scanned (Bandit, detect-secrets, Flake8) and **a critical
+finding blocks that version until a NEW version number is uploaded** — a burnt version, not a
+retry. CI runs the same Bandit scan so it fails here instead.
+
+`geodeploy_qgis/.bandit` declares the findings that are deliberate, each with the reason. Two
+things about it are the point:
+
+- **Fix first, declare second.** The two MEDIUM findings were real and were fixed —
+  `connection.http_url` rejects any scheme but http/https before an open (the plugin follows links
+  that come BACK from an instance, so a hostile one could otherwise have aimed it at `file://`),
+  and a WMTS capabilities document declaring a `DOCTYPE`/`ENTITY` is refused before parsing, which
+  removes the entity-expansion class rather than mitigating it. `defusedxml` is not an option: a
+  plugin cannot pip-install, which is the same constraint that makes the client vendored.
+- **`exclude_dirs` is deliberately unset.** Excluding `vendor/` is the obvious move and the guide
+  even suggests it, but its findings are the same `B110`s already declared — so it would buy
+  nothing and stop scanning code we ship.
+
+```bash
+cd integrations/qgis-plugin/geodeploy_qgis && python -m bandit -q -r .   # what CI and they run
+```
+
 ## Last updated
 2026-08-18c (**CORRECTION to the entry below: 3D extrusion does not draw in QGIS AT ALL, not merely
 on tiles.** Tested for real — a 3D portal opened editable, zoomed to, then View ▸ New 3D Map View —

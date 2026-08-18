@@ -25,6 +25,23 @@ from geodeploy.config import Config, load_credential, normalize_url  # noqa: E40
 from geodeploy.errors import GeoDeployError       # noqa: E402
 
 
+#: The only schemes this plugin will open. `normalize_url` already restricts the instance ORIGIN,
+#: but that is not where the risk is: `fetch_json`/`fetch_text` are handed URLs that came BACK from
+#: the server — a layer's `links`, a portal's `style.json` sources — and a compromised or hostile
+#: instance could answer with `file:///etc/passwd` and have the plugin read it. Checking at the point
+#: of opening covers every caller at once, including ones written later.
+_ALLOWED_SCHEMES = ("http", "https")
+
+
+def http_url(url: str) -> str:
+    """`url` if it is http(s), else raise. The guard in front of every open in this module."""
+    scheme = str(url or "").split("://", 1)[0].lower() if "://" in str(url or "") else ""
+    if scheme not in _ALLOWED_SCHEMES:
+        raise GeoDeployError(
+            "Refusing to open {0!r}: only http:// and https:// URLs are followed.".format(url))
+    return url
+
+
 class Instance:
     """One connection. `token` may be None — that is a supported way to use this, not an error."""
 
@@ -99,7 +116,7 @@ class Instance:
         if self.token:
             headers["Authorization"] = "Bearer {0}".format(self.token)
         try:
-            with urlopen(Request(url, headers=headers), timeout=30) as response:  # noqa: S310
+            with urlopen(Request(http_url(url), headers=headers), timeout=30) as response:  # noqa: S310
                 doc = json.loads(response.read().decode("utf-8"))
         except Exception as exc:        # noqa: BLE001 - surfaced as a plugin message
             error = GeoDeployError("Could not read {0}: {1}".format(url, exc))
@@ -140,7 +157,7 @@ class Instance:
         if self.token:
             headers["Authorization"] = "Bearer {0}".format(self.token)
         try:
-            with urlopen(Request(url, headers=headers), timeout=30) as response:  # noqa: S310
+            with urlopen(Request(http_url(url), headers=headers), timeout=30) as response:  # noqa: S310
                 body = response.read().decode("utf-8", "replace")
         except Exception as exc:        # noqa: BLE001 - surfaced as a plugin message
             error = GeoDeployError("Could not read {0}: {1}".format(url, exc))
@@ -166,10 +183,10 @@ class Instance:
         # Cloudflare-fronted instance answers that with 403 — measured: the same URL returns 200 to
         # curl and to a browser, 403 to urllib. The portal is public; it was the client that looked
         # suspicious. Named after the tool, like the API client's own agent.
-        request = Request(url, headers={"User-Agent": self._c_user_agent(),
-                                        "Accept": "application/json"})
+        request = Request(http_url(url), headers={"User-Agent": self._c_user_agent(),
+                                                  "Accept": "application/json"})
         try:
-            with urlopen(request, timeout=30) as response:  # noqa: S310 - our own instance URL
+            with urlopen(request, timeout=30) as response:  # noqa: S310 - scheme checked by http_url
                 return json.loads(response.read().decode("utf-8"))
         except Exception as exc:        # noqa: BLE001 - surfaced as a plugin message
             raise GeoDeployError("Could not read the published portal at {0}: {1}".format(url, exc))
