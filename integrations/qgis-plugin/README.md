@@ -63,6 +63,14 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
 - Styling covers single symbol, graduated and categorized for vectors, colormap / stretch / band /
   colour-per-value / hillshade for rasters, and **3D extrusion for polygons and points** — all
   **both directions**. Size-from-a-field round-trips too.
+- **What is NOT carried yet, and where it is tracked:** QGIS draws far more than GeoDeploy's
+  vocabulary — inverted polygons, 2.5D, hatch and gradient fills, line offsets, markers along a
+  line, multi-layer symbols, rule-based rendering, labels. Those are simplified on the way in and
+  lost on the way out today. Planned as *"Every symbol QGIS can draw"* in `docs/roadmap.md`, where
+  the split that matters is written down: symbols a web renderer CAN express (real round trips,
+  each to be wired up) versus symbols it cannot (carry the QML alongside the friendly style, so
+  QGIS ⇄ QGIS stays lossless while the portal approximates), plus a fidelity report so an author
+  learns which of the two they are in BEFORE they push.
 - **A polygon's outline WIDTH round-trips now too** — it used to be the one thing that could not,
   because a MapLibre fill's edge is a fixed hairline. GeoDeploy draws it as a `line` layer beside
   the fill, so the number is real and travels. Note the key means two things: `outline_width` is a
