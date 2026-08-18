@@ -197,6 +197,7 @@ server decision. Everything is Docker Compose behind nginx: one thing to start, 
 | Install it and publish something | [Getting started](getting-started.md) |
 | Understand the portal types | [Portals and experiences](portals.md) |
 | Get your data into QGIS or DuckDB | [Access from other tools](data-access.md) |
+| Work in QGIS and publish back | [The QGIS plugin](qgis.md) |
 | Script against it | [API reference](api-reference.md) |
 | Keep it backed up | [Backups and restore](backups.md) |
 | Tune it for heavy layers | [Performance tuning](performance-tuning.md) |

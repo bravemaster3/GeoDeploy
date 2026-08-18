@@ -327,12 +327,11 @@ small server. Clients that specifically require the older protocols are out of s
 
 ## In QGIS, without any of this
 
-There is a **GeoDeploy plugin for QGIS** (`integrations/qgis-plugin/`): paste an instance URL and
-browse what it publishes — no account needed for public data — add a layer using the fastest source
-it offers, open a whole portal as a styled group, and upload back. It carries symbology in both
-directions, so a layer opens looking like the portal and what you restyle there goes home. The
-protocols below are still what it uses underneath, and remain the right choice for anything
-scripted.
+There is a **[GeoDeploy plugin for QGIS](qgis.md)**: paste an instance URL and browse what it
+publishes — no account needed for public data — add a layer using the fastest source it offers, open
+a whole portal as a styled group, and upload back. It carries symbology in both directions, so a
+layer opens looking like the portal and what you restyle there goes home. The protocols below are
+what it uses underneath, and remain the right choice for anything scripted.
 
 ## Not yet implemented
 
