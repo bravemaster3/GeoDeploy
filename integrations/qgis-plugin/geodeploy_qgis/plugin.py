@@ -317,7 +317,7 @@ class GeoDeployDock(QDockWidget):
                 if (request.url().host() or "").lower() == host:
                     request.setRawHeader(b"Authorization",
                                          ("Bearer " + token).encode("utf-8"))
-            except Exception:           # noqa: BLE001 - never break QGIS networking
+            except Exception:           # noqa: BLE001 - never break QGIS networking  # nosec B110 - intentional: a cosmetic failure must not take down the layer
                 pass
 
         try:
@@ -377,7 +377,7 @@ class GeoDeployDock(QDockWidget):
             try:
                 from qgis.PyQt.QtCore import Qt as _Qt
                 image = image.scaledToWidth(1200, _Qt.SmoothTransformation)
-            except Exception:           # noqa: BLE001 - full size is still usable
+            except Exception:           # noqa: BLE001 - full size is still usable  # nosec B110 - intentional: a cosmetic failure must not take down the layer
                 pass
             for suffix, fmt in ((".webp", "WEBP"), (".png", "PNG")):
                 path = os.path.join(tempfile.mkdtemp(prefix="geodeploy-thumb-"), "thumb" + suffix)
@@ -902,7 +902,7 @@ class GeoDeployDock(QDockWidget):
         a layer that looks valid and draws nothing.
         """
         try:
-            import xml.etree.ElementTree as ET      # noqa: S405 - see the entity check below
+            import xml.etree.ElementTree as ET      # noqa: S405 - see the entity check below  # nosec B405 - see the entity check in _raster_from_wmts
             from qgis.core import QgsDataSourceUri
 
             text = self.instance.fetch_text(url) if self.instance else None
@@ -918,7 +918,7 @@ class GeoDeployDock(QDockWidget):
                 symbology._log("Refused a WMTS capabilities document that declares XML entities — "
                                "{0}. The raster will be added from another source.".format(url))
                 return None
-            root = ET.fromstring(text)      # noqa: S314 - entity declarations refused above
+            root = ET.fromstring(text)      # noqa: S314 - entity declarations refused above  # nosec B314 - entity declarations refused before this line
             ns = {"wmts": "http://www.opengis.net/wmts/1.0",
                   "ows": "http://www.opengis.net/ows/1.1"}
             node = root.find(".//wmts:Contents/wmts:Layer", ns)

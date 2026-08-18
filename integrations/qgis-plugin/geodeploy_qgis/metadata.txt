@@ -6,7 +6,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.3.1
+version=0.3.2
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -25,7 +25,11 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.3.1 - Security-scan round. Two findings pointed at real weaknesses and were fixed
+changelog=0.3.2 - The 0.3.1 security declarations are applied inline instead of in a bundled
+    .bandit file. plugins.qgis.org runs bandit with an explicit list of tests, and a config file
+    that skips any of them makes bandit abort without scanning anything - which is what the 0.3.1
+    scan report showed. Same declarations, same fixes, now honoured.
+    0.3.1 - Security-scan round. Two findings pointed at real weaknesses and were fixed
     rather than waved through: every URL the plugin opens is now checked to be http or https before
     it is opened - it follows links that come BACK from an instance, so a hostile one could
     otherwise have pointed it at a local file - and a WMTS capabilities document that declares XML

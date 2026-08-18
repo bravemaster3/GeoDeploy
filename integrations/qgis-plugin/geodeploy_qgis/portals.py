@@ -29,7 +29,7 @@ def _note(message: str) -> None:
     try:
         from .symbology import _log
         _log(message)
-    except Exception:                   # noqa: BLE001 - a log line is never worth an exception
+    except Exception:                   # noqa: BLE001 - a log line is never worth an exception  # nosec B110 - intentional: a cosmetic failure must not take down the layer
         pass
 
 # Namespaced so nothing else in a QGIS project collides with them.
@@ -87,7 +87,7 @@ def _folder_id(node) -> str:
     made = "g" + uuid.uuid4().hex[:8]
     try:
         node.setCustomProperty(P_FOLDER_ID, made)
-    except Exception:                   # noqa: BLE001 - an unstorable id is still usable once
+    except Exception:                   # noqa: BLE001 - an unstorable id is still usable once  # nosec B110 - intentional: a cosmetic failure must not take down the layer
         pass
     return made
 
@@ -368,7 +368,7 @@ def plan_push(group, style_for, current_configs) -> dict:
                 try:
                     from .symbology import merge_style
                     style = merge_style(was["style"], style)
-                except Exception:       # noqa: BLE001 - outside QGIS, send what was read
+                except Exception:       # noqa: BLE001 - outside QGIS, send what was read  # nosec B110 - intentional: a cosmetic failure must not take down the layer
                     pass
             if not style and (was or {}).get("style"):
                 # AN UNREADABLE STYLE MUST NOT ERASE THE PORTAL'S.
@@ -475,7 +475,7 @@ def _opacity_of(qgis_layer) -> float:
         value = qgis_layer.opacity()          # QgsRasterLayer, and QgsVectorLayer since 3.18
         if value is not None:
             return round(float(value), 3)
-    except Exception:                         # noqa: BLE001 - older API, fall through
+    except Exception:                         # noqa: BLE001 - older API, fall through  # nosec B110 - intentional: a cosmetic failure must not take down the layer
         pass
     return 1.0
 
@@ -515,7 +515,7 @@ def push(client, group, configs, publish: bool = True, new_title: str | None = N
     try:
         group.setCustomProperty(P_PORTAL_ID, str(doc.get("id", portal_id)))
         group.setCustomProperty(P_PORTAL_TITLE, doc.get("title") or new_title or title or "")
-    except Exception:                   # noqa: BLE001 - a tag is not worth failing a publish over
+    except Exception:                   # noqa: BLE001 - a tag is not worth failing a publish over  # nosec B110 - intentional: a cosmetic failure must not take down the layer
         pass
     return doc
 

@@ -166,7 +166,7 @@ def _set_stroke_width(layer0, width: float) -> None:
             try:
                 fn(width)
                 return
-            except Exception:           # noqa: BLE001 - an outline is not worth failing the style
+            except Exception:           # noqa: BLE001 - an outline is not worth failing the style  # nosec B110 - intentional: a cosmetic failure must not take down the layer
                 pass
 
 
@@ -189,7 +189,7 @@ def _use_points(symbol, layer0) -> None:
         if callable(fn):
             try:
                 fn(pt)
-            except Exception:           # noqa: BLE001 - not every symbol layer has both
+            except Exception:           # noqa: BLE001 - not every symbol layer has both  # nosec B110 - intentional: a cosmetic failure must not take down the layer
                 pass
 
 
@@ -225,7 +225,7 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
         if shape:
             try:
                 layer0.setShape(QgsSimpleMarkerSymbolLayer.decodeShape(shape)[0])
-            except Exception:           # noqa: BLE001 - shape names shift between QGIS versions
+            except Exception:           # noqa: BLE001 - shape names shift between QGIS versions  # nosec B110 - intentional: a cosmetic failure must not take down the layer
                 pass
         _use_points(symbol, layer0)
         # ALWAYS set the size — never leave QGIS's default number standing under a unit we just
@@ -444,7 +444,7 @@ def _log(message: str, level: str = "warning") -> None:
         from qgis.core import Qgis, QgsMessageLog
         QgsMessageLog.logMessage(message, "GeoDeploy",
                                  Qgis.Info if level == "info" else Qgis.Warning)
-    except Exception:                   # noqa: BLE001 - logging must never raise
+    except Exception:                   # noqa: BLE001 - logging must never raise  # nosec B110 - intentional: a cosmetic failure must not take down the layer
         pass
 
 
@@ -1234,7 +1234,7 @@ def _pseudocolor(provider, band, ramp, lo, hi, reverse: bool):
             if reverse and hasattr(source, "invert"):
                 source.invert()
             shader_fn.setSourceColorRamp(source)
-        except Exception:               # noqa: BLE001 - the items already carry the colours
+        except Exception:               # noqa: BLE001 - the items already carry the colours  # nosec B110 - intentional: a cosmetic failure must not take down the layer
             pass
     shader = QgsRasterShader()
     shader.setRasterShaderFunction(shader_fn)
@@ -1280,7 +1280,7 @@ def _default_range(qgis_layer, band):
                                         QgsRectangle(), 250000)
         if _finite(stats.minimumValue) and stats.maximumValue > stats.minimumValue:
             return (float(stats.minimumValue), float(stats.maximumValue))
-    except Exception:                   # noqa: BLE001 - a range we cannot find is not an error
+    except Exception:                   # noqa: BLE001 - a range we cannot find is not an error  # nosec B110 - intentional: a cosmetic failure must not take down the layer
         pass
     return (0.0, 1.0)
 
@@ -1301,7 +1301,7 @@ def _algorithm_signature(renderer) -> str:
             try:
                 band = fn()
                 break
-            except Exception:           # noqa: BLE001 - try the other spelling
+            except Exception:           # noqa: BLE001 - try the other spelling  # nosec B112 - intentional: try the other spelling, do not fail the read
                 continue
     return "{0}:{1}".format(type(renderer).__name__, band)
 
@@ -1318,7 +1318,7 @@ def _record_algorithm(qgis_layer, keys, signature) -> None:
         else:
             qgis_layer.setCustomProperty(P_RASTER_ALGO, "")
             qgis_layer.setCustomProperty(P_RASTER_ALGO_SIG, "")
-    except Exception:                   # noqa: BLE001 - a note we cannot store is not an error
+    except Exception:                   # noqa: BLE001 - a note we cannot store is not an error  # nosec B110 - intentional: a cosmetic failure must not take down the layer
         pass
 
 
@@ -1358,7 +1358,7 @@ def _record_colormap(qgis_layer, name, stops) -> None:
             # to believe.
             qgis_layer.setCustomProperty(P_COLORMAP, "")
             qgis_layer.setCustomProperty(P_COLORMAP_SIG, "")
-    except Exception:                   # noqa: BLE001 - a note we cannot store is not an error
+    except Exception:                   # noqa: BLE001 - a note we cannot store is not an error  # nosec B110 - intentional: a cosmetic failure must not take down the layer
         pass
 
 
@@ -1514,7 +1514,7 @@ def _set_material(symbol, colour: str) -> None:
             if callable(fn):
                 fn(material)
                 return
-    except Exception:                   # noqa: BLE001 - a colour is not worth losing the 3D over
+    except Exception:                   # noqa: BLE001 - a colour is not worth losing the 3D over  # nosec B110 - intentional: a cosmetic failure must not take down the layer
         pass
 
 
@@ -1529,7 +1529,7 @@ def _material_color(symbol):
             diffuse = material.diffuse() if hasattr(material, "diffuse") else None
             if diffuse is not None:
                 return diffuse.name().lower()
-        except Exception:               # noqa: BLE001 - try the other spelling
+        except Exception:               # noqa: BLE001 - try the other spelling  # nosec B112 - intentional: try the other spelling, do not fail the read
             continue
     return None
 
@@ -1555,7 +1555,7 @@ def apply_3d(qgis_layer, style: dict, geometry: str | None = None) -> bool:
             if qgis_layer.customProperty(P_EXTRUSION):
                 setter(None)            # ours to clear; a renderer we never set is left alone
             _record_extrusion(qgis_layer, None, None)
-        except Exception:               # noqa: BLE001 - never fail a style over the 3D it lacks
+        except Exception:               # noqa: BLE001 - never fail a style over the 3D it lacks  # nosec B110 - intentional: a cosmetic failure must not take down the layer
             pass
         return False
 
@@ -1622,7 +1622,7 @@ def _point_3d(ex: dict, style: dict):
     try:
         if shape is not None and hasattr(symbol, "setShape"):
             symbol.setShape(shape)
-    except Exception:                   # noqa: BLE001 - the default shape still draws something
+    except Exception:                   # noqa: BLE001 - the default shape still draws something  # nosec B110 - intentional: a cosmetic failure must not take down the layer
         pass
     height = _number(ex.get("height"), 0.0)
     expression = _height_expression(ex)
@@ -1637,7 +1637,7 @@ def _point_3d(ex: dict, style: dict):
             symbol.setShapeProperties({"shape": "Cylinder",
                                        "radius": _number(ex.get("radius"), DEFAULT_PILLAR_RADIUS_M),
                                        "length": height})
-        except Exception:               # noqa: BLE001 - shape properties differ between builds
+        except Exception:               # noqa: BLE001 - shape properties differ between builds  # nosec B110 - intentional: a cosmetic failure must not take down the layer
             pass
     _set_material(symbol, ex.get("color") or style.get("color") or DEFAULT_COLOR)
     return symbol
@@ -1712,7 +1712,7 @@ def _record_extrusion(qgis_layer, spec, applied) -> None:
         else:
             qgis_layer.setCustomProperty(P_EXTRUSION, "")
             qgis_layer.setCustomProperty(P_EXTRUSION_SIG, "")
-    except Exception:                   # noqa: BLE001 - a note we cannot store is not an error
+    except Exception:                   # noqa: BLE001 - a note we cannot store is not an error  # nosec B110 - intentional: a cosmetic failure must not take down the layer
         pass
 
 
@@ -1751,7 +1751,7 @@ def extrusion_from_qgis(qgis_layer, geometry: str | None = None):
         try:
             if qgis_layer.customProperty(P_EXTRUSION):
                 return {"enabled": False}
-        except Exception:               # noqa: BLE001
+        except Exception:               # noqa: BLE001  # nosec B110 - intentional: a cosmetic failure must not take down the layer
             pass
         return None
 
@@ -1765,7 +1765,7 @@ def extrusion_from_qgis(qgis_layer, geometry: str | None = None):
             spec = json.loads(recorded)
             if isinstance(spec, dict):
                 return dict(spec, enabled=True)
-    except Exception:                   # noqa: BLE001 - fall through to what QGIS is showing
+    except Exception:                   # noqa: BLE001 - fall through to what QGIS is showing  # nosec B110 - intentional: a cosmetic failure must not take down the layer
         pass
     if not current:
         return None
@@ -2612,7 +2612,7 @@ def _stroke_of(layer0) -> str:
     try:
         if layer0.strokeStyle() == Qt.NoPen:
             return "none"
-    except Exception:                   # noqa: BLE001 - not every symbol layer has one
+    except Exception:                   # noqa: BLE001 - not every symbol layer has one  # nosec B110 - intentional: a cosmetic failure must not take down the layer
         pass
     try:
         return _hex(layer0.strokeColor())

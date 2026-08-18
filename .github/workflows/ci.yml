@@ -167,7 +167,19 @@ jobs:
         working-directory: integrations/qgis-plugin/geodeploy_qgis
         run: |
           pip install --quiet bandit
-          python -m bandit -q -r . -f json > /tmp/bandit.json || true
+          # BOTH invocations, because they differ in a way that bit us: plugins.qgis.org passes
+          # `-t <selected tests>` on the command line, and a `.bandit` file that SKIPS any of those
+          # makes bandit abort with "Non-exclusive include/exclude test sets" — it runs nothing,
+          # reports nothing, and the upload is marked as scanned. Inline `# nosec` has no such
+          # conflict, which is why the declarations live in the code rather than in a config file.
+          python -m bandit -q -r . -f json -o bandit-plain.json || true
+          python -m bandit -r . -t B101,B110,B112,B310,B314,B405,B605 -f json                  -o bandit-selected.json 2> bandit-selected.log || true
+          if grep -qi "non-exclusive\|ERROR" bandit-selected.log; then
+            echo "bandit could not run with -t (the way plugins.qgis.org invokes it):"
+            cat bandit-selected.log
+            exit 1
+          fi
+          cp bandit-plain.json /tmp/bandit.json
           python - <<'PY'
           import json, sys
           results = json.load(open("/tmp/bandit.json"))["results"]

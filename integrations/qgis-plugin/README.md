@@ -154,25 +154,40 @@ rather than following the platform's — see the note in `CHANGELOG.md`.
 
 ## The security scan
 Every upload to plugins.qgis.org is scanned (Bandit, detect-secrets, Flake8) and **a critical
-finding blocks that version until a NEW version number is uploaded** — a burnt version, not a
-retry. CI runs the same Bandit scan so it fails here instead.
+finding blocks that version until a NEW version number is uploaded** — a burnt version, not a retry.
+CI runs the same scan so it fails here instead.
 
-`geodeploy_qgis/.bandit` declares the findings that are deliberate, each with the reason. Two
-things about it are the point:
+**Declarations are inline `# nosec`, NOT a `.bandit` file, and that is not a style preference.**
+plugins.qgis.org invokes bandit with `-t <selected tests>` on the command line. A `.bandit` that
+`skips` any test in that set makes bandit abort with:
 
-- **Fix first, declare second.** The two MEDIUM findings were real and were fixed —
-  `connection.http_url` rejects any scheme but http/https before an open (the plugin follows links
-  that come BACK from an instance, so a hostile one could otherwise have aimed it at `file://`),
-  and a WMTS capabilities document declaring a `DOCTYPE`/`ENTITY` is refused before parsing, which
-  removes the entity-expansion class rather than mitigating it. `defusedxml` is not an option: a
-  plugin cannot pip-install, which is the same constraint that makes the client vendored.
-- **`exclude_dirs` is deliberately unset.** Excluding `vendor/` is the obvious move and the guide
-  even suggests it, but its findings are the same `B110`s already declared — so it would buy
-  nothing and stop scanning code we ship.
+```
+[main] ERROR  Non-exclusive include/exclude test sets: {'B310', 'B110', …}
+```
+
+It then scans nothing, reports nothing, and the version is marked as scanned anyway — with a
+"Validated (configured)" badge asking an administrator to review suppressions that never applied.
+We shipped exactly that in 0.3.1 and their scan report said so. Inline `# nosec` has no such
+conflict and is honoured whatever flags they pass.
+
+**Fix first, declare second.** The two MEDIUM findings were real and were fixed:
+`connection.http_url` rejects any scheme but http/https before an open (the plugin follows links
+that come BACK from an instance, so a hostile one could otherwise have aimed it at `file://`), and a
+WMTS capabilities document declaring a `DOCTYPE`/`ENTITY` is refused before parsing, which removes
+the entity-expansion class rather than mitigating it. `defusedxml` is not an option: a plugin cannot
+pip-install, the same constraint that makes the client vendored.
+
+The rest are the deliberate try/except/pass pattern this code needs to survive Qt API drift, each
+carrying its reason next to the `# nosec`.
 
 ```bash
-cd integrations/qgis-plugin/geodeploy_qgis && python -m bandit -q -r .   # what CI and they run
+cd integrations/qgis-plugin/geodeploy_qgis
+python -m bandit -q -r .                                    # plain
+python -m bandit -r . -t B101,B110,B112,B310,B314,B405,B605 # the way THEY run it
 ```
+
+Findings in `vendor/` are fixed in `cli/geodeploy` and re-vendored — never edited in the copy, or
+`vendor.py --check` fails.
 
 ## Last updated
 2026-08-18c (**CORRECTION to the entry below: 3D extrusion does not draw in QGIS AT ALL, not merely
