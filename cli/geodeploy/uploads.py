@@ -436,7 +436,7 @@ class Uploads(object):
             try:
                 self._c.post(base + "/upload/multipart/abort",
                              {"s3_key": key, "upload_id": upload_id})
-            except Exception:  # noqa: BLE001 - the original failure is what matters
+            except Exception:  # noqa: BLE001 - the original failure is what matters  # nosec B110 - intentional: a cosmetic failure must not take down the layer
                 pass
             raise
         return key

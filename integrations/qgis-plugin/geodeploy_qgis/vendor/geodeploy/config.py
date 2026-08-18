@@ -285,7 +285,7 @@ def _store_credential(origin: str, entry: Dict[str, Any], use_keyring: bool = Tr
                 # Drop any older file copy, so a secret lives in ONE place, not two.
                 _write_credentials({k: v for k, v in _read_credentials().items() if k != origin})
                 return "keyring"
-            except Exception:
+            except Exception:  # nosec B110 - intentional: a cosmetic failure must not take down the layer
                 pass  # Locked/denied keyring: fall back to the file rather than losing the login.
     creds = _read_credentials()
     creds[origin] = entry
@@ -309,7 +309,7 @@ def load_credential(url: str) -> Dict[str, Any]:
                     # Pre-1.3 entries stored the bare token string. Read it rather than making a
                     # working login look like no login at all.
                     return {"token": value}
-        except Exception:
+        except Exception:  # nosec B110 - intentional: a cosmetic failure must not take down the layer
             pass
     entry = _read_credentials().get(origin) or {}
     return dict(entry) if isinstance(entry, dict) else {}
@@ -345,7 +345,7 @@ def delete_token(url: str, kind: Optional[str] = None) -> bool:
             if kr.get_password(KEYRING_SERVICE, origin):
                 kr.delete_password(KEYRING_SERVICE, origin)
                 removed = True
-        except Exception:
+        except Exception:  # nosec B110 - intentional: a cosmetic failure must not take down the layer
             pass
     creds = _read_credentials()
     if creds.pop(origin, None) is not None:

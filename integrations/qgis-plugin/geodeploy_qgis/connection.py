@@ -116,7 +116,7 @@ class Instance:
         if self.token:
             headers["Authorization"] = "Bearer {0}".format(self.token)
         try:
-            with urlopen(Request(http_url(url), headers=headers), timeout=30) as response:  # noqa: S310
+            with urlopen(Request(http_url(url), headers=headers), timeout=30) as response:  # noqa: S310  # nosec B310 - scheme restricted to http/https by http_url above
                 doc = json.loads(response.read().decode("utf-8"))
         except Exception as exc:        # noqa: BLE001 - surfaced as a plugin message
             error = GeoDeployError("Could not read {0}: {1}".format(url, exc))
@@ -157,7 +157,7 @@ class Instance:
         if self.token:
             headers["Authorization"] = "Bearer {0}".format(self.token)
         try:
-            with urlopen(Request(http_url(url), headers=headers), timeout=30) as response:  # noqa: S310
+            with urlopen(Request(http_url(url), headers=headers), timeout=30) as response:  # noqa: S310  # nosec B310 - scheme restricted to http/https by http_url above
                 body = response.read().decode("utf-8", "replace")
         except Exception as exc:        # noqa: BLE001 - surfaced as a plugin message
             error = GeoDeployError("Could not read {0}: {1}".format(url, exc))
@@ -186,7 +186,7 @@ class Instance:
         request = Request(http_url(url), headers={"User-Agent": self._c_user_agent(),
                                                   "Accept": "application/json"})
         try:
-            with urlopen(request, timeout=30) as response:  # noqa: S310 - scheme checked by http_url
+            with urlopen(request, timeout=30) as response:  # noqa: S310 - scheme checked by http_url  # nosec B310 - scheme restricted to http/https by http_url above
                 return json.loads(response.read().decode("utf-8"))
         except Exception as exc:        # noqa: BLE001 - surfaced as a plugin message
             raise GeoDeployError("Could not read the published portal at {0}: {1}".format(url, exc))
