@@ -4,6 +4,8 @@
 End-user / operator documentation (not developer internals — those live in each folder's README and in `notes_temp/`).
 
 ## Contents
+- `overrides/main.html` — the ONLY theme override: the link-preview (`og:`/`twitter:`) tags, per page, pointing at `assets/og-image.png`. Material's own `social` plugin would render a card per page but needs Cairo + Pango in the build image, and this site is built by a plain `pip install mkdocs-material` in CI — so the card is a shipped image instead. Registered as `theme.custom_dir` and listed in `exclude_docs` so MkDocs does not also copy it into the site.
+- `assets/og-image.png` — the 1200x630 card, the same image every instance serves at `/og-image.png` (source of truth: `ui/public/og-image.png`).
 - `getting-started.md` — install command, the 3-step setup wizard (Database → Storage → Admin), first upload, first portal.
 - `data-access.md` — how third parties consume shared data: the STAC catalog (`/api/stac`), COG via `/vsicurl/`, XYZ tiles into QGIS, GeoParquet via DuckDB/manifest, the honest GeoNode comparison, and what's deliberately not provided (legacy OGC).
 - `api-reference.md` — points at the instance's own live OpenAPI docs (`/api/docs`, `/api/redoc`, `/api/openapi.json`) rather than restating endpoints, plus token auth + scopes and the unauthenticated public read surfaces.
@@ -33,6 +35,7 @@ End-user / operator documentation (not developer internals — those live in eac
 - User-facing docs; for build quirks and debugging history use `notes_temp/notes_for_future.md` instead.
 
 ## Last updated
+2026-08-18 (link previews: `overrides/main.html` + `assets/og-image.png`.)
 2026-07-30 (created `api-reference.md` — the root README's link to it had always been dead; indexed
 `backups.md` + `roadmap.html`, which this file had never learned about; recorded the docs-site
 decision and the coverage gaps)

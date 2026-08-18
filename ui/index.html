@@ -11,6 +11,23 @@
   <link rel="apple-touch-icon" href="/logo.png" />
   <meta name="description" content="Self-hosted spatial data platform and geoportal builder." />
   <title>GeoDeploy</title>
+
+  <!-- Link previews (LinkedIn / Slack / X / Discord / Teams). Crawlers do not run JavaScript, so
+       everything a card shows has to be in this static shell — a Vue route cannot supply it.
+       `__GEODEPLOY_ORIGIN__` is rewritten to the real scheme://host by nginx (`sub_filter` in
+       nginx/nginx.conf): og:image MUST be absolute, and a shipped image cannot know the instance's
+       domain at build time. Portals inject their own tags per portal (services/portal_generator.py). -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="GeoDeploy" />
+  <meta property="og:title" content="GeoDeploy" />
+  <meta property="og:description" content="Self-hosted spatial data platform and geoportal builder." />
+  <meta property="og:url" content="__GEODEPLOY_ORIGIN__/" />
+  <meta property="og:image" content="__GEODEPLOY_ORIGIN__/og-image.png" />
+  <meta property="og:image:type" content="image/png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="GeoDeploy — self-hosted spatial data platform and geoportal builder" />
+  <meta name="twitter:card" content="summary_large_image" />
 </head>
 <body>
   <div id="app"></div>

@@ -17,6 +17,7 @@ Vue 3 single-page dashboard — the browser-only control panel for setup, data u
 - `src/i18n/en.json`, `fr.json` — UI strings (FR ships at Phase 1).
 - `src/style.css`, `tailwind.config.js`, `postcss.config.js` — Tailwind setup (brand colors, `.btn-primary`/`.card`/`.input` utility classes).
 - `index.html`, `vite.config.js` — Vite entry + dev server. **Vite dev proxy** forwards `/api`, `/portals`, `/tiles` (→ martin:3000), `/raster` (→ titiler:80) with path rewrites that strip the prefix (mirrors nginx).
+- `index.html` also carries the **Open Graph / link-preview tags** (`og:image`, `og:title`, `twitter:card`). They live in the static shell because crawlers do not run JavaScript — a Vue route cannot supply them. The absolute origin they need is written as `__GEODEPLOY_ORIGIN__` and rewritten per request by the `sub_filter` in `nginx.conf` (mirrored in `nginx/nginx.conf` for portals). The card itself is `public/og-image.png` (1200x630, served at `/og-image.png`).
 - `Dockerfile` (multi-stage; `development` target = `npm run dev`), `nginx.conf` (serves the built SPA inside the `geodeploy-ui` container).
 
 ## Dependencies / relationships
@@ -36,5 +37,6 @@ Vue 3 single-page dashboard — the browser-only control panel for setup, data u
 - `vite.config.js` dev proxy must stay aligned with `nginx/nginx.conf` (prefix stripping + titiler port 80).
 
 ## Last updated
+2026-08-18 (link previews: `og:`/`twitter:` tags in `index.html`, `public/og-image.png`, and the `__GEODEPLOY_ORIGIN__` → `$public_scheme://$host` `sub_filter` in `nginx.conf`. Because that rule ships **inside this image**, `docker compose build geodeploy-ui` + recreate is enough for the dashboard's card — the outer nginx does not have to be touched.)
 2026-08-13 (ramp reverse toggle + swatch strip in `components/portal/LayerPanel.vue`; class-count
 ceiling raised 9 → 12 to match the server; the symbology-twin rounding fix above)

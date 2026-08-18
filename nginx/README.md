@@ -11,6 +11,8 @@ The single public entrypoint. Reverse-proxies the SPA, the API, the two tile ser
   - `/s3/` → local MinIO (`geodeploy-minio:9000`), for **presigned direct uploads** (GeoParquet). The browser can't reach MinIO's internal hostname, so it PUTs here. The presigned URL is signed against `geodeploy-minio:9000`, so this block forwards that **exact** `Host` (hardcoded, not `$host`) for SigV4 to verify, and sets `proxy_request_buffering off` so a 10 GB body streams straight to MinIO instead of spooling to nginx disk. Same `rewrite … break;` + explicit `$uri$is_args$args` pattern as the tile routes (keeps the `?X-Amz-…` signature query intact). Only the local MinIO uses this path; external/public S3 gets a full presigned URL and uploads cross-origin (bucket CORS).
   - `/templates-static/` → API. `/` → `geodeploy-ui:80` (SPA, with websocket upgrade for dev HMR).
   - Uses Docker's internal resolver (`127.0.0.11`) + `set $var` so recreated containers are re-resolved without an nginx restart.
+  - **`sub_filter '__GEODEPLOY_ORIGIN__' '$forwarded_proto://$host';`** at the *server* level, so it applies to published portals and anything else served as `text/html`. Link previews (LinkedIn, Slack, Teams) require an **absolute** `og:image`/`og:url`, and neither a portal bundle nor the shipped UI knows the instance's domain when it is written — so both emit the placeholder and nginx substitutes the origin the visitor actually used. `sub_filter`'s default type is `text/html`, so tiles, JSON and the S3/raster proxies are never scanned. `ui/nginx.conf` repeats the rule for its own `index.html`, which is what lets a **UI rebuild alone** fix the dashboard's card without recreating this container.
+  - `location /` and `@spa` forward **`X-Forwarded-Proto $forwarded_proto`** to the UI container, which is how *it* knows the public scheme for the same substitution. Its map whitelists `http`/`https` rather than echoing the header, because the value lands inside an HTML attribute.
   - **`merge_slashes off;`** at the server level — left in but **was a misdiagnosis**: `merge_slashes` only normalizes the URI *path*, never the query string, so it never affected `?url=s3://...`. Harmless; the real query-forwarding fix is the explicit `$uri$is_args$args` proxy_pass above.
 
 ## Dependencies / relationships
@@ -24,6 +26,7 @@ The single public entrypoint. Reverse-proxies the SPA, the API, the two tile ser
 - HTTPS/443 is stubbed but not wired (no automated certbot flow yet).
 
 ## Last updated
+2026-08-18 (**link previews**: `sub_filter` rewrites `__GEODEPLOY_ORIGIN__` to `$forwarded_proto://$host` on every `text/html` response, so published portals carry absolute `og:` URLs; `X-Forwarded-Proto` now forwarded to `geodeploy-ui`. Verified with `nginx -t` and a throwaway container: a spoofed `X-Forwarded-Proto: "><script>` falls back to `https` rather than reaching the page. **This file needs the container recreated, not reloaded** — see below.)
 2026-08-07 (**a tile that misses the raster is EMPTY, not missing.** TiTiler answers 404 for a tile
 outside the COG bounds — correct for an API, wrong for a tile pyramid, where the off-the-edge tiles
 are a normal part of the grid a client requests. A portal can be told where the data is (MapLibre
