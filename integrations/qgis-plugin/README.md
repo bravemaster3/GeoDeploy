@@ -68,13 +68,32 @@ from CI without storing those credentials — which is why it is a deliberate ma
 an oversight. (`qgis-plugin-ci` exists and can publish from a workflow with `OSGEO_USER` /
 `OSGEO_PASSWORD` secrets, if that trade is ever worth making.)
 
-1. Sign in at <https://plugins.qgis.org/> with an **OSGeo ID** (not a GitHub account — register at
-   <https://www.osgeo.org/community/getting-started-osgeo/osgeo_userid/> if you have none).
+1. Sign in at <https://plugins.qgis.org/> with **GitHub, GitLab, Google or an OSGeo ID** — any of
+   them works. Only the OSGeo route has a condition attached: the address in `metadata.txt` (or on
+   your profile) must match the address you correspond from.
 2. **Plugins ▸ Upload a plugin**, choose `integrations/qgis-plugin/dist/geodeploy_qgis-<version>.zip`.
 3. The form reads everything else out of `metadata.txt`. It rejects the archive outright if the zip
    holds anything but exactly one top-level directory named for the package.
-4. First upload only: the plugin is **unapproved** until a QGIS staff member reviews it. It is
-   installable by direct link meanwhile, and appears in the Plugin Manager once approved.
+4. Two automated emails follow: one confirming the upload and that a **security scan** is queued
+   (the version is not downloadable yet), and one with the scan result — code quality, secrets
+   detection, suspicious files. Critical findings **block** the version, and the only way past that
+   is to fix them and upload a NEW version number. Results are under the **Security** tab on the
+   version page.
+5. Then a human approves it. Volunteers, published daily on weekdays — a Friday upload is usually a
+   Monday approval.
+
+**What the reviewers actually check** — from <https://plugins.qgis.org/docs/approval/>, and the
+first one is the easy way to be rejected:
+
+- **`homepage` must be a page describing what the plugin DOES.** Their words: "Any other links will
+  result in the plugin being rejected." A project's front page does not qualify — ours points at
+  `docs-geodeploy.kndev.org/qgis/`, which is the plugin's own page. The repository README is an
+  acceptable substitute if no such page exists.
+- **`tracker`** must be the issue tracker, **`repository`** the browsable code — not a zip, and
+  publicly readable.
+- **No binaries.** Pure Python here, and `build.py` excludes caches, so this is free.
+- They run the plugin on **Windows and Unix** to check it does not crash QGIS.
+- For an UPDATE they also check the changelog names what changed, and re-test the links.
 
 **While `experimental=True`, users must tick Settings ▸ "Show also experimental plugins" in the
 Plugin Manager or they will not see it at all** — searching finds nothing, which looks exactly like
