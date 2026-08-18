@@ -58,7 +58,32 @@ mandatory `metadata.txt` / `__init__.py` / `LICENSE`, working homepage-repositor
 ```bash
 python integrations/qgis-plugin/scripts/vendor.py          # refresh the client
 python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
+python integrations/qgis-plugin/scripts/build.py           # the installable zip, into dist/
 ```
+
+### Uploading to plugins.qgis.org
+
+**There is no API for this.** The upload is a web form behind an OSGeo login, so it cannot be done
+from CI without storing those credentials — which is why it is a deliberate manual step rather than
+an oversight. (`qgis-plugin-ci` exists and can publish from a workflow with `OSGEO_USER` /
+`OSGEO_PASSWORD` secrets, if that trade is ever worth making.)
+
+1. Sign in at <https://plugins.qgis.org/> with an **OSGeo ID** (not a GitHub account — register at
+   <https://www.osgeo.org/community/getting-started-osgeo/osgeo_userid/> if you have none).
+2. **Plugins ▸ Upload a plugin**, choose `integrations/qgis-plugin/dist/geodeploy_qgis-<version>.zip`.
+3. The form reads everything else out of `metadata.txt`. It rejects the archive outright if the zip
+   holds anything but exactly one top-level directory named for the package.
+4. First upload only: the plugin is **unapproved** until a QGIS staff member reviews it. It is
+   installable by direct link meanwhile, and appears in the Plugin Manager once approved.
+
+**While `experimental=True`, users must tick Settings ▸ "Show also experimental plugins" in the
+Plugin Manager or they will not see it at all** — searching finds nothing, which looks exactly like
+the plugin never having been published. `docs/qgis.md` says so on the user's side; remember to
+remove that paragraph in the same change that drops the flag.
+
+Every version must be higher than the last: plugins.qgis.org will not accept a re-upload of a
+version it already has, and there is no way down. That is why the plugin has its own version line
+rather than following the platform's — see the note in `CHANGELOG.md`.
 
 ## Current status & known issues
 - **Written but never run inside QGIS.** Every module parses and the vendored client imports, but
