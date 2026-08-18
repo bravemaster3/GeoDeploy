@@ -21,8 +21,7 @@ import zipfile
 from qgis.core import (QgsCoordinateTransformContext, QgsVectorFileWriter, QgsVectorLayer,
                        QgsRasterLayer)
 
-from .vendor.geodeploy.uploads import (GEOPARQUET_EXTENSIONS, LARGE_VECTOR_EXTENSIONS,
-                                       RASTER_EXTENSIONS)
+from .vendor.geodeploy.uploads import GEOPARQUET_EXTENSIONS, LARGE_VECTOR_EXTENSIONS
 try:                                    # a package, inside QGIS
     from .compat import enum
 except ImportError:                     # pragma: no cover - exec'd standalone by the test harness
@@ -143,7 +142,6 @@ def _zip_shapefile(shp_path: str, say=None) -> str:
     values compresses hard, and the upload is over a network, not a bus.
     """
     stem, _ = os.path.splitext(shp_path)
-    folder = os.path.dirname(shp_path) or "."
     base = os.path.basename(stem)
 
     present = {}

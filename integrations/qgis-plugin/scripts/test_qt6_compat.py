@@ -55,6 +55,22 @@ except AttributeError:
 print("resolver           -> Qt5, Qt6 and both-styles all resolve; an unknown member still raises")
 
 
+# ── the scope belongs to the class you are CALLING ───────────────────────────────────────────────
+#
+# Both of these were reported by the QGIS checker in a form that names the scope but not its owner,
+# and guessing the owner is how you get an AttributeError at runtime instead of a clean start.
+try:
+    from PyQt5.QtCore import Qt as _Qt
+    from PyQt5.QtWidgets import QDialogButtonBox as _BB, QLineEdit as _LE
+except ImportError:                     # pragma: no cover - PyQt5 absent in this environment
+    _Qt = _BB = _LE = None
+if _Qt is not None:
+    assert not hasattr(getattr(_Qt, "EchoMode", object()), "Password"),         "Qt.EchoMode.Password should NOT exist — EchoMode belongs to QLineEdit"
+    assert enum(_LE, "EchoMode", "Password") == _LE.Password
+    assert enum(_BB, "StandardButton", "Ok") == _BB.Ok
+    print("scopes             -> resolved against the real owner (QLineEdit, QDialogButtonBox)")
+
+
 # ── 2. nothing reaches for a flat enum any more ──────────────────────────────────────────────────
 #
 # The map is repeated here on purpose. If someone edits the one in the fixer and not this one, the
@@ -66,6 +82,10 @@ FLAT = {
            "ItemIsEnabled", "Checked", "Unchecked", "RightDockWidgetArea"),
     "QLineEdit": ("Password",),
     "QMessageBox": ("Ok", "Cancel"),
+    # QDialogButtonBox, not QMessageBox. Missing from this map is exactly why the first pass left
+    # six `QDialogButtonBox.Ok` accesses behind and the guard below said nothing: the check can only
+    # catch what it has been told to look for, so an owner absent here is an owner unprotected.
+    "QDialogButtonBox": ("Ok", "Cancel", "Apply", "Close", "Save", "Yes", "No"),
     "QDialog": ("Accepted", "Rejected"),
     "QAbstractItemView": ("SingleSelection", "NoSelection"),
     "QgsWkbTypes": ("PointGeometry", "LineGeometry", "PolygonGeometry"),

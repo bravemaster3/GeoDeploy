@@ -71,8 +71,10 @@ def choose(parent, candidates):
         listing.addItem(item)
     layout.addWidget(listing)
 
-    buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-    buttons.button(QDialogButtonBox.Ok).setText("Upload")
+    # Resolved once: the scoped spelling is long, and it is the same button twice.
+    ok_button = enum(QDialogButtonBox, "StandardButton", "Ok")
+    buttons = QDialogButtonBox(ok_button | enum(QDialogButtonBox, "StandardButton", "Cancel"))
+    buttons.button(ok_button).setText("Upload")
     buttons.accepted.connect(dialog.accept)
     buttons.rejected.connect(dialog.reject)
     layout.addWidget(buttons)

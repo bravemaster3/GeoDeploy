@@ -118,8 +118,9 @@ def confirm(parent, portal_title: str, plan: dict, creating: bool):
     note.setWordWrap(True)
     layout.addWidget(note)
 
-    buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-    buttons.button(QDialogButtonBox.Ok).setText("Publish" if not creating else "Create and publish")
+    ok_button = enum(QDialogButtonBox, "StandardButton", "Ok")
+    buttons = QDialogButtonBox(ok_button | enum(QDialogButtonBox, "StandardButton", "Cancel"))
+    buttons.button(ok_button).setText("Publish" if not creating else "Create and publish")
     buttons.accepted.connect(dialog.accept)
     buttons.rejected.connect(dialog.reject)
     layout.addWidget(buttons)

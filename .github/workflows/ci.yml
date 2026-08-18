@@ -165,6 +165,15 @@ jobs:
         # on QGIS 4 hit that path, so the test walks the AST of every module and refuses one.
         run: python integrations/qgis-plugin/scripts/test_qt6_compat.py
 
+      - name: Flake8, for the codes plugins.qgis.org reports
+        # Their scan runs flake8 too and reported E741 (ambiguous name `l`) on a version that had
+        # already passed everything else. Scoped to the codes that are actual defects rather than
+        # formatting, since the repository does not otherwise enforce a line length.
+        working-directory: integrations/qgis-plugin/geodeploy_qgis
+        run: |
+          pip install --quiet flake8
+          python -m flake8 --select=E741,E999,F401,F811,F821,F841 .
+
       - name: The security scan plugins.qgis.org runs
         # Every upload is scanned, and a critical finding BLOCKS the version until a new one is
         # uploaded — so finding this here rather than there is the difference between a commit and

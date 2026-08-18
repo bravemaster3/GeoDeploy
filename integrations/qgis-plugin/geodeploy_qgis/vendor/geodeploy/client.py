@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json as _json
 import os
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Dict, Optional
 from urllib.parse import quote, urlencode, urljoin
 
 from . import errors
