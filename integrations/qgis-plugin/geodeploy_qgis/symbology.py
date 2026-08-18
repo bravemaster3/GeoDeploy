@@ -22,6 +22,10 @@ from __future__ import annotations
 import re
 
 from .connection import GeoDeployError  # noqa: F401  (re-exported for callers)
+try:                                    # a package, inside QGIS
+    from .compat import enum
+except ImportError:                     # pragma: no cover - exec'd standalone by the test harness
+    from compat import enum
 
 try:                                    # pragma: no cover - only present inside QGIS
     from qgis.core import (QgsCategorizedSymbolRenderer, QgsGraduatedSymbolRenderer,
@@ -99,7 +103,7 @@ def _apply_data_defined_size(symbol, layer0, style: dict) -> None:
         elif isinstance(layer0, QgsSimpleLineSymbolLayer):
             expr = 'scale_linear("{0}", {1}, {2}, {3}, {4})'.format(
                 field, in_lo, in_hi, out_lo * CSS_PX_TO_POINTS, out_hi * CSS_PX_TO_POINTS)
-            layer0.setDataDefinedProperty(QgsSymbolLayer.PropertyStrokeWidth,
+            layer0.setDataDefinedProperty(enum(QgsSymbolLayer, "Property", "PropertyStrokeWidth"),
                                           QgsProperty.fromExpression(expr))
     except Exception as exc:            # noqa: BLE001 - a size must never stop a layer drawing
         _log("Could not apply size-by-field ({0}): {1}".format(field, exc))
@@ -180,7 +184,7 @@ def _use_points(symbol, layer0) -> None:
     """
     try:
         from qgis.core import QgsUnitTypes
-        pt = QgsUnitTypes.RenderPoints
+        pt = enum(QgsUnitTypes, "RenderUnit", "RenderPoints")
     except Exception:                   # noqa: BLE001 - very old QGIS: leave the default
         return
     for target, setter in ((symbol, "setSizeUnit"), (layer0, "setSizeUnit"),
@@ -239,7 +243,7 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
         symbol.setSize(float(style.get("radius") or DEFAULT_POINT_RADIUS) * 2 * CSS_PX_TO_POINTS)
         outline = style.get("outline_color")
         if outline == "none":
-            layer0.setStrokeStyle(Qt.NoPen)
+            layer0.setStrokeStyle(enum(Qt, "PenStyle", "NoPen"))
         else:
             # A WHITE ring by default, because that is what the map draws — and because QGIS's own
             # default is a dark grey outline, which on a small marker covers the fill completely
@@ -254,13 +258,13 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
         layer0.setWidth(float(style.get("line_width") or DEFAULT_LINE_WIDTH) * CSS_PX_TO_POINTS)
         dash = (style.get("lineType") or "solid").lower()
         if dash == "dashed":
-            layer0.setPenStyle(Qt.DashLine)
+            layer0.setPenStyle(enum(Qt, "PenStyle", "DashLine"))
         elif dash == "dotted":
-            layer0.setPenStyle(Qt.DotLine)
+            layer0.setPenStyle(enum(Qt, "PenStyle", "DotLine"))
     elif isinstance(layer0, QgsSimpleFillSymbolLayer):
         outline = style.get("outline_color")
         if outline == "none":
-            layer0.setStrokeStyle(Qt.NoPen)
+            layer0.setStrokeStyle(enum(Qt, "PenStyle", "NoPen"))
         else:
             # The map's default outline, not QGIS's — `fill-outline-color: #1d4ed8` in
             # portal_generator when the style names none.
@@ -443,7 +447,7 @@ def _log(message: str, level: str = "warning") -> None:
     try:
         from qgis.core import Qgis, QgsMessageLog
         QgsMessageLog.logMessage(message, "GeoDeploy",
-                                 Qgis.Info if level == "info" else Qgis.Warning)
+                                 enum(Qgis, "MessageLevel", "Info") if level == "info" else enum(Qgis, "MessageLevel", "Warning"))
     except Exception:                   # noqa: BLE001 - logging must never raise  # nosec B110 - intentional: a cosmetic failure must not take down the layer
         pass
 
@@ -1194,7 +1198,7 @@ def _enhancement(provider, band, lo, hi):
     """A min/max stretch QGIS will apply to `band`."""
     enhancement = QgsContrastEnhancement(provider.dataType(band))
     enhancement.setContrastEnhancementAlgorithm(
-        QgsContrastEnhancement.StretchToMinimumMaximum, True)
+        enum(QgsContrastEnhancement, "ContrastEnhancementAlgorithm", "StretchToMinimumMaximum"), True)
     enhancement.setMinimumValue(lo)
     enhancement.setMaximumValue(hi)
     return enhancement
@@ -1214,8 +1218,8 @@ def _pseudocolor(provider, band, ramp, lo, hi, reverse: bool):
     # already holding — so passing the same object to both would leave this function sampling a ramp
     # C++ had just freed. It is sampled here, and the shader is given a clone of its own.
     shader_fn = QgsColorRampShader(lo, hi)
-    for setter, value in (("setColorRampType", QgsColorRampShader.Interpolated),
-                          ("setClassificationMode", QgsColorRampShader.Continuous)):
+    for setter, value in (("setColorRampType", enum(QgsColorRampShader, "Type", "Interpolated")),
+                          ("setClassificationMode", enum(QgsColorRampShader, "ClassificationMode", "Continuous"))):
         if hasattr(shader_fn, setter):
             getattr(shader_fn, setter)(value)
     span = (hi - lo) or 1.0
@@ -1276,7 +1280,7 @@ def _default_range(qgis_layer, band):
         # SAMPLED, not exhaustive: 250k pixels is what QGIS's own renderer uses to decide a stretch,
         # and it is bounded whatever the raster's size.
         from qgis.core import QgsRasterBandStats, QgsRectangle
-        stats = provider.bandStatistics(band, QgsRasterBandStats.Min | QgsRasterBandStats.Max,
+        stats = provider.bandStatistics(band, enum(QgsRasterBandStats, "Stats", "Min") | enum(QgsRasterBandStats, "Stats", "Max"),
                                         QgsRectangle(), 250000)
         if _finite(stats.minimumValue) and stats.maximumValue > stats.minimumValue:
             return (float(stats.minimumValue), float(stats.maximumValue))
@@ -1787,8 +1791,8 @@ def _geometry_name(qgis_layer):
         return str(recorded).lower()
     try:
         from qgis.core import QgsWkbTypes
-        return {QgsWkbTypes.PointGeometry: "point", QgsWkbTypes.LineGeometry: "line",
-                QgsWkbTypes.PolygonGeometry: "polygon"}.get(qgis_layer.geometryType())
+        return {enum(QgsWkbTypes, "GeometryType", "PointGeometry"): "point", enum(QgsWkbTypes, "GeometryType", "LineGeometry"): "line",
+                enum(QgsWkbTypes, "GeometryType", "PolygonGeometry"): "polygon"}.get(qgis_layer.geometryType())
     except Exception:                   # noqa: BLE001 - not a feature layer
         return None
 
@@ -1839,14 +1843,14 @@ def apply_to_vector_tiles(tile_layer, row: dict, source_layer: str | None,
     # one geometry anyway.
     geom = (row.get("geometry_type") or "").lower()
     if "polygon" in geom:
-        geometry_types = [QgsWkbTypes.PolygonGeometry]
+        geometry_types = [enum(QgsWkbTypes, "GeometryType", "PolygonGeometry")]
     elif "line" in geom:
-        geometry_types = [QgsWkbTypes.LineGeometry]
+        geometry_types = [enum(QgsWkbTypes, "GeometryType", "LineGeometry")]
     elif "point" in geom:
-        geometry_types = [QgsWkbTypes.PointGeometry]
+        geometry_types = [enum(QgsWkbTypes, "GeometryType", "PointGeometry")]
     else:
-        geometry_types = [QgsWkbTypes.PolygonGeometry, QgsWkbTypes.LineGeometry,
-                          QgsWkbTypes.PointGeometry]
+        geometry_types = [enum(QgsWkbTypes, "GeometryType", "PolygonGeometry"), enum(QgsWkbTypes, "GeometryType", "LineGeometry"),
+                          enum(QgsWkbTypes, "GeometryType", "PointGeometry")]
         if geom:
             _log("Unrecognised geometry {0!r}; styling every geometry type.".format(geom))
 
@@ -2344,11 +2348,11 @@ def style_from_vector_tiles(tile_layer) -> dict:
         recorded = str(recorded).lower()
         from qgis.core import QgsWkbTypes
         if "polygon" in recorded:
-            wanted = QgsWkbTypes.PolygonGeometry
+            wanted = enum(QgsWkbTypes, "GeometryType", "PolygonGeometry")
         elif "line" in recorded:
-            wanted = QgsWkbTypes.LineGeometry
+            wanted = enum(QgsWkbTypes, "GeometryType", "LineGeometry")
         elif "point" in recorded:
-            wanted = QgsWkbTypes.PointGeometry
+            wanted = enum(QgsWkbTypes, "GeometryType", "PointGeometry")
     except Exception:                   # noqa: BLE001 - fall through to every entry
         wanted = None
 
@@ -2548,8 +2552,8 @@ def _style_from_symbol(symbol) -> dict:
         if width is not None:
             style["line_width"] = round(width / CSS_PX_TO_POINTS, 2)
         pen = layer0.penStyle()
-        style["lineType"] = ("dashed" if pen == Qt.DashLine
-                             else "dotted" if pen == Qt.DotLine else "solid")
+        style["lineType"] = ("dashed" if pen == enum(Qt, "PenStyle", "DashLine")
+                             else "dotted" if pen == enum(Qt, "PenStyle", "DotLine") else "solid")
     elif isinstance(layer0, QgsSimpleFillSymbolLayer):
         opacity = number(symbol.opacity)
         if opacity is not None:
@@ -2582,7 +2586,7 @@ def _size_from_qgis(symbol, layer0) -> dict:
         from qgis.core import QgsSymbolLayer
         for holder, getter, key in (
                 (symbol, "dataDefinedSize", None),
-                (layer0, "dataDefinedProperty", QgsSymbolLayer.PropertyStrokeWidth)):
+                (layer0, "dataDefinedProperty", enum(QgsSymbolLayer, "Property", "PropertyStrokeWidth"))):
             fn = getattr(holder, getter, None)
             if not callable(fn):
                 continue
@@ -2610,7 +2614,7 @@ def _size_from_qgis(symbol, layer0) -> dict:
 def _stroke_of(layer0) -> str:
     """A symbol layer's outline as GeoDeploy states it: a colour, or `"none"` for no outline."""
     try:
-        if layer0.strokeStyle() == Qt.NoPen:
+        if layer0.strokeStyle() == enum(Qt, "PenStyle", "NoPen"):
             return "none"
     except Exception:                   # noqa: BLE001 - not every symbol layer has one  # nosec B110 - intentional: a cosmetic failure must not take down the layer
         pass

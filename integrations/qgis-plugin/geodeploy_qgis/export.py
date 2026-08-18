@@ -23,6 +23,10 @@ from qgis.core import (QgsCoordinateTransformContext, QgsVectorFileWriter, QgsVe
 
 from .vendor.geodeploy.uploads import (GEOPARQUET_EXTENSIONS, LARGE_VECTOR_EXTENSIONS,
                                        RASTER_EXTENSIONS)
+try:                                    # a package, inside QGIS
+    from .compat import enum
+except ImportError:                     # pragma: no cover - exec'd standalone by the test harness
+    from compat import enum
 
 # What the server will actually take. Imported rather than restated: a list copied into the plugin
 # would drift from the client's, and the user would learn about it as an HTTP 400 mid-upload.
@@ -126,7 +130,7 @@ def prepare(layer, on_status=None) -> tuple[str, bool]:
         layer, tmp, QgsCoordinateTransformContext(), options)
     # V3 returns (errorCode, errorMessage) on modern QGIS and a 3-tuple on some builds.
     code = error[0] if isinstance(error, (tuple, list)) else error
-    if code != QgsVectorFileWriter.NoError:
+    if code != enum(QgsVectorFileWriter, "WriterError", "NoError"):
         message = error[1] if isinstance(error, (tuple, list)) and len(error) > 1 else code
         raise NotUploadable(f"QGIS could not write this layer out: {message}")
     return tmp, True

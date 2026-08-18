@@ -25,6 +25,10 @@ from qgis.PyQt.QtWidgets import (QAbstractItemView, QAction, QCheckBox, QComboBo
 from . import (diffdialog, export, portals as portal_sync, sources, symbology,
                uploadpicker)
 from .connection import GeoDeployError, Instance, saved_instances
+try:                                    # a package, inside QGIS
+    from .compat import enum
+except ImportError:                     # pragma: no cover - exec'd standalone by the test harness
+    from compat import enum
 
 PLUGIN_NAME = "GeoDeploy"
 
@@ -33,7 +37,7 @@ class _Job(QgsTask):
     """Run one client call off the UI thread. `finished_ok(result)` / `failed(message)`."""
 
     def __init__(self, description, fn):
-        super().__init__(description, QgsTask.CanCancel)
+        super().__init__(description, enum(QgsTask, "Flag", "CanCancel"))
         self._fn = fn
         self.result = None
         self.error = ""
@@ -127,7 +131,7 @@ class GeoDeployDock(QDockWidget):
 
         self.token = QLineEdit()
         self.token.setPlaceholderText("API token (optional — public data needs none)")
-        self.token.setEchoMode(QLineEdit.Password)
+        self.token.setEchoMode(enum(QLineEdit, "EchoMode", "Password"))
         outer.addWidget(self.token)
 
         self.status = QLabel("Not connected.")
@@ -137,7 +141,7 @@ class GeoDeployDock(QDockWidget):
         # -- layers -------------------------------------------------------------------------------
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Layer", "Kind", "Features"])
-        self.tree.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.tree.setSelectionMode(enum(QAbstractItemView, "SelectionMode", "SingleSelection"))
         self.tree.itemDoubleClicked.connect(lambda *_: self.add_selected())
         outer.addWidget(self.tree, 1)
 
@@ -243,7 +247,7 @@ class GeoDeployDock(QDockWidget):
 
     # -- helpers -----------------------------------------------------------------------------------
 
-    def _say(self, text, level=Qgis.Info, bar=True):
+    def _say(self, text, level=enum(Qgis, "MessageLevel", "Info"), bar=True):
         """`bar=False` for progress: the dock label updates, the message bar does not.
 
         QGIS's message bar is a STACK. Pushing "Uploading…" and then pushing a failure on top means
@@ -259,7 +263,7 @@ class GeoDeployDock(QDockWidget):
         bar_widget.clearWidgets()
         # A warning or an error waits to be dismissed. Six seconds is fine for "done"; it is not
         # fine for the one message that explains why the thing you asked for did not happen.
-        duration = 0 if level in (Qgis.Warning, Qgis.Critical) else 6
+        duration = 0 if level in (enum(Qgis, "MessageLevel", "Warning"), enum(Qgis, "MessageLevel", "Critical")) else 6
         bar_widget.pushMessage(PLUGIN_NAME, text, level=level, duration=duration)
 
     def _apply_auth_ui(self):
@@ -305,7 +309,7 @@ class GeoDeployDock(QDockWidget):
             # Older QGIS: private layers over OAPIF will not open, but everything else works.
             self._say("This QGIS is too old to attach a token to its own requests, so private "
                       "layers cannot be added as OGC API - Features. Public layers are fine.",
-                      Qgis.Warning)
+                      enum(Qgis, "MessageLevel", "Warning"))
             return
         host = (QUrl(self.instance.url).host() or "").lower()
         token = self.instance.token
@@ -413,7 +417,7 @@ class GeoDeployDock(QDockWidget):
     def connect_to_instance(self):
         url = (self.url.currentText() or "").strip()
         if not url:
-            self._say("Enter the instance URL first.", Qgis.Warning)
+            self._say("Enter the instance URL first.", enum(Qgis, "MessageLevel", "Warning"))
             return
         token = (self.token.text() or "").strip() or None
         if not token:
@@ -425,7 +429,7 @@ class GeoDeployDock(QDockWidget):
         try:
             self.instance = Instance(url, token)
         except Exception as exc:                      # noqa: BLE001 - a bad URL is a message
-            self._say(f"That URL will not do: {exc}", Qgis.Critical)
+            self._say(f"That URL will not do: {exc}", enum(Qgis, "MessageLevel", "Critical"))
             return
         self._busy(True)
         self._run(_Job("GeoDeploy: connecting", self.instance.check), self._connected)
@@ -433,7 +437,7 @@ class GeoDeployDock(QDockWidget):
     def _connected(self, job):
         self._busy(False)
         if job.error:
-            self._say(job.error, Qgis.Critical)
+            self._say(job.error, enum(Qgis, "MessageLevel", "Critical"))
             return
         info = job.result or {}
         # Before any layer is added: an OAPIF layer is fetched by QGIS itself, so the token has to
@@ -475,7 +479,7 @@ class GeoDeployDock(QDockWidget):
     def _listed(self, job):
         self._busy(False)
         if job.error:
-            self._say(job.error, Qgis.Critical)
+            self._say(job.error, enum(Qgis, "MessageLevel", "Critical"))
             return
         result = job.result or {}
         self._rows = result.get("layers") or []
@@ -495,7 +499,7 @@ class GeoDeployDock(QDockWidget):
             item = QTreeWidgetItem(parent, [row.get("name") or "?",
                                             row.get("geometry_type") or backend,
                                             f"{count:,}" if isinstance(count, int) else ""])
-            item.setData(0, Qt.UserRole, row)
+            item.setData(0, enum(Qt, "ItemDataRole", "UserRole"), row)
         # Portals last: they are things to LOOK at rather than add, so they sit below the data.
         if self._portals:
             parent = QTreeWidgetItem(self.tree, ["Portals"])
@@ -517,7 +521,7 @@ class GeoDeployDock(QDockWidget):
                 # everything downstream — the group name, the status messages — read `title` off
                 # this dict, found nothing, and fell back to the slug. Anonymous rows carry a title
                 # like authenticated ones do, so there was never a reason for the two to differ.
-                item.setData(0, Qt.UserRole, dict(portal, _portal=True, slug=slug,
+                item.setData(0, enum(Qt, "ItemDataRole", "UserRole"), dict(portal, _portal=True, slug=slug,
                                                   _base=self.instance.url if self.instance else ""))
 
         if not self._rows and not self._portals:
@@ -527,7 +531,7 @@ class GeoDeployDock(QDockWidget):
 
     def _selected_row(self) -> dict | None:
         items = self.tree.selectedItems()
-        return items[0].data(0, Qt.UserRole) if items else None
+        return items[0].data(0, enum(Qt, "ItemDataRole", "UserRole")) if items else None
 
     def _on_selection_changed(self):
         """A portal cannot be added to the map, so the button says what it WILL do instead."""
@@ -623,20 +627,20 @@ class GeoDeployDock(QDockWidget):
     def add_selected(self):
         row = self._selected_row()
         if not row:
-            self._say("Pick a layer first.", Qgis.Warning)
+            self._say("Pick a layer first.", enum(Qgis, "MessageLevel", "Warning"))
             return
         if row.get("_portal"):
             self._open_portal(row)
             return
         source = self._chosen_source(row)
         if not source:
-            self._say("That layer offers nothing QGIS can read yet.", Qgis.Warning)
+            self._say("That layer offers nothing QGIS can read yet.", enum(Qgis, "MessageLevel", "Warning"))
             return
 
         name = row.get("name") or "GeoDeploy layer"
         layer, source = self._open_best(row, source, name)
         if layer is None:
-            self._say(f"QGIS could not open the {source['kind']} source for {name}.", Qgis.Critical)
+            self._say(f"QGIS could not open the {source['kind']} source for {name}.", enum(Qgis, "MessageLevel", "Critical"))
             return
 
         # EVERYTHING BEFORE THE LAYER GOES ON THE MAP. Adding it first and styling it after is what
@@ -1055,7 +1059,7 @@ class GeoDeployDock(QDockWidget):
         """
         row = self._selected_row()
         if not row or not row.get("_portal"):
-            self._say("Select a portal in the list first.", Qgis.Warning)
+            self._say("Select a portal in the list first.", enum(Qgis, "MessageLevel", "Warning"))
             return
         if not self.instance:
             return
@@ -1109,12 +1113,12 @@ class GeoDeployDock(QDockWidget):
     def _portal_opened(self, job):
         self._busy(False)
         if job.error:
-            self._say(job.error, Qgis.Critical)
+            self._say(job.error, enum(Qgis, "MessageLevel", "Critical"))
             return
         doc = job.result or {}
         configs = doc.get("layer_configs") or []
         if not configs:
-            self._say("That portal has no layers yet.", Qgis.Warning)
+            self._say("That portal has no layers yet.", enum(Qgis, "MessageLevel", "Warning"))
             return
 
         project = QgsProject.instance()
@@ -1278,7 +1282,7 @@ class GeoDeployDock(QDockWidget):
                else "as the portal draws it")
         self._say("Opened " + str(doc.get("title")) + " as a group - " + str(added) +
                   " layer(s), " + how + "." + note + " Restyle it, then use Push group to portal.",
-                  Qgis.Warning if (missing or not_editable or flat_3d) else Qgis.Info)
+                  enum(Qgis, "MessageLevel", "Warning") if (missing or not_editable or flat_3d) else enum(Qgis, "MessageLevel", "Info"))
 
     def push_group(self):
         """Push the selected QGIS group back as a portal — after showing exactly what will change.
@@ -1289,14 +1293,14 @@ class GeoDeployDock(QDockWidget):
         approved, and the two consequential parts are separate opt-ins rather than one blanket OK.
         """
         if not self.instance or not self.instance.token:
-            self._say("Pushing a portal needs a token with write access.", Qgis.Warning)
+            self._say("Pushing a portal needs a token with write access.", enum(Qgis, "MessageLevel", "Warning"))
             return
         view = self.iface.layerTreeView()
         nodes = view.selectedNodes() if view else []
         groups = [n for n in nodes if hasattr(n, "addLayer")]
         if len(groups) != 1:
             self._say("Select exactly one GROUP in the Layers panel - that group becomes the "
-                      "portal.", Qgis.Warning)
+                      "portal.", enum(Qgis, "MessageLevel", "Warning"))
             return
         group = groups[0]
         portal_id, title = portal_sync.group_portal(group)
@@ -1315,13 +1319,13 @@ class GeoDeployDock(QDockWidget):
             try:
                 current = (client.portals.get(portal_id) or {}).get("layer_configs") or []
             except GeoDeployError as exc:
-                self._say(f"Could not read the portal to compare against: {exc}", Qgis.Critical)
+                self._say(f"Could not read the portal to compare against: {exc}", enum(Qgis, "MessageLevel", "Critical"))
                 return
 
         try:
             plan = portal_sync.plan_push(group, style_for, current)
         except Exception as exc:            # noqa: BLE001 - never crash QGIS over a layer tree
-            self._say(f"Could not read that group: {exc}", Qgis.Critical)
+            self._say(f"Could not read that group: {exc}", enum(Qgis, "MessageLevel", "Critical"))
             return
 
         go, upload_new, drop_removed = diffdialog.confirm(
@@ -1403,7 +1407,7 @@ class GeoDeployDock(QDockWidget):
     def _group_pushed(self, job):
         self._busy(False)
         if job.error:
-            self._say(job.error, Qgis.Critical)
+            self._say(job.error, enum(Qgis, "MessageLevel", "Critical"))
             return
         result = job.result or {}
         doc = result.get("portal") or {}
@@ -1434,7 +1438,7 @@ class GeoDeployDock(QDockWidget):
         """
         row = self._selected_row()
         if not row:
-            self._say("Pick a layer or a portal first.", Qgis.Warning)
+            self._say("Pick a layer or a portal first.", enum(Qgis, "MessageLevel", "Warning"))
             return
         if row.get("_portal"):
             # A PORTAL OPENS IN THE EDITOR, not in view mode — "Add to map" already offers the
@@ -1445,14 +1449,14 @@ class GeoDeployDock(QDockWidget):
             portal_id = row.get("id")
             if not (self.instance and self.instance.token) or portal_id is None:
                 self._say("Editing a portal needs a token with write access. Without one, use "
-                          "“Open portal in browser” to see the published page.", Qgis.Warning)
+                          "“Open portal in browser” to see the published page.", enum(Qgis, "MessageLevel", "Warning"))
                 return
             self._open_url("{0}/portals/{1}/edit".format(base, portal_id))
             return
         base = (row.get("_base") or (self.instance.url if self.instance else "")).rstrip("/")
         ref = row.get("uid") or row.get("id")
         if not base or ref is None:
-            self._say("That layer has no address on the instance.", Qgis.Warning)
+            self._say("That layer has no address on the instance.", enum(Qgis, "MessageLevel", "Warning"))
             return
         kind = "raster" if (row.get("layer_type") == "raster"
                             or row.get("kind") == "raster"
@@ -1467,7 +1471,7 @@ class GeoDeployDock(QDockWidget):
             QDesktopServices.openUrl(QUrl(url))
             self._say("Opened {0} in your browser.".format(url))
         except Exception as exc:        # noqa: BLE001 - still give them the address
-            self._say("Open it at {0} ({1}).".format(url, exc), Qgis.Warning)
+            self._say("Open it at {0} ({1}).".format(url, exc), enum(Qgis, "MessageLevel", "Warning"))
 
     def _open_portal(self, row):
         """A portal is a published web map — QGIS cannot render one, so open it where it lives."""
@@ -1479,7 +1483,7 @@ class GeoDeployDock(QDockWidget):
             base = (row.get("_base") or "").rstrip("/")
             slug = row.get("slug") or ""
             if not base or not slug:
-                self._say("That portal has no address yet — publish it first.", Qgis.Warning)
+                self._say("That portal has no address yet — publish it first.", enum(Qgis, "MessageLevel", "Warning"))
                 return
             url = f"{base}/portals/{slug}/"
         self._open_url(url)
@@ -1505,16 +1509,16 @@ class GeoDeployDock(QDockWidget):
         """
         layer = self.iface.activeLayer()
         if layer is None:
-            self._say("Select the layer to restyle in the Layers panel first.", Qgis.Warning)
+            self._say("Select the layer to restyle in the Layers panel first.", enum(Qgis, "MessageLevel", "Warning"))
             return
         identity = portal_sync.layer_identity(layer)
         if identity is None:
             self._say("{0} did not come from GeoDeploy, so there is no other source to open it "
                       "from. QGIS is already showing everything it has.".format(layer.name()),
-                      Qgis.Warning)
+                      enum(Qgis, "MessageLevel", "Warning"))
             return
         if not self.instance:
-            self._say("Connect to the instance this layer came from first.", Qgis.Warning)
+            self._say("Connect to the instance this layer came from first.", enum(Qgis, "MessageLevel", "Warning"))
             return
         layer_id, kind = identity
         row = self._row_for(layer_id, kind)
@@ -1522,7 +1526,7 @@ class GeoDeployDock(QDockWidget):
             self._say("{0} is not in this instance's listing — a portal can serve a layer that is "
                       "not published on its own, and only the portal knows where it is. Sign in "
                       "with a token that can see it, then try again.".format(layer.name()),
-                      Qgis.Warning)
+                      enum(Qgis, "MessageLevel", "Warning"))
             return
 
         # WHAT IT LOOKS LIKE NOW, from the most specific source available. A portal's raster wears
@@ -1549,14 +1553,14 @@ class GeoDeployDock(QDockWidget):
             self._say("Could not open {0}'s data source ({1}). The reason is in View > Panels > "
                       "Log Messages, under GeoDeploy.".format(layer.name(),
                                                               (source or {}).get("kind", "?")),
-                      Qgis.Critical)
+                      enum(Qgis, "MessageLevel", "Critical"))
             return
 
         replacement.setName(layer.name())
         applied = symbology.apply(replacement, style, row) if style else False
         _set_opacity(replacement, portal_sync._opacity_of(layer))
         if not self._swap_layer(layer, replacement):
-            self._say("Could not put {0} back where it was.".format(layer.name()), Qgis.Critical)
+            self._say("Could not put {0} back where it was.".format(layer.name()), enum(Qgis, "MessageLevel", "Critical"))
             return
         self.iface.setActiveLayer(replacement)
         # The picker's default is deliberately NOT changed. Restyling one layer is a targeted act;
@@ -1610,7 +1614,7 @@ class GeoDeployDock(QDockWidget):
         which layer on the server is meant.
         """
         if not self.instance or not self.instance.token:
-            self._say("Saving a style needs a token with write access.", Qgis.Warning)
+            self._say("Saving a style needs a token with write access.", enum(Qgis, "MessageLevel", "Warning"))
             return
         view = self.iface.layerTreeView()
         chosen = [l for l in (view.selectedLayers() if view else []) if l is not None]
@@ -1618,7 +1622,7 @@ class GeoDeployDock(QDockWidget):
             active = self.iface.activeLayer()
             chosen = [active] if active is not None else []
         if not chosen:
-            self._say("Select a layer that came from this instance.", Qgis.Warning)
+            self._say("Select a layer that came from this instance.", enum(Qgis, "MessageLevel", "Warning"))
             return
 
         jobs, skipped = [], []
@@ -1656,7 +1660,7 @@ class GeoDeployDock(QDockWidget):
         if not jobs:
             self._say("Nothing to save: " + (", ".join(skipped) or "no layer from this instance") +
                       ". A layer must have been ADDED from GeoDeploy to be saved back to it.",
-                      Qgis.Warning)
+                      enum(Qgis, "MessageLevel", "Warning"))
             return
 
         client = self.instance.client
@@ -1675,23 +1679,23 @@ class GeoDeployDock(QDockWidget):
     def _style_saved(self, job):
         self._busy(False)
         if job.error:
-            self._say(job.error, Qgis.Critical)
+            self._say(job.error, enum(Qgis, "MessageLevel", "Critical"))
             return
         result = job.result or {}
         saved, skipped = result.get("saved") or [], result.get("skipped") or []
         note = " Skipped: " + ", ".join(skipped[:3]) + "." if skipped else ""
         self._say("Saved styling for " + ", ".join(saved[:3]) +
                   (" and {0} more".format(len(saved) - 3) if len(saved) > 3 else "") + "." + note,
-                  Qgis.Warning if skipped else Qgis.Info)
+                  enum(Qgis, "MessageLevel", "Warning") if skipped else enum(Qgis, "MessageLevel", "Info"))
         self.refresh_layers()
 
     def upload_active(self):
         if not self.instance:
-            self._say("Connect to an instance first.", Qgis.Warning)
+            self._say("Connect to an instance first.", enum(Qgis, "MessageLevel", "Warning"))
             return
         if not self.instance.token:
             self._say("Uploading needs a token with data:write. Public browsing does not.",
-                      Qgis.Warning)
+                      enum(Qgis, "MessageLevel", "Warning"))
             return
         # Whatever is SELECTED in the Layers panel, falling back to the active layer. Sending five
         # layers is a normal thing to want, and doing it one at a time means five round trips
@@ -1700,7 +1704,7 @@ class GeoDeployDock(QDockWidget):
         if not layers:
             active = self.iface.activeLayer()
             if active is None:
-                self._say("Select one or more layers in the Layers panel first.", Qgis.Warning)
+                self._say("Select one or more layers in the Layers panel first.", enum(Qgis, "MessageLevel", "Warning"))
                 return
             layers = [active]
 
@@ -1718,7 +1722,7 @@ class GeoDeployDock(QDockWidget):
             self._say("Nothing was uploaded.", bar=False)
             return
         if not chosen:
-            self._say("No layers were selected to upload.", Qgis.Warning)
+            self._say("No layers were selected to upload.", enum(Qgis, "MessageLevel", "Warning"))
             return
         layers = [l for l in layers if l.name() in set(chosen)]
 
@@ -1746,7 +1750,7 @@ class GeoDeployDock(QDockWidget):
 
         if not jobs:
             # Everything was refused — say why, for each, rather than a generic failure.
-            self._say(" | ".join(refused) or "Nothing could be uploaded.", Qgis.Warning)
+            self._say(" | ".join(refused) or "Nothing could be uploaded.", enum(Qgis, "MessageLevel", "Warning"))
             return
 
         client = self.instance.client
@@ -1789,7 +1793,7 @@ class GeoDeployDock(QDockWidget):
     def _uploaded(self, job):
         self._busy(False)
         if job.error:
-            self._say(job.error, Qgis.Critical)
+            self._say(job.error, enum(Qgis, "MessageLevel", "Critical"))
             return
         result = job.result or {}
         uploaded = result.get("uploaded") or []
@@ -1813,9 +1817,9 @@ class GeoDeployDock(QDockWidget):
             # Partial success is its own outcome. Reporting it as failure hides work that landed;
             # reporting it as success hides work that did not.
             self._say(f"Uploaded {len(uploaded)}, but {len(failed)} did not: " + " | ".join(failed),
-                      Qgis.Warning)
+                      enum(Qgis, "MessageLevel", "Warning"))
         else:
-            self._say(" | ".join(failed) or "Nothing was uploaded.", Qgis.Critical)
+            self._say(" | ".join(failed) or "Nothing was uploaded.", enum(Qgis, "MessageLevel", "Critical"))
         if uploaded:
             self.refresh_layers()
 
@@ -1855,6 +1859,6 @@ class GeoDeployPlugin:
     def show(self):
         if self.dock is None:
             self.dock = GeoDeployDock(self.iface)
-            self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dock)
+            self.iface.addDockWidget(enum(Qt, "DockWidgetArea", "RightDockWidgetArea"), self.dock)
         self.dock.show()
         self.dock.raise_()

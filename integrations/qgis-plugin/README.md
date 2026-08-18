@@ -152,6 +152,21 @@ rather than following the platform's — see the note in `CHANGELOG.md`.
 - A RASTER still needs a local file: re-encoding one here would mean choosing compression and
   resampling on the user's behalf, and ingest converts to COG anyway.
 
+## Qt6 / QGIS 4
+QGIS 4 is Qt6, where an enum member is only reachable through its scope — `Qt.PenStyle.NoPen`, not
+`Qt.NoPen`. The plugin has to run on both, since its floor is QGIS 3.28 (Qt5), so `compat.enum`
+asks for the scoped name and falls back to the flat one. Every enum read goes through it;
+`scripts/test_qt6_compat.py` walks the AST of every module and fails on a flat one, because the
+migration was mechanical across 94 sites and a single one typed later would be invisible until a
+user on QGIS 4 hit that path.
+
+**Do not apply the plugins.qgis.org Qt6 report verbatim.** It reports
+`QLineEdit.Password` as *"add 'EchoMode' before 'Password'"*, which reads as `Qt.EchoMode.Password`
+— a name that does not exist, because `EchoMode` belongs to `QLineEdit`. Every scope in the map was
+resolved against the real class instead. And not everything capitalised is an enum:
+`QgsVectorFileWriter.SaveVectorOptions` and `QgsColorRampShader.ColorRampItem` are classes, and
+scoping them would be a silent `AttributeError`.
+
 ## The security scan
 Every upload to plugins.qgis.org is scanned (Bandit, detect-secrets, Flake8) and **a critical
 finding blocks that version until a NEW version number is uploaded** — a burnt version, not a retry.

@@ -28,7 +28,7 @@ def _load(name):
     lines = open(os.path.join(PKG, name + ".py"), encoding="utf-8").read().splitlines()
     src = "\n".join(l for l in lines
                     if not (l.startswith("from .connection") or l.startswith("from .symbology")))
-    ns = {}
+    ns = {"__name__": name}
     exec(compile(src, name, "exec"), ns)                                        # noqa: S102
     return ns
 
