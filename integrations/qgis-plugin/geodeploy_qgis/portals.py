@@ -393,7 +393,7 @@ def plan_push(group, style_for, current_configs) -> dict:
             tree.append({"layer_id": layer_id, "layer_type": layer_type})
             if was is None:
                 added.append(qgis_layer.name())
-            elif _style_differs(was, entry):
+            elif _style_differs(was, entry, _geometry_of_layer(qgis_layer)):
                 restyled.append(qgis_layer.name())
             else:
                 unchanged.append(qgis_layer.name())
@@ -418,26 +418,43 @@ def plan_push(group, style_for, current_configs) -> dict:
             "tree": tree, "kept": kept}
 
 
-def _style_differs(before: dict, after: dict) -> bool:
+def _geometry_of_layer(qgis_layer):
+    """"point" / "line" / "polygon" for a QGIS layer, or None — see `symbology._geometry_name`.
+
+    Lazily imported and never allowed to raise: this is only used to disambiguate one style key, and
+    a comparison must not fail because a layer could not say what it holds.
+    """
+    try:
+        from .symbology import _geometry_name
+        return _geometry_name(qgis_layer)
+    except Exception:                   # noqa: BLE001 - unknown geometry is a valid answer
+        return None
+
+
+def _style_differs(before: dict, after: dict, geometry: str | None = None) -> bool:
     """Whether anything a viewer would SEE has changed.
 
     Visibility and opacity count: a layer switched off in QGIS is a real change to the portal, and
     treating it as "unchanged" would publish something the user did not intend. Compared through
     sorted JSON so that key order — which carries no meaning — never reads as a difference.
+
+    `geometry` is passed through because one style key means two things: `outline_width` is a RATIO
+    of the radius on a point and a WIDTH IN PIXELS on a polygon, so their defaults differ and a
+    comparison that cannot tell them apart reports every polygon as restyled.
     """
     import json
 
     try:
         from .symbology import comparable_style
     except Exception:                   # noqa: BLE001 - outside QGIS, compare the raw dicts
-        def comparable_style(style):
+        def comparable_style(style, geometry=None):
             return style or {}
 
     def shape(cfg):
         # COMPARED THROUGH THE SAME DEFAULTS. A style read back out of QGIS is always complete, while
         # a stored one holds only what somebody chose — so comparing them as written reported every
         # layer in a freshly opened portal as restyled. See `symbology.comparable_style`.
-        return json.dumps({"style": comparable_style(cfg.get("style")),
+        return json.dumps({"style": comparable_style(cfg.get("style"), geometry),
                            "visible": bool(cfg.get("visible", True)),
                            "opacity": round(float(cfg.get("opacity", 1.0) or 1.0), 3)},
                           sort_keys=True, default=str)

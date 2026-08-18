@@ -37,6 +37,16 @@ try:                                    # pragma: no cover - only present inside
 except ImportError:                     # importable outside QGIS so the module can be unit-tested
     QGIS = False
 
+try:                                    # pragma: no cover - only present inside QGIS
+    # THE RASTER HALF, IMPORTED SEPARATELY AND DELIBERATELY. A QGIS build missing one of these must
+    # cost the raster path only: folding them into the block above would turn a missing shader class
+    # into "no styling at all", which is how one narrow gap becomes every layer arriving plain.
+    from qgis.core import (QgsColorRampShader, QgsContrastEnhancement, QgsGradientColorRamp,
+                           QgsGradientStop, QgsRasterShader, QgsStyle)
+    QGIS_RASTER = True
+except ImportError:                     # pragma: no cover
+    QGIS_RASTER = False
+
 
 # ── GeoDeploy → QGIS ─────────────────────────────────────────────────────────────────────────────
 
@@ -120,6 +130,17 @@ DEFAULT_FILL_OPACITY = 0.45
 DEFAULT_FILL_OUTLINE = "#1d4ed8"
 #: A line with no stated width is 2 CSS px on the map.
 DEFAULT_LINE_WIDTH = 2
+#: A POLYGON's outline with no stated width is 1 CSS px — what a MapLibre `fill` draws on its own
+#: edge, and therefore what every polygon published before outlines had a width looked like.
+#: Mirrors `services/symbology.POLYGON_OUTLINE_WIDTH`.
+DEFAULT_POLYGON_OUTLINE = 1
+#: And the colour every renderer falls back to — `symbology.DEFAULT_COLOR` on the instance.
+DEFAULT_COLOR = "#3b82f6"
+#: The footprint of an extruded POINT when the style names none, in metres. Mirrors
+#: `services/symbology.DEFAULT_PILLAR_RADIUS_M` and `services/pillars.DEFAULT_RADIUS_M`. The
+#: instance derives a better one from the layer's own extent when it has the bbox to do it with;
+#: this is only the floor, for a style that reaches QGIS without one.
+DEFAULT_PILLAR_RADIUS_M = 30.0
 
 
 def _number(value, default):
@@ -244,6 +265,13 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
             # The map's default outline, not QGIS's — `fill-outline-color: #1d4ed8` in
             # portal_generator when the style names none.
             layer0.setStrokeColor(QColor(outline or DEFAULT_FILL_OUTLINE))
+            # AND ITS WIDTH. On a POLYGON `outline_width` is a width in CSS pixels — the same unit a
+            # line uses, because it is one — where on a marker the same key is a RATIO of the
+            # radius. The two are never read by the same branch. 1 px is what a MapLibre fill's own
+            # edge draws, so an unset width is a hairline here too.
+            _use_points(symbol, layer0)
+            layer0.setWidth(_number(style.get("outline_width"), DEFAULT_POLYGON_OUTLINE)
+                            * CSS_PX_TO_POINTS)
         # ALWAYS, and defaulted — the same mistake the point radius made. A polygon style rarely
         # carries `fill_opacity`, and the map fills the gap with 0.45: every portal draws polygons
         # translucent. Applying it only when present meant QGIS drew them SOLID, so a layer that is
@@ -309,6 +337,102 @@ def style_from_legend(legend: dict) -> dict:
     return style
 
 
+def raster_style_from_legend(legend: dict) -> dict:
+    """A RASTER style from the public legend endpoint — the raster twin of `style_from_legend`.
+
+    The two legends answer different questions and have different shapes, and for a long time only
+    the vector one had a reader: a raster's legend was handed to `style_from_legend`, which looked
+    for `entries[0].color` and returned `{"color": "#…"}` — a VECTOR key, meaningless to a raster
+    renderer. So a public raster (whose listing row carries no `default_style`) had no way to arrive
+    coloured, and the colours it did carry described nothing.
+
+    `rescale` comes back from the API as a PAIR OF NUMBERS and is stored as the string TiTiler
+    wants; that conversion happens here so that everything downstream sees one spelling.
+    """
+    if not legend:
+        return {}
+    style = {}
+    colormap = (legend.get("colormap") or "").strip()
+    if colormap:
+        style["colormap"] = colormap
+        if legend.get("colormap_reverse"):
+            style["colormap_reverse"] = True
+    classes = legend.get("color_classes")
+    if not classes and not legend.get("ramp", True):
+        # A classified raster reports its classes as legend ENTRIES; `color_classes` is the same
+        # list under its own name, and older instances send only the entries.
+        classes = [{"value": e.get("value"), "color": e.get("color")}
+                   for e in (legend.get("entries") or [])
+                   if e.get("value") is not None and e.get("color")]
+    if classes:
+        style["color_classes"] = [c for c in classes if isinstance(c, dict)]
+    rescale = _rescale_text(legend.get("rescale"))
+    if rescale:
+        style["rescale"] = rescale
+    bands = [int(b) for b in (legend.get("bidx") or []) if isinstance(b, (int, float))]
+    if bands:
+        style["bidx"] = bands
+    algorithm = (legend.get("algorithm") or "").strip()
+    if algorithm:
+        style["algorithm"] = algorithm
+        zfactor = legend.get("zfactor")
+        if _finite(zfactor) and float(zfactor) > 0:
+            style["zfactor"] = float(zfactor)
+    return style
+
+
+def raster_style_of(stored) -> dict:
+    """The raster style inside a stored `default_style`, whichever shape it was written in.
+
+    A vector's default style NESTS the visual part — `{opacity, style: {...}, popup_fields}` — while
+    a raster's is written FLAT: `{opacity, colormap, rescale, …}`. The API's own legend route carries
+    the same warning, having been written against the vector shape and therefore reporting every
+    field as null on a live instance. Reading only `["style"]` here had the same effect one layer
+    up: a raster with a stored colormap looked like a raster with no style at all.
+
+    Both shapes are read, nested first, and the envelope keys are removed — `opacity`, which is
+    applied separately and is not part of the colouring, plus the two a nested style wraps itself in.
+
+    EVERYTHING ELSE IS KEPT, including keys this plugin has never heard of. An allowlist would have
+    been tidier and would silently drop the next raster property GeoDeploy grows — contour
+    `increment` and `thickness` are already planned — so the layer would lose it the first time
+    anybody opened it in QGIS. A key we cannot translate still travels, untouched.
+    """
+    if not isinstance(stored, dict):
+        return {}
+    inner = stored.get("style")
+    source = inner if isinstance(inner, dict) and inner else stored
+    return {k: v for k, v in source.items()
+            if v is not None and k not in ("opacity", "style", "popup_fields")}
+
+
+def _rescale_text(rescale) -> str | None:
+    """A stretch in any of its spellings, as the one `"min,max"` string that is stored.
+
+    It arrives as `[0.0, 2.0]` from the legend route, as `"0,2"` from a stored style, and as two
+    numbers from a QGIS renderer. Comparing those as written reports a change nobody made, which is
+    exactly what `comparable_style` exists to prevent — so there is one canonical form and this is
+    where everything is put into it.
+    """
+    if rescale is None:
+        return None
+    if isinstance(rescale, str):
+        parts = [p.strip() for p in rescale.split(",")]
+    elif isinstance(rescale, (list, tuple)):
+        parts = list(rescale)
+    else:
+        return None
+    if len(parts) != 2:
+        return None
+    try:
+        lo, hi = float(parts[0]), float(parts[1])
+    except (TypeError, ValueError):
+        return None
+    if not (_finite(lo) and _finite(hi)) or hi <= lo:
+        return None
+    return "{0},{1}".format(_trim(lo), _trim(hi))
+
+
 def _log(message: str, level: str = "warning") -> None:
     """Into QGIS's Log Messages panel, under our own tab — the place a user can be pointed to.
 
@@ -335,6 +459,36 @@ P_SOURCE_LAYER = "geodeploy/source_layer"
 #: a point layer — the wrong colour, identical to the old default, so an edit registered as no change.
 P_GEOMETRY = "geodeploy/geometry"
 
+#: And a raster's COLORMAP NAME, recorded when one is applied — because QGIS does not keep it.
+#: `QgsColorRampShader` holds a ramp OBJECT, and only a ColorBrewer or cpt-city ramp can be asked
+#: what scheme it came from; the matplotlib ramps (viridis, magma, plasma, …) are plain gradients
+#: with no name at all. So a raster styled `colormap: "viridis"` used to come back with no colormap
+#: and the layer silently lost its palette on every push, keeping only the stretch.
+#:
+#: The name alone would be a lie the moment somebody chose a different ramp in QGIS, so the ramp's
+#: COLOURS are recorded beside it and the name is only believed while they still match — forwards,
+#: or exactly reversed, which is how flipping the ramp in QGIS travels back as `colormap_reverse`.
+P_COLORMAP = "geodeploy/colormap"
+P_COLORMAP_SIG = "geodeploy/colormap_stops"
+
+#: And the raster styling QGIS HAS NO RENDERER FOR. `hillshade` maps onto `QgsHillshadeRenderer`;
+#: `contours` maps onto nothing — QGIS makes contours with a processing algorithm that outputs a
+#: VECTOR layer, not with a raster renderer — and the same will be true of the next server-side
+#: algorithm. Such a raster is drawn here with its stretch alone, which is honest, but reading THAT
+#: back would report a plain stretch and the merge would then delete the algorithm: opening a
+#: contour layer in QGIS and pushing it back would silently turn it into a grey raster.
+#:
+#: So the untranslatable part is recorded, with a signature of what QGIS was actually given, and
+#: handed back unchanged while that still matches. A user who genuinely restyles the layer — picks
+#: a palette, classifies it — changes the renderer, the signature stops matching, and the edit is
+#: reported as the real edit it is. Third use of the same device (`P_COLORMAP`, `P_EXTRUSION`),
+#: which is what it looks like when a lossy container is being used honestly.
+P_RASTER_ALGO = "geodeploy/raster_algorithm"
+P_RASTER_ALGO_SIG = "geodeploy/raster_algorithm_sig"
+
+#: The keys that belong to a server-side algorithm rather than to a renderer QGIS can build.
+_ALGORITHM_KEYS = ("algorithm", "increment", "thickness", "minz", "maxz", "zfactor")
+
 
 #: Every visual key, with the value the MAP supplies when a style omits it. Used only to COMPARE two
 #: styles — see `comparable_style`.
@@ -352,7 +506,7 @@ _STYLE_DEFAULTS = {
 }
 
 
-def comparable_style(style: dict | None) -> dict:
+def comparable_style(style: dict | None, geometry: str | None = None) -> dict:
     """A style reduced to what a viewer would SEE, for comparing two of them.
 
     WHY A STORED STYLE AND A READ-BACK ONE CANNOT BE COMPARED DIRECTLY. QGIS has no concept of "unset":
@@ -364,8 +518,24 @@ def comparable_style(style: dict | None) -> dict:
     different" instead of "is written differently".
 
     Keys that do not apply to a geometry are harmless: both sides get them identically.
+
+    A RASTER style is a different shape and gets its own treatment — filling it with a vector's
+    defaults would compare a colormap against a marker size.
     """
+    if _is_raster_style(style):
+        return _comparable_raster(style)
     merged = dict(_STYLE_DEFAULTS)
+    # `outline_width` MEANS TWO THINGS, and the default differs with them: on a POINT it is a ratio
+    # of the marker radius (0.28), on a POLYGON a width in CSS pixels (1, what a fill's own edge
+    # draws). Without the geometry the two cannot be told apart, and a polygon read back at its
+    # 1 px default would compare against a marker's 0.28 and report every polygon as restyled.
+    # Folding them into one token instead would be wrong the other way: a marker ratio of 1 is a
+    # solid RING, a real symbol somebody chose, and hiding that change would be worse.
+    # `in`, not `startswith`: GeoDeploy's geometry strings are "Polygon" AND "MultiPolygon", and
+    # the rest of the codebase tests them the same way (`"polygon" in geom` in portal_generator and
+    # mapStyle.js). Anchoring the match silently missed every multipart layer.
+    if "polygon" in str(geometry or "").lower():
+        merged["outline_width"] = DEFAULT_POLYGON_OUTLINE
     merged.update({k: v for k, v in (style or {}).items() if v is not None})
     # An outline is stated as a colour or the word "none", and the DEFAULT differs by geometry — white
     # on a marker, #1d4ed8 on a fill. Either default reads as "the outline nobody chose", so both
@@ -400,6 +570,10 @@ def comparable_style(style: dict | None) -> dict:
                            if isinstance(item, dict)]
     # DERIVED, not chosen: `classes_n` is `len(classes)`, and only one side bothers to write it.
     merged.pop("classes_n", None)
+    # 3D, reduced to what is actually drawn — an extrusion switched off is the same map as none.
+    extrusion = _comparable_extrusion(merged.pop("extrusion", None))
+    if extrusion:
+        merged["extrusion"] = extrusion
     # A CLASSIFIED layer's single colour is not drawn — the classes are. Keeping it in the comparison
     # made an untouched categorized layer look edited, because the read-back fills it from the
     # catch-all entry while the stored style never had one.
@@ -410,6 +584,179 @@ def comparable_style(style: dict | None) -> dict:
     if merged.get("outline_color") == "none":
         merged.pop("outline_width", None)
     return merged
+
+
+#: Every key a RASTER style is made of. A style holding any of them is a raster's; none of them
+#: appears in a vector style, so the two shapes can never be mistaken for one another.
+#:
+#: THIS LIST IS ALSO WHAT A RASTER READ-BACK CLEARS (see `merge_style`): QGIS shows one renderer at
+#: a time, so a raster that came back as a colormap is no longer a hillshade. A key OUTSIDE the list
+#: survives a push untouched, which is the safe default for anything this plugin has not met — so
+#: when contour styling lands (`algorithm: "contours"` with `increment` and `thickness`), adding
+#: those two names here is what makes switching AWAY from contours clear them too. Until then they
+#: would linger harmlessly: TiTiler ignores them without the algorithm that reads them.
+_RASTER_KEYS = ("colormap", "colormap_reverse", "rescale", "bidx", "color_classes",
+                "algorithm", "zfactor", "increment", "thickness", "minz", "maxz")
+
+#: TiTiler's own contour defaults, mirrored from `services/titiler`. Needed here only so that an
+#: absent interval and an explicitly written 35 compare as the same map.
+CONTOUR_INCREMENT = 35.0
+CONTOUR_THICKNESS = 1
+
+
+def _is_raster_style(style) -> bool:
+    return isinstance(style, dict) and any(k in style for k in _RASTER_KEYS)
+
+
+def _hex_rgba(color):
+    """`#RGB` / `#RRGGBB` / `#RRGGBBAA` folded to one lower-case 8-digit spelling.
+
+    An opaque colour is written both ways depending on who wrote it — QGIS reads back
+    `#3b82f6ff`, a person types `#3B82F6` — and comparing those as strings reports an edit nobody
+    made, on every class, on every push.
+    """
+    if not isinstance(color, str):
+        return color
+    text = color.strip().lower().lstrip("#")
+    if len(text) == 3:
+        text = "".join(c * 2 for c in text)
+    if len(text) == 6:
+        text += "ff"
+    return "#" + text if len(text) == 8 else color.strip().lower()
+
+
+def _comparable_raster(style: dict | None) -> dict:
+    """A RASTER style reduced to what a viewer would see — the raster half of `comparable_style`.
+
+    Two rules do the work, and both come from `services/titiler.get_tile_url`, which is what
+    actually draws the thing: a key the tile URL would IGNORE cannot be a visible difference, and
+    the several spellings of one value (a stretch as a string or a pair, a colour with or without
+    its alpha, a palette named forwards or with matplotlib's `_r`) are all folded into one.
+
+    Without this, opening a portal's raster and pushing it straight back reported it as restyled —
+    the same phantom-edit problem the vector side already solved, one shape along.
+    """
+    style = style or {}
+    # ANYTHING THIS DOES NOT KNOW ABOUT IS CARRIED THROUGH, not dropped. A key it cannot classify
+    # might well be drawn — contour `increment` and `thickness` are already planned — and dropping
+    # it here would make a real change to one invisible to every comparison in the plugin.
+    out = {k: v for k, v in style.items() if k not in _RASTER_KEYS and v is not None}
+    bands = _bands_of(style)
+    if bands and bands != [1]:
+        # BAND 1 IS WHAT "NO BAND" MEANS. QGIS has no concept of unset here either: a renderer is
+        # always ON a band, so a style that named none reads back as `bidx: [1]` and every raster
+        # opened from a portal reported itself as restyled. The two draw the same picture — TiTiler
+        # given no band renders the first — so they are not a difference a viewer can see.
+        # (A raster with more than three bands defaults to an RGB composite instead, and that case
+        # states its bands explicitly at both ends, so it is unaffected.)
+        out["bidx"] = bands
+    algorithm = (style.get("algorithm") or "").strip().lower()
+    if algorithm:
+        # ANY algorithm replaces the colouring — `get_tile_url` skips the colormap entirely when one
+        # is set — but only a HILLSHADE drops the stretch, because it comes back as finished 0–255
+        # relief and stretching that saturates every pixel to one value. Stated as two separate
+        # rules rather than one, so the contours algorithm (which does take a stretch) is right the
+        # day it arrives instead of quietly losing its range.
+        out["algorithm"] = algorithm
+        if algorithm == "hillshade":
+            try:
+                out["zfactor"] = round(float(style.get("zfactor") or 1.0), 6)
+            except (TypeError, ValueError):
+                out["zfactor"] = 1.0
+            return out
+        rescale = _rescale_text(style.get("rescale"))
+        if rescale:
+            out["rescale"] = rescale
+        # THE ALGORITHM'S OWN PARAMETERS. `_RASTER_KEYS` holds them so a change of algorithm clears
+        # them, which also meant they were filtered out of the comparison above — so changing a
+        # contour interval from 5 m to 25 m, which is the most visible edit a contour map has, was
+        # reported as "unchanged". Defaulted, because an absent value draws as TiTiler's default and
+        # `5` written explicitly is the same map as nothing written at all.
+        for key, default in (("increment", CONTOUR_INCREMENT), ("thickness", CONTOUR_THICKNESS)):
+            value = _number(style.get(key), default)
+            out[key] = round(value, 6) if key == "increment" else int(value)
+        for key in ("minz", "maxz"):
+            if style.get(key) is not None:
+                out[key] = round(_number(style.get(key), 0.0), 6)
+        return out
+    rescale = _rescale_text(style.get("rescale"))
+    if rescale:
+        out["rescale"] = rescale
+    if len(bands) == 3:
+        return out                      # an RGB composite; a colormap is ignored for one
+    classes = [c for c in (style.get("color_classes") or []) if isinstance(c, dict)]
+    if classes:
+        # An explicit colour per value beats a named ramp in the tile URL, so the ramp is not drawn
+        # and a stale one left beside it is not a difference. NEITHER IS THE STRETCH: the mapping is
+        # matched on raw pixel values and `get_tile_url` therefore omits `rescale` entirely — a
+        # stretch would remap the very values the classes are keyed on, which is what once left a
+        # three-class mask drawing only one of them.
+        out.pop("rescale", None)
+        out["color_classes"] = [_comparable_raster_class(c) for c in classes]
+        if style.get("colormap_reverse"):
+            out["colormap_reverse"] = True
+        return out
+    name, reverse = _colormap_of(style)
+    if name:
+        out["colormap"] = name.lower()
+        if reverse:
+            out["colormap_reverse"] = True
+    return out
+
+
+def _comparable_raster_class(item: dict) -> dict:
+    """One class of a classified raster, reduced to what a viewer would see.
+
+    The LABEL is what a legend prints, so it is compared — but QGIS labels a class with its own
+    value when nothing else is given, and a raster whose classes were never named would otherwise
+    come back carrying `label: "3"` where the stored style had none and report as edited. Absent and
+    "the value as text" are the same legend, so they fold together.
+
+    The text itself is DATA, like a category value: "Water" and "water" are different labels and
+    case-folding them would hide a real edit and mislabel the map.
+    """
+    out = {"value": item.get("value"), "color": _hex_rgba(item.get("color"))}
+    label = item.get("label")
+    label = "" if label is None else str(label).strip()
+    if label and label != str(item.get("value")):
+        out["label"] = label
+    return out
+
+
+def _comparable_extrusion(ex):
+    """A 3D block reduced to what a viewer would see, or None when nothing is extruded.
+
+    The two rules are the same ones the 2D side uses, applied to `services/symbology.is_extruded`:
+    an extrusion that is switched OFF draws exactly like no extrusion at all, and a height driven by
+    a COLUMN means the fixed `height` beside it is not drawn — keeping either in the comparison
+    would report an edit that changes nothing on the map.
+    """
+    if not isinstance(ex, dict) or not ex.get("enabled"):
+        return None
+    if not (ex.get("field") or ex.get("height")):
+        return None                     # enabled with no height is drawn flat — the same as off
+    out = {"enabled": True}
+    field = str(ex.get("field") or "").strip()
+    if field:
+        out["field"] = field
+        out["scale"] = round(_number(ex.get("scale"), 1.0), 6)
+    else:
+        out["height"] = round(_number(ex.get("height"), 0.0), 6)
+    base = ex.get("base")
+    if isinstance(base, str) and base.strip():
+        out["base"] = base.strip()      # a FIELD name, which is data and not case-folded
+    elif _number(base, 0.0):
+        out["base"] = round(_number(base, 0.0), 6)
+    if ex.get("color"):
+        out["color"] = str(ex["color"]).strip().lower()
+    opacity = round(_number(ex.get("opacity"), 1.0), 3)
+    if opacity != 1.0:
+        out["opacity"] = opacity
+    if ex.get("radius") not in (None, ""):
+        # POINTS only: the footprint the tile server buffers a point into. A polygon has area
+        # already, so nothing writes one for it and nothing reads one back.
+        out["radius"] = round(_number(ex.get("radius"), DEFAULT_PILLAR_RADIUS_M), 6)
+    return out
 
 
 def _comparable_class(item: dict) -> dict:
@@ -445,6 +792,17 @@ def merge_style(stored: dict | None, read_back: dict | None) -> dict:
     fresh = {k: v for k, v in (read_back or {}).items() if v is not None}
     if not fresh:
         return base
+    if _is_raster_style(fresh):
+        # A RASTER READ-BACK IS THE WHOLE COLOURING, not an update to part of it. QGIS shows one
+        # renderer at a time, so a raster that came back as a hillshade is not also a colormap, and
+        # a paletted one is not also a stretch — leaving either behind would publish a raster that
+        # does not look like the QGIS the user was looking at when they pushed it. Keys outside this
+        # list (opacity, anything a future GeoDeploy adds) are still left alone.
+        for key in _RASTER_KEYS:
+            if key not in fresh:
+                base.pop(key, None)
+        base.update(fresh)
+        return base
     if fresh.get("color_mode") and fresh["color_mode"] != base.get("color_mode"):
         for key in ("classes", "classes_n", "categories", "other_color", "color_field"):
             base.pop(key, None)
@@ -452,6 +810,22 @@ def merge_style(stored: dict | None, read_back: dict | None) -> dict:
             "size_mode" in fresh and fresh["size_mode"] != "proportional"):
         for key in ("size_field", "size_stops"):
             base.pop(key, None)
+    if isinstance(fresh.get("extrusion"), dict):
+        # EXTRUSION MERGES KEY BY KEY, not wholesale. QGIS reads back only the part of a 3D block it
+        # can hold — a cylinder has a length, not a column — so replacing the whole dict with what
+        # was read would delete the field, the scale and the opacity that QGIS never saw. The same
+        # reasoning as `merge_style` itself, one level down.
+        merged_ex = dict(base.get("extrusion") or {})
+        fresh_ex = {k: v for k, v in fresh["extrusion"].items() if v is not None}
+        # …but a change of height SOURCE still has to clear the other one, or a layer switched from
+        # a column to a fixed height keeps the column, and `extrusion_paint` prefers the column.
+        if fresh_ex.get("field"):
+            merged_ex.pop("height", None)
+        elif "height" in fresh_ex:
+            merged_ex.pop("field", None)
+            merged_ex.pop("scale", None)
+        merged_ex.update(fresh_ex)
+        fresh = dict(fresh, extrusion=merged_ex)
     base.update(fresh)
     return base
 
@@ -468,11 +842,31 @@ def apply(qgis_layer, style: dict, row: dict | None = None) -> bool:
     if not QGIS or not style:
         return False
     try:
-        from qgis.core import QgsVectorTileLayer
+        from qgis.core import QgsRasterLayer, QgsVectorTileLayer
         is_tiles = isinstance(qgis_layer, QgsVectorTileLayer)
+        is_raster = isinstance(qgis_layer, QgsRasterLayer)
     except ImportError:                 # pragma: no cover - older QGIS has no vector tiles
-        is_tiles = False
+        is_tiles, is_raster = False, False
+    if is_raster:
+        # A RASTER IS A THIRD RENDERER, not a variant of the vector one. It arrives here because the
+        # caller should not have to know: the same "add this layer with its styling" call covers a
+        # GeoTIFF, a feature layer and a tile pyramid, and every time that decision was left to a
+        # caller one of them was forgotten. Server-rendered raster TILES have nothing to style — QGIS
+        # holds them as colour — and `raster_to_qgis` declines them rather than pretending.
+        return raster_to_qgis(qgis_layer, style)
     if is_tiles:
+        # 3D CANNOT BE DRAWN ON TILES, and silence about that is how it reads as broken: the layer
+        # arrives with the right colours, QGIS's 3D view shows it flat, and nothing anywhere says
+        # why. A `QgsVectorLayer3DRenderer` needs a FEATURE layer — the extrusion is not lost (it
+        # is still stored, and a push from here will not remove it), it simply has no renderer to
+        # live on until the layer is opened from its data.
+        if is_extruded(style):
+            _log("{0} is drawn from vector tiles, which QGIS cannot extrude — the 3D view will "
+                 "show it flat. Open it from its DATA to see and edit the 3D: pick “Editable — "
+                 "each layer from its data” in Source before opening the portal, or select the "
+                 "layer and use “Restyle this layer…”. Its 3D styling is unchanged either way."
+                 .format(qgis_layer.name() if hasattr(qgis_layer, "name") else "This layer"),
+                 level="info")
         source_layer = qgis_layer.customProperty(P_SOURCE_LAYER) or None
         return apply_to_vector_tiles(qgis_layer, row or {}, source_layer, style)
     return apply_to_qgis(qgis_layer, style)
@@ -487,6 +881,12 @@ def apply_to_qgis(qgis_layer, style: dict) -> bool:
         return False
     from geodeploy import parse_style
     model = parse_style(style)
+
+    # 3D FIRST, and separately: it is a second renderer hung beside the 2D one, not a variant of it,
+    # so a layer that is both extruded and graduated needs both set. Doing it here rather than in
+    # every caller is the same reasoning as `apply` dispatching on layer type — every path that
+    # styles a feature layer gets it without having to remember.
+    apply_3d(qgis_layer, style)
 
     try:
         if model.mode == "graduated" and model.field and model.classes:
@@ -534,6 +934,863 @@ def apply_to_qgis(qgis_layer, style: dict) -> bool:
     _log("The saved style produced no renderer (mode={0!r}, field={1!r}).".format(
         model.mode, model.field))
     return False
+
+
+#: How many colour stops a continuous ramp is written with. Enough that an interpolated shader is
+#: visually smooth, few enough that the list stays readable in QGIS's own dialog.
+_RAMP_STOPS = 32
+
+#: GeoDeploy/TiTiler colormap names → the ramp QGIS ships under a different spelling. The two
+#: catalogues are both matplotlib + ColorBrewer underneath, so most names match once case is
+#: ignored; these are the ones that genuinely differ.
+_COLORMAP_ALIASES = {
+    "gray": "Greys", "grey": "Greys",
+    "rdylgn": "RdYlGn", "rdylbu": "RdYlBu", "rdbu": "RdBu", "rdgy": "RdGy",
+    "brbg": "BrBG", "piyg": "PiYG", "prgn": "PRGn", "puor": "PuOr",
+    "ylgn": "YlGn", "ylgnbu": "YlGnBu", "ylorbr": "YlOrBr", "ylorrd": "YlOrRd",
+    "bugn": "BuGn", "bupu": "BuPu", "gnbu": "GnBu", "orrd": "OrRd",
+    "pubu": "PuBu", "pubugn": "PuBuGn", "purd": "PuRd",
+}
+
+#: Ramps GeoDeploy has and QGIS does not ship at all, as `(position, #rrggbb)` stops. `terrain` is
+#: matplotlib's, which is where TiTiler's comes from — so a DEM styled `terrain` in the portal opens
+#: in QGIS as the same colours rather than falling back to grey.
+_BUILTIN_RAMPS = {
+    "terrain": [(0.00, "#333399"), (0.15, "#0099ff"), (0.25, "#00cc66"),
+                (0.50, "#ffff99"), (0.75, "#805c54"), (1.00, "#ffffff")],
+}
+
+
+def _qcolor(value):
+    """A QColor from `#rgb`, `#rrggbb` or `#rrggbbaa`. None when it is not a colour.
+
+    Qt CANNOT be handed the 8-digit form directly: `QColor("#rrggbbaa")` reads eight hex digits as
+    **#AARRGGBB**, so a half-transparent red arrives as an opaque near-black — and GeoDeploy writes
+    alpha LAST (see `services/titiler._rgba`). The channels are therefore split here rather than
+    left to a constructor whose convention is the opposite of ours.
+    """
+    if not QGIS or not isinstance(value, str):
+        return None
+    text = value.strip().lstrip("#")
+    if len(text) == 3:
+        text = "".join(c * 2 for c in text)
+    if len(text) not in (6, 8):
+        return None
+    try:
+        parts = [int(text[i:i + 2], 16) for i in range(0, len(text), 2)]
+    except ValueError:
+        return None
+    return QColor(parts[0], parts[1], parts[2], parts[3] if len(parts) == 4 else 255)
+
+
+def _rescale_pair(style: dict):
+    """`(min, max)` floats for the stretch, or `(None, None)`."""
+    text = _rescale_text((style or {}).get("rescale"))
+    if not text:
+        return (None, None)
+    lo, hi = text.split(",")
+    return (float(lo), float(hi))
+
+
+def _bands_of(style: dict) -> list:
+    return [int(b) for b in ((style or {}).get("bidx") or [])
+            if isinstance(b, (int, float)) and int(b) > 0]
+
+
+def _colormap_of(style: dict):
+    """`(name, reverse)` for a style's colormap, with matplotlib's `_r` suffix unpacked.
+
+    GeoDeploy stores the palette a person chose and its direction as two separate facts — that is
+    what keeps "Viridis" recognisable in the UI after somebody flips it. A name that arrived with
+    the suffix already on it (from an import, or from a hand-written style) is normalised to the
+    same two facts here, so nothing downstream has to look for the suffix a second time.
+    """
+    name = ((style or {}).get("colormap") or "").strip()
+    reverse = bool((style or {}).get("colormap_reverse"))
+    if name.lower().endswith("_r"):
+        name, reverse = name[:-2], not reverse
+    return (name, reverse)
+
+
+def _ramp_for(name: str):
+    """`(ramp, stops)` for a GeoDeploy colormap name — the QGIS ramp and the colours it produces.
+
+    Looked up in QGIS's own style library first, so a user who then opens the ramp dialog sees the
+    palette they know by name rather than an anonymous gradient. `stops` is always the FORWARD
+    colours, whatever direction the style asks for: it is the evidence for the name, and a reversed
+    ramp has to be recognisable as the same palette running backwards rather than as a different
+    one — that is what lets flipping the ramp in QGIS travel back as `colormap_reverse`.
+    """
+    if not (QGIS and QGIS_RASTER) or not name:
+        return (None, [])
+    wanted = name.strip().lower()
+    ramp = None
+    try:
+        style_db = QgsStyle.defaultStyle()
+        names = list(style_db.colorRampNames() or [])
+        match = _COLORMAP_ALIASES.get(wanted)
+        if match not in names:
+            match = next((n for n in names if n.lower() == wanted), match)
+        if match in names:
+            ramp = style_db.colorRamp(match)
+    except Exception as exc:            # noqa: BLE001 - a style library we cannot read is not fatal
+        _log("Could not read QGIS's colour ramps ({0}); building {1!r} from its own stops."
+             .format(exc, name), level="info")
+    if ramp is None and wanted in _BUILTIN_RAMPS:
+        ramp = _gradient_ramp(_BUILTIN_RAMPS[wanted])
+    if ramp is None:
+        _log("QGIS has no colour ramp called {0!r}, so this raster keeps its stretch and is drawn "
+             "with the default ramp. Its colours in GeoDeploy are unchanged.".format(name))
+        return (None, [])
+    return (ramp, _ramp_colors(ramp))
+
+
+def _gradient_ramp(stops):
+    """A `QgsGradientColorRamp` from `[(position, "#rrggbb")]`."""
+    colors = [(pos, _qcolor(hexcode)) for pos, hexcode in stops]
+    colors = [(pos, c) for pos, c in colors if c is not None]
+    if len(colors) < 2:
+        return None
+    ramp = QgsGradientColorRamp(colors[0][1], colors[-1][1])
+    middle = [QgsGradientStop(pos, c) for pos, c in colors[1:-1]]
+    if middle:
+        ramp.setStops(middle)
+    return ramp
+
+
+def _ramp_colors(ramp) -> list:
+    """The ramp sampled at `_RAMP_STOPS` even positions, as `#rrggbb` strings."""
+    out = []
+    for i in range(_RAMP_STOPS):
+        try:
+            colour = ramp.color(i / float(_RAMP_STOPS - 1))
+        except Exception:               # noqa: BLE001 - an unsamplable ramp has no signature
+            return []
+        out.append(colour.name().lower())
+    return out
+
+
+def raster_to_qgis(qgis_layer, style: dict) -> bool:
+    """Render a RASTER the way GeoDeploy renders it. True when a renderer was set.
+
+    THE MISSING HALF. `raster_from_qgis` has read QGIS raster renderers for a while, but nothing
+    wrote them, so the only way to restyle a raster was to open the GeoTIFF — which arrived in
+    QGIS's own grey default, with GeoDeploy's colours nowhere in it. "Prefer the real data" was
+    therefore a TRADE: values or appearance, never both, and restyling meant starting over. With
+    this, the COG opens looking like the portal AND with its real bands, which is the only version
+    of the round trip that is worth calling one.
+
+    The renderer is chosen in the same ORDER `services/titiler.get_tile_url` chooses one, because
+    the two have to agree about which key wins when a style carries several: hillshade first, then
+    an explicit colour-per-value, then an RGB composite, then a named ramp, then a plain stretch.
+    Disagreeing here would mean QGIS showing a colormap the portal ignores.
+    """
+    if not (QGIS and QGIS_RASTER) or not style or qgis_layer is None:
+        return False
+    provider = qgis_layer.dataProvider() if hasattr(qgis_layer, "dataProvider") else None
+    if provider is None:
+        return False
+    # SERVER-RENDERED TILES ARE ALREADY COLOURED, and colouring them again is worse than doing
+    # nothing: WMTS/XYZ tiles reach QGIS as RGBA, so a band renderer laid over them would draw the
+    # red channel of a finished picture through a colour ramp. The GDAL provider is the one holding
+    # real values, and that is the only one there is anything to style.
+    try:
+        if (qgis_layer.providerType() or "").lower() != "gdal":
+            return False
+    except Exception:                   # noqa: BLE001 - a layer that cannot say is left alone
+        return False
+    bands = _bands_of(style)
+    band = bands[0] if bands else 1
+    lo, hi = _rescale_pair(style)
+    colormap, reverse = _colormap_of(style)
+    try:
+        renderer, colormap_sig = None, None
+        if (style.get("algorithm") or "").strip() == "hillshade":
+            # Azimuth and altitude are GeoDeploy's fixed 315/45 — `raster_from_qgis` says so on the
+            # way out, and writing anything else here would make a pushed hillshade drift on every
+            # round trip.
+            renderer = QgsHillshadeRenderer(provider, band, 315.0, 45.0)
+            try:
+                z = float(style.get("zfactor") or 1.0)
+                if _finite(z) and z > 0:
+                    renderer.setZFactor(z)
+            except (TypeError, ValueError):
+                pass
+
+        elif style.get("color_classes"):
+            classes = _paletted_classes(style.get("color_classes"), reverse)
+            if classes:
+                renderer = QgsPalettedRasterRenderer(provider, band, classes)
+
+        elif len(bands) == 3:
+            renderer = QgsMultiBandColorRenderer(provider, bands[0], bands[1], bands[2])
+            if lo is not None:
+                for setter in ("setRedContrastEnhancement", "setGreenContrastEnhancement",
+                               "setBlueContrastEnhancement"):
+                    # A FRESH ENHANCEMENT PER BAND. QGIS takes ownership of the object it is given,
+                    # so handing the same one to all three is a double-free waiting to happen.
+                    getattr(renderer, setter)(_enhancement(provider, bands[0], lo, hi))
+
+        elif colormap:
+            ramp, colormap_sig = _ramp_for(colormap)
+            if ramp is not None:
+                low, high = (lo, hi) if lo is not None else _default_range(qgis_layer, band)
+                renderer = _pseudocolor(provider, band, ramp, low, high, reverse)
+
+        if renderer is None and (lo is not None or bands):
+            # NO COLOURING TO APPLY, BUT A STRETCH WORTH KEEPING. Non-8-bit data drawn against
+            # QGIS's guess is the difference between a visible raster and a black rectangle, and the
+            # band choice is the difference between the layer's data and some other band of it.
+            renderer = QgsSingleBandGrayRenderer(provider, band)
+            if lo is not None:
+                renderer.setContrastEnhancement(_enhancement(provider, band, lo, hi))
+        if renderer is None:
+            return False
+
+        qgis_layer.setRenderer(renderer)
+        # Recorded AFTER the renderer is in place: the name is only meaningful next to the colours
+        # it produced, so the two are written together or not at all.
+        _record_colormap(qgis_layer, colormap if colormap_sig else None, colormap_sig)
+        # And the server-side algorithm QGIS could not build a renderer for — see `P_RASTER_ALGO`.
+        # Hillshade is excluded because it DID become a renderer and reads back on its own.
+        untranslatable = {k: style[k] for k in _ALGORITHM_KEYS
+                          if style.get(k) is not None and algorithm_of(style) != "hillshade"}
+        _record_algorithm(qgis_layer, untranslatable if algorithm_of(style) not in ("", "hillshade")
+                          else None, _algorithm_signature(renderer))
+        qgis_layer.triggerRepaint()
+        return True
+    except Exception as exc:            # noqa: BLE001 - a style must never stop a layer loading
+        _log("Could not apply the saved raster style: {0}: {1}".format(type(exc).__name__, exc))
+        return False
+
+
+def _paletted_classes(color_classes, reverse: bool = False):
+    """`[QgsPalettedRasterRenderer.Class]` from GeoDeploy's colour-per-value list.
+
+    Reversal re-pairs the COLOURS with the values in the opposite order, exactly as
+    `services/titiler._explicit_colormap` does — the values keep their places and the palette runs
+    the other way. Doing it differently here would draw a classified raster in QGIS with class 3's
+    colour on class 7.
+    """
+    entries = [c for c in (color_classes or []) if isinstance(c, dict)]
+    colours = [c.get("color") for c in entries]
+    if reverse:
+        colours = colours[::-1]
+    classes = []
+    for entry, colour in zip(entries, colours):
+        qcolor = _qcolor(colour)
+        try:
+            value = int(entry.get("value"))
+        except (TypeError, ValueError):
+            continue
+        if qcolor is None:
+            continue
+        classes.append(QgsPalettedRasterRenderer.Class(
+            value, qcolor, str(entry.get("label") or value)))
+    return classes
+
+
+def _enhancement(provider, band, lo, hi):
+    """A min/max stretch QGIS will apply to `band`."""
+    enhancement = QgsContrastEnhancement(provider.dataType(band))
+    enhancement.setContrastEnhancementAlgorithm(
+        QgsContrastEnhancement.StretchToMinimumMaximum, True)
+    enhancement.setMinimumValue(lo)
+    enhancement.setMaximumValue(hi)
+    return enhancement
+
+
+def _pseudocolor(provider, band, ramp, lo, hi, reverse: bool):
+    """A single-band pseudocolour renderer over `ramp`, stretched to `lo`–`hi`.
+
+    The colour items are written out here rather than left to `classifyColorRamp`, whose argument
+    list has changed across QGIS versions — and because the items ARE the round trip: they are what
+    `raster_from_qgis` reads back to recognise the ramp.
+    """
+    if lo is None or hi is None:
+        lo, hi = 0.0, 1.0               # the caller resolves the real range; see `_default_range`
+    # THE RAMP IS NOT HANDED TO THE SHADER'S CONSTRUCTOR, deliberately. `QgsColorRampShader` takes
+    # OWNERSHIP of a ramp given that way, and `setSourceColorRamp` below deletes whatever it is
+    # already holding — so passing the same object to both would leave this function sampling a ramp
+    # C++ had just freed. It is sampled here, and the shader is given a clone of its own.
+    shader_fn = QgsColorRampShader(lo, hi)
+    for setter, value in (("setColorRampType", QgsColorRampShader.Interpolated),
+                          ("setClassificationMode", QgsColorRampShader.Continuous)):
+        if hasattr(shader_fn, setter):
+            getattr(shader_fn, setter)(value)
+    span = (hi - lo) or 1.0
+    items = []
+    for i in range(_RAMP_STOPS):
+        fraction = i / float(_RAMP_STOPS - 1)
+        colour = ramp.color(1.0 - fraction if reverse else fraction)
+        value = lo + fraction * span
+        items.append(QgsColorRampShader.ColorRampItem(value, colour, _trim(value)))
+    shader_fn.setColorRampItemList(items)
+    # The SOURCE ramp as well as the items, so QGIS's dialog offers the palette itself — a user who
+    # opens Symbology sees "Viridis" and can re-classify from it, not a list of frozen stops.
+    if hasattr(shader_fn, "setSourceColorRamp"):
+        try:
+            source = ramp.clone() if hasattr(ramp, "clone") else ramp
+            if reverse and hasattr(source, "invert"):
+                source.invert()
+            shader_fn.setSourceColorRamp(source)
+        except Exception:               # noqa: BLE001 - the items already carry the colours
+            pass
+    shader = QgsRasterShader()
+    shader.setRasterShaderFunction(shader_fn)
+    renderer = QgsSingleBandPseudoColorRenderer(provider, band, shader)
+    for setter, value in (("setClassificationMin", lo), ("setClassificationMax", hi)):
+        if hasattr(renderer, setter):
+            getattr(renderer, setter)(value)
+    return renderer
+
+
+def _default_range(qgis_layer, band):
+    """`(min, max)` for a colormap whose style carries no stretch — WITHOUT reading the raster.
+
+    A colormap needs a range to spread itself over, and the obvious way to get one is to ask the
+    provider for band statistics. That is also the one thing in this file that could make adding a
+    layer SLOW: statistics on a remote COG mean range requests over the network, and on a large one
+    they are not quick — a styling nicety would have become a stall on every add.
+
+    QGIS has already done the work. Opening a raster builds a default renderer with a contrast
+    enhancement over its own sampled range, so the answer is sitting on the layer, free. Only if
+    that is somehow absent is the provider asked, and then over a bounded SAMPLE rather than the
+    whole raster.
+    """
+    existing = qgis_layer.renderer() if hasattr(qgis_layer, "renderer") else None
+    if existing is not None:
+        getter = getattr(existing, "contrastEnhancement", None)
+        if callable(getter):
+            lo, hi = _enhancement_range(getter())
+            if lo is not None:
+                return (float(lo), float(hi))
+        lo = getattr(existing, "classificationMin", None)
+        hi = getattr(existing, "classificationMax", None)
+        if callable(lo) and callable(hi):
+            lo, hi = lo(), hi()
+            if _finite(lo) and _finite(hi) and hi > lo:
+                return (float(lo), float(hi))
+    try:
+        provider = qgis_layer.dataProvider()
+        # SAMPLED, not exhaustive: 250k pixels is what QGIS's own renderer uses to decide a stretch,
+        # and it is bounded whatever the raster's size.
+        from qgis.core import QgsRasterBandStats, QgsRectangle
+        stats = provider.bandStatistics(band, QgsRasterBandStats.Min | QgsRasterBandStats.Max,
+                                        QgsRectangle(), 250000)
+        if _finite(stats.minimumValue) and stats.maximumValue > stats.minimumValue:
+            return (float(stats.minimumValue), float(stats.maximumValue))
+    except Exception:                   # noqa: BLE001 - a range we cannot find is not an error
+        pass
+    return (0.0, 1.0)
+
+
+def algorithm_of(style) -> str:
+    """A style's server-side algorithm, lower-cased. `""` when it has none."""
+    return ((style or {}).get("algorithm") or "").strip().lower()
+
+
+def _algorithm_signature(renderer) -> str:
+    """What QGIS was given for a style it could not really draw — the renderer type and its band."""
+    if renderer is None:
+        return ""
+    band = None
+    for getter in ("band", "grayBand"):
+        fn = getattr(renderer, getter, None)
+        if callable(fn):
+            try:
+                band = fn()
+                break
+            except Exception:           # noqa: BLE001 - try the other spelling
+                continue
+    return "{0}:{1}".format(type(renderer).__name__, band)
+
+
+def _record_algorithm(qgis_layer, keys, signature) -> None:
+    """Remember a server-side algorithm QGIS has no renderer for — see `P_RASTER_ALGO`."""
+    if not hasattr(qgis_layer, "setCustomProperty"):
+        return
+    try:
+        import json
+        if keys:
+            qgis_layer.setCustomProperty(P_RASTER_ALGO, json.dumps(keys, sort_keys=True, default=str))
+            qgis_layer.setCustomProperty(P_RASTER_ALGO_SIG, signature or "")
+        else:
+            qgis_layer.setCustomProperty(P_RASTER_ALGO, "")
+            qgis_layer.setCustomProperty(P_RASTER_ALGO_SIG, "")
+    except Exception:                   # noqa: BLE001 - a note we cannot store is not an error
+        pass
+
+
+def _recorded_algorithm(qgis_layer, renderer) -> dict:
+    """The recorded algorithm keys, if QGIS is still showing what it was given. `{}` otherwise."""
+    if not hasattr(qgis_layer, "customProperty"):
+        return {}
+    try:
+        import json
+        recorded = qgis_layer.customProperty(P_RASTER_ALGO) or ""
+        signature = qgis_layer.customProperty(P_RASTER_ALGO_SIG) or ""
+        if not recorded:
+            return {}
+        if _algorithm_signature(renderer) != signature:
+            # The user built a real renderer over it — a palette, a classification. That REPLACES
+            # the algorithm, and saying so is the point of comparing rather than always restoring.
+            _log("This raster's {0} styling was replaced by the renderer you chose in QGIS, so it "
+                 "will no longer be drawn that way.".format(
+                     json.loads(recorded).get("algorithm", "server-side")), level="info")
+            return {}
+        keys = json.loads(recorded)
+        return keys if isinstance(keys, dict) else {}
+    except Exception:                   # noqa: BLE001 - an unreadable note is simply absent
+        return {}
+
+
+def _record_colormap(qgis_layer, name, stops) -> None:
+    """Remember which named colormap produced the current colours — see `P_COLORMAP`."""
+    if not hasattr(qgis_layer, "setCustomProperty"):
+        return
+    try:
+        if name and stops:
+            qgis_layer.setCustomProperty(P_COLORMAP, str(name))
+            qgis_layer.setCustomProperty(P_COLORMAP_SIG, ",".join(stops))
+        else:
+            # A renderer that is not a named ramp must not leave a stale name behind for the reader
+            # to believe.
+            qgis_layer.setCustomProperty(P_COLORMAP, "")
+            qgis_layer.setCustomProperty(P_COLORMAP_SIG, "")
+    except Exception:                   # noqa: BLE001 - a note we cannot store is not an error
+        pass
+
+
+# ── 3D: extrusion, both directions ───────────────────────────────────────────────────────────────
+#
+# GeoDeploy draws 3D as MapLibre `fill-extrusion`, from one style key:
+#
+#     extrusion {enabled, field, height, scale, base, color, opacity, radius}
+#
+# `field` × `scale` is the height when a column drives it, `height` when a number does. `base` is a
+# number or another field. `radius` is METRES and applies to POINTS only: a point has no area, so
+# `services/pillars` buffers it into a footprint server-side and the tiles that reach a viewer hold
+# POLYGONS. That is why a 3D point layer's tiles say "polygon" while its source says "point".
+#
+# QGIS models the same thing as a 3D RENDERER hung beside the 2D one — `QgsPolygon3DSymbol` with an
+# extrusion height, or `QgsPoint3DSymbol` shaped as a cylinder — which is why 3D needs a FEATURE
+# layer: a vector-tile layer has no such renderer to read, and that is the honest reason the restyle
+# path exists.
+#
+# UNITS ARE NOT CONVERTED, deliberately. GeoDeploy's heights and radii are metres; QGIS 3D measures
+# in the project's map units. Those agree exactly in a projected CRS in metres and do not in a
+# geographic one — and converting would need the project CRS, would be lossy in both directions, and
+# would mean the number a user typed is not the number that comes back. So the number travels
+# unchanged and the mismatch is stated rather than papered over.
+
+#: The 3D classes are not in one module across versions — `qgis._3d` for most of 3.x, with parts
+#: migrating to `qgis.core`. Probed rather than imported, so a QGIS that keeps them elsewhere loses
+#: 3D and nothing else.
+_3D_MODULES = ("qgis._3d", "qgis.core")
+_3D_CACHE: dict = {}
+
+
+def _qgis3d(name):
+    """A 3D class by name, from wherever this QGIS keeps it. None when it has none."""
+    if name in _3D_CACHE:
+        return _3D_CACHE[name]
+    found = None
+    for module in _3D_MODULES:
+        try:
+            import importlib
+            found = getattr(importlib.import_module(module), name, None)
+        except ImportError:             # pragma: no cover - a QGIS built without 3D
+            found = None
+        if found is not None:
+            break
+    _3D_CACHE[name] = found
+    return found
+
+
+def _3d_enum(class_name, *candidates):
+    """An enum member spelled any of `candidates`, on the class or on its nested `Property`/`Shape`.
+
+    QGIS moved these twice: `QgsAbstract3DSymbol.PropertyExtrusionHeight` became
+    `QgsAbstract3DSymbol.Property.ExtrusionHeight`, and `QgsPoint3DSymbol.Cylinder` became
+    `Qgis.Point3DShape.Cylinder`. Both spellings are asked for rather than one being assumed,
+    because guessing wrong here does not fail loudly — it silently applies no 3D at all.
+    """
+    holders = [_qgis3d(class_name)]
+    holders += [getattr(holders[0], attr, None) for attr in ("Property", "Shape")
+                if holders[0] is not None]
+    for holder in holders:
+        if holder is None:
+            continue
+        for candidate in candidates:
+            value = getattr(holder, candidate, None)
+            if value is not None:
+                return value
+    return None
+
+
+#: Where a layer remembers the extrusion it was GIVEN, and what that looked like once QGIS held it.
+#: Same device as `P_COLORMAP`, for the same reason: QGIS cannot express every GeoDeploy extrusion —
+#: a point's height driven by a column has no equivalent in a cylinder's fixed length — so reading
+#: the symbol back would report a fixed height and the merge would then DELETE the column. The
+#: recorded spec is returned unchanged while the symbol still matches it, and only a real edit in
+#: QGIS is read as one.
+P_EXTRUSION = "geodeploy/extrusion"
+P_EXTRUSION_SIG = "geodeploy/extrusion_sig"
+
+#: `"field" * 2.5` — the height expression written for a column-driven extrusion, read back.
+_HEIGHT_EXPRESSION = re.compile(
+    r'^\s*"(?P<field>[^"]+)"\s*(?:\*\s*(?P<scale>-?[\d.eE+]+)\s*)?$')
+
+
+def _extrusion_of(style: dict) -> dict:
+    """The extrusion block of a style, as a dict. Empty when there is none."""
+    ex = (style or {}).get("extrusion")
+    return dict(ex) if isinstance(ex, dict) else {}
+
+
+def is_extruded(style: dict) -> bool:
+    """Whether this style asks for 3D — the same test `services/symbology.is_extruded` makes.
+
+    Enabled ALONE is not enough: a layer with the box ticked and no height set draws flat, and
+    treating it as 3D here would put a zero-height symbol on a layer the map draws in 2D.
+    """
+    ex = _extrusion_of(style)
+    return bool(ex.get("enabled")) and bool(ex.get("field") or ex.get("height"))
+
+
+def _height_expression(ex: dict):
+    """`("field" * scale)` for a column-driven height, or None."""
+    field = str(ex.get("field") or "").strip()
+    if not field:
+        return None
+    scale = _number(ex.get("scale"), 1.0) or 1.0
+    return '"{0}"'.format(field) if scale == 1.0 else '"{0}" * {1:g}'.format(field, scale)
+
+
+def _set_data_defined(symbol, key, expression) -> bool:
+    """Drive one 3D symbol property from an expression. False when this QGIS cannot."""
+    if key is None:
+        return False
+    try:
+        from qgis.core import QgsProperty
+        properties = symbol.dataDefinedProperties()
+        properties.setProperty(key, QgsProperty.fromExpression(expression))
+        symbol.setDataDefinedProperties(properties)
+        return True
+    except Exception:                   # noqa: BLE001 - 3D is a bonus, never a blocker
+        return False
+
+
+def _data_defined_expression(symbol, key):
+    """The expression driving a 3D symbol property, or None."""
+    if key is None:
+        return None
+    try:
+        prop = symbol.dataDefinedProperties().property(key)
+        if prop is None or not prop.isActive():
+            return None
+        return prop.expressionString() or None
+    except Exception:                   # noqa: BLE001 - a property we cannot read is absent
+        return None
+
+
+def _set_material(symbol, colour: str) -> None:
+    """Colour a 3D symbol. QGIS renamed the setter, so both names are tried."""
+    settings_cls = _qgis3d("QgsPhongMaterialSettings")
+    qcolor = _qcolor(colour)
+    if settings_cls is None or qcolor is None:
+        return
+    try:
+        material = settings_cls()
+        material.setDiffuse(qcolor)
+        # An unlit 3D volume reads as a silhouette; QGIS's own default ambient is nearly black, so
+        # a dark ambient under a bright diffuse turns every extrusion into a shadow of itself.
+        if hasattr(material, "setAmbient"):
+            material.setAmbient(QColor(int(qcolor.red() * 0.35), int(qcolor.green() * 0.35),
+                                       int(qcolor.blue() * 0.35)))
+        for setter in ("setMaterialSettings", "setMaterial"):
+            fn = getattr(symbol, setter, None)
+            if callable(fn):
+                fn(material)
+                return
+    except Exception:                   # noqa: BLE001 - a colour is not worth losing the 3D over
+        pass
+
+
+def _material_color(symbol):
+    """A 3D symbol's diffuse colour as `#rrggbb`, or None."""
+    for getter in ("materialSettings", "material"):
+        fn = getattr(symbol, getter, None)
+        if not callable(fn):
+            continue
+        try:
+            material = fn()
+            diffuse = material.diffuse() if hasattr(material, "diffuse") else None
+            if diffuse is not None:
+                return diffuse.name().lower()
+        except Exception:               # noqa: BLE001 - try the other spelling
+            continue
+    return None
+
+
+def apply_3d(qgis_layer, style: dict, geometry: str | None = None) -> bool:
+    """Give a FEATURE layer the 3D symbol its GeoDeploy style describes. True when one was set.
+
+    Called from `apply_to_qgis`, so every path that styles a feature layer gets 3D without having
+    to remember to ask — the same reasoning as `apply` dispatching on layer type.
+
+    A style with no extrusion CLEARS any 3D renderer this plugin set, rather than leaving one
+    standing: turning 3D off in GeoDeploy and reopening the layer has to actually turn it off, or
+    the two disagree and the next push argues about which is right.
+    """
+    if not QGIS or qgis_layer is None:
+        return False
+    setter = getattr(qgis_layer, "setRenderer3D", None)
+    if not callable(setter):
+        return False
+    ex = _extrusion_of(style)
+    if not is_extruded(style):
+        try:
+            if qgis_layer.customProperty(P_EXTRUSION):
+                setter(None)            # ours to clear; a renderer we never set is left alone
+            _record_extrusion(qgis_layer, None, None)
+        except Exception:               # noqa: BLE001 - never fail a style over the 3D it lacks
+            pass
+        return False
+
+    renderer_cls = _qgis3d("QgsVectorLayer3DRenderer")
+    if renderer_cls is None:
+        _log("This QGIS has no 3D support, so the layer's extrusion was not applied — it is still "
+             "stored, and pushing from here will not remove it.", level="info")
+        return False
+
+    kind = (geometry or _geometry_name(qgis_layer) or "polygon").lower()
+    symbol = _point_3d(ex, style) if kind.startswith("point") else _polygon_3d(ex, style)
+    if symbol is None:
+        return False
+    try:
+        qgis_layer.setRenderer3D(renderer_cls(symbol))
+    except Exception as exc:            # noqa: BLE001 - 3D must never stop a layer loading
+        _log("Could not apply the 3D extrusion: {0}: {1}".format(type(exc).__name__, exc))
+        return False
+    # Recorded together: the spec asked for, and what QGIS actually ended up holding.
+    _record_extrusion(qgis_layer, ex, _read_3d_symbol(symbol, kind))
+    return True
+
+
+def _polygon_3d(ex: dict, style: dict):
+    """A `QgsPolygon3DSymbol` for an extruded polygon layer."""
+    cls = _qgis3d("QgsPolygon3DSymbol")
+    if cls is None:
+        return None
+    symbol = cls()
+    # The fixed height either way: it is what the layer draws at when no column drives it, and the
+    # fallback QGIS falls back TO when a data-defined expression cannot be evaluated for a feature.
+    symbol.setExtrusionHeight(_number(ex.get("height"), 0.0))
+    expression = _height_expression(ex)
+    if expression and not _set_data_defined(symbol, _3d_property_key("extrusion"), expression):
+        # DATA-DEFINED IS WHAT MAKES IT THE SAME MAP: MapLibre reads the column per feature, and one
+        # averaged height would draw a city of identical blocks.
+        _log("This QGIS cannot drive an extrusion height from a field, so {0!r} was drawn at a flat "
+             "height. The field is still stored, and still drawn in GeoDeploy."
+             .format(ex.get("field")))
+    base = ex.get("base")
+    if isinstance(base, str) and base.strip():
+        _set_data_defined(symbol, _3d_property_key("height"),
+                          _height_expression({"field": base, "scale": ex.get("scale")}))
+    elif hasattr(symbol, "setHeight"):
+        symbol.setHeight(_number(base, 0.0))
+    _set_material(symbol, ex.get("color") or style.get("color") or DEFAULT_COLOR)
+    return symbol
+
+
+def _point_3d(ex: dict, style: dict):
+    """A `QgsPoint3DSymbol` — a cylinder, matching the pillars the tile server generates.
+
+    A CYLINDER because that is what `services/pillars` builds: the point is buffered into a round
+    footprint and extruded, so a box here would be a different map. `radius` is the footprint the
+    style names, in metres, and `length` the height.
+    """
+    cls = _qgis3d("QgsPoint3DSymbol")
+    if cls is None:
+        return None
+    symbol = cls()
+    shape = _3d_enum("QgsPoint3DSymbol", "Cylinder") or _3d_enum("Qgis", "Point3DShape")
+    if shape is None:
+        shape = _3d_enum("Qgis", "Cylinder")
+    try:
+        if shape is not None and hasattr(symbol, "setShape"):
+            symbol.setShape(shape)
+    except Exception:                   # noqa: BLE001 - the default shape still draws something
+        pass
+    height = _number(ex.get("height"), 0.0)
+    expression = _height_expression(ex)
+    if expression:
+        # A cylinder's LENGTH is a shape property, not a data-defined one in most QGIS builds, so a
+        # column-driven pillar cannot be drawn per-feature here. It is attempted anyway (newer
+        # builds accept it) and the recorded spec is what travels back, so the column is never lost
+        # to this limitation — see `P_EXTRUSION`.
+        _set_data_defined(symbol, _3d_property_key("extrusion"), expression)
+    if hasattr(symbol, "setShapeProperties"):
+        try:
+            symbol.setShapeProperties({"shape": "Cylinder",
+                                       "radius": _number(ex.get("radius"), DEFAULT_PILLAR_RADIUS_M),
+                                       "length": height})
+        except Exception:               # noqa: BLE001 - shape properties differ between builds
+            pass
+    _set_material(symbol, ex.get("color") or style.get("color") or DEFAULT_COLOR)
+    return symbol
+
+
+def _3d_property_key(which: str):
+    if which == "extrusion":
+        return _3d_enum("QgsAbstract3DSymbol", "ExtrusionHeight", "PropertyExtrusionHeight")
+    return _3d_enum("QgsAbstract3DSymbol", "Height", "PropertyHeight")
+
+
+def _read_3d_symbol(symbol, kind: str) -> dict:
+    """What a 3D symbol is CURRENTLY drawing, as GeoDeploy extrusion keys.
+
+    One function, used twice: to record what QGIS ended up holding when a style was applied, and to
+    read it again later. Using the same reader for both is what makes the comparison meaningful — a
+    separate "signature" routine would eventually disagree with the reader and every layer would
+    look edited.
+    """
+    out: dict = {}
+    if symbol is None:
+        return out
+    expression = _data_defined_expression(symbol, _3d_property_key("extrusion"))
+    match = _HEIGHT_EXPRESSION.match(expression or "")
+    if match:
+        out["field"] = match.group("field")
+        scale = _number(match.group("scale"), 1.0)
+        if scale != 1.0:
+            out["scale"] = round(scale, 6)
+    if kind.startswith("point"):
+        properties = {}
+        getter = getattr(symbol, "shapeProperties", None)
+        if callable(getter):
+            try:
+                properties = dict(getter() or {})
+            except Exception:           # noqa: BLE001 - unreadable shape properties are absent
+                properties = {}
+        height = _number(properties.get("length"), None)
+        radius = _number(properties.get("radius"), None)
+        if height is not None:
+            out["height"] = round(height, 6)
+        if radius is not None:
+            out["radius"] = round(radius, 6)
+    else:
+        height = _number(getattr(symbol, "extrusionHeight", lambda: None)(), None)
+        if height is not None:
+            out["height"] = round(height, 6)
+        base_expression = _data_defined_expression(symbol, _3d_property_key("height"))
+        base_match = _HEIGHT_EXPRESSION.match(base_expression or "")
+        if base_match:
+            out["base"] = base_match.group("field")
+        else:
+            base = _number(getattr(symbol, "height", lambda: None)(), None)
+            if base:
+                out["base"] = round(base, 6)
+    colour = _material_color(symbol)
+    if colour:
+        out["color"] = colour
+    return out
+
+
+def _record_extrusion(qgis_layer, spec, applied) -> None:
+    """Remember the extrusion a layer was given, and how QGIS ended up holding it."""
+    if not hasattr(qgis_layer, "setCustomProperty"):
+        return
+    try:
+        import json
+        if spec:
+            qgis_layer.setCustomProperty(P_EXTRUSION, json.dumps(spec, sort_keys=True, default=str))
+            qgis_layer.setCustomProperty(P_EXTRUSION_SIG,
+                                         json.dumps(applied or {}, sort_keys=True, default=str))
+        else:
+            qgis_layer.setCustomProperty(P_EXTRUSION, "")
+            qgis_layer.setCustomProperty(P_EXTRUSION_SIG, "")
+    except Exception:                   # noqa: BLE001 - a note we cannot store is not an error
+        pass
+
+
+def extrusion_from_qgis(qgis_layer, geometry: str | None = None):
+    """The `extrusion` block for a layer's current 3D renderer, or None when there is nothing to say.
+
+    THREE ANSWERS, AND THE DIFFERENCE MATTERS:
+
+    * **None** — this layer cannot carry the question. A vector-TILE layer has no 3D renderer, and
+      a QGIS without 3D has none either; reporting "no extrusion" for those would DELETE a portal's
+      3D on the next push, which is the same mistake as pushing an empty raster style over a
+      colormap.
+    * **`{"enabled": False}`** — a feature layer whose 3D was switched off in QGIS. That is a real
+      edit and must travel.
+    * **the block** — what it is drawing now, or the spec it was given if that is still what it
+      holds. The recorded spec wins whenever the symbol still matches it, because QGIS cannot
+      express every GeoDeploy extrusion and reading it back would quietly flatten a column-driven
+      point pillar into a fixed height.
+    """
+    if not QGIS or qgis_layer is None:
+        return None
+    getter = getattr(qgis_layer, "renderer3D", None)
+    if not callable(getter):
+        return None                     # not a layer that can hold 3D — say nothing about it
+    try:
+        renderer = getter()
+    except Exception:                   # noqa: BLE001 - a renderer we cannot read is unknown
+        return None
+    symbol = None
+    if renderer is not None:
+        symbol_getter = getattr(renderer, "symbol", None)
+        symbol = symbol_getter() if callable(symbol_getter) else None
+    if symbol is None:
+        # Nothing 3D on the layer. Only worth reporting when this plugin PUT something there — for
+        # any other layer, silence is the truthful answer rather than "the user removed it".
+        try:
+            if qgis_layer.customProperty(P_EXTRUSION):
+                return {"enabled": False}
+        except Exception:               # noqa: BLE001
+            pass
+        return None
+
+    kind = (geometry or _geometry_name(qgis_layer) or "polygon").lower()
+    current = _read_3d_symbol(symbol, kind)
+    try:
+        import json
+        recorded = qgis_layer.customProperty(P_EXTRUSION) or ""
+        signature = qgis_layer.customProperty(P_EXTRUSION_SIG) or ""
+        if recorded and signature and json.dumps(current, sort_keys=True, default=str) == signature:
+            spec = json.loads(recorded)
+            if isinstance(spec, dict):
+                return dict(spec, enabled=True)
+    except Exception:                   # noqa: BLE001 - fall through to what QGIS is showing
+        pass
+    if not current:
+        return None
+    return dict(current, enabled=True)
+
+
+def _geometry_name(qgis_layer):
+    """"point" / "line" / "polygon" for a feature layer, or None.
+
+    A vector-tile layer records its geometry on the layer (`P_GEOMETRY`) because it cannot be asked;
+    a feature layer can be, and `geometryType()` is the enum QGIS answers with.
+    """
+    recorded = None
+    try:
+        recorded = qgis_layer.customProperty(P_GEOMETRY) or None
+    except Exception:                   # noqa: BLE001
+        recorded = None
+    if recorded:
+        return str(recorded).lower()
+    try:
+        from qgis.core import QgsWkbTypes
+        return {QgsWkbTypes.PointGeometry: "point", QgsWkbTypes.LineGeometry: "line",
+                QgsWkbTypes.PolygonGeometry: "polygon"}.get(qgis_layer.geometryType())
+    except Exception:                   # noqa: BLE001 - not a feature layer
+        return None
 
 
 # ── QGIS → GeoDeploy ─────────────────────────────────────────────────────────────────────────────
@@ -698,6 +1955,17 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
         return {}
     if renderer is None:
         return {}
+
+    def with_algorithm(read: dict) -> dict:
+        """`read`, plus any server-side algorithm QGIS has no renderer for — see `P_RASTER_ALGO`.
+
+        Applied to every return path below, because the algorithm is orthogonal to the renderer
+        that was built: a contour layer is drawn here as a plain stretch, and returning only that
+        stretch would let the merge clear `algorithm` and turn the layer grey.
+        """
+        recorded = _recorded_algorithm(qgis_layer, renderer)
+        return dict(read, **recorded) if recorded else read
+
     style = {}
     try:
         if isinstance(renderer, QgsMultiBandColorRenderer):
@@ -709,7 +1977,7 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
             lo, hi = _enhancement_range(renderer.redContrastEnhancement())
             if lo is not None:
                 style["rescale"] = "{0},{1}".format(_trim(lo), _trim(hi))
-            return style
+            return with_algorithm(style)
 
         if isinstance(renderer, QgsSingleBandGrayRenderer):
             band = renderer.grayBand()
@@ -718,7 +1986,7 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
             lo, hi = _enhancement_range(renderer.contrastEnhancement())
             if lo is not None:
                 style["rescale"] = "{0},{1}".format(_trim(lo), _trim(hi))
-            return style
+            return with_algorithm(style)
 
         if isinstance(renderer, QgsSingleBandPseudoColorRenderer):
             band = renderer.band()
@@ -727,6 +1995,16 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
             lo, hi = renderer.classificationMin(), renderer.classificationMax()
             if _finite(lo) and _finite(hi) and hi > lo:
                 style["rescale"] = "{0},{1}".format(_trim(lo), _trim(hi))
+            # THE NAME WE APPLIED FIRST, while the colours on screen still back it up. It is the
+            # instance's own spelling — GeoDeploy calls a grey ramp `gray` where QGIS calls it
+            # `Greys` — so believing it keeps a round trip byte-identical where reading the ramp
+            # object would rename the palette on every pass.
+            recorded, recorded_reverse = _recorded_colormap(qgis_layer, renderer)
+            if recorded:
+                style["colormap"] = recorded
+                if recorded_reverse:
+                    style["colormap_reverse"] = True
+                return with_algorithm(style)
             name, inverted = _ramp_name(renderer)
             if name and colormaps and name in colormaps:
                 style["colormap"] = name
@@ -750,7 +2028,7 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
                     _log("This raster's colour ramp has no name and no per-value stops, so only "
                          "the stretch travelled. GeoDeploy carries either a NAMED palette or a "
                          "colour per value; a custom continuous gradient is neither.")
-            return style
+            return with_algorithm(style)
 
         if isinstance(renderer, QgsHillshadeRenderer):
             # Exactly representable: GeoDeploy asks TiTiler for a hillshade of the same band, and
@@ -774,7 +2052,7 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
                          "standard 315/45, so the shading will differ.".format(az, alt))
             except (TypeError, ValueError, AttributeError):
                 pass
-            return style
+            return with_algorithm(style)
 
         if isinstance(renderer, QgsPalettedRasterRenderer):
             # A colour per pixel VALUE — land cover, soil types, any classification. A named
@@ -797,9 +2075,19 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
                     continue
                 # Alpha travels: "no data" in a classification is usually a transparent class, and
                 # dropping that would paint it over everything underneath.
-                classes.append({"value": value,
-                                "color": "#{0:02x}{1:02x}{2:02x}{3:02x}".format(
-                                    colour.red(), colour.green(), colour.blue(), colour.alpha())})
+                entry = {"value": value,
+                         "color": "#{0:02x}{1:02x}{2:02x}{3:02x}".format(
+                             colour.red(), colour.green(), colour.blue(), colour.alpha())}
+                # AND THE LABEL. "Water" and "Trees" are the whole point of a classification, and
+                # dropping them here meant a push replaced the stored classes with unlabelled ones —
+                # the legend on the layer page and in every portal fell back to bare numbers. QGIS
+                # labels a class with its own value when nothing else is given, so that case is
+                # treated as no label rather than travelling as one.
+                label = getattr(cls, "label", None)
+                label = "" if label is None else str(label).strip()
+                if label and label != str(value):
+                    entry["label"] = label
+                classes.append(entry)
             if len(classes) > MAX_COLOR_CLASSES:
                 # Truncating a classification would silently mis-colour part of the map, so refuse
                 # the colours and keep the band: a grey raster is obviously unstyled, where a
@@ -807,12 +2095,12 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
                 _log("This raster has {0} classes; GeoDeploy carries at most {1} because the "
                      "mapping travels in every tile request. The colours were not sent — the band "
                      "was.".format(len(classes), MAX_COLOR_CLASSES))
-                return style
+                return with_algorithm(style)
             if classes:
                 style["color_classes"] = classes
             else:
                 _log("This paletted raster exposed no readable classes; only its band was sent.")
-            return style
+            return with_algorithm(style)
 
         # Anything else — a renderer from a plugin, or a QGIS class we have not met. The band and the
         # stretch are still worth having even when the colouring cannot travel: the stretch is what
@@ -831,7 +2119,7 @@ def raster_from_qgis(qgis_layer, colormaps=None) -> dict:
         _log("Raster renderer {0} is not translatable{1}.".format(
             type(renderer).__name__,
             " — sent its bands and stretch" if style else ", and exposed no bands or stretch"))
-        return style
+        return with_algorithm(style)
     except Exception as exc:            # noqa: BLE001 - never block an upload over styling
         _log("Could not read this raster's symbology ({0}): {1}: {2}".format(
             type(renderer).__name__, type(exc).__name__, exc))
@@ -923,6 +2211,61 @@ def _ramp_name(renderer):
         return ((name or "").strip().lower() or None, inverted)
     except Exception:                   # noqa: BLE001 - a missing ramp is not an error
         return (None, False)
+
+
+def _shader_signature(renderer) -> list:
+    """The colours a pseudocolour shader is currently drawing, lower-cased `#rrggbb`.
+
+    Deliberately the COLOURS and not the values: a user who restretches a raster in QGIS keeps the
+    same palette, and a palette that stopped being recognised every time somebody moved a slider
+    would be worse than useless.
+    """
+    try:
+        shader = renderer.shader()
+        fn = shader.rasterShaderFunction() if shader else None
+        items = fn.colorRampItemList() if fn and hasattr(fn, "colorRampItemList") else []
+    except Exception:                   # noqa: BLE001 - a shader we cannot read has no signature
+        return []
+    out = []
+    for item in items:
+        colour = getattr(item, "color", None)
+        if colour is None:
+            return []
+        out.append(colour.name().lower())
+    return out
+
+
+def _recorded_colormap(qgis_layer, renderer):
+    """`(name, reverse)` for the colormap this plugin applied, if it is still on screen.
+
+    QGIS keeps a ramp OBJECT, not the name of the palette it came from — see `P_COLORMAP` — so
+    without this a raster styled `viridis` in GeoDeploy came back from QGIS with no colormap at all
+    and the push kept only its stretch. The recorded name is believed exactly as long as the
+    colours still match it, forwards or exactly backwards; anything else means the user chose a
+    different ramp, and the honest answer is then "no name", not the last one we happen to remember.
+    """
+    if not hasattr(qgis_layer, "customProperty"):
+        return (None, False)
+    try:
+        name = str(qgis_layer.customProperty(P_COLORMAP) or "").strip()
+        recorded = [s for s in str(qgis_layer.customProperty(P_COLORMAP_SIG) or "").split(",") if s]
+    except Exception:                   # noqa: BLE001 - an unreadable note is simply absent
+        return (None, False)
+    if not name or not recorded:
+        return (None, False)
+    current = _shader_signature(renderer)
+    if not current:
+        return (None, False)
+    if current == recorded:
+        return (name, False)
+    if current == recorded[::-1]:
+        # The same palette, flipped in QGIS's dialog. That is a real edit and it travels.
+        return (name, True)
+    _log("This raster's colour ramp is no longer the {0!r} it was opened with, and QGIS does not "
+         "record what a gradient is called — so its stretch travelled but its colours did not. "
+         "Pick a ramp GeoDeploy also has, or classify it to send exact colours.".format(name),
+         level="info")
+    return (None, False)
 
 
 #: Filters `apply_to_vector_tiles` writes, read back. `"field" = 'value'` is a category; a pair of
@@ -1099,6 +2442,16 @@ def from_qgis(qgis_layer) -> dict:
     if renderer is None:
         return {}
 
+    def with_3d(style: dict) -> dict:
+        """The 2D style plus whatever the layer's 3D renderer says — see `extrusion_from_qgis`.
+
+        Added to every return path rather than to one of them, because a layer can be extruded AND
+        graduated: 3D is a second renderer, and reading only the one the first branch happened to
+        match is how half a style goes missing.
+        """
+        extrusion = extrusion_from_qgis(qgis_layer)
+        return dict(style, extrusion=extrusion) if extrusion is not None else style
+
     try:
         if isinstance(renderer, QgsGraduatedSymbolRenderer):
             classes = []
@@ -1111,8 +2464,9 @@ def from_qgis(qgis_layer) -> dict:
                     "color": _hex(rng.symbol().color()),
                 })
             if classes:
-                return {"color_mode": "graduated", "color_field": renderer.classAttribute(),
-                        "classes": classes, "classes_n": len(classes)}
+                return with_3d({"color_mode": "graduated",
+                                "color_field": renderer.classAttribute(),
+                                "classes": classes, "classes_n": len(classes)})
 
         if isinstance(renderer, QgsCategorizedSymbolRenderer):
             categories, other = [], None
@@ -1127,14 +2481,14 @@ def from_qgis(qgis_layer) -> dict:
                          "categories": categories}
                 if other:
                     style["other_color"] = other
-                return style
+                return with_3d(style)
 
         symbol = renderer.symbol() if isinstance(renderer, QgsSingleSymbolRenderer) else None
         if symbol is None and hasattr(renderer, "symbols"):
             symbols = renderer.symbols(None)
             symbol = symbols[0] if symbols else None
         if symbol is not None:
-            return dict({"color_mode": "single"}, **_style_from_symbol(symbol))
+            return with_3d(dict({"color_mode": "single"}, **_style_from_symbol(symbol)))
     except Exception:                   # noqa: BLE001 - never block an upload over styling
         return {}
     return {}
@@ -1201,6 +2555,13 @@ def _style_from_symbol(symbol) -> dict:
         if opacity is not None:
             style["fill_opacity"] = round(opacity, 3)
         style["outline_color"] = _stroke_of(layer0)
+        # The border WIDTH, which used to be dropped because GeoDeploy could not draw one: a
+        # MapLibre fill strokes its own edge at a fixed hairline. It draws one now (a `line` layer
+        # beside the fill), so the number is worth carrying — divided by the same constant the
+        # writer multiplies by, like every other size here.
+        width = number(layer0.width)
+        if width is not None:
+            style["outline_width"] = round(width / CSS_PX_TO_POINTS, 2)
     style.update(_size_from_qgis(symbol, layer0))
     return style
 

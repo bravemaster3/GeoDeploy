@@ -32,7 +32,8 @@
         </RouterLink>
         <div class="flex items-center gap-2 mt-1">
           <LegendSwatch :geom="swatchGeom" :color="swatch" :marker="markerShape"
-            :dash="lineDash" :size="18" />
+            :dash="lineDash" :size="18"
+            :outline-color="outlineColor" :outline-width="outlineWidth" />
           <h1 v-if="!renaming" class="text-2xl font-semibold truncate">{{ layer.name }}</h1>
           <input v-else ref="nameInput" v-model="draftName" @keyup.enter="commitRename"
             @keyup.esc="renaming = false" @blur="commitRename"
@@ -122,7 +123,8 @@
                    bg-card/95 border border-border shadow backdrop-blur hover:bg-muted"
             :title="legendOpen ? 'Hide the legend' : 'Show the legend'">
             <LegendSwatch :geom="swatchGeom" :color="swatch" :marker="markerShape"
-              :dash="lineDash" :size="16" />
+              :dash="lineDash" :size="16"
+              :outline-color="outlineColor" :outline-width="outlineWidth" />
             <span class="truncate">Legend</span>
             <span class="ml-auto text-muted-foreground/70" aria-hidden="true">
               {{ legendOpen ? '▾' : '▸' }}
@@ -138,8 +140,18 @@
             <div v-if="legend.length" class="space-y-1">
               <div v-for="(e, i) in legend" :key="i" class="flex items-center gap-2">
                 <LegendSwatch :geom="swatchGeom" :color="e.color" :marker="markerShape"
-                  :dash="lineDash" :size="16" />
+                  :dash="lineDash" :size="16"
+              :outline-color="outlineColor" :outline-width="outlineWidth" />
                 <span class="text-[11px] text-muted-foreground truncate">{{ e.label }}</span>
+              </div>
+            </div>
+            <!-- A raster classified by VALUE — land cover, soil types — is a list of swatches.
+                 A gradient between class 3 and class 4 would claim a meaning that is not there. -->
+            <div v-else-if="isRaster && rasterClasses.length" class="space-y-1">
+              <div v-for="c in rasterClasses" :key="c.value" class="flex items-center gap-2">
+                <span class="w-4 h-3 rounded-sm border border-border/60 flex-shrink-0"
+                  :style="{ background: c.color }" />
+                <span class="text-[11px] text-muted-foreground truncate">{{ c.label }}</span>
               </div>
             </div>
             <!-- A raster ramp is continuous: a strip, not swatches. -->
@@ -148,10 +160,17 @@
               <div class="flex justify-between text-[10px] text-muted-foreground/80 tabular-nums">
                 <span>{{ rampRange[0] }}</span><span>{{ rampRange[1] }}</span>
               </div>
+              <!-- The interval is the whole point of a contour map, and it is nowhere else on
+                   the page: the strip says what the colours mean, this says what the lines do. -->
+              <div v-if="contourInterval != null"
+                class="flex justify-between text-[10px] text-muted-foreground/80 tabular-nums">
+                <span>contour lines</span><span>every {{ contourInterval }}</span>
+              </div>
             </div>
             <div v-else class="flex items-center gap-2">
               <LegendSwatch :geom="swatchGeom" :color="swatch" :marker="markerShape"
-                :dash="lineDash" :size="16" />
+                :dash="lineDash" :size="16"
+              :outline-color="outlineColor" :outline-width="outlineWidth" />
               <span class="text-[11px] text-muted-foreground">Single symbol</span>
             </div>
             <!-- Size varies independently of colour, so a legend showing only classes
@@ -385,12 +404,35 @@ const RAMP_STOPS = {
   rdbu: ['#67001f', '#f7f7f7', '#053061'],
   spectral: ['#9e0142', '#fdae61', '#ffffbf', '#66c2a5', '#5e4fa2'],
 }
+// WHICH ramp is on the map, which is not always the layer's colormap. A hillshade IS a grey relief
+// image and TiTiler's contours colours the terrain with its own built-in ramp and ignores the
+// colormap entirely — so reading `colormap` alone left both with NO gradient at all, and the legend
+// fell through to "Single symbol" for a raster that is plainly not one. Same three-way rule as
+// `templates/shared/portal.js::rasterLegendHtml`, because the two legends describe the same tiles.
+const rasterRamp = computed(() => {
+  const style = rasterStyle.value
+  const algorithm = (style.algorithm || '').toLowerCase()
+  if (algorithm === 'hillshade') return 'gray'
+  if (algorithm === 'contours') return 'terrain'
+  return (style.colormap || '').replace(/_r$/, '').toLowerCase()
+})
+// A raster classified by VALUE is a list of swatches, not a strip: interpolating between class 3
+// and class 4 means nothing, and a gradient would claim it does.
+const rasterClasses = computed(() => {
+  if (!isRaster.value) return []
+  return (rasterStyle.value.color_classes || [])
+    .filter(c => c && c.value != null && c.color)
+    .map(c => ({ value: c.value, color: String(c.color).slice(0, 7), label: c.label ?? c.value }))
+})
+const contourInterval = computed(() =>
+  (rasterStyle.value.algorithm || '').toLowerCase() === 'contours'
+    ? (rasterStyle.value.increment ?? 35) : null)
 const rampCss = computed(() => {
-  if (!isRaster.value) return null
-  const name = (rasterStyle.value.colormap || '').replace(/_r$/, '').toLowerCase()
-  let stops = RAMP_STOPS[name]
+  if (!isRaster.value || rasterClasses.value.length) return null
+  let stops = RAMP_STOPS[rasterRamp.value]
   if (!stops) return null
-  if (rasterStyle.value.colormap_reverse) stops = [...stops].reverse()
+  // A named ramp is reversible; the algorithms' own ramps are not the layer's to flip.
+  if (rasterStyle.value.colormap_reverse && !rasterStyle.value.algorithm) stops = [...stops].reverse()
   return `linear-gradient(to right, ${stops.join(', ')})`
 })
 const rampRange = computed(() => {
@@ -411,6 +453,16 @@ const swatchGeom = computed(() => {
   return 'point'
 })
 const markerShape = computed(() => vectorStyle.value.marker || 'circle')
+// A polygon's outline, so the swatch shows the border the map draws rather than the fill colour at
+// a fixed width. `outline_width` is PIXELS on a polygon and a RATIO of the radius on a point, so it
+// is only read for the geometry it means something on.
+const outlineColor = computed(() => {
+  const c = vectorStyle.value.outline_color
+  if (c === 'none') return 'transparent'
+  return c || (swatchGeom.value === 'polygon' ? '#1d4ed8' : '')
+})
+const outlineWidth = computed(() =>
+  swatchGeom.value === 'polygon' ? (vectorStyle.value.outline_width ?? 1) : null)
 const lineDash = computed(() => vectorStyle.value.lineType || 'solid')
 
 /** The two ends of a proportional size scale — mirrors services/symbology.size_legend. */

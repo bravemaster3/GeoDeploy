@@ -1710,7 +1710,7 @@
         '<div class="layer-row">' +
           '<span class="layer-drag" title="Drag to reorder">' + dragIcon() + '</span>' +
           '<button class="layer-eye' + (visOn ? '' : ' off') + '" data-layer-id="' + layer.id + '" title="Hide / show" aria-label="Toggle visibility">' + eyeIcon(visOn) + '</button>' +
-          '<button class="layer-swatch-btn" data-swatch="' + layer.id + '" data-layer-id="' + layer.id + '" title="Symbology" aria-label="Edit symbology">' + legendSwatch(geom, color, dash, shape) + '</button>' +
+          '<button class="layer-swatch-btn" data-swatch="' + layer.id + '" data-layer-id="' + layer.id + '" title="Symbology" aria-label="Edit symbology">' + legendSwatch(geom, color, dash, shape, geom === 'polygon' ? bakedOutline(layer.id) : null) + '</button>' +
           '<span class="layer-name" title="' + escHtml(name) + '">' + escHtml(name) + '</span>' +
           '<button class="layer-zoom" data-layer-id="' + layer.id + '" title="Zoom to layer" aria-label="Zoom to layer"' + (canZoom ? '' : ' disabled') + '>' +
             '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
@@ -1722,7 +1722,8 @@
           ? '<div class="layer-legend" data-legend="' + layer.id + '">' + rasterLegendHtml(layer) + '</div>'
           : vectorLegendHtml(meta['geodeploy:legend'], geom,
                              meta['geodeploy:legendField'], meta['geodeploy:sizeLegend'], color,
-                             meta['geodeploy:lineType'], meta['geodeploy:marker']));
+                             meta['geodeploy:lineType'], meta['geodeploy:marker'],
+                             geom === 'polygon' ? bakedOutline(layer.id) : null));
       container.appendChild(card);
     });
 
@@ -2220,6 +2221,27 @@
         if (!isNaN(v)) map.setPaintProperty(id, prop, v);
       });
     });
+    root.querySelectorAll('.layer-outline-width').forEach(inp => {
+      inp.addEventListener('input', e => {
+        const fillId = e.target.dataset.layerId;
+        const w = parseFloat(e.target.value);
+        if (isNaN(w)) return;
+        const outId = ensureOutlineLayer(fillId);
+        if (outId) map.setPaintProperty(outId, 'line-width', w);
+      });
+    });
+    root.querySelectorAll('.layer-outline-color').forEach(inp => {
+      inp.addEventListener('input', e => {
+        const fillId = e.target.dataset.layerId;
+        // Whichever layer is drawing the edge: the published outline layer if there is one, the
+        // fill's own hairline if not — setting the wrong one silently does nothing.
+        if (map.getLayer(fillId + '-outline')) {
+          map.setPaintProperty(fillId + '-outline', 'line-color', e.target.value);
+        } else {
+          try { map.setPaintProperty(fillId, 'fill-outline-color', e.target.value); } catch (err) {}
+        }
+      });
+    });
     root.querySelectorAll('.layer-linetype').forEach(sel => {
       sel.addEventListener('change', e => {
         const id = e.target.dataset.layerId;
@@ -2264,10 +2286,22 @@
       rasterState[s] = Object.assign({}, rasterState[s], { colormap: e.target.value || null });
       applyRaster(s); updateRasterLegend(s);
     }));
-    root.querySelectorAll('.rstyle-hillshade').forEach(el => el.addEventListener('change', e => {
+    root.querySelectorAll('.rstyle-algorithm').forEach(el => el.addEventListener('change', e => {
       const s = e.target.dataset.src;
-      rasterState[s] = Object.assign({}, rasterState[s], { hillshade: e.target.checked });
+      // The row is REBUILT, not just re-applied: the Z factor and the contour inputs belong to one
+      // mode each, so the popover has to stop showing the controls of the mode being left.
+      rasterState[s] = Object.assign({}, rasterState[s], { algorithm: e.target.value });
+      applyRaster(s); refreshRasterRow(s); updateRasterLegend(s);
+    }));
+    root.querySelectorAll('.rstyle-increment').forEach(el => el.addEventListener('input', e => {
+      const s = e.target.dataset.src;
+      rasterState[s] = Object.assign({}, rasterState[s], { increment: e.target.value });
       applyRaster(s); updateRasterLegend(s);
+    }));
+    root.querySelectorAll('.rstyle-thickness').forEach(el => el.addEventListener('input', e => {
+      const s = e.target.dataset.src;
+      rasterState[s] = Object.assign({}, rasterState[s], { thickness: e.target.value });
+      applyRaster(s);
     }));
     root.querySelectorAll('.rstyle-min').forEach(el => el.addEventListener('input', e => {
       const s = e.target.dataset.src;
@@ -2359,18 +2393,45 @@
     if (!sw) return;
     let dash = 'solid';
     if (geomK === 'line') { try { dash = dashKind({ 'line-dasharray': map.getPaintProperty(id, 'line-dasharray') }); } catch (e) {} }
-    sw.innerHTML = legendSwatch(geomK, color, dash, shape);
+    sw.innerHTML = legendSwatch(geomK, color, dash, shape,
+      geomK === 'polygon' ? { color: polygonOutlineColor(id), width: polygonOutlineWidth(id) } : null);
   }
 
   // Legend swatch that mirrors the layer's actual symbol + colour (+ line dash / marker shape)
-  function legendSwatch(geom, color, dash, shape) {
+  /** A polygon's outline as PUBLISHED — `{color, width}` — or null.
+   *
+   * Read from STYLE rather than from the live map, because the layer list is built before the map
+   * has finished loading its layers and `getPaintProperty` would throw for every one of them. The
+   * outline lives in a sibling `-outline` line layer when the author set a width, and in the fill's
+   * own `fill-outline-color` when they did not. */
+  function bakedOutline(fillId) {
+    const layers = (STYLE && STYLE.layers) || [];
+    const line = layers.find(function (l) { return l.id === fillId + '-outline'; });
+    if (line && line.paint) {
+      return { color: line.paint['line-color'], width: line.paint['line-width'] };
+    }
+    const fill = layers.find(function (l) { return l.id === fillId; });
+    const c = fill && fill.paint && fill.paint['fill-outline-color'];
+    return typeof c === 'string' ? { color: c, width: 1 } : null;
+  }
+
+  function legendSwatch(geom, color, dash, shape, outline) {
     const c = color || '#3b82f6';
     if (geom === 'line') {
       const da = dash === 'dashed' ? ' stroke-dasharray="3 2"' : dash === 'dotted' ? ' stroke-dasharray="0.6 3"' : '';
       return '<svg width="18" height="18" viewBox="0 0 18 18"><line x1="2" y1="9" x2="16" y2="9" stroke="' + c + '" stroke-width="3" stroke-linecap="round"' + da + '/></svg>';
     }
-    if (geom === 'polygon')
-      return '<svg width="18" height="18" viewBox="0 0 18 18"><rect x="2.5" y="4" width="13" height="10" fill="' + c + '" fill-opacity="0.45" stroke="' + c + '" stroke-width="1.5"/></svg>';
+    if (geom === 'polygon') {
+      // The outline's own colour and width, when the caller knows them. 1.5 is what this swatch has
+      // always drawn, so a caller that does not keeps its legend pixel-identical; a real width is
+      // COMPRESSED into the swatch rather than scaled, because a 12 px border on the map would
+      // swallow a 13x10 rect whole and the useful signal is "thicker than default".
+      const oc = (outline && outline.color) || c;
+      const raw = outline && Number(outline.width);
+      const ow = isFinite(raw) ? Math.max(0.5, Math.min(4, 1.5 + (raw - 1) * 0.6)) : 1.5;
+      return '<svg width="18" height="18" viewBox="0 0 18 18"><rect x="2.5" y="4" width="13" ' +
+        'height="10" fill="' + c + '" fill-opacity="0.45" stroke="' + oc + '" stroke-width="' + ow + '"/></svg>';
+    }
     if (geom === 'raster')
       return geomIcon('raster');
     return '<svg width="18" height="18" viewBox="0 0 18 18">' + markerSvg(shape || 'circle', c) + '</svg>';
@@ -2422,10 +2483,25 @@
   //
   // `undefined` means "viewer has not touched this" — distinct from a viewer's deliberate empty
   // value, which must NOT resurrect the baked one.
-  function effectiveHillshade(srcId) {
+  /** '' | 'hillshade' | 'contours' — TiTiler takes ONE algorithm, so this is a choice, not a flag. */
+  function effectiveAlgorithm(srcId) {
     const st = rasterState[srcId] || {};
-    if (st.hillshade !== undefined) return !!st.hillshade;
-    return parseRasterParams(srcId).algorithm === 'hillshade';
+    if (st.algorithm !== undefined) return st.algorithm || '';
+    return parseRasterParams(srcId).algorithm || '';
+  }
+  function effectiveHillshade(srcId) {
+    return effectiveAlgorithm(srcId) === 'hillshade';
+  }
+  /** {increment, thickness} for contours — the viewer's, else what the author baked in. */
+  function effectiveContours(srcId) {
+    const st = rasterState[srcId] || {};
+    let baked = {};
+    try { baked = JSON.parse(parseRasterParams(srcId).algorithm_params || '{}') || {}; } catch (e) { baked = {}; }
+    const pick = (key, fallback) => {
+      if (st[key] !== undefined && st[key] !== '') return Number(st[key]);
+      return baked[key] != null ? Number(baked[key]) : fallback;
+    };
+    return { increment: pick('increment', 35), thickness: pick('thickness', 1) };
   }
   function effectiveZfactor(srcId) {
     const st = rasterState[srcId] || {};
@@ -2486,7 +2562,7 @@
       '</div></div>';
   }
 
-  function vectorLegendHtml(entries, geom, field, size, color, dash, shape) {
+  function vectorLegendHtml(entries, geom, field, size, color, dash, shape, outline) {
     const sizeHtml = sizeLegendHtml(size, geom, color);
     // Size can vary while colour does not — they are independent dimensions — so a layer with no
     // classes may still have a legend worth showing.
@@ -2498,7 +2574,7 @@
     // swatch button uses; it was simply never reached from here.
     const rows = entries.map(function (e) {
       return '<div class="legend-class">' +
-        legendSwatch(geom, e.color || '#999', dash, shape) +
+        legendSwatch(geom, e.color || '#999', dash, shape, outline) +
         '<span class="legend-label">' + escHtml(e.label == null ? '' : String(e.label)) + '</span>' +
         '</div>';
     }).join('');
@@ -2525,13 +2601,63 @@
       return '<div class="legend-range"><span>RGB composite</span><span>bands ' + escHtml(bidx.join(' / ')) + '</span></div>';
     // Through the same helpers as the popover and the tile URL — three surfaces that must agree
     // about what is on the map. Hillshade always reads as a grey ramp: it IS a grey relief image.
-    const cmap = effectiveHillshade(srcId) ? 'gray' : effectiveColormap(srcId);
+    // CONTOURS always reads as TERRAIN, for the same reason: the algorithm colours the background
+    // with its own built-in terrain ramp and ignores the layer's colormap entirely, so showing the
+    // layer's palette here would be a legend describing a map nobody is looking at.
+    const algorithm = effectiveAlgorithm(srcId);
+    // A raster classified by VALUE is a list of swatches, not a strip — interpolating between class
+    // 3 and class 4 means nothing, and a gradient would claim it does. The mapping is baked into the
+    // tile URL as `colormap={"3":[r,g,b,a]}`, which is the only place it exists on this page.
+    if (!algorithm) {
+      // THE AUTHOR'S CLASSES FIRST, because they are the only place the LABELS exist. The tile URL
+      // carries `colormap={"11":[r,g,b,a]}` — enough to draw the map, with nowhere to put a name —
+      // so a legend built from it alone prints "11" where the author wrote "Water".
+      const baked = (layer.metadata && layer.metadata['geodeploy:classes']) || null;
+      if (Array.isArray(baked) && baked.length) {
+        return baked.map(function (c) {
+          return '<div class="legend-class">' +
+            '<span style="display:inline-block;width:14px;height:10px;border-radius:2px;' +
+            'border:1px solid var(--border);background:' + escHtml(String(c.color || '#999')) + '"></span>' +
+            '<span class="legend-label">' + escHtml(String(c.label == null ? c.value : c.label)) +
+            '</span></div>';
+        }).join('');
+      }
+      let mapping = null;
+      try { mapping = JSON.parse(parseRasterParams(srcId).colormap || 'null'); } catch (e) { mapping = null; }
+      if (mapping && typeof mapping === 'object' && Object.keys(mapping).length) {
+        // `legend-class` / `legend-label` are the classes the VECTOR legend already uses and
+        // portal.css already styles — a classified raster's legend is the same list, so it should
+        // look like one rather than inventing a second set of names with no CSS behind them.
+        return Object.keys(mapping)
+          .sort(function (a, b) { return Number(a) - Number(b); })
+          .map(function (key) {
+            const c = mapping[key] || [];
+            const css = 'rgba(' + (c[0] | 0) + ',' + (c[1] | 0) + ',' + (c[2] | 0) + ',' +
+              ((c.length > 3 ? c[3] : 255) / 255) + ')';
+            return '<div class="legend-class">' +
+              '<span style="display:inline-block;width:14px;height:10px;border-radius:2px;' +
+              'border:1px solid var(--border);background:' + css + '"></span>' +
+              '<span class="legend-label">' + escHtml(String(key)) + '</span></div>';
+          }).join('');
+      }
+    }
+    const cmap = algorithm === 'hillshade' ? 'gray'
+      : algorithm === 'contours' ? 'terrain'
+      : effectiveColormap(srcId);
     const p = effectiveRescale(srcId).split(',');
     const mn = (p[0] !== undefined && p[0] !== '') ? p[0] : 'min';
     const mx = (p[1] !== undefined && p[1] !== '') ? p[1] : 'max';
     const grad = LEGEND_GRADIENTS[cmap] || LEGEND_GRADIENTS.gray;
-    return '<div class="legend-bar" style="background:' + grad + '"></div>' +
+    let html = '<div class="legend-bar" style="background:' + grad + '"></div>' +
       '<div class="legend-range"><span>' + escHtml(String(mn)) + '</span><span>' + escHtml(String(mx)) + '</span></div>';
+    if (algorithm === 'contours') {
+      // The INTERVAL is the whole point of a contour map and it is nowhere else on the page — the
+      // gradient above says what the colours mean, and this says what the lines mean.
+      const c = effectiveContours(srcId);
+      html += '<div class="legend-range"><span>contour lines</span><span>every ' +
+        escHtml(String(c.increment)) + '</span></div>';
+    }
+    return html;
   }
 
   function updateRasterLegend(srcId) {
@@ -2585,10 +2711,63 @@
         `<select class="layer-linetype" data-layer-id="${layer.id}">` +
         opt('solid', 'Solid') + opt('dashed', 'Dashed') + opt('dotted', 'Dotted') + `</select></div>`;
     }
+    // A POLYGON'S OUTLINE WIDTH. A `fill` strokes its own edge at a fixed hairline, so anything
+    // wider is a separate `line` layer — published by portal_generator when the author set one, and
+    // created here on demand when they did not, so a viewer can still thicken a border.
+    let outlineField = '';
+    if (t === 'fill') {
+      outlineField = `<div class="layer-style-field"><label>Outline</label>` +
+        `<input class="layer-outline-color" type="color" value="${toHex(polygonOutlineColor(layer.id))}" ` +
+        `data-layer-id="${layer.id}">` +
+        `<input class="layer-outline-width" type="number" min="0" max="20" step="0.5" title="Outline width, px" ` +
+        `value="${polygonOutlineWidth(layer.id)}" data-layer-id="${layer.id}"></div>`;
+    }
     return `<div class="layer-style-row" data-style-for="${layer.id}">` +
         `<div class="layer-style-field"><label>Color</label>` +
         `<input class="layer-style-color" type="color" value="${toHex(color)}" ` +
-        `data-layer-id="${layer.id}" data-layer-type="${t}"></div>${sizeField}${lineType}</div>`;
+        `data-layer-id="${layer.id}" data-layer-type="${t}"></div>` +
+        `${sizeField}${lineType}${outlineField}</div>`;
+  }
+
+  /** The id of a polygon's outline layer, creating it if the author published none. */
+  function ensureOutlineLayer(fillId) {
+    const outId = fillId + '-outline';
+    if (map.getLayer(outId)) return outId;
+    const layers = (map.getStyle() || {}).layers || [];
+    const i = layers.findIndex(function (l) { return l.id === fillId; });
+    if (i < 0 || layers[i].type !== 'fill') return null;
+    let color = '#1d4ed8';
+    try { color = map.getPaintProperty(fillId, 'fill-outline-color') || color; } catch (e) {}
+    // Directly ABOVE the fill, not at the end of the style: appending would draw this polygon's
+    // border over every layer sitting above it in the portal's own order.
+    const before = layers[i + 1] && layers[i + 1].id;
+    const def = { id: outId, type: 'line', source: layers[i].source,
+                  paint: { 'line-color': color, 'line-width': 1 } };
+    if (layers[i]['source-layer']) def['source-layer'] = layers[i]['source-layer'];
+    try {
+      map.addLayer(def, before);
+      // Or the hairline is drawn underneath the new line — a hard inner edge on a soft fill.
+      map.setPaintProperty(fillId, 'fill-antialias', false);
+    } catch (e) { return null; }
+    return outId;
+  }
+
+  function polygonOutlineWidth(fillId) {
+    try {
+      const w = map.getPaintProperty(fillId + '-outline', 'line-width');
+      if (typeof w === 'number') return w;
+    } catch (e) {}
+    return 1;
+  }
+
+  function polygonOutlineColor(fillId) {
+    for (const [id, prop] of [[fillId + '-outline', 'line-color'], [fillId, 'fill-outline-color']]) {
+      try {
+        const c = map.getPaintProperty(id, prop);
+        if (typeof c === 'string') return c;
+      } catch (e) {}
+    }
+    return '#1d4ed8';
   }
 
   // Minimal controls for an external source: opacity lives in the popover header;
@@ -2640,19 +2819,41 @@
         '<select class="rstyle-colormap" data-src="' + src + '"><option value=""' + (cmapSel ? '' : ' selected') + '>Grayscale</option>' +
         PORTAL_COLORMAPS.map(c => '<option value="' + c + '"' + (c === cmapSel ? ' selected' : '') + '>' + c + '</option>').join('') +
         '</select></div>';
-      html += '<label class="layer-style-field" style="cursor:pointer">' +
-        '<input type="checkbox" class="rstyle-hillshade" data-src="' + src + '"' +
-        (effectiveHillshade(src) ? ' checked' : '') + '> Hillshade</label>';
-      html += '<div class="layer-style-field" title="Hillshade vertical exaggeration"><label>Z</label>' +
-        '<input class="rstyle-zfactor" data-src="' + src + '" type="number" min="0.1" max="10" step="0.1" value="' +
-        escHtml(String(effectiveZfactor(src))) + '"></div>';
+      // ONE CHOICE, not a checkbox: TiTiler takes a single `algorithm`, so hillshade and contours
+      // are mutually exclusive and two ticks could ask for something that cannot be rendered.
+      const alg = effectiveAlgorithm(src);
+      html += '<div class="layer-style-field"><label>Terrain</label>' +
+        '<select class="rstyle-algorithm" data-src="' + src + '">' +
+        '<option value=""' + (alg ? '' : ' selected') + '>None</option>' +
+        '<option value="hillshade"' + (alg === 'hillshade' ? ' selected' : '') + '>Hillshade</option>' +
+        '<option value="contours"' + (alg === 'contours' ? ' selected' : '') + '>Contours</option>' +
+        '</select></div>';
+      if (alg === 'hillshade') {
+        html += '<div class="layer-style-field" title="Hillshade vertical exaggeration"><label>Z</label>' +
+          '<input class="rstyle-zfactor" data-src="' + src + '" type="number" min="0.1" max="10" step="0.1" value="' +
+          escHtml(String(effectiveZfactor(src))) + '"></div>';
+      }
+      if (alg === 'contours') {
+        const c = effectiveContours(src);
+        html += '<div class="layer-style-field" title="Contour interval, in the raster\'s own units"><label>Interval</label>' +
+          '<input class="rstyle-increment" data-src="' + src + '" type="number" min="0" step="any" value="' +
+          escHtml(String(c.increment)) + '">' +
+          '<input class="rstyle-thickness" data-src="' + src + '" type="number" min="1" max="10" step="1" title="Line width" value="' +
+          escHtml(String(c.thickness)) + '"></div>';
+      }
     }
     // Stretch does nothing under hillshade (the relief is already 0-255 and TiTiler applies rescale
-    // AFTER the algorithm), so it is shown disabled rather than as an inviting empty box.
+    // AFTER the algorithm), so it is shown disabled rather than as an inviting empty box. Under
+    // CONTOURS it is the opposite — the stretch is the range the relief behind the lines is
+    // coloured over, so it stays enabled and says so.
     const hs = effectiveHillshade(src);
+    const isCont = effectiveAlgorithm(src) === 'contours';
     const rs = effectiveRescale(src).split(',');
     const dis = hs ? ' disabled' : '';
-    html += '<div class="layer-style-field"' + (hs ? ' title="Not used while Hillshade is on"' : '') + '><label>Stretch</label>' +
+    html += '<div class="layer-style-field"' +
+      (hs ? ' title="Not used while Hillshade is on"'
+          : isCont ? ' title="The elevation range the relief behind the contours is coloured over"' : '') +
+      '><label>Stretch</label>' +
       '<input class="rstyle-min" data-src="' + src + '" type="number" placeholder="min" value="' + escHtml(String(rs[0] || '')) + '"' + dis + '>' +
       '<input class="rstyle-max" data-src="' + src + '" type="number" placeholder="max" value="' + escHtml(String(rs[1] || '')) + '"' + dis + '>' +
       '<button type="button" class="rstyle-auto" data-src="' + src + '" title="Auto stretch from raster statistics"' + dis + '>Auto</button></div>';
@@ -2671,21 +2872,44 @@
     // palette and the author's stretch vanished, because it was never in `rasterState` to begin with.
     const bidx = effectiveBidx(srcId);
     bidx.forEach(b => params.push('bidx=' + b));
-    const hillshade = effectiveHillshade(srcId);
-    // Not when hillshading: TiTiler applies rescale AFTER the algorithm, and a hillshade is already
-    // a finished 0-255 relief image, so a data-range stretch flattens it to one colour.
+    const algorithm = effectiveAlgorithm(srcId);
+    const rescale = effectiveRescale(srcId);
+    // A CLASSIFIED raster's mapping is keyed on the RAW pixel values, so a stretch destroys it:
+    // rescale maps the data into 0-255 before the lookup, and a classification of 0/1/2 arrives as
+    // 0/127/255 where only one key still matches - the other classes fall through to transparent.
     // Mirrors services/titiler.py::get_tile_url.
-    if (!hillshade) {
-      const rescale = effectiveRescale(srcId);
-      if (rescale) params.push('rescale=' + rescale);
+    const bakedClasses = (!algorithm && parseRasterParams(srcId).colormap) || '';
+    // Not when hillshading: TiTiler applies rescale AFTER the algorithm, and a hillshade is already
+    // a finished 0-255 relief image, so a data-range stretch flattens it to one colour. Contours is
+    // the same picture for a different reason — it returns finished RGB and CONSUMES the stretch as
+    // the range its relief is coloured over. Mirrors services/titiler.py::get_tile_url.
+    const usesClasses = !!bakedClasses && !effectiveColormap(srcId) && bidx.length !== 3;
+    if (algorithm !== 'hillshade' && algorithm !== 'contours' && rescale && !usesClasses) {
+      params.push('rescale=' + rescale);
     }
-    if (hillshade) {
+    if (algorithm === 'hillshade') {
       params.push('algorithm=hillshade');
       const z = effectiveZfactor(srcId);
       if (Number(z) !== 1) params.push('expression=b1*' + z);
+    } else if (algorithm === 'contours') {
+      params.push('algorithm=contours');
+      const c = effectiveContours(srcId);
+      const p = { increment: c.increment > 0 ? c.increment : 35,
+                  thickness: c.thickness > 0 ? Math.trunc(c.thickness) : 1 };
+      // minz/maxz come from the stretch, and MUST be integers — TiTiler types them as int and
+      // rejects the whole tile request for a fractional one. Floored and ceiled so the coloured
+      // band always contains the data rather than clipping its extremes flat.
+      const parts = String(rescale || '').split(',');
+      const lo = Number(parts[0]), hi = Number(parts[1]);
+      if (isFinite(lo) && isFinite(hi) && hi > lo) { p.minz = Math.floor(lo); p.maxz = Math.ceil(hi); }
+      params.push('algorithm_params=' + encodeURIComponent(JSON.stringify(p)));
     } else {
       const cmap = effectiveColormap(srcId);
+      // A CLASSIFIED raster's colours live in a baked `colormap=` JSON mapping, which this used to
+      // drop: touching any control rebuilt the URL without it and a land-cover layer fell back to
+      // grayscale mid-session. Kept whenever the viewer has not chosen a named palette instead.
       if (cmap && bidx.length !== 3) params.push('colormap_name=' + cmap);  // ignored for RGB
+      else if (usesClasses) params.push('colormap=' + encodeURIComponent(bakedClasses));
     }
     const url = base + (params.length ? '&' + params.join('&') : '');
     const src = map.getSource(srcId);
@@ -4165,7 +4389,13 @@
             && String(x.metadata['geodeploy:layer_id']) === String(lid);
         });
         const src = l && l.source;
-        const cmap = src ? (effectiveHillshade(src) ? 'gray' : effectiveColormap(src)) : '';
+        // Same three-way rule as `rasterLegendHtml`: hillshade IS grey relief and contours draws
+        // its own terrain ramp, so neither shows the layer's colormap.
+        const alg = src ? effectiveAlgorithm(src) : '';
+        const cmap = !src ? ''
+          : alg === 'hillshade' ? 'gray'
+          : alg === 'contours' ? 'terrain'
+          : effectiveColormap(src);
         const grad = LEGEND_GRADIENTS[cmap] || LEGEND_GRADIENTS.gray;
         return '<span class="cat-active-sw cat-active-ramp" style="background:' + grad + '"></span>';
       }

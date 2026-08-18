@@ -131,7 +131,7 @@ geodeploy portals create "Field sites 2026" --publish
 
 Everything the dashboard does, scriptable: uploads of any size, data-driven symbology, portals,
 publishing, the public catalog, and instance administration. No dependencies and Python 3.9+, so
-it is also the client a QGIS plugin can vendor as-is.
+it is also the client the QGIS plugin vendors as-is.
 
 [The command line](cli.md){ .md-button }
 

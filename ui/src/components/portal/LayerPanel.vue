@@ -173,6 +173,18 @@
                   </label>
                   <span v-if="!noOutline" class="text-xs text-muted-foreground/70 font-mono">{{ outlineSwatch('#1d4ed8') }}</span>
                 </div>
+                <!-- A polygon's outline WIDTH, in pixels — the same unit a line uses, because it is
+                     one. Anything above the default 1 is drawn as its own line layer beside the
+                     fill: a MapLibre fill strokes its own edge at a fixed hairline, so a width
+                     could not be honoured by the fill at all. -->
+                <div v-if="!noOutline" class="flex items-center gap-2 mt-1.5">
+                  <span class="text-[11px] text-muted-foreground flex-shrink-0">Width</span>
+                  <input type="number" min="0" max="20" step="0.5"
+                    :value="config.style?.outline_width ?? 1"
+                    @input="emitStyle({ outline_width: parseFloat($event.target.value) })"
+                    class="w-16 text-xs border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+                  <span class="text-xs text-muted-foreground/70">px</span>
+                </div>
               </div>
 
             </template>
@@ -402,7 +414,50 @@
 
             <!-- Palette + hillshade: single-band raster, or a multiband raster in single-band mode -->
             <template v-if="bandCount === 1 || bandMode === 'single'">
-              <div>
+              <!-- CONTINUOUS or CLASSIFIED — the same first question the vector side asks, and for
+                   the same reason: a ramp claims that the distance between two values is meaningful,
+                   which for land cover or soil codes it is not. -->
+              <div v-if="!isHillshade && !isContours">
+                <label class="text-xs text-muted-foreground">Values</label>
+                <div class="flex gap-1 mt-1">
+                  <button v-for="m in [{ value: 'ramp', label: 'Continuous' }, { value: 'classes', label: 'Unique values' }]"
+                    :key="m.value" type="button" @click="setRasterColorMode(m.value)"
+                    class="flex-1 text-[11px] py-1 rounded border transition-colors"
+                    :class="rasterColorMode === m.value
+                      ? 'border-primary/60 bg-primary/15 text-foreground'
+                      : 'border-border text-muted-foreground hover:text-foreground'">{{ m.label }}</button>
+                </div>
+              </div>
+
+              <div v-if="rasterColorMode === 'classes' && !isHillshade && !isContours" class="space-y-1.5">
+                <div class="flex items-center justify-between">
+                  <label class="text-xs text-muted-foreground">Classes</label>
+                  <button @click="loadUniqueValues" :disabled="loadingValues"
+                    class="text-xs text-primary hover:text-primary/80 font-medium disabled:opacity-50"
+                    title="Read the distinct pixel values from the raster">
+                    {{ loadingValues ? 'Reading…' : (rasterClasses.length ? '↻ Re-read' : '⚡ Read values') }}
+                  </button>
+                </div>
+                <p v-if="valuesNote" class="text-[10px] text-muted-foreground/80">{{ valuesNote }}</p>
+                <div v-if="rasterClasses.length" class="space-y-1 max-h-44 overflow-auto pr-0.5">
+                  <div v-for="(c, i) in rasterClasses" :key="c.value" class="flex items-center gap-1.5">
+                    <input type="color" :value="classHex(c.color)"
+                      @input="setClassColor(i, $event.target.value)"
+                      class="w-6 h-6 rounded border border-border cursor-pointer p-0 flex-shrink-0" />
+                    <span class="text-xs text-muted-foreground/80 tabular-nums w-10 flex-shrink-0">{{ c.value }}</span>
+                    <input type="text" :value="c.label ?? ''" placeholder="label"
+                      @input="setClassLabel(i, $event.target.value)"
+                      class="flex-1 min-w-0 text-xs border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+                  </div>
+                </div>
+                <!-- Transparency is how a "no data" class is expressed, and it has to be reachable:
+                     dropping it would paint that class over everything beneath the layer. -->
+                <p v-if="rasterClasses.length" class="text-[10px] text-muted-foreground/70">
+                  A colour per pixel value. Re-reading keeps the colours you have already chosen.
+                </p>
+              </div>
+
+              <div v-show="rasterColorMode !== 'classes' || isHillshade || isContours">
                 <label class="text-xs text-muted-foreground">Color palette</label>
                 <select :value="config.style?.colormap || ''" :disabled="config.style?.algorithm === 'hillshade'"
                   @change="emitStyle({ colormap: $event.target.value || null })"
@@ -420,43 +475,79 @@
                   Reverse the palette
                 </label>
               </div>
-              <div class="flex items-center gap-3">
-                <label class="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
-                  <input type="checkbox" :checked="config.style?.algorithm === 'hillshade'"
-                    @change="emitStyle({ algorithm: $event.target.checked ? 'hillshade' : null })" class="accent-primary flex-shrink-0" />
-                  Hillshade
-                </label>
-                <div v-if="config.style?.algorithm === 'hillshade'" class="flex items-center gap-1.5" title="Vertical exaggeration (Z factor)">
-                  <label class="text-xs text-muted-foreground">Z</label>
-                  <input type="number" min="0.1" max="10" step="0.1" :value="config.style?.zfactor ?? 1"
-                    @input="emitStyle({ zfactor: parseFloat($event.target.value) || 1 })"
-                    class="w-14 text-xs border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+              <!-- ONE CHOICE, not two checkboxes: TiTiler takes a single `algorithm`, so hillshade
+                   and contours are mutually exclusive and a pair of ticks would let the user ask
+                   for something that cannot be rendered. -->
+              <div>
+                <label class="text-xs text-muted-foreground">Terrain rendering</label>
+                <select :value="config.style?.algorithm || ''"
+                  @change="setAlgorithm($event.target.value)"
+                  class="mt-0.5 w-full text-xs border border-border rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary/60">
+                  <option value="">None</option>
+                  <option value="hillshade">Hillshade</option>
+                  <option value="contours">Contour lines</option>
+                </select>
+              </div>
+              <div v-if="config.style?.algorithm === 'hillshade'" class="flex items-center gap-1.5"
+                title="Vertical exaggeration (Z factor)">
+                <label class="text-xs text-muted-foreground">Z factor</label>
+                <input type="number" min="0.1" max="10" step="0.1" :value="config.style?.zfactor ?? 1"
+                  @input="emitStyle({ zfactor: parseFloat($event.target.value) || 1 })"
+                  class="w-14 text-xs border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+              </div>
+              <div v-if="config.style?.algorithm === 'contours'" class="flex items-end gap-2">
+                <div class="flex-1">
+                  <label class="text-xs text-muted-foreground" title="Spacing between contour lines, in the raster's own units">
+                    Interval
+                  </label>
+                  <input type="number" min="0" step="any" :value="config.style?.increment ?? 35"
+                    @input="emitStyle({ increment: parseFloat($event.target.value) || null })"
+                    class="mt-0.5 w-full text-xs border border-border rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+                </div>
+                <div class="w-20">
+                  <label class="text-xs text-muted-foreground">Line width</label>
+                  <input type="number" min="1" max="10" step="1" :value="config.style?.thickness ?? 1"
+                    @input="emitStyle({ thickness: parseInt($event.target.value, 10) || null })"
+                    class="mt-0.5 w-full text-xs border border-border rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary/60" />
                 </div>
               </div>
+              <!-- The stretch is not decoration under contours: it is the range the coloured relief
+                   behind the lines is drawn over. Without it TiTiler spans −12000–8000 m and a
+                   survey DEM comes out one flat colour, so say what the numbers are doing. -->
+              <p v-if="config.style?.algorithm === 'contours'" class="text-xs text-muted-foreground">
+                Lines every {{ config.style?.increment ?? 35 }} units, over the stretch below —
+                that range colours the relief behind them.
+                <button v-if="!config.style?.rescale" @click="autoStretch" :disabled="autoStretching"
+                  class="text-primary hover:text-primary/80 font-medium disabled:opacity-50">
+                  Set it automatically
+                </button>
+              </p>
             </template>
 
             <!-- Stretch is disabled under hillshade: the algorithm returns a finished 0–255 relief
                  image and TiTiler applies rescale AFTER it, so a data-range stretch would flatten
                  the shading to one colour. Saying so beats letting the control look available. -->
-            <div :class="isHillshade ? 'opacity-50' : ''">
+            <div :class="(isHillshade || isClassified) ? 'opacity-50' : ''">
               <div class="flex items-center justify-between mb-0.5">
                 <label class="text-xs text-muted-foreground">Stretch (min / max)</label>
-                <button @click="autoStretch" :disabled="autoStretching || isHillshade"
+                <button @click="autoStretch" :disabled="autoStretching || isHillshade || isClassified"
                   class="text-xs text-primary hover:text-primary/80 font-medium disabled:opacity-50"
                   title="Compute min/max from the raster (2–98th percentile)">
                   {{ autoStretching ? 'Computing…' : '⚡ Auto' }}
                 </button>
               </div>
               <div class="flex items-center gap-2">
-                <input type="number" :value="rescaleMin" :disabled="isHillshade" @input="setRescale('min', $event.target.value)" placeholder="min"
+                <input type="number" :value="rescaleMin" :disabled="isHillshade || isClassified" @input="setRescale('min', $event.target.value)" placeholder="min"
                   class="w-16 text-xs border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/60 disabled:opacity-50" />
                 <span class="text-muted-foreground/40">–</span>
-                <input type="number" :value="rescaleMax" :disabled="isHillshade" @input="setRescale('max', $event.target.value)" placeholder="max"
+                <input type="number" :value="rescaleMax" :disabled="isHillshade || isClassified" @input="setRescale('max', $event.target.value)" placeholder="max"
                   class="w-16 text-xs border border-border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-primary/60 disabled:opacity-50" />
               </div>
               <p class="text-[10px] text-muted-foreground/70 mt-0.5">
                 {{ isHillshade ? 'Not used while Hillshade is on — the shading is already 0–255.'
-                               : 'For non-8-bit imagery (e.g. 0–4095). Blank = default.' }}
+                   : isClassified ? 'Not used with unique values — each class is matched on its raw pixel value, and a stretch would change those.'
+                   : isContours ? 'Under contours this is the elevation range the relief is coloured over — set it, or the whole raster draws as one flat band.'
+                   : 'For non-8-bit imagery (e.g. 0–4095). Blank = default.' }}
               </p>
             </div>
           </template>
@@ -497,11 +588,13 @@
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useDataStore } from '@/stores/data'
 import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps, getRasterStats,
+         getRasterUniqueValues,
          getFieldStats } from '@/api'
 // The shared symbology vocabulary — twin of api/geodeploy/services/symbology.py. The swatch and
 // the legend here must describe exactly what the published portal will draw.
 import { RAMPS, DIVERGING, NO_OUTLINE, markerOutline, legendEntries, rampColors,
          representativeColor, pillarRadius } from '@/lib/symbology'
+import { rasterStyleOf } from '@/lib/mapStyle'
 import { TrashIcon, LocateIcon } from '@/views/icons'
 
 const props = defineProps({
@@ -937,6 +1030,102 @@ function setSingleBand(val) {
 
 // Hillshade returns its own 0–255 image, so the stretch controls below do nothing while it is on.
 const isHillshade = computed(() => props.config.style?.algorithm === 'hillshade')
+const isContours = computed(() => props.config.style?.algorithm === 'contours')
+// A value-lookup palette is matched on the RAW pixel values, so the stretch is not applied to it —
+// see services/titiler.get_tile_url. Shown unavailable rather than as an inviting empty box.
+const isClassified = computed(() => (props.config.style?.color_classes || []).length > 0)
+
+// ── Raster: continuous ramp, or a colour per VALUE ────────────────────────────────────────────
+// The mode is derived from the style rather than kept beside it, so re-opening the panel shows what
+// the layer actually is instead of whatever was last clicked.
+const rasterClasses = computed(() => props.config.style?.color_classes || [])
+const rasterColorMode = ref(rasterClasses.value.length ? 'classes' : 'ramp')
+const loadingValues = ref(false)
+const valuesNote = ref('')
+
+//: A colour per class, for a classification whose values have no order — the same qualitative set
+//: the vector side uses (`services/symbology.CATEGORY_COLORS`), because a sequential ramp over
+//: land-cover codes implies a ranking that is not there.
+const CLASS_COLORS = ['#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#a855f7', '#06b6d4',
+                      '#ec4899', '#84cc16', '#f97316', '#6366f1', '#14b8a6', '#eab308']
+
+function setRasterColorMode(mode) {
+  rasterColorMode.value = mode
+  valuesNote.value = ''
+  // Leaving classified mode CLEARS the classes: TiTiler gives an explicit mapping precedence over a
+  // named ramp, so classes left behind would keep drawing and the palette picker would do nothing.
+  if (mode !== 'classes' && rasterClasses.value.length) emitStyle({ color_classes: null })
+  // Entering it clears the RAMP and its direction. `colormap_reverse` is not cosmetic here: the
+  // reverse flag re-pairs an explicit palette's colours with the values in the opposite order, so a
+  // flag left over from a reversed ramp silently swapped hand-picked class colours end for end —
+  // class 0's colour drew on the highest class. The checkbox that sets it is hidden in this mode,
+  // which is exactly why it has to be cleared rather than left to be found.
+  else if (mode === 'classes') {
+    if (props.config.style?.colormap || props.config.style?.colormap_reverse) {
+      emitStyle({ colormap: null, colormap_reverse: false })
+    }
+    if (!rasterClasses.value.length) loadUniqueValues()
+  }
+}
+
+function classHex(color) {
+  const text = String(color || '').trim()
+  return /^#[0-9a-fA-F]{6}/.test(text) ? text.slice(0, 7) : '#3b82f6'
+}
+function setClassColor(index, hex) {
+  const next = rasterClasses.value.map((c, i) => (i === index ? { ...c, color: hex } : c))
+  emitStyle({ color_classes: next })
+}
+function setClassLabel(index, label) {
+  const next = rasterClasses.value.map((c, i) => (i === index ? { ...c, label } : c))
+  emitStyle({ color_classes: next })
+}
+
+async function loadUniqueValues() {
+  if (!layer.value) return
+  loadingValues.value = true
+  valuesNote.value = ''
+  try {
+    const { data } = await getRasterUniqueValues(layer.value.id, singleBand.value || undefined)
+    if (!data?.categorical) {
+      // Said plainly rather than by returning nothing: "this raster is continuous" is the answer,
+      // not a failure, and the user needs it to stop looking for a classification that is not there.
+      valuesNote.value = data?.reason || 'This raster has no usable classes.'
+      return
+    }
+    // COLOURS ALREADY CHOSEN ARE KEPT. Re-reading after editing a colour is a normal thing to do
+    // (a new class appears, a count changes), and regenerating the whole palette would throw away
+    // the work every time.
+    const existing = new Map(rasterClasses.value.map(c => [String(c.value), c]))
+    const next = data.values.map((v, i) => {
+      const had = existing.get(String(v.value))
+      return {
+        value: v.value,
+        color: had?.color || CLASS_COLORS[i % CLASS_COLORS.length],
+        label: had?.label ?? String(v.value),
+      }
+    })
+    // `colormap_reverse` off with them: it re-pairs an explicit palette end for end, so a flag left
+    // over from a reversed ramp would hand class 0 the colour chosen for the highest class.
+    emitStyle({ color_classes: next, colormap: null, colormap_reverse: false })
+    valuesNote.value = `${next.length} value${next.length === 1 ? '' : 's'} in the raster.`
+  } catch (e) {
+    valuesNote.value = e?.response?.data?.detail || 'Could not read the raster values.'
+  } finally {
+    loadingValues.value = false
+  }
+}
+
+// Switching terrain rendering CLEARS the parameters of the mode being left. Keeping them would
+// leave a zfactor on a contour layer and an interval on a hillshade — invisible in the map, but
+// carried into every published portal, every share link and every round trip through QGIS, where
+// something eventually reads them back and reports a change nobody made.
+function setAlgorithm(value) {
+  const patch = { algorithm: value || null }
+  if (value !== 'hillshade') patch.zfactor = null
+  if (value !== 'contours') { patch.increment = null; patch.thickness = null; patch.minz = null; patch.maxz = null }
+  emitStyle(patch)
+}
 const rescaleMin = computed(() => (props.config.style?.rescale || '').split(',')[0] || '')
 const rescaleMax = computed(() => (props.config.style?.rescale || '').split(',')[1] || '')
 const autoStretching = ref(false)
@@ -985,14 +1174,7 @@ async function saveDefault() {
   try {
     const body = props.config.layer_type === 'vector'
       ? { opacity: props.config.opacity, style: props.config.style, popup_fields: props.config.popup_fields }
-      : {
-          opacity: props.config.opacity,
-          colormap: props.config.style?.colormap || null,
-          rescale: props.config.style?.rescale || null,
-          algorithm: props.config.style?.algorithm || null,
-          zfactor: props.config.style?.zfactor ?? null,
-          bidx: props.config.style?.bidx || null,
-        }
+      : { opacity: props.config.opacity, ...rasterStyleOf(props.config.style) }
     const fn = props.config.layer_type === 'vector' ? saveVectorDefaultStyle : saveRasterDefaultStyle
     const { data: updated } = await fn(layer.value.id, body)
     const list = props.config.layer_type === 'vector' ? dataStore.vectorLayers : dataStore.rasterLayers
@@ -1010,7 +1192,7 @@ function useDefault() {
     opacity: ds.opacity ?? 1.0,
     style: props.config.layer_type === 'vector'
       ? (ds.style ?? {})
-      : { colormap: ds.colormap || null, rescale: ds.rescale || null, algorithm: ds.algorithm || null, zfactor: ds.zfactor ?? null, bidx: ds.bidx || null },
+      : rasterStyleOf(ds),
     ...(props.config.layer_type === 'vector' ? { popup_fields: ds.popup_fields ?? [] } : {}),
   })
 }

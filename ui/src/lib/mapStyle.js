@@ -19,6 +19,8 @@ import {
   iconImageExpression as symIconImageExpression,
   iconSizeExpression as symIconSizeExpression,
   markerImages as symMarkerImages,
+  polygonOutlineWidth,
+  POLYGON_OUTLINE_WIDTH,
   NO_OUTLINE,
 } from '@/lib/symbology'
 
@@ -131,11 +133,31 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
           // `fill-antialias: false`, not an omission: an omitted fill-outline-color MATCHES the
           // fill colour (the spec default), which is why "None" drew a visible edge. Mirrors
           // portal_generator._vector_layer.
-          if (st.outline_color === NO_OUTLINE) fillPaint['fill-antialias'] = false
+          // A WIDER OUTLINE NEEDS ITS OWN LAYER. `fill-outline-color` is a colour with no width —
+          // a fill's edge is always one pixel — so anything wider is a `line` layer beside the
+          // fill, and the fill then stops drawing its own edge or the two are stacked. Emitted
+          // only above the hairline, so existing portals render byte-identically. Mirrors
+          // portal_generator._polygon_outline_layer.
+          const outlineWidth = polygonOutlineWidth(st)
+          const wantsOutlineLayer = st.outline_color !== NO_OUTLINE
+            && outlineWidth > POLYGON_OUTLINE_WIDTH
+          if (st.outline_color === NO_OUTLINE || wantsOutlineLayer) fillPaint['fill-antialias'] = false
           else fillPaint['fill-outline-color'] = st.outline_color || '#1d4ed8'
           style.layers.push({
             id: srcId, type: 'fill', source: srcId, 'source-layer': sourceLayer, paint: fillPaint,
           })
+          if (wantsOutlineLayer) {
+            style.layers.push({
+              id: `${srcId}-outline`, type: 'line', source: srcId, 'source-layer': sourceLayer,
+              paint: {
+                'line-color': st.outline_color || '#1d4ed8',
+                'line-width': outlineWidth,
+                // The layer's opacity, not the fill's: a 45% wash with a solid border is the
+                // ordinary way to draw a polygon.
+                'line-opacity': opacity,
+              },
+            })
+          }
         }
       } else if (geom.includes('line')) {
         const linePaint = {
@@ -268,6 +290,81 @@ function minZoomFor(b) {
   return Math.max(0, Math.min(Math.trunc(fitsAt) - MINZOOM_SLACK, 18))
 }
 
+// Every key of a raster style that changes the picture — the JS twin of services/titiler.STYLE_KEYS.
+// `opacity` is deliberately absent: the map applies it, the tile server does not.
+export const RASTER_STYLE_KEYS = [
+  'colormap', 'colormap_reverse', 'rescale', 'algorithm', 'zfactor', 'bidx',
+  'color_classes', 'increment', 'thickness', 'minz', 'maxz',
+]
+
+// Pull a raster style out of a layer's default_style or a portal's layer_config, whole.
+//
+// FOUR PLACES USED TO HAND-LIST THESE and every one of them listed five of the eleven: the panel's
+// "save as default", its "use the layer's default", the My Data style modal, and the portal editor's
+// add-layer. A raster coloured per pixel VALUE, or with a reversed ramp, lost exactly that on the way
+// through — and a dropped key does not fail, it quietly serves a style nobody chose. Same counting
+// problem the backend had at seven call sites, and the same fix.
+export function rasterStyleOf(source) {
+  const out = {}
+  RASTER_STYLE_KEYS.forEach((key) => {
+    const value = source?.[key]
+    if (value !== undefined && value !== null && value !== '') out[key] = value
+  })
+  return out
+}
+
+//: Must match services/titiler.MAX_COLOR_CLASSES — the mapping rides in every tile request's URL.
+const MAX_COLOR_CLASSES = 128
+
+// `{"3":[r,g,b,a]}` for a raster coloured per pixel VALUE. Mirrors services/titiler._explicit_colormap,
+// including the reversal rule: the colours are re-paired with the values in the opposite order, so
+// the values keep their places and the palette runs the other way.
+function explicitColormap(classes, reverse) {
+  if (!Array.isArray(classes) || !classes.length) return null
+  let entries = classes.slice(0, MAX_COLOR_CLASSES).filter(e => e && typeof e === 'object')
+  if (reverse) {
+    const colours = entries.map(e => e.color).reverse()
+    entries = entries.map((e, i) => ({ ...e, color: colours[i] }))
+  }
+  const mapping = {}
+  entries.forEach(e => {
+    const text = String(e.color || '').trim().replace(/^#/, '')
+    if (text.length !== 6 && text.length !== 8) return
+    const key = parseInt(e.value, 10)
+    if (!Number.isFinite(key)) return
+    const rgba = []
+    for (let i = 0; i < text.length; i += 2) rgba.push(parseInt(text.slice(i, i + 2), 16))
+    if (rgba.some(n => !Number.isFinite(n))) return
+    if (rgba.length === 3) rgba.push(255)
+    mapping[String(key)] = rgba
+  })
+  return Object.keys(mapping).length ? JSON.stringify(mapping) : null
+}
+
+// CONTOUR parameters. Mirrors services/titiler._contour_params, and the two traps are the same:
+// TiTiler's contours colours the data across minz–maxz with a built-in terrain ramp and draws the
+// lines on that, so its planet-sized defaults (−12000..8000) render a survey DEM as one flat band —
+// hence borrowing the layer's own stretch. And it types minz/maxz as INT, rejecting the whole tile
+// request for a fractional one, so the borrowed range is floored and ceiled to widen rather than clip.
+export function contourParams(style) {
+  const out = {}
+  const increment = Number(style?.increment)
+  const thickness = Number(style?.thickness)
+  out.increment = Number.isFinite(increment) && increment > 0 ? increment : 35
+  out.thickness = Number.isFinite(thickness) && thickness > 0 ? Math.trunc(thickness) : 1
+  let lo = Number(style?.minz)
+  let hi = Number(style?.maxz)
+  if (!(Number.isFinite(lo) && Number.isFinite(hi) && hi > lo)) {
+    const parts = String(style?.rescale || '').split(',')
+    lo = Number(parts[0]); hi = Number(parts[1])
+  }
+  if (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo) {
+    out.minz = Math.floor(lo)
+    out.maxz = Math.ceil(hi)
+  }
+  return JSON.stringify(out)
+}
+
 // Build a raster tile URL from the layer's base URL + the configured raster style.
 export function rasterTilesUrl(baseTileUrl, style, bandCount) {
   const base = (baseTileUrl || '').split('&')[0]  // s3 key has no '&', so this keeps ?url=...
@@ -280,17 +377,37 @@ export function rasterTilesUrl(baseTileUrl, style, bandCount) {
   bands.forEach(b => params.push(`bidx=${b}`))
   // Mirrors services/titiler.py::get_tile_url — a hillshade is already a finished 0-255 relief
   // image, and TiTiler applies rescale AFTER the algorithm, so a data-range stretch flattens it.
-  if (style?.rescale && style?.algorithm !== 'hillshade') params.push(`rescale=${style.rescale}`)
+  // Contours is the same picture for a different reason: it returns a finished RGB image, and it
+  // CONSUMES the stretch as its colour range instead (see below).
+  // An explicit colour-per-VALUE mapping is keyed on the raw values, so a stretch destroys it:
+  // rescale maps the data into 0–255 before the lookup, and a classification of 0/1/2 arrives as
+  // 0/127/255 where only one key still matches. Mirrors services/titiler.py::get_tile_url.
+  const explicitCmap = explicitColormap(style?.color_classes, style?.colormap_reverse)
+  if (style?.rescale && style?.algorithm !== 'hillshade' && style?.algorithm !== 'contours'
+      && !explicitCmap) {
+    params.push(`rescale=${style.rescale}`)
+  }
   if (style?.algorithm) {
     params.push(`algorithm=${style.algorithm}`)
     if (style.algorithm === 'hillshade' && style.zfactor && Number(style.zfactor) !== 1) {
       params.push(`expression=b1*${style.zfactor}`)
     }
-  } else if (style?.colormap && bands.length !== 3) {
-    // Mirrors services/titiler.py: matplotlib spells a reversed ramp with an `_r` suffix, and the
-    // flag is the single source of truth — a stored `viridis_r` with reverse off is forward.
-    const base_ = style.colormap.endsWith('_r') ? style.colormap.slice(0, -2) : style.colormap
-    params.push(`colormap_name=${style.colormap_reverse ? base_ + '_r' : base_}`)
+    if (style.algorithm === 'contours') {
+      const p = contourParams(style)
+      if (p) params.push(`algorithm_params=${encodeURIComponent(p)}`)
+    }
+  } else if (bands.length !== 3) {
+    // A CLASSIFIED raster, which this used to drop entirely: only `colormap` was mirrored, so a
+    // layer coloured per pixel VALUE drew here in plain grayscale while the published portal drew
+    // its classes. The editor is supposed to be the preview — a preview that disagrees with the
+    // thing it previews is worse than none.
+    if (explicitCmap) params.push(`colormap=${encodeURIComponent(explicitCmap)}`)
+    else if (style?.colormap) {
+      // Mirrors services/titiler.py: matplotlib spells a reversed ramp with an `_r` suffix, and the
+      // flag is the single source of truth — a stored `viridis_r` with reverse off is forward.
+      const base_ = style.colormap.endsWith('_r') ? style.colormap.slice(0, -2) : style.colormap
+      params.push(`colormap_name=${style.colormap_reverse ? base_ + '_r' : base_}`)
+    }
   }
   const url = base + (params.length ? '&' + params.join('&') : '')
   return url.startsWith('/') ? location.origin + url : url

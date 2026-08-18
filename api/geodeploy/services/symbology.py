@@ -413,6 +413,47 @@ def marker_outline(style: dict) -> tuple[str | None, float]:
     return color, min(max(ratio, 0.0), 1.0)
 
 
+#: What a POLYGON's outline is worth in CSS pixels when nothing says otherwise.
+#:
+#: 1 is not an arbitrary default — it is what a MapLibre `fill` layer already draws. A fill strokes
+#: its own edge at a fixed hairline and `fill-outline-color` has no width, so every polygon ever
+#: published here has a 1 px outline. Anything wider needs a real `line` layer beside the fill, and
+#: keeping the default at 1 means those portals keep rendering exactly as they did.
+POLYGON_OUTLINE_WIDTH = 1
+
+
+def outline_width_px(style: dict, default: float = POLYGON_OUTLINE_WIDTH) -> float:
+    """A POLYGON's outline width, in CSS pixels.
+
+    `outline_width` means different things on different geometries, which is worth stating plainly
+    because one key carries both: on a POINT it is a RATIO of the marker radius (a ring around a
+    4 px dot and around a 20 px dot should stay in proportion — see `marker_outline`), and on a
+    POLYGON it is a width in pixels, like a line's. They are never read by the same code path.
+    """
+    try:
+        width = float(style.get("outline_width", default))
+    except (TypeError, ValueError):
+        return float(default)
+    if width != width or width in (float("inf"), float("-inf")):
+        return float(default)
+    # Capped where a "border" stops being one. Nothing rejects a wider value; it simply stops being
+    # a sensible thing to draw over the data the polygon is describing.
+    return min(max(width, 0.0), 40.0)
+
+
+def needs_outline_layer(style: dict) -> bool:
+    """Whether a polygon needs its own `line` layer, or a plain `fill` already draws it right.
+
+    ONLY WHEN IT IS WIDER THAN THE HAIRLINE A FILL DRAWS ANYWAY. Emitting the extra layer
+    unconditionally would add one to every polygon in every portal that exists, for a picture
+    nobody asked to change — and a `line` layer's antialiasing is not pixel-identical to a fill's
+    own edge, so it would be a visible change too.
+    """
+    if outline_color(style) is None:
+        return False                     # no outline at all; nothing to widen
+    return outline_width_px(style) > POLYGON_OUTLINE_WIDTH
+
+
 def _px(value, default=5):
     try:
         n = round(float(value if value is not None else default), 2)

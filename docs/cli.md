@@ -373,16 +373,23 @@ of the style is left alone.
 geodeploy layers style roads --color '#e11d48' --line-width 2 --line-type dashed
 geodeploy layers style sites --marker star --radius 6 --outline-color none
 geodeploy layers style dem   --colormap terrain --rescale 0,2400
+geodeploy layers style dem   --algorithm contours --increment 25 --rescale 0,2400
 ```
+
+`--rescale` is not optional for contours: the algorithm colours the terrain across that range and
+draws the lines on top of it, so without a range the whole raster comes out one flat colour.
+`geodeploy layers stats dem` suggests one.
 
 | Flag | For |
 | --- | --- |
 | `--color` | polygon fill, line colour, or point colour |
 | `--fill-opacity`, `--opacity` | fill opacity; whole-layer opacity |
-| `--outline-color`, `--outline-width` | outline colour (`none` for no outline) and, on points, its width as a fraction of the radius — a wide one is how a ring is drawn |
+| `--outline-color`, `--outline-width` | outline colour (`none` for no outline) and its width. On **points** a fraction of the radius — a wide one is how a ring is drawn; on **polygons** a width in px (default 1) |
 | `--line-width`, `--line-type` | width in px; `solid` `dashed` `dotted` |
 | `--radius`, `--marker` | point size; `circle` `square` `triangle` `diamond` `star` `cross` |
-| `--colormap`, `--rescale`, `--algorithm`, `--zfactor`, `--bidx` | raster: colour ramp, stretch, `hillshade`, exaggeration, band selection |
+| `--colormap`, `--reverse-colormap`, `--rescale`, `--bidx` | raster: colour ramp, its direction, stretch, band selection |
+| `--algorithm`, `--zfactor` | raster: `hillshade` or `contours`; hillshade's vertical exaggeration |
+| `--increment`, `--thickness`, `--minz`, `--maxz` | contours: interval in the raster's own units, line width in px, and the range the relief behind the lines is coloured over (defaults to `--rescale`) |
 
 ### Colour by a field
 
@@ -664,7 +671,7 @@ For the legend, prefer asking the instance — that answer is the one the publis
 
 ```python
 gd.vector.legend("cities")      # {'entries': [{'color': …, 'label': '10 – 90'}], …}
-gd.raster.legend("dem")         # a ramp: colormap, rescale, algorithm, bidx
+gd.raster.legend("dem")         # a ramp: colormap, rescale, algorithm, zfactor, contours, bidx
 ```
 
 `style.legend()` computes the same labels locally, for a caller holding an unsaved style that has

@@ -135,6 +135,22 @@ jobs:
         # outer bound and an inclusive top break.
         run: python integrations/qgis-plugin/scripts/test_tile_symbology.py
 
+      - name: Raster symbology survives QGIS and comes back unchanged
+        # The half that did not exist: a raster could be READ out of QGIS but never written into it,
+        # so opening a GeoTIFF to restyle it meant losing GeoDeploy's colours first. This stubs the
+        # raster renderers and asserts on the ROUND TRIP — every style applied and read back through
+        # the same comparison `_style_differs` uses, because a phantom "restyled" is as wrong as a
+        # lost colormap.
+        run: python integrations/qgis-plugin/scripts/test_raster_symbology.py
+
+      - name: 3D extrusion round-trips for polygons and for points
+        # QGIS cannot express every GeoDeploy extrusion — a cylinder has one length, so a point
+        # whose height comes from a column has no equivalent — and reading the symbol back naively
+        # reports a fixed height, which the merge then treats as "the user replaced the column".
+        # These tests are what keep the recorded-spec mechanism honest, and they include every
+        # extrusion block found on the live instance.
+        run: python integrations/qgis-plugin/scripts/test_3d_symbology.py
+
       - name: The plugin picks the fast source, and degrades when it is absent
         run: python integrations/qgis-plugin/scripts/test_sources.py
 

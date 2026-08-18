@@ -222,9 +222,12 @@ without a browser, and about being able to take a copy with you.</p>
 desktop GIS people already have open.</p>
 
 - [ ] **A QGIS plugin** — browse the catalog, add a layer, style it, publish back. Built on the
-      packaged client, which is why that client has no dependencies and runs on Python 3.9
+      packaged client, which is why that client has no dependencies and runs on Python 3.9.
+      *Built; not yet run in anger inside QGIS, and `experimental` until it has been*
 - [ ] **Styling that travels** — portal and layer style interchange with GeoLibre and QGIS, for
-      every layer type
+      every layer type. *Both directions now for vectors and rasters, including a polygon's outline
+      width. 3D extrusion is carried safely but is not yet DRAWN by QGIS — see "Every symbol QGIS
+      can draw" below*
 - [ ] **Download a backup**, and **restore from disk** — state-only (small, covers a bad restore or
       a botched update) separately from the full copy including objects
 - [ ] **Labels** — the other half of data-driven symbology v1.1 did not ship, and unlike size this
@@ -249,6 +252,49 @@ is the rest of the round trip, not yet scheduled.</p>
 - [ ] **Push from GeoLibre** — a "Publish to GeoDeploy" plugin and a `.geolibre.json` importer
 - [ ] Write-back: expose a layer as editable GeoJSON and re-ingest the edit
 - [ ] Catalog **search**, so a client can discover a dataset rather than fetch a known URL
+
+</div>
+
+<div class="gd-rel" markdown>
+### Every symbol QGIS can draw
+<span class="gd-when">Planned</span>
+
+<p class="gd-goal">v1.4 made styling travel both ways for most of the symbology GeoDeploy itself
+has: single symbol, graduated and categorized, size from a field, raster colormaps, classes and
+contours, outlines. QGIS draws a great deal more than that, and today those symbols are quietly
+simplified on the way in. This is about closing that gap — and about being honest where it cannot be
+closed.</p>
+
+Two different problems wear the same coat, and separating them is most of the work:
+
+- [ ] **3D extrusion, drawn in QGIS.** GeoDeploy renders extrusion and the plugin carries it safely
+      — a round trip cannot delete a layer's 3D — but QGIS still draws those polygons FLAT in a 3D
+      map view, so 3D cannot be edited there. This is the first thing on this list, because unlike
+      the rest it is half-built rather than absent.
+- [ ] **Symbols a web map can draw, which simply are not wired up yet.** These are real round
+      trips, each worth its own entry: **inverted polygons** (a mask — the world minus the layer,
+      which is how you dim everything outside a study area), **2.5D** (QGIS's shadowed
+      pseudo-3D block, distinct from the true extrusion v1.4 already carries), **hatch and
+      pattern fills**, **gradient fills**, **line offsets** and **markers along a line** (arrows on
+      a river, ticks on a boundary), **halos and buffers**, **multi-layer symbols** (a casing under
+      a road), and **rule-based rendering**, which is a superset of the categorized/graduated pair
+      and the one most real QGIS projects reach for.
+- [ ] **Symbols a web map cannot draw at all** — a shapeburst fill, an SVG marker from the user's
+      disk, a geometry generator. The plugin currently drops these, which loses the author's work
+      the first time they push. The answer is not to fake them: carry the layer's **QML** (or SLD)
+      alongside the friendly style, so QGIS ⇄ QGIS is lossless and the portal draws the closest
+      approximation it can. GeoDeploy already does exactly this for GeoLibre imports, where raw
+      MapLibre paint rides along in `style.maplibre` and the friendly keys describe what they can.
+- [ ] **Labels**, which are on this list twice for a reason: they are the other half of data-driven
+      symbology, they are what most QGIS layers actually carry, and MapLibre draws them well.
+- [ ] A **fidelity report** in the plugin: before a push, say which parts of the symbology will
+      travel exactly, which will be approximated, and which are carried but not drawn. Guessing
+      which of the three applies is the current experience.
+
+<p class="gd-goal">The constraint that shapes all of it: GeoDeploy renders with MapLibre and
+TiTiler, not with QGIS. A symbol travels exactly when the web renderer can express it, and the
+useful question for each one is not "can we support it" but "does it survive a round trip unchanged,
+and if not, does the author find out before they publish?"</p>
 
 </div>
 

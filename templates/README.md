@@ -338,3 +338,11 @@ zoom-to-folder and expand/collapse-all on the published switcher)
 re-applies groups)
 2026-07-14 (removed the research template; added satellite-dark, editorial, humanitarian; fixed the
 listing requirement note to `style.json`; basemap now chosen separately from the template)
+2026-08-17 (**contours in the published portal**, and two parity bugs fixed with it. `portal.js`'s
+raster popover swaps its Hillshade checkbox for a Terrain choice — TiTiler takes ONE algorithm, so
+hillshade and contours are mutually exclusive — with Interval/Line-width inputs, and the legend
+draws contours as TiTiler's own **terrain** ramp plus an "every N" line, because the algorithm
+ignores the layer's colormap entirely. *Parity:* `applyRaster` rebuilt the tile URL from scratch and
+dropped a baked `colormap=` JSON mapping, so touching any control on a CLASSIFIED raster silently
+fell back to grayscale mid-session; it is now preserved. Under contours the stretch stays ENABLED —
+it is the range the relief behind the lines is coloured over — where hillshade disables it.)

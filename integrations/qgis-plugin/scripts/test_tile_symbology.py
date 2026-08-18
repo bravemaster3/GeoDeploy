@@ -616,16 +616,21 @@ print("\nALL GEOMETRY-SELECTION CASES PASS")
 comparable_style = ns["comparable_style"]
 
 
-def differs(before, after):
-    """`portals._style_differs`, in the one part that matters here."""
-    return comparable_style(before) != comparable_style(after)
+def differs(before, after, geometry=None):
+    """`portals._style_differs`, in the one part that matters here.
+
+    The GEOMETRY is not optional in the real call and is not optional here: `outline_width` is a
+    ratio of the radius on a point and a width in pixels on a polygon, so a comparison that does not
+    know which would report every polygon as restyled (and it did, until this argument existed).
+    """
+    return comparable_style(before, geometry) != comparable_style(after, geometry)
 
 
 # A portal's stored style, and the same style after a round trip through QGIS. Nothing was edited, so
 # nothing may be reported.
 stored = {"color": "#10b981", "fill_opacity": 0.45, "outline_color": "#1d4ed8"}
 readback = round_trip({"geometry_type": "MultiPolygon"}, stored)
-assert not differs(stored, readback), (stored, readback)
+assert not differs(stored, readback, "MultiPolygon"), (stored, readback)
 print("untouched polygon  -> no change reported")
 
 for geom, stored in (("point", {"color": "#ef4444", "radius": 1.0}),
@@ -633,7 +638,7 @@ for geom, stored in (("point", {"color": "#ef4444", "radius": 1.0}),
                      ("point", {"color": "#3b82f6"}),                 # nothing but a colour
                      ("MultiPolygon", {"color": "#e5b636"})):
     readback = round_trip({"geometry_type": geom}, stored)
-    assert not differs(stored, readback), (geom, stored, readback)
+    assert not differs(stored, readback, geom), (geom, stored, readback)
 print("untouched, 4 shapes-> no change reported")
 
 # A classified layer, likewise.
@@ -776,7 +781,29 @@ cases = [
 ]
 for geom, style in cases:
     readback = round_trip({"geometry_type": geom}, style)
-    assert not differs(style, readback), (geom, style, readback)
+    # The GEOMETRY is part of the comparison — `outline_width` is a ratio on a point and pixels on
+    # a polygon, and their defaults differ.
+    assert not differs(style, readback, geom), (geom, style, readback)
 print("all properties     ->", len(cases), "styles round-trip with no phantom change")
+
+# ── a polygon's outline WIDTH ────────────────────────────────────────────────────────────────────
+#
+# It used to be dropped on the floor, and honestly so: a MapLibre `fill` strokes its own edge at a
+# fixed hairline, so there was no width for GeoDeploy to draw. There is now — a `line` layer beside
+# the fill — so the number has to survive the trip like every other one.
+poly = {"color": "#e5b636", "outline_color": "#1d4ed8", "outline_width": 4}
+back = round_trip({"geometry_type": "MultiPolygon"}, poly)
+assert back["outline_width"] == 4, back
+assert not differs(poly, back, "MultiPolygon"), back
+print("polygon outline    -> a 4 px border survives the round trip")
+
+# A change to it registers…
+assert differs(poly, dict(poly, outline_width=8), "MultiPolygon"), "a wider border is a real edit"
+# …and 1 px is the default a fill's own edge draws, so stating it is not an edit.
+assert not differs({"color": "#e5b636"}, {"color": "#e5b636", "outline_width": 1}, "MultiPolygon")
+# THE SAME KEY MEANS SOMETHING ELSE ON A POINT: there it is a RATIO of the radius, and 1 is a solid
+# ring rather than a hairline — so the two must not be folded together.
+assert differs({"color": "#e5b636"}, {"color": "#e5b636", "outline_width": 1}, "point")
+print("outline width      -> px on a polygon, a ratio on a point, and the defaults do not collide")
 
 print("\nALL FULL-FIDELITY CASES PASS")

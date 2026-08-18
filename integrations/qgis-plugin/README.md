@@ -19,11 +19,16 @@ fastest source it offers, and upload a QGIS layer back — with its styling. Sit
     stored profiles, so `geodeploy login` at a shell is already a login here.
   - `sources.py` — which URL to hand QGIS. PMTiles for a tiled layer (fastest to draw, needs
     GDAL ≥ 3.8, checked at runtime), OGC API - Features otherwise or when the user asks for
-    attributes, `/vsicurl/…/cog` for rasters.
+    attributes, `/vsicurl/…/cog` for rasters. `alternatives()` returns every surface a layer
+    offers, each with a `label` and an `is_data` flag — that is what the dock's **Source** picker
+    shows. `raster_style_from_tile_url` reads a portal's baked raster styling back OUT of its tile
+    template, which is the only place a portal records how it colours a raster.
   - `export.py` — what to actually upload for a given layer.
-  - `symbology.py` — GeoDeploy style ⇄ QGIS renderer, **both directions**. Classification is never
-    recomputed here: breaks are read from the style or from the renderer, and new breaks come from
-    the instance's `/field-stats`, exactly as the CLI does.
+  - `symbology.py` — GeoDeploy style ⇄ QGIS renderer, **both directions, vector and raster**.
+    Classification is never recomputed here: breaks are read from the style or from the renderer,
+    and new breaks come from the instance's `/field-stats`, exactly as the CLI does. The raster half
+    is `raster_to_qgis` / `raster_from_qgis` (colormap, stretch, band, colour-per-value, hillshade),
+    and `comparable_style` folds both shapes so a round trip reports only real edits.
   - `vendor/geodeploy/` — the published client, checked in (see below).
 - `scripts/vendor.py` — refresh the vendored copy; `--check` in CI.
 
@@ -55,8 +60,41 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   QGIS session as the real test.
 - `experimental=True` in `metadata.txt` until that happens.
 - No icon yet (`icon.png` is referenced by `metadata.txt` and must exist before upload).
-- Styling covers single symbol, graduated and categorized. **Size-from-a-field is not translated
-  yet** in either direction, though the instance and the CLI both support it.
+- Styling covers single symbol, graduated and categorized for vectors, and colormap / stretch /
+  band / colour-per-value / hillshade / contours for rasters — **both directions**.
+  Size-from-a-field, marker shape, stroke colour and width, and a polygon's outline width too.
+- **3D EXTRUSION IS NOT DRAWN BY QGIS, and the code that tries is unverified.** `apply_3d` builds a
+  `QgsVectorLayer3DRenderer` and the round-trip tests pass against stubs, but in a real QGIS session
+  an extruded portal layer still renders FLAT in a 3D map view — reported after opening a 3D portal
+  editable, zooming in and adding the view. Do not describe this as working. What IS verified: the
+  extrusion is never LOST — `extrusion_from_qgis` returns None for a tile layer and the recorded
+  spec survives a push, so a round trip cannot delete a portal's 3D (proven against every extrusion
+  on the live instance). Candidate causes for whoever picks this up are in
+  `notes_temp/notes_for_future.md`; the feature is on the roadmap under "Every symbol QGIS can draw".
+- **What is NOT carried yet, and where it is tracked:** QGIS draws far more than GeoDeploy's
+  vocabulary — inverted polygons, 2.5D, hatch and gradient fills, line offsets, markers along a
+  line, multi-layer symbols, rule-based rendering, labels. Those are simplified on the way in and
+  lost on the way out today. Planned as *"Every symbol QGIS can draw"* in `docs/roadmap.md`, where
+  the split that matters is written down: symbols a web renderer CAN express (real round trips,
+  each to be wired up) versus symbols it cannot (carry the QML alongside the friendly style, so
+  QGIS ⇄ QGIS stays lossless while the portal approximates), plus a fidelity report so an author
+  learns which of the two they are in BEFORE they push.
+- **A polygon's outline WIDTH round-trips now too** — it used to be the one thing that could not,
+  because a MapLibre fill's edge is a fixed hairline. GeoDeploy draws it as a `line` layer beside
+  the fill, so the number is real and travels. Note the key means two things: `outline_width` is a
+  RATIO of the radius on a point and a WIDTH IN PIXELS on a polygon, which is why
+  `comparable_style` takes the geometry — without it a polygon read back at its 1 px default
+  compares against a marker's 0.28 and every polygon reports as restyled.
+- **3D units are not converted.** GeoDeploy's extrusion heights and pillar radii are metres; QGIS 3D
+  measures in the project's map units. Those agree exactly in a projected CRS in metres and do not
+  in a geographic one. The number travels unchanged rather than being transformed, because
+  converting would need the project CRS and would make the number a user typed differ from the one
+  that comes back.
+- **Which renderer QGIS offers is decided by the SOURCE, not by us.** Server-rendered raster tiles
+  arrive as one band of RGBA ("Singleband color data" — nothing to classify), and vector tiles get
+  `QgsVectorTileBasicRenderer`, which has no categorized or graduated mode. The **Source** picker
+  and **"Restyle this layer…"** are the two ways to get onto a surface that can be restyled; the
+  default is still the fast one, so nothing is slower unless it is asked for.
 - Uploading writes the layer out first (`export.py`) rather than reading `layer.source()` as a
   path: a FILTERED layer's file holds more than the layer does, and a memory or PostGIS layer has no
   file at all. A plain unfiltered file is sent as-is, so nothing is re-encoded needlessly. A remote
@@ -65,6 +103,156 @@ python integrations/qgis-plugin/scripts/vendor.py --check  # what CI runs
   resampling on the user's behalf, and ingest converts to COG anyway.
 
 ## Last updated
+2026-08-18c (**CORRECTION to the entry below: 3D extrusion does not draw in QGIS AT ALL, not merely
+on tiles.** Tested for real — a 3D portal opened editable, zoomed to, then View ▸ New 3D Map View —
+and the polygons are still FLAT. So the previous entry's implication, that the editable portal mode
+shows 3D, is wrong, and every claim that 3D "travels both ways" has been removed from the changelog,
+the plugin's published description and the roadmap. What survives scrutiny is narrower and still
+worth having: the extrusion is never LOST. `extrusion_from_qgis` returns None for a layer that
+cannot hold 3D, the recorded spec is returned unchanged while the symbol matches it, and all six
+live extrusions round-trip with no phantom change — so opening a portal and pushing it back cannot
+delete somebody's 3D. The DISPLAY half is unbuilt, and is now the first item under "Every symbol
+QGIS can draw" in `docs/roadmap.md`. Candidate causes — an unresolved `qgis._3d` import that logs
+at Info and returns False, terrain-relative altitude clamping, and above all the CRS units problem
+(in an EPSG:4326 project a height in metres is read as DEGREES) — are in
+`notes_temp/notes_for_future.md`. The lesson for this file: stub tests prove the code does what it
+was written to do, not that QGIS draws anything. Nothing may be described as working in QGIS until
+it has been seen working in QGIS.)
+2026-08-18b (**"3D extrusions don't show in the QGIS 3D view" — they cannot, on tiles, and the
+plugin now says so.** A `QgsVectorLayer3DRenderer` needs a FEATURE layer. A portal opened *as the
+portal draws it* hands QGIS vector tiles, `apply` routes those to `apply_to_vector_tiles`, and
+`apply_3d` is never reached — so the 3D view shows flat polygons. Nothing was wrong and nothing was
+lost (the extrusion is still stored, and a push from a tile layer returns None, so it cannot be
+deleted), but silence about it is indistinguishable from "not implemented". Reported on a portal
+whose two GeoParquet polygon layers both carry real extrusions.
+Now: `apply` logs the reason and the fix at Info when it meets an extruded tile layer, and
+`open_portal_as_group` NAMES those layers in its result — "reopen with Source set to Editable to see
+and edit it. The 3D itself is unchanged." The editable portal mode already draws them properly,
+since it opens each layer from its data. `test_3d_symbology` pins the two halves that matter: a tile
+layer is given no 3D renderer, and the one it never had is not cleared either.)
+2026-08-18 (**the default source now follows the BACKEND, and a portal can be opened editable.**
+*Defaults:* PostGIS holds the layers people classify — the attribute table is the point, and Martin's
+tiles carry only what was baked into them — so a PostGIS layer now opens over OGC API - Features,
+ready to be styled by a column. Tiled GeoParquet is the large-data backend and keeps its tiles.
+`sources.describe` therefore takes a THREE-valued `prefer_attributes`: `None` means "this backend's
+default", `True`/`False` are a choice somebody made — two values would not do, because `False` has
+to still mean "give me the tiles" for the picker to offer both. `prefers_attributes()` is the one
+place that decision lives, and `alternatives()` orders the picker by it. The dock's sticky
+preference starts as `None` for the same reason: `False` would have overridden the new default on
+every layer.
+*Portals:* the Source picker is no longer blank for a portal — it offers **"As the portal draws it"**
+and **"Editable — each layer from its data"**. The editable group opens every layer from its own
+data (features, or the GeoTIFF) and then paints it with the PORTAL's styling, so all of QGIS's
+symbology applies to a portal layer exactly as it does to a single one, and `Push group to portal`
+sends it home. A raster's portal colours are parsed back out of its baked tile URL first, since that
+is where a portal records them. A layer whose data cannot be reached — not in the listing this token
+can see — still opens from the portal's tiles and is NAMED in the result, rather than silently
+arriving unrestylable.
+*And the contour parameters reached the comparison:* they live in `_RASTER_KEYS` so a change of
+algorithm clears them, which also filtered them out of `comparable_style` — so changing a contour
+interval from 5 m to 25 m, the most visible edit a contour map has, reported as "unchanged".)
+2026-08-17p (**class LABELS round-trip.** Values and colours already did; the reader built
+`{value, color}` and dropped the label, so pushing a classified raster back from QGIS replaced its
+classes with unlabelled ones and every legend — the layer page, every portal — fell back to bare
+numbers. QGIS labels a class with its own value when nothing else is given, so that case folds to
+"no label" in `_comparable_raster_class`: a raster whose classes were never named must not report as
+edited on every push. The label text is DATA, like a category value, so its case is not folded —
+"Water" and "water" are a real difference.)
+2026-08-17o (**contour styling round-trips too — and it needed the record-and-verify device a THIRD
+time.** GeoDeploy grew `algorithm: "contours"` (with `increment`/`thickness`/`minz`/`maxz`), and QGIS
+has no renderer for it: QGIS makes contours with a processing algorithm that outputs a VECTOR layer.
+So the raster is drawn here with its stretch alone — honest — but reading THAT back reports a plain
+stretch, and `merge_style` treats a raster read-back as the whole colouring, so opening a contour
+layer and pushing it back would have turned it grey. `P_RASTER_ALGO` records the untranslatable keys
+with a signature of the renderer QGIS was actually given, and `with_algorithm` puts them back on
+every `raster_from_qgis` return path while that still matches; picking a palette or classifying the
+layer changes the renderer, the signature stops matching, and the replacement travels as the real
+edit it is. Hillshade is deliberately NOT recorded — it became a real renderer and reads back on its
+own, and shadowing it would restore a stale copy over a genuine change.
+`sources.raster_style_from_tile_url` also learned `algorithm_params`, since a portal drawing contours
+every 10 m carries that number nowhere else. `raster_style_of` and `comparable_style` now CARRY keys
+the plugin has never met rather than dropping them, so the next server-side property survives before
+anyone teaches the plugin about it.)
+2026-08-17n (**3D extrusion now travels both ways, for polygons AND points — and it was verified
+against the live instance rather than only against stubs.** `merge_style` already PRESERVED the
+`extrusion` key through a push, which is the floor: it meant a restyle from QGIS did not delete 3D,
+but 3D could not be edited there either. Now `apply_3d` writes it (`QgsPolygon3DSymbol` with an
+extrusion height, or `QgsPoint3DSymbol` shaped as the CYLINDER `services/pillars` actually builds a
+point into) and `extrusion_from_qgis` reads it back.
+*The hard part is that QGIS cannot express every GeoDeploy extrusion.* A cylinder has one length, so
+a point whose height comes from a COLUMN has no equivalent — and reading the symbol back naively
+reports a fixed height, which `merge_style` would then treat as "the user replaced the column" and
+DELETE it. So the applied spec is recorded on the layer (`P_EXTRUSION`) beside what QGIS ended up
+holding, and returned unchanged while the two still match; only a real edit is read as one. Same
+device as `P_COLORMAP`, and the same reason: QGIS is not a lossless container for someone else's
+style. `opacity` survives the same way.
+*Three answers, not two:* `extrusion_from_qgis` returns None for a layer that cannot hold 3D (a
+vector-TILE layer, or a QGIS without 3D) so a push cannot delete a portal's extrusion; `{"enabled":
+False}` for a feature layer whose 3D was switched off, which is a real edit; and the block itself
+otherwise. `with_3d` is applied to EVERY `from_qgis` return path, not just the single-symbol one —
+the live instance has extrusions on categorized and graduated layers, and reading only the branch
+the 2D renderer matched would have dropped them.
+*Verified live* (geodeploy-lite, read-only): **40 vector styles and 12 raster styles round-trip with
+zero phantom changes**, including all 7 real extrusions. Two of those cases no amount of reasoning
+produced — `CO` is stored `{"enabled": true}` with NO height (GeoDeploy draws it flat, so QGIS must
+too), and a world-scale point layer carries `radius: 10000000`, which is why the plugin's 30 m
+fallback footprint must never be written back into a style that named none. Both are now fixtures in
+`scripts/test_3d_symbology.py`.
+*Also, from the same live read:* the raster `/legend` route reported no `zfactor`, so a PUBLIC
+hillshade — whose only styling source is that route — opened flat instead of at its stored
+exaggeration. Fixed in `routers/data/raster.py`; **needs an API deploy to take effect**.
+*And forward work for contour styling:* `raster_style_of` and `comparable_style` now carry keys this
+plugin has never met instead of dropping them, and only a HILLSHADE drops the stretch (any other
+algorithm keeps it) — so `algorithm: "contours"` with `increment`/`thickness` round-trips the day it
+lands. `_RASTER_KEYS` says what to add there when it does.)
+2026-08-17m (**"raster symbology can't be changed, and for polygons I can only change fill colour"
+— neither was a symbology limit. It was the SOURCE.** QGIS decides which renderer to offer from the
+layer TYPE: server-rendered raster tiles reach it as one band of RGBA, so Symbology shows
+"Singleband color data" with no bands and no classes; vector tiles get `QgsVectorTileBasicRenderer`,
+a flat list of symbols with no categorized or graduated mode and no attribute statistics to classify
+from. Both are the right way to LOOK at a layer and neither can be restyled beyond a colour. Three
+changes, and the requirement driving all of them was *faithful both ways*:
+*1. `symbology.raster_to_qgis`* — the missing half. `raster_from_qgis` has read QGIS raster
+renderers for a while but nothing WROTE them, so `plugin.py` excluded the COG from styling
+(`source["kind"] != "cog"`) and "prefer the real data" was a TRADE: values or GeoDeploy's colours,
+never both. Now colormap → `QgsSingleBandPseudoColorRenderer` over the named ramp, `color_classes` →
+`QgsPalettedRasterRenderer`, `algorithm: hillshade` → `QgsHillshadeRenderer` at GeoDeploy's own
+315/45, three bands → `QgsMultiBandColorRenderer`, and a bare stretch → gray — chosen in the SAME
+ORDER `services/titiler.get_tile_url` chooses, or QGIS would show a colormap the portal ignores.
+**QGIS does not keep a ramp's NAME** (only ColorBrewer/cpt-city ramps answer `schemeName`; viridis
+and friends are anonymous gradients), so `P_COLORMAP` records it alongside the ramp's COLOURS and
+the name is believed only while those still match — forwards, or exactly reversed, which is how
+flipping the ramp in QGIS travels back as `colormap_reverse`. A different ramp means no name, not
+the last one we remember. Also new: `raster_style_from_legend` (a raster legend was being read by
+the VECTOR reader, which returned `{"color": …}` — a key no raster renderer can use, so a public
+raster could never arrive coloured), `raster_style_of` for the flat stored shape, `_qcolor`
+(**Qt reads `#rrggbbaa` as `#AARRGGBB`** — GeoDeploy writes alpha LAST, so a transparent "no data"
+class became opaque near-black), and raster branches in `comparable_style`/`merge_style`: a raster
+read-back is the WHOLE colouring, `bidx: [1]` and no band are the same picture, and a hillshade
+ignores the colormap so a stale one is not a difference.
+*2. A per-layer Source picker* replaces the global "prefer the real data" checkbox — the right
+question in the wrong place: it applied to whatever was added next, named no layer, and listed
+neither surface. `sources.alternatives` now labels each with `is_data`. The default is unchanged
+(the fast tiles), and a restyle deliberately does NOT make the data surface sticky.
+*3. "Restyle this layer…"* reopens the active layer from its data — GeoTIFF, or full features —
+carrying the styling it is wearing now, and replaces it IN PLACE (found by layer id, not
+`list.index`, whose wrapper comparison would have appended it to the end of a portal group and
+changed the portal's drawing order). For a portal raster the current styling is parsed out of the
+TILE URL (`sources.raster_style_from_tile_url`), because that is where a portal records how it
+colours a raster — reading the layer's default would restyle it to something no portal chose.
+*Speed, since the ask was "faithful, not slower":* the default source is untouched; a colormap with
+no stretch reuses the range QGIS already computed when it opened the raster rather than asking the
+provider for band statistics (range requests over the network on a remote COG — `_default_range`),
+and falls back to a bounded 250k-pixel sample only if that is absent. Adding a raster the ordinary
+way now also skips a pointless style fetch and no longer logs "saved style could not be applied" for
+every one of them — those tiles are already coloured by the server.
+*And two fidelity bugs found on the way:* "Save styling to GeoDeploy" sent `opacity: 1.0` and
+`popup_fields: []` hardcoded, so saving a colour from QGIS made a half-transparent layer opaque and
+DELETED its popup fields along with anything else QGIS cannot draw. It now merges over the stored
+style and sends the layer's real opacity, the same rule the portal push path already used.
+Tests: `scripts/test_raster_symbology.py` — 9 styles applied and read back through the comparison
+`_style_differs` uses, plus alpha, reversal, restretching, a swapped ramp, declined tile layers, the
+merge rules, both readers, the tile-URL parser and the no-statistics guarantee.)
 2026-08-17l (**a raster could not be restyled at all, and three symbol properties never travelled.**
 *The raster blocker was server-side and two layers deep:* the only source of a raster's real band
 values is its COG, and `routers/data/raster.py::raster_cog` required `is_public` with NO authenticated

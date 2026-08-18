@@ -6,7 +6,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.1.12
+version=0.3.0
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -21,7 +21,55 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.1.12 - Rasters can finally be restyled, and every symbol property now travels. A
+changelog=0.3.0 - First public release. Browse a GeoDeploy instance (no account needed for public
+    data), add a layer using the fastest source it offers, open a whole portal as a styled QGIS
+    group, and upload back - including multi-gigabyte files. Styling travels BOTH WAYS: single
+    symbol, graduated and categorized vectors; colormap, stretch, band, hillshade, contours and
+    colour-per-value rasters; size-from-a-field; marker shape, stroke colour and width; a polygon's
+    outline width. A layer opens looking like the portal, and what you change goes home.
+    Which renderer QGIS offers depends on the SOURCE, so a per-layer Source picker and a
+    "Restyle this layer..." button get you onto the surface that can actually be restyled. A PostGIS
+    layer opens over OGC API - Features, ready to classify by a field; tiled GeoParquet keeps its
+    tiles. A portal opens either as it draws it, or editable - every layer from its own data with
+    the portal's styling painted on - so a portal's layers restyle exactly like single ones.
+    KNOWN LIMITATION: a layer's 3D extrusion is carried safely (opening one and pushing it back
+    does not remove it) but is NOT yet drawn in QGIS's 3D view, so 3D cannot be edited here.
+    0.2.1 - A polygon's outline WIDTH now travels, which was the one property that could
+    not: GeoDeploy draws a fill's edge as a real line layer now, so the number means something.
+    0.2.0 - First public release. Browse a GeoDeploy instance (no account needed for public
+    data), add a layer using the fastest source it offers, open a whole portal as a styled QGIS
+    group, and upload back - including multi-gigabyte files. Styling travels BOTH WAYS for every
+    layer type: single symbol, graduated and categorized vectors; colormap, stretch, band, hillshade,
+    contours and colour-per-value rasters; 3D extrusion for polygons and points; size-from-a-field;
+    marker shape and stroke. A layer opens looking like the portal, and what you change goes home.
+    Which renderer QGIS offers depends on the SOURCE, so a per-layer Source picker and a
+    "Restyle this layer..." button get you onto the surface that can actually be restyled. A PostGIS
+    layer opens over OGC API - Features, ready to classify by a field; tiled GeoParquet keeps its
+    tiles. A portal opens either as it draws it, or editable - every layer from its own data with
+    the portal's styling painted on - so a portal's layers restyle exactly like single ones.
+    0.1.15 - A classified raster's stretch is no longer compared. GeoDeploy does not
+    apply a stretch to a colour-per-value palette - the classes are matched on raw pixel values, and
+    a stretch would change the very numbers they key on - so a stretch sitting beside one is not a
+    visible difference and must not report the layer as restyled.
+    0.1.14 - Class LABELS now travel with a classified raster. "Water" and "Trees" are
+    the whole point of a classification, and the reader only carried the value and the colour - so
+    pushing a land-cover raster back from QGIS replaced its classes with unlabelled ones and every
+    legend fell back to bare numbers. A class QGIS labelled with its own value still counts as
+    unlabelled, so a raster whose classes were never named does not report as edited.
+    0.1.13 - Raster symbology is editable, 3D extrusion travels both ways, and contour
+    lines round-trip. Why a raster offered nothing to change: QGIS picks its renderer from the layer
+    TYPE, and server-rendered tiles arrive as one band of RGBA - "Singleband color data", no bands,
+    no classes. Vector tiles are the same shape of limit: no categorized or graduated renderer at
+    all. Opening the data instead used to cost you GeoDeploy's colours; now the GeoTIFF opens WITH
+    its colormap, stretch, band and classification applied, so you can classify it and send it back.
+    A per-layer Source picker replaces the old global checkbox, and a new "Restyle this layer..."
+    button reopens whatever is selected from its data, in place, keeping the styling it has. For a
+    portal's raster that styling is read out of the portal's own tile URL, so you restyle what the
+    portal shows rather than the layer's default. 3D EXTRUSION now applies and reads back for
+    polygons and points - heights from a field, fixed heights, bases, colours, and a point pillar's
+    footprint - and what QGIS cannot express is preserved rather than flattened by the next push.
+    Contour styling is carried the same way. Nothing is slower: the default source is unchanged.
+    0.1.12 - Rasters can finally be restyled, and every symbol property now travels. A
     raster's real bands come from its GeoTIFF, and that file was refused unless the layer was shared
     publicly - so for a private raster there was no way to restyle it at all. It is now readable by
     anyone who may see the layer, and the plugin gives GDAL the token (scoped to your instance) so

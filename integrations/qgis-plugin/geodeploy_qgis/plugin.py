@@ -144,17 +144,27 @@ class GeoDeployDock(QDockWidget):
         self.styled.setChecked(True)
         outer.addWidget(self.styled)
 
-        # The label names the raster consequence outright: "why can I not restyle this raster" was
-        # answered only in a tooltip and in the log, and the answer IS this checkbox.
-        self.attributes = QCheckBox("Prefer the real data over the styled view "
-                                    "(needed to restyle a raster)")
-        self.attributes.setToolTip(
-            "Vector — off: one pre-generalized archive, downloaded once, carrying only the "
-            "attributes the tiles hold. On: OGC API - Features, re-queried for the extent on "
-            "screen, with exact geometry and every attribute.\n"
-            "Raster — off: server-rendered tiles, coloured exactly as GeoDeploy draws them. "
-            "On: the GeoTIFF itself, with real pixel values, drawn using QGIS's own defaults.")
-        outer.addWidget(self.attributes)
+        # PER LAYER, NOT PER SESSION. This was a checkbox — "prefer the real data over the styled
+        # view" — which is the right question asked in the wrong place: it applied to whatever was
+        # added next, named no layer, and listed neither of the surfaces it was choosing between. A
+        # layer's sources are a property of that layer (a raster offers tiles or its GeoTIFF; an
+        # untiled vector offers only features), so the choice belongs beside the layer, spelled out.
+        #: Sticky across layers, because "I want the real data" is a way of working rather than a
+        #: per-layer whim: once chosen, every layer that offers one opens on its data surface.
+        #: **None means nobody has chosen**, which is not the same as choosing the tiles — with
+        #: PostGIS now defaulting to features, `False` would actively override that default on
+        #: every layer. Set BEFORE the widget, so the slot cannot run against attributes that do
+        #: not exist yet.
+        self._prefer_data = None
+        self._sources: list[dict] = []
+        picker = QHBoxLayout()
+        picker.addWidget(QLabel("Source"))
+        self.source_box = QComboBox()
+        self.source_box.setEnabled(False)
+        self.source_box.currentIndexChanged.connect(self._on_source_changed)
+        picker.addWidget(self.source_box, 1)
+        outer.addLayout(picker)
+        self._describe_source()         # the empty picker still explains what it is for
 
         self.add_btn = QPushButton("Add to map")
         self.add_btn.clicked.connect(self.add_selected)
@@ -192,6 +202,17 @@ class GeoDeployDock(QDockWidget):
             "rest still go.")
         self.upload_btn.clicked.connect(self.upload_active)
         outer.addWidget(self.upload_btn)
+
+        self.restyle_btn = QPushButton("Restyle this layer…")
+        self.restyle_btn.setToolTip(
+            "Reopen the layer selected in the Layers panel from its DATA — the GeoTIFF for a "
+            "raster, full features for a vector — keeping the styling it has now.\n\n"
+            "Use it when QGIS offers you nothing to change: server-rendered raster tiles arrive as "
+            "\"Singleband color data\" with no bands to classify, and vector tiles have no "
+            "categorized or graduated renderer. The data source has both, and everything you then "
+            "build travels back to GeoDeploy.")
+        self.restyle_btn.clicked.connect(self.restyle_selected)
+        outer.addWidget(self.restyle_btn)
 
         self.save_style_btn = QPushButton("Save styling to GeoDeploy")
         self.save_style_btn.setToolTip(
@@ -511,6 +532,7 @@ class GeoDeployDock(QDockWidget):
         """A portal cannot be added to the map, so the button says what it WILL do instead."""
         row = self._selected_row() or {}
         is_portal = bool(row.get("_portal"))
+        self._refresh_sources(row, is_portal)
         signed_in = bool(self.instance and self.instance.token)
         self.add_btn.setText("Open portal in browser" if is_portal else "Add to map")
         if is_portal:
@@ -530,6 +552,73 @@ class GeoDeployDock(QDockWidget):
                 "Open the layer's page on the instance — the map, the metadata, the fields and "
                 "every share link. A public layer opens for anyone.")
 
+    #: The two ways to open a PORTAL, offered in the same picker as a layer's sources because it is
+    #: the same question one level up: draw it as published, or open what can actually be edited.
+    PORTAL_SOURCES = [
+        {"kind": "portal-tiles", "is_data": False,
+         "label": "As the portal draws it — fast",
+         "why": "Every layer from the source the portal publishes: tiles, coloured and generalized "
+                "by the server. Fastest to draw, and exactly what a visitor sees — but tiles offer "
+                "no categorized or graduated renderer, so symbology can only be nudged."},
+        {"kind": "portal-data", "is_data": True,
+         "label": "Editable — each layer from its data",
+         "why": "Every layer opened from its own data — features for a vector, the GeoTIFF for a "
+                "raster — and then painted with the PORTAL's styling. Slower to draw, and the whole "
+                "of QGIS's symbology applies: classify by a field, build classes, edit 3D. Push the "
+                "group back when you are done."},
+    ]
+
+    def _refresh_sources(self, row: dict, is_portal: bool) -> None:
+        """Fill the source picker with what THIS layer — or this portal — actually offers."""
+        if is_portal:
+            self._sources = [dict(s) for s in self.PORTAL_SOURCES]
+        else:
+            self._sources = [] if not row else sources.alternatives(row)
+        self.source_box.blockSignals(True)     # repopulating is not the user choosing
+        self.source_box.clear()
+        for entry in self._sources:
+            self.source_box.addItem(entry["label"], entry)
+        # Entry 0 is the BACKEND'S default (`sources.alternatives` orders them), so a user who has
+        # expressed no preference gets it. One who has gets what they asked for, where it exists.
+        index = 0
+        if self._prefer_data is not None:
+            index = next((i for i, s in enumerate(self._sources)
+                          if bool(s.get("is_data")) == self._prefer_data), 0)
+        if self._sources:
+            self.source_box.setCurrentIndex(index)
+        self.source_box.setEnabled(len(self._sources) > 1)
+        self.source_box.blockSignals(False)
+        self._describe_source()
+
+    def _describe_source(self) -> None:
+        """The chosen source's own sentence, as the picker's tooltip."""
+        current = self.source_box.currentData()
+        if isinstance(current, dict):
+            self.source_box.setToolTip(current.get("why") or "")
+        elif self._sources:
+            self.source_box.setToolTip("")
+        else:
+            self.source_box.setToolTip(
+                "Select a layer to see the sources it offers. A raster offers server-rendered "
+                "tiles (a picture, exactly as GeoDeploy draws it) or its GeoTIFF (real pixel "
+                "values — the one you can classify and restyle). A vector offers tiles or full "
+                "features.")
+
+    def _on_source_changed(self, *_):
+        current = self.source_box.currentData()
+        if isinstance(current, dict):
+            # Remembered, so choosing the data surface once does not have to be chosen again for
+            # every layer after it.
+            self._prefer_data = bool(current.get("is_data"))
+        self._describe_source()
+
+    def _chosen_source(self, row: dict):
+        """The source the picker is showing for `row`, or the best one if it is showing none."""
+        current = self.source_box.currentData()
+        if isinstance(current, dict) and self._sources and self._selected_row() is row:
+            return current
+        return sources.describe(row, prefer_attributes=self._prefer_data)
+
     def add_selected(self):
         row = self._selected_row()
         if not row:
@@ -538,7 +627,7 @@ class GeoDeployDock(QDockWidget):
         if row.get("_portal"):
             self._open_portal(row)
             return
-        source = sources.describe(row, prefer_attributes=self.attributes.isChecked())
+        source = self._chosen_source(row)
         if not source:
             self._say("That layer offers nothing QGIS can read yet.", Qgis.Warning)
             return
@@ -558,10 +647,24 @@ class GeoDeployDock(QDockWidget):
             # The stored style is `{opacity, style: {...}, popup_fields}` — the plugin only ever
             # read the inner `style`, so a layer saved at 50% arrived opaque.
             _set_opacity(layer, row["default_style"].get("opacity"))
-        if self.styled.isChecked() and source["kind"] != "cog":
+        if source["kind"] in ("wmts", "tilejson", "xyz"):
+            # ALREADY STYLED, BY THE SERVER, whatever the checkbox says. These tiles arrive with the
+            # colormap, stretch and band choice baked into the image, so there is nothing for QGIS
+            # to apply — and trying was not harmless: it put a "saved style could not be applied"
+            # warning in the log for every raster added the ordinary way, which is the one path that
+            # was never broken. The source's own `why` already says how it is coloured.
+            pass
+        elif self.styled.isChecked():
+            # THE COG IS STYLED TOO, NOW. It used to be excluded, on the reasoning that a GeoTIFF is
+            # drawn by QGIS rather than by the server — which was true and was the problem: choosing
+            # "the real data" meant giving up GeoDeploy's colours and restyling from scratch, so the
+            # round trip only ever ran one way. `raster_to_qgis` translates the stored colormap,
+            # stretch, band and classification into a real QGIS renderer, so the GeoTIFF opens
+            # looking like the portal AND with its values intact — which is the whole point of
+            # being able to restyle it.
             style = self._style_for_row(row, name)
             if style:
-                # `symbology.apply` picks the renderer from the layer's TYPE — feature layers and
+                # `symbology.apply` picks the renderer from the layer's TYPE — feature, raster and
                 # vector-tile layers need different ones, and choosing here by source kind is how
                 # the two drifted apart before.
                 applied = (", styled as the portal draws it"
@@ -581,9 +684,16 @@ class GeoDeployDock(QDockWidget):
         the plugin's headline promise — it could only fail, and every public layer arrived unstyled.
         `/legend` IS public and is what the portal draws from. Cached by `fetch_json`, so opening
         several layers does not re-ask.
+
+        A RASTER is a different shape at both ends — stored flat, and described by a legend of
+        colormap-and-stretch rather than a list of swatches — so both readers are picked by kind.
+        Handing a raster legend to the vector reader, which is what happened until now, produced
+        `{"color": "#…"}`: a vector key, and nothing a raster renderer can use.
         """
+        is_raster = (row.get("layer_type") == "raster" or row.get("storage_backend") == "raster")
         if isinstance(row.get("default_style"), dict):
-            style = row["default_style"].get("style")
+            style = (symbology.raster_style_of(row["default_style"]) if is_raster
+                     else row["default_style"].get("style"))
             if style:
                 return style
         if not self.instance:
@@ -593,11 +703,11 @@ class GeoDeployDock(QDockWidget):
             # `legend` is defined on the VECTOR and RASTER namespaces, not on the kind-agnostic
             # `layers` helper — asking the latter is an AttributeError, which is what every
             # unstyled layer was really hitting.
-            kind = "raster" if (row.get("layer_type") == "raster"
-                                or row.get("storage_backend") == "raster") else "vector"
+            kind = "raster" if is_raster else "vector"
             legend = self.instance.fetch_json(
                 "{0}/api/data/{1}/{2}/legend".format(self.instance.url.rstrip("/"), kind, ref))
-            return symbology.style_from_legend(legend)
+            return (symbology.raster_style_from_legend(legend) if is_raster
+                    else symbology.style_from_legend(legend))
         except GeoDeployError as exc:
             symbology._log("Could not read the legend for {0}: {1}".format(name, exc))
             return None
@@ -1014,8 +1124,17 @@ class GeoDeployDock(QDockWidget):
         group.setCustomProperty(portal_sync.P_PORTAL_TITLE, doc.get("title") or "")
 
         added, missing = 0, []
+        # WHICH KIND OF GROUP. Read once, here, rather than per layer: a group half from the
+        # portal's tiles and half from its data would push back a mixture nobody chose.
+        editable = self._prefer_data is True
+        not_editable = []
+        flat_3d = []            # extruded layers opened as tiles, which QGIS draws flat
         by_key = {(int(c.get("layer_id")), str(c.get("layer_type"))): c for c in configs
                   if c.get("layer_id") is not None}
+
+        def _log_editable_fallback(name):
+            """A layer the editable group could not open from its data — named, not swallowed."""
+            not_editable.append(str(name))
 
         def place(node_list, parent):
             """The portal's folder tree, as QGIS sub-groups. Folders are a real structure the
@@ -1035,7 +1154,19 @@ class GeoDeployDock(QDockWidget):
                 label = str(cfg.get("name") or cfg.get("layer_id"))
                 layer_row = self._row_for(cfg.get("layer_id"), cfg.get("layer_type"))
                 layer = None
-                if (cfg.get("source") or {}).get("url"):
+                portal_url = (cfg.get("source") or {}).get("url")
+                # EDITABLE MODE INVERTS THE PRIORITY. The portal's own source is what makes the
+                # group look like the portal, and it is also the one thing that cannot be restyled:
+                # tiles have no categorized or graduated renderer and a server-rendered raster
+                # reaches QGIS as colour. Asked for the editable group, each layer is opened from
+                # its DATA instead and then painted with the portal's styling below — same picture,
+                # but every renderer QGIS has now applies to it.
+                if editable and layer_row is not None:
+                    source = sources.describe(layer_row, prefer_attributes=True)
+                    layer = (self._open_best(layer_row, source,
+                                             layer_row.get("name") or "layer")[0]
+                             if source else None)
+                if layer is None and portal_url and not editable:
                     # THE PORTAL'S OWN SOURCE, for every layer type, because that is what "open the
                     # portal" means.
                     #
@@ -1048,17 +1179,20 @@ class GeoDeployDock(QDockWidget):
                     # points there. Either way, going through the layer's entry instead draws
                     # something the portal does not show.
                     layer = self._layer_from_portal_source(cfg, label)
-                if layer is None and layer_row is not None:
-                    source = sources.describe(layer_row,
-                                              prefer_attributes=self.attributes.isChecked())
+                if layer is None and layer_row is not None and not editable:
+                    source = sources.describe(layer_row)
                     layer = (self._open_best(layer_row, source,
                                              layer_row.get("name") or "layer")[0]
                              if source else None)
-                if layer is None and layer_row is None:
-                    # Not in the listing: a layer that is not itself published, on a portal that
-                    # is. The portal's own style says where it draws from, and that source is
-                    # readable by anyone who can read the portal — which is the whole point.
+                if layer is None and portal_url:
+                    # Not in the listing, or its data would not open: a layer that is not itself
+                    # published, on a portal that is. The portal's own style says where it draws
+                    # from, and that source is readable by anyone who can read the portal — which
+                    # is the whole point. In editable mode this is a fallback rather than the
+                    # first choice, so such a layer still appears; it simply cannot be restyled.
                     layer = self._layer_from_portal_source(cfg, label)
+                    if editable:
+                        _log_editable_fallback(label)
                 if layer is None:
                     missing.append(label)
                     continue
@@ -1071,7 +1205,19 @@ class GeoDeployDock(QDockWidget):
                 # reported it as a change the user never made.
                 _set_opacity(layer, cfg.get("opacity"))
                 style = (cfg.get("style") or {}) if self.styled.isChecked() else {}
-                if style and cfg.get("layer_type") != "raster":
+                # A PORTAL'S RASTER COLOURS LIVE IN ITS TILE URL, not in its layer_config: the
+                # server does the colouring, so `style` for a raster is usually empty and the
+                # colormap, stretch, band and algorithm are baked into the template. Opened as a
+                # GeoTIFF there is nothing to read them from — so they are parsed back out, and the
+                # raster arrives coloured as THIS portal draws it rather than as the layer's default.
+                if style is not None and editable and cfg.get("layer_type") == "raster" and portal_url:
+                    baked = sources.raster_style_from_tile_url(portal_url)
+                    if baked:
+                        style = symbology.merge_style(style, baked)
+                # Rasters are no longer excluded: opened from their GeoTIFF they have real bands and
+                # `symbology.apply` builds them a renderer. Server-rendered tiles still have nothing
+                # to style, and `raster_to_qgis` declines those itself.
+                if style:
                     # THE PORTAL'S style wins over the layer's default here — that is what opening
                     # a portal means. Through the dispatcher, so a tile layer gets the tile
                     # renderer instead of silently keeping the colour it was born with.
@@ -1085,6 +1231,11 @@ class GeoDeployDock(QDockWidget):
                     if cfg.get("geometry_type"):
                         row_for_style["geometry_type"] = cfg["geometry_type"]
                     symbology.apply(layer, style, row_for_style)
+                    # 3D needs a FEATURE layer to hang a renderer on. Opened as the portal draws it,
+                    # an extruded layer is a tile layer and QGIS's 3D view shows it flat — which
+                    # reads as "3D is not implemented" unless somebody says otherwise.
+                    if symbology.is_extruded(style) and not isinstance(layer, QgsVectorLayer):
+                        flat_3d.append(label)
                 added += 1
 
         # A portal with no folders is a flat list — the configs themselves, in order.
@@ -1101,9 +1252,22 @@ class GeoDeployDock(QDockWidget):
         note = ""
         if missing:
             note = " " + str(len(missing)) + " could not be opened (" + ", ".join(missing[:3]) + ")."
+        if not_editable:
+            # Named, because "why can I not classify THAT one" is the next question and the answer
+            # is specific: those layers are not in the listing this token can see, so only the
+            # portal's own tiles could be opened for them.
+            note += (" " + str(len(not_editable)) + " opened as the portal's tiles and cannot be "
+                     "restyled (" + ", ".join(not_editable[:3]) + ") - they are not in the layer "
+                     "listing, so their data could not be reached.")
+        if flat_3d:
+            note += (" " + str(len(flat_3d)) + " has 3D extrusion that QGIS cannot draw on tiles ("
+                     + ", ".join(flat_3d[:3]) + ") - reopen the portal with Source set to "
+                     "“Editable” to see and edit it. The 3D itself is unchanged.")
+        how = ("every layer from its data, so all of QGIS's symbology applies" if editable
+               else "as the portal draws it")
         self._say("Opened " + str(doc.get("title")) + " as a group - " + str(added) +
-                  " layer(s)." + note + " Restyle it, then use Push group to portal.",
-                  Qgis.Warning if missing else Qgis.Info)
+                  " layer(s), " + how + "." + note + " Restyle it, then use Push group to portal.",
+                  Qgis.Warning if (missing or not_editable or flat_3d) else Qgis.Info)
 
     def push_group(self):
         """Push the selected QGIS group back as a portal — after showing exactly what will change.
@@ -1309,6 +1473,124 @@ class GeoDeployDock(QDockWidget):
             url = f"{base}/portals/{slug}/"
         self._open_url(url)
 
+    def restyle_selected(self):
+        """Reopen the active QGIS layer as the surface its symbology can actually be edited on.
+
+        THE ANSWER TO "WHY CAN I NOT CLASSIFY THIS?". QGIS's renderer options are a property of the
+        layer TYPE, not a setting: server-rendered raster tiles arrive as one band of RGBA, which is
+        why a raster from a portal shows "Singleband color data" and offers no bands to stretch and
+        no classes to build; vector tiles get `QgsVectorTileBasicRenderer`, a flat list of symbols
+        with no categorized or graduated mode and no attribute statistics to classify from. Both are
+        the fast, faithful way to LOOK at a layer and neither can be restyled beyond a colour.
+
+        So this swaps the layer for the one holding real values — the GeoTIFF, or full features over
+        OGC API - Features — and applies the styling it is wearing right now, so nothing is lost in
+        the move. What comes back is an ordinary QGIS layer: Singleband pseudocolor, Paletted,
+        Categorized, Graduated, the classify button, the histogram. Restyle it and send it back with
+        "Save styling to GeoDeploy" or "Push group to portal".
+
+        It replaces the layer IN PLACE — same position, same name, same visibility, same group — so
+        a portal group stays the portal it was and can still be pushed as one.
+        """
+        layer = self.iface.activeLayer()
+        if layer is None:
+            self._say("Select the layer to restyle in the Layers panel first.", Qgis.Warning)
+            return
+        identity = portal_sync.layer_identity(layer)
+        if identity is None:
+            self._say("{0} did not come from GeoDeploy, so there is no other source to open it "
+                      "from. QGIS is already showing everything it has.".format(layer.name()),
+                      Qgis.Warning)
+            return
+        if not self.instance:
+            self._say("Connect to the instance this layer came from first.", Qgis.Warning)
+            return
+        layer_id, kind = identity
+        row = self._row_for(layer_id, kind)
+        if row is None:
+            self._say("{0} is not in this instance's listing — a portal can serve a layer that is "
+                      "not published on its own, and only the portal knows where it is. Sign in "
+                      "with a token that can see it, then try again.".format(layer.name()),
+                      Qgis.Warning)
+            return
+
+        # WHAT IT LOOKS LIKE NOW, from the most specific source available. A portal's raster wears
+        # the portal's colours, and those live in its TILE URL rather than in the layer's stored
+        # style — reading the layer's default instead would silently restyle it to something this
+        # portal never showed.
+        style = {}
+        try:
+            if kind == "raster":
+                style = sources.raster_style_from_tile_url(layer.source() or "")
+                if not style:
+                    style = symbology.raster_from_qgis(layer, self._colormaps())
+            else:
+                style = symbology.from_qgis(layer)
+        except Exception as exc:        # noqa: BLE001 - fall back to the stored style
+            symbology._log("Could not read {0}'s current styling ({1}); using its saved style."
+                           .format(layer.name(), exc))
+        if not style:
+            style = self._style_for_row(row, layer.name()) or {}
+
+        source = sources.describe(row, prefer_attributes=True)
+        replacement, source = self._open_best(row, source, layer.name())
+        if replacement is None:
+            self._say("Could not open {0}'s data source ({1}). The reason is in View > Panels > "
+                      "Log Messages, under GeoDeploy.".format(layer.name(),
+                                                              (source or {}).get("kind", "?")),
+                      Qgis.Critical)
+            return
+
+        replacement.setName(layer.name())
+        applied = symbology.apply(replacement, style, row) if style else False
+        _set_opacity(replacement, portal_sync._opacity_of(layer))
+        if not self._swap_layer(layer, replacement):
+            self._say("Could not put {0} back where it was.".format(layer.name()), Qgis.Critical)
+            return
+        self.iface.setActiveLayer(replacement)
+        # The picker's default is deliberately NOT changed. Restyling one layer is a targeted act;
+        # turning it into a standing preference would quietly put every later "Add to map" on the
+        # slow surface — full features re-queried on every pan — for a choice made about a raster.
+        self._say("{0} reopened as {1}{2}. Its symbology is now fully editable — classify it, then "
+                  "use “Save styling to GeoDeploy” or “Push group to portal”.".format(
+                      layer.name(), source["why"],
+                      ", with its current styling carried across" if applied
+                      else " (it had no styling to carry across)"))
+
+    def _swap_layer(self, old, new) -> bool:
+        """Put `new` exactly where `old` is in the layer tree, and remove `old`.
+
+        Adding the replacement and letting the user delete the original would be simpler and would
+        quietly break a portal group: the group is the portal, its ORDER is the portal's drawing
+        order, and a layer appended at the root is no longer in it. So the node is replaced in
+        place, keeping its position, its parent group and whether it was ticked.
+        """
+        try:
+            project = QgsProject.instance()
+            root = project.layerTreeRoot()
+            node = root.findLayer(old.id())
+            parent = node.parent() if node is not None else root
+            # FOUND BY LAYER ID, not by `list.index(node)`: two lookups of the same tree node can
+            # come back as two different Python wrappers, and `index()` compares wrappers — so the
+            # search would raise ValueError and the layer would be appended at the end of the group
+            # instead of taking the place it had. In a portal group, position IS drawing order.
+            index, visible = 0, True
+            if node is not None:
+                for i, child in enumerate(parent.children()):
+                    if getattr(child, "layerId", lambda: None)() == old.id():
+                        index = i
+                        break
+                visible = node.itemVisibilityChecked()
+            project.addMapLayer(new, False)         # False: placed by hand, not at the root
+            inserted = parent.insertLayer(index, new)
+            if inserted is not None:
+                inserted.setItemVisibilityChecked(visible)
+            project.removeMapLayer(old.id())
+            return True
+        except Exception as exc:        # noqa: BLE001 - never leave the project half-swapped
+            symbology._log("Could not replace the layer in the tree: {0}".format(exc))
+            return False
+
     def save_style(self):
         """Push the selected layer's QGIS styling back as its GeoDeploy default style.
 
@@ -1340,7 +1622,25 @@ class GeoDeployDock(QDockWidget):
             if not style:
                 skipped.append("{0} (nothing translatable)".format(layer.name()))
                 continue
-            jobs.append((layer.name(), layer_id, kind, style))
+            # LAID OVER WHAT IS STORED, and carrying the layer's real opacity.
+            #
+            # This used to send the read-back style alone, with `opacity: 1.0` and
+            # `popup_fields: []` written in — so saving a colour from QGIS also made a
+            # half-transparent layer opaque and DELETED its popup fields, along with anything else
+            # QGIS cannot draw (3D extrusion, imported MapLibre paint). The portal push path already
+            # merges for exactly this reason; the two are now the same rule.
+            row = self._row_for(layer_id, kind) or {}
+            stored = row.get("default_style")
+            stored = stored if isinstance(stored, dict) else {}
+            opacity = portal_sync._opacity_of(layer)
+            if kind == "raster":
+                body = dict(symbology.merge_style(symbology.raster_style_of(stored), style),
+                            opacity=opacity)
+            else:
+                body = {"opacity": opacity,
+                        "style": symbology.merge_style(stored.get("style"), style),
+                        "popup_fields": stored.get("popup_fields") or []}
+            jobs.append((layer.name(), layer_id, kind, body))
 
         if not jobs:
             self._say("Nothing to save: " + (", ".join(skipped) or "no layer from this instance") +
@@ -1352,9 +1652,7 @@ class GeoDeployDock(QDockWidget):
 
         def work():
             saved = []
-            for name, layer_id, kind, style in jobs:
-                body = (dict(style, opacity=1.0) if kind == "raster"
-                        else {"opacity": 1.0, "style": style, "popup_fields": []})
+            for name, layer_id, kind, body in jobs:
                 client.layers.api(kind).set_default_style(layer_id, body)
                 saved.append(name)
             return {"saved": saved, "skipped": skipped}

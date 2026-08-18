@@ -12,7 +12,7 @@ from ...deps import require_scope, resolve_optional_user
 from ...models import RasterLayer, UploadJob, User
 from ...schemas import JobStatus, LayerRename, PortalRefOut, RasterDefaultStyle, RasterLayerOut, SharingUpdate
 from ...services import share_links
-from ...services.titiler import get_tile_url as raster_tile_url, COLORMAPS
+from ...services.titiler import tile_url_from_style as raster_tile_url, COLORMAPS
 from ...tasks.raster_ingest import ingest_raster
 from . import exports
 from ..common import (apply_sharing, demo_upload_cap, busy_job_progress, by_ref, creator_names, portals_using,
@@ -46,17 +46,7 @@ async def list_layers(user: User = Depends(require_scope("data:read")), db: Asyn
             obj.progress, obj.current_step = jobs[l.id]
         if l.status == "ready":
             ds = json.loads(l.default_style) if l.default_style else {}
-            obj.tile_url = raster_tile_url(
-                l.s3_key,
-                colormap=ds.get("colormap"),
-                rescale=ds.get("rescale"),
-                algorithm=ds.get("algorithm"),
-                zfactor=ds.get("zfactor"),
-                bidx=ds.get("bidx"),
-                color_classes=ds.get("color_classes"),
-                colormap_reverse=bool(ds.get("colormap_reverse")),
-                band_count=l.band_count,
-            )
+            obj.tile_url = raster_tile_url(l.s3_key, ds, band_count=l.band_count)
         out.append(obj)
     return out
 
@@ -103,6 +93,79 @@ async def raster_stats(layer_id: int, user: User = Depends(require_scope("data:r
     if not mins or not maxs:
         raise HTTPException(422, "No usable statistics returned.")
     return {"rescale": f"{round(min(mins), 4)},{round(max(maxs), 4)}"}
+
+
+@router.get("/{layer_id}/unique-values")
+async def raster_unique_values(layer_id: int, band: int = 1,
+                               user: User = Depends(require_scope("data:read")),
+                               db: AsyncSession = Depends(get_db)):
+    """The distinct pixel values of a CLASSIFIED raster — land cover, soil types, a mask.
+
+    The counterpart of `/stats`, which suggests a stretch for CONTINUOUS data. A classification is
+    the other kind of raster entirely: its numbers are labels, a gradient between class 3 and class
+    4 means nothing, and what a legend needs is the list of values actually present.
+
+    TiTiler answers this with `categorical=true`, which turns the histogram into one bin per unique
+    value. Bounded twice on the way out, because the question is only meaningful for a raster whose
+    values ARE classes: `max_size` caps the pixels sampled, and a raster with more distinct values
+    than GeoDeploy can colour is reported as continuous rather than truncated into a classification
+    that would mis-colour most of the map. This DEM answers 12,145 — which is the correct answer to
+    "are you categorical", and it is no.
+    """
+    from ...services.titiler import MAX_COLOR_CLASSES
+
+    result = await db.execute(
+        select(RasterLayer).where(RasterLayer.id == layer_id, visible_to(user, RasterLayer)))
+    layer = result.scalar_one_or_none()
+    if not layer:
+        raise HTTPException(404, "Layer not found.")
+    if layer.status != "ready":
+        raise HTTPException(409, "Layer is not ready yet.")
+
+    import httpx
+    settings = get_settings()
+    cog_url = f"s3://{settings.storage_bucket}/{layer.s3_key}"
+    params = {"url": cog_url, "categorical": "true", "bidx": band,
+              # A SAMPLE, not the whole raster. A full read of a large COG to answer "which classes
+              # are in here" would hold the request open for minutes; a classification's values all
+              # appear in any decent sample, and the count only has to be right enough to decide
+              # whether this is categorical at all.
+              "max_size": 1024}
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.get(f"{settings.titiler_url}/cog/statistics", params=params)
+            r.raise_for_status()
+            stats = r.json()
+    except Exception as exc:
+        raise HTTPException(502, f"Could not read raster values: {exc}") from exc
+
+    band_stats = next((s for s in stats.values() if isinstance(s, dict)), None)
+    histogram = (band_stats or {}).get("histogram") or []
+    if len(histogram) < 2:
+        raise HTTPException(422, "No usable statistics returned.")
+    counts, values = histogram[0], histogram[1]
+
+    entries = []
+    for value, count in zip(values, counts):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        # INTEGERS ONLY. TiTiler maps a colour to a pixel VALUE, so 3.7 has nothing to key on — and
+        # a raster of fractional values is continuous whatever its histogram looks like.
+        if number != int(number):
+            return {"categorical": False, "values": [], "count": len(values),
+                    "reason": "This raster holds fractional values, so it is continuous — use a "
+                              "colour ramp and a stretch."}
+        entries.append({"value": int(number), "count": int(count or 0)})
+
+    entries = [e for e in entries if e["count"] > 0]
+    entries.sort(key=lambda e: e["value"])
+    if len(entries) > MAX_COLOR_CLASSES:
+        return {"categorical": False, "values": [], "count": len(entries),
+                "reason": f"{len(entries)} distinct values — more than the {MAX_COLOR_CLASSES} a "
+                          f"classification can carry, so this reads as continuous data."}
+    return {"categorical": True, "values": entries, "count": len(entries)}
 
 
 @router.post("/upload", response_model=JobStatus, status_code=202)
@@ -508,6 +571,20 @@ async def raster_legend(layer_ref: str, request: Request, db: AsyncSession = Dep
         "colormap_reverse": bool(style.get("colormap_reverse")),
         "rescale": rescale,
         "algorithm": style.get("algorithm"),
+        # A hillshade without its Z FACTOR is a different hillshade. The exaggeration is the whole
+        # visible difference between `b1*1` and `b1*5` relief, and this route is the only styling a
+        # PUBLIC raster has — a client falling back to it drew flat terrain where the portal shows
+        # a modelled surface. Verified on the live instance, where `Degfert_DEM_restr` is stored
+        # with `zfactor: 5.0` and reported it nowhere.
+        "zfactor": style.get("zfactor"),
+        # CONTOUR spacing and line width, and the range the background is coloured over. Same
+        # reasoning as `zfactor`: this route is the only styling a PUBLIC raster has, and contours
+        # drawn at the algorithm's default 35 m interval instead of the author's 10 m is a
+        # different map.
+        "increment": style.get("increment"),
+        "thickness": style.get("thickness"),
+        "minz": style.get("minz"),
+        "maxz": style.get("maxz"),
         "bidx": style.get("bidx"),
         "band_count": layer.band_count,
     }
@@ -541,12 +618,7 @@ async def raster_tilejson(layer_ref: str, request: Request, db: AsyncSession = D
         "tilejson": "3.0.0",
         "name": layer.name,
         "scheme": "xyz",
-        "tiles": [base + raster_tile_url(
-            layer.s3_key, colormap=ds.get("colormap"), rescale=ds.get("rescale"),
-            algorithm=ds.get("algorithm"), zfactor=ds.get("zfactor"), bidx=ds.get("bidx"),
-            color_classes=ds.get("color_classes"),
-            colormap_reverse=bool(ds.get("colormap_reverse")),
-            band_count=layer.band_count)],
+        "tiles": [base + raster_tile_url(layer.s3_key, ds, band_count=layer.band_count)],
         "minzoom": 0,
         "maxzoom": 22,
     }
@@ -626,12 +698,7 @@ async def raster_wmts(layer_ref: str, request: Request, db: AsyncSession = Depen
 
     # The XYZ template, re-labelled with WMTS's placeholders. `&` inside it MUST be escaped or the
     # document is not well-formed XML and QGIS rejects the whole connection.
-    tmpl = base + raster_tile_url(
-        layer.s3_key, colormap=ds.get("colormap"), rescale=ds.get("rescale"),
-        algorithm=ds.get("algorithm"), zfactor=ds.get("zfactor"), bidx=ds.get("bidx"),
-        color_classes=ds.get("color_classes"),
-        colormap_reverse=bool(ds.get("colormap_reverse")),
-        band_count=layer.band_count)
+    tmpl = base + raster_tile_url(layer.s3_key, ds, band_count=layer.band_count)
     tmpl = (tmpl.replace("{z}", "{TileMatrix}").replace("{x}", "{TileCol}")
                 .replace("{y}", "{TileRow}"))
 

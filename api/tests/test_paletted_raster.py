@@ -226,3 +226,37 @@ def test_explicit_classes_reverse_by_re_pairing_the_colours():
 def test_reverse_is_inert_without_a_palette():
     url = get_tile_url("r/x.tif", colormap_reverse=True, settings=_S())
     assert "colormap_name" not in _params(url) and "colormap" not in _params(url)
+
+
+# ── A stretch destroys a value-lookup palette ────────────────────────────────────────────────────
+
+def test_an_explicit_colormap_drops_the_rescale():
+    """Reported as "unique values renders only the red".
+
+    `rescale` maps the data linearly into 0-255 BEFORE the colormap lookup, and an explicit palette
+    is keyed on the RAW pixel values. A float32 mask of 0/1/2 with `rescale=0,2` therefore arrives at
+    the lookup as 0/127/255: only the class whose number survives still matches a key, and the other
+    two fall through to transparent. Measured on the live instance against that exact raster — one
+    class drew and the map was two-thirds empty; without the stretch all three drew, as QGIS shows
+    them. Same rule as hillshade, for a different reason.
+    """
+    url = get_tile_url("k.tif", color_classes=CLASSES, rescale="0,2", settings=_S())
+    p = _params(url)
+    assert "colormap" in p
+    assert "rescale" not in p, f"a stretch remaps the values the classes are keyed on: {url}"
+
+
+def test_the_rescale_survives_when_the_palette_is_a_named_ramp():
+    """Scoped to the explicit mapping only. A named ramp is applied ACROSS a range, so it needs the
+    stretch — dropping it there would flatten every non-8-bit raster."""
+    p = _params(get_tile_url("k.tif", colormap="viridis", rescale="0,4095", settings=_S()))
+    assert p["rescale"] == ["0,4095"]
+
+
+def test_a_classified_rgb_composite_keeps_its_stretch():
+    """Three bands means no colormap at all is applied, so the stretch is the only thing colouring
+    it — an explicit palette that is being IGNORED must not take the stretch down with it."""
+    p = _params(get_tile_url("k.tif", bidx=[3, 2, 1], color_classes=CLASSES, rescale="0,255",
+                             settings=_S()))
+    assert "colormap" not in p
+    assert p["rescale"] == ["0,255"]
