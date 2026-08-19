@@ -1,12 +1,13 @@
 [general]
 name=GeoDeploy
 qgisMinimumVersion=3.28
+qgisMaximumVersion=4.99
 description=Browse a GeoDeploy instance, add its layers, and publish layers back to it.
 about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. This plugin connects
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.3.4
+version=0.3.5
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -25,7 +26,8 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.3.4 - The plugin wears the GeoDeploy logo instead of a placeholder circle, six
+changelog=0.3.5 - Maximum version added because it is also supported in QGIS 4.2. 
+    0.3.4 - The plugin wears the GeoDeploy logo instead of a placeholder circle, six
     QDialogButtonBox enums missed by the first Qt6 pass are scoped (the scope belongs to the class
     you are calling, and that one is not QMessageBox), and a handful of unused imports and an
     ambiguous variable name are gone.
