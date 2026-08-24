@@ -1,0 +1,67 @@
+{
+  "name": "Monitoring dashboard",
+  "author": "GeoDeploy",
+  "description": "An operational board: a map, four headline numbers, a time-series line chart and a live record list, wired so a map selection and a date range both cross-filter everything. Built for sensor, asset or incident data. Every widget stays removable and re-bindable — this is a starting layout, not a fixed one.",
+  "tags": ["dashboard", "monitoring", "operations", "time series", "official"],
+  "language": "en",
+  "basemap": "positron",
+  "preview": "preview.png",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "archetype": "dashboard",
+  "archetypes": ["dashboard"],
+  "layout": {
+    "regions": { "dashboard": { "density": "comfortable", "mapControls": true } }
+  },
+  "dashboard": {
+    "grid": { "rowHeight": 88, "gap": 10 },
+    "refresh": 0,
+    "widgets": [
+      {
+        "id": "sel-date", "type": "selector", "title": "Time range",
+        "layout": { "x": 0, "y": 0, "w": 3, "h": 2 },
+        "dataSource": { "kind": "date" },
+        "actions": { "filters": ["kpi-total", "kpi-open", "kpi-avg", "kpi-max", "chart-time", "list", "map"], "listens": false }
+      },
+      { "id": "kpi-total", "type": "indicator", "title": "Records",
+        "layout": { "x": 3, "y": 0, "w": 2, "h": 2 },
+        "dataSource": { "op": "count" },
+        "style": { "format": "auto" },
+        "actions": { "filters": [], "listens": true } },
+      { "id": "kpi-open", "type": "indicator", "title": "Latest value",
+        "layout": { "x": 5, "y": 0, "w": 2, "h": 2 },
+        "dataSource": { "op": "max" },
+        "style": { "format": "auto", "compareMode": "delta", "goodDirection": "up" },
+        "actions": { "filters": [], "listens": true } },
+      { "id": "kpi-avg", "type": "indicator", "title": "Average",
+        "layout": { "x": 7, "y": 0, "w": 2, "h": 2 },
+        "dataSource": { "op": "avg" },
+        "style": { "format": "decimal", "decimals": 1 },
+        "actions": { "filters": [], "listens": true } },
+      { "id": "kpi-max", "type": "indicator", "title": "Peak",
+        "layout": { "x": 9, "y": 0, "w": 3, "h": 2 },
+        "dataSource": { "op": "max" },
+        "style": { "format": "auto" },
+        "actions": { "filters": [], "listens": true } },
+      {
+        "id": "map", "type": "map", "title": "Map",
+        "layout": { "x": 0, "y": 2, "w": 7, "h": 6 },
+        "dataSource": { "tools": ["click", "polygon", "bbox"] },
+        "actions": { "filters": ["kpi-total", "kpi-open", "kpi-avg", "kpi-max", "chart-time", "list"], "listens": true }
+      },
+      {
+        "id": "chart-time", "type": "chart", "title": "Over time",
+        "layout": { "x": 7, "y": 2, "w": 5, "h": 3 },
+        "dataSource": { "op": "count", "timeBucket": "day", "limit": 30, "sort": "value_desc" },
+        "style": { "chart": "line" },
+        "actions": { "filters": ["kpi-total", "list"], "listens": true }
+      },
+      {
+        "id": "list", "type": "table", "title": "Records",
+        "layout": { "x": 7, "y": 5, "w": 5, "h": 3 },
+        "dataSource": { "pageSize": 50 },
+        "actions": { "filters": [], "listens": true }
+      }
+    ]
+  }
+}

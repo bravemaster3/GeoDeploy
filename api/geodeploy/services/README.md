@@ -8,6 +8,48 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
 - `minio.py` — **`browser_upload_url(key)`** returns a presigned PUT URL the *browser* can reach: for the local MinIO (internal hostname) it strips scheme+host and returns a same-origin `/s3/...` path that nginx proxies with the **signed Host preserved** (SigV4 still verifies, no CORS); for an external/public endpoint it returns the full presigned URL (bucket must allow cross-origin PUT). Used by the GeoParquet direct-upload flow. Also provisions the MinIO container (named volume `geodeploy_minio`, `minio` alias), ensures the bucket, and **starts the TiTiler container** via `_start_titiler()`. `_start_titiler` strips the `http://` scheme from the endpoint for GDAL's VSI S3 (`AWS_S3_ENDPOINT` must be `host:port`), **derives `AWS_HTTPS` from the endpoint scheme** (so a real HTTPS S3 works, not just the local HTTP MinIO) + sets `AWS_REGION`, and always recreates the container so credential changes take effect. **`restart_titiler(endpoint, key, secret, region)`** is the public entry the *existing-storage* setup branch calls (`routers/setup.py`) — the local branch goes through `provision_local()` instead. `AWS_VIRTUAL_HOSTING` stays `FALSE` (path-style works for MinIO/R2/B2/Hetzner and AWS).
 - `martin.py` — `regenerate_config(layers)` rebuilds `martin-config.yaml` and reloads Martin (restart, else create the container if missing). Per-layer `geometry_column`/`id_column`/`srid` (`_srid_from_crs` parses `EPSG:N` from the layer's `crs`) so **imported** tables that don't use GeoDeploy's `geom`/`id`/4326 conventions still serve; ingested layers default to geom/id/4326. **Martin is now a core always-on service** (no compose profile; started by `install.sh`; boots from a sources-less config written by `main.py::_ensure_martin_config` until a DB exists) — so both local and external PostGIS serve tiles without manual intervention. `get_tile_url(schema, table)` → `/tiles/{schema}.{table}/{z}/{x}/{y}`. The connection string + `_attach_properties`'s asyncpg connect use `settings.postgis_*` and append `?sslmode=` when `postgis_sslmode` is set (external/managed DBs; empty for the local DB). **Config notes:** (1) `listen_addresses` is top-level (Martin v1.x); the old `srv:` key is ignored. (2) `_attach_properties()` queries `information_schema.columns` and writes a `properties` map per table — **required**, because a configured Martin table source with no `properties` serves geometry only (feature popups would show no attributes). (3) Reload does a full **container restart**, not SIGHUP — Martin only builds table field/property definitions at startup, so SIGHUP leaves `vector_layers[].fields` empty after a config change.
 - `titiler.py` — **`tile_url_from_style(s3_key, style, band_count)` is the entry point every caller should use**; it unpacks a stored raster style through `STYLE_KEYS` so a new raster property reaches all seven surfaces (layer listing, public index, TileJSON, WMTS, STAC assets, share links, portal generator) without seven edits. `get_tile_url(s3_key, colormap, rescale, algorithm, zfactor, bidx, increment, thickness, minz, maxz)` → `/raster/cog/tiles/WebMercatorQuad/{z}/{x}/{y}?url=s3://...` (the `WebMercatorQuad` TileMatrixSet segment is **required** by the current TiTiler API). Supports `rescale` ("min,max" stretch); `algorithm` (e.g. `hillshade`, single-band; hillshade adds `expression=b1*{zfactor}` for vertical exaggeration); `bidx` (list of 1-based band indices → `&bidx=` per band: one band = single-band output, three = RGB composite); and `colormap_name`. **`algorithm=contours`** adds `algorithm_params` as URL-encoded JSON (`increment`, `thickness`, `minz`, `maxz`) — see `_contour_params`: TiTiler's contours colours the data across minz–maxz with a built-in terrain ramp and draws lines on it, its defaults span −12000..8000 m, and `minz`/`maxz` are typed **int** (a fractional one 422s the whole request), so the layer's own `rescale` is borrowed, floored and ceiled. Colormap is dropped for an RGB composite (`len(bidx)==3`) or when an algorithm is active; algorithm and colormap are mutually exclusive. `get_tilejson_url` uses `/cog/WebMercatorQuad/tilejson.json`. `COLORMAPS` list.
+- `dashboard.py` (V-16, 2026-08-24) — the **dashboard archetype's config schema and its only
+  validator**. `WIDGET_TYPES` is the registry (per type: what it binds, whether it can be a filter
+  SOURCE, whether it can be a TARGET, and which channel it listens on — `attr` / `geom` / `select`);
+  `resolve_dashboard(config)` normalises an authored config into the manifest baked at publish.
+  **It NORMALISES rather than rejects** — an unknown widget type or a dangling action target is
+  dropped, never raised, so a dashboard published from a newer builder still renders what this
+  server understands (the same posture `resolve_layout` takes). The published runtime
+  (`templates/shared/dashboard.js`) does **no** validation of its own: it is written against the
+  invariants this module guarantees (unique DOM-safe ids, known types, live action targets, in-grid
+  layout). One validator, not two halves that drift. `dashboard_layer_refs()` returns the vector +
+  raster ids a dashboard binds — used by `portal_generator.build_dashboard_sources` AND by the
+  public-read caches in `routers/data/{vector,raster}.py`, because a widget can summarise a layer
+  the MAP never draws. Registry mirrored in `dashboard.js` and `DashboardBuilder.vue` — three
+  surfaces, change together. Full design note: `notes_temp/DASHBOARD_ARCHETYPE.md`.
+- `aggregate.py` (V-16, 2026-08-24) — **server-side summarisation of a vector layer** for the
+  dashboard's indicator / gauge / chart / table / selector widgets, plus `*_pick` (the exact
+  geometry of a clicked feature). Behind `POST /data/vector/{ref}/{aggregate,table,pick}` and
+  `GET …/distinct`. **The engine is the layer's own storage, deliberately, and that is two paths not
+  one:** a PostGIS layer aggregates in PostGIS (the GiST index makes an `ST_Intersects`-filtered
+  `SUM` one indexed pass; exporting to DuckDB would copy the table to save nothing), a GeoParquet
+  layer aggregates in DuckDB in place (columnar, and the covering-bbox column + prep-grid hive
+  partitions prune row groups and whole files). **The DuckDB spatial extension cannot be loaded on
+  the read path** (`duckdb_engine._connect_read`), so a geometry filter there prunes by bbox in SQL
+  and does the exact test in vectorised shapely over the survivors, capped at `CANDIDATE_CAP` and
+  reported as `capped` when it bites. **`_srid_of(layer)` is not cosmetic:**
+  `ST_Transform(…, ST_SRID(geom))` makes the predicate row-dependent so Postgres cannot fold it and
+  the GiST index goes unused; the literal SRID keeps it a constant expression. asyncpg also needs
+  `CAST(:param AS text[])` on `= ANY(...)` — a bare list has no type to infer.
+- `zonal.py` (V-16, 2026-08-24) — **raster zonal statistics** for the Raster Stats widget, behind
+  `POST /data/raster/{ref}/zonal-stats`. Takes a GeoJSON geometry (a clicked feature, a drawn
+  polygon or a dragged bbox — all three normalise upstream to one geometry) and returns
+  min/max/mean/sum/std/median/count/histogram. **Uses TiTiler's own `POST /cog/statistics`**: it is
+  already deployed, already holds the storage credentials, and rio-tiler reads the COG through a
+  WINDOW around the feature (a ranged read of the matching overview level) rather than the whole
+  raster — that windowing is what makes zonal stats viable at all. A dedicated
+  rasterio/exactextract service is the documented alternative and the module is shaped for it:
+  `compute()` is the only entry point and `_titiler_statistics` the only thing that knows how the
+  numbers are made. **Cache is content-addressed** on `(s3_key, band, sha256(canonical geometry))`
+  so redrawing the same area or comparing two rasters over one polygon hits; coordinates are NOT
+  rounded into the hash (two selections differing in the sixth decimal are two selections);
+  `invalidate(s3_key)` runs on raster delete, because an object key can be reused and serving the
+  previous raster's numbers under a new one is a wrong answer with no symptom.
 - `share_links.py` (2026-07-29) — the ONE place that knows **which artifact a given layer should be
   consumed through, and how a human pastes it into their tool**. `vector_links(layer, base)` /
   `raster_links(layer, base, default_style)` return tool-labelled entries
@@ -132,6 +174,15 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   permalink it serves, never a substitute for the bbox queries.
 
 ## Last updated
+2026-08-24 (**V-16 dashboard archetype**: three new services. `dashboard.py` is the config schema
+and the archetype's ONLY validator — the published runtime is written against its invariants and
+checks nothing itself. `aggregate.py` summarises a vector layer server-side, choosing the engine
+from the layer's own storage (PostGIS in PostGIS, GeoParquet in DuckDB in place) rather than forcing
+one access path; the two non-obvious details are that DuckDB's spatial extension cannot be loaded on
+the GeoParquet read path (so a geometry filter is bbox-in-SQL plus exact-in-shapely) and that
+`ST_Transform(…, ST_SRID(geom))` costs the GiST index, so the SRID is inlined. `zonal.py` computes
+raster zonal statistics through TiTiler's own windowed `POST /cog/statistics`, cached
+content-addressed on the geometry hash. Design note: `notes_temp/DASHBOARD_ARCHETYPE.md`.)
 2026-08-18 (`portal_generator._social_meta` + the `<head>` injection above — a pasted portal link rendered as a bare card because nothing in the stack emitted `og:` tags at all.)
 2026-08-17b (`portal_generator`: **a portal's raster with no `rescale` now inherits the layer's.**
 TiTiler needs a stretch for anything not already 0-255, and without one a float DEM or index raster

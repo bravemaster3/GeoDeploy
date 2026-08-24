@@ -53,6 +53,23 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
   #21 — the instance had drawn it since v1.1 with no way to set it) and the ramp **Reverse**
   checkbox, which flips the stored class colours locally: a reversed ramp is the same colours
   backwards, so no request is needed and hand-edited colours survive.
+- `portal/DashboardBuilder.vue` (V-16, 2026-08-24) — the editor half of the **dashboard**
+  archetype, mounted in `PortalEditor`'s Experience panel. **The one rule it exists to enforce: a
+  template is a STARTING POINT, never a fixed layout.** Whether the author began blank or from a
+  preset, every widget is removable, replaceable (the type dropdown REPLACES in place, keeping the
+  cell and title — carrying a chart's `groupBy` onto a gauge would leave an unusable field in the
+  config), re-bindable, re-wirable and re-sizable; the widget picker always offers all eight types.
+  `applyPreset` binds a template's unbound preset to this portal's layers (first suitable layer,
+  first suitable field of the right type, successive rasters for successive raster widgets) and only
+  ever seeds an EMPTY grid — the overwrite path is a button. Layout editing is a 12-column grid with
+  pointer drag + a corner resize handle and arrow-key nudges, deliberately the SAME geometry the
+  runtime uses (a free-pixel canvas would need a second mapping to the published grid, and the two
+  would drift). The wiring UI shows both directions: what this widget filters, and who filters it.
+  **There is no widget renderer here** — the live preview is the real published portal in an iframe,
+  as it is for every other archetype, so this component draws configuration only. Its `WIDGET_TYPES`
+  table mirrors `services/dashboard.WIDGET_TYPES` and `templates/shared/dashboard.js`'s `RENDERERS`
+  — three surfaces, change together. Changing a widget's LAYER clears every field on it (a column of
+  the old table is almost never a column of the new one, and the query would 400).
 - `portal/PortalCard.vue` — portal tile in the builder grid (edit/publish/view/unpublish/delete).
 - `shared/StatusBadge.vue` — colored processing/ready/error pill.
 - `shared/StorageBar.vue` — used/total storage bar (Settings).
@@ -77,6 +94,11 @@ All dialogs (`UploadModal`, `AddSourceModal`, `DiscoverModal`, `portal/CreatePor
   icon logic in `views/PortalEditor.vue` + `templates/shared/portal.js` — change all three together.
 
 ## Last updated
+2026-08-24 (**V-16 `portal/DashboardBuilder.vue`** — the widget picker, the 12-column drag/resize
+grid, per-widget data binding and the source→target filter wiring. It draws configuration only: the
+live preview is the real published portal in an iframe, so there is no second widget renderer to
+keep in sync with `templates/shared/dashboard.js`. A template preset seeds an empty grid once and is
+fully editable afterwards — that is the rule the component exists to enforce.)
 2026-08-07 (`portal/LayerPanel.vue`: the **Stretch (min/max)** inputs and ⚡ Auto are **disabled while
 Hillshade is on**, with the hint swapped to say why. The algorithm returns a finished 0–255 relief
 image and TiTiler applies `rescale` after it, so a stretch there silently flattened the shading —

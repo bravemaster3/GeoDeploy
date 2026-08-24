@@ -59,6 +59,10 @@
     // V-14 catalog: a BROWSE surface. The dataset list is the page and the map is a panel beside it,
     // so layerCatalog is off (the facet rail replaces the switcher) and `catalog` carries the split.
     catalog:  { regions: { layerList: { side: 'right', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, catalog: { scope: 'portal', mapSide: 'right', mapWidth: 50, railWidth: 20, perPage: 12 } }, panels: { catalog: true, layerCatalog: false, legend: true, basemap: true, about: false, story: false } },
+    // V-16 dashboard: the MAP IS A WIDGET. #layout becomes the widget grid and #map-wrap takes the
+    // map widget's cell by grid-area — never re-parented, same rule as the catalog. `layerCatalog`
+    // is off by default because the widgets name their own data; an author can turn it back on.
+    dashboard: { regions: { layerList: { side: 'left', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, dashboard: { density: 'comfortable', mapControls: true } }, panels: { dashboard: true, layerCatalog: false, legend: true, basemap: true, about: false, story: false } },
   };
   // `webmap+catalog` is still UNBUILT and degrades to a working map on purpose — a blank shell would
   // be worse. `catalog` used to be here too, which is why choosing it silently rendered a web map.
@@ -108,6 +112,16 @@
       b.style.setProperty('--cat-map-w', Math.min(60, Math.max(30, mw)) + '%');
       const cp = document.getElementById('catalog-panel');
       if (cp) cp.style.display = '';
+    }
+    // V-16 dashboard: reveal the widget host and stamp the density NOW, at parse time, for the same
+    // reason the catalog claims its column here — MapLibre measures its container at construction,
+    // so a grid that appears later would build the map at the wrong size and then jump.
+    if (L.archetype === 'dashboard') {
+      const dcfg = (L.regions && L.regions.dashboard) || {};
+      b.dataset.dashDensity = dcfg.density === 'compact' ? 'compact' : 'comfortable';
+      b.dataset.dashMapctrl = dcfg.mapControls === false ? '0' : '1';
+      const dp = document.getElementById('dashboard-panel');
+      if (dp) dp.style.display = '';
     }
     // The layer list is hidden by whether its PANEL is enabled, not by which archetype is in play.
     // It used to be hidden by a CSS rule keyed on the catalog archetype, which meant a catalog
@@ -314,6 +328,7 @@
   loading.need('render');    // MapLibre has finished drawing the opening view
   if (LAYOUT.archetype === 'catalog') loading.need('catalog');
   if (LAYOUT.archetype === 'storymap') loading.need('story');
+  if (LAYOUT.archetype === 'dashboard') loading.need('dashboard');
   // Backstop. NOT the mechanism — the gates above are — but a portal must never be held hostage by
   // one piece that fails in a way that skips its own clear (a hard error inside MapLibre, a style
   // that never finishes). Generous enough that a slow connection reaches readiness first.
@@ -1311,6 +1326,36 @@
     if (LAYOUT.archetype === 'catalog') {
       try { setupCatalog(); } catch (e) { console.warn('[geodeploy] catalog failed', e); }
       loading.ready('catalog');   // outside the catch, for the same reason as the story panel
+    }
+    // V-16 dashboard: hand the map to the dashboard runtime (templates/shared/dashboard.js), which
+    // owns the widget grid, the shared filter state and the query layer. It lives in its own file
+    // rather than in here so a 4.7k-line runtime does not become a 6k-line one, and so it can be
+    // syntax-checked on its own. AFTER initDeck() for the same reason the catalog is: a map widget
+    // over a GeoParquet layer needs deckState to already exist.
+    if (LAYOUT.archetype === 'dashboard') {
+      try {
+        if (window.GD_DASHBOARD && typeof window.GD_DASHBOARD.setup === 'function') {
+          window.GD_DASHBOARD.setup({
+            map: map,
+            maplibregl: maplibregl,
+            style: STYLE,
+            layout: LAYOUT,
+            editMode: EDIT_MODE,
+            // The runtime's own absolutifier, so a tile/data URL baked with the origin token
+            // resolves identically in both files rather than being re-derived in one of them.
+            absUrl: function (u) { return String(u || '').split('__GD_ORIGIN__').join(location.origin); },
+            // Fitting the map to a selection is portal.js's job (it owns the camera + the
+            // navigation history), so the dashboard asks rather than reaching for map.fitBounds.
+            fitBbox: function (b) {
+              try { map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 60, maxZoom: 16, duration: 700 }); }
+              catch (e) { /* an empty or malformed extent is not worth breaking a click over */ }
+            },
+          });
+        } else {
+          console.warn('[geodeploy] dashboard runtime missing');
+        }
+      } catch (e) { console.warn('[geodeploy] dashboard failed', e); }
+      loading.ready('dashboard');   // outside the catch, for the same reason as the story panel
     }
     // R2: when rendered as the editor's preview (?edit=1), open the postMessage channel + click-to-place.
     try { setupEditMode(); } catch (e) { console.warn('[geodeploy] edit mode failed', e); }

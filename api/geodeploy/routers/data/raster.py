@@ -401,16 +401,23 @@ async def _published_raster_ids(db: AsyncSession) -> set[int]:
         import json as _json
         from ...models import Portal
         rows = (await db.execute(
-            select(Portal.layer_configs).where(Portal.published == True))).scalars().all()  # noqa: E712
+            select(Portal.layer_configs, Portal.dashboard)
+            .where(Portal.published == True))).all()  # noqa: E712
+        # The SAME parser vector.py uses, so the two published-id caches cannot disagree about what
+        # a dashboard exposes. Imported lazily (this module and vector.py import each other).
+        from .vector import _dashboard_ids
         ids: set[int] = set()
-        for cfg in rows:
+        for cfg, dash in rows:
             try:
                 configs = _json.loads(cfg) if isinstance(cfg, str) else (cfg or [])
                 for lc in configs:
                     if lc.get("layer_id") is not None and lc.get("layer_type") == "raster":
                         ids.add(int(lc["layer_id"]))
             except (ValueError, TypeError, AttributeError):
-                continue
+                pass
+            # V-16: a Raster Stats widget can bind a COG the map never draws — zonal statistics
+            # need the pixels, not a tile.
+            ids |= _dashboard_ids(dash, "raster")
         _PUBLISHED_RASTER_IDS = ids
     return _PUBLISHED_RASTER_IDS
 
@@ -506,6 +513,52 @@ async def raster_cog(layer_ref: str, request: Request, db: AsyncSession = Depend
         headers["Content-Length"] = str(obj["ContentLength"])
     return StreamingResponse(obj["Body"].iter_chunks(256 * 1024), status_code=status,
                              media_type="image/tiff", headers=headers)
+
+
+# ── V-16 Dashboard: raster zonal statistics ──────────────────────────────────────────────────
+
+class ZonalRequest(BaseModel):
+    """A geometry and the statistics to compute over it.
+
+    `geometry` is EPSG:4326 GeoJSON — a clicked vector feature's polygon, a hand-drawn polygon, or
+    a dragged bbox. All three arrive here identically because the dashboard's filter bus normalises
+    them before publishing (a bbox IS a rectangular polygon; a separate path for it would be two
+    implementations of one computation).
+    """
+    geometry: dict
+    stats: list[str] | None = None    # min | max | mean | sum | std | median | count | histogram
+    band: int = 1
+    categorical: bool = False         # a classified raster: one histogram bin per distinct value
+
+
+@router.post("/{layer_ref}/zonal-stats")
+async def raster_zonal_stats(layer_ref: str, req: ZonalRequest,
+                             db: AsyncSession = Depends(get_db)):
+    """PUBLIC zonal statistics for the dashboard's Raster Stats widget.
+
+    Anonymous with the same posture as the other public raster endpoints (`_describable`: shared, or
+    drawn/bound by a published portal, else 404) — a published dashboard is browsed without a login,
+    and a widget that needed one would make every dashboard members-only.
+
+    The computation and its cache live in `services/zonal.py`; this route is the gate and the shape.
+    """
+    from ...services import zonal
+
+    result = await db.execute(select(RasterLayer).where(by_ref(RasterLayer, layer_ref)))
+    layer = result.scalar_one_or_none()
+    if not await _describable(layer, db):
+        raise HTTPException(404, "Layer not found.")
+    geom = req.geometry if isinstance(req.geometry, dict) else None
+    if not geom or not (geom.get("type") and (geom.get("coordinates") is not None
+                                              or geom.get("geometry") or geom.get("features"))):
+        raise HTTPException(400, "A GeoJSON geometry is required.")
+    try:
+        out = await zonal.compute(layer.s3_key, geom, stats=req.stats or [],
+                                  band=req.band, categorical=bool(req.categorical))
+    except zonal.ZonalError as exc:
+        raise HTTPException(502, f"Could not compute statistics for that area: {exc}") from exc
+    out["layer"] = {"id": layer.id, "name": layer.name, "band_count": layer.band_count}
+    return out
 
 
 @router.get("/{layer_ref}/legend")
@@ -848,6 +901,15 @@ async def delete_layer(layer_id: int, user: User = Depends(require_scope("data:w
             s3.delete_object(Bucket=settings.storage_bucket, Key=layer.s3_key)
         except Exception:
             pass
+
+    # V-16: cached zonal statistics are keyed by OBJECT KEY, and an object key can be reused by the
+    # next upload. Serving the previous raster's numbers under a new raster would be a wrong answer
+    # with no symptom, so the cache is dropped here rather than left to expire.
+    try:
+        from ...services.zonal import invalidate as invalidate_zonal
+        invalidate_zonal(layer.s3_key)
+    except Exception:
+        pass
 
     await db.delete(layer)
     await db.commit()

@@ -614,6 +614,7 @@ class PortalCreate(BaseModel):
     layout_config: dict[str, Any] | None = None  # V-11: {archetype, regions, panels}
     story: dict[str, Any] | None = None  # V-11: {sections:[...]} for the storymap archetype
     theme: dict[str, Any] | None = None  # V-11 R3: {mode, accent, font}
+    dashboard: dict[str, Any] | None = None  # V-16: {grid, refresh, widgets} for the dashboard archetype
     access_type: str = Field(default="public", pattern=_ACCESS_TYPE)
     access_password: str | None = None
 
@@ -627,6 +628,7 @@ class PortalUpdate(BaseModel):
     layout_config: dict[str, Any] | None = None  # V-11: {archetype, regions, panels} (null = leave as-is)
     story: dict[str, Any] | None = None  # V-11: storymap sections (null = leave as-is)
     theme: dict[str, Any] | None = None  # V-11 R3: {mode, accent, font} (null = leave as-is)
+    dashboard: dict[str, Any] | None = None  # V-16: widget grid + wiring (null = leave as-is)
     initial_view: dict[str, Any] | None = None  # {center:[lng,lat], zoom, bearing, pitch}
     access_type: str | None = Field(default=None, pattern=_ACCESS_TYPE)
     access_password: str | None = None
@@ -646,6 +648,7 @@ class PortalOut(BaseModel):
     layout_config: dict[str, Any] | None = None  # V-11: {archetype, regions, panels}
     story: dict[str, Any] | None = None  # V-11: storymap sections
     theme: dict[str, Any] | None = None  # V-11 R3: {mode, accent, font}
+    dashboard: dict[str, Any] | None = None  # V-16: widget grid + wiring
     initial_view: dict[str, Any] | None = None
     access_type: str
     basemap: str | None = None
@@ -665,6 +668,7 @@ class PortalOut(BaseModel):
         data["layout_config"] = json.loads(obj.layout_config) if obj.layout_config else None
         data["story"] = json.loads(obj.story) if obj.story else None
         data["theme"] = json.loads(obj.theme) if obj.theme else None
+        data["dashboard"] = json.loads(obj.dashboard) if obj.dashboard else None
         data["initial_view"] = json.loads(obj.initial_view) if obj.initial_view else None
         data.pop("access_password_hash", None)
         return cls(**data)
@@ -701,6 +705,12 @@ class TemplateOut(BaseModel):
     archetype: str | None = None
     # V-11: optional layout region/panel overrides shipped with the preset (merged onto the archetype).
     layout: dict[str, Any] | None = None
+    # V-16: a dashboard PRESET — a starting set of widgets + cross-filter wiring, with the data
+    # bindings left empty (the layer ids it would need do not exist until an author picks them).
+    # Selecting a dashboard template seeds the portal's `dashboard`; every widget in the preset
+    # stays individually removable, replaceable and re-bindable in the builder. A preset is a
+    # convenience default, never a constraint on what the builder allows.
+    dashboard: dict[str, Any] | None = None
 
 
 # ── Admin ─────────────────────────────────────────────────────────────────────

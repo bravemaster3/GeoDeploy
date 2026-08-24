@@ -1,0 +1,60 @@
+{
+  "name": "Zonal analysis",
+  "author": "GeoDeploy",
+  "description": "Select an area, see what the rasters say about it. A map with feature-click, polygon-draw and box-draw selection over a boundary layer, feeding two raster statistics panels plus a histogram — elevation, land cover, canopy height. Built for environmental and land-management work. Every widget stays removable and re-bindable — this is a starting layout, not a fixed one.",
+  "tags": ["dashboard", "zonal", "raster", "environment", "land management", "official"],
+  "language": "en",
+  "basemap": "positron",
+  "preview": "preview.png",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "archetype": "dashboard",
+  "archetypes": ["dashboard"],
+  "layout": {
+    "regions": { "dashboard": { "density": "comfortable", "mapControls": true } }
+  },
+  "dashboard": {
+    "grid": { "rowHeight": 90, "gap": 10 },
+    "refresh": 0,
+    "widgets": [
+      {
+        "id": "map", "type": "map", "title": "Draw or click an area",
+        "layout": { "x": 0, "y": 0, "w": 7, "h": 8 },
+        "dataSource": { "tools": ["click", "polygon", "bbox"] },
+        "actions": { "filters": ["rs-a", "rs-b", "rs-hist", "kpi-area", "details"], "listens": true }
+      },
+      {
+        "id": "kpi-area", "type": "indicator", "title": "Features in the selection",
+        "layout": { "x": 7, "y": 0, "w": 5, "h": 2 },
+        "dataSource": { "op": "count" },
+        "style": { "format": "integer" },
+        "actions": { "filters": [], "listens": true }
+      },
+      {
+        "id": "rs-a", "type": "rasterstats", "title": "Elevation",
+        "layout": { "x": 7, "y": 2, "w": 5, "h": 2 },
+        "dataSource": { "stats": ["min", "max", "mean"], "band": 1 },
+        "style": { "format": "decimal", "decimals": 1, "unit": "m" },
+        "actions": { "filters": [], "listens": true }
+      },
+      {
+        "id": "rs-b", "type": "rasterstats", "title": "Second raster",
+        "layout": { "x": 7, "y": 4, "w": 5, "h": 2 },
+        "dataSource": { "stats": ["mean", "std", "count"], "band": 1 },
+        "style": { "format": "decimal", "decimals": 2 },
+        "actions": { "filters": [], "listens": true }
+      },
+      {
+        "id": "rs-hist", "type": "rasterstats", "title": "Value distribution",
+        "layout": { "x": 7, "y": 6, "w": 5, "h": 2 },
+        "dataSource": { "stats": ["histogram"], "band": 1 },
+        "actions": { "filters": [], "listens": true }
+      },
+      {
+        "id": "details", "type": "details", "title": "Selected feature",
+        "layout": { "x": 0, "y": 8, "w": 12, "h": 3 },
+        "actions": { "filters": [], "listens": true }
+      }
+    ]
+  }
+}

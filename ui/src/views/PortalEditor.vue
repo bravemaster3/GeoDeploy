@@ -343,6 +343,15 @@
             </p>
           </div>
 
+          <!-- Dashboard builder (dashboard archetype) -->
+          <div v-if="isDashboard" class="mt-3 pt-3 border-t border-border/60">
+            <p v-if="!dashboardLayers.length" class="text-[11px] text-muted-foreground/70 mb-2 leading-snug">
+              Add layers to this portal first — a widget reads one of them. Rasters power the zonal
+              statistics panels; vectors power everything else.
+            </p>
+            <DashboardBuilder v-model="dashboard" :layers="dashboardLayers" :preset="dashboardPreset" />
+          </div>
+
           <!-- Story sections editor (storymap archetype) -->
           <div v-if="isStory" class="mt-3 pt-3 border-t border-border/60">
             <div class="flex items-center justify-between mb-2">
@@ -566,6 +575,7 @@ import { MapboxOverlay } from '@deck.gl/mapbox'
 import { GeoJsonLayer } from '@deck.gl/layers'
 import { ExternalLinkIcon, GlobeIcon, KeyIcon, UsersIcon, UserIcon, CheckIcon } from '@/views/icons'
 import LayerTree from '@/components/portal/LayerTree.vue'
+import DashboardBuilder from '@/components/portal/DashboardBuilder.vue'
 
 const route = useRoute()
 const portalsStore = usePortalsStore()
@@ -641,6 +651,7 @@ const ARCHETYPES = [
   { id: 'webmap',   name: 'Web map',   desc: 'Map-first with a layer list.' },
   { id: 'storymap', name: 'Story map', desc: 'Scrollytelling — scroll drives the map.' },
   { id: 'catalog',  name: 'Catalog',   desc: 'Browse datasets — searchable list beside a map.' },
+  { id: 'dashboard', name: 'Dashboard', desc: 'A grid of widgets that cross-filter each other.' },
 ]
 // PARITY mirror of portal_generator.resolve_layout / portal.js resolveLayout — change all three together.
 const _ARCH_DEFAULTS = {
@@ -649,6 +660,9 @@ const _ARCH_DEFAULTS = {
   // V-14 catalog: the dataset list is the page and the map is a panel beside it, so layerCatalog is
   // off (the facet rail replaces the switcher) and `catalog` carries the split.
   catalog:  { regions: { layerList: { side: 'right', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, catalog: { scope: 'portal', mapSide: 'right', mapWidth: 50, railWidth: 20, perPage: 12 } }, panels: { catalog: true, layerCatalog: false, legend: true, basemap: true, about: false, story: false } },
+  // V-16 dashboard: the MAP IS A WIDGET — #layout becomes the widget grid and #map-wrap takes the
+  // map widget's cell. `layerCatalog` is off by default because the widgets name their own data.
+  dashboard: { regions: { layerList: { side: 'left', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, dashboard: { density: 'comfortable', mapControls: true } }, panels: { dashboard: true, layerCatalog: false, legend: true, basemap: true, about: false, story: false } },
 }
 // `webmap+catalog` is still UNBUILT and degrades to a working map on purpose. `catalog` used to be
 // here too, which is why choosing it silently rendered a plain web map.
@@ -671,6 +685,34 @@ function resolveLayout(config) {
 const resolvedLayout = computed(() => resolveLayout(layoutConfig.value))
 const isStory = computed(() => resolvedLayout.value.archetype === 'storymap')
 const isCatalog = computed(() => resolvedLayout.value.archetype === 'catalog')
+const isDashboard = computed(() => resolvedLayout.value.archetype === 'dashboard')
+// V-16: the widget grid + cross-filter wiring. `null` until the archetype is chosen, which is also
+// what tells the server "no dashboard" — the same convention `story` and `theme` use.
+const dashboard = ref(null)
+// The layers a dashboard widget may bind. Vectors and rasters ONLY (an external WMS has no
+// attribute table to summarise and no COG to sample), and the layers this portal actually places —
+// binding a widget to a layer the portal does not publish would 404 for every visitor.
+const dashboardLayers = computed(() => {
+  const out = []
+  for (const cfg of layerConfigs.value) {
+    if (cfg.layer_type === 'vector') {
+      const l = dataStore.vectorLayers.find(v => v.id === cfg.layer_id)
+      if (l) out.push({ id: l.id, type: 'vector', name: l.name, columns: l.columns || [],
+                        geometry_type: l.geometry_type })
+    } else if (cfg.layer_type === 'raster') {
+      const l = dataStore.rasterLayers.find(r => r.id === cfg.layer_id)
+      if (l) out.push({ id: l.id, type: 'raster', name: l.name, band_count: l.band_count })
+    }
+  }
+  return out
+})
+// The chosen template's starting widget set, handed to the builder. It seeds an EMPTY grid only;
+// everything in it stays removable and re-bindable afterwards (see DashboardBuilder).
+const dashboardPreset = computed(() => {
+  if (!isDashboard.value) return null
+  const t = templates.value.find(x => x.id === selectedTemplate.value)
+  return (t && t.dashboard) || null
+})
 // Which datasets the published catalog lists. 'portal' = this portal's own layers (baked at publish).
 // 'public' reads the instance's PUBLIC layers live, so adding a public layer shows up without a
 // re-publish — it can never widen past public, because a published portal is browsed anonymously.
@@ -792,7 +834,8 @@ const templatesForArchetype = computed(() => {
   const arch = resolvedLayout.value.archetype
   return templates.value.filter(t => (t.archetypes || ['webmap']).includes(arch))
 })
-const ARCHETYPE_NOUN = { webmap: 'a web map', storymap: 'a story map', catalog: 'a catalog' }
+const ARCHETYPE_NOUN = { webmap: 'a web map', storymap: 'a story map', catalog: 'a catalog',
+                         dashboard: 'a dashboard' }
 
 function onSelectTemplate(t) {
   selectedTemplate.value = t.id
@@ -1148,6 +1191,9 @@ onMounted(async () => {
     story.value = portal.value.story && Array.isArray(portal.value.story.sections)
       ? portal.value.story : { sections: [] }
     theme.value = Object.assign({ mode: 'auto', accent: '', font: 'sans' }, portal.value.theme || {})
+    // V-16: the saved widget grid (null → the builder seeds from the template preset, once).
+    dashboard.value = portal.value.dashboard && Array.isArray(portal.value.dashboard.widgets)
+      ? portal.value.dashboard : null
   }
   ready.value = true  // inputs set → the watcher may now build the preview (once, on the chosen basemap)
   const { data } = await listTemplates()
@@ -1176,6 +1222,7 @@ async function refreshPreview() {
       layout_config: layoutConfig.value,
       story: story.value,
       theme: theme.value,
+      dashboard: dashboard.value || {},   // {} clears — a preview must be able to show an empty grid
       initial_view: currentView() || savedView.value || undefined,
       basemap: basemap.value || (basemapCatalog.value[0] && basemapCatalog.value[0].id),
     }
@@ -1214,7 +1261,10 @@ onBeforeUnmount(() => { window.removeEventListener('message', onFrameMessage); c
 //   watched, so every pause while typing in the About editor triggered a full server-side bundle
 //   rebuild and an iframe reload, to preview text you could not see in the preview. That was the
 //   "re-renders on every letter" problem. It is still baked on save/publish.
-watch([layoutConfig, story, layerConfigs, layerTree, basemap, selectedTemplate, ready],
+// `dashboard` is in the list because a dashboard IS the published page — a widget added, moved or
+// re-bound changes what the preview shows, and unlike the theme there is no live channel for it
+// (the widgets are built by the runtime from the baked config, not restyled by a CSS variable).
+watch([layoutConfig, story, dashboard, layerConfigs, layerTree, basemap, selectedTemplate, ready],
   () => { if (ready.value) schedulePreview() }, { deep: true })
 
 // B: theme changes apply live in the preview (no reload). The theme is still baked on the next full
@@ -1901,6 +1951,7 @@ async function save() {
       layout_config: layoutConfig.value,           // V-11: {archetype, regions, panels}
       story: story.value,                          // V-11: storymap sections (baked only for storymap)
       theme: theme.value,                          // V-11 R3: colour theme (mode/accent/font)
+      dashboard: dashboard.value || {},            // V-16: widget grid (baked only for dashboard)
       template_id: selectedTemplate.value,
       access_type: accessType.value,
       initial_view: view,

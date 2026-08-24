@@ -1,0 +1,26 @@
+/* Monitoring dashboard — an operations board. Cool slate surfaces so the numbers are the only
+   saturated thing on screen, and a signal blue that reads as "live" rather than decorative.
+   :root overrides restyle the LIGHT theme; the dark theme is the shared runtime's own scale. */
+:root {
+  --bg: #ffffff;
+  --surface: #eef2f7;
+  --border: #d5dee8;
+  --text: #10202e;
+  --text-muted: #5a7085;
+  --accent: #0369a1;
+  --accent-light: #e0f2fe;
+  --radius: 6px;
+}
+body { font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+/* A dark masthead separates the board from the room it is mounted in. */
+#header { background: #10202e; border-bottom: 1px solid #1e3448; }
+#portal-title { color: #f1f5f9; font-weight: 650; letter-spacing: .2px; }
+#sidebar-toggle { color: #94a3b8; }
+#sidebar-toggle:hover { background: rgba(255,255,255,.10); color: #f1f5f9; }
+#header-badge { color: rgba(241,245,249,.6); }
+#header-badge a:hover { color: #f1f5f9; }
+
+/* Headline figures carry the weight — this is a board read from across a room. */
+.gd-ind-value { font-variant-numeric: tabular-nums; font-weight: 700; }
+.gd-w-head { background: var(--surface); }

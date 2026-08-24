@@ -299,6 +299,37 @@ deliberately NOT visibility-filtered (published portals depend on them).
 - `data/raster.py` also: **`GET /{layer_id}/cog`** — **PUBLIC** HTTP-Range proxy for the layer's COG,
   **only when `is_public`** (404 otherwise). This is the "WCS replacement": full pixel access in
   QGIS/GDAL via `/vsicurl/https://host/api/data/raster/{id}/cog`, and a direct-download URL.
+- `data/vector.py` **V-16 dashboard summarisation (2026-08-24)** — four PUBLIC endpoints behind the
+  dashboard archetype's widgets, with exactly the posture `features.geojson` already takes
+  (`_publicly_readable`: shared, or drawn/bound by a published portal, else 404 — a published
+  dashboard is browsed anonymously, and a widget that needed a login would make every dashboard
+  members-only): **`POST /{ref}/aggregate`** (count/sum/avg/min/max, optional group-by or time
+  bucket, attribute filters + a geometry filter → one number or a small group list — a widget's
+  answer, not its feature set), **`POST /{ref}/table`** (attribute rows, sortable, paged, each with
+  a server-computed lon/lat `bbox` so click-to-zoom needs no second request),
+  **`POST /{ref}/pick`** (the EXACT geometry + attributes under a clicked point; 204 on a miss,
+  because clicking empty map is normal and a 404 per miss reads as a broken portal), and
+  **`GET /{ref}/distinct?field=`** (a selector's option list, or a numeric/date min-max).
+  Why `/pick` rather than reading the click off the map: `queryRenderedFeatures` returns geometry
+  clipped to the vector TILE, so zonal statistics over a parcel straddling a tile boundary would be
+  computed on the visible fragment and reported as the parcel's. `/distinct` is deliberately NOT
+  `/field-stats` — that one answers the symbology question (breaks and colours) for a signed-in
+  editor; one endpoint serving two audiences at two trust levels would drift. Work happens in
+  `services/aggregate.py`, which picks the engine from the layer's own backend.
+  **`_published_vector_ids` now also reads `Portal.dashboard`**: a widget can summarise a layer the
+  MAP never draws, and that layer must still answer for a portal deliberately publishing statistics
+  about it. `_dashboard_ids` is shared with `data/raster.py` so the two caches cannot disagree.
+- `data/raster.py` **`POST /{ref}/zonal-stats` (V-16, 2026-08-24)** — PUBLIC zonal statistics for
+  the Raster Stats widget: a GeoJSON geometry (clicked feature / drawn polygon / dragged bbox — one
+  shape by the time it arrives) plus the statistics wanted → min/max/mean/sum/std/median/count and
+  an optional histogram. Gated by `_describable`, the raster twin of `_publicly_readable`, widened
+  the same way to include dashboard-bound layers. Computation + caching in `services/zonal.py`
+  (TiTiler `POST /cog/statistics`, a windowed COG read). Delete now calls `zonal.invalidate`.
+- `portals.py` **V-16 dashboard (2026-08-24)** — `dashboard` threads through create / update /
+  publish / preview exactly as `story` and `theme` do (`{}` or no widgets clears the column).
+  `_assemble_bundle` resolves it FIRST so a dashboard-only layer is fetched alongside the map's and
+  `build_dashboard_sources` can bake its field list — but `generate_style` is handed only the layers
+  the author PLACED, so a dashboard-only layer never appears in the layer list or the legend.
 - `data/__init__.py`, `__init__.py` — package markers.
 
 ## Dependencies / relationships
@@ -311,6 +342,13 @@ deliberately NOT visibility-filtered (published portals depend on them).
 - No rate limiting beyond nginx; no pagination on list endpoints (fine at current scale).
 
 ## Last updated
+2026-08-24 (**V-16 dashboard archetype**: four PUBLIC vector endpoints (`/aggregate`, `/table`,
+`/pick`, `/distinct`) and one raster endpoint (`/zonal-stats`) behind the dashboard's widgets, all
+with the existing published-portal posture. `/pick` exists because `queryRenderedFeatures` returns
+TILE-CLIPPED geometry, which would make zonal statistics for a parcel straddling a tile boundary
+silently wrong. **Both published-id caches now read `Portal.dashboard` as well as `layer_configs`**,
+through one shared parser — a widget can summarise a layer the map never draws, and it must still
+answer for the portal publishing statistics about it.)
 2026-08-17d (`data/raster.py`: **`/cog` is no longer public-or-nothing.** It required `is_public` with
 no authenticated path, so an unshared raster's pixels were unreachable by everyone including its
 owner. That is not a download nicety: server-rendered tiles are colour, not values, so the COG is the

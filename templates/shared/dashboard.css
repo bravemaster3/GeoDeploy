@@ -1,0 +1,266 @@
+/* ── V-16 Dashboard archetype ────────────────────────────────────────────────
+   The widget grid and the widget chrome. Loaded for every portal (see layout.html) but every rule
+   here is scoped under body[data-archetype="dashboard"], so it is inert on a web map, a story map
+   or a catalog. Written entirely against portal.css's variables (--bg / --surface / --border /
+   --text / --text-muted / --accent / --radius / --shadow) so a template theme.css and a per-portal
+   accent restyle a dashboard exactly as they restyle every other archetype — there is no separate
+   widget palette to keep in step.
+
+   THE GRID. #layout stops being a flexbox and becomes a CSS grid; #dashboard-panel is
+   `display: contents`, so the widget cards it holds become DIRECT grid items of #layout. That is
+   what lets #map-wrap sit in the map widget's cell by grid-area WITHOUT the MapLibre container ever
+   being moved in the DOM — a re-parented canvas container loses its measured size, which is the
+   same rule the catalog archetype follows for the same reason.
+
+   Placement (grid-column / grid-row) is written as inline style by dashboard.js, because the column
+   count changes with the breakpoint and the mapping from a 12-column author layout to a 6- or
+   1-column phone layout is arithmetic, not a media query. What lives here is everything that does
+   NOT depend on the widget's coordinates. */
+
+body[data-archetype="dashboard"] #layout {
+  display: grid;
+  grid-template-columns: repeat(var(--dash-cols, 12), minmax(0, 1fr));
+  grid-auto-rows: var(--dash-row, 90px);
+  gap: var(--dash-gap, 10px);
+  padding: var(--dash-gap, 10px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--surface);
+  align-content: start;
+}
+body[data-archetype="dashboard"] #dashboard-panel { display: contents; }
+
+/* The layer list is an overlay on a dashboard, never a column — the grid owns the width. */
+body[data-archetype="dashboard"] #sidebar {
+  position: absolute; top: calc(var(--header-h) + 12px); left: 12px;
+  width: var(--sidebar-w); max-height: calc(100% - var(--header-h) - 24px);
+  z-index: 40; border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow-lg); overflow: hidden;
+}
+
+/* ── the card ─────────────────────────────────────────────────────────────── */
+body[data-archetype="dashboard"] .gd-w {
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); overflow: hidden; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column; position: relative;
+}
+/* #map-wrap IS a widget card when the dashboard places it, so it takes the same chrome. `flex: 1`
+   from portal.css would fight the grid, so it is reset here rather than in portal.css — a web map
+   still needs it. */
+body[data-archetype="dashboard"] #map-wrap {
+  flex: initial; border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); overflow: hidden; min-width: 0; min-height: 0;
+}
+/* A dashboard with no map widget still BUILDS the map — the runtime, the deck overlay and the
+   selection tools all hang off it — it simply has nowhere on the grid to be. Parked rather than
+   `display:none`, because a display:none MapLibre container measures 0×0 and never recovers. */
+body[data-archetype="dashboard"] #map-wrap[data-dash-parked="1"] {
+  position: absolute; left: -10000px; top: 0; width: 400px; height: 300px;
+  border: none; box-shadow: none; pointer-events: none; opacity: 0;
+}
+body[data-archetype="dashboard"][data-dash-mapctrl="0"] #map-wrap .maplibregl-ctrl-top-right,
+body[data-archetype="dashboard"][data-dash-mapctrl="0"] #map-wrap .maplibregl-ctrl-top-left,
+body[data-archetype="dashboard"][data-dash-mapctrl="0"] #map-wrap .maplibregl-ctrl-bottom-left {
+  display: none;
+}
+
+body[data-archetype="dashboard"] .gd-w-head {
+  display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+  padding: 8px 10px 6px; border-bottom: 1px solid var(--border);
+}
+body[data-archetype="dashboard"][data-dash-density="compact"] .gd-w-head { padding: 5px 8px 4px; }
+.gd-w-title {
+  font-size: 12px; font-weight: 600; color: var(--text); flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.gd-w-sub { font-size: 10px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+.gd-w-body { flex: 1; min-height: 0; overflow: auto; padding: 10px; }
+body[data-archetype="dashboard"][data-dash-density="compact"] .gd-w-body { padding: 6px 8px; }
+.gd-w-body.gd-w-center {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; overflow: hidden;
+}
+
+/* A widget waiting on its own request dims rather than emptying: an empty card during a filter
+   change reads as "the filter matched nothing", which is a different fact from "still loading". */
+.gd-w.gd-busy .gd-w-body { opacity: .45; transition: opacity .12s ease; }
+.gd-w-empty { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
+.gd-w-error { font-size: 11px; color: #dc2626; line-height: 1.5; }
+html[data-theme="dark"] .gd-w-error { color: #f87171; }
+
+/* An UNBOUND widget — what a preset template ships before an author picks its layer. A labelled
+   placeholder, not an error: nothing is wrong, the binding simply has not happened yet. */
+.gd-w-unbound {
+  font-size: 11px; color: var(--text-muted); line-height: 1.5;
+  border: 1px dashed var(--border); border-radius: 6px; padding: 10px; width: 100%;
+}
+
+/* ── indicator ────────────────────────────────────────────────────────────── */
+.gd-ind-value {
+  font-size: clamp(20px, 4.2vw, 40px); font-weight: 650; line-height: 1.05;
+  color: var(--text); letter-spacing: -.02em; font-variant-numeric: tabular-nums;
+}
+.gd-ind-unit { font-size: .45em; font-weight: 500; color: var(--text-muted); margin-left: .25em; }
+.gd-ind-label { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+.gd-ind-delta { font-size: 11px; font-weight: 600; margin-top: 5px; }
+.gd-ind-delta.up { color: #16a34a; }
+.gd-ind-delta.down { color: #dc2626; }
+.gd-ind-delta.flat { color: var(--text-muted); }
+html[data-theme="dark"] .gd-ind-delta.up { color: #4ade80; }
+html[data-theme="dark"] .gd-ind-delta.down { color: #f87171; }
+/* A clickable indicator (one with filterField/filterValue set) has to LOOK clickable, and has to
+   show when its filter is on — otherwise the only feedback is other widgets changing. */
+.gd-w[data-clickable="1"] { cursor: pointer; }
+.gd-w[data-clickable="1"]:hover { border-color: var(--accent); }
+.gd-w[data-active="1"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+
+/* ── gauge ────────────────────────────────────────────────────────────────── */
+.gd-gauge { width: 100%; height: 100%; display: block; }
+.gd-gauge-track { stroke: var(--border); }
+.gd-gauge-value { font-size: 15px; font-weight: 650; fill: var(--text); }
+.gd-gauge-cap { font-size: 8px; fill: var(--text-muted); }
+
+/* ── chart ────────────────────────────────────────────────────────────────── */
+.gd-chart { width: 100%; height: 100%; display: block; overflow: visible; }
+.gd-chart .bar { cursor: pointer; }
+.gd-chart .bar:hover { opacity: .8; }
+.gd-chart .axis { stroke: var(--border); }
+.gd-chart .tick { font-size: 9px; fill: var(--text-muted); }
+.gd-chart .glabel { font-size: 9px; fill: var(--text-muted); }
+.gd-chart .slice { cursor: pointer; }
+.gd-chart .slice:hover { opacity: .82; }
+.gd-chart .dim { opacity: .28; }
+.gd-chart-legend {
+  display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px;
+  font-size: 10px; color: var(--text-muted);
+}
+.gd-chart-legend span { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.gd-chart-legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+
+/* ── table ────────────────────────────────────────────────────────────────── */
+.gd-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.gd-table th {
+  position: sticky; top: 0; z-index: 1; background: var(--bg);
+  text-align: left; font-weight: 600; color: var(--text-muted);
+  padding: 5px 8px; border-bottom: 1px solid var(--border); cursor: pointer;
+  white-space: nowrap;
+}
+.gd-table th:hover { color: var(--text); }
+.gd-table th .sortmark { opacity: .7; margin-left: 3px; }
+.gd-table td {
+  padding: 5px 8px; border-bottom: 1px solid var(--border); color: var(--text);
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gd-table tbody tr { cursor: pointer; }
+.gd-table tbody tr:hover td { background: var(--surface); }
+.gd-table tbody tr.sel td { background: var(--accent-light); }
+.gd-w-body.gd-w-table { padding: 0; }
+.gd-table-foot {
+  flex-shrink: 0; display: flex; align-items: center; gap: 8px; justify-content: space-between;
+  padding: 4px 8px; border-top: 1px solid var(--border); font-size: 10px; color: var(--text-muted);
+}
+.gd-table-foot button {
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  border-radius: 4px; padding: 1px 7px; cursor: pointer; font-size: 11px;
+}
+.gd-table-foot button:disabled { opacity: .4; cursor: default; }
+
+/* ── selector ─────────────────────────────────────────────────────────────── */
+.gd-sel-field {
+  width: 100%; font-size: 12px; padding: 5px 7px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+}
+.gd-sel-row { display: flex; align-items: center; gap: 6px; }
+.gd-sel-row + .gd-sel-row { margin-top: 6px; }
+.gd-sel-row label { font-size: 10px; color: var(--text-muted); width: 30px; flex-shrink: 0; }
+.gd-sel-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+.gd-sel-chip {
+  font-size: 10px; padding: 2px 7px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-muted);
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gd-sel-chip[aria-pressed="true"] {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}
+.gd-sel-range { display: flex; align-items: center; gap: 6px; }
+.gd-sel-range input[type="range"] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.gd-sel-num {
+  font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums;
+  min-width: 46px; text-align: right;
+}
+
+/* ── details ──────────────────────────────────────────────────────────────── */
+.gd-det { font-size: 11px; }
+.gd-det div { display: flex; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--border); }
+.gd-det div:last-child { border-bottom: none; }
+.gd-det b { font-weight: 600; color: var(--text-muted); flex: 0 0 40%; word-break: break-word; }
+.gd-det s { text-decoration: none; color: var(--text); flex: 1; min-width: 0; word-break: break-word; }
+
+/* ── raster stats ─────────────────────────────────────────────────────────── */
+.gd-rs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(66px, 1fr)); gap: 6px; }
+.gd-rs-cell {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  padding: 5px 7px; min-width: 0;
+}
+.gd-rs-k { font-size: 9px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
+.gd-rs-v {
+  font-size: 14px; font-weight: 650; color: var(--text); font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.gd-rs-hist { margin-top: 8px; width: 100%; height: 54px; display: block; }
+.gd-rs-hist rect { fill: var(--accent); }
+
+/* ── the map widget's selection toolbar + reset ───────────────────────────── */
+.gd-dash-tools {
+  position: absolute; left: 8px; top: 8px; z-index: 10; display: flex; gap: 4px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 3px; box-shadow: var(--shadow);
+}
+.gd-dash-tools button {
+  width: 27px; height: 27px; border: none; background: none; border-radius: 4px;
+  cursor: pointer; color: var(--text-muted); display: flex; align-items: center; justify-content: center;
+}
+.gd-dash-tools button:hover { background: var(--surface); color: var(--text); }
+.gd-dash-tools button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+.gd-dash-tools svg { width: 15px; height: 15px; }
+
+/* The active-filter bar. It is the answer to "why is this number small?", so it names every filter
+   currently narrowing the page and offers to clear them — individually and all at once. */
+#gd-dash-bar {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px; z-index: 60;
+  max-width: min(92vw, 900px);
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 6px 10px; border: 1px solid var(--accent); border-radius: 999px;
+  background: var(--bg); box-shadow: var(--shadow-lg); font-size: 11px; color: var(--text);
+}
+#gd-dash-bar .gd-fchip {
+  display: inline-flex; align-items: center; gap: 5px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: 999px; padding: 1px 4px 1px 8px;
+  max-width: 320px;
+}
+#gd-dash-bar .gd-fchip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#gd-dash-bar .gd-fchip button {
+  border: none; background: none; cursor: pointer; color: var(--text-muted);
+  font-size: 13px; line-height: 1; padding: 0 3px;
+}
+#gd-dash-bar .gd-fchip button:hover { color: var(--text); }
+#gd-dash-bar .gd-reset {
+  margin-left: auto; border: 1px solid var(--accent); background: var(--accent); color: #fff;
+  border-radius: 6px; padding: 2px 10px; font-size: 11px; font-weight: 600; cursor: pointer;
+}
+
+/* ── responsive ───────────────────────────────────────────────────────────
+   The column count is set by dashboard.js (it rewrites every widget's placement, because mapping a
+   12-column layout onto 6 or 1 is arithmetic a media query cannot do). These rules only handle the
+   things that are purely presentational at small widths. */
+@media (max-width: 1024px) {
+  body[data-archetype="dashboard"] #layout { gap: 8px; padding: 8px; }
+}
+@media (max-width: 720px) {
+  body[data-archetype="dashboard"] #sidebar { left: 8px; right: 8px; width: auto; }
+  .gd-ind-value { font-size: clamp(20px, 9vw, 34px); }
+  .gd-table td { max-width: 140px; }
+}
+
+/* A drawing gesture owns the cursor for the whole map, not only the canvas. */
+body[data-archetype="dashboard"][data-dash-draw="1"] #map canvas { cursor: crosshair; }

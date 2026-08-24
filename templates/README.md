@@ -156,6 +156,41 @@ a basemap, and metadata. This is what makes templates cheap to add and features 
   - `portal.css` — all structural CSS, written against CSS variables (`--accent`, `--bg`, …). **Popup (2026-07-11): `.maplibregl-popup` gets `z-index:10`** so a clicked feature's attributes render ABOVE the deck.gl overlay canvas (interleaved:false draws over the map), and **`.gd-popup .maplibregl-popup-content` is themed `background/color`** — MapLibre's default white left dark-mode text unreadable on the un-striped rows (only even rows had a dark bg → the "white/navy" striping the user saw). **Basemap switcher (2026-07-11) is an enlarged popover**: `.gd-basemap-menu` 250px with a "Basemap" header, 68×46 `.gd-basemap-thumb` thumbnails, 13px labels, and a selected-row highlight via `.gd-basemap-opt:has(input:checked)` (accent border + check mark). **Dark-mode MapLibre controls**: `html[data-theme="dark"]` recolours `.maplibregl-ctrl-group` to the theme surface and light-inverts the built-in `.maplibregl-ctrl-icon` glyphs (nav zoom/compass/globe) — the custom basemap/tools buttons use `currentColor` so they're untouched. The dashboard editor mirrors this in `ui/src/style.css` (`.dark .maplibregl-ctrl…`).
   - `layout.html` — the default thin skeleton (the body structure with the required element IDs +
     placeholders). Templates that don't ship their own `layout.html` fall back to this.
+  - **V-16 DASHBOARD archetype (2026-08-24) — `dashboard.js` + `dashboard.css`, NOT more portal.js.**
+    A fourth archetype: a single-screen grid of widgets over the portal's own layers, wired to
+    CROSS-FILTER each other. The runtime is a SEPARATE shared file because it is a different kind of
+    surface (a widget grid, a filter bus, a query client) that needs the map as one of its widgets —
+    portal.js is 4.7k lines already, and this way each can be read and `node --check`ed alone.
+    `layout.html` loads `{{DASHBOARD_JS}}` BEFORE `{{PORTAL_JS}}` (it defines `window.GD_DASHBOARD`;
+    a script after portal.js would not exist when the load handler calls it) and `{{DASHBOARD_CSS}}`
+    after `{{PORTAL_CSS}}`, before `{{THEME_CSS}}` — so a template theme still wins. Both are
+    substituted for EVERY archetype (a template shipping its own layout.html would otherwise render
+    the literal placeholder) and are inert unless `style.geodeploy.dashboard` is present.
+    * **The MAP IS A WIDGET, and is never re-parented.** `#layout` becomes a CSS grid,
+      `#dashboard-panel` is `display: contents` so the widget cards become direct grid items, and
+      `#map-wrap` — a sibling — takes the map widget's cell by `grid-column`/`grid-row`. Same rule
+      as the catalog: a moved MapLibre container loses its measured size. BOTH axes are written
+      explicitly by `placeAll`, because `#map-wrap` is always the LAST grid item in document order
+      and auto row placement would push the map to the bottom of every dashboard.
+    * **Responsive by rewriting placement, not by media query:** 12 cols ≥1100px, 6 cols ≥720px
+      (spans halved, columns re-flowed), 1 col below. Mapping 12 onto 6 is arithmetic.
+    * **The filter bus** is one state per dashboard with three channels — `attr` (a field/value
+      predicate, scoped to targets on the SAME layer), `geom` (a geometry, applied to every target
+      regardless of layer — that is what lets a drawn polygon drive raster statistics) and `select`
+      (one feature's attributes, for the details panel). Combined with AND. A source publishes only
+      to the widgets its `actions.filters` names. Clicked/polygon/bbox selections all normalise to
+      ONE geometry (a bbox IS a rectangular polygon). Clicked geometry comes from
+      `POST /api/data/vector/{id}/pick`, never from `queryRenderedFeatures` (tile-clipped geometry
+      would give zonal statistics for the visible fragment of a parcel). One in-flight request per
+      widget, aborted on the next.
+    * **The active-filter bar is fixed to the window, not a grid row** — a row for it would be
+      `grid-auto-rows` tall and would push every widget down the moment a filter went live.
+    * Charts are inline SVG against portal.css's variables — no charting library, so a template
+      `theme.css` and a per-portal accent restyle a dashboard like every other archetype.
+    * Registering a new widget type = a `RENDERERS` entry here + `services/dashboard.WIDGET_TYPES`
+      + a `DashboardBuilder.vue` case. Nothing else branches on type. Validation lives ONLY in
+      `resolve_dashboard` (publish-time); this file assumes its invariants.
+    * Full design note: `notes_temp/DASHBOARD_ARCHETYPE.md`.
 - **A template** (`official/<name>/`) just needs:
   - `template.json` — metadata (name, author, description, tags, language, basemap, version, license).
   - `theme.css` — CSS-variable overrides (colours, fonts) + small touches. This is the whole "look".
@@ -179,6 +214,14 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   `webmap+catalog` archetype (V-11 — still aliased to webmap).
 - `official/story/` — warm serif narrative theme; presets the `storymap` archetype (V-11) — a
   scrollytelling portal whose sections are authored in the editor's Experience panel.
+- `official/dashboard-monitoring|dashboard-regional|dashboard-assets|dashboard-zonal/` — the four
+  V-16 dashboard starters (operational board · regional snapshot · asset tracker · zonal analysis).
+  Each declares `"archetype": "dashboard"` and ships a **`dashboard` preset** in `template.json`:
+  a starting widget set + cross-filter wiring with **no layer ids** (they cannot exist when the
+  template is written). `DashboardBuilder.applyPreset` binds them to the portal's own layers on
+  first load — first suitable layer, first suitable field, successive rasters for successive raster
+  widgets — and every part of that guess stays editable. **A preset seeds an EMPTY grid only** and
+  never overwrites work; the overwrite path is a button the author presses.
 - `official/west-africa-fr/` — metadata-only stub (no `style.json` → not listed until completed;
   a French light theme is the intended finish).
 - `community/` — user submissions + `CONTRIBUTING.md` (CI-validated format).
@@ -205,6 +248,14 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-24 (**V-16 dashboard archetype** — a fourth archetype and the first with its own runtime
+file. `shared/dashboard.js` + `shared/dashboard.css` hold the widget grid, the cross-filter bus and
+the query client; portal.js hands them the map on load. The MAP IS A WIDGET: `#layout` becomes a CSS
+grid, `#dashboard-panel` is `display:contents`, and `#map-wrap` takes the map widget's cell by
+grid-area — never re-parented, the same rule the catalog follows. Placement is written explicitly in
+BOTH axes because `#map-wrap` is always the last grid item in document order, so auto row placement
+would sink the map to the bottom of every dashboard. Four starter templates ship dashboard PRESETS
+whose data bindings are empty by construction and are bound to the portal's layers by the builder.)
 2026-08-07g (**the catalog's "On map" list shows real symbology, and the phone layout stops starving
 the results.** The list is a catalog portal's ONLY legend (the layer switcher is a separate panel),
 and each row carried a 7px dot coloured by KIND — so three point layers on screen were three

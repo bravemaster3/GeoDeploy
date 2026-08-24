@@ -1,0 +1,24 @@
+/* Regional statistics — a print-adjacent snapshot: warm paper, a serif for headings, and a single
+   teal accent so a choropleth's own colour ramp is never competing with the interface. */
+:root {
+  --bg: #ffffff;
+  --surface: #f6f4ee;
+  --border: #e0dbcf;
+  --text: #23201a;
+  --text-muted: #6c6355;
+  --accent: #0f766e;
+  --accent-light: #d7f0ec;
+  --radius: 4px;
+}
+body { font-family: "Iowan Old Style", Georgia, "Times New Roman", serif; }
+
+#header { background: #ffffff; border-bottom: 1px solid var(--border); }
+#portal-title { font-weight: 600; letter-spacing: .1px; }
+
+/* Widget titles in the body face, values in a proportional-figures-free numeric face: a table of
+   regional totals is unreadable when the digits do not line up. */
+.gd-w-title { font-family: "Iowan Old Style", Georgia, serif; }
+.gd-ind-value, .gd-table td, .gd-rs-v {
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}

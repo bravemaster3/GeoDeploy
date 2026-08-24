@@ -483,6 +483,69 @@ def _layer_info(layer, kind: str) -> dict:
     return info
 
 
+# ── V-16 Dashboard: the data catalogue the widgets query ─────────────────────
+def build_dashboard_sources(dashboard: dict | None, vector_layers: list,
+                            raster_layers: list) -> dict:
+    """`{"vector:3": {...}, "raster:5": {...}}` — one entry per layer a dashboard's widgets bind.
+
+    Baked beside the widget list so the runtime can label an axis, offer a field, format a number
+    and build a request URL WITHOUT a metadata round trip per widget on load. A dashboard opens with
+    six widgets hitting five endpoints; adding a "what columns does this layer have" call in front
+    of each would double the requests before a single number appeared.
+
+    Deliberately narrow: name, backend, fields, geometry type, extent. Not `_layer_info` — that
+    payload carries share links and licensing for the About/catalog surfaces, and a widget needs
+    none of it. A PRIVATE layer contributes its name and fields and nothing else, matching the rule
+    `_layer_info` already applies: a restricted layer can be summarised on a portal that publishes
+    it, but its catalog metadata is not part of that.
+    """
+    from . import dashboard as dash_svc
+
+    wanted_vec, wanted_ras = dash_svc.dashboard_layer_refs(dashboard)
+    out: dict = {}
+    for layer in vector_layers or []:
+        if layer.id not in wanted_vec:
+            continue
+        try:
+            columns = json.loads(layer.columns or "[]")
+        except (ValueError, TypeError):
+            columns = []
+        out[f"vector:{layer.id}"] = {
+            "kind": "vector",
+            "id": layer.id,
+            "name": layer.name,
+            "backend": getattr(layer, "storage_backend", "postgis"),
+            "geometryType": getattr(layer, "geometry_type", None),
+            "featureCount": getattr(layer, "feature_count", None),
+            # [{name, type}] — the builder offers these as field choices and the runtime uses the
+            # type to decide whether a selector is a dropdown, a slider or a date range.
+            "fields": [{"name": c.get("name"), "type": c.get("type")}
+                       for c in columns if isinstance(c, dict) and c.get("name")],
+            "bbox": _json_bbox(layer),
+        }
+    for layer in raster_layers or []:
+        if layer.id not in wanted_ras:
+            continue
+        out[f"raster:{layer.id}"] = {
+            "kind": "raster",
+            "id": layer.id,
+            "name": layer.name,
+            "bandCount": getattr(layer, "band_count", None),
+            "bbox": _json_bbox(layer),
+        }
+    return out
+
+
+def _json_bbox(layer):
+    raw = getattr(layer, "bbox", None)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return None
+
+
 # ── V-11 Template Experiences: layout manifest ────────────────────────────────
 # The PARITY CONTRACT. This same archetype→defaults table + override merge is mirrored in
 # templates/shared/portal.js (resolveLayout) and ui/src/views/PortalEditor.vue (resolveLayout) so the
@@ -537,6 +600,33 @@ _LAYOUT_ARCHETYPES = {
         "panels": {"catalog": True, "layerCatalog": False, "legend": True, "basemap": True,
                    # No About page: every dataset already carries its abstract, licence and access
                    # links on its own card, so an About page would only restate the catalog.
+                   "about": False, "story": False},
+    },
+    # V-16 DASHBOARD — a single screen of widgets over the portal's own layers, wired to
+    # cross-filter each other. The MAP IS A WIDGET here, not the page: `#layout` becomes the widget
+    # grid and `#map-wrap` is placed into the map widget's cell by grid-area. It is never
+    # re-parented (a moved MapLibre container loses its size — the same rule the catalog follows).
+    #
+    # `layerCatalog` is OFF by default: the widgets name their own data, so a second list of layers
+    # would be a control that explains nothing about the numbers on screen. An author can turn it
+    # on and gets the floating list, like every other archetype.
+    "dashboard": {
+        "regions": {
+            "layerList": {"side": "left", "mode": "floating", "collapsed": True,
+                          "width": None, "x": None, "y": None},
+            "controls": {"position": "top-right"},
+            "header": {"style": "bar"},
+            "dashboard": {
+                # The visible density of the widget cards. `compact` shrinks padding and type — a
+                # wall-mounted operations board fits more; `comfortable` reads better on a laptop.
+                "density": "comfortable",
+                # Whether the map widget keeps the full control cluster. A dashboard map is usually
+                # a selection surface rather than a map to explore, and seven controls over a
+                # quarter-screen map is mostly buttons.
+                "mapControls": True,
+            },
+        },
+        "panels": {"dashboard": True, "layerCatalog": False, "legend": True, "basemap": True,
                    "about": False, "story": False},
     },
     # scrollytelling — a narrative column drives the map camera; the layer list floats (collapsed by
@@ -653,7 +743,8 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
                         initial_view: dict | None = None, description: str | None = None,
                         basemap: str | None = None,
                         layout_config: dict | None = None, story: dict | None = None,
-                        theme: dict | None = None) -> str:
+                        theme: dict | None = None, dashboard: dict | None = None,
+                        dashboard_sources: dict | None = None) -> str:
     """
     Merge basemap + user data into a complete style, inject into layout.html,
     write to data/portals/{slug}/index.html.
@@ -667,6 +758,12 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
     shared_dir = Path("/templates/shared")
     portal_css = _read(shared_dir / "portal.css", "")
     portal_js = _read(shared_dir / "portal.js", "")
+    # V-16: the dashboard runtime is a SEPARATE file, not more portal.js. It defines
+    # `window.GD_DASHBOARD` and portal.js calls it when the archetype is 'dashboard' — so the widget
+    # renderers, the filter bus and the query layer stay independently readable (and independently
+    # `node --check`-able) instead of adding a thousand lines to the 4.7k-line portal runtime.
+    dashboard_css = _read(shared_dir / "dashboard.css", "")
+    dashboard_js = _read(shared_dir / "dashboard.js", "")
 
     # REFUSE to write a portal with no runtime. `_read` returns "" for a missing file, so a caller
     # that cannot see /templates produced a bundle containing a style and nothing else: the portal
@@ -694,6 +791,11 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
     # Resolved once and reused: the style needs it, and so does the decision below about whether to
     # bake the catalog payload at all.
     _layout = resolve_layout(layout_config)
+    # V-16: normalised HERE, at publish, and never again — dashboard.js is written against the
+    # invariants `resolve_dashboard` guarantees (unique DOM-safe ids, known types, live action
+    # targets, in-grid layout) and does no validation of its own. One validator, not two halves.
+    from .dashboard import resolve_dashboard
+    _dashboard = resolve_dashboard(dashboard) if _layout.get("panels", {}).get("dashboard") else None
 
     # Merge basemap + user layers into a single complete MapLibre style
     full_style = {
@@ -724,6 +826,11 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
                         if _layout.get("panels", {}).get("catalog") else None),
             # V-11 storymap: narrative sections (only rendered when archetype == 'storymap').
             "story": story if (story and story.get("sections")) else None,
+            # V-16 dashboard: the widget grid, its cross-filter wiring, and a small per-layer
+            # catalogue (`sources`) so a widget can label itself and build its query URL without a
+            # metadata round trip. Baked only for the dashboard archetype — null everywhere else,
+            # so "is this a dashboard" is one test in the runtime.
+            "dashboard": (dict(_dashboard, sources=(dashboard_sources or {})) if _dashboard else None),
             # V-11 R3: colour-theme metadata (portal.js reads .mode for the initial light/dark state).
             "theme": resolve_theme(theme),
             # The full basemap catalog, baked in so portal.js builds the switcher from the SAME source
@@ -772,6 +879,11 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
     # Inject the shared runtime first (it contains no placeholders), then the data.
     html = layout_html.replace("{{PORTAL_CSS}}", portal_css)
     html = html.replace("{{PORTAL_JS}}", portal_js)
+    # Substituted for EVERY archetype, not only the dashboard: a template shipping its own
+    # layout.html would otherwise render the literal placeholder text into the page. The runtime is
+    # inert unless style.geodeploy.dashboard is present, so the only cost is the bytes.
+    html = html.replace("{{DASHBOARD_CSS}}", dashboard_css)
+    html = html.replace("{{DASHBOARD_JS}}", dashboard_js)
     # STYLE_JSON / POPUP_CONFIG are embedded INSIDE a <script> block, so a user-controlled string
     # (e.g. a layer name containing "</script>") could otherwise break out of the script and inject
     # markup. `_json_for_html` neutralizes the HTML-significant characters as valid JS-string

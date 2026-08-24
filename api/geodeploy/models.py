@@ -425,6 +425,12 @@ class Portal(Base):
     # V-11 R3 colour theme: {mode:auto|light|dark, accent:#hex, font:sans|serif}. NULL = the template's
     # own theme.css unchanged. Baked as CSS-variable overrides AFTER theme.css (so it wins).
     theme: Mapped[str | None] = mapped_column(Text)
+    # V-16 dashboard archetype: {version, grid, refresh, widgets:[...]}. NULL = no dashboard. Only
+    # consumed when the resolved layout archetype is 'dashboard'; normalised by
+    # services/dashboard.resolve_dashboard at publish and baked into style.geodeploy.dashboard.
+    # Its widgets may bind layers this portal does not DRAW, which is why the public-read caches in
+    # routers/data/{vector,raster}.py read this column as well as layer_configs.
+    dashboard: Mapped[str | None] = mapped_column(Text)
     # Card thumbnail: a snapshot of the PUBLISHED map, captured in the browser at publish time (the
     # editor already renders the real portal in an iframe) and written to a FIXED filename, so
     # re-publishing overwrites instead of orphaning a file. Carries a ?v= cache-buster. NULL = the

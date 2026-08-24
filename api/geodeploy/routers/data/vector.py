@@ -1,6 +1,7 @@
 import json
 import os
 import uuid
+from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
@@ -62,20 +63,38 @@ def invalidate_public_layers() -> None:
     _PARQUET_PREFIX_CACHE.clear()
 
 
+def _dashboard_ids(raw, kind: str) -> set[int]:
+    """Layer ids a published portal's DASHBOARD binds, by kind. Shared with `raster.py` (which
+    imports it) so the two published-id caches read the config the same way — a second parser would
+    eventually disagree about which layers a dashboard exposes."""
+    try:
+        from ...services.dashboard import dashboard_layer_refs
+        cfg = json.loads(raw) if isinstance(raw, str) else raw
+        vectors, rasters = dashboard_layer_refs(cfg if isinstance(cfg, dict) else None)
+    except (ValueError, TypeError, AttributeError):
+        return set()
+    return rasters if kind == "raster" else vectors
+
+
 async def _published_vector_ids(db: AsyncSession) -> set[int]:
     global _PUBLISHED_VECTOR_IDS
     if _PUBLISHED_VECTOR_IDS is None:
         rows = (await db.execute(
-            select(Portal.layer_configs).where(Portal.published == True))).scalars().all()  # noqa: E712
+            select(Portal.layer_configs, Portal.dashboard)
+            .where(Portal.published == True))).all()  # noqa: E712
         ids: set[int] = set()
-        for cfg in rows:
+        for cfg, dash in rows:
             try:
                 configs = json.loads(cfg) if isinstance(cfg, str) else (cfg or [])
                 for lc in configs:
                     if lc.get("layer_id") is not None and lc.get("layer_type", "vector") in (None, "vector"):
                         ids.add(int(lc["layer_id"]))
             except (ValueError, TypeError, AttributeError):
-                continue
+                pass
+            # V-16: a dashboard widget can summarise a layer the MAP never draws (an indicator over
+            # a table of readings, say). Its aggregate endpoint has to answer for that layer or the
+            # widget is a permanent error on a portal that is deliberately publishing it.
+            ids |= _dashboard_ids(dash, "vector")
         _PUBLISHED_VECTOR_IDS = ids
     return _PUBLISHED_VECTOR_IDS
 
@@ -787,6 +806,180 @@ async def vector_identify(
         duckdb_engine.query_features_at_point, layer.s3_key, lng, lat, tol,
         max(1, min(int(limit), 25)))
     return {"features": feats}
+
+
+# ── V-16 Dashboard: server-side summarisation ────────────────────────────────────────────────
+# Indicators, gauges, charts, tables, selectors and the map's feature-click read through these
+# four endpoints. They are
+# PUBLIC-by-id with exactly the posture `features.geojson` above already takes — a published
+# dashboard is browsed anonymously, and a widget that cannot answer without a login would make
+# every dashboard a members-only page. `_publicly_readable` is the gate: shared, or drawn by a
+# published portal, or 404.
+#
+# The summarisation itself lives in `services/aggregate.py`, which chooses the engine from the
+# layer's own backend (PostGIS in PostGIS, GeoParquet in DuckDB) — see that module on why that is
+# the fastest route rather than the conventional one.
+
+class AttrFilter(BaseModel):
+    """One attribute predicate published by a source widget. `op`: in | eq | between | gte | lte |
+    daterange | notnull. Several combine with AND — that IS the cross-filter semantics (a selector
+    and a map selection both active narrow the result; they do not replace one another)."""
+    field: str
+    op: str = "in"
+    values: list[Any] | None = None
+    value: Any | None = None
+    min: Any | None = None
+    max: Any | None = None
+    date: bool = False
+
+
+class AggregateRequest(BaseModel):
+    op: str = "count"                     # count | sum | avg | min | max
+    field: str | None = None              # required unless op == count
+    groupBy: str | None = None            # a category field, or a date field with timeBucket
+    timeBucket: str | None = None         # hour | day | week | month | quarter | year
+    limit: int | None = None
+    sort: str | None = None               # value_desc | value_asc | key_asc
+    filters: list[AttrFilter] | None = None
+    # The GEOMETRY filter — a clicked feature, a drawn polygon or a drawn bbox, already normalised
+    # to one GeoJSON geometry in EPSG:4326 by the dashboard's filter bus. Carried separately from
+    # `filters` because it is a different kind of thing: it has no field and no value.
+    geometry: dict[str, Any] | None = None
+
+
+class TableRequest(BaseModel):
+    fields: list[str] | None = None
+    filters: list[AttrFilter] | None = None
+    geometry: dict[str, Any] | None = None
+    sort: str | None = None
+    dir: str | None = None
+    limit: int | None = None
+    offset: int | None = None
+
+
+async def _public_vector(layer_ref: str, db: AsyncSession) -> VectorLayer:
+    result = await db.execute(select(VectorLayer).where(by_ref(VectorLayer, layer_ref)))
+    layer = result.scalar_one_or_none()
+    if not await _publicly_readable(layer, db):
+        raise HTTPException(404, "Layer not found.")
+    if layer.status != "ready":
+        raise HTTPException(409, "Layer is not ready yet.")
+    return layer
+
+
+def _spec(model: BaseModel) -> dict:
+    """A request model → the plain dict `services/aggregate` takes. `exclude_none` is deliberate:
+    the service distinguishes "absent" from "explicitly null" for `groupBy` and `sort`."""
+    return model.model_dump(exclude_none=True)
+
+
+@router.post("/{layer_ref}/aggregate")
+async def vector_aggregate(layer_ref: str, req: AggregateRequest,
+                           db: AsyncSession = Depends(get_db)):
+    """PUBLIC aggregation for the dashboard's indicator / gauge / chart widgets.
+
+    Returns either `{op, value, count}` (no groupBy) or `{groups:[{key, value, count}], truncated}`.
+    One number per widget per filter change, instead of a feature set the browser would have to
+    reduce — see `services/aggregate.py`.
+    """
+    from ...services import aggregate as agg
+    layer = await _public_vector(layer_ref, db)
+    spec = _spec(req)
+    try:
+        if layer.storage_backend == "geoparquet":
+            return await run_in_threadpool(agg.parquet_aggregate, layer, spec)
+        return await agg.postgis_aggregate(db, layer, spec)
+    except agg.AggregateError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Could not summarise this layer: {exc}") from exc
+
+
+@router.post("/{layer_ref}/table")
+async def vector_table(layer_ref: str, req: TableRequest, db: AsyncSession = Depends(get_db)):
+    """PUBLIC attribute rows for the dashboard's list/table and details widgets.
+
+    Each row carries a lon/lat `bbox` computed server-side, so clicking a row zooms and highlights
+    the map without a second request — click-to-zoom is the widget's whole purpose and a round trip
+    per click reads as a broken control.
+    """
+    from ...services import aggregate as agg
+    layer = await _public_vector(layer_ref, db)
+    spec = _spec(req)
+    try:
+        if layer.storage_backend == "geoparquet":
+            return await run_in_threadpool(agg.parquet_table, layer, spec)
+        return await agg.postgis_table(db, layer, spec)
+    except agg.AggregateError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Could not read this layer: {exc}") from exc
+
+
+class PickRequest(BaseModel):
+    """A click on the dashboard's map widget."""
+    lng: float
+    lat: float
+    # Hit tolerance in degrees. A polygon layer needs none; a point or line layer needs one, because
+    # an exact intersection with a click almost never happens. The client scales it by zoom.
+    tol: float = 0.0
+
+
+@router.post("/{layer_ref}/pick")
+async def vector_pick(layer_ref: str, req: PickRequest, db: AsyncSession = Depends(get_db)):
+    """PUBLIC: the EXACT geometry (EPSG:4326) and attributes of the feature under a clicked point.
+
+    Why this exists rather than reading the click off the map: `queryRenderedFeatures` returns
+    geometry clipped to the vector TILE the click landed in. Feeding that to zonal statistics would
+    compute a parcel's elevation over whichever fragment of it happened to be in that tile and
+    report the number as the parcel's — a wrong answer with no visible symptom. So the geometry that
+    drives a spatial filter comes from the layer, not from the renderer.
+
+    Both backends: PostGIS resolves it with an indexed ST_Intersects, GeoParquet with a
+    covering-bbox prune plus an exact shapely test (there is no spatial extension on the DuckDB read
+    path — see `services/aggregate.py`).
+    """
+    from ...services import aggregate as agg
+    layer = await _public_vector(layer_ref, db)
+    tol = min(max(float(req.tol or 0.0), 0.0), 1.0)
+    try:
+        if layer.storage_backend == "geoparquet":
+            hit = await run_in_threadpool(agg.parquet_pick, layer, req.lng, req.lat, tol)
+        else:
+            hit = await agg.postgis_pick(db, layer, req.lng, req.lat, tol)
+    except agg.AggregateError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Could not read this layer: {exc}") from exc
+    if not hit:
+        # 204, not 404: "nothing is under your click" is a normal outcome of clicking a map, and a
+        # 404 in the console on every empty click reads as a broken portal.
+        return Response(status_code=204)
+    return hit
+
+
+@router.get("/{layer_ref}/distinct")
+async def vector_distinct(layer_ref: str, field: str, limit: int = 200,
+                          db: AsyncSession = Depends(get_db)):
+    """PUBLIC option list for a dashboard selector: the distinct values of a text field (by
+    frequency), or the min/max of a numeric or date field.
+
+    Separate from `/field-stats`, which answers the SYMBOLOGY question (a classification with
+    breaks and colours) for a signed-in editor. This one answers "what can a visitor pick", is
+    anonymous, and returns no classification — the two would otherwise drift into one endpoint
+    serving two audiences with two trust levels.
+    """
+    from ...services import aggregate as agg
+    layer = await _public_vector(layer_ref, db)
+    limit = max(5, min(int(limit), agg.DISTINCT_LIMIT))
+    try:
+        if layer.storage_backend == "geoparquet":
+            return await run_in_threadpool(agg.parquet_distinct, layer, field, limit)
+        return await agg.postgis_distinct(db, layer, field, limit)
+    except agg.AggregateError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Could not read this field: {exc}") from exc
 
 
 @router.post("/{layer_id}/tile", response_model=VectorLayerOut)
