@@ -795,8 +795,14 @@ async def postgis_pick(db, layer, lng: float, lat: float, tol: float = 0.0) -> d
     pt = (f"ST_Transform(ST_Buffer(ST_SetSRID(ST_MakePoint(:lng, :lat), 4326), :tol), {target})"
           if tol > 0 else
           f"ST_Transform(ST_SetSRID(ST_MakePoint(:lng, :lat), 4326), {target})")
+    # NEAREST wins, not "whichever row the scan reached first". With a zero-width probe the two are
+    # the same thing, but a click radius gives the hit box area, and over dense points or adjacent
+    # parcels several features intersect it — picking arbitrarily among them means clicking the same
+    # spot twice can select two different features. `<->` is PostGIS's KNN operator and it reads the
+    # same GiST index the `&&` prefilter uses, so the ordering is not a second pass.
+    order = f" ORDER BY {geom} <-> {pt}" if tol > 0 else ""
     sql = (f"SELECT ST_AsGeoJSON(ST_Transform({geom}, 4326))" + (f", {cols}" if cols else "") +
-           f" FROM {table} WHERE {geom} && {pt} AND ST_Intersects({geom}, {pt}) LIMIT 1")
+           f" FROM {table} WHERE {geom} && {pt} AND ST_Intersects({geom}, {pt}){order} LIMIT 1")
     params = {"lng": float(lng), "lat": float(lat)}
     if tol > 0:
         params["tol"] = float(tol)
@@ -834,12 +840,23 @@ def parquet_pick(layer, lng: float, lat: float, tol: float = 0.0) -> dict | None
         if reproject is not None:
             geoms = reproject(geoms)
         hit = intersects(geoms, probe)
+        # Nearest of the intersecting candidates, for the same reason the PostGIS path orders by
+        # `<->`: a click radius can cover several features and "first in file order" would make the
+        # same click select different ones as the file is rewritten.
+        best, best_d = None, None
+        centre = probe.centroid if tol > 0 else probe
         for i, ok in enumerate(hit):
             if not ok:
                 continue
-            import json
-            return {"geometry": json.loads(to_geojson(geoms[i])),
-                    "props": {fields[j]: _jsonable(rows[i][j + 1]) for j in range(len(fields))}}
-        return None
+            d = geoms[i].distance(centre)
+            if best_d is None or d < best_d:
+                best, best_d = i, d
+            if best_d == 0 and tol <= 0:
+                break
+        if best is None:
+            return None
+        import json
+        return {"geometry": json.loads(to_geojson(geoms[best])),
+                "props": {fields[j]: _jsonable(rows[best][j + 1]) for j in range(len(fields))}}
     finally:
         conn.close()

@@ -248,6 +248,19 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-24 (**dashboard first-use round**, `shared/dashboard.{js,css}` + the four presets.
+`drawLine` now takes `selected` + `onPick`, so line and area charts are filter sources like bars and
+pies — with a transparent 9px hit circle, because a 2.6px dot on a 30-point series is unaimable. The
+map click resolves its tolerance from `tolPx` by unprojecting two pixels at the click (zoom- and
+latitude-correct) and falls through EVERY vector layer in the style, top-down, first hit wins, capped
+at 8 — the map draws all the portal's layers, so a click that does nothing over a visible feature
+read as "my second layer is not in the dashboard". New `extent` tool: `moveend` republishes the
+viewport on the geom channel with `soft: true`, which an explicit selection pins over. `placeAll`
+scales grid EDGES rather than origin-and-width separately (independent rounding made four 3-wide
+widgets OVERLAP at the 6-column breakpoint), scales row height per breakpoint, caps widget height on
+a phone, and re-places from a ResizeObserver on `#layout` rather than only `window.resize`. The
+Asset-tracker preset gained the chart it never had; every preset now offers the `extent` button.)
+
 2026-08-24 (**V-16 dashboard archetype** — a fourth archetype and the first with its own runtime
 file. `shared/dashboard.js` + `shared/dashboard.css` hold the widget grid, the cross-filter bus and
 the query client; portal.js hands them the map on load. The MAP IS A WIDGET: `#layout` becomes a CSS

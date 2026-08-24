@@ -184,7 +184,9 @@ window.GD_DASHBOARD = (function () {
   function createStore(widgets) {
     const byId = {};
     widgets.forEach(function (w) { byId[w.id] = w; });
-    const state = { attr: {}, geom: null, selection: null };
+    // `geomPinned` = the geometry came from a deliberate act (a click, a drawn polygon, a dragged
+    // box) rather than from the map moving. See `publishGeom`.
+    const state = { attr: {}, geom: null, geomPinned: false, selection: null };
     const listeners = {};      // widgetId → refresh fn (a TARGET re-queries)
     const selfListeners = {};  // widgetId → fn (a SOURCE redraws its own active state, no query)
     const barListeners = [];
@@ -243,15 +245,23 @@ window.GD_DASHBOARD = (function () {
       },
       attrOf: function (sourceId) { return state.attr[sourceId] || null; },
 
-      publishGeom: function (sourceId, geometry, label, bbox) {
+      //: `soft` marks a geometry the visitor did not choose — the current map extent, republished
+      //: on every pan. It shares the geom channel rather than getting a fourth one, because
+      //: downstream it IS the same thing: one polygon every target intersects against. What it must
+      //: not do is silently replace an area someone drew, so an explicit selection PINS the channel
+      //: until it is cleared, and panning under a pinned selection changes nothing.
+      publishGeom: function (sourceId, geometry, label, bbox, soft) {
+        if (soft && state.geomPinned) return;
         const prev = state.geom;
         const targets = targetsOf(sourceId);
         state.geom = { sourceId: sourceId, targets: targets, geometry: geometry,
-                       bbox: bbox || null, label: label };
+                       bbox: bbox || null, label: label, soft: !!soft };
+        state.geomPinned = !soft;
         notify(affected(prev && prev.targets, targets));
       },
       clearGeom: function (quiet) {
         const prev = state.geom;
+        state.geomPinned = false;
         if (!prev) return;
         state.geom = null;
         if (!quiet) notify(prev.targets);
@@ -300,7 +310,9 @@ window.GD_DASHBOARD = (function () {
         for (const sid in state.attr) {
           out.push({ key: 'a:' + sid, label: state.attr[sid].label || 'Filter', source: sid });
         }
-        if (state.geom) out.push({ key: 'g', label: state.geom.label || 'Selected area', geom: true });
+        if (state.geom && !state.geom.soft) {
+          out.push({ key: 'g', label: state.geom.label || 'Selected area', geom: true });
+        }
         return out;
       },
       clearAll: function () {
@@ -310,6 +322,9 @@ window.GD_DASHBOARD = (function () {
           delete state.attr[sid];
         }
         if (state.geom) { touched.push.apply(touched, state.geom.targets); state.geom = null; }
+        // Un-pin, or a Reset leaves the geom channel claimed by a selection that no longer exists
+        // and the extent tool never publishes again.
+        state.geomPinned = false;
         if (state.selection) { touched.push.apply(touched, state.selection.targets); state.selection = null; }
         // Every widget, not only the touched ones: a "reset dashboard" that leaves one card showing
         // a stale number is worse than no reset at all, and a full refresh costs one request each.
@@ -333,8 +348,22 @@ window.GD_DASHBOARD = (function () {
     if (width < 1100) return 6;
     return 12;
   }
-  function placeAll(cards, cols) {
+  //: Row height per breakpoint, as a fraction of the height the author chose. A 12-column layout
+  //: dropped onto 6 makes every widget about half as wide but exactly as tall, so the cards go from
+  //: landscape to portrait and a dashboard that fitted one screen becomes three. Shrinking the row
+  //: is the arithmetic counterpart of halving the span, and it is done here rather than in a media
+  //: query for the same reason the placement is: the media query cannot see the authored geometry.
+  const ROW_SCALE = { 12: 1, 6: 0.86, 1: 0.74 };
+  //: The tallest a widget may be once it is full-width on a phone. An author's 8-row map is 8 rows
+  //: because it sits beside eight rows of other widgets; stacked, that is most of a phone screen
+  //: for one card and the visitor scrolls past everything else to find out the dashboard has more
+  //: on it. The map keeps more of its height than the rest because a map that small is not a map.
+  const PHONE_MAX_H = 5, PHONE_MAP_H = 7;
+
+  function placeAll(cards, cols, baseRow) {
     document.documentElement.style.setProperty('--dash-cols', String(cols));
+    document.documentElement.style.setProperty(
+      '--dash-row', Math.round((baseRow || 90) * (ROW_SCALE[cols] || 1)) + 'px');
     // BOTH axes are written explicitly, never left to auto-placement. #map-wrap is a sibling of
     // #dashboard-panel in the DOM (it must never be re-parented), so it is always the LAST grid
     // item in document order however early the author placed the map — auto row placement would
@@ -344,7 +373,8 @@ window.GD_DASHBOARD = (function () {
       // sorted by y then x, so this is the author's own order.
       let row = 1;
       cards.forEach(function (c) {
-        const h = Math.max(2, c.layout.h);
+        const cap = c.inst && c.inst.isMap ? PHONE_MAP_H : PHONE_MAX_H;
+        const h = Math.max(2, Math.min(c.layout.h, cap));
         c.el.style.gridColumn = '1 / -1';
         c.el.style.gridRow = row + ' / span ' + h;
         row += h;
@@ -353,10 +383,14 @@ window.GD_DASHBOARD = (function () {
     }
     const scale = cols / 12;
     cards.forEach(function (c) {
-      const w = Math.max(1, Math.min(cols, Math.round(c.layout.w * scale)));
-      let x = Math.round(c.layout.x * scale);
-      if (x + w > cols) x = cols - w;
-      c.el.style.gridColumn = (x + 1) + ' / span ' + w;
+      // Scale the EDGES, not the origin and the width separately. Rounding each independently is
+      // what makes a row of four 3-wide widgets collide at 6 columns: x=3 rounds up to 2 and w=3
+      // rounds up to 2, so the second widget claims columns 3–4 and the third, at x=3, claims 4–5.
+      // Two cards in one cell, overlapping, at exactly the width a tablet reports. Deriving the
+      // span from two rounded edges is monotonic, so neighbours can touch but never overlap.
+      const x = Math.max(0, Math.min(cols - 1, Math.round(c.layout.x * scale)));
+      const right = Math.max(x + 1, Math.min(cols, Math.round((c.layout.x + c.layout.w) * scale)));
+      c.el.style.gridColumn = (x + 1) + ' / span ' + (right - x);
       c.el.style.gridRow = (Math.max(0, c.layout.y) + 1) + ' / span ' + Math.max(2, c.layout.h);
     });
   }
@@ -606,7 +640,7 @@ window.GD_DASHBOARD = (function () {
       const node = (kind === 'pie' || kind === 'donut')
         ? drawPie(groups, ds, w.style, selectedKey(), onPick, kind === 'donut')
         : (kind === 'line' || kind === 'area')
-          ? drawLine(groups, ds, w.style, kind === 'area')
+          ? drawLine(groups, ds, w.style, kind === 'area', selectedKey(), onPick)
           : drawBars(groups, ds, w.style, selectedKey(), onPick, kind === 'hbar');
       c.body.appendChild(node);
       if (w.style && w.style.legend !== false && (kind === 'pie' || kind === 'donut')) {
@@ -703,7 +737,12 @@ window.GD_DASHBOARD = (function () {
     return g;
   }
 
-  function drawLine(groups, ds, style, filled) {
+  //: `selected` + `onPick` because a line chart is a filter SOURCE exactly like a bar chart —
+  //: clicking March on a time series and clicking the March bar are the same question, and only one
+  //: of them used to be answerable. The click target is a transparent circle far larger than the
+  //: 2.6px dot: on a 30-point series the dots are ~9px apart and aiming at the dot itself is a test
+  //: of the mouse, not an interaction.
+  function drawLine(groups, ds, style, filled, selected, onPick) {
     const W = 300, H = 170, padL = 34, padR = 8, padT = 8, padB = 26;
     const svg = svgEl('svg', { class: 'gd-chart', viewBox: '0 0 ' + W + ' ' + H,
                                preserveAspectRatio: 'none' });
@@ -724,10 +763,22 @@ window.GD_DASHBOARD = (function () {
     svg.appendChild(svgEl('path', { d: d, fill: 'none', stroke: colour, 'stroke-width': 2,
                                     'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
     values.forEach(function (v, i) {
-      const dot = svgEl('circle', { cx: x(i).toFixed(2), cy: y(v).toFixed(2), r: 2.6, fill: colour });
-      const t = svgEl('title'); t.textContent = groupLabel(groups[i], ds) + ': ' + fmtNumber(v, style);
-      dot.appendChild(t);
+      const key = groups[i].key == null ? '' : String(groups[i].key);
+      const on = selected != null && String(selected) === key;
+      const dot = svgEl('circle', { cx: x(i).toFixed(2), cy: y(v).toFixed(2),
+                                    r: on ? 4.2 : 2.6, fill: colour });
+      if (on) { dot.setAttribute('stroke', 'var(--bg)'); dot.setAttribute('stroke-width', '1.6'); }
+      // Everything dims except the chosen point, the same feedback the bars give.
+      if (selected != null && !on) dot.setAttribute('opacity', '.35');
       svg.appendChild(dot);
+      const hit = svgEl('circle', { cx: x(i).toFixed(2), cy: y(v).toFixed(2), r: 9,
+                                    fill: 'transparent', class: onPick ? 'gd-pick' : null });
+      const t = svgEl('title'); t.textContent = groupLabel(groups[i], ds) + ': ' + fmtNumber(v, style);
+      hit.appendChild(t);
+      if (onPick) {
+        hit.addEventListener('click', function () { onPick(groups[i].key); });
+      }
+      svg.appendChild(hit);
     });
     const every = Math.ceil(n / 6);
     groups.forEach(function (g, i) {
@@ -1174,7 +1225,19 @@ window.GD_DASHBOARD = (function () {
       const meta = lyr.metadata || {};
       if (String(meta['geodeploy:layer_id']) !== String(ds.layerId)) return;
       if (meta['geodeploy:external']) return;
-      try { map.setFilter(lyr.id, expr); } catch (e) { /* a layer the live style no longer has */ }
+      // AND with the layer's OWN filter, never replace it. A raw-paint passthrough
+      // (`style.maplibre.layers`, how a GeoLibre import carries data-driven symbology) emits
+      // several style layers for one data layer, each filtered to the part it draws. Overwriting
+      // that with the dashboard's predicate makes every part draw every feature — the polygon
+      // layer would render the points too — and clearing the dashboard's filter would set it to
+      // null and leave it that way. The baseline is captured once, from the baked style, so
+      // repeated applies cannot compound it.
+      if (lyr.__gdBaseFilter === undefined) {
+        lyr.__gdBaseFilter = (lyr.filter !== undefined && lyr.filter !== null) ? lyr.filter : null;
+      }
+      const base = lyr.__gdBaseFilter;
+      const next = (base && expr) ? ['all', base].concat(expr.slice(1)) : (expr || base);
+      try { map.setFilter(lyr.id, next); } catch (e) { /* a layer the live style no longer has */ }
     });
   }
   function toMapLibreExpr(f) {
@@ -1240,6 +1303,55 @@ window.GD_DASHBOARD = (function () {
     })(geometry.coordinates || []);
     return isFinite(minx) ? [minx, miny, maxx, maxy] : null;
   }
+  //: A screen radius expressed in DEGREES at one point on the map. Measured by unprojecting two
+  //: pixels that far apart at the click itself, so it follows the zoom and the latitude together —
+  //: the same number of pixels is a very different ground distance at 64N and at the equator.
+  function degreesFor(map, point, ds) {
+    const px = (ds && ds.tolPx != null) ? ds.tolPx : 6;
+    let deg = 0;
+    if (px > 0) {
+      try {
+        const a = map.unproject([point.x, point.y]);
+        const b = map.unproject([point.x + px, point.y]);
+        deg = Math.abs(b.lng - a.lng);
+      } catch (e) { deg = 0; }
+    }
+    // An authored `tol` (degrees) is a FLOOR, not a replacement: it is how an author asks for a
+    // fixed GROUND distance, and configs written against the original schema still carry one.
+    return Math.max(deg, (ds && ds.tol) || 0);
+  }
+
+  //: The vector layers a click hit-tests, in order: the widget's own selection layer first, then
+  //: every other vector layer in the published style, TOP-DOWN. MapLibre's `style.layers` is in
+  //: draw order (last is drawn on top), so it is walked backwards — the layer a visitor sees on
+  //: top is the one they meant to click.
+  function pickCandidates(w, env) {
+    const ds = w.dataSource || {};
+    const out = [];
+    const seen = {};
+    if (ds.layerId != null) { out.push(ds.layerId); seen[String(ds.layerId)] = true; }
+    const layers = (env.style && env.style.layers) || [];
+    for (let i = layers.length - 1; i >= 0; i--) {
+      const meta = layers[i].metadata || {};
+      const id = meta['geodeploy:layer_id'];
+      if (id == null) continue;
+      if (meta['geodeploy:external']) continue;              // not ours to query
+      // A raster's layer_id lives in a DIFFERENT id space from a vector's, so `raster-7` and a
+      // vector layer 7 both report 7 — asking /data/vector/7/pick for the raster would either 404
+      // or, worse, answer about an unrelated table. Both the metadata tag portal_generator writes
+      // and the MapLibre layer type are checked, because an author's own style layer may carry only
+      // one of them.
+      if (meta['geodeploy:type'] === 'raster' || meta['geodeploy:geometry'] === 'raster') continue;
+      const t = layers[i].type;
+      if (t === 'raster' || t === 'hillshade' || t === 'background') continue;
+      if (seen[String(id)]) continue;
+      seen[String(id)] = true;
+      out.push(id);
+    }
+    // Bounded: a portal with thirty layers must not answer one click with thirty round trips.
+    return out.slice(0, 8);
+  }
+
   function ringPolygon(points) {
     const ring = points.slice();
     const first = ring[0], last = ring[ring.length - 1];
@@ -1251,10 +1363,12 @@ window.GD_DASHBOARD = (function () {
     click: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l7.5 18 2.5-7.5L20.5 11z"/></svg>',
     polygon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 3 21 9 18 20 6 20 3 9"/></svg>',
     bbox: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="1"/></svg>',
+    extent: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V5a1 1 0 0 1 1-1h4"/><path d="M15 4h4a1 1 0 0 1 1 1v4"/><path d="M20 15v4a1 1 0 0 1-1 1h-4"/><path d="M9 20H5a1 1 0 0 1-1-1v-4"/></svg>',
     clear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><polyline points="3 4 3 10 9 10"/></svg>',
   };
   const TOOL_TITLES = { click: 'Select a feature', polygon: 'Draw a polygon',
-                        bbox: 'Drag a box', clear: 'Clear the selection' };
+                        bbox: 'Drag a box', extent: 'Filter to what is on screen',
+                        clear: 'Clear the selection' };
 
   function mountSelectionTools(w, ds, env, wrap) {
     const map = env.map;
@@ -1270,7 +1384,10 @@ window.GD_DASHBOARD = (function () {
 
     function setMode(next) {
       mode = (mode === next) ? null : next;
-      for (const k in buttons) buttons[k].setAttribute('aria-pressed', k === mode ? 'true' : 'false');
+      for (const k in buttons) {
+        if (k === 'extent') continue;   // a switch, not a mode — see below
+        buttons[k].setAttribute('aria-pressed', k === mode ? 'true' : 'false');
+      }
       document.body.dataset.dashDraw = mode && mode !== 'click' ? '1' : '0';
       // Box-drag and map-pan are the same gesture, so one has to yield while the other is armed.
       try {
@@ -1295,6 +1412,58 @@ window.GD_DASHBOARD = (function () {
       buttons[t] = b;
       bar.appendChild(b);
     });
+    // ── extent: the map itself is a filter ────────────────────────────────────
+    // NOT one of the modes above, and that is the point — it is a switch, not a gesture. It stays on
+    // while the visitor clicks features and draws polygons, and it answers the plainest expectation
+    // a dashboard sets: that panning the map changes the numbers beside it. Debounced on `moveend`
+    // rather than `move`, because a single drag emits a frame's worth of events and every one of
+    // them would be a round trip per listening widget.
+    if (tools.indexOf('extent') >= 0) {
+      const eb = el('button');
+      eb.type = 'button';
+      eb.title = TOOL_TITLES.extent;
+      eb.setAttribute('aria-label', TOOL_TITLES.extent);
+      eb.setAttribute('aria-pressed', 'false');
+      eb.innerHTML = TOOL_ICONS.extent;
+      let extentOn = false, extentTimer = null;
+      const pushExtent = function () {
+        if (!extentOn) return;
+        let b;
+        try { b = map.getBounds(); } catch (e) { return; }
+        const w0 = b.getWest(), s0 = b.getSouth(), e0 = b.getEast(), n0 = b.getNorth();
+        // A world-wrapped view can report a west past its east; clamping keeps the polygon a
+        // polygon rather than a bow tie the server has to reject.
+        const west = Math.max(-180, Math.min(w0, e0)), east = Math.min(180, Math.max(w0, e0));
+        const south = Math.max(-85, Math.min(s0, n0)), north = Math.min(85, Math.max(s0, n0));
+        const rect = { type: 'Polygon', coordinates: [[[west, south], [east, south],
+                                                       [east, north], [west, north], [west, south]]] };
+        env.store.publishGeom(w.id, rect, 'Map extent', [west, south, east, north], true);
+      };
+      map.on('moveend', function () {
+        if (!extentOn) return;
+        if (extentTimer) clearTimeout(extentTimer);
+        extentTimer = setTimeout(pushExtent, 250);
+      });
+      // A cleared selection un-pins the channel, so the extent takes over again immediately rather
+      // than waiting for the visitor to nudge the map.
+      env.onClearSelection(function () { setTimeout(pushExtent, 0); });
+      eb.addEventListener('click', function () {
+        extentOn = !extentOn;
+        eb.setAttribute('aria-pressed', extentOn ? 'true' : 'false');
+        if (extentOn) pushExtent();
+        else if (env.store.state.geom && env.store.state.geom.soft) env.store.clearGeom();
+      });
+      buttons.extent = eb;
+      bar.appendChild(eb);
+    }
+
+    // SELECT IS THE RESTING STATE. Every mode started off, so a visitor's first instinct — click the
+    // feature — did nothing at all until they found the arrow button, and "the details panel never
+    // fills in" is the only conclusion available to them. Polygon and box are gestures you go
+    // looking for; picking a feature is not, and it is also the one mode that cannot be triggered
+    // by accident (a drag pans, and MapLibre does not emit `click` after a drag).
+    if (tools.indexOf('click') >= 0) setMode('click');
+
     const clearBtn = el('button');
     clearBtn.type = 'button';
     clearBtn.title = TOOL_TITLES.clear;
@@ -1323,25 +1492,55 @@ window.GD_DASHBOARD = (function () {
     // `queryRenderedFeatures` would give geometry clipped to the vector tile the click landed in,
     // so a parcel straddling a tile boundary would produce zonal statistics for the visible
     // fragment and report them as the parcel's. See routers/data/vector.py::vector_pick.
+    //
+    // TWO corrections live in here, and both presented as "the click does nothing, silently":
+    //
+    //  1. THE HIT RADIUS IS A SCREEN DISTANCE. The stored `tolPx` is converted to degrees at the
+    //     click's own zoom and latitude on every click. The old code sent a fixed `tol` in degrees
+    //     that defaulted to 0, which makes the server's pick an exact intersection with a zero-area
+    //     point — that can only ever land on a polygon, so a POINT layer was unclickable at every
+    //     zoom. A degree value is not zoom-invariant either: 0.0005 degrees is half the screen at
+    //     z18 and invisible at z6.
+    //
+    //  2. A CLICK TRIES EVERY VECTOR LAYER, not only the widget's own. The map draws all of the
+    //     portal's layers, so "the second layer I added is not selectable" is the only reading a
+    //     visitor can make of a click that does nothing over a feature they can see. The widget's
+    //     bound layer stays FIRST (it is the author's declared intent), then the rest top-down. The
+    //     attribute channel is published only for the bound layer, because `store.attr` is scoped
+    //     by layerKey — publishing another layer's value under this widget's key would silently
+    //     filter nothing (see `filtersFor`).
     map.on('click', function (ev) {
       if (mode !== 'click') return;
-      if (ds.layerId == null) return;
-      env.api.pick(w.id + ':pick', ds.layerId,
-        { lng: ev.lngLat.lng, lat: ev.lngLat.lat, tol: ds.tol || 0 })
-        .then(function (hit) {
-          if (!hit) return;                    // 204 — an empty click, which is a normal outcome
-          const label = ds.field && hit.props && hit.props[ds.field] != null
-            ? String(hit.props[ds.field]) : 'Selected feature';
-          publish(hit.geometry, label, hit.props);
-          // The ATTRIBUTE channel too, when the author named a field: one click both selects the
-          // polygon (which drives raster statistics) and filters the attribute-backed widgets to
-          // that feature's value. That is what makes a choropleth dashboard feel wired.
-          if (ds.field && hit.props && hit.props[ds.field] != null) {
-            env.store.publishAttr(w.id, { field: ds.field, op: 'in', values: [hit.props[ds.field]] },
-              ds.field + ' = ' + truncate(hit.props[ds.field], 24));
-          }
-        })
-        .catch(function (err) { if (err.name !== 'AbortError') console.warn('[geodeploy] pick failed', err); });
+      const candidates = pickCandidates(w, env);
+      if (!candidates.length) return;
+      const tol = degreesFor(map, ev.point, ds);
+      // Sequential, stopping at the first hit: the topmost feature under the cursor is the one the
+      // visitor pointed at, and firing every layer in parallel would race to report a lower one.
+      (function attempt(i) {
+        if (i >= candidates.length) return;
+        const layerId = candidates[i];
+        return env.api.pick(w.id + ':pick', layerId,
+          { lng: ev.lngLat.lng, lat: ev.lngLat.lat, tol: tol })
+          .then(function (hit) {
+            if (!hit) return attempt(i + 1);   // 204 — nothing here; try the layer underneath
+            const primary = ds.layerId != null && String(layerId) === String(ds.layerId);
+            const label = primary && ds.field && hit.props && hit.props[ds.field] != null
+              ? String(hit.props[ds.field]) : 'Selected feature';
+            publish(hit.geometry, label, hit.props);
+            // The ATTRIBUTE channel too, when the author named a field: one click both selects the
+            // polygon (which drives raster statistics) and filters the attribute-backed widgets to
+            // that feature's value. That is what makes a choropleth dashboard feel wired.
+            if (primary && ds.field && hit.props && hit.props[ds.field] != null) {
+              env.store.publishAttr(w.id, { field: ds.field, op: 'in', values: [hit.props[ds.field]] },
+                ds.field + ' = ' + truncate(hit.props[ds.field], 24));
+            }
+          })
+          .catch(function (err) {
+            if (err.name === 'AbortError') return;
+            console.warn('[geodeploy] pick failed', layerId, err);
+            return attempt(i + 1);
+          });
+      })(0);
     });
 
     // ── polygon: click to add a vertex, double-click or Enter to close, Esc to cancel ──
@@ -1449,7 +1648,7 @@ window.GD_DASHBOARD = (function () {
     if (!host || !layoutEl) return;
 
     const grid = cfg.grid || {};
-    document.documentElement.style.setProperty('--dash-row', (grid.rowHeight || 90) + 'px');
+    const baseRow = grid.rowHeight || 90;      // `--dash-row` is written per breakpoint by placeAll
     document.documentElement.style.setProperty('--dash-gap', (grid.gap || 10) + 'px');
 
     const store = createStore(cfg.widgets);
@@ -1525,18 +1724,37 @@ window.GD_DASHBOARD = (function () {
     if (toggle && sidebar && sidebar.style.display === 'none') toggle.style.display = 'none';
 
     // The bar is a full-width grid row of its own; the cards are placed by the responsive mapper.
+    let lastCols = null;
     function layoutNow() {
-      placeAll(cards, breakpointCols(layoutEl.clientWidth || window.innerWidth));
+      const cols = breakpointCols(layoutEl.clientWidth || window.innerWidth);
+      placeAll(cards, cols, baseRow);
+      lastCols = cols;
       // The map's container changed size, so MapLibre has to be told — it measures on construction
       // and on its own resize observer only for the window, not for a grid re-flow.
       if (hasMapCard) { try { ctx.map.resize(); } catch (e) {} }
     }
     layoutNow();
     let resizeTimer = null;
-    window.addEventListener('resize', function () {
+    const relayout = function () {
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(layoutNow, 120);
-    });
+    };
+    window.addEventListener('resize', relayout);
+    // The WINDOW is not the only thing that changes the grid's width: the layer-list overlay, an
+    // embed whose host resizes the iframe, and a phone's URL bar collapsing all move
+    // `#layout.clientWidth` without a window resize event. Observing the element is the only way to
+    // catch those, and it is also what makes the editor's preview iframe re-flow while it is being
+    // dragged. Guarded on the column count actually changing, because a ResizeObserver fires for
+    // every pixel and re-placing every card 60 times a second is worse than not re-placing at all.
+    if (typeof ResizeObserver === 'function') {
+      let roTimer = null;
+      new ResizeObserver(function () {
+        if (roTimer) clearTimeout(roTimer);
+        roTimer = setTimeout(function () {
+          if (breakpointCols(layoutEl.clientWidth || window.innerWidth) !== lastCols) layoutNow();
+        }, 120);
+      }).observe(layoutEl);
+    }
 
     // First paint: every widget asks its own question once. They run in parallel — the api client's
     // per-widget abort keys mean they cannot cancel each other.

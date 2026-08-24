@@ -94,6 +94,17 @@ All dialogs (`UploadModal`, `AddSourceModal`, `DiscoverModal`, `portal/CreatePor
   icon logic in `views/PortalEditor.vue` + `templates/shared/portal.js` — change all three together.
 
 ## Last updated
+2026-08-24 (**dashboard first-use round**, `portal/DashboardBuilder.vue`. `addWidget` shipped every
+widget with `actions.filters: []`, so a hand-built dashboard cross-filtered NOTHING — the map
+published a geometry to nobody and the raster-stats and details panels sat on their placeholders for
+ever, with no error anywhere. Cross-filtering is the archetype, so `autowire()` now connects a new
+widget in BOTH directions and disconnecting is the deliberate act; duplicate wires incoming only. A
+map widget binds the first vector layer and a `tolPx` click radius by default (a map with no
+`layerId` returned early on every click) and exposes both as controls. `applyPreset` retitles an
+auto-guessed aggregate after the field it actually reads — "Mean condition" over an arbitrary numeric
+column named a quantity the card was not showing — and `autoRangeGauge` reads `/field-stats` to
+rescale the dial and its threshold bands off the column's real range instead of a hardcoded 0–100.)
+
 2026-08-24 (**V-16 `portal/DashboardBuilder.vue`** — the widget picker, the 12-column drag/resize
 grid, per-widget data binding and the source→target filter wiring. It draws configuration only: the
 live preview is the real published portal in an iframe, so there is no second widget renderer to

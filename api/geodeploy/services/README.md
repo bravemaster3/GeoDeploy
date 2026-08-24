@@ -174,6 +174,17 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   permalink it serves, never a substitute for the bbox queries.
 
 ## Last updated
+2026-08-24 (**dashboard first-use round** — `dashboard.py`: the map widget's hit radius is now
+`tolPx` (SCREEN pixels, default 6, clamped 0–24) instead of `tol` (degrees, default **0**), and it is
+written whether or not a selection layer is bound. Zero degrees makes `postgis_pick`'s
+`ST_Intersects` an exact test against a zero-area point, so a POINT layer could not be clicked at any
+zoom — silently. `tol` survives as a degree FLOOR for an author who wants a fixed ground distance.
+`MAP_TOOLS` gained `extent` (the viewport as a live geometry filter) and `DEFAULT_MAP_TOOLS` now
+names the three that are on by default, so an existing map that never listed its tools does not
+acquire extent-filtering. `aggregate.py`: `postgis_pick` orders by the KNN `<->` operator and
+`parquet_pick` by shapely distance once the radius gives the probe area — with several features
+inside the hit box, "first row the scan reached" made the same click select different features.)
+
 2026-08-24 (**V-16 dashboard archetype**: three new services. `dashboard.py` is the config schema
 and the archetype's ONLY validator — the published runtime is written against its invariants and
 checks nothing itself. `aggregate.py` summarises a vector layer server-side, choosing the engine

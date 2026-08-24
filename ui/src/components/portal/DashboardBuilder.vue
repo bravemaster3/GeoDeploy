@@ -25,6 +25,7 @@
  * the runtime. That is why this component draws configuration, not widgets.
  */
 import { computed, ref, watch } from 'vue'
+import { getFieldStats } from '@/api'
 
 const props = defineProps({
   modelValue: { type: Object, default: null },   // {grid, refresh, widgets:[]}
@@ -65,6 +66,9 @@ const AGG_OPS = [
   { id: 'count', name: 'Count' }, { id: 'sum', name: 'Sum' }, { id: 'avg', name: 'Average' },
   { id: 'min', name: 'Minimum' }, { id: 'max', name: 'Maximum' },
 ]
+//: How an aggregation reads in a widget TITLE (as opposed to AGG_OPS, which is how it reads in the
+//: dropdown that chooses it).
+const OP_TITLE = { count: 'Count of', sum: 'Total', avg: 'Mean', min: 'Lowest', max: 'Highest' }
 const CHART_KINDS = [
   { id: 'bar', name: 'Bars' }, { id: 'hbar', name: 'Bars (horizontal)' },
   { id: 'line', name: 'Line' }, { id: 'area', name: 'Area' },
@@ -84,7 +88,16 @@ const MAP_TOOLS = [
   { id: 'click', name: 'Click a feature' },
   { id: 'polygon', name: 'Draw a polygon' },
   { id: 'bbox', name: 'Drag a box' },
+  // A switch rather than a gesture: while it is on, panning or zooming the map republishes the
+  // viewport as the geometry filter, so the widgets beside the map describe what is on screen. Off
+  // by default — see DEFAULT_MAP_TOOLS in services/dashboard.py.
+  { id: 'extent', name: 'Filter by map extent' },
 ]
+// Click hit radius in SCREEN PIXELS, converted to degrees at the click's zoom+latitude by
+// dashboard.js. Degrees were the wrong unit for an author to reason in and the wrong unit for the
+// runtime to use: 0 (the old default) can only ever hit a polygon, so clicking a point or line
+// layer never resolved to a feature at any zoom.
+const DEFAULT_TOL_PX = 6
 const GRID_COLS = 12
 
 // ── the model ───────────────────────────────────────────────────────────────
@@ -151,6 +164,42 @@ const DEFAULT_SIZE = {
   chart: { w: 5, h: 3 }, table: { w: 6, h: 4 }, selector: { w: 3, h: 2 },
   details: { w: 4, h: 4 }, rasterstats: { w: 4, h: 2 },
 }
+/**
+ * Wire a widget into the bus the moment it exists, in BOTH directions.
+ *
+ * Cross-filtering is what makes a dashboard a dashboard rather than a page of charts, so an
+ * unwired widget is a broken one, not a neutral starting point. Shipping every new widget with
+ * `filters: []` meant a hand-built dashboard cross-filtered NOTHING: the map published a geometry
+ * to nobody, so a Raster Stats panel sat on "draw a box on the map" for ever and the details panel
+ * on "select a feature" — with no error anywhere, because from the runtime's point of view that is
+ * simply a dashboard whose author wired nothing.
+ *
+ * So the default is "connected", and disconnecting is the deliberate act (the wiring panel, which
+ * already shows both directions). `incomingOnly` is for DUPLICATE: a copy must be DRIVEN like its
+ * original, but must not re-publish the original's filter — two sources publishing the identical
+ * predicate to the same targets is never what duplicating means.
+ */
+function autowire(list, freshId, incomingOnly) {
+  const fresh = list.find(w => w.id === freshId)
+  if (!fresh) return list
+  const canListen = TYPE_BY_ID[fresh.type]?.target && fresh.actions?.listens !== false
+  return list.map((w) => {
+    if (w.id === freshId) {
+      if (incomingOnly || !TYPE_BY_ID[w.type]?.source) return w
+      const targets = list
+        .filter(t => t.id !== freshId && TYPE_BY_ID[t.type]?.target && t.actions?.listens !== false)
+        .map(t => t.id)
+      return { ...w, actions: { ...w.actions, filters: targets } }
+    }
+    // Every existing SOURCE gains the newcomer as a target, so adding a chart to a dashboard that
+    // already has a map does not leave the map silently not filtering it.
+    if (!canListen || !TYPE_BY_ID[w.type]?.source) return w
+    const cur = w.actions?.filters || []
+    if (cur.includes(freshId)) return w
+    return { ...w, actions: { ...w.actions, filters: [...cur, freshId] } }
+  })
+}
+
 function addWidget(type) {
   const size = DEFAULT_SIZE[type] || { w: 4, h: 3 }
   const id = newId()
@@ -163,7 +212,7 @@ function addWidget(type) {
     style: defaultStyle(type),
     actions: { filters: [], listens: TYPE_BY_ID[type].target },
   }
-  setWidgets([...widgets.value, w])
+  setWidgets(autowire([...widgets.value, w], id, false))
   selectedId.value = id
   pickerOpen.value = false
 }
@@ -171,7 +220,14 @@ function nextRow() {
   return widgets.value.reduce((m, w) => Math.max(m, (w.layout?.y || 0) + (w.layout?.h || 2)), 0)
 }
 function defaultSource(type) {
-  if (type === 'map') return { tools: ['click', 'polygon', 'bbox'] }
+  if (type === 'map') {
+    // A selection layer by DEFAULT. Without one `dashboard.js` returns early on every click
+    // (`ds.layerId == null`), so the map's click tool did nothing at all on a hand-built dashboard
+    // — the tool highlighted, the cursor changed, and no request was ever made.
+    const l = vectorLayers.value[0]
+    const base = { tools: ['click', 'polygon', 'bbox'], tolPx: DEFAULT_TOL_PX }
+    return l ? { ...base, layerType: 'vector', layerId: l.id } : base
+  }
   if (type === 'none' || type === 'details') return null
   if (type === 'rasterstats') {
     const l = rasterLayers.value[0]
@@ -215,7 +271,9 @@ function duplicateWidget(id) {
   // Deliberately NOT copying the wiring: two widgets publishing the identical filter to the same
   // targets is never what duplicating means, and it is invisible until something double-filters.
   copy.actions = { filters: [], listens: copy.actions?.listens !== false }
-  setWidgets([...widgets.value, copy])
+  // Incoming wiring only: the copy IS driven by whatever drives the original (otherwise it sits
+  // there never updating), but publishes nothing of its own — see `autowire`.
+  setWidgets(autowire([...widgets.value, copy], copy.id, true))
   selectedId.value = copy.id
 }
 function replaceType(id, type) {
@@ -344,6 +402,7 @@ function applyPreset(overwrite) {
       if (layer) { w.dataSource.layerType = 'raster'; w.dataSource.layerId = layer.id }
     } else if (spec.needs === 'vector' || spec.needs === 'map') {
       if (vec) { w.dataSource.layerType = 'vector'; w.dataSource.layerId = vec.id }
+      if (w.type === 'map' && w.dataSource.tolPx == null) w.dataSource.tolPx = DEFAULT_TOL_PX
       const cols = (vec && vec.columns) || []
       const nums = cols.filter(c => isNumeric(c.type))
       const cats = cols.filter(c => !isNumeric(c.type) && !isDate(c.type))
@@ -371,6 +430,15 @@ function applyPreset(overwrite) {
         if (nums[0]) w.dataSource.field = nums[0].name
         else w.dataSource.op = 'count'
       }
+      // A PRESET TITLE DESCRIBES A DATASET THAT DOES NOT EXIST. "Mean condition" is written for a
+      // hypothetical asset table; bound to whatever this portal's first numeric column happens to
+      // be, it names a quantity the card is not showing. So a widget whose number comes from an
+      // auto-guessed field is retitled after the field it actually reads. The author can type
+      // anything over it — but the default now describes the data instead of the template.
+      if (['indicator', 'gauge'].includes(w.type)
+          && w.dataSource.field && (w.dataSource.op || 'count') !== 'count') {
+        w.title = `${OP_TITLE[w.dataSource.op] || w.dataSource.op} ${w.dataSource.field}`
+      }
     }
     return w
   })
@@ -380,6 +448,11 @@ function applyPreset(overwrite) {
     widgets: bound,
   })
   selectedId.value = null
+  // After the commit, not during it: `autoRangeGauge` reads the committed widget back and patches
+  // it, so it has to run against the model the author can now see.
+  bound.forEach((w) => {
+    if (w.type === 'gauge' && w.dataSource?.field) autoRangeGauge(w.id, w.dataSource.field)
+  })
 }
 const presetName = computed(() => (props.preset ? 'this template' : null))
 
@@ -429,6 +502,60 @@ function setLayer(w, value) {
     fields: w.type === 'table' ? [] : undefined,
     filterField: undefined, filterValue: undefined,
   } })
+}
+
+/**
+ * The aggregated FIELD of an indicator / gauge / chart, plus the two things that have to follow it.
+ *
+ * A gauge is the widget where a wrong scale is a wrong READING rather than an ugly one: the preset
+ * and `defaultStyle` both ship 0–100, so a dial bound to an area in m² or an elevation in metres
+ * pegged at full and told the visitor nothing. So binding a field also asks the server for that
+ * column's actual range and rescales the dial — and the threshold bands with it, at the same
+ * FRACTIONS of the arc the author (or the preset) put them at, because a band is "the top third",
+ * not "70".
+ *
+ * One-shot, on the binding change the author just made. There is no stored "auto" flag to go stale:
+ * the moment they drag the min/max inputs, nothing here fires again until they rebind the field.
+ */
+function setAggField(w, field) {
+  patchWidget(w.id, { dataSource: { field: field || undefined } })
+  if (w.type === 'gauge' && field) autoRangeGauge(w.id, field)
+}
+
+async function autoRangeGauge(widgetId, field) {
+  const w = widgets.value.find(x => x.id === widgetId)
+  if (!w || w.type !== 'gauge' || w.dataSource?.layerId == null) return
+  let stats
+  try {
+    const res = await getFieldStats(w.dataSource.layerId, { field })
+    stats = res?.data
+  } catch (e) { return }        // a range we could not read is not worth a message; 0–100 stands
+  if (!stats || stats.kind !== 'numeric') return
+  const lo = Number(stats.min), hi = Number(stats.max)
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return
+  // The widget may have been retyped, rebound or removed while the request was in flight.
+  const cur = widgets.value.find(x => x.id === widgetId)
+  if (!cur || cur.type !== 'gauge' || cur.dataSource?.field !== field) return
+  const oldMin = Number(cur.style?.min ?? 0)
+  const oldMax = Number(cur.style?.max ?? 100)
+  const span = (oldMax - oldMin) || 1
+  const bands = (cur.style?.bands || []).map(b => ({
+    ...b,
+    from: tidy(lo + ((Number(b.from) - oldMin) / span) * (hi - lo)),
+  }))
+  // The ends round OUTWARD. Rounding a max of 1.0210 to 1.02 puts the column's own largest value
+  // past the end of the dial, which is the one number a gauge must be able to show.
+  patchWidget(widgetId, { style: { min: tidy(lo, 'down'), max: tidy(hi, 'up'), bands } })
+}
+/** A readable number at a precision that suits its magnitude, optionally rounded outward. */
+function tidy(n, dir) {
+  if (!Number.isFinite(n)) return n
+  const mag = Math.abs(n)
+  const dp = mag >= 100 ? 0 : mag >= 1 ? 2 : 4
+  const f = 10 ** dp
+  if (dir === 'down') return Math.floor(n * f) / f
+  if (dir === 'up') return Math.ceil(n * f) / f
+  return Number(n.toFixed(dp))
 }
 function layerValue(w) {
   const ds = w.dataSource
@@ -544,6 +671,26 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
               a clicked feature, a drawn polygon and a dragged box alike.
             </p>
           </div>
+          <!-- Click radius. In PIXELS, because that is what the visitor is aiming with; the runtime
+               converts it to degrees at the click's own zoom and latitude. A point layer needs a few
+               pixels of slack or a click never lands on a feature at all. -->
+          <label class="block">
+            <span class="text-[10px] text-muted-foreground block mb-0.5">
+              Click radius — {{ selected.dataSource?.tolPx ?? DEFAULT_TOL_PX }} px
+            </span>
+            <input type="range" min="0" max="24" step="1"
+              :value="selected.dataSource?.tolPx ?? DEFAULT_TOL_PX"
+              @input="patchWidget(selected.id, { dataSource: { tolPx: Number($event.target.value) } })"
+              class="w-full accent-primary" />
+            <span class="text-[10px] text-muted-foreground/70 leading-snug block">
+              How near a click has to land. Points and lines need a few pixels; polygons work at 0.
+            </span>
+          </label>
+          <p v-if="vectorLayers.length > 1" class="text-[10px] text-muted-foreground/70 leading-snug">
+            A click tries this layer first, then the portal's other vector layers top-down, so every
+            layer on the map is selectable. Attribute filters stay scoped to the layer they came
+            from — a selector over one layer cannot narrow a widget reading another.
+          </p>
           <label v-if="selected.dataSource?.layerId != null" class="block">
             <span class="text-[10px] text-muted-foreground block mb-0.5">Also filter by this field on click</span>
             <select :value="selected.dataSource?.field || ''"
@@ -569,7 +716,7 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
             <label v-if="(selected.dataSource?.op || 'count') !== 'count'" class="block">
               <span class="text-[10px] text-muted-foreground block mb-0.5">Field</span>
               <select :value="selected.dataSource?.field || ''"
-                @change="patchWidget(selected.id, { dataSource: { field: $event.target.value } })"
+                @change="setAggField(selected, $event.target.value)"
                 class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
                 <option value="">—</option>
                 <option v-for="f in numericFields(selected)" :key="f.name" :value="f.name">{{ f.name }}</option>

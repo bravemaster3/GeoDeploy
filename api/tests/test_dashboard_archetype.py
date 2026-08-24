@@ -8,7 +8,8 @@ widget types, live action targets, in-grid layout, and normalisation rather than
 Pure functions, no database — like `test_catalog_extra_layers.py`.
 """
 from geodeploy.services.dashboard import (
-    GRID_COLS, WIDGET_TYPES, dashboard_layer_refs, resolve_dashboard,
+    DEFAULT_MAP_TOOLS, DEFAULT_TOL_PX, GRID_COLS, MAX_TOL_PX, WIDGET_TYPES,
+    dashboard_layer_refs, resolve_dashboard,
 )
 from geodeploy.services.portal_generator import resolve_layout
 
@@ -152,6 +153,52 @@ def test_map_keeps_its_tools_even_with_no_selection_layer():
     ds = out["widgets"][0]["dataSource"]
     assert ds["tools"] == ["polygon"]
     assert "layerId" not in ds
+
+
+def test_the_click_radius_is_pixels_and_survives_an_unbound_map():
+    """`tolPx` is the map's hit radius in SCREEN pixels, and it must exist even with no selection
+    layer named — a click now falls through to the portal's other vector layers, so the radius
+    applies to a map that binds nothing of its own.
+
+    The bug this pins: the radius used to be `tol` in DEGREES, defaulting to 0, and it was written
+    only inside the layer-bound branch. Zero degrees makes the server's pick an exact intersection
+    with a zero-area point, which can only ever land on a polygon — so clicking a POINT layer
+    resolved to nothing at every zoom, with no error to show for it."""
+    out = resolve_dashboard({"widgets": [_w("m", "map", dataSource={"tools": ["click"]})]})
+    ds = out["widgets"][0]["dataSource"]
+    assert ds["tolPx"] == DEFAULT_TOL_PX
+    assert ds["tolPx"] > 0
+
+
+def test_the_click_radius_is_clamped_and_zero_is_legal():
+    """0 is exact and is all a polygon layer needs, so it must survive rather than being treated as
+    "unset" and replaced by the default."""
+    def tol(value):
+        out = resolve_dashboard({"widgets": [_w("m", "map", dataSource={"tolPx": value})]})
+        return out["widgets"][0]["dataSource"]["tolPx"]
+
+    assert tol(0) == 0
+    assert tol(9) == 9
+    assert tol(9999) == MAX_TOL_PX
+    assert tol(-4) == 0
+    assert tol("wide") == DEFAULT_TOL_PX      # normalisation, not rejection
+
+
+def test_map_extent_is_offered_but_never_assumed():
+    """`extent` republishes the viewport as the geometry filter on every pan. It is a switch, not a
+    gesture, so it must be selectable — but a map that never named its tools must NOT get it, or
+    every existing dashboard would start silently narrowing its widgets to the current view."""
+    picked = resolve_dashboard({"widgets": [
+        _w("m", "map", dataSource={"tools": ["click", "extent"]})]})
+    assert picked["widgets"][0]["dataSource"]["tools"] == ["click", "extent"]
+
+    defaulted = resolve_dashboard({"widgets": [_w("m", "map", dataSource={})]})
+    assert "extent" not in defaulted["widgets"][0]["dataSource"]["tools"]
+    assert defaulted["widgets"][0]["dataSource"]["tools"] == list(DEFAULT_MAP_TOOLS)
+
+    # An explicit empty list still falls back rather than leaving a map with no way to select.
+    empty = resolve_dashboard({"widgets": [_w("m", "map", dataSource={"tools": []})]})
+    assert empty["widgets"][0]["dataSource"]["tools"] == list(DEFAULT_MAP_TOOLS)
 
 
 def test_map_with_a_raster_selection_layer_is_rejected():
@@ -298,3 +345,42 @@ def test_the_starter_templates_declare_the_dashboard_archetype():
         assert resolved and resolved["widgets"], name
         # …and it must be UNBOUND: the layers it would name do not exist when a template is written.
         assert dashboard_layer_refs(resolved) == (set(), set()), name
+
+
+def test_every_preset_wires_a_source_to_something():
+    """CROSS-FILTERING IS THE ARCHETYPE. A preset whose widgets are all mutually disconnected is a
+    page of charts, and a visitor drawing a box on it watches nothing happen — which is exactly how
+    the hand-built path failed (every widget was created with `filters: []`).
+
+    So: every preset must have at least one live wire, and every preset that offers a raster-stats
+    or details panel must have something pointed AT it. Those two are target-only, so an unwired one
+    can never show anything but its own placeholder."""
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "templates" / "official"
+    for folder in sorted(root.glob("dashboard-*")):
+        meta = json.loads((folder / "template.json").read_text(encoding="utf-8"))
+        resolved = resolve_dashboard(meta["dashboard"])
+        widgets = resolved["widgets"]
+        wired = {t for w in widgets for t in w["actions"]["filters"]}
+        assert wired, f"{folder.name}: nothing filters anything"
+        for w in widgets:
+            if w["type"] in ("rasterstats", "details"):
+                assert w["id"] in wired, f"{folder.name}: {w['id']} is target-only and unwired"
+
+
+def test_every_preset_offers_a_chart():
+    """A dashboard template with no chart on it reads as a broken dashboard, not a deliberate one —
+    the Asset tracker shipped a gauge, a table and a details panel and nothing that plots."""
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "templates" / "official"
+    for folder in sorted(root.glob("dashboard-*")):
+        meta = json.loads((folder / "template.json").read_text(encoding="utf-8"))
+        types = {w["type"] for w in resolve_dashboard(meta["dashboard"])["widgets"]}
+        # The zonal preset plots a raster histogram instead of an attribute chart, which is the
+        # same promise kept with the data it actually has.
+        assert types & {"chart", "gauge", "rasterstats"}, folder.name
+        assert "chart" in types or folder.name == "dashboard-zonal", folder.name

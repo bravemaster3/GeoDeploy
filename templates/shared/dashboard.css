@@ -260,6 +260,25 @@ html[data-theme="dark"] .gd-ind-delta.down { color: #f87171; }
   body[data-archetype="dashboard"] #sidebar { left: 8px; right: 8px; width: auto; }
   .gd-ind-value { font-size: clamp(20px, 9vw, 34px); }
   .gd-table td { max-width: 140px; }
+  /* The filter bar is fixed to the foot of the window (a grid row for it would push every widget
+     down the moment a filter went live). On a phone that lands it ON TOP of the last card, so the
+     grid gets a matching footer of empty space — the bar is ~40px plus its own 14px offset. */
+  body[data-archetype="dashboard"] #layout { padding-bottom: 66px; }
+  #gd-dash-bar {
+    left: 8px; right: 8px; bottom: 8px; transform: none; max-width: none;
+    border-radius: 12px; justify-content: flex-start;
+  }
+  #gd-dash-bar .gd-fchip { max-width: 100%; }
+  #gd-dash-bar .gd-reset { margin-left: auto; }
+  /* Bigger tap targets: 27px is a comfortable mouse target and a poor thumb one, and these buttons
+     sit over a map that will happily interpret a near-miss as a pan. */
+  .gd-dash-tools button { width: 34px; height: 34px; }
+  .gd-dash-tools svg { width: 17px; height: 17px; }
+  /* A category selector on a phone is a list of chips, and 10px chips in a 2px gap are unusable. */
+  .gd-sel-chip { font-size: 11px; padding: 4px 10px; }
+  .gd-sel-chips { gap: 6px; }
+  /* Two stat cells per row rather than four squeezed ones. */
+  .gd-rs-grid { grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); }
 }
 
 /* A drawing gesture owns the cursor for the whole map, not only the canvas. */

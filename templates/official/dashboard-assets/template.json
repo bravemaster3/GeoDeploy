@@ -21,7 +21,7 @@
         "id": "sel-status", "type": "selector", "title": "Status",
         "layout": { "x": 0, "y": 0, "w": 4, "h": 2 },
         "dataSource": { "kind": "category", "multi": true },
-        "actions": { "filters": ["gauge-condition", "kpi-assets", "table", "map"], "listens": false }
+        "actions": { "filters": ["gauge-condition", "kpi-assets", "table", "map", "chart-breakdown"], "listens": false }
       },
       {
         "id": "kpi-assets", "type": "indicator", "title": "Assets",
@@ -47,8 +47,8 @@
       {
         "id": "map", "type": "map", "title": "Asset map",
         "layout": { "x": 0, "y": 2, "w": 7, "h": 6 },
-        "dataSource": { "tools": ["click", "polygon", "bbox"], "tol": 0.0005 },
-        "actions": { "filters": ["kpi-assets", "gauge-condition", "table", "details"], "listens": true }
+        "dataSource": { "tools": ["click", "polygon", "bbox", "extent"], "tolPx": 6 },
+        "actions": { "filters": ["kpi-assets", "gauge-condition", "table", "details", "chart-breakdown"], "listens": true }
       },
       {
         "id": "details", "type": "details", "title": "Selected asset",
@@ -57,9 +57,16 @@
       },
       {
         "id": "table", "type": "table", "title": "Assets",
-        "layout": { "x": 0, "y": 8, "w": 12, "h": 4 },
+        "layout": { "x": 0, "y": 8, "w": 7, "h": 4 },
         "dataSource": { "pageSize": 50 },
-        "actions": { "filters": ["details", "gauge-condition"], "listens": true }
+        "actions": { "filters": ["details", "gauge-condition", "chart-breakdown"], "listens": true }
+      },
+      {
+        "id": "chart-breakdown", "type": "chart", "title": "Breakdown",
+        "layout": { "x": 7, "y": 8, "w": 5, "h": 4 },
+        "dataSource": { "op": "count", "limit": 8, "sort": "value_desc" },
+        "style": { "chart": "hbar" },
+        "actions": { "filters": ["kpi-assets", "gauge-condition", "table", "map"], "listens": true }
       }
     ]
   }
