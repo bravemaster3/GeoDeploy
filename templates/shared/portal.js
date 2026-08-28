@@ -116,6 +116,11 @@
     // V-16 dashboard: reveal the widget host and stamp the density NOW, at parse time, for the same
     // reason the catalog claims its column here — MapLibre measures its container at construction,
     // so a grid that appears later would build the map at the wrong size and then jump.
+    // The GRID is still keyed on the archetype, because turning #layout into a widget grid
+    // restructures the whole page — that IS the dashboard archetype, and a webmap must not acquire
+    // it by ticking a panel. What the panel flag governs is whether the widget RUNTIME loads at
+    // all (see the handoff further down), which is what lets any archetype carry overlay widgets
+    // over its map without becoming a dashboard.
     if (L.archetype === 'dashboard') {
       const dcfg = (L.regions && L.regions.dashboard) || {};
       b.dataset.dashDensity = dcfg.density === 'compact' ? 'compact' : 'comfortable';
@@ -1332,7 +1337,13 @@
     // rather than in here so a 4.7k-line runtime does not become a 6k-line one, and so it can be
     // syntax-checked on its own. AFTER initDeck() for the same reason the catalog is: a map widget
     // over a GeoParquet layer needs deckState to already exist.
-    if (LAYOUT.archetype === 'dashboard') {
+    // Gated on the PANEL, not on the archetype — the same rule the layer list follows ten lines
+    // into resolveLayout ("hidden by whether its PANEL is enabled, not by which archetype is in
+    // play"). The dashboard archetype turns `panels.dashboard` on by default, so nothing about a
+    // dashboard changes; what this adds is a webmap or a storymap that declares widgets getting
+    // them, as overlays on its map. Widgets with no overlay anchor still need the grid, so they
+    // only appear on the archetype that has one.
+    if (LAYOUT.panels && LAYOUT.panels.dashboard) {
       try {
         if (window.GD_DASHBOARD && typeof window.GD_DASHBOARD.setup === 'function') {
           window.GD_DASHBOARD.setup({

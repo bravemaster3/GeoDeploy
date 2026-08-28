@@ -99,10 +99,10 @@ export const useDataStore = defineStore('data', () => {
   // (Re)tile a GeoParquet layer to PMTiles for fast, seamless pan/zoom (heavy layers). Tiling is a
   // background Celery job with no JobStatus, so we flip tile_status locally then poll the layer list
   // until it settles (ready/error). Meanwhile the portal keeps rendering via the deck.gl fallback.
-  async function tileVector(id) {
+  async function tileVector(id, cluster) {
     const layer = vectorLayers.value.find(l => l.id === id)
     if (layer) { layer.tile_status = 'tiling'; layer.error_message = null }
-    await tileVectorLayer(id)
+    await tileVectorLayer(id, cluster)
     const poll = async (n) => {
       if (n <= 0) return
       await new Promise(r => setTimeout(r, 5000))

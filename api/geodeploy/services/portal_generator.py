@@ -200,6 +200,18 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                     "maxzoom": 22,
                 }
             ml_layers = _vector_layers(source_id, layer, cfg)
+            # A clustered archive draws TWO more layers: the cluster bubble and its count. Only when
+            # the layer was actually tiled with clustering — the attributes they filter on do not
+            # exist in an archive built without it, and a filter that matches nothing is an invisible
+            # layer rather than an error, which is the hardest kind of nothing to debug.
+            if _clusters_enabled(layer):
+                # The ordinary markers must stop drawing where a cluster stands. At a clustered zoom
+                # tippecanoe REPLACES the merged points with one feature that is still a point, so an
+                # unfiltered marker layer paints a pin on top of every bubble. The singletons it did
+                # not merge carry no `clustered` attribute and keep their marker.
+                for ml in ml_layers:
+                    _and_filter(ml, ["!=", ["get", _CLUSTER_FLAG], True])
+                ml_layers = ml_layers + _cluster_layers(source_id, layer, cfg)
             meta = {
                 "geodeploy:name": layer.name,
                 "geodeploy:type": "vector",
@@ -1514,6 +1526,108 @@ def _source_layer_name(layer) -> str:
     GeoParquet PMTiles use the tippecanoe layer name "geodeploy" (see tasks/pmtiles_tile.PMTILES_LAYER)."""
     return ("geodeploy" if getattr(layer, "storage_backend", "postgis") == "geoparquet"
             else f"{layer.schema_name}.{layer.table_name}")
+
+
+#: The attributes tippecanoe writes onto a clustered feature. Verified against v2.80.0's own
+#: tilestats rather than assumed — a wrong name here is an empty circle with no error anywhere.
+_CLUSTER_FLAG = "clustered"
+_CLUSTER_COUNT = "point_count"
+_CLUSTER_SQRT = "sqrt_point_count"       # pre-rooted by tippecanoe, so radius scales by area
+_CLUSTER_LABEL = "point_count_abbreviated"
+
+
+def _and_filter(ml: dict, extra: list) -> None:
+    """AND `extra` into a style layer's filter, in place, keeping whatever was already there.
+
+    Replacing rather than combining is the mistake the dashboard's `applyMapFilter` made and had to
+    be fixed for: a raw-paint passthrough (a GeoLibre import) emits several style layers for one data
+    layer, each filtered to the part it draws, and overwriting that makes the polygon layer draw the
+    points too.
+    """
+    current = ml.get("filter")
+    if current is None:
+        ml["filter"] = extra
+    elif isinstance(current, list) and current and current[0] == "all":
+        ml["filter"] = current + [extra]
+    else:
+        ml["filter"] = ["all", current, extra]
+
+
+def _clusters_enabled(layer) -> bool:
+    """True when this layer's PMTiles archive was built with clustering. Requires the flag AND a
+    ready archive AND a positively-point geometry — the same three conditions the tiling task used,
+    so the style can never describe an archive that was not built that way."""
+    return bool(getattr(layer, "cluster_points", False)
+                and getattr(layer, "storage_backend", "postgis") == "geoparquet"
+                and layer.tile_status == "ready"
+                and _is_point(layer.geometry_type))
+
+
+def _cluster_layers(source_id: str, layer, cfg: dict) -> list[dict]:
+    """The two extra style layers a CLUSTERED point archive needs: a circle sized by how many points
+    it stands for, and the count written on it.
+
+    Radius comes from `sqrt_point_count`, not `point_count`: a circle's AREA is what the eye reads as
+    quantity, so the radius has to go as the square root or a cluster of 500 looks 250 times a
+    cluster of 2 instead of 16 times. tippecanoe pre-computes the root, so this is a plain
+    interpolation rather than an expression the style has to evaluate per feature.
+
+    The base marker layer is filtered to unclustered features by `_vector_layer`, so the two never
+    draw on top of each other.
+    """
+    style = cfg.get("style") or {}
+    colour = symbology.color_expression(style)
+    # A single colour, even when the layer is classified: a cluster stands for features of MANY
+    # classes, so painting it with one class's colour would state something untrue. The data-driven
+    # expression is kept for the unclustered markers, which really are one class each.
+    if not isinstance(colour, str):
+        colour = style.get("color", "#3b82f6")
+    opacity = cfg.get("opacity", 1.0)
+    source_layer = _source_layer_name(layer)
+    is_cluster = ["==", ["get", _CLUSTER_FLAG], True]
+    return [
+        {
+            "id": f"vector-{layer.id}-clusters",
+            "type": "circle",
+            "source": source_id,
+            "source-layer": source_layer,
+            "filter": is_cluster,
+            "paint": {
+                "circle-color": colour,
+                "circle-opacity": 0.85 * opacity,
+                "circle-stroke-color": "#ffffff",
+                "circle-stroke-width": 1.5,
+                "circle-radius": [
+                    "interpolate", ["linear"], ["get", _CLUSTER_SQRT],
+                    1.4, 12,      # sqrt(2)   — the smallest cluster tippecanoe makes
+                    22.4, 34,     # sqrt(500) — a dense city block
+                ],
+            },
+        },
+        {
+            "id": f"vector-{layer.id}-cluster-count",
+            "type": "symbol",
+            "source": source_id,
+            "source-layer": source_layer,
+            "filter": is_cluster,
+            "layout": {
+                # The abbreviated form ("1.2k"), because the count is drawn INSIDE the circle and a
+                # six-digit number does not fit one.
+                "text-field": ["to-string", ["get", _CLUSTER_LABEL]],
+                "text-size": 11,
+                "text-font": ["Noto Sans Regular"],
+                "text-allow-overlap": True,
+                "text-ignore-placement": True,
+            },
+            "paint": {
+                "text-color": "#ffffff",
+                # A halo rather than a shadow: the circle beneath is the layer's own colour, which an
+                # author can set to anything, and white-on-pale needs the dark edge to stay readable.
+                "text-halo-color": "rgba(0,0,0,0.45)",
+                "text-halo-width": 1,
+            },
+        },
+    ]
 
 
 def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:

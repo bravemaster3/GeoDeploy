@@ -53,6 +53,12 @@ const WIDGET_TYPES = [
     desc: 'Bar, line or pie over a grouping field. Clicking a segment filters.' },
   { type: 'table', name: 'List / table', needs: 'vector', source: true, target: true,
     desc: 'Attribute rows, sortable, click-to-zoom on the map.' },
+  { type: 'scatter', name: 'Scatter (Y ~ X)', needs: 'vector', source: false, target: true,
+    desc: 'One dot per feature, two numeric columns against each other. Randomly sampled.' },
+  { type: 'search', name: 'Search box', needs: 'vector', source: true, target: false,
+    desc: 'Find a feature by name or address, fly to it and filter to it. A filter source only.' },
+  { type: 'profile', name: 'Column profile', needs: 'vector', source: false, target: true,
+    desc: 'What is in the selected data, column by column: range, completeness, commonest values.' },
   { type: 'selector', name: 'Selector', needs: 'vector', source: true, target: false,
     desc: 'A category, range or date-range control. A filter source only.' },
   { type: 'details', name: 'Details panel', needs: 'none', source: false, target: true,
@@ -238,6 +244,9 @@ function defaultSource(type) {
   const base = l ? { layerType: 'vector', layerId: l.id } : { layerType: 'vector' }
   if (type === 'chart') return { ...base, op: 'count', limit: 12, sort: 'value_desc' }
   if (type === 'table') return { ...base, fields: [], pageSize: 50 }
+  if (type === 'profile') return { ...base, fields: [], topN: 5 }
+  if (type === 'search') return { ...base, fields: [], searchMode: 'contains', limit: 8 }
+  if (type === 'scatter') return { ...base, xField: null, yField: null, limit: 1500 }
   if (type === 'selector') return { ...base, kind: 'category', multi: true }
   return { ...base, op: 'count' }
 }
@@ -317,6 +326,18 @@ function sourcesOf(w) { return widgets.value.filter(s => isWired(s, w.id)) }
 const ROW_PX = 26          // the editor's own row height; the published one comes from grid.rowHeight
 const gridEl = ref(null)
 const drag = ref(null)     // {id, mode:'move'|'resize', startX, startY, orig}
+
+//: The canvas draws only what the GRID places. An overlay widget is pinned to the map instead, so
+//: it takes no cell — and showing it in one would claim space that is actually free for its
+//: neighbours, which is a layout the author never gets.
+const gridWidgets = computed(() => widgets.value.filter(w => !w.layout?.overlay))
+const overlayWidgets = computed(() => widgets.value.filter(w => w.layout?.overlay))
+const ANCHOR_LABELS = {
+  'top-left': 'top left', 'top-center': 'top centre', 'top-right': 'top right',
+  'left-center': 'left', 'right-center': 'right',
+  'bottom-left': 'bottom left', 'bottom-center': 'bottom centre', 'bottom-right': 'bottom right',
+}
+function anchorLabel(a) { return ANCHOR_LABELS[a] || a || '' }
 
 function gridStyle(w) {
   const l = w.layout || { x: 0, y: 0, w: 4, h: 3 }
@@ -424,6 +445,22 @@ function applyPreset(overwrite) {
       } else if (w.type === 'table') {
         w.dataSource.fields = cols.slice(0, 6).map(c => c.name)
         w.dataSource.keyField = w.dataSource.fields[0] || null
+      } else if (w.type === 'scatter') {
+        // Two DIFFERENT numeric columns, or the plot is the y = x diagonal and says nothing.
+        w.dataSource.xField = nums[0]?.name || null
+        w.dataSource.yField = (nums[1] || nums[0])?.name || null
+      } else if (w.type === 'search') {
+        // Text columns only: searching a numeric id column with a contains-match is a scan that
+        // finds nothing anyone typed.
+        const text = cats.length ? cats : cols
+        w.dataSource.fields = text.slice(0, 3).map(c => c.name)
+        w.dataSource.keyField = w.dataSource.fields[0] || null
+        w.dataSource.titleField = w.dataSource.fields[0] || null
+      } else if (w.type === 'profile') {
+        // A mix reads better than the first four columns: a couple of numbers give ranges and a
+        // couple of categories give top lists, so the panel shows both of its shapes straight away.
+        w.dataSource.fields = [...nums.slice(0, 2), ...cats.slice(0, 2)].map(c => c.name)
+        if (!w.dataSource.fields.length) w.dataSource.fields = cols.slice(0, 4).map(c => c.name)
       } else if (w.type === 'map') {
         if (cats[0]) w.dataSource.field = cats[0].name
       } else if (w.dataSource.op && w.dataSource.op !== 'count') {
@@ -491,6 +528,23 @@ function toggleTableField(w, name) {
   const cur = w.dataSource?.fields || []
   const next = cur.includes(name) ? cur.filter(f => f !== name) : [...cur, name]
   patchWidget(w.id, { dataSource: { fields: next, keyField: w.dataSource?.keyField || next[0] || null } })
+}
+// The profile has no keyField to keep in step — it describes columns, it does not filter by one.
+function toggleSearchField(w, name) {
+  const cur = w.dataSource?.fields || []
+  const next = cur.includes(name) ? cur.filter(f => f !== name) : [...cur, name]
+  patchWidget(w.id, {
+    dataSource: {
+      fields: next,
+      keyField: w.dataSource?.keyField || next[0] || null,
+      titleField: w.dataSource?.titleField || next[0] || null,
+    },
+  })
+}
+function toggleProfileField(w, name) {
+  const cur = w.dataSource?.fields || []
+  const next = cur.includes(name) ? cur.filter(f => f !== name) : [...cur, name]
+  patchWidget(w.id, { dataSource: { fields: next } })
 }
 function setLayer(w, value) {
   const [type, id] = String(value).split(':')
@@ -594,7 +648,7 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
     <div v-if="widgets.length" ref="gridEl"
       class="relative mb-3 rounded-lg border border-border bg-muted/30 p-1 select-none"
       style="display:grid; grid-template-columns:repeat(12, 1fr); grid-auto-rows:26px; gap:3px;">
-      <div v-for="w in widgets" :key="w.id" :style="gridStyle(w)"
+      <div v-for="w in gridWidgets" :key="w.id" :style="gridStyle(w)"
         class="relative rounded border text-[10px] overflow-hidden cursor-move focus:outline-none"
         :class="selectedId === w.id
           ? 'border-primary bg-primary/15 ring-1 ring-primary'
@@ -613,9 +667,26 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
         </div>
       </div>
     </div>
-    <p v-if="widgets.length" class="text-[10px] text-muted-foreground/60 -mt-2 mb-3">
+    <p v-if="gridWidgets.length" class="text-[10px] text-muted-foreground/60 -mt-2 mb-3">
       Drag to move, pull the corner to resize. Arrow keys nudge; hold shift to resize.
     </p>
+
+    <!-- Widgets pinned to the map. They are NOT in the canvas above: they take no grid cell, so
+         drawing them in one would show a box reserving space that is actually free, and offer a
+         resize handle that changes nothing once published. They are sized in pixels instead. -->
+    <div v-if="overlayWidgets.length" class="mb-3">
+      <span class="text-[10px] text-muted-foreground block mb-1">On the map</span>
+      <div class="flex flex-wrap gap-1">
+        <button v-for="w in overlayWidgets" :key="w.id" @click="selectedId = w.id"
+          class="px-2 py-1 rounded border text-[10px] text-left"
+          :class="selectedId === w.id
+            ? 'border-primary bg-primary/15 text-primary'
+            : 'border-border bg-card text-foreground/75 hover:border-muted-foreground/50'">
+          <span class="font-medium">{{ widgetLabel(w) }}</span>
+          <span class="text-muted-foreground/70"> · {{ anchorLabel(w.layout?.overlay) }}</span>
+        </button>
+      </div>
+    </div>
 
     <!-- ── the selected widget's configuration ────────────────────────────── -->
     <div v-if="selected" class="p-2.5 rounded-lg border border-border bg-card space-y-2.5">
@@ -637,6 +708,51 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
           <option v-for="t in WIDGET_TYPES" :key="t.type" :value="t.type">{{ t.name }}</option>
         </select>
       </label>
+
+      <!-- Placement. A widget either takes a grid cell or floats in a corner OF THE MAP; the map
+           widget itself is the thing being floated over, so it is never offered the choice. -->
+      <template v-if="selected.type !== 'map'">
+        <div class="grid grid-cols-2 gap-2">
+          <label class="block">
+            <span class="text-[10px] text-muted-foreground block mb-0.5">Placement</span>
+            <select :value="selected.layout?.overlay || ''"
+              @change="patchWidget(selected.id, { layout: { overlay: $event.target.value || null } })"
+              class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
+              <option value="">In the grid</option>
+              <optgroup label="On the map — top">
+                <option value="top-left">Top left</option>
+                <option value="top-center">Top centre</option>
+                <option value="top-right">Top right</option>
+              </optgroup>
+              <optgroup label="On the map — sides">
+                <option value="left-center">Left</option>
+                <option value="right-center">Right</option>
+              </optgroup>
+              <optgroup label="On the map — bottom">
+                <option value="bottom-left">Bottom left</option>
+                <option value="bottom-center">Bottom centre</option>
+                <option value="bottom-right">Bottom right</option>
+              </optgroup>
+            </select>
+          </label>
+          <label class="block" v-if="selected.layout?.overlay">
+            <span class="text-[10px] text-muted-foreground block mb-0.5">Width (px)</span>
+            <input type="number" min="140" max="520" step="10" :value="selected.layout?.overlayW ?? 260"
+              @change="patchWidget(selected.id, { layout: { overlayW: Number($event.target.value) || 260 } })"
+              class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
+          </label>
+        </div>
+        <label class="block" v-if="selected.layout?.overlay">
+          <span class="text-[10px] text-muted-foreground block mb-0.5">Height (px, 0 = fit content)</span>
+          <input type="number" min="0" max="800" step="10" :value="selected.layout?.overlayH ?? 0"
+            @change="patchWidget(selected.id, { layout: { overlayH: Number($event.target.value) || 0 } })"
+            class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
+        </label>
+        <p v-if="selected.layout?.overlay" class="text-[10px] text-muted-foreground/70 -mt-1">
+          Pinned to the map and sized in pixels, so it is not in the canvas above and its cell is
+          freed for the widgets around it. Leave the height at 0 for a box that fits its content.
+        </p>
+      </template>
 
       <!-- Data source -->
       <template v-if="TYPE_BY_ID[selected.type]?.needs !== 'none'">
@@ -760,6 +876,26 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
               </select>
             </label>
             <label class="block">
+              <span class="text-[10px] text-muted-foreground block mb-0.5">Bar colours</span>
+              <select :value="selected.style?.colorMode || 'single'"
+                @change="patchWidget(selected.id, { style: { colorMode: $event.target.value } })"
+                class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
+                <option value="single">One colour</option>
+                <option value="category">One per category</option>
+                <option value="sequential">Shaded (ordered)</option>
+              </select>
+            </label>
+            <label class="block">
+              <span class="text-[10px] text-muted-foreground block mb-0.5">Values on bars</span>
+              <select :value="selected.style?.valueLabels == null ? '' : (selected.style.valueLabels ? 'on' : 'off')"
+                @change="patchWidget(selected.id, { style: { valueLabels: $event.target.value === '' ? null : $event.target.value === 'on' } })"
+                class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
+                <option value="">Automatic</option>
+                <option value="on">Always show</option>
+                <option value="off">Never show</option>
+              </select>
+            </label>
+            <label class="block">
               <span class="text-[10px] text-muted-foreground block mb-0.5">Max groups</span>
               <input type="number" min="2" max="100" :value="selected.dataSource?.limit || 12"
                 @input="patchWidget(selected.id, { dataSource: { limit: Number($event.target.value) } })"
@@ -790,6 +926,123 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
               <option value="">— nothing —</option>
               <option v-for="f in fieldsOf(selected)" :key="f.name" :value="f.name">{{ f.name }}</option>
             </select>
+          </label>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="block">
+              <span class="text-[10px] text-muted-foreground block mb-0.5">Shape</span>
+              <select :value="selected.style?.layout || 'table'"
+                @change="patchWidget(selected.id, { style: { layout: $event.target.value } })"
+                class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
+                <option value="table">Table</option>
+                <option value="cards">Cards (directory)</option>
+              </select>
+            </label>
+            <label class="block" v-if="(selected.style?.layout || 'table') === 'cards'">
+              <span class="text-[10px] text-muted-foreground block mb-0.5">Card heading</span>
+              <select :value="selected.dataSource?.titleField || ''"
+                @change="patchWidget(selected.id, { dataSource: { titleField: $event.target.value || null } })"
+                class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
+                <option value="">— same as the filter column —</option>
+                <option v-for="f in fieldsOf(selected)" :key="f.name" :value="f.name">{{ f.name }}</option>
+              </select>
+            </label>
+          </div>
+        </template>
+
+        <!-- scatter -->
+        <template v-if="selected.type === 'scatter'">
+          <div class="grid grid-cols-2 gap-2">
+            <label class="block">
+              <span class="text-[10px] text-muted-foreground block mb-0.5">X axis</span>
+              <select :value="selected.dataSource?.xField || ''"
+                @change="patchWidget(selected.id, { dataSource: { xField: $event.target.value || null } })"
+                class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
+                <option value="">— pick a column —</option>
+                <option v-for="f in numericFields(selected)" :key="f.name" :value="f.name">{{ f.name }}</option>
+              </select>
+            </label>
+            <label class="block">
+              <span class="text-[10px] text-muted-foreground block mb-0.5">Y axis</span>
+              <select :value="selected.dataSource?.yField || ''"
+                @change="patchWidget(selected.id, { dataSource: { yField: $event.target.value || null } })"
+                class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
+                <option value="">— pick a column —</option>
+                <option v-for="f in numericFields(selected)" :key="f.name" :value="f.name">{{ f.name }}</option>
+              </select>
+            </label>
+          </div>
+          <label class="block">
+            <span class="text-[10px] text-muted-foreground block mb-0.5">Points plotted (sampled)</span>
+            <input type="number" min="50" max="3000" step="50" :value="selected.dataSource?.limit ?? 1500"
+              @change="patchWidget(selected.id, { dataSource: { limit: Number($event.target.value) || 1500 } })"
+              class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
+            <span class="text-[10px] text-muted-foreground/70">
+              Drawn from a random sample, so the shape holds even on a very large layer.
+            </span>
+          </label>
+        </template>
+
+        <!-- search -->
+        <template v-if="selected.type === 'search'">
+          <div>
+            <span class="text-[10px] text-muted-foreground block mb-1">Columns to search</span>
+            <div class="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
+              <button v-for="f in fieldsOf(selected)" :key="f.name" @click="toggleSearchField(selected, f.name)"
+                class="px-2 py-0.5 rounded border text-[11px]"
+                :class="(selected.dataSource?.fields || []).includes(f.name)
+                  ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ f.name }}</button>
+            </div>
+            <p class="text-[10px] text-muted-foreground/70 mt-1">
+              Each column adds to the scan. Two or three named ones stay fast on a big layer.
+            </p>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="block">
+              <span class="text-[10px] text-muted-foreground block mb-0.5">Match</span>
+              <select :value="selected.dataSource?.searchMode || 'contains'"
+                @change="patchWidget(selected.id, { dataSource: { searchMode: $event.target.value } })"
+                class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
+                <option value="contains">Anywhere in the value</option>
+                <option value="prefix">Starts with (faster)</option>
+              </select>
+            </label>
+            <label class="block">
+              <span class="text-[10px] text-muted-foreground block mb-0.5">Results shown</span>
+              <input type="number" min="3" max="25" :value="selected.dataSource?.limit ?? 8"
+                @change="patchWidget(selected.id, { dataSource: { limit: Number($event.target.value) || 8 } })"
+                class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
+            </label>
+          </div>
+          <label class="block">
+            <span class="text-[10px] text-muted-foreground block mb-0.5">A chosen result filters by</span>
+            <select :value="selected.dataSource?.keyField || ''"
+              @change="patchWidget(selected.id, { dataSource: { keyField: $event.target.value || null } })"
+              class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
+              <option value="">— nothing —</option>
+              <option v-for="f in fieldsOf(selected)" :key="f.name" :value="f.name">{{ f.name }}</option>
+            </select>
+          </label>
+        </template>
+
+        <!-- profile -->
+        <template v-if="selected.type === 'profile'">
+          <div>
+            <span class="text-[10px] text-muted-foreground block mb-1">Columns to describe</span>
+            <div class="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
+              <button v-for="f in fieldsOf(selected)" :key="f.name" @click="toggleProfileField(selected, f.name)"
+                class="px-2 py-0.5 rounded border text-[11px]"
+                :class="(selected.dataSource?.fields || []).includes(f.name)
+                  ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ f.name }}</button>
+            </div>
+            <p v-if="!(selected.dataSource?.fields || []).length" class="text-[10px] text-muted-foreground/70 mt-1">
+              Pick at least one — the panel describes only the columns you choose.
+            </p>
+          </div>
+          <label class="block">
+            <span class="text-[10px] text-muted-foreground block mb-0.5">Values listed per column</span>
+            <input type="number" min="3" max="20" :value="selected.dataSource?.topN ?? 5"
+              @change="patchWidget(selected.id, { dataSource: { topN: Number($event.target.value) || 5 } })"
+              class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
           </label>
         </template>
 

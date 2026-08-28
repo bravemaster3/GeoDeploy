@@ -221,7 +221,11 @@ export const getSourceUsage = (id) => api.get(`/data/sources/${id}/usage`)
 export const reprocessVectorLayer = (id) => api.post(`/data/vector/${id}/reprocess`)
 // (Re)generate the PMTiles archive for a GeoParquet layer — fast seamless display for heavy layers.
 // Runs tippecanoe in the background; returns the layer with tile_status='tiling'. Poll for 'ready'.
-export const tileVectorLayer = (id) => api.post(`/data/vector/${id}/tile`)
+// `cluster` is optional: omitted, the server leaves the layer's current setting alone, so a
+// plain retry cannot silently change how the layer draws.
+export const tileVectorLayer = (id, cluster) =>
+  api.post(`/data/vector/${id}/tile`, null,
+    cluster === undefined || cluster === null ? undefined : { params: { cluster } })
 // "Share links" panel: the tool-ready URLs for a layer (TileJSON / PMTiles / GeoJSON / COG / STAC).
 // Built server-side (services/share_links.py) so the UI never has to know which artifact fits which
 // storage backend. `public` says whether those URLs actually resolve yet.

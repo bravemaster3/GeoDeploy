@@ -127,6 +127,14 @@ html[data-theme="dark"] .gd-ind-delta.down { color: #f87171; }
 .gd-chart .axis { stroke: var(--border); }
 .gd-chart .tick { font-size: 9px; fill: var(--text-muted); }
 .gd-chart .glabel { font-size: 9px; fill: var(--text-muted); }
+/* Printed bar values. `vlabel-in` sits ON the bar, so it takes a light fill and a soft shadow to
+   stay legible over any palette colour; the outside variant sits on the card and takes the normal
+   muted text colour. Both are pointer-events:none so the label never steals the bar's click. */
+.gd-chart .vlabel {
+  font-size: 9px; fill: var(--text-muted); pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+.gd-chart .vlabel-in { fill: #fff; text-shadow: 0 0 2px rgba(0, 0, 0, .45); }
 .gd-chart .slice { cursor: pointer; }
 .gd-chart .slice:hover { opacity: .82; }
 .gd-chart .dim { opacity: .28; }
@@ -155,6 +163,127 @@ html[data-theme="dark"] .gd-ind-delta.down { color: #f87171; }
 .gd-table tbody tr:hover td { background: var(--surface); }
 .gd-table tbody tr.sel td { background: var(--accent-light); }
 .gd-w-body.gd-w-table { padding: 0; }
+
+/* ── search ────────────────────────────────────────────────────────────────── */
+.gd-w-body.gd-w-search { display: flex; flex-direction: column; gap: 6px; overflow: hidden; }
+.gd-search-box { flex-shrink: 0; }
+.gd-search-input {
+  width: 100%; font-size: 12px; padding: 5px 8px;
+  background: var(--bg); color: inherit;
+  border: 1px solid var(--border); border-radius: 4px;
+}
+.gd-search-input:focus { outline: none; border-color: var(--accent); }
+.gd-search-results { overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.gd-search-row {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 5px 7px; border-radius: 4px; cursor: pointer;
+}
+.gd-search-row:hover { background: var(--accent-light); }
+.gd-search-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.gd-search-row.sel { background: var(--accent-light); }
+.gd-search-title {
+  font-size: 12px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gd-search-sub {
+  font-size: 10px; color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gd-search-hint { font-size: 10px; color: var(--text-muted); padding: 4px 7px; }
+
+/* ── overlay widgets: pinned to a corner OF THE MAP ────────────────────────── */
+/* The layer itself never takes the pointer, so the map still pans everywhere a card is not; each
+   card takes it back. Without that pair, an overlay layer covering the map would swallow every
+   drag and the map would look frozen. */
+.gd-overlays {
+  position: absolute; inset: 0; z-index: 3; pointer-events: none;
+}
+.gd-overlays > * { pointer-events: auto; }
+.gd-overlay {
+  position: absolute; max-width: calc(100% - 24px); max-height: calc(100% - 24px);
+  display: flex; flex-direction: column;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, .18);
+}
+/* The eight compass points. Right-hand offsets clear MapLibre's own control cluster, which sits at
+   10px in the corners it uses; bottom offsets clear the attribution strip. Centred anchors are
+   translated by half their own size, which is what keeps them centred at any width the author sets
+   — `left: 50%` alone would centre the widget's LEFT EDGE, not the widget. */
+.gd-overlay-top-left { top: 10px; left: 10px; }
+.gd-overlay-top-center { top: 10px; left: 50%; transform: translateX(-50%); }
+.gd-overlay-top-right { top: 10px; right: 52px; }
+.gd-overlay-left-center { top: 50%; left: 10px; transform: translateY(-50%); }
+.gd-overlay-right-center { top: 50%; right: 52px; transform: translateY(-50%); }
+.gd-overlay-bottom-left { bottom: 28px; left: 10px; }
+.gd-overlay-bottom-center { bottom: 28px; left: 50%; transform: translateX(-50%); }
+.gd-overlay-bottom-right { bottom: 28px; right: 52px; }
+/* A phone has no room for a floating panel beside a map: overlays become full-width strips at the
+   top, stacked in document order, rather than four cards piled on each other in the corners. */
+@media (max-width: 640px) {
+  /* A STRIP across the top, still absolutely positioned. Going `static` here would give #map-wrap
+     real height and push the MapLibre canvas down — the map must keep the whole box. */
+  .gd-overlays {
+    inset: 0 0 auto 0;
+    display: flex; flex-direction: column; gap: 6px; padding: 6px;
+  }
+  .gd-overlay {
+    position: static; width: auto !important; max-width: none;
+    max-height: 40vh;               /* never let a stack of overlays bury the map */
+    /* Static positioning does NOT cancel a transform: without this, the centred anchors keep their
+       translate(-50%) and sit half off the screen edge. */
+    transform: none;
+  }
+}
+
+/* ── profile (what is in the current selection, column by column) ───────────── */
+.gd-w-body.gd-w-profile { overflow-y: auto; }
+.gd-prof-total {
+  font-size: 11px; font-weight: 600; color: var(--text-muted);
+  padding-bottom: 6px; border-bottom: 1px solid var(--border); margin-bottom: 8px;
+}
+.gd-prof-f + .gd-prof-f { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border); }
+.gd-prof-head { display: flex; align-items: baseline; gap: 6px; }
+.gd-prof-name {
+  font-size: 12px; font-weight: 600; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.gd-prof-kind {
+  font-size: 9px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-muted); border: 1px solid var(--border);
+  border-radius: 3px; padding: 0 4px; flex-shrink: 0;
+}
+.gd-prof-meta { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+.gd-prof-stats { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; }
+.gd-prof-stat { display: flex; flex-direction: column; }
+.gd-prof-statk { font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
+.gd-prof-statv { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.gd-prof-top { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 11px; }
+.gd-prof-topk { flex: 0 0 40%; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gd-prof-bar { height: 8px; border-radius: 2px; background: var(--accent); flex-shrink: 1; min-width: 2px; }
+.gd-prof-topn { color: var(--text-muted); font-variant-numeric: tabular-nums; margin-left: auto; flex-shrink: 0; }
+.gd-prof-note { font-size: 10px; color: var(--text-muted); margin-top: 6px; font-style: italic; }
+
+/* ── cards layout for the table widget (a directory, not a spreadsheet) ─────── */
+.gd-cards { display: flex; flex-direction: column; gap: 6px; padding: 8px; }
+.gd-card-item {
+  border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: 5px; padding: 8px 10px; cursor: pointer; background: var(--bg);
+}
+.gd-card-item:hover { border-color: var(--accent); }
+/* The keyboard equivalent of :hover — cards are focusable, so the focus must be visible. */
+.gd-card-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.gd-card-item.sel { background: var(--accent-light); }
+.gd-card-title {
+  font-weight: 600; font-size: 12px; margin-bottom: 5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gd-card-line { display: flex; gap: 8px; align-items: baseline; font-size: 11px; }
+.gd-card-line + .gd-card-line { margin-top: 2px; }
+/* Fixed-width key column so the values line up down the card — a directory is scanned by value. */
+.gd-card-k {
+  color: var(--text-muted); flex: 0 0 34%; max-width: 34%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gd-card-v { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gd-table-foot {
   flex-shrink: 0; display: flex; align-items: center; gap: 8px; justify-content: space-between;
   padding: 4px 8px; border-top: 1px solid var(--border); font-size: 10px; color: var(--text-muted);
@@ -283,3 +412,7 @@ html[data-theme="dark"] .gd-ind-delta.down { color: #f87171; }
 
 /* A drawing gesture owns the cursor for the whole map, not only the canvas. */
 body[data-archetype="dashboard"][data-dash-draw="1"] #map canvas { cursor: crosshair; }
+
+/* ── scatter ───────────────────────────────────────────────────────────────── */
+.gd-w-body.gd-w-scatter { display: flex; flex-direction: column; gap: 4px; }
+.gd-scatter-note { font-size: 10px; color: var(--text-muted); flex-shrink: 0; }

@@ -60,8 +60,94 @@ CANDIDATE_CAP = 250_000
 DISTINCT_LIMIT = 200
 
 
+#: Entries and seconds for the answer cache below. Same sizing reasoning as `zonal.py`: this exists
+#: to absorb the burst of identical questions ONE interaction produces, not to be a store.
+CACHE_MAX = 512
+CACHE_TTL = 300
+
+#: key -> (stamp, answer). Process-local, like the zonal cache — a second worker simply recomputes.
+_cache: dict[str, tuple[float, dict]] = {}
+
+
 class AggregateError(ValueError):
     """A caller error (unknown field, unsupported op) — the router turns this into a 400."""
+
+
+# ── answer cache ─────────────────────────────────────────────────────────────
+# WHY. Cross-filtering means one act by one visitor fans out into a query per wired widget, and the
+# widgets over a layer very often ask overlapping questions of the SAME selection. Nothing here was
+# cached, so eight widgets over one drawn polygon meant eight independent scans, and clearing the
+# selection then drawing the same box again paid the whole cost a second time. The spatial path is
+# where this hurts: measured at 750 ms for a broad selection over 200 k features (and that is on
+# local disk, before object-storage latency).
+#
+# This is deliberately the lever that was chosen over making the spatial test itself cleverer — see
+# notes_for_future.md "FAILED APPROACH … testing a dashboard geometry filter in the LAYER'S CRS",
+# which traded a 1.8× win on selective queries for a 4× regression on broad ones. A cache removes
+# the cost in BOTH cases instead of moving it between them.
+#
+# The key folds in the layer's storage identity, so it cannot serve one layer's numbers for another,
+# and a GeoParquet re-prep changes `s3_key` (a new `parts-<hex>` prefix) and therefore self-
+# invalidates. A PostGIS table is rewritten IN PLACE, which is why `invalidate()` exists and is
+# called from the same place the public-layer caches are dropped.
+
+def _layer_identity(layer) -> str:
+    """What makes two layers different for caching. `s3_key` for a file-backed layer (it changes on
+    re-prep), schema.table for PostGIS (it does not — hence `invalidate`)."""
+    if getattr(layer, "storage_backend", "postgis") == "geoparquet":
+        return f"gp:{getattr(layer, 's3_key', '')}"
+    return f"pg:{getattr(layer, 'schema_name', '')}.{getattr(layer, 'table_name', '')}"
+
+
+def cache_key(layer, spec: dict) -> str:
+    """The question's identity. `sort_keys` + compact separators so two structurally identical specs
+    hash the same however the client serialised them; geometry coordinates are NOT rounded, for the
+    reason `zonal._canonical` gives — two selections differing in the sixth decimal are two
+    selections, and conflating them reports one area's numbers under another's outline."""
+    import hashlib
+    import json
+    blob = json.dumps(spec, sort_keys=True, separators=(",", ":"), default=str)
+    digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]
+    return f"{_layer_identity(layer)}|{getattr(layer, 'id', '?')}|{digest}"
+
+
+def _cache_get(key: str) -> dict | None:
+    import time
+    hit = _cache.get(key)
+    if not hit:
+        return None
+    stamp, value = hit
+    if time.time() - stamp > CACHE_TTL:
+        _cache.pop(key, None)
+        return None
+    # A copy, not the stored dict: callers annotate the answer they get back (the router and the
+    # widgets both do), and handing out the cached object would let one response mutate the next.
+    return dict(value)
+
+
+def _cache_put(key: str, value: dict) -> dict:
+    import time
+    if len(_cache) >= CACHE_MAX:
+        # Oldest-first eviction; a plain dict preserves insertion order, so this is LRU-ish without
+        # carrying an OrderedDict for a cache this size. Mirrors zonal.py.
+        for old in list(_cache)[:max(1, CACHE_MAX // 4)]:
+            _cache.pop(old, None)
+    _cache[key] = (time.time(), dict(value))
+    return value
+
+
+def invalidate(layer=None) -> None:
+    """Drop cached answers — everything, or one layer's.
+
+    Needed because a PostGIS layer is re-ingested IN PLACE: same schema.table, new rows. Serving the
+    previous ingest's totals under it is a wrong answer with no symptom, which is exactly the failure
+    mode `zonal.invalidate` exists to prevent on the raster side."""
+    if layer is None:
+        _cache.clear()
+        return
+    prefix = f"{_layer_identity(layer)}|"
+    for key in [k for k in _cache if k.startswith(prefix)]:
+        _cache.pop(key, None)
 
 
 # ── shared: identifier quoting + filter validation ───────────────────────────
@@ -226,6 +312,14 @@ def _pg_value_expr(op: str, field: str | None) -> str:
 
 async def postgis_aggregate(db, layer, spec: dict) -> dict:
     """The PostGIS half of `aggregate`. Same contract as `parquet_aggregate`."""
+    ckey = cache_key(layer, spec)
+    cached = _cache_get(ckey)
+    if cached is not None:
+        return cached
+    return _cache_put(ckey, await _postgis_aggregate_uncached(db, layer, spec))
+
+
+async def _postgis_aggregate_uncached(db, layer, spec: dict) -> dict:
     from sqlalchemy import text
 
     known = _known_columns(layer)
@@ -264,10 +358,16 @@ async def postgis_aggregate(db, layer, spec: dict) -> dict:
                  "key_asc": "ORDER BY 1 ASC NULLS LAST"}.get(
                      spec.get("sort") or "value_desc", "ORDER BY 2 DESC NULLS LAST")
     limit = max(2, min(int(spec.get("limit") or 12), MAX_GROUPS))
-    sql = (f"SELECT {key_expr} AS k, {value} AS v, COUNT(*) AS n FROM {table} {where} "
+    # One query for every measure: N series over the same grouping is N aggregate expressions in one
+    # GROUP BY, not N round trips. `ORDER BY 2` therefore sorts by the FIRST series, which is the one
+    # the author named first and the one the chart draws in front.
+    series = _series_specs(spec, known)
+    vals = ", ".join(f"{_pg_value_expr(sp['op'], sp['field'])} AS v{i}"
+                     for i, sp in enumerate(series))
+    sql = (f"SELECT {key_expr} AS k, {vals}, COUNT(*) AS n FROM {table} {where} "
            f"GROUP BY 1 {order} LIMIT {limit + 1}")
     rows = (await db.execute(text(sql), params)).fetchall()
-    return _groups_out(rows, limit, bucket)
+    return _groups_out(rows, limit, bucket, series)
 
 
 async def postgis_table(db, layer, spec: dict) -> dict:
@@ -287,6 +387,11 @@ async def postgis_table(db, layer, spec: dict) -> dict:
     id_col = layer.id_column or None
     params: dict = {}
     where = _pg_where(filters, geometry, geom_col, params, _srid_of(layer))
+    # See the note in `parquet_table`: search is a predicate on the table query, not its own path.
+    search = _pg_search(_search_term(spec), _search_fields(spec, known), params,
+                        _search_mode(spec.get('searchMode')))
+    if search:
+        where = (where + " AND " + search) if where else ("WHERE " + search)
 
     limit = max(1, min(int(spec.get("limit") or 50), MAX_ROWS))
     offset = max(0, int(spec.get("offset") or 0))
@@ -305,7 +410,10 @@ async def postgis_table(db, layer, spec: dict) -> dict:
            f"ST_XMax({g4326}), ST_YMax({g4326})" + (f", {cols}" if cols else "") +
            f" FROM {table} {where} {order} LIMIT {limit} OFFSET {offset}")
     rows = (await db.execute(text(sql), params)).fetchall()
-    total = (await db.execute(text(f"SELECT COUNT(*) FROM {table} {where}"), params)).scalar()
+    # Skippable for the same reason as the DuckDB path above: a search box wants matches, not a
+    # census, and the count is a second full pass over the same predicate.
+    total = ((await db.execute(text(f"SELECT COUNT(*) FROM {table} {where}"), params)).scalar()
+             if spec.get("withTotal", True) else None)
     return _rows_out(rows, fields, int(total or 0), limit, offset)
 
 
@@ -375,6 +483,82 @@ def _duck_where(filters: list[dict], cols: dict) -> list[str]:
         elif f["op"] == "notnull":
             parts.append(f"{col} IS NOT NULL")
     return parts
+
+
+#: How many characters of a search term are honoured. Long enough for an address, short enough that
+#: a pasted essay cannot become a scan predicate.
+SEARCH_MAX_LEN = 120
+
+#: Columns one search may look in. A search that reads every column of a wide table is a table scan
+#: dressed as a feature, and the author almost always means two or three named ones.
+SEARCH_MAX_FIELDS = 8
+
+
+def _search_term(spec: dict) -> str:
+    """The search text, trimmed and bounded. Empty means "no search" — NOT "match nothing", the same
+    convention `normalize_filters` uses for an empty selection: a cleared box shows everything."""
+    q = spec.get("search") if isinstance(spec.get("search"), str) else ""
+    return (q or "").strip()[:SEARCH_MAX_LEN]
+
+
+def _search_fields(spec: dict, known: set[str]) -> list[str]:
+    named = [f for f in (spec.get("searchFields") or []) if f in known]
+    return named[:SEARCH_MAX_FIELDS]
+
+
+#: How a search term is matched. `contains` finds it anywhere (what people expect of a search box);
+#: `prefix` only at the start, which is what a "find this street / this name" box usually means and
+#: is measurably cheaper — see the cost note below.
+SEARCH_MODES = {"contains", "prefix"}
+
+
+def _search_mode(value) -> str:
+    return value if value in SEARCH_MODES else "contains"
+
+
+def _like_escape(term: str) -> str:
+    """LIKE metacharacters made literal. Without this, typing `%` matches the whole layer and `_`
+    matches any single character — which reads as a broken search, not as a wildcard anyone asked
+    for."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _duck_search(term: str, fields: list[str], mode: str = "contains") -> str | None:
+    """A case-insensitive match across `fields`, OR-ed. The term goes through `_lit` like every other
+    inlined literal on this path.
+
+    ON COST, measured over 400k rows on local disk, one text column, LIMIT 10:
+
+        contains  ILIKE '%term%'   154 ms       prefix  ILIKE 'term%'    108 ms
+        contains, no match          88 ms       prefix, no match          66 ms
+        prefix    LIKE  'term%'     11 ms   <-- case-SENSITIVE
+
+    That 11 ms is DuckDB pruning row groups from the string column's zonemaps, which a leading `%`
+    makes impossible and which `ILIKE` also defeats (the stored min/max are not case-folded). It is
+    deliberately NOT taken: a search box that misses `bern` because the data says `Bern` is broken in
+    a way no amount of speed repays. `prefix` is the honest middle — same case-insensitive
+    behaviour, less scanning — and the larger saving is the client not asking on every keystroke.
+    """
+    if not term or not fields:
+        return None
+    pat = _lit(f"{_like_escape(term)}%" if mode == "prefix" else f"%{_like_escape(term)}%")
+    parts = [f"CAST({qi(f)} AS VARCHAR) ILIKE {pat} ESCAPE '\\'" for f in fields]
+    return "(" + " OR ".join(parts) + ")"
+
+
+def _pg_search(term: str, fields: list[str], params: dict, mode: str = "contains") -> str | None:
+    """The PostGIS twin of `_duck_search`. The term is BOUND (this path binds everything); the LIKE
+    metacharacters still need escaping for the same reason.
+
+    A prefix match here can use a `text_pattern_ops` btree index where a deployment has added one; a
+    contains match cannot use any index and is always a sequential scan. Ingest creates neither —
+    worth knowing before pointing a search box at a very large PostGIS table."""
+    if not term or not fields:
+        return None
+    safe = _like_escape(term)
+    params["gdsearch"] = f"{safe}%" if mode == "prefix" else f"%{safe}%"
+    parts = [f"{qi(f)}::text ILIKE :gdsearch ESCAPE '\\'" for f in fields]
+    return "(" + " OR ".join(parts) + ")"
 
 
 def _lit(text: str) -> str:
@@ -461,8 +645,351 @@ def _duck_reprojector(meta: dict):
     return lambda geoms: shp_transform(geoms, _coords)
 
 
+# ── column profile ───────────────────────────────────────────────────────────
+# "What is IN this layer?" — asked of the current selection, not of the whole table, so it narrows
+# with everything else. Per field: how many values are present, how many are distinct, and either the
+# numeric range or the commonest few values.
+#
+# THE ONE DESIGN DECISION WORTH READING. With a geometry filter on a GeoParquet layer, the exact
+# point-in-polygon test is the expensive step (measured at 750 ms for a broad selection over 200 k
+# features). Computing each field's statistics in SQL would re-run that test once PER FIELD. So the
+# geometry-filtered path reads the candidates ONCE, tests once, and reduces every field over the
+# survivors in Python — one pass for the whole panel, the same cost as a single aggregate. The
+# unfiltered path stays in SQL, where the columnar read is already the fast thing.
+#
+# What it must NOT do is answer from the bbox prune alone: that would be cheap and would silently
+# disagree with the chart sitting next to it, which does run the exact test.
+
+#: Fields a profile will describe in one request, and how many top values each may return.
+PROFILE_MAX_FIELDS = 12
+PROFILE_TOP_MAX = 20
+
+#: A column with more distinct values than this is described by its RANGE rather than a top list,
+#: even when it is textual — a "top 5" over a column of unique ids says nothing.
+PROFILE_CATEGORICAL_MAX = 5000
+
+
+def _profile_kind(duck_type: str) -> str:
+    t = (duck_type or "").upper()
+    if any(k in t for k in ("INT", "DECIMAL", "DOUBLE", "FLOAT", "REAL", "NUMERIC", "HUGEINT")):
+        return "numeric"
+    if any(k in t for k in ("DATE", "TIME")):
+        return "date"
+    if "BOOL" in t:
+        return "boolean"
+    return "text"
+
+
+def _profile_from_values(name: str, kind: str, values: list, top_n: int) -> dict:
+    """Reduce one column's already-materialised values to its profile entry. Shared by both engines'
+    in-memory paths so the two cannot describe the same column differently."""
+    present = [v for v in values if v is not None]
+    out: dict = {"field": name, "kind": kind, "count": len(present),
+                 "nulls": len(values) - len(present)}
+    if not present:
+        return out
+    if kind == "numeric":
+        nums = [float(v) for v in present if isinstance(v, (int, float))]
+        if nums:
+            nums.sort()
+            mid = len(nums) // 2
+            out["min"] = nums[0]
+            out["max"] = nums[-1]
+            out["avg"] = sum(nums) / len(nums)
+            out["median"] = nums[mid] if len(nums) % 2 else (nums[mid - 1] + nums[mid]) / 2
+        out["distinct"] = len(set(present))
+        return out
+    counts: dict = {}
+    for v in present:
+        key = str(v)
+        counts[key] = counts.get(key, 0) + 1
+    out["distinct"] = len(counts)
+    if len(counts) <= PROFILE_CATEGORICAL_MAX:
+        top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:top_n]
+        out["top"] = [{"value": k, "count": n} for k, n in top]
+    return out
+
+
+def parquet_profile(layer, spec: dict) -> dict:
+    """Column profile for a GeoParquet layer. Cached like the aggregates — a profile panel and the
+    charts beside it ask overlapping questions of one selection."""
+    ckey = cache_key(layer, dict(spec, __kind="profile"))
+    cached = _cache_get(ckey)
+    if cached is not None:
+        return cached
+    return _cache_put(ckey, _parquet_profile_uncached(layer, spec))
+
+
+def _parquet_profile_uncached(layer, spec: dict) -> dict:
+    known = _known_columns(layer)
+    fields = [f for f in (spec.get("fields") or []) if f in known][:PROFILE_MAX_FIELDS]
+    if not fields:
+        raise AggregateError("Pick at least one column to describe.")
+    top_n = max(3, min(int(spec.get("topN") or 5), PROFILE_TOP_MAX))
+    filters = normalize_filters(spec.get("filters"), known)
+    geometry = spec.get("geometry") if isinstance(spec.get("geometry"), dict) else None
+
+    conn, src, meta, cols, _ = _duck_open(layer)
+    try:
+        where = _duck_where(filters, cols)
+        bbox_pred, geom = _duck_bbox_prune(meta, geometry)
+        if bbox_pred:
+            where.append(bbox_pred)
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+        kinds = {f: _profile_kind(cols.get(f, "")) for f in fields}
+
+        if geom is None:
+            # No exact test to pay for: let the columnar engine do it. One scalar pass for every
+            # field, then one grouped pass per field that can carry a top list.
+            sel = []
+            for f in fields:
+                q = qi(f)
+                sel.append(f"COUNT({q}) AS c_{len(sel)}")
+                sel.append(f"COUNT(DISTINCT {q}) AS d_{len(sel)}")
+                if kinds[f] == "numeric":
+                    n = f"TRY_CAST({q} AS DOUBLE)"
+                    sel += [f"MIN({n}) AS mn_{len(sel)}", f"MAX({n}) AS mx_{len(sel)}",
+                            f"AVG({n}) AS av_{len(sel)}", f"MEDIAN({n}) AS md_{len(sel)}"]
+            row = conn.execute(
+                f"SELECT COUNT(*) AS __total, {', '.join(sel)} FROM {src} {where_sql}").fetchone()
+            total = int(row[0] or 0)
+            out, i = [], 1
+            for f in fields:
+                entry = {"field": f, "kind": kinds[f], "count": int(row[i] or 0),
+                         "nulls": total - int(row[i] or 0), "distinct": int(row[i + 1] or 0)}
+                i += 2
+                if kinds[f] == "numeric":
+                    entry.update({"min": _num(row[i]), "max": _num(row[i + 1]),
+                                  "avg": _num(row[i + 2]), "median": _num(row[i + 3])})
+                    i += 4
+                elif entry["distinct"] and entry["distinct"] <= PROFILE_CATEGORICAL_MAX:
+                    tops = conn.execute(
+                        f"SELECT CAST({qi(f)} AS VARCHAR) AS k, COUNT(*) AS n FROM {src} "
+                        f"{where_sql} {'AND' if where_sql else 'WHERE'} {qi(f)} IS NOT NULL "
+                        f"GROUP BY 1 ORDER BY 2 DESC, 1 ASC LIMIT {top_n}").fetchall()
+                    entry["top"] = [{"value": r[0], "count": int(r[1])} for r in tops]
+                out.append(entry)
+            return {"total": total, "fields": out, "capped": False}
+
+        # Geometry filter: ONE read, ONE exact test, every field reduced over the survivors.
+        from shapely import from_wkb, intersects
+        geom_col = _duck_geom_col(meta, cols)
+        sel = ", ".join([f"{qi(geom_col)} AS __wkb"] + [qi(f) for f in fields])
+        rows = conn.execute(
+            f"SELECT {sel} FROM {src} {where_sql} LIMIT {CANDIDATE_CAP + 1}").fetchall()
+        capped = len(rows) > CANDIDATE_CAP
+        rows = rows[:CANDIDATE_CAP]
+        if not rows:
+            return {"total": 0, "fields": [{"field": f, "kind": kinds[f], "count": 0, "nulls": 0}
+                                           for f in fields], "capped": capped}
+        geoms = from_wkb([bytes(r[0]) if r[0] is not None else None for r in rows],
+                         on_invalid="ignore")
+        reproject = _duck_reprojector(meta)
+        if reproject is not None:
+            geoms = reproject(geoms)
+        hit = intersects(geoms, geom)
+        kept = [rows[i] for i, ok in enumerate(hit) if ok]
+        out = [_profile_from_values(f, kinds[f], [r[j + 1] for r in kept], top_n)
+               for j, f in enumerate(fields)]
+        return {"total": len(kept), "fields": out, "capped": capped}
+    finally:
+        conn.close()
+
+
+async def postgis_profile(db, layer, spec: dict) -> dict:
+    """Column profile for a PostGIS layer. One statement: the scalar stats for every field, plus a
+    lateral top-N for each field that can carry one. PostGIS does the exact test in the WHERE, so
+    there is no candidate-materialising step to avoid here."""
+    ckey = cache_key(layer, dict(spec, __kind="profile"))
+    cached = _cache_get(ckey)
+    if cached is not None:
+        return cached
+    return _cache_put(ckey, await _postgis_profile_uncached(db, layer, spec))
+
+
+async def _postgis_profile_uncached(db, layer, spec: dict) -> dict:
+    from sqlalchemy import text
+
+    known = _known_columns(layer)
+    fields = [f for f in (spec.get("fields") or []) if f in known][:PROFILE_MAX_FIELDS]
+    if not fields:
+        raise AggregateError("Pick at least one column to describe.")
+    top_n = max(3, min(int(spec.get("topN") or 5), PROFILE_TOP_MAX))
+    filters = normalize_filters(spec.get("filters"), known)
+    geometry = spec.get("geometry") if isinstance(spec.get("geometry"), dict) else None
+
+    table = f"{qi(layer.schema_name)}.{qi(layer.table_name)}"
+    geom_col = layer.geometry_column or "geom"
+    params: dict = {}
+    where = _pg_where(filters, geometry, geom_col, params, _srid_of(layer))
+    types = _pg_types(layer)
+
+    sel = ["COUNT(*) AS total"]
+    for i, f in enumerate(fields):
+        q = qi(f)
+        sel.append(f"COUNT({q}) AS c{i}")
+        sel.append(f"COUNT(DISTINCT {q}) AS d{i}")
+        if _profile_kind(types.get(f, "")) == "numeric":
+            n = f"({q})::double precision"
+            sel += [f"MIN({n}) AS mn{i}", f"MAX({n}) AS mx{i}", f"AVG({n}) AS av{i}",
+                    f"PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY {n}) AS md{i}"]
+    row = (await db.execute(text(f"SELECT {', '.join(sel)} FROM {table} {where}"), params)).mappings().first()
+    total = int((row or {}).get("total") or 0)
+
+    out = []
+    for i, f in enumerate(fields):
+        kind = _profile_kind(types.get(f, ""))
+        count = int((row or {}).get(f"c{i}") or 0)
+        entry = {"field": f, "kind": kind, "count": count, "nulls": total - count,
+                 "distinct": int((row or {}).get(f"d{i}") or 0)}
+        if kind == "numeric":
+            entry.update({"min": _num((row or {}).get(f"mn{i}")), "max": _num((row or {}).get(f"mx{i}")),
+                          "avg": _num((row or {}).get(f"av{i}")), "median": _num((row or {}).get(f"md{i}"))})
+        elif entry["distinct"] and entry["distinct"] <= PROFILE_CATEGORICAL_MAX:
+            tops = (await db.execute(text(
+                f"SELECT {qi(f)}::text AS k, COUNT(*) AS n FROM {table} {where} "
+                f"{'AND' if where else 'WHERE'} {qi(f)} IS NOT NULL "
+                f"GROUP BY 1 ORDER BY 2 DESC, 1 ASC LIMIT {top_n}"), params)).fetchall()
+            entry["top"] = [{"value": r[0], "count": int(r[1])} for r in tops]
+        out.append(entry)
+    return {"total": total, "fields": out, "capped": False}
+
+
+# ── scatter (Y against X, per feature) ───────────────────────────────────────
+# Not an aggregate: a scatter plots FEATURES, so it is the one chart that needs rows rather than a
+# summary. That makes sampling the whole design problem.
+#
+# THE SAMPLE MUST BE RANDOM, NOT THE FIRST N. A prepped GeoParquet layer is written in spatial
+# partitions (`partition_with_covering` scatters rows into a grid and writes `__cell=N/` files), so
+# "the first 2000 rows" is one corner of the map. A scatter drawn from that is not a slow answer or a
+# partial answer — it is a WRONG one, showing the relationship in one district and labelling it the
+# layer's. DuckDB's `USING SAMPLE n ROWS` is reservoir sampling over the scan; PostGIS gets
+# `ORDER BY random()`, which is a sort but on a bounded result.
+
+#: Points one scatter ships. Past this the plot is a solid blob and the honest thing is a density
+#: chart, not more dots — and the browser has to draw every one of them.
+SCATTER_MAX_POINTS = 3000
+
+
+def _scatter_fields(spec: dict, known: set[str]) -> tuple[str, str]:
+    x = _check_field(spec.get("xField"), known, "X field")
+    y = _check_field(spec.get("yField"), known, "Y field")
+    return x, y
+
+
+def parquet_scatter(layer, spec: dict) -> dict:
+    """Y against X for a GeoParquet layer, randomly sampled."""
+    ckey = cache_key(layer, dict(spec, __kind="scatter"))
+    cached = _cache_get(ckey)
+    if cached is not None:
+        return cached
+    return _cache_put(ckey, _parquet_scatter_uncached(layer, spec))
+
+
+def _parquet_scatter_uncached(layer, spec: dict) -> dict:
+    known = _known_columns(layer)
+    xf, yf = _scatter_fields(spec, known)
+    limit = max(50, min(int(spec.get("limit") or 1500), SCATTER_MAX_POINTS))
+    filters = normalize_filters(spec.get("filters"), known)
+    geometry = spec.get("geometry") if isinstance(spec.get("geometry"), dict) else None
+
+    conn, src, meta, cols, _ = _duck_open(layer)
+    try:
+        where = _duck_where(filters, cols)
+        bbox_pred, geom = _duck_bbox_prune(meta, geometry)
+        if bbox_pred:
+            where.append(bbox_pred)
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+        xe = f"TRY_CAST({qi(xf)} AS DOUBLE)"
+        ye = f"TRY_CAST({qi(yf)} AS DOUBLE)"
+        keep = f"{xe} IS NOT NULL AND {ye} IS NOT NULL"
+        where_sql = (where_sql + " AND " + keep) if where_sql else ("WHERE " + keep)
+
+        if geom is None:
+            rows = conn.execute(
+                f"SELECT {xe} AS x, {ye} AS y FROM {src} {where_sql} "
+                f"USING SAMPLE {limit} ROWS").fetchall()
+            total = conn.execute(f"SELECT COUNT(*) FROM {src} {where_sql}").fetchone()[0]
+            pts = [[_num(r[0]), _num(r[1])] for r in rows]
+            return {"points": pts, "x": xf, "y": yf, "total": int(total or 0),
+                    "sampled": len(pts) < int(total or 0), "capped": False}
+
+        # With a geometry filter the exact test has to run before the sample, or the sample is drawn
+        # from candidates that are not in the selection. Candidates are bounded by CANDIDATE_CAP as
+        # everywhere else, then thinned evenly rather than truncated.
+        from shapely import from_wkb, intersects
+        geom_col = _duck_geom_col(meta, cols)
+        rows = conn.execute(
+            f"SELECT {qi(geom_col)} AS __wkb, {xe} AS x, {ye} AS y FROM {src} {where_sql} "
+            f"LIMIT {CANDIDATE_CAP + 1}").fetchall()
+        capped = len(rows) > CANDIDATE_CAP
+        rows = rows[:CANDIDATE_CAP]
+        if not rows:
+            return {"points": [], "x": xf, "y": yf, "total": 0, "sampled": False, "capped": capped}
+        geoms = from_wkb([bytes(r[0]) if r[0] is not None else None for r in rows],
+                         on_invalid="ignore")
+        reproject = _duck_reprojector(meta)
+        if reproject is not None:
+            geoms = reproject(geoms)
+        hit = intersects(geoms, geom)
+        kept = [rows[i] for i, ok in enumerate(hit) if ok]
+        total = len(kept)
+        if total > limit:
+            # An even stride, not the first `limit`: the candidate order is the file's spatial
+            # order, so truncating would again plot one corner.
+            step = total / float(limit)
+            kept = [kept[int(i * step)] for i in range(limit)]
+        return {"points": [[_num(r[1]), _num(r[2])] for r in kept], "x": xf, "y": yf,
+                "total": total, "sampled": total > limit, "capped": capped}
+    finally:
+        conn.close()
+
+
+async def postgis_scatter(db, layer, spec: dict) -> dict:
+    """Y against X for a PostGIS layer, randomly sampled."""
+    ckey = cache_key(layer, dict(spec, __kind="scatter"))
+    cached = _cache_get(ckey)
+    if cached is not None:
+        return cached
+    return _cache_put(ckey, await _postgis_scatter_uncached(db, layer, spec))
+
+
+async def _postgis_scatter_uncached(db, layer, spec: dict) -> dict:
+    from sqlalchemy import text
+
+    known = _known_columns(layer)
+    xf, yf = _scatter_fields(spec, known)
+    limit = max(50, min(int(spec.get("limit") or 1500), SCATTER_MAX_POINTS))
+    filters = normalize_filters(spec.get("filters"), known)
+    geometry = spec.get("geometry") if isinstance(spec.get("geometry"), dict) else None
+
+    table = f"{qi(layer.schema_name)}.{qi(layer.table_name)}"
+    geom_col = layer.geometry_column or "geom"
+    params: dict = {}
+    where = _pg_where(filters, geometry, geom_col, params, _srid_of(layer))
+    xe, ye = f"({qi(xf)})::double precision", f"({qi(yf)})::double precision"
+    keep = f"{qi(xf)} IS NOT NULL AND {qi(yf)} IS NOT NULL"
+    where = (where + " AND " + keep) if where else ("WHERE " + keep)
+
+    total = (await db.execute(text(f"SELECT COUNT(*) FROM {table} {where}"), params)).scalar() or 0
+    rows = (await db.execute(text(
+        f"SELECT {xe} AS x, {ye} AS y FROM {table} {where} ORDER BY random() LIMIT {limit}"),
+        params)).fetchall()
+    pts = [[_num(r[0]), _num(r[1])] for r in rows]
+    return {"points": pts, "x": xf, "y": yf, "total": int(total),
+            "sampled": len(pts) < int(total), "capped": False}
+
+
 def parquet_aggregate(layer, spec: dict) -> dict:
     """The GeoParquet half of `aggregate`. Runs in a threadpool (DuckDB is synchronous)."""
+    ckey = cache_key(layer, spec)
+    cached = _cache_get(ckey)
+    if cached is not None:
+        return cached
+    return _cache_put(ckey, _parquet_aggregate_uncached(layer, spec))
+
+
+def _parquet_aggregate_uncached(layer, spec: dict) -> dict:
     known = _known_columns(layer)
     op = spec.get("op", "count")
     if op not in OPS:
@@ -499,10 +1026,15 @@ def parquet_aggregate(layer, spec: dict) -> dict:
                      {"value_asc": "ORDER BY 2 ASC", "key_asc": "ORDER BY 1 ASC"}.get(
                          spec.get("sort") or "value_desc", "ORDER BY 2 DESC"))
             limit = max(2, min(int(spec.get("limit") or 12), MAX_GROUPS))
+            # As on the PostGIS side: N measures are N aggregate expressions in ONE grouped scan,
+            # which is the whole reason a columnar engine is worth using here.
+            series = _series_specs(spec, known)
+            vals = ", ".join(f"{_duck_value_expr(sp['op'], sp['field'])} AS v{i}"
+                             for i, sp in enumerate(series))
             rows = conn.execute(
-                f"SELECT {key_expr} AS k, {value} AS v, COUNT(*) AS n FROM {src} {where_sql} "
+                f"SELECT {key_expr} AS k, {vals}, COUNT(*) AS n FROM {src} {where_sql} "
                 f"GROUP BY 1 {order} LIMIT {limit + 1}").fetchall()
-            return _groups_out(rows, limit, bucket)
+            return _groups_out(rows, limit, bucket, series)
 
         # GEOMETRY FILTER: bbox-pruned candidates out of SQL, exact test in shapely.
         return _parquet_spatial_aggregate(conn, src, meta, cols, where_sql, geom, spec,
@@ -531,9 +1063,14 @@ def _parquet_spatial_aggregate(conn, src, meta, cols, where_sql, geom, spec,
     from shapely import from_wkb, intersects
 
     geom_col = _duck_geom_col(meta, cols)
+    # ONE value column per series. A chart with several measures must answer the same shape whether
+    # or not a geometry filter is active — otherwise wiring it to the map silently drops every series
+    # but the first, which looks like the map broke the chart.
+    series = _series_specs(spec, _known_columns_from(cols))
     wanted = [f"{qi(geom_col)} AS __wkb"]
-    if field:
-        wanted.append(f"TRY_CAST({qi(field)} AS DOUBLE) AS __v")
+    for i, sp in enumerate(series):
+        wanted.append((f"TRY_CAST({qi(sp['field'])} AS DOUBLE)" if sp.get("field") else "NULL")
+                      + f" AS __v{i}")
     if group_by:
         wanted.append((f"date_trunc('{bucket}', TRY_CAST({qi(group_by)} AS TIMESTAMP))"
                        if bucket else f"CAST({qi(group_by)} AS VARCHAR)") + " AS __k")
@@ -543,7 +1080,9 @@ def _parquet_spatial_aggregate(conn, src, meta, cols, where_sql, geom, spec,
     rows = rows[:CANDIDATE_CAP]
     if not rows:
         return ({"op": op, "value": None, "count": 0, "capped": capped} if not group_by
-                else {"groups": [], "truncated": False, "capped": capped})
+                else {"groups": [], "truncated": False, "capped": capped,
+                      "series": [{"label": sp["label"], "op": sp["op"], "field": sp.get("field")}
+                                 for sp in series]})
 
     geoms = from_wkb([bytes(r[0]) if r[0] is not None else None for r in rows], on_invalid="ignore")
     reproject = _duck_reprojector(meta)
@@ -551,18 +1090,13 @@ def _parquet_spatial_aggregate(conn, src, meta, cols, where_sql, geom, spec,
         geoms = reproject(geoms)
     hit = intersects(geoms, geom)
 
-    values = None
-    if field:
-        idx = 1
-        values = np.array([_num(r[idx]) for r in rows], dtype="float64")
-    keys = None
-    if group_by:
-        idx = 2 if field else 1
-        keys = [r[idx] for r in rows]
+    cols_v = [np.array([_num(r[1 + i]) for r in rows], dtype="float64")
+              for i in range(len(series))]
+    keys = [r[1 + len(series)] for r in rows] if group_by else None
 
     if not group_by:
-        return {"op": op, "value": _reduce(op, values, hit), "count": int(hit.sum()),
-                "capped": capped}
+        return {"op": op, "value": _reduce(series[0]["op"], cols_v[0], hit),
+                "count": int(hit.sum()), "capped": capped}
 
     buckets: dict[Any, list[int]] = {}
     for i, ok in enumerate(hit):
@@ -573,7 +1107,10 @@ def _parquet_spatial_aggregate(conn, src, meta, cols, where_sql, geom, spec,
     for key, idxs in buckets.items():
         mask = np.zeros(len(rows), dtype=bool)
         mask[idxs] = True
-        out.append((key, _reduce(op, values, mask), len(idxs)))
+        # (key, v0, v1, …, count) — the row shape `_groups_out` reads, so the SQL and the in-memory
+        # paths hand it the same thing and cannot describe one chart two ways.
+        out.append((key,) + tuple(_reduce(sp["op"], cols_v[i], mask)
+                                  for i, sp in enumerate(series)) + (len(idxs),))
     limit = max(2, min(int(spec.get("limit") or 12), MAX_GROUPS))
     if bucket:
         out.sort(key=lambda r: (r[0] is None, r[0]))
@@ -583,7 +1120,7 @@ def _parquet_spatial_aggregate(conn, src, meta, cols, where_sql, geom, spec,
             out.sort(key=lambda r: (r[0] is None, str(r[0])))
         else:
             out.sort(key=lambda r: (r[1] is None, r[1]), reverse=(sort != "value_asc"))
-    result = _groups_out(out, limit, bucket)
+    result = _groups_out(out, limit, bucket, series)
     result["capped"] = capped
     return result
 
@@ -623,6 +1160,13 @@ def parquet_table(layer, spec: dict) -> dict:
         bbox_pred, geom = _duck_bbox_prune(meta, geometry)
         if bbox_pred:
             where.append(bbox_pred)
+        # Text search rides on the table query rather than getting an endpoint of its own: a search
+        # result IS a table row — same columns, same per-row bbox for click-to-zoom, same paging.
+        # A second endpoint would be a second place to build a row and a second place to secure.
+        search = _duck_search(_search_term(spec), _search_fields(spec, known),
+                              _search_mode(spec.get('searchMode')))
+        if search:
+            where.append(search)
         where_sql = ("WHERE " + " AND ".join(where)) if where else ""
         geom_col = _duck_geom_col(meta, cols)
         sel = ", ".join([f"{qi(geom_col)} AS __wkb"] + [qi(f) for f in fields])
@@ -634,10 +1178,17 @@ def parquet_table(layer, spec: dict) -> dict:
             order = f"ORDER BY {qi(sort)} " + ("DESC" if str(spec.get('dir')).lower() == "desc" else "ASC")
 
         if geom is None:
-            total = conn.execute(f"SELECT COUNT(*) FROM {src} {where_sql}").fetchone()[0]
+            # COUNTING IS THE EXPENSIVE HALF OF A SEARCH, so it is skippable. `COUNT(*)` over the
+            # predicate is a FULL scan of the matched column — and worse, it runs before the row
+            # query and therefore throws away the `LIMIT` short-circuit that lets DuckDB stop as
+            # soon as it has enough rows. A search box wants the first ten matches, not how many
+            # matches exist, so it asks for no total and gets one scan that ends early instead of
+            # two that do not. A table widget still counts: its pager needs the number.
             rows = conn.execute(
                 f"SELECT {sel} FROM {src} {where_sql} {order} LIMIT {limit} OFFSET {offset}"
             ).fetchall()
+            total = (conn.execute(f"SELECT COUNT(*) FROM {src} {where_sql}").fetchone()[0]
+                     if spec.get("withTotal", True) else offset + len(rows))
         else:
             candidates = conn.execute(
                 f"SELECT {sel} FROM {src} {where_sql} LIMIT {CANDIDATE_CAP}").fetchall()
@@ -709,13 +1260,87 @@ def _known_columns(layer) -> set[str]:
         return set()
 
 
-def _groups_out(rows, limit: int, bucket: str | None) -> dict:
+def _known_columns_from(cols: dict) -> set[str]:
+    """The column names a DuckDB `DESCRIBE` already gave us. Used where the layer object is not to
+    hand — `_series_specs` validates measure fields against it, and validating against the file's
+    real columns is strictly better than against the catalog's copy of them."""
+    return set(cols or {})
+
+
+def _pg_types(layer) -> dict[str, str]:
+    """`{column: declared type}` from the layer's stored catalog — the PostGIS path's equivalent of
+    the DuckDB `DESCRIBE` the GeoParquet path runs. Used only to decide whether a column gets a
+    numeric summary or a top-N list; an unknown type falls through to the categorical branch, which
+    is the safe way round (a top list over numbers is merely uninteresting, while a MIN/MAX over
+    text would be a type error at the database)."""
+    import json
+    try:
+        return {c.get("name"): str(c.get("type") or "")
+                for c in json.loads(layer.columns or "[]") if isinstance(c, dict)}
+    except (ValueError, TypeError):
+        return {}
+
+
+#: Measures one chart may plot against a single group key. Four is where a legend stops being a
+#: legend and starts being a table, and where line colours stop being tellable apart at a glance.
+MAX_SERIES = 4
+
+
+def _series_label(op: str, field: str | None) -> str:
+    return "Count" if op == "count" else f"{op.capitalize()} of {field}"
+
+
+def _series_specs(spec: dict, known: set[str]) -> list[dict]:
+    """The measures this chart plots: `[{op, field, label}]`.
+
+    MULTI-SERIES IS SEVERAL MEASURES OVER ONE GROUPING, not a second grouping field. "Average height
+    and average age per district" is a question about two columns; "count per district per year" is a
+    question about two dimensions, and answering it well needs a stacked/grouped renderer and a
+    cardinality guard that this does not have. The first is what a Y~X chart with several Y means,
+    and it is what this returns.
+
+    Falls back to the single `op`/`field` pair every existing chart uses, so a chart authored before
+    this asks exactly the query it asked before — one series, same SQL shape.
+    """
+    out: list[dict] = []
+    raw = spec.get("series")
+    if isinstance(raw, list):
+        for s in raw[:MAX_SERIES]:
+            if not isinstance(s, dict):
+                continue
+            op = s.get("op", "count")
+            if op not in OPS:
+                continue
+            field = None if op == "count" else s.get("field")
+            if op != "count" and not (field and (not known or field in known)):
+                continue          # a measure naming a column this layer lacks is dropped, not fatal
+            label = str(s.get("label") or _series_label(op, field))[:40]
+            out.append({"op": op, "field": field, "label": label})
+    if out:
+        return out
+    op = spec.get("op", "count")
+    field = None if op == "count" else spec.get("field")
+    return [{"op": op, "field": field, "label": _series_label(op, field)}]
+
+
+def _groups_out(rows, limit: int, bucket: str | None, series: list[dict] | None = None) -> dict:
+    """Shape grouped rows for the wire.
+
+    Rows arrive as `(key, v0, v1, …, count)`. `value` carries the FIRST series and is kept even for a
+    multi-series answer: every chart renderer and every widget written before this reads it, and a
+    response that dropped it would break them for no gain. `values` carries all of them.
+    """
+    n = len(series or [{}])
     groups = []
     for r in rows[:limit]:
-        key = r[0]
-        groups.append({"key": _scalar(key), "value": _num(r[1]), "count": int(r[2] or 0)})
-    return {"groups": groups, "truncated": len(rows) > limit,
-            "bucket": bucket or None}
+        values = [_num(r[1 + i]) for i in range(n)]
+        groups.append({"key": _scalar(r[0]), "value": values[0],
+                       "values": values, "count": int(r[1 + n] or 0)})
+    out = {"groups": groups, "truncated": len(rows) > limit, "bucket": bucket or None}
+    if series:
+        out["series"] = [{"label": s["label"], "op": s["op"], "field": s.get("field")}
+                         for s in series]
+    return out
 
 
 def _rows_out(rows, fields, total: int, limit: int, offset: int) -> dict:
@@ -724,7 +1349,11 @@ def _rows_out(rows, fields, total: int, limit: int, offset: int) -> dict:
         bbox = [r[1], r[2], r[3], r[4]]
         props = {fields[j]: _jsonable(r[j + 5]) for j in range(len(fields))}
         out.append({"id": r[0], "bbox": _bbox_or_none(bbox), "props": props})
-    return {"rows": out, "fields": fields, "total": total, "limit": limit, "offset": offset}
+    # `total` is None when the caller skipped the count (a search box). Report the rows actually on
+    # this page rather than null, so a client never has to special-case the field it pages with.
+    return {"rows": out, "fields": fields,
+            "total": int(total) if total is not None else offset + len(out),
+            "limit": limit, "offset": offset}
 
 
 def _bbox_or_none(box):

@@ -49,6 +49,21 @@ WIDGET_TYPES: dict[str, dict] = {
     "gauge":       {"needs": "vector", "source": True,  "target": True,  "channel": "attr"},
     "chart":       {"needs": "vector", "source": True,  "target": True,  "channel": "attr"},
     "table":       {"needs": "vector", "source": True,  "target": True,  "channel": "attr"},
+    # PROFILE is a TARGET only, like rasterstats and for the same reason: it describes the shape of
+    # whatever is currently selected — how many, what range, which values are common — and has no
+    # single value of its own to publish. Clicking one of its top-N values COULD filter, and that is
+    # the obvious v2 seam, but "the panel that tells you what is in the data" should not also be a
+    # control that changes what the data is until that is asked for.
+    "profile":     {"needs": "vector", "source": False, "target": True,  "channel": "attr"},
+    # SCATTER is a target only for now, like profile: it plots features rather than choosing them.
+    # Making a dot publish its own feature is the obvious v2 seam and is deliberately not taken here,
+    # because a scatter is SAMPLED — clicking a dot would filter to a feature that happens to be in
+    # the sample, and the same click on a redrawn sample would select nothing.
+    "scatter":     {"needs": "vector", "source": False, "target": True,  "channel": "attr"},
+    # SEARCH is a SOURCE only, for the same reason `selector` is: it is an input. Letting other
+    # widgets narrow the set it searches would move the control under the hand using it — you would
+    # type a name, another widget would narrow, and the name would stop matching.
+    "search":      {"needs": "vector", "source": True,  "target": False, "channel": "attr"},
     "selector":    {"needs": "vector", "source": True,  "target": False, "channel": None},
     "details":     {"needs": "none",   "source": False, "target": True,  "channel": "select"},
     "rasterstats": {"needs": "raster", "source": False, "target": True,  "channel": "geom"},
@@ -66,6 +81,31 @@ TIME_BUCKETS = {"hour", "day", "week", "month", "quarter", "year"}
 #: Chart shapes. `pie` and `donut` differ only in the hole, but they are separate types because the
 #: builder shows them as separate choices and the renderer needs to know which one was chosen.
 CHART_KINDS = {"bar", "hbar", "line", "area", "pie", "donut"}
+
+#: How a bar chart assigns colour. See `_normalize_style` for why `single` remains the default.
+CHART_COLOR_MODES = {"single", "category", "sequential"}
+
+#: How a table widget arranges its rows: a spreadsheet, or a directory of per-feature cards.
+TABLE_LAYOUTS = {"table", "cards"}
+
+#: How a search term is matched. Mirrors `services/aggregate.SEARCH_MODES`; `prefix` scans less.
+SEARCH_MODES = {"contains", "prefix"}
+
+#: Where an overlay widget pins itself on the map: the eight compass points — four corners and four
+#: edge midpoints. What is excluded is FREE x/y placement, which reads as a design tool and then has
+#: to survive every viewport; an anchor is stable at any size because it is defined against an edge
+#: rather than against a coordinate. A centred anchor is exactly as stable as a corner, which is why
+#: `top-center` (where a search box usually wants to be) belongs here too.
+#:
+#: What this is NOT is a full-height side RAIL. That is a different shape, and the grid already
+#: builds it better: a two-column dashboard puts a real rail beside the map, sized in columns, with
+#: the map keeping the rest. An overlay rail would cover half the map permanently and still have to
+#: fight the map's own controls for the edge.
+OVERLAY_ANCHORS = {
+    "top-left", "top-center", "top-right",
+    "left-center", "right-center",
+    "bottom-left", "bottom-center", "bottom-right",
+}
 
 #: The selection modes a map widget can offer. All of them normalise to ONE geometry filter
 #: downstream (a bbox IS a rectangular polygon), which is why they are a list of switches here
@@ -240,9 +280,43 @@ def _normalize_source(widget_type: str, source: dict | None) -> dict | None:
         # The column a ROW CLICK publishes as a filter. Defaults to the first shown column, so a
         # table wired to filter something works the moment it is wired.
         ref["keyField"] = _str(src.get("keyField")) or (ref["fields"][0] if ref["fields"] else None)
+        # CARD layout only: the field used as each card's heading. A directory reads heading-first
+        # ("5th Ave Parking Deck" over the name and the phone number), and that heading is rarely the
+        # same column as `keyField`, which exists to say what a click FILTERS on. Falls back to
+        # keyField so a table switched to cards is readable before anyone configures it.
+        ref["titleField"] = _str(src.get("titleField")) or ref["keyField"]
         ref["pageSize"] = _int(src.get("pageSize"), 50, 5, 500)
         ref["sort"] = _str(src.get("sort"))
         ref["dir"] = _str(src.get("dir"), {"asc", "desc"}, "asc")
+    if widget_type == "search":
+        fields = [f for f in (src.get("fields") or []) if isinstance(f, str) and f.strip()]
+        # Capped low: every named column is another column the scan has to read, and a search that
+        # looks in eight columns is usually a sign the author has not decided what it searches FOR.
+        ref["fields"] = fields[:8]
+        # The column a chosen result publishes as a filter, and the one shown as its heading. They
+        # differ for the same reason they do on a card list: what you READ is the name, what you
+        # FILTER on is the identity.
+        ref["keyField"] = _str(src.get("keyField")) or (ref["fields"][0] if ref["fields"] else None)
+        ref["titleField"] = _str(src.get("titleField")) or ref["keyField"]
+        ref["searchMode"] = _str(src.get("searchMode"), SEARCH_MODES, "contains")
+        ref["limit"] = _int(src.get("limit"), 8, 3, 25)
+        placeholder = _str(src.get("placeholder"))
+        if placeholder:
+            ref["placeholder"] = placeholder[:60]
+    if widget_type == "scatter":
+        ref["xField"] = _str(src.get("xField"))
+        ref["yField"] = _str(src.get("yField"))
+        # Points drawn. The cap is the renderer's limit as much as the query's: past a few thousand
+        # dots an SVG scatter is a solid shape and every one of them is a DOM node.
+        ref["limit"] = _int(src.get("limit"), 1500, 50, 3000)
+    if widget_type == "profile":
+        fields = [f for f in (src.get("fields") or []) if isinstance(f, str) and f.strip()]
+        # Capped low on purpose: this widget is read, not scanned. Every field costs a pass, and a
+        # panel describing forty columns is a data dictionary, not a dashboard card.
+        ref["fields"] = fields[:12]
+        # How many values a categorical field shows. 5 is the default because a top list is there to
+        # say "mostly these" — past about seven it stops being a summary and becomes the column.
+        ref["topN"] = _int(src.get("topN"), 5, 3, 20)
     if widget_type == "selector":
         ref["kind"] = _str(src.get("kind"), SELECTOR_KINDS, "category")
         ref["multi"] = bool(src.get("multi", True))
@@ -264,6 +338,22 @@ def _normalize_style(widget_type: str, style: dict | None) -> dict:
     if widget_type == "chart":
         out["chart"] = _str(s.get("chart"), CHART_KINDS, "bar")
         out["legend"] = bool(s.get("legend", True))
+        # How the bars are coloured. `single` is the default and stays the default: an axis that
+        # already names the category does not need the bars to repeat it, and every dashboard
+        # published so far keeps the look it had. `category` is for a NOMINAL key, `sequential` for
+        # an ORDERED one (a construction period, a decade) — a rainbow across an ordered key implies
+        # the categories are unrelated when they have a direction.
+        out["colorMode"] = _str(s.get("colorMode"), CHART_COLOR_MODES, "single")
+        # Printed values on the bars. None = the renderer's own default, which is ON for a
+        # horizontal bar (the row has space for it) and OFF for a vertical one (the column does not).
+        if s.get("valueLabels") is not None:
+            out["valueLabels"] = bool(s.get("valueLabels"))
+        out["valueShare"] = bool(s.get("valueShare", True))
+    if widget_type == "table":
+        # `table` is the spreadsheet; `cards` is a directory — one card per feature with a heading
+        # and a few fields under it. Same query, same paging, same click behaviour: only the shape on
+        # screen differs, which is why this is a style option and not a second widget type.
+        out["layout"] = _str(s.get("layout"), TABLE_LAYOUTS, "table")
     if widget_type == "gauge":
         out["min"] = _num(s.get("min"), 0.0)
         out["max"] = _num(s.get("max"), 100.0)
@@ -329,7 +419,23 @@ def _normalize_layout(layout: dict | None, index: int) -> dict:
     if x + w > GRID_COLS:
         w = GRID_COLS - x
     y = _int(lay.get("y"), index * 4, 0, 400)
-    return {"x": x, "y": y, "w": w, "h": h}
+    out = {"x": x, "y": y, "w": w, "h": h}
+    # OVERLAY: the widget floats over the map, pinned to one of its corners, instead of taking a
+    # grid cell. This is what a search box on a map wants — it belongs ON the map, not beside it —
+    # and it is the only placement available in an archetype whose map is full-bleed (a webmap or a
+    # storymap has no widget grid to sit in). Absent = a normal grid cell, which stays the default:
+    # a widget that silently left the grid would be a surprise, and the grid is what a dashboard is.
+    anchor = _str(lay.get("overlay"), OVERLAY_ANCHORS)
+    if anchor:
+        out["overlay"] = anchor
+        # Overlay size in PIXELS, not grid columns: it is measured against the map, which has no
+        # columns. Bounded so an overlay can never swallow the map it sits on.
+        out["overlayW"] = _int(lay.get("overlayW"), 260, 140, 520)
+        # Height is OPTIONAL and 0 means "as tall as its content" — the right default for the small
+        # panels this placement is for (a search box should not reserve 300px of map to show one
+        # input). A list that wants to scroll inside a fixed box sets a number instead.
+        out["overlayH"] = _int(lay.get("overlayH"), 0, 0, 800)
+    return out
 
 
 def _num(value, default):

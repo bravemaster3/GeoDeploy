@@ -283,6 +283,12 @@ class VectorLayer(Base):
     # NULL/none (n/a or not started) | tiling | ready | error. Until ready, the layer isn't displayable.
     pmtiles_key: Mapped[str | None] = mapped_column(String(512))
     tile_status: Mapped[str | None] = mapped_column(String(16))
+    # Cluster POINTS at low zoom when tiling. A tiling-time property, not a portal style: tippecanoe
+    # collapses nearby points into one feature carrying `point_count` while building the archive, so
+    # changing this only takes effect on a RE-TILE. NULL/False = the current behaviour, where
+    # tippecanoe thins points at low zoom instead — thinning keeps real, clickable features but the
+    # density you see is not the density that exists.
+    cluster_points: Mapped[bool | None] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(16), default="processing")  # processing | ready | error
     error_message: Mapped[str | None] = mapped_column(Text)
     default_style: Mapped[str | None] = mapped_column(Text)  # JSON {opacity, style, popup_fields}

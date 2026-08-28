@@ -1,0 +1,80 @@
+{
+  "name": "Directory",
+  "author": "GeoDeploy",
+  "description": "A findable register: a search box on the map, a scrolling list of feature cards beside it, a breakdown of what the register holds, and a details panel. Built for the datasets people look things UP in — facilities, offices, contacts, stations — where the question is 'where is this one' rather than 'how many are there'. Every widget stays removable and re-bindable; this is a starting layout, not a fixed one.",
+  "tags": ["dashboard", "directory", "search", "register", "official"],
+  "language": "en",
+  "basemap": "positron",
+  "preview": "preview.png",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "archetype": "dashboard",
+  "archetypes": ["dashboard"],
+  "layout": {
+    "regions": { "dashboard": { "density": "comfortable", "mapControls": true } }
+  },
+  "dashboard": {
+    "grid": { "rowHeight": 88, "gap": 10 },
+    "refresh": 0,
+    "widgets": [
+      {
+        "id": "search",
+        "type": "search",
+        "title": "Find",
+        "layout": { "x": 0, "y": 0, "w": 4, "h": 3, "overlay": "top-left", "overlayW": 280 },
+        "dataSource": { "searchMode": "contains", "limit": 8 },
+        "actions": { "filters": ["cards", "details", "map", "kpi-count", "chart-breakdown"], "listens": false }
+      },
+      {
+        "id": "kpi-count",
+        "type": "indicator",
+        "title": "Entries",
+        "layout": { "x": 0, "y": 0, "w": 4, "h": 2 },
+        "dataSource": { "op": "count" },
+        "style": { "format": "integer" },
+        "actions": { "filters": [], "listens": true }
+      },
+      {
+        "id": "sel-category",
+        "type": "selector",
+        "title": "Narrow by",
+        "layout": { "x": 0, "y": 2, "w": 4, "h": 2 },
+        "dataSource": { "kind": "category", "multi": true },
+        "actions": { "filters": ["cards", "map", "kpi-count", "details", "chart-breakdown"], "listens": false }
+      },
+      {
+        "id": "cards",
+        "type": "table",
+        "title": "Entries",
+        "layout": { "x": 0, "y": 4, "w": 4, "h": 8 },
+        "dataSource": { "pageSize": 25 },
+        "style": { "layout": "cards" },
+        "actions": { "filters": ["details", "map", "chart-breakdown"], "listens": true }
+      },
+      {
+        "id": "map",
+        "type": "map",
+        "title": "Map",
+        "layout": { "x": 4, "y": 0, "w": 8, "h": 9 },
+        "dataSource": { "tools": ["click", "polygon", "bbox"], "tolPx": 8 },
+        "actions": { "filters": ["cards", "details", "kpi-count", "chart-breakdown"], "listens": true }
+      },
+      {
+        "id": "chart-breakdown",
+        "type": "chart",
+        "title": "By category",
+        "layout": { "x": 4, "y": 9, "w": 4, "h": 3 },
+        "dataSource": { "op": "count", "limit": 6, "sort": "value_desc" },
+        "style": { "chart": "hbar", "colorMode": "category", "valueLabels": true },
+        "actions": { "filters": ["cards", "map", "kpi-count", "details"], "listens": true }
+      },
+      {
+        "id": "details",
+        "type": "details",
+        "title": "Selected entry",
+        "layout": { "x": 8, "y": 9, "w": 4, "h": 3 },
+        "actions": { "filters": [], "listens": true }
+      }
+    ]
+  }
+}

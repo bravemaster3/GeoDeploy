@@ -105,6 +105,28 @@ def _resolve_maxzoom(feature_count: int) -> int:
     return 13
 
 
+def _layer_cluster_opts(layer_id) -> tuple[bool, str | None]:
+    """`(cluster_points, geometry_type)` for a layer. Read here rather than passed in because the
+    task is queued with (layer_id, s3_key, pmtiles_key) from several places — a re-tile button, the
+    import chain — and adding an argument to each would let them disagree about the same layer."""
+    try:
+        con = state_db.connect()
+        try:
+            row = con.execute(
+                "SELECT cluster_points, geometry_type FROM vector_layers WHERE id=?",
+                (layer_id,)).fetchone()
+        finally:
+            con.close()
+        return (bool(row[0]) if row and row[0] is not None else False,
+                row[1] if row else None)
+    except Exception:
+        # A database that cannot answer must not stop the tiling: not clustering is the behaviour
+        # every archive had before this existed.
+        logger.warning("tile_geoparquet: could not read clustering options for layer %s", layer_id,
+                       exc_info=True)
+        return False, None
+
+
 def _layer_feature_count(layer_id) -> int:
     """Read a layer's stored feature_count (0 if unknown) to drive {@link _resolve_maxzoom}."""
     try:
@@ -124,11 +146,45 @@ def _densest_flag() -> str:
         else "--drop-densest-as-needed"
 
 
-def _tippecanoe_base(out_path: str, scratch: str, maxzoom: int) -> list:
+#: How close two points must be, in screen pixels at a given zoom, before clustering merges them.
+#: 40 is roughly a marker-and-a-half: close enough that the merged pair really did overlap, far
+#: enough that a cluster is not created out of two dots you could already tell apart.
+PMTILES_CLUSTER_DISTANCE = int(os.getenv("PMTILES_CLUSTER_DISTANCE", "40"))
+
+
+def _cluster_flags(cluster: bool, geometry_type: str | None) -> list:
+    """Low-zoom point clustering, or nothing.
+
+    ONLY for points, and this is a judgement rather than a limitation: clustering a polygon layer
+    replaces areas with dots at their centroids, which is a heatmap wearing a disguise — the
+    choropleth the portal can already draw says more and says it honestly. `--cluster-distance`
+    merges neighbours while the tiles are BUILT, so the browser gets counts it can draw directly;
+    MapLibre's own clustering cannot help here at all, because it only works on a GeoJSON source
+    and these layers are vector tiles.
+
+    Clustered features carry `point_count`, `sqrt_point_count` (pre-rooted for radius scaling),
+    `point_count_abbreviated` (a short label) and `clustered: true` — verified against tippecanoe
+    v2.80.0's own tilestats, which is what `portal_generator` filters and sizes on. Unclustered
+    features keep their own attributes, so the top zooms are unaffected.
+    """
+    if not cluster or not _is_point_geometry(geometry_type):
+        return []
+    return [f"--cluster-distance={max(1, PMTILES_CLUSTER_DISTANCE)}"]
+
+
+def _is_point_geometry(geometry_type: str | None) -> bool:
+    """Positively point. Mirrors `portal_generator._is_point`: an unknown or mixed type must NOT be
+    clustered, because collapsing geometry we cannot identify is never right."""
+    g = (geometry_type or "").lower()
+    return "point" in g and "polygon" not in g and "line" not in g
+
+
+def _tippecanoe_base(out_path: str, scratch: str, maxzoom: int, cluster_args: list | None = None) -> list:
     """The tippecanoe argv common to both feeds (output, layer, zoom, simplification, densest,
     a dedicated on-disk scratch dir)."""
     cmd = ["tippecanoe", "-o", out_path, "-l", PMTILES_LAYER, "-z", str(maxzoom),
            _densest_flag(), "--force", "-t", scratch]
+    cmd += list(cluster_args or [])
     if PMTILES_KEEP_ALL_FEATURES:
         # Add deeper zooms only where tiles still drop, and keep small polygons — so every feature is
         # present at the deepest zoom and visible when zoomed in, even in dense areas.
@@ -207,12 +263,16 @@ def tile_geoparquet(self, layer_id, s3_key, pmtiles_key):
     out_path = os.path.join(run_dir, "out.pmtiles")
 
     feature_count = _layer_feature_count(layer_id)
+    cluster, geom_type = _layer_cluster_opts(layer_id)
+    cluster_args = _cluster_flags(cluster, geom_type)
     maxzoom = _resolve_maxzoom(feature_count)
     simplify_tol = _simplify_tol(maxzoom)
     _update_layer(layer_id, tile_status="tiling")
     started = time.monotonic()
-    logger.info("tile_geoparquet: layer %s — tiling %s → z%s (PMTiles, input=%s, mem=%s, features=%s, simplify_tol=%s)",
-                layer_id, s3_key, maxzoom, PMTILES_INPUT, PMTILES_TILE_MEMORY_LIMIT, f"{feature_count:,}", simplify_tol)
+    logger.info("tile_geoparquet: layer %s — tiling %s → z%s (PMTiles, input=%s, mem=%s, features=%s, "
+                "simplify_tol=%s, cluster=%s)",
+                layer_id, s3_key, maxzoom, PMTILES_INPUT, PMTILES_TILE_MEMORY_LIMIT,
+                f"{feature_count:,}", simplify_tol, cluster_args or "off")
     try:
         used = None
         if PMTILES_INPUT != "geojsonseq":
@@ -220,7 +280,7 @@ def tile_geoparquet(self, layer_id, s3_key, pmtiles_key):
             # geometry to GeoJSON, streamed to tippecanoe's stdin so the feed OVERLAPS the tiling
             # pass (no serialized intermediate file, no per-feature shapely).
             try:
-                cmd = _tippecanoe_base(out_path, tile_scratch, maxzoom) + ["/dev/stdin"]
+                cmd = _tippecanoe_base(out_path, tile_scratch, maxzoom, cluster_args) + ["/dev/stdin"]
 
                 def _feed_native(stdin):
                     duckdb_engine.stream_tiling_geojsonseq(
@@ -240,7 +300,7 @@ def tile_geoparquet(self, layer_id, s3_key, pmtiles_key):
         if used is None:
             # FALLBACK: shapely stream → tippecanoe stdin (no simplify; used only if `spatial` is
             # unavailable). Also concurrent + memory-bounded.
-            cmd = _tippecanoe_base(out_path, tile_scratch, maxzoom) + ["/dev/stdin"]
+            cmd = _tippecanoe_base(out_path, tile_scratch, maxzoom, cluster_args) + ["/dev/stdin"]
 
             def _feed_shapely(stdin):
                 duckdb_engine.stream_geojsonseq(

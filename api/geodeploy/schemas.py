@@ -429,6 +429,10 @@ class VectorLayerOut(BaseModel):
     s3_key: str | None = None
     pmtiles_key: str | None = None
     tile_status: str | None = None
+    # Whether the ARCHIVE was built with low-zoom point clustering. Exposed so the layer page can
+    # show what the existing tiles actually are, not just what the flag is set to — they differ
+    # between changing the setting and re-tiling.
+    cluster_points: bool | None = None
     status: str
     error_message: str | None
     # Live ingest progress for a queued/processing layer (from its latest UploadJob; None when ready)
