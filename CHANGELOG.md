@@ -4,7 +4,11 @@ Notable changes, newest first. Versions are **major.minor** — `v1.0`, `v1.1`, 
 `v2.0`. The minor number moves for anything shipped, features or fixes; the major changes when an
 upgrade needs manual work.
 
-## Unreleased
+## v1.4.1 — 2026-08-28
+
+A patch release, and the second deliberate exception to the major.minor convention above: a
+GeoParquet layer in a projected CRS built its tiles at coordinates that were not its own, and that
+should not wait for v1.5. Two smaller things already on main ride along with it.
 
 - **A GeoParquet layer in a projected CRS now tiles to the right place.** Tiles were built with
   DuckDB's three-argument `ST_Transform`, whose `always_xy` defaults to false — and EPSG:4326
