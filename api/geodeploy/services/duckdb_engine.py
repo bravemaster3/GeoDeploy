@@ -215,6 +215,20 @@ def _read_geo_metadata(conn: duckdb.DuckDBPyConnection, loc: str) -> dict:
     return out
 
 
+def _st_transform_4326(expr: str, src_epsg: str) -> str:
+    """`expr` reprojected to EPSG:4326 by DuckDB spatial, in LON/LAT order.
+
+    The 4th argument (`always_xy`) is NOT optional. DuckDB's ST_Transform defaults it to FALSE,
+    which honours the authority's declared axis order — and EPSG:4326 declares LAT/LON. Leaving it
+    off silently returns every coordinate swapped: the Swiss buildings layer (EPSG:2056) tiled to
+    PMTiles landed at lon 46 / lat 7, in the Gulf of Aden. Nothing errors, and the layer's own bbox
+    stays right (that one is computed with pyproj, `always_xy=True`), so the portal fits to
+    Switzerland and draws an empty map — the tiles are simply somewhere else. PostGIS's
+    ST_Transform is always lon/lat, which is why only these DuckDB paths were affected.
+    """
+    return f"ST_Transform({expr}, '{src_epsg}', 'EPSG:4326', true)"
+
+
 def _reproject_bbox(bbox: list[float], src_epsg: str, dst_epsg: str = "EPSG:4326") -> list[float]:
     if src_epsg == dst_epsg:
         return bbox
@@ -929,7 +943,7 @@ def export_geoparquet_to_fgb(s3_key: str, out_path: str, creds: dict | None = No
             else f"ST_GeomFromWKB({gq})"
         geom_expr = base_geom
         if src_epsg and src_epsg != "EPSG:4326":
-            geom_expr = f"ST_Transform({base_geom}, '{src_epsg}', 'EPSG:4326')"
+            geom_expr = _st_transform_4326(base_geom, src_epsg)
         sel = ", ".join([f"{geom_expr} AS {gq}"] +
                         [_fgb_prop_expr(c, col_types.get(c, "")) for c in prop_cols])
         out_q = out_path.replace("'", "''")
@@ -991,7 +1005,7 @@ def stream_tiling_geojsonseq(s3_key: str, out, creds: dict | None = None, bucket
         gq = _q(geom_col)
         gexpr = gq if "GEOMETRY" in col_types.get(geom_col, "").upper() else f"ST_GeomFromWKB({gq})"
         if src_epsg and src_epsg != "EPSG:4326":
-            gexpr = f"ST_Transform({gexpr}, '{src_epsg}', 'EPSG:4326')"
+            gexpr = _st_transform_4326(gexpr, src_epsg)
         if simplify_tol and simplify_tol > 0:
             gexpr = f"ST_Simplify({gexpr}, {float(simplify_tol)})"
         sel = ", ".join([f"ST_AsGeoJSON({gexpr}) AS __gj"] + [_q(c) for c in prop_cols])

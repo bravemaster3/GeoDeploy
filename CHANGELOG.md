@@ -6,6 +6,14 @@ upgrade needs manual work.
 
 ## Unreleased
 
+- **A GeoParquet layer in a projected CRS now tiles to the right place.** Tiles were built with
+  DuckDB's three-argument `ST_Transform`, whose `always_xy` defaults to false — and EPSG:4326
+  declares lat/lon, so every coordinate came out swapped. A Swiss layer (EPSG:2056) tiled to the
+  Gulf of Aden while the map still opened on Switzerland: no error, no failed request, just an empty
+  map. Layers already in EPSG:4326 were never affected, and neither was anything served from
+  PostGIS. **Archives tiled before this fix must be re-tiled** (Tile, in My Data) — the fix only
+  changes what new tiles contain.
+
 - **A pasted GeoDeploy link now shows the GeoDeploy card.** The dashboard, every published portal
   (with its own title and description) and the docs emit Open Graph tags against a shipped
   1200x630 image, so a link posted to LinkedIn, Slack or Teams stops rendering as a bare title and
