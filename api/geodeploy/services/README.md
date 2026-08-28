@@ -173,7 +173,29 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   through one path). Parquet has no index — it is a scan with `LIMIT 1`, fine for the single-feature
   permalink it serves, never a substitute for the bbox queries.
 
+- **DuckDB `ST_Transform` needs `always_xy=true` — FIXED 2026-08-28 (`duckdb_engine._st_transform_4326`).**
+  DuckDB spatial defaults the 4th argument to FALSE, which honours the authority's declared axis
+  order, and **EPSG:4326 declares LAT/LON**. The three-argument form therefore returned every
+  coordinate SWAPPED. It hit the two DuckDB reprojection sites — `stream_tiling_geojsonseq` (the
+  PRIMARY PMTiles feed) and `export_geoparquet_to_fgb` — so any GeoParquet layer in a projected CRS
+  built tiles that were somewhere else entirely: the live Swiss buildings layer (EPSG:2056, 3.4 M
+  points) landed at lon 46 / lat 7, in the Gulf of Aden. Nothing errored, and the layer's OWN bbox
+  stayed correct (that is computed with pyproj, `always_xy=True`), so the portal fitted to
+  Switzerland and drew an empty map. Diagnosis shortcut: the archive's own bounds are exposed by
+  `GET /api/data/vector/{ref}/tilejson` — compare them with the layer's `bbox`; swapped bounds are
+  the whole tell, and neither call needs a login. **PostGIS `ST_Transform` is always lon/lat**, so
+  no PostGIS path was affected, and neither were the deck.gl viewport feeds
+  (`query_features_geojson`/`_arrow`, pyproj) — which is why an UNTILED projected layer displayed
+  fine and a tiled one did not. Archives tiled before the fix must be RE-TILED
+  (`POST /data/vector/{id}/tile`); the fix only changes what new tiles contain. Regression test:
+  `api/tests/test_native_crs.py`.
+
 ## Last updated
+2026-08-28 (**DuckDB `ST_Transform` axis-order fix** — `_st_transform_4326()` now passes
+`always_xy=true`; without it every projected-CRS GeoParquet layer tiled to PMTiles at swapped
+coordinates. Two call sites: `stream_tiling_geojsonseq`, `export_geoparquet_to_fgb`. Existing
+archives need a re-tile.)
+
 2026-08-24 (**dashboard first-use round** — `dashboard.py`: the map widget's hit radius is now
 `tolPx` (SCREEN pixels, default 6, clamped 0–24) instead of `tol` (degrees, default **0**), and it is
 written whether or not a selection layer is bound. Zero degrees makes `postgis_pick`'s
