@@ -23,12 +23,18 @@ def _w(wid, wtype, **kw):
 # ── resolve_layout: the fourth archetype ────────────────────────────────────────────────────────
 
 def test_dashboard_archetype_defaults():
-    """A dashboard is a widget grid, not a map page: the dashboard panel is on and the layer
-    catalog is off (the widgets name their own data)."""
+    """A dashboard is a widget grid, not a map page — so the dashboard panel is on.
+
+    The layer catalog is ALSO on, and that reversed a previous default. It carries the LEGEND: the
+    legend has never been a panel of its own, it is drawn inside each layer card and opens from the
+    toggle at the top of the control cluster. With the list off, a dashboard had `legend: true` and
+    nowhere to draw one, and no way to read what the colours on its map meant. It starts collapsed,
+    so the cost is one button in a cluster that already has several."""
     r = resolve_layout({"archetype": "dashboard"})
     assert r["archetype"] == "dashboard"
     assert r["panels"]["dashboard"] is True
-    assert r["panels"]["layerCatalog"] is False
+    assert r["panels"]["layerCatalog"] is True
+    assert r["panels"]["legend"] is True
     assert r["panels"]["story"] is False
     # The list is still available to an author who turns it on — and when they do it must FLOAT,
     # because the grid owns the page width.
@@ -37,12 +43,15 @@ def test_dashboard_archetype_defaults():
 
 
 def test_dashboard_overrides_merge_like_every_other_archetype():
+    # `layerCatalog: False` is the override worth testing now that the DEFAULT is True — overriding
+    # a flag to the value it already has proves nothing about the merge.
     r = resolve_layout({"archetype": "dashboard",
                         "regions": {"dashboard": {"density": "compact"}},
-                        "panels": {"layerCatalog": True}})
+                        "panels": {"layerCatalog": False}})
     assert r["regions"]["dashboard"]["density"] == "compact"
     assert r["regions"]["dashboard"]["mapControls"] is True   # untouched key survives the merge
-    assert r["panels"]["layerCatalog"] is True
+    assert r["panels"]["layerCatalog"] is False
+    assert r["panels"]["dashboard"] is True                   # untouched panel survives too
 
 
 # ── resolve_dashboard: nothing to render ────────────────────────────────────────────────────────
