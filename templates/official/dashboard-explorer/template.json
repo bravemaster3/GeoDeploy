@@ -39,7 +39,7 @@
         "type": "map",
         "title": "Map",
         "layout": { "x": 3, "y": 0, "w": 9, "h": 7 },
-        "dataSource": { "tools": ["click", "polygon", "bbox", "extent"], "tolPx": 8 },
+        "dataSource": { "tools": ["click", "polygon", "bbox"], "tolPx": 8 },
         "actions": { "filters": ["profile", "kpi-rows", "chart-breakdown", "details"], "listens": true }
       },
       {

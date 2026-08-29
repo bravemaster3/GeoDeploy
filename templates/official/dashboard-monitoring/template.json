@@ -46,7 +46,7 @@
       {
         "id": "map", "type": "map", "title": "Map",
         "layout": { "x": 0, "y": 2, "w": 7, "h": 6 },
-        "dataSource": { "tools": ["click", "polygon", "bbox", "extent"], "tolPx": 6 },
+        "dataSource": { "tools": ["click", "polygon", "bbox"], "tolPx": 6 },
         "actions": { "filters": ["kpi-total", "kpi-open", "kpi-avg", "kpi-max", "chart-time", "list"], "listens": true }
       },
       {

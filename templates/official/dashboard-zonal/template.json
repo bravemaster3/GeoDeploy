@@ -20,7 +20,7 @@
       {
         "id": "map", "type": "map", "title": "Draw or click an area",
         "layout": { "x": 0, "y": 0, "w": 7, "h": 8 },
-        "dataSource": { "tools": ["click", "polygon", "bbox", "extent"], "tolPx": 6 },
+        "dataSource": { "tools": ["click", "polygon", "bbox"], "tolPx": 6 },
         "actions": { "filters": ["rs-a", "rs-b", "rs-hist", "kpi-area", "details"], "listens": true }
       },
       {

@@ -435,3 +435,10 @@ body[data-archetype="dashboard"][data-dash-draw="1"] #map canvas { cursor: cross
 /* ── scatter ───────────────────────────────────────────────────────────────── */
 .gd-w-body.gd-w-scatter { display: flex; flex-direction: column; gap: 4px; }
 .gd-scatter-note { font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
+
+/* The in-view tag a widget's title wears while a map's extent tool is narrowing it. Deliberately
+   quiet — it qualifies the title, it is not a second title — and it never takes the pointer, so it
+   cannot get in the way of a clickable card's own click. */
+.gd-w-title .gd-inview {
+  font-weight: 400; color: var(--text-muted); font-size: .92em; pointer-events: none;
+}

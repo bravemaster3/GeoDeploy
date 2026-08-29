@@ -2049,6 +2049,10 @@ window.GD_DASHBOARD = (function () {
       eb.addEventListener('click', function () {
         extentOn = !extentOn;
         eb.setAttribute('aria-pressed', extentOn ? 'true' : 'false');
+        // Label the widgets this map narrows for as long as the tool is on. An extent publishes
+        // SOFT and draws no chip in the filter bar, so without this a visitor has nothing telling
+        // them why "Buildings" is counting fewer buildings than the layer has.
+        if (env.markInView) env.markInView(w.id, extentOn);
         if (extentOn) pushExtent();
         else if (env.store.state.geom && env.store.state.geom.soft) env.store.clearGeom();
       });
@@ -2260,6 +2264,7 @@ window.GD_DASHBOARD = (function () {
     const store = createStore(cfg.widgets);
     const api = createApi();
     const clearHandlers = [];
+    const inViewCount = {};   // widget id -> how many extent-filtering maps currently target it
     const env = {
       map: ctx.map,
       maplibregl: ctx.maplibregl,
@@ -2270,6 +2275,38 @@ window.GD_DASHBOARD = (function () {
       api: api,
       absUrl: ctx.absUrl || function (u) { return u; },
       fitBbox: ctx.fitBbox || function () {},
+      //: THE IN-VIEW GUARD. While a map's `extent` tool is on, every widget that map filters is
+      //: answering a different question than its title says: "Buildings" has quietly become
+      //: "buildings currently on screen", and the number changes when nobody touched the data. The
+      //: filter bar cannot say so either — an extent is published SOFT and deliberately draws no
+      //: chip, because it is not something the visitor chose and "clearing" it would last until the
+      //: next pan.
+      //:
+      //: So the titles say it instead, for exactly as long as the tool is on. This is a LABEL, never
+      //: a filter: it changes no query and no result, and switching the tool off removes it.
+      //: Counted rather than boolean because two maps can both filter one widget, and the first one
+      //: switched off must not un-label a widget the second is still narrowing.
+      markInView: function (sourceId, on) {
+        const src = (cfg.widgets || []).find(function (x) { return x.id === sourceId; });
+        const targets = (src && src.actions && src.actions.filters) || [];
+        targets.forEach(function (tid) {
+          inViewCount[tid] = Math.max(0, (inViewCount[tid] || 0) + (on ? 1 : -1));
+          const node = nodeById[tid];
+          if (!node) return;
+          const title = node.querySelector('.gd-w-title');
+          if (!title) return;
+          let tag = title.querySelector('.gd-inview');
+          if (inViewCount[tid] > 0 && !tag) {
+            tag = document.createElement('span');
+            tag.className = 'gd-inview';
+            tag.textContent = ' · in view';
+            tag.title = 'This widget is describing the map’s current extent.';
+            title.appendChild(tag);
+          } else if (!inViewCount[tid] && tag) {
+            tag.remove();
+          }
+        });
+      },
       onClearSelection: function (fn) { clearHandlers.push(fn); },
       clearSelection: function () {
         // Clearing the geometry channel MUST also clear the raster results it produced — a stat
@@ -2287,6 +2324,9 @@ window.GD_DASHBOARD = (function () {
     });
 
     const cards = [];
+    //: widget id -> its mounted card element, for the few things that have to reach ACROSS widgets.
+    //: Today that is only the in-view guard below; a renderer never touches another's DOM.
+    const nodeById = {};
     //: Overlay widgets, tracked separately from `cards` because they are placed by CSS rather than
     //: by the responsive grid mapper. Kept so the first-load refresh can reach them too.
     const overlays = [];
@@ -2343,11 +2383,13 @@ window.GD_DASHBOARD = (function () {
         const oh = w.layout && w.layout.overlayH;
         if (oh) inst.el.style.height = oh + 'px';
         overlayHost(mapWrap).appendChild(inst.el);
+        nodeById[w.id] = inst.el;
         store.subscribe(w.id, inst.refresh);
         overlays.push(inst);
         return;
       }
       if (!inst.isMap) host.appendChild(inst.el);
+      nodeById[w.id] = inst.el;
       cards.push({ id: w.id, el: inst.el, layout: w.layout, inst: inst });
       store.subscribe(w.id, inst.refresh);
     });

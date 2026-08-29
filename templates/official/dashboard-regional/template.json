@@ -40,7 +40,7 @@
       {
         "id": "map", "type": "map", "title": "Choropleth",
         "layout": { "x": 0, "y": 2, "w": 6, "h": 6 },
-        "dataSource": { "tools": ["click", "polygon", "bbox", "extent"], "tolPx": 6 },
+        "dataSource": { "tools": ["click", "polygon", "bbox"], "tolPx": 6 },
         "actions": { "filters": ["kpi-regions", "kpi-total", "pie", "rank"], "listens": true }
       },
       {
