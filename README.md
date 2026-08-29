@@ -111,6 +111,9 @@ Full documentation: **<https://docs-geodeploy.kndev.org/>**
 | [Getting started](https://docs-geodeploy.kndev.org/getting-started/) | Install, set up, publish your first portal |
 | [Uploading data](https://docs-geodeploy.kndev.org/uploading/) | Formats, the two vector backends, large files |
 | [Portals and experiences](https://docs-geodeploy.kndev.org/portals/) | Web map, story map, catalog, dashboard; templates, layout and access |
+| [Web maps](https://docs-geodeploy.kndev.org/web-maps/) | The layer list, layout choices, the tools visitors get |
+| [Story maps](https://docs-geodeploy.kndev.org/story-maps/) | Sections, capturing a camera, per-section layers |
+| [Catalogs](https://docs-geodeploy.kndev.org/catalogs/) | Facets, what a dataset card shows, portal or instance-wide |
 | [Dashboards](https://docs-geodeploy.kndev.org/dashboards/) | Widgets, cross-filtering, linked layers, placement |
 | [Users, roles and sharing](https://docs-geodeploy.kndev.org/users-and-sharing/) | Roles, visibility, tokens, audit log |
 | [Access from other tools](https://docs-geodeploy.kndev.org/data-access/) | QGIS, DuckDB, Python — which standard for which job |

@@ -82,6 +82,11 @@ AGG_OPS = {"count", "sum", "avg", "min", "max"}
 #: Time buckets a chart may group a date/timestamp field by.
 TIME_BUCKETS = {"hour", "day", "week", "month", "quarter", "year"}
 
+#: Measures one chart may plot against a single grouping. Four is where a legend stops being a
+#: legend and starts being a table, and where line colours stop being tellable apart at a glance.
+#: Mirrors `services/aggregate.MAX_SERIES`.
+MAX_CHART_SERIES = 4
+
 #: Chart shapes. `pie` and `donut` differ only in the hole, but they are separate types because the
 #: builder shows them as separate choices and the renderer needs to know which one was chosen.
 CHART_KINDS = {"bar", "hbar", "line", "area", "pie", "donut"}
@@ -284,6 +289,27 @@ def _normalize_source(widget_type: str, source: dict | None) -> dict | None:
         ref["timeBucket"] = _str(src.get("timeBucket"), TIME_BUCKETS)
         ref["limit"] = _int(src.get("limit"), 12, 2, 100)
         ref["sort"] = _str(src.get("sort"), {"value_desc", "value_asc", "key_asc"}, "value_desc")
+        # SEVERAL measures against the one grouping — "mean height AND mean age per district". Each
+        # is {op, field, label}. Absent, the single op/field above is the chart's one series, which
+        # is what every chart authored before this has. `count` needs no field; the rest do, and a
+        # measure without one is dropped rather than published as a query that will 400.
+        series = []
+        for m in (src.get("series") or [])[:MAX_CHART_SERIES]:
+            if not isinstance(m, dict):
+                continue
+            op = _str(m.get("op"), AGG_OPS, "count")
+            field = _str(m.get("field"))
+            if op != "count" and not field:
+                continue
+            entry = {"op": op}
+            if field:
+                entry["field"] = field
+            label = _str(m.get("label"))
+            if label:
+                entry["label"] = label[:40]
+            series.append(entry)
+        if series:
+            ref["series"] = series
     if widget_type == "table":
         fields = [f for f in (src.get("fields") or []) if isinstance(f, str) and f.strip()]
         ref["fields"] = fields[:24]     # a scrollable row, not a spreadsheet

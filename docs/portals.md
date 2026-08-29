@@ -5,7 +5,8 @@ page is laid out, and publish. Visitors need nothing installed.
 
 ## The four experiences
 
-Choosing an experience changes the *shape of the page*, not just its colours.
+Choosing an experience changes the *shape of the page*, not just its colours. Each has its own
+guide; this page covers what they share — building, layout, access and templates.
 
 === "Web map"
 
@@ -16,6 +17,8 @@ Choosing an experience changes the *shape of the page*, not just its colours.
     - Layer list you can dock left or right, or float over the map
     - Folders, legend, basemap switcher, About panel
 
+    See **[Web maps](web-maps.md)**.
+
 === "Story map"
 
     Scrollytelling. The page is a narrative of sections; each one is pinned to a map position and a
@@ -24,6 +27,8 @@ Choosing an experience changes the *shape of the page*, not just its colours.
     - Write each section in the editor
     - Capture the map camera for a section as you go
     - The layer list starts collapsed, so the story leads
+
+    See **[Story maps](story-maps.md)**.
 
 === "Catalog"
 
@@ -34,6 +39,8 @@ Choosing an experience changes the *shape of the page*, not just its colours.
     - Filter by folder, type and licence
     - Each result shows what it is, and how to get it
     - Click a dataset to add it to the map, or zoom to its extent
+
+    See **[Catalogs](catalogs.md)**.
 
 === "Dashboard"
 
@@ -46,7 +53,7 @@ Choosing an experience changes the *shape of the page*, not just its colours.
     - Clicking a chart or drawing on the map re-asks every other question on the page
     - Widgets can be pinned to the map, or docked into its control cluster
 
-    See **[Dashboards](dashboards.md)** for the full guide.
+    See **[Dashboards](dashboards.md)**.
 
 ## Building a portal
 

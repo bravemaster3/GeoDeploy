@@ -574,6 +574,33 @@ function toggleTableField(w, name) {
   patchWidget(w.id, { dataSource: { fields: next, keyField: w.dataSource?.keyField || next[0] || null } })
 }
 // The profile has no keyField to keep in step — it describes columns, it does not filter by one.
+//: MEASURES — several aggregates against one grouping ("mean height AND mean age per district").
+//: Absent, a chart has the single op/field pair below it and behaves exactly as it always has; the
+//: first measure added SEEDS ITSELF FROM that pair, so turning one chart into two series never
+//: silently discards the one the author already configured.
+const MAX_SERIES = 4
+function seriesOf(w) { return w.dataSource?.series || [] }
+function addSeries(w) {
+  const cur = seriesOf(w)
+  if (cur.length >= MAX_SERIES) return
+  const ds = w.dataSource || {}
+  const next = cur.length
+    ? [...cur, { op: 'count' }]
+    // Seed with what the chart is already plotting, then the new one.
+    : [{ op: ds.op || 'count', ...(ds.field ? { field: ds.field } : {}) }, { op: 'count' }]
+  patchWidget(w.id, { dataSource: { series: next } })
+}
+function patchSeries(w, i, patch) {
+  const next = seriesOf(w).map((m, n) => (n === i ? { ...m, ...patch } : m))
+  patchWidget(w.id, { dataSource: { series: next } })
+}
+function removeSeries(w, i) {
+  const next = seriesOf(w).filter((_, n) => n !== i)
+  // Back to one measure is back to a plain single-series chart, not a one-item list: the op/field
+  // controls below take over again, and they are what an existing chart uses.
+  patchWidget(w.id, { dataSource: { series: next.length > 1 ? next : null } })
+}
+
 function toggleSearchField(w, name) {
   const cur = w.dataSource?.fields || []
   const next = cur.includes(name) ? cur.filter(f => f !== name) : [...cur, name]
@@ -959,6 +986,38 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
             class="text-[10px] text-amber-500 leading-snug">
             A time bucket needs a date or timestamp field in “Group by”.
           </p>
+          <!-- Several measures against the one grouping. Pie and donut are excluded: a pie divides
+               ONE quantity into parts, so "mean height and mean age" has no whole to be parts of. -->
+          <div v-if="!['pie', 'donut'].includes(selected.style?.chart || 'bar')">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="text-[10px] text-muted-foreground">Measures plotted</span>
+              <button v-if="seriesOf(selected).length < 4" @click="addSeries(selected)"
+                class="ml-auto text-[10px] text-primary hover:text-primary/80">+ Measure</button>
+            </div>
+            <div v-for="(m, i) in seriesOf(selected)" :key="i" class="flex items-center gap-1 mb-1">
+              <select :value="m.op"
+                @change="patchSeries(selected, i, { op: $event.target.value })"
+                class="min-w-0 flex-1 text-[11px] bg-background border border-border rounded px-1.5 py-1">
+                <option v-for="o in AGG_OPS" :key="o.id" :value="o.id">{{ o.name }}</option>
+              </select>
+              <select v-if="m.op !== 'count'" :value="m.field || ''"
+                @change="patchSeries(selected, i, { field: $event.target.value || null })"
+                class="min-w-0 flex-1 text-[11px] bg-background border border-border rounded px-1.5 py-1">
+                <option value="">— column —</option>
+                <option v-for="f in numericFields(selected)" :key="f.name" :value="f.name">{{ f.name }}</option>
+              </select>
+              <input :value="m.label || ''" placeholder="Label"
+                @change="patchSeries(selected, i, { label: $event.target.value || null })"
+                class="min-w-0 flex-1 text-[11px] bg-background border border-border rounded px-1.5 py-1" />
+              <button @click="removeSeries(selected, i)" title="Remove this measure"
+                class="text-[11px] text-red-400 hover:text-red-500 px-1 flex-shrink-0">&times;</button>
+            </div>
+            <p v-if="!seriesOf(selected).length" class="text-[10px] text-muted-foreground/70 mb-1">
+              One measure — the aggregation below. Add another to plot them side by side, with a
+              legend; colour then names the measure rather than the category.
+            </p>
+          </div>
+
           <div class="grid grid-cols-2 gap-2">
             <label class="block">
               <span class="text-[10px] text-muted-foreground block mb-0.5">Chart</span>
