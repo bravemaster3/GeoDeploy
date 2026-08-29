@@ -199,10 +199,19 @@ html[data-theme="dark"] .gd-ind-delta.down { color: #f87171; }
   position: absolute; inset: 0; z-index: 3; pointer-events: none;
 }
 .gd-overlays > * { pointer-events: auto; }
+/* The SLOT, which is what carries the anchor. The card inside keeps whatever position its own
+   archetype gives it — `.gd-w` is `position: relative` on a dashboard, at a specificity no single
+   class can beat, which is why the offsets have to live out here. */
 .gd-overlay {
   position: absolute; max-width: calc(100% - 24px); max-height: calc(100% - 24px);
   display: flex; flex-direction: column;
   box-shadow: 0 2px 12px rgba(0, 0, 0, .18);
+  border-radius: var(--radius, 6px);
+}
+/* The card fills the slot: to its content when the slot has no height, to the slot when it does. */
+.gd-overlay > .gd-w {
+  width: 100%; min-height: 0; max-height: 100%; flex: 1 1 auto;
+  box-shadow: none;
 }
 /* The eight compass points. Right-hand offsets clear MapLibre's own control cluster, which sits at
    10px in the corners it uses; bottom offsets clear the attribution strip. Centred anchors are
@@ -216,6 +225,12 @@ html[data-theme="dark"] .gd-ind-delta.down { color: #f87171; }
 .gd-overlay-bottom-left { bottom: 28px; left: 10px; }
 .gd-overlay-bottom-center { bottom: 28px; left: 50%; transform: translateX(-50%); }
 .gd-overlay-bottom-right { bottom: 28px; right: 52px; }
+/* The 52px exists ONLY to clear MapLibre's control cluster. A dashboard that turned the map controls
+   off has nothing there to clear, and the gap then reads as a widget that failed to reach the edge —
+   so it goes back to the same 10px the left side uses. */
+body[data-dash-mapctrl="0"] .gd-overlay-top-right,
+body[data-dash-mapctrl="0"] .gd-overlay-right-center,
+body[data-dash-mapctrl="0"] .gd-overlay-bottom-right { right: 10px; }
 /* A phone has no room for a floating panel beside a map: overlays become full-width strips at the
    top, stacked in document order, rather than four cards piled on each other in the corners. */
 @media (max-width: 640px) {

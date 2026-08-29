@@ -2375,14 +2375,23 @@ window.GD_DASHBOARD = (function () {
         return;
       }
       if (anchor && mapWrap && !inst.isMap) {
-        inst.el.classList.add('gd-overlay', 'gd-overlay-' + anchor);
+        // The card goes inside a positioned SLOT rather than being positioned itself. The card is a
+        // `.gd-w`, and `body[data-archetype="dashboard"] .gd-w` sets `position: relative` at a
+        // higher specificity than any single class could override — so anchoring the card directly
+        // left it in flow and the offsets merely nudged it from its static position: `top-left`
+        // looked correct by accident while `bottom` moved it UP and `right` moved it LEFT.
+        //
+        // A slot also makes this work outside the dashboard archetype, where `.gd-w` carries no
+        // styling at all — which it now has to, since the runtime is gated on the panel flag.
+        const slot = el('div', 'gd-overlay gd-overlay-' + anchor);
         const ow = (w.layout && w.layout.overlayW) || 260;
-        inst.el.style.width = ow + 'px';
+        slot.style.width = ow + 'px';
         // 0 / absent = as tall as its content, which is what a search box or a small readout wants.
         // A number fixes the box and lets the widget's own body scroll inside it.
         const oh = w.layout && w.layout.overlayH;
-        if (oh) inst.el.style.height = oh + 'px';
-        overlayHost(mapWrap).appendChild(inst.el);
+        if (oh) slot.style.height = oh + 'px';
+        slot.appendChild(inst.el);
+        overlayHost(mapWrap).appendChild(slot);
         nodeById[w.id] = inst.el;
         store.subscribe(w.id, inst.refresh);
         overlays.push(inst);
