@@ -160,10 +160,22 @@ window.GD_DASHBOARD = (function () {
     if (bucket === 'hour') return String(d.getUTCHours()).padStart(2, '0') + ':00 ' + day + ' ' + MON[m];
     return day + ' ' + MON[m];
   }
+  //: A CELL is not a measurement. `fmtNumber`'s 'auto' compacts anything past 100 000, which is
+  //: right for a 40px indicator that would otherwise overflow its card and WRONG for a value in a
+  //: row: a building id of 1011771 became "1M", every building in the list became "1M", and the
+  //: column stopped telling one feature from another.
+  //:
+  //: So an integer is printed RAW here — no compaction and no thousands separators. A table cell
+  //: cannot know whether it holds a quantity or an identifier, and the two want opposite treatment:
+  //: getting an identifier wrong destroys it, while an ungrouped count is merely less pretty. Years
+  //: (2026, not "2,026") and postcodes come out right for the same reason. Fractions still get
+  //: bounded decimals, because a raw float prints seventeen digits of noise.
   function fmtCell(value) {
     if (value == null) return '';
-    if (typeof value === 'number') return fmtNumber(value, { format: 'auto', decimals: 2 });
-    return String(value);
+    if (typeof value !== 'number') return String(value);
+    if (!isFinite(value)) return '—';
+    if (Number.isInteger(value)) return String(value);
+    return String(Number(value.toFixed(4)));
   }
   function truncate(text, n) {
     const s = String(text == null ? '' : text);
@@ -367,7 +379,13 @@ window.GD_DASHBOARD = (function () {
           out.push({ key: 'a:' + sid, label: state.attr[sid].label || 'Filter', source: sid });
         }
         if (state.geom && !state.geom.soft) {
-          out.push({ key: 'g', label: state.geom.label || 'Selected area', geom: true });
+          // Named as an AREA. Clicking a feature publishes on both channels by design — the
+          // geometry that drives raster statistics AND the attribute that narrows the charts — so
+          // without the prefix the bar shows two chips with the same words and looks like it
+          // double-counted one click. They are two different filters and now say so.
+          const glabel = state.geom.label;
+          out.push({ key: 'g', geom: true,
+                     label: glabel ? 'Area: ' + glabel : 'Selected area' });
         }
         return out;
       },
@@ -2189,7 +2207,14 @@ window.GD_DASHBOARD = (function () {
       const chips = store.chips();
       if (!chips.length) { bar.style.display = 'none'; return; }
       bar.style.display = '';
-      bar.appendChild(el('span', null, 'Filtered by'));
+      bar.appendChild(el('span', 'gd-fbar-label', 'Filtered by'));
+      // The chips live in their OWN strip, which scrolls sideways when there are more than fit.
+      // Letting them wrap grew the bar to three lines while it kept its pill radius, which turned it
+      // into a lozenge covering a third of the map — and pushed Reset onto a line of its own. One
+      // line that scrolls keeps the bar the size it looks like it should be however many filters are
+      // active, and keeps Reset where the hand expects it.
+      const strip = el('div', 'gd-fchips');
+      bar.appendChild(strip);
       chips.forEach(function (chip) {
         const node = el('span', 'gd-fchip');
         node.appendChild(el('span', null, chip.label));
@@ -2202,7 +2227,7 @@ window.GD_DASHBOARD = (function () {
           render();
         });
         node.appendChild(x);
-        bar.appendChild(node);
+        strip.appendChild(node);
       });
       const reset = el('button', 'gd-reset', 'Reset dashboard');
       reset.type = 'button';

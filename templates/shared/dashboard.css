@@ -358,14 +358,27 @@ html[data-theme="dark"] .gd-ind-delta.down { color: #f87171; }
 #gd-dash-bar {
   position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px; z-index: 60;
   max-width: min(92vw, 900px);
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-  padding: 6px 10px; border: 1px solid var(--accent); border-radius: 999px;
+  /* ONE line, never wrapped. Wrapping kept the 999px pill radius and turned the bar into a lozenge
+     three lines tall covering a third of the map, with Reset pushed onto its own row. The chips
+     scroll sideways inside instead, so the bar stays the height it looks like it should be however
+     many filters are active. */
+  display: flex; align-items: center; gap: 6px; flex-wrap: nowrap;
+  padding: 6px 8px 6px 12px; border: 1px solid var(--accent); border-radius: 999px;
   background: var(--bg); box-shadow: var(--shadow-lg); font-size: 11px; color: var(--text);
+}
+#gd-dash-bar .gd-fbar-label { flex-shrink: 0; color: var(--text-muted); }
+#gd-dash-bar .gd-fchips {
+  display: flex; align-items: center; gap: 6px; flex-wrap: nowrap;
+  overflow-x: auto; overflow-y: hidden; min-width: 0; flex: 1 1 auto;
+  scrollbar-width: thin;
+  /* The scrollbar would sit under the pill's rounded edge and clip; a couple of pixels of room
+     keeps it visible without adding a visible track to a bar that is mostly one line. */
+  padding-bottom: 1px;
 }
 #gd-dash-bar .gd-fchip {
   display: inline-flex; align-items: center; gap: 5px; background: var(--bg);
   border: 1px solid var(--border); border-radius: 999px; padding: 1px 4px 1px 8px;
-  max-width: 320px;
+  max-width: 220px; flex-shrink: 0;
 }
 #gd-dash-bar .gd-fchip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #gd-dash-bar .gd-fchip button {
@@ -374,8 +387,10 @@ html[data-theme="dark"] .gd-ind-delta.down { color: #f87171; }
 }
 #gd-dash-bar .gd-fchip button:hover { color: var(--text); }
 #gd-dash-bar .gd-reset {
-  margin-left: auto; border: 1px solid var(--accent); background: var(--accent); color: #fff;
-  border-radius: 6px; padding: 2px 10px; font-size: 11px; font-weight: 600; cursor: pointer;
+  /* No `margin-left: auto`: the chip strip now takes the free space, and auto-margin against a
+     scrolling sibling pushed the button out of reach once the strip overflowed. */
+  flex-shrink: 0; border: 1px solid var(--accent); background: var(--accent); color: #fff;
+  border-radius: 999px; padding: 3px 12px; font-size: 11px; font-weight: 600; cursor: pointer;
 }
 
 /* ── responsive ───────────────────────────────────────────────────────────
@@ -395,9 +410,13 @@ html[data-theme="dark"] .gd-ind-delta.down { color: #f87171; }
   body[data-archetype="dashboard"] #layout { padding-bottom: 66px; }
   #gd-dash-bar {
     left: 8px; right: 8px; bottom: 8px; transform: none; max-width: none;
-    border-radius: 12px; justify-content: flex-start;
+    border-radius: 14px; justify-content: flex-start; padding: 5px 6px 5px 10px;
   }
-  #gd-dash-bar .gd-fchip { max-width: 100%; }
+  /* On a phone the words cost more than they explain — the chips each name their own filter, and
+     the × on them says what the bar is for. */
+  #gd-dash-bar .gd-fbar-label { display: none; }
+  #gd-dash-bar .gd-fchip { max-width: 150px; }
+  #gd-dash-bar .gd-reset { padding: 3px 9px; }
   #gd-dash-bar .gd-reset { margin-left: auto; }
   /* Bigger tap targets: 27px is a comfortable mouse target and a poor thumb one, and these buttons
      sit over a map that will happily interpret a near-miss as a pan. */
