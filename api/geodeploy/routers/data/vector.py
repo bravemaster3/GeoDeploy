@@ -363,7 +363,7 @@ async def multipart_initiate(body: MultipartInitiate, user: User = Depends(requi
     """Begin a chunked upload: validate, mint a key under the user's prefix, open the S3 multipart
     upload, and return a presigned PUT URL for every part. The key convention matches the single-PUT
     flows so /geoparquet/complete and /large/complete accept it unchanged."""
-    demo_upload_cap(body.file_size)
+    demo_upload_cap(body.file_size, user)
     import math
     from ...services import minio as minio_svc
     ext = os.path.splitext(body.filename or "")[1].lower()

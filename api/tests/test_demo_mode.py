@@ -131,6 +131,29 @@ async def test_direct_upload_over_the_cap_is_refused(demo_on):
     assert "install yourself" in exc.value.detail
 
 
+async def test_the_owner_is_exempt_from_the_demo_cap(demo_on):
+    """The cap stops VISITORS using a public demo as free storage. The person who runs the instance
+    is not one of them, and making them switch demo mode off to load a test layer means taking the
+    demo down in order to work on it."""
+    import types
+    from geodeploy.routers.common import demo_upload_cap
+    demo_upload_cap(900 * 1024 * 1024, types.SimpleNamespace(role="owner", id=1))
+
+
+async def test_only_the_owner_is_exempt(demo_on):
+    """ADMIN is not exempt, and this is the whole point of the distinction: a demo may hand out admin
+    to show the role off, and that must not hand out the disk with it. No user at all fails CLOSED."""
+    import types
+    from fastapi import HTTPException
+    from geodeploy.routers.common import demo_upload_cap
+    for role in ("admin", "editor", "viewer"):
+        with pytest.raises(HTTPException) as exc:
+            demo_upload_cap(900 * 1024 * 1024, types.SimpleNamespace(role=role, id=2))
+        assert exc.value.status_code == 413, role
+    with pytest.raises(HTTPException):
+        demo_upload_cap(900 * 1024 * 1024, None)        # unauthenticated → capped
+
+
 async def test_request_body_over_the_cap_is_refused(client, demo_on):
     r = await client.post("/api/auth/demo/join", json={"name": "Ada"},
                           headers={"content-length": str(600 * 1024 * 1024)})

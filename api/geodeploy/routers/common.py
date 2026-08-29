@@ -136,15 +136,30 @@ async def record_audit(db: AsyncSession, actor, action: str, resource_type: str 
 _GOVERNANCE_ROLES = ("admin", "owner")
 
 
-def demo_upload_cap(file_size: int | None) -> None:
+def demo_upload_cap(file_size: int | None, user: User | None = None) -> None:
     """DEMO ONLY: cap a DIRECT-TO-STORAGE upload at the multipart initiate.
 
     The Content-Length middleware in main.py cannot see these — the bytes go browser to S3 and never
     pass through the API — so the size declared at initiate is the one chance to refuse. No-op unless
     demo mode is on, so a normal install keeps its full limits.
+
+    THE OWNER IS EXEMPT. The cap exists so a public demo cannot be used as free storage by its
+    visitors; the person who runs the instance is not one of those, and making them switch demo mode
+    off to load a test layer means taking the demo down to work on it. Only `owner` — not `admin` —
+    because a demo can hand out admin to show the role off, and that must not hand out the disk too.
+
+    This is the ONE place the exemption lives, and it is deliberately not mirrored into the ASGI
+    middleware: that runs before authentication, so honouring a role there would mean re-decoding the
+    token, re-checking `token_version` (revocation) and hitting the database, all in a layer that
+    exists to reject on Content-Length alone. A second, weaker copy of authentication is a worse
+    thing to own than a cap the owner routes around. It costs nothing in practice — the client sends
+    anything at or above 48 MB direct-to-storage (`LARGE_UPLOAD_THRESHOLD`), so every upload big
+    enough to meet a 500 MB cap arrives HERE, where the caller is already authenticated.
     """
     settings = get_settings()
     if not settings.geodeploy_demo_mode or not file_size:
+        return
+    if user is not None and getattr(user, "role", None) == "owner":
         return
     limit = settings.geodeploy_demo_max_upload_mb * 1024 * 1024
     if file_size > limit:

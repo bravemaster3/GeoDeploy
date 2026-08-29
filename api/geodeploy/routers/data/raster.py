@@ -245,7 +245,7 @@ def _raster_key(user_id: int, filename: str) -> str:
 async def raster_multipart_initiate(body: MultipartInitiate,
                                     user: User = Depends(require_scope("data:write"))):
     """Open a chunked upload for a raster and presign every part."""
-    demo_upload_cap(body.file_size)
+    demo_upload_cap(body.file_size, user)
     import math
 
     from ...services import minio as minio_svc
