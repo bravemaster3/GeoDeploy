@@ -54,6 +54,14 @@ resizable.
     Horizontal bars print their value and its share by default; vertical ones do not, because the
     column is usually narrower than the number.
 
+    Category labels under a vertical bar chart tilt once there are more than six, and thin out only
+    as far as they must to stay legible. If too many are still dropped for your taste, a
+    **horizontal** bar chart gives every category its own full-width label.
+
+    A pie or donut has a **plot size**, separate from the widget's size. The legend sits under the
+    circle, and growing the widget grows both together — so when a long legend ends up in a
+    scrollbar, shrink the plot rather than enlarging the card.
+
     **Several measures at once** — a chart can plot more than one aggregate against the same
     grouping ("mean height *and* mean age per district"). Lines are drawn per measure with a
     legend; bars become clustered groups. Colour then identifies the *measure*, not the category,
@@ -175,9 +183,14 @@ With it on, a filter arriving through a relation is resolved to the **keys it ma
 values, which is something a browser-side expression *can* evaluate.
 
 !!! warning "It is bounded, and it tells you when it gives up"
-    That list is capped at **5 000 keys**. Filtering entrances to one common category can match
-    hundreds of thousands of buildings, and moving half a million values into the browser to draw a
-    map is a data transfer wearing a predicate's clothes.
+    The list is capped, at **5 000 keys** by default. Filtering entrances to one common category can
+    match hundreds of thousands of buildings, and moving half a million values into the browser to
+    draw a map is a data transfer wearing a predicate's clothes.
+
+    **Give up past** sets the bound per map — 1 000, 5 000, 10 000 or 20 000. Roughly 40 KB travels
+    per 1 000 keys, on every filter change, so raising it reaches broader selections at the cost of
+    a heavier round trip. It is a short list rather than a free number because too high a value
+    fails as a sluggish map rather than as an error, which gives you nothing to correct.
 
     Past the cap the map is left **unfiltered** and says so, in a line across the bottom:
 

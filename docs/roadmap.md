@@ -236,13 +236,12 @@ desktop GIS people already have open.</p>
 
 </div>
 
-<div class="gd-rel now tail" markdown>
+<div class="gd-rel done" markdown>
 ### v1.5 — dashboards
-<span class="gd-when">Finishing</span>
+<span class="gd-when">Shipped · 29 Aug 2026</span>
 
 <p class="gd-goal">A fourth experience, where the map is one widget among charts, numbers and
-filters — for the questions a reader asks of the DATA rather than of the geography. Built and
-running; being used before it is called done.</p>
+filters — for the questions a reader asks of the DATA rather than of the geography.</p>
 
 - [x] **The archetype itself** — `dashboard` alongside web map / story map / catalog: a 12-column
       grid of widgets, with the map placed into a cell rather than the page placed around it
@@ -264,14 +263,12 @@ running; being used before it is called done.</p>
 - [x] **Six starting templates**, each a working layout rather than a blank grid
 - [x] **Published like any other portal** — one URL, the four access tiers, embeddable, and it
       stacks on a phone
-- [ ] **Linked or detached, chosen per dashboard.** A *linked* dashboard reads its layers live, so
-      the numbers move when the data does — that is the interesting one, and what is built today. A
-      *detached* dashboard is built on saved queries and keeps reporting what it reported, which is
-      what a published figure sometimes has to do. The distinction has to be stated in the editor in
-      those terms, because "layer or saved query" is a storage detail and "does this update itself?"
-      is the actual question being asked
-- [ ] **Benchmarks on real data** before this is called done — the spatial filter path is the one
-      that decides whether a dashboard over ten million features is pleasant or merely possible
+- [x] **The map narrows every layer it draws**, each by its own filters — and a linked filter can
+      narrow it too, behind a per-map opt-in with a chosen key limit and an on-map notice when it
+      passes that limit rather than a map that looks narrowed and is not
+
+Two items scoped here did **not** ship in v1.5 and move to the next release rather than being
+counted: *linked or detached dashboards*, and the *benchmarks on real data*. See **Next up**.
 
 </div>
 
@@ -292,6 +289,25 @@ is the rest of the round trip, not yet scheduled.</p>
 - [ ] **Push from GeoLibre** — a "Publish to GeoDeploy" plugin and a `.geolibre.json` importer
 - [ ] Write-back: expose a layer as editable GeoJSON and re-ingest the edit
 - [ ] Catalog **search**, so a client can discover a dataset rather than fetch a known URL
+
+</div>
+
+<div class="gd-rel" markdown>
+### Finishing what v1.5 started
+<span class="gd-when">Planned · next</span>
+
+<p class="gd-goal">Two items scoped into the dashboard release that it shipped without. Named here
+rather than ticked there, because a dashboard nobody has measured on ten million features is not the
+same as one that has been.</p>
+
+- [ ] **Linked or detached, chosen per dashboard.** A *linked* dashboard reads its layers live, so
+      the numbers move when the data does — that is what is built today. A *detached* dashboard is
+      built on saved queries and keeps reporting what it reported, which is what a published figure
+      sometimes has to do. The distinction has to be stated in the editor in those terms, because
+      "layer or saved query" is a storage detail and "does this update itself?" is the actual
+      question being asked
+- [ ] **Benchmarks on real data** — the spatial filter path is the one that decides whether a
+      dashboard over ten million features is pleasant or merely possible
 
 </div>
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 # The CLI's version tracks the GeoDeploy release it ships with. A PyPI version can never be
 # re-uploaded, so a number is only spent once the release it names exists: 1.3.0b1 proved the
 # packaging against the real index, and this is the release it was rehearsing for.
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 from .client import Client  # noqa: E402  (after __version__ — the user agent reads it)
 from .errors import (  # noqa: E402
