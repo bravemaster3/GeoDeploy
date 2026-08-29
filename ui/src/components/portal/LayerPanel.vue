@@ -27,12 +27,16 @@
       <div v-if="showStyle || standalone" ref="popEl" :style="standalone ? null : popStyle"
         :class="standalone
           ? 'text-foreground/85'
-          : 'fixed z-[60] bg-card border border-border rounded-lg shadow-xl text-foreground/85'">
-        <div v-if="!standalone" class="flex items-center justify-between gap-2 px-3 py-2 border-b border-border/60 text-xs font-semibold">
+          : 'fixed z-[60] flex flex-col bg-card border border-border rounded-lg shadow-xl text-foreground/85'">
+        <div v-if="!standalone" class="flex items-center justify-between gap-2 px-3 py-2 border-b border-border/60 text-xs font-semibold flex-shrink-0">
           <span class="truncate">{{ layerName }}</span>
           <button @click="showStyle = false" class="text-muted-foreground/70 hover:text-foreground text-lg leading-none flex-shrink-0">&times;</button>
         </div>
-        <div class="space-y-3" :class="standalone ? '' : 'px-3 py-2.5 max-h-[70vh] overflow-auto'">
+        <!-- `min-h-0` is what makes the flex child actually scroll: without it a flex item refuses
+             to shrink below its content and the popover grows past the height positionPop gave it,
+             which is how the bottom of this panel ended up off-screen. The max height now lives on
+             the OUTER box (set from the space actually available), not on this one as a fixed 70vh. -->
+        <div class="space-y-3" :class="standalone ? '' : 'px-3 py-2.5 overflow-auto flex-1 min-h-0'">
 
           <!-- Opacity (all layers) -->
           <div>
@@ -569,15 +573,23 @@
             </p>
           </template>
 
-          <!-- Default style actions (not applicable to external sources). Hidden when standalone:
-               in My Data this IS the default style, so "use default" and "save as default" would be
-               a control acting on itself — the host's own Save button writes it. -->
-          <div v-if="config.layer_type !== 'external' && !standalone" class="flex items-center gap-2 pt-1 border-t border-border/60">
-            <button v-if="layer?.default_style" @click="useDefault" class="text-xs text-primary hover:text-primary/80 font-medium"
-              title="Apply saved default style to this portal">↩ Use default</button>
-            <button @click="saveDefault" :disabled="savingDefault" class="text-xs text-muted-foreground hover:text-foreground ml-auto"
-              title="Save current style as the default for this layer">{{ savingDefault ? 'Saving…' : '⭐ Save as default' }}</button>
-          </div>
+        </div>
+
+        <!-- Default style actions, PINNED as a footer rather than left at the end of the scrolling
+             body. They were the last thing in a panel that can run to several screens, so "save as
+             default" was only reachable by scrolling to the very bottom of everything — and when the
+             popover overflowed the window it could not be reached at all. A control that writes
+             something has to stay in view.
+
+             Not applicable to external sources, and hidden when standalone: in My Data this IS the
+             default style, so "use default" and "save as default" would be a control acting on
+             itself — the host's own Save button writes it. -->
+        <div v-if="config.layer_type !== 'external' && !standalone"
+          class="flex items-center gap-2 px-3 py-2 border-t border-border/60 flex-shrink-0 bg-card rounded-b-lg">
+          <button v-if="layer?.default_style" @click="useDefault" class="text-xs text-primary hover:text-primary/80 font-medium"
+            title="Apply saved default style to this portal">↩ Use default</button>
+          <button @click="saveDefault" :disabled="savingDefault" class="text-xs text-muted-foreground hover:text-foreground ml-auto"
+            title="Save current style as the default for this layer">{{ savingDefault ? 'Saving…' : '⭐ Save as default' }}</button>
         </div>
       </div>
     </Teleport>
@@ -625,6 +637,14 @@ function toggleStyle() {
   showStyle.value = !showStyle.value
   if (showStyle.value) nextTick(positionPop)
 }
+//: Breathing room between the popover and every window edge.
+const POP_MARGIN = 8
+//: The height the popover tries to keep. When the swatch sits low on screen it is lifted so it still
+//: gets this much, instead of being pinned to the anchor and running off the bottom.
+const POP_PREFERRED_H = 420
+//: Never lift it so far that it covers the whole window on a short one.
+const POP_MIN_H = 220
+
 function positionPop() {
   const el = swatchBtn.value
   if (!el) return
@@ -632,9 +652,27 @@ function positionPop() {
   // Widened from 230: the panel now carries a colour-mode picker, a field, class count/method/ramp,
   // an editable legend, marker + outline controls and a 3D block. At 230 the labelled rows wrapped.
   const w = 288
-  let left = r.right + 8
-  if (left + w > window.innerWidth) left = Math.max(8, r.left - w - 8)
-  popStyle.value = { left: left + 'px', top: Math.min(r.top, window.innerHeight - 380) + 'px', width: w + 'px' }
+  let left = r.right + POP_MARGIN
+  if (left + w > window.innerWidth) left = Math.max(POP_MARGIN, r.left - w - POP_MARGIN)
+
+  // HEIGHT IS DERIVED FROM THE SPACE THAT EXISTS, not assumed. The old form was
+  // `top: min(r.top, innerHeight - 380)`, which hard-coded 380px as the popover's height while the
+  // body was `max-h-[70vh]` plus a header — about 750px on a 1024px window. So the box was placed
+  // as though it were half its real size and the bottom ran off the screen, taking "Save as
+  // default" with it. Now the top is chosen first and maxHeight is whatever is left below it, so
+  // the popover fits by construction at any window size and any content length.
+  const room = window.innerHeight - POP_MARGIN
+  let top = r.top
+  if (room - top < POP_PREFERRED_H) {
+    top = room - POP_PREFERRED_H          // lift it to keep a usable panel visible
+  }
+  top = Math.max(POP_MARGIN, Math.min(top, room - POP_MIN_H))
+  popStyle.value = {
+    left: left + 'px',
+    top: top + 'px',
+    width: w + 'px',
+    maxHeight: (room - top) + 'px',
+  }
 }
 function onDocClick(e) {
   if (!showStyle.value) return
@@ -642,13 +680,21 @@ function onDocClick(e) {
     showStyle.value = false
   }
 }
+// Re-fit on resize. The popover's height is derived from the window's, so a window that changes
+// size while it is open would otherwise keep a maxHeight computed for the old one — which is the
+// same overflow this fixed, arrived at a different way.
+function onWinResize() { if (showStyle.value) positionPop() }
 onMounted(async () => {
   document.addEventListener('mousedown', onDocClick)
+  window.addEventListener('resize', onWinResize)
   if (props.config.layer_type === 'raster') {
     try { const { data } = await listColormaps(); colormaps.value = data } catch {}
   }
 })
-onBeforeUnmount(() => document.removeEventListener('mousedown', onDocClick))
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', onDocClick)
+  window.removeEventListener('resize', onWinResize)
+})
 
 const layer = computed(() => {
   if (props.config.layer_type === 'external') return dataStore.externalSources.find(s => s.id === props.config.layer_id) || null
