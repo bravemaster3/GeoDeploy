@@ -1,0 +1,24 @@
+/* Directory — a register you look things up in. Paper-white cards on a cool grey ground, generous
+   radii so a list of cards reads as a list rather than a table with lines removed, and a single
+   indigo accent: the colour carries the SELECTED entry across the card list, the map and the
+   details panel, which is the one relationship this board exists to show. */
+:root {
+  --bg: #ffffff;
+  --surface: #f4f5f8;
+  --border: #dcdfe6;
+  --text: #171a21;
+  --text-muted: #5e6675;
+  --accent: #4338ca;
+  --accent-light: #ecebfa;
+  --radius: 6px;
+}
+body { font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; }
+
+/* The card list is the centre of this layout, so it gets the room: a taller line-height than the
+   dense default, because a directory is read one entry at a time rather than scanned as a grid. */
+.gd-card-item { padding: 9px 11px; }
+.gd-card-title { font-size: 12.5px; }
+
+/* The search box floats on the map, so it needs to read against imagery as well as against paper —
+   an opaque ground rather than the card's usual translucent one. */
+.gd-overlay .gd-search-input { background: #ffffff; }

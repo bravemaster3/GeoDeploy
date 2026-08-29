@@ -15,6 +15,9 @@
 
   <!-- Shared GeoDeploy portal runtime (same for every template) -->
   <style>{{PORTAL_CSS}}</style>
+  <!-- V-16 dashboard archetype: the widget grid + widget chrome. AFTER portal.css (it builds on
+       portal.css's variables and layout) and BEFORE theme.css, so a template theme still wins. -->
+  <style>{{DASHBOARD_CSS}}</style>
   <!-- Template theme: override CSS variables / fonts here -->
   <style>{{THEME_CSS}}</style>
 </head>
@@ -63,6 +66,11 @@
        its own element and MapLibre is never re-parented (a moved canvas container loses its size).
        Filled by portal.js (setupCatalog) only when the resolved archetype is 'catalog'. -->
   <div id="catalog-panel" style="display:none"></div>
+  <!-- V-16 dashboard archetype: the widget cards. `display:contents` when active (see
+       dashboard.css), so the cards become direct grid items of #layout and #map-wrap can take the
+       map widget's cell by grid-area WITHOUT the MapLibre container ever being re-parented — the
+       same rule the catalog follows, for the same reason (a moved canvas loses its size). -->
+  <div id="dashboard-panel" style="display:none"></div>
   <aside id="sidebar">
     <div id="sidebar-inner">
       <p class="sidebar-section-title">Layers</p>
@@ -99,6 +107,10 @@ window.GEODEPLOY = {
   ownerId: {{OWNER_ID}}
 };
 </script>
+<!-- V-16 dashboard runtime. BEFORE portal.js, because portal.js calls window.GD_DASHBOARD on the
+     map's load event and a script defined after it would not exist yet. Inert on every other
+     archetype: it only defines a namespace until portal.js invokes it. -->
+<script>{{DASHBOARD_JS}}</script>
 <script>{{PORTAL_JS}}</script>
 </body>
 </html>

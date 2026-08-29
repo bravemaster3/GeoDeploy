@@ -67,6 +67,10 @@ nav:
   - Getting started: getting-started.md
   - Guides:
       - Portals and experiences: portals.md
+      - Web maps: web-maps.md
+      - Story maps: story-maps.md
+      - Catalogs: catalogs.md
+      - Dashboards: dashboards.md
       - Users, roles and sharing: users-and-sharing.md
       - Uploading data: uploading.md
   - Sharing your data:

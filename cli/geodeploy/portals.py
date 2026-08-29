@@ -22,7 +22,10 @@ from .config import split_portal_url
 from .errors import NotFoundError, ValidationError
 
 ACCESS_TYPES = ("public", "password", "organization", "owner")
-ARCHETYPES = ("webmap", "storymap", "catalog")
+#: Mirrors `_LAYOUT_ARCHETYPES` in `api/geodeploy/services/portal_generator.py`. The CLI validates
+#: LOCALLY — an unknown value never reaches the server — so an archetype missing here is refused for
+#: the client's own reasons however new the instance is. Add the server's before shipping.
+ARCHETYPES = ("webmap", "storymap", "catalog", "dashboard")
 
 
 class Portals(object):

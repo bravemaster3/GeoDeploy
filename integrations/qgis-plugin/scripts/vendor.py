@@ -54,9 +54,25 @@ def main() -> int:
         print("vendored client matches cli/geodeploy")
         return 0
 
-    if DST.exists():
-        shutil.rmtree(DST)
-    shutil.copytree(SRC, DST, ignore=IGNORE)
+    # Copy OVER the existing tree and prune what no longer belongs, rather than removing the
+    # directory and recreating it.
+    #
+    # `rmtree` + `copytree` is the obvious way to write this and it is destructive on Windows: the
+    # per-file deletes succeed, then `os.rmdir` of the now-empty folder raises PermissionError when
+    # anything holds a handle on it — OneDrive does, and this repository lives under OneDrive. The
+    # copy never runs, so the failure mode is not "vendored copy unchanged" but "vendored copy
+    # DELETED", which `--check` then reports as `<vendor copy missing>`. Never touching the
+    # directory itself sidesteps the lock entirely.
+    DST.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(SRC, DST, ignore=IGNORE, dirs_exist_ok=True)
+    # Files the client no longer has. Without this a module deleted from `cli/` would live on in the
+    # zip, which is exactly the drift `--check` exists to catch.
+    for stale in sorted(DST.rglob("*.py"), reverse=True):
+        rel = stale.relative_to(DST)
+        if not (SRC / rel).exists():
+            stale.unlink()
+    for pycache in sorted(DST.rglob("__pycache__"), reverse=True):
+        shutil.rmtree(pycache, ignore_errors=True)
     print(f"copied {SRC} -> {DST}")
     return 0
 

@@ -53,9 +53,12 @@ couple of minutes later. No terminal, no Docker knowledge, no database configura
 
 - **Bring data in.** Shapefile, GeoPackage, GeoJSON, CSV, GeoParquet, GeoTIFF. Large files upload
   straight to object storage, so multi-gigabyte datasets are not a special case.
-- **Publish portals.** Choose an experience — a web map, a scrollytelling story, or a searchable
-  catalog — arrange the layers, set who can see it, publish. Each gets its own URL, and any portal
-  embeds in another site with one `<iframe>`.
+- **Publish portals.** Choose an experience — a web map, a scrollytelling story, a searchable
+  catalog, or a **dashboard** — arrange the layers, set who can see it, publish. Each gets its own
+  URL, and any portal embeds in another site with one `<iframe>`.
+- **Ask questions of the data.** A dashboard puts charts, numbers, lists and filters around the map
+  and cross-filters them: click a bar, draw a box, or type in a search box, and every other widget
+  re-answers. Aggregates are computed on the server, in each layer's own storage.
 - **Share data properly.** Layers you mark public are readable by standard clients over open
   standards, so QGIS, Python and R consume them directly with no export step.
 - **Work without the browser.** `pip install geodeploy` gives you a command-line client covering the
@@ -107,7 +110,11 @@ Full documentation: **<https://docs-geodeploy.kndev.org/>**
 |---|---|
 | [Getting started](https://docs-geodeploy.kndev.org/getting-started/) | Install, set up, publish your first portal |
 | [Uploading data](https://docs-geodeploy.kndev.org/uploading/) | Formats, the two vector backends, large files |
-| [Portals and experiences](https://docs-geodeploy.kndev.org/portals/) | Web map, story map, catalog; layout and access |
+| [Portals and experiences](https://docs-geodeploy.kndev.org/portals/) | Web map, story map, catalog, dashboard; templates, layout and access |
+| [Web maps](https://docs-geodeploy.kndev.org/web-maps/) | The layer list, layout choices, the tools visitors get |
+| [Story maps](https://docs-geodeploy.kndev.org/story-maps/) | Sections, capturing a camera, per-section layers |
+| [Catalogs](https://docs-geodeploy.kndev.org/catalogs/) | Facets, what a dataset card shows, portal or instance-wide |
+| [Dashboards](https://docs-geodeploy.kndev.org/dashboards/) | Widgets, cross-filtering, linked layers, placement |
 | [Users, roles and sharing](https://docs-geodeploy.kndev.org/users-and-sharing/) | Roles, visibility, tokens, audit log |
 | [Access from other tools](https://docs-geodeploy.kndev.org/data-access/) | QGIS, DuckDB, Python — which standard for which job |
 | [The QGIS plugin](https://docs-geodeploy.kndev.org/qgis/) | Browse an instance, restyle its layers and publish back, from inside QGIS |

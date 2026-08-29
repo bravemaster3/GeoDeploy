@@ -63,6 +63,9 @@ def _load_templates() -> list[TemplateOut]:
                     archetypes=(meta.get("archetypes")
                                 or ([meta["archetype"]] if meta.get("archetype") else ["webmap"])),
                     layout=meta.get("layout"),          # V-11 optional region/panel overrides
+                    # V-16 dashboard preset: the starting widget set + wiring (unbound data
+                    # sources — the builder binds them to this portal's layers).
+                    dashboard=meta.get("dashboard"),
                 ))
             except Exception:
                 continue

@@ -16,8 +16,8 @@ from ..timeutil import naive_utcnow
 from ..models import ExternalSource, Portal, RasterLayer, User, VectorLayer
 from ..schemas import PortalCreate, PortalOut, PortalUpdate
 from ..services import titiler as titiler_svc
-from ..services.portal_generator import (build_portal_bundle, generate_style,
-                                         read_deck_core_bbox, resolve_layout)
+from ..services.portal_generator import (build_dashboard_sources, build_portal_bundle,
+                                         generate_style, read_deck_core_bbox, resolve_layout)
 from .common import creator_names, record_audit
 from .data.vector import invalidate_public_layers
 
@@ -105,7 +105,8 @@ async def _with_public_catalog_layers(db: AsyncSession, layer_configs: list[dict
 
 async def _assemble_bundle(db: AsyncSession, *, slug: str, title: str, layer_configs: list[dict],
                            layer_groups, layout_config, story, theme, initial_view, template_id: str,
-                           basemap, description, access_type: str, password_sha256, owner_id) -> None:
+                           basemap, description, access_type: str, password_sha256, owner_id,
+                           dashboard=None) -> None:
     """Resolve the layers referenced by `layer_configs`, build the MapLibre style, and write the static
     bundle to data/portals/{slug}/. Shared by publish (persisted values) and preview (unsaved values)."""
     # V-14: a catalog portal scoped to "all public" LISTS every public layer, so those layers must
@@ -122,6 +123,21 @@ async def _assemble_bundle(db: AsyncSession, *, slug: str, title: str, layer_con
     vector_ids = [cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "vector"]
     raster_ids = [cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "raster"]
     external_ids = [cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "external"]
+
+    # V-16: a dashboard widget may bind a layer the MAP never draws — an indicator over a table of
+    # readings, or a Raster Stats widget on a DEM that is only ever measured, never displayed. Those
+    # layers are still fetched here so `build_dashboard_sources` can bake their field lists; they do
+    # NOT join `layer_configs`, so `generate_style` still draws exactly what the author placed.
+    #
+    # Gated on the ARCHETYPE, not merely on the column being populated: a portal switched from
+    # dashboard back to web map keeps its saved widgets (so switching back does not lose them), and
+    # fetching their layers for a page that will not render them is work for nobody.
+    from ..services.dashboard import dashboard_layer_refs, resolve_dashboard
+    _dash = (resolve_dashboard(dashboard)
+             if resolve_layout(layout_config).get("panels", {}).get("dashboard") else None)
+    _dash_vec, _dash_ras = dashboard_layer_refs(_dash)
+    vector_ids = list({*vector_ids, *_dash_vec})
+    raster_ids = list({*raster_ids, *_dash_ras})
 
     vector_layers = []
     if vector_ids:
@@ -147,7 +163,14 @@ async def _assemble_bundle(db: AsyncSession, *, slug: str, title: str, layer_con
             if bbox:
                 deck_core_bounds[l.id] = bbox
 
-    user_data = generate_style(layer_configs, vector_layers, raster_layers, external_sources,
+    # The style is built from the layers the author PLACED — a dashboard-only layer is data, not a
+    # map layer, and adding it here would put an unasked-for entry in the layer list and the legend.
+    _placed_vec = {cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "vector"}
+    _placed_ras = {cfg["layer_id"] for cfg in layer_configs if cfg.get("layer_type") == "raster"}
+    user_data = generate_style(layer_configs,
+                               [l for l in vector_layers if l.id in _placed_vec],
+                               [l for l in raster_layers if l.id in _placed_ras],
+                               external_sources,
                                deck_core_bounds=deck_core_bounds, layer_groups=layer_groups)
     build_portal_bundle(
         slug, title, user_data, template_id, layer_configs,
@@ -160,6 +183,8 @@ async def _assemble_bundle(db: AsyncSession, *, slug: str, title: str, layer_con
         layout_config=layout_config,   # V-11: resolved into style.geodeploy.layout
         story=story,                   # V-11: storymap sections baked when archetype == storymap
         theme=theme,                   # V-11 R3: colour theme → CSS-var overrides after theme.css
+        dashboard=dashboard,           # V-16: widget grid, baked when archetype == dashboard
+        dashboard_sources=build_dashboard_sources(_dash, vector_layers, raster_layers),
     )
 
 
@@ -174,7 +199,8 @@ async def _rebuild_bundle(portal: Portal, db: AsyncSession) -> None:
         db, slug=portal.slug, title=portal.title,
         layer_configs=json.loads(portal.layer_configs or "[]"),
         layer_groups=_pjson(portal.layer_groups), layout_config=_pjson(portal.layout_config),
-        story=_pjson(portal.story), theme=_pjson(portal.theme), initial_view=_pjson(portal.initial_view),
+        story=_pjson(portal.story), theme=_pjson(portal.theme), dashboard=_pjson(portal.dashboard),
+        initial_view=_pjson(portal.initial_view),
         template_id=portal.template_id, basemap=portal.basemap, description=portal.description,
         access_type=portal.access_type, password_sha256=portal.access_password_sha256,
         owner_id=portal.user_id,
@@ -211,6 +237,7 @@ async def create_portal(req: PortalCreate, user: User = Depends(require_scope("p
         layout_config=json.dumps(req.layout_config) if req.layout_config else None,
         story=json.dumps(req.story) if req.story else None,
         theme=json.dumps(req.theme) if req.theme else None,
+        dashboard=json.dumps(req.dashboard) if req.dashboard else None,
         access_type=req.access_type,
     )
     if req.access_password:
@@ -333,6 +360,10 @@ async def update_portal(portal_id: int, req: PortalUpdate, user: User = Depends(
     if req.theme is not None:
         # An empty dict clears back to the template's own theme; a populated one sets the colour theme.
         portal.theme = json.dumps(req.theme) if req.theme else None
+    if req.dashboard is not None:
+        # An empty dict / no widgets clears the dashboard; a populated one sets the widget grid.
+        portal.dashboard = (json.dumps(req.dashboard)
+                            if (req.dashboard and req.dashboard.get("widgets")) else None)
     if req.initial_view is not None:
         portal.initial_view = json.dumps(req.initial_view)
     if req.access_type is not None:
@@ -380,6 +411,7 @@ class PortalPreview(BaseModel):
     layout_config: dict | None = None
     story: dict | None = None
     theme: dict | None = None
+    dashboard: dict | None = None
     initial_view: dict | None = None
     basemap: str | None = None
 
@@ -400,6 +432,7 @@ async def preview_portal(portal_id: int, req: PortalPreview,
         layout_config=req.layout_config if req.layout_config is not None else _pjson(portal.layout_config),
         story=req.story if req.story is not None else _pjson(portal.story),
         theme=req.theme if req.theme is not None else _pjson(portal.theme),
+        dashboard=req.dashboard if req.dashboard is not None else _pjson(portal.dashboard),
         initial_view=req.initial_view if req.initial_view is not None else _pjson(portal.initial_view),
         template_id=req.template_id or portal.template_id,
         basemap=req.basemap if req.basemap is not None else portal.basemap,

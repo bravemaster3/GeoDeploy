@@ -1,0 +1,21 @@
+/* Zonal analysis — an environmental worksheet. Cool paper, a green accent, and deliberately quiet
+   widget chrome: the map and the raster numbers are the content, everything else is scaffolding. */
+:root {
+  --bg: #ffffff;
+  --surface: #f0f5f1;
+  --border: #d2e0d6;
+  --text: #16241b;
+  --text-muted: #5b6f61;
+  --accent: #15803d;
+  --accent-light: #dcf3e3;
+  --radius: 6px;
+}
+body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+#header { background: #ffffff; border-bottom: 1px solid var(--border); }
+#portal-title { font-weight: 640; }
+
+/* Statistics cells read as measurements, so the digits line up and the units stay quiet. */
+.gd-rs-v { font-variant-numeric: tabular-nums; }
+.gd-rs-cell { background: var(--bg); }
+.gd-rs-hist rect { fill: #15803d; }

@@ -283,6 +283,12 @@ class VectorLayer(Base):
     # NULL/none (n/a or not started) | tiling | ready | error. Until ready, the layer isn't displayable.
     pmtiles_key: Mapped[str | None] = mapped_column(String(512))
     tile_status: Mapped[str | None] = mapped_column(String(16))
+    # Cluster POINTS at low zoom when tiling. A tiling-time property, not a portal style: tippecanoe
+    # collapses nearby points into one feature carrying `point_count` while building the archive, so
+    # changing this only takes effect on a RE-TILE. NULL/False = the current behaviour, where
+    # tippecanoe thins points at low zoom instead — thinning keeps real, clickable features but the
+    # density you see is not the density that exists.
+    cluster_points: Mapped[bool | None] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(16), default="processing")  # processing | ready | error
     error_message: Mapped[str | None] = mapped_column(Text)
     default_style: Mapped[str | None] = mapped_column(Text)  # JSON {opacity, style, popup_fields}
@@ -425,6 +431,12 @@ class Portal(Base):
     # V-11 R3 colour theme: {mode:auto|light|dark, accent:#hex, font:sans|serif}. NULL = the template's
     # own theme.css unchanged. Baked as CSS-variable overrides AFTER theme.css (so it wins).
     theme: Mapped[str | None] = mapped_column(Text)
+    # V-16 dashboard archetype: {version, grid, refresh, widgets:[...]}. NULL = no dashboard. Only
+    # consumed when the resolved layout archetype is 'dashboard'; normalised by
+    # services/dashboard.resolve_dashboard at publish and baked into style.geodeploy.dashboard.
+    # Its widgets may bind layers this portal does not DRAW, which is why the public-read caches in
+    # routers/data/{vector,raster}.py read this column as well as layer_configs.
+    dashboard: Mapped[str | None] = mapped_column(Text)
     # Card thumbnail: a snapshot of the PUBLISHED map, captured in the browser at publish time (the
     # editor already renders the real portal in an iframe) and written to a FIXED filename, so
     # re-publishing overwrites instead of orphaning a file. Carries a ?v= cache-buster. NULL = the

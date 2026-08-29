@@ -1,0 +1,20 @@
+/* Data explorer — a board for reading an unfamiliar dataset. Near-neutral greys with a slight cool
+   cast so the profile's share bars are the only saturated thing on screen; a teal accent because the
+   profile panel is the subject here and teal holds its own against a basemap without competing with
+   the categorical chart palette beside it. */
+:root {
+  --bg: #ffffff;
+  --surface: #f1f4f5;
+  --border: #d5dbde;
+  --text: #14191b;
+  --text-muted: #5a666b;
+  --accent: #0f766e;
+  --accent-light: #e2f2f0;
+  --radius: 4px;
+}
+body { font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; }
+
+/* The profile is a tall reading column, not a dashboard card of numbers: a little more air between
+   columns, and monospaced figures so ranges and counts line up down the panel. */
+.gd-prof-f + .gd-prof-f { margin-top: 12px; padding-top: 11px; }
+.gd-prof-statv, .gd-prof-topn { font-variant-numeric: tabular-nums; }

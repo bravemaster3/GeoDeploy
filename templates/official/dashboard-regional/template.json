@@ -1,0 +1,62 @@
+{
+  "name": "Regional statistics",
+  "author": "GeoDeploy",
+  "description": "A snapshot board for census or administrative data: a choropleth map, a category breakdown, a ranked top-N list and a category picker, all cross-filtered. No time dimension assumed. Every widget stays removable and re-bindable — this is a starting layout, not a fixed one.",
+  "tags": ["dashboard", "statistics", "census", "administrative", "official"],
+  "language": "en",
+  "basemap": "positron",
+  "preview": "preview.png",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "archetype": "dashboard",
+  "archetypes": ["dashboard"],
+  "layout": {
+    "regions": { "dashboard": { "density": "comfortable", "mapControls": true } }
+  },
+  "dashboard": {
+    "grid": { "rowHeight": 90, "gap": 10 },
+    "refresh": 0,
+    "widgets": [
+      {
+        "id": "kpi-regions", "type": "indicator", "title": "Regions",
+        "layout": { "x": 0, "y": 0, "w": 3, "h": 2 },
+        "dataSource": { "op": "count" },
+        "style": { "format": "integer" },
+        "actions": { "filters": [], "listens": true }
+      },
+      {
+        "id": "kpi-total", "type": "indicator", "title": "Total",
+        "layout": { "x": 3, "y": 0, "w": 3, "h": 2 },
+        "dataSource": { "op": "sum" },
+        "style": { "format": "compact", "decimals": 1 },
+        "actions": { "filters": [], "listens": true }
+      },
+      {
+        "id": "sel-cat", "type": "selector", "title": "Category",
+        "layout": { "x": 6, "y": 0, "w": 6, "h": 2 },
+        "dataSource": { "kind": "category", "multi": true },
+        "actions": { "filters": ["kpi-regions", "kpi-total", "pie", "rank", "map"], "listens": false }
+      },
+      {
+        "id": "map", "type": "map", "title": "Choropleth",
+        "layout": { "x": 0, "y": 2, "w": 6, "h": 6 },
+        "dataSource": { "tools": ["click", "polygon", "bbox"], "tolPx": 6 },
+        "actions": { "filters": ["kpi-regions", "kpi-total", "pie", "rank"], "listens": true }
+      },
+      {
+        "id": "pie", "type": "chart", "title": "Breakdown",
+        "layout": { "x": 6, "y": 2, "w": 6, "h": 3 },
+        "dataSource": { "op": "sum", "limit": 8, "sort": "value_desc" },
+        "style": { "chart": "donut", "legend": true },
+        "actions": { "filters": ["kpi-regions", "kpi-total", "rank", "map"], "listens": true }
+      },
+      {
+        "id": "rank", "type": "chart", "title": "Top regions",
+        "layout": { "x": 6, "y": 5, "w": 6, "h": 3 },
+        "dataSource": { "op": "sum", "limit": 10, "sort": "value_desc" },
+        "style": { "chart": "hbar" },
+        "actions": { "filters": ["kpi-total", "map"], "listens": true }
+      }
+    ]
+  }
+}

@@ -1,6 +1,7 @@
 import json
 import os
 import uuid
+from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
@@ -50,6 +51,12 @@ def invalidate_public_layers() -> None:
     global _PUBLISHED_VECTOR_IDS
     _PUBLISHED_VECTOR_IDS = None
     _PMTILES_KEY_CACHE.clear()
+    # The dashboard's answer cache too. A deleted layer is the case that matters: its id can be
+    # reused, and answering a widget with the previous layer's totals is a wrong number with no
+    # symptom. (Ordinary re-ingest is bounded by that cache's own TTL instead — the ingest runs in
+    # celery, a different process, so it cannot reach this one's memory.)
+    from ...services import aggregate as _agg
+    _agg.invalidate()
     # The raster side keeps the same kind of cache for its description endpoints, and the events
     # that invalidate one invalidate the other — every caller already reaches for this function, so
     # forwarding here is what stops the two from drifting. Imported lazily: raster.py imports from
@@ -62,20 +69,38 @@ def invalidate_public_layers() -> None:
     _PARQUET_PREFIX_CACHE.clear()
 
 
+def _dashboard_ids(raw, kind: str) -> set[int]:
+    """Layer ids a published portal's DASHBOARD binds, by kind. Shared with `raster.py` (which
+    imports it) so the two published-id caches read the config the same way — a second parser would
+    eventually disagree about which layers a dashboard exposes."""
+    try:
+        from ...services.dashboard import dashboard_layer_refs
+        cfg = json.loads(raw) if isinstance(raw, str) else raw
+        vectors, rasters = dashboard_layer_refs(cfg if isinstance(cfg, dict) else None)
+    except (ValueError, TypeError, AttributeError):
+        return set()
+    return rasters if kind == "raster" else vectors
+
+
 async def _published_vector_ids(db: AsyncSession) -> set[int]:
     global _PUBLISHED_VECTOR_IDS
     if _PUBLISHED_VECTOR_IDS is None:
         rows = (await db.execute(
-            select(Portal.layer_configs).where(Portal.published == True))).scalars().all()  # noqa: E712
+            select(Portal.layer_configs, Portal.dashboard)
+            .where(Portal.published == True))).all()  # noqa: E712
         ids: set[int] = set()
-        for cfg in rows:
+        for cfg, dash in rows:
             try:
                 configs = json.loads(cfg) if isinstance(cfg, str) else (cfg or [])
                 for lc in configs:
                     if lc.get("layer_id") is not None and lc.get("layer_type", "vector") in (None, "vector"):
                         ids.add(int(lc["layer_id"]))
             except (ValueError, TypeError, AttributeError):
-                continue
+                pass
+            # V-16: a dashboard widget can summarise a layer the MAP never draws (an indicator over
+            # a table of readings, say). Its aggregate endpoint has to answer for that layer or the
+            # widget is a permanent error on a portal that is deliberately publishing it.
+            ids |= _dashboard_ids(dash, "vector")
         _PUBLISHED_VECTOR_IDS = ids
     return _PUBLISHED_VECTOR_IDS
 
@@ -338,7 +363,7 @@ async def multipart_initiate(body: MultipartInitiate, user: User = Depends(requi
     """Begin a chunked upload: validate, mint a key under the user's prefix, open the S3 multipart
     upload, and return a presigned PUT URL for every part. The key convention matches the single-PUT
     flows so /geoparquet/complete and /large/complete accept it unchanged."""
-    demo_upload_cap(body.file_size)
+    demo_upload_cap(body.file_size, user)
     import math
     from ...services import minio as minio_svc
     ext = os.path.splitext(body.filename or "")[1].lower()
@@ -789,14 +814,344 @@ async def vector_identify(
     return {"features": feats}
 
 
+# ── V-16 Dashboard: server-side summarisation ────────────────────────────────────────────────
+# Indicators, gauges, charts, tables, selectors and the map's feature-click read through these
+# four endpoints. They are
+# PUBLIC-by-id with exactly the posture `features.geojson` above already takes — a published
+# dashboard is browsed anonymously, and a widget that cannot answer without a login would make
+# every dashboard a members-only page. `_publicly_readable` is the gate: shared, or drawn by a
+# published portal, or 404.
+#
+# The summarisation itself lives in `services/aggregate.py`, which chooses the engine from the
+# layer's own backend (PostGIS in PostGIS, GeoParquet in DuckDB) — see that module on why that is
+# the fastest route rather than the conventional one.
+
+class AttrFilter(BaseModel):
+    """One attribute predicate published by a source widget. `op`: in | eq | between | gte | lte |
+    daterange | notnull. Several combine with AND — that IS the cross-filter semantics (a selector
+    and a map selection both active narrow the result; they do not replace one another)."""
+    field: str
+    op: str = "in"
+    values: list[Any] | None = None
+    value: Any | None = None
+    min: Any | None = None
+    max: Any | None = None
+    date: bool = False
+
+
+class AggregateRequest(BaseModel):
+    op: str = "count"                     # count | sum | avg | min | max
+    field: str | None = None              # required unless op == count
+    groupBy: str | None = None            # a category field, or a date field with timeBucket
+    timeBucket: str | None = None         # hour | day | week | month | quarter | year
+    limit: int | None = None
+    sort: str | None = None               # value_desc | value_asc | key_asc
+    # DISTINCT KEYS rather than groups: `{keys, truncated}` instead of `{groups, truncated}`, with
+    # no measure and no per-group count. The dashboard's map uses it to turn a linked filter into a
+    # predicate it can evaluate in the browser, where every field but the key is dead weight — six
+    # times the payload for 5 000 keys. Clamped by `MAX_KEYS`, not `MAX_GROUPS`.
+    keysOnly: bool | None = None
+    # SEVERAL measures against one grouping — "average height AND average age per district". Each
+    # entry is {op, field, label}. Absent, the single op/field above is used, which is what every
+    # chart authored before this sends.
+    series: list[dict[str, Any]] | None = None
+    # Declared relations letting filters from OTHER layers reach this one. Each entry is
+    # {layerId, leftField, rightField, filters}. The server resolves `layerId` itself — the client
+    # never names a table, so a relation can never become a way to read a layer you cannot open.
+    joins: list[dict[str, Any]] | None = None
+    filters: list[AttrFilter] | None = None
+    # The GEOMETRY filter — a clicked feature, a drawn polygon or a drawn bbox, already normalised
+    # to one GeoJSON geometry in EPSG:4326 by the dashboard's filter bus. Carried separately from
+    # `filters` because it is a different kind of thing: it has no field and no value.
+    geometry: dict[str, Any] | None = None
+
+
+class ScatterRequest(BaseModel):
+    """Y against X, per feature. Sampled server-side — see `services/aggregate.parquet_scatter`."""
+    xField: str | None = None
+    yField: str | None = None
+    limit: int | None = None
+    filters: list[AttrFilter] | None = None
+    geometry: dict[str, Any] | None = None
+
+
+class ProfileRequest(BaseModel):
+    """What the column-profile widget asks: describe these columns, over the current selection."""
+    fields: list[str] = []
+    topN: int | None = None               # values a categorical column lists (default 5)
+    filters: list[AttrFilter] | None = None
+    geometry: dict[str, Any] | None = None
+
+
+class TableRequest(BaseModel):
+    fields: list[str] | None = None
+    filters: list[AttrFilter] | None = None
+    geometry: dict[str, Any] | None = None
+    sort: str | None = None
+    dir: str | None = None
+    limit: int | None = None
+    offset: int | None = None
+    # TEXT SEARCH rides on this request rather than having an endpoint of its own: a search result IS
+    # a table row — same columns, same per-row bbox for click-to-zoom, same paging. A second endpoint
+    # would be a second place to build a row and a second place to get the public-readability check
+    # right. `searchFields` are validated against the layer's catalog in the service.
+    search: str | None = None
+    searchFields: list[str] | None = None
+    searchMode: str | None = None          # contains (default) | prefix
+    joins: list[dict[str, Any]] | None = None
+    # Skips the COUNT(*) over the predicate, which is a second full pass and which also defeats the
+    # LIMIT short-circuit. A search box wants the first few matches, not a census; a table's pager
+    # needs the number, so it leaves this alone.
+    withTotal: bool | None = None
+
+
+async def _public_vector(layer_ref: str, db: AsyncSession) -> VectorLayer:
+    result = await db.execute(select(VectorLayer).where(by_ref(VectorLayer, layer_ref)))
+    layer = result.scalar_one_or_none()
+    if not await _publicly_readable(layer, db):
+        raise HTTPException(404, "Layer not found.")
+    if layer.status != "ready":
+        raise HTTPException(409, "Layer is not ready yet.")
+    return layer
+
+
+async def _resolve_joins(spec: dict, layer: VectorLayer, db: AsyncSession) -> str | None:
+    """Turn each `spec['joins'][].layerId` into the LAYER, in place. Returns a note naming the first
+    join that could NOT be honoured; those are removed rather than half-applied.
+
+    The client sends an id, never a table name: a join READS another layer, so it has to pass the
+    same public-readability check as opening that layer directly — otherwise declaring a relation
+    would be a way to query something you are not allowed to see.
+
+    A cross-engine pair is refused HERE rather than deep in the query builder, because refusing
+    early is what lets the answer carry a reason. A number that quietly ignored half of its filter
+    is the worst outcome available.
+    """
+    raw = spec.pop("joins", None)
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, list) or not raw:
+        return None
+
+    resolved: list[dict] = []
+    note: str | None = None
+    right_is_file = (layer.storage_backend or "postgis") == "geoparquet"
+    for j in raw[:4]:
+        if not isinstance(j, dict):
+            continue
+        try:
+            other_id = int(j.get("layerId"))
+        except (TypeError, ValueError):
+            continue
+        if other_id == layer.id:
+            continue                     # a layer joined to itself is a filter, not a relation
+        result = await db.execute(select(VectorLayer).where(VectorLayer.id == other_id))
+        other = result.scalar_one_or_none()
+        if not other or not await _publicly_readable(other, db):
+            note = note or "a related layer is not available"
+            continue
+        if other.status != "ready":
+            note = note or f"“{other.name}” is still processing"
+            continue
+        if ((other.storage_backend or "postgis") == "geoparquet") != right_is_file:
+            note = note or (f"“{other.name}” is stored differently from this layer "
+                            "(one file-backed, one in the database), so a filter cannot travel "
+                            "between them yet")
+            continue
+        resolved.append({"layer": other, "leftField": j.get("leftField"),
+                         "rightField": j.get("rightField"), "filters": j.get("filters")})
+    if resolved:
+        spec["joins"] = resolved
+    return note
+
+
+def _spec(model: BaseModel) -> dict:
+    """A request model → the plain dict `services/aggregate` takes. `exclude_none` is deliberate:
+    the service distinguishes "absent" from "explicitly null" for `groupBy` and `sort`."""
+    return model.model_dump(exclude_none=True)
+
+
+@router.post("/{layer_ref}/scatter")
+async def vector_scatter(layer_ref: str, req: ScatterRequest,
+                         db: AsyncSession = Depends(get_db)):
+    """PUBLIC X/Y sample for the dashboard's scatter widget.
+
+    Returns `{points:[[x,y],…], x, y, total, sampled}`. The points are a RANDOM sample, not the first
+    N: a prepped GeoParquet layer is stored in spatial partitions, so the first N rows are one corner
+    of the map and a plot drawn from them would state a relationship that only holds there.
+    """
+    from ...services import aggregate as agg
+    layer = await _public_vector(layer_ref, db)
+    spec = _spec(req)
+    try:
+        if layer.storage_backend == "geoparquet":
+            return await run_in_threadpool(agg.parquet_scatter, layer, spec)
+        return await agg.postgis_scatter(db, layer, spec)
+    except agg.AggregateError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Could not plot this layer: {exc}") from exc
+
+
+@router.post("/{layer_ref}/profile")
+async def vector_profile(layer_ref: str, req: ProfileRequest,
+                         db: AsyncSession = Depends(get_db)):
+    """PUBLIC column profile for the dashboard's profile widget.
+
+    Returns `{total, fields:[{field, kind, count, nulls, distinct, …}]}` — a numeric column carries
+    min/max/avg/median, a categorical one carries `top:[{value, count}]`. Narrowed by the same
+    filters and geometry as every other widget, so the panel describes what is currently selected
+    rather than the whole layer.
+    """
+    from ...services import aggregate as agg
+    layer = await _public_vector(layer_ref, db)
+    spec = _spec(req)
+    try:
+        if layer.storage_backend == "geoparquet":
+            return await run_in_threadpool(agg.parquet_profile, layer, spec)
+        return await agg.postgis_profile(db, layer, spec)
+    except agg.AggregateError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Could not describe this layer: {exc}") from exc
+
+
+@router.post("/{layer_ref}/aggregate")
+async def vector_aggregate(layer_ref: str, req: AggregateRequest,
+                           db: AsyncSession = Depends(get_db)):
+    """PUBLIC aggregation for the dashboard's indicator / gauge / chart widgets.
+
+    Returns either `{op, value, count}` (no groupBy) or `{groups:[{key, value, count}], truncated}`.
+    One number per widget per filter change, instead of a feature set the browser would have to
+    reduce — see `services/aggregate.py`.
+    """
+    from ...services import aggregate as agg
+    layer = await _public_vector(layer_ref, db)
+    spec = _spec(req)
+    join_note = await _resolve_joins(spec, layer, db)
+    try:
+        if layer.storage_backend == "geoparquet":
+            out = await run_in_threadpool(agg.parquet_aggregate, layer, spec)
+        else:
+            out = await agg.postgis_aggregate(db, layer, spec)
+        # A refused join travels WITH the answer. The number is real — it simply was not narrowed by
+        # the other layer's filter, and the widget says so rather than looking like it agrees with
+        # the chart that published it.
+        if join_note and isinstance(out, dict):
+            out = dict(out, joinNote=join_note)
+        return out
+    except agg.AggregateError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Could not summarise this layer: {exc}") from exc
+
+
+@router.post("/{layer_ref}/table")
+async def vector_table(layer_ref: str, req: TableRequest, db: AsyncSession = Depends(get_db)):
+    """PUBLIC attribute rows for the dashboard's list/table and details widgets.
+
+    Each row carries a lon/lat `bbox` computed server-side, so clicking a row zooms and highlights
+    the map without a second request — click-to-zoom is the widget's whole purpose and a round trip
+    per click reads as a broken control.
+    """
+    from ...services import aggregate as agg
+    layer = await _public_vector(layer_ref, db)
+    spec = _spec(req)
+    join_note = await _resolve_joins(spec, layer, db)
+    try:
+        if layer.storage_backend == "geoparquet":
+            out = await run_in_threadpool(agg.parquet_table, layer, spec)
+        else:
+            out = await agg.postgis_table(db, layer, spec)
+        if join_note and isinstance(out, dict):
+            out = dict(out, joinNote=join_note)
+        return out
+    except agg.AggregateError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Could not read this layer: {exc}") from exc
+
+
+class PickRequest(BaseModel):
+    """A click on the dashboard's map widget."""
+    lng: float
+    lat: float
+    # Hit tolerance in degrees. A polygon layer needs none; a point or line layer needs one, because
+    # an exact intersection with a click almost never happens. The client scales it by zoom.
+    tol: float = 0.0
+
+
+@router.post("/{layer_ref}/pick")
+async def vector_pick(layer_ref: str, req: PickRequest, db: AsyncSession = Depends(get_db)):
+    """PUBLIC: the EXACT geometry (EPSG:4326) and attributes of the feature under a clicked point.
+
+    Why this exists rather than reading the click off the map: `queryRenderedFeatures` returns
+    geometry clipped to the vector TILE the click landed in. Feeding that to zonal statistics would
+    compute a parcel's elevation over whichever fragment of it happened to be in that tile and
+    report the number as the parcel's — a wrong answer with no visible symptom. So the geometry that
+    drives a spatial filter comes from the layer, not from the renderer.
+
+    Both backends: PostGIS resolves it with an indexed ST_Intersects, GeoParquet with a
+    covering-bbox prune plus an exact shapely test (there is no spatial extension on the DuckDB read
+    path — see `services/aggregate.py`).
+    """
+    from ...services import aggregate as agg
+    layer = await _public_vector(layer_ref, db)
+    tol = min(max(float(req.tol or 0.0), 0.0), 1.0)
+    try:
+        if layer.storage_backend == "geoparquet":
+            hit = await run_in_threadpool(agg.parquet_pick, layer, req.lng, req.lat, tol)
+        else:
+            hit = await agg.postgis_pick(db, layer, req.lng, req.lat, tol)
+    except agg.AggregateError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Could not read this layer: {exc}") from exc
+    if not hit:
+        # 204, not 404: "nothing is under your click" is a normal outcome of clicking a map, and a
+        # 404 in the console on every empty click reads as a broken portal.
+        return Response(status_code=204)
+    return hit
+
+
+@router.get("/{layer_ref}/distinct")
+async def vector_distinct(layer_ref: str, field: str, limit: int = 200,
+                          db: AsyncSession = Depends(get_db)):
+    """PUBLIC option list for a dashboard selector: the distinct values of a text field (by
+    frequency), or the min/max of a numeric or date field.
+
+    Separate from `/field-stats`, which answers the SYMBOLOGY question (a classification with
+    breaks and colours) for a signed-in editor. This one answers "what can a visitor pick", is
+    anonymous, and returns no classification — the two would otherwise drift into one endpoint
+    serving two audiences with two trust levels.
+    """
+    from ...services import aggregate as agg
+    layer = await _public_vector(layer_ref, db)
+    limit = max(5, min(int(limit), agg.DISTINCT_LIMIT))
+    try:
+        if layer.storage_backend == "geoparquet":
+            return await run_in_threadpool(agg.parquet_distinct, layer, field, limit)
+        return await agg.postgis_distinct(db, layer, field, limit)
+    except agg.AggregateError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Could not read this field: {exc}") from exc
+
+
 @router.post("/{layer_id}/tile", response_model=VectorLayerOut)
 async def tile_layer(
     layer_id: int,
+    cluster: bool | None = None,
     user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     """(Re)generate the PMTiles archive for a GeoParquet layer — used to tile a file uploaded
-    before tiling existed, or to retry after an error."""
+    before tiling existed, or to retry after an error.
+
+    `cluster` sets low-zoom POINT clustering for this and future tilings. It belongs on this action
+    rather than on a settings form because it is baked into the archive by tippecanoe: changing it
+    without re-tiling would change nothing, and the two are therefore one decision. Omitted leaves
+    the layer's current setting alone, so a plain retry does not silently change how it draws."""
     from ...tasks.pmtiles_tile import tile_geoparquet
     result = await db.execute(
         select(VectorLayer).where(VectorLayer.id == layer_id, visible_to(user, VectorLayer)))
@@ -807,6 +1162,11 @@ async def tile_layer(
         raise HTTPException(400, "This layer is not a GeoParquet (file-backed) layer.")
 
     pmtiles_key = (layer.s3_key.rsplit(".", 1)[0] if "." in layer.s3_key else layer.s3_key) + ".pmtiles"
+    if cluster is not None:
+        # Persisted BEFORE the task is queued: the worker reads the flag from the database (the task
+        # is queued from several places and passing it per call would let them disagree), so a commit
+        # that landed after the queue would tile with the previous setting.
+        layer.cluster_points = bool(cluster)
     layer.tile_status = "tiling"
     await db.commit()
     await db.refresh(layer)

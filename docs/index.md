@@ -49,7 +49,12 @@ put there as public and changeable by others; and the whole instance is **wiped 
 hour**, so nothing you build survives. It runs the same code this page tells you how to install,
 with demo mode switched on.
 
-## Three kinds of portal
+Demo mode also caps uploads, so the sandbox cannot be used as free storage. The cap applies to
+visitors; the **owner of the instance is exempt**, so whoever runs a demo can load a test layer
+without switching demo mode off — and anything they add still needs to be captured as the new seed
+snapshot, or the next hourly wipe removes it like everything else.
+
+## Four kinds of portal
 
 The experience you choose changes the shape of the page, not just its colours.
 
@@ -70,9 +75,14 @@ The experience you choose changes the shape of the page, not just its colours.
 <figcaption>**Catalog** — search and facets beside the map, for more datasets than one map should hold.</figcaption>
 </figure>
 
+<figure markdown>
+<figcaption>**Dashboard** — charts, numbers and filters around the map, cross-filtering each other. For questions asked of the data rather than the geography.</figcaption>
+</figure>
+
 </div>
 
 [How portals work](portals.md){ .md-button }
+[Dashboards](dashboards.md){ .md-button }
 
 ## Get your data in
 

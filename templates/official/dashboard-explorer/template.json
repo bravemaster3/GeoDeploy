@@ -1,0 +1,71 @@
+{
+  "name": "Data explorer",
+  "author": "GeoDeploy",
+  "description": "A board for a dataset nobody has read yet: a column profile that says what is actually in it — range, completeness, the commonest values — beside a map, a breakdown chart and a search box. Built for the first hour with an unfamiliar layer, when the question is 'what is this data' rather than a number you already know you want. Every widget stays removable and re-bindable; this is a starting layout, not a fixed one.",
+  "tags": ["dashboard", "explorer", "profile", "data-quality", "official"],
+  "language": "en",
+  "basemap": "positron",
+  "preview": "preview.png",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "archetype": "dashboard",
+  "archetypes": ["dashboard"],
+  "layout": {
+    "regions": { "dashboard": { "density": "comfortable", "mapControls": true } }
+  },
+  "dashboard": {
+    "grid": { "rowHeight": 88, "gap": 10 },
+    "refresh": 0,
+    "widgets": [
+      {
+        "id": "search",
+        "type": "search",
+        "title": "Find a feature",
+        "layout": { "x": 0, "y": 0, "w": 4, "h": 3, "overlay": "controls", "overlayW": 290, "overlayCollapsed": true },
+        "dataSource": { "searchMode": "contains", "limit": 8 },
+        "actions": { "filters": ["profile", "chart-breakdown", "map", "kpi-rows", "details"], "listens": false }
+      },
+      {
+        "id": "kpi-rows",
+        "type": "indicator",
+        "title": "Features in view",
+        "layout": { "x": 0, "y": 0, "w": 3, "h": 2 },
+        "dataSource": { "op": "count" },
+        "style": { "format": "integer" },
+        "actions": { "filters": [], "listens": true }
+      },
+      {
+        "id": "map",
+        "type": "map",
+        "title": "Map",
+        "layout": { "x": 3, "y": 0, "w": 9, "h": 7 },
+        "dataSource": { "tools": ["click", "polygon", "bbox"], "tolPx": 8 },
+        "actions": { "filters": ["profile", "kpi-rows", "chart-breakdown", "details"], "listens": true }
+      },
+      {
+        "id": "profile",
+        "type": "profile",
+        "title": "What is in this data",
+        "layout": { "x": 0, "y": 2, "w": 3, "h": 10 },
+        "dataSource": { "topN": 5 },
+        "actions": { "filters": [], "listens": true }
+      },
+      {
+        "id": "chart-breakdown",
+        "type": "chart",
+        "title": "Breakdown",
+        "layout": { "x": 3, "y": 7, "w": 5, "h": 5 },
+        "dataSource": { "op": "count", "limit": 8, "sort": "value_desc" },
+        "style": { "chart": "hbar", "colorMode": "category", "valueLabels": true },
+        "actions": { "filters": ["profile", "kpi-rows", "map", "details"], "listens": true }
+      },
+      {
+        "id": "details",
+        "type": "details",
+        "title": "Selected feature",
+        "layout": { "x": 8, "y": 7, "w": 4, "h": 5 },
+        "actions": { "filters": [], "listens": true }
+      }
+    ]
+  }
+}

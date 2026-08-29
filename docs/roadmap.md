@@ -1,6 +1,6 @@
 # Roadmap
 
-GeoDeploy is at **v1.3**. Everything under *In v1.0* and in the releases after it is built and
+GeoDeploy is at **v1.4.1**. Everything under *In v1.0* and in the releases after it is built and
 running in production; the groups at the end are what comes next.
 
 <div class="gd-legend" markdown>
@@ -214,24 +214,58 @@ without a browser, and about being able to take a copy with you.</p>
 
 </div>
 
-<div class="gd-rel now tail" markdown>
+<div class="gd-rel done" markdown>
 ### v1.4 — into the tools you already use
-<span class="gd-when">Next</span>
+<span class="gd-when">Shipped · 2026-08-17</span>
 
 <p class="gd-goal">The CLI made an instance reachable without a browser. This one puts it inside the
 desktop GIS people already have open.</p>
 
-- [ ] **A QGIS plugin** — browse the catalog, add a layer, style it, publish back. Built on the
+- [x] **A QGIS plugin** — browse the catalog, add a layer, style it, publish back. Built on the
       packaged client, which is why that client has no dependencies and runs on Python 3.9.
       *Built; not yet run in anger inside QGIS, and `experimental` until it has been*
-- [ ] **Styling that travels** — portal and layer style interchange with GeoLibre and QGIS, for
+- [x] **Styling that travels** — portal and layer style interchange with GeoLibre and QGIS, for
       every layer type. *Both directions now for vectors and rasters, including a polygon's outline
       width. 3D extrusion is carried safely but is not yet DRAWN by QGIS — see "Every symbol QGIS
       can draw" below*
 - [ ] **Download a backup**, and **restore from disk** — state-only (small, covers a bad restore or
-      a botched update) separately from the full copy including objects
+      a botched update) separately from the full copy including objects. *Slipped: designed, not
+      built*
 - [ ] **Labels** — the other half of data-driven symbology v1.1 did not ship, and unlike size this
-      one does not exist anywhere yet
+      one does not exist anywhere yet. *Slipped; carried forward*
+
+</div>
+
+<div class="gd-rel done" markdown>
+### v1.5 — dashboards
+<span class="gd-when">Shipped · 29 Aug 2026</span>
+
+<p class="gd-goal">A fourth experience, where the map is one widget among charts, numbers and
+filters — for the questions a reader asks of the DATA rather than of the geography.</p>
+
+- [x] **The archetype itself** — `dashboard` alongside web map / story map / catalog: a 12-column
+      grid of widgets, with the map placed into a cell rather than the page placed around it
+- [x] **Widgets** — indicator, gauge, chart, list/table (spreadsheet *or* cards), column profile,
+      scatter, selector, search box, details panel, legend, raster statistics, and the map
+- [x] **Cross-filtering** on three channels — an attribute predicate, a geometry, and a selection —
+      combining with AND, each clearable from a filter bar. Without it this is a page of pictures
+- [x] **Filter by the map's extent**, opt-in, with every widget it narrows saying **· in view**
+      for as long as the tool is on
+- [x] **Aggregates computed server-side**, in each layer's own storage — SQL for PostGIS, DuckDB
+      in place for GeoParquet. Sending a million features to the browser to count them was the
+      failure mode to design against
+- [x] **Linked layers** — declare that two layers share a column and an attribute filter travels
+      between them, pushed into the engine as a subquery rather than passed around as a list of ids
+- [x] **Charts that carry their weight** — several measures on one axis, colour per category or a
+      shaded ramp for an ordered key, printed values, and a scatter that samples honestly
+- [x] **Widgets pinned to the map** — eight anchors, or docked into the map's own control cluster,
+      collapsible to a single icon
+- [x] **Six starting templates**, each a working layout rather than a blank grid
+- [x] **Published like any other portal** — one URL, the four access tiers, embeddable, and it
+      stacks on a phone
+- [x] **The map narrows every layer it draws**, each by its own filters — and a linked filter can
+      narrow it too, behind a per-map opt-in with a chosen key limit and an on-map notice when it
+      passes that limit rather than a map that looks narrowed and is not
 
 </div>
 
@@ -256,10 +290,30 @@ is the rest of the round trip, not yet scheduled.</p>
 </div>
 
 <div class="gd-rel" markdown>
-### Every symbol QGIS can draw
-<span class="gd-when">Planned</span>
+### Finishing what v1.5 started
+<span class="gd-when">Planned · next</span>
 
-<p class="gd-goal">v1.4 made styling travel both ways for most of the symbology GeoDeploy itself
+<p class="gd-goal">Two items scoped into the dashboard release that it shipped without. Named here
+rather than ticked there, because a dashboard nobody has measured on ten million features is not the
+same as one that has been.</p>
+
+- [ ] **Linked or detached, chosen per dashboard.** A *linked* dashboard reads its layers live, so
+      the numbers move when the data does — that is what is built today. A *detached* dashboard is
+      built on saved queries and keeps reporting what it reported, which is what a published figure
+      sometimes has to do. The distinction has to be stated in the editor in those terms, because
+      "layer or saved query" is a storage detail and "does this update itself?" is the actual
+      question being asked
+- [ ] **Benchmarks on real data** — the spatial filter path is the one that decides whether a
+      dashboard over ten million features is pleasant or merely possible
+
+</div>
+
+<div class="gd-rel" markdown>
+### Every symbol QGIS can draw
+<span class="gd-when">Planned · after dashboards</span>
+
+<p class="gd-goal">This was next after v1.4; dashboards moved ahead of it, so it is the release
+after. v1.4 made styling travel both ways for most of the symbology GeoDeploy itself
 has: single symbol, graduated and categorized, size from a field, raster colormaps, classes and
 contours, outlines. QGIS draws a great deal more than that, and today those symbols are quietly
 simplified on the way in. This is about closing that gap — and about being honest where it cannot be
@@ -298,47 +352,35 @@ and if not, does the author find out before they publish?"</p>
 
 </div>
 
+
 <div class="gd-rel" markdown>
-### A fourth experience: dashboards
+### Install somewhere that is not empty
 <span class="gd-when">Planned</span>
 
-<p class="gd-goal">Today a portal is a map with panels around it. A dashboard inverts that: the map
-becomes one small element among charts, indicators and filters, for the questions a reader asks of
-the DATA rather than of the geography.</p>
+<p class="gd-goal">Every install path so far assumes a bare VPS that GeoDeploy owns — ports 80 and
+443 free, fixed container names available, nothing else on the box wanting any of it. That is the
+right default and stays the default. It also rules out a lab server, a shared research machine, or
+a VM that already serves something on 443.</p>
 
-The shape is well established — indicators, charts, selectors and a map, where interacting with one
-element filters the others — so the work is less about inventing an interface than about deciding
-which parts are worth having and where the numbers come from.
+- [ ] **Serve behind an existing reverse proxy** — publish to a configurable port, or to no host
+      port at all, with the `proxy_pass` an operator already running nginx or Caddy needs. The
+      single biggest unlock, and the first step
+- [ ] **A base path.** A portal lives at `/portals/<slug>/` today; on a shared host it may need to
+      live under `/geodeploy/…`. Every absolute URL the app emits — vector tiles, `pmtiles://`, the
+      parquet range proxy, published portal assets — has to be built from a configured prefix
+      rather than assumed to sit at the root. This is the part that will leak bugs and it deserves
+      its own audit
+- [ ] **A namespace for containers, networks and volumes**, so two instances can coexist and
+      neither collides with unrelated software
+- [ ] **A rootless path**, or at minimum a preflight that states the privileges required and fails
+      early and legibly without them
+- [ ] **A preflight that reports every conflict at once** — ports in use, names taken, network
+      present — before it writes anything
 
-- [ ] **The archetype itself**: `dashboard` alongside webmap / storymap / catalog, with a layout of
-      resizable cells rather than a map plus panels. `resolve_layout` already carries archetypes and
-      regions, so this is a new layout rather than a new renderer.
-- [ ] **Elements**: indicator (one number, optionally against a target), chart (bar, line, pie),
-      table, text, and the map. Each bound to a layer and an aggregate — count, sum, mean, min, max,
-      grouped by a field.
-- [ ] **Cross-filtering — the thing that makes a dashboard a dashboard.** Selecting a bar, a table
-      row or features on the map filters every other element. Without it this is a page of pictures.
-- [ ] **Filter by the map's extent**, so panning re-computes the numbers for what is on screen.
-- [ ] **Selectors** — a dropdown, a date range, a search box — that filter elements without needing
-      a click on the map.
-- [ ] **Aggregates computed server-side.** `/field-stats` already does this for both backends
-      (SQL for PostGIS, DuckDB for GeoParquet); a dashboard needs the same idea generalised to
-      grouped aggregates with a filter. Sending a million features to the browser to count them is
-      the failure mode to design against.
-- [ ] **Published like any other portal** — one URL, the four access tiers, embeddable in an
-      `<iframe>`, and readable on a phone, where a dashboard is mostly numbers and the map is
-      smallest.
-
-- [ ] **Linked or detached, chosen per dashboard and explained where the choice is made.** A
-      *linked* dashboard reads its layers live, so when the data is updated the numbers move with
-      it — that is the interesting one, and the default. A *detached* dashboard is built on saved
-      queries: it keeps reporting what it reported, and changes at the source do not reach it,
-      which is what a published figure sometimes has to do. The distinction has to be stated in the
-      editor in those terms, because "layer or saved query" is a storage detail and "does this
-      update itself?" is the actual question being asked.
-
-The linked case is the one that earns the feature: a dashboard that goes stale the moment the data
-moves is a screenshot with extra steps.
+<p class="gd-goal">Half-doing the base path produces an instance that mostly works and breaks on the
+paths nobody clicked while testing, which is the worst failure available to a self-hosted product:
+the operator cannot tell whether they misconfigured it or it is broken. Hence a release rather than
+a flag. <a href="https://github.com/bravemaster3/GeoDeploy/issues/79">#79</a></p>
 
 </div>
 

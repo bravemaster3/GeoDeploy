@@ -200,6 +200,18 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                     "maxzoom": 22,
                 }
             ml_layers = _vector_layers(source_id, layer, cfg)
+            # A clustered archive draws TWO more layers: the cluster bubble and its count. Only when
+            # the layer was actually tiled with clustering — the attributes they filter on do not
+            # exist in an archive built without it, and a filter that matches nothing is an invisible
+            # layer rather than an error, which is the hardest kind of nothing to debug.
+            if _clusters_enabled(layer):
+                # The ordinary markers must stop drawing where a cluster stands. At a clustered zoom
+                # tippecanoe REPLACES the merged points with one feature that is still a point, so an
+                # unfiltered marker layer paints a pin on top of every bubble. The singletons it did
+                # not merge carry no `clustered` attribute and keep their marker.
+                for ml in ml_layers:
+                    _and_filter(ml, ["!=", ["get", _CLUSTER_FLAG], True])
+                ml_layers = ml_layers + _cluster_layers(source_id, layer, cfg)
             meta = {
                 "geodeploy:name": layer.name,
                 "geodeploy:type": "vector",
@@ -483,6 +495,69 @@ def _layer_info(layer, kind: str) -> dict:
     return info
 
 
+# ── V-16 Dashboard: the data catalogue the widgets query ─────────────────────
+def build_dashboard_sources(dashboard: dict | None, vector_layers: list,
+                            raster_layers: list) -> dict:
+    """`{"vector:3": {...}, "raster:5": {...}}` — one entry per layer a dashboard's widgets bind.
+
+    Baked beside the widget list so the runtime can label an axis, offer a field, format a number
+    and build a request URL WITHOUT a metadata round trip per widget on load. A dashboard opens with
+    six widgets hitting five endpoints; adding a "what columns does this layer have" call in front
+    of each would double the requests before a single number appeared.
+
+    Deliberately narrow: name, backend, fields, geometry type, extent. Not `_layer_info` — that
+    payload carries share links and licensing for the About/catalog surfaces, and a widget needs
+    none of it. A PRIVATE layer contributes its name and fields and nothing else, matching the rule
+    `_layer_info` already applies: a restricted layer can be summarised on a portal that publishes
+    it, but its catalog metadata is not part of that.
+    """
+    from . import dashboard as dash_svc
+
+    wanted_vec, wanted_ras = dash_svc.dashboard_layer_refs(dashboard)
+    out: dict = {}
+    for layer in vector_layers or []:
+        if layer.id not in wanted_vec:
+            continue
+        try:
+            columns = json.loads(layer.columns or "[]")
+        except (ValueError, TypeError):
+            columns = []
+        out[f"vector:{layer.id}"] = {
+            "kind": "vector",
+            "id": layer.id,
+            "name": layer.name,
+            "backend": getattr(layer, "storage_backend", "postgis"),
+            "geometryType": getattr(layer, "geometry_type", None),
+            "featureCount": getattr(layer, "feature_count", None),
+            # [{name, type}] — the builder offers these as field choices and the runtime uses the
+            # type to decide whether a selector is a dropdown, a slider or a date range.
+            "fields": [{"name": c.get("name"), "type": c.get("type")}
+                       for c in columns if isinstance(c, dict) and c.get("name")],
+            "bbox": _json_bbox(layer),
+        }
+    for layer in raster_layers or []:
+        if layer.id not in wanted_ras:
+            continue
+        out[f"raster:{layer.id}"] = {
+            "kind": "raster",
+            "id": layer.id,
+            "name": layer.name,
+            "bandCount": getattr(layer, "band_count", None),
+            "bbox": _json_bbox(layer),
+        }
+    return out
+
+
+def _json_bbox(layer):
+    raw = getattr(layer, "bbox", None)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return None
+
+
 # ── V-11 Template Experiences: layout manifest ────────────────────────────────
 # The PARITY CONTRACT. This same archetype→defaults table + override merge is mirrored in
 # templates/shared/portal.js (resolveLayout) and ui/src/views/PortalEditor.vue (resolveLayout) so the
@@ -537,6 +612,35 @@ _LAYOUT_ARCHETYPES = {
         "panels": {"catalog": True, "layerCatalog": False, "legend": True, "basemap": True,
                    # No About page: every dataset already carries its abstract, licence and access
                    # links on its own card, so an About page would only restate the catalog.
+                   "about": False, "story": False},
+    },
+    # V-16 DASHBOARD — a single screen of widgets over the portal's own layers, wired to
+    # cross-filter each other. The MAP IS A WIDGET here, not the page: `#layout` becomes the widget
+    # grid and `#map-wrap` is placed into the map widget's cell by grid-area. It is never
+    # re-parented (a moved MapLibre container loses its size — the same rule the catalog follows).
+    #
+    # `layerCatalog` is ON, and it is what carries the LEGEND. The legend has never been a panel of
+    # its own — it is drawn inside each layer card — so a dashboard with the list off had
+    # `legend: true` and nowhere to draw it, and no way to read what the colours on its map meant.
+    # It opens from the same toggle at the top of the control cluster that every other archetype
+    # uses, and it starts collapsed, so the cost is one button and the gain is the legend.
+    "dashboard": {
+        "regions": {
+            "layerList": {"side": "left", "mode": "floating", "collapsed": True,
+                          "width": None, "x": None, "y": None},
+            "controls": {"position": "top-right"},
+            "header": {"style": "bar"},
+            "dashboard": {
+                # The visible density of the widget cards. `compact` shrinks padding and type — a
+                # wall-mounted operations board fits more; `comfortable` reads better on a laptop.
+                "density": "comfortable",
+                # Whether the map widget keeps the full control cluster. A dashboard map is usually
+                # a selection surface rather than a map to explore, and seven controls over a
+                # quarter-screen map is mostly buttons.
+                "mapControls": True,
+            },
+        },
+        "panels": {"dashboard": True, "layerCatalog": True, "legend": True, "basemap": True,
                    "about": False, "story": False},
     },
     # scrollytelling — a narrative column drives the map camera; the layer list floats (collapsed by
@@ -653,7 +757,8 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
                         initial_view: dict | None = None, description: str | None = None,
                         basemap: str | None = None,
                         layout_config: dict | None = None, story: dict | None = None,
-                        theme: dict | None = None) -> str:
+                        theme: dict | None = None, dashboard: dict | None = None,
+                        dashboard_sources: dict | None = None) -> str:
     """
     Merge basemap + user data into a complete style, inject into layout.html,
     write to data/portals/{slug}/index.html.
@@ -667,6 +772,12 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
     shared_dir = Path("/templates/shared")
     portal_css = _read(shared_dir / "portal.css", "")
     portal_js = _read(shared_dir / "portal.js", "")
+    # V-16: the dashboard runtime is a SEPARATE file, not more portal.js. It defines
+    # `window.GD_DASHBOARD` and portal.js calls it when the archetype is 'dashboard' — so the widget
+    # renderers, the filter bus and the query layer stay independently readable (and independently
+    # `node --check`-able) instead of adding a thousand lines to the 4.7k-line portal runtime.
+    dashboard_css = _read(shared_dir / "dashboard.css", "")
+    dashboard_js = _read(shared_dir / "dashboard.js", "")
 
     # REFUSE to write a portal with no runtime. `_read` returns "" for a missing file, so a caller
     # that cannot see /templates produced a bundle containing a style and nothing else: the portal
@@ -694,6 +805,11 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
     # Resolved once and reused: the style needs it, and so does the decision below about whether to
     # bake the catalog payload at all.
     _layout = resolve_layout(layout_config)
+    # V-16: normalised HERE, at publish, and never again — dashboard.js is written against the
+    # invariants `resolve_dashboard` guarantees (unique DOM-safe ids, known types, live action
+    # targets, in-grid layout) and does no validation of its own. One validator, not two halves.
+    from .dashboard import resolve_dashboard
+    _dashboard = resolve_dashboard(dashboard) if _layout.get("panels", {}).get("dashboard") else None
 
     # Merge basemap + user layers into a single complete MapLibre style
     full_style = {
@@ -724,6 +840,11 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
                         if _layout.get("panels", {}).get("catalog") else None),
             # V-11 storymap: narrative sections (only rendered when archetype == 'storymap').
             "story": story if (story and story.get("sections")) else None,
+            # V-16 dashboard: the widget grid, its cross-filter wiring, and a small per-layer
+            # catalogue (`sources`) so a widget can label itself and build its query URL without a
+            # metadata round trip. Baked only for the dashboard archetype — null everywhere else,
+            # so "is this a dashboard" is one test in the runtime.
+            "dashboard": (dict(_dashboard, sources=(dashboard_sources or {})) if _dashboard else None),
             # V-11 R3: colour-theme metadata (portal.js reads .mode for the initial light/dark state).
             "theme": resolve_theme(theme),
             # The full basemap catalog, baked in so portal.js builds the switcher from the SAME source
@@ -772,6 +893,11 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
     # Inject the shared runtime first (it contains no placeholders), then the data.
     html = layout_html.replace("{{PORTAL_CSS}}", portal_css)
     html = html.replace("{{PORTAL_JS}}", portal_js)
+    # Substituted for EVERY archetype, not only the dashboard: a template shipping its own
+    # layout.html would otherwise render the literal placeholder text into the page. The runtime is
+    # inert unless style.geodeploy.dashboard is present, so the only cost is the bytes.
+    html = html.replace("{{DASHBOARD_CSS}}", dashboard_css)
+    html = html.replace("{{DASHBOARD_JS}}", dashboard_js)
     # STYLE_JSON / POPUP_CONFIG are embedded INSIDE a <script> block, so a user-controlled string
     # (e.g. a layer name containing "</script>") could otherwise break out of the script and inject
     # markup. `_json_for_html` neutralizes the HTML-significant characters as valid JS-string
@@ -1402,6 +1528,108 @@ def _source_layer_name(layer) -> str:
     GeoParquet PMTiles use the tippecanoe layer name "geodeploy" (see tasks/pmtiles_tile.PMTILES_LAYER)."""
     return ("geodeploy" if getattr(layer, "storage_backend", "postgis") == "geoparquet"
             else f"{layer.schema_name}.{layer.table_name}")
+
+
+#: The attributes tippecanoe writes onto a clustered feature. Verified against v2.80.0's own
+#: tilestats rather than assumed — a wrong name here is an empty circle with no error anywhere.
+_CLUSTER_FLAG = "clustered"
+_CLUSTER_COUNT = "point_count"
+_CLUSTER_SQRT = "sqrt_point_count"       # pre-rooted by tippecanoe, so radius scales by area
+_CLUSTER_LABEL = "point_count_abbreviated"
+
+
+def _and_filter(ml: dict, extra: list) -> None:
+    """AND `extra` into a style layer's filter, in place, keeping whatever was already there.
+
+    Replacing rather than combining is the mistake the dashboard's `applyMapFilter` made and had to
+    be fixed for: a raw-paint passthrough (a GeoLibre import) emits several style layers for one data
+    layer, each filtered to the part it draws, and overwriting that makes the polygon layer draw the
+    points too.
+    """
+    current = ml.get("filter")
+    if current is None:
+        ml["filter"] = extra
+    elif isinstance(current, list) and current and current[0] == "all":
+        ml["filter"] = current + [extra]
+    else:
+        ml["filter"] = ["all", current, extra]
+
+
+def _clusters_enabled(layer) -> bool:
+    """True when this layer's PMTiles archive was built with clustering. Requires the flag AND a
+    ready archive AND a positively-point geometry — the same three conditions the tiling task used,
+    so the style can never describe an archive that was not built that way."""
+    return bool(getattr(layer, "cluster_points", False)
+                and getattr(layer, "storage_backend", "postgis") == "geoparquet"
+                and layer.tile_status == "ready"
+                and _is_point(layer.geometry_type))
+
+
+def _cluster_layers(source_id: str, layer, cfg: dict) -> list[dict]:
+    """The two extra style layers a CLUSTERED point archive needs: a circle sized by how many points
+    it stands for, and the count written on it.
+
+    Radius comes from `sqrt_point_count`, not `point_count`: a circle's AREA is what the eye reads as
+    quantity, so the radius has to go as the square root or a cluster of 500 looks 250 times a
+    cluster of 2 instead of 16 times. tippecanoe pre-computes the root, so this is a plain
+    interpolation rather than an expression the style has to evaluate per feature.
+
+    The base marker layer is filtered to unclustered features by `_vector_layer`, so the two never
+    draw on top of each other.
+    """
+    style = cfg.get("style") or {}
+    colour = symbology.color_expression(style)
+    # A single colour, even when the layer is classified: a cluster stands for features of MANY
+    # classes, so painting it with one class's colour would state something untrue. The data-driven
+    # expression is kept for the unclustered markers, which really are one class each.
+    if not isinstance(colour, str):
+        colour = style.get("color", "#3b82f6")
+    opacity = cfg.get("opacity", 1.0)
+    source_layer = _source_layer_name(layer)
+    is_cluster = ["==", ["get", _CLUSTER_FLAG], True]
+    return [
+        {
+            "id": f"vector-{layer.id}-clusters",
+            "type": "circle",
+            "source": source_id,
+            "source-layer": source_layer,
+            "filter": is_cluster,
+            "paint": {
+                "circle-color": colour,
+                "circle-opacity": 0.85 * opacity,
+                "circle-stroke-color": "#ffffff",
+                "circle-stroke-width": 1.5,
+                "circle-radius": [
+                    "interpolate", ["linear"], ["get", _CLUSTER_SQRT],
+                    1.4, 12,      # sqrt(2)   — the smallest cluster tippecanoe makes
+                    22.4, 34,     # sqrt(500) — a dense city block
+                ],
+            },
+        },
+        {
+            "id": f"vector-{layer.id}-cluster-count",
+            "type": "symbol",
+            "source": source_id,
+            "source-layer": source_layer,
+            "filter": is_cluster,
+            "layout": {
+                # The abbreviated form ("1.2k"), because the count is drawn INSIDE the circle and a
+                # six-digit number does not fit one.
+                "text-field": ["to-string", ["get", _CLUSTER_LABEL]],
+                "text-size": 11,
+                "text-font": ["Noto Sans Regular"],
+                "text-allow-overlap": True,
+                "text-ignore-placement": True,
+            },
+            "paint": {
+                "text-color": "#ffffff",
+                # A halo rather than a shadow: the circle beneath is the layer's own colour, which an
+                # author can set to anything, and white-on-pale needs the dark edge to stay readable.
+                "text-halo-color": "rgba(0,0,0,0.45)",
+                "text-halo-width": 1,
+            },
+        },
+    ]
 
 
 def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:

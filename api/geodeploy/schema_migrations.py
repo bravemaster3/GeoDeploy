@@ -62,4 +62,12 @@ PG_MIGRATIONS = [
     # NO default on purpose: NULL means "not measured", which is different from False and is what
     # keeps every existing layer on the extent heuristic until it is re-ingested.
     "ALTER TABLE raster_layers ADD COLUMN IF NOT EXISTS low_zoom_ok BOOLEAN",
+    # V-16 dashboard archetype: the widget grid + its cross-filter wiring. Nullable — every portal
+    # published before this has no dashboard, and NULL is exactly what "no dashboard" means.
+    "ALTER TABLE portals ADD COLUMN IF NOT EXISTS dashboard TEXT",
+    # Low-zoom point clustering, applied by tippecanoe when the layer is tiled. DEFAULT FALSE rather
+    # than nullable: unlike `low_zoom_ok` there is no "not measured" state to preserve — every
+    # existing archive was built without clustering, and False is exactly what that means. Turning it
+    # on requires a re-tile, which is why it lives on the layer and not in a portal's style.
+    "ALTER TABLE vector_layers ADD COLUMN IF NOT EXISTS cluster_points BOOLEAN DEFAULT FALSE",
 ]

@@ -4,6 +4,84 @@ Notable changes, newest first. Versions are **major.minor** — `v1.0`, `v1.1`, 
 `v2.0`. The minor number moves for anything shipped, features or fixes; the major changes when an
 upgrade needs manual work.
 
+## Unreleased
+
+## v1.5 — 2026-08-29
+
+### Dashboards — a fourth experience
+
+- **A dashboard is a grid of widgets that cross-filter each other**, with the map placed into a
+  cell rather than the page arranged around it. Indicator, gauge, chart, list/table, column
+  profile, scatter, selector, search box, details panel, legend, raster statistics and the map.
+- **Three filter channels.** An attribute predicate reaches widgets on the same layer; a geometry —
+  a click, a drawn polygon, a box, or the map's extent — reaches every widget whatever layer it
+  reads; a selection fills the details panel. They combine with AND, and each shows as a chip that
+  can clear itself.
+- **Linked layers.** Declare that two layers share a column and an attribute filter travels between
+  them — clicking a canton in a buildings chart narrows the entrances list. The filter is pushed
+  into the engine as a subquery rather than passed around as a list of ids, because narrowing 3.4M
+  buildings to one canton yields about 477k keys. A link between differently-stored layers is
+  refused with a reason rather than half-applied.
+- **The map narrows every layer it draws**, each by its own filters — not only the layer it
+  hit-tests clicks against. Those are two different questions about the map widget's bound layer,
+  and answering the second with the first left a layer unfiltered on screen while every widget
+  reading it had narrowed.
+- **A linked filter can narrow the map too, if you ask.** _Follow linked-layer filters_ on the map
+  widget, off by default, resolves a relation to the keys it matches so the map can test features
+  against them. Capped at 5 000 keys; past the cap the map is left unfiltered and says so on
+  screen, so "nothing matched" is never mistaken for "too many matched to draw".
+- **The linked-filter key limit is an author's choice** — 1 000, 5 000, 10 000 or 20 000 per map —
+  and the request that fetches those keys now asks for keys alone, about a sixth of the bytes the
+  grouped answer carried. This also fixes the limit being silently clamped to 200 server-side, which
+  made the map stop narrowing at 201 features while reporting that it had passed 5 000.
+- **Bar-chart category labels tilt and thin more honestly**, ending at the tick they name rather
+  than straddling it, and dropping only as many as they must: 26 categories on a wide card now show
+  all 26 labels instead of 13.
+- **A pie or donut's plot can be sized independently of its widget**, so a long legend has room to
+  be read instead of ending up in a scrollbar.
+- **The map now says when a GeoParquet layer is not being narrowed.** Those layers draw through
+  deck.gl and have never been filterable on the map, for any kind of filter — but the map drew them
+  whole and said nothing, so an unfiltered layer and an empty result looked the same. It now names
+  them.
+- **Charts that carry their weight.** Several measures against one grouping (multi-line, clustered
+  bars), one colour per category or a shaded ramp for an ordered key, printed values with shares,
+  and a scatter of one numeric column against another — randomly sampled, and it says so.
+- **A column profile** describing what is in the selected data: completeness, distinct counts, and
+  either a range or the commonest values.
+- **Widgets can be pinned to the map** at any of eight anchors, or docked into the map's own
+  control cluster beside zoom and the layer list, and can collapse to a single icon.
+- **Filter by map extent**, opt-in, with every widget it narrows saying "· in view" while it is on.
+- **Six starting templates**, each a working layout that binds itself to your layers.
+- **The dashboard now carries the layer list**, and therefore the legend — it had `legend: true`
+  and nowhere to draw it.
+- **Point layers can be clustered at low zoom**, applied while the PMTiles archive is built. Points
+  only, and it takes effect on a re-tile.
+
+### Also in this release
+
+- **The CLI and the QGIS plugin know the new experience.** `geodeploy portals create --experience
+  dashboard` works; it was refused by the client itself before, whatever the server supported. The
+  plugin needed no change — it creates portals with no archetype and only reads one for display —
+  but it vendors the same client, so its copy is current too.
+
+### Fixes
+
+- **Numbers in a list are no longer abbreviated.** A building id of 1011771 rendered as "1M", and
+  so did every other building. Compaction belongs to a measurement in a big figure, not to a value
+  in a row; years and postcodes come out right for the same reason.
+- **The symbology panel stays inside the window**, and "Save as default" is a pinned footer rather
+  than the last thing in a panel several screens long — it could previously be off-screen entirely.
+- **The filter bar no longer wraps** into a lozenge covering a third of the map.
+- **The demo upload cap exempts the instance owner**, so loading a test layer no longer means taking
+  the demo down first. Owner only — not admin — and unauthenticated requests still hit the cap.
+- **A linked filter's key limit was really 200, not 5 000.** The server clamped it to the ceiling
+  meant for chart groups, so the map stopped narrowing at 201 matching features while reporting that
+  it had passed 5 000. Key sets now have their own ceiling, and the offered limits are checked
+  against it.
+- **`vendor.py` could delete the plugin's vendored client instead of refreshing it.** It removed the
+  directory before copying, and removing it fails on Windows whenever anything holds a handle —
+  OneDrive does. It now copies over the tree without removing the folder.
+
 ## v1.4.1 — 2026-08-28
 
 A patch release, and the second deliberate exception to the major.minor convention above: a

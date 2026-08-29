@@ -1,0 +1,73 @@
+{
+  "name": "Asset tracker",
+  "author": "GeoDeploy",
+  "description": "An infrastructure board: a map, condition gauges with threshold bands, a filterable asset table and a details panel that fills in whatever is selected. Built for inspection, condition and maintenance datasets. Every widget stays removable and re-bindable — this is a starting layout, not a fixed one.",
+  "tags": ["dashboard", "assets", "infrastructure", "maintenance", "official"],
+  "language": "en",
+  "basemap": "positron",
+  "preview": "preview.png",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "archetype": "dashboard",
+  "archetypes": ["dashboard"],
+  "layout": {
+    "regions": { "dashboard": { "density": "comfortable", "mapControls": true } }
+  },
+  "dashboard": {
+    "grid": { "rowHeight": 88, "gap": 10 },
+    "refresh": 0,
+    "widgets": [
+      {
+        "id": "sel-status", "type": "selector", "title": "Status",
+        "layout": { "x": 0, "y": 0, "w": 4, "h": 2 },
+        "dataSource": { "kind": "category", "multi": true },
+        "actions": { "filters": ["gauge-condition", "kpi-assets", "table", "map", "chart-breakdown"], "listens": false }
+      },
+      {
+        "id": "kpi-assets", "type": "indicator", "title": "Assets",
+        "layout": { "x": 4, "y": 0, "w": 3, "h": 2 },
+        "dataSource": { "op": "count" },
+        "style": { "format": "integer" },
+        "actions": { "filters": [], "listens": true }
+      },
+      {
+        "id": "gauge-condition", "type": "gauge", "title": "Mean condition",
+        "layout": { "x": 7, "y": 0, "w": 5, "h": 4 },
+        "dataSource": { "op": "avg" },
+        "style": {
+          "min": 0, "max": 100, "decimals": 1,
+          "bands": [
+            { "from": 0, "color": "#dc2626", "label": "Critical" },
+            { "from": 40, "color": "#d97706", "label": "Warning" },
+            { "from": 70, "color": "#16a34a", "label": "Good" }
+          ]
+        },
+        "actions": { "filters": [], "listens": true }
+      },
+      {
+        "id": "map", "type": "map", "title": "Asset map",
+        "layout": { "x": 0, "y": 2, "w": 7, "h": 6 },
+        "dataSource": { "tools": ["click", "polygon", "bbox"], "tolPx": 6 },
+        "actions": { "filters": ["kpi-assets", "gauge-condition", "table", "details", "chart-breakdown"], "listens": true }
+      },
+      {
+        "id": "details", "type": "details", "title": "Selected asset",
+        "layout": { "x": 7, "y": 4, "w": 5, "h": 4 },
+        "actions": { "filters": [], "listens": true }
+      },
+      {
+        "id": "table", "type": "table", "title": "Assets",
+        "layout": { "x": 0, "y": 8, "w": 7, "h": 4 },
+        "dataSource": { "pageSize": 50 },
+        "actions": { "filters": ["details", "gauge-condition", "chart-breakdown"], "listens": true }
+      },
+      {
+        "id": "chart-breakdown", "type": "chart", "title": "Breakdown",
+        "layout": { "x": 7, "y": 8, "w": 5, "h": 4 },
+        "dataSource": { "op": "count", "limit": 8, "sort": "value_desc" },
+        "style": { "chart": "hbar" },
+        "actions": { "filters": ["kpi-assets", "gauge-condition", "table", "map"], "listens": true }
+      }
+    ]
+  }
+}

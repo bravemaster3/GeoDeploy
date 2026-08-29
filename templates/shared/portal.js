@@ -59,6 +59,10 @@
     // V-14 catalog: a BROWSE surface. The dataset list is the page and the map is a panel beside it,
     // so layerCatalog is off (the facet rail replaces the switcher) and `catalog` carries the split.
     catalog:  { regions: { layerList: { side: 'right', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, catalog: { scope: 'portal', mapSide: 'right', mapWidth: 50, railWidth: 20, perPage: 12 } }, panels: { catalog: true, layerCatalog: false, legend: true, basemap: true, about: false, story: false } },
+    // V-16 dashboard: the MAP IS A WIDGET. #layout becomes the widget grid and #map-wrap takes the
+    // map widget's cell by grid-area — never re-parented, same rule as the catalog. `layerCatalog`
+    // is off by default because the widgets name their own data; an author can turn it back on.
+    dashboard: { regions: { layerList: { side: 'left', mode: 'floating', collapsed: true, width: null, x: null, y: null }, controls: { position: 'top-right' }, header: { style: 'bar' }, dashboard: { density: 'comfortable', mapControls: true } }, panels: { dashboard: true, layerCatalog: true, legend: true, basemap: true, about: false, story: false } },
   };
   // `webmap+catalog` is still UNBUILT and degrades to a working map on purpose — a blank shell would
   // be worse. `catalog` used to be here too, which is why choosing it silently rendered a web map.
@@ -108,6 +112,21 @@
       b.style.setProperty('--cat-map-w', Math.min(60, Math.max(30, mw)) + '%');
       const cp = document.getElementById('catalog-panel');
       if (cp) cp.style.display = '';
+    }
+    // V-16 dashboard: reveal the widget host and stamp the density NOW, at parse time, for the same
+    // reason the catalog claims its column here — MapLibre measures its container at construction,
+    // so a grid that appears later would build the map at the wrong size and then jump.
+    // The GRID is still keyed on the archetype, because turning #layout into a widget grid
+    // restructures the whole page — that IS the dashboard archetype, and a webmap must not acquire
+    // it by ticking a panel. What the panel flag governs is whether the widget RUNTIME loads at
+    // all (see the handoff further down), which is what lets any archetype carry overlay widgets
+    // over its map without becoming a dashboard.
+    if (L.archetype === 'dashboard') {
+      const dcfg = (L.regions && L.regions.dashboard) || {};
+      b.dataset.dashDensity = dcfg.density === 'compact' ? 'compact' : 'comfortable';
+      b.dataset.dashMapctrl = dcfg.mapControls === false ? '0' : '1';
+      const dp = document.getElementById('dashboard-panel');
+      if (dp) dp.style.display = '';
     }
     // The layer list is hidden by whether its PANEL is enabled, not by which archetype is in play.
     // It used to be hidden by a CSS rule keyed on the catalog archetype, which meant a catalog
@@ -314,6 +333,7 @@
   loading.need('render');    // MapLibre has finished drawing the opening view
   if (LAYOUT.archetype === 'catalog') loading.need('catalog');
   if (LAYOUT.archetype === 'storymap') loading.need('story');
+  if (LAYOUT.archetype === 'dashboard') loading.need('dashboard');
   // Backstop. NOT the mechanism — the gates above are — but a portal must never be held hostage by
   // one piece that fails in a way that skips its own clear (a hard error inside MapLibre, a style
   // that never finishes). Generous enough that a slow connection reaches readiness first.
@@ -1312,6 +1332,117 @@
       try { setupCatalog(); } catch (e) { console.warn('[geodeploy] catalog failed', e); }
       loading.ready('catalog');   // outside the catch, for the same reason as the story panel
     }
+    // V-16 dashboard: hand the map to the dashboard runtime (templates/shared/dashboard.js), which
+    // owns the widget grid, the shared filter state and the query layer. It lives in its own file
+    // rather than in here so a 4.7k-line runtime does not become a 6k-line one, and so it can be
+    // syntax-checked on its own. AFTER initDeck() for the same reason the catalog is: a map widget
+    // over a GeoParquet layer needs deckState to already exist.
+    // Gated on the PANEL, not on the archetype — the same rule the layer list follows ten lines
+    // into resolveLayout ("hidden by whether its PANEL is enabled, not by which archetype is in
+    // play"). The dashboard archetype turns `panels.dashboard` on by default, so nothing about a
+    // dashboard changes; what this adds is a webmap or a storymap that declares widgets getting
+    // them, as overlays on its map. Widgets with no overlay anchor still need the grid, so they
+    // only appear on the archetype that has one.
+    if (LAYOUT.panels && LAYOUT.panels.dashboard) {
+      try {
+        if (window.GD_DASHBOARD && typeof window.GD_DASHBOARD.setup === 'function') {
+          window.GD_DASHBOARD.setup({
+            map: map,
+            maplibregl: maplibregl,
+            style: STYLE,
+            layout: LAYOUT,
+            editMode: EDIT_MODE,
+            // The runtime's own absolutifier, so a tile/data URL baked with the origin token
+            // resolves identically in both files rather than being re-derived in one of them.
+            absUrl: function (u) { return String(u || '').split('__GD_ORIGIN__').join(location.origin); },
+            // Is a GeoParquet (deck.gl) layer currently ON? The baked `deckLayers[].visible` is
+            // only its starting state — a visitor toggling it in the layer list writes to
+            // `deckState`, which lives here. The dashboard needs the live answer because it tells
+            // the visitor which layers a filter is NOT narrowing, and naming a layer that is not
+            // even on screen would be worse than saying nothing.
+            deckVisible: function (layerId) {
+              const st = deckState[layerId];
+              return st ? !!st.visible : null;      // null = not a deck layer
+            },
+            // Fitting the map to a selection is portal.js's job (it owns the camera + the
+            // navigation history), so the dashboard asks rather than reaching for map.fitBounds.
+            fitBbox: function (b) {
+              try { map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 60, maxZoom: 16, duration: 700 }); }
+              catch (e) { /* an empty or malformed extent is not worth breaking a click over */ }
+            },
+            // The LEGEND, built by the same code that builds it for the layer list. A dashboard
+            // hides the layer list by default (`panels.layerCatalog: false`), and the legend has
+            // always lived INSIDE a layer card — so a dashboard had `legend: true` and nothing to
+            // render it into. This hands the dashboard the entries rather than letting it grow a
+            // second legend renderer: one description of a layer's symbology, however many surfaces
+            // draw it. Reads the live style, so it reflects a symbology edit without a re-publish.
+            legendEntries: function () {
+              const out = [];
+              (STYLE.layers || []).forEach(function (layer) {
+                const meta = layer.metadata;
+                if (!meta || !meta['geodeploy:name'] || meta['geodeploy:part']) return;
+                const type = meta['geodeploy:type'];
+                const geom = meta['geodeploy:geometry'] || (type === 'raster' ? 'raster' : 'point');
+                const color = getLayerColor(layer);
+                const dash = dashKind(layer.paint);
+                const shape = meta['geodeploy:marker'] || 'circle';
+                const outline = geom === 'polygon' ? bakedOutline(layer.id) : null;
+                let visible = true;
+                try { visible = map.getLayoutProperty(layer.id, 'visibility') !== 'none'; } catch (e) {}
+                out.push({
+                  id: layer.id,
+                  layerId: meta['geodeploy:layer_id'],
+                  name: meta['geodeploy:name'],
+                  geometry: geom,
+                  visible: visible,
+                  bbox: meta['geodeploy:bbox'] || null,
+                  swatch: legendSwatch(geom, color, dash, shape, outline),
+                  detail: type === 'raster' && !meta['geodeploy:external']
+                    ? rasterLegendHtml(layer)
+                    : vectorLegendHtml(meta['geodeploy:legend'], geom, meta['geodeploy:legendField'],
+                                       meta['geodeploy:sizeLegend'], color, meta['geodeploy:lineType'],
+                                       shape, outline),
+                });
+              });
+              return out;
+            },
+            // Where the map's own control cluster sits, and how to add a button to it. A dashboard
+            // widget that collapses to an icon should BE one of those icons rather than a square
+            // floating in a corner of its own — it is a map control as far as the eye is concerned,
+            // and the eye is right. portal.js owns the cluster (position, styling, the corner an
+            // author chose), so it hands over a maker rather than letting the dashboard guess.
+            ctrlPos: CTRL_POS,
+            addControlButton: function (cls, title, iconHtml, onClick) {
+              try {
+                const holder = { ctl: null };
+                const control = {
+                  onAdd: function () {
+                    holder.ctl = ctrlButton(cls, title, iconHtml, onClick);
+                    return holder.ctl;
+                  },
+                  onRemove: function () { if (holder.ctl) holder.ctl.remove(); },
+                };
+                map.addControl(control, CTRL_POS);
+                return holder;
+              } catch (e) { return null; }
+            },
+            // Toggling a layer belongs to portal.js for the same reason fitBbox does — it owns the
+            // map. `groupLayerIds` is what makes it correct: a raw-paint import renders as fill +
+            // outline + …, all sharing one geodeploy:layer_id, and toggling only the primary leaves
+            // half the layer on screen.
+            setLayerVisible: function (styleLayerId, on) {
+              const vis = on ? 'visible' : 'none';
+              groupLayerIds(styleLayerId).forEach(function (lid) {
+                try { map.setLayoutProperty(lid, 'visibility', vis); } catch (e) {}
+              });
+            },
+          });
+        } else {
+          console.warn('[geodeploy] dashboard runtime missing');
+        }
+      } catch (e) { console.warn('[geodeploy] dashboard failed', e); }
+      loading.ready('dashboard');   // outside the catch, for the same reason as the story panel
+    }
     // R2: when rendered as the editor's preview (?edit=1), open the postMessage channel + click-to-place.
     try { setupEditMode(); } catch (e) { console.warn('[geodeploy] edit mode failed', e); }
     // Everything this handler mounts now exists. The cover still waits on 'render' — the map has to
@@ -1718,12 +1849,17 @@
             '<line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/></svg>' +
           '</button>' +
         '</div>' +
-        (type === 'raster' && !meta['geodeploy:external']
-          ? '<div class="layer-legend" data-legend="' + layer.id + '">' + rasterLegendHtml(layer) + '</div>'
-          : vectorLegendHtml(meta['geodeploy:legend'], geom,
-                             meta['geodeploy:legendField'], meta['geodeploy:sizeLegend'], color,
-                             meta['geodeploy:lineType'], meta['geodeploy:marker'],
-                             geom === 'polygon' ? bakedOutline(layer.id) : null));
+        // `panels.legend` finally gates something. It has been declared in every archetype's
+        // defaults since V-11 and read by NOTHING — an inert field that reads like a switch, which
+        // is a trap for whoever tries to use it next. Default true everywhere, so no portal changes
+        // how it looks; what changes is that turning it off now does what its name says.
+        (LAYOUT.panels.legend === false ? '' :
+          (type === 'raster' && !meta['geodeploy:external']
+            ? '<div class="layer-legend" data-legend="' + layer.id + '">' + rasterLegendHtml(layer) + '</div>'
+            : vectorLegendHtml(meta['geodeploy:legend'], geom,
+                               meta['geodeploy:legendField'], meta['geodeploy:sizeLegend'], color,
+                               meta['geodeploy:lineType'], meta['geodeploy:marker'],
+                               geom === 'polygon' ? bakedOutline(layer.id) : null)));
       container.appendChild(card);
     });
 

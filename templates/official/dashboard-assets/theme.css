@@ -1,0 +1,24 @@
+/* Asset tracker — a maintenance console. Neutral greys, square corners and an amber accent, the
+   colour condition data already speaks in; the gauge bands supply the red and the green. */
+:root {
+  --bg: #ffffff;
+  --surface: #f2f4f6;
+  --border: #d3d8dd;
+  --text: #1a1f24;
+  --text-muted: #616b75;
+  --accent: #b45309;
+  --accent-light: #fdf0dd;
+  --radius: 3px;
+}
+body { font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; }
+
+#header { background: #1a1f24; border-bottom: 2px solid var(--accent); }
+#portal-title { color: #f4f5f6; font-weight: 650; }
+#sidebar-toggle { color: #b9c0c7; }
+#sidebar-toggle:hover { background: rgba(255,255,255,.12); color: #ffffff; }
+#header-badge { color: rgba(244,245,246,.6); }
+#header-badge a:hover { color: #ffffff; }
+
+/* A table is the centre of this board, so its rows get room and its header a hard edge. */
+.gd-table th { text-transform: uppercase; letter-spacing: .04em; font-size: 10px; }
+.gd-table td { padding-top: 6px; padding-bottom: 6px; }

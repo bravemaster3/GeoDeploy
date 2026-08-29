@@ -88,6 +88,18 @@
         <TilesIcon class="w-4 h-4" :class="(tiling || isTiling(layer)) ? 'animate-pulse' : ''" />
       </button>
 
+      <!-- Low-zoom point clustering. Sits beside the Tile action because it IS that action: the
+           clustering is baked into the archive by tippecanoe, so changing it without re-tiling
+           would change nothing on the map. -->
+      <label v-if="auth.canEdit && canTile && ready && isPointLayer"
+        class="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer select-none"
+        :title="clusterPoints
+          ? 'Nearby points will be merged into counted circles at low zoom, on the next tiling.'
+          : 'Points thin out at low zoom. Tick to merge them into counted circles instead.'">
+        <input type="checkbox" v-model="clusterPoints" class="accent-primary" />
+        Cluster
+      </label>
+
       <button v-if="auth.canEdit && isVector && !isExternal" @click="onReprocess"
         :disabled="restarting" class="gd-act disabled:opacity-40"
         title="Restart processing — re-convert from the uploaded file, no re-upload needed">
@@ -442,6 +454,22 @@ const rampRange = computed(() => {
 
 // What KIND of thing this layer draws, for the swatch shape.
 // Only a GeoParquet layer has PMTiles to build; PostGIS is already tiled by Martin.
+//: Positively a point layer. Clustering is offered for points only — a clustered polygon layer is a
+//: centroid heatmap in disguise, and the choropleth the portal can already draw says more. Matches
+//: `portal_generator._is_point`: an unknown or mixed type answers NO.
+const isPointLayer = computed(() => {
+  const g = (layer.value?.geometry_type || '').toLowerCase()
+  return g.includes('point') && !g.includes('polygon') && !g.includes('line')
+})
+//: Seeded from what the ARCHIVE was actually built with, so the box shows the current state of the
+//: tiles rather than an assumption. Only follows the layer's own value — once the author has ticked
+//: it, their pending choice must survive the poll that refreshes the layer while tiling runs.
+const clusterPoints = ref(false)
+let clusterSeeded = false
+watch(layer, (l) => {
+  if (l && !clusterSeeded) { clusterPoints.value = !!l.cluster_points; clusterSeeded = true }
+}, { immediate: true })
+
 const canTile = computed(() =>
   isVector.value && !isExternal.value && layer.value?.storage_backend === 'geoparquet')
 
@@ -691,7 +719,9 @@ async function onTile() {
   // take minutes. See lib/tiling.js; My Data asks the same question in the same words.
   if (!confirmTiling(layer.value)) return
   tiling.value = true
-  try { await dataStore.tileVector(layer.value.id) }
+  // Sent only for a point layer: for anything else the flag is meaningless, and posting it would
+  // record a setting the tiler will never act on.
+  try { await dataStore.tileVector(layer.value.id, isPointLayer.value ? clusterPoints.value : undefined) }
   catch (e) { alert(e.response?.data?.detail || 'Could not start tiling.') }
   finally { tiling.value = false }
 }
