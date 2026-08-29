@@ -267,9 +267,6 @@ filters — for the questions a reader asks of the DATA rather than of the geogr
       narrow it too, behind a per-map opt-in with a chosen key limit and an on-map notice when it
       passes that limit rather than a map that looks narrowed and is not
 
-Two items scoped here did **not** ship in v1.5 and move to the next release rather than being
-counted: *linked or detached dashboards*, and the *benchmarks on real data*. See **Next up**.
-
 </div>
 
 ---
