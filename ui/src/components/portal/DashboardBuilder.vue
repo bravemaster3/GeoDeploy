@@ -335,6 +335,7 @@ const drag = ref(null)     // {id, mode:'move'|'resize', startX, startY, orig}
 const gridWidgets = computed(() => widgets.value.filter(w => !w.layout?.overlay))
 const overlayWidgets = computed(() => widgets.value.filter(w => w.layout?.overlay))
 const ANCHOR_LABELS = {
+  controls: 'with the map buttons',
   'top-left': 'top left', 'top-center': 'top centre', 'top-right': 'top right',
   'left-center': 'left', 'right-center': 'right',
   'bottom-left': 'bottom left', 'bottom-center': 'bottom centre', 'bottom-right': 'bottom right',
@@ -721,6 +722,7 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
               @change="patchWidget(selected.id, { layout: { overlay: $event.target.value || null } })"
               class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
               <option value="">In the grid</option>
+              <option value="controls">With the map's buttons</option>
               <optgroup label="On the map — top">
                 <option value="top-left">Top left</option>
                 <option value="top-center">Top centre</option>

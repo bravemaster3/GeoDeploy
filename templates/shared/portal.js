@@ -1397,6 +1397,26 @@
               });
               return out;
             },
+            // Where the map's own control cluster sits, and how to add a button to it. A dashboard
+            // widget that collapses to an icon should BE one of those icons rather than a square
+            // floating in a corner of its own — it is a map control as far as the eye is concerned,
+            // and the eye is right. portal.js owns the cluster (position, styling, the corner an
+            // author chose), so it hands over a maker rather than letting the dashboard guess.
+            ctrlPos: CTRL_POS,
+            addControlButton: function (cls, title, iconHtml, onClick) {
+              try {
+                const holder = { ctl: null };
+                const control = {
+                  onAdd: function () {
+                    holder.ctl = ctrlButton(cls, title, iconHtml, onClick);
+                    return holder.ctl;
+                  },
+                  onRemove: function () { if (holder.ctl) holder.ctl.remove(); },
+                };
+                map.addControl(control, CTRL_POS);
+                return holder;
+              } catch (e) { return null; }
+            },
             // Toggling a layer belongs to portal.js for the same reason fitBbox does — it owns the
             // map. `groupLayerIds` is what makes it correct: a raw-paint import renders as fill +
             // outline + …, all sharing one geodeploy:layer_id, and toggling only the primary leaves

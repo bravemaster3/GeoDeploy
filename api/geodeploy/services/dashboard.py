@@ -106,9 +106,15 @@ SEARCH_MODES = {"contains", "prefix"}
 #: the map keeping the rest. An overlay rail would cover half the map permanently and still have to
 #: fight the map's own controls for the edge.
 OVERLAY_ANCHORS = {
+    # The eight compass points…
     "top-left", "top-center", "top-right",
     "left-center", "right-center",
     "bottom-left", "bottom-center", "bottom-right",
+    # …and `controls`, which is not a position at all but a HOME: the widget's collapsed icon joins
+    # the map's own control cluster, wherever the author put that, and its panel opens beside it. A
+    # legend belongs with the zoom and basemap buttons, not floating in a corner over the scale bar.
+    # Only meaningful together with `overlayCollapsed` — an always-open panel has no icon to dock.
+    "controls",
 }
 
 #: The selection modes a map widget can offer. All of them normalise to ONE geometry filter

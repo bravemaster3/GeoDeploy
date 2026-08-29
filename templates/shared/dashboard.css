@@ -238,6 +238,17 @@ html[data-theme="dark"] .gd-ind-delta.down { color: #f87171; }
 .gd-overlay-collapsible.is-collapsed > .gd-overlay-toggle {
   background: var(--bg); color: var(--text);
 }
+/* DOCKED: the icon lives in MapLibre's control cluster, so the slot holds only the panel and must
+   not reserve a button's worth of space or paint a box around nothing while shut. */
+.gd-overlay-docked.is-collapsed { box-shadow: none; border: none; pointer-events: none; }
+.gd-overlay-docked > .gd-overlay-toggle { display: none; }
+/* Open, the panel sits clear of the cluster it belongs to. 52px is the cluster's own width plus its
+   margin — the same figure the right-hand anchors use. */
+.gd-overlay-docked.gd-overlay-top-right,
+.gd-overlay-docked.gd-overlay-bottom-right { right: 52px; }
+.gd-overlay-docked.gd-overlay-top-left,
+.gd-overlay-docked.gd-overlay-bottom-left { left: 52px; }
+
 /* Anchored right or bottom, the button should hug that edge rather than the opposite one. */
 .gd-overlay-top-right > .gd-overlay-toggle,
 .gd-overlay-right-center > .gd-overlay-toggle,

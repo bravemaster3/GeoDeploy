@@ -453,32 +453,53 @@ window.GD_DASHBOARD = (function () {
   //: The widget is HIDDEN, never destroyed — it keeps its results, its selection and its place in
   //: the filter bus while shut, so re-opening shows what you left rather than an empty box, and a
   //: filter it published stays published.
-  function makeCollapsible(slot, w, expandedW) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'gd-overlay-toggle';
-    btn.innerHTML = OVERLAY_ICONS[w.type] || OVERLAY_ICON_FALLBACK;
+  function makeCollapsible(slot, w, expandedW, env, docked) {
     const label = w.title || (w.type === 'search' ? 'Search' : 'Open');
-    btn.title = label;
-    btn.setAttribute('aria-label', label);
-    btn.setAttribute('aria-expanded', 'false');
-    slot.insertBefore(btn, slot.firstChild);
+    const icon = OVERLAY_ICONS[w.type] || OVERLAY_ICON_FALLBACK;
     slot.classList.add('gd-overlay-collapsible', 'is-collapsed');
-    slot.style.width = '';                    // collapsed: the button's own size
+    slot.style.width = '';                    // collapsed: nothing but the panel, and it is hidden
+
+    let btn = null;
     function setOpen(open) {
       slot.classList.toggle('is-collapsed', !open);
       slot.style.width = open ? expandedW + 'px' : '';
-      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
       if (open) {
         // Put the caret where the visitor is about to type, rather than making them click twice.
         const input = slot.querySelector('input');
         if (input) { try { input.focus(); } catch (e) {} }
       }
     }
-    btn.addEventListener('click', function () { setOpen(slot.classList.contains('is-collapsed')); });
+    function toggle() { setOpen(slot.classList.contains('is-collapsed')); }
+
+    // DOCKED: the icon joins the map's own control cluster and is styled by MapLibre, so it is
+    // indistinguishable from zoom or basemap — which is the point. Falls back to an in-slot button
+    // if the portal shell is older than `addControlButton`, rather than losing the toggle entirely.
+    if (docked && env && env.addControlButton) {
+      const handle = env.addControlButton('gd-widget-btn', label, icon, toggle);
+      if (handle) {
+        slot.classList.add('gd-overlay-docked');
+      } else {
+        docked = false;
+      }
+    }
+    if (!docked || !env || !env.addControlButton) {
+      btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'gd-overlay-toggle';
+      btn.innerHTML = icon;
+      btn.title = label;
+      btn.setAttribute('aria-label', label);
+      btn.setAttribute('aria-expanded', 'false');
+      btn.addEventListener('click', toggle);
+      slot.insertBefore(btn, slot.firstChild);
+    }
     // Escape shuts it, which is the shortcut anyone who opened a panel over a map reaches for.
     slot.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && !slot.classList.contains('is-collapsed')) { setOpen(false); btn.focus(); }
+      if (e.key === 'Escape' && !slot.classList.contains('is-collapsed')) {
+        setOpen(false);
+        if (btn) btn.focus();
+      }
     });
   }
 
@@ -2395,6 +2416,8 @@ window.GD_DASHBOARD = (function () {
       //: Supplied by portal.js, which owns symbology rendering and the map. Absent on an older
       //: portal shell, which the legend widget checks for rather than assuming.
       legendEntries: ctx.legendEntries || null,
+      ctrlPos: ctx.ctrlPos || 'top-right',
+      addControlButton: ctx.addControlButton || null,
       setLayerVisible: ctx.setLayerVisible || null,
       fitBbox: ctx.fitBbox || function () {},
       //: THE IN-VIEW GUARD. While a map's `extent` tool is on, every widget that map filters is
@@ -2505,7 +2528,11 @@ window.GD_DASHBOARD = (function () {
         //
         // A slot also makes this work outside the dashboard archetype, where `.gd-w` carries no
         // styling at all — which it now has to, since the runtime is gated on the panel flag.
-        const slot = el('div', 'gd-overlay gd-overlay-' + anchor);
+        // `controls` is a HOME, not a position: the icon docks in the map's control cluster and the
+        // panel opens in that same corner, so the two read as one control.
+        const docked = anchor === 'controls';
+        const place = docked ? (env.ctrlPos || 'top-right') : anchor;
+        const slot = el('div', 'gd-overlay gd-overlay-' + place);
         const ow = (w.layout && w.layout.overlayW) || 260;
         slot.style.width = ow + 'px';
         // 0 / absent = as tall as its content, which is what a search box or a small readout wants.
@@ -2513,7 +2540,7 @@ window.GD_DASHBOARD = (function () {
         const oh = w.layout && w.layout.overlayH;
         if (oh) slot.style.height = oh + 'px';
         slot.appendChild(inst.el);
-        if (w.layout && w.layout.overlayCollapsed) makeCollapsible(slot, w, ow);
+        if (w.layout && w.layout.overlayCollapsed) makeCollapsible(slot, w, ow, env, docked);
         overlayHost(mapWrap).appendChild(slot);
         nodeById[w.id] = inst.el;
         store.subscribe(w.id, inst.refresh);
