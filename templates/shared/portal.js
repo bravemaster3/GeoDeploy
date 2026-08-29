@@ -1355,6 +1355,15 @@
             // The runtime's own absolutifier, so a tile/data URL baked with the origin token
             // resolves identically in both files rather than being re-derived in one of them.
             absUrl: function (u) { return String(u || '').split('__GD_ORIGIN__').join(location.origin); },
+            // Is a GeoParquet (deck.gl) layer currently ON? The baked `deckLayers[].visible` is
+            // only its starting state — a visitor toggling it in the layer list writes to
+            // `deckState`, which lives here. The dashboard needs the live answer because it tells
+            // the visitor which layers a filter is NOT narrowing, and naming a layer that is not
+            // even on screen would be worse than saying nothing.
+            deckVisible: function (layerId) {
+              const st = deckState[layerId];
+              return st ? !!st.visible : null;      // null = not a deck layer
+            },
             // Fitting the map to a selection is portal.js's job (it owns the camera + the
             // navigation history), so the dashboard asks rather than reaching for map.fitBounds.
             fitBbox: function (b) {

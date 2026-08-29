@@ -314,6 +314,37 @@ window.GD_DASHBOARD = (function () {
       return (prevTargets || []).concat(nextTargets || []);
     }
 
+    //: Which of the live filters reach a given TARGET, expressed against a given LAYER: the ones
+    //: on that layer directly, plus the ones from other layers that a declared relation lets
+    //: through as a join. Split out of `filtersFor` because the layer is not always the target's
+    //: own — the map asks it once per layer it draws.
+    function resolveFor(targetId, myLayer, key) {
+        const filters = [];
+        //: Cross-layer filters, grouped by the layer they came FROM: one join per source layer,
+        //: each carrying that layer's own predicates. Grouped rather than one-join-per-filter
+        //: because two filters on the same source layer are one subquery with two conditions, not
+        //: two subqueries — and because "the first one wins" would drop the rest silently.
+        const joinsBySource = {};
+        for (const sid in state.attr) {
+          const f = state.attr[sid];
+          if (sid === targetId) continue;                   // a widget never filters itself
+          if (f.targets.indexOf(targetId) < 0) continue;
+          if (key && f.layerKey === key) { filters.push(f.expr); continue; }
+          // A different layer. It can still reach this widget, but only through a relation the
+          // author declared — otherwise the predicate is dropped, exactly as before.
+          const from = f.layerId;
+          if (from == null || myLayer == null) continue;
+          const rel = relationBetween(relations, from, myLayer);
+          if (!rel) continue;
+          const j = joinsBySource[from] || (joinsBySource[from] = {
+            layerId: from, leftField: rel.leftField, rightField: rel.rightField, filters: [],
+          });
+          j.filters.push(f.expr);
+        }
+        const joins = Object.keys(joinsBySource).map(function (k) { return joinsBySource[k]; });
+        return { filters: filters, joins: joins.length ? joins : null };
+    }
+
     return {
       state: state,
       widget: function (id) { return byId[id]; },
@@ -377,35 +408,21 @@ window.GD_DASHBOARD = (function () {
 
       // Everything currently pointed at one widget, in the shape the endpoints take.
       filtersFor: function (w) {
-        const key = layerKeyOf(w);
-        const myLayer = layerIdOf(w);
-        const filters = [];
-        //: Cross-layer filters, grouped by the layer they came FROM: one join per source layer,
-        //: each carrying that layer's own predicates. Grouped rather than one-join-per-filter
-        //: because two filters on the same source layer are one subquery with two conditions, not
-        //: two subqueries — and because "the first one wins" would drop the rest silently.
-        const joinsBySource = {};
-        for (const sid in state.attr) {
-          const f = state.attr[sid];
-          if (sid === w.id) continue;                       // a widget never filters itself
-          if (f.targets.indexOf(w.id) < 0) continue;
-          if (key && f.layerKey === key) { filters.push(f.expr); continue; }
-          // A different layer. It can still reach this widget, but only through a relation the
-          // author declared — otherwise the predicate is dropped, exactly as before.
-          const from = f.layerId;
-          if (from == null || myLayer == null) continue;
-          const rel = relationBetween(relations, from, myLayer);
-          if (!rel) continue;
-          const j = joinsBySource[from] || (joinsBySource[from] = {
-            layerId: from, leftField: rel.leftField, rightField: rel.rightField, filters: [],
-          });
-          j.filters.push(f.expr);
-        }
-        const joins = Object.keys(joinsBySource).map(function (k) { return joinsBySource[k]; });
+        const r = resolveFor(w.id, layerIdOf(w), layerKeyOf(w));
         const geom = (state.geom && state.geom.targets.indexOf(w.id) >= 0)
           ? state.geom.geometry : null;
-        return { filters: filters, geometry: geom, joins: joins.length ? joins : null };
+        return { filters: r.filters, geometry: geom, joins: r.joins };
       },
+      //: The joins that would reach an ARBITRARY layer, rather than the one a widget is bound to.
+      //:
+      //: Only the map needs this. Every other widget reads exactly one layer, so "which joins reach
+      //: this widget" and "which joins reach this layer" are the same question. The map draws all of
+      //: them, so it has to ask the question once per layer it draws — see `applyMapFilter`'s
+      //: linked pass.
+      mapJoinsForLayer: function (w, layerId) {
+        return resolveFor(w.id, layerId, 'vector:' + layerId).joins;
+      },
+
       //: Attribute filters aimed at this widget, grouped by the layer each one belongs to:
       //: `{ layerId: [expr, …] }`.
       //:
@@ -2007,12 +2024,25 @@ window.GD_DASHBOARD = (function () {
     return { el: wrap, refresh: refresh, isMap: true };
   };
 
-  //: MapLibre's own `setFilter`, applied to every style layer that carries this layer's id in its
+  //: How many join keys the map will pull into a style expression before it gives up.
+  //:
+  //: Not a paint-cost budget: the keys go into a `match`, which MapLibre compiles to a hash lookup,
+  //: so the per-feature cost is flat however long the list is. It is a budget for the RESPONSE and
+  //: for the honesty of the answer. Narrowing 3.4M buildings to one canton yields ~477k keys, and a
+  //: filter that has to move half a million values into the browser to draw a map is a data
+  //: transfer wearing a predicate's clothes.
+  //:
+  //: Over the cap the layer is left UNFILTERED and the map SAYS SO. That is the whole reason this
+  //: is a feature rather than a hazard: a map that silently stops narrowing past some threshold is
+  //: worse than one that never narrowed, because "nothing matched" and "too many matched" look
+  //: identical on screen.
+  const LINKED_KEY_CAP = 5000;
+
+  //: MapLibre's own `setFilter`, applied to every style layer that carries a layer's id in its
   //: metadata. GeoParquet layers render through deck.gl, which has no style layer to filter — those
   //: are left alone rather than half-filtered, and the widgets over them still narrow correctly
   //: because their filtering happens server-side.
   function applyMapFilter(w, env) {
-    const map = env.map;
     // EVERY drawn layer, narrowed by ITS OWN filters — not one layer narrowed by the map widget's.
     // The map widget's `layerId` names the layer a CLICK hit-tests against; it was also being used
     // to decide what the map draws, which are two different questions. With a pie chart on
@@ -2022,15 +2052,144 @@ window.GD_DASHBOARD = (function () {
     // No early return on a missing selection layer either: a map that cannot turn a click into a
     // feature can still be narrowed by the widgets around it.
     const byLayer = env.store.mapFiltersByLayer(w);
+    const drawn = drawnLayerIds(env);
+    const linkedOn = !!(w.dataSource && w.dataSource.linkedFilter);
+
+    // One generation per apply. An answer that arrives after the visitor has moved on belongs to a
+    // question nobody is asking any more, and applying it would paint a filter the filter bar does
+    // not list. Same reasoning as the query client's abort, which cannot stand in for it here: the
+    // linked pass runs one request PER LAYER, so there is no single key to abort against.
+    const gen = (env.__mapFilterGen = (env.__mapFilterGen || 0) + 1);
+
+    const exprs = {};
+    drawn.forEach(function (lid) {
+      const clauses = (byLayer[lid] || []).map(toMapLibreExpr).filter(Boolean);
+      exprs[lid] = clauses.length ? ['all'].concat(clauses) : null;
+    });
+    setLayerFilters(env, exprs);
+
+    // Said whether or not the linked option is on: deck layers are unreachable by any filter.
+    const deckNote = deckNoteFor(deckLayersFiltered(w, env, byLayer, linkedOn));
+    if (!linkedOn) { mapNote(env, deckNote); return; }
+
+    // The LINKED pass, opt-in. A relation says two layers describe the same things and names the
+    // pair of columns that proves it; the widgets narrow through it as a subquery the engine runs.
+    // The map cannot run a subquery — it filters in the browser against tiles it already has — so
+    // the only way it can follow is to resolve the relation to the KEYS it matches and test against
+    // those. Which is the data transfer the join was introduced to avoid, and why this is off
+    // unless an author asks for it.
+    //
+    // Only layers with no filter of their OWN: a layer that can be narrowed directly already has
+    // been, and asking the server for keys it does not need would be a round trip for nothing.
+    const jobs = [];
+    drawn.forEach(function (lid) {
+      if ((byLayer[lid] || []).length) return;
+      (env.store.mapJoinsForLayer(w, lid) || []).forEach(function (j) {
+        // Ask the SOURCE layer for its own matching keys rather than the target layer through a
+        // join: `SELECT DISTINCT egid FROM entrances WHERE kind = 'main'` IS the set the join
+        // predicate tests against, it is a plain grouped aggregate on a layer the visitor can
+        // already read, and it never scans the target at all. Several relations onto one layer
+        // therefore resolve independently and AND together, which is what the join spec means.
+        jobs.push({
+          layerId: lid, keyField: j.rightField,
+          promise: env.api.aggregate(
+            'mapkeys:' + w.id + ':' + lid + ':' + j.layerId, j.layerId,
+            { op: 'count', groupBy: j.leftField, filters: j.filters,
+              limit: LINKED_KEY_CAP, sort: 'key_asc' })
+        });
+      });
+    });
+    if (!jobs.length) { mapNote(env, deckNote); return; }
+
+    Promise.all(jobs.map(function (job) {
+      return job.promise.then(
+        function (r) { return { job: job, res: r }; },
+        function (e) { return { job: job, err: e }; });
+    })).then(function (results) {
+      if (gen !== env.__mapFilterGen) return;               // a newer apply already painted
+      const capped = {};
+      results.forEach(function (out) {
+        const lid = out.job.layerId;
+        // A refused or failed key query is treated exactly like an over-cap one: the layer is left
+        // whole and the map says it was not narrowed. Silently drawing everything is the failure
+        // this whole note exists to prevent, and it does not matter which reason produced it.
+        if (out.err || !out.res || out.res.truncated) { capped[lid] = true; return; }
+        const keys = [], seen = {};
+        (out.res.groups || []).forEach(function (g) {
+          if (g.key == null) return;                        // a null key joins to nothing
+          const k = String(g.key);
+          if (seen[k]) return;                              // `match` labels must be unique
+          seen[k] = 1;
+          keys.push(k);
+        });
+        const clause = keys.length
+          // `match`, not `in`: MapLibre compiles a match's labels into a lookup object, so testing
+          // a feature is one probe however many keys there are, where `in` walks the array.
+          ? ['match', ['to-string', ['get', out.job.keyField]], keys, true, false]
+          // Nothing matched. That is a real answer — draw nothing — and it has to be said as an
+          // expression, because leaving the layer whole would show every feature for an empty set.
+          : ['==', ['literal', 1], ['literal', 0]];
+        const prev = exprs[lid];
+        exprs[lid] = prev ? prev.concat([clause]) : ['all', clause];
+      });
+      setLayerFilters(env, exprs);
+      const n = Object.keys(capped).length;
+      const capNote = n
+        ? ('Map not narrowed by ' + (n === 1 ? 'a linked filter' : 'linked filters')
+           + ' — over ' + LINKED_KEY_CAP.toLocaleString() + ' matching features')
+        : null;
+      // Both can be true at once, and the visitor needs both: one layer over the cap and another
+      // that cannot be filtered at all are different facts about the same map.
+      mapNote(env, [capNote, deckNote].filter(Boolean).join(' · '));
+    });
+  }
+
+  //: The layers on this map that a filter can reach but `setFilter` cannot: GeoParquet layers, drawn
+  //: by the deck.gl overlay, which has no style layer to filter.
+  //:
+  //: Answering "is anything unfilterable here" needs the DECK list specifically, because these
+  //: layers are absent from `style.layers` entirely — `drawnLayerIds` cannot see them, so without
+  //: this the map would draw the whole layer and say nothing, which is the exact failure the cap
+  //: notice exists to prevent. It is not specific to a linked filter: a plain same-layer predicate
+  //: does not reach a deck layer either.
+  function deckLayersFiltered(w, env, byLayer, linkedOn) {
+    const deck = (env.style && env.style.geodeploy && env.style.geodeploy.deckLayers) || [];
+    return deck.filter(function (d) {
+      const live = env.deckVisible ? env.deckVisible(d.layer_id) : null;
+      if (live === false) return false;                  // switched off in the layer list
+      if (live === null && d.visible === false) return false;   // or baked off, on an older shell
+      const lid = d.layer_id;
+      if (lid == null) return false;
+      if ((byLayer[lid] || []).length) return true;      // a filter on its own layer
+      return linkedOn && (env.store.mapJoinsForLayer(w, lid) || []).length > 0;
+    });
+  }
+
+  //: The distinct data layers the style draws, in style order. An external layer is skipped for the
+  //: same reason it always was: its features are somebody else's and carry none of our columns.
+  function drawnLayerIds(env) {
+    const seen = {}, out = [];
     (env.style.layers || []).forEach(function (lyr) {
       const meta = lyr.metadata || {};
       const lid = meta['geodeploy:layer_id'];
-      if (lid == null) return;
-      if (meta['geodeploy:external']) return;
-      const own = byLayer[lid] || [];
-      let expr = null;
-      const clauses = own.map(toMapLibreExpr).filter(Boolean);
-      if (clauses.length) expr = ['all'].concat(clauses);
+      if (lid == null || meta['geodeploy:external']) return;
+      if (seen[lid]) return;
+      seen[lid] = 1;
+      out.push(lid);
+    });
+    return out;
+  }
+
+  //: Push `{layerId: expr|null}` onto the live style. Every style layer belonging to a data layer
+  //: gets the same expression, because they draw parts of one thing.
+  function setLayerFilters(env, exprs) {
+    const map = env.map;
+    (env.style.layers || []).forEach(function (lyr) {
+      const meta = lyr.metadata || {};
+      const lid = meta['geodeploy:layer_id'];
+      if (lid == null || meta['geodeploy:external']) return;
+      if (!Object.prototype.hasOwnProperty.call(exprs, lid)) return;
+      const expr = exprs[lid];
       // AND with the layer's OWN filter, never replace it. A raw-paint passthrough
       // (`style.maplibre.layers`, how a GeoLibre import carries data-driven symbology) emits
       // several style layers for one data layer, each filtered to the part it draws. Overwriting
@@ -2046,6 +2205,35 @@ window.GD_DASHBOARD = (function () {
       try { map.setFilter(lyr.id, next); } catch (e) { /* a layer the live style no longer has */ }
     });
   }
+
+  //: NAMES the layers, unlike the cap note. A capped filter is about the selection and would say
+  //: the same thing whichever layer it hit; this is a permanent property of particular layers, and
+  //: "which ones" is the first thing anyone seeing it will want to know.
+  function deckNoteFor(deckLayers) {
+    if (!deckLayers.length) return null;
+    const names = deckLayers.map(function (d) { return d.name || 'a layer'; });
+    const list = names.length <= 2 ? names.join(' and ')
+      : (names.slice(0, 2).join(', ') + ' and ' + (names.length - 2) + ' more');
+    return list + (names.length === 1 ? ' is' : ' are') + ' not narrowed on the map (GeoParquet)';
+  }
+
+  //: The one thing that makes the capped case safe to ship: the map STATES that it is not showing
+  //: the filtered set. Without it "nothing matched" and "too many matched" are the same picture and
+  //: a visitor has no way to tell which one they are looking at.
+  function mapNote(env, text) {
+    const wrap = document.getElementById('map-wrap');
+    if (!wrap) return;
+    let el = wrap.querySelector('.gd-mapnote');
+    if (!text) { if (el) el.remove(); return; }
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'gd-mapnote';
+      el.setAttribute('role', 'status');
+      wrap.appendChild(el);
+    }
+    el.textContent = text;
+  }
+
   function toMapLibreExpr(f) {
     if (f.op === 'in') {
       // `to-string` on the feature side: the selector's values are strings (that is what a control
@@ -2490,6 +2678,9 @@ window.GD_DASHBOARD = (function () {
       ctrlPos: ctx.ctrlPos || 'top-right',
       addControlButton: ctx.addControlButton || null,
       setLayerVisible: ctx.setLayerVisible || null,
+      //: Live visibility of a GeoParquet (deck.gl) layer. Absent on an older portal shell, in which
+      //: case the baked `visible` is the best answer available.
+      deckVisible: ctx.deckVisible || null,
       fitBbox: ctx.fitBbox || function () {},
       //: THE IN-VIEW GUARD. While a map's `extent` tool is on, every widget that map filters is
       //: answering a different question than its title says: "Buildings" has quietly become

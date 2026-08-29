@@ -22,6 +22,13 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   public-read caches in `routers/data/{vector,raster}.py`, because a widget can summarise a layer
   the MAP never draws. Registry mirrored in `dashboard.js` and `DashboardBuilder.vue` — three
   surfaces, change together. Full design note: `notes_temp/DASHBOARD_ARCHETYPE.md`.
+  **The map's `dataSource` answers TWO different questions and they must not be conflated:**
+  `layerId` names the layer a CLICK hit-tests against, while what the map DRAWS filtered is every
+  layer in the style, each narrowed by its own filters (`dashboard.js::applyMapFilter`). Using
+  `layerId` for both is the bug fixed in 8154479. `linkedFilter` (default False) is the opt-in that
+  lets a filter arriving through a declared relation narrow the map too, by resolving the relation
+  to its matching keys client-side; the bound and the over-bound behaviour live in
+  `dashboard.js::LINKED_KEY_CAP`, not here.
 - `aggregate.py` (V-16, 2026-08-24) — **server-side summarisation of a vector layer** for the
   dashboard's indicator / gauge / chart / table / selector widgets, plus `*_pick` (the exact
   geometry of a clicked feature). Behind `POST /data/vector/{ref}/{aggregate,table,pick}` and
@@ -191,6 +198,10 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   `api/tests/test_native_crs.py`.
 
 ## Last updated
+2026-08-29 (**map filtering is per-drawn-layer, and a linked filter can reach the map by opt-in** —
+`resolve_dashboard` normalises the map's new `linkedFilter` flag; the runtime narrows each style
+layer by that layer's own filters instead of by the map widget's selection layer.)
+
 2026-08-28 (**DuckDB `ST_Transform` axis-order fix** — `_st_transform_4326()` now passes
 `always_xy=true`; without it every projected-CRS GeoParquet layer tiled to PMTiles at swapped
 coordinates. Two call sites: `stream_tiling_geojsonseq`, `export_geoparquet_to_fgb`. Existing

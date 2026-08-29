@@ -193,6 +193,29 @@ def test_the_click_radius_is_clamped_and_zero_is_legal():
     assert tol("wide") == DEFAULT_TOL_PX      # normalisation, not rejection
 
 
+def test_following_a_linked_filter_is_opt_in_and_defaults_off():
+    """The map can be told to follow a filter that reached it through a declared relation, and it is
+    OFF unless an author asks for it.
+
+    Why it has to default off: the widgets follow a relation as a subquery the engine runs, but the
+    map filters in the browser against tiles it already holds, so the only way it can follow is to
+    fetch the matching KEYS and test against those. That works for a narrow selection and is capped
+    for a broad one — and a map that narrows for small selections and silently stops for large ones
+    is a worse thing to hand someone unasked-for than a map that never claimed to narrow. Past the
+    cap the runtime leaves the layer whole and says so on the map."""
+    out = resolve_dashboard({"widgets": [_w("m", "map", dataSource={"tools": ["click"]})]})
+    assert out["widgets"][0]["dataSource"]["linkedFilter"] is False
+
+    on = resolve_dashboard({"widgets": [_w("m", "map", dataSource={"linkedFilter": True})]})
+    assert on["widgets"][0]["dataSource"]["linkedFilter"] is True
+
+    # Present even on a map that binds no selection layer: it governs what the map DRAWS, which is a
+    # different question from what a click hit-tests against.
+    unbound = resolve_dashboard({"widgets": [_w("m", "map", dataSource={"linkedFilter": True})]})
+    assert "layerId" not in unbound["widgets"][0]["dataSource"]
+    assert unbound["widgets"][0]["dataSource"]["linkedFilter"] is True
+
+
 def test_map_extent_is_offered_but_never_assumed():
     """`extent` republishes the viewport as the geometry filter on every pan. It is a switch, not a
     gesture, so it must be selectable — but a map that never named its tools must NOT get it, or

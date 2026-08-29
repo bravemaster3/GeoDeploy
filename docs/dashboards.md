@@ -144,9 +144,9 @@ link is undirected — declaring it once lets filtering travel either way.
     `entrances.egid IN (SELECT egid FROM buildings WHERE canton = 'BE')`. One DuckDB query across
     both files for GeoParquet layers, or one SQL subquery for PostGIS ones.
 
-!!! warning "A linked filter does not narrow the MAP"
-    The widgets re-answer, the chip appears in the filter bar — and the map keeps drawing every
-    feature.
+!!! info "A linked filter does not narrow the map by default"
+    The widgets re-answer and the chip appears in the filter bar, but the map keeps drawing every
+    feature of the *other* layer.
 
     This is structural rather than an oversight. The map filters itself with a MapLibre expression
     evaluated in the browser, feature by feature, against the vector tiles it has already loaded. A
@@ -154,19 +154,62 @@ link is undirected — declaring it once lets filtering travel either way.
     browser-side expression: the widgets narrow because they ask the server, and the map has nothing
     to ask.
 
-    A filter on a layer the map **draws** does narrow it, as does any geometry selection — those are
-    expressible. It is specifically the cross-layer case that stops at the map's edge.
+    A filter on a layer the map **draws** narrows it regardless, as does any geometry selection —
+    those are expressible. It is specifically the cross-layer case that needs help.
 
     So with both layers on the map, filtering the entrances pie narrows the entrances *directly*
-    (same layer, expressible) while the buildings stay whole (linked, not expressible).
-
-    If you need the map to follow, filter on a column the map's own layer has, or select an area
-    instead.
+    (same layer, expressible) while the buildings stay whole unless you turn on the option below.
 
 !!! warning "Both layers must use the same storage"
     A link between a GeoParquet layer and a PostGIS one cannot be pushed into a single query, so it
     is **refused** rather than half-applied, and the widget says why. Layers uploaded the same way
     are normally stored the same way; you can see which is which on each layer's page.
+
+### Making the map follow a linked filter
+
+The map widget has a **Follow linked-layer filters** switch, off by default, that appears once the
+dashboard declares a relation.
+
+With it on, a filter arriving through a relation is resolved to the **keys it matches** — the actual
+`egid` values — and the map tests its features against that list. The subquery becomes a list of
+values, which is something a browser-side expression *can* evaluate.
+
+!!! warning "It is bounded, and it tells you when it gives up"
+    That list is capped at **5 000 keys**. Filtering entrances to one common category can match
+    hundreds of thousands of buildings, and moving half a million values into the browser to draw a
+    map is a data transfer wearing a predicate's clothes.
+
+    Past the cap the map is left **unfiltered** and says so, in a line across the bottom:
+
+    > Map not narrowed by a linked filter — over 5 000 matching features
+
+    That notice is the reason the feature is safe to use. Without it, "nothing matched" and "too
+    many matched to draw" are the same empty-looking map, and you would have no way to tell which
+    one you were looking at. The same notice appears if the key lookup fails outright.
+
+    Leave the switch off and the map simply never claims to follow — which is why that is the
+    default. Turn it on when your relations resolve to *narrow* selections: a building and its
+    entrances, a station and its readings, a case and its site. Leave it off when a single choice on
+    one layer selects a large fraction of the other.
+
+If you would rather not depend on the cap at all, filter on a column the map's own layer has, or
+select an area instead — both narrow the map directly, with no lookup and no bound.
+
+!!! note "GeoParquet layers on the map are never narrowed — and the map names them"
+    This applies to every kind of filter, not only linked ones. A GeoParquet layer draws through
+    deck.gl rather than as a MapLibre style layer, so there is no style layer to filter. The widgets
+    reading it still narrow correctly, because that happens on the server — it is only the drawing
+    that does not follow.
+
+    Whenever a filter is aimed at such a layer, the map says which one:
+
+    > Parcels is not narrowed on the map (GeoParquet)
+
+    For the same reason the cap notice exists: an unnarrowed layer and an unmatched one look
+    identical on a map. The notice names the layers because this is a permanent property of
+    particular layers rather than a property of the current selection, and "which ones" is the first
+    thing worth knowing. It appears whether or not the linked-filter switch is on, and disappears
+    when you switch the layer off in the layer list.
 
 ---
 

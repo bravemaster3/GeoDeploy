@@ -20,6 +20,18 @@ upgrade needs manual work.
   into the engine as a subquery rather than passed around as a list of ids, because narrowing 3.4M
   buildings to one canton yields about 477k keys. A link between differently-stored layers is
   refused with a reason rather than half-applied.
+- **The map narrows every layer it draws**, each by its own filters — not only the layer it
+  hit-tests clicks against. Those are two different questions about the map widget's bound layer,
+  and answering the second with the first left a layer unfiltered on screen while every widget
+  reading it had narrowed.
+- **A linked filter can narrow the map too, if you ask.** _Follow linked-layer filters_ on the map
+  widget, off by default, resolves a relation to the keys it matches so the map can test features
+  against them. Capped at 5 000 keys; past the cap the map is left unfiltered and says so on
+  screen, so "nothing matched" is never mistaken for "too many matched to draw".
+- **The map now says when a GeoParquet layer is not being narrowed.** Those layers draw through
+  deck.gl and have never been filterable on the map, for any kind of filter — but the map drew them
+  whole and said nothing, so an unfiltered layer and an empty result looked the same. It now names
+  them.
 - **Charts that carry their weight.** Several measures against one grouping (multi-line, clustered
   bars), one colour per category or a shaded ramp for an ordered key, printed values with shares,
   and a scatter of one numeric column against another — randomly sampled, and it says so.

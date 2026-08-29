@@ -451,6 +451,18 @@ body[data-dash-mapctrl="0"] .gd-overlay-bottom-right { right: 10px; }
   border-radius: 999px; padding: 3px 12px; font-size: 11px; font-weight: 600; cursor: pointer;
 }
 
+/* The map's "I did not narrow this" notice. Bottom-centre and inside #map-wrap, so it sits over
+   the map it is talking about rather than in the filter bar, which lists filters that DID apply.
+   `pointer-events: none` because it is a statement, not a control — it must never eat a click
+   meant for the map under it. */
+.gd-mapnote {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 12px; z-index: 5;
+  max-width: calc(100% - 24px); pointer-events: none;
+  padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text-muted); box-shadow: var(--shadow-lg);
+  font-size: 11px; line-height: 1.4; text-align: center;
+}
+
 /* ── responsive ───────────────────────────────────────────────────────────
    The column count is set by dashboard.js (it rewrites every widget's placement, because mapping a
    12-column layout onto 6 or 1 is arithmetic a media query cannot do). These rules only handle the

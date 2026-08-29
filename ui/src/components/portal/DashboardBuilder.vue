@@ -105,6 +105,9 @@ const MAP_TOOLS = [
 // dashboard.js. Degrees were the wrong unit for an author to reason in and the wrong unit for the
 // runtime to use: 0 (the old default) can only ever hit a polygon, so clicking a point or line
 // layer never resolved to a feature at any zoom.
+//: Mirrors `LINKED_KEY_CAP` in templates/shared/dashboard.js — the runtime enforces it; this copy
+//: only tells the author what the bound is before they opt in.
+const LINKED_KEY_CAP = 5000
 const DEFAULT_TOL_PX = 6
 const GRID_COLS = 12
 
@@ -924,9 +927,26 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
           </label>
           <p v-if="vectorLayers.length > 1" class="text-[10px] text-muted-foreground/70 leading-snug">
             A click tries this layer first, then the portal's other vector layers top-down, so every
-            layer on the map is selectable. Attribute filters stay scoped to the layer they came
-            from — a selector over one layer cannot narrow a widget reading another.
+            layer on the map is selectable. A filter narrows the layer it came from wherever that
+            layer is drawn, whichever layer is named here.
           </p>
+          <!-- The map following a LINKED filter. Off by default and deliberately explained rather
+               than just labelled: it is the one dashboard setting whose failure mode is a map that
+               looks narrowed and is not, so the author has to be told what the bound does before
+               they turn it on. -->
+          <label v-if="relations.length" class="flex items-start gap-2">
+            <input type="checkbox" class="mt-0.5 accent-primary"
+              :checked="!!selected.dataSource?.linkedFilter"
+              @change="patchWidget(selected.id, { dataSource: { linkedFilter: $event.target.checked } })" />
+            <span class="min-w-0">
+              <span class="text-[11px] block">Follow linked-layer filters</span>
+              <span class="text-[10px] text-muted-foreground/70 leading-snug block">
+                Lets a filter published on a linked layer narrow this map too, by fetching the
+                matching keys. Works for a narrow selection; past
+                {{ LINKED_KEY_CAP.toLocaleString() }} matches the map is left whole and says so.
+              </span>
+            </span>
+          </label>
           <label v-if="selected.dataSource?.layerId != null" class="block">
             <span class="text-[10px] text-muted-foreground block mb-0.5">Also filter by this field on click</span>
             <select :value="selected.dataSource?.field || ''"

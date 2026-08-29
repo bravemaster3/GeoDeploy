@@ -236,6 +236,17 @@ def _normalize_source(widget_type: str, source: dict | None) -> dict | None:
         # show for it. Degrees were also the wrong thing to ask an author for: the same 0.0005° is
         # half a screen at z18 and invisible at z6.
         out["tolPx"] = _int(src.get("tolPx"), DEFAULT_TOL_PX, 0, MAX_TOL_PX)
+        # OPT-IN, and it stays opt-in. A filter published on one layer can reach a widget reading
+        # another through a declared relation, because the server turns it into a subquery. The MAP
+        # cannot run a subquery — it filters in the browser against tiles it already holds — so the
+        # only way it can follow a relation is to fetch the matching KEYS and test against them,
+        # which is exactly the data transfer the join exists to avoid.
+        #
+        # Bounded (`LINKED_KEY_CAP` in dashboard.js) and, past the bound, the map says it was not
+        # narrowed rather than quietly drawing everything. Default False because a map that narrows
+        # for a small selection and stops for a large one is a worse thing to hand someone
+        # unasked-for than a map that never claimed to narrow at all.
+        out["linkedFilter"] = bool(src.get("linkedFilter"))
         ref = _layer_ref(source)
         if ref and ref["layerType"] == "vector":
             out["layerType"] = "vector"
