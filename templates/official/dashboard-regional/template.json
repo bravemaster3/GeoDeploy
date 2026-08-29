@@ -18,6 +18,13 @@
     "refresh": 0,
     "widgets": [
       {
+        "id": "legend",
+        "type": "legend",
+        "title": "Legend",
+        "layout": { "x": 0, "y": 0, "w": 3, "h": 4, "overlay": "bottom-left", "overlayW": 210, "overlayCollapsed": true },
+        "actions": { "filters": [], "listens": false }
+      },
+      {
         "id": "kpi-regions", "type": "indicator", "title": "Regions",
         "layout": { "x": 0, "y": 0, "w": 3, "h": 2 },
         "dataSource": { "op": "count" },

@@ -1820,12 +1820,17 @@
             '<line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/></svg>' +
           '</button>' +
         '</div>' +
-        (type === 'raster' && !meta['geodeploy:external']
-          ? '<div class="layer-legend" data-legend="' + layer.id + '">' + rasterLegendHtml(layer) + '</div>'
-          : vectorLegendHtml(meta['geodeploy:legend'], geom,
-                             meta['geodeploy:legendField'], meta['geodeploy:sizeLegend'], color,
-                             meta['geodeploy:lineType'], meta['geodeploy:marker'],
-                             geom === 'polygon' ? bakedOutline(layer.id) : null));
+        // `panels.legend` finally gates something. It has been declared in every archetype's
+        // defaults since V-11 and read by NOTHING — an inert field that reads like a switch, which
+        // is a trap for whoever tries to use it next. Default true everywhere, so no portal changes
+        // how it looks; what changes is that turning it off now does what its name says.
+        (LAYOUT.panels.legend === false ? '' :
+          (type === 'raster' && !meta['geodeploy:external']
+            ? '<div class="layer-legend" data-legend="' + layer.id + '">' + rasterLegendHtml(layer) + '</div>'
+            : vectorLegendHtml(meta['geodeploy:legend'], geom,
+                               meta['geodeploy:legendField'], meta['geodeploy:sizeLegend'], color,
+                               meta['geodeploy:lineType'], meta['geodeploy:marker'],
+                               geom === 'polygon' ? bakedOutline(layer.id) : null)));
       container.appendChild(card);
     });
 
