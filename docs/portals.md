@@ -3,7 +3,7 @@
 A **portal** is a published map with its own URL. You pick the layers, arrange them, choose how the
 page is laid out, and publish. Visitors need nothing installed.
 
-## The three experiences
+## The four experiences
 
 Choosing an experience changes the *shape of the page*, not just its colours.
 
@@ -34,6 +34,19 @@ Choosing an experience changes the *shape of the page*, not just its colours.
     - Filter by folder, type and licence
     - Each result shows what it is, and how to get it
     - Click a dataset to add it to the map, or zoom to its extent
+
+=== "Dashboard"
+
+    A grid of widgets that cross-filter each other, where the map is one widget among charts,
+    numbers, lists and controls. For the questions a reader asks of the *data* rather than of the
+    geography.
+
+    - Indicators, gauges, charts, tables, a column profile, a scatter
+    - Selectors and a search box that narrow everything at once
+    - Clicking a chart or drawing on the map re-asks every other question on the page
+    - Widgets can be pinned to the map, or docked into its control cluster
+
+    See **[Dashboards](dashboards.md)** for the full guide.
 
 ## Building a portal
 
@@ -95,8 +108,40 @@ them, map beneath.
 
 ## Templates
 
-Templates set the look — palette, typography, header treatment — and may preset an experience. You
-can change any of it afterwards; a template is a starting point, not a constraint.
+A **template** is a starting point you pick when you create a portal. It can carry three separate
+things, and it is worth knowing which is which, because you can change any of them afterwards
+without touching the others.
+
+| A template may set | What that means | Change it later? |
+|---|---|---|
+| **Look** | Palette, typography, header treatment, basemap | Yes — per-portal branding overrides it |
+| **Experience** | Which of the four archetypes the portal starts as | Yes — switch experience at any time |
+| **Starting content** | A story map's sections, or a dashboard's widgets and their wiring | Yes — everything is editable afterwards |
+
+### How a template and an experience relate
+
+They are not the same choice, and a template does not lock one in.
+
+- The **experience** (web map, story map, catalog, dashboard) decides the *shape of the page*.
+- A **template** may say which experience it was designed for, and most declare only one — a story
+  template applied to a catalog would style a layout nobody designed for it.
+- Switching experience keeps your layers, your styling and your branding. What changes is the
+  arrangement around them.
+
+### What a template's content does when you apply it
+
+A template ships with **no layer ids** — it cannot have any, because your layers did not exist when
+it was written. When you choose one, its content is bound to *your* portal's layers: the first
+suitable layer, the first field of the right type, successive rasters for successive raster widgets.
+
+Every one of those guesses is editable. You correct a guess rather than fill in a blank.
+
+Two rules keep this predictable:
+
+- A template's content **seeds an empty portal only**. It never silently overwrites work.
+- To deliberately start over, use **Reload template** — a button you have to press.
+
+### Branding
 
 Per-portal branding (accent colour, font, logo, light/dark) is set in the editor and overrides the
-template.
+template, whichever experience you are in.
