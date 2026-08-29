@@ -144,6 +144,22 @@ link is undirected — declaring it once lets filtering travel either way.
     `entrances.egid IN (SELECT egid FROM buildings WHERE canton = 'BE')`. One DuckDB query across
     both files for GeoParquet layers, or one SQL subquery for PostGIS ones.
 
+!!! warning "A linked filter does not narrow the MAP"
+    The widgets re-answer, the chip appears in the filter bar — and the map keeps drawing every
+    feature.
+
+    This is structural rather than an oversight. The map filters itself with a MapLibre expression
+    evaluated in the browser, feature by feature, against the vector tiles it has already loaded. A
+    linked filter is a *subquery* against another layer, and there is no way to write that as a
+    browser-side expression: the widgets narrow because they ask the server, and the map has nothing
+    to ask.
+
+    A filter on the map's **own** layer does narrow it, as does any geometry selection — those are
+    expressible. It is specifically the cross-layer case that stops at the map's edge.
+
+    If you need the map to follow, filter on a column the map's own layer has, or select an area
+    instead.
+
 !!! warning "Both layers must use the same storage"
     A link between a GeoParquet layer and a PostGIS one cannot be pushed into a single query, so it
     is **refused** rather than half-applied, and the widget says why. Layers uploaded the same way
