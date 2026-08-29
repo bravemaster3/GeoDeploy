@@ -406,6 +406,26 @@ window.GD_DASHBOARD = (function () {
           ? state.geom.geometry : null;
         return { filters: filters, geometry: geom, joins: joins.length ? joins : null };
       },
+      //: Attribute filters aimed at this widget, grouped by the layer each one belongs to:
+      //: `{ layerId: [expr, …] }`.
+      //:
+      //: `filtersFor` deliberately scopes to ONE layer, because a widget reads one layer and a
+      //: predicate from another means nothing to it. The MAP is the exception in the whole
+      //: dashboard: it draws every layer the portal publishes, so "the filters for the map" is not
+      //: one list — it is one list PER LAYER DRAWN. Asking `filtersFor` for them threw away every
+      //: filter that did not belong to the map's own selection layer, which is why filtering a pie
+      //: chart of entrances left the entrances on the map untouched.
+      mapFiltersByLayer: function (w) {
+        const out = {};
+        for (const sid in state.attr) {
+          const f = state.attr[sid];
+          if (sid === w.id) continue;                       // a widget never filters itself
+          if (f.targets.indexOf(w.id) < 0) continue;
+          if (f.layerId == null) continue;
+          (out[f.layerId] || (out[f.layerId] = [])).push(f.expr);
+        }
+        return out;
+      },
       selectionFor: function (w) {
         const sel = state.selection;
         return (sel && sel.targets.indexOf(w.id) >= 0) ? sel : null;
@@ -1992,17 +2012,25 @@ window.GD_DASHBOARD = (function () {
   //: are left alone rather than half-filtered, and the widgets over them still narrow correctly
   //: because their filtering happens server-side.
   function applyMapFilter(w, env) {
-    const ds = w.dataSource;
-    if (!ds || ds.layerId == null) return;
     const map = env.map;
-    const f = env.store.filtersFor(w);
-    let expr = null;
-    const clauses = f.filters.map(toMapLibreExpr).filter(Boolean);
-    if (clauses.length) expr = ['all'].concat(clauses);
+    // EVERY drawn layer, narrowed by ITS OWN filters — not one layer narrowed by the map widget's.
+    // The map widget's `layerId` names the layer a CLICK hit-tests against; it was also being used
+    // to decide what the map draws, which are two different questions. With a pie chart on
+    // `entrances` and the map's selection layer set to `buildings`, picking a slice narrowed every
+    // widget and left the entrances on the map exactly as they were.
+    //
+    // No early return on a missing selection layer either: a map that cannot turn a click into a
+    // feature can still be narrowed by the widgets around it.
+    const byLayer = env.store.mapFiltersByLayer(w);
     (env.style.layers || []).forEach(function (lyr) {
       const meta = lyr.metadata || {};
-      if (String(meta['geodeploy:layer_id']) !== String(ds.layerId)) return;
+      const lid = meta['geodeploy:layer_id'];
+      if (lid == null) return;
       if (meta['geodeploy:external']) return;
+      const own = byLayer[lid] || [];
+      let expr = null;
+      const clauses = own.map(toMapLibreExpr).filter(Boolean);
+      if (clauses.length) expr = ['all'].concat(clauses);
       // AND with the layer's OWN filter, never replace it. A raw-paint passthrough
       // (`style.maplibre.layers`, how a GeoLibre import carries data-driven symbology) emits
       // several style layers for one data layer, each filtered to the part it draws. Overwriting

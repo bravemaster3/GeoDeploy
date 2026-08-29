@@ -154,8 +154,11 @@ link is undirected — declaring it once lets filtering travel either way.
     browser-side expression: the widgets narrow because they ask the server, and the map has nothing
     to ask.
 
-    A filter on the map's **own** layer does narrow it, as does any geometry selection — those are
+    A filter on a layer the map **draws** does narrow it, as does any geometry selection — those are
     expressible. It is specifically the cross-layer case that stops at the map's edge.
+
+    So with both layers on the map, filtering the entrances pie narrows the entrances *directly*
+    (same layer, expressible) while the buildings stay whole (linked, not expressible).
 
     If you need the map to follow, filter on a column the map's own layer has, or select an area
     instead.
