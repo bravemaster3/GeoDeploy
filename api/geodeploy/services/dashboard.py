@@ -87,6 +87,14 @@ TIME_BUCKETS = {"hour", "day", "week", "month", "quarter", "year"}
 #: Mirrors `services/aggregate.MAX_SERIES`.
 MAX_CHART_SERIES = 4
 
+#: How many join keys a map may pull into a style expression before it stops narrowing and says so.
+#: Offered as a short list because the trade-off is real in both directions: too low and the map
+#: gives up on selections it could have drawn, too high and every filter change moves a large
+#: response. Mirrors `LINKED_FILTER_CAPS` in `DashboardBuilder.vue`; the top of the list must not
+#: exceed `aggregate.MAX_KEYS`, which is what the server will actually honour.
+LINKED_FILTER_CAPS = (1000, 5000, 10000, 20000)
+DEFAULT_LINKED_FILTER_CAP = 5000
+
 #: Chart shapes. `pie` and `donut` differ only in the hole, but they are separate types because the
 #: builder shows them as separate choices and the renderer needs to know which one was chosen.
 CHART_KINDS = {"bar", "hbar", "line", "area", "pie", "donut"}
@@ -247,6 +255,12 @@ def _normalize_source(widget_type: str, source: dict | None) -> dict | None:
         # for a small selection and stops for a large one is a worse thing to hand someone
         # unasked-for than a map that never claimed to narrow at all.
         out["linkedFilter"] = bool(src.get("linkedFilter"))
+        # A CHOICE, not a free number. The failure mode of too large a value is a sluggish map and a
+        # fat response rather than an error, which is the kind of setting an author should not be
+        # able to wander into — and the runtime's behaviour past the bound (leave the layer whole,
+        # say so) is the same at every one of them.
+        cap = src.get("linkedFilterCap")
+        out["linkedFilterCap"] = cap if cap in LINKED_FILTER_CAPS else DEFAULT_LINKED_FILTER_CAP
         ref = _layer_ref(source)
         if ref and ref["layerType"] == "vector":
             out["layerType"] = "vector"
@@ -396,6 +410,14 @@ def _normalize_style(widget_type: str, style: dict | None) -> dict:
         if s.get("valueLabels") is not None:
             out["valueLabels"] = bool(s.get("valueLabels"))
         out["valueShare"] = bool(s.get("valueShare", True))
+        # How much of the card's HEIGHT the plot itself takes, for a pie or donut. 100 is the
+        # default and what every dashboard published so far draws.
+        #
+        # It exists because resizing the WIDGET cannot solve the problem it solves: the pie is
+        # `height: 100%` and its legend is a sibling below, so a taller card grows the circle by
+        # exactly as much and the legend stays in its scrollbar. Sizing the plot separately is the
+        # only way to give a many-category key room to be read.
+        out["plotSize"] = _int(s.get("plotSize"), 100, 30, 100)
     if widget_type == "table":
         # `table` is the spreadsheet; `cards` is a directory — one card per feature with a heading
         # and a few fields under it. Same query, same paging, same click behaviour: only the shape on

@@ -25,6 +25,7 @@
  * the runtime. That is why this component draws configuration, not widgets.
  */
 import { computed, ref, watch } from 'vue'
+import InfoHint from '../shared/InfoHint.vue'
 import { getFieldStats } from '@/api'
 
 const props = defineProps({
@@ -105,12 +106,15 @@ const MAP_TOOLS = [
 // dashboard.js. Degrees were the wrong unit for an author to reason in and the wrong unit for the
 // runtime to use: 0 (the old default) can only ever hit a polygon, so clicking a point or line
 // layer never resolved to a feature at any zoom.
-//: Mirrors `LINKED_KEY_CAP` in templates/shared/dashboard.js — the runtime enforces it; this copy
-//: only tells the author what the bound is before they opt in.
-import InfoHint from '../shared/InfoHint.vue'
-
-const LINKED_KEY_CAP = 5000
 const DEFAULT_TOL_PX = 6
+
+//: Mirrors `LINKED_FILTER_CAPS` / `DEFAULT_LINKED_FILTER_CAP` in `services/dashboard.py` and
+//: `LINKED_KEY_CAPS` in `templates/shared/dashboard.js`. The server normalises and the runtime
+//: enforces; this copy only offers the choice. A list rather than a number field because too large
+//: a value fails as a slow map and a fat response, never as an error — not somewhere an author
+//: should be able to wander by typing.
+const LINKED_KEY_CAPS = [1000, 5000, 10000, 20000]
+const LINKED_KEY_CAP = 5000
 const GRID_COLS = 12
 
 // ── the model ───────────────────────────────────────────────────────────────
@@ -947,9 +951,26 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
             Follow linked-layer filters
             <InfoHint label="About following linked-layer filters">
               Lets a filter published on a linked layer narrow this map too, by fetching the matching
-              keys. Works for a narrow selection; past {{ LINKED_KEY_CAP.toLocaleString() }} matches
-              the map is left whole and says so.
+              keys. Works for a narrow selection; past the limit below the map is left whole and says
+              so on screen, rather than looking narrowed when it is not.
             </InfoHint>
+          </label>
+          <label v-if="relations.length && selected.dataSource?.linkedFilter" class="block">
+            <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
+              Give up past
+              <InfoHint label="About the key limit">
+                How many matching keys the map will fetch before it stops narrowing. Higher reaches
+                broader selections and moves more data on every filter change — roughly 40 KB per
+                1 000 keys. Past the limit the map draws everything and says so.
+              </InfoHint>
+            </span>
+            <select :value="selected.dataSource?.linkedFilterCap ?? LINKED_KEY_CAP"
+              @change="patchWidget(selected.id, { dataSource: { linkedFilterCap: Number($event.target.value) } })"
+              class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
+              <option v-for="c in LINKED_KEY_CAPS" :key="c" :value="c">
+                {{ c.toLocaleString() }} keys{{ c === LINKED_KEY_CAP ? ' (default)' : '' }}
+              </option>
+            </select>
           </label>
           <label v-if="selected.dataSource?.layerId != null" class="block">
             <span class="text-[10px] text-muted-foreground block mb-0.5">Also filter by this field on click</span>
@@ -1036,7 +1057,24 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
               <button @click="removeSeries(selected, i)" title="Remove this measure"
                 class="text-[11px] text-red-400 hover:text-red-500 px-1 flex-shrink-0">&times;</button>
             </div>
-            <p v-if="!seriesOf(selected).length" class="text-[10px] text-muted-foreground/70 mb-1">
+            <!-- Pie/donut only: the plot and its legend share the card, and only these two have a
+               legend that competes with the plot for it. On a bar chart the same control would just
+               leave empty space. -->
+          <label v-if="['pie', 'donut'].includes(selected.style?.chart)" class="block">
+            <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
+              Plot size — {{ selected.style?.plotSize ?? 100 }}%
+              <InfoHint label="About the plot size">
+                How much of the card the circle takes, leaving the rest to the legend. Making the
+                widget bigger grows both together; this is what shrinks the plot so a long legend
+                has room to be read without scrolling.
+              </InfoHint>
+            </span>
+            <input type="range" min="30" max="100" step="5"
+              :value="selected.style?.plotSize ?? 100"
+              @input="patchWidget(selected.id, { style: { plotSize: Number($event.target.value) } })"
+              class="w-full accent-primary" />
+          </label>
+          <p v-if="!seriesOf(selected).length" class="text-[10px] text-muted-foreground/70 mb-1">
               One measure — the aggregation below. Add another to plot them side by side, with a
               legend; colour then names the measure rather than the category.
             </p>

@@ -47,6 +47,18 @@ BUCKETS = {"hour", "day", "week", "month", "quarter", "year"}
 #: and the cap is what keeps a group-by on a high-cardinality column from returning the whole column.
 MAX_GROUPS = 200
 
+#: The ceiling for a KEYS-ONLY request, which is a different question with a different answer.
+#:
+#: `MAX_GROUPS` is a CHART's limit: 200 bars is already past the point of being readable, so
+#: clamping there protects a widget from an author asking for something nobody can look at. A key
+#: set is not looked at — it is a predicate the dashboard's map tests features against — and 200 of
+#: them is a very small selection.
+#:
+#: They were the same number until the map's linked filter asked for 5 000 and silently got 200, so
+#: the map reported "over 5 000 matching features" the moment a filter matched 201. One clamp
+#: answering two unrelated questions is how that happens; hence two.
+MAX_KEYS = 20000
+
 #: Rows a table widget may receive in one page.
 MAX_ROWS = 500
 
@@ -452,6 +464,14 @@ async def _postgis_aggregate_uncached(db, layer, spec: dict) -> dict:
         order = {"value_asc": "ORDER BY 2 ASC NULLS LAST",
                  "key_asc": "ORDER BY 1 ASC NULLS LAST"}.get(
                      spec.get("sort") or "value_desc", "ORDER BY 2 DESC NULLS LAST")
+    # KEYS ONLY: no measures, no count, no ordering by a value that is not computed. The caller is
+    # building a predicate, not a chart, so every column but the key is work nobody reads.
+    if spec.get("keysOnly"):
+        limit = max(2, min(int(spec.get("limit") or 12), MAX_KEYS))
+        sql = (f"SELECT {key_expr} AS k FROM {table} {where} "
+               f"GROUP BY 1 ORDER BY 1 ASC NULLS LAST LIMIT {limit + 1}")
+        return _keys_out((await db.execute(text(sql), params)).fetchall(), limit)
+
     limit = max(2, min(int(spec.get("limit") or 12), MAX_GROUPS))
     # One query for every measure: N series over the same grouping is N aggregate expressions in one
     # GROUP BY, not N round trips. `ORDER BY 2` therefore sorts by the FIRST series, which is the one
@@ -1123,6 +1143,13 @@ def _parquet_aggregate_uncached(layer, spec: dict) -> dict:
             order = ("ORDER BY 1 ASC" if bucket else
                      {"value_asc": "ORDER BY 2 ASC", "key_asc": "ORDER BY 1 ASC"}.get(
                          spec.get("sort") or "value_desc", "ORDER BY 2 DESC"))
+            # KEYS ONLY — see the PostGIS branch: a predicate, not a chart.
+            if spec.get("keysOnly"):
+                limit = max(2, min(int(spec.get("limit") or 12), MAX_KEYS))
+                return _keys_out(conn.execute(
+                    f"SELECT {key_expr} AS k FROM {src} {where_sql} "
+                    f"GROUP BY 1 ORDER BY 1 LIMIT {limit + 1}").fetchall(), limit)
+
             limit = max(2, min(int(spec.get("limit") or 12), MAX_GROUPS))
             # As on the PostGIS side: N measures are N aggregate expressions in ONE grouped scan,
             # which is the whole reason a columnar engine is worth using here.
@@ -1420,6 +1447,18 @@ def _series_specs(spec: dict, known: set[str]) -> list[dict]:
     op = spec.get("op", "count")
     field = None if op == "count" else spec.get("field")
     return [{"op": op, "field": field, "label": _series_label(op, field)}]
+
+
+def _keys_out(rows, limit: int) -> dict:
+    """Shape a keys-only answer: the distinct values themselves, and whether there were more.
+
+    Exists because the caller that wants keys wants ONLY keys. `_groups_out` emits
+    `{key, value, values, count}` per row, which for 5 000 keys is ~239 KB on the wire where the
+    keys alone are ~39 KB — six times the payload to deliver the one field that gets read. Nulls are
+    dropped here rather than by the caller: a null key matches nothing on either side of a join, so
+    it is not a value the answer should spend a row on."""
+    keys = [_scalar(r[0]) for r in rows[:limit]]
+    return {"keys": [k for k in keys if k is not None], "truncated": len(rows) > limit}
 
 
 def _groups_out(rows, limit: int, bucket: str | None, series: list[dict] | None = None) -> dict:

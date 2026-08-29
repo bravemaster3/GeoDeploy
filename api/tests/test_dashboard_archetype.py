@@ -8,6 +8,7 @@ widget types, live action targets, in-grid layout, and normalisation rather than
 Pure functions, no database — like `test_catalog_extra_layers.py`.
 """
 from geodeploy.services.dashboard import (
+    LINKED_FILTER_CAPS, DEFAULT_LINKED_FILTER_CAP,
     DEFAULT_MAP_TOOLS, DEFAULT_TOL_PX, GRID_COLS, MAX_TOL_PX, WIDGET_TYPES,
     dashboard_layer_refs, resolve_dashboard,
 )
@@ -208,12 +209,47 @@ def test_following_a_linked_filter_is_opt_in_and_defaults_off():
 
     on = resolve_dashboard({"widgets": [_w("m", "map", dataSource={"linkedFilter": True})]})
     assert on["widgets"][0]["dataSource"]["linkedFilter"] is True
+    assert on["widgets"][0]["dataSource"]["linkedFilterCap"] == DEFAULT_LINKED_FILTER_CAP
 
     # Present even on a map that binds no selection layer: it governs what the map DRAWS, which is a
     # different question from what a click hit-tests against.
     unbound = resolve_dashboard({"widgets": [_w("m", "map", dataSource={"linkedFilter": True})]})
     assert "layerId" not in unbound["widgets"][0]["dataSource"]
     assert unbound["widgets"][0]["dataSource"]["linkedFilter"] is True
+
+
+def test_the_linked_filter_cap_is_a_choice_not_a_free_number():
+    """The author picks how many keys the map will fetch from a short list, and anything else falls
+    back to the default rather than being honoured.
+
+    A free number would be the wrong control here: too large a value fails as a sluggish map and a
+    large response on every filter change, never as an error, so there is nothing to tell an author
+    they have gone too far. The offered list is also bounded by what the server will actually serve
+    (`aggregate.MAX_KEYS`) — a cap the backend silently clamps is a cap that lies."""
+    def cap(value):
+        out = resolve_dashboard({"widgets": [
+            _w("m", "map", dataSource={"linkedFilter": True, "linkedFilterCap": value})]})
+        return out["widgets"][0]["dataSource"]["linkedFilterCap"]
+
+    for choice in LINKED_FILTER_CAPS:
+        assert cap(choice) == choice
+    assert cap(999999) == DEFAULT_LINKED_FILTER_CAP     # not offered
+    assert cap(3000) == DEFAULT_LINKED_FILTER_CAP       # plausible, still not offered
+    assert cap("lots") == DEFAULT_LINKED_FILTER_CAP     # normalisation, not rejection
+    assert cap(None) == DEFAULT_LINKED_FILTER_CAP
+
+
+def test_no_offered_cap_exceeds_what_the_server_will_serve():
+    """The regression this pins cost a shipped release-note-worthy bug.
+
+    The map asked for 5 000 keys; `postgis_aggregate` clamped the limit to `MAX_GROUPS` (200,
+    correct for a CHART) and reported `truncated` against 200. So the map stopped narrowing at 201
+    matching features while telling the visitor it had passed 5 000. Two unrelated questions were
+    sharing one ceiling. `MAX_KEYS` is the keys-only ceiling; every choice offered has to fit under
+    it or the same lie comes back."""
+    from geodeploy.services.aggregate import MAX_KEYS
+    assert max(LINKED_FILTER_CAPS) <= MAX_KEYS
+    assert DEFAULT_LINKED_FILTER_CAP in LINKED_FILTER_CAPS
 
 
 def test_map_extent_is_offered_but_never_assumed():

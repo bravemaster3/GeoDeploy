@@ -1019,6 +1019,33 @@ window.GD_DASHBOARD = (function () {
     return svg;
   }
 
+  //: The category labels under a vertical bar chart: how many fit, and where each one sits.
+  //:
+  //: Two things were wrong when 26 cantons went under one chart. A rotated label was anchored
+  //: `middle`, so it straddled the tick — half of it climbing to the right of the bar, half falling
+  //: to the left — and read as offset from the bar it names. Rotated axis labels anchor at their
+  //: END, which puts the last character at the tick and lets the rest trail away below-left.
+  //:
+  //: And the thinning budgeted 38-42px of width per label whether or not it was rotated. A rotated
+  //: label spends far less horizontal room, so the stride was throwing away labels there was space
+  //: for. What actually limits a rotated label is the PERPENDICULAR gap between neighbours: two
+  //: baselines at -32 degrees whose anchors are `d` apart horizontally clear each other by
+  //: `d * sin(32 deg)` = 0.53d, and 9px text needs about 11px of that — so d >= 21px. 22 is that
+  //: bound with a pixel of margin, and it roughly doubles how many labels a busy chart shows.
+  function axisLabels(svg, i, n, g, ds, x, y, upright) {
+    const rotated = !upright && n > 6;
+    const per = rotated ? 22 : (upright ? 38 : 42);
+    const every = Math.max(1, Math.ceil(n / Math.max(3, Math.floor(axisLabels.room / per))));
+    if (i % every !== 0) return;
+    const lab = svgEl('text', {
+      x: x, y: y, class: 'glabel',
+      'text-anchor': rotated ? 'end' : 'middle',
+      transform: rotated ? 'rotate(-32 ' + x + ' ' + y + ')' : null,
+    });
+    lab.textContent = truncate(groupLabel(g, ds), rotated ? 14 : 12);
+    svg.appendChild(lab);
+  }
+
   function drawGroupedBars(groups, ds, style, series, boxW, boxH) {
     const W = boxW || 300, H = boxH || 170, padL = 34, padR = 8, padT = 8, padB = 34;
     const svg = svgEl('svg', { class: 'gd-chart', viewBox: '0 0 ' + W + ' ' + H,
@@ -1045,15 +1072,8 @@ window.GD_DASHBOARD = (function () {
         rect.appendChild(t);
         svg.appendChild(rect);
       }
-      const every = Math.max(1, Math.ceil(n / Math.max(3, Math.floor((W - padL - padR) / 42))));
-      if (i % every === 0) {
-        const lab = svgEl('text', { x: padL + i * colW + colW / 2, y: H - padB + 11,
-                                    'text-anchor': 'middle', class: 'glabel',
-                                    transform: n > 6 ? 'rotate(-32 ' + (padL + i * colW + colW / 2)
-                                      + ' ' + (H - padB + 11) + ')' : null });
-        lab.textContent = truncate(groupLabel(g, ds), 12);
-        svg.appendChild(lab);
-      }
+      axisLabels.room = W - padL - padR;
+      axisLabels(svg, i, n, g, ds, padL + i * colW + colW / 2, H - padB + 11, false);
     });
     svg.appendChild(axis(padL, padT, W - padR, H - padB, ext.lo, ext.hi, style));
     return svg;
@@ -1136,18 +1156,11 @@ window.GD_DASHBOARD = (function () {
         vl.textContent = fmtNumber(v, style);
         svg.appendChild(vl);
       }
-      // A 9px label needs ~7px of column to be readable, so labels thin out rather than overlap —
-      // the tooltip still names every bar. Now measured against the REAL width (see chartBox), so a
-      // wide card shows every label instead of thinning as if it were 300px.
-      const every = Math.max(1, Math.ceil(n / Math.max(3, Math.floor((W - padL - padR) / 38))));
-      if (i % every === 0) {
-        const lab = svgEl('text', { x: padL + i * colW + colW / 2, y: H - padB + 11,
-                                    'text-anchor': 'middle', class: 'glabel',
-                                    transform: n > 6 ? 'rotate(-32 ' + (padL + i * colW + colW / 2)
-                                      + ' ' + (H - padB + 11) + ')' : null });
-        lab.textContent = truncate(groupLabel(g, ds), 12);
-        svg.appendChild(lab);
-      }
+      // Labels thin out rather than overlap — the tooltip still names every bar. Measured against
+      // the REAL width (see chartBox), so a wide card shows every label instead of thinning as if
+      // it were 300px.
+      axisLabels.room = W - padL - padR;
+      axisLabels(svg, i, n, g, ds, padL + i * colW + colW / 2, H - padB + 11, false);
     });
     svg.appendChild(axis(padL, padT, W - padR, H - padB, minV, maxV, style));
     return svg;
@@ -1218,10 +1231,30 @@ window.GD_DASHBOARD = (function () {
     return svg;
   }
 
+  //: How much of the card's HEIGHT the pie itself takes, as a percentage. Default 100, which is
+  //: what every dashboard published so far draws.
+  //:
+  //: The pie is `height: 100%` and the legend is its sibling, so on a card with many categories the
+  //: circle claimed the whole body and pushed the legend into a scrollbar — a chart you cannot read
+  //: the key to. Resizing the WIDGET does not help: a taller card grows the pie by exactly as much.
+  //: The two need to be separately adjustable, so this caps the plot and leaves the rest to the key.
+  function plotShare(style) {
+    const v = style && style.plotSize;
+    return (typeof v === 'number' && v >= 30 && v <= 100) ? v : 100;
+  }
+
   function drawPie(groups, ds, style, selected, onPick, donut) {
     const S = 170, cx = S / 2, cy = S / 2, r = S / 2 - 8, inner = donut ? r * 0.58 : 0;
     const svg = svgEl('svg', { class: 'gd-chart', viewBox: '0 0 ' + S + ' ' + S,
                                preserveAspectRatio: 'xMidYMid meet' });
+    const share = plotShare(style);
+    if (share < 100) {
+      // `flex: none` alongside the height: the body is a block box today, where the height alone
+      // is enough, but `.gd-w-center` turns it into a flex column — and a flex child grows past a
+      // set height unless told not to, handing the pie back exactly the space this takes away.
+      svg.style.height = share + '%';
+      svg.style.flex = 'none';
+    }
     const total = groups.reduce(function (a, g) { return a + Math.max(0, g.value || 0); }, 0);
     if (total <= 0) return svg;
     let angle = -Math.PI / 2;
@@ -2036,7 +2069,12 @@ window.GD_DASHBOARD = (function () {
   //: is a feature rather than a hazard: a map that silently stops narrowing past some threshold is
   //: worse than one that never narrowed, because "nothing matched" and "too many matched" look
   //: identical on screen.
-  const LINKED_KEY_CAP = 5000;
+  const LINKED_KEY_CAP = 5000;      // the fallback; an author can raise or lower it per map
+  const LINKED_KEY_CAPS = [1000, 5000, 10000, 20000];
+  function capFor(w) {
+    const c = w.dataSource && w.dataSource.linkedFilterCap;
+    return LINKED_KEY_CAPS.indexOf(c) >= 0 ? c : LINKED_KEY_CAP;
+  }
 
   //: MapLibre's own `setFilter`, applied to every style layer that carries a layer's id in its
   //: metadata. GeoParquet layers render through deck.gl, which has no style layer to filter — those
@@ -2054,6 +2092,7 @@ window.GD_DASHBOARD = (function () {
     const byLayer = env.store.mapFiltersByLayer(w);
     const drawn = drawnLayerIds(env);
     const linkedOn = !!(w.dataSource && w.dataSource.linkedFilter);
+    const cap = capFor(w);
 
     // One generation per apply. An answer that arrives after the visitor has moved on belongs to a
     // question nobody is asking any more, and applying it would paint a filter the filter bar does
@@ -2094,8 +2133,11 @@ window.GD_DASHBOARD = (function () {
           layerId: lid, keyField: j.rightField,
           promise: env.api.aggregate(
             'mapkeys:' + w.id + ':' + lid + ':' + j.layerId, j.layerId,
-            { op: 'count', groupBy: j.leftField, filters: j.filters,
-              limit: LINKED_KEY_CAP, sort: 'key_asc' })
+            // `keysOnly`: the distinct values and nothing else. The grouped answer carries
+            // `{key, value, values, count}` per row — six times the bytes for the one field read
+            // here — and is clamped to MAX_GROUPS (200), which silently made every cap above 200
+            // fire at 201 until the server grew a separate ceiling for key sets.
+            { groupBy: j.leftField, filters: j.filters, limit: cap, keysOnly: true })
         });
       });
     });
@@ -2115,9 +2157,9 @@ window.GD_DASHBOARD = (function () {
         // this whole note exists to prevent, and it does not matter which reason produced it.
         if (out.err || !out.res || out.res.truncated) { capped[lid] = true; return; }
         const keys = [], seen = {};
-        (out.res.groups || []).forEach(function (g) {
-          if (g.key == null) return;                        // a null key joins to nothing
-          const k = String(g.key);
+        (out.res.keys || []).forEach(function (v) {
+          if (v == null) return;                            // a null key joins to nothing
+          const k = String(v);
           if (seen[k]) return;                              // `match` labels must be unique
           seen[k] = 1;
           keys.push(k);
@@ -2136,7 +2178,7 @@ window.GD_DASHBOARD = (function () {
       const n = Object.keys(capped).length;
       const capNote = n
         ? ('Map not narrowed by ' + (n === 1 ? 'a linked filter' : 'linked filters')
-           + ' — over ' + LINKED_KEY_CAP.toLocaleString() + ' matching features')
+           + ' — over ' + cap.toLocaleString() + ' matching features')
         : null;
       // Both can be true at once, and the visitor needs both: one layer over the cap and another
       // that cannot be filtered at all are different facts about the same map.

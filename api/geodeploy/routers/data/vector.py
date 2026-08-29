@@ -846,6 +846,11 @@ class AggregateRequest(BaseModel):
     timeBucket: str | None = None         # hour | day | week | month | quarter | year
     limit: int | None = None
     sort: str | None = None               # value_desc | value_asc | key_asc
+    # DISTINCT KEYS rather than groups: `{keys, truncated}` instead of `{groups, truncated}`, with
+    # no measure and no per-group count. The dashboard's map uses it to turn a linked filter into a
+    # predicate it can evaluate in the browser, where every field but the key is dead weight — six
+    # times the payload for 5 000 keys. Clamped by `MAX_KEYS`, not `MAX_GROUPS`.
+    keysOnly: bool | None = None
     # SEVERAL measures against one grouping — "average height AND average age per district". Each
     # entry is {op, field, label}. Absent, the single op/field above is used, which is what every
     # chart authored before this sends.

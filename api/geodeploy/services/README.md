@@ -28,7 +28,12 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   `layerId` for both is the bug fixed in 8154479. `linkedFilter` (default False) is the opt-in that
   lets a filter arriving through a declared relation narrow the map too, by resolving the relation
   to its matching keys client-side; the bound and the over-bound behaviour live in
-  `dashboard.js::LINKED_KEY_CAP`, not here.
+  `dashboard.js::LINKED_KEY_CAPS` and the author's `linkedFilterCap`, one of `LINKED_FILTER_CAPS`.
+  **`aggregate.MAX_KEYS` is a SECOND ceiling and must not be merged back into `MAX_GROUPS`:** 200
+  groups is right for a chart nobody can read past and wrong for a key set, and while they were one
+  constant the map stopped narrowing at 201 features while claiming it had passed 5 000. A
+  `keysOnly` aggregate request returns `{keys, truncated}` — no measure, no per-group count — which
+  is about a sixth of the bytes for the one field the caller reads.
 - `aggregate.py` (V-16, 2026-08-24) — **server-side summarisation of a vector layer** for the
   dashboard's indicator / gauge / chart / table / selector widgets, plus `*_pick` (the exact
   geometry of a clicked feature). Behind `POST /data/vector/{ref}/{aggregate,table,pick}` and
@@ -198,6 +203,10 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   `api/tests/test_native_crs.py`.
 
 ## Last updated
+2026-08-29 (**`keysOnly` aggregates + `MAX_KEYS`** — a keys-only request returns just the distinct
+values and is clamped by its own ceiling, because `MAX_GROUPS` (200) was silently truncating the
+map's 5 000-key linked filter. Plus `linkedFilterCap` and chart `plotSize` in `dashboard.py`.)
+
 2026-08-29 (**map filtering is per-drawn-layer, and a linked filter can reach the map by opt-in** —
 `resolve_dashboard` normalises the map's new `linkedFilter` flag; the runtime narrows each style
 layer by that layer's own filters instead of by the map widget's selection layer.)
