@@ -107,6 +107,8 @@ const MAP_TOOLS = [
 // layer never resolved to a feature at any zoom.
 //: Mirrors `LINKED_KEY_CAP` in templates/shared/dashboard.js — the runtime enforces it; this copy
 //: only tells the author what the bound is before they opt in.
+import InfoHint from '../shared/InfoHint.vue'
+
 const LINKED_KEY_CAP = 5000
 const DEFAULT_TOL_PX = 6
 const GRID_COLS = 12
@@ -749,12 +751,13 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
     <div v-if="boundLayers.length > 1" class="mb-3 p-2.5 rounded-lg border border-border bg-card">
       <div class="flex items-center gap-2 mb-1">
         <span class="text-[11px] font-medium">Linked layers</span>
+        <InfoHint label="What linked layers do">
+          Filters normally stay on their own layer. Link two layers on a shared column and a filter
+          on one narrows the other — clicking a canton in a buildings chart then narrows the
+          entrances.
+        </InfoHint>
         <button @click="addRelation" class="ml-auto text-[11px] text-primary hover:text-primary/80">+ Link</button>
       </div>
-      <p class="text-[10px] text-muted-foreground/70 mb-2">
-        Filters normally stay on their own layer. Link two layers on a shared column and a filter on
-        one narrows the other — clicking a canton in a buildings chart then narrows the entrances.
-      </p>
       <div v-for="(r, i) in relations" :key="i" class="flex items-center gap-1 mb-1">
         <select :value="r.left.layerId"
           @change="patchRelation(i, 'left', { layerId: Number($event.target.value), field: null })"
@@ -870,18 +873,24 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
             :checked="!!selected.layout?.overlayCollapsed"
             @change="patchWidget(selected.id, { layout: { overlayCollapsed: $event.target.checked } })" />
           Start collapsed as an icon
+          <InfoHint label="About pinning to the map">
+            Pinned to the map and sized in pixels, so it is not in the canvas above and its cell is
+            freed for the widgets around it. Leave the height at 0 for a box that fits its content.
+          </InfoHint>
         </label>
-        <p v-if="selected.layout?.overlay" class="text-[10px] text-muted-foreground/70 -mt-1">
-          Pinned to the map and sized in pixels, so it is not in the canvas above and its cell is
-          freed for the widgets around it. Leave the height at 0 for a box that fits its content.
-        </p>
       </template>
 
       <!-- Data source -->
       <template v-if="TYPE_BY_ID[selected.type]?.needs !== 'none'">
         <label class="block">
-          <span class="text-[10px] text-muted-foreground block mb-0.5">
+          <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
             {{ selected.type === 'map' ? 'Selection layer (optional)' : 'Layer' }}
+            <InfoHint v-if="selected.type === 'map' && vectorLayers.length > 1"
+              label="How the selection layer is used">
+              A click tries this layer first, then the portal's other vector layers top-down, so
+              every layer on the map is selectable. A filter narrows the layer it came from wherever
+              that layer is drawn, whichever layer is named here.
+            </InfoHint>
           </span>
           <select :value="layerValue(selected)" @change="setLayer(selected, $event.target.value)"
             class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
@@ -898,54 +907,49 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
         <!-- map: which selection modes, and what a click publishes -->
         <template v-if="selected.type === 'map'">
           <div>
-            <span class="text-[10px] text-muted-foreground block mb-1">Selection tools</span>
+            <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-1">
+              Selection tools
+              <InfoHint label="About the selection tools">
+                All three produce the same kind of filter — a geometry — so raster statistics respond
+                to a clicked feature, a drawn polygon and a dragged box alike.
+              </InfoHint>
+            </span>
             <div class="flex flex-wrap gap-1">
               <button v-for="t in MAP_TOOLS" :key="t.id" @click="toggleTool(selected, t.id)"
                 class="px-2 py-0.5 rounded border text-[11px]"
                 :class="(selected.dataSource?.tools || []).includes(t.id)
                   ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ t.name }}</button>
             </div>
-            <p class="text-[10px] text-muted-foreground/70 leading-snug mt-1">
-              All three produce the same kind of filter — a geometry — so raster statistics respond to
-              a clicked feature, a drawn polygon and a dragged box alike.
-            </p>
           </div>
           <!-- Click radius. In PIXELS, because that is what the visitor is aiming with; the runtime
                converts it to degrees at the click's own zoom and latitude. A point layer needs a few
                pixels of slack or a click never lands on a feature at all. -->
           <label class="block">
-            <span class="text-[10px] text-muted-foreground block mb-0.5">
+            <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
               Click radius — {{ selected.dataSource?.tolPx ?? DEFAULT_TOL_PX }} px
+              <InfoHint label="About the click radius">
+                How near a click has to land. Points and lines need a few pixels; polygons work at 0.
+              </InfoHint>
             </span>
             <input type="range" min="0" max="24" step="1"
               :value="selected.dataSource?.tolPx ?? DEFAULT_TOL_PX"
               @input="patchWidget(selected.id, { dataSource: { tolPx: Number($event.target.value) } })"
               class="w-full accent-primary" />
-            <span class="text-[10px] text-muted-foreground/70 leading-snug block">
-              How near a click has to land. Points and lines need a few pixels; polygons work at 0.
-            </span>
           </label>
-          <p v-if="vectorLayers.length > 1" class="text-[10px] text-muted-foreground/70 leading-snug">
-            A click tries this layer first, then the portal's other vector layers top-down, so every
-            layer on the map is selectable. A filter narrows the layer it came from wherever that
-            layer is drawn, whichever layer is named here.
-          </p>
-          <!-- The map following a LINKED filter. Off by default and deliberately explained rather
-               than just labelled: it is the one dashboard setting whose failure mode is a map that
-               looks narrowed and is not, so the author has to be told what the bound does before
-               they turn it on. -->
-          <label v-if="relations.length" class="flex items-start gap-2">
-            <input type="checkbox" class="mt-0.5 accent-primary"
+          <!-- The map following a LINKED filter. Off by default, and the one setting here whose
+               failure mode is a map that LOOKS narrowed and is not — so the bound stays one click
+               away rather than being left to the docs. -->
+          <label v-if="relations.length"
+            class="flex items-center gap-1.5 text-[11px] cursor-pointer select-none">
+            <input type="checkbox" class="accent-primary"
               :checked="!!selected.dataSource?.linkedFilter"
               @change="patchWidget(selected.id, { dataSource: { linkedFilter: $event.target.checked } })" />
-            <span class="min-w-0">
-              <span class="text-[11px] block">Follow linked-layer filters</span>
-              <span class="text-[10px] text-muted-foreground/70 leading-snug block">
-                Lets a filter published on a linked layer narrow this map too, by fetching the
-                matching keys. Works for a narrow selection; past
-                {{ LINKED_KEY_CAP.toLocaleString() }} matches the map is left whole and says so.
-              </span>
-            </span>
+            Follow linked-layer filters
+            <InfoHint label="About following linked-layer filters">
+              Lets a filter published on a linked layer narrow this map too, by fetching the matching
+              keys. Works for a narrow selection; past {{ LINKED_KEY_CAP.toLocaleString() }} matches
+              the map is left whole and says so.
+            </InfoHint>
           </label>
           <label v-if="selected.dataSource?.layerId != null" class="block">
             <span class="text-[10px] text-muted-foreground block mb-0.5">Also filter by this field on click</span>
@@ -1144,29 +1148,33 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
             </label>
           </div>
           <label class="block">
-            <span class="text-[10px] text-muted-foreground block mb-0.5">Points plotted (sampled)</span>
+            <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
+              Points plotted (sampled)
+              <InfoHint label="About sampling">
+                Drawn from a random sample, so the shape holds even on a very large layer.
+              </InfoHint>
+            </span>
             <input type="number" min="50" max="3000" step="50" :value="selected.dataSource?.limit ?? 1500"
               @change="patchWidget(selected.id, { dataSource: { limit: Number($event.target.value) || 1500 } })"
               class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
-            <span class="text-[10px] text-muted-foreground/70">
-              Drawn from a random sample, so the shape holds even on a very large layer.
-            </span>
           </label>
         </template>
 
         <!-- search -->
         <template v-if="selected.type === 'search'">
           <div>
-            <span class="text-[10px] text-muted-foreground block mb-1">Columns to search</span>
+            <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-1">
+              Columns to search
+              <InfoHint label="About choosing columns">
+                Each column adds to the scan. Two or three named ones stay fast on a big layer.
+              </InfoHint>
+            </span>
             <div class="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
               <button v-for="f in fieldsOf(selected)" :key="f.name" @click="toggleSearchField(selected, f.name)"
                 class="px-2 py-0.5 rounded border text-[11px]"
                 :class="(selected.dataSource?.fields || []).includes(f.name)
                   ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ f.name }}</button>
             </div>
-            <p class="text-[10px] text-muted-foreground/70 mt-1">
-              Each column adds to the scan. Two or three named ones stay fast on a big layer.
-            </p>
           </div>
           <div class="grid grid-cols-2 gap-2">
             <label class="block">
@@ -1240,20 +1248,28 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
             </label>
           </div>
           <label v-if="(selected.dataSource?.kind || 'category') === 'category'" class="flex items-center justify-between text-xs">
-            <span class="text-muted-foreground">Allow several at once</span>
+            <span class="text-muted-foreground flex items-center gap-1">
+              Allow several at once
+              <InfoHint label="About selectors">
+                A selector is a filter source only — it never gets filtered by the other widgets, so
+                the control cannot move under the hand using it.
+              </InfoHint>
+            </span>
             <input type="checkbox" :checked="selected.dataSource?.multi !== false"
               @change="patchWidget(selected.id, { dataSource: { multi: $event.target.checked } })" />
           </label>
-          <p class="text-[10px] text-muted-foreground/70 leading-snug">
-            A selector is a filter source only — it never gets filtered by the other widgets, so the
-            control cannot move under the hand using it.
-          </p>
         </template>
 
         <!-- raster statistics -->
         <template v-if="selected.type === 'rasterstats'">
           <div>
-            <span class="text-[10px] text-muted-foreground block mb-1">Statistics</span>
+            <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-1">
+              Statistics
+              <InfoHint label="How raster statistics are driven">
+                Listens for the active area selection — a clicked feature, a drawn polygon or a
+                dragged box — and reports statistics for it. Wire the map to this widget below.
+              </InfoHint>
+            </span>
             <div class="flex flex-wrap gap-1">
               <button v-for="s in RASTER_STATS" :key="s" @click="toggleStat(selected, s)"
                 class="px-2 py-0.5 rounded border text-[11px] capitalize"
@@ -1269,10 +1285,6 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
               <option v-for="n in bandCount(selected)" :key="n" :value="n">Band {{ n }}</option>
             </select>
           </label>
-          <p class="text-[10px] text-muted-foreground/70 leading-snug">
-            Listens for the active area selection — a clicked feature, a drawn polygon or a dragged
-            box — and reports statistics for it. Wire the map to this widget below.
-          </p>
         </template>
       </template>
 

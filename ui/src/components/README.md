@@ -71,6 +71,12 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
   — three surfaces, change together. Changing a widget's LAYER clears every field on it (a column of
   the old table is almost never a column of the new one, and the query would 400).
 - `portal/PortalCard.vue` — portal tile in the builder grid (edit/publish/view/unpublish/delete).
+- `shared/InfoHint.vue` — an ⓘ next to a label that opens its explanation on click. Use it for the
+  two-or-three-sentence *why* behind a control; keep STATE inline and visible ("Nothing filters this
+  yet", "Add a raster layer first"), because a reader will not click an ⓘ to discover a blocking
+  condition. Not `title=""` (what the older rows use): a native tooltip cannot be opened by touch,
+  is unstyled, and truncates multi-sentence text. TELEPORTED to `<body>` and positioned `fixed`, so
+  a narrow scrolling inspector cannot clip it — the bug the symbology popover had.
 - `shared/StatusBadge.vue` — colored processing/ready/error pill.
 - `shared/StorageBar.vue` — used/total storage bar (Settings).
 - `users/` — admin Users screen components (RBAC A-01): UserRow / InviteRow / InviteModal /
@@ -94,6 +100,10 @@ All dialogs (`UploadModal`, `AddSourceModal`, `DiscoverModal`, `portal/CreatePor
   icon logic in `views/PortalEditor.vue` + `templates/shared/portal.js` — change all three together.
 
 ## Last updated
+2026-08-29 (`shared/InfoHint.vue` added; DashboardBuilder's ten explanatory paragraphs moved into
+hints on the controls they describe — the map inspector had become a wall of prose. Its map editor
+also gained the `linkedFilter` checkbox.)
+
 2026-08-24 (**dashboard first-use round**, `portal/DashboardBuilder.vue`. `addWidget` shipped every
 widget with `actions.filters: []`, so a hand-built dashboard cross-filtered NOTHING — the map
 published a geometry to nobody and the raster-stats and details panels sat on their placeholders for
