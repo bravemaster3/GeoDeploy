@@ -341,6 +341,37 @@ and if not, does the author find out before they publish?"</p>
 
 
 <div class="gd-rel" markdown>
+### Install somewhere that is not empty
+<span class="gd-when">Planned</span>
+
+<p class="gd-goal">Every install path so far assumes a bare VPS that GeoDeploy owns — ports 80 and
+443 free, fixed container names available, nothing else on the box wanting any of it. That is the
+right default and stays the default. It also rules out a lab server, a shared research machine, or
+a VM that already serves something on 443.</p>
+
+- [ ] **Serve behind an existing reverse proxy** — publish to a configurable port, or to no host
+      port at all, with the `proxy_pass` an operator already running nginx or Caddy needs. The
+      single biggest unlock, and the first step
+- [ ] **A base path.** A portal lives at `/portals/<slug>/` today; on a shared host it may need to
+      live under `/geodeploy/…`. Every absolute URL the app emits — vector tiles, `pmtiles://`, the
+      parquet range proxy, published portal assets — has to be built from a configured prefix
+      rather than assumed to sit at the root. This is the part that will leak bugs and it deserves
+      its own audit
+- [ ] **A namespace for containers, networks and volumes**, so two instances can coexist and
+      neither collides with unrelated software
+- [ ] **A rootless path**, or at minimum a preflight that states the privileges required and fails
+      early and legibly without them
+- [ ] **A preflight that reports every conflict at once** — ports in use, names taken, network
+      present — before it writes anything
+
+<p class="gd-goal">Half-doing the base path produces an instance that mostly works and breaks on the
+paths nobody clicked while testing, which is the worst failure available to a self-hosted product:
+the operator cannot tell whether they misconfigured it or it is broken. Hence a release rather than
+a flag. <a href="https://github.com/bravemaster3/GeoDeploy/issues/79">#79</a></p>
+
+</div>
+
+<div class="gd-rel" markdown>
 ### A page for a layer
 <span class="gd-when">Planned</span>
 
