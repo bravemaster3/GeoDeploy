@@ -554,7 +554,69 @@ def resolve_dashboard(config: dict | None) -> dict | None:
         },
         "refresh": _int(config.get("refresh"), 0, 0, REFRESH_MAX) if config.get("refresh") else 0,
         "widgets": widgets,
+        "relations": _normalize_relations(config.get("relations"), widgets),
     }
+
+
+#: Declared joins between two vector layers, so an attribute filter can travel from one to the
+#: other. Four is plenty for a single screen and keeps the resolver's per-filter lookup trivial.
+MAX_RELATIONS = 8
+
+
+def _normalize_relations(raw, widgets: list[dict]) -> list[dict]:
+    """`[{left:{layerId, field}, right:{layerId, field}}]` — an equi-join between two vector layers.
+
+    WHY THIS EXISTS. Attribute filters are layer-scoped: a predicate on `canton` is meaningless
+    against a table that has no such column, so `filtersFor` drops it rather than silently returning
+    nothing. That is right in the absence of any stated connection between two layers — and wrong the
+    moment the author knows one. A relation is the author stating it: *these two layers describe the
+    same things, and this pair of columns is how you tell*.
+
+    UNDIRECTED, deliberately. An author declaring `buildings.egid = entrances.egid` means the two are
+    related, not that filtering may only travel one way; requiring them to declare it twice would be
+    a way to get it half-declared. The resolver reads it from either side.
+
+    Only layers a widget actually binds to are kept — a relation naming a layer nobody displays is a
+    join that can never fire, and keeping it would put a row in the editor that does nothing.
+    """
+    if not isinstance(raw, list):
+        return []
+    bound: set[int] = set()
+    for w in widgets:
+        ds = w.get("dataSource") or {}
+        if ds.get("layerType") == "vector" and isinstance(ds.get("layerId"), int):
+            bound.add(ds["layerId"])
+
+    out: list[dict] = []
+    seen: set[tuple] = set()
+    for rel in raw[:MAX_RELATIONS * 2]:
+        if not isinstance(rel, dict):
+            continue
+        left, right = rel.get("left"), rel.get("right")
+        if not isinstance(left, dict) or not isinstance(right, dict):
+            continue
+        try:
+            lid, rid = int(left.get("layerId")), int(right.get("layerId"))
+        except (TypeError, ValueError):
+            continue
+        lf, rf = _str(left.get("field")), _str(right.get("field"))
+        if not lf or not rf:
+            continue
+        # A layer joined to itself is not a relation, it is a filter — and it would make the
+        # resolver translate a predicate into the same predicate for ever.
+        if lid == rid:
+            continue
+        if lid not in bound or rid not in bound:
+            continue
+        key = tuple(sorted([(lid, lf), (rid, rf)]))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"left": {"layerId": lid, "field": lf},
+                    "right": {"layerId": rid, "field": rf}})
+        if len(out) >= MAX_RELATIONS:
+            break
+    return out
 
 
 def dashboard_layer_refs(dashboard: dict | None) -> tuple[set[int], set[int]]:

@@ -619,9 +619,11 @@ _LAYOUT_ARCHETYPES = {
     # grid and `#map-wrap` is placed into the map widget's cell by grid-area. It is never
     # re-parented (a moved MapLibre container loses its size — the same rule the catalog follows).
     #
-    # `layerCatalog` is OFF by default: the widgets name their own data, so a second list of layers
-    # would be a control that explains nothing about the numbers on screen. An author can turn it
-    # on and gets the floating list, like every other archetype.
+    # `layerCatalog` is ON, and it is what carries the LEGEND. The legend has never been a panel of
+    # its own — it is drawn inside each layer card — so a dashboard with the list off had
+    # `legend: true` and nowhere to draw it, and no way to read what the colours on its map meant.
+    # It opens from the same toggle at the top of the control cluster that every other archetype
+    # uses, and it starts collapsed, so the cost is one button and the gain is the legend.
     "dashboard": {
         "regions": {
             "layerList": {"side": "left", "mode": "floating", "collapsed": True,
@@ -638,7 +640,7 @@ _LAYOUT_ARCHETYPES = {
                 "mapControls": True,
             },
         },
-        "panels": {"dashboard": True, "layerCatalog": False, "legend": True, "basemap": True,
+        "panels": {"dashboard": True, "layerCatalog": True, "legend": True, "basemap": True,
                    "about": False, "story": False},
     },
     # scrollytelling — a narrative column drives the map camera; the layer list floats (collapsed by

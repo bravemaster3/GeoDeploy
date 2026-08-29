@@ -246,8 +246,91 @@ def _srid_of(layer) -> int | None:
         return None
 
 
+# ── joins between two layers ─────────────────────────────────────────────────
+# An attribute filter is layer-scoped, because a predicate on `canton` means nothing against a table
+# without that column. A RELATION is the author saying two layers describe the same things and naming
+# the pair of columns that proves it — at which point the filter can travel.
+#
+# HOW, and why not the obvious way. The obvious way is to resolve the filter to a set of key values
+# and send them along: `entrances.egid IN (…)`. That collapses the moment the key is
+# high-cardinality — narrowing 3.4M buildings to one canton yields ~477k egids, which is not a
+# predicate, it is a data transfer. So the join is pushed INTO the engine as a subquery, and the
+# engine is chosen by what the two layers actually are:
+#
+#   GeoParquet + GeoParquet -> one DuckDB query reading both parquet sources
+#   PostGIS    + PostGIS    -> one SQL subquery
+#   mixed                   -> refused, and SAID so (see `join_note`), because the alternative is a
+#                              silent half-filter and a number nobody can account for
+#
+# The subquery carries the SOURCE layer's own attribute filters. It does NOT carry the geometry:
+# a geometry filter already applies to every target whatever its layer, so passing it here would
+# apply it twice — once directly and once through the join — which for an intersection is harmless
+# and for a future non-idempotent filter would not be.
+
+
+def _join_spec(spec: dict) -> dict | None:
+    j = spec.get("join")
+    return j if isinstance(j, dict) and j.get("layer") is not None else None
+
+
+def _duck_join_predicate(spec: dict, cols: dict) -> tuple[str | None, str | None]:
+    """`(predicate, note)` for a GeoParquet target. `note` is non-None when the join was REFUSED and
+    explains why, so the caller can report it rather than quietly answering the wrong question."""
+    j = _join_spec(spec)
+    if not j:
+        return None, None
+    other = j["layer"]
+    right, left = _str_field(j.get("rightField")), _str_field(j.get("leftField"))
+    if not right or not left:
+        return None, None
+    if right not in cols:
+        return None, f"this layer has no column {right!r} to join on"
+    if getattr(other, "storage_backend", "postgis") != "geoparquet" or not getattr(other, "s3_key", None):
+        return None, "the related layer is stored differently, so the two cannot be joined in one query"
+
+    from ..config import get_settings
+    from . import duckdb_engine
+    bucket = get_settings().storage_bucket
+    _meta, src_other = duckdb_engine._parquet_paths(f"s3://{bucket}/{other.s3_key}")
+    known_other = _known_columns(other)
+    if known_other and left not in known_other:
+        return None, f"the related layer has no column {left!r}"
+    where = _duck_where(normalize_filters(j.get("filters"), known_other), {})
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    # CAST to VARCHAR on both sides, for the same reason the `in` filter does it: the two columns
+    # can be an int and a string of the same id and must still match.
+    return (f"CAST({qi(right)} AS VARCHAR) IN "
+            f"(SELECT DISTINCT CAST({qi(left)} AS VARCHAR) FROM {src_other} {where_sql})"), None
+
+
+def _pg_join_predicate(spec: dict, params: dict) -> tuple[str | None, str | None]:
+    """The PostGIS twin. Nested parameters are namespaced (`prefix="j"`), or the subquery's binds
+    would overwrite the outer query's and the two would silently filter by each other's values."""
+    j = _join_spec(spec)
+    if not j:
+        return None, None
+    other = j["layer"]
+    right, left = _str_field(j.get("rightField")), _str_field(j.get("leftField"))
+    if not right or not left:
+        return None, None
+    if getattr(other, "storage_backend", "postgis") == "geoparquet":
+        return None, "the related layer is stored differently, so the two cannot be joined in one query"
+    known_other = _known_columns(other)
+    if known_other and left not in known_other:
+        return None, f"the related layer has no column {left!r}"
+    table = f"{qi(other.schema_name)}.{qi(other.table_name)}"
+    where = _pg_where(normalize_filters(j.get("filters"), known_other), None,
+                      other.geometry_column or "geom", params, _srid_of(other), prefix="j")
+    return (f"{qi(right)}::text IN "
+            f"(SELECT DISTINCT {qi(left)}::text FROM {table} {where})"), None
+
+
+def _str_field(v) -> str | None:
+    return v if isinstance(v, str) and v.strip() else None
+
+
 def _pg_where(filters: list[dict], geometry: dict | None, geom_col: str,
-              params: dict, srid: int | None = None) -> str:
+              params: dict, srid: int | None = None, prefix: str = "f") -> str:
     """WHERE clause + bound parameters for the PostGIS path.
 
     Values are BOUND, not interpolated — only identifiers reach the SQL text, and those went through
@@ -258,7 +341,7 @@ def _pg_where(filters: list[dict], geometry: dict | None, geom_col: str,
     for i, f in enumerate(filters):
         col = qi(f["field"])
         if f["op"] == "in":
-            key = f"f{i}"
+            key = f"{prefix}{i}"
             params[key] = [str(v) for v in f["values"]]
             # Cast to text on BOTH sides: a selector reads its options as strings (that is what a
             # <select> holds), and comparing them to an int column would fail the whole query rather
@@ -272,24 +355,24 @@ def _pg_where(filters: list[dict], geometry: dict | None, geom_col: str,
             parts.append(f"{col}::text = ANY(CAST(:{key} AS text[]))")
         elif f["op"] == "between":
             if f.get("min") is not None:
-                params[f"f{i}lo"] = f["min"]
-                parts.append(f"{col}::double precision >= :f{i}lo")
+                params[f"{prefix}{i}lo"] = f["min"]
+                parts.append(f"{col}::double precision >= :{prefix}{i}lo")
             if f.get("max") is not None:
-                params[f"f{i}hi"] = f["max"]
-                parts.append(f"{col}::double precision <= :f{i}hi")
+                params[f"{prefix}{i}hi"] = f["max"]
+                parts.append(f"{col}::double precision <= :{prefix}{i}hi")
         elif f["op"] == "daterange":
             if f.get("min"):
-                params[f"f{i}lo"] = str(f["min"])
-                parts.append(f"{col} >= CAST(:f{i}lo AS timestamp)")
+                params[f"{prefix}{i}lo"] = str(f["min"])
+                parts.append(f"{col} >= CAST(:{prefix}{i}lo AS timestamp)")
             if f.get("max"):
-                params[f"f{i}hi"] = str(f["max"])
-                parts.append(f"{col} <= CAST(:f{i}hi AS timestamp)")
+                params[f"{prefix}{i}hi"] = str(f["max"])
+                parts.append(f"{col} <= CAST(:{prefix}{i}hi AS timestamp)")
         elif f["op"] == "notnull":
             parts.append(f"{col} IS NOT NULL")
     if geometry:
-        params["gdgeom"] = _dumps(geometry)
+        params[f"{prefix}gdgeom"] = _dumps(geometry)
         target = str(srid) if srid else f"ST_SRID({qi(geom_col)})"
-        sel = (f"ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON(CAST(:gdgeom AS text)), 4326), {target})")
+        sel = (f"ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON(CAST(:{prefix}gdgeom AS text)), 4326), {target})")
         # ST_Intersects, not ST_Within: a selection is a question about what the visitor drew over,
         # and a polygon that straddles the boundary of a drawn box is part of what they pointed at.
         # `&&` first so the GiST index prunes before the exact test.
@@ -336,6 +419,9 @@ async def _postgis_aggregate_uncached(db, layer, spec: dict) -> dict:
     geom_col = layer.geometry_column or "geom"
     params: dict = {}
     where = _pg_where(filters, geometry, geom_col, params, _srid_of(layer))
+    join_pred, join_note = _pg_join_predicate(spec, params)
+    if join_pred:
+        where = (where + " AND " + join_pred) if where else ("WHERE " + join_pred)
     value = _pg_value_expr(op, field)
 
     group_by = spec.get("groupBy")
@@ -392,6 +478,9 @@ async def postgis_table(db, layer, spec: dict) -> dict:
                         _search_mode(spec.get('searchMode')))
     if search:
         where = (where + " AND " + search) if where else ("WHERE " + search)
+    join_pred, _join_note = _pg_join_predicate(spec, params)
+    if join_pred:
+        where = (where + " AND " + join_pred) if where else ("WHERE " + join_pred)
 
     limit = max(1, min(int(spec.get("limit") or 50), MAX_ROWS))
     offset = max(0, int(spec.get("offset") or 0))
@@ -1010,6 +1099,9 @@ def _parquet_aggregate_uncached(layer, spec: dict) -> dict:
         bbox_pred, geom = _duck_bbox_prune(meta, geometry)
         if bbox_pred:
             where.append(bbox_pred)
+        join_pred, join_note = _duck_join_predicate(spec, cols)
+        if join_pred:
+            where.append(join_pred)
         where_sql = ("WHERE " + " AND ".join(where)) if where else ""
 
         if geom is None:
@@ -1167,6 +1259,9 @@ def parquet_table(layer, spec: dict) -> dict:
                               _search_mode(spec.get('searchMode')))
         if search:
             where.append(search)
+        join_pred, _join_note = _duck_join_predicate(spec, cols)
+        if join_pred:
+            where.append(join_pred)
         where_sql = ("WHERE " + " AND ".join(where)) if where else ""
         geom_col = _duck_geom_col(meta, cols)
         sel = ", ".join([f"{qi(geom_col)} AS __wkb"] + [qi(f) for f in fields])
