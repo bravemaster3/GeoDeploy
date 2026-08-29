@@ -180,12 +180,26 @@ class TestPortalDocument:
             client.portals.create("X", access_type="secret")
 
     def test_unknown_experience_is_refused_locally(self, client):
+        # NOT `dashboard`, which this used before it became a real archetype. A test whose invalid
+        # example turns valid keeps passing for the wrong reason — it would have gone on asserting
+        # that the CLI refuses `dashboard` long after the server started accepting it, which is the
+        # bug rather than the guarantee.
         with pytest.raises(ValidationError):
-            client.portals.create("X", archetype="dashboard")
+            client.portals.create("X", archetype="infographic")
 
     def test_create_carries_the_experience_into_layout_config(self, client, instance):
         portal = client.portals.create("Cat", archetype="catalog")
         assert portal["layout_config"]["archetype"] == "catalog"
+
+    def test_every_server_archetype_is_accepted(self, client, instance):
+        """Each experience the server offers has to survive the CLI's own validation.
+
+        The list is duplicated on the client so a typo fails before a request goes out; the cost of
+        that is exactly this drift, and `dashboard` shipped on the server while the CLI still
+        refused it."""
+        for archetype in ("webmap", "storymap", "catalog", "dashboard"):
+            portal = client.portals.create("P-" + archetype, archetype=archetype)
+            assert portal["layout_config"]["archetype"] == archetype
 
     def test_publish_and_url(self, client):
         portal = client.portals.create("Fresh")

@@ -39,13 +39,14 @@ examples:
   geodeploy portals create "Field sites 2026"
   geodeploy portals create "Catalogue" --experience catalog --access organization
   geodeploy portals create "Story" --experience storymap --template minimal
+  geodeploy portals create "Fleet" --experience dashboard --template dashboard-monitoring
 """)
     create.add_argument("title")
     create.add_argument("--description", help="About text, or @file.md")
     create.add_argument("--template", default="minimal", dest="template_id",
                         help="template id (see `geodeploy catalog templates`)")
     create.add_argument("--experience", choices=ARCHETYPES,
-                        help="webmap (default), storymap or catalog")
+                        help="webmap (default), storymap, catalog or dashboard")
     create.add_argument("--access", choices=ACCESS_TYPES, default="public",
                         help="who may view the PUBLISHED portal")
     create.add_argument("--password", help="the password, when --access password")

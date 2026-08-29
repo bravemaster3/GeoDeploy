@@ -442,7 +442,7 @@ geodeploy portals create "Field sites 2026"
 geodeploy portals create "Catalogue" --experience catalog --access organization
 ```
 
-`--experience` picks the archetype — `webmap` (default), `storymap` or `catalog`. `--access` sets
+`--experience` picks the archetype — `webmap` (default), `storymap`, `catalog` or `dashboard`. `--access` sets
 who may view the published portal: `public`, `password` (with `--password`), `organization` (any
 signed-in member) or `owner`.
 
