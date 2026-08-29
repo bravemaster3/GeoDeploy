@@ -1302,6 +1302,73 @@ window.GD_DASHBOARD = (function () {
     return { el: c.root, refresh: function () { offset = 0; refresh(); } };
   };
 
+  // LEGEND — what the colours on the map mean. Binds to NOTHING: it reads the published style, so
+  // it needs no layer, no query and no wiring.
+  //
+  // Why this exists as a widget at all: the legend has always lived inside a layer card in the layer
+  // list, and a dashboard hides that list by default (`panels.layerCatalog: false`) — so a dashboard
+  // had `panels.legend: true` and nowhere to draw it. Turning the whole layer switcher on to get a
+  // legend is the wrong trade on a board whose widgets already name their own data.
+  //
+  // The entries come from portal.js (`ctx.legendEntries`), which owns symbology rendering for the
+  // layer list, the storymap and the catalog. One description of a layer's symbology, however many
+  // surfaces draw it.
+  RENDERERS.legend = function (w, env) {
+    const c = card(w, { bodyClass: 'gd-w-legend' });
+    const ds = w.dataSource || {};
+
+    function render() {
+      clear(c.body);
+      const all = (env.legendEntries ? env.legendEntries() : []) || [];
+      // An author can narrow it to named layers; by default it describes everything on the map,
+      // which is what a legend is for.
+      const only = ds.layerIds;
+      const entries = (Array.isArray(only) && only.length)
+        ? all.filter(function (e) { return only.indexOf(e.layerId) >= 0; })
+        : all;
+      if (!entries.length) {
+        c.body.appendChild(el('div', 'gd-w-empty', 'No layers on the map to describe.'));
+        return;
+      }
+      entries.forEach(function (e) {
+        const row = el('div', 'gd-legend-row' + (e.visible ? '' : ' is-off'));
+        const head = el('div', 'gd-legend-head');
+        const sw = el('span', 'gd-legend-swatch');
+        sw.innerHTML = e.swatch;
+        head.appendChild(sw);
+        const nm = el('span', 'gd-legend-name', e.name);
+        nm.title = e.name;
+        head.appendChild(nm);
+        // Toggling from the legend is the one interaction a legend earns: you read what a colour
+        // means and immediately want that layer off. Only offered when the author allows it.
+        if (ds.toggle !== false && env.setLayerVisible) {
+          const eye = document.createElement('button');
+          eye.type = 'button';
+          eye.className = 'gd-legend-eye';
+          eye.textContent = e.visible ? '◉' : '◎';
+          eye.title = e.visible ? 'Hide this layer' : 'Show this layer';
+          eye.setAttribute('aria-pressed', e.visible ? 'true' : 'false');
+          eye.addEventListener('click', function () {
+            env.setLayerVisible(e.id, !e.visible);
+            render();          // re-read the live style rather than trusting our own bookkeeping
+          });
+          head.appendChild(eye);
+        }
+        row.appendChild(head);
+        if (e.detail) {
+          const det = el('div', 'gd-legend-detail');
+          det.innerHTML = e.detail;
+          row.appendChild(det);
+        }
+        c.body.appendChild(row);
+      });
+    }
+    render();
+    // Re-read when anything else changes the map: a symbology edit in the editor preview, or a
+    // layer toggled from the layer list if the author left it on.
+    return { el: c.root, refresh: render };
+  };
+
   // SCATTER — one dot per feature, Y against X. The only chart here that plots FEATURES rather
   // than a summary of them, which is why it is a widget of its own rather than a chart kind: the
   // aggregate endpoint has no shape that returns rows.
@@ -2325,6 +2392,10 @@ window.GD_DASHBOARD = (function () {
       store: store,
       api: api,
       absUrl: ctx.absUrl || function (u) { return u; },
+      //: Supplied by portal.js, which owns symbology rendering and the map. Absent on an older
+      //: portal shell, which the legend widget checks for rather than assuming.
+      legendEntries: ctx.legendEntries || null,
+      setLayerVisible: ctx.setLayerVisible || null,
       fitBbox: ctx.fitBbox || function () {},
       //: THE IN-VIEW GUARD. While a map's `extent` tool is on, every widget that map filters is
       //: answering a different question than its title says: "Buildings" has quietly become

@@ -65,6 +65,10 @@ WIDGET_TYPES: dict[str, dict] = {
     # type a name, another widget would narrow, and the name would stop matching.
     "search":      {"needs": "vector", "source": True,  "target": False, "channel": "attr"},
     "selector":    {"needs": "vector", "source": True,  "target": False, "channel": None},
+    # LEGEND binds to NOTHING and neither filters nor is filtered: it describes the map's symbology,
+    # which no filter changes. `needs: none` for the same reason the details panel has it — there is
+    # no layer to pick, because it describes all of them.
+    "legend":      {"needs": "none",   "source": False, "target": False, "channel": None},
     "details":     {"needs": "none",   "source": False, "target": True,  "channel": "select"},
     "rasterstats": {"needs": "raster", "source": False, "target": True,  "channel": "geom"},
 }

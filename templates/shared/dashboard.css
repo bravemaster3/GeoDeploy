@@ -489,3 +489,23 @@ body[data-archetype="dashboard"][data-dash-draw="1"] #map canvas { cursor: cross
 .gd-w-title .gd-inview {
   font-weight: 400; color: var(--text-muted); font-size: .92em; pointer-events: none;
 }
+
+/* ── legend ────────────────────────────────────────────────────────────────── */
+.gd-w-body.gd-w-legend { display: flex; flex-direction: column; gap: 7px; }
+.gd-legend-row { display: flex; flex-direction: column; gap: 3px; }
+/* A hidden layer stays LISTED and dims, rather than vanishing: a legend that drops entries as you
+   toggle them gives you no way to bring one back. */
+.gd-legend-row.is-off { opacity: .45; }
+.gd-legend-head { display: flex; align-items: center; gap: 6px; }
+.gd-legend-swatch { flex-shrink: 0; display: inline-flex; align-items: center; }
+.gd-legend-name {
+  font-size: 11px; font-weight: 500; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gd-legend-eye {
+  margin-left: auto; flex-shrink: 0; border: none; background: none; cursor: pointer;
+  color: var(--text-muted); font-size: 12px; line-height: 1; padding: 0 2px;
+}
+.gd-legend-eye:hover { color: var(--text); }
+.gd-legend-eye:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 3px; }
+.gd-legend-detail { padding-left: 22px; }

@@ -61,6 +61,8 @@ const WIDGET_TYPES = [
     desc: 'What is in the selected data, column by column: range, completeness, commonest values.' },
   { type: 'selector', name: 'Selector', needs: 'vector', source: true, target: false,
     desc: 'A category, range or date-range control. A filter source only.' },
+  { type: 'legend', name: 'Legend', needs: 'none', source: false, target: false,
+    desc: 'What the colours on the map mean. Describes every layer; no binding needed.' },
   { type: 'details', name: 'Details panel', needs: 'none', source: false, target: true,
     desc: 'Full attributes of whatever is selected across the dashboard.' },
   { type: 'rasterstats', name: 'Raster statistics', needs: 'raster', source: false, target: true,

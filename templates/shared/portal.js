@@ -1361,6 +1361,52 @@
               try { map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 60, maxZoom: 16, duration: 700 }); }
               catch (e) { /* an empty or malformed extent is not worth breaking a click over */ }
             },
+            // The LEGEND, built by the same code that builds it for the layer list. A dashboard
+            // hides the layer list by default (`panels.layerCatalog: false`), and the legend has
+            // always lived INSIDE a layer card — so a dashboard had `legend: true` and nothing to
+            // render it into. This hands the dashboard the entries rather than letting it grow a
+            // second legend renderer: one description of a layer's symbology, however many surfaces
+            // draw it. Reads the live style, so it reflects a symbology edit without a re-publish.
+            legendEntries: function () {
+              const out = [];
+              (STYLE.layers || []).forEach(function (layer) {
+                const meta = layer.metadata;
+                if (!meta || !meta['geodeploy:name'] || meta['geodeploy:part']) return;
+                const type = meta['geodeploy:type'];
+                const geom = meta['geodeploy:geometry'] || (type === 'raster' ? 'raster' : 'point');
+                const color = getLayerColor(layer);
+                const dash = dashKind(layer.paint);
+                const shape = meta['geodeploy:marker'] || 'circle';
+                const outline = geom === 'polygon' ? bakedOutline(layer.id) : null;
+                let visible = true;
+                try { visible = map.getLayoutProperty(layer.id, 'visibility') !== 'none'; } catch (e) {}
+                out.push({
+                  id: layer.id,
+                  layerId: meta['geodeploy:layer_id'],
+                  name: meta['geodeploy:name'],
+                  geometry: geom,
+                  visible: visible,
+                  bbox: meta['geodeploy:bbox'] || null,
+                  swatch: legendSwatch(geom, color, dash, shape, outline),
+                  detail: type === 'raster' && !meta['geodeploy:external']
+                    ? rasterLegendHtml(layer)
+                    : vectorLegendHtml(meta['geodeploy:legend'], geom, meta['geodeploy:legendField'],
+                                       meta['geodeploy:sizeLegend'], color, meta['geodeploy:lineType'],
+                                       shape, outline),
+                });
+              });
+              return out;
+            },
+            // Toggling a layer belongs to portal.js for the same reason fitBbox does — it owns the
+            // map. `groupLayerIds` is what makes it correct: a raw-paint import renders as fill +
+            // outline + …, all sharing one geodeploy:layer_id, and toggling only the primary leaves
+            // half the layer on screen.
+            setLayerVisible: function (styleLayerId, on) {
+              const vis = on ? 'visible' : 'none';
+              groupLayerIds(styleLayerId).forEach(function (lid) {
+                try { map.setLayoutProperty(lid, 'visibility', vis); } catch (e) {}
+              });
+            },
           });
         } else {
           console.warn('[geodeploy] dashboard runtime missing');
