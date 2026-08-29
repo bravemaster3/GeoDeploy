@@ -434,6 +434,54 @@ window.GD_DASHBOARD = (function () {
   //: on it. The map keeps more of its height than the rest because a map that small is not a map.
   const PHONE_MAX_H = 5, PHONE_MAP_H = 7;
 
+  //: The icon an overlay wears while it is collapsed. Keyed by widget type, in the same 24-viewBox
+  //: stroked style as the map tools beside it — a collapsed overlay IS a map control as far as the
+  //: eye is concerned, so it should not arrive in a different visual language.
+  const OVERLAY_ICONS = {
+    search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+    table: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="9" y1="10" x2="9" y2="20"/></svg>',
+    profile: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="20" x2="4" y2="10"/><line x1="10" y1="20" x2="10" y2="4"/><line x1="16" y1="20" x2="16" y2="14"/><line x1="22" y1="20" x2="2" y2="20"/></svg>',
+    chart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 17 9 11 13 15 21 7"/></svg>',
+  };
+  const OVERLAY_ICON_FALLBACK =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>';
+
+  //: Wrap an overlay so it can shrink to a single icon. A search box is wanted for a few seconds
+  //: and the map for the rest of the time, so an always-open box on the map is a box IN THE WAY of
+  //: the map. Collapsed, it is one 30px button; open, it is the widget.
+  //:
+  //: The widget is HIDDEN, never destroyed — it keeps its results, its selection and its place in
+  //: the filter bus while shut, so re-opening shows what you left rather than an empty box, and a
+  //: filter it published stays published.
+  function makeCollapsible(slot, w, expandedW) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'gd-overlay-toggle';
+    btn.innerHTML = OVERLAY_ICONS[w.type] || OVERLAY_ICON_FALLBACK;
+    const label = w.title || (w.type === 'search' ? 'Search' : 'Open');
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+    btn.setAttribute('aria-expanded', 'false');
+    slot.insertBefore(btn, slot.firstChild);
+    slot.classList.add('gd-overlay-collapsible', 'is-collapsed');
+    slot.style.width = '';                    // collapsed: the button's own size
+    function setOpen(open) {
+      slot.classList.toggle('is-collapsed', !open);
+      slot.style.width = open ? expandedW + 'px' : '';
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) {
+        // Put the caret where the visitor is about to type, rather than making them click twice.
+        const input = slot.querySelector('input');
+        if (input) { try { input.focus(); } catch (e) {} }
+      }
+    }
+    btn.addEventListener('click', function () { setOpen(slot.classList.contains('is-collapsed')); });
+    // Escape shuts it, which is the shortcut anyone who opened a panel over a map reaches for.
+    slot.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !slot.classList.contains('is-collapsed')) { setOpen(false); btn.focus(); }
+    });
+  }
+
   //: One positioned container inside #map-wrap that every overlay widget mounts into.
   //:
   //: Why a container rather than appending to #map-wrap directly: MapLibre owns the children of its
@@ -2078,6 +2126,9 @@ window.GD_DASHBOARD = (function () {
     });
     bar.appendChild(clearBtn);
     wrap.appendChild(bar);
+    // Tell the overlay layer that this corner is taken. Set here rather than assumed in CSS, so a
+    // map that renders no tool bar keeps its overlays tight to the corner.
+    try { wrap.dataset.dashTools = '1'; } catch (e) {}
 
     function publish(geometry, label, props) {
       setData(map, SEL_SRC, geometry);
@@ -2391,6 +2442,7 @@ window.GD_DASHBOARD = (function () {
         const oh = w.layout && w.layout.overlayH;
         if (oh) slot.style.height = oh + 'px';
         slot.appendChild(inst.el);
+        if (w.layout && w.layout.overlayCollapsed) makeCollapsible(slot, w, ow);
         overlayHost(mapWrap).appendChild(slot);
         nodeById[w.id] = inst.el;
         store.subscribe(w.id, inst.refresh);

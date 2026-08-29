@@ -748,6 +748,12 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
             @change="patchWidget(selected.id, { layout: { overlayH: Number($event.target.value) || 0 } })"
             class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
         </label>
+        <label v-if="selected.layout?.overlay" class="flex items-center gap-1.5 text-[11px] cursor-pointer select-none">
+          <input type="checkbox" class="accent-primary"
+            :checked="!!selected.layout?.overlayCollapsed"
+            @change="patchWidget(selected.id, { layout: { overlayCollapsed: $event.target.checked } })" />
+          Start collapsed as an icon
+        </label>
         <p v-if="selected.layout?.overlay" class="text-[10px] text-muted-foreground/70 -mt-1">
           Pinned to the map and sized in pixels, so it is not in the canvas above and its cell is
           freed for the widgets around it. Leave the height at 0 for a box that fits its content.

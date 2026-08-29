@@ -435,6 +435,12 @@ def _normalize_layout(layout: dict | None, index: int) -> dict:
         # panels this placement is for (a search box should not reserve 300px of map to show one
         # input). A list that wants to scroll inside a fixed box sets a number instead.
         out["overlayH"] = _int(lay.get("overlayH"), 0, 0, 800)
+        # COLLAPSED: the overlay ships as a single icon button and opens when clicked. For a search
+        # box on a map this is usually what is wanted — the box is needed for a few seconds and the
+        # map is needed the rest of the time — and it is the difference between a widget that sits
+        # ON the map and one that sits IN THE WAY of it. Absent = always open, which is right for a
+        # legend or a readout that is there to be read.
+        out["overlayCollapsed"] = bool(lay.get("overlayCollapsed"))
     return out
 
 

@@ -217,6 +217,32 @@ html[data-theme="dark"] .gd-ind-delta.down { color: #f87171; }
    10px in the corners it uses; bottom offsets clear the attribution strip. Centred anchors are
    translated by half their own size, which is what keeps them centred at any width the author sets
    — `left: 50%` alone would centre the widget's LEFT EDGE, not the widget. */
+/* A collapsed overlay is one button, sized and styled like the map tools it sits beside — it IS a
+   map control as far as the eye is concerned. `is-collapsed` hides the widget rather than removing
+   it, so it keeps its results and its published filter while shut. */
+.gd-overlay-toggle {
+  width: 33px; height: 33px; flex: 0 0 auto; align-self: flex-start;
+  display: none; align-items: center; justify-content: center;
+  background: var(--bg); color: var(--text-muted);
+  border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow);
+  cursor: pointer; padding: 0;
+}
+.gd-overlay-toggle svg { width: 16px; height: 16px; }
+.gd-overlay-toggle:hover { color: var(--text); }
+.gd-overlay-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.gd-overlay-collapsible > .gd-overlay-toggle { display: flex; }
+/* Open: the button stays as the way back, above the widget. */
+.gd-overlay-collapsible { gap: 6px; }
+.gd-overlay-collapsible.is-collapsed { box-shadow: none; }
+.gd-overlay-collapsible.is-collapsed > .gd-w { display: none; }
+.gd-overlay-collapsible.is-collapsed > .gd-overlay-toggle {
+  background: var(--bg); color: var(--text);
+}
+/* Anchored right or bottom, the button should hug that edge rather than the opposite one. */
+.gd-overlay-top-right > .gd-overlay-toggle,
+.gd-overlay-right-center > .gd-overlay-toggle,
+.gd-overlay-bottom-right > .gd-overlay-toggle { align-self: flex-end; }
+
 .gd-overlay-top-left { top: 10px; left: 10px; }
 .gd-overlay-top-center { top: 10px; left: 50%; transform: translateX(-50%); }
 .gd-overlay-top-right { top: 10px; right: 52px; }
@@ -228,6 +254,12 @@ html[data-theme="dark"] .gd-ind-delta.down { color: #f87171; }
 /* The 52px exists ONLY to clear MapLibre's control cluster. A dashboard that turned the map controls
    off has nothing there to clear, and the gap then reads as a widget that failed to reach the edge —
    so it goes back to the same 10px the left side uses. */
+/* The map's own selection tools sit at left:8 / top:8 and are ~33px tall, so a top-left overlay
+   landed underneath them. `data-dash-tools` is set by the map widget when it actually renders that
+   bar, so a map with no tools keeps the overlay tight to the corner rather than carrying a gap that
+   clears nothing. */
+[data-dash-tools="1"] .gd-overlay-top-left { top: 51px; }
+
 body[data-dash-mapctrl="0"] .gd-overlay-top-right,
 body[data-dash-mapctrl="0"] .gd-overlay-right-center,
 body[data-dash-mapctrl="0"] .gd-overlay-bottom-right { right: 10px; }
