@@ -268,25 +268,34 @@ def _srid_of(layer) -> int | None:
 # and for a future non-idempotent filter would not be.
 
 
-def _join_spec(spec: dict) -> dict | None:
-    j = spec.get("join")
-    return j if isinstance(j, dict) and j.get("layer") is not None else None
+#: Related layers one query may pull filters through. A LIST, not a single join, because two
+#: different layers can each be filtering this one at the same time and "the first one wins" would
+#: silently drop the other -- the same silent half-filter this whole design exists to avoid.
+MAX_JOINS = 4
 
 
-def _duck_join_predicate(spec: dict, cols: dict) -> tuple[str | None, str | None]:
-    """`(predicate, note)` for a GeoParquet target. `note` is non-None when the join was REFUSED and
-    explains why, so the caller can report it rather than quietly answering the wrong question."""
-    j = _join_spec(spec)
-    if not j:
-        return None, None
+def _join_specs(spec: dict) -> list[dict]:
+    raw = spec.get("joins")
+    if isinstance(raw, dict):                     # tolerate the single-join form
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    return [j for j in raw[:MAX_JOINS] if isinstance(j, dict) and j.get("layer") is not None]
+
+
+def _duck_join_predicates(spec: dict, cols: dict) -> list[str]:
+    """One predicate per related layer, ANDed by the caller. A join that cannot be built is skipped
+    here and reported by the ROUTER, which refused it before the query was assembled."""
+    return [p for p in (_duck_one_join(j, cols) for j in _join_specs(spec)) if p]
+
+
+def _duck_one_join(j: dict, cols: dict) -> str | None:
     other = j["layer"]
     right, left = _str_field(j.get("rightField")), _str_field(j.get("leftField"))
-    if not right or not left:
-        return None, None
-    if right not in cols:
-        return None, f"this layer has no column {right!r} to join on"
+    if not right or not left or right not in cols:
+        return None
     if getattr(other, "storage_backend", "postgis") != "geoparquet" or not getattr(other, "s3_key", None):
-        return None, "the related layer is stored differently, so the two cannot be joined in one query"
+        return None
 
     from ..config import get_settings
     from . import duckdb_engine
@@ -294,35 +303,36 @@ def _duck_join_predicate(spec: dict, cols: dict) -> tuple[str | None, str | None
     _meta, src_other = duckdb_engine._parquet_paths(f"s3://{bucket}/{other.s3_key}")
     known_other = _known_columns(other)
     if known_other and left not in known_other:
-        return None, f"the related layer has no column {left!r}"
+        return None
     where = _duck_where(normalize_filters(j.get("filters"), known_other), {})
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     # CAST to VARCHAR on both sides, for the same reason the `in` filter does it: the two columns
     # can be an int and a string of the same id and must still match.
     return (f"CAST({qi(right)} AS VARCHAR) IN "
-            f"(SELECT DISTINCT CAST({qi(left)} AS VARCHAR) FROM {src_other} {where_sql})"), None
+            f"(SELECT DISTINCT CAST({qi(left)} AS VARCHAR) FROM {src_other} {where_sql})")
 
 
-def _pg_join_predicate(spec: dict, params: dict) -> tuple[str | None, str | None]:
-    """The PostGIS twin. Nested parameters are namespaced (`prefix="j"`), or the subquery's binds
-    would overwrite the outer query's and the two would silently filter by each other's values."""
-    j = _join_spec(spec)
-    if not j:
-        return None, None
-    other = j["layer"]
-    right, left = _str_field(j.get("rightField")), _str_field(j.get("leftField"))
-    if not right or not left:
-        return None, None
-    if getattr(other, "storage_backend", "postgis") == "geoparquet":
-        return None, "the related layer is stored differently, so the two cannot be joined in one query"
-    known_other = _known_columns(other)
-    if known_other and left not in known_other:
-        return None, f"the related layer has no column {left!r}"
-    table = f"{qi(other.schema_name)}.{qi(other.table_name)}"
-    where = _pg_where(normalize_filters(j.get("filters"), known_other), None,
-                      other.geometry_column or "geom", params, _srid_of(other), prefix="j")
-    return (f"{qi(right)}::text IN "
-            f"(SELECT DISTINCT {qi(left)}::text FROM {table} {where})"), None
+def _pg_join_predicates(spec: dict, params: dict) -> list[str]:
+    """The PostGIS twin. Nested parameters are namespaced PER JOIN (`j0…`, `j1…`), or the subqueries'
+    binds would overwrite the outer query's and each other's, and every one of them would silently
+    filter by the wrong values."""
+    out = []
+    for n, j in enumerate(_join_specs(spec)):
+        other = j["layer"]
+        right, left = _str_field(j.get("rightField")), _str_field(j.get("leftField"))
+        if not right or not left:
+            continue
+        if getattr(other, "storage_backend", "postgis") == "geoparquet":
+            continue
+        known_other = _known_columns(other)
+        if known_other and left not in known_other:
+            continue
+        table = f"{qi(other.schema_name)}.{qi(other.table_name)}"
+        where = _pg_where(normalize_filters(j.get("filters"), known_other), None,
+                          other.geometry_column or "geom", params, _srid_of(other), prefix=f"j{n}")
+        out.append(f"{qi(right)}::text IN "
+                   f"(SELECT DISTINCT {qi(left)}::text FROM {table} {where})")
+    return out
 
 
 def _str_field(v) -> str | None:
@@ -419,9 +429,8 @@ async def _postgis_aggregate_uncached(db, layer, spec: dict) -> dict:
     geom_col = layer.geometry_column or "geom"
     params: dict = {}
     where = _pg_where(filters, geometry, geom_col, params, _srid_of(layer))
-    join_pred, join_note = _pg_join_predicate(spec, params)
-    if join_pred:
-        where = (where + " AND " + join_pred) if where else ("WHERE " + join_pred)
+    for jp in _pg_join_predicates(spec, params):
+        where = (where + " AND " + jp) if where else ("WHERE " + jp)
     value = _pg_value_expr(op, field)
 
     group_by = spec.get("groupBy")
@@ -478,9 +487,8 @@ async def postgis_table(db, layer, spec: dict) -> dict:
                         _search_mode(spec.get('searchMode')))
     if search:
         where = (where + " AND " + search) if where else ("WHERE " + search)
-    join_pred, _join_note = _pg_join_predicate(spec, params)
-    if join_pred:
-        where = (where + " AND " + join_pred) if where else ("WHERE " + join_pred)
+    for jp in _pg_join_predicates(spec, params):
+        where = (where + " AND " + jp) if where else ("WHERE " + jp)
 
     limit = max(1, min(int(spec.get("limit") or 50), MAX_ROWS))
     offset = max(0, int(spec.get("offset") or 0))
@@ -1099,9 +1107,7 @@ def _parquet_aggregate_uncached(layer, spec: dict) -> dict:
         bbox_pred, geom = _duck_bbox_prune(meta, geometry)
         if bbox_pred:
             where.append(bbox_pred)
-        join_pred, join_note = _duck_join_predicate(spec, cols)
-        if join_pred:
-            where.append(join_pred)
+        where.extend(_duck_join_predicates(spec, cols))
         where_sql = ("WHERE " + " AND ".join(where)) if where else ""
 
         if geom is None:
@@ -1259,9 +1265,7 @@ def parquet_table(layer, spec: dict) -> dict:
                               _search_mode(spec.get('searchMode')))
         if search:
             where.append(search)
-        join_pred, _join_note = _duck_join_predicate(spec, cols)
-        if join_pred:
-            where.append(join_pred)
+        where.extend(_duck_join_predicates(spec, cols))
         where_sql = ("WHERE " + " AND ".join(where)) if where else ""
         geom_col = _duck_geom_col(meta, cols)
         sel = ", ".join([f"{qi(geom_col)} AS __wkb"] + [qi(f) for f in fields])

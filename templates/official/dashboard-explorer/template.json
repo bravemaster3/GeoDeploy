@@ -21,7 +21,7 @@
         "id": "search",
         "type": "search",
         "title": "Find a feature",
-        "layout": { "x": 0, "y": 0, "w": 4, "h": 3, "overlay": "top-center", "overlayW": 300, "overlayCollapsed": true },
+        "layout": { "x": 0, "y": 0, "w": 4, "h": 3, "overlay": "controls", "overlayW": 290, "overlayCollapsed": true },
         "dataSource": { "searchMode": "contains", "limit": 8 },
         "actions": { "filters": ["profile", "chart-breakdown", "map", "kpi-rows", "details"], "listens": false }
       },

@@ -850,9 +850,10 @@ class AggregateRequest(BaseModel):
     # entry is {op, field, label}. Absent, the single op/field above is used, which is what every
     # chart authored before this sends.
     series: list[dict[str, Any]] | None = None
-    # A declared relation letting a filter from ANOTHER layer reach this one. {layerId, leftField,
-    # rightField, filters}. The server resolves `layerId` itself — the client never names a table.
-    join: dict[str, Any] | None = None
+    # Declared relations letting filters from OTHER layers reach this one. Each entry is
+    # {layerId, leftField, rightField, filters}. The server resolves `layerId` itself — the client
+    # never names a table, so a relation can never become a way to read a layer you cannot open.
+    joins: list[dict[str, Any]] | None = None
     filters: list[AttrFilter] | None = None
     # The GEOMETRY filter — a clicked feature, a drawn polygon or a drawn bbox, already normalised
     # to one GeoJSON geometry in EPSG:4326 by the dashboard's filter bus. Carried separately from
@@ -892,7 +893,7 @@ class TableRequest(BaseModel):
     search: str | None = None
     searchFields: list[str] | None = None
     searchMode: str | None = None          # contains (default) | prefix
-    join: dict[str, Any] | None = None
+    joins: list[dict[str, Any]] | None = None
     # Skips the COUNT(*) over the predicate, which is a second full pass and which also defeats the
     # LIMIT short-circuit. A search box wants the first few matches, not a census; a table's pager
     # needs the number, so it leaves this alone.
@@ -909,42 +910,54 @@ async def _public_vector(layer_ref: str, db: AsyncSession) -> VectorLayer:
     return layer
 
 
-async def _resolve_join(spec: dict, layer: VectorLayer, db: AsyncSession) -> str | None:
-    """Turn `spec['join'].layerId` into the LAYER, in place. Returns a note when the join cannot be
-    honoured, in which case the join is removed rather than half-applied.
+async def _resolve_joins(spec: dict, layer: VectorLayer, db: AsyncSession) -> str | None:
+    """Turn each `spec['joins'][].layerId` into the LAYER, in place. Returns a note naming the first
+    join that could NOT be honoured; those are removed rather than half-applied.
 
-    The client sends an id, never a table name: the join reads another layer, so it has to pass the
-    same public-readability check as reading that layer directly — otherwise a relation would be a
-    way to query a layer you cannot open.
+    The client sends an id, never a table name: a join READS another layer, so it has to pass the
+    same public-readability check as opening that layer directly — otherwise declaring a relation
+    would be a way to query something you are not allowed to see.
 
     A cross-engine pair is refused HERE rather than deep in the query builder, because refusing
-    early is what lets the answer carry a reason. A number that quietly ignored half its filter is
-    the worst outcome available.
+    early is what lets the answer carry a reason. A number that quietly ignored half of its filter
+    is the worst outcome available.
     """
-    j = spec.get("join")
-    if not isinstance(j, dict):
+    raw = spec.pop("joins", None)
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not isinstance(raw, list) or not raw:
         return None
-    spec.pop("join", None)
-    try:
-        other_id = int(j.get("layerId"))
-    except (TypeError, ValueError):
-        return None
-    if other_id == layer.id:
-        return None                      # a layer joined to itself is a filter, not a relation
-    result = await db.execute(select(VectorLayer).where(VectorLayer.id == other_id))
-    other = result.scalar_one_or_none()
-    if not other or not await _publicly_readable(other, db):
-        return "the related layer is not available"
-    if other.status != "ready":
-        return "the related layer is still processing"
-    left = (other.storage_backend or "postgis") == "geoparquet"
-    right = (layer.storage_backend or "postgis") == "geoparquet"
-    if left != right:
-        return ("these two layers are stored differently (one file-backed, one in the database), "
-                "so a filter cannot travel between them yet")
-    spec["join"] = {"layer": other, "leftField": j.get("leftField"),
-                    "rightField": j.get("rightField"), "filters": j.get("filters")}
-    return None
+
+    resolved: list[dict] = []
+    note: str | None = None
+    right_is_file = (layer.storage_backend or "postgis") == "geoparquet"
+    for j in raw[:4]:
+        if not isinstance(j, dict):
+            continue
+        try:
+            other_id = int(j.get("layerId"))
+        except (TypeError, ValueError):
+            continue
+        if other_id == layer.id:
+            continue                     # a layer joined to itself is a filter, not a relation
+        result = await db.execute(select(VectorLayer).where(VectorLayer.id == other_id))
+        other = result.scalar_one_or_none()
+        if not other or not await _publicly_readable(other, db):
+            note = note or "a related layer is not available"
+            continue
+        if other.status != "ready":
+            note = note or f"“{other.name}” is still processing"
+            continue
+        if ((other.storage_backend or "postgis") == "geoparquet") != right_is_file:
+            note = note or (f"“{other.name}” is stored differently from this layer "
+                            "(one file-backed, one in the database), so a filter cannot travel "
+                            "between them yet")
+            continue
+        resolved.append({"layer": other, "leftField": j.get("leftField"),
+                         "rightField": j.get("rightField"), "filters": j.get("filters")})
+    if resolved:
+        spec["joins"] = resolved
+    return note
 
 
 def _spec(model: BaseModel) -> dict:
@@ -1010,7 +1023,7 @@ async def vector_aggregate(layer_ref: str, req: AggregateRequest,
     from ...services import aggregate as agg
     layer = await _public_vector(layer_ref, db)
     spec = _spec(req)
-    join_note = await _resolve_join(spec, layer, db)
+    join_note = await _resolve_joins(spec, layer, db)
     try:
         if layer.storage_backend == "geoparquet":
             out = await run_in_threadpool(agg.parquet_aggregate, layer, spec)
@@ -1039,7 +1052,7 @@ async def vector_table(layer_ref: str, req: TableRequest, db: AsyncSession = Dep
     from ...services import aggregate as agg
     layer = await _public_vector(layer_ref, db)
     spec = _spec(req)
-    join_note = await _resolve_join(spec, layer, db)
+    join_note = await _resolve_joins(spec, layer, db)
     try:
         if layer.storage_backend == "geoparquet":
             out = await run_in_threadpool(agg.parquet_table, layer, spec)

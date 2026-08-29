@@ -21,7 +21,7 @@
         "id": "search",
         "type": "search",
         "title": "Find",
-        "layout": { "x": 0, "y": 0, "w": 4, "h": 3, "overlay": "top-left", "overlayW": 280, "overlayCollapsed": true },
+        "layout": { "x": 0, "y": 0, "w": 4, "h": 3, "overlay": "controls", "overlayW": 290, "overlayCollapsed": true },
         "dataSource": { "searchMode": "contains", "limit": 8 },
         "actions": { "filters": ["cards", "details", "map", "kpi-count", "chart-breakdown"], "listens": false }
       },

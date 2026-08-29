@@ -332,6 +332,47 @@ const drag = ref(null)     // {id, mode:'move'|'resize', startX, startY, orig}
 //: The canvas draws only what the GRID places. An overlay widget is pinned to the map instead, so
 //: it takes no cell — and showing it in one would claim space that is actually free for its
 //: neighbours, which is a layout the author never gets.
+//: RELATIONS — how a filter travels from one layer to another. Without one, an attribute filter
+//: cannot leave its own layer: a predicate on `canton` means nothing against a table with no such
+//: column, so the runtime drops it rather than silently returning zero rows. A relation is the
+//: author saying "these two layers describe the same things, and this pair of columns proves it".
+const relations = computed({
+  get: () => dash.value.relations || [],
+  set: (v) => patchDash({ relations: v }),
+})
+//: Every vector layer a widget actually binds to. A relation between layers nobody displays can
+//: never fire, so offering one would be offering a control that does nothing.
+const boundLayers = computed(() => {
+  const seen = new Map()
+  for (const w of widgets.value) {
+    const ds = w.dataSource
+    if (ds?.layerType === 'vector' && ds.layerId != null && !seen.has(ds.layerId)) {
+      const l = vectorLayers.value.find(x => x.id === ds.layerId)
+      if (l) seen.set(ds.layerId, l)
+    }
+  }
+  return [...seen.values()]
+})
+function layerFields(id) {
+  const l = vectorLayers.value.find(x => x.id === id)
+  return (l?.columns || []).filter(c => c && c.name)
+}
+function addRelation() {
+  const ls = boundLayers.value
+  if (ls.length < 2) return
+  relations.value = [...relations.value, {
+    left: { layerId: ls[0].id, field: null },
+    right: { layerId: ls[1].id, field: null },
+  }]
+}
+function patchRelation(i, side, patch) {
+  relations.value = relations.value.map((r, n) =>
+    (n === i ? { ...r, [side]: { ...r[side], ...patch } } : r))
+}
+function removeRelation(i) {
+  relations.value = relations.value.filter((_, n) => n !== i)
+}
+
 const gridWidgets = computed(() => widgets.value.filter(w => !w.layout?.overlay))
 const overlayWidgets = computed(() => widgets.value.filter(w => w.layout?.overlay))
 const ANCHOR_LABELS = {
@@ -673,6 +714,48 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
     <p v-if="gridWidgets.length" class="text-[10px] text-muted-foreground/60 -mt-2 mb-3">
       Drag to move, pull the corner to resize. Arrow keys nudge; hold shift to resize.
     </p>
+
+    <!-- ── relations between layers ───────────────────────────────────────── -->
+    <div v-if="boundLayers.length > 1" class="mb-3 p-2.5 rounded-lg border border-border bg-card">
+      <div class="flex items-center gap-2 mb-1">
+        <span class="text-[11px] font-medium">Linked layers</span>
+        <button @click="addRelation" class="ml-auto text-[11px] text-primary hover:text-primary/80">+ Link</button>
+      </div>
+      <p class="text-[10px] text-muted-foreground/70 mb-2">
+        Filters normally stay on their own layer. Link two layers on a shared column and a filter on
+        one narrows the other — clicking a canton in a buildings chart then narrows the entrances.
+      </p>
+      <div v-for="(r, i) in relations" :key="i" class="flex items-center gap-1 mb-1">
+        <select :value="r.left.layerId"
+          @change="patchRelation(i, 'left', { layerId: Number($event.target.value), field: null })"
+          class="min-w-0 flex-1 text-[11px] bg-background border border-border rounded px-1.5 py-1">
+          <option v-for="l in boundLayers" :key="l.id" :value="l.id">{{ l.name }}</option>
+        </select>
+        <select :value="r.left.field || ''"
+          @change="patchRelation(i, 'left', { field: $event.target.value || null })"
+          class="min-w-0 flex-1 text-[11px] bg-background border border-border rounded px-1.5 py-1">
+          <option value="">— column —</option>
+          <option v-for="f in layerFields(r.left.layerId)" :key="f.name" :value="f.name">{{ f.name }}</option>
+        </select>
+        <span class="text-[11px] text-muted-foreground flex-shrink-0">=</span>
+        <select :value="r.right.layerId"
+          @change="patchRelation(i, 'right', { layerId: Number($event.target.value), field: null })"
+          class="min-w-0 flex-1 text-[11px] bg-background border border-border rounded px-1.5 py-1">
+          <option v-for="l in boundLayers" :key="l.id" :value="l.id">{{ l.name }}</option>
+        </select>
+        <select :value="r.right.field || ''"
+          @change="patchRelation(i, 'right', { field: $event.target.value || null })"
+          class="min-w-0 flex-1 text-[11px] bg-background border border-border rounded px-1.5 py-1">
+          <option value="">— column —</option>
+          <option v-for="f in layerFields(r.right.layerId)" :key="f.name" :value="f.name">{{ f.name }}</option>
+        </select>
+        <button @click="removeRelation(i)" title="Remove this link"
+          class="text-[11px] text-red-400 hover:text-red-500 px-1 flex-shrink-0">&times;</button>
+      </div>
+      <p v-if="!relations.length" class="text-[10px] text-muted-foreground/60">
+        No links yet — filters stay on their own layer.
+      </p>
+    </div>
 
     <!-- Widgets pinned to the map. They are NOT in the canvas above: they take no grid cell, so
          drawing them in one would show a box reserving space that is actually free, and offer a

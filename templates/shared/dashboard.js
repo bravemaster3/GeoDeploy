@@ -249,7 +249,32 @@ window.GD_DASHBOARD = (function () {
     return (ds && ds.layerId != null) ? (ds.layerType + ':' + ds.layerId) : null;
   }
 
-  function createStore(widgets) {
+  //: RELATIONS — the author saying two layers describe the same things, and which pair of columns
+  //: proves it. Without one, an attribute filter cannot leave its own layer, because a predicate on
+  //: `canton` means nothing against a table that has no such column. With one, the filter travels as
+  //: a JOIN: the server turns it into `entrances.egid IN (SELECT egid FROM buildings WHERE …)`.
+  //:
+  //: Why a join and not a list of matching ids: narrowing 3.4M buildings to one canton yields about
+  //: 477k egids. That is not a predicate, it is a data transfer. The engine does the work instead.
+  function relationBetween(relations, fromLayerId, toLayerId) {
+    for (let i = 0; i < (relations || []).length; i++) {
+      const r = relations[i];
+      // Undirected: the author declared that the two are related, not a direction of travel.
+      if (r.left.layerId === fromLayerId && r.right.layerId === toLayerId) {
+        return { leftField: r.left.field, rightField: r.right.field };
+      }
+      if (r.right.layerId === fromLayerId && r.left.layerId === toLayerId) {
+        return { leftField: r.right.field, rightField: r.left.field };
+      }
+    }
+    return null;
+  }
+  function layerIdOf(w) {
+    const ds = w && w.dataSource;
+    return (ds && ds.layerType === 'vector' && ds.layerId != null) ? ds.layerId : null;
+  }
+
+  function createStore(widgets, relations) {
     const byId = {};
     widgets.forEach(function (w) { byId[w.id] = w; });
     // `geomPinned` = the geometry came from a deliberate act (a click, a drawn polygon, a dragged
@@ -300,7 +325,8 @@ window.GD_DASHBOARD = (function () {
       publishAttr: function (sourceId, expr, label) {
         const prev = state.attr[sourceId];
         const targets = targetsOf(sourceId);
-        state.attr[sourceId] = { layerKey: layerKeyOf(byId[sourceId]), targets: targets,
+        state.attr[sourceId] = { layerKey: layerKeyOf(byId[sourceId]),
+                                 layerId: layerIdOf(byId[sourceId]), targets: targets,
                                  expr: expr, label: label };
         notify(affected(prev && prev.targets, targets));
         notifySelf(sourceId);
@@ -352,20 +378,33 @@ window.GD_DASHBOARD = (function () {
       // Everything currently pointed at one widget, in the shape the endpoints take.
       filtersFor: function (w) {
         const key = layerKeyOf(w);
+        const myLayer = layerIdOf(w);
         const filters = [];
+        //: Cross-layer filters, grouped by the layer they came FROM: one join per source layer,
+        //: each carrying that layer's own predicates. Grouped rather than one-join-per-filter
+        //: because two filters on the same source layer are one subquery with two conditions, not
+        //: two subqueries — and because "the first one wins" would drop the rest silently.
+        const joinsBySource = {};
         for (const sid in state.attr) {
           const f = state.attr[sid];
           if (sid === w.id) continue;                       // a widget never filters itself
           if (f.targets.indexOf(w.id) < 0) continue;
-          // Attribute filters are LAYER-SCOPED: a predicate on `region` is meaningless against a
-          // different table and would silently return nothing. A join/relationship model would
-          // widen this — that is the documented v2 seam, and it lands here.
-          if (!key || f.layerKey !== key) continue;
-          filters.push(f.expr);
+          if (key && f.layerKey === key) { filters.push(f.expr); continue; }
+          // A different layer. It can still reach this widget, but only through a relation the
+          // author declared — otherwise the predicate is dropped, exactly as before.
+          const from = f.layerId;
+          if (from == null || myLayer == null) continue;
+          const rel = relationBetween(relations, from, myLayer);
+          if (!rel) continue;
+          const j = joinsBySource[from] || (joinsBySource[from] = {
+            layerId: from, leftField: rel.leftField, rightField: rel.rightField, filters: [],
+          });
+          j.filters.push(f.expr);
         }
+        const joins = Object.keys(joinsBySource).map(function (k) { return joinsBySource[k]; });
         const geom = (state.geom && state.geom.targets.indexOf(w.id) >= 0)
           ? state.geom.geometry : null;
-        return { filters: filters, geometry: geom };
+        return { filters: filters, geometry: geom, joins: joins.length ? joins : null };
       },
       selectionFor: function (w) {
         const sel = state.selection;
@@ -596,6 +635,10 @@ window.GD_DASHBOARD = (function () {
     const spec = Object.assign({}, extra || {});
     if (f.filters.length) spec.filters = f.filters;
     if (f.geometry) spec.geometry = f.geometry;
+    // Filters that reached this widget from ANOTHER layer, through a relation the author declared.
+    // The server turns each into a subquery against that layer; it resolves the layer id itself, so
+    // nothing here names a table.
+    if (f.joins) spec.joins = f.joins;
     return spec;
   }
 
@@ -2400,7 +2443,7 @@ window.GD_DASHBOARD = (function () {
     const baseRow = grid.rowHeight || 90;      // `--dash-row` is written per breakpoint by placeAll
     document.documentElement.style.setProperty('--dash-gap', (grid.gap || 10) + 'px');
 
-    const store = createStore(cfg.widgets);
+    const store = createStore(cfg.widgets, cfg.relations || []);
     const api = createApi();
     const clearHandlers = [];
     const inViewCount = {};   // widget id -> how many extent-filtering maps currently target it
