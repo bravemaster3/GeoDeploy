@@ -215,6 +215,12 @@ window.GD_DASHBOARD = (function () {
       });
     }
     return {
+      //: How many requests are still open. The loading gate reads it to decide when the first round
+      //: of widget queries has settled — see `whenSettled`. Counting the client's own in-flight map
+      //: rather than threading a promise back out of every renderer: `refresh()` returns nothing on
+      //: all thirteen of them, and changing that contract to answer one question would be a wide
+      //: change for a narrow need.
+      pending: function () { return Object.keys(inflight).length; },
       aggregate: function (key, layerId, spec) {
         return post(key, '/api/data/vector/' + layerId + '/aggregate', spec);
       },
@@ -2688,14 +2694,51 @@ window.GD_DASHBOARD = (function () {
   }
 
   // ── setup ──────────────────────────────────────────────────────────────────
+  //: How long the loading cover will wait for the widgets before giving up on them.
+  //:
+  //: Under portal.js's own 15s backstop, deliberately: that one exists for a piece that never calls
+  //: back at all and logs a warning when it fires, so this must resolve first in the ordinary
+  //: slow-connection case and leave the backstop as a genuine backstop.
+  const DATA_GATE_MAX = 10000;
+
+  //: Call `done` once the widgets' first questions have all been answered — or once `DATA_GATE_MAX`
+  //: has passed, whichever comes first. Never twice.
+  //:
+  //: Quiet is checked TWICE, an interval apart, because zero in-flight requests is also true for the
+  //: instant between one widget's answer arriving and its follow-up going out. One reading would
+  //: call a gap in the traffic the end of it.
+  function whenSettled(api, done) {
+    let fired = false;
+    const finish = function () { if (!fired) { fired = true; try { done(); } catch (e) {} } };
+    const cap = setTimeout(finish, DATA_GATE_MAX);
+    let quiet = 0;
+    const tick = function () {
+      if (fired) return;
+      quiet = api.pending() === 0 ? quiet + 1 : 0;
+      if (quiet >= 2) { clearTimeout(cap); finish(); return; }
+      setTimeout(tick, 80);
+    };
+    setTimeout(tick, 80);
+  }
+
   function setup(ctx) {
+    // ARMED FIRST, before anything below can return early or throw. The cover is only safe to make
+    // conditional on the widgets if the signal that lifts it cannot be skipped: `setup` returns
+    // early for a dashboard with no widgets and again for one whose host element is missing, and a
+    // gate cleared on neither path is a portal that never appears. Same rule the gates in portal.js
+    // are written to — clear unconditionally — applied on this side of the call.
+    const dataReady = (function (fn) {
+      let sent = false;
+      return function () { if (!sent) { sent = true; try { fn && fn(); } catch (e) {} } };
+    })(ctx.onDataReady);
+    setTimeout(dataReady, DATA_GATE_MAX);
     const cfg = ctx.style && ctx.style.geodeploy && ctx.style.geodeploy.dashboard;
-    if (!cfg || !cfg.widgets || !cfg.widgets.length) return;
+    if (!cfg || !cfg.widgets || !cfg.widgets.length) { dataReady(); return; }
 
     const host = document.getElementById('dashboard-panel');
     const layoutEl = document.getElementById('layout');
     const mapWrap = document.getElementById('map-wrap');
-    if (!host || !layoutEl) return;
+    if (!host || !layoutEl) { dataReady(); return; }
 
     const grid = cfg.grid || {};
     const baseRow = grid.rowHeight || 90;      // `--dash-row` is written per breakpoint by placeAll
@@ -2910,6 +2953,19 @@ window.GD_DASHBOARD = (function () {
     // need asking too — otherwise a search box on the map would sit empty until the first
     // filter change.
     overlays.forEach(function (o) { try { o.refresh(); } catch (e) { console.warn('[geodeploy] overlay refresh failed', e); } });
+
+    // Every first question is now IN FLIGHT — each `refresh()` above issues its fetch synchronously
+    // — so the client's pending count is a complete picture from here, and waiting for it to reach
+    // zero is waiting for the answers. Checked after the loop for exactly that reason: asking
+    // earlier would find a client that had not been given the questions yet.
+    //
+    // Widgets that ask the server nothing (legend, details) never enter the count and so never hold
+    // the cover; a widget whose request FAILS clears itself in the client's `finally`, so a broken
+    // panel delays the page by its own timeout rather than indefinitely.
+    if (ctx.onDataReady) {
+      ctx.note && ctx.note('Loading widgets…');
+      whenSettled(api, dataReady);
+    }
 
     // AUTO-REFRESH, for a near-real-time layer. It re-asks every widget the question it is already
     // asking, which is deliberately NOT the same as clearing the filters: a wall-mounted board must

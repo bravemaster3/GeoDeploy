@@ -321,6 +321,15 @@
       ready: ready,
       hide: hide,
       waiting: function () { return Object.keys(gates); },
+      //: Re-label the cover. A dashboard waits for its widgets' first answers as well as the map,
+      //: which on a heavy one is a visibly longer wait than any other archetype asks for — and a
+      //: cover that sits there saying the same thing throughout reads as a page that has hung.
+      //: Saying which part is outstanding costs nothing and is the difference between "slow" and
+      //: "broken".
+      note: function (text) {
+        const sub = document.getElementById('gd-loading-sub');
+        if (sub && !released) sub.textContent = text;
+      },
     };
   })();
   // The access gate is its OWN full-window surface and sits above this one; a visitor who has to
@@ -333,7 +342,14 @@
   loading.need('render');    // MapLibre has finished drawing the opening view
   if (LAYOUT.archetype === 'catalog') loading.need('catalog');
   if (LAYOUT.archetype === 'storymap') loading.need('story');
-  if (LAYOUT.archetype === 'dashboard') loading.need('dashboard');
+  if (LAYOUT.archetype === 'dashboard') {
+    loading.need('dashboard');   // the widgets are MOUNTED
+    // …and a second gate for their first ANSWERS. Mounting a dashboard only puts empty cards on the
+    // screen: the numbers, bars and rows arrive one request later, so clearing the cover at mount
+    // revealed the very assembling-in-front-of-the-visitor this whole mechanism exists to prevent —
+    // worse here than anywhere else, because a dashboard is mostly widgets and the map is one cell.
+    loading.need('widgets');
+  }
   // Backstop. NOT the mechanism — the gates above are — but a portal must never be held hostage by
   // one piece that fails in a way that skips its own clear (a hard error inside MapLibre, a style
   // that never finishes). Generous enough that a slow connection reaches readiness first.
@@ -1360,6 +1376,11 @@
             // `deckState`, which lives here. The dashboard needs the live answer because it tells
             // the visitor which layers a filter is NOT narrowing, and naming a layer that is not
             // even on screen would be worse than saying nothing.
+            // Cleared when the widgets' first questions have all been answered. The dashboard
+            // runtime guarantees this fires — on its early returns, on a throw, and behind its own
+            // cap — so the gate cannot outlive the thing it is waiting for.
+            onDataReady: function () { loading.ready('widgets'); },
+            note: function (text) { loading.note(text); },
             deckVisible: function (layerId) {
               const st = deckState[layerId];
               return st ? !!st.visible : null;      // null = not a deck layer
@@ -1439,8 +1460,16 @@
           });
         } else {
           console.warn('[geodeploy] dashboard runtime missing');
+          // Nothing will ever answer for the widgets, so nothing must be waiting on them. Also
+          // covers a runtime older than `onDataReady`, which would ignore the callback entirely.
+          loading.ready('widgets');
         }
-      } catch (e) { console.warn('[geodeploy] dashboard failed', e); }
+      } catch (e) {
+        console.warn('[geodeploy] dashboard failed', e);
+        // A throw BEFORE the runtime armed its own signal would strand the data gate; releasing it
+        // here is harmless if the runtime already owns it, because a gate only clears once.
+        loading.ready('widgets');
+      }
       loading.ready('dashboard');   // outside the catch, for the same reason as the story panel
     }
     // R2: when rendered as the editor's preview (?edit=1), open the postMessage channel + click-to-place.
