@@ -37,6 +37,17 @@ body[data-archetype="dashboard"] #sidebar {
   z-index: 40; border: 1px solid var(--border); border-radius: var(--radius);
   box-shadow: var(--shadow-lg); overflow: hidden;
 }
+/* …and BECAUSE it is always an overlay, collapsed means the same thing in both modes: gone, with
+   the map's toggle to bring it back.
+   ─────────────────────────────────────────────────────────────────────────────────────────────
+   A DOCKED list collapses by going to `width: 0` (`#sidebar.collapsed`, specificity (1,1,0)),
+   which works because a docked list is a column whose width is the whole of its presence. The rule
+   above is (1,1,1) and sets a width unconditionally, so on a dashboard it outranked that and the
+   list stayed exactly as wide as before — the "start collapsed" checkbox did nothing at all in
+   docked mode, while floating collapsed fine because its own rule is (1,2,1).
+   Zero width would be the wrong repair anyway: this is an absolutely positioned overlay, so a
+   zero-width box is not a column that has closed, it is a sliver of border floating over a widget. */
+body[data-archetype="dashboard"] #sidebar.collapsed { display: none; }
 
 /* ── the card ─────────────────────────────────────────────────────────────── */
 body[data-archetype="dashboard"] .gd-w {
@@ -519,6 +530,12 @@ body[data-dash-mapctrl="0"] .gd-overlay-bottom-right { right: 10px; }
      how the collapsed drawer broke in the first place. */
   body[data-archetype="dashboard"] #layout > #sidebar {
     position: fixed; top: var(--header-h); bottom: 0; z-index: 60;
+    /* Full width, and both edges pinned. Inherited from the desktop rules it would keep
+       `left: 52px` (the offset that clears the control column) and `width: 85vw` — which together
+       run off the right-hand edge of a phone. There is no control column to clear here, because
+       the panel is over the whole screen rather than over the map. */
+    left: 8px; right: 8px; width: auto; max-width: none;
+    border-radius: var(--radius);
   }
 }
 
