@@ -529,14 +529,27 @@ body[data-dash-mapctrl="0"] .gd-overlay-bottom-right { right: 10px; }
      settled by which file happens to be included second. A rule that depends on source order is
      how the collapsed drawer broke in the first place. */
   body[data-archetype="dashboard"] #layout > #sidebar {
-    position: fixed; top: var(--header-h); bottom: 0; z-index: 60;
-    /* Full width, and both edges pinned. Inherited from the desktop rules it would keep
+    position: fixed; top: calc(var(--header-h) + 8px); z-index: 60;
+    /* Both edges pinned, width follows. Inherited from the desktop rules it would keep
        `left: 52px` (the offset that clears the control column) and `width: 85vw` — which together
        run off the right-hand edge of a phone. There is no control column to clear here, because
-       the panel is over the whole screen rather than over the map. */
+       the panel is over the screen rather than over the map. */
     left: 8px; right: 8px; width: auto; max-width: none;
+    /* AS TALL AS ITS CONTENT, no taller. `bottom: 0` made a five-class legend fill the whole phone —
+       a screen of empty panel with the dashboard hidden behind it — where the same legend on a
+       desktop takes the few centimetres it needs. A panel is only worth the room it uses.
+       Capped so a long layer list still scrolls inside rather than running off the bottom. */
+    bottom: auto; height: auto; max-height: calc(100vh - var(--header-h) - 16px);
     border-radius: var(--radius);
   }
+
+  /* …and a way out that is not hidden behind the panel.
+     The header hamburger is hidden everywhere by default, because the on-map toggle replaced it.
+     That toggle is a MAP control, so an open panel covering the map covers the only means of
+     closing it — "I don't even see how to close it". The header stays above the panel, so its
+     button is the one control that cannot be swallowed by what it dismisses. Only here: only a
+     dashboard puts the map somewhere a panel can cover completely. */
+  body[data-archetype="dashboard"] #sidebar-toggle { display: flex; }
 }
 
 @media (max-width: 720px) {

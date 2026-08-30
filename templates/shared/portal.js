@@ -263,8 +263,65 @@
   // someone is using it (a phone rotating, or a desktop window being dragged narrow).
   const isPhone = window.matchMedia && window.matchMedia('(max-width: 640px)').matches;
   if (LAYOUT.regions.layerList.collapsed || isPhone) sidebar.classList.add('collapsed');
+  //: On a DASHBOARD, the opened list is positioned against the MAP rather than against the page.
+  //:
+  //: Everywhere else the two are the same place — the map is the page. On a dashboard the map is one
+  //: cell in a grid, and the stylesheet's `top: header + 12px; left: 12px` is the corner of the
+  //: DASHBOARD, which can be a long way from the button that was pressed: the toggle is a MapLibre
+  //: control living in the map's own cluster. Pressing a button on the map and having a panel appear
+  //: somewhere else entirely is the complaint, and on a phone it was worse — the map scrolls, so the
+  //: panel could open off-screen.
+  //:
+  //: Fixed coordinates from the map's viewport rect, clamped so the panel is always reachable even
+  //: when the map itself is scrolled out of view. CSS cannot do this: where the map sits depends on
+  //: the widget grid, which is authored, re-flowed per breakpoint and written as inline style.
+  const placeListByMap = (function () {
+    if (LAYOUT.archetype !== 'dashboard') return function () {};
+    const PAD = 8, INSET = 12, CTRL_CLEAR = 52;
+    let raf = 0;
+    function apply() {
+      raf = 0;
+      // The phone has its own treatment — a full-width sheet over everything, in the stylesheet.
+      // Inline styles would outrank it, so they are cleared rather than left behind by a desktop
+      // session that was resized narrow.
+      if (window.matchMedia && window.matchMedia('(max-width: 640px)').matches) {
+        ['position', 'left', 'top', 'right', 'bottom', 'maxHeight']
+          .forEach(function (k) { sidebar.style[k] = ''; });
+        return;
+      }
+      if (sidebar.classList.contains('collapsed')) return;   // nothing to place
+      const wrap = document.getElementById('map-wrap');
+      if (!wrap) return;
+      const m = wrap.getBoundingClientRect();
+      if (!m.width || !m.height) return;                     // parked, or not laid out yet
+      const w = sidebar.offsetWidth || 300, h = sidebar.offsetHeight || 300;
+      const side = (LAYOUT.regions.layerList && LAYOUT.regions.layerList.side) || 'left';
+      const ctrl = (LAYOUT.regions.controls && LAYOUT.regions.controls.position) || 'top-right';
+      // Clear the control column only when the controls are on the same side the list opens from;
+      // otherwise the extra 40px is a gap for no reason.
+      const inset = ctrl.indexOf(side) >= 0 ? CTRL_CLEAR : INSET;
+      const left = side === 'right' ? m.right - w - inset : m.left + inset;
+      const top = m.top + INSET;
+      sidebar.style.position = 'fixed';
+      sidebar.style.right = 'auto';
+      sidebar.style.bottom = 'auto';
+      sidebar.style.left = Math.min(Math.max(left, PAD), window.innerWidth - w - PAD) + 'px';
+      const t = Math.min(Math.max(top, PAD), Math.max(PAD, window.innerHeight - h - PAD));
+      sidebar.style.top = t + 'px';
+      // A tall legend on a short map must not run off the bottom of the window.
+      sidebar.style.maxHeight = Math.max(160, window.innerHeight - t - PAD) + 'px';
+    }
+    function schedule() { if (!raf) raf = requestAnimationFrame(apply); }
+    window.addEventListener('resize', schedule);
+    // The grid scrolls inside #layout, so the map moves under a fixed panel; follow it, clamped.
+    const layoutEl = document.getElementById('layout');
+    if (layoutEl) layoutEl.addEventListener('scroll', schedule, { passive: true });
+    return schedule;
+  })();
+
   document.getElementById('sidebar-toggle').addEventListener('click', () => {
     sidebar.classList.toggle('collapsed');
+    placeListByMap();
     setTimeout(() => map.resize(), 220);
   });
   // On a phone the list is an overlay drawer covering the map, so tapping the map is the natural way
@@ -272,6 +329,10 @@
   // hides the control cluster including its own toggle button. Capture phase, because the map's own
   // handlers stop propagation. Desktop is untouched: there the list sits beside the map, and closing
   // it on any stray click would be hostile.
+  // A dashboard whose author left the list EXPANDED needs it placed before the visitor sees it,
+  // not on the first toggle.
+  placeListByMap();
+
   document.addEventListener('click', function (e) {
     if (!window.matchMedia || !window.matchMedia('(max-width: 640px)').matches) return;
     if (sidebar.classList.contains('collapsed')) return;
