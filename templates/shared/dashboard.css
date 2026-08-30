@@ -495,6 +495,31 @@ body[data-dash-mapctrl="0"] .gd-overlay-bottom-right { right: 10px; }
    (1,2,1) — the extra attribute is doing real work here, not decoration. */
 @media (max-width: 640px) {
   body[data-archetype="dashboard"][data-layerlist="floating"] #sidebar.collapsed { display: none; }
+
+  /* OPENED, it pins to the viewport — and therefore covers the map.
+     ────────────────────────────────────────────────────────────────
+     `#sidebar` lives inside `#layout`, which on a dashboard is `position: fixed` AND
+     `overflow-y: auto`. An absolutely positioned child of a scrolling box anchors to its scrolled
+     CONTENT, so `top: 0` means the top of the widget stack, not the top of the screen. The toggle
+     that opens the list is a map control, and the map is somewhere down that stack — so tapping it
+     opened the legend above you and you had to scroll back up to read it, away from the map it
+     describes.
+
+     `fixed` anchors it to the viewport instead, so it opens over whatever you are looking at.
+     That covers the map, which on a desktop would be the wrong trade — there the list sits beside
+     the map precisely so you can read both — but on a phone there is no beside. A legend you can
+     see over the map beats a legend somewhere off-screen that is technically not covering it.
+
+     Below the header, not over it: the header is how you know which portal you are in, and a panel
+     that swallows it reads as a new page rather than an overlay on this one.
+
+     `#layout > #sidebar` rather than a bare `#sidebar`: it names the containing block that causes
+     the problem, and at (2,1,1) it wins outright instead of tying portal.css's (1,1,1) and being
+     settled by which file happens to be included second. A rule that depends on source order is
+     how the collapsed drawer broke in the first place. */
+  body[data-archetype="dashboard"] #layout > #sidebar {
+    position: fixed; top: var(--header-h); bottom: 0; z-index: 60;
+  }
 }
 
 @media (max-width: 720px) {
