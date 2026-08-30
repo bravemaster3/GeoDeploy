@@ -316,6 +316,18 @@
     // The grid scrolls inside #layout, so the map moves under a fixed panel; follow it, clamped.
     const layoutEl = document.getElementById('layout');
     if (layoutEl) layoutEl.addEventListener('scroll', schedule, { passive: true });
+    // WATCH THE PANEL, do not wire the buttons.
+    //
+    // There are two controls that open this: the header button, and `#gd-list-toggle`, a MapLibre
+    // control created much later and in another scope. Wiring the one that was to hand left the
+    // other — the one actually pressed on a desktop, since it sits on the map — toggling the class
+    // without ever repositioning, so the panel kept its stylesheet corner and opened above the map.
+    // Observing the class covers both, and covers whatever opens it next.
+    if (typeof MutationObserver === 'function') {
+      new MutationObserver(schedule).observe(sidebar, {
+        attributes: true, attributeFilter: ['class'],
+      });
+    }
     return schedule;
   })();
 
