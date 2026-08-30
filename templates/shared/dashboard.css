@@ -470,8 +470,34 @@ body[data-dash-mapctrl="0"] .gd-overlay-bottom-right { right: 10px; }
 @media (max-width: 1024px) {
   body[data-archetype="dashboard"] #layout { gap: 8px; padding: 8px; }
 }
-@media (max-width: 720px) {
+/* The layer list on a TABLET only — 641px up to the tablet breakpoint.
+   The upper bound is the whole point: below 640px portal.css restyles #sidebar as a full-height
+   drawer, and this rule's `left`/`right`/`width` fought that geometry. Both selectors weigh (1,1,1),
+   so which one won was decided by nothing better than file order. */
+@media (min-width: 641px) and (max-width: 720px) {
   body[data-archetype="dashboard"] #sidebar { left: 8px; right: 8px; width: auto; }
+}
+
+/* A COLLAPSED layer list on a dashboard phone is an ICON, not a slid-away drawer.
+   ─────────────────────────────────────────────────────────────────────────────
+   Everywhere else, collapsing a floating list sets `display: none` and the on-map toggle — a real
+   MapLibre control — is what you press to bring it back. At phone width portal.css deliberately
+   turns that into `display: flex` plus `translateX(-100%)`: a drawer that slides off the edge
+   rather than vanishing. On a WEB MAP that is right, because the map fills the screen and its
+   control cluster (with the toggle) is always in view.
+
+   A dashboard is not that shape. Its map is ONE CELL in a tall scrolling stack, so a drawer pinned
+   `top: 0; bottom: 0` hangs over the widgets, and the toggle that would dismiss it is inside a map
+   that may be scrolled entirely off-screen. What the visitor gets is a panel they cannot put away.
+
+   So a dashboard keeps the behaviour it has at every other width: collapsed means gone, and the
+   icon in the map's controls is how it comes back. Specificity (1,3,1) to clear the phone rule's
+   (1,2,1) — the extra attribute is doing real work here, not decoration. */
+@media (max-width: 640px) {
+  body[data-archetype="dashboard"][data-layerlist="floating"] #sidebar.collapsed { display: none; }
+}
+
+@media (max-width: 720px) {
   .gd-ind-value { font-size: clamp(20px, 9vw, 34px); }
   .gd-table td { max-width: 140px; }
   /* The filter bar is fixed to the foot of the window (a grid row for it would push every widget
