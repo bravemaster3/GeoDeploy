@@ -689,6 +689,38 @@ window.GD_DASHBOARD = (function () {
   const RENDERERS = {};
 
   // INDICATOR — one number, optionally against a target, optionally clickable as a filter source.
+  //: The floor a fitted number will not go below. Under this it stops being the thing the card is
+  //: for and becomes small print that happens to be bold.
+  const FIT_MIN_PX = 13;
+
+  //: Shrink a number until it fits the width of its card.
+  //:
+  //: `.gd-ind-value` is sized in `vw`, which is the VIEWPORT's width and not the card's — so a
+  //: three-column indicator on a wide screen gets the same 40px as a full-width one, and a count in
+  //: the millions simply ran past the edge. Nothing in CSS can size type to a box the author
+  //: resizes at will: container queries would need a container the flex-centred body does not
+  //: establish, and clamp() cannot see the card at all.
+  //:
+  //: One measurement, one ratio: text width is very nearly linear in font size, so scaling by
+  //: `available / measured` lands within a pixel. The second pass is only there for the rounding.
+  function fitValue(node) {
+    const host = node.parentNode;
+    if (!host) return;
+    node.style.fontSize = '';                 // start from the stylesheet's own size every time
+    const avail = host.clientWidth;
+    if (!avail) return;                       // detached, or a card with no width yet
+    let size = parseFloat(getComputedStyle(node).fontSize) || 32;
+    for (let pass = 0; pass < 2; pass++) {
+      const wide = node.scrollWidth;
+      if (wide <= avail) return;
+      // 0.98 keeps a hair of margin: scrollWidth rounds up, and a number that exactly fills its box
+      // reads as though it is about to overflow even when it is not.
+      size = Math.max(FIT_MIN_PX, Math.floor(size * (avail / wide) * 0.98));
+      node.style.fontSize = size + 'px';
+      if (size === FIT_MIN_PX) return;        // as small as it is allowed to get
+    }
+  }
+
   RENDERERS.indicator = function (w, env) {
     const c = card(w, { bodyClass: 'gd-w-center' });
     const ds = w.dataSource;
@@ -713,12 +745,31 @@ window.GD_DASHBOARD = (function () {
       });
     }
 
+    // Re-fit when the CARD changes size, not only when the number does. Widening a card should let
+    // a number that had been shrunk grow back, and narrowing one must shrink it — a fit computed
+    // once at first paint is wrong the moment the author drags a corner.
+    let lastValue = null;
+    try {
+      if (typeof ResizeObserver === 'function') {
+        let last = 0;
+        new ResizeObserver(function () {
+          // Only a real change in integer width: the observer also fires for the font-size change
+          // `fitValue` itself makes, and re-fitting on that would be a loop.
+          const now = c.body.clientWidth | 0;
+          if (now === last) return;
+          last = now;
+          if (lastValue) fitValue(lastValue);
+        }).observe(c.body);
+      }
+    } catch (e) { /* no ResizeObserver: the number keeps its first-paint size */ }
+
     function refresh() {
       busy(c.root, true);
       env.api.aggregate(w.id, ds.layerId, specFor(w, env.store, { op: ds.op, field: ds.field }))
         .then(function (data) {
           busy(c.root, false);
           clear(c.body);
+          lastValue = null;
           const value = data ? data.value : null;
           const v = el('div', 'gd-ind-value', fmtNumber(value, w.style));
           if (w.style && w.style.unit) {
@@ -727,6 +778,8 @@ window.GD_DASHBOARD = (function () {
           }
           if (w.style && w.style.color) v.style.color = w.style.color;
           c.body.appendChild(v);
+          fitValue(v);                        // after the append: it has no width before it
+          lastValue = v;
           if (ds.field && ds.op !== 'count') c.body.appendChild(el('div', 'gd-ind-label', ds.field));
           const target = w.style && w.style.target;
           if (target != null && value != null && (w.style.compareMode || 'delta') !== 'none') {
