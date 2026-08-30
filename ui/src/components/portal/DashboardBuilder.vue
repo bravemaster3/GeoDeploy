@@ -399,11 +399,64 @@ function gridStyle(w) {
     gridRow: `${(l.y || 0) + 1} / span ${l.h || 3}`,
   }
 }
+//: Two grid rectangles share a cell.
+function hits(a, b) {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+}
+
+//: Resolve overlaps by pushing the widgets the ANCHOR landed on downwards, cascading.
+//:
+//: CSS Grid does not object to two items in one cell — it stacks them — so a dragged widget simply
+//: sat on top of whatever was there, and the dashboard was saved that way. (A portal on the test
+//: instance had one table overlapping four other widgets, including the map.) Nothing warned,
+//: because nothing was checking.
+//:
+//: Push rather than block: a drag that refuses to land reads as a broken control, and the author's
+//: intent is the position they dragged TO. The anchor keeps exactly what it was given and everything
+//: it displaces moves down, which is the convention every grid dashboard uses.
+//:
+//: `from` is the layout as it stood when the drag STARTED, not the running one. Resolving against
+//: the running layout would accumulate — each pointermove pushing neighbours a little further —
+//: so dragging a widget across the grid and back would leave everything below it lower than it
+//: began. Recomputing from the snapshot makes any single drag reversible.
+function resolveOverlaps(list, anchorId, from) {
+  const base = from || list
+  const byId = {}
+  base.forEach((w) => { byId[w.id] = w.layout })
+  const anchor = list.find((w) => w.id === anchorId)
+  if (!anchor) return list
+
+  const placed = [{ id: anchorId, ...anchor.layout }]
+  const rest = list
+    .filter((w) => w.id !== anchorId && !w.layout?.overlay)   // overlays are pinned to the map
+    .map((w) => ({ w, start: byId[w.id] || w.layout }))
+    .sort((a, b) => (a.start.y - b.start.y) || (a.start.x - b.start.x))
+
+  const moved = {}
+  for (const { w, start } of rest) {
+    const box = { x: start.x, y: start.y, w: start.w, h: start.h }
+    // Bounded: the grid has no row limit, so an unbounded loop is a hang rather than a bad layout.
+    for (let guard = 0; guard < 400 && placed.some((p) => hits(p, box)); guard++) box.y += 1
+    placed.push({ id: w.id, ...box })
+    if (box.y !== (w.layout?.y ?? 0)) moved[w.id] = box.y
+  }
+  if (!Object.keys(moved).length && !from) return list
+  return list.map((w) => (
+    moved[w.id] !== undefined || (from && byId[w.id] && w.id !== anchorId)
+      ? { ...w, layout: { ...w.layout, ...byId[w.id], y: moved[w.id] !== undefined ? moved[w.id] : byId[w.id].y } }
+      : w))
+}
+
 function onPointerDown(ev, w, mode) {
   if (ev.button !== 0) return
   ev.preventDefault()
   selectedId.value = w.id
-  drag.value = { id: w.id, mode, startX: ev.clientX, startY: ev.clientY, orig: { ...w.layout } }
+  drag.value = {
+    id: w.id, mode, startX: ev.clientX, startY: ev.clientY, orig: { ...w.layout },
+    // Every widget's layout as it stood when the drag began — what collisions are resolved
+    // against, so a drag cannot accumulate displacement across its own pointermoves.
+    from: widgets.value.map((x) => ({ id: x.id, layout: { ...x.layout } })),
+  }
   window.addEventListener('pointermove', onPointerMove)
   window.addEventListener('pointerup', onPointerUp, { once: true })
 }
@@ -414,15 +467,14 @@ function onPointerMove(ev) {
   const dx = Math.round((ev.clientX - d.startX) / colPx)
   const dy = Math.round((ev.clientY - d.startY) / ROW_PX)
   const o = d.orig
-  if (d.mode === 'move') {
-    const x = Math.max(0, Math.min(GRID_COLS - o.w, o.x + dx))
-    const y = Math.max(0, o.y + dy)
-    patchWidget(d.id, { layout: { x, y } })
-  } else {
-    const w = Math.max(2, Math.min(GRID_COLS - o.x, o.w + dx))
-    const h = Math.max(2, Math.min(24, o.h + dy))
-    patchWidget(d.id, { layout: { w, h } })
-  }
+  const patch = d.mode === 'move'
+    ? { x: Math.max(0, Math.min(GRID_COLS - o.w, o.x + dx)), y: Math.max(0, o.y + dy) }
+    : { w: Math.max(2, Math.min(GRID_COLS - o.x, o.w + dx)),
+        h: Math.max(2, Math.min(24, o.h + dy)) }
+  // Resizing collides exactly as moving does — growing a widget onto its neighbour is the same
+  // problem — so both go through the resolver.
+  const next = widgets.value.map(w => (w.id === d.id ? deepMerge(w, { layout: patch }) : w))
+  setWidgets(resolveOverlaps(next, d.id, d.from))
 }
 function onPointerUp() {
   drag.value = null
@@ -437,13 +489,14 @@ function onKey(ev, w) {
   const d = map[ev.key]
   if (!d) return
   ev.preventDefault()
-  if (step === 'move') {
-    patchWidget(w.id, { layout: {
-      x: Math.max(0, Math.min(GRID_COLS - l.w, l.x + d[0])), y: Math.max(0, l.y + d[1]) } })
-  } else {
-    patchWidget(w.id, { layout: {
-      w: Math.max(2, Math.min(GRID_COLS - l.x, l.w + d[0])), h: Math.max(2, Math.min(24, l.h + d[1])) } })
-  }
+  const patch = step === 'move'
+    ? { x: Math.max(0, Math.min(GRID_COLS - l.w, l.x + d[0])), y: Math.max(0, l.y + d[1]) }
+    : { w: Math.max(2, Math.min(GRID_COLS - l.x, l.w + d[0])),
+        h: Math.max(2, Math.min(24, l.h + d[1])) }
+  // No snapshot here: each keypress is its own complete move, so resolving against the current
+  // layout is right — there is no burst of intermediate states to accumulate.
+  const next = widgets.value.map(x => (x.id === w.id ? deepMerge(x, { layout: patch }) : x))
+  setWidgets(resolveOverlaps(next, w.id, null))
 }
 
 // ── presets ─────────────────────────────────────────────────────────────────
