@@ -52,10 +52,10 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           # 3.9 is the package's floor (the QGIS plugin vendors it, QGIS 3.28 LTR ships 3.9). Test
           # on the floor: a 3.10+ syntax slip would otherwise reach PyPI and break exactly the
@@ -126,7 +126,7 @@ jobs:
           /tmp/verify/bin/pip install --quiet --no-deps cli/dist/*.whl
           /tmp/verify/bin/geodeploy --version
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: cli/dist/
@@ -143,7 +143,7 @@ jobs:
     permissions:
       id-token: write        # the OIDC token IS the credential — nothing else is needed
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
@@ -167,7 +167,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
