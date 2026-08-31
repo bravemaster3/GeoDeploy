@@ -1525,6 +1525,43 @@ def _bounds_out(row) -> dict:
     return {"bounds": b}
 
 
+#: How far a zero-area filter geometry is grown before it is tested. 1e-6 degrees is about 11 cm at
+#: the equator: far larger than the precision a geometry loses on its round trip, far smaller than
+#: the distance between any two features anyone would want to tell apart.
+GEOM_EPS = 1e-6
+
+
+def usable_geometry(geom: dict | None) -> dict | None:
+    """A geometry filter that can actually match what it came from.
+
+    Clicking a POINT layer publishes the picked feature's own geometry as the area filter, and that
+    filter then matched NOTHING — not even the feature it was taken from. The point makes the round
+    trip as GeoJSON, rounded to nine decimals on the way out and reprojected on the way back, and an
+    exact `intersects` between two zero-area geometries fails on the last few digits. Measured on a
+    live layer: the picked point scored 0, the same point grown by 1e-9 degrees scored 1.
+
+    What the visitor saw was worse than an error. The attribute channel matched (`Country_Na =
+    Luxembourg`, 1 row) and the geometry channel did not, so every widget answered "no records" and
+    the chart flattened to zero — a dashboard that looked like it had lost its data.
+
+    So a geometry with no area is grown by `GEOM_EPS` before it is used. Polygons are untouched:
+    they have area, their tests are not knife-edge, and nothing here should widen a selection the
+    visitor actually drew.
+    """
+    if not isinstance(geom, dict) or not geom.get("type"):
+        return geom
+    try:
+        from shapely.geometry import shape, mapping
+        g = shape(geom)
+        if g.is_empty or g.area > 0:
+            return geom
+        return mapping(g.buffer(GEOM_EPS))
+    except Exception:
+        # A geometry shapely cannot read is one the engines will reject with a better message than
+        # anything invented here.
+        return geom
+
+
 def _keys_out(rows, limit: int) -> dict:
     """Shape a keys-only answer: the distinct values themselves, and whether there were more.
 

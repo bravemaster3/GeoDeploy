@@ -552,6 +552,10 @@ async def raster_zonal_stats(layer_ref: str, req: ZonalRequest,
     if not geom or not (geom.get("type") and (geom.get("coordinates") is not None
                                               or geom.get("geometry") or geom.get("features"))):
         raise HTTPException(400, "A GeoJSON geometry is required.")
+    # Same normalisation the vector side does at `_spec`: a clicked POINT has no area, and a
+    # zero-area window over a raster reads no pixels at all. Grown, it samples the one it is on.
+    from ...services.aggregate import usable_geometry
+    geom = usable_geometry(geom)
     try:
         out = await zonal.compute(layer.s3_key, geom, stats=req.stats or [],
                                   band=req.band, categorical=bool(req.categorical))
