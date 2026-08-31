@@ -248,6 +248,15 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-31 (**a dashboard is photographed whole.** `shared/portal.js::snapshotDashboard()` renders
+the live page into a `<foreignObject>` and rasterises it, so a dashboard's card thumbnail shows the
+charts and tables rather than only the map cell — the map alone made two dashboards over the same
+layer indistinguishable. The SVG is loaded in the restricted mode images use and fetches NOTHING, so
+`collectCss()` inlines every readable rule (rewriting each selector's leading `html` / `body` /
+`:root` onto a wrapper that stands in for both, or every `body[data-archetype="dashboard"]` rule
+would miss), the WebGL canvas is swapped for a WebP still, and same-origin `<img>` are inlined. Any
+failure falls back to the map-only shot.)
+
 2026-08-24 (**dashboard first-use round**, `shared/dashboard.{js,css}` + the four presets.
 `drawLine` now takes `selected` + `onPick`, so line and area charts are filter sources like bars and
 pies — with a transparent 9px hit circle, because a 2.6px dot on a 30-point series is unaimable. The
