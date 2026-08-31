@@ -721,16 +721,36 @@
     html[data-theme="dark"] .maplibregl-ctrl button .maplibregl-ctrl-icon {
       filter: invert(1) hue-rotate(180deg) brightness(1.05);
     }
-    html[data-theme="dark"] .maplibregl-ctrl-attrib { background: rgba(0,0,0,.4); }
+    /* Attribution in dark mode. The background alone was being set, and the TEXT was left to
+       MapLibre's own near-black — dark on dark — while the compact pill and its toggle button kept
+       their white. Every part of the control is named here, because a control is only as legible as
+       the piece that was forgotten. */
+    html[data-theme="dark"] .maplibregl-ctrl-attrib,
+    html[data-theme="dark"] .maplibregl-ctrl-attrib.maplibregl-compact {
+      background: var(--bg); color: var(--text-muted);
+    }
     html[data-theme="dark"] .maplibregl-ctrl-attrib a { color: var(--text-muted); }
+    html[data-theme="dark"] .maplibregl-ctrl-attrib-button {
+      background-color: var(--bg);
+      /* The chevron is a background IMAGE, so it cannot inherit a colour — inverting it is the only
+         way to turn a black glyph light without shipping a second asset. */
+      filter: invert(1) opacity(.75);
+    }
 
     /* ── Coordinate readout ──────────────────────────────── */
+    /* The coordinate readout. Both colours come from TOKENS, which is the whole fix: the text was
+       already `var(--text)` but the background was a hardcoded white, so in dark mode it was pale
+       text on a white slab — the one combination neither theme ever intends. A readout that takes
+       one colour from the theme and one from nowhere is unreadable in exactly half of them. */
     #coords {
       position: absolute; right: 8px; bottom: 4px; z-index: 20; pointer-events: none;
       font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text);
-      background: rgba(255,255,255,.85); padding: 2px 7px; border-radius: 4px;
-      box-shadow: var(--shadow); min-height: 18px;
+      background: var(--bg); padding: 2px 7px; border-radius: 4px;
+      border: 1px solid var(--border); box-shadow: var(--shadow); min-height: 18px;
     }
+    /* The CRS, muted and a size down: it does not change while you move the mouse, so it should not
+       compete with the numbers that do. */
+    #coords .gd-crs { color: var(--text-muted); font-size: 10px; margin-left: 5px; }
 
     /* ── Mobile ──────────────────────────────────────────── */
     /* ── Phone: the map is the page ────────────────────────────────────────────────────────

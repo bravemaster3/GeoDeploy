@@ -345,6 +345,25 @@
   // not on the first toggle.
   placeListByMap();
 
+  // A close button INSIDE the panel. CSS shows it only on a dashboard phone, where the panel covers
+  // the map and therefore covers the on-map toggle that would otherwise dismiss it. Built here
+  // rather than in layout.html because it belongs to this behaviour, and a button in the markup
+  // that is hidden in every archetype but one is a thing to wonder about later.
+  (function () {
+    if (!sidebar || sidebar.querySelector('.gd-list-close')) return;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'gd-list-close';
+    b.setAttribute('aria-label', 'Close the layer list');
+    b.title = 'Close';
+    b.innerHTML = '&times;';
+    b.addEventListener('click', function (e) {
+      e.stopPropagation();          // the phone's tap-outside handler runs on capture
+      sidebar.classList.add('collapsed');
+    });
+    sidebar.appendChild(b);
+  })();
+
   document.addEventListener('click', function (e) {
     if (!window.matchMedia || !window.matchMedia('(max-width: 640px)').matches) return;
     if (sidebar.classList.contains('collapsed')) return;
@@ -3477,8 +3496,16 @@
   // ── Coordinate readout (bottom-right) ───────────────────
   const coordsEl = document.getElementById('coords');
   if (coordsEl) {
+    // WITH the CRS. Two numbers alone are ambiguous — 47.37, 8.54 is a lat/lon pair, a metre
+    // easting/northing and a dozen other things depending on what you assume, and the reader has no
+    // way to tell which from the readout. MapLibre works in WGS84 lon/lat and the map always
+    // reports that, so naming it costs one span and removes the guess.
     map.on('mousemove', e => {
       coordsEl.textContent = e.lngLat.lng.toFixed(5) + ', ' + e.lngLat.lat.toFixed(5);
+      const crs = document.createElement('span');
+      crs.className = 'gd-crs';
+      crs.textContent = 'EPSG:4326';
+      coordsEl.appendChild(crs);
     });
     map.on('mouseout', () => { coordsEl.textContent = ''; });
   }
