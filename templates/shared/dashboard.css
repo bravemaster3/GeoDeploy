@@ -419,6 +419,15 @@ body[data-dash-mapctrl="0"] .gd-overlay-bottom-right { right: 10px; }
   cursor: pointer; color: var(--text-muted); display: flex; align-items: center; justify-content: center;
 }
 .gd-dash-tools button:hover { background: var(--surface); color: var(--text); }
+/* The drag grip. `touch-action: none` is what makes this work on a phone at all: without it the
+   browser claims the gesture as a scroll before a single pointermove is delivered. */
+.gd-dash-tools-grip {
+  cursor: grab; touch-action: none; color: var(--text-muted); opacity: .65;
+  border-right: 1px solid var(--border); border-radius: 4px 0 0 4px;
+}
+.gd-dash-tools-grip:hover { opacity: 1; }
+.gd-dash-tools[data-dragging] { cursor: grabbing; box-shadow: var(--shadow-lg); }
+.gd-dash-tools[data-dragging] .gd-dash-tools-grip { cursor: grabbing; opacity: 1; }
 .gd-dash-tools button[aria-pressed="true"] { background: var(--accent); color: #fff; }
 .gd-dash-tools svg { width: 15px; height: 15px; }
 

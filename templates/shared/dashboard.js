@@ -2508,6 +2508,93 @@ window.GD_DASHBOARD = (function () {
                         bbox: 'Drag a box', extent: 'Filter to what is on screen',
                         clear: 'Clear the selection' };
 
+  //: Let the visitor MOVE the selection tools around the map.
+  //:
+  //: Not an author setting, because the collision it fixes is not one an author can see coming: the
+  //: control cluster's corner is configurable, the layer list opens from a side, a widget can be
+  //: pinned to the map, and the tools sit at a fixed top-left through all of it. Whichever corner
+  //: were chosen at publish would be wrong for some other combination — so the person actually
+  //: looking at the overlap is the one who gets to resolve it.
+  //:
+  //: Stored as FRACTIONS of the map box rather than pixels: a dashboard's map cell changes size
+  //: with the breakpoint and with every drag of the widget's corner, and a bar pinned at "412px
+  //: from the left" ends up off a narrower map. Fractions survive that, and are clamped on the way
+  //: back in regardless.
+  function makeToolsMovable(bar, wrap, key) {
+    let pos = null;
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (raw) pos = JSON.parse(raw);
+    } catch (e) { /* private mode throws on read; the default position is a fine answer */ }
+
+    function apply() {
+      if (!pos) return;
+      const W = wrap.clientWidth - bar.offsetWidth, H = wrap.clientHeight - bar.offsetHeight;
+      if (W <= 0 || H <= 0) return;
+      bar.style.left = Math.round(Math.max(0, Math.min(1, pos.fx)) * W) + 'px';
+      bar.style.top = Math.round(Math.max(0, Math.min(1, pos.fy)) * H) + 'px';
+      bar.style.right = 'auto';
+      bar.style.bottom = 'auto';
+    }
+
+    const grip = el('button', 'gd-dash-tools-grip');
+    grip.type = 'button';
+    grip.title = 'Drag to move these tools';
+    grip.setAttribute('aria-label', 'Move the selection tools');
+    grip.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">'
+      + '<circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/>'
+      + '<circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/>'
+      + '<circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>';
+    bar.insertBefore(grip, bar.firstChild);
+
+    let drag = null;
+    grip.addEventListener('pointerdown', function (ev) {
+      if (ev.button !== 0 && ev.pointerType === 'mouse') return;
+      ev.preventDefault();
+      ev.stopPropagation();               // never let the map read this as a pan
+      const b = bar.getBoundingClientRect(), m = wrap.getBoundingClientRect();
+      drag = { dx: ev.clientX - b.left, dy: ev.clientY - b.top, m: m };
+      try { grip.setPointerCapture(ev.pointerId); } catch (e) {}
+      bar.dataset.dragging = '1';
+    });
+    grip.addEventListener('pointermove', function (ev) {
+      if (!drag) return;
+      ev.preventDefault();
+      const W = wrap.clientWidth - bar.offsetWidth, H = wrap.clientHeight - bar.offsetHeight;
+      if (W <= 0 || H <= 0) return;
+      // Clamped to the map, so the bar cannot be dragged somewhere it can never be grabbed back
+      // from. The fraction is what gets stored; the pixels are just this frame.
+      const x = Math.max(0, Math.min(W, ev.clientX - drag.m.left - drag.dx));
+      const y = Math.max(0, Math.min(H, ev.clientY - drag.m.top - drag.dy));
+      pos = { fx: x / W, fy: y / H };
+      apply();
+    });
+    function end(ev) {
+      if (!drag) return;
+      drag = null;
+      delete bar.dataset.dragging;
+      try { grip.releasePointerCapture(ev.pointerId); } catch (e) {}
+      try { window.localStorage.setItem(key, JSON.stringify(pos)); } catch (e) { /* see above */ }
+    }
+    grip.addEventListener('pointerup', end);
+    grip.addEventListener('pointercancel', end);
+    // Back to where it started. The only way out of a position that turned out to be worse than
+    // the default, short of clearing site data.
+    grip.addEventListener('dblclick', function (ev) {
+      ev.preventDefault();
+      pos = null;
+      bar.style.left = bar.style.top = bar.style.right = bar.style.bottom = '';
+      try { window.localStorage.removeItem(key); } catch (e) {}
+    });
+
+    apply();
+    // The map cell resizes with the breakpoint and with the widget's own corner; re-clamp so a bar
+    // parked near an edge does not end up outside a smaller map.
+    try {
+      if (typeof ResizeObserver === 'function') new ResizeObserver(apply).observe(wrap);
+    } catch (e) { /* no observer: the position is still right until something resizes */ }
+  }
+
   function mountSelectionTools(w, ds, env, wrap) {
     const map = env.map;
     const tools = ds.tools || ['click', 'polygon', 'bbox'];
@@ -2617,6 +2704,9 @@ window.GD_DASHBOARD = (function () {
     });
     bar.appendChild(clearBtn);
     wrap.appendChild(bar);
+    // Keyed by PORTAL and widget: one visitor may have several portals open over time, and a
+    // position chosen on one says nothing about where the tools are in the way on another.
+    makeToolsMovable(bar, wrap, 'gd-tools:' + (location.pathname || '') + ':' + w.id);
     // Tell the overlay layer that this corner is taken. Set here rather than assumed in CSS, so a
     // map that renders no tool bar keeps its overlays tight to the corner.
     try { wrap.dataset.dashTools = '1'; } catch (e) {}
