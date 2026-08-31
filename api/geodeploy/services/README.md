@@ -203,6 +203,8 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   `api/tests/test_native_crs.py`.
 
 ## Last updated
+2026-08-31 (`dashboard.py`: `style.pointSize` for scatter widgets, 1.5-8, default 3.5.)
+
 2026-08-29 (**`keysOnly` aggregates + `MAX_KEYS`** — a keys-only request returns just the distinct
 values and is clamped by its own ceiling, because `MAX_GROUPS` (200) was silently truncating the
 map's 5 000-key linked filter. Plus `linkedFilterCap` and chart `plotSize` in `dashboard.py`.)

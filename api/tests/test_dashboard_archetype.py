@@ -324,6 +324,23 @@ def test_gauge_range_cannot_be_inverted():
     assert style["max"] > style["min"]
 
 
+def test_scatter_points_have_a_visible_default_size_and_a_settable_one():
+    """2px read as dust on a small card, so the default is 3.5 and the author can change it — how
+    big a dot should be depends on how many of them land on the card, which the renderer cannot
+    know."""
+    def size(style):
+        out = resolve_dashboard({"widgets": [
+            _w("s", "scatter", dataSource={"layerType": "vector", "layerId": 1,
+                                           "xField": "a", "yField": "b"}, style=style)]})
+        return out["widgets"][0]["style"]["pointSize"]
+
+    assert size({}) == 3.5
+    assert size({"pointSize": 6}) == 6
+    assert size({"pointSize": 500}) == 8.0          # not a blob covering the plot
+    assert size({"pointSize": 0}) == 1.5            # nor an invisible one
+    assert size({"pointSize": "big"}) == 3.5        # nonsense falls back, it does not crash
+
+
 def test_refresh_is_bounded():
     assert resolve_dashboard({"refresh": 999999, "widgets": [_w("a", "indicator")]})["refresh"] == 3600
     assert resolve_dashboard({"widgets": [_w("a", "indicator")]})["refresh"] == 0

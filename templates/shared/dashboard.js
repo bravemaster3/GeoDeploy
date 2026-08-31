@@ -837,6 +837,11 @@ window.GD_DASHBOARD = (function () {
     c.sub.textContent = custom ? truncate(custom, 40) : fallback;
   }
 
+  function pointRadius(w) {
+    const r = Number(w.style && w.style.pointSize);
+    return r > 0 ? Math.max(1.5, Math.min(8, r)) : 3.5;
+  }
+
   function opLabel(ds, source) {
     const name = source ? source.name : ('layer ' + ds.layerId);
     // The EFFECTIVE aggregation. With columns as the axis the runtime substitutes `sum` for
@@ -2001,11 +2006,19 @@ window.GD_DASHBOARD = (function () {
       // it could not tell you about. A native `<title>` rather than a custom tooltip: it is what the
       // bars and lines already use, it survives touch and keyboard focus, and it costs one element.
       const names = data.labels || [];
+      // HOW BIG A DOT IS. 2 px was too small to read as a mark: on a card a few hundred pixels
+      // wide, a scatter of a dozen features looked like dust on the screen rather than data, and
+      // hovering one to read its name meant hunting for it. 3.5 is a dot you can see and aim at
+      // while still being small enough that a few thousand of them overlap into a shape.
+      //
+      // Settable because the right size depends on how many points there are, which the renderer
+      // cannot know at author time: 12 features want a mark, 5 000 want a grain.
+      const r = pointRadius(w);
       pts.forEach(function (p, i) {
         const dot = svgEl('circle', {
           cx: padL + ((p[0] - x0) / sx) * (W - padL - padR),
           cy: H - padB - ((p[1] - y0) / sy) * (H - padT - padB),
-          r: 2, fill: colour, opacity: 0.45,
+          r: r, fill: colour, opacity: 0.45,
         });
         const label = names[i];
         const coords = fmtNumber(p[0], w.style) + ', ' + fmtNumber(p[1], w.style);

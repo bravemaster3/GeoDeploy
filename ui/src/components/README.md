@@ -107,6 +107,10 @@ All dialogs (`UploadModal`, `AddSourceModal`, `DiscoverModal`, `portal/CreatePor
   icon logic in `views/PortalEditor.vue` + `templates/shared/portal.js` — change all three together.
 
 ## Last updated
+2026-08-31 (`portal/DashboardBuilder.vue`: a **Point size** slider on the scatter inspector,
+1.5-8px, default 3.5 — the right dot depends on how many points land on the card, which is a fact
+about the data and so the author's call.)
+
 2026-08-29 (`shared/InfoHint.vue` added; DashboardBuilder's ten explanatory paragraphs moved into
 hints on the controls they describe — the map inspector had become a wall of prose. Its map editor
 also gained the `linkedFilter` checkbox.)

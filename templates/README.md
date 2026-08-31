@@ -255,7 +255,8 @@ layer indistinguishable. The SVG is loaded in the restricted mode images use and
 `collectCss()` inlines every readable rule (rewriting each selector's leading `html` / `body` /
 `:root` onto a wrapper that stands in for both, or every `body[data-archetype="dashboard"]` rule
 would miss), the WebGL canvas is swapped for a WebP still, and same-origin `<img>` are inlined. Any
-failure falls back to the map-only shot.)
+failure falls back to the map-only shot. Also: `shared/dashboard.js` scatter dots default to
+r=3.5 and honour `style.pointSize` — 2px read as dust on a small card.)
 
 2026-08-24 (**dashboard first-use round**, `shared/dashboard.{js,css}` + the four presets.
 `drawLine` now takes `selected` + `onPick`, so line and area charts are filter sources like bars and

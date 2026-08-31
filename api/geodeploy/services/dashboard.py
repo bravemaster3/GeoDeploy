@@ -512,6 +512,12 @@ def _normalize_style(widget_type: str, style: dict | None) -> dict:
         # shows the comparison as a position on its arc, not as a signed number.
         out["compareMode"] = _str(s.get("compareMode"), {"delta", "percent", "none"}, "delta")
         out["goodDirection"] = _str(s.get("goodDirection"), {"up", "down", "none"}, "up")
+    if widget_type == "scatter":
+        # HOW BIG A DOT IS, in SVG px of radius. The right answer depends on how many points land on
+        # the card — a dozen features want a mark you can see and aim at, a few thousand want a grain
+        # that overlaps into a shape — and that is a fact about the data, so the author sets it.
+        # 3.5 is the default because the previous fixed 2 read as dust on a small card.
+        out["pointSize"] = max(1.5, min(8.0, _num(s.get("pointSize"), 3.5)))
     # AXIS TITLES. A column name is what the data is called; the title is what it measures, and the
     # two are rarely the same string — least of all after a shapefile has cut the first to ten
     # characters. Only where there are axes to title: a pie has none, an indicator has none.

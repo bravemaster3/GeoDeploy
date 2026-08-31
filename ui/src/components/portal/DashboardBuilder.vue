@@ -1763,6 +1763,20 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
                 ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ f.name }}</button>
           </div>
         </div>
+        <label class="block">
+          <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
+            Point size — {{ selected.style?.pointSize ?? 3.5 }} px
+            <InfoHint label="About point size">
+              How big each dot is drawn. The right size depends on how many points there are: a
+              dozen features want a mark you can see and hover, a few thousand want a grain small
+              enough that overlapping ones read as density rather than a solid blob.
+            </InfoHint>
+          </span>
+          <input type="range" min="1.5" max="8" step="0.5"
+            :value="selected.style?.pointSize ?? 3.5"
+            @input="patchWidget(selected.id, { style: { pointSize: Number($event.target.value) } })"
+            class="w-full accent-primary" />
+        </label>
       </template>
 
       <!-- Axis titles, for the two widget types that have axes. -->
