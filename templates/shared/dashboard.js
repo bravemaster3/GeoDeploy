@@ -2312,6 +2312,18 @@ window.GD_DASHBOARD = (function () {
           if ((ds.stats || []).indexOf('histogram') >= 0) {
             if (stats.histogram && stats.histogram.counts && stats.histogram.counts.length) {
               c.body.appendChild(drawHistogram(stats.histogram, w.style));
+              // WHAT RANGE it covers. The bars alone show a shape over an interval the reader has
+              // no way to name — the edges were reachable only by hovering a bar, which is not a
+              // thing anyone does to find out what a chart is about. As HTML rather than inside the
+              // SVG: the histogram is drawn with `preserveAspectRatio: none` so it can stretch to
+              // the card, and text in there would stretch with it.
+              const edges = stats.histogram.edges || [];
+              if (edges.length > 1) {
+                const scale = el('div', 'gd-rs-hist-scale');
+                scale.appendChild(el('span', null, fmtNumber(edges[0], w.style)));
+                scale.appendChild(el('span', null, fmtNumber(edges[edges.length - 1], w.style)));
+                c.body.appendChild(scale);
+              }
             } else {
               c.body.appendChild(el('div', 'gd-w-empty', 'No histogram for this area.'));
             }

@@ -132,6 +132,11 @@ html[data-theme="dark"] .gd-ind-delta.down { color: #f87171; }
 /* Tick marks inside the dial, and the target line across it. The target is deliberately the
    strongest mark on the gauge after the needle: it is the number the reading is being judged
    against, and a gauge without it makes the reader do that comparison from memory. */
+/* The histogram's own scale line. Outside the SVG because that one stretches. */
+.gd-rs-hist-scale {
+  display: flex; justify-content: space-between; margin-top: 2px;
+  font-size: 9px; color: var(--text-muted); font-variant-numeric: tabular-nums;
+}
 .gd-gauge-tick { stroke: var(--text-muted); opacity: .55; stroke-width: 1.5; }
 .gd-gauge-target { stroke: var(--text); opacity: .85; stroke-width: 2; stroke-linecap: round; }
 .gd-gauge-cap { font-size: 8px; fill: var(--text-muted); }

@@ -483,11 +483,17 @@ def _normalize_style(widget_type: str, style: dict | None) -> dict:
                           "label": (_str(band.get("label")) or "")[:24]})
         bands.sort(key=lambda b: b["from"])
         out["bands"] = bands
-    if widget_type == "indicator":
-        # Comparison / target value — "vs. last month". `compareMode` says how to render the delta.
+    # The TARGET is a gauge's setting as much as an indicator's — arguably more, since a gauge exists
+    # to answer "are we there yet" and draws the target as a mark across its dial. It was normalised
+    # for the indicator alone, so a gauge could be given one in the builder and the publish step
+    # would drop it before the runtime ever saw it.
+    if widget_type in ("indicator", "gauge"):
         target = _num(s.get("target"), None)
         if target is not None:
             out["target"] = target
+    if widget_type == "indicator":
+        # How the delta against that target is rendered — "vs. last month". Indicator only: a gauge
+        # shows the comparison as a position on its arc, not as a signed number.
         out["compareMode"] = _str(s.get("compareMode"), {"delta", "percent", "none"}, "delta")
         out["goodDirection"] = _str(s.get("goodDirection"), {"up", "down", "none"}, "up")
     color = _hex(s.get("color"))

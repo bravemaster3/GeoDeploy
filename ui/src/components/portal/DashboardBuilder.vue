@@ -1612,6 +1612,19 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
 
       <!-- gauge bands -->
       <template v-if="selected.type === 'gauge'">
+        <label class="block">
+          <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
+            Target
+            <InfoHint label="About the gauge target">
+              Drawn as a line across the dial, so the reading can be compared with the number that
+              matters at a glance rather than from memory. Leave it empty for a gauge that only
+              reports a level.
+            </InfoHint>
+          </span>
+          <input type="number" :value="selected.style?.target ?? ''" placeholder="none"
+            @input="patchWidget(selected.id, { style: { target: $event.target.value === '' ? undefined : Number($event.target.value) } })"
+            class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
+        </label>
         <div class="grid grid-cols-2 gap-2">
           <label class="block">
             <span class="text-[10px] text-muted-foreground block mb-0.5">Dial minimum</span>
