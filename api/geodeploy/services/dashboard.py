@@ -338,6 +338,21 @@ def _normalize_source(widget_type: str, source: dict | None) -> dict | None:
                 xcols.append(name)
         if xcols:
             ref["xColumns"] = xcols
+            # WHAT THE TICKS SAY once the shared part of the column names is gone. `gdp60, gdp61`
+            # already trim to `60, 61`; these turn those into what they stand for.
+            #
+            #   offset   arithmetic on a label that is a number — 60 + 1900 = 1960
+            #   pattern  text around it, `{}` being the label — `19{}` also gives 1960, and
+            #            `Q{}` gives Q1; applied after the offset, so the two compose
+            #
+            # Two knobs rather than one expression language: an author writing an axis label should
+            # not be writing code, and these cover the cases the data actually produces.
+            ref["xLabelOffset"] = _num(src.get("xLabelOffset"), 0)
+            pattern = _str(src.get("xLabelPattern"))
+            if pattern and "{}" in pattern:
+                # A pattern with no placeholder would render every tick identically — the same label
+                # repeated across the axis. Dropped rather than obeyed.
+                ref["xLabelPattern"] = pattern[:24]
         ref["limit"] = _int(src.get("limit"), 12, 2, 100)
         ref["sort"] = _str(src.get("sort"), {"value_desc", "value_asc", "key_asc"}, "value_desc")
         # SEVERAL measures against the one grouping — "mean height AND mean age per district". Each

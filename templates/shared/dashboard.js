@@ -972,6 +972,27 @@ window.GD_DASHBOARD = (function () {
     return out.every(function (v) { return v.length; }) ? out : names.slice();
   }
 
+  //: The axis labels an author asked for, from the ones the column names gave.
+  //:
+  //: `gdp60 … gdp99` trim to `60 … 99`, which is what the columns say and not what they mean. The
+  //: offset does the arithmetic (60 + 1900) and the pattern does the text (`19{}`); either reaches
+  //: 1960, and together they handle the cases neither does alone.
+  //:
+  //: A label that is not a number is left alone by the offset rather than becoming NaN — a column
+  //: set can mix `q1` with `2020` and the axis should not go blank over it.
+  function formatColumnLabels(labels, pattern, offset) {
+    const off = Number(offset) || 0;
+    const pat = (pattern && pattern.indexOf('{}') >= 0) ? pattern : null;
+    return labels.map(function (lab) {
+      let v = String(lab == null ? '' : lab);
+      if (off) {
+        const n = Number(v);
+        if (v !== '' && isFinite(n)) v = String(n + off);
+      }
+      return pat ? pat.split('{}').join(v) : v;
+    });
+  }
+
   //: Turn a measures-by-group answer into a groups-by-measure one.
   //:
   //: The server returns rows = groups, columns = measures — right for "mean height and mean age per
@@ -1076,8 +1097,9 @@ window.GD_DASHBOARD = (function () {
         if (xcols.length && multi.length) {
           // Labels come from the ANSWER's series, not the request's columns, for the same reason:
           // a column the server dropped must not leave its name on another column's ticks.
-          const t = transposeSeries(groups, multi,
-            trimColumnLabels(multi.map(function (m) { return m.field || m.label; })));
+          const t = transposeSeries(groups, multi, formatColumnLabels(
+            trimColumnLabels(multi.map(function (m) { return m.field || m.label; })),
+            ds.xLabelPattern, ds.xLabelOffset));
           groups = t.groups;
           multi = t.series;
         }

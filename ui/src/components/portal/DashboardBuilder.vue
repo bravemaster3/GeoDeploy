@@ -228,7 +228,16 @@ function xAxisPreview(w) {
   if (!preOk) pre = ''
   if (suf.length && !SEP.test(suf[0])) suf = ''
   const out = names.map(n => n.slice(pre.length, n.length - suf.length).replace(/^[_\-. ]+|[_\-. ]+$/g, ''))
-  return (out.every(v => v.length) ? out : names).join(', ')
+  const trimmed = out.every(v => v.length) ? out : names
+  //: …then the author's own formatting, exactly as `formatColumnLabels` applies it at runtime.
+  const off = Number(w?.dataSource?.xLabelOffset) || 0
+  const patRaw = w?.dataSource?.xLabelPattern
+  const pat = (patRaw && patRaw.includes('{}')) ? patRaw : null
+  return trimmed.map((lab) => {
+    let v = String(lab)
+    if (off) { const n = Number(v); if (v !== '' && isFinite(n)) v = String(n + off) }
+    return pat ? pat.split('{}').join(v) : v
+  }).join(', ')
 }
 function isNumeric(type) {
   return /int|numeric|decimal|double|real|float|serial|bigint|smallint/i.test(String(type || ''))
@@ -1217,6 +1226,37 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
                 class="px-2 py-0.5 rounded border text-[11px]"
                 :class="xColumnsOf(selected).includes(f.name)
                   ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ f.name }}</button>
+            </div>
+            <div v-if="xColumnsOf(selected).length" class="grid grid-cols-2 gap-2 mt-2">
+              <label class="block">
+                <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
+                  Add to each label
+                  <InfoHint label="About the label offset">
+                    Arithmetic on labels that are numbers. Columns named gdp60, gdp61 give ticks 60
+                    and 61; adding 1900 makes them 1960 and 1961. Labels that are not numbers are
+                    left alone.
+                  </InfoHint>
+                </span>
+                <input type="number" step="1" placeholder="0"
+                  :value="selected.dataSource?.xLabelOffset ?? ''"
+                  @change="patchWidget(selected.id, { dataSource: { xLabelOffset: Number($event.target.value) || 0 } })"
+                  class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
+              </label>
+              <label class="block">
+                <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
+                  Label pattern
+                  <InfoHint label="About the label pattern">
+                    Text around each label, with <code>{}</code> standing for it. <code>19{}</code>
+                    turns 60 into 1960; <code>Q{}</code> turns 1 into Q1; <code>{} kg</code> adds a
+                    unit. Applied after the offset, so the two work together. A pattern without
+                    <code>{}</code> is ignored — it would print the same tick all along the axis.
+                  </InfoHint>
+                </span>
+                <input type="text" placeholder="{}" maxlength="24"
+                  :value="selected.dataSource?.xLabelPattern || ''"
+                  @change="patchWidget(selected.id, { dataSource: { xLabelPattern: $event.target.value || undefined } })"
+                  class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
+              </label>
             </div>
             <p v-if="xColumnsOf(selected).length" class="text-[10px] text-muted-foreground/70 mt-1 leading-snug">
               Axis will read: <span class="text-foreground/80">{{ xAxisPreview(selected) }}</span>
