@@ -1715,29 +1715,75 @@ window.GD_DASHBOARD = (function () {
     foot.appendChild(nav);
     c.root.appendChild(foot);
 
-    let sort = ds.sort || null, dir = ds.dir || 'asc', offset = 0, selectedRow = null;
+    let sort = ds.sort || null, dir = ds.dir || 'asc', offset = 0;
+    //: SEVERAL ROWS AT ONCE. Held as the selected KEY VALUES rather than as DOM nodes, because the
+    //: rows are rebuilt on every page turn, sort and filter change — a node reference would be
+    //: stale the moment anything moved, and the highlight would vanish while the filter it
+    //: published stayed live. Keys survive the rebuild and the highlight is re-applied from them.
+    const picked = new Set();
+    let anchor = null;          // index the last plain click landed on, for shift-ranges
+    let onScreen = [];          // the rows currently rendered, so a range knows what lies between
+    function keyOf(row) {
+      const k = ds.keyField ? row.props[ds.keyField] : null;
+      return k == null ? null : String(k);
+    }
     env.store.subscribeSelf(w.id, function () {
-      if (!env.store.attrOf(w.id) && selectedRow) { selectedRow.classList.remove('sel'); selectedRow = null; }
+      // The filter bar's × and Reset both clear the attribute; the rows must stop looking selected.
+      if (!env.store.attrOf(w.id) && picked.size) { picked.clear(); paintSelection(); }
     });
+    function paintSelection() {
+      onScreen.forEach(function (r) {
+        const on = picked.has(keyOf(r.row));
+        r.el.classList.toggle('sel', on);
+        r.el.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+    }
     prev.addEventListener('click', function () { offset = Math.max(0, offset - ds.pageSize); refresh(); });
     next.addEventListener('click', function () { offset += ds.pageSize; refresh(); });
 
-    function onRow(row, tr) {
-      if (selectedRow) selectedRow.classList.remove('sel');
-      selectedRow = tr;
-      tr.classList.add('sel');
-      // Zoom + highlight: the bbox came with the row precisely so this needs no round trip.
-      if (row.bbox) env.fitBbox(row.bbox);
-      // Same rule the map follows: a new row REPLACES the last selection on every channel it used.
-      // Publishing the filter is conditional -- a row whose key column is null cannot name itself --
-      // so selecting such a row after one that could left the earlier row's filter narrowing
-      // everything, with the details panel showing a different feature entirely.
+    //: A click selects one row; ctrl/cmd adds or removes one; shift takes the run between.
+    //:
+    //: The conventions every list in every desktop application uses, and worth following exactly:
+    //: a visitor who has to learn a list widget's own idea of multi-select will not discover it. A
+    //: plain click still REPLACES, so nothing changes for anyone not reaching for a modifier.
+    function onRow(row, tr, ev, idx) {
+      const add = !!(ev && (ev.ctrlKey || ev.metaKey));
+      const range = !!(ev && ev.shiftKey) && anchor != null;
+      const key = keyOf(row);
+
+      if (range) {
+        const lo = Math.min(anchor, idx), hi = Math.max(anchor, idx);
+        picked.clear();
+        for (let i = lo; i <= hi; i++) {
+          const k = keyOf(onScreen[i].row);
+          if (k != null) picked.add(k);
+        }
+      } else if (add) {
+        if (key != null) { if (picked.has(key)) picked.delete(key); else picked.add(key); }
+        anchor = idx;
+      } else {
+        picked.clear();
+        if (key != null) picked.add(key);
+        anchor = idx;
+      }
+      paintSelection();
+
+      // Zoom + highlight: the bbox came with the row precisely so this needs no round trip. Only on
+      // a SINGLE pick — flying the camera on every ctrl-click, while someone is building a
+      // selection, moves the map out from under the rows they are still choosing.
+      if (!add && !range && row.bbox) env.fitBbox(row.bbox);
+
+      // A new selection REPLACES the last on every channel it used. The details panel shows the row
+      // just clicked even when several are selected: it holds one feature by definition, and the
+      // most recently touched is the one the visitor is looking at.
       env.store.clearAttr(w.id, true);
       env.store.publishSelection(w.id, row.props, row.bbox,
         String(row.props[ds.keyField] == null ? '' : row.props[ds.keyField]));
-      if (ds.keyField && row.props[ds.keyField] != null) {
-        env.store.publishAttr(w.id, { field: ds.keyField, op: 'in', values: [row.props[ds.keyField]] },
-          (w.title || defaultTitle(w)) + ': ' + truncate(row.props[ds.keyField], 24));
+      if (picked.size) {
+        const values = Array.from(picked);
+        env.store.publishAttr(w.id, { field: ds.keyField, op: 'in', values: values },
+          (w.title || defaultTitle(w)) + ': '
+            + (values.length === 1 ? truncate(values[0], 24) : values.length + ' selected'));
       }
     }
     function refresh() {
@@ -1747,6 +1793,9 @@ window.GD_DASHBOARD = (function () {
       })).then(function (data) {
         busy(c.root, false);
         clear(c.body);
+        // Emptied per render: these are DOM nodes, and holding the ones just discarded would leak
+        // a page's worth on every page turn and let a shift-range address rows nobody can see.
+        onScreen = [];
         const rows = (data && data.rows) || [];
         const fields = (data && data.fields) || ds.fields || [];
         if (!rows.length) {
@@ -1762,7 +1811,7 @@ window.GD_DASHBOARD = (function () {
         if (w.style && w.style.layout === 'cards') {
           const titleField = ds.titleField || ds.keyField || fields[0];
           const list = el('div', 'gd-cards');
-          rows.forEach(function (row) {
+          rows.forEach(function (row, idx) {
             const item = el('div', 'gd-card-item');
             const head = el('div', 'gd-card-title',
                             fmtCell(row.props[titleField]) || '—');
@@ -1780,15 +1829,17 @@ window.GD_DASHBOARD = (function () {
               line.appendChild(val);
               item.appendChild(line);
             });
-            item.addEventListener('click', function () { onRow(row, item); });
+            item.addEventListener('click', function (ev) { onRow(row, item, ev, idx); });
             // Reachable without a mouse: the table gives its rows to the pointer only, but a card is
             // the primary control in a directory layout.
             item.tabIndex = 0;
             item.addEventListener('keydown', function (e) {
-              if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRow(row, item); }
+              if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRow(row, item, e, idx); }
             });
+            onScreen.push({ row: row, el: item });
             list.appendChild(item);
           });
+          paintSelection();
           c.body.appendChild(list);
           const totalC = data.total || rows.length;
           count.textContent = (offset + 1) + '–' + (offset + rows.length) + ' of ' + totalC.toLocaleString();
@@ -1813,16 +1864,20 @@ window.GD_DASHBOARD = (function () {
         thead.appendChild(hr);
         table.appendChild(thead);
         const tbody = el('tbody');
-        rows.forEach(function (row) {
+        rows.forEach(function (row, idx) {
           const tr = el('tr');
           fields.forEach(function (f) {
             const td = el('td', null, fmtCell(row.props[f]));
             td.title = row.props[f] == null ? '' : String(row.props[f]);
             tr.appendChild(td);
           });
-          tr.addEventListener('click', function () { onRow(row, tr); });
+          tr.addEventListener('click', function (ev) { onRow(row, tr, ev, idx); });
+          onScreen.push({ row: row, el: tr });
           tbody.appendChild(tr);
         });
+        // The highlight, restored from the KEYS after the rebuild — a page turn or a re-sort must
+        // not make a live selection look like nothing is selected.
+        paintSelection();
         table.appendChild(tbody);
         c.body.appendChild(table);
         const total = data.total || rows.length;
