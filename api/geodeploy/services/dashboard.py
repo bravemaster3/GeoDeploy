@@ -520,6 +520,12 @@ def _normalize_style(widget_type: str, style: dict | None) -> dict:
             title = _str(s.get(key))
             if title:
                 out[key] = title[:40]
+    # The line under the title. Every widget has one and none of them could be written: it is
+    # generated from the layer and the aggregation, which describes the QUERY where the reader wants
+    # the subject. Not per-type, because every widget draws one.
+    subtitle = _str(s.get("subtitle"))
+    if subtitle:
+        out["subtitle"] = subtitle[:48]
     color = _hex(s.get("color"))
     if color:
         out["color"] = color

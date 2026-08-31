@@ -746,7 +746,7 @@ window.GD_DASHBOARD = (function () {
       return { el: c.root, refresh: function () {} };
     }
     const source = env.sources[layerKeyOf(w)];
-    c.sub.textContent = opLabel(ds, source);
+    setSub(c, w, opLabel(ds, source));
 
     if (ds.filterField && ds.filterValue != null) {
       c.root.dataset.clickable = '1';
@@ -825,9 +825,28 @@ window.GD_DASHBOARD = (function () {
     return el('div', 'gd-ind-delta ' + cls, text + ' vs ' + fmtNumber(target, style));
   }
 
+  //: The line under a widget's title: the author's words if they wrote any, otherwise what the
+  //: widget can work out about itself.
+  //:
+  //: The automatic one names the layer and the aggregation, which is the right DEFAULT and a poor
+  //: caption — "GDP_per_capita_1960_2016_… · count" describes the query, and the reader wants the
+  //: subject. The title has always been editable; this line was not, and it is the one carrying the
+  //: field name.
+  function setSub(c, w, fallback) {
+    const custom = w.style && w.style.subtitle;
+    c.sub.textContent = custom ? truncate(custom, 40) : fallback;
+  }
+
   function opLabel(ds, source) {
     const name = source ? source.name : ('layer ' + ds.layerId);
-    const op = { count: 'count', sum: 'sum', avg: 'average', min: 'minimum', max: 'maximum' }[ds.op] || ds.op;
+    // The EFFECTIVE aggregation. With columns as the axis the runtime substitutes `sum` for
+    // `count`, because counting rows reads none of the chosen columns — so a chart saved before
+    // that promotion existed said "count" in its subtitle while plotting sums.
+    // `|| 'count'` at the end because an absent op used to fall through the lookup and print the
+    // word "undefined" in the subtitle. The schema fills it in on every widget it normalises, so
+    // this is for the one that arrives without — an older manifest, a hand-edited config.
+    const raw = ((ds.xColumns || []).length && (!ds.op || ds.op === 'count')) ? 'sum' : (ds.op || 'count');
+    const op = { count: 'count', sum: 'sum', avg: 'average', min: 'minimum', max: 'maximum' }[raw] || raw;
     return truncate(name, 26) + ' · ' + op;
   }
 
@@ -839,7 +858,7 @@ window.GD_DASHBOARD = (function () {
       unbound(c.body, 'Pick a layer and an aggregation for this gauge.');
       return { el: c.root, refresh: function () {} };
     }
-    c.sub.textContent = opLabel(ds, env.sources[layerKeyOf(w)]);
+    setSub(c, w, opLabel(ds, env.sources[layerKeyOf(w)]));
     if (ds.filterField && ds.filterValue != null) {
       c.root.dataset.clickable = '1';
       c.root.addEventListener('click', function () {
@@ -1085,7 +1104,7 @@ window.GD_DASHBOARD = (function () {
       unbound(c.body, 'Pick a layer, an aggregation and a grouping field for this chart.');
       return { el: c.root, refresh: function () {} };
     }
-    c.sub.textContent = opLabel(ds, env.sources[layerKeyOf(w)]);
+    setSub(c, w, opLabel(ds, env.sources[layerKeyOf(w)]));
     let groups = [];
     let multi = [];      // the series the server answered; length > 1 selects the multi-series draw
 
@@ -1685,7 +1704,7 @@ window.GD_DASHBOARD = (function () {
       return { el: c.root, refresh: function () {} };
     }
     const source = env.sources[layerKeyOf(w)];
-    c.sub.textContent = truncate(source ? source.name : ('layer ' + ds.layerId), 26);
+    setSub(c, w, truncate(source ? source.name : ('layer ' + ds.layerId), 26));
     const foot = el('div', 'gd-table-foot');
     const prev = el('button', null, '‹');
     const next = el('button', null, '›');
@@ -1899,8 +1918,8 @@ window.GD_DASHBOARD = (function () {
     // heading and its axes cannot disagree about what is plotted. Naming a column "GDP per capita"
     // on the axis and leaving `GDP_PerC_1` in the heading is the field name showing through in the
     // one place the reader looks first.
-    c.sub.textContent = truncate(((w.style && w.style.yTitle) || ds.yField) + ' ~ '
-                               + ((w.style && w.style.xTitle) || ds.xField), 26);
+    setSub(c, w, truncate(((w.style && w.style.yTitle) || ds.yField) + ' ~ '
+                        + ((w.style && w.style.xTitle) || ds.xField), 26));
 
     function draw(data) {
       clear(c.body);
@@ -2145,7 +2164,7 @@ window.GD_DASHBOARD = (function () {
       return { el: c.root, refresh: function () {} };
     }
     const source = env.sources[layerKeyOf(w)];
-    c.sub.textContent = truncate(source ? source.name : ('layer ' + ds.layerId), 26);
+    setSub(c, w, truncate(source ? source.name : ('layer ' + ds.layerId), 26));
 
     function fieldBlock(f, total) {
       const box = el('div', 'gd-prof-f');
@@ -2227,7 +2246,7 @@ window.GD_DASHBOARD = (function () {
       unbound(c.body, 'Pick a layer and a field for this filter control.');
       return { el: c.root, refresh: function () {} };
     }
-    c.sub.textContent = ds.field;
+    setSub(c, w, ds.field);
     const chosen = {};
 
     function publish() {
@@ -2356,7 +2375,7 @@ window.GD_DASHBOARD = (function () {
     function refresh() {
       const sel = env.store.selectionFor(w);
       clear(c.body);
-      c.sub.textContent = sel && sel.title ? truncate(sel.title, 22) : '';
+      setSub(c, w, sel && sel.title ? truncate(sel.title, 22) : '');
       if (!sel) {
         c.body.appendChild(el('div', 'gd-w-empty',
           'Select a feature on the map, or a row in a table, to see its attributes here.'));
@@ -2389,7 +2408,7 @@ window.GD_DASHBOARD = (function () {
       return { el: c.root, refresh: function () {} };
     }
     const source = env.sources[layerKeyOf(w)];
-    c.sub.textContent = truncate(source ? source.name : ('raster ' + ds.layerId), 24);
+    setSub(c, w, truncate(source ? source.name : ('raster ' + ds.layerId), 24));
 
     function refresh() {
       const f = env.store.filtersFor(w);

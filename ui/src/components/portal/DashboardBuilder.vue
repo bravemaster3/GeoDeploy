@@ -1038,6 +1038,24 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
           class="text-[11px] text-red-400 hover:text-red-500 px-1">✕</button>
       </div>
 
+      <!-- The line UNDER the title. Generated from the layer and the aggregation unless written,
+           which describes the query where the reader wants the subject. -->
+      <label class="block">
+        <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
+          Subtitle
+          <InfoHint label="About the subtitle">
+            The small line beside the title. Left empty it names the layer and the aggregation —
+            useful while building, rarely what a reader wants to be told. Write anything here to
+            replace it.
+          </InfoHint>
+        </span>
+        <input type="text" maxlength="48"
+          :placeholder="TYPE_BY_ID[selected.type]?.name + ' — automatic'"
+          :value="selected.style?.subtitle || ''"
+          @change="patchWidget(selected.id, { style: { subtitle: $event.target.value || undefined } })"
+          class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
+      </label>
+
       <!-- Type. Changing it REPLACES the widget in place, keeping its cell and its title. -->
       <label class="block">
         <span class="text-[10px] text-muted-foreground block mb-0.5">Widget type</span>
