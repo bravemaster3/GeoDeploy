@@ -6,6 +6,85 @@ upgrade needs manual work.
 
 ## Unreleased
 
+## v1.5.1 — 2026-08-31
+
+A fortnight of building real dashboards with v1.5. Almost everything here is something that could
+not be said, sized or read until someone tried to author a board with it. No migration, no
+configuration change: publish a portal again and it picks all of this up.
+
+### Charts you can author
+
+- **Wide data plots.** Let the **columns** be the X axis, for data stored one column per year or
+  period (`gdp1960`, `gdp1961`, …) rather than one row per observation. Up to 120 columns, with a
+  select-all rather than 120 clicks, and the groups become the series.
+- **Tick labels from column names.** Column names rarely read as axis labels, so the shared prefix
+  can be trimmed to leave the numbers and an **offset** applied when the numbers are not the values
+  meant (`gdp1` + 1959 reads as `1960`).
+- **An overall line** across the whole current selection on a multi-column chart, to read the
+  individual series against.
+- **Axis titles and widget subtitles are yours to write**, and the card's heading follows them. A
+  column name is what the data is called, not what it measures — and after a shapefile has cut it
+  to ten characters it is often neither.
+- **Plot a chosen column per group.** The measure field could not be picked alongside a grouping
+  field, so "GDP per country" was unaskable and only counts and averages were offered.
+- **Readable axes.** Gridlines and ticks at intervals on line and scatter plots rather than only
+  the two extremes; rotated category labels that no longer straddle their ticks; a histogram that
+  names the range it covers.
+- **The legend gets its room before the plot does** — on the multi-series line, the grouped bars
+  and the pie, all of which drew at `height: 100%` and pushed their key into the card's scrollbar.
+  Making the widget taller grew the plot by exactly as much, so height never helped. **Plot size**
+  now overrules the measured split on any chart with a key, not only a pie.
+- **The gauge** no longer clips its own arc: its box is derived from the arc's geometry instead of
+  being a constant that stopped matching it.
+- Bar-only controls are hidden on line charts, where they changed nothing.
+
+### Reading a dashboard
+
+- **Several table rows at once** — <kbd>Ctrl</kbd>/<kbd>Cmd</kbd> adds and removes, <kbd>Shift</kbd>
+  takes the run between. The map fits the **whole** selection rather than the row last clicked, and
+  the selection survives a page turn.
+- **A scatter can say which feature a dot is**: hover labels from up to three columns you nominate.
+  An outlier is the point of a scatter and was the one thing it could not tell you about. Point
+  size is adjustable too — 2px read as dust on a small card.
+- **A new selection replaces the last** rather than compounding with it. Drawing a box after
+  clicking a feature was asking for the features that are both, and getting none.
+- **Zoom to what a chart selected**, so the filter and the view agree. On by default for chart
+  clicks, off per widget; map clicks never move the camera.
+- **Fill the screen**, per dashboard: the grid rows share the height of the window instead of each
+  being exactly the row height, so a board laid out on a laptop does not stop a third of the way
+  down a large monitor. It stretches but never squeezes — the row height stays the floor — so a
+  phone or a portrait display scrolls exactly as before.
+- A **filter that matched nothing** because the clicked geometry had zero area now matches: a
+  point round-tripped through GeoJSON is precision-fragile against an exact `intersects`.
+
+### On the map
+
+- **Basemaps that are free without an account.** The three CARTO styles asked for an API key;
+  they are replaced, and **OpenStreetMap now leads the list** as the default.
+- **The selection tools can be dragged** clear of whatever they overlap, by the visitor, on a
+  published portal.
+- **The coordinate readout names its CRS** (`EPSG:4326`) — two numbers alone are ambiguous — and
+  now sits at the **bottom centre**, sharing one line with the scale bar and the attribution. The
+  scale bar had floated above the credit on every map in the product since the first shared-runtime
+  refactor.
+- **Both map readouts are legible in dark mode.** Each took one colour from the theme and one from
+  nowhere.
+- Drawing on a phone no longer opens the attribute table on every tap.
+
+### Portals, everywhere
+
+- **A dashboard's card thumbnail is the whole dashboard**, not the map cell inside it — two boards
+  over the same layer used to get the same picture.
+- **A plain map is no longer refused as a blank one.** The capture check was a byte floor, and a map
+  zoomed in far enough to show no detail is a real picture that compresses to almost nothing.
+- **The legend opens beside the map** rather than at the top of the page on a phone, sizes itself to
+  its content, and "start collapsed" now works for a docked list.
+- **A big number shrinks to fit its card** instead of overflowing it.
+- **A dragged widget no longer lands on top of another.**
+- The loading cover is held until the widgets have answered, so a dashboard does not appear empty
+  before it appears full.
+- **View on GitHub** in the sidebar, on the demo instance only.
+
 ## v1.5 — 2026-08-29
 
 ### Dashboards — a fourth experience

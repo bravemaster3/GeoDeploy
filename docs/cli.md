@@ -1,3 +1,8 @@
+---
+description: >-
+  The `geodeploy` command-line client: upload many files at once, style layers with data-driven symbology, build and publish portals, and administer an instance from a terminal.
+---
+
 # The command line
 
 **`geodeploy` — upload data, build and publish portals, and operate an instance, without a browser.**

@@ -1,3 +1,8 @@
+---
+description: >-
+  The four portal experiences GeoDeploy publishes — web map, story map, catalog and dashboard — how each is built, who can see it, and how to embed one in another site.
+---
+
 # Portals and experiences
 
 A **portal** is a published map with its own URL. You pick the layers, arrange them, choose how the

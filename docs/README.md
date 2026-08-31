@@ -35,6 +35,15 @@ End-user / operator documentation (not developer internals — those live in eac
 - User-facing docs; for build quirks and debugging history use `notes_temp/notes_for_future.md` instead.
 
 ## Last updated
+2026-08-31 (**SEO pass + v1.5.1.** Every page now carries its own `description:` front matter —
+all eighteen were falling back to `site_description` from mkdocs.yml, so every GeoDeploy search
+result shipped an identical snippet. `index.md` also gained a `title:` so its `<title>` carries the
+words people search ("self-hosted geoportal builder") while the visible H1 stays the hero line; the
+nav label is unaffected because mkdocs.yml names it. Fixed a dead hero link — the button still
+pointed at `#three-kinds-of-portal`, which became "Four kinds" when dashboards shipped.
+`dashboards.md` documents the v1.5.1 authoring options; `roadmap.md` gained the v1.5.1 stop and its
+header now says v1.5.1 rather than v1.4.1.)
+
 2026-08-18 (link previews: `overrides/main.html` + `assets/og-image.png`.)
 2026-07-30 (created `api-reference.md` — the root README's link to it had always been dead; indexed
 `backups.md` + `roadmap.html`, which this file had never learned about; recorded the docs-site

@@ -1,3 +1,8 @@
+---
+description: >-
+  The GeoDeploy HTTP API: authentication, layers, portals, styling, uploads and administration, with the OpenAPI schema every instance serves.
+---
+
 # API reference
 
 Every GeoDeploy instance serves its **own** interactive, always-current API reference — generated

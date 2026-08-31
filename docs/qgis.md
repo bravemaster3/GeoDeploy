@@ -1,3 +1,8 @@
+---
+description: >-
+  The GeoDeploy QGIS plugin: browse an instance from inside QGIS, load layers, and push styled layers back up to publish them.
+---
+
 # The QGIS plugin
 
 Browse a GeoDeploy instance from inside QGIS, add its layers, restyle them, and publish back —

@@ -1,3 +1,8 @@
+---
+description: >-
+  Build a scrollytelling story map where scrolling drives the camera — narrative sections bound to map views, published from your own server.
+---
+
 # Story maps
 
 A **story map** is scrollytelling. The page is a column of written sections, each pinned to a map

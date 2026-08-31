@@ -1,3 +1,8 @@
+---
+description: >-
+  Build a self-hosted web map: choose a basemap, order and style layers, add a legend, search and identify tools, and publish it at its own URL.
+---
+
 # Web maps
 
 A **web map** is the default experience and the right one when the map itself is the point: a

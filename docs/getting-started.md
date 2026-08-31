@@ -1,3 +1,8 @@
+---
+description: >-
+  Install GeoDeploy on a Linux server with one command: the Docker Compose stack, PostGIS, object storage and the setup wizard that takes you from a bare VPS to your first published map.
+---
+
 # Getting Started
 
 ## What you need

@@ -1,3 +1,8 @@
+---
+description: >-
+  GeoDeploy is open source under the Apache License 2.0 — what that permits and what the third-party components are licensed under.
+---
+
 # Licence
 
 GeoDeploy is **open source under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0)**.

@@ -1,3 +1,8 @@
+---
+description: >-
+  Update a self-hosted GeoDeploy instance from the browser or the command line, what the preflight checks, and how to pin or change the release channel.
+---
+
 # Updating
 
 GeoDeploy checks for new versions and can update itself from the dashboard. Everything lives under

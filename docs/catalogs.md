@@ -1,3 +1,8 @@
+---
+description: >-
+  Publish a searchable geospatial data catalog: browse and filter layers by metadata, preview them on a map, and download or connect to them over open standards.
+---
+
 # Catalogs
 
 A **catalog** is a browsing surface, for when you have more datasets than a single map should show
