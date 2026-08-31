@@ -3221,6 +3221,16 @@
 
   map.on('click', async e => {
     if (suppressClick) { suppressClick = false; return; }  // ignore the click that ends a box draw
+    // A tap that is PLACING A VERTEX is not a tap that is asking what is here. A dashboard's polygon
+    // tool builds its shape click by click, and every one of those clicks was also opening the
+    // attribute panel over the map being drawn on — worst on a phone, where the panel covers most
+    // of it and has to be dismissed between vertices.
+    //
+    // `dashDraw` is set by the dashboard's tool bar (`setMode`) and was, until now, written and
+    // never read: the flag existed, and nothing acted on it. Read from the body rather than passed
+    // in, because the tool bar lives in dashboard.js and this handler in portal.js, and one shared
+    // attribute is a smaller seam between them than a callback registry.
+    if (document.body.dataset.dashDraw === '1') return;
     const vectorLayerIds = (STYLE.layers || [])
       .filter(l => l.metadata && l.metadata['geodeploy:type'] === 'vector')
       .map(l => l.id);

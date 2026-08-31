@@ -742,8 +742,12 @@
        already `var(--text)` but the background was a hardcoded white, so in dark mode it was pale
        text on a white slab — the one combination neither theme ever intends. A readout that takes
        one colour from the theme and one from nowhere is unreadable in exactly half of them. */
+    /* ABOVE the attribution, not on top of it. Both sat at bottom-right; while the readout had a
+       translucent white background the collision merely looked untidy, and giving it a solid one
+       and a border — so it would be legible in dark mode — turned it into one box covering
+       another. The scale bar owns bottom-left, so up is the direction with room in it. */
     #coords {
-      position: absolute; right: 8px; bottom: 4px; z-index: 20; pointer-events: none;
+      position: absolute; right: 8px; bottom: 26px; z-index: 20; pointer-events: none;
       font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text);
       background: var(--bg); padding: 2px 7px; border-radius: 4px;
       border: 1px solid var(--border); box-shadow: var(--shadow); min-height: 18px;
@@ -751,6 +755,11 @@
     /* The CRS, muted and a size down: it does not change while you move the mouse, so it should not
        compete with the numbers that do. */
     #coords .gd-crs { color: var(--text-muted); font-size: 10px; margin-left: 5px; }
+    /* NOTHING when there is nothing to say. The readout is empty until the pointer is over the map
+       and empty again the moment it leaves, and `min-height` plus a solid background and a border —
+       both added so it would be legible in dark mode — turned that empty state into a visible blank
+       chip sitting in the corner. A readout with no reading should not be on screen. */
+    #coords:empty { display: none; }
 
     /* ── Mobile ──────────────────────────────────────────── */
     /* ── Phone: the map is the page ────────────────────────────────────────────────────────
