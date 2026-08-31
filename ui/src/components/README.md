@@ -71,6 +71,13 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
   — three surfaces, change together. Changing a widget's LAYER clears every field on it (a column of
   the old table is almost never a column of the new one, and the query would 400).
 - `portal/PortalCard.vue` — portal tile in the builder grid (edit/publish/view/unpublish/delete).
+- `shared/GithubLink.vue` — a link to the repository, in the sidebar, **on the demo instance only**
+  (same `/auth/demo` test `DemoBanner` uses, and the same posture: anything but a clear `demo: true`
+  renders nothing). Someone trying the demo is deciding whether to run it themselves; an operator
+  who already has the source does not need a permanent link out of their own admin panel. The star
+  count is cached in `localStorage` for a day — GitHub allows 60 unauthenticated calls an hour PER
+  IP, so a demo behind one address would spend that in an afternoon if every page load asked. The
+  count is an ornament: when it does not arrive the link renders without it.
 - `shared/InfoHint.vue` — an ⓘ next to a label that opens its explanation on click. Use it for the
   two-or-three-sentence *why* behind a control; keep STATE inline and visible ("Nothing filters this
   yet", "Add a raster layer first"), because a reader will not click an ⓘ to discover a blocking
