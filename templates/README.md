@@ -248,6 +248,13 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-31 (**a multi-series chart's key gets its room before the plot does.** `.gd-chart` is
+`height: 100%` and the legend is its sibling, so the plot claimed the whole body and pushed the key
+into the body's scrollbar — and making the widget taller grew the plot by exactly as much. The
+legend is now appended and measured first, and the plot is built for the remainder. `chartBox()`
+also reports the CONTENT box (it was returning `clientHeight`, 20px of padding included), because
+subtracting a legend from a figure that is already too big still overflows.)
+
 2026-08-31 (**the camera follows the whole selection.** `shared/dashboard.js`'s table/card widget
 holds `picked` as a Map of key -> bbox rather than a set of keys, and fits the map to the UNION on
 every selection change — ctrl-clicking a second row widens the view to hold both, removing one

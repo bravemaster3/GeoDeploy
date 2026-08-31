@@ -83,11 +83,38 @@ window.GD_DASHBOARD = (function () {
   //: has rather than an assumed 300. Falls back to the old numbers when the card has not been laid
   //: out yet (first paint), and `render()` runs again on resize.
   const CHART_MIN_W = 160, CHART_MIN_H = 90;
+  //: The space a chart actually has, in px — the body's CONTENT box, padding excluded.
+  //:
+  //: `clientHeight` includes padding, and the card body has 10px of it on every side. That was
+  //: harmless while the SVG was `height: 100%` (the browser resolved it against the content box and
+  //: `preserveAspectRatio: meet` quietly scaled the 20px-too-tall viewBox down to fit), but it is
+  //: not harmless the moment anything does arithmetic with the number: subtracting a legend's
+  //: height from a figure that is 20px too big still overflows the card. Reporting the real box
+  //: also makes the label-density calculations honest, since they budget px against this width.
   function chartBox(host) {
     let w = 0, h = 0;
-    try { w = host.clientWidth || 0; h = host.clientHeight || 0; } catch (e) { /* detached */ }
+    try {
+      w = host.clientWidth || 0;
+      h = host.clientHeight || 0;
+      const cs = getComputedStyle(host);
+      w -= (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+      h -= (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+    } catch (e) { /* detached */ }
     return { W: Math.max(CHART_MIN_W, Math.round(w) || 300),
              H: Math.max(CHART_MIN_H, Math.round(h) || 170) };
+  }
+
+  //: An element's height INCLUDING the margin that separates it from its sibling — the space it
+  //: costs the box it shares, which is what has to be taken off the plot.
+  function outerHeight(node) {
+    if (!node) return 0;
+    let h = 0;
+    try {
+      h = node.getBoundingClientRect().height || node.offsetHeight || 0;
+      const cs = getComputedStyle(node);
+      h += (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0);
+    } catch (e) { h = node.offsetHeight || 0; }
+    return Math.ceil(h);
   }
 
   //: Per-bar colour. Default stays SINGLE — an x-axis that already names the category does not need
@@ -1143,12 +1170,29 @@ window.GD_DASHBOARD = (function () {
       // has no whole to be parts of — it would draw a shape that means nothing.
       if (multi.length > 1 && kind !== 'pie' && kind !== 'donut') {
         const colours = multi.map(function (_, i) { return PALETTE[i % PALETTE.length]; });
-        c.body.appendChild((kind === 'line' || kind === 'area')
-          ? drawMultiLine(groups, ds, w.style, multi, kind === 'area', bx.W, bx.H)
-          : drawGroupedBars(groups, ds, w.style, multi, bx.W, bx.H));
-        if (!(w.style && w.style.legend === false)) {
-          c.body.appendChild(seriesLegend(multi, colours));
-        }
+        //: THE LEGEND GETS ITS ROOM FIRST, and the plot takes what is left.
+        //:
+        //: `.gd-chart` is `height: 100%` and the legend is its sibling in a block body, so the plot
+        //: claimed the card's full height and pushed the key out of sight into the body's
+        //: scrollbar. Making the widget taller did not help — it grew the plot by exactly as much,
+        //: which is the same trap the pie hit and why `plotSize` exists there.
+        //:
+        //: A slider is the wrong answer for a series key, though: unlike a pie's, it wraps to
+        //: however many lines its labels need, so its height is a MEASURABLE fact rather than a
+        //: judgement call. So it is appended first, measured, and the plot is built for the
+        //: remainder. A taller card now grows the plot and leaves the key where it is, which is
+        //: what someone reaching for the resize handle was asking for.
+        const legend = (w.style && w.style.legend === false)
+          ? null : seriesLegend(multi, colours);
+        if (legend) c.body.appendChild(legend);
+        const plotH = Math.max(CHART_MIN_H, bx.H - outerHeight(legend));
+        const node = (kind === 'line' || kind === 'area')
+          ? drawMultiLine(groups, ds, w.style, multi, kind === 'area', bx.W, plotH)
+          : drawGroupedBars(groups, ds, w.style, multi, bx.W, plotH);
+        // The viewBox is already `plotH` tall; this stops the CSS `height: 100%` scaling it back up
+        // to the full body and undoing the whole calculation.
+        node.style.height = plotH + 'px';
+        c.body.insertBefore(node, legend);      // a null second argument appends, which is correct
         return;
       }
       const node = (kind === 'pie' || kind === 'donut')
