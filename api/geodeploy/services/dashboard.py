@@ -87,6 +87,11 @@ TIME_BUCKETS = {"hour", "day", "week", "month", "quarter", "year"}
 #: Mirrors `services/aggregate.MAX_SERIES`.
 MAX_CHART_SERIES = 4
 
+#: How many columns may form the X axis when a chart plots WIDE data — one column per year, per
+#: month, per survey round. Bounded by `aggregate.MAX_SERIES`, which is what the request becomes:
+#: one aggregate expression per column, in a single grouped scan.
+MAX_X_COLUMNS = 24
+
 #: How many join keys a map may pull into a style expression before it stops narrowing and says so.
 #: Offered as a short list because the trade-off is real in both directions: too low and the map
 #: gives up on selections it could have drawn, too high and every filter change moves a large
@@ -318,6 +323,21 @@ def _normalize_source(widget_type: str, source: dict | None) -> dict | None:
     if widget_type == "chart":
         ref["groupBy"] = _str(src.get("groupBy"))
         ref["timeBucket"] = _str(src.get("timeBucket"), TIME_BUCKETS)
+        # WIDE DATA: a set of columns that are really one variable measured repeatedly — gdp_1990,
+        # gdp_2000, gdp_2010. Named here, they become the chart's X axis, one aggregate each, and
+        # whatever `groupBy` says becomes a line per group rather than the axis.
+        #
+        # It is a reshape of the ANSWER, not a second query path: the request is the existing
+        # multi-measure one (one aggregate expression per column in a single grouped scan) and the
+        # runtime transposes what comes back. So there is nothing here the engines do not already do.
+        xcols, seen = [], set()
+        for c in (src.get("xColumns") or [])[:MAX_X_COLUMNS]:
+            name = _str(c)
+            if name and name not in seen:      # a column twice is a duplicated axis tick
+                seen.add(name)
+                xcols.append(name)
+        if xcols:
+            ref["xColumns"] = xcols
         ref["limit"] = _int(src.get("limit"), 12, 2, 100)
         ref["sort"] = _str(src.get("sort"), {"value_desc", "value_asc", "key_asc"}, "value_desc")
         # SEVERAL measures against the one grouping — "mean height AND mean age per district". Each

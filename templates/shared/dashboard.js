@@ -918,6 +918,79 @@ window.GD_DASHBOARD = (function () {
     return svg;
   }
 
+  //: Column names as axis labels, with the part they all share removed.
+  //:
+  //: `gdp_1990 … gdp_2020` are twenty ticks that agree on eleven characters and differ in four. The
+  //: shared part is the variable's name — true of every tick, and therefore telling the reader
+  //: nothing about which one they are looking at, while eating the width that would let the rest be
+  //: read. Trimmed, they say 1990 … 2020, which is what the axis is.
+  //:
+  //: Only when a difference SURVIVES: a common prefix is not stripped if doing so leaves a label
+  //: empty, and a single column keeps its full name because one label shares everything with itself.
+  function trimColumnLabels(names) {
+    if (!names || names.length < 2) return (names || []).slice();
+    let pre = names[0], suf = names[0];
+    for (let i = 1; i < names.length; i++) {
+      const n = names[i];
+      let p = 0;
+      while (p < pre.length && p < n.length && pre[p] === n[p]) p++;
+      pre = pre.slice(0, p);
+      let q = 0;
+      while (q < suf.length && q < n.length && suf[suf.length - 1 - q] === n[n.length - 1 - q]) q++;
+      suf = suf.slice(suf.length - q);
+    }
+    // NEVER SPLIT A TOKEN. What two labels happen to share is not the same as the part that tells
+    // the reader nothing. `gdp_1990, gdp_2000, gdp_2010` share a trailing `0` — the last digit of
+    // every year — and trimming it leaves 199, 200, 201. `y.2019, y.2020` share a leading `y.20`,
+    // leaving 19 and 20. `alpha, beta` share a trailing `a`, leaving alph and bet. Three versions of
+    // one mistake: a boundary drawn inside a word or a number.
+    //
+    // So an affix is first backed out of any digit run it lands in, and then only accepted if it
+    // ends (or begins) at a SEPARATOR. `gdp_` and `_est` qualify; `y.20`, `0_est` and `a` do not.
+    // One exception, because it is unambiguous and common: a prefix of letters followed everywhere
+    // by digits — `gdp1990` — is a boundary even with no separator to mark it.
+    const D = /[0-9]/, SEP = /[_\-. ]/;
+    while (pre.length && D.test(pre[pre.length - 1])
+           && names.some(function (n) { return D.test(n[pre.length] || ''); })) {
+      pre = pre.slice(0, -1);
+    }
+    while (suf.length && D.test(suf[0])
+           && names.some(function (n) { return D.test(n[n.length - suf.length - 1] || ''); })) {
+      suf = suf.slice(1);
+    }
+    const preOk = !pre.length || SEP.test(pre[pre.length - 1])
+      || (!D.test(pre[pre.length - 1])
+          && names.every(function (n) { return D.test(n[pre.length] || ''); }));
+    if (!preOk) pre = '';
+    if (suf.length && !SEP.test(suf[0])) suf = '';
+    const out = names.map(function (n) {
+      const cut = n.slice(pre.length, n.length - suf.length);
+      // Separators next to the affix belong with it in spirit if not in characters: `gdp_1990`
+      // against the prefix `gdp` leaves `_1990`.
+      return cut.replace(/^[_\-. ]+|[_\-. ]+$/g, '');
+    });
+    return out.every(function (v) { return v.length; }) ? out : names.slice();
+  }
+
+  //: Turn a measures-by-group answer into a groups-by-measure one.
+  //:
+  //: The server returns rows = groups, columns = measures — right for "mean height and mean age per
+  //: district", where the district is the axis. Wide data is the same matrix read the other way:
+  //: the COLUMNS are the axis (one per year) and each group becomes a line across them. Nothing is
+  //: recomputed; the numbers are the numbers, and this only decides which way round they are drawn.
+  function transposeSeries(groups, series, labels) {
+    const rows = (labels || series.map(function (s) { return s.label; })).map(function (lab, i) {
+      return { key: lab, values: groups.map(function (g) { return (g.values || [])[i]; }),
+               value: (groups[0] && (groups[0].values || [])[i]), count: 0 };
+    });
+    // With no grouping the server answers one row whose key is null: one line, and calling its
+    // legend entry "null" would be worse than not drawing a legend at all.
+    const cols = groups.map(function (g, i) {
+      return { label: g.key == null ? 'Value' : String(g.key), op: null, field: null, __i: i };
+    });
+    return { groups: rows, series: cols };
+  }
+
   // CHART — bar / hbar / line / area / pie / donut over a grouped aggregation. Segments are filter
   // SOURCES: clicking one publishes `groupBy IN (key)` to this widget's targets, clicking it again
   // clears. That is the interaction the whole archetype is named for, so it is not optional chrome.
@@ -982,9 +1055,17 @@ window.GD_DASHBOARD = (function () {
     }
     function refresh() {
       busy(c.root, true);
+      // WIDE DATA: each chosen column becomes one measure. That is the whole of the request side —
+      // the server already answers N aggregates over one grouping in a single scan, and this is
+      // that, with the columns supplying the N.
+      const xcols = (ds.xColumns || []).filter(Boolean);
+      const series = xcols.length
+        ? xcols.map(function (c) { return { op: ds.op && ds.op !== 'count' ? ds.op : 'sum',
+                                            field: c, label: c }; })
+        : ds.series;
       env.api.aggregate(w.id, ds.layerId, specFor(w, env.store, {
         op: ds.op, field: ds.field, groupBy: ds.groupBy, timeBucket: ds.timeBucket,
-        limit: ds.limit, sort: ds.sort, series: ds.series,
+        limit: ds.limit, sort: xcols.length ? 'key_asc' : ds.sort, series: series,
       })).then(function (data) {
         busy(c.root, false);
         groups = (data && data.groups) || [];
@@ -992,6 +1073,14 @@ window.GD_DASHBOARD = (function () {
         // rather than the request — a measure the server dropped (a field the layer lost) then
         // disappears from the legend too, instead of labelling someone else's line.
         multi = (data && data.series) || [];
+        if (xcols.length && multi.length) {
+          // Labels come from the ANSWER's series, not the request's columns, for the same reason:
+          // a column the server dropped must not leave its name on another column's ticks.
+          const t = transposeSeries(groups, multi,
+            trimColumnLabels(multi.map(function (m) { return m.field || m.label; })));
+          groups = t.groups;
+          multi = t.series;
+        }
         render();
       }).catch(function (err) { busy(c.root, false); showError(c.body, err); });
     }

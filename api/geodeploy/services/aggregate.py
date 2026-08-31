@@ -1459,7 +1459,17 @@ def _pg_types(layer) -> dict[str, str]:
 
 #: Measures one chart may plot against a single group key. Four is where a legend stops being a
 #: legend and starts being a table, and where line colours stop being tellable apart at a glance.
-MAX_SERIES = 4
+#: How many aggregate expressions one grouped scan may carry.
+#:
+#: This was 4, borrowed from a READABILITY limit: four coloured lines is where a legend stops being
+#: a legend. That reasoning belongs to the client, and only to the mode where colour names the
+#: measure — when the measures become the X AXIS (a chart plotting one column per year), they are
+#: ticks, not legend entries, and four of them is a two-year timeline.
+#:
+#: What the server should bound is the QUERY: N measures are N aggregate expressions in one pass
+#: over one grouping, and twenty-four of those is still one scan. The builder keeps its own limit of
+#: four for hand-authored measures, where the legend argument does apply.
+MAX_SERIES = 24
 
 
 def _series_label(op: str, field: str | None) -> str:

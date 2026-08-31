@@ -192,6 +192,44 @@ function fieldsOf(w) {
   return (layer && layer.columns) ? layer.columns.filter(c => c && c.name) : []
 }
 function numericFields(w) { return fieldsOf(w).filter(c => isNumeric(c.type)) }
+//: How many columns may form the X axis. Mirrors `MAX_X_COLUMNS` in services/dashboard.py.
+const MAX_X_COLUMNS = 24
+function xColumnsOf(w) { return w?.dataSource?.xColumns || [] }
+function toggleXColumn(w, name) {
+  const cur = xColumnsOf(w)
+  const next = cur.includes(name) ? cur.filter(c => c !== name) : [...cur, name]
+  patchWidget(w.id, { dataSource: { xColumns: next.slice(0, MAX_X_COLUMNS) } })
+}
+//: What the trimmed axis will read, shown while choosing so the author can see whether the columns
+//: they picked produce sensible ticks. Same rule as the runtime's `trimColumnLabels`.
+function xAxisPreview(w) {
+  const names = xColumnsOf(w)
+  if (names.length < 2) return names.join(', ')
+  let pre = names[0], suf = names[0]
+  for (const n of names.slice(1)) {
+    let p = 0
+    while (p < pre.length && p < n.length && pre[p] === n[p]) p++
+    pre = pre.slice(0, p)
+    let q = 0
+    while (q < suf.length && q < n.length && suf[suf.length - 1 - q] === n[n.length - 1 - q]) q++
+    suf = suf.slice(suf.length - q)
+  }
+  // Same rule as `trimColumnLabels` in templates/shared/dashboard.js, and it has to STAY the same:
+  // this previews what that will draw, and a preview that disagrees is worse than none.
+  const D = /[0-9]/, SEP = /[_\-. ]/
+  while (pre.length && D.test(pre[pre.length - 1]) && names.some(n => D.test(n[pre.length] || ''))) {
+    pre = pre.slice(0, -1)
+  }
+  while (suf.length && D.test(suf[0]) && names.some(n => D.test(n[n.length - suf.length - 1] || ''))) {
+    suf = suf.slice(1)
+  }
+  const preOk = !pre.length || SEP.test(pre[pre.length - 1])
+    || (!D.test(pre[pre.length - 1]) && names.every(n => D.test(n[pre.length] || '')))
+  if (!preOk) pre = ''
+  if (suf.length && !SEP.test(suf[0])) suf = ''
+  const out = names.map(n => n.slice(pre.length, n.length - suf.length).replace(/^[_\-. ]+|[_\-. ]+$/g, ''))
+  return (out.every(v => v.length) ? out : names).join(', ')
+}
 function isNumeric(type) {
   return /int|numeric|decimal|double|real|float|serial|bigint|smallint/i.test(String(type || ''))
 }
@@ -1142,7 +1180,7 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
                  aggregation and a grouping and no way to name the column, and Count -- the default --
                  was the one setting under which the column picker did not exist. The order people
                  think in is "which column", then "how to combine it". -->
-            <label class="block">
+            <label v-if="!(selected.type === 'chart' && xColumnsOf(selected).length)" class="block">
               <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
                 Field
                 <InfoHint label="About the field">
@@ -1161,11 +1199,40 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
           </div>
         </template>
 
+        <!-- chart: WIDE data — columns as the X axis -->
+        <template v-if="selected.type === 'chart'">
+          <div>
+            <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-1">
+              Columns as the X axis
+              <InfoHint label="About plotting columns as the axis">
+                For data where one variable is spread across many columns — gdp_1990, gdp_2000,
+                gdp_2010. Each column you pick becomes a point on the axis, aggregated with the
+                setting above. “Group by” then draws one line per group instead of using it as the
+                axis. Leave this empty for ordinary charts.
+              </InfoHint>
+            </span>
+            <div class="flex flex-wrap gap-1 max-h-28 overflow-y-auto">
+              <button v-for="f in numericFields(selected)" :key="f.name"
+                @click="toggleXColumn(selected, f.name)"
+                class="px-2 py-0.5 rounded border text-[11px]"
+                :class="xColumnsOf(selected).includes(f.name)
+                  ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ f.name }}</button>
+            </div>
+            <p v-if="xColumnsOf(selected).length" class="text-[10px] text-muted-foreground/70 mt-1 leading-snug">
+              Axis will read: <span class="text-foreground/80">{{ xAxisPreview(selected) }}</span>
+            </p>
+            <p v-if="xColumnsOf(selected).length === 1" class="text-[10px] text-amber-500/90 mt-1 leading-snug">
+              One column is a single point — pick at least two for an axis.
+            </p>
+          </div>
+        </template>
+
         <!-- chart: grouping -->
         <template v-if="selected.type === 'chart'">
           <div class="grid grid-cols-2 gap-2">
             <label class="block">
-              <span class="text-[10px] text-muted-foreground block mb-0.5">Group by</span>
+              <span class="text-[10px] text-muted-foreground block mb-0.5">{{
+                xColumnsOf(selected).length ? 'One line per' : 'Group by' }}</span>
               <select :value="selected.dataSource?.groupBy || ''"
                 @change="patchWidget(selected.id, { dataSource: { groupBy: $event.target.value } })"
                 class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
