@@ -208,6 +208,14 @@ function toggleLabelField(w, name) {
 //: for every chart kind, so choosing Line left two controls on screen that did nothing, and one of
 //: them was called "Bar colours" while no bars were in sight.
 function isBarChart(w) { return ['bar', 'hbar'].includes(w?.style?.chart || 'bar') }
+// Which charts have a plot and a legend competing for the same card, and so something to split. A
+// pie always does; a line or bar chart only once it draws more than one measure, since a single
+// series has no key to make room for.
+function hasLegendToShare(w) {
+  if (w?.style?.legend === false) return false     // nothing to give the space to
+  if (['pie', 'donut'].includes(w?.style?.chart)) return true
+  return Math.max(seriesOf(w).length, xColumnsOf(w).length) > 1
+}
 //: Every numeric column at once. A wide file is wide by nature -- 57 years of GDP is 57 clicks --
 //: and a picker that only takes them one at a time is not a picker for this data.
 function allXColumns(w) { setXColumns(w, numericFields(w).map(f => f.name)) }
@@ -1399,13 +1407,15 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
             <!-- Pie/donut only: the plot and its legend share the card, and only these two have a
                legend that competes with the plot for it. On a bar chart the same control would just
                leave empty space. -->
-          <label v-if="['pie', 'donut'].includes(selected.style?.chart)" class="block">
+          <label v-if="hasLegendToShare(selected)" class="block">
             <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
-              Plot size — {{ selected.style?.plotSize ?? 100 }}%
+              Plot size — {{ selected.style?.plotSize ?? 100 }}%{{ (selected.style?.plotSize ?? 100) === 100 ? ' (auto)' : '' }}
               <InfoHint label="About the plot size">
-                How much of the card the circle takes, leaving the rest to the legend. Making the
-                widget bigger grows both together; this is what shrinks the plot so a long legend
-                has room to be read without scrolling.
+                How much of the card's height the plot takes, leaving the rest to the legend.
+                At 100% the plot takes everything the legend does not need — on a pie that is the
+                whole card, and on a line or bar chart it is what is left once the key has its
+                room. Move it down to hand the plot a fixed share and let a long key scroll
+                instead: twelve series wrap to several lines and can take a third of the card.
               </InfoHint>
             </span>
             <input type="range" min="30" max="100" step="5"

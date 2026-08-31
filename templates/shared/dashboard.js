@@ -104,17 +104,24 @@ window.GD_DASHBOARD = (function () {
              H: Math.max(CHART_MIN_H, Math.round(h) || 170) };
   }
 
+  //: The vertical margin an element costs the box it shares — separate from its height, because
+  //: capping how tall the legend may GROW has to leave room for the gap above it too.
+  function marginY(node) {
+    if (!node) return 0;
+    try {
+      const cs = getComputedStyle(node);
+      return (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0);
+    } catch (e) { return 0; }
+  }
+
   //: An element's height INCLUDING the margin that separates it from its sibling — the space it
   //: costs the box it shares, which is what has to be taken off the plot.
   function outerHeight(node) {
     if (!node) return 0;
     let h = 0;
-    try {
-      h = node.getBoundingClientRect().height || node.offsetHeight || 0;
-      const cs = getComputedStyle(node);
-      h += (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0);
-    } catch (e) { h = node.offsetHeight || 0; }
-    return Math.ceil(h);
+    try { h = node.getBoundingClientRect().height || node.offsetHeight || 0; }
+    catch (e) { h = node.offsetHeight || 0; }
+    return Math.ceil(h + marginY(node));
   }
 
   //: Per-bar colour. Default stays SINGLE — an x-axis that already names the category does not need
@@ -1185,25 +1192,31 @@ window.GD_DASHBOARD = (function () {
         const legend = (w.style && w.style.legend === false)
           ? null : seriesLegend(multi, colours);
         if (legend) c.body.appendChild(legend);
-        const plotH = Math.max(CHART_MIN_H, bx.H - outerHeight(legend));
+        const plotH = plotHeight(bx, w.style, [legend]);
         const node = (kind === 'line' || kind === 'area')
           ? drawMultiLine(groups, ds, w.style, multi, kind === 'area', bx.W, plotH)
           : drawGroupedBars(groups, ds, w.style, multi, bx.W, plotH);
-        // The viewBox is already `plotH` tall; this stops the CSS `height: 100%` scaling it back up
-        // to the full body and undoing the whole calculation.
-        node.style.height = plotH + 'px';
+        fixPlotHeight(node, plotH);
+        capToRoom(legend, bx, plotH);
         c.body.insertBefore(node, legend);      // a null second argument appends, which is correct
         return;
       }
+      // A pie's key had the same problem as a line chart's and for the same reason — the circle is
+      // `height: 100%` and the key is its sibling — so it is measured first here too. `plotSize`
+      // still overrules, which is what it always did on a pie; it just no longer has to be reached
+      // for to make the key visible at all.
+      const key = (w.style && w.style.legend !== false && (kind === 'pie' || kind === 'donut'))
+        ? pieLegend(groups, selectedKey(), onPick) : null;
+      if (key) c.body.appendChild(key);
+      const plotH = plotHeight(bx, w.style, [key]);
       const node = (kind === 'pie' || kind === 'donut')
         ? drawPie(groups, ds, w.style, selectedKey(), onPick, kind === 'donut')
         : (kind === 'line' || kind === 'area')
-          ? drawLine(groups, ds, w.style, kind === 'area', selectedKey(), onPick, bx.W, bx.H)
-          : drawBars(groups, ds, w.style, selectedKey(), onPick, kind === 'hbar', bx.W, bx.H);
-      c.body.appendChild(node);
-      if (w.style && w.style.legend !== false && (kind === 'pie' || kind === 'donut')) {
-        c.body.appendChild(pieLegend(groups, selectedKey(), onPick));
-      }
+          ? drawLine(groups, ds, w.style, kind === 'area', selectedKey(), onPick, bx.W, plotH)
+          : drawBars(groups, ds, w.style, selectedKey(), onPick, kind === 'hbar', bx.W, plotH);
+      fixPlotHeight(node, plotH);
+      capToRoom(key, bx, plotH);
+      c.body.insertBefore(node, key);
     }
     function refresh() {
       busy(c.root, true);
@@ -1673,30 +1686,56 @@ window.GD_DASHBOARD = (function () {
     return svg;
   }
 
-  //: How much of the card's HEIGHT the pie itself takes, as a percentage. Default 100, which is
-  //: what every dashboard published so far draws.
+  //: SHARING THE CARD between a plot and the key that explains it.
   //:
-  //: The pie is `height: 100%` and the legend is its sibling, so on a card with many categories the
-  //: circle claimed the whole body and pushed the legend into a scrollbar — a chart you cannot read
-  //: the key to. Resizing the WIDGET does not help: a taller card grows the pie by exactly as much.
-  //: The two need to be separately adjustable, so this caps the plot and leaves the rest to the key.
+  //: Every plot in here is `height: 100%` and every key is its sibling in a body that scrolls, so
+  //: by default the plot claimed the whole card and pushed the key out of sight — and making the
+  //: widget taller grew the plot by exactly as much, which is why resizing never fixed it. The
+  //: three functions below are the fix, and they are shared because the pie, the multi-series line
+  //: and the grouped bars all had the same bug for the same reason.
+
+  //: The plot's share of the card's height, 30-100. Default 100, which means AUTO: take everything
+  //: the key does not need. Below 100 it is a fixed fraction and the key scrolls in the remainder,
+  //: for the case where twelve series wrap to four lines and the shape matters more than the names.
   function plotShare(style) {
     const v = style && style.plotSize;
     return (typeof v === 'number' && v >= 30 && v <= 100) ? v : 100;
+  }
+
+  //: How tall the plot may be, once everything else sharing the body has had its room. Measuring
+  //: is the right default because only the key knows how many lines its labels wrap to.
+  function plotHeight(bx, style, companions) {
+    const share = plotShare(style);
+    if (share < 100) return Math.max(CHART_MIN_H, Math.round(bx.H * share / 100));
+    const cost = (companions || []).reduce(function (a, n) { return a + outerHeight(n); }, 0);
+    return Math.max(CHART_MIN_H, bx.H - cost);
+  }
+
+  //: Keep a companion inside the room the plot left it, scrolling rather than pushing the pair out
+  //: of the card. Bites whenever the author fixed the share, and in AUTO only when the key alone is
+  //: taller than the whole card — where the plot has hit its floor and something has to give. The
+  //: key scrolling is a better outcome than the card scrolling: the plot at least stays visible.
+  function capToRoom(node, bx, plotH) {
+    if (!node) return;
+    const room = Math.max(0, bx.H - plotH - marginY(node));
+    if (outerHeight(node) - marginY(node) > room) {
+      node.style.maxHeight = room + 'px';
+      node.style.overflowY = 'auto';
+    }
+  }
+
+  //: Pin the plot to the height it was measured for. `.gd-chart` is `height: 100%`, which would
+  //: otherwise scale it straight back up to the whole body and undo the calculation; `flex: none`
+  //: covers the bodies that are flex columns, where a set height is only a starting size.
+  function fixPlotHeight(node, h) {
+    node.style.height = h + 'px';
+    node.style.flex = 'none';
   }
 
   function drawPie(groups, ds, style, selected, onPick, donut) {
     const S = 170, cx = S / 2, cy = S / 2, r = S / 2 - 8, inner = donut ? r * 0.58 : 0;
     const svg = svgEl('svg', { class: 'gd-chart', viewBox: '0 0 ' + S + ' ' + S,
                                preserveAspectRatio: 'xMidYMid meet' });
-    const share = plotShare(style);
-    if (share < 100) {
-      // `flex: none` alongside the height: the body is a block box today, where the height alone
-      // is enough, but `.gd-w-center` turns it into a flex column — and a flex child grows past a
-      // set height unless told not to, handing the pie back exactly the space this takes away.
-      svg.style.height = share + '%';
-      svg.style.flex = 'none';
-    }
     const total = groups.reduce(function (a, g) { return a + Math.max(0, g.value || 0); }, 0);
     if (total <= 0) return svg;
     let angle = -Math.PI / 2;

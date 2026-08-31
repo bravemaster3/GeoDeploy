@@ -248,12 +248,16 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
-2026-08-31 (**a multi-series chart's key gets its room before the plot does.** `.gd-chart` is
-`height: 100%` and the legend is its sibling, so the plot claimed the whole body and pushed the key
-into the body's scrollbar — and making the widget taller grew the plot by exactly as much. The
-legend is now appended and measured first, and the plot is built for the remainder. `chartBox()`
-also reports the CONTENT box (it was returning `clientHeight`, 20px of padding included), because
-subtracting a legend from a figure that is already too big still overflows.)
+2026-08-31 (**every plot shares its card with its key the same way.** `.gd-chart` is `height: 100%`
+and the key is its sibling, so the plot claimed the whole body and pushed the key into the
+scrollbar — and making the widget taller grew the plot by exactly as much. `plotHeight` /
+`capToRoom` / `fixPlotHeight` in `shared/dashboard.js` now serve the multi-series line, the grouped
+bars AND the pie, which all had the bug for the same reason. AUTO (`plotSize` unset or 100) measures
+the key and gives the plot the rest; a share below 100 hands the plot a fixed fraction and lets a
+long key scroll in the remainder. The key is capped either way, so a key taller than the whole card
+scrolls itself instead of pushing the plot out. `chartBox()` also reports the CONTENT box (it was
+returning `clientHeight`, 20px of padding included), because subtracting a key's height from a
+figure that is already too big still overflows.)
 
 2026-08-31 (**the camera follows the whole selection.** `shared/dashboard.js`'s table/card widget
 holds `picked` as a Map of key -> bbox rather than a set of keys, and fits the map to the UNION on
