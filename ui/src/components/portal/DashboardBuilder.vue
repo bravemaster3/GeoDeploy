@@ -125,7 +125,34 @@ const selected = computed(() => widgets.value.find(w => w.id === selectedId.valu
 
 function commit(next) { emit('update:modelValue', next) }
 function patchDash(patch) { commit({ ...dash.value, ...patch }) }
-function setWidgets(list) { patchDash({ widgets: list }) }
+
+//: Has anyone touched this grid, or is it still just a template sitting there?
+//:
+//: The distinction is the whole of the template-switching behaviour below. Loading a preset over
+//: widgets an author has arranged destroys work and must be asked for; loading one over widgets
+//: another preset put there five seconds ago destroys nothing, and asking is a button press for no
+//: reason. Anything already on the grid when this editor opens counts as the author's — it came out
+//: of a saved portal, and this component has no way to know how it got there.
+const presetTouched = ref(widgets.value.length > 0)
+//: Set while `applyPreset` commits, so its own write does not count as a touch.
+let applyingPreset = false
+//: The preset whose widgets are on the grid, or null if they came from anywhere else — a saved
+//: portal, or hand-built. Auto-replacing is only ever safe when THIS component put them there:
+//: `presetTouched` alone is not enough, because a portal loading into the editor after mount
+//: arrives without going through `setWidgets` and would look untouched.
+let appliedPreset = null
+//: The preset watcher runs immediately, which is how an empty grid gets its template. That first
+//: run is the editor OPENING, not the author choosing — and an offer to replace their layout the
+//: moment they open a saved portal would be alarming.
+let presetWatchOpened = false
+//: A template was chosen whose layout differs from work the author has done. Not applied, ASKED —
+//: see the banner in the template.
+const presetOffered = ref(false)
+
+function setWidgets(list) {
+  if (!applyingPreset) presetTouched.value = true
+  patchDash({ widgets: list })
+}
 function patchWidget(id, patch) {
   setWidgets(widgets.value.map(w => (w.id === id ? deepMerge(w, patch) : w)))
 }
@@ -585,11 +612,16 @@ function applyPreset(overwrite) {
     }
     return w
   })
+  applyingPreset = true
   commit({
     grid: preset.grid || { rowHeight: 90, gap: 10 },
     refresh: preset.refresh || 0,
     widgets: bound,
   })
+  applyingPreset = false
+  presetTouched.value = false      // this grid is the template's again, not anyone's work
+  appliedPreset = preset
+  presetOffered.value = false
   selectedId.value = null
   // After the commit, not during it: `autoRangeGauge` reads the committed widget back and patches
   // it, so it has to run against the model the author can now see.
@@ -603,7 +635,21 @@ const presetName = computed(() => (props.preset ? 'this template' : null))
 // a preset is available, load it. Only when the grid is genuinely empty — this must never overwrite
 // an author's work, which is why the overwrite path is a button they press.
 watch(() => props.preset, (p) => {
-  if (p && !widgets.value.length) applyPreset(false)
+  const opening = !presetWatchOpened
+  presetWatchOpened = true
+  if (!p) return
+  // Nothing there yet — a dashboard with no widgets is a blank page.
+  if (!widgets.value.length) { applyPreset(false); return }
+  // Widgets are there, but THIS component put them there from a template and nobody has touched
+  // them since. Switching should then just show the new one: someone is trying layouts on, and
+  // making them find "Reload template" after every choice is the editor pretending it did not
+  // understand. `appliedPreset` as well as `presetTouched`, because a portal that finished loading
+  // after mount never passed through `setWidgets` and would otherwise read as untouched.
+  if (appliedPreset && !presetTouched.value) { applyPreset(true); return }
+  // Real work, or work of unknown origin. Never overwrite it silently — but do not sit in silence
+  // either, which is what made choosing a template look like it had done nothing at all. Not on the
+  // first run: that is the editor opening, not a choice.
+  if (!opening) presetOffered.value = true
 }, { immediate: true })
 
 // The common opening order is "new portal → pick Dashboard → add layers", which means the preset
@@ -761,6 +807,21 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
           :title="`Replace the current widgets with ${presetName}'s starting set`">↺ Reload template</button>
         <button @click="pickerOpen = !pickerOpen" class="text-xs text-primary hover:text-primary/80 font-medium">+ Add widget</button>
       </div>
+    </div>
+
+    <!-- Asked, not done. Choosing a template with work already on the grid used to change nothing
+         visible, leaving a quiet "Reload template" link as the only clue that a choice had been
+         registered at all. -->
+    <div v-if="presetOffered"
+      class="mb-3 p-2.5 rounded-lg border border-primary/40 bg-primary/5 flex items-start gap-2">
+      <span class="text-[11px] leading-snug flex-1">
+        This template has a different starting layout.
+        <span class="text-muted-foreground">Loading it replaces the widgets you have now.</span>
+      </span>
+      <button @click="applyPreset(true)"
+        class="text-[11px] font-medium text-primary hover:text-primary/80 shrink-0">Load it</button>
+      <button @click="presetOffered = false"
+        class="text-[11px] text-muted-foreground hover:text-foreground shrink-0">Keep mine</button>
     </div>
 
     <!-- The widget picker. Every type, always — a template's set is a starting point, not a menu. -->
