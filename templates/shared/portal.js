@@ -3503,7 +3503,7 @@
     deckHit = false;
   });
 
-  // ── Coordinate readout (bottom-right) ───────────────────
+  // ── Coordinate readout (bottom-centre) ──────────────────
   const coordsEl = document.getElementById('coords');
   if (coordsEl) {
     // WITH the CRS. Two numbers alone are ambiguous — 47.37, 8.54 is a lat/lon pair, a metre

@@ -248,6 +248,12 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-31 (`shared/portal.css`: the coordinate readout moves to **bottom-centre** of the map — the
+one stretch of the map edge nothing else claims, with the scale bar at bottom-left and the
+attribution at bottom-right. It had been pushed UP off the credit rather than sideways off it, so it
+can now share their line; below 640px it goes back to riding above them, where the scale bar reaches
+the middle.)
+
 2026-08-31 (**`grid.fit: "screen"` fills the viewport.** `placeAll` counts the rows the layout
 actually reaches (per breakpoint — the phone cursor and the desktop max are different numbers) and
 `applyRowTemplate` writes `grid-template-rows: repeat(N, minmax(var(--dash-row), 1fr))`. The author's

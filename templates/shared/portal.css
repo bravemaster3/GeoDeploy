@@ -742,15 +742,24 @@
        already `var(--text)` but the background was a hardcoded white, so in dark mode it was pale
        text on a white slab — the one combination neither theme ever intends. A readout that takes
        one colour from the theme and one from nowhere is unreadable in exactly half of them. */
-    /* ABOVE the attribution, not on top of it. Both sat at bottom-right; while the readout had a
-       translucent white background the collision merely looked untidy, and giving it a solid one
-       and a border — so it would be legible in dark mode — turned it into one box covering
-       another. The scale bar owns bottom-left, so up is the direction with room in it. */
+    /* BOTTOM CENTRE, which is the one part of the map edge nothing else claims: the scale bar owns
+       bottom-left and the attribution bottom-right, and those two are what the readout used to
+       collide with — it sat at bottom-right on top of the credit, and was moved up out of the way
+       rather than sideways out of it. Centred, it can sit on the same line as both. It also puts
+       the numbers under the pointer's usual path rather than off in a corner. */
     #coords {
-      position: absolute; right: 8px; bottom: 26px; z-index: 20; pointer-events: none;
+      position: absolute; left: 50%; transform: translateX(-50%); bottom: 8px;
+      z-index: 20; pointer-events: none; white-space: nowrap;
       font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text);
       background: var(--bg); padding: 2px 7px; border-radius: 4px;
       border: 1px solid var(--border); box-shadow: var(--shadow); min-height: 18px;
+    }
+    /* On a narrow map the three no longer fit on one line — the scale bar reaches the middle — so
+       the readout goes back to riding above them. `mousemove` is a pointer affordance and a phone
+       rarely raises it at all, but a tap does synthesise one, and a chip landing on the scale bar
+       is exactly the collision this move was meant to end. */
+    @media (max-width: 640px) {
+      #coords { bottom: 26px; }
     }
     /* The CRS, muted and a size down: it does not change while you move the mouse, so it should not
        compete with the numbers that do. */
