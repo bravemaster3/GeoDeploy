@@ -1890,7 +1890,12 @@ window.GD_DASHBOARD = (function () {
       unbound(c.body, 'Pick a layer and the two numeric columns to plot against each other.');
       return { el: c.root, refresh: function () {} };
     }
-    c.sub.textContent = truncate(ds.yField + ' ~ ' + ds.xField, 26);
+    // The author's axis titles, if they wrote any — the same names the axes carry, so the card's
+    // heading and its axes cannot disagree about what is plotted. Naming a column "GDP per capita"
+    // on the axis and leaving `GDP_PerC_1` in the heading is the field name showing through in the
+    // one place the reader looks first.
+    c.sub.textContent = truncate(((w.style && w.style.yTitle) || ds.yField) + ' ~ '
+                               + ((w.style && w.style.xTitle) || ds.xField), 26);
 
     function draw(data) {
       clear(c.body);
