@@ -320,6 +320,18 @@ def _normalize_source(widget_type: str, source: dict | None) -> dict | None:
             # keeps the widget alive and showing a true number, which is better than a red box: the
             # author sees a count where they expected a sum and fixes the binding.
             ref["op"] = "count"
+    if widget_type == "scatter":
+        # Columns that NAME each point on hover. A scatter plots two numbers per feature and, with
+        # nothing else, cannot say which feature they belong to — the reader sees an outlier and has
+        # no way to find out what it is.
+        names, seen = [], set()
+        for c in (src.get("labelFields") or [])[:3]:
+            name = _str(c)
+            if name and name not in seen:
+                seen.add(name)
+                names.append(name)
+        if names:
+            ref["labelFields"] = names
     if widget_type == "chart":
         ref["groupBy"] = _str(src.get("groupBy"))
         ref["timeBucket"] = _str(src.get("timeBucket"), TIME_BUCKETS)

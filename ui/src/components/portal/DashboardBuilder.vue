@@ -195,6 +195,14 @@ function numericFields(w) { return fieldsOf(w).filter(c => isNumeric(c.type)) }
 //: How many columns may form the X axis. Mirrors `MAX_X_COLUMNS` in services/dashboard.py.
 const MAX_X_COLUMNS = 120
 function xColumnsOf(w) { return w?.dataSource?.xColumns || [] }
+//: Up to three columns naming a scatter's points on hover. Three is a line of hover text; more is a
+//: record, and a record is what clicking already puts in the details panel.
+function labelFieldsOf(w) { return w?.dataSource?.labelFields || [] }
+function toggleLabelField(w, name) {
+  const cur = labelFieldsOf(w)
+  const next = cur.includes(name) ? cur.filter(c => c !== name) : [...cur, name]
+  patchWidget(w.id, { dataSource: { labelFields: next.slice(0, 3) } })
+}
 //: Bars only. `colorMode` colours bars and `valueLabels` prints numbers on them; a line chart takes
 //: neither — its colours come from the series palette and it has no bar to write on. Both were shown
 //: for every chart kind, so choosing Line left two controls on screen that did nothing, and one of
@@ -1717,6 +1725,28 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
           </label>
         </div>
       </template>
+      <!-- What a scatter's points are called. -->
+      <template v-if="selected.type === 'scatter'">
+        <div>
+          <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-1">
+            Name points on hover
+            <InfoHint label="About point names">
+              Columns whose values identify each dot when you hover it — a name, a code, a date.
+              Without them a scatter shows two numbers per feature and cannot say which feature, so
+              an outlier is visible and unidentifiable. Up to three; use the details panel for the
+              rest.
+            </InfoHint>
+          </span>
+          <div class="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
+            <button v-for="f in fieldsOf(selected)" :key="f.name"
+              @click="toggleLabelField(selected, f.name)"
+              class="px-2 py-0.5 rounded border text-[11px]"
+              :class="labelFieldsOf(selected).includes(f.name)
+                ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ f.name }}</button>
+          </div>
+        </div>
+      </template>
+
       <!-- Axis titles, for the two widget types that have axes. -->
       <template v-if="['chart', 'scatter'].includes(selected.type)">
         <div class="grid grid-cols-2 gap-2">

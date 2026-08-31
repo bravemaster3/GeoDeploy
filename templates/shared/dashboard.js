@@ -1917,12 +1917,23 @@ window.GD_DASHBOARD = (function () {
       const colour = (w.style && w.style.color) || accent();
       // Opacity rather than a smaller dot: overlapping points then READ as density, which is the
       // information a scatter of a few thousand features actually carries.
-      pts.forEach(function (p) {
-        svg.appendChild(svgEl('circle', {
+      // NAMES ON HOVER, when the author nominated columns for them. A dot is a pair of numbers
+      // until something says whose they are; an outlier is the point of a scatter and the one thing
+      // it could not tell you about. A native `<title>` rather than a custom tooltip: it is what the
+      // bars and lines already use, it survives touch and keyboard focus, and it costs one element.
+      const names = data.labels || [];
+      pts.forEach(function (p, i) {
+        const dot = svgEl('circle', {
           cx: padL + ((p[0] - x0) / sx) * (W - padL - padR),
           cy: H - padB - ((p[1] - y0) / sy) * (H - padT - padB),
           r: 2, fill: colour, opacity: 0.45,
-        }));
+        });
+        const label = names[i];
+        const coords = fmtNumber(p[0], w.style) + ', ' + fmtNumber(p[1], w.style);
+        const t = svgEl('title');
+        t.textContent = label ? label + ' — ' + coords : coords;
+        dot.appendChild(t);
+        svg.appendChild(dot);
       });
       svg.appendChild(svgEl('line', { class: 'axis', x1: padL, y1: H - padB, x2: W - padR, y2: H - padB }));
       svg.appendChild(svgEl('line', { class: 'axis', x1: padL, y1: padT, x2: padL, y2: H - padB }));
@@ -1983,6 +1994,7 @@ window.GD_DASHBOARD = (function () {
       busy(c.root, true);
       env.api.scatter(w.id, ds.layerId, specFor(w, env.store, {
         xField: ds.xField, yField: ds.yField, limit: ds.limit,
+        labelFields: ds.labelFields,
       })).then(function (data) {
         busy(c.root, false);
         draw(data);

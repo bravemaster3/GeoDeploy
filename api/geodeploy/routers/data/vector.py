@@ -867,6 +867,9 @@ class AggregateRequest(BaseModel):
 
 
 class ScatterRequest(BaseModel):
+    #: Columns whose values name each point on hover — see `aggregate._label_fields`. A scatter
+    #: otherwise plots two numbers and cannot say which feature they belong to.
+    labelFields: list[str] | None = None
     """Y against X, per feature. Sampled server-side — see `services/aggregate.parquet_scatter`."""
     xField: str | None = None
     yField: str | None = None

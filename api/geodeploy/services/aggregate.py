@@ -1052,6 +1052,34 @@ async def _postgis_profile_uncached(db, layer, spec: dict) -> dict:
 #: chart, not more dots — and the browser has to draw every one of them.
 SCATTER_MAX_POINTS = 3000
 
+#: How many columns may name a scatter's points. Three is a line of hover text; more is a record,
+#: and a record belongs in the details panel, which is what a click already fills.
+MAX_LABEL_FIELDS = 3
+
+
+def _label_fields(spec: dict, known) -> list[str]:
+    """The columns a scatter's hover label is built from, validated like any other field.
+
+    A scatter plots two numbers per feature and, without this, says nothing about WHICH feature: the
+    reader can see an outlier and has no way to find out what it is. The label is built server-side
+    because the point is already being read there — sending the columns back so the browser can
+    concatenate them would be the same bytes and one more thing to keep in step.
+    """
+    out, seen = [], set()
+    for name in (spec.get("labelFields") or [])[:MAX_LABEL_FIELDS]:
+        if not isinstance(name, str) or name in seen:
+            continue
+        _check_field(name, known, "label field")
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+def _label_of(row, start: int, count: int) -> str:
+    """One row's label, from `count` values beginning at `row[start]`."""
+    parts = [str(row[start + i]) for i in range(count) if row[start + i] is not None]
+    return " · ".join(parts)
+
 
 def _scatter_fields(spec: dict, known: set[str]) -> tuple[str, str]:
     x = _check_field(spec.get("xField"), known, "X field")
@@ -1087,14 +1115,19 @@ def _parquet_scatter_uncached(layer, spec: dict) -> dict:
         keep = f"{xe} IS NOT NULL AND {ye} IS NOT NULL"
         where_sql = (where_sql + " AND " + keep) if where_sql else ("WHERE " + keep)
 
+        labels = _label_fields(spec, known)
+        lab_sel = "".join(", " + qi(c) for c in labels)
         if geom is None:
             rows = conn.execute(
-                f"SELECT {xe} AS x, {ye} AS y FROM {src} {where_sql} "
+                f"SELECT {xe} AS x, {ye} AS y{lab_sel} FROM {src} {where_sql} "
                 f"USING SAMPLE {limit} ROWS").fetchall()
             total = conn.execute(f"SELECT COUNT(*) FROM {src} {where_sql}").fetchone()[0]
             pts = [[_num(r[0]), _num(r[1])] for r in rows]
-            return {"points": pts, "x": xf, "y": yf, "total": int(total or 0),
-                    "sampled": len(pts) < int(total or 0), "capped": False}
+            out = {"points": pts, "x": xf, "y": yf, "total": int(total or 0),
+                   "sampled": len(pts) < int(total or 0), "capped": False}
+            if labels:
+                out["labels"] = [_label_of(r, 2, len(labels)) for r in rows]
+            return out
 
         # With a geometry filter the exact test has to run before the sample, or the sample is drawn
         # from candidates that are not in the selection. Candidates are bounded by CANDIDATE_CAP as
@@ -1102,7 +1135,7 @@ def _parquet_scatter_uncached(layer, spec: dict) -> dict:
         from shapely import from_wkb, intersects
         geom_col = _duck_geom_col(meta, cols)
         rows = conn.execute(
-            f"SELECT {qi(geom_col)} AS __wkb, {xe} AS x, {ye} AS y FROM {src} {where_sql} "
+            f"SELECT {qi(geom_col)} AS __wkb, {xe} AS x, {ye} AS y{lab_sel} FROM {src} {where_sql} "
             f"LIMIT {CANDIDATE_CAP + 1}").fetchall()
         capped = len(rows) > CANDIDATE_CAP
         rows = rows[:CANDIDATE_CAP]
@@ -1121,8 +1154,12 @@ def _parquet_scatter_uncached(layer, spec: dict) -> dict:
             # order, so truncating would again plot one corner.
             step = total / float(limit)
             kept = [kept[int(i * step)] for i in range(limit)]
-        return {"points": [[_num(r[1]), _num(r[2])] for r in kept], "x": xf, "y": yf,
-                "total": total, "sampled": total > limit, "capped": capped}
+        out = {"points": [[_num(r[1]), _num(r[2])] for r in kept], "x": xf, "y": yf,
+               "total": total, "sampled": total > limit, "capped": capped}
+        if labels:
+            # 3, not 2: this SELECT leads with the geometry.
+            out["labels"] = [_label_of(r, 3, len(labels)) for r in kept]
+        return out
     finally:
         conn.close()
 
@@ -1154,12 +1191,17 @@ async def _postgis_scatter_uncached(db, layer, spec: dict) -> dict:
     where = (where + " AND " + keep) if where else ("WHERE " + keep)
 
     total = (await db.execute(text(f"SELECT COUNT(*) FROM {table} {where}"), params)).scalar() or 0
+    labels = _label_fields(spec, known)
+    lab_sel = "".join(", " + qi(c) for c in labels)
     rows = (await db.execute(text(
-        f"SELECT {xe} AS x, {ye} AS y FROM {table} {where} ORDER BY random() LIMIT {limit}"),
-        params)).fetchall()
+        f"SELECT {xe} AS x, {ye} AS y{lab_sel} FROM {table} {where} "
+        f"ORDER BY random() LIMIT {limit}"), params)).fetchall()
     pts = [[_num(r[0]), _num(r[1])] for r in rows]
-    return {"points": pts, "x": xf, "y": yf, "total": int(total),
-            "sampled": len(pts) < int(total), "capped": False}
+    out = {"points": pts, "x": xf, "y": yf, "total": int(total),
+           "sampled": len(pts) < int(total), "capped": False}
+    if labels:
+        out["labels"] = [_label_of(r, 2, len(labels)) for r in rows]
+    return out
 
 
 def parquet_aggregate(layer, spec: dict) -> dict:
