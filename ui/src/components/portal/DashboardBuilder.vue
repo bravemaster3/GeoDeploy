@@ -750,8 +750,26 @@ function setLayer(w, value) {
  * One-shot, on the binding change the author just made. There is no stored "auto" flag to go stale:
  * the moment they drag the min/max inputs, nothing here fires again until they rebind the field.
  */
+//: Picking a column implies an aggregation of it, and clearing one implies counting rows again.
+//:
+//: `count` ignores `field` entirely, so a field chosen while Count is selected would be stored,
+//: displayed, and have no effect on the chart — the author sets the thing they came to set and the
+//: bars do not move. Sum is the promotion because "GDP per country" means the total, and Average /
+//: Minimum / Maximum are one dropdown away.
+//: The other direction: switching TO Count drops the field, so the stored config cannot say
+//: "count, of GDP" — a pair that reads as a measurement and behaves as a row tally.
+function setAggOp(w, op) {
+  const patch = { op: op };
+  if (op === 'count') patch.field = undefined
+  patchWidget(w.id, { dataSource: patch })
+}
+
 function setAggField(w, field) {
-  patchWidget(w.id, { dataSource: { field: field || undefined } })
+  const patch = { field: field || undefined }
+  const op = w.dataSource?.op || 'count'
+  if (field && op === 'count') patch.op = 'sum'
+  if (!field && op !== 'count') patch.op = 'count'
+  patchWidget(w.id, { dataSource: patch })
   if (w.type === 'gauge' && field) autoRangeGauge(w.id, field)
 }
 
@@ -1114,17 +1132,29 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
             <label class="block">
               <span class="text-[10px] text-muted-foreground block mb-0.5">Aggregation</span>
               <select :value="selected.dataSource?.op || 'count'"
-                @change="patchWidget(selected.id, { dataSource: { op: $event.target.value } })"
+                @change="setAggOp(selected, $event.target.value)"
                 class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
                 <option v-for="o in AGG_OPS" :key="o.id" :value="o.id">{{ o.name }}</option>
               </select>
             </label>
-            <label v-if="(selected.dataSource?.op || 'count') !== 'count'" class="block">
-              <span class="text-[10px] text-muted-foreground block mb-0.5">Field</span>
+            <!-- ALWAYS shown, not only once the aggregation is something other than Count.
+                 Hidden, it made "plot GDP per country" look impossible: the panel offered an
+                 aggregation and a grouping and no way to name the column, and Count -- the default --
+                 was the one setting under which the column picker did not exist. The order people
+                 think in is "which column", then "how to combine it". -->
+            <label class="block">
+              <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
+                Field
+                <InfoHint label="About the field">
+                  The column being measured. Leave it empty to count rows; choose one and the
+                  aggregation becomes Sum, which you can change to Average, Minimum or Maximum.
+                  Only numeric columns are listed — the others have nothing to add up.
+                </InfoHint>
+              </span>
               <select :value="selected.dataSource?.field || ''"
                 @change="setAggField(selected, $event.target.value)"
                 class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
-                <option value="">—</option>
+                <option value="">— count rows —</option>
                 <option v-for="f in numericFields(selected)" :key="f.name" :value="f.name">{{ f.name }}</option>
               </select>
             </label>
