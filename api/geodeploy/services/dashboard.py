@@ -87,6 +87,11 @@ TIME_BUCKETS = {"hour", "day", "week", "month", "quarter", "year"}
 #: Mirrors `services/aggregate.MAX_SERIES`.
 MAX_CHART_SERIES = 4
 
+#: How many columns may form the X axis when a chart plots WIDE data — one column per year, per
+#: month, per survey round. Bounded by `aggregate.MAX_SERIES`, which is what the request becomes:
+#: one aggregate expression per column, in a single grouped scan.
+MAX_X_COLUMNS = 120
+
 #: How many join keys a map may pull into a style expression before it stops narrowing and says so.
 #: Offered as a short list because the trade-off is real in both directions: too low and the map
 #: gives up on selections it could have drawn, too high and every filter change moves a large
@@ -254,6 +259,12 @@ def _normalize_source(widget_type: str, source: dict | None) -> dict | None:
         # narrowed rather than quietly drawing everything. Default False because a map that narrows
         # for a small selection and stops for a large one is a worse thing to hand someone
         # unasked-for than a map that never claimed to narrow at all.
+        # ON by default, unlike `linkedFilter`. The two are opposites in what they risk: following a
+        # linked filter can leave a map that LOOKS filtered and is not, which must be opted into;
+        # framing the features a chart just selected is only a camera move, and it is what almost
+        # everyone expects when they click a bar. Off is one checkbox away for the dashboards where
+        # comparing categories in a fixed frame matters more.
+        out["zoomToFilter"] = bool(src.get("zoomToFilter", True))
         out["linkedFilter"] = bool(src.get("linkedFilter"))
         # A CHOICE, not a free number. The failure mode of too large a value is a sluggish map and a
         # fat response rather than an error, which is the kind of setting an author should not be
@@ -309,9 +320,55 @@ def _normalize_source(widget_type: str, source: dict | None) -> dict | None:
             # keeps the widget alive and showing a true number, which is better than a red box: the
             # author sees a count where they expected a sum and fixes the binding.
             ref["op"] = "count"
+    if widget_type == "scatter":
+        # Columns that NAME each point on hover. A scatter plots two numbers per feature and, with
+        # nothing else, cannot say which feature they belong to — the reader sees an outlier and has
+        # no way to find out what it is.
+        names, seen = [], set()
+        for c in (src.get("labelFields") or [])[:3]:
+            name = _str(c)
+            if name and name not in seen:
+                seen.add(name)
+                names.append(name)
+        if names:
+            ref["labelFields"] = names
     if widget_type == "chart":
         ref["groupBy"] = _str(src.get("groupBy"))
         ref["timeBucket"] = _str(src.get("timeBucket"), TIME_BUCKETS)
+        # WIDE DATA: a set of columns that are really one variable measured repeatedly — gdp_1990,
+        # gdp_2000, gdp_2010. Named here, they become the chart's X axis, one aggregate each, and
+        # whatever `groupBy` says becomes a line per group rather than the axis.
+        #
+        # It is a reshape of the ANSWER, not a second query path: the request is the existing
+        # multi-measure one (one aggregate expression per column in a single grouped scan) and the
+        # runtime transposes what comes back. So there is nothing here the engines do not already do.
+        xcols, seen = [], set()
+        for c in (src.get("xColumns") or [])[:MAX_X_COLUMNS]:
+            name = _str(c)
+            if name and name not in seen:      # a column twice is a duplicated axis tick
+                seen.add(name)
+                xcols.append(name)
+        if xcols:
+            ref["xColumns"] = xcols
+            # An overall line across the columns, beside the per-group ones. Its own question:
+            # "one line per country" and "the average of all of them" are different answers, and
+            # averaging the plotted lines would average the TOP N groups rather than the selection.
+            ref["meanLine"] = bool(src.get("meanLine"))
+            # WHAT THE TICKS SAY once the shared part of the column names is gone. `gdp60, gdp61`
+            # already trim to `60, 61`; these turn those into what they stand for.
+            #
+            #   offset   arithmetic on a label that is a number — 60 + 1900 = 1960
+            #   pattern  text around it, `{}` being the label — `19{}` also gives 1960, and
+            #            `Q{}` gives Q1; applied after the offset, so the two compose
+            #
+            # Two knobs rather than one expression language: an author writing an axis label should
+            # not be writing code, and these cover the cases the data actually produces.
+            ref["xLabelOffset"] = _num(src.get("xLabelOffset"), 0)
+            pattern = _str(src.get("xLabelPattern"))
+            if pattern and "{}" in pattern:
+                # A pattern with no placeholder would render every tick identically — the same label
+                # repeated across the axis. Dropped rather than obeyed.
+                ref["xLabelPattern"] = pattern[:24]
         ref["limit"] = _int(src.get("limit"), 12, 2, 100)
         ref["sort"] = _str(src.get("sort"), {"value_desc", "value_asc", "key_asc"}, "value_desc")
         # SEVERAL measures against the one grouping — "mean height AND mean age per district". Each
@@ -442,13 +499,39 @@ def _normalize_style(widget_type: str, style: dict | None) -> dict:
                           "label": (_str(band.get("label")) or "")[:24]})
         bands.sort(key=lambda b: b["from"])
         out["bands"] = bands
-    if widget_type == "indicator":
-        # Comparison / target value — "vs. last month". `compareMode` says how to render the delta.
+    # The TARGET is a gauge's setting as much as an indicator's — arguably more, since a gauge exists
+    # to answer "are we there yet" and draws the target as a mark across its dial. It was normalised
+    # for the indicator alone, so a gauge could be given one in the builder and the publish step
+    # would drop it before the runtime ever saw it.
+    if widget_type in ("indicator", "gauge"):
         target = _num(s.get("target"), None)
         if target is not None:
             out["target"] = target
+    if widget_type == "indicator":
+        # How the delta against that target is rendered — "vs. last month". Indicator only: a gauge
+        # shows the comparison as a position on its arc, not as a signed number.
         out["compareMode"] = _str(s.get("compareMode"), {"delta", "percent", "none"}, "delta")
         out["goodDirection"] = _str(s.get("goodDirection"), {"up", "down", "none"}, "up")
+    if widget_type == "scatter":
+        # HOW BIG A DOT IS, in SVG px of radius. The right answer depends on how many points land on
+        # the card — a dozen features want a mark you can see and aim at, a few thousand want a grain
+        # that overlaps into a shape — and that is a fact about the data, so the author sets it.
+        # 3.5 is the default because the previous fixed 2 read as dust on a small card.
+        out["pointSize"] = max(1.5, min(8.0, _num(s.get("pointSize"), 3.5)))
+    # AXIS TITLES. A column name is what the data is called; the title is what it measures, and the
+    # two are rarely the same string — least of all after a shapefile has cut the first to ten
+    # characters. Only where there are axes to title: a pie has none, an indicator has none.
+    if widget_type in ("chart", "scatter"):
+        for key in ("xTitle", "yTitle"):
+            title = _str(s.get(key))
+            if title:
+                out[key] = title[:40]
+    # The line under the title. Every widget has one and none of them could be written: it is
+    # generated from the layer and the aggregation, which describes the QUERY where the reader wants
+    # the subject. Not per-type, because every widget draws one.
+    subtitle = _str(s.get("subtitle"))
+    if subtitle:
+        out["subtitle"] = subtitle[:48]
     color = _hex(s.get("color"))
     if color:
         out["color"] = color
@@ -610,6 +693,19 @@ def resolve_dashboard(config: dict | None) -> dict | None:
             "cols": GRID_COLS,                                  # fixed: the builder's own geometry
             "rowHeight": _int(grid.get("rowHeight"), 90, 40, 240),
             "gap": _int(grid.get("gap"), 10, 0, 32),
+            # HOW THE BOARD MEETS THE SCREEN.
+            #
+            # "rows" is the original and stays the default, so no published dashboard changes: every
+            # row is exactly `rowHeight`, the board is as tall as its content, and a screen taller
+            # than that shows background below it. That is right for a long board someone scrolls
+            # and wrong for the case a dashboard is usually built for — one screen, taken in at a
+            # glance — where a board authored on a laptop leaves a third of a desktop monitor empty.
+            #
+            # "screen" makes the rows share the height instead. It cannot be a guarantee, and does
+            # not pretend to be: the runtime asks for `minmax(rowHeight, 1fr)`, so the rows stretch
+            # when there is room and fall back to scrolling when there is not. A phone, a portrait
+            # monitor and a board with thirty rows all land on the same floor they have today.
+            "fit": _str(grid.get("fit"), {"rows", "screen"}, "rows"),
         },
         "refresh": _int(config.get("refresh"), 0, 0, REFRESH_MAX) if config.get("refresh") else 0,
         "widgets": widgets,

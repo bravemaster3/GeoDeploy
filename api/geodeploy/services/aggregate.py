@@ -37,7 +37,13 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 #: Aggregations. `count` takes no field.
-OPS = {"count", "sum", "avg", "min", "max"}
+#: `bounds` is not a summary of a column like the others — it is the EXTENT of whatever the current
+#: filter selects, four numbers in lon/lat. It lives here rather than in its own endpoint because it
+#: takes exactly the same filters, geometry and joins as every other question the dashboard asks,
+#: and a second endpoint would be a second place to keep that in step.
+OPS = {"count", "sum", "avg", "min", "max", "bounds"}
+#: The ops that summarise no column and therefore need no `field`.
+FIELDLESS_OPS = {"count", "bounds"}
 
 #: `date_trunc` units, spelled the same in Postgres and DuckDB — which is why the time-bucket
 #: implementation below is genuinely shared rather than two lookalike branches.
@@ -431,7 +437,7 @@ async def _postgis_aggregate_uncached(db, layer, spec: dict) -> dict:
     op = spec.get("op", "count")
     if op not in OPS:
         raise AggregateError(f"Unsupported aggregation: {op}")
-    field = None if op == "count" else _check_field(spec.get("field"), known, "field")
+    field = None if op in FIELDLESS_OPS else _check_field(spec.get("field"), known, "field")
     filters = normalize_filters(spec.get("filters"), known)
     geometry = spec.get("geometry") if isinstance(spec.get("geometry"), dict) else None
 
@@ -447,6 +453,25 @@ async def _postgis_aggregate_uncached(db, layer, spec: dict) -> dict:
 
     group_by = spec.get("groupBy")
     if not group_by:
+        # SEVERAL MEASURES, NO GROUPING. The grouped path has always answered N aggregates in
+        # one pass; ungrouped it ignored `series` and answered the single `op`/`field` — so
+        # "average of these 56 columns over everything" was unaskable, and asking it with an op
+        # that needs a field but no field to give came back 400.
+        #
+        # It is the shape a chart's OVERALL line needs: the same measures as the per-group
+        # lines, over the whole selection rather than one group. Answered in the same shape as
+        # the grouped reply (`values` alongside `value`) so the client reads one thing.
+        if spec.get("series"):
+            series = _series_specs(spec, known)
+            vals = ", ".join(f"{_pg_value_expr(sp['op'], sp['field'])} AS v{i}"
+                             for i, sp in enumerate(series))
+            row = (await db.execute(
+                text(f"SELECT {vals}, COUNT(*) AS n FROM {table} {where}"), params)).first()
+            values = [_num(row[i]) for i in range(len(series))] if row else []
+            return {"op": op, "value": values[0] if values else None, "values": values,
+                    "count": int(row[len(series)]) if row else 0,
+                    "series": [{"label": sp["label"], "op": sp["op"], "field": sp.get("field")}
+                               for sp in series]}
         row = (await db.execute(text(f"SELECT {value} AS v, COUNT(*) AS n FROM {table} {where}"),
                                 params)).first()
         return {"op": op, "value": _num(row[0]) if row else None,
@@ -464,6 +489,15 @@ async def _postgis_aggregate_uncached(db, layer, spec: dict) -> dict:
         order = {"value_asc": "ORDER BY 2 ASC NULLS LAST",
                  "key_asc": "ORDER BY 1 ASC NULLS LAST"}.get(
                      spec.get("sort") or "value_desc", "ORDER BY 2 DESC NULLS LAST")
+    # THE EXTENT of the filtered set. Asked before the group-by branch because it never groups: the
+    # caller wants one rectangle for everything the filter selects, not one per category.
+    if op == "bounds":
+        g4326 = f"ST_Transform({qi(geom_col)}, 4326)"
+        row = (await db.execute(text(
+            f"SELECT ST_XMin(e), ST_YMin(e), ST_XMax(e), ST_YMax(e) "
+            f"FROM (SELECT ST_Extent({g4326}) AS e FROM {table} {where}) t"), params)).first()
+        return _bounds_out(row)
+
     # KEYS ONLY: no measures, no count, no ordering by a value that is not computed. The caller is
     # building a predicate, not a chart, so every column but the key is work nobody reads.
     if spec.get("keysOnly"):
@@ -734,6 +768,37 @@ def _duck_bbox_prune(meta: dict, geometry: dict | None) -> tuple[str | None, Any
             f"AND {ce('ymin')} <= {bbox[3]} AND {ce('ymax')} >= {bbox[1]}"), geom
 
 
+def _duck_bounds(conn, src: str, meta: dict, cols: dict, where_sql: str) -> dict:
+    """The extent of the filtered set, in lon/lat.
+
+    Prefers the COVERING bbox struct the prep step writes: four numeric columns whose min/max is the
+    extent, with no geometry decoded at all. Falls back to the geometry itself when a layer has no
+    covering column — correct either way, and the difference is whole seconds on a large file.
+
+    Reprojected at the END rather than per row: the extent of the reprojected set and the reprojected
+    extent differ only for a shape spanning a projection's discontinuity, and reprojecting four
+    numbers instead of millions is the reason this is worth asking for at all.
+    """
+    covering = meta.get("covering")
+    if covering:
+        col, f = covering
+        def ce(k):
+            return f"struct_extract({qi(col)}, '{f[k]}')"
+        sel = f"MIN({ce('xmin')}), MIN({ce('ymin')}), MAX({ce('xmax')}), MAX({ce('ymax')})"
+    else:
+        g = qi(_duck_geom_col(meta, cols))
+        sel = f"MIN(ST_XMin({g})), MIN(ST_YMin({g})), MAX(ST_XMax({g})), MAX(ST_YMax({g}))"
+    row = conn.execute(f"SELECT {sel} FROM {src} {where_sql}").fetchone()
+    if not row or row[0] is None:
+        return {"bounds": None}
+    b = [float(row[0]), float(row[1]), float(row[2]), float(row[3])]
+    src_epsg = meta.get("epsg") or "EPSG:4326"
+    if src_epsg not in ("EPSG:4326", "4326"):
+        from . import duckdb_engine
+        b = list(duckdb_engine._reproject_bbox(b, src_epsg, "EPSG:4326"))
+    return {"bounds": b}
+
+
 def _duck_geom_col(meta: dict, cols: dict) -> str:
     col = meta.get("column")
     if col and col in cols:
@@ -987,6 +1052,34 @@ async def _postgis_profile_uncached(db, layer, spec: dict) -> dict:
 #: chart, not more dots — and the browser has to draw every one of them.
 SCATTER_MAX_POINTS = 3000
 
+#: How many columns may name a scatter's points. Three is a line of hover text; more is a record,
+#: and a record belongs in the details panel, which is what a click already fills.
+MAX_LABEL_FIELDS = 3
+
+
+def _label_fields(spec: dict, known) -> list[str]:
+    """The columns a scatter's hover label is built from, validated like any other field.
+
+    A scatter plots two numbers per feature and, without this, says nothing about WHICH feature: the
+    reader can see an outlier and has no way to find out what it is. The label is built server-side
+    because the point is already being read there — sending the columns back so the browser can
+    concatenate them would be the same bytes and one more thing to keep in step.
+    """
+    out, seen = [], set()
+    for name in (spec.get("labelFields") or [])[:MAX_LABEL_FIELDS]:
+        if not isinstance(name, str) or name in seen:
+            continue
+        _check_field(name, known, "label field")
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+def _label_of(row, start: int, count: int) -> str:
+    """One row's label, from `count` values beginning at `row[start]`."""
+    parts = [str(row[start + i]) for i in range(count) if row[start + i] is not None]
+    return " · ".join(parts)
+
 
 def _scatter_fields(spec: dict, known: set[str]) -> tuple[str, str]:
     x = _check_field(spec.get("xField"), known, "X field")
@@ -1022,14 +1115,19 @@ def _parquet_scatter_uncached(layer, spec: dict) -> dict:
         keep = f"{xe} IS NOT NULL AND {ye} IS NOT NULL"
         where_sql = (where_sql + " AND " + keep) if where_sql else ("WHERE " + keep)
 
+        labels = _label_fields(spec, known)
+        lab_sel = "".join(", " + qi(c) for c in labels)
         if geom is None:
             rows = conn.execute(
-                f"SELECT {xe} AS x, {ye} AS y FROM {src} {where_sql} "
+                f"SELECT {xe} AS x, {ye} AS y{lab_sel} FROM {src} {where_sql} "
                 f"USING SAMPLE {limit} ROWS").fetchall()
             total = conn.execute(f"SELECT COUNT(*) FROM {src} {where_sql}").fetchone()[0]
             pts = [[_num(r[0]), _num(r[1])] for r in rows]
-            return {"points": pts, "x": xf, "y": yf, "total": int(total or 0),
-                    "sampled": len(pts) < int(total or 0), "capped": False}
+            out = {"points": pts, "x": xf, "y": yf, "total": int(total or 0),
+                   "sampled": len(pts) < int(total or 0), "capped": False}
+            if labels:
+                out["labels"] = [_label_of(r, 2, len(labels)) for r in rows]
+            return out
 
         # With a geometry filter the exact test has to run before the sample, or the sample is drawn
         # from candidates that are not in the selection. Candidates are bounded by CANDIDATE_CAP as
@@ -1037,7 +1135,7 @@ def _parquet_scatter_uncached(layer, spec: dict) -> dict:
         from shapely import from_wkb, intersects
         geom_col = _duck_geom_col(meta, cols)
         rows = conn.execute(
-            f"SELECT {qi(geom_col)} AS __wkb, {xe} AS x, {ye} AS y FROM {src} {where_sql} "
+            f"SELECT {qi(geom_col)} AS __wkb, {xe} AS x, {ye} AS y{lab_sel} FROM {src} {where_sql} "
             f"LIMIT {CANDIDATE_CAP + 1}").fetchall()
         capped = len(rows) > CANDIDATE_CAP
         rows = rows[:CANDIDATE_CAP]
@@ -1056,8 +1154,12 @@ def _parquet_scatter_uncached(layer, spec: dict) -> dict:
             # order, so truncating would again plot one corner.
             step = total / float(limit)
             kept = [kept[int(i * step)] for i in range(limit)]
-        return {"points": [[_num(r[1]), _num(r[2])] for r in kept], "x": xf, "y": yf,
-                "total": total, "sampled": total > limit, "capped": capped}
+        out = {"points": [[_num(r[1]), _num(r[2])] for r in kept], "x": xf, "y": yf,
+               "total": total, "sampled": total > limit, "capped": capped}
+        if labels:
+            # 3, not 2: this SELECT leads with the geometry.
+            out["labels"] = [_label_of(r, 3, len(labels)) for r in kept]
+        return out
     finally:
         conn.close()
 
@@ -1089,12 +1191,17 @@ async def _postgis_scatter_uncached(db, layer, spec: dict) -> dict:
     where = (where + " AND " + keep) if where else ("WHERE " + keep)
 
     total = (await db.execute(text(f"SELECT COUNT(*) FROM {table} {where}"), params)).scalar() or 0
+    labels = _label_fields(spec, known)
+    lab_sel = "".join(", " + qi(c) for c in labels)
     rows = (await db.execute(text(
-        f"SELECT {xe} AS x, {ye} AS y FROM {table} {where} ORDER BY random() LIMIT {limit}"),
-        params)).fetchall()
+        f"SELECT {xe} AS x, {ye} AS y{lab_sel} FROM {table} {where} "
+        f"ORDER BY random() LIMIT {limit}"), params)).fetchall()
     pts = [[_num(r[0]), _num(r[1])] for r in rows]
-    return {"points": pts, "x": xf, "y": yf, "total": int(total),
-            "sampled": len(pts) < int(total), "capped": False}
+    out = {"points": pts, "x": xf, "y": yf, "total": int(total),
+           "sampled": len(pts) < int(total), "capped": False}
+    if labels:
+        out["labels"] = [_label_of(r, 2, len(labels)) for r in rows]
+    return out
 
 
 def parquet_aggregate(layer, spec: dict) -> dict:
@@ -1111,7 +1218,7 @@ def _parquet_aggregate_uncached(layer, spec: dict) -> dict:
     op = spec.get("op", "count")
     if op not in OPS:
         raise AggregateError(f"Unsupported aggregation: {op}")
-    field = None if op == "count" else _check_field(spec.get("field"), known, "field")
+    field = None if op in FIELDLESS_OPS else _check_field(spec.get("field"), known, "field")
     filters = normalize_filters(spec.get("filters"), known)
     geometry = spec.get("geometry") if isinstance(spec.get("geometry"), dict) else None
     group_by = spec.get("groupBy")
@@ -1134,6 +1241,25 @@ def _parquet_aggregate_uncached(layer, spec: dict) -> dict:
             # PURE SQL — one columnar pass, row groups pruned by the attribute predicates.
             value = _duck_value_expr(op, field)
             if not group_by:
+            # SEVERAL MEASURES, NO GROUPING. The grouped path has always answered N aggregates in
+            # one pass; ungrouped it ignored `series` and answered the single `op`/`field` — so
+            # "average of these 56 columns over everything" was unaskable, and asking it with an op
+            # that needs a field but no field to give came back 400.
+            #
+            # It is the shape a chart's OVERALL line needs: the same measures as the per-group
+            # lines, over the whole selection rather than one group. Answered in the same shape as
+            # the grouped reply (`values` alongside `value`) so the client reads one thing.
+                if spec.get("series"):
+                    series = _series_specs(spec, known)
+                    vals = ", ".join(_duck_value_expr(sp["op"], sp.get("field"))
+                                     for sp in series)
+                    row = conn.execute(
+                        f"SELECT {vals}, COUNT(*) FROM {src} {where_sql}").fetchone()
+                    values = [_num(row[i]) for i in range(len(series))] if row else []
+                    return {"op": op, "value": values[0] if values else None, "values": values,
+                            "count": int(row[len(series)]) if row else 0,
+                            "series": [{"label": sp["label"], "op": sp["op"],
+                                        "field": sp.get("field")} for sp in series]}
                 row = conn.execute(
                     f"SELECT {value}, COUNT(*) FROM {src} {where_sql}").fetchone()
                 return {"op": op, "value": _num(row[0]) if row else None,
@@ -1143,6 +1269,10 @@ def _parquet_aggregate_uncached(layer, spec: dict) -> dict:
             order = ("ORDER BY 1 ASC" if bucket else
                      {"value_asc": "ORDER BY 2 ASC", "key_asc": "ORDER BY 1 ASC"}.get(
                          spec.get("sort") or "value_desc", "ORDER BY 2 DESC"))
+            # THE EXTENT — see the PostGIS branch.
+            if op == "bounds":
+                return _duck_bounds(conn, src, meta, cols, where_sql)
+
             # KEYS ONLY — see the PostGIS branch: a predicate, not a chart.
             if spec.get("keysOnly"):
                 limit = max(2, min(int(spec.get("limit") or 12), MAX_KEYS))
@@ -1409,7 +1539,19 @@ def _pg_types(layer) -> dict[str, str]:
 
 #: Measures one chart may plot against a single group key. Four is where a legend stops being a
 #: legend and starts being a table, and where line colours stop being tellable apart at a glance.
-MAX_SERIES = 4
+#: How many aggregate expressions one grouped scan may carry.
+#:
+#: This was 4, borrowed from a READABILITY limit: four coloured lines is where a legend stops being
+#: a legend. That reasoning belongs to the client, and only to the mode where colour names the
+#: measure — when the measures become the X AXIS (a chart plotting one column per year), they are
+#: ticks, not legend entries, and four of them is a two-year timeline.
+#:
+#: What the server should bound is the QUERY: N measures are N aggregate expressions in one pass
+#: over one grouping, and a hundred of those is still one scan. Raised from 24 the first time a real
+#: file turned up: GDP per capita 1960-2016 is 57 columns, and a limit set to a comfortable-looking
+#: number rather than a measured one is a limit that fails on the first honest use. The builder keeps
+#: its own limit of four for hand-authored measures, where the legend argument does apply.
+MAX_SERIES = 120
 
 
 def _series_label(op: str, field: str | None) -> str:
@@ -1447,6 +1589,57 @@ def _series_specs(spec: dict, known: set[str]) -> list[dict]:
     op = spec.get("op", "count")
     field = None if op == "count" else spec.get("field")
     return [{"op": op, "field": field, "label": _series_label(op, field)}]
+
+
+def _bounds_out(row) -> dict:
+    """`{bounds: [minx, miny, maxx, maxy]}` in lon/lat, or `{bounds: None}`.
+
+    None is a real answer and the caller must handle it: a filter that matches nothing has no
+    extent, and neither does a set whose every geometry is null. Flying the map to a rectangle
+    invented for that case would be worse than not moving at all."""
+    if not row or row[0] is None:
+        return {"bounds": None}
+    b = [float(row[0]), float(row[1]), float(row[2]), float(row[3])]
+    # A single point selects a zero-area box, which `fitBounds` cannot frame — it is left to the
+    # client, which knows its own viewport and can simply centre on it.
+    return {"bounds": b}
+
+
+#: How far a zero-area filter geometry is grown before it is tested. 1e-6 degrees is about 11 cm at
+#: the equator: far larger than the precision a geometry loses on its round trip, far smaller than
+#: the distance between any two features anyone would want to tell apart.
+GEOM_EPS = 1e-6
+
+
+def usable_geometry(geom: dict | None) -> dict | None:
+    """A geometry filter that can actually match what it came from.
+
+    Clicking a POINT layer publishes the picked feature's own geometry as the area filter, and that
+    filter then matched NOTHING — not even the feature it was taken from. The point makes the round
+    trip as GeoJSON, rounded to nine decimals on the way out and reprojected on the way back, and an
+    exact `intersects` between two zero-area geometries fails on the last few digits. Measured on a
+    live layer: the picked point scored 0, the same point grown by 1e-9 degrees scored 1.
+
+    What the visitor saw was worse than an error. The attribute channel matched (`Country_Na =
+    Luxembourg`, 1 row) and the geometry channel did not, so every widget answered "no records" and
+    the chart flattened to zero — a dashboard that looked like it had lost its data.
+
+    So a geometry with no area is grown by `GEOM_EPS` before it is used. Polygons are untouched:
+    they have area, their tests are not knife-edge, and nothing here should widen a selection the
+    visitor actually drew.
+    """
+    if not isinstance(geom, dict) or not geom.get("type"):
+        return geom
+    try:
+        from shapely.geometry import shape, mapping
+        g = shape(geom)
+        if g.is_empty or g.area > 0:
+            return geom
+        return mapping(g.buffer(GEOM_EPS))
+    except Exception:
+        # A geometry shapely cannot read is one the engines will reject with a better message than
+        # anything invented here.
+        return geom
 
 
 def _keys_out(rows, limit: int) -> dict:

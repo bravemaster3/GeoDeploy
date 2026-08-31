@@ -1,3 +1,8 @@
+---
+description: >-
+  Roles from viewer to owner, per-layer visibility, invitation links, scoped API tokens and an audit log — how access works in a self-hosted GeoDeploy instance.
+---
+
 # Users, roles and sharing
 
 GeoDeploy is a **shared workspace**: everyone signed in sees the same catalog of layers and portals,

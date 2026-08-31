@@ -37,6 +37,17 @@ body[data-archetype="dashboard"] #sidebar {
   z-index: 40; border: 1px solid var(--border); border-radius: var(--radius);
   box-shadow: var(--shadow-lg); overflow: hidden;
 }
+/* …and BECAUSE it is always an overlay, collapsed means the same thing in both modes: gone, with
+   the map's toggle to bring it back.
+   ─────────────────────────────────────────────────────────────────────────────────────────────
+   A DOCKED list collapses by going to `width: 0` (`#sidebar.collapsed`, specificity (1,1,0)),
+   which works because a docked list is a column whose width is the whole of its presence. The rule
+   above is (1,1,1) and sets a width unconditionally, so on a dashboard it outranked that and the
+   list stayed exactly as wide as before — the "start collapsed" checkbox did nothing at all in
+   docked mode, while floating collapsed fine because its own rule is (1,2,1).
+   Zero width would be the wrong repair anyway: this is an absolutely positioned overlay, so a
+   zero-width box is not a column that has closed, it is a sliver of border floating over a widget. */
+body[data-archetype="dashboard"] #sidebar.collapsed { display: none; }
 
 /* ── the card ─────────────────────────────────────────────────────────────── */
 body[data-archetype="dashboard"] .gd-w {
@@ -118,6 +129,16 @@ html[data-theme="dark"] .gd-ind-delta.down { color: #f87171; }
 .gd-gauge { width: 100%; height: 100%; display: block; }
 .gd-gauge-track { stroke: var(--border); }
 .gd-gauge-value { font-size: 15px; font-weight: 650; fill: var(--text); }
+/* Tick marks inside the dial, and the target line across it. The target is deliberately the
+   strongest mark on the gauge after the needle: it is the number the reading is being judged
+   against, and a gauge without it makes the reader do that comparison from memory. */
+/* The histogram's own scale line. Outside the SVG because that one stretches. */
+.gd-rs-hist-scale {
+  display: flex; justify-content: space-between; margin-top: 2px;
+  font-size: 9px; color: var(--text-muted); font-variant-numeric: tabular-nums;
+}
+.gd-gauge-tick { stroke: var(--text-muted); opacity: .55; stroke-width: 1.5; }
+.gd-gauge-target { stroke: var(--text); opacity: .85; stroke-width: 2; stroke-linecap: round; }
 .gd-gauge-cap { font-size: 8px; fill: var(--text-muted); }
 
 /* ── chart ────────────────────────────────────────────────────────────────── */
@@ -127,6 +148,11 @@ html[data-theme="dark"] .gd-ind-delta.down { color: #f87171; }
 .gd-chart .axis { stroke: var(--border); }
 .gd-chart .tick { font-size: 9px; fill: var(--text-muted); }
 .gd-chart .glabel { font-size: 9px; fill: var(--text-muted); }
+/* The rules behind the plot. Faint on purpose: they are there to be measured against, not read —
+   a gridline as strong as the data competes with it. */
+.gd-chart .gridline { stroke: var(--border); opacity: .45; stroke-width: 1; }
+/* Which columns a scatter is plotting, on the axes themselves. */
+.gd-chart .gd-axis-title { font-size: 9px; fill: var(--text-muted); opacity: .9; }
 /* Printed bar values. `vlabel-in` sits ON the bar, so it takes a light fill and a soft shadow to
    stay legible over any palette colour; the outside variant sits on the card and takes the normal
    muted text colour. Both are pointer-events:none so the label never steals the bar's click. */
@@ -408,11 +434,27 @@ body[data-dash-mapctrl="0"] .gd-overlay-bottom-right { right: 10px; }
   cursor: pointer; color: var(--text-muted); display: flex; align-items: center; justify-content: center;
 }
 .gd-dash-tools button:hover { background: var(--surface); color: var(--text); }
+/* The drag grip. `touch-action: none` is what makes this work on a phone at all: without it the
+   browser claims the gesture as a scroll before a single pointermove is delivered. */
+.gd-dash-tools-grip {
+  cursor: grab; touch-action: none; color: var(--text-muted); opacity: .65;
+  border-right: 1px solid var(--border); border-radius: 4px 0 0 4px;
+}
+.gd-dash-tools-grip:hover { opacity: 1; }
+.gd-dash-tools[data-dragging] { cursor: grabbing; box-shadow: var(--shadow-lg); }
+.gd-dash-tools[data-dragging] .gd-dash-tools-grip { cursor: grabbing; opacity: 1; }
 .gd-dash-tools button[aria-pressed="true"] { background: var(--accent); color: #fff; }
 .gd-dash-tools svg { width: 15px; height: 15px; }
 
 /* The active-filter bar. It is the answer to "why is this number small?", so it names every filter
    currently narrowing the page and offers to clear them — individually and all at once. */
+/* Room for the filter bar, only while there is one.
+   It is fixed to the foot of the window, so on a dashboard tall enough to scroll it covered the
+   last row — and what sits at the bottom of a chart is its x-axis, the part that says what you are
+   looking at. The grid gets a footer instead: ~40px of bar plus its 14px offset and a margin.
+   Reserved only when a filter is live, because otherwise every dashboard ends in dead space. */
+body[data-archetype="dashboard"][data-dash-filtered="1"] #layout { padding-bottom: 68px; }
+
 #gd-dash-bar {
   position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px; z-index: 60;
   max-width: min(92vw, 900px);
@@ -463,6 +505,24 @@ body[data-dash-mapctrl="0"] .gd-overlay-bottom-right { right: 10px; }
   font-size: 11px; line-height: 1.4; text-align: center;
 }
 
+/* The layer list's own close button. Present only where the list can cover the thing that would
+   otherwise dismiss it: a dashboard, on a phone. Everywhere else the map's toggle is in view and a
+   second control would be clutter. Positioned against the panel, not the page, so it is wherever
+   the panel is. */
+.gd-list-close {
+  display: none; position: absolute; top: 6px; right: 8px; z-index: 2;
+  width: 30px; height: 30px; padding: 0; line-height: 1;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--text-muted);
+  font-size: 18px; cursor: pointer;
+}
+.gd-list-close:hover { color: var(--text); }
+@media (max-width: 640px) {
+  body[data-archetype="dashboard"] .gd-list-close { display: block; }
+  /* Room for it, so it never lands on the "Layers" heading. */
+  body[data-archetype="dashboard"] #sidebar .sidebar-section-title { padding-right: 38px; }
+}
+
 /* ── responsive ───────────────────────────────────────────────────────────
    The column count is set by dashboard.js (it rewrites every widget's placement, because mapping a
    12-column layout onto 6 or 1 is arithmetic a media query cannot do). These rules only handle the
@@ -470,14 +530,84 @@ body[data-dash-mapctrl="0"] .gd-overlay-bottom-right { right: 10px; }
 @media (max-width: 1024px) {
   body[data-archetype="dashboard"] #layout { gap: 8px; padding: 8px; }
 }
-@media (max-width: 720px) {
+/* The layer list on a TABLET only — 641px up to the tablet breakpoint.
+   The upper bound is the whole point: below 640px portal.css restyles #sidebar as a full-height
+   drawer, and this rule's `left`/`right`/`width` fought that geometry. Both selectors weigh (1,1,1),
+   so which one won was decided by nothing better than file order. */
+@media (min-width: 641px) and (max-width: 720px) {
   body[data-archetype="dashboard"] #sidebar { left: 8px; right: 8px; width: auto; }
+}
+
+/* A COLLAPSED layer list on a dashboard phone is an ICON, not a slid-away drawer.
+   ─────────────────────────────────────────────────────────────────────────────
+   Everywhere else, collapsing a floating list sets `display: none` and the on-map toggle — a real
+   MapLibre control — is what you press to bring it back. At phone width portal.css deliberately
+   turns that into `display: flex` plus `translateX(-100%)`: a drawer that slides off the edge
+   rather than vanishing. On a WEB MAP that is right, because the map fills the screen and its
+   control cluster (with the toggle) is always in view.
+
+   A dashboard is not that shape. Its map is ONE CELL in a tall scrolling stack, so a drawer pinned
+   `top: 0; bottom: 0` hangs over the widgets, and the toggle that would dismiss it is inside a map
+   that may be scrolled entirely off-screen. What the visitor gets is a panel they cannot put away.
+
+   So a dashboard keeps the behaviour it has at every other width: collapsed means gone, and the
+   icon in the map's controls is how it comes back. Specificity (1,3,1) to clear the phone rule's
+   (1,2,1) — the extra attribute is doing real work here, not decoration. */
+@media (max-width: 640px) {
+  body[data-archetype="dashboard"][data-layerlist="floating"] #sidebar.collapsed { display: none; }
+
+  /* OPENED, it pins to the viewport — and therefore covers the map.
+     ────────────────────────────────────────────────────────────────
+     `#sidebar` lives inside `#layout`, which on a dashboard is `position: fixed` AND
+     `overflow-y: auto`. An absolutely positioned child of a scrolling box anchors to its scrolled
+     CONTENT, so `top: 0` means the top of the widget stack, not the top of the screen. The toggle
+     that opens the list is a map control, and the map is somewhere down that stack — so tapping it
+     opened the legend above you and you had to scroll back up to read it, away from the map it
+     describes.
+
+     `fixed` anchors it to the viewport instead, so it opens over whatever you are looking at.
+     That covers the map, which on a desktop would be the wrong trade — there the list sits beside
+     the map precisely so you can read both — but on a phone there is no beside. A legend you can
+     see over the map beats a legend somewhere off-screen that is technically not covering it.
+
+     Below the header, not over it: the header is how you know which portal you are in, and a panel
+     that swallows it reads as a new page rather than an overlay on this one.
+
+     `#layout > #sidebar` rather than a bare `#sidebar`: it names the containing block that causes
+     the problem, and at (2,1,1) it wins outright instead of tying portal.css's (1,1,1) and being
+     settled by which file happens to be included second. A rule that depends on source order is
+     how the collapsed drawer broke in the first place. */
+  body[data-archetype="dashboard"] #layout > #sidebar {
+    position: fixed; top: calc(var(--header-h) + 8px); z-index: 60;
+    /* Both edges pinned, width follows. Inherited from the desktop rules it would keep
+       `left: 52px` (the offset that clears the control column) and `width: 85vw` — which together
+       run off the right-hand edge of a phone. There is no control column to clear here, because
+       the panel is over the screen rather than over the map. */
+    left: 8px; right: 8px; width: auto; max-width: none;
+    /* AS TALL AS ITS CONTENT, no taller. `bottom: 0` made a five-class legend fill the whole phone —
+       a screen of empty panel with the dashboard hidden behind it — where the same legend on a
+       desktop takes the few centimetres it needs. A panel is only worth the room it uses.
+       Capped so a long layer list still scrolls inside rather than running off the bottom. */
+    bottom: auto; height: auto; max-height: calc(100vh - var(--header-h) - 16px);
+    border-radius: var(--radius);
+  }
+
+  /* The way out is INSIDE the panel — see `.gd-list-close`. Bringing the header hamburger back was
+     the first attempt and it was wrong: a dashboard's header already carries the portal's own logo,
+     so a second stack-of-layers icon appeared beside it, and the map is not the page here, so the
+     header button was a control for a panel nowhere near it. One layer icon, on the map, where the
+     panel is. */
+}
+
+@media (max-width: 720px) {
   .gd-ind-value { font-size: clamp(20px, 9vw, 34px); }
   .gd-table td { max-width: 140px; }
   /* The filter bar is fixed to the foot of the window (a grid row for it would push every widget
      down the moment a filter went live). On a phone that lands it ON TOP of the last card, so the
      grid gets a matching footer of empty space — the bar is ~40px plus its own 14px offset. */
-  body[data-archetype="dashboard"] #layout { padding-bottom: 66px; }
+  /* Only while filtered, matching the desktop rule — an unfiltered phone dashboard should not end
+     in a band of empty space either. */
+  body[data-archetype="dashboard"][data-dash-filtered="1"] #layout { padding-bottom: 66px; }
   #gd-dash-bar {
     left: 8px; right: 8px; bottom: 8px; transform: none; max-width: none;
     border-radius: 14px; justify-content: flex-start; padding: 5px 6px 5px 10px;

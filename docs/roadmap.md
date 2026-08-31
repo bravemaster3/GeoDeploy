@@ -1,6 +1,11 @@
+---
+description: >-
+  What GeoDeploy has shipped, release by release, and what is being built next.
+---
+
 # Roadmap
 
-GeoDeploy is at **v1.4.1**. Everything under *In v1.0* and in the releases after it is built and
+GeoDeploy is at **v1.5.1**. Everything under *In v1.0* and in the releases after it is built and
 running in production; the groups at the end are what comes next.
 
 <div class="gd-legend" markdown>
@@ -266,6 +271,40 @@ filters — for the questions a reader asks of the DATA rather than of the geogr
 - [x] **The map narrows every layer it draws**, each by its own filters — and a linked filter can
       narrow it too, behind a per-map opt-in with a chosen key limit and an on-map notice when it
       passes that limit rather than a map that looks narrowed and is not
+
+</div>
+
+<div class="gd-rel done" markdown>
+### v1.5.1 — a dashboard you can actually author
+<span class="gd-when">Shipped · 31 Aug 2026</span>
+
+<p class="gd-goal">v1.5 shipped the dashboard; this is a fortnight of building real ones with it.
+Almost every item here is something that could not be said, sized or read until someone tried —
+which is the only way this list could have been written.</p>
+
+- [x] **Wide data plots** — let the COLUMNS be the X axis, for data stored one column per year,
+      with the tick labels trimmed and shifted (`gdp1` + 1959 reads as `1960`) and an overall line
+      across the current selection
+- [x] **Words the author chooses** — axis titles, widget subtitles, and a card heading that follows
+      them. A column name is what the data is called, not what it measures
+- [x] **Charts that fit their card** — the legend takes its room before the plot does, on the
+      multi-series line, the grouped bars *and* the pie, with **Plot size** to overrule the split
+- [x] **Readable axes** — gridlines and ticks at intervals on line and scatter plots, a gauge that
+      no longer clips its own arc, and a histogram that names the range it covers
+- [x] **A scatter that says which feature a dot is** — hover labels from columns you nominate, and
+      a point size that suits twelve features or five thousand
+- [x] **Several table rows at once** — <kbd>Ctrl</kbd> and <kbd>Shift</kbd> as every desktop list
+      uses them, with the map fitting the whole selection and the selection surviving a page turn
+- [x] **A new selection replaces the last** rather than compounding with it — drawing a box after
+      clicking a feature was asking for the features that are both, and getting none
+- [x] **Fill the screen**, per dashboard: the rows share the window instead of each being the row
+      height, stretching where there is room and scrolling where there is not
+- [x] **Zoom to what a chart selected**, so the filter and the view agree
+- [x] **Basemaps that are free without an account** — CARTO out, OpenStreetMap first
+- [x] **A card thumbnail of the whole dashboard**, not of the map cell inside it
+- [x] **On the map itself** — draw tools you can drag clear of whatever they overlap, a coordinate
+      readout that names its CRS and shares one line with the scale bar and the attribution, and
+      both legible in dark mode
 
 </div>
 

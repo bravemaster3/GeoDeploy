@@ -70,6 +70,21 @@ couple of minutes later. No terminal, no Docker knowledge, no database configura
 - **Operate it from the browser.** Service logs, a terminal, scheduled backups to a separate
   destination, an in-app restore, and one-button updates.
 
+## Where it fits
+
+If you have been looking for one of these, it is the same thing under a different name:
+
+- a **self-hosted alternative to a hosted geoportal** — ArcGIS Online, ArcGIS Hub and the like —
+  where the data stays on your server and there is no per-seat licence;
+- a **geoportal builder** or small **spatial data infrastructure (SDI)** in one package, rather
+  than a tile server, a catalog, a database and a front end assembled and kept in step by hand;
+- a **GIS data catalog** with OGC API - Features and STAC endpoints, for publishing open data;
+- a **geospatial dashboard** tool, for putting charts and figures around a map.
+
+It does not replace a desktop GIS, and does not try to. QGIS stays where the analysis happens — the
+[plugin](https://docs-geodeploy.kndev.org/qgis/) and the
+[Python client](https://pypi.org/project/geodeploy/) connect the two.
+
 ## How data flows
 
 ```

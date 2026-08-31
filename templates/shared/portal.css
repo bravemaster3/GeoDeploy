@@ -539,7 +539,22 @@
     #map { position: absolute; inset: 0; }
 
     /* ── MapLibre overrides ──────────────────────────────── */
-    .maplibregl-ctrl-bottom-left { bottom: 24px; }
+    /* ONE LINE for everything pinned to the bottom of the map: the scale bar at the left, the
+       coordinate readout in the middle, the attribution at the right.
+
+       They were at two different heights on every archetype. `.maplibregl-ctrl-bottom-left` carried
+       `bottom: 24px` from the first shared-runtime refactor — no comment, and nothing at the bottom
+       left to clear — while `.maplibregl-ctrl-bottom-right` kept MapLibre's own 0, so the scale bar
+       floated a finger's width above the credit.
+
+       A token rather than three matching numbers, because the number MOVES: the storymap lifts this
+       chrome over its narrative strip and the phone tightens the gutter, and both used to nudge one
+       corner at a time. Anything that shifts the line now shifts all three together and they cannot
+       drift apart again. The readout adds MapLibre's own 10px control margin to land on the same
+       line, since it is ours and has no such margin of its own. */
+    :root { --map-chrome-b: 0px; }
+    .maplibregl-ctrl-bottom-left,
+    .maplibregl-ctrl-bottom-right { bottom: var(--map-chrome-b); }
     .maplibregl-ctrl-attrib { font-size: 10px; }
     .maplibregl-ctrl-top-right { top: 10px; right: 10px; }
 
@@ -721,16 +736,48 @@
     html[data-theme="dark"] .maplibregl-ctrl button .maplibregl-ctrl-icon {
       filter: invert(1) hue-rotate(180deg) brightness(1.05);
     }
-    html[data-theme="dark"] .maplibregl-ctrl-attrib { background: rgba(0,0,0,.4); }
+    /* Attribution in dark mode. The background alone was being set, and the TEXT was left to
+       MapLibre's own near-black — dark on dark — while the compact pill and its toggle button kept
+       their white. Every part of the control is named here, because a control is only as legible as
+       the piece that was forgotten. */
+    html[data-theme="dark"] .maplibregl-ctrl-attrib,
+    html[data-theme="dark"] .maplibregl-ctrl-attrib.maplibregl-compact {
+      background: var(--bg); color: var(--text-muted);
+    }
     html[data-theme="dark"] .maplibregl-ctrl-attrib a { color: var(--text-muted); }
+    html[data-theme="dark"] .maplibregl-ctrl-attrib-button {
+      background-color: var(--bg);
+      /* The chevron is a background IMAGE, so it cannot inherit a colour — inverting it is the only
+         way to turn a black glyph light without shipping a second asset. */
+      filter: invert(1) opacity(.75);
+    }
 
     /* ── Coordinate readout ──────────────────────────────── */
+    /* The coordinate readout. Both colours come from TOKENS, which is the whole fix: the text was
+       already `var(--text)` but the background was a hardcoded white, so in dark mode it was pale
+       text on a white slab — the one combination neither theme ever intends. A readout that takes
+       one colour from the theme and one from nowhere is unreadable in exactly half of them. */
+    /* BOTTOM CENTRE, which is the one part of the map edge nothing else claims: the scale bar owns
+       bottom-left and the attribution bottom-right, and those two are what the readout used to
+       collide with — it sat at bottom-right on top of the credit, and was moved up out of the way
+       rather than sideways out of it. Centred, it can sit on the same line as both. It also puts
+       the numbers under the pointer's usual path rather than off in a corner. */
     #coords {
-      position: absolute; right: 8px; bottom: 4px; z-index: 20; pointer-events: none;
+      position: absolute; left: 50%; transform: translateX(-50%);
+      bottom: calc(var(--map-chrome-b) + 10px);
+      z-index: 20; pointer-events: none; white-space: nowrap;
       font-size: 11px; font-variant-numeric: tabular-nums; color: var(--text);
-      background: rgba(255,255,255,.85); padding: 2px 7px; border-radius: 4px;
-      box-shadow: var(--shadow); min-height: 18px;
+      background: var(--bg); padding: 2px 7px; border-radius: 4px;
+      border: 1px solid var(--border); box-shadow: var(--shadow); min-height: 18px;
     }
+    /* The CRS, muted and a size down: it does not change while you move the mouse, so it should not
+       compete with the numbers that do. */
+    #coords .gd-crs { color: var(--text-muted); font-size: 10px; margin-left: 5px; }
+    /* NOTHING when there is nothing to say. The readout is empty until the pointer is over the map
+       and empty again the moment it leaves, and `min-height` plus a solid background and a border —
+       both added so it would be legible in dark mode — turned that empty state into a visible blank
+       chip sitting in the corner. A readout with no reading should not be on screen. */
+    #coords:empty { display: none; }
 
     /* ── Mobile ──────────────────────────────────────────── */
     /* ── Phone: the map is the page ────────────────────────────────────────────────────────
@@ -764,8 +811,10 @@
       .maplibregl-ctrl-top-right, .maplibregl-ctrl-top-left { top: 6px; }
       .maplibregl-ctrl-top-right { right: 6px; }
       .maplibregl-ctrl-top-left { left: 6px; }
-      .maplibregl-ctrl-bottom-right { right: 6px; bottom: 6px; }
-      .maplibregl-ctrl-bottom-left { left: 6px; bottom: 6px; }
+      /* The gutter tightens for all three at once — see --map-chrome-b. */
+      :root { --map-chrome-b: 6px; }
+      .maplibregl-ctrl-bottom-right { right: 6px; }
+      .maplibregl-ctrl-bottom-left { left: 6px; }
       .gd-basemap-menu, .gd-tools-menu, .gd-sym-pop {
         max-width: calc(100vw - 24px); max-height: 60vh; overflow-y: auto;
       }
@@ -1393,9 +1442,9 @@
       body[data-archetype="storymap"] .gd-story-more { left: auto; right: auto; }
       body[data-archetype="storymap"] .gd-story-up { top: auto; bottom: calc(44vh / 2 - 21px); left: 8px; }
       body[data-archetype="storymap"] .gd-story-down { bottom: calc(44vh / 2 - 21px); right: 8px; }
-      /* Keep the map's own controls above the strip rather than behind it. */
-      body[data-archetype="storymap"] .maplibregl-ctrl-bottom-right,
-      body[data-archetype="storymap"] .maplibregl-ctrl-bottom-left { bottom: calc(44vh + 6px); }
+      /* Keep the map's own bottom chrome above the strip rather than behind it — the readout
+         rides up with the scale bar and the credit, because they share the line. */
+      body[data-archetype="storymap"] { --map-chrome-b: calc(44vh + 6px); }
     }
 
     /* LANDSCAPE on a phone (~360px tall): the control cluster is a single vertical stack and simply

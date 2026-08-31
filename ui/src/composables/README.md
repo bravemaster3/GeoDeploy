@@ -61,4 +61,11 @@ identically, where a copy in each would drift.
 
 ## Last updated
 
+2026-08-31 (`portalThumbnail.js`: the size floor no longer refuses a plain capture. Bytes were a
+proxy for "did the map render" and got the common case backwards — a map zoomed in far enough to
+show no detail is a real picture that compresses to nothing, and it was discarded as "probably still
+blank". A small capture is now decoded and sampled at 32x32; only one with no colour variation at
+all is thrown away, and a picture that cannot be decoded here is never taken as evidence of a blank
+one.)
+
 2026-08-02

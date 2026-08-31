@@ -36,7 +36,27 @@ Vue 3 single-page dashboard — the browser-only control panel for setup, data u
   as the contract. **When you touch either file, run the parity check, not just the tests.**
 - `vite.config.js` dev proxy must stay aligned with `nginx/nginx.conf` (prefix stripping + titiler port 80).
 
+## Version
+
+`package.json` tracks the PRODUCT version, alongside `api/geodeploy/main.py`'s `version=`. Bump both
+together when cutting a release. It had been left at 1.4.1 through v1.5.
+
+Two other versions are deliberately NOT in step and must not be swept up by a product release:
+
+- `cli/geodeploy/__init__.py` — the PyPI package's own version. It is what `pip show geodeploy` and
+  the client's user agent report, so raising it without publishing that version to PyPI makes the
+  number disagree with what is actually installed. It moves when the CLI is released, on its own
+  `cli-v*` tag.
+- `integrations/qgis-plugin/geodeploy_qgis/metadata.txt` — the plugin's version in the QGIS plugin
+  repository, on its own cadence.
+
 ## Last updated
-2026-08-18 (link previews: `og:`/`twitter:` tags in `index.html`, `public/og-image.png`, and the `__GEODEPLOY_ORIGIN__` → `$public_scheme://$host` `sub_filter` in `nginx.conf`. Because that rule ships **inside this image**, `docker compose build geodeploy-ui` + recreate is enough for the dashboard's card — the outer nginx does not have to be touched.)
+2026-08-31 (`package.json` brought in line with the product at 1.5.1, and a note above on which
+versions track it and which are deliberately independent.)
+
+2026-08-31 (`index.html`: the shell's `<title>` names the product, not just the brand. Nothing in
+the app sets `document.title`, so that static string is the whole title of the only page of ours
+search engines had indexed — the demo instance. Meta and og descriptions widened to match.)
+
 2026-08-13 (ramp reverse toggle + swatch strip in `components/portal/LayerPanel.vue`; class-count
 ceiling raised 9 → 12 to match the server; the symbology-twin rounding fix above)

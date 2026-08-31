@@ -71,6 +71,13 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
   — three surfaces, change together. Changing a widget's LAYER clears every field on it (a column of
   the old table is almost never a column of the new one, and the query would 400).
 - `portal/PortalCard.vue` — portal tile in the builder grid (edit/publish/view/unpublish/delete).
+- `shared/GithubLink.vue` — a link to the repository, in the sidebar, **on the demo instance only**
+  (same `/auth/demo` test `DemoBanner` uses, and the same posture: anything but a clear `demo: true`
+  renders nothing). Someone trying the demo is deciding whether to run it themselves; an operator
+  who already has the source does not need a permanent link out of their own admin panel. The star
+  count is cached in `localStorage` for a day — GitHub allows 60 unauthenticated calls an hour PER
+  IP, so a demo behind one address would spend that in an afternoon if every page load asked. The
+  count is an ornament: when it does not arrive the link renders without it.
 - `shared/InfoHint.vue` — an ⓘ next to a label that opens its explanation on click. Use it for the
   two-or-three-sentence *why* behind a control; keep STATE inline and visible ("Nothing filters this
   yet", "Add a raster layer first"), because a reader will not click an ⓘ to discover a blocking
@@ -100,6 +107,19 @@ All dialogs (`UploadModal`, `AddSourceModal`, `DiscoverModal`, `portal/CreatePor
   icon logic in `views/PortalEditor.vue` + `templates/shared/portal.js` — change all three together.
 
 ## Last updated
+2026-08-31 (`portal/DashboardBuilder.vue`: a **Fill the screen** checkbox in the board-wide
+settings, writing `grid.fit`. Its hint is deliberate about the limit — it stretches, it does not
+squeeze, so a screen too short still scrolls.)
+
+2026-08-31 (`portal/DashboardBuilder.vue`: the **Plot size** slider is no longer pie-only — it is
+offered by `hasLegendToShare()` for any chart whose key competes with its plot for the card, and
+100% now reads "(auto)" because that is what it means: the plot takes everything the key does not
+need.)
+
+2026-08-31 (`portal/DashboardBuilder.vue`: a **Point size** slider on the scatter inspector,
+1.5-8px, default 3.5 — the right dot depends on how many points land on the card, which is a fact
+about the data and so the author's call.)
+
 2026-08-29 (`shared/InfoHint.vue` added; DashboardBuilder's ten explanatory paragraphs moved into
 hints on the controls they describe — the map inspector had become a wall of prose. Its map editor
 also gained the `linkedFilter` checkbox.)

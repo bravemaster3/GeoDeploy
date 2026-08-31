@@ -263,8 +263,77 @@
   // someone is using it (a phone rotating, or a desktop window being dragged narrow).
   const isPhone = window.matchMedia && window.matchMedia('(max-width: 640px)').matches;
   if (LAYOUT.regions.layerList.collapsed || isPhone) sidebar.classList.add('collapsed');
+  //: On a DASHBOARD, the opened list is positioned against the MAP rather than against the page.
+  //:
+  //: Everywhere else the two are the same place — the map is the page. On a dashboard the map is one
+  //: cell in a grid, and the stylesheet's `top: header + 12px; left: 12px` is the corner of the
+  //: DASHBOARD, which can be a long way from the button that was pressed: the toggle is a MapLibre
+  //: control living in the map's own cluster. Pressing a button on the map and having a panel appear
+  //: somewhere else entirely is the complaint, and on a phone it was worse — the map scrolls, so the
+  //: panel could open off-screen.
+  //:
+  //: Fixed coordinates from the map's viewport rect, clamped so the panel is always reachable even
+  //: when the map itself is scrolled out of view. CSS cannot do this: where the map sits depends on
+  //: the widget grid, which is authored, re-flowed per breakpoint and written as inline style.
+  const placeListByMap = (function () {
+    if (LAYOUT.archetype !== 'dashboard') return function () {};
+    const PAD = 8, INSET = 12, CTRL_CLEAR = 52;
+    let raf = 0;
+    function apply() {
+      raf = 0;
+      // The phone has its own treatment — a full-width sheet over everything, in the stylesheet.
+      // Inline styles would outrank it, so they are cleared rather than left behind by a desktop
+      // session that was resized narrow.
+      if (window.matchMedia && window.matchMedia('(max-width: 640px)').matches) {
+        ['position', 'left', 'top', 'right', 'bottom', 'maxHeight']
+          .forEach(function (k) { sidebar.style[k] = ''; });
+        return;
+      }
+      if (sidebar.classList.contains('collapsed')) return;   // nothing to place
+      const wrap = document.getElementById('map-wrap');
+      if (!wrap) return;
+      const m = wrap.getBoundingClientRect();
+      if (!m.width || !m.height) return;                     // parked, or not laid out yet
+      const w = sidebar.offsetWidth || 300, h = sidebar.offsetHeight || 300;
+      const side = (LAYOUT.regions.layerList && LAYOUT.regions.layerList.side) || 'left';
+      const ctrl = (LAYOUT.regions.controls && LAYOUT.regions.controls.position) || 'top-right';
+      // Clear the control column only when the controls are on the same side the list opens from;
+      // otherwise the extra 40px is a gap for no reason.
+      const inset = ctrl.indexOf(side) >= 0 ? CTRL_CLEAR : INSET;
+      const left = side === 'right' ? m.right - w - inset : m.left + inset;
+      const top = m.top + INSET;
+      sidebar.style.position = 'fixed';
+      sidebar.style.right = 'auto';
+      sidebar.style.bottom = 'auto';
+      sidebar.style.left = Math.min(Math.max(left, PAD), window.innerWidth - w - PAD) + 'px';
+      const t = Math.min(Math.max(top, PAD), Math.max(PAD, window.innerHeight - h - PAD));
+      sidebar.style.top = t + 'px';
+      // A tall legend on a short map must not run off the bottom of the window.
+      sidebar.style.maxHeight = Math.max(160, window.innerHeight - t - PAD) + 'px';
+    }
+    function schedule() { if (!raf) raf = requestAnimationFrame(apply); }
+    window.addEventListener('resize', schedule);
+    // The grid scrolls inside #layout, so the map moves under a fixed panel; follow it, clamped.
+    const layoutEl = document.getElementById('layout');
+    if (layoutEl) layoutEl.addEventListener('scroll', schedule, { passive: true });
+    // WATCH THE PANEL, do not wire the buttons.
+    //
+    // There are two controls that open this: the header button, and `#gd-list-toggle`, a MapLibre
+    // control created much later and in another scope. Wiring the one that was to hand left the
+    // other — the one actually pressed on a desktop, since it sits on the map — toggling the class
+    // without ever repositioning, so the panel kept its stylesheet corner and opened above the map.
+    // Observing the class covers both, and covers whatever opens it next.
+    if (typeof MutationObserver === 'function') {
+      new MutationObserver(schedule).observe(sidebar, {
+        attributes: true, attributeFilter: ['class'],
+      });
+    }
+    return schedule;
+  })();
+
   document.getElementById('sidebar-toggle').addEventListener('click', () => {
     sidebar.classList.toggle('collapsed');
+    placeListByMap();
     setTimeout(() => map.resize(), 220);
   });
   // On a phone the list is an overlay drawer covering the map, so tapping the map is the natural way
@@ -272,6 +341,29 @@
   // hides the control cluster including its own toggle button. Capture phase, because the map's own
   // handlers stop propagation. Desktop is untouched: there the list sits beside the map, and closing
   // it on any stray click would be hostile.
+  // A dashboard whose author left the list EXPANDED needs it placed before the visitor sees it,
+  // not on the first toggle.
+  placeListByMap();
+
+  // A close button INSIDE the panel. CSS shows it only on a dashboard phone, where the panel covers
+  // the map and therefore covers the on-map toggle that would otherwise dismiss it. Built here
+  // rather than in layout.html because it belongs to this behaviour, and a button in the markup
+  // that is hidden in every archetype but one is a thing to wonder about later.
+  (function () {
+    if (!sidebar || sidebar.querySelector('.gd-list-close')) return;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'gd-list-close';
+    b.setAttribute('aria-label', 'Close the layer list');
+    b.title = 'Close';
+    b.innerHTML = '&times;';
+    b.addEventListener('click', function (e) {
+      e.stopPropagation();          // the phone's tap-outside handler runs on capture
+      sidebar.classList.add('collapsed');
+    });
+    sidebar.appendChild(b);
+  })();
+
   document.addEventListener('click', function (e) {
     if (!window.matchMedia || !window.matchMedia('(max-width: 640px)').matches) return;
     if (sidebar.classList.contains('collapsed')) return;
@@ -321,6 +413,15 @@
       ready: ready,
       hide: hide,
       waiting: function () { return Object.keys(gates); },
+      //: Re-label the cover. A dashboard waits for its widgets' first answers as well as the map,
+      //: which on a heavy one is a visibly longer wait than any other archetype asks for — and a
+      //: cover that sits there saying the same thing throughout reads as a page that has hung.
+      //: Saying which part is outstanding costs nothing and is the difference between "slow" and
+      //: "broken".
+      note: function (text) {
+        const sub = document.getElementById('gd-loading-sub');
+        if (sub && !released) sub.textContent = text;
+      },
     };
   })();
   // The access gate is its OWN full-window surface and sits above this one; a visitor who has to
@@ -333,7 +434,14 @@
   loading.need('render');    // MapLibre has finished drawing the opening view
   if (LAYOUT.archetype === 'catalog') loading.need('catalog');
   if (LAYOUT.archetype === 'storymap') loading.need('story');
-  if (LAYOUT.archetype === 'dashboard') loading.need('dashboard');
+  if (LAYOUT.archetype === 'dashboard') {
+    loading.need('dashboard');   // the widgets are MOUNTED
+    // …and a second gate for their first ANSWERS. Mounting a dashboard only puts empty cards on the
+    // screen: the numbers, bars and rows arrive one request later, so clearing the cover at mount
+    // revealed the very assembling-in-front-of-the-visitor this whole mechanism exists to prevent —
+    // worse here than anywhere else, because a dashboard is mostly widgets and the map is one cell.
+    loading.need('widgets');
+  }
   // Backstop. NOT the mechanism — the gates above are — but a portal must never be held hostage by
   // one piece that fails in a way that skips its own clear (a hard error inside MapLibre, a style
   // that never finishes). Generous enough that a slow connection reaches readiness first.
@@ -1360,6 +1468,11 @@
             // `deckState`, which lives here. The dashboard needs the live answer because it tells
             // the visitor which layers a filter is NOT narrowing, and naming a layer that is not
             // even on screen would be worse than saying nothing.
+            // Cleared when the widgets' first questions have all been answered. The dashboard
+            // runtime guarantees this fires — on its early returns, on a throw, and behind its own
+            // cap — so the gate cannot outlive the thing it is waiting for.
+            onDataReady: function () { loading.ready('widgets'); },
+            note: function (text) { loading.note(text); },
             deckVisible: function (layerId) {
               const st = deckState[layerId];
               return st ? !!st.visible : null;      // null = not a deck layer
@@ -1439,8 +1552,16 @@
           });
         } else {
           console.warn('[geodeploy] dashboard runtime missing');
+          // Nothing will ever answer for the widgets, so nothing must be waiting on them. Also
+          // covers a runtime older than `onDataReady`, which would ignore the callback entirely.
+          loading.ready('widgets');
         }
-      } catch (e) { console.warn('[geodeploy] dashboard failed', e); }
+      } catch (e) {
+        console.warn('[geodeploy] dashboard failed', e);
+        // A throw BEFORE the runtime armed its own signal would strand the data gate; releasing it
+        // here is harmless if the runtime already owns it, because a gate only clears once.
+        loading.ready('widgets');
+      }
       loading.ready('dashboard');   // outside the catch, for the same reason as the story panel
     }
     // R2: when rendered as the editor's preview (?edit=1), open the postMessage channel + click-to-place.
@@ -3100,6 +3221,16 @@
 
   map.on('click', async e => {
     if (suppressClick) { suppressClick = false; return; }  // ignore the click that ends a box draw
+    // A tap that is PLACING A VERTEX is not a tap that is asking what is here. A dashboard's polygon
+    // tool builds its shape click by click, and every one of those clicks was also opening the
+    // attribute panel over the map being drawn on — worst on a phone, where the panel covers most
+    // of it and has to be dismissed between vertices.
+    //
+    // `dashDraw` is set by the dashboard's tool bar (`setMode`) and was, until now, written and
+    // never read: the flag existed, and nothing acted on it. Read from the body rather than passed
+    // in, because the tool bar lives in dashboard.js and this handler in portal.js, and one shared
+    // attribute is a smaller seam between them than a callback registry.
+    if (document.body.dataset.dashDraw === '1') return;
     const vectorLayerIds = (STYLE.layers || [])
       .filter(l => l.metadata && l.metadata['geodeploy:type'] === 'vector')
       .map(l => l.id);
@@ -3372,11 +3503,19 @@
     deckHit = false;
   });
 
-  // ── Coordinate readout (bottom-right) ───────────────────
+  // ── Coordinate readout (bottom-centre) ──────────────────
   const coordsEl = document.getElementById('coords');
   if (coordsEl) {
+    // WITH the CRS. Two numbers alone are ambiguous — 47.37, 8.54 is a lat/lon pair, a metre
+    // easting/northing and a dozen other things depending on what you assume, and the reader has no
+    // way to tell which from the readout. MapLibre works in WGS84 lon/lat and the map always
+    // reports that, so naming it costs one span and removes the guess.
     map.on('mousemove', e => {
       coordsEl.textContent = e.lngLat.lng.toFixed(5) + ', ' + e.lngLat.lat.toFixed(5);
+      const crs = document.createElement('span');
+      crs.className = 'gd-crs';
+      crs.textContent = 'EPSG:4326';
+      coordsEl.appendChild(crs);
     });
     map.on('mouseout', () => { coordsEl.textContent = ''; });
   }
@@ -3387,10 +3526,10 @@
   // The minimal fallback only covers portals published before basemaps were baked in.
   const BASEMAP_CATALOG = (((STYLE.geodeploy || {}).basemaps) || []).length
     ? STYLE.geodeploy.basemaps
-    : [{ id: 'positron', name: 'Positron',
-         tiles: ['https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png'],
-         attribution: '© OpenStreetMap © CARTO',
-         thumb: 'https://a.basemaps.cartocdn.com/light_all/4/8/5.png' }];
+    : [{ id: 'osm', name: 'OpenStreetMap',
+         tiles: ['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png', 'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png'],
+         attribution: '© OpenStreetMap contributors',
+         thumb: 'https://a.tile.openstreetmap.org/4/8/5.png' }];
   const BASEMAPS = BASEMAP_CATALOG;
   // The admin's chosen basemap, baked into the base layer at publish. Portals published BEFORE
   // basemap selection have no defaultBasemap → keep the template's own baked basemap (the '__default__'
@@ -3913,6 +4052,160 @@
       return out;
     }
 
+    //: THE WHOLE DASHBOARD, not the map inside it.
+    //:
+    //: A card thumbnail is a photograph of the portal, and for three archetypes the portal IS the
+    //: map. A dashboard is not: the map is one cell of a grid, and a picture of it alone shows none
+    //: of the charts, tables and figures that are the reason the dashboard exists — two dashboards
+    //: over the same layer got the same picture.
+    //:
+    //: There is no browser API for "photograph this element". The one mechanism that exists is a
+    //: `<foreignObject>` holding the markup, rasterised by loading the SVG as an image, and it comes
+    //: with real constraints: the SVG is loaded in the restricted mode images use, so it fetches
+    //: NOTHING — no stylesheet, no webfont, no tile. Everything the picture needs must be inside the
+    //: string. Hence the three passes below: the CSS is collected from the live stylesheets, the
+    //: WebGL canvas is swapped for a still of itself, and same-origin images are inlined.
+    //:
+    //: The rewrite pass is the subtle one. Most dashboard rules are written `body[data-archetype=
+    //: "dashboard"] #layout`, and the clone has no <body> ancestor, so every one of them would miss
+    //: and the grid would render as a column of unstyled divs. The wrapper therefore STANDS IN for
+    //: both <html> and <body> — it carries their classes and data attributes — and each selector's
+    //: leading `html` / `body` / `:root` is rewritten to match it.
+    //:
+    //: Every failure falls back to the map alone, which is what this did before. A thumbnail is
+    //: decoration; it must never be the reason a publish reports an error.
+    function snapshotDashboard(done) {
+      let settled = false;
+      const finish = function (url) { if (!settled) { settled = true; done(url); } };
+      try {
+        const W = document.documentElement.clientWidth || 1200;
+        const H = document.documentElement.clientHeight || 800;
+        const html = document.documentElement, body = document.body;
+
+        // No explicit xmlns: the wrapper is already in the XHTML namespace (it was made by an HTML
+        // document), and XMLSerializer declares that itself. Writing the attribute by hand only
+        // risks a second, conflicting declaration.
+        const wrap = document.createElement('div');
+        [html, body].forEach(function (el) {
+          Array.prototype.forEach.call(el.attributes, function (a) {
+            if (a.name === 'class' || a.name === 'style') return;   // merged / ours, below
+            if (a.name === 'xmlns') return;
+            wrap.setAttribute(a.name, a.value);
+          });
+        });
+        wrap.setAttribute('class', ('gd-snap-root ' + html.className + ' ' + body.className).trim());
+        wrap.setAttribute('style', 'position:relative;overflow:hidden;width:' + W + 'px;height:' + H
+          + 'px;background:' + (getComputedStyle(body).backgroundColor || '#fff'));
+
+        // A plain text node, NOT a CDATA section: createCDATASection throws outright in an HTML
+        // document. It round-trips anyway — XMLSerializer escapes `&` and `<` on the way out and
+        // the XML parser turns them back on the way in, so the CSS arrives byte-identical.
+        const style = document.createElement('style');
+        style.textContent = collectCss();
+        wrap.appendChild(style);
+        Array.prototype.forEach.call(body.children, function (child) {
+          wrap.appendChild(child.cloneNode(true));
+        });
+
+        // The canvases, in document order — the clone was made from the same tree, so the two
+        // lists line up. The map's own goes through snapshotCanvas so a globe keeps its backdrop.
+        const live = body.querySelectorAll('canvas');
+        const copies = wrap.querySelectorAll('canvas');
+        for (let i = 0; i < copies.length; i++) {
+          const src = live[i];
+          if (!src) break;
+          let url = null;
+          try {
+            // WebP, not PNG: this string is inlined into the SVG and then percent-encoded, so a
+            // lossless 1200x800 frame would put several megabytes into a data URL for a picture
+            // that ends up a card thumbnail.
+            url = (src === map.getCanvas() ? snapshotCanvas() : src).toDataURL('image/webp', 0.8);
+          } catch (e) { url = null; }        // tainted by a tile server that sent no CORS header
+          const img = document.createElement('img');
+          if (url) img.setAttribute('src', url);
+          img.setAttribute('class', copies[i].className || '');
+          img.setAttribute('style', (copies[i].getAttribute('style') || '')
+            + ';width:' + src.clientWidth + 'px;height:' + src.clientHeight + 'px');
+          copies[i].parentNode.replaceChild(img, copies[i]);
+        }
+
+        // Same-origin <img> (a portal logo, a card image): the restricted SVG cannot fetch them, so
+        // they travel as data or not at all. Best effort — a missing logo is not worth a failed
+        // thumbnail.
+        Array.prototype.forEach.call(wrap.querySelectorAll('img'), function (img) {
+          const src = img.getAttribute('src');
+          if (!src || src.indexOf('data:') === 0) return;
+          try {
+            const c = document.createElement('canvas');
+            c.width = img.naturalWidth || img.width || 1;
+            c.height = img.naturalHeight || img.height || 1;
+            c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+            img.setAttribute('src', c.toDataURL('image/png'));
+          } catch (e) { img.removeAttribute('src'); }
+        });
+
+        const markup = new XMLSerializer().serializeToString(wrap);
+        const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H
+          + '" viewBox="0 0 ' + W + ' ' + H + '"><foreignObject x="0" y="0" width="' + W
+          + '" height="' + H + '">' + markup + '</foreignObject></svg>';
+
+        const shot = new Image();
+        shot.onload = function () {
+          try {
+            const out = document.createElement('canvas');
+            out.width = W; out.height = H;
+            const ctx = out.getContext('2d');
+            ctx.fillStyle = getComputedStyle(body).backgroundColor || '#fff';
+            ctx.fillRect(0, 0, W, H);
+            ctx.drawImage(shot, 0, 0);
+            finish(out.toDataURL('image/webp', 0.75));
+          } catch (e) { finish(null); }
+        };
+        shot.onerror = function () { finish(null); };
+        shot.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+        // Rasterising a foreignObject is one of the places a browser can simply never call back.
+        setTimeout(function () { finish(null); }, 4000);
+      } catch (err) {
+        console.warn('[geodeploy] dashboard snapshot failed', err);
+        finish(null);
+      }
+    }
+
+    //: Every rule on the page, with `html` / `body` / `:root` re-pointed at the wrapper.
+    //:
+    //: Cross-origin sheets (a webfont's) throw on `cssRules` and are skipped — nothing in them can
+    //: be honoured by an SVG that cannot fetch the font anyway.
+    function collectCss() {
+      const out = [];
+      const scope = function (sel) {
+        return sel.split(',').map(function (part) {
+          return part.trim().replace(/^(?::root|html|body)\b/, '.gd-snap-root');
+        }).join(', ');
+      };
+      const walk = function (rules) {
+        Array.prototype.forEach.call(rules, function (r) {
+          if (r.selectorText) out.push(scope(r.selectorText) + '{' + r.style.cssText + '}');
+          else if (r.cssRules && r.conditionText != null) {
+            // @media / @supports: keep the condition, rewrite what is inside it.
+            const save = out.length, inner = [];
+            walk(r.cssRules);
+            while (out.length > save) inner.unshift(out.pop());
+            out.push('@' + (r.type === 12 ? 'supports' : 'media') + ' ' + r.conditionText
+                     + '{' + inner.join('') + '}');
+          } else if (r.cssText) out.push(r.cssText);   // @font-face, @keyframes
+        });
+      };
+      Array.prototype.forEach.call(document.styleSheets, function (sheet) {
+        let rules = null;
+        try { rules = sheet.cssRules; } catch (e) { return; }
+        if (rules) walk(rules);
+      });
+      // #layout is `position: fixed`, whose containing block inside a foreignObject is not something
+      // to rely on. Pinned to the wrapper instead, which is exactly the viewport's size.
+      out.push('.gd-snap-root #layout{position:absolute;}');
+      return out.join('\n');
+    }
+
     function sendSnapshot(requestId) {
       // The reason travels WITH the reply. Discarding it made every failure look identical from the
       // dashboard — a tainted canvas (SecurityError, from a tile server that sent no CORS header),
@@ -3925,6 +4218,19 @@
       const grab = function () {
         if (done) return;
         done = true;
+        // On a dashboard the map is one widget of several, so photograph the page. Falls through to
+        // the map alone if that cannot be done — see snapshotDashboard.
+        if (document.body.dataset.archetype === 'dashboard') {
+          try { map.triggerRepaint(); } catch (e) {}
+          snapshotDashboard(function (url) {
+            if (url && url.length > 2048) return reply(url, null);
+            grabMap();
+          });
+          return;
+        }
+        grabMap();
+      };
+      const grabMap = function () {
         try {
           map.triggerRepaint();
           const url = snapshotCanvas().toDataURL('image/webp', 0.75);

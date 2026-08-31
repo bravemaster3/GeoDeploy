@@ -1,3 +1,8 @@
+---
+description: >-
+  Build a geospatial dashboard: a grid of charts, indicators, tables and a map that cross-filter each other, with aggregates computed in PostGIS or DuckDB rather than in the browser.
+---
+
 # Dashboards
 
 A **dashboard** is a portal where the map is one widget among many. Charts, numbers, lists and
@@ -58,23 +63,53 @@ resizable.
     as far as they must to stay legible. If too many are still dropped for your taste, a
     **horizontal** bar chart gives every category its own full-width label.
 
-    A pie or donut has a **plot size**, separate from the widget's size. The legend sits under the
-    circle, and growing the widget grows both together — so when a long legend ends up in a
-    scrollbar, shrink the plot rather than enlarging the card.
+    **The legend gets its room before the plot does.** Any chart with a key — a pie, a donut, or a
+    line or bar chart with more than one measure — measures the key first and gives the plot what
+    is left, so the key is never pushed out of sight and making the widget taller gives every new
+    pixel to the plot. **Plot size** overrules that: leave it at 100% (auto) for the measured
+    split, or move it down to hand the plot a fixed share of the card and let a long key scroll in
+    the remainder. Twelve series wrap to several lines, and sometimes the shape matters more than
+    the names.
 
     **Several measures at once** — a chart can plot more than one aggregate against the same
     grouping ("mean height *and* mean age per district"). Lines are drawn per measure with a
     legend; bars become clustered groups. Colour then identifies the *measure*, not the category,
     because with several lines on one axis colour is the only thing telling them apart.
 
+    **Columns as the X axis** — for data stored wide, one column per year or per period
+    (`gdp1960`, `gdp1961`, …). Choose the columns instead of a grouping field and each becomes a
+    point on the axis, with the groups as the series. Up to 120 columns, with a select-all rather
+    than 120 clicks.
+
+    Column names rarely make good tick labels, so they can be **trimmed and shifted**: strip the
+    shared prefix to leave the numbers, and add an offset when the numbers are not the values you
+    want (`gdp1` + 1959 reads as `1960`). An **overall line** can be drawn across the whole current
+    selection, for a mean to read the individual series against.
+
+    **Axis titles and the subtitle** are yours to write. A column name is what the data is called,
+    not what it measures — and after a shapefile has cut it to ten characters it is often neither.
+    The heading at the top right of the card follows the titles you set.
+
     **Scatter** — one dot per feature, two numeric columns against each other. This is the only
     chart that plots features rather than a summary of them, so it is **sampled**: a random sample,
     never the first N rows, and it says so under the plot when a sample is what you are seeing.
+
+    A scatter can **name its points on hover** — nominate up to three columns and the dot says
+    which feature it is. Without that a scatter shows two numbers per feature and cannot say whose
+    they are, which makes an outlier visible and unidentifiable. **Point size** is adjustable: a
+    dozen features want a mark you can see and aim at, a few thousand want a grain small enough
+    that overlapping dots read as density.
 
 === "Lists"
 
     **List / table** — attribute rows, sortable, paged on the server. Clicking a row zooms the map
     to that feature and fills the details panel.
+
+    **Several rows at once**, with the conventions every desktop list uses: <kbd>Ctrl</kbd> (or
+    <kbd>Cmd</kbd>) adds and removes one, <kbd>Shift</kbd> takes the run between. The map fits the
+    whole selection rather than the row last clicked — it widens to hold a row you add and narrows
+    when you remove one — and the selection survives turning the page, so rows chosen on page one
+    keep filtering while you pick more from page two.
 
     The same widget has a **cards** layout: a directory rather than a spreadsheet, one card per
     feature with a heading and a few fields under it. Useful for the datasets people look things
@@ -120,6 +155,15 @@ There are three channels, and they behave differently on purpose.
 Filters combine with **AND**. A selector and a map selection both active narrow the result; they do
 not replace one another. Everything currently narrowing the page appears as a chip in the filter
 bar at the bottom, and each chip can clear itself.
+
+A *new* selection from the same widget **replaces** its previous one rather than adding to it —
+drawing a box after clicking a feature does not ask for the features that are both, which is a
+question with no answer. Selections from *different* widgets still combine, which is the point.
+
+**Zooming to what was chosen.** Clicking a bar or a pie slice can also fly the map to the extent of
+what it selected, so the filter and the view agree. It is on by default for chart clicks and can be
+turned off per widget; map clicks and drawn areas never move the camera, because the visitor is
+already looking at the place they clicked.
 
 ### Why geometry crosses layers and attributes do not
 
@@ -260,6 +304,19 @@ A pinned widget is sized in pixels rather than grid columns, and can **start col
 one button that opens when clicked and closes on <kbd>Esc</kbd>. That is usually what a search box
 wants: needed for a few seconds, in the way for the rest of the time. While collapsed the widget is
 hidden rather than destroyed, so it keeps its results and any filter it published.
+
+---
+
+## Filling the screen
+
+By default every grid row is exactly the row height you set, so the board is as tall as its content
+and no taller — a board laid out on a laptop leaves empty space below it on a large monitor.
+
+**Fill the screen** makes the rows share the height of the window instead. The proportions hold: a
+widget two rows tall still gets twice one row. It stretches but never squeezes — your row height
+stays the floor — so a phone, a portrait display, or simply a board with many widgets scrolls
+exactly as it does now. No single setting can be right for every screen a portal is opened on, so
+it is worth looking at the board at the sizes your readers actually use.
 
 ---
 

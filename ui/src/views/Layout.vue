@@ -46,6 +46,13 @@
         </RouterLink>
       </nav>
 
+      <!-- Last in the column, above the footer: it is a way OUT of the app, and the things that
+           leave it belong at the bottom next to sign-out rather than among the pages. Renders
+           nothing outside the demo. -->
+      <div :class="collapsed ? 'px-2 pb-2' : 'px-3 pb-2'">
+        <GithubLink :collapsed="collapsed" />
+      </div>
+
       <!-- Footer: user + theme + logout -->
       <div class="border-t border-border text-xs text-muted-foreground"
         :class="collapsed ? 'py-3 flex flex-col items-center gap-2' : 'px-4 py-3 flex items-center gap-2 min-w-0'">
@@ -75,6 +82,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, RouterLink, RouterView } from 'vue-router'
+import GithubLink from '@/components/shared/GithubLink.vue'
 import { useAuthStore } from '@/stores/auth'
 import logoDark from '@/assets/logo-dark.svg'
 import { DatabaseIcon, GlobeIcon, LayoutIcon, SettingsIcon, UsersIcon, ActivityIcon } from './icons'

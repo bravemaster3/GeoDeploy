@@ -18,28 +18,41 @@ from . import symbology
 # baked into every published portal as `geodeploy.basemaps` (so templates/shared/portal.js and
 # ui/src/views/PortalEditor.vue both consume it at runtime — neither hard-codes the catalog).
 BASEMAP_CATALOG = [
-    {"id": "positron", "name": "Positron",
-     "tiles": ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png",
-               "https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png",
-               "https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png"],
-     "attribution": "© OpenStreetMap © CARTO",
-     "thumb": "https://a.basemaps.cartocdn.com/light_all/4/8/5.png"},
-    {"id": "voyager", "name": "Voyager",
-     "tiles": ["https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
-               "https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
-               "https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png"],
-     "attribution": "© OpenStreetMap © CARTO",
-     "thumb": "https://a.basemaps.cartocdn.com/rastertiles/voyager/4/8/5.png"},
-    {"id": "dark", "name": "Dark Matter",
-     "tiles": ["https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png",
-               "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png"],
-     "attribution": "© OpenStreetMap © CARTO",
-     "thumb": "https://a.basemaps.cartocdn.com/dark_all/4/8/5.png"},
+    # OpenStreetMap FIRST, and therefore the default.
+    #
+    # It is also the thumbnail the switcher shows for the "Default" option on a portal published
+    # before basemaps were selectable (`BASEMAP_CATALOG[0].thumb` in portal.js) — which, while a
+    # CARTO style led this list, was a tile with API KEY REQUIRED printed across it.
     {"id": "osm", "name": "OpenStreetMap",
      "tiles": ["https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
                "https://b.tile.openstreetmap.org/{z}/{x}/{y}.png"],
      "attribution": "© OpenStreetMap contributors",
      "thumb": "https://a.tile.openstreetmap.org/4/8/5.png"},
+
+    # ── The three that used to be CARTO ──────────────────────────────────────────────────────────
+    # CARTO now requires an API key. It does not refuse an unauthenticated request — it answers 200
+    # with the map, and "API KEY REQUIRED / carto.com/basemaps/apikey" watermarked diagonally across
+    # EVERY tile at EVERY zoom. So a portal on one of these did not fail; it silently went branded.
+    #
+    # THE IDS ARE DELIBERATELY UNCHANGED. Nine official templates name `positron`, and every portal
+    # already published records its choice by id in `geodeploy.defaultBasemap`. Renaming would break
+    # all of them for a tidier internal string, so the id stays what it always was and the NAME says
+    # what it now shows. An id is an identifier; only the label is a description.
+    {"id": "positron", "name": "Light Gray",
+     "tiles": ["https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"],
+     "attribution": "© Esri, HERE, Garmin, © OpenStreetMap contributors",
+     "thumb": "https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/4/5/8"},
+    {"id": "voyager", "name": "Humanitarian",
+     "tiles": ["https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+               "https://b.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+               "https://c.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png"],
+     "attribution": "© OpenStreetMap contributors | Tiles: Humanitarian OSM Team, hosted by OpenStreetMap France",
+     "thumb": "https://a.tile.openstreetmap.fr/hot/4/8/5.png"},
+    {"id": "dark", "name": "Dark Gray",
+     "tiles": ["https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"],
+     "attribution": "© Esri, HERE, Garmin, © OpenStreetMap contributors",
+     "thumb": "https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/4/5/8"},
+
     {"id": "topo", "name": "OpenTopoMap",
      "tiles": ["https://a.tile.opentopomap.org/{z}/{x}/{y}.png",
                "https://b.tile.opentopomap.org/{z}/{x}/{y}.png"],
@@ -54,6 +67,7 @@ BASEMAP_CATALOG = [
      "attribution": "© Esri",
      "thumb": "https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/4/5/8"},
 ]
+
 _BASEMAP_BY_ID = {b["id"]: b for b in BASEMAP_CATALOG}
 
 
@@ -2026,11 +2040,11 @@ def _default_basemap() -> dict:
             "basemap": {
                 "type": "raster",
                 "tiles": [
-                    "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png",
-                    "https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png",
+                    "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                    "https://b.tile.openstreetmap.org/{z}/{x}/{y}.png",
                 ],
                 "tileSize": 256,
-                "attribution": "© <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors © <a href='https://carto.com/attributions'>CARTO</a>",
+                "attribution": "© <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors",
             }
         },
         "layers": [{"id": "basemap", "type": "raster", "source": "basemap"}],

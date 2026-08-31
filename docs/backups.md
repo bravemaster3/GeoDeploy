@@ -1,3 +1,8 @@
+---
+description: >-
+  Scheduled backups of database, files and state to a separate destination, backup history, and restoring a GeoDeploy instance in place.
+---
+
 # Backups and restore
 
 GeoDeploy can copy everything that cannot be regenerated to a **separate object store**: the

@@ -125,7 +125,34 @@ const selected = computed(() => widgets.value.find(w => w.id === selectedId.valu
 
 function commit(next) { emit('update:modelValue', next) }
 function patchDash(patch) { commit({ ...dash.value, ...patch }) }
-function setWidgets(list) { patchDash({ widgets: list }) }
+
+//: Has anyone touched this grid, or is it still just a template sitting there?
+//:
+//: The distinction is the whole of the template-switching behaviour below. Loading a preset over
+//: widgets an author has arranged destroys work and must be asked for; loading one over widgets
+//: another preset put there five seconds ago destroys nothing, and asking is a button press for no
+//: reason. Anything already on the grid when this editor opens counts as the author's — it came out
+//: of a saved portal, and this component has no way to know how it got there.
+const presetTouched = ref(widgets.value.length > 0)
+//: Set while `applyPreset` commits, so its own write does not count as a touch.
+let applyingPreset = false
+//: The preset whose widgets are on the grid, or null if they came from anywhere else — a saved
+//: portal, or hand-built. Auto-replacing is only ever safe when THIS component put them there:
+//: `presetTouched` alone is not enough, because a portal loading into the editor after mount
+//: arrives without going through `setWidgets` and would look untouched.
+let appliedPreset = null
+//: The preset watcher runs immediately, which is how an empty grid gets its template. That first
+//: run is the editor OPENING, not the author choosing — and an offer to replace their layout the
+//: moment they open a saved portal would be alarming.
+let presetWatchOpened = false
+//: A template was chosen whose layout differs from work the author has done. Not applied, ASKED —
+//: see the banner in the template.
+const presetOffered = ref(false)
+
+function setWidgets(list) {
+  if (!applyingPreset) presetTouched.value = true
+  patchDash({ widgets: list })
+}
 function patchWidget(id, patch) {
   setWidgets(widgets.value.map(w => (w.id === id ? deepMerge(w, patch) : w)))
 }
@@ -165,6 +192,97 @@ function fieldsOf(w) {
   return (layer && layer.columns) ? layer.columns.filter(c => c && c.name) : []
 }
 function numericFields(w) { return fieldsOf(w).filter(c => isNumeric(c.type)) }
+//: How many columns may form the X axis. Mirrors `MAX_X_COLUMNS` in services/dashboard.py.
+const MAX_X_COLUMNS = 120
+function xColumnsOf(w) { return w?.dataSource?.xColumns || [] }
+//: Up to three columns naming a scatter's points on hover. Three is a line of hover text; more is a
+//: record, and a record is what clicking already puts in the details panel.
+function labelFieldsOf(w) { return w?.dataSource?.labelFields || [] }
+function toggleLabelField(w, name) {
+  const cur = labelFieldsOf(w)
+  const next = cur.includes(name) ? cur.filter(c => c !== name) : [...cur, name]
+  patchWidget(w.id, { dataSource: { labelFields: next.slice(0, 3) } })
+}
+//: Bars only. `colorMode` colours bars and `valueLabels` prints numbers on them; a line chart takes
+//: neither — its colours come from the series palette and it has no bar to write on. Both were shown
+//: for every chart kind, so choosing Line left two controls on screen that did nothing, and one of
+//: them was called "Bar colours" while no bars were in sight.
+function isBarChart(w) { return ['bar', 'hbar'].includes(w?.style?.chart || 'bar') }
+// Which charts have a plot and a legend competing for the same card, and so something to split. A
+// pie always does; a line or bar chart only once it draws more than one measure, since a single
+// series has no key to make room for.
+function hasLegendToShare(w) {
+  if (w?.style?.legend === false) return false     // nothing to give the space to
+  if (['pie', 'donut'].includes(w?.style?.chart)) return true
+  return Math.max(seriesOf(w).length, xColumnsOf(w).length) > 1
+}
+//: Every numeric column at once. A wide file is wide by nature -- 57 years of GDP is 57 clicks --
+//: and a picker that only takes them one at a time is not a picker for this data.
+function allXColumns(w) { setXColumns(w, numericFields(w).map(f => f.name)) }
+function noXColumns(w) { patchWidget(w.id, { dataSource: { xColumns: [] } }) }
+function toggleXColumn(w, name) {
+  const cur = xColumnsOf(w)
+  const next = cur.includes(name) ? cur.filter(c => c !== name) : [...cur, name]
+  setXColumns(w, next)
+}
+//: Choosing columns implies reading them, so Count -- which reads none -- becomes Sum, the same
+//: promotion the single Field picker makes. Left on Count the runtime would silently use Sum
+//: anyway, and a panel that says one thing while the chart does another is worse than either.
+function setXColumns(w, cols) {
+  const patch = { xColumns: cols.slice(0, MAX_X_COLUMNS) }
+  if (patch.xColumns.length && (w.dataSource?.op || 'count') === 'count') patch.op = 'sum'
+  patchWidget(w.id, { dataSource: patch })
+}
+//: What the trimmed axis will read, shown while choosing so the author can see whether the columns
+//: they picked produce sensible ticks. Same rule as the runtime's `trimColumnLabels`.
+function xAxisPreview(w) {
+  const names = xColumnsOf(w)
+  if (names.length < 2) return names.join(', ')
+  //: Same order as `trimColumnLabels` in templates/shared/dashboard.js: the trailing number first,
+  //: because a shapefile's 10-character truncation makes the PREFIXES disagree (GDP_PerC_9 then
+  //: GDP_Per_10) and there is then no common affix to find.
+  const tails = names.map(n => (String(n).match(/(\d+)$/) || [null, null])[1])
+  if (tails.every(Boolean) && new Set(tails).size === names.length) {
+    return formatXLabels(tails.map(t => String(Number(t))), w).join(', ')
+  }
+  let pre = names[0], suf = names[0]
+  for (const n of names.slice(1)) {
+    let p = 0
+    while (p < pre.length && p < n.length && pre[p] === n[p]) p++
+    pre = pre.slice(0, p)
+    let q = 0
+    while (q < suf.length && q < n.length && suf[suf.length - 1 - q] === n[n.length - 1 - q]) q++
+    suf = suf.slice(suf.length - q)
+  }
+  // Same rule as `trimColumnLabels` in templates/shared/dashboard.js, and it has to STAY the same:
+  // this previews what that will draw, and a preview that disagrees is worse than none.
+  const D = /[0-9]/, SEP = /[_\-. ]/
+  while (pre.length && D.test(pre[pre.length - 1]) && names.some(n => D.test(n[pre.length] || ''))) {
+    pre = pre.slice(0, -1)
+  }
+  while (suf.length && D.test(suf[0]) && names.some(n => D.test(n[n.length - suf.length - 1] || ''))) {
+    suf = suf.slice(1)
+  }
+  const preOk = !pre.length || SEP.test(pre[pre.length - 1])
+    || (!D.test(pre[pre.length - 1]) && names.every(n => D.test(n[pre.length] || '')))
+  if (!preOk) pre = ''
+  if (suf.length && !SEP.test(suf[0])) suf = ''
+  const out = names.map(n => n.slice(pre.length, n.length - suf.length).replace(/^[_\-. ]+|[_\-. ]+$/g, ''))
+  const trimmed = out.every(v => v.length) ? out : names
+  return formatXLabels(trimmed, w).join(', ')
+}
+
+//: The author's own formatting, exactly as `formatColumnLabels` applies it at runtime.
+function formatXLabels(labels, w) {
+  const off = Number(w?.dataSource?.xLabelOffset) || 0
+  const patRaw = w?.dataSource?.xLabelPattern
+  const pat = (patRaw && patRaw.includes('{}')) ? patRaw : null
+  return labels.map((lab) => {
+    let v = String(lab)
+    if (off) { const n = Number(v); if (v !== '' && isFinite(n)) v = String(n + off) }
+    return pat ? pat.split('{}').join(v) : v
+  })
+}
 function isNumeric(type) {
   return /int|numeric|decimal|double|real|float|serial|bigint|smallint/i.test(String(type || ''))
 }
@@ -399,11 +517,64 @@ function gridStyle(w) {
     gridRow: `${(l.y || 0) + 1} / span ${l.h || 3}`,
   }
 }
+//: Two grid rectangles share a cell.
+function hits(a, b) {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+}
+
+//: Resolve overlaps by pushing the widgets the ANCHOR landed on downwards, cascading.
+//:
+//: CSS Grid does not object to two items in one cell — it stacks them — so a dragged widget simply
+//: sat on top of whatever was there, and the dashboard was saved that way. (A portal on the test
+//: instance had one table overlapping four other widgets, including the map.) Nothing warned,
+//: because nothing was checking.
+//:
+//: Push rather than block: a drag that refuses to land reads as a broken control, and the author's
+//: intent is the position they dragged TO. The anchor keeps exactly what it was given and everything
+//: it displaces moves down, which is the convention every grid dashboard uses.
+//:
+//: `from` is the layout as it stood when the drag STARTED, not the running one. Resolving against
+//: the running layout would accumulate — each pointermove pushing neighbours a little further —
+//: so dragging a widget across the grid and back would leave everything below it lower than it
+//: began. Recomputing from the snapshot makes any single drag reversible.
+function resolveOverlaps(list, anchorId, from) {
+  const base = from || list
+  const byId = {}
+  base.forEach((w) => { byId[w.id] = w.layout })
+  const anchor = list.find((w) => w.id === anchorId)
+  if (!anchor) return list
+
+  const placed = [{ id: anchorId, ...anchor.layout }]
+  const rest = list
+    .filter((w) => w.id !== anchorId && !w.layout?.overlay)   // overlays are pinned to the map
+    .map((w) => ({ w, start: byId[w.id] || w.layout }))
+    .sort((a, b) => (a.start.y - b.start.y) || (a.start.x - b.start.x))
+
+  const moved = {}
+  for (const { w, start } of rest) {
+    const box = { x: start.x, y: start.y, w: start.w, h: start.h }
+    // Bounded: the grid has no row limit, so an unbounded loop is a hang rather than a bad layout.
+    for (let guard = 0; guard < 400 && placed.some((p) => hits(p, box)); guard++) box.y += 1
+    placed.push({ id: w.id, ...box })
+    if (box.y !== (w.layout?.y ?? 0)) moved[w.id] = box.y
+  }
+  if (!Object.keys(moved).length && !from) return list
+  return list.map((w) => (
+    moved[w.id] !== undefined || (from && byId[w.id] && w.id !== anchorId)
+      ? { ...w, layout: { ...w.layout, ...byId[w.id], y: moved[w.id] !== undefined ? moved[w.id] : byId[w.id].y } }
+      : w))
+}
+
 function onPointerDown(ev, w, mode) {
   if (ev.button !== 0) return
   ev.preventDefault()
   selectedId.value = w.id
-  drag.value = { id: w.id, mode, startX: ev.clientX, startY: ev.clientY, orig: { ...w.layout } }
+  drag.value = {
+    id: w.id, mode, startX: ev.clientX, startY: ev.clientY, orig: { ...w.layout },
+    // Every widget's layout as it stood when the drag began — what collisions are resolved
+    // against, so a drag cannot accumulate displacement across its own pointermoves.
+    from: widgets.value.map((x) => ({ id: x.id, layout: { ...x.layout } })),
+  }
   window.addEventListener('pointermove', onPointerMove)
   window.addEventListener('pointerup', onPointerUp, { once: true })
 }
@@ -414,15 +585,14 @@ function onPointerMove(ev) {
   const dx = Math.round((ev.clientX - d.startX) / colPx)
   const dy = Math.round((ev.clientY - d.startY) / ROW_PX)
   const o = d.orig
-  if (d.mode === 'move') {
-    const x = Math.max(0, Math.min(GRID_COLS - o.w, o.x + dx))
-    const y = Math.max(0, o.y + dy)
-    patchWidget(d.id, { layout: { x, y } })
-  } else {
-    const w = Math.max(2, Math.min(GRID_COLS - o.x, o.w + dx))
-    const h = Math.max(2, Math.min(24, o.h + dy))
-    patchWidget(d.id, { layout: { w, h } })
-  }
+  const patch = d.mode === 'move'
+    ? { x: Math.max(0, Math.min(GRID_COLS - o.w, o.x + dx)), y: Math.max(0, o.y + dy) }
+    : { w: Math.max(2, Math.min(GRID_COLS - o.x, o.w + dx)),
+        h: Math.max(2, Math.min(24, o.h + dy)) }
+  // Resizing collides exactly as moving does — growing a widget onto its neighbour is the same
+  // problem — so both go through the resolver.
+  const next = widgets.value.map(w => (w.id === d.id ? deepMerge(w, { layout: patch }) : w))
+  setWidgets(resolveOverlaps(next, d.id, d.from))
 }
 function onPointerUp() {
   drag.value = null
@@ -437,13 +607,14 @@ function onKey(ev, w) {
   const d = map[ev.key]
   if (!d) return
   ev.preventDefault()
-  if (step === 'move') {
-    patchWidget(w.id, { layout: {
-      x: Math.max(0, Math.min(GRID_COLS - l.w, l.x + d[0])), y: Math.max(0, l.y + d[1]) } })
-  } else {
-    patchWidget(w.id, { layout: {
-      w: Math.max(2, Math.min(GRID_COLS - l.x, l.w + d[0])), h: Math.max(2, Math.min(24, l.h + d[1])) } })
-  }
+  const patch = step === 'move'
+    ? { x: Math.max(0, Math.min(GRID_COLS - l.w, l.x + d[0])), y: Math.max(0, l.y + d[1]) }
+    : { w: Math.max(2, Math.min(GRID_COLS - l.x, l.w + d[0])),
+        h: Math.max(2, Math.min(24, l.h + d[1])) }
+  // No snapshot here: each keypress is its own complete move, so resolving against the current
+  // layout is right — there is no burst of intermediate states to accumulate.
+  const next = widgets.value.map(x => (x.id === w.id ? deepMerge(x, { layout: patch }) : x))
+  setWidgets(resolveOverlaps(next, w.id, null))
 }
 
 // ── presets ─────────────────────────────────────────────────────────────────
@@ -532,11 +703,16 @@ function applyPreset(overwrite) {
     }
     return w
   })
+  applyingPreset = true
   commit({
     grid: preset.grid || { rowHeight: 90, gap: 10 },
     refresh: preset.refresh || 0,
     widgets: bound,
   })
+  applyingPreset = false
+  presetTouched.value = false      // this grid is the template's again, not anyone's work
+  appliedPreset = preset
+  presetOffered.value = false
   selectedId.value = null
   // After the commit, not during it: `autoRangeGauge` reads the committed widget back and patches
   // it, so it has to run against the model the author can now see.
@@ -550,7 +726,21 @@ const presetName = computed(() => (props.preset ? 'this template' : null))
 // a preset is available, load it. Only when the grid is genuinely empty — this must never overwrite
 // an author's work, which is why the overwrite path is a button they press.
 watch(() => props.preset, (p) => {
-  if (p && !widgets.value.length) applyPreset(false)
+  const opening = !presetWatchOpened
+  presetWatchOpened = true
+  if (!p) return
+  // Nothing there yet — a dashboard with no widgets is a blank page.
+  if (!widgets.value.length) { applyPreset(false); return }
+  // Widgets are there, but THIS component put them there from a template and nobody has touched
+  // them since. Switching should then just show the new one: someone is trying layouts on, and
+  // making them find "Reload template" after every choice is the editor pretending it did not
+  // understand. `appliedPreset` as well as `presetTouched`, because a portal that finished loading
+  // after mount never passed through `setWidgets` and would otherwise read as untouched.
+  if (appliedPreset && !presetTouched.value) { applyPreset(true); return }
+  // Real work, or work of unknown origin. Never overwrite it silently — but do not sit in silence
+  // either, which is what made choosing a template look like it had done nothing at all. Not on the
+  // first run: that is the editor opening, not a choice.
+  if (!opening) presetOffered.value = true
 }, { immediate: true })
 
 // The common opening order is "new portal → pick Dashboard → add layers", which means the preset
@@ -651,8 +841,26 @@ function setLayer(w, value) {
  * One-shot, on the binding change the author just made. There is no stored "auto" flag to go stale:
  * the moment they drag the min/max inputs, nothing here fires again until they rebind the field.
  */
+//: Picking a column implies an aggregation of it, and clearing one implies counting rows again.
+//:
+//: `count` ignores `field` entirely, so a field chosen while Count is selected would be stored,
+//: displayed, and have no effect on the chart — the author sets the thing they came to set and the
+//: bars do not move. Sum is the promotion because "GDP per country" means the total, and Average /
+//: Minimum / Maximum are one dropdown away.
+//: The other direction: switching TO Count drops the field, so the stored config cannot say
+//: "count, of GDP" — a pair that reads as a measurement and behaves as a row tally.
+function setAggOp(w, op) {
+  const patch = { op: op };
+  if (op === 'count') patch.field = undefined
+  patchWidget(w.id, { dataSource: patch })
+}
+
 function setAggField(w, field) {
-  patchWidget(w.id, { dataSource: { field: field || undefined } })
+  const patch = { field: field || undefined }
+  const op = w.dataSource?.op || 'count'
+  if (field && op === 'count') patch.op = 'sum'
+  if (!field && op !== 'count') patch.op = 'count'
+  patchWidget(w.id, { dataSource: patch })
   if (w.type === 'gauge' && field) autoRangeGauge(w.id, field)
 }
 
@@ -708,6 +916,21 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
           :title="`Replace the current widgets with ${presetName}'s starting set`">↺ Reload template</button>
         <button @click="pickerOpen = !pickerOpen" class="text-xs text-primary hover:text-primary/80 font-medium">+ Add widget</button>
       </div>
+    </div>
+
+    <!-- Asked, not done. Choosing a template with work already on the grid used to change nothing
+         visible, leaving a quiet "Reload template" link as the only clue that a choice had been
+         registered at all. -->
+    <div v-if="presetOffered"
+      class="mb-3 p-2.5 rounded-lg border border-primary/40 bg-primary/5 flex items-start gap-2">
+      <span class="text-[11px] leading-snug flex-1">
+        This template has a different starting layout.
+        <span class="text-muted-foreground">Loading it replaces the widgets you have now.</span>
+      </span>
+      <button @click="applyPreset(true)"
+        class="text-[11px] font-medium text-primary hover:text-primary/80 shrink-0">Load it</button>
+      <button @click="presetOffered = false"
+        class="text-[11px] text-muted-foreground hover:text-foreground shrink-0">Keep mine</button>
     </div>
 
     <!-- The widget picker. Every type, always — a template's set is a starting point, not a menu. -->
@@ -822,6 +1045,24 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
         <button @click="removeWidget(selected.id)" title="Remove this widget"
           class="text-[11px] text-red-400 hover:text-red-500 px-1">✕</button>
       </div>
+
+      <!-- The line UNDER the title. Generated from the layer and the aggregation unless written,
+           which describes the query where the reader wants the subject. -->
+      <label class="block">
+        <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
+          Subtitle
+          <InfoHint label="About the subtitle">
+            The small line beside the title. Left empty it names the layer and the aggregation —
+            useful while building, rarely what a reader wants to be told. Write anything here to
+            replace it.
+          </InfoHint>
+        </span>
+        <input type="text" maxlength="48"
+          :placeholder="TYPE_BY_ID[selected.type]?.name + ' — automatic'"
+          :value="selected.style?.subtitle || ''"
+          @change="patchWidget(selected.id, { style: { subtitle: $event.target.value || undefined } })"
+          class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
+      </label>
 
       <!-- Type. Changing it REPLACES the widget in place, keeping its cell and its title. -->
       <label class="block">
@@ -940,6 +1181,17 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
               @input="patchWidget(selected.id, { dataSource: { tolPx: Number($event.target.value) } })"
               class="w-full accent-primary" />
           </label>
+          <label class="flex items-center gap-1.5 text-[11px] cursor-pointer select-none">
+            <input type="checkbox" class="accent-primary"
+              :checked="selected.dataSource?.zoomToFilter !== false"
+              @change="patchWidget(selected.id, { dataSource: { zoomToFilter: $event.target.checked } })" />
+            Zoom to what a chart selects
+            <InfoHint label="About zooming to a chart's selection">
+              Clicking a bar or a slice frames the features it selected. Charts only — a slider or a
+              search box is a control you are working in, and moving the camera under the hand using
+              it fights you. Turn it off where comparing categories in a fixed view matters more.
+            </InfoHint>
+          </label>
           <!-- The map following a LINKED filter. Off by default, and the one setting here whose
                failure mode is a map that LOOKS narrowed and is not — so the bound stays one click
                away rather than being left to the docs. -->
@@ -989,19 +1241,113 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
             <label class="block">
               <span class="text-[10px] text-muted-foreground block mb-0.5">Aggregation</span>
               <select :value="selected.dataSource?.op || 'count'"
-                @change="patchWidget(selected.id, { dataSource: { op: $event.target.value } })"
+                @change="setAggOp(selected, $event.target.value)"
                 class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
-                <option v-for="o in AGG_OPS" :key="o.id" :value="o.id">{{ o.name }}</option>
+                <!-- Count is dropped once columns form the axis: COUNT(*) does not read the
+                     column at all, so every point on the axis would be the same number — a flat
+                     line saying how many rows are in the group. -->
+                <option v-for="o in AGG_OPS.filter(o => !(selected.type === 'chart'
+                          && xColumnsOf(selected).length && o.id === 'count'))"
+                  :key="o.id" :value="o.id">{{ o.name }}</option>
               </select>
             </label>
-            <label v-if="(selected.dataSource?.op || 'count') !== 'count'" class="block">
-              <span class="text-[10px] text-muted-foreground block mb-0.5">Field</span>
+            <!-- ALWAYS shown, not only once the aggregation is something other than Count.
+                 Hidden, it made "plot GDP per country" look impossible: the panel offered an
+                 aggregation and a grouping and no way to name the column, and Count -- the default --
+                 was the one setting under which the column picker did not exist. The order people
+                 think in is "which column", then "how to combine it". -->
+            <label v-if="!(selected.type === 'chart' && xColumnsOf(selected).length)" class="block">
+              <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
+                Field
+                <InfoHint label="About the field">
+                  The column being measured. Leave it empty to count rows; choose one and the
+                  aggregation becomes Sum, which you can change to Average, Minimum or Maximum.
+                  Only numeric columns are listed — the others have nothing to add up.
+                </InfoHint>
+              </span>
               <select :value="selected.dataSource?.field || ''"
                 @change="setAggField(selected, $event.target.value)"
                 class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
-                <option value="">—</option>
+                <option value="">— count rows —</option>
                 <option v-for="f in numericFields(selected)" :key="f.name" :value="f.name">{{ f.name }}</option>
               </select>
+            </label>
+          </div>
+        </template>
+
+        <!-- chart: WIDE data — columns as the X axis -->
+        <template v-if="selected.type === 'chart'">
+          <div>
+            <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-1">
+              Columns as the X axis
+              <button @click="allXColumns(selected)"
+                class="ml-auto text-[10px] text-primary hover:text-primary/80">All</button>
+              <button @click="noXColumns(selected)"
+                class="text-[10px] text-muted-foreground hover:text-foreground">None</button>
+              <InfoHint label="About plotting columns as the axis">
+                For data where one variable is spread across many columns — gdp_1990, gdp_2000,
+                gdp_2010. Each column you pick becomes a point on the axis, aggregated with the
+                setting above. “Group by” then draws one line per group instead of using it as the
+                axis. Leave this empty for ordinary charts.
+              </InfoHint>
+            </span>
+            <div class="flex flex-wrap gap-1 max-h-28 overflow-y-auto">
+              <button v-for="f in numericFields(selected)" :key="f.name"
+                @click="toggleXColumn(selected, f.name)"
+                class="px-2 py-0.5 rounded border text-[11px]"
+                :class="xColumnsOf(selected).includes(f.name)
+                  ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ f.name }}</button>
+            </div>
+            <div v-if="xColumnsOf(selected).length" class="grid grid-cols-2 gap-2 mt-2">
+              <label class="block">
+                <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
+                  Add to each label
+                  <InfoHint label="About the label offset">
+                    Arithmetic on labels that are numbers. Columns named gdp60, gdp61 give ticks 60
+                    and 61; adding 1900 makes them 1960 and 1961. Labels that are not numbers are
+                    left alone.
+                  </InfoHint>
+                </span>
+                <input type="number" step="1" placeholder="0"
+                  :value="selected.dataSource?.xLabelOffset ?? ''"
+                  @change="patchWidget(selected.id, { dataSource: { xLabelOffset: Number($event.target.value) || 0 } })"
+                  class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
+              </label>
+              <label class="block">
+                <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
+                  Label pattern
+                  <InfoHint label="About the label pattern">
+                    Text around each label, with <code>{}</code> standing for it. <code>19{}</code>
+                    turns 60 into 1960; <code>Q{}</code> turns 1 into Q1; <code>{} kg</code> adds a
+                    unit. Applied after the offset, so the two work together. A pattern without
+                    <code>{}</code> is ignored — it would print the same tick all along the axis.
+                  </InfoHint>
+                </span>
+                <input type="text" placeholder="{}" maxlength="24"
+                  :value="selected.dataSource?.xLabelPattern || ''"
+                  @change="patchWidget(selected.id, { dataSource: { xLabelPattern: $event.target.value || undefined } })"
+                  class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
+              </label>
+            </div>
+            <p v-if="xColumnsOf(selected).length" class="text-[10px] text-muted-foreground/70 mt-1 leading-snug">
+              <span class="text-foreground/70">{{ xColumnsOf(selected).length }} columns.</span>
+              Axis will read: <span class="text-foreground/80">{{ xAxisPreview(selected) }}</span>
+            </p>
+            <p v-if="xColumnsOf(selected).length === 1" class="text-[10px] text-amber-500/90 mt-1 leading-snug">
+              One column is a single point — pick at least two for an axis.
+            </p>
+            <label v-if="xColumnsOf(selected).length && selected.dataSource?.groupBy"
+              class="flex items-center gap-1.5 text-[11px] cursor-pointer select-none mt-2">
+              <input type="checkbox" class="accent-primary"
+                :checked="!!selected.dataSource?.meanLine"
+                @change="patchWidget(selected.id, { dataSource: { meanLine: $event.target.checked } })" />
+              Add an overall line
+              <InfoHint label="About the overall line">
+                One more line across the same columns, for everything currently selected rather than
+                for one group — drawn thicker and in the accent colour. It is asked as its own
+                question, so it is the figure over the whole selection and not the average of the
+                lines that happened to fit under “Max groups”.
+              </InfoHint>
             </label>
           </div>
         </template>
@@ -1010,7 +1356,8 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
         <template v-if="selected.type === 'chart'">
           <div class="grid grid-cols-2 gap-2">
             <label class="block">
-              <span class="text-[10px] text-muted-foreground block mb-0.5">Group by</span>
+              <span class="text-[10px] text-muted-foreground block mb-0.5">{{
+                xColumnsOf(selected).length ? 'One line per' : 'Group by' }}</span>
               <select :value="selected.dataSource?.groupBy || ''"
                 @change="patchWidget(selected.id, { dataSource: { groupBy: $event.target.value } })"
                 class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
@@ -1060,13 +1407,15 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
             <!-- Pie/donut only: the plot and its legend share the card, and only these two have a
                legend that competes with the plot for it. On a bar chart the same control would just
                leave empty space. -->
-          <label v-if="['pie', 'donut'].includes(selected.style?.chart)" class="block">
+          <label v-if="hasLegendToShare(selected)" class="block">
             <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
-              Plot size — {{ selected.style?.plotSize ?? 100 }}%
+              Plot size — {{ selected.style?.plotSize ?? 100 }}%{{ (selected.style?.plotSize ?? 100) === 100 ? ' (auto)' : '' }}
               <InfoHint label="About the plot size">
-                How much of the card the circle takes, leaving the rest to the legend. Making the
-                widget bigger grows both together; this is what shrinks the plot so a long legend
-                has room to be read without scrolling.
+                How much of the card's height the plot takes, leaving the rest to the legend.
+                At 100% the plot takes everything the legend does not need — on a pie that is the
+                whole card, and on a line or bar chart it is what is left once the key has its
+                room. Move it down to hand the plot a fixed share and let a long key scroll
+                instead: twelve series wrap to several lines and can take a third of the card.
               </InfoHint>
             </span>
             <input type="range" min="30" max="100" step="5"
@@ -1089,7 +1438,7 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
                 <option v-for="k in CHART_KINDS" :key="k.id" :value="k.id">{{ k.name }}</option>
               </select>
             </label>
-            <label class="block">
+            <label v-if="isBarChart(selected)" class="block">
               <span class="text-[10px] text-muted-foreground block mb-0.5">Bar colours</span>
               <select :value="selected.style?.colorMode || 'single'"
                 @change="patchWidget(selected.id, { style: { colorMode: $event.target.value } })"
@@ -1099,7 +1448,7 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
                 <option value="sequential">Shaded (ordered)</option>
               </select>
             </label>
-            <label class="block">
+            <label v-if="isBarChart(selected)" class="block">
               <span class="text-[10px] text-muted-foreground block mb-0.5">Values on bars</span>
               <select :value="selected.style?.valueLabels == null ? '' : (selected.style.valueLabels ? 'on' : 'off')"
                 @change="patchWidget(selected.id, { style: { valueLabels: $event.target.value === '' ? null : $event.target.value === 'on' } })"
@@ -1328,6 +1677,19 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
 
       <!-- gauge bands -->
       <template v-if="selected.type === 'gauge'">
+        <label class="block">
+          <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
+            Target
+            <InfoHint label="About the gauge target">
+              Drawn as a line across the dial, so the reading can be compared with the number that
+              matters at a glance rather than from memory. Leave it empty for a gauge that only
+              reports a level.
+            </InfoHint>
+          </span>
+          <input type="number" :value="selected.style?.target ?? ''" placeholder="none"
+            @input="patchWidget(selected.id, { style: { target: $event.target.value === '' ? undefined : Number($event.target.value) } })"
+            class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
+        </label>
         <div class="grid grid-cols-2 gap-2">
           <label class="block">
             <span class="text-[10px] text-muted-foreground block mb-0.5">Dial minimum</span>
@@ -1391,6 +1753,70 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
           </label>
         </div>
       </template>
+      <!-- What a scatter's points are called. -->
+      <template v-if="selected.type === 'scatter'">
+        <div>
+          <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-1">
+            Name points on hover
+            <InfoHint label="About point names">
+              Columns whose values identify each dot when you hover it — a name, a code, a date.
+              Without them a scatter shows two numbers per feature and cannot say which feature, so
+              an outlier is visible and unidentifiable. Up to three; use the details panel for the
+              rest.
+            </InfoHint>
+          </span>
+          <div class="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
+            <button v-for="f in fieldsOf(selected)" :key="f.name"
+              @click="toggleLabelField(selected, f.name)"
+              class="px-2 py-0.5 rounded border text-[11px]"
+              :class="labelFieldsOf(selected).includes(f.name)
+                ? 'border-primary text-primary bg-primary/10' : 'border-border text-foreground/70'">{{ f.name }}</button>
+          </div>
+        </div>
+        <label class="block">
+          <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
+            Point size — {{ selected.style?.pointSize ?? 3.5 }} px
+            <InfoHint label="About point size">
+              How big each dot is drawn. The right size depends on how many points there are: a
+              dozen features want a mark you can see and hover, a few thousand want a grain small
+              enough that overlapping ones read as density rather than a solid blob.
+            </InfoHint>
+          </span>
+          <input type="range" min="1.5" max="8" step="0.5"
+            :value="selected.style?.pointSize ?? 3.5"
+            @input="patchWidget(selected.id, { style: { pointSize: Number($event.target.value) } })"
+            class="w-full accent-primary" />
+        </label>
+      </template>
+
+      <!-- Axis titles, for the two widget types that have axes. -->
+      <template v-if="['chart', 'scatter'].includes(selected.type)">
+        <div class="grid grid-cols-2 gap-2">
+          <label class="block">
+            <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
+              X axis title
+              <InfoHint label="About axis titles">
+                What the axis measures, in your words. The tick labels say where a point sits; the
+                title says what is being measured — and a column name is what the data is called,
+                which is rarely the same thing. A scatter falls back to the column name; other
+                charts show no title unless you write one.
+              </InfoHint>
+            </span>
+            <input type="text" maxlength="40" placeholder="none"
+              :value="selected.style?.xTitle || ''"
+              @change="patchWidget(selected.id, { style: { xTitle: $event.target.value || undefined } })"
+              class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
+          </label>
+          <label class="block">
+            <span class="text-[10px] text-muted-foreground block mb-0.5">Y axis title</span>
+            <input type="text" maxlength="40" placeholder="none"
+              :value="selected.style?.yTitle || ''"
+              @change="patchWidget(selected.id, { style: { yTitle: $event.target.value || undefined } })"
+              class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
+          </label>
+        </div>
+      </template>
+
       <template v-if="selected.type === 'indicator'">
         <div class="grid grid-cols-3 gap-2">
           <label class="block">
@@ -1500,6 +1926,25 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
         <input type="number" min="0" max="3600" :value="dash.refresh || 0"
           @input="patchDash({ refresh: Number($event.target.value) })"
           class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
+      </label>
+      <label class="col-span-2 flex items-center gap-2 text-[11px] text-foreground/80">
+        <input type="checkbox" :checked="dash.grid?.fit === 'screen'"
+          @change="patchDash({ grid: { ...(dash.grid || {}), fit: $event.target.checked ? 'screen' : 'rows' } })"
+          class="accent-primary" />
+        <span class="flex items-center gap-1">
+          Fill the screen
+          <InfoHint label="About filling the screen">
+            Off, every row is exactly the row height above, so a board built on a laptop leaves
+            empty space below it on a larger monitor. On, the rows share the height of the window
+            instead — the widgets keep their relative proportions, since a widget two rows tall
+            still gets twice one row.
+            <br /><br />
+            It stretches, it does not squeeze: the row height stays the floor. On a screen too
+            short for the board — a phone, a portrait monitor, or simply a lot of widgets — it
+            scrolls exactly as it does now. Worth checking the board at the sizes your readers
+            actually use.
+          </InfoHint>
+        </span>
       </label>
     </div>
   </div>

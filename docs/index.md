@@ -1,4 +1,7 @@
 ---
+title: Self-hosted geoportal builder and spatial data platform
+description: >-
+  GeoDeploy is an open-source, self-hosted geoportal builder and spatial data platform. Publish web maps, dashboards, story maps and catalogs from your own server with PostGIS, MapLibre and Docker Compose.
 hide:
   - navigation
   - toc
@@ -16,7 +19,7 @@ own storage, and no per-seat pricing.
 
 [Try the demo](https://geodeploy-demo.kndev.org){ .md-button .md-button--primary }
 [Get started](getting-started.md){ .md-button }
-[See what it publishes](#three-kinds-of-portal){ .md-button }
+[See what it publishes](#four-kinds-of-portal){ .md-button }
 
 <p class="gd-demo-note" markdown>
 No sign-up — join with a name and you can upload, style and publish. Everything is wiped hourly.

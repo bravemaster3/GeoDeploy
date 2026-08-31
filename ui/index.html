@@ -9,8 +9,12 @@
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="apple-touch-icon" href="/logo.png" />
-  <meta name="description" content="Self-hosted spatial data platform and geoportal builder." />
-  <title>GeoDeploy</title>
+  <meta name="description" content="Self-hosted geoportal builder and spatial data platform. Upload, style and publish web maps, dashboards, story maps and data catalogs from your own server." />
+  <!-- The product, not just the name. This shell is the only HTML a crawler ever sees — nothing here
+       sets document.title, and a Vue route could not help a crawler anyway — so a bare "GeoDeploy"
+       was the entire title of the one page of ours that search engines had indexed. Kept short
+       enough to still read as a browser tab on an operator's own instance. -->
+  <title>GeoDeploy — self-hosted geoportal builder</title>
 
   <!-- Link previews (LinkedIn / Slack / X / Discord / Teams). Crawlers do not run JavaScript, so
        everything a card shows has to be in this static shell — a Vue route cannot supply it.
@@ -19,8 +23,8 @@
        domain at build time. Portals inject their own tags per portal (services/portal_generator.py). -->
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="GeoDeploy" />
-  <meta property="og:title" content="GeoDeploy" />
-  <meta property="og:description" content="Self-hosted spatial data platform and geoportal builder." />
+  <meta property="og:title" content="GeoDeploy — self-hosted geoportal builder" />
+  <meta property="og:description" content="Upload, style and publish web maps, dashboards, story maps and data catalogs from your own server. PostGIS, MapLibre, OGC API and STAC in one Docker Compose stack." />
   <meta property="og:url" content="__GEODEPLOY_ORIGIN__/" />
   <meta property="og:image" content="__GEODEPLOY_ORIGIN__/og-image.png" />
   <meta property="og:image:type" content="image/png" />

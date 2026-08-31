@@ -3,13 +3,13 @@
     "basemap": {
       "type": "raster",
       "tiles": [
-        "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
-        "https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png",
-        "https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png"
+        "https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+        "https://b.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+        "https://c.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png"
       ],
       "tileSize": 256,
       "maxzoom": 19,
-      "attribution": "© <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors © <a href='https://carto.com/attributions'>CARTO</a>"
+      "attribution": "© OpenStreetMap contributors | Tiles: Humanitarian OSM Team, hosted by OpenStreetMap France"
     }
   },
   "layers": [
@@ -17,7 +17,9 @@
       "id": "basemap",
       "type": "raster",
       "source": "basemap",
-      "paint": { "raster-opacity": 1 }
+      "paint": {
+        "raster-opacity": 1
+      }
     }
   ]
 }

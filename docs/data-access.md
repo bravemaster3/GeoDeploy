@@ -1,3 +1,8 @@
+---
+description: >-
+  Read your GeoDeploy layers from QGIS, Python and R over open standards: OGC API - Features, STAC, vector tiles, Cloud-Optimized GeoTIFF, GeoParquet and PMTiles.
+---
+
 # Accessing your data from other tools
 
 **QGIS · GeoLibre · DuckDB · Python · R · anything that speaks HTTP.**

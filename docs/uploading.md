@@ -1,3 +1,8 @@
+---
+description: >-
+  Upload Shapefile, GeoPackage, GeoJSON, KML, CSV, GeoParquet and GeoTIFF data into GeoDeploy, including multi-gigabyte files that go straight to object storage.
+---
+
 # Uploading data
 
 **My Data** holds everything you have brought in. Vector layers and rasters are listed separately,

@@ -83,11 +83,45 @@ window.GD_DASHBOARD = (function () {
   //: has rather than an assumed 300. Falls back to the old numbers when the card has not been laid
   //: out yet (first paint), and `render()` runs again on resize.
   const CHART_MIN_W = 160, CHART_MIN_H = 90;
+  //: The space a chart actually has, in px — the body's CONTENT box, padding excluded.
+  //:
+  //: `clientHeight` includes padding, and the card body has 10px of it on every side. That was
+  //: harmless while the SVG was `height: 100%` (the browser resolved it against the content box and
+  //: `preserveAspectRatio: meet` quietly scaled the 20px-too-tall viewBox down to fit), but it is
+  //: not harmless the moment anything does arithmetic with the number: subtracting a legend's
+  //: height from a figure that is 20px too big still overflows the card. Reporting the real box
+  //: also makes the label-density calculations honest, since they budget px against this width.
   function chartBox(host) {
     let w = 0, h = 0;
-    try { w = host.clientWidth || 0; h = host.clientHeight || 0; } catch (e) { /* detached */ }
+    try {
+      w = host.clientWidth || 0;
+      h = host.clientHeight || 0;
+      const cs = getComputedStyle(host);
+      w -= (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+      h -= (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+    } catch (e) { /* detached */ }
     return { W: Math.max(CHART_MIN_W, Math.round(w) || 300),
              H: Math.max(CHART_MIN_H, Math.round(h) || 170) };
+  }
+
+  //: The vertical margin an element costs the box it shares — separate from its height, because
+  //: capping how tall the legend may GROW has to leave room for the gap above it too.
+  function marginY(node) {
+    if (!node) return 0;
+    try {
+      const cs = getComputedStyle(node);
+      return (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0);
+    } catch (e) { return 0; }
+  }
+
+  //: An element's height INCLUDING the margin that separates it from its sibling — the space it
+  //: costs the box it shares, which is what has to be taken off the plot.
+  function outerHeight(node) {
+    if (!node) return 0;
+    let h = 0;
+    try { h = node.getBoundingClientRect().height || node.offsetHeight || 0; }
+    catch (e) { h = node.offsetHeight || 0; }
+    return Math.ceil(h + marginY(node));
   }
 
   //: Per-bar colour. Default stays SINGLE — an x-axis that already names the category does not need
@@ -215,6 +249,12 @@ window.GD_DASHBOARD = (function () {
       });
     }
     return {
+      //: How many requests are still open. The loading gate reads it to decide when the first round
+      //: of widget queries has settled — see `whenSettled`. Counting the client's own in-flight map
+      //: rather than threading a promise back out of every renderer: `refresh()` returns nothing on
+      //: all thirteen of them, and changing that contract to answer one question would be a wide
+      //: change for a narrow need.
+      pending: function () { return Object.keys(inflight).length; },
       aggregate: function (key, layerId, spec) {
         return post(key, '/api/data/vector/' + layerId + '/aggregate', spec);
       },
@@ -279,7 +319,8 @@ window.GD_DASHBOARD = (function () {
     widgets.forEach(function (w) { byId[w.id] = w; });
     // `geomPinned` = the geometry came from a deliberate act (a click, a drawn polygon, a dragged
     // box) rather than from the map moving. See `publishGeom`.
-    const state = { attr: {}, geom: null, geomPinned: false, selection: null };
+    const state = { attr: {}, geom: null, geomPinned: false, selection: null,
+                    lastAttr: null };
     const listeners = {};      // widgetId → refresh fn (a TARGET re-queries)
     const selfListeners = {};  // widgetId → fn (a SOURCE redraws its own active state, no query)
     const barListeners = [];
@@ -359,12 +400,18 @@ window.GD_DASHBOARD = (function () {
         state.attr[sourceId] = { layerKey: layerKeyOf(byId[sourceId]),
                                  layerId: layerIdOf(byId[sourceId]), targets: targets,
                                  expr: expr, label: label };
+        // WHO published last. Only the map reads it, to decide whether the newest filter was a
+        // chart click worth framing the camera on; targets otherwise see a set, not an order.
+        state.lastAttr = sourceId;
         notify(affected(prev && prev.targets, targets));
         notifySelf(sourceId);
       },
       clearAttr: function (sourceId, quiet) {
         const prev = state.attr[sourceId];
         if (!prev) return;
+        // Clearing is not publishing: un-selecting a bar must not fly the camera to what was just
+        // let go of. Only forget it if the source being cleared IS the last publisher.
+        if (state.lastAttr === sourceId) state.lastAttr = null;
         delete state.attr[sourceId];
         if (!quiet) { notify(prev.targets); notifySelf(sourceId); }
       },
@@ -442,6 +489,16 @@ window.GD_DASHBOARD = (function () {
           (out[f.layerId] || (out[f.layerId] = [])).push(f.expr);
         }
         return out;
+      },
+      //: The attribute filter published MOST RECENTLY, with the type of the widget that published
+      //: it — everything the map needs to decide whether this was a chart click worth framing.
+      //: Tracked here because the store is the only place that sees the publications in order; a
+      //: target only ever sees the resulting set.
+      lastAttrSource: function () {
+        const id = state.lastAttr;
+        if (!id || !state.attr[id]) return null;
+        const f = state.attr[id], w = byId[id];
+        return { id: id, type: w && w.type, layerId: f.layerId, expr: f.expr };
       },
       selectionFor: function (w) {
         const sel = state.selection;
@@ -596,6 +653,29 @@ window.GD_DASHBOARD = (function () {
     return host;
   }
 
+  //: "screen" makes the board fill the viewport; "rows" (the default) keeps every row at the
+  //: height the author set. Written by init from `grid.fit`, read by placeAll on every breakpoint.
+  let fitMode = 'rows';
+
+  //: FILLING THE SCREEN, without promising something the screen may not allow.
+  //:
+  //: The rows become `minmax(--dash-row, 1fr)`: at least the height the author chose, sharing
+  //: whatever is left over. On a monitor taller than the board that spreads the widgets down the
+  //: whole page instead of leaving a third of it empty; on a screen too short — a phone, a portrait
+  //: display, a board of thirty rows — the minimum wins and it scrolls exactly as it does today.
+  //: One declaration covers both because that is what minmax means, and no media query has to guess
+  //: where the boundary is.
+  //:
+  //: Uniform rows are what make this safe: a widget spanning four of them still gets four times a
+  //: widget spanning one, so the author's proportions survive the stretch untouched.
+  function applyRowTemplate(rows) {
+    const layoutEl = document.getElementById('layout');
+    if (!layoutEl) return;
+    layoutEl.style.gridTemplateRows = (fitMode === 'screen' && rows > 0)
+      ? 'repeat(' + rows + ', minmax(var(--dash-row), 1fr))'
+      : '';
+  }
+
   function placeAll(cards, cols, baseRow) {
     document.documentElement.style.setProperty('--dash-cols', String(cols));
     document.documentElement.style.setProperty(
@@ -615,9 +695,11 @@ window.GD_DASHBOARD = (function () {
         c.el.style.gridRow = row + ' / span ' + h;
         row += h;
       });
+      applyRowTemplate(row - 1);
       return;
     }
     const scale = cols / 12;
+    let used = 0;               // the last row any widget reaches, for the fit-to-screen template
     cards.forEach(function (c) {
       // Scale the EDGES, not the origin and the width separately. Rounding each independently is
       // what makes a row of four 3-wide widgets collide at 6 columns: x=3 rounds up to 2 and w=3
@@ -627,8 +709,11 @@ window.GD_DASHBOARD = (function () {
       const x = Math.max(0, Math.min(cols - 1, Math.round(c.layout.x * scale)));
       const right = Math.max(x + 1, Math.min(cols, Math.round((c.layout.x + c.layout.w) * scale)));
       c.el.style.gridColumn = (x + 1) + ' / span ' + (right - x);
-      c.el.style.gridRow = (Math.max(0, c.layout.y) + 1) + ' / span ' + Math.max(2, c.layout.h);
+      const y = Math.max(0, c.layout.y), h = Math.max(2, c.layout.h);
+      c.el.style.gridRow = (y + 1) + ' / span ' + h;
+      if (y + h > used) used = y + h;
     });
+    applyRowTemplate(used);
   }
 
   // ── widget chrome ──────────────────────────────────────────────────────────
@@ -683,6 +768,38 @@ window.GD_DASHBOARD = (function () {
   const RENDERERS = {};
 
   // INDICATOR — one number, optionally against a target, optionally clickable as a filter source.
+  //: The floor a fitted number will not go below. Under this it stops being the thing the card is
+  //: for and becomes small print that happens to be bold.
+  const FIT_MIN_PX = 13;
+
+  //: Shrink a number until it fits the width of its card.
+  //:
+  //: `.gd-ind-value` is sized in `vw`, which is the VIEWPORT's width and not the card's — so a
+  //: three-column indicator on a wide screen gets the same 40px as a full-width one, and a count in
+  //: the millions simply ran past the edge. Nothing in CSS can size type to a box the author
+  //: resizes at will: container queries would need a container the flex-centred body does not
+  //: establish, and clamp() cannot see the card at all.
+  //:
+  //: One measurement, one ratio: text width is very nearly linear in font size, so scaling by
+  //: `available / measured` lands within a pixel. The second pass is only there for the rounding.
+  function fitValue(node) {
+    const host = node.parentNode;
+    if (!host) return;
+    node.style.fontSize = '';                 // start from the stylesheet's own size every time
+    const avail = host.clientWidth;
+    if (!avail) return;                       // detached, or a card with no width yet
+    let size = parseFloat(getComputedStyle(node).fontSize) || 32;
+    for (let pass = 0; pass < 2; pass++) {
+      const wide = node.scrollWidth;
+      if (wide <= avail) return;
+      // 0.98 keeps a hair of margin: scrollWidth rounds up, and a number that exactly fills its box
+      // reads as though it is about to overflow even when it is not.
+      size = Math.max(FIT_MIN_PX, Math.floor(size * (avail / wide) * 0.98));
+      node.style.fontSize = size + 'px';
+      if (size === FIT_MIN_PX) return;        // as small as it is allowed to get
+    }
+  }
+
   RENDERERS.indicator = function (w, env) {
     const c = card(w, { bodyClass: 'gd-w-center' });
     const ds = w.dataSource;
@@ -691,7 +808,7 @@ window.GD_DASHBOARD = (function () {
       return { el: c.root, refresh: function () {} };
     }
     const source = env.sources[layerKeyOf(w)];
-    c.sub.textContent = opLabel(ds, source);
+    setSub(c, w, opLabel(ds, source));
 
     if (ds.filterField && ds.filterValue != null) {
       c.root.dataset.clickable = '1';
@@ -707,12 +824,31 @@ window.GD_DASHBOARD = (function () {
       });
     }
 
+    // Re-fit when the CARD changes size, not only when the number does. Widening a card should let
+    // a number that had been shrunk grow back, and narrowing one must shrink it — a fit computed
+    // once at first paint is wrong the moment the author drags a corner.
+    let lastValue = null;
+    try {
+      if (typeof ResizeObserver === 'function') {
+        let last = 0;
+        new ResizeObserver(function () {
+          // Only a real change in integer width: the observer also fires for the font-size change
+          // `fitValue` itself makes, and re-fitting on that would be a loop.
+          const now = c.body.clientWidth | 0;
+          if (now === last) return;
+          last = now;
+          if (lastValue) fitValue(lastValue);
+        }).observe(c.body);
+      }
+    } catch (e) { /* no ResizeObserver: the number keeps its first-paint size */ }
+
     function refresh() {
       busy(c.root, true);
       env.api.aggregate(w.id, ds.layerId, specFor(w, env.store, { op: ds.op, field: ds.field }))
         .then(function (data) {
           busy(c.root, false);
           clear(c.body);
+          lastValue = null;
           const value = data ? data.value : null;
           const v = el('div', 'gd-ind-value', fmtNumber(value, w.style));
           if (w.style && w.style.unit) {
@@ -721,6 +857,8 @@ window.GD_DASHBOARD = (function () {
           }
           if (w.style && w.style.color) v.style.color = w.style.color;
           c.body.appendChild(v);
+          fitValue(v);                        // after the append: it has no width before it
+          lastValue = v;
           if (ds.field && ds.op !== 'count') c.body.appendChild(el('div', 'gd-ind-label', ds.field));
           const target = w.style && w.style.target;
           if (target != null && value != null && (w.style.compareMode || 'delta') !== 'none') {
@@ -749,9 +887,33 @@ window.GD_DASHBOARD = (function () {
     return el('div', 'gd-ind-delta ' + cls, text + ' vs ' + fmtNumber(target, style));
   }
 
+  //: The line under a widget's title: the author's words if they wrote any, otherwise what the
+  //: widget can work out about itself.
+  //:
+  //: The automatic one names the layer and the aggregation, which is the right DEFAULT and a poor
+  //: caption — "GDP_per_capita_1960_2016_… · count" describes the query, and the reader wants the
+  //: subject. The title has always been editable; this line was not, and it is the one carrying the
+  //: field name.
+  function setSub(c, w, fallback) {
+    const custom = w.style && w.style.subtitle;
+    c.sub.textContent = custom ? truncate(custom, 40) : fallback;
+  }
+
+  function pointRadius(w) {
+    const r = Number(w.style && w.style.pointSize);
+    return r > 0 ? Math.max(1.5, Math.min(8, r)) : 3.5;
+  }
+
   function opLabel(ds, source) {
     const name = source ? source.name : ('layer ' + ds.layerId);
-    const op = { count: 'count', sum: 'sum', avg: 'average', min: 'minimum', max: 'maximum' }[ds.op] || ds.op;
+    // The EFFECTIVE aggregation. With columns as the axis the runtime substitutes `sum` for
+    // `count`, because counting rows reads none of the chosen columns — so a chart saved before
+    // that promotion existed said "count" in its subtitle while plotting sums.
+    // `|| 'count'` at the end because an absent op used to fall through the lookup and print the
+    // word "undefined" in the subtitle. The schema fills it in on every widget it normalises, so
+    // this is for the one that arrives without — an older manifest, a hand-edited config.
+    const raw = ((ds.xColumns || []).length && (!ds.op || ds.op === 'count')) ? 'sum' : (ds.op || 'count');
+    const op = { count: 'count', sum: 'sum', avg: 'average', min: 'minimum', max: 'maximum' }[raw] || raw;
     return truncate(name, 26) + ' · ' + op;
   }
 
@@ -763,7 +925,7 @@ window.GD_DASHBOARD = (function () {
       unbound(c.body, 'Pick a layer and an aggregation for this gauge.');
       return { el: c.root, refresh: function () {} };
     }
-    c.sub.textContent = opLabel(ds, env.sources[layerKeyOf(w)]);
+    setSub(c, w, opLabel(ds, env.sources[layerKeyOf(w)]));
     if (ds.filterField && ds.filterValue != null) {
       c.root.dataset.clickable = '1';
       c.root.addEventListener('click', function () {
@@ -794,13 +956,27 @@ window.GD_DASHBOARD = (function () {
   function drawGauge(value, style) {
     const min = style.min == null ? 0 : style.min;
     const max = style.max == null ? 100 : style.max;
-    const W = 180, H = 116, cx = 90, cy = 96, r = 68;
+    //: GEOMETRY THAT FITS. The arc sweeps 240 degrees from -210, so its two ends sit at 30 degrees
+    //: BELOW the centre — `cy + r*sin(30) = cy + r/2`, lower than the widest point of the circle.
+    //: The old box was 116 tall with the centre at 96, which put both ends at y=130 and cut 20px
+    //: off the bottom of the dial: the arc appeared to stop dead just before each cap, and the
+    //: min/max labels sat over the gap where its ends should have been.
+    //:
+    //: Derived rather than guessed, so it stays right if the radius or the sweep changes:
+    //:   top    = cy - r - halfStroke   (must be >= 0)
+    //:   bottom = cy + r*sin(30) + halfStroke
+    //:   labels sit below that, and H covers the lot.
+    const r = 68, SW = 12, HALF = SW / 2, W = 180, cx = 90;
     const START = -210, SWEEP = 240;
+    const endDrop = r * Math.sin((START + SWEEP) * Math.PI / 180);   // + r/2
+    const cy = r + HALF;
+    const H = Math.ceil(cy + endDrop + HALF + 16);                   // + room for the cap labels
     const svg = svgEl('svg', { class: 'gd-gauge', viewBox: '0 0 ' + W + ' ' + H,
                                preserveAspectRatio: 'xMidYMid meet' });
-    function pt(frac) {
+    function pt(frac, radius) {
       const a = (START + SWEEP * frac) * Math.PI / 180;
-      return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+      const rr = radius == null ? r : radius;
+      return [cx + rr * Math.cos(a), cy + rr * Math.sin(a)];
     }
     function arc(f0, f1, colour, width) {
       const p0 = pt(f0), p1 = pt(f1);
@@ -811,35 +987,178 @@ window.GD_DASHBOARD = (function () {
         fill: 'none', stroke: colour, 'stroke-width': width, 'stroke-linecap': 'round',
       });
     }
-    const track = arc(0, 1, 'currentColor', 12);
+    const span = (max - min) || 1;
+    const fracOf = function (v) { return Math.max(0, Math.min(1, (v - min) / span)); };
+
+    const track = arc(0, 1, 'currentColor', SW);
     track.setAttribute('class', 'gd-gauge-track');
     track.removeAttribute('stroke');
     svg.appendChild(track);
 
-    const span = (max - min) || 1;
     const bands = (style.bands || []).slice();
     bands.forEach(function (b, i) {
-      const from = Math.max(0, Math.min(1, (b.from - min) / span));
-      const to = i + 1 < bands.length ? Math.max(0, Math.min(1, (bands[i + 1].from - min) / span)) : 1;
-      if (to > from) svg.appendChild(arc(from, to, b.color, 12));
+      const from = fracOf(b.from);
+      const to = i + 1 < bands.length ? fracOf(bands[i + 1].from) : 1;
+      if (to > from) svg.appendChild(arc(from, to, b.color, SW));
     });
 
+    //: TICKS. A dial labelled only at its two ends says how far it goes and not where anything
+    //: sits along it — the same fault the value axis had. Short marks just inside the track, at the
+    //: round numbers `niceTicks` picks, so a needle two thirds along can be read as a number.
+    niceTicks(min, max, 4).forEach(function (v) {
+      if (v < min || v > max) return;
+      const f = fracOf(v);
+      const a = pt(f, r - HALF - 1), b = pt(f, r - HALF - 5);
+      svg.appendChild(svgEl('line', { class: 'gd-gauge-tick',
+                                      x1: a[0].toFixed(2), y1: a[1].toFixed(2),
+                                      x2: b[0].toFixed(2), y2: b[1].toFixed(2) }));
+    });
+
+    //: The TARGET, when there is one. A gauge exists to answer "are we there yet", and a dial with
+    //: a number on it but no mark for the number that matters leaves the reader doing the
+    //: comparison in their head.
+    if (style.target != null && isFinite(style.target)) {
+      const f = fracOf(style.target);
+      const a = pt(f, r + HALF + 1), b = pt(f, r - HALF - 1);
+      svg.appendChild(svgEl('line', { class: 'gd-gauge-target',
+                                      x1: a[0].toFixed(2), y1: a[1].toFixed(2),
+                                      x2: b[0].toFixed(2), y2: b[1].toFixed(2) }));
+    }
+
     if (value != null && isFinite(value)) {
-      const frac = Math.max(0, Math.min(1, (value - min) / span));
+      const frac = fracOf(value);
       svg.appendChild(arc(0, Math.max(frac, 0.001), style.color || accent(), 6));
       const p = pt(frac);
       svg.appendChild(svgEl('circle', { cx: p[0].toFixed(2), cy: p[1].toFixed(2), r: 5,
                                         fill: style.color || accent() }));
     }
-    const label = svgEl('text', { x: cx, y: cy - 8, 'text-anchor': 'middle', class: 'gd-gauge-value' });
+    const label = svgEl('text', { x: cx, y: cy - 6, 'text-anchor': 'middle', class: 'gd-gauge-value' });
     label.textContent = fmtNumber(value, style) + (style.unit ? ' ' + style.unit : '');
     svg.appendChild(label);
-    const lo = svgEl('text', { x: pt(0)[0], y: cy + 16, 'text-anchor': 'middle', class: 'gd-gauge-cap' });
+    // Under the arc's ENDS, wherever the geometry puts them.
+    const capY = cy + endDrop + HALF + 12;
+    const lo = svgEl('text', { x: pt(0)[0].toFixed(2), y: capY, 'text-anchor': 'middle',
+                               class: 'gd-gauge-cap' });
     lo.textContent = fmtNumber(min, style);
-    const hi = svgEl('text', { x: pt(1)[0], y: cy + 16, 'text-anchor': 'middle', class: 'gd-gauge-cap' });
+    const hi = svgEl('text', { x: pt(1)[0].toFixed(2), y: capY, 'text-anchor': 'middle',
+                               class: 'gd-gauge-cap' });
     hi.textContent = fmtNumber(max, style);
     svg.appendChild(lo); svg.appendChild(hi);
     return svg;
+  }
+
+  //: Column names as axis labels, with the part they all share removed.
+  //:
+  //: `gdp_1990 … gdp_2020` are twenty ticks that agree on eleven characters and differ in four. The
+  //: shared part is the variable's name — true of every tick, and therefore telling the reader
+  //: nothing about which one they are looking at, while eating the width that would let the rest be
+  //: read. Trimmed, they say 1990 … 2020, which is what the axis is.
+  //:
+  //: Only when a difference SURVIVES: a common prefix is not stripped if doing so leaves a label
+  //: empty, and a single column keeps its full name because one label shares everything with itself.
+  function trimColumnLabels(names) {
+    if (!names || names.length < 2) return (names || []).slice();
+    // FIRST, the trailing number — which is what actually distinguishes a set of wide columns, and
+    // does not depend on their prefixes agreeing.
+    //
+    // A shapefile truncates field names to ten characters, so one variable across 56 years arrives
+    // as GDP_PerC_1 … GDP_PerC_9 and then GDP_Per_10 … GDP_Per_56: the prefix CHANGES partway
+    // through, as the number grows and the truncation eats another letter. There is no common
+    // prefix to strip, and affix-trimming correctly concludes there is nothing to do — leaving the
+    // axis reading GDP_PerC_1, GDP_Per_10 when the reader wanted 1, 10.
+    //
+    // Only when EVERY name ends in digits and those digits are all different: identical tails mean
+    // the number is not what tells the columns apart (q1_2020, q2_2020) and the shared-affix rule
+    // below is the one that finds the 1 and the 2.
+    const tails = names.map(function (n) {
+      const m = String(n).match(/(\d+)$/);
+      return m ? m[1] : null;
+    });
+    if (tails.every(Boolean) && new Set(tails).size === names.length) {
+      // Through Number, so 01 and 1 do not sit on the same axis looking like different years.
+      return tails.map(function (t) { return String(Number(t)); });
+    }
+    let pre = names[0], suf = names[0];
+    for (let i = 1; i < names.length; i++) {
+      const n = names[i];
+      let p = 0;
+      while (p < pre.length && p < n.length && pre[p] === n[p]) p++;
+      pre = pre.slice(0, p);
+      let q = 0;
+      while (q < suf.length && q < n.length && suf[suf.length - 1 - q] === n[n.length - 1 - q]) q++;
+      suf = suf.slice(suf.length - q);
+    }
+    // NEVER SPLIT A TOKEN. What two labels happen to share is not the same as the part that tells
+    // the reader nothing. `gdp_1990, gdp_2000, gdp_2010` share a trailing `0` — the last digit of
+    // every year — and trimming it leaves 199, 200, 201. `y.2019, y.2020` share a leading `y.20`,
+    // leaving 19 and 20. `alpha, beta` share a trailing `a`, leaving alph and bet. Three versions of
+    // one mistake: a boundary drawn inside a word or a number.
+    //
+    // So an affix is first backed out of any digit run it lands in, and then only accepted if it
+    // ends (or begins) at a SEPARATOR. `gdp_` and `_est` qualify; `y.20`, `0_est` and `a` do not.
+    // One exception, because it is unambiguous and common: a prefix of letters followed everywhere
+    // by digits — `gdp1990` — is a boundary even with no separator to mark it.
+    const D = /[0-9]/, SEP = /[_\-. ]/;
+    while (pre.length && D.test(pre[pre.length - 1])
+           && names.some(function (n) { return D.test(n[pre.length] || ''); })) {
+      pre = pre.slice(0, -1);
+    }
+    while (suf.length && D.test(suf[0])
+           && names.some(function (n) { return D.test(n[n.length - suf.length - 1] || ''); })) {
+      suf = suf.slice(1);
+    }
+    const preOk = !pre.length || SEP.test(pre[pre.length - 1])
+      || (!D.test(pre[pre.length - 1])
+          && names.every(function (n) { return D.test(n[pre.length] || ''); }));
+    if (!preOk) pre = '';
+    if (suf.length && !SEP.test(suf[0])) suf = '';
+    const out = names.map(function (n) {
+      const cut = n.slice(pre.length, n.length - suf.length);
+      // Separators next to the affix belong with it in spirit if not in characters: `gdp_1990`
+      // against the prefix `gdp` leaves `_1990`.
+      return cut.replace(/^[_\-. ]+|[_\-. ]+$/g, '');
+    });
+    return out.every(function (v) { return v.length; }) ? out : names.slice();
+  }
+
+  //: The axis labels an author asked for, from the ones the column names gave.
+  //:
+  //: `gdp60 … gdp99` trim to `60 … 99`, which is what the columns say and not what they mean. The
+  //: offset does the arithmetic (60 + 1900) and the pattern does the text (`19{}`); either reaches
+  //: 1960, and together they handle the cases neither does alone.
+  //:
+  //: A label that is not a number is left alone by the offset rather than becoming NaN — a column
+  //: set can mix `q1` with `2020` and the axis should not go blank over it.
+  function formatColumnLabels(labels, pattern, offset) {
+    const off = Number(offset) || 0;
+    const pat = (pattern && pattern.indexOf('{}') >= 0) ? pattern : null;
+    return labels.map(function (lab) {
+      let v = String(lab == null ? '' : lab);
+      if (off) {
+        const n = Number(v);
+        if (v !== '' && isFinite(n)) v = String(n + off);
+      }
+      return pat ? pat.split('{}').join(v) : v;
+    });
+  }
+
+  //: Turn a measures-by-group answer into a groups-by-measure one.
+  //:
+  //: The server returns rows = groups, columns = measures — right for "mean height and mean age per
+  //: district", where the district is the axis. Wide data is the same matrix read the other way:
+  //: the COLUMNS are the axis (one per year) and each group becomes a line across them. Nothing is
+  //: recomputed; the numbers are the numbers, and this only decides which way round they are drawn.
+  function transposeSeries(groups, series, labels) {
+    const rows = (labels || series.map(function (s) { return s.label; })).map(function (lab, i) {
+      return { key: lab, values: groups.map(function (g) { return (g.values || [])[i]; }),
+               value: (groups[0] && (groups[0].values || [])[i]), count: 0 };
+    });
+    // With no grouping the server answers one row whose key is null: one line, and calling its
+    // legend entry "null" would be worse than not drawing a legend at all.
+    const cols = groups.map(function (g, i) {
+      return { label: g.key == null ? 'Value' : String(g.key), op: null, field: null, __i: i };
+    });
+    return { groups: rows, series: cols };
   }
 
   // CHART — bar / hbar / line / area / pie / donut over a grouped aggregation. Segments are filter
@@ -852,7 +1171,7 @@ window.GD_DASHBOARD = (function () {
       unbound(c.body, 'Pick a layer, an aggregation and a grouping field for this chart.');
       return { el: c.root, refresh: function () {} };
     }
-    c.sub.textContent = opLabel(ds, env.sources[layerKeyOf(w)]);
+    setSub(c, w, opLabel(ds, env.sources[layerKeyOf(w)]));
     let groups = [];
     let multi = [];      // the series the server answered; length > 1 selects the multi-series draw
 
@@ -886,29 +1205,60 @@ window.GD_DASHBOARD = (function () {
       // has no whole to be parts of — it would draw a shape that means nothing.
       if (multi.length > 1 && kind !== 'pie' && kind !== 'donut') {
         const colours = multi.map(function (_, i) { return PALETTE[i % PALETTE.length]; });
-        c.body.appendChild((kind === 'line' || kind === 'area')
-          ? drawMultiLine(groups, ds, w.style, multi, kind === 'area', bx.W, bx.H)
-          : drawGroupedBars(groups, ds, w.style, multi, bx.W, bx.H));
-        if (!(w.style && w.style.legend === false)) {
-          c.body.appendChild(seriesLegend(multi, colours));
-        }
+        //: THE LEGEND GETS ITS ROOM FIRST, and the plot takes what is left.
+        //:
+        //: `.gd-chart` is `height: 100%` and the legend is its sibling in a block body, so the plot
+        //: claimed the card's full height and pushed the key out of sight into the body's
+        //: scrollbar. Making the widget taller did not help — it grew the plot by exactly as much,
+        //: which is the same trap the pie hit and why `plotSize` exists there.
+        //:
+        //: A slider is the wrong answer for a series key, though: unlike a pie's, it wraps to
+        //: however many lines its labels need, so its height is a MEASURABLE fact rather than a
+        //: judgement call. So it is appended first, measured, and the plot is built for the
+        //: remainder. A taller card now grows the plot and leaves the key where it is, which is
+        //: what someone reaching for the resize handle was asking for.
+        const legend = (w.style && w.style.legend === false)
+          ? null : seriesLegend(multi, colours);
+        if (legend) c.body.appendChild(legend);
+        const plotH = plotHeight(bx, w.style, [legend]);
+        const node = (kind === 'line' || kind === 'area')
+          ? drawMultiLine(groups, ds, w.style, multi, kind === 'area', bx.W, plotH)
+          : drawGroupedBars(groups, ds, w.style, multi, bx.W, plotH);
+        fixPlotHeight(node, plotH);
+        capToRoom(legend, bx, plotH);
+        c.body.insertBefore(node, legend);      // a null second argument appends, which is correct
         return;
       }
+      // A pie's key had the same problem as a line chart's and for the same reason — the circle is
+      // `height: 100%` and the key is its sibling — so it is measured first here too. `plotSize`
+      // still overrules, which is what it always did on a pie; it just no longer has to be reached
+      // for to make the key visible at all.
+      const key = (w.style && w.style.legend !== false && (kind === 'pie' || kind === 'donut'))
+        ? pieLegend(groups, selectedKey(), onPick) : null;
+      if (key) c.body.appendChild(key);
+      const plotH = plotHeight(bx, w.style, [key]);
       const node = (kind === 'pie' || kind === 'donut')
         ? drawPie(groups, ds, w.style, selectedKey(), onPick, kind === 'donut')
         : (kind === 'line' || kind === 'area')
-          ? drawLine(groups, ds, w.style, kind === 'area', selectedKey(), onPick, bx.W, bx.H)
-          : drawBars(groups, ds, w.style, selectedKey(), onPick, kind === 'hbar', bx.W, bx.H);
-      c.body.appendChild(node);
-      if (w.style && w.style.legend !== false && (kind === 'pie' || kind === 'donut')) {
-        c.body.appendChild(pieLegend(groups, selectedKey(), onPick));
-      }
+          ? drawLine(groups, ds, w.style, kind === 'area', selectedKey(), onPick, bx.W, plotH)
+          : drawBars(groups, ds, w.style, selectedKey(), onPick, kind === 'hbar', bx.W, plotH);
+      fixPlotHeight(node, plotH);
+      capToRoom(key, bx, plotH);
+      c.body.insertBefore(node, key);
     }
     function refresh() {
       busy(c.root, true);
+      // WIDE DATA: each chosen column becomes one measure. That is the whole of the request side —
+      // the server already answers N aggregates over one grouping in a single scan, and this is
+      // that, with the columns supplying the N.
+      const xcols = (ds.xColumns || []).filter(Boolean);
+      const series = xcols.length
+        ? xcols.map(function (c) { return { op: ds.op && ds.op !== 'count' ? ds.op : 'sum',
+                                            field: c, label: c }; })
+        : ds.series;
       env.api.aggregate(w.id, ds.layerId, specFor(w, env.store, {
         op: ds.op, field: ds.field, groupBy: ds.groupBy, timeBucket: ds.timeBucket,
-        limit: ds.limit, sort: ds.sort, series: ds.series,
+        limit: ds.limit, sort: xcols.length ? 'key_asc' : ds.sort, series: series,
       })).then(function (data) {
         busy(c.root, false);
         groups = (data && data.groups) || [];
@@ -916,6 +1266,36 @@ window.GD_DASHBOARD = (function () {
         // rather than the request — a measure the server dropped (a field the layer lost) then
         // disappears from the legend too, instead of labelling someone else's line.
         multi = (data && data.series) || [];
+        // THE OVERALL LINE, asked as its own question rather than derived from the answer above.
+        //
+        // Averaging the plotted series would average the groups that SURVIVED `limit` — the top 12,
+        // or 100 — and label the result as the average of everything. Asking the same aggregation
+        // with no grouping gives the real figure over the current filters, whatever the group cap.
+        // One extra request, and only when it is switched on.
+        if (xcols.length && ds.meanLine && ds.groupBy) {
+          env.api.aggregate(w.id + ':mean', ds.layerId, specFor(w, env.store, {
+            op: ds.op, series: series, limit: 2, sort: 'key_asc',
+          })).then(function (mean) {
+            const row = (mean && mean.groups && mean.groups[0]) || null;
+            const vals = row ? (row.values || [row.value]) : (mean ? [mean.value] : null);
+            if (!vals || !groups.length) return;
+            // Appended AFTER the transpose, as one more value on each tick — the same shape every
+            // other series has, so nothing downstream needs to know it is special except the marker
+            // that draws it thicker.
+            groups.forEach(function (g, i) { g.values = (g.values || []).concat([vals[i]]); });
+            multi = multi.concat([{ label: 'Average', __mean: true }]);
+            render();
+          }).catch(function () { /* the per-group lines are still a chart without it */ });
+        }
+        if (xcols.length && multi.length) {
+          // Labels come from the ANSWER's series, not the request's columns, for the same reason:
+          // a column the server dropped must not leave its name on another column's ticks.
+          const t = transposeSeries(groups, multi, formatColumnLabels(
+            trimColumnLabels(multi.map(function (m) { return m.field || m.label; })),
+            ds.xLabelPattern, ds.xLabelOffset));
+          groups = t.groups;
+          multi = t.series;
+        }
         render();
       }).catch(function (err) { busy(c.root, false); showError(c.body, err); });
     }
@@ -983,7 +1363,11 @@ window.GD_DASHBOARD = (function () {
   }
 
   function drawMultiLine(groups, ds, style, series, filled, boxW, boxH) {
-    const W = boxW || 300, H = boxH || 170, padL = 34, padR = 8, padT = 8, padB = 26;
+    // padB 34, not 26: a rotated label hangs below its tick, and 26 clipped it. Same as the grouped
+    // bars, which have always rotated.
+    const tp = titlePads(style);
+    const W = boxW || 300, H = boxH || 170, padR = 8, padT = 8;
+    const padL = 34 + tp.y, padB = 34 + tp.x;
     const svg = svgEl('svg', { class: 'gd-chart', viewBox: '0 0 ' + W + ' ' + H,
                                preserveAspectRatio: 'xMidYMid meet' });
     const n = groups.length, m = series.length;
@@ -993,7 +1377,11 @@ window.GD_DASHBOARD = (function () {
     const y = function (v) { return H - padB - ((v - ext.lo) / span) * (H - padT - padB); };
 
     for (let s = 0; s < m; s++) {
-      const colour = PALETTE[s % PALETTE.length];
+      // The overall line is drawn in the theme's own accent and twice as thick: it is not one more
+      // country, and a reader scanning fifty lines of palette colour needs to find it without
+      // consulting the legend.
+      const mean = !!(series[s] && series[s].__mean);
+      const colour = mean ? accent() : PALETTE[s % PALETTE.length];
       const pts = groups.map(function (g, i) { return x(i) + ',' + y(seriesValues(g, m)[s]); });
       if (filled && m === 1) {
         // Only a SINGLE series is ever area-filled: stacked translucent fills over each other read
@@ -1004,7 +1392,7 @@ window.GD_DASHBOARD = (function () {
         }));
       }
       svg.appendChild(svgEl('polyline', { points: pts.join(' '), fill: 'none',
-                                          stroke: colour, 'stroke-width': 1.8,
+                                          stroke: colour, 'stroke-width': mean ? 3.4 : 1.8,
                                           'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
       groups.forEach(function (g, i) {
         const v = seriesValues(g, m)[s];
@@ -1015,8 +1403,50 @@ window.GD_DASHBOARD = (function () {
         svg.appendChild(dot);
       });
     }
+    // THE X AXIS. This drew none at all: a chart of one line per country across 56 year-columns
+    // showed the lines and never said which year any point was. Selecting a single country dropped
+    // to `drawLine`, which does label its axis — so the labels appeared and disappeared with the
+    // number of series, which is not a distinction the axis has any business making.
+    axisLabels.room = W - padL - padR;
+    groups.forEach(function (g, i) {
+      axisLabels(svg, i, n, g, ds, x(i), H - padB + 11, false);
+    });
     svg.appendChild(axis(padL, padT, W - padR, H - padB, ext.lo, ext.hi, style));
+    axisTitles(svg, style, W, H, padL, padB);
     return svg;
+  }
+
+  //: How much room an axis title needs, or none when there is no title.
+  //:
+  //: Charged only when there is something to charge for: an axis title costs plot height or width,
+  //: and a chart that reserved it always would give up that space on every chart that has none.
+  const TITLE_PAD = 13;
+  function titlePads(style) {
+    return { x: (style && style.xTitle) ? TITLE_PAD : 0,
+             y: (style && style.yTitle) ? TITLE_PAD : 0 };
+  }
+
+  //: The axis titles themselves.
+  //:
+  //: A column name is not a label. `GDP_PerC_1` is what the data is called; "GDP per capita (USD)"
+  //: is what the reader needs, and the two are rarely the same string — especially after a
+  //: shapefile has truncated the first to ten characters. Tick labels say WHERE a point is; the
+  //: title says WHAT is being measured, and no amount of tick formatting supplies it.
+  function axisTitles(svg, style, W, H, padL, padB) {
+    if (!style) return;
+    if (style.xTitle) {
+      const t = svgEl('text', { x: (padL + W - 8) / 2, y: H - 2, 'text-anchor': 'middle',
+                                class: 'gd-axis-title' });
+      t.textContent = style.xTitle;
+      svg.appendChild(t);
+    }
+    if (style.yTitle) {
+      const cy = (8 + H - padB) / 2;
+      const t = svgEl('text', { x: 9, y: cy, 'text-anchor': 'middle', class: 'gd-axis-title',
+                                transform: 'rotate(-90 9 ' + cy.toFixed(1) + ')' });
+      t.textContent = style.yTitle;
+      svg.appendChild(t);
+    }
   }
 
   //: The category labels under a vertical bar chart: how many fit, and where each one sits.
@@ -1047,7 +1477,9 @@ window.GD_DASHBOARD = (function () {
   }
 
   function drawGroupedBars(groups, ds, style, series, boxW, boxH) {
-    const W = boxW || 300, H = boxH || 170, padL = 34, padR = 8, padT = 8, padB = 34;
+    const tp = titlePads(style);
+    const W = boxW || 300, H = boxH || 170, padR = 8, padT = 8;
+    const padL = 34 + tp.y, padB = 34 + tp.x;
     const svg = svgEl('svg', { class: 'gd-chart', viewBox: '0 0 ' + W + ' ' + H,
                                preserveAspectRatio: 'xMidYMid meet' });
     const n = groups.length, m = series.length;
@@ -1076,6 +1508,7 @@ window.GD_DASHBOARD = (function () {
       axisLabels(svg, i, n, g, ds, padL + i * colW + colW / 2, H - padB + 11, false);
     });
     svg.appendChild(axis(padL, padT, W - padR, H - padB, ext.lo, ext.hi, style));
+    axisTitles(svg, style, W, H, padL, padB);
     return svg;
   }
 
@@ -1083,8 +1516,9 @@ window.GD_DASHBOARD = (function () {
     const W = boxW || 300, H = boxH || 170;
     // Label gutter scales with the box now that units are pixels: 28% of the width for a horizontal
     // chart's category names, floored so a narrow card still leaves room to read one.
-    const padL = horizontal ? Math.max(60, Math.min(140, Math.round(W * 0.28))) : 34;
-    const padR = 8, padT = 8, padB = horizontal ? 20 : 34;
+    const tp = titlePads(style);
+    const padL = (horizontal ? Math.max(60, Math.min(140, Math.round(W * 0.28))) : 34) + tp.y;
+    const padR = 8, padT = 8, padB = (horizontal ? 20 : 34) + tp.x;
     const svg = svgEl('svg', { class: 'gd-chart', viewBox: '0 0 ' + W + ' ' + H,
                                preserveAspectRatio: 'xMidYMid meet' });
     const values = groups.map(function (g) { return g.value == null ? 0 : g.value; });
@@ -1163,17 +1597,61 @@ window.GD_DASHBOARD = (function () {
       axisLabels(svg, i, n, g, ds, padL + i * colW + colW / 2, H - padB + 11, false);
     });
     svg.appendChild(axis(padL, padT, W - padR, H - padB, minV, maxV, style));
+    axisTitles(svg, style, W, H, padL, padB);
     return svg;
   }
 
+  //: Round numbers to put an axis's ticks on.
+  //:
+  //: The ends of a range are almost never the numbers a reader wants to see: an axis labelled
+  //: 0 and 25413 says how far it goes and nothing about where anything sits along it. Ticks at
+  //: 0 / 5000 / 10000 / … let a value be read off the chart, which is what an axis is for.
+  //:
+  //: Steps are 1, 2 or 5 times a power of ten — the intervals people count in. Snapping the step
+  //: rather than dividing the span evenly is the difference between 0, 5000, 10000 and 0, 6353.25,
+  //: 12706.5, both of which have five ticks and only one of which can be read at a glance.
+  function niceTicks(min, max, count) {
+    if (!isFinite(min) || !isFinite(max)) return [];
+    if (min === max) return [min];
+    const raw = (max - min) / Math.max(1, count);
+    const mag = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
+    const norm = raw / mag;
+    // Thresholds at the MIDPOINTS between the candidate steps, not at the steps themselves. Snapping
+    // 2.5 up to 5 (norm <= 2 ? 2 : 5) doubles the interval and halves the ticks: a chart from 12 to
+    // 913 came out with a step of 500 and therefore exactly ONE gridline, at 500. Choosing the
+    // nearest candidate instead of the next one up keeps the count near what was asked for.
+    const step = (norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10) * mag;
+    // How many decimals the step itself carries; ticks are rounded to it so a 0.2 step does not
+    // produce 0.6000000000000001 for a label to render.
+    const dp = Math.max(0, Math.min(12, -Math.floor(Math.log(step) / Math.LN10)));
+    const out = [];
+    // The epsilon is for binary floating point, not for tolerance: 0.1 + 0.2 lands a hair past 0.3
+    // and the last tick of a decimal range would otherwise be dropped.
+    for (let v = Math.ceil(min / step) * step; v <= max + step * 1e-9; v += step) {
+      out.push(Math.abs(v) < step * 1e-9 ? 0 : Number(v.toFixed(dp)));   // -0 prints as "-0"
+      if (out.length > 40) break;                    // a guard, never reached by a sane range
+    }
+    return out;
+  }
+
+  //: The value axis: a baseline, ticks at readable intervals, and a faint rule across the plot at
+  //: each one so a bar's height can be compared with the number beside it rather than guessed.
   function axis(x0, y0, x1, y1, minV, maxV, style) {
     const g = svgEl('g');
     g.appendChild(svgEl('line', { class: 'axis', x1: x0, y1: y1, x2: x1, y2: y1 }));
-    const hi = svgEl('text', { x: x0 - 4, y: y0 + 8, 'text-anchor': 'end', class: 'tick' });
-    hi.textContent = fmtNumber(maxV, style);
-    const lo = svgEl('text', { x: x0 - 4, y: y1, 'text-anchor': 'end', class: 'tick' });
-    lo.textContent = fmtNumber(minV, style);
-    g.appendChild(hi); g.appendChild(lo);
+    const span = (maxV - minV) || 1;
+    const ticks = niceTicks(minV, maxV, 4);
+    ticks.forEach(function (v) {
+      const y = y1 - ((v - minV) / span) * (y1 - y0);
+      if (y < y0 - 0.5 || y > y1 + 0.5) return;      // outside the plot after rounding
+      // Not over the baseline, which is already a line.
+      if (Math.abs(y - y1) > 0.5) {
+        g.appendChild(svgEl('line', { class: 'gridline', x1: x0, y1: y, x2: x1, y2: y }));
+      }
+      const t = svgEl('text', { x: x0 - 4, y: y + 3, 'text-anchor': 'end', class: 'tick' });
+      t.textContent = fmtNumber(v, style);
+      g.appendChild(t);
+    });
     return g;
   }
 
@@ -1183,7 +1661,9 @@ window.GD_DASHBOARD = (function () {
   //: 2.6px dot: on a 30-point series the dots are ~9px apart and aiming at the dot itself is a test
   //: of the mouse, not an interaction.
   function drawLine(groups, ds, style, filled, selected, onPick, boxW, boxH) {
-    const W = boxW || 300, H = boxH || 170, padL = 34, padR = 8, padT = 8, padB = 26;
+    const tp = titlePads(style);
+    const W = boxW || 300, H = boxH || 170, padR = 8, padT = 8;
+    const padL = 34 + tp.y, padB = 34 + tp.x;
     const svg = svgEl('svg', { class: 'gd-chart', viewBox: '0 0 ' + W + ' ' + H,
                                preserveAspectRatio: 'xMidYMid meet' });
     const values = groups.map(function (g) { return g.value == null ? 0 : g.value; });
@@ -1220,41 +1700,70 @@ window.GD_DASHBOARD = (function () {
       }
       svg.appendChild(hit);
     });
-    const every = Math.ceil(n / 6);
+    // The SAME helper the bars use, rather than this renderer's own rule of "six, upright, always".
+    // Six was a count with no relation to the card's width — too many in a narrow cell, and a waste
+    // of a wide one — and upright labels cannot rotate out of each other's way, so long category
+    // names simply overlapped. Sharing it also means a chart's axis does not change character when
+    // a filter takes it from several lines down to one.
+    axisLabels.room = W - padL - padR;
     groups.forEach(function (g, i) {
-      if (i % every) return;
-      const lab = svgEl('text', { x: x(i), y: H - padB + 12, 'text-anchor': 'middle', class: 'glabel' });
-      lab.textContent = truncate(groupLabel(g, ds), 12);
-      svg.appendChild(lab);
+      axisLabels(svg, i, n, g, ds, x(i), H - padB + 11, false);
     });
     svg.appendChild(axis(padL, padT, W - padR, H - padB, minV, maxV, style));
+    axisTitles(svg, style, W, H, padL, padB);
     return svg;
   }
 
-  //: How much of the card's HEIGHT the pie itself takes, as a percentage. Default 100, which is
-  //: what every dashboard published so far draws.
+  //: SHARING THE CARD between a plot and the key that explains it.
   //:
-  //: The pie is `height: 100%` and the legend is its sibling, so on a card with many categories the
-  //: circle claimed the whole body and pushed the legend into a scrollbar — a chart you cannot read
-  //: the key to. Resizing the WIDGET does not help: a taller card grows the pie by exactly as much.
-  //: The two need to be separately adjustable, so this caps the plot and leaves the rest to the key.
+  //: Every plot in here is `height: 100%` and every key is its sibling in a body that scrolls, so
+  //: by default the plot claimed the whole card and pushed the key out of sight — and making the
+  //: widget taller grew the plot by exactly as much, which is why resizing never fixed it. The
+  //: three functions below are the fix, and they are shared because the pie, the multi-series line
+  //: and the grouped bars all had the same bug for the same reason.
+
+  //: The plot's share of the card's height, 30-100. Default 100, which means AUTO: take everything
+  //: the key does not need. Below 100 it is a fixed fraction and the key scrolls in the remainder,
+  //: for the case where twelve series wrap to four lines and the shape matters more than the names.
   function plotShare(style) {
     const v = style && style.plotSize;
     return (typeof v === 'number' && v >= 30 && v <= 100) ? v : 100;
+  }
+
+  //: How tall the plot may be, once everything else sharing the body has had its room. Measuring
+  //: is the right default because only the key knows how many lines its labels wrap to.
+  function plotHeight(bx, style, companions) {
+    const share = plotShare(style);
+    if (share < 100) return Math.max(CHART_MIN_H, Math.round(bx.H * share / 100));
+    const cost = (companions || []).reduce(function (a, n) { return a + outerHeight(n); }, 0);
+    return Math.max(CHART_MIN_H, bx.H - cost);
+  }
+
+  //: Keep a companion inside the room the plot left it, scrolling rather than pushing the pair out
+  //: of the card. Bites whenever the author fixed the share, and in AUTO only when the key alone is
+  //: taller than the whole card — where the plot has hit its floor and something has to give. The
+  //: key scrolling is a better outcome than the card scrolling: the plot at least stays visible.
+  function capToRoom(node, bx, plotH) {
+    if (!node) return;
+    const room = Math.max(0, bx.H - plotH - marginY(node));
+    if (outerHeight(node) - marginY(node) > room) {
+      node.style.maxHeight = room + 'px';
+      node.style.overflowY = 'auto';
+    }
+  }
+
+  //: Pin the plot to the height it was measured for. `.gd-chart` is `height: 100%`, which would
+  //: otherwise scale it straight back up to the whole body and undo the calculation; `flex: none`
+  //: covers the bodies that are flex columns, where a set height is only a starting size.
+  function fixPlotHeight(node, h) {
+    node.style.height = h + 'px';
+    node.style.flex = 'none';
   }
 
   function drawPie(groups, ds, style, selected, onPick, donut) {
     const S = 170, cx = S / 2, cy = S / 2, r = S / 2 - 8, inner = donut ? r * 0.58 : 0;
     const svg = svgEl('svg', { class: 'gd-chart', viewBox: '0 0 ' + S + ' ' + S,
                                preserveAspectRatio: 'xMidYMid meet' });
-    const share = plotShare(style);
-    if (share < 100) {
-      // `flex: none` alongside the height: the body is a block box today, where the height alone
-      // is enough, but `.gd-w-center` turns it into a flex column — and a flex child grows past a
-      // set height unless told not to, handing the pie back exactly the space this takes away.
-      svg.style.height = share + '%';
-      svg.style.flex = 'none';
-    }
     const total = groups.reduce(function (a, g) { return a + Math.max(0, g.value || 0); }, 0);
     if (total <= 0) return svg;
     let angle = -Math.PI / 2;
@@ -1311,7 +1820,7 @@ window.GD_DASHBOARD = (function () {
       return { el: c.root, refresh: function () {} };
     }
     const source = env.sources[layerKeyOf(w)];
-    c.sub.textContent = truncate(source ? source.name : ('layer ' + ds.layerId), 26);
+    setSub(c, w, truncate(source ? source.name : ('layer ' + ds.layerId), 26));
     const foot = el('div', 'gd-table-foot');
     const prev = el('button', null, '‹');
     const next = el('button', null, '›');
@@ -1322,24 +1831,94 @@ window.GD_DASHBOARD = (function () {
     foot.appendChild(nav);
     c.root.appendChild(foot);
 
-    let sort = ds.sort || null, dir = ds.dir || 'asc', offset = 0, selectedRow = null;
+    let sort = ds.sort || null, dir = ds.dir || 'asc', offset = 0;
+    //: SEVERAL ROWS AT ONCE. Held as the selected KEY VALUES rather than as DOM nodes, because the
+    //: rows are rebuilt on every page turn, sort and filter change — a node reference would be
+    //: stale the moment anything moved, and the highlight would vanish while the filter it
+    //: published stayed live. Keys survive the rebuild and the highlight is re-applied from them.
+    //: A MAP of key -> bbox, not a set of keys. The camera follows the whole selection, and a row
+    //: scrolls off the page as soon as the visitor turns it — so the extent has to be remembered
+    //: when the row is picked, or selecting page 1 and page 2 would fit only page 2.
+    const picked = new Map();
+    let anchor = null;          // index the last plain click landed on, for shift-ranges
+    let onScreen = [];          // the rows currently rendered, so a range knows what lies between
+    function keyOf(row) {
+      const k = ds.keyField ? row.props[ds.keyField] : null;
+      return k == null ? null : String(k);
+    }
     env.store.subscribeSelf(w.id, function () {
-      if (!env.store.attrOf(w.id) && selectedRow) { selectedRow.classList.remove('sel'); selectedRow = null; }
+      // The filter bar's × and Reset both clear the attribute; the rows must stop looking selected.
+      if (!env.store.attrOf(w.id) && picked.size) { picked.clear(); paintSelection(); }
     });
+    //: The extent of every selected row, or null when not one of them carries a bbox — an
+    //: aggregate row and a feature with no geometry both come back without one, and moving the
+    //: camera to a guess is worse than leaving it where the visitor put it.
+    function unionBbox() {
+      let out = null;
+      picked.forEach(function (b) {
+        if (!b || b.length !== 4) return;
+        if (!out) { out = [b[0], b[1], b[2], b[3]]; return; }
+        out[0] = Math.min(out[0], b[0]); out[1] = Math.min(out[1], b[1]);
+        out[2] = Math.max(out[2], b[2]); out[3] = Math.max(out[3], b[3]);
+      });
+      return out;
+    }
+    function paintSelection() {
+      onScreen.forEach(function (r) {
+        const on = picked.has(keyOf(r.row));
+        r.el.classList.toggle('sel', on);
+        r.el.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+    }
     prev.addEventListener('click', function () { offset = Math.max(0, offset - ds.pageSize); refresh(); });
     next.addEventListener('click', function () { offset += ds.pageSize; refresh(); });
 
-    function onRow(row, tr) {
-      if (selectedRow) selectedRow.classList.remove('sel');
-      selectedRow = tr;
-      tr.classList.add('sel');
-      // Zoom + highlight: the bbox came with the row precisely so this needs no round trip.
-      if (row.bbox) env.fitBbox(row.bbox);
+    //: A click selects one row; ctrl/cmd adds or removes one; shift takes the run between.
+    //:
+    //: The conventions every list in every desktop application uses, and worth following exactly:
+    //: a visitor who has to learn a list widget's own idea of multi-select will not discover it. A
+    //: plain click still REPLACES, so nothing changes for anyone not reaching for a modifier.
+    function onRow(row, tr, ev, idx) {
+      const add = !!(ev && (ev.ctrlKey || ev.metaKey));
+      const range = !!(ev && ev.shiftKey) && anchor != null;
+      const key = keyOf(row);
+
+      if (range) {
+        const lo = Math.min(anchor, idx), hi = Math.max(anchor, idx);
+        picked.clear();
+        for (let i = lo; i <= hi; i++) {
+          const k = keyOf(onScreen[i].row);
+          if (k != null) picked.set(k, onScreen[i].row.bbox || null);
+        }
+      } else if (add) {
+        if (key != null) { if (picked.has(key)) picked.delete(key); else picked.set(key, row.bbox || null); }
+        anchor = idx;
+      } else {
+        picked.clear();
+        if (key != null) picked.set(key, row.bbox || null);
+        anchor = idx;
+      }
+      paintSelection();
+
+      // Zoom to EVERYTHING selected, not to the row just clicked. The bboxes came with the rows
+      // precisely so this needs no round trip, and taking their union is what makes the camera
+      // follow the selection rather than chase the last click: ctrl-clicking a second row widens
+      // the view to hold both, and removing one narrows it back. Fitting the newest row alone
+      // would hide the others the visitor had just chosen.
+      const box = unionBbox();
+      if (box) env.fitBbox(box);
+
+      // A new selection REPLACES the last on every channel it used. The details panel shows the row
+      // just clicked even when several are selected: it holds one feature by definition, and the
+      // most recently touched is the one the visitor is looking at.
+      env.store.clearAttr(w.id, true);
       env.store.publishSelection(w.id, row.props, row.bbox,
         String(row.props[ds.keyField] == null ? '' : row.props[ds.keyField]));
-      if (ds.keyField && row.props[ds.keyField] != null) {
-        env.store.publishAttr(w.id, { field: ds.keyField, op: 'in', values: [row.props[ds.keyField]] },
-          (w.title || defaultTitle(w)) + ': ' + truncate(row.props[ds.keyField], 24));
+      if (picked.size) {
+        const values = Array.from(picked.keys());
+        env.store.publishAttr(w.id, { field: ds.keyField, op: 'in', values: values },
+          (w.title || defaultTitle(w)) + ': '
+            + (values.length === 1 ? truncate(values[0], 24) : values.length + ' selected'));
       }
     }
     function refresh() {
@@ -1349,6 +1928,9 @@ window.GD_DASHBOARD = (function () {
       })).then(function (data) {
         busy(c.root, false);
         clear(c.body);
+        // Emptied per render: these are DOM nodes, and holding the ones just discarded would leak
+        // a page's worth on every page turn and let a shift-range address rows nobody can see.
+        onScreen = [];
         const rows = (data && data.rows) || [];
         const fields = (data && data.fields) || ds.fields || [];
         if (!rows.length) {
@@ -1364,7 +1946,7 @@ window.GD_DASHBOARD = (function () {
         if (w.style && w.style.layout === 'cards') {
           const titleField = ds.titleField || ds.keyField || fields[0];
           const list = el('div', 'gd-cards');
-          rows.forEach(function (row) {
+          rows.forEach(function (row, idx) {
             const item = el('div', 'gd-card-item');
             const head = el('div', 'gd-card-title',
                             fmtCell(row.props[titleField]) || '—');
@@ -1382,15 +1964,17 @@ window.GD_DASHBOARD = (function () {
               line.appendChild(val);
               item.appendChild(line);
             });
-            item.addEventListener('click', function () { onRow(row, item); });
+            item.addEventListener('click', function (ev) { onRow(row, item, ev, idx); });
             // Reachable without a mouse: the table gives its rows to the pointer only, but a card is
             // the primary control in a directory layout.
             item.tabIndex = 0;
             item.addEventListener('keydown', function (e) {
-              if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRow(row, item); }
+              if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRow(row, item, e, idx); }
             });
+            onScreen.push({ row: row, el: item });
             list.appendChild(item);
           });
+          paintSelection();
           c.body.appendChild(list);
           const totalC = data.total || rows.length;
           count.textContent = (offset + 1) + '–' + (offset + rows.length) + ' of ' + totalC.toLocaleString();
@@ -1415,16 +1999,20 @@ window.GD_DASHBOARD = (function () {
         thead.appendChild(hr);
         table.appendChild(thead);
         const tbody = el('tbody');
-        rows.forEach(function (row) {
+        rows.forEach(function (row, idx) {
           const tr = el('tr');
           fields.forEach(function (f) {
             const td = el('td', null, fmtCell(row.props[f]));
             td.title = row.props[f] == null ? '' : String(row.props[f]);
             tr.appendChild(td);
           });
-          tr.addEventListener('click', function () { onRow(row, tr); });
+          tr.addEventListener('click', function (ev) { onRow(row, tr, ev, idx); });
+          onScreen.push({ row: row, el: tr });
           tbody.appendChild(tr);
         });
+        // The highlight, restored from the KEYS after the rebuild — a page turn or a re-sort must
+        // not make a live selection look like nothing is selected.
+        paintSelection();
         table.appendChild(tbody);
         c.body.appendChild(table);
         const total = data.total || rows.length;
@@ -1516,7 +2104,12 @@ window.GD_DASHBOARD = (function () {
       unbound(c.body, 'Pick a layer and the two numeric columns to plot against each other.');
       return { el: c.root, refresh: function () {} };
     }
-    c.sub.textContent = truncate(ds.yField + ' ~ ' + ds.xField, 26);
+    // The author's axis titles, if they wrote any — the same names the axes carry, so the card's
+    // heading and its axes cannot disagree about what is plotted. Naming a column "GDP per capita"
+    // on the axis and leaving `GDP_PerC_1` in the heading is the field name showing through in the
+    // one place the reader looks first.
+    setSub(c, w, truncate(((w.style && w.style.yTitle) || ds.yField) + ' ~ '
+                        + ((w.style && w.style.xTitle) || ds.xField), 26));
 
     function draw(data) {
       clear(c.body);
@@ -1538,12 +2131,31 @@ window.GD_DASHBOARD = (function () {
       const colour = (w.style && w.style.color) || accent();
       // Opacity rather than a smaller dot: overlapping points then READ as density, which is the
       // information a scatter of a few thousand features actually carries.
-      pts.forEach(function (p) {
-        svg.appendChild(svgEl('circle', {
+      // NAMES ON HOVER, when the author nominated columns for them. A dot is a pair of numbers
+      // until something says whose they are; an outlier is the point of a scatter and the one thing
+      // it could not tell you about. A native `<title>` rather than a custom tooltip: it is what the
+      // bars and lines already use, it survives touch and keyboard focus, and it costs one element.
+      const names = data.labels || [];
+      // HOW BIG A DOT IS. 2 px was too small to read as a mark: on a card a few hundred pixels
+      // wide, a scatter of a dozen features looked like dust on the screen rather than data, and
+      // hovering one to read its name meant hunting for it. 3.5 is a dot you can see and aim at
+      // while still being small enough that a few thousand of them overlap into a shape.
+      //
+      // Settable because the right size depends on how many points there are, which the renderer
+      // cannot know at author time: 12 features want a mark, 5 000 want a grain.
+      const r = pointRadius(w);
+      pts.forEach(function (p, i) {
+        const dot = svgEl('circle', {
           cx: padL + ((p[0] - x0) / sx) * (W - padL - padR),
           cy: H - padB - ((p[1] - y0) / sy) * (H - padT - padB),
-          r: 2, fill: colour, opacity: 0.45,
-        }));
+          r: r, fill: colour, opacity: 0.45,
+        });
+        const label = names[i];
+        const coords = fmtNumber(p[0], w.style) + ', ' + fmtNumber(p[1], w.style);
+        const t = svgEl('title');
+        t.textContent = label ? label + ' — ' + coords : coords;
+        dot.appendChild(t);
+        svg.appendChild(dot);
       });
       svg.appendChild(svgEl('line', { class: 'axis', x1: padL, y1: H - padB, x2: W - padR, y2: H - padB }));
       svg.appendChild(svgEl('line', { class: 'axis', x1: padL, y1: padT, x2: padL, y2: H - padB }));
@@ -1552,10 +2164,44 @@ window.GD_DASHBOARD = (function () {
         t.textContent = text;
         return t;
       };
-      svg.appendChild(tick(padL, H - padB + 11, fmtNumber(x0, w.style), 'start'));
-      svg.appendChild(tick(W - padR, H - padB + 11, fmtNumber(x1, w.style), 'end'));
-      svg.appendChild(tick(padL - 4, H - padB, fmtNumber(y0, w.style), 'end'));
-      svg.appendChild(tick(padL - 4, padT + 8, fmtNumber(y1, w.style), 'end'));
+      // Ticks at readable intervals on BOTH axes, not just the two ends. A scatter labelled only
+      // with its extremes shows the shape of a relationship and refuses to say what any point on
+      // it is worth.
+      // `sx`/`sy` above are the SPANS; these map a value to a coordinate.
+      const toX = function (v) { return padL + ((v - x0) / sx) * (W - padL - padR); };
+      const toY = function (v) { return (H - padB) - ((v - y0) / sy) * (H - padT - padB); };
+      niceTicks(x0, x1, 4).forEach(function (v) {
+        const cx = toX(v);
+        if (cx < padL - 0.5 || cx > W - padR + 0.5) return;
+        svg.appendChild(svgEl('line', { class: 'gridline', x1: cx, y1: padT, x2: cx, y2: H - padB }));
+        svg.appendChild(tick(cx, H - padB + 11, fmtNumber(v, w.style), 'middle'));
+      });
+      niceTicks(y0, y1, 4).forEach(function (v) {
+        const cy = toY(v);
+        if (cy < padT - 0.5 || cy > H - padB + 0.5) return;
+        svg.appendChild(svgEl('line', { class: 'gridline', x1: padL, y1: cy, x2: W - padR, y2: cy }));
+        svg.appendChild(tick(padL - 4, cy + 3, fmtNumber(v, w.style), 'end'));
+      });
+      // WHICH COLUMNS. Two axes of bare numbers describe a relationship between things the reader
+      // has to remember; the card's subtitle names them, but the axes are where they are read.
+      // The author's title if there is one, the column name if not. A column name is a usable
+      // default and a poor label: it is what the data is called, not what it measures.
+      const xTitle = (w.style && w.style.xTitle) || ds.xField;
+      const yTitle = (w.style && w.style.yTitle) || ds.yField;
+      if (xTitle) {
+        const xt = svgEl('text', { x: (padL + W - padR) / 2, y: H - 2,
+                                   'text-anchor': 'middle', class: 'gd-axis-title' });
+        xt.textContent = xTitle;
+        svg.appendChild(xt);
+      }
+      if (yTitle) {
+        const cy = (padT + H - padB) / 2;
+        const yt = svgEl('text', { x: 9, y: cy, 'text-anchor': 'middle',
+                                   class: 'gd-axis-title',
+                                   transform: 'rotate(-90 9 ' + cy + ')' });
+        yt.textContent = yTitle;
+        svg.appendChild(yt);
+      }
       c.body.appendChild(svg);
       // Say when the plot is a SAMPLE. A scatter silently drawn from 1500 of 3.4M features looks
       // exactly like a scatter of everything, and the reader would have no way to tell.
@@ -1570,6 +2216,7 @@ window.GD_DASHBOARD = (function () {
       busy(c.root, true);
       env.api.scatter(w.id, ds.layerId, specFor(w, env.store, {
         xField: ds.xField, yField: ds.yField, limit: ds.limit,
+        labelFields: ds.labelFields,
       })).then(function (data) {
         busy(c.root, false);
         draw(data);
@@ -1623,6 +2270,11 @@ window.GD_DASHBOARD = (function () {
       selectedEl = node;
       node.classList.add('sel');
       if (row.bbox) env.fitBbox(row.bbox);
+      // Same rule the map follows: a new row REPLACES the last selection on every channel it used.
+      // Publishing the filter is conditional -- a row whose key column is null cannot name itself --
+      // so selecting such a row after one that could left the earlier row's filter narrowing
+      // everything, with the details panel showing a different feature entirely.
+      env.store.clearAttr(w.id, true);
       env.store.publishSelection(w.id, row.props, row.bbox,
         String(row.props[titleField] == null ? '' : row.props[titleField]));
       const kf = ds.keyField;
@@ -1710,7 +2362,7 @@ window.GD_DASHBOARD = (function () {
       return { el: c.root, refresh: function () {} };
     }
     const source = env.sources[layerKeyOf(w)];
-    c.sub.textContent = truncate(source ? source.name : ('layer ' + ds.layerId), 26);
+    setSub(c, w, truncate(source ? source.name : ('layer ' + ds.layerId), 26));
 
     function fieldBlock(f, total) {
       const box = el('div', 'gd-prof-f');
@@ -1792,7 +2444,7 @@ window.GD_DASHBOARD = (function () {
       unbound(c.body, 'Pick a layer and a field for this filter control.');
       return { el: c.root, refresh: function () {} };
     }
-    c.sub.textContent = ds.field;
+    setSub(c, w, ds.field);
     const chosen = {};
 
     function publish() {
@@ -1921,7 +2573,7 @@ window.GD_DASHBOARD = (function () {
     function refresh() {
       const sel = env.store.selectionFor(w);
       clear(c.body);
-      c.sub.textContent = sel && sel.title ? truncate(sel.title, 22) : '';
+      setSub(c, w, sel && sel.title ? truncate(sel.title, 22) : '');
       if (!sel) {
         c.body.appendChild(el('div', 'gd-w-empty',
           'Select a feature on the map, or a row in a table, to see its attributes here.'));
@@ -1954,7 +2606,7 @@ window.GD_DASHBOARD = (function () {
       return { el: c.root, refresh: function () {} };
     }
     const source = env.sources[layerKeyOf(w)];
-    c.sub.textContent = truncate(source ? source.name : ('raster ' + ds.layerId), 24);
+    setSub(c, w, truncate(source ? source.name : ('raster ' + ds.layerId), 24));
 
     function refresh() {
       const f = env.store.filtersFor(w);
@@ -1990,6 +2642,18 @@ window.GD_DASHBOARD = (function () {
           if ((ds.stats || []).indexOf('histogram') >= 0) {
             if (stats.histogram && stats.histogram.counts && stats.histogram.counts.length) {
               c.body.appendChild(drawHistogram(stats.histogram, w.style));
+              // WHAT RANGE it covers. The bars alone show a shape over an interval the reader has
+              // no way to name — the edges were reachable only by hovering a bar, which is not a
+              // thing anyone does to find out what a chart is about. As HTML rather than inside the
+              // SVG: the histogram is drawn with `preserveAspectRatio: none` so it can stretch to
+              // the card, and text in there would stretch with it.
+              const edges = stats.histogram.edges || [];
+              if (edges.length > 1) {
+                const scale = el('div', 'gd-rs-hist-scale');
+                scale.appendChild(el('span', null, fmtNumber(edges[0], w.style)));
+                scale.appendChild(el('span', null, fmtNumber(edges[edges.length - 1], w.style)));
+                c.body.appendChild(scale);
+              }
             } else {
               c.body.appendChild(el('div', 'gd-w-empty', 'No histogram for this area.'));
             }
@@ -2053,6 +2717,7 @@ window.GD_DASHBOARD = (function () {
       // The map as a TARGET: an attribute filter pointed at it is applied to the MapLibre layers
       // drawing its selection layer, so filtering the dashboard visibly narrows the map too.
       applyMapFilter(w, env);
+      zoomToFilter(w, env);
     }
     return { el: wrap, refresh: refresh, isMap: true };
   };
@@ -2209,6 +2874,31 @@ window.GD_DASHBOARD = (function () {
 
   //: The distinct data layers the style draws, in style order. An external layer is skipped for the
   //: same reason it always was: its features are somebody else's and carry none of our columns.
+  //: Frame what a CHART just selected.
+  //:
+  //: Charts only, deliberately. A selector or a search box is a control the visitor is working in —
+  //: moving the camera under someone adjusting a slider is the map arguing with the hand using it —
+  //: and a table row already flies to its own feature. A chart segment is the one case where the
+  //: selection IS a set of features with an extent and clicking it says "show me these".
+  //:
+  //: The extent comes from the server (`op: 'bounds'`), because the browser only holds the tiles it
+  //: has drawn: computing it client-side would frame the part of the selection that happens to be
+  //: on screen, which is the answer least worth having.
+  function zoomToFilter(w, env) {
+    if (!(w.dataSource && w.dataSource.zoomToFilter)) return;
+    if (!env.fitBbox) return;
+    const src = env.store.lastAttrSource && env.store.lastAttrSource();
+    if (!src || src.type !== 'chart' || src.layerId == null) return;
+    env.api.aggregate('mapfit:' + w.id, src.layerId,
+      { op: 'bounds', filters: [src.expr], geometry: null })
+      .then(function (r) {
+        // `null` is a real answer — a filter that matches nothing has no extent — and moving the
+        // camera to a rectangle invented for that case is worse than not moving at all.
+        if (r && r.bounds) env.fitBbox(r.bounds);
+      })
+      .catch(function () { /* a camera move is never worth an error in front of the visitor */ });
+  }
+
   function drawnLayerIds(env) {
     const seen = {}, out = [];
     (env.style.layers || []).forEach(function (lyr) {
@@ -2406,6 +3096,93 @@ window.GD_DASHBOARD = (function () {
                         bbox: 'Drag a box', extent: 'Filter to what is on screen',
                         clear: 'Clear the selection' };
 
+  //: Let the visitor MOVE the selection tools around the map.
+  //:
+  //: Not an author setting, because the collision it fixes is not one an author can see coming: the
+  //: control cluster's corner is configurable, the layer list opens from a side, a widget can be
+  //: pinned to the map, and the tools sit at a fixed top-left through all of it. Whichever corner
+  //: were chosen at publish would be wrong for some other combination — so the person actually
+  //: looking at the overlap is the one who gets to resolve it.
+  //:
+  //: Stored as FRACTIONS of the map box rather than pixels: a dashboard's map cell changes size
+  //: with the breakpoint and with every drag of the widget's corner, and a bar pinned at "412px
+  //: from the left" ends up off a narrower map. Fractions survive that, and are clamped on the way
+  //: back in regardless.
+  function makeToolsMovable(bar, wrap, key) {
+    let pos = null;
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (raw) pos = JSON.parse(raw);
+    } catch (e) { /* private mode throws on read; the default position is a fine answer */ }
+
+    function apply() {
+      if (!pos) return;
+      const W = wrap.clientWidth - bar.offsetWidth, H = wrap.clientHeight - bar.offsetHeight;
+      if (W <= 0 || H <= 0) return;
+      bar.style.left = Math.round(Math.max(0, Math.min(1, pos.fx)) * W) + 'px';
+      bar.style.top = Math.round(Math.max(0, Math.min(1, pos.fy)) * H) + 'px';
+      bar.style.right = 'auto';
+      bar.style.bottom = 'auto';
+    }
+
+    const grip = el('button', 'gd-dash-tools-grip');
+    grip.type = 'button';
+    grip.title = 'Drag to move these tools';
+    grip.setAttribute('aria-label', 'Move the selection tools');
+    grip.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">'
+      + '<circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/>'
+      + '<circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/>'
+      + '<circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>';
+    bar.insertBefore(grip, bar.firstChild);
+
+    let drag = null;
+    grip.addEventListener('pointerdown', function (ev) {
+      if (ev.button !== 0 && ev.pointerType === 'mouse') return;
+      ev.preventDefault();
+      ev.stopPropagation();               // never let the map read this as a pan
+      const b = bar.getBoundingClientRect(), m = wrap.getBoundingClientRect();
+      drag = { dx: ev.clientX - b.left, dy: ev.clientY - b.top, m: m };
+      try { grip.setPointerCapture(ev.pointerId); } catch (e) {}
+      bar.dataset.dragging = '1';
+    });
+    grip.addEventListener('pointermove', function (ev) {
+      if (!drag) return;
+      ev.preventDefault();
+      const W = wrap.clientWidth - bar.offsetWidth, H = wrap.clientHeight - bar.offsetHeight;
+      if (W <= 0 || H <= 0) return;
+      // Clamped to the map, so the bar cannot be dragged somewhere it can never be grabbed back
+      // from. The fraction is what gets stored; the pixels are just this frame.
+      const x = Math.max(0, Math.min(W, ev.clientX - drag.m.left - drag.dx));
+      const y = Math.max(0, Math.min(H, ev.clientY - drag.m.top - drag.dy));
+      pos = { fx: x / W, fy: y / H };
+      apply();
+    });
+    function end(ev) {
+      if (!drag) return;
+      drag = null;
+      delete bar.dataset.dragging;
+      try { grip.releasePointerCapture(ev.pointerId); } catch (e) {}
+      try { window.localStorage.setItem(key, JSON.stringify(pos)); } catch (e) { /* see above */ }
+    }
+    grip.addEventListener('pointerup', end);
+    grip.addEventListener('pointercancel', end);
+    // Back to where it started. The only way out of a position that turned out to be worse than
+    // the default, short of clearing site data.
+    grip.addEventListener('dblclick', function (ev) {
+      ev.preventDefault();
+      pos = null;
+      bar.style.left = bar.style.top = bar.style.right = bar.style.bottom = '';
+      try { window.localStorage.removeItem(key); } catch (e) {}
+    });
+
+    apply();
+    // The map cell resizes with the breakpoint and with the widget's own corner; re-clamp so a bar
+    // parked near an edge does not end up outside a smaller map.
+    try {
+      if (typeof ResizeObserver === 'function') new ResizeObserver(apply).observe(wrap);
+    } catch (e) { /* no observer: the position is still right until something resizes */ }
+  }
+
   function mountSelectionTools(w, ds, env, wrap) {
     const map = env.map;
     const tools = ds.tools || ['click', 'polygon', 'bbox'];
@@ -2511,10 +3288,18 @@ window.GD_DASHBOARD = (function () {
     clearBtn.innerHTML = TOOL_ICONS.clear;
     clearBtn.addEventListener('click', function () {
       setMode(null);
+      // The attribute filter too. `env.clearSelection` drops the geometry and the details panel —
+      // it is generic, and knows nothing about this widget — so pressing Clear used to leave the
+      // chip a click had published sitting in the filter bar, still narrowing everything, with no
+      // outline on the map to explain it.
+      env.store.clearAttr(w.id);
       env.clearSelection();
     });
     bar.appendChild(clearBtn);
     wrap.appendChild(bar);
+    // Keyed by PORTAL and widget: one visitor may have several portals open over time, and a
+    // position chosen on one says nothing about where the tools are in the way on another.
+    makeToolsMovable(bar, wrap, 'gd-tools:' + (location.pathname || '') + ':' + w.id);
     // Tell the overlay layer that this corner is taken. Set here rather than assumed in CSS, so a
     // map that renders no tool bar keeps its overlays tight to the corner.
     try { wrap.dataset.dashTools = '1'; } catch (e) {}
@@ -2523,6 +3308,19 @@ window.GD_DASHBOARD = (function () {
       setData(map, SEL_SRC, geometry);
       setData(map, DRAW_SRC, null);
       const bbox = bboxOf(geometry);
+      // A NEW SELECTION REPLACES THE LAST, on every channel the last one used.
+      //
+      // A click publishes up to three things: the feature's geometry, its attributes for the
+      // details panel, and — when the author named a field — an attribute FILTER. Drawing a box
+      // afterwards published only a geometry, so the attribute filter from the click survived and
+      // the two ANDed: `Country_Na = Niger` intersected with a box somewhere else matches nothing,
+      // and the dashboard emptied while its filter bar showed two chips that each looked reasonable.
+      //
+      // Cleared before the geometry goes out, and quietly, because `publishGeom` notifies the same
+      // targets a line later — two notifications would fire two requests, the first of them
+      // immediately aborted. The click path re-publishes its attribute straight after this, so
+      // clicking still filters; only the STALE one goes.
+      env.store.clearAttr(w.id, true);
       env.store.publishGeom(w.id, geometry, label, bbox);
       if (props) env.store.publishSelection(w.id, props, bbox, label);
     }
@@ -2649,6 +3447,13 @@ window.GD_DASHBOARD = (function () {
     function render() {
       clear(bar);
       const chips = store.chips();
+      // The GRID makes room for the bar, rather than the bar covering the grid. It is fixed to the
+      // foot of the window, so at the bottom of a scrolled dashboard it sat over the last row —
+      // over a chart's x-axis labels, which is the part of a chart that says what you are looking
+      // at. A flag on the body rather than a measured height: the bar is one line by construction
+      // (its chips scroll sideways instead of wrapping), so the space it needs is a constant, and
+      // the reservation appears only while there is something to reserve it for.
+      try { document.body.dataset.dashFiltered = chips.length ? '1' : '0'; } catch (e) {}
       if (!chips.length) { bar.style.display = 'none'; return; }
       bar.style.display = '';
       bar.appendChild(el('span', 'gd-fbar-label', 'Filtered by'));
@@ -2688,18 +3493,58 @@ window.GD_DASHBOARD = (function () {
   }
 
   // ── setup ──────────────────────────────────────────────────────────────────
+  //: How long the loading cover will wait for the widgets before giving up on them.
+  //:
+  //: Under portal.js's own 15s backstop, deliberately: that one exists for a piece that never calls
+  //: back at all and logs a warning when it fires, so this must resolve first in the ordinary
+  //: slow-connection case and leave the backstop as a genuine backstop.
+  const DATA_GATE_MAX = 10000;
+
+  //: Call `done` once the widgets' first questions have all been answered — or once `DATA_GATE_MAX`
+  //: has passed, whichever comes first. Never twice.
+  //:
+  //: Quiet is checked TWICE, an interval apart, because zero in-flight requests is also true for the
+  //: instant between one widget's answer arriving and its follow-up going out. One reading would
+  //: call a gap in the traffic the end of it.
+  function whenSettled(api, done) {
+    let fired = false;
+    const finish = function () { if (!fired) { fired = true; try { done(); } catch (e) {} } };
+    const cap = setTimeout(finish, DATA_GATE_MAX);
+    let quiet = 0;
+    const tick = function () {
+      if (fired) return;
+      quiet = api.pending() === 0 ? quiet + 1 : 0;
+      if (quiet >= 2) { clearTimeout(cap); finish(); return; }
+      setTimeout(tick, 80);
+    };
+    setTimeout(tick, 80);
+  }
+
   function setup(ctx) {
+    // ARMED FIRST, before anything below can return early or throw. The cover is only safe to make
+    // conditional on the widgets if the signal that lifts it cannot be skipped: `setup` returns
+    // early for a dashboard with no widgets and again for one whose host element is missing, and a
+    // gate cleared on neither path is a portal that never appears. Same rule the gates in portal.js
+    // are written to — clear unconditionally — applied on this side of the call.
+    const dataReady = (function (fn) {
+      let sent = false;
+      return function () { if (!sent) { sent = true; try { fn && fn(); } catch (e) {} } };
+    })(ctx.onDataReady);
+    setTimeout(dataReady, DATA_GATE_MAX);
     const cfg = ctx.style && ctx.style.geodeploy && ctx.style.geodeploy.dashboard;
-    if (!cfg || !cfg.widgets || !cfg.widgets.length) return;
+    if (!cfg || !cfg.widgets || !cfg.widgets.length) { dataReady(); return; }
 
     const host = document.getElementById('dashboard-panel');
     const layoutEl = document.getElementById('layout');
     const mapWrap = document.getElementById('map-wrap');
-    if (!host || !layoutEl) return;
+    if (!host || !layoutEl) { dataReady(); return; }
 
     const grid = cfg.grid || {};
     const baseRow = grid.rowHeight || 90;      // `--dash-row` is written per breakpoint by placeAll
     document.documentElement.style.setProperty('--dash-gap', (grid.gap || 10) + 'px');
+    fitMode = grid.fit === 'screen' ? 'screen' : 'rows';
+    // Published for CSS and for anyone reading the DOM to see which mode a board is in.
+    document.body.dataset.dashFit = fitMode;
 
     const store = createStore(cfg.widgets, cfg.relations || []);
     const api = createApi();
@@ -2910,6 +3755,19 @@ window.GD_DASHBOARD = (function () {
     // need asking too — otherwise a search box on the map would sit empty until the first
     // filter change.
     overlays.forEach(function (o) { try { o.refresh(); } catch (e) { console.warn('[geodeploy] overlay refresh failed', e); } });
+
+    // Every first question is now IN FLIGHT — each `refresh()` above issues its fetch synchronously
+    // — so the client's pending count is a complete picture from here, and waiting for it to reach
+    // zero is waiting for the answers. Checked after the loop for exactly that reason: asking
+    // earlier would find a client that had not been given the questions yet.
+    //
+    // Widgets that ask the server nothing (legend, details) never enter the count and so never hold
+    // the cover; a widget whose request FAILS clears itself in the client's `finally`, so a broken
+    // panel delays the page by its own timeout rather than indefinitely.
+    if (ctx.onDataReady) {
+      ctx.note && ctx.note('Loading widgets…');
+      whenSettled(api, dataReady);
+    }
 
     // AUTO-REFRESH, for a near-real-time layer. It re-asks every widget the question it is already
     // asking, which is deliberately NOT the same as clearing the filters: a wall-mounted board must

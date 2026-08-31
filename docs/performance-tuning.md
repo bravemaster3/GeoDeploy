@@ -1,3 +1,8 @@
+---
+description: >-
+  Tune a GeoDeploy instance for large data: choosing PostGIS or GeoParquet per layer, tile caching, aggregate caching, and what a small server can actually carry.
+---
+
 # Performance tuning (heavy layers & tiling)
 
 GeoDeploy runs on a small server with sensible defaults, and **a normal install needs no tuning at

@@ -248,6 +248,48 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-31 (`shared/portal.css`: the map's bottom chrome — scale bar, **bottom-centre** coordinate
+readout, attribution — sits on ONE line, on every archetype. `.maplibregl-ctrl-bottom-left` had
+carried `bottom: 24px` since the first shared-runtime refactor while `-bottom-right` kept MapLibre's
+0, so the scale bar floated above the credit everywhere. All three now hang off `--map-chrome-b`
+(the readout adds MapLibre's own 10px control margin, having none of its own), so the phone gutter
+and the storymap's lift over its narrative strip move the whole line instead of one corner each.)
+
+2026-08-31 (**`grid.fit: "screen"` fills the viewport.** `placeAll` counts the rows the layout
+actually reaches (per breakpoint — the phone cursor and the desktop max are different numbers) and
+`applyRowTemplate` writes `grid-template-rows: repeat(N, minmax(var(--dash-row), 1fr))`. The author's
+row height becomes a FLOOR rather than the height, so the board stretches where there is room and
+scrolls where there is not, with no media query having to guess the boundary; uniform rows mean a
+widget spanning four still gets four times one, so proportions survive. Default is `"rows"`, the
+existing behaviour, so no published board changes. `body[data-dash-fit]` publishes the mode.)
+
+2026-08-31 (**every plot shares its card with its key the same way.** `.gd-chart` is `height: 100%`
+and the key is its sibling, so the plot claimed the whole body and pushed the key into the
+scrollbar — and making the widget taller grew the plot by exactly as much. `plotHeight` /
+`capToRoom` / `fixPlotHeight` in `shared/dashboard.js` now serve the multi-series line, the grouped
+bars AND the pie, which all had the bug for the same reason. AUTO (`plotSize` unset or 100) measures
+the key and gives the plot the rest; a share below 100 hands the plot a fixed fraction and lets a
+long key scroll in the remainder. The key is capped either way, so a key taller than the whole card
+scrolls itself instead of pushing the plot out. `chartBox()` also reports the CONTENT box (it was
+returning `clientHeight`, 20px of padding included), because subtracting a key's height from a
+figure that is already too big still overflows.)
+
+2026-08-31 (**the camera follows the whole selection.** `shared/dashboard.js`'s table/card widget
+holds `picked` as a Map of key -> bbox rather than a set of keys, and fits the map to the UNION on
+every selection change — ctrl-clicking a second row widens the view to hold both, removing one
+narrows it back. The bbox is remembered at pick time because a row scrolls off as soon as the
+visitor turns the page, so a set spanning two pages would otherwise fit only the last.)
+
+2026-08-31 (**a dashboard is photographed whole.** `shared/portal.js::snapshotDashboard()` renders
+the live page into a `<foreignObject>` and rasterises it, so a dashboard's card thumbnail shows the
+charts and tables rather than only the map cell — the map alone made two dashboards over the same
+layer indistinguishable. The SVG is loaded in the restricted mode images use and fetches NOTHING, so
+`collectCss()` inlines every readable rule (rewriting each selector's leading `html` / `body` /
+`:root` onto a wrapper that stands in for both, or every `body[data-archetype="dashboard"]` rule
+would miss), the WebGL canvas is swapped for a WebP still, and same-origin `<img>` are inlined. Any
+failure falls back to the map-only shot. Also: `shared/dashboard.js` scatter dots default to
+r=3.5 and honour `style.pointSize` — 2px read as dust on a small card.)
+
 2026-08-24 (**dashboard first-use round**, `shared/dashboard.{js,css}` + the four presets.
 `drawLine` now takes `selected` + `onPick`, so line and area charts are filter sources like bars and
 pies — with a transparent 9px hit circle, because a 2.6px dot on a 30-point series is unaimable. The

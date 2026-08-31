@@ -867,6 +867,9 @@ class AggregateRequest(BaseModel):
 
 
 class ScatterRequest(BaseModel):
+    #: Columns whose values name each point on hover — see `aggregate._label_fields`. A scatter
+    #: otherwise plots two numbers and cannot say which feature they belong to.
+    labelFields: list[str] | None = None
     """Y against X, per feature. Sampled server-side — see `services/aggregate.parquet_scatter`."""
     xField: str | None = None
     yField: str | None = None
@@ -967,8 +970,17 @@ async def _resolve_joins(spec: dict, layer: VectorLayer, db: AsyncSession) -> st
 
 def _spec(model: BaseModel) -> dict:
     """A request model → the plain dict `services/aggregate` takes. `exclude_none` is deliberate:
-    the service distinguishes "absent" from "explicitly null" for `groupBy` and `sort`."""
-    return model.model_dump(exclude_none=True)
+    the service distinguishes "absent" from "explicitly null" for `groupBy` and `sort`.
+
+    The geometry is normalised HERE, once, rather than in each of the five services that read it:
+    aggregate, table, scatter, profile and pick all take the same `geometry` and all inherit the
+    same zero-area problem. See `aggregate.usable_geometry`.
+    """
+    from ...services.aggregate import usable_geometry
+    spec = model.model_dump(exclude_none=True)
+    if spec.get("geometry") is not None:
+        spec["geometry"] = usable_geometry(spec["geometry"])
+    return spec
 
 
 @router.post("/{layer_ref}/scatter")
