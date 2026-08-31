@@ -42,9 +42,32 @@ GitHub Actions CI and the community-template validation pipeline.
 - `ci.yml` exercises `api/` (pytest), `ui/` (vite build) and `cli/` (pytest + console script) — keep build/test commands here in sync with those folders' tooling.
 - `validate-template.yml` + `scripts/validate_template.py` enforce the contract documented in `templates/community/CONTRIBUTING.md`.
 
+## Action versions
+Every `actions/*` step is pinned to its latest MAJOR and they are moved together, because a repo
+that bumps one at a time ends up spread across four generations of runner requirements. What each
+crossing actually required, checked rather than assumed (2026-08-30):
+
+- **Node 24** is the substance of most of the majors (`checkout` v5, `setup-python` v6,
+  `upload-artifact` v5, `download-artifact` v6). They need runner **v2.327.1+**, which every
+  GitHub-hosted runner already exceeds.
+- **`download-artifact` v5** changed the output path for downloads **by ID**. Downloads **by name**
+  are explicitly unchanged, and by name is what `publish-cli.yml` does.
+- **`download-artifact` v8** now errors on a hash mismatch instead of warning. That is the behaviour
+  worth having on a release pipeline.
+- **`setup-node` v5** caches automatically when `package.json` has a `packageManager` field.
+  `ui/package.json` has none, so nothing changed here.
+- **`upload-pages-artifact` v4** stopped including dotfiles. `docs/` has none, and `docs/CNAME` —
+  which is what keeps the custom domain — is not a dotfile.
+- **`checkout` v7** blocks checking out a fork PR under `pull_request_target` / `workflow_run`.
+  No workflow here uses either trigger.
+
 ## Current status & known issues
 - CI runs unit/build checks only — no integration test spins up the full Docker stack, so tile-serving regressions (the kind debugged in `notes_temp/notes_for_future.md`) are **not** caught by CI. Verify those manually.
 - The API test suite is minimal (`/health`, initial setup status).
 
 ## Last updated
+2026-08-30 (every `actions/*` step bumped to its latest major — checkout v7, setup-python v7,
+setup-node v7, upload-artifact v7, download-artifact v8, upload-pages-artifact v5, deploy-pages v5.
+See **Action versions** for what each crossing required.)
+
 2026-08-13 (added `publish-cli.yml` — Trusted Publishing to PyPI on a `cli-v*` tag)
