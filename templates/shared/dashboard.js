@@ -1233,7 +1233,9 @@ window.GD_DASHBOARD = (function () {
   }
 
   function drawMultiLine(groups, ds, style, series, filled, boxW, boxH) {
-    const W = boxW || 300, H = boxH || 170, padL = 34, padR = 8, padT = 8, padB = 26;
+    // padB 34, not 26: a rotated label hangs below its tick, and 26 clipped it. Same as the grouped
+    // bars, which have always rotated.
+    const W = boxW || 300, H = boxH || 170, padL = 34, padR = 8, padT = 8, padB = 34;
     const svg = svgEl('svg', { class: 'gd-chart', viewBox: '0 0 ' + W + ' ' + H,
                                preserveAspectRatio: 'xMidYMid meet' });
     const n = groups.length, m = series.length;
@@ -1265,6 +1267,14 @@ window.GD_DASHBOARD = (function () {
         svg.appendChild(dot);
       });
     }
+    // THE X AXIS. This drew none at all: a chart of one line per country across 56 year-columns
+    // showed the lines and never said which year any point was. Selecting a single country dropped
+    // to `drawLine`, which does label its axis — so the labels appeared and disappeared with the
+    // number of series, which is not a distinction the axis has any business making.
+    axisLabels.room = W - padL - padR;
+    groups.forEach(function (g, i) {
+      axisLabels(svg, i, n, g, ds, x(i), H - padB + 11, false);
+    });
     svg.appendChild(axis(padL, padT, W - padR, H - padB, ext.lo, ext.hi, style));
     return svg;
   }
@@ -1476,7 +1486,7 @@ window.GD_DASHBOARD = (function () {
   //: 2.6px dot: on a 30-point series the dots are ~9px apart and aiming at the dot itself is a test
   //: of the mouse, not an interaction.
   function drawLine(groups, ds, style, filled, selected, onPick, boxW, boxH) {
-    const W = boxW || 300, H = boxH || 170, padL = 34, padR = 8, padT = 8, padB = 26;
+    const W = boxW || 300, H = boxH || 170, padL = 34, padR = 8, padT = 8, padB = 34;
     const svg = svgEl('svg', { class: 'gd-chart', viewBox: '0 0 ' + W + ' ' + H,
                                preserveAspectRatio: 'xMidYMid meet' });
     const values = groups.map(function (g) { return g.value == null ? 0 : g.value; });
@@ -1513,12 +1523,14 @@ window.GD_DASHBOARD = (function () {
       }
       svg.appendChild(hit);
     });
-    const every = Math.ceil(n / 6);
+    // The SAME helper the bars use, rather than this renderer's own rule of "six, upright, always".
+    // Six was a count with no relation to the card's width — too many in a narrow cell, and a waste
+    // of a wide one — and upright labels cannot rotate out of each other's way, so long category
+    // names simply overlapped. Sharing it also means a chart's axis does not change character when
+    // a filter takes it from several lines down to one.
+    axisLabels.room = W - padL - padR;
     groups.forEach(function (g, i) {
-      if (i % every) return;
-      const lab = svgEl('text', { x: x(i), y: H - padB + 12, 'text-anchor': 'middle', class: 'glabel' });
-      lab.textContent = truncate(groupLabel(g, ds), 12);
-      svg.appendChild(lab);
+      axisLabels(svg, i, n, g, ds, x(i), H - padB + 11, false);
     });
     svg.appendChild(axis(padL, padT, W - padR, H - padB, minV, maxV, style));
     return svg;
@@ -3099,6 +3111,13 @@ window.GD_DASHBOARD = (function () {
     function render() {
       clear(bar);
       const chips = store.chips();
+      // The GRID makes room for the bar, rather than the bar covering the grid. It is fixed to the
+      // foot of the window, so at the bottom of a scrolled dashboard it sat over the last row —
+      // over a chart's x-axis labels, which is the part of a chart that says what you are looking
+      // at. A flag on the body rather than a measured height: the bar is one line by construction
+      // (its chips scroll sideways instead of wrapping), so the space it needs is a constant, and
+      // the reservation appears only while there is something to reserve it for.
+      try { document.body.dataset.dashFiltered = chips.length ? '1' : '0'; } catch (e) {}
       if (!chips.length) { bar.style.display = 'none'; return; }
       bar.style.display = '';
       bar.appendChild(el('span', 'gd-fbar-label', 'Filtered by'));

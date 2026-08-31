@@ -448,6 +448,13 @@ body[data-dash-mapctrl="0"] .gd-overlay-bottom-right { right: 10px; }
 
 /* The active-filter bar. It is the answer to "why is this number small?", so it names every filter
    currently narrowing the page and offers to clear them — individually and all at once. */
+/* Room for the filter bar, only while there is one.
+   It is fixed to the foot of the window, so on a dashboard tall enough to scroll it covered the
+   last row — and what sits at the bottom of a chart is its x-axis, the part that says what you are
+   looking at. The grid gets a footer instead: ~40px of bar plus its 14px offset and a margin.
+   Reserved only when a filter is live, because otherwise every dashboard ends in dead space. */
+body[data-archetype="dashboard"][data-dash-filtered="1"] #layout { padding-bottom: 68px; }
+
 #gd-dash-bar {
   position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px; z-index: 60;
   max-width: min(92vw, 900px);
@@ -598,7 +605,9 @@ body[data-dash-mapctrl="0"] .gd-overlay-bottom-right { right: 10px; }
   /* The filter bar is fixed to the foot of the window (a grid row for it would push every widget
      down the moment a filter went live). On a phone that lands it ON TOP of the last card, so the
      grid gets a matching footer of empty space — the bar is ~40px plus its own 14px offset. */
-  body[data-archetype="dashboard"] #layout { padding-bottom: 66px; }
+  /* Only while filtered, matching the desktop rule — an unfiltered phone dashboard should not end
+     in a band of empty space either. */
+  body[data-archetype="dashboard"][data-dash-filtered="1"] #layout { padding-bottom: 66px; }
   #gd-dash-bar {
     left: 8px; right: 8px; bottom: 8px; transform: none; max-width: none;
     border-radius: 14px; justify-content: flex-start; padding: 5px 6px 5px 10px;
