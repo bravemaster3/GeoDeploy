@@ -653,6 +653,29 @@ window.GD_DASHBOARD = (function () {
     return host;
   }
 
+  //: "screen" makes the board fill the viewport; "rows" (the default) keeps every row at the
+  //: height the author set. Written by init from `grid.fit`, read by placeAll on every breakpoint.
+  let fitMode = 'rows';
+
+  //: FILLING THE SCREEN, without promising something the screen may not allow.
+  //:
+  //: The rows become `minmax(--dash-row, 1fr)`: at least the height the author chose, sharing
+  //: whatever is left over. On a monitor taller than the board that spreads the widgets down the
+  //: whole page instead of leaving a third of it empty; on a screen too short — a phone, a portrait
+  //: display, a board of thirty rows — the minimum wins and it scrolls exactly as it does today.
+  //: One declaration covers both because that is what minmax means, and no media query has to guess
+  //: where the boundary is.
+  //:
+  //: Uniform rows are what make this safe: a widget spanning four of them still gets four times a
+  //: widget spanning one, so the author's proportions survive the stretch untouched.
+  function applyRowTemplate(rows) {
+    const layoutEl = document.getElementById('layout');
+    if (!layoutEl) return;
+    layoutEl.style.gridTemplateRows = (fitMode === 'screen' && rows > 0)
+      ? 'repeat(' + rows + ', minmax(var(--dash-row), 1fr))'
+      : '';
+  }
+
   function placeAll(cards, cols, baseRow) {
     document.documentElement.style.setProperty('--dash-cols', String(cols));
     document.documentElement.style.setProperty(
@@ -672,9 +695,11 @@ window.GD_DASHBOARD = (function () {
         c.el.style.gridRow = row + ' / span ' + h;
         row += h;
       });
+      applyRowTemplate(row - 1);
       return;
     }
     const scale = cols / 12;
+    let used = 0;               // the last row any widget reaches, for the fit-to-screen template
     cards.forEach(function (c) {
       // Scale the EDGES, not the origin and the width separately. Rounding each independently is
       // what makes a row of four 3-wide widgets collide at 6 columns: x=3 rounds up to 2 and w=3
@@ -684,8 +709,11 @@ window.GD_DASHBOARD = (function () {
       const x = Math.max(0, Math.min(cols - 1, Math.round(c.layout.x * scale)));
       const right = Math.max(x + 1, Math.min(cols, Math.round((c.layout.x + c.layout.w) * scale)));
       c.el.style.gridColumn = (x + 1) + ' / span ' + (right - x);
-      c.el.style.gridRow = (Math.max(0, c.layout.y) + 1) + ' / span ' + Math.max(2, c.layout.h);
+      const y = Math.max(0, c.layout.y), h = Math.max(2, c.layout.h);
+      c.el.style.gridRow = (y + 1) + ' / span ' + h;
+      if (y + h > used) used = y + h;
     });
+    applyRowTemplate(used);
   }
 
   // ── widget chrome ──────────────────────────────────────────────────────────
@@ -3514,6 +3542,9 @@ window.GD_DASHBOARD = (function () {
     const grid = cfg.grid || {};
     const baseRow = grid.rowHeight || 90;      // `--dash-row` is written per breakpoint by placeAll
     document.documentElement.style.setProperty('--dash-gap', (grid.gap || 10) + 'px');
+    fitMode = grid.fit === 'screen' ? 'screen' : 'rows';
+    // Published for CSS and for anyone reading the DOM to see which mode a board is in.
+    document.body.dataset.dashFit = fitMode;
 
     const store = createStore(cfg.widgets, cfg.relations || []);
     const api = createApi();

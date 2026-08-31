@@ -248,6 +248,14 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-31 (**`grid.fit: "screen"` fills the viewport.** `placeAll` counts the rows the layout
+actually reaches (per breakpoint — the phone cursor and the desktop max are different numbers) and
+`applyRowTemplate` writes `grid-template-rows: repeat(N, minmax(var(--dash-row), 1fr))`. The author's
+row height becomes a FLOOR rather than the height, so the board stretches where there is room and
+scrolls where there is not, with no media query having to guess the boundary; uniform rows mean a
+widget spanning four still gets four times one, so proportions survive. Default is `"rows"`, the
+existing behaviour, so no published board changes. `body[data-dash-fit]` publishes the mode.)
+
 2026-08-31 (**every plot shares its card with its key the same way.** `.gd-chart` is `height: 100%`
 and the key is its sibling, so the plot claimed the whole body and pushed the key into the
 scrollbar — and making the widget taller grew the plot by exactly as much. `plotHeight` /

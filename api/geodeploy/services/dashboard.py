@@ -693,6 +693,19 @@ def resolve_dashboard(config: dict | None) -> dict | None:
             "cols": GRID_COLS,                                  # fixed: the builder's own geometry
             "rowHeight": _int(grid.get("rowHeight"), 90, 40, 240),
             "gap": _int(grid.get("gap"), 10, 0, 32),
+            # HOW THE BOARD MEETS THE SCREEN.
+            #
+            # "rows" is the original and stays the default, so no published dashboard changes: every
+            # row is exactly `rowHeight`, the board is as tall as its content, and a screen taller
+            # than that shows background below it. That is right for a long board someone scrolls
+            # and wrong for the case a dashboard is usually built for — one screen, taken in at a
+            # glance — where a board authored on a laptop leaves a third of a desktop monitor empty.
+            #
+            # "screen" makes the rows share the height instead. It cannot be a guarantee, and does
+            # not pretend to be: the runtime asks for `minmax(rowHeight, 1fr)`, so the rows stretch
+            # when there is room and fall back to scrolling when there is not. A phone, a portrait
+            # monitor and a board with thirty rows all land on the same floor they have today.
+            "fit": _str(grid.get("fit"), {"rows", "screen"}, "rows"),
         },
         "refresh": _int(config.get("refresh"), 0, 0, REFRESH_MAX) if config.get("refresh") else 0,
         "widgets": widgets,

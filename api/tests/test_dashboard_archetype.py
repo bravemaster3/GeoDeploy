@@ -341,6 +341,23 @@ def test_scatter_points_have_a_visible_default_size_and_a_settable_one():
     assert size({"pointSize": "big"}) == 3.5        # nonsense falls back, it does not crash
 
 
+def test_filling_the_screen_is_opt_in_and_leaves_published_boards_alone():
+    """The row height is the floor either way; "screen" only lets the rows stretch past it. Default
+    stays "rows" because changing it would restyle every dashboard already published."""
+    def fit(grid):
+        return resolve_dashboard({"grid": grid, "widgets": [_w("a", "indicator")]})["grid"]["fit"]
+
+    assert fit({}) == "rows"
+    assert fit({"fit": "screen"}) == "screen"
+    assert fit({"fit": "rows"}) == "rows"
+    assert fit({"fit": "stretch-everything"}) == "rows"   # not a mode we offer
+    assert fit({"fit": True}) == "rows"
+    # the floor the stretch is measured against is still the author's row height
+    out = resolve_dashboard({"grid": {"fit": "screen", "rowHeight": 120},
+                             "widgets": [_w("a", "indicator")]})
+    assert out["grid"]["rowHeight"] == 120
+
+
 def test_refresh_is_bounded():
     assert resolve_dashboard({"refresh": 999999, "widgets": [_w("a", "indicator")]})["refresh"] == 3600
     assert resolve_dashboard({"widgets": [_w("a", "indicator")]})["refresh"] == 0

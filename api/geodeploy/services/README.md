@@ -203,6 +203,9 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   `api/tests/test_native_crs.py`.
 
 ## Last updated
+2026-08-31 (`dashboard.py`: `grid.fit` — `"rows"` (default, unchanged) or `"screen"`, which lets the
+runtime stretch the rows to the viewport. Default stays `"rows"` so no published board restyles.)
+
 2026-08-31 (`dashboard.py`: `style.pointSize` for scatter widgets, 1.5-8, default 3.5.)
 
 2026-08-29 (**`keysOnly` aggregates + `MAX_KEYS`** — a keys-only request returns just the distinct

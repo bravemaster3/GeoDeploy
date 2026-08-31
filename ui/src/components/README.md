@@ -107,6 +107,10 @@ All dialogs (`UploadModal`, `AddSourceModal`, `DiscoverModal`, `portal/CreatePor
   icon logic in `views/PortalEditor.vue` + `templates/shared/portal.js` — change all three together.
 
 ## Last updated
+2026-08-31 (`portal/DashboardBuilder.vue`: a **Fill the screen** checkbox in the board-wide
+settings, writing `grid.fit`. Its hint is deliberate about the limit — it stretches, it does not
+squeeze, so a screen too short still scrolls.)
+
 2026-08-31 (`portal/DashboardBuilder.vue`: the **Plot size** slider is no longer pie-only — it is
 offered by `hasLegendToShare()` for any chart whose key competes with its plot for the card, and
 100% now reads "(auto)" because that is what it means: the plot takes everything the key does not

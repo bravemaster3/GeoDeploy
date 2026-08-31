@@ -1927,6 +1927,25 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
           @input="patchDash({ refresh: Number($event.target.value) })"
           class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
       </label>
+      <label class="col-span-2 flex items-center gap-2 text-[11px] text-foreground/80">
+        <input type="checkbox" :checked="dash.grid?.fit === 'screen'"
+          @change="patchDash({ grid: { ...(dash.grid || {}), fit: $event.target.checked ? 'screen' : 'rows' } })"
+          class="accent-primary" />
+        <span class="flex items-center gap-1">
+          Fill the screen
+          <InfoHint label="About filling the screen">
+            Off, every row is exactly the row height above, so a board built on a laptop leaves
+            empty space below it on a larger monitor. On, the rows share the height of the window
+            instead — the widgets keep their relative proportions, since a widget two rows tall
+            still gets twice one row.
+            <br /><br />
+            It stretches, it does not squeeze: the row height stays the floor. On a screen too
+            short for the board — a phone, a portrait monitor, or simply a lot of widgets — it
+            scrolls exactly as it does now. Worth checking the board at the sizes your readers
+            actually use.
+          </InfoHint>
+        </span>
+      </label>
     </div>
   </div>
 </template>
