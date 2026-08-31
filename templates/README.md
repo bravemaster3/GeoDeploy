@@ -248,6 +248,12 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
 ## Last updated
+2026-08-31 (**the camera follows the whole selection.** `shared/dashboard.js`'s table/card widget
+holds `picked` as a Map of key -> bbox rather than a set of keys, and fits the map to the UNION on
+every selection change — ctrl-clicking a second row widens the view to hold both, removing one
+narrows it back. The bbox is remembered at pick time because a row scrolls off as soon as the
+visitor turns the page, so a set spanning two pages would otherwise fit only the last.)
+
 2026-08-31 (**a dashboard is photographed whole.** `shared/portal.js::snapshotDashboard()` renders
 the live page into a `<foreignObject>` and rasterises it, so a dashboard's card thumbnail shows the
 charts and tables rather than only the map cell — the map alone made two dashboards over the same

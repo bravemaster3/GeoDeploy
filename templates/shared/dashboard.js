@@ -1725,7 +1725,10 @@ window.GD_DASHBOARD = (function () {
     //: rows are rebuilt on every page turn, sort and filter change — a node reference would be
     //: stale the moment anything moved, and the highlight would vanish while the filter it
     //: published stayed live. Keys survive the rebuild and the highlight is re-applied from them.
-    const picked = new Set();
+    //: A MAP of key -> bbox, not a set of keys. The camera follows the whole selection, and a row
+    //: scrolls off the page as soon as the visitor turns it — so the extent has to be remembered
+    //: when the row is picked, or selecting page 1 and page 2 would fit only page 2.
+    const picked = new Map();
     let anchor = null;          // index the last plain click landed on, for shift-ranges
     let onScreen = [];          // the rows currently rendered, so a range knows what lies between
     function keyOf(row) {
@@ -1736,6 +1739,19 @@ window.GD_DASHBOARD = (function () {
       // The filter bar's × and Reset both clear the attribute; the rows must stop looking selected.
       if (!env.store.attrOf(w.id) && picked.size) { picked.clear(); paintSelection(); }
     });
+    //: The extent of every selected row, or null when not one of them carries a bbox — an
+    //: aggregate row and a feature with no geometry both come back without one, and moving the
+    //: camera to a guess is worse than leaving it where the visitor put it.
+    function unionBbox() {
+      let out = null;
+      picked.forEach(function (b) {
+        if (!b || b.length !== 4) return;
+        if (!out) { out = [b[0], b[1], b[2], b[3]]; return; }
+        out[0] = Math.min(out[0], b[0]); out[1] = Math.min(out[1], b[1]);
+        out[2] = Math.max(out[2], b[2]); out[3] = Math.max(out[3], b[3]);
+      });
+      return out;
+    }
     function paintSelection() {
       onScreen.forEach(function (r) {
         const on = picked.has(keyOf(r.row));
@@ -1761,22 +1777,25 @@ window.GD_DASHBOARD = (function () {
         picked.clear();
         for (let i = lo; i <= hi; i++) {
           const k = keyOf(onScreen[i].row);
-          if (k != null) picked.add(k);
+          if (k != null) picked.set(k, onScreen[i].row.bbox || null);
         }
       } else if (add) {
-        if (key != null) { if (picked.has(key)) picked.delete(key); else picked.add(key); }
+        if (key != null) { if (picked.has(key)) picked.delete(key); else picked.set(key, row.bbox || null); }
         anchor = idx;
       } else {
         picked.clear();
-        if (key != null) picked.add(key);
+        if (key != null) picked.set(key, row.bbox || null);
         anchor = idx;
       }
       paintSelection();
 
-      // Zoom + highlight: the bbox came with the row precisely so this needs no round trip. Only on
-      // a SINGLE pick — flying the camera on every ctrl-click, while someone is building a
-      // selection, moves the map out from under the rows they are still choosing.
-      if (!add && !range && row.bbox) env.fitBbox(row.bbox);
+      // Zoom to EVERYTHING selected, not to the row just clicked. The bboxes came with the rows
+      // precisely so this needs no round trip, and taking their union is what makes the camera
+      // follow the selection rather than chase the last click: ctrl-clicking a second row widens
+      // the view to hold both, and removing one narrows it back. Fitting the newest row alone
+      // would hide the others the visitor had just chosen.
+      const box = unionBbox();
+      if (box) env.fitBbox(box);
 
       // A new selection REPLACES the last on every channel it used. The details panel shows the row
       // just clicked even when several are selected: it holds one feature by definition, and the
@@ -1785,7 +1804,7 @@ window.GD_DASHBOARD = (function () {
       env.store.publishSelection(w.id, row.props, row.bbox,
         String(row.props[ds.keyField] == null ? '' : row.props[ds.keyField]));
       if (picked.size) {
-        const values = Array.from(picked);
+        const values = Array.from(picked.keys());
         env.store.publishAttr(w.id, { field: ds.keyField, op: 'in', values: values },
           (w.title || defaultTitle(w)) + ': '
             + (values.length === 1 ? truncate(values[0], 24) : values.length + ' selected'));
