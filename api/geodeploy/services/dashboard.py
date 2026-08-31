@@ -496,6 +496,14 @@ def _normalize_style(widget_type: str, style: dict | None) -> dict:
         # shows the comparison as a position on its arc, not as a signed number.
         out["compareMode"] = _str(s.get("compareMode"), {"delta", "percent", "none"}, "delta")
         out["goodDirection"] = _str(s.get("goodDirection"), {"up", "down", "none"}, "up")
+    # AXIS TITLES. A column name is what the data is called; the title is what it measures, and the
+    # two are rarely the same string — least of all after a shapefile has cut the first to ten
+    # characters. Only where there are axes to title: a pie has none, an indicator has none.
+    if widget_type in ("chart", "scatter"):
+        for key in ("xTitle", "yTitle"):
+            title = _str(s.get(key))
+            if title:
+                out[key] = title[:40]
     color = _hex(s.get("color"))
     if color:
         out["color"] = color

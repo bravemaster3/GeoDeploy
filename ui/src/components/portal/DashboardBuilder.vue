@@ -1688,6 +1688,34 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
           </label>
         </div>
       </template>
+      <!-- Axis titles, for the two widget types that have axes. -->
+      <template v-if="['chart', 'scatter'].includes(selected.type)">
+        <div class="grid grid-cols-2 gap-2">
+          <label class="block">
+            <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-0.5">
+              X axis title
+              <InfoHint label="About axis titles">
+                What the axis measures, in your words. The tick labels say where a point sits; the
+                title says what is being measured — and a column name is what the data is called,
+                which is rarely the same thing. A scatter falls back to the column name; other
+                charts show no title unless you write one.
+              </InfoHint>
+            </span>
+            <input type="text" maxlength="40" placeholder="none"
+              :value="selected.style?.xTitle || ''"
+              @change="patchWidget(selected.id, { style: { xTitle: $event.target.value || undefined } })"
+              class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
+          </label>
+          <label class="block">
+            <span class="text-[10px] text-muted-foreground block mb-0.5">Y axis title</span>
+            <input type="text" maxlength="40" placeholder="none"
+              :value="selected.style?.yTitle || ''"
+              @change="patchWidget(selected.id, { style: { yTitle: $event.target.value || undefined } })"
+              class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60" />
+          </label>
+        </div>
+      </template>
+
       <template v-if="selected.type === 'indicator'">
         <div class="grid grid-cols-3 gap-2">
           <label class="block">

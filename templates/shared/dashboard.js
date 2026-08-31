@@ -1235,7 +1235,9 @@ window.GD_DASHBOARD = (function () {
   function drawMultiLine(groups, ds, style, series, filled, boxW, boxH) {
     // padB 34, not 26: a rotated label hangs below its tick, and 26 clipped it. Same as the grouped
     // bars, which have always rotated.
-    const W = boxW || 300, H = boxH || 170, padL = 34, padR = 8, padT = 8, padB = 34;
+    const tp = titlePads(style);
+    const W = boxW || 300, H = boxH || 170, padR = 8, padT = 8;
+    const padL = 34 + tp.y, padB = 34 + tp.x;
     const svg = svgEl('svg', { class: 'gd-chart', viewBox: '0 0 ' + W + ' ' + H,
                                preserveAspectRatio: 'xMidYMid meet' });
     const n = groups.length, m = series.length;
@@ -1276,7 +1278,41 @@ window.GD_DASHBOARD = (function () {
       axisLabels(svg, i, n, g, ds, x(i), H - padB + 11, false);
     });
     svg.appendChild(axis(padL, padT, W - padR, H - padB, ext.lo, ext.hi, style));
+    axisTitles(svg, style, W, H, padL, padB);
     return svg;
+  }
+
+  //: How much room an axis title needs, or none when there is no title.
+  //:
+  //: Charged only when there is something to charge for: an axis title costs plot height or width,
+  //: and a chart that reserved it always would give up that space on every chart that has none.
+  const TITLE_PAD = 13;
+  function titlePads(style) {
+    return { x: (style && style.xTitle) ? TITLE_PAD : 0,
+             y: (style && style.yTitle) ? TITLE_PAD : 0 };
+  }
+
+  //: The axis titles themselves.
+  //:
+  //: A column name is not a label. `GDP_PerC_1` is what the data is called; "GDP per capita (USD)"
+  //: is what the reader needs, and the two are rarely the same string — especially after a
+  //: shapefile has truncated the first to ten characters. Tick labels say WHERE a point is; the
+  //: title says WHAT is being measured, and no amount of tick formatting supplies it.
+  function axisTitles(svg, style, W, H, padL, padB) {
+    if (!style) return;
+    if (style.xTitle) {
+      const t = svgEl('text', { x: (padL + W - 8) / 2, y: H - 2, 'text-anchor': 'middle',
+                                class: 'gd-axis-title' });
+      t.textContent = style.xTitle;
+      svg.appendChild(t);
+    }
+    if (style.yTitle) {
+      const cy = (8 + H - padB) / 2;
+      const t = svgEl('text', { x: 9, y: cy, 'text-anchor': 'middle', class: 'gd-axis-title',
+                                transform: 'rotate(-90 9 ' + cy.toFixed(1) + ')' });
+      t.textContent = style.yTitle;
+      svg.appendChild(t);
+    }
   }
 
   //: The category labels under a vertical bar chart: how many fit, and where each one sits.
@@ -1307,7 +1343,9 @@ window.GD_DASHBOARD = (function () {
   }
 
   function drawGroupedBars(groups, ds, style, series, boxW, boxH) {
-    const W = boxW || 300, H = boxH || 170, padL = 34, padR = 8, padT = 8, padB = 34;
+    const tp = titlePads(style);
+    const W = boxW || 300, H = boxH || 170, padR = 8, padT = 8;
+    const padL = 34 + tp.y, padB = 34 + tp.x;
     const svg = svgEl('svg', { class: 'gd-chart', viewBox: '0 0 ' + W + ' ' + H,
                                preserveAspectRatio: 'xMidYMid meet' });
     const n = groups.length, m = series.length;
@@ -1336,6 +1374,7 @@ window.GD_DASHBOARD = (function () {
       axisLabels(svg, i, n, g, ds, padL + i * colW + colW / 2, H - padB + 11, false);
     });
     svg.appendChild(axis(padL, padT, W - padR, H - padB, ext.lo, ext.hi, style));
+    axisTitles(svg, style, W, H, padL, padB);
     return svg;
   }
 
@@ -1343,8 +1382,9 @@ window.GD_DASHBOARD = (function () {
     const W = boxW || 300, H = boxH || 170;
     // Label gutter scales with the box now that units are pixels: 28% of the width for a horizontal
     // chart's category names, floored so a narrow card still leaves room to read one.
-    const padL = horizontal ? Math.max(60, Math.min(140, Math.round(W * 0.28))) : 34;
-    const padR = 8, padT = 8, padB = horizontal ? 20 : 34;
+    const tp = titlePads(style);
+    const padL = (horizontal ? Math.max(60, Math.min(140, Math.round(W * 0.28))) : 34) + tp.y;
+    const padR = 8, padT = 8, padB = (horizontal ? 20 : 34) + tp.x;
     const svg = svgEl('svg', { class: 'gd-chart', viewBox: '0 0 ' + W + ' ' + H,
                                preserveAspectRatio: 'xMidYMid meet' });
     const values = groups.map(function (g) { return g.value == null ? 0 : g.value; });
@@ -1423,6 +1463,7 @@ window.GD_DASHBOARD = (function () {
       axisLabels(svg, i, n, g, ds, padL + i * colW + colW / 2, H - padB + 11, false);
     });
     svg.appendChild(axis(padL, padT, W - padR, H - padB, minV, maxV, style));
+    axisTitles(svg, style, W, H, padL, padB);
     return svg;
   }
 
@@ -1486,7 +1527,9 @@ window.GD_DASHBOARD = (function () {
   //: 2.6px dot: on a 30-point series the dots are ~9px apart and aiming at the dot itself is a test
   //: of the mouse, not an interaction.
   function drawLine(groups, ds, style, filled, selected, onPick, boxW, boxH) {
-    const W = boxW || 300, H = boxH || 170, padL = 34, padR = 8, padT = 8, padB = 34;
+    const tp = titlePads(style);
+    const W = boxW || 300, H = boxH || 170, padR = 8, padT = 8;
+    const padL = 34 + tp.y, padB = 34 + tp.x;
     const svg = svgEl('svg', { class: 'gd-chart', viewBox: '0 0 ' + W + ' ' + H,
                                preserveAspectRatio: 'xMidYMid meet' });
     const values = groups.map(function (g) { return g.value == null ? 0 : g.value; });
@@ -1533,6 +1576,7 @@ window.GD_DASHBOARD = (function () {
       axisLabels(svg, i, n, g, ds, x(i), H - padB + 11, false);
     });
     svg.appendChild(axis(padL, padT, W - padR, H - padB, minV, maxV, style));
+    axisTitles(svg, style, W, H, padL, padB);
     return svg;
   }
 
@@ -1877,17 +1921,22 @@ window.GD_DASHBOARD = (function () {
       });
       // WHICH COLUMNS. Two axes of bare numbers describe a relationship between things the reader
       // has to remember; the card's subtitle names them, but the axes are where they are read.
-      if (ds.xField) {
+      // The author's title if there is one, the column name if not. A column name is a usable
+      // default and a poor label: it is what the data is called, not what it measures.
+      const xTitle = (w.style && w.style.xTitle) || ds.xField;
+      const yTitle = (w.style && w.style.yTitle) || ds.yField;
+      if (xTitle) {
         const xt = svgEl('text', { x: (padL + W - padR) / 2, y: H - 2,
                                    'text-anchor': 'middle', class: 'gd-axis-title' });
-        xt.textContent = ds.xField;
+        xt.textContent = xTitle;
         svg.appendChild(xt);
       }
-      if (ds.yField) {
-        const yt = svgEl('text', { x: 9, y: (padT + H - padB) / 2, 'text-anchor': 'middle',
+      if (yTitle) {
+        const cy = (padT + H - padB) / 2;
+        const yt = svgEl('text', { x: 9, y: cy, 'text-anchor': 'middle',
                                    class: 'gd-axis-title',
-                                   transform: 'rotate(-90 9 ' + ((padT + H - padB) / 2) + ')' });
-        yt.textContent = ds.yField;
+                                   transform: 'rotate(-90 9 ' + cy + ')' });
+        yt.textContent = yTitle;
         svg.appendChild(yt);
       }
       c.body.appendChild(svg);
