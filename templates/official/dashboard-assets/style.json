@@ -3,13 +3,11 @@
     "basemap": {
       "type": "raster",
       "tiles": [
-        "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png",
-        "https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png",
-        "https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png"
+        "https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
       ],
       "tileSize": 256,
       "maxzoom": 19,
-      "attribution": "© <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors © <a href='https://carto.com/attributions'>CARTO</a>"
+      "attribution": "© Esri, HERE, Garmin, © OpenStreetMap contributors"
     }
   },
   "layers": [
@@ -17,7 +15,9 @@
       "id": "basemap",
       "type": "raster",
       "source": "basemap",
-      "paint": { "raster-opacity": 1 }
+      "paint": {
+        "raster-opacity": 1
+      }
     }
   ]
 }

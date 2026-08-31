@@ -3489,10 +3489,10 @@
   // The minimal fallback only covers portals published before basemaps were baked in.
   const BASEMAP_CATALOG = (((STYLE.geodeploy || {}).basemaps) || []).length
     ? STYLE.geodeploy.basemaps
-    : [{ id: 'positron', name: 'Positron',
-         tiles: ['https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png'],
-         attribution: '© OpenStreetMap © CARTO',
-         thumb: 'https://a.basemaps.cartocdn.com/light_all/4/8/5.png' }];
+    : [{ id: 'osm', name: 'OpenStreetMap',
+         tiles: ['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png', 'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png'],
+         attribution: '© OpenStreetMap contributors',
+         thumb: 'https://a.tile.openstreetmap.org/4/8/5.png' }];
   const BASEMAPS = BASEMAP_CATALOG;
   // The admin's chosen basemap, baked into the base layer at publish. Portals published BEFORE
   // basemap selection have no defaultBasemap → keep the template's own baked basemap (the '__default__'

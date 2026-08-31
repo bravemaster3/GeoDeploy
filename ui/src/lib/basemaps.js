@@ -3,24 +3,29 @@
  *
  * Here rather than in a view because more than one place needs them now, and a second copy of a
  * tile-URL list is a second place to fix when a provider changes a path — which they do.
+ *
+ * That warning came true: CARTO began requiring an API key and answered unauthenticated requests
+ * with watermarked tiles, and this copy went on serving them after the server's catalog had moved.
+ * MIRROR OF `api/geodeploy/services/portal_generator.BASEMAP_CATALOG` — same ids, same order, same
+ * URLs. Change that one first, then this.
  */
 export const BASEMAPS = [
-  { id: 'positron', name: 'Positron',
-    tiles: ['https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png', 'https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png'],
-    attribution: '© OpenStreetMap © CARTO',
-    thumb: 'https://a.basemaps.cartocdn.com/light_all/4/8/5.png' },
-  { id: 'voyager', name: 'Voyager',
-    tiles: ['https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png', 'https://c.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png'],
-    attribution: '© OpenStreetMap © CARTO',
-    thumb: 'https://a.basemaps.cartocdn.com/rastertiles/voyager/4/8/5.png' },
-  { id: 'dark', name: 'Dark Matter',
-    tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png', 'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png'],
-    attribution: '© OpenStreetMap © CARTO',
-    thumb: 'https://a.basemaps.cartocdn.com/dark_all/4/8/5.png' },
   { id: 'osm', name: 'OpenStreetMap',
     tiles: ['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png', 'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png'],
     attribution: '© OpenStreetMap contributors',
     thumb: 'https://a.tile.openstreetmap.org/4/8/5.png' },
+  { id: 'positron', name: 'Light Gray',
+    tiles: ['https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}'],
+    attribution: '© Esri, HERE, Garmin, © OpenStreetMap contributors',
+    thumb: 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/4/5/8' },
+  { id: 'voyager', name: 'Humanitarian',
+    tiles: ['https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', 'https://b.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', 'https://c.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png'],
+    attribution: '© OpenStreetMap contributors | Tiles: Humanitarian OSM Team, hosted by OpenStreetMap France',
+    thumb: 'https://a.tile.openstreetmap.fr/hot/4/8/5.png' },
+  { id: 'dark', name: 'Dark Gray',
+    tiles: ['https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'],
+    attribution: '© Esri, HERE, Garmin, © OpenStreetMap contributors',
+    thumb: 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/4/5/8' },
   { id: 'topo', name: 'OpenTopoMap',
     tiles: ['https://a.tile.opentopomap.org/{z}/{x}/{y}.png', 'https://b.tile.opentopomap.org/{z}/{x}/{y}.png'],
     attribution: '© OpenStreetMap, SRTM | © OpenTopoMap (CC-BY-SA)',
