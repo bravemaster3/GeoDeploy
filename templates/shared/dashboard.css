@@ -129,6 +129,11 @@ html[data-theme="dark"] .gd-ind-delta.down { color: #f87171; }
 .gd-gauge { width: 100%; height: 100%; display: block; }
 .gd-gauge-track { stroke: var(--border); }
 .gd-gauge-value { font-size: 15px; font-weight: 650; fill: var(--text); }
+/* Tick marks inside the dial, and the target line across it. The target is deliberately the
+   strongest mark on the gauge after the needle: it is the number the reading is being judged
+   against, and a gauge without it makes the reader do that comparison from memory. */
+.gd-gauge-tick { stroke: var(--text-muted); opacity: .55; stroke-width: 1.5; }
+.gd-gauge-target { stroke: var(--text); opacity: .85; stroke-width: 2; stroke-linecap: round; }
 .gd-gauge-cap { font-size: 8px; fill: var(--text-muted); }
 
 /* ── chart ────────────────────────────────────────────────────────────────── */
@@ -138,6 +143,11 @@ html[data-theme="dark"] .gd-ind-delta.down { color: #f87171; }
 .gd-chart .axis { stroke: var(--border); }
 .gd-chart .tick { font-size: 9px; fill: var(--text-muted); }
 .gd-chart .glabel { font-size: 9px; fill: var(--text-muted); }
+/* The rules behind the plot. Faint on purpose: they are there to be measured against, not read —
+   a gridline as strong as the data competes with it. */
+.gd-chart .gridline { stroke: var(--border); opacity: .45; stroke-width: 1; }
+/* Which columns a scatter is plotting, on the axes themselves. */
+.gd-chart .gd-axis-title { font-size: 9px; fill: var(--text-muted); opacity: .9; }
 /* Printed bar values. `vlabel-in` sits ON the bar, so it takes a light fill and a soft shadow to
    stay legible over any palette colour; the outside variant sits on the card and takes the normal
    muted text colour. Both are pointer-events:none so the label never steals the bar's click. */

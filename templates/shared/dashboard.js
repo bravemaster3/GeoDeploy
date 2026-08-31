@@ -870,13 +870,27 @@ window.GD_DASHBOARD = (function () {
   function drawGauge(value, style) {
     const min = style.min == null ? 0 : style.min;
     const max = style.max == null ? 100 : style.max;
-    const W = 180, H = 116, cx = 90, cy = 96, r = 68;
+    //: GEOMETRY THAT FITS. The arc sweeps 240 degrees from -210, so its two ends sit at 30 degrees
+    //: BELOW the centre — `cy + r*sin(30) = cy + r/2`, lower than the widest point of the circle.
+    //: The old box was 116 tall with the centre at 96, which put both ends at y=130 and cut 20px
+    //: off the bottom of the dial: the arc appeared to stop dead just before each cap, and the
+    //: min/max labels sat over the gap where its ends should have been.
+    //:
+    //: Derived rather than guessed, so it stays right if the radius or the sweep changes:
+    //:   top    = cy - r - halfStroke   (must be >= 0)
+    //:   bottom = cy + r*sin(30) + halfStroke
+    //:   labels sit below that, and H covers the lot.
+    const r = 68, SW = 12, HALF = SW / 2, W = 180, cx = 90;
     const START = -210, SWEEP = 240;
+    const endDrop = r * Math.sin((START + SWEEP) * Math.PI / 180);   // + r/2
+    const cy = r + HALF;
+    const H = Math.ceil(cy + endDrop + HALF + 16);                   // + room for the cap labels
     const svg = svgEl('svg', { class: 'gd-gauge', viewBox: '0 0 ' + W + ' ' + H,
                                preserveAspectRatio: 'xMidYMid meet' });
-    function pt(frac) {
+    function pt(frac, radius) {
       const a = (START + SWEEP * frac) * Math.PI / 180;
-      return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+      const rr = radius == null ? r : radius;
+      return [cx + rr * Math.cos(a), cy + rr * Math.sin(a)];
     }
     function arc(f0, f1, colour, width) {
       const p0 = pt(f0), p1 = pt(f1);
@@ -887,32 +901,61 @@ window.GD_DASHBOARD = (function () {
         fill: 'none', stroke: colour, 'stroke-width': width, 'stroke-linecap': 'round',
       });
     }
-    const track = arc(0, 1, 'currentColor', 12);
+    const span = (max - min) || 1;
+    const fracOf = function (v) { return Math.max(0, Math.min(1, (v - min) / span)); };
+
+    const track = arc(0, 1, 'currentColor', SW);
     track.setAttribute('class', 'gd-gauge-track');
     track.removeAttribute('stroke');
     svg.appendChild(track);
 
-    const span = (max - min) || 1;
     const bands = (style.bands || []).slice();
     bands.forEach(function (b, i) {
-      const from = Math.max(0, Math.min(1, (b.from - min) / span));
-      const to = i + 1 < bands.length ? Math.max(0, Math.min(1, (bands[i + 1].from - min) / span)) : 1;
-      if (to > from) svg.appendChild(arc(from, to, b.color, 12));
+      const from = fracOf(b.from);
+      const to = i + 1 < bands.length ? fracOf(bands[i + 1].from) : 1;
+      if (to > from) svg.appendChild(arc(from, to, b.color, SW));
     });
 
+    //: TICKS. A dial labelled only at its two ends says how far it goes and not where anything
+    //: sits along it — the same fault the value axis had. Short marks just inside the track, at the
+    //: round numbers `niceTicks` picks, so a needle two thirds along can be read as a number.
+    niceTicks(min, max, 4).forEach(function (v) {
+      if (v < min || v > max) return;
+      const f = fracOf(v);
+      const a = pt(f, r - HALF - 1), b = pt(f, r - HALF - 5);
+      svg.appendChild(svgEl('line', { class: 'gd-gauge-tick',
+                                      x1: a[0].toFixed(2), y1: a[1].toFixed(2),
+                                      x2: b[0].toFixed(2), y2: b[1].toFixed(2) }));
+    });
+
+    //: The TARGET, when there is one. A gauge exists to answer "are we there yet", and a dial with
+    //: a number on it but no mark for the number that matters leaves the reader doing the
+    //: comparison in their head.
+    if (style.target != null && isFinite(style.target)) {
+      const f = fracOf(style.target);
+      const a = pt(f, r + HALF + 1), b = pt(f, r - HALF - 1);
+      svg.appendChild(svgEl('line', { class: 'gd-gauge-target',
+                                      x1: a[0].toFixed(2), y1: a[1].toFixed(2),
+                                      x2: b[0].toFixed(2), y2: b[1].toFixed(2) }));
+    }
+
     if (value != null && isFinite(value)) {
-      const frac = Math.max(0, Math.min(1, (value - min) / span));
+      const frac = fracOf(value);
       svg.appendChild(arc(0, Math.max(frac, 0.001), style.color || accent(), 6));
       const p = pt(frac);
       svg.appendChild(svgEl('circle', { cx: p[0].toFixed(2), cy: p[1].toFixed(2), r: 5,
                                         fill: style.color || accent() }));
     }
-    const label = svgEl('text', { x: cx, y: cy - 8, 'text-anchor': 'middle', class: 'gd-gauge-value' });
+    const label = svgEl('text', { x: cx, y: cy - 6, 'text-anchor': 'middle', class: 'gd-gauge-value' });
     label.textContent = fmtNumber(value, style) + (style.unit ? ' ' + style.unit : '');
     svg.appendChild(label);
-    const lo = svgEl('text', { x: pt(0)[0], y: cy + 16, 'text-anchor': 'middle', class: 'gd-gauge-cap' });
+    // Under the arc's ENDS, wherever the geometry puts them.
+    const capY = cy + endDrop + HALF + 12;
+    const lo = svgEl('text', { x: pt(0)[0].toFixed(2), y: capY, 'text-anchor': 'middle',
+                               class: 'gd-gauge-cap' });
     lo.textContent = fmtNumber(min, style);
-    const hi = svgEl('text', { x: pt(1)[0], y: cy + 16, 'text-anchor': 'middle', class: 'gd-gauge-cap' });
+    const hi = svgEl('text', { x: pt(1)[0].toFixed(2), y: capY, 'text-anchor': 'middle',
+                               class: 'gd-gauge-cap' });
     hi.textContent = fmtNumber(max, style);
     svg.appendChild(lo); svg.appendChild(hi);
     return svg;
@@ -1373,14 +1416,57 @@ window.GD_DASHBOARD = (function () {
     return svg;
   }
 
+  //: Round numbers to put an axis's ticks on.
+  //:
+  //: The ends of a range are almost never the numbers a reader wants to see: an axis labelled
+  //: 0 and 25413 says how far it goes and nothing about where anything sits along it. Ticks at
+  //: 0 / 5000 / 10000 / … let a value be read off the chart, which is what an axis is for.
+  //:
+  //: Steps are 1, 2 or 5 times a power of ten — the intervals people count in. Snapping the step
+  //: rather than dividing the span evenly is the difference between 0, 5000, 10000 and 0, 6353.25,
+  //: 12706.5, both of which have five ticks and only one of which can be read at a glance.
+  function niceTicks(min, max, count) {
+    if (!isFinite(min) || !isFinite(max)) return [];
+    if (min === max) return [min];
+    const raw = (max - min) / Math.max(1, count);
+    const mag = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
+    const norm = raw / mag;
+    // Thresholds at the MIDPOINTS between the candidate steps, not at the steps themselves. Snapping
+    // 2.5 up to 5 (norm <= 2 ? 2 : 5) doubles the interval and halves the ticks: a chart from 12 to
+    // 913 came out with a step of 500 and therefore exactly ONE gridline, at 500. Choosing the
+    // nearest candidate instead of the next one up keeps the count near what was asked for.
+    const step = (norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10) * mag;
+    // How many decimals the step itself carries; ticks are rounded to it so a 0.2 step does not
+    // produce 0.6000000000000001 for a label to render.
+    const dp = Math.max(0, Math.min(12, -Math.floor(Math.log(step) / Math.LN10)));
+    const out = [];
+    // The epsilon is for binary floating point, not for tolerance: 0.1 + 0.2 lands a hair past 0.3
+    // and the last tick of a decimal range would otherwise be dropped.
+    for (let v = Math.ceil(min / step) * step; v <= max + step * 1e-9; v += step) {
+      out.push(Math.abs(v) < step * 1e-9 ? 0 : Number(v.toFixed(dp)));   // -0 prints as "-0"
+      if (out.length > 40) break;                    // a guard, never reached by a sane range
+    }
+    return out;
+  }
+
+  //: The value axis: a baseline, ticks at readable intervals, and a faint rule across the plot at
+  //: each one so a bar's height can be compared with the number beside it rather than guessed.
   function axis(x0, y0, x1, y1, minV, maxV, style) {
     const g = svgEl('g');
     g.appendChild(svgEl('line', { class: 'axis', x1: x0, y1: y1, x2: x1, y2: y1 }));
-    const hi = svgEl('text', { x: x0 - 4, y: y0 + 8, 'text-anchor': 'end', class: 'tick' });
-    hi.textContent = fmtNumber(maxV, style);
-    const lo = svgEl('text', { x: x0 - 4, y: y1, 'text-anchor': 'end', class: 'tick' });
-    lo.textContent = fmtNumber(minV, style);
-    g.appendChild(hi); g.appendChild(lo);
+    const span = (maxV - minV) || 1;
+    const ticks = niceTicks(minV, maxV, 4);
+    ticks.forEach(function (v) {
+      const y = y1 - ((v - minV) / span) * (y1 - y0);
+      if (y < y0 - 0.5 || y > y1 + 0.5) return;      // outside the plot after rounding
+      // Not over the baseline, which is already a line.
+      if (Math.abs(y - y1) > 0.5) {
+        g.appendChild(svgEl('line', { class: 'gridline', x1: x0, y1: y, x2: x1, y2: y }));
+      }
+      const t = svgEl('text', { x: x0 - 4, y: y + 3, 'text-anchor': 'end', class: 'tick' });
+      t.textContent = fmtNumber(v, style);
+      g.appendChild(t);
+    });
     return g;
   }
 
@@ -1759,10 +1845,39 @@ window.GD_DASHBOARD = (function () {
         t.textContent = text;
         return t;
       };
-      svg.appendChild(tick(padL, H - padB + 11, fmtNumber(x0, w.style), 'start'));
-      svg.appendChild(tick(W - padR, H - padB + 11, fmtNumber(x1, w.style), 'end'));
-      svg.appendChild(tick(padL - 4, H - padB, fmtNumber(y0, w.style), 'end'));
-      svg.appendChild(tick(padL - 4, padT + 8, fmtNumber(y1, w.style), 'end'));
+      // Ticks at readable intervals on BOTH axes, not just the two ends. A scatter labelled only
+      // with its extremes shows the shape of a relationship and refuses to say what any point on
+      // it is worth.
+      // `sx`/`sy` above are the SPANS; these map a value to a coordinate.
+      const toX = function (v) { return padL + ((v - x0) / sx) * (W - padL - padR); };
+      const toY = function (v) { return (H - padB) - ((v - y0) / sy) * (H - padT - padB); };
+      niceTicks(x0, x1, 4).forEach(function (v) {
+        const cx = toX(v);
+        if (cx < padL - 0.5 || cx > W - padR + 0.5) return;
+        svg.appendChild(svgEl('line', { class: 'gridline', x1: cx, y1: padT, x2: cx, y2: H - padB }));
+        svg.appendChild(tick(cx, H - padB + 11, fmtNumber(v, w.style), 'middle'));
+      });
+      niceTicks(y0, y1, 4).forEach(function (v) {
+        const cy = toY(v);
+        if (cy < padT - 0.5 || cy > H - padB + 0.5) return;
+        svg.appendChild(svgEl('line', { class: 'gridline', x1: padL, y1: cy, x2: W - padR, y2: cy }));
+        svg.appendChild(tick(padL - 4, cy + 3, fmtNumber(v, w.style), 'end'));
+      });
+      // WHICH COLUMNS. Two axes of bare numbers describe a relationship between things the reader
+      // has to remember; the card's subtitle names them, but the axes are where they are read.
+      if (ds.xField) {
+        const xt = svgEl('text', { x: (padL + W - padR) / 2, y: H - 2,
+                                   'text-anchor': 'middle', class: 'gd-axis-title' });
+        xt.textContent = ds.xField;
+        svg.appendChild(xt);
+      }
+      if (ds.yField) {
+        const yt = svgEl('text', { x: 9, y: (padT + H - padB) / 2, 'text-anchor': 'middle',
+                                   class: 'gd-axis-title',
+                                   transform: 'rotate(-90 9 ' + ((padT + H - padB) / 2) + ')' });
+        yt.textContent = ds.yField;
+        svg.appendChild(yt);
+      }
       c.body.appendChild(svg);
       // Say when the plot is a SAMPLE. A scatter silently drawn from 1500 of 3.4M features looks
       // exactly like a scatter of everything, and the reader would have no way to tell.
