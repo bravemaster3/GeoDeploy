@@ -1709,6 +1709,11 @@ window.GD_DASHBOARD = (function () {
       tr.classList.add('sel');
       // Zoom + highlight: the bbox came with the row precisely so this needs no round trip.
       if (row.bbox) env.fitBbox(row.bbox);
+      // Same rule the map follows: a new row REPLACES the last selection on every channel it used.
+      // Publishing the filter is conditional -- a row whose key column is null cannot name itself --
+      // so selecting such a row after one that could left the earlier row's filter narrowing
+      // everything, with the details panel showing a different feature entirely.
+      env.store.clearAttr(w.id, true);
       env.store.publishSelection(w.id, row.props, row.bbox,
         String(row.props[ds.keyField] == null ? '' : row.props[ds.keyField]));
       if (ds.keyField && row.props[ds.keyField] != null) {
@@ -2048,6 +2053,11 @@ window.GD_DASHBOARD = (function () {
       selectedEl = node;
       node.classList.add('sel');
       if (row.bbox) env.fitBbox(row.bbox);
+      // Same rule the map follows: a new row REPLACES the last selection on every channel it used.
+      // Publishing the filter is conditional -- a row whose key column is null cannot name itself --
+      // so selecting such a row after one that could left the earlier row's filter narrowing
+      // everything, with the details panel showing a different feature entirely.
+      env.store.clearAttr(w.id, true);
       env.store.publishSelection(w.id, row.props, row.bbox,
         String(row.props[titleField] == null ? '' : row.props[titleField]));
       const kf = ds.keyField;
@@ -3061,6 +3071,11 @@ window.GD_DASHBOARD = (function () {
     clearBtn.innerHTML = TOOL_ICONS.clear;
     clearBtn.addEventListener('click', function () {
       setMode(null);
+      // The attribute filter too. `env.clearSelection` drops the geometry and the details panel —
+      // it is generic, and knows nothing about this widget — so pressing Clear used to leave the
+      // chip a click had published sitting in the filter bar, still narrowing everything, with no
+      // outline on the map to explain it.
+      env.store.clearAttr(w.id);
       env.clearSelection();
     });
     bar.appendChild(clearBtn);
@@ -3076,6 +3091,19 @@ window.GD_DASHBOARD = (function () {
       setData(map, SEL_SRC, geometry);
       setData(map, DRAW_SRC, null);
       const bbox = bboxOf(geometry);
+      // A NEW SELECTION REPLACES THE LAST, on every channel the last one used.
+      //
+      // A click publishes up to three things: the feature's geometry, its attributes for the
+      // details panel, and — when the author named a field — an attribute FILTER. Drawing a box
+      // afterwards published only a geometry, so the attribute filter from the click survived and
+      // the two ANDed: `Country_Na = Niger` intersected with a box somewhere else matches nothing,
+      // and the dashboard emptied while its filter bar showed two chips that each looked reasonable.
+      //
+      // Cleared before the geometry goes out, and quietly, because `publishGeom` notifies the same
+      // targets a line later — two notifications would fire two requests, the first of them
+      // immediately aborted. The click path re-publishes its attribute straight after this, so
+      // clicking still filters; only the STALE one goes.
+      env.store.clearAttr(w.id, true);
       env.store.publishGeom(w.id, geometry, label, bbox);
       if (props) env.store.publishSelection(w.id, props, bbox, label);
     }
