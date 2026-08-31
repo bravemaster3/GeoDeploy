@@ -90,7 +90,7 @@ MAX_CHART_SERIES = 4
 #: How many columns may form the X axis when a chart plots WIDE data — one column per year, per
 #: month, per survey round. Bounded by `aggregate.MAX_SERIES`, which is what the request becomes:
 #: one aggregate expression per column, in a single grouped scan.
-MAX_X_COLUMNS = 24
+MAX_X_COLUMNS = 120
 
 #: How many join keys a map may pull into a style expression before it stops narrowing and says so.
 #: Offered as a short list because the trade-off is real in both directions: too low and the map

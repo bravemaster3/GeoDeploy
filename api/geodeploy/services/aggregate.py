@@ -1467,9 +1467,11 @@ def _pg_types(layer) -> dict[str, str]:
 #: ticks, not legend entries, and four of them is a two-year timeline.
 #:
 #: What the server should bound is the QUERY: N measures are N aggregate expressions in one pass
-#: over one grouping, and twenty-four of those is still one scan. The builder keeps its own limit of
-#: four for hand-authored measures, where the legend argument does apply.
-MAX_SERIES = 24
+#: over one grouping, and a hundred of those is still one scan. Raised from 24 the first time a real
+#: file turned up: GDP per capita 1960-2016 is 57 columns, and a limit set to a comfortable-looking
+#: number rather than a measured one is a limit that fails on the first honest use. The builder keeps
+#: its own limit of four for hand-authored measures, where the legend argument does apply.
+MAX_SERIES = 120
 
 
 def _series_label(op: str, field: str | None) -> str:

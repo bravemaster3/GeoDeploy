@@ -929,6 +929,26 @@ window.GD_DASHBOARD = (function () {
   //: empty, and a single column keeps its full name because one label shares everything with itself.
   function trimColumnLabels(names) {
     if (!names || names.length < 2) return (names || []).slice();
+    // FIRST, the trailing number — which is what actually distinguishes a set of wide columns, and
+    // does not depend on their prefixes agreeing.
+    //
+    // A shapefile truncates field names to ten characters, so one variable across 56 years arrives
+    // as GDP_PerC_1 … GDP_PerC_9 and then GDP_Per_10 … GDP_Per_56: the prefix CHANGES partway
+    // through, as the number grows and the truncation eats another letter. There is no common
+    // prefix to strip, and affix-trimming correctly concludes there is nothing to do — leaving the
+    // axis reading GDP_PerC_1, GDP_Per_10 when the reader wanted 1, 10.
+    //
+    // Only when EVERY name ends in digits and those digits are all different: identical tails mean
+    // the number is not what tells the columns apart (q1_2020, q2_2020) and the shared-affix rule
+    // below is the one that finds the 1 and the 2.
+    const tails = names.map(function (n) {
+      const m = String(n).match(/(\d+)$/);
+      return m ? m[1] : null;
+    });
+    if (tails.every(Boolean) && new Set(tails).size === names.length) {
+      // Through Number, so 01 and 1 do not sit on the same axis looking like different years.
+      return tails.map(function (t) { return String(Number(t)); });
+    }
     let pre = names[0], suf = names[0];
     for (let i = 1; i < names.length; i++) {
       const n = names[i];

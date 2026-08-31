@@ -193,8 +193,14 @@ function fieldsOf(w) {
 }
 function numericFields(w) { return fieldsOf(w).filter(c => isNumeric(c.type)) }
 //: How many columns may form the X axis. Mirrors `MAX_X_COLUMNS` in services/dashboard.py.
-const MAX_X_COLUMNS = 24
+const MAX_X_COLUMNS = 120
 function xColumnsOf(w) { return w?.dataSource?.xColumns || [] }
+//: Every numeric column at once. A wide file is wide by nature -- 57 years of GDP is 57 clicks --
+//: and a picker that only takes them one at a time is not a picker for this data.
+function allXColumns(w) {
+  patchWidget(w.id, { dataSource: { xColumns: numericFields(w).map(f => f.name).slice(0, MAX_X_COLUMNS) } })
+}
+function noXColumns(w) { patchWidget(w.id, { dataSource: { xColumns: [] } }) }
 function toggleXColumn(w, name) {
   const cur = xColumnsOf(w)
   const next = cur.includes(name) ? cur.filter(c => c !== name) : [...cur, name]
@@ -205,6 +211,13 @@ function toggleXColumn(w, name) {
 function xAxisPreview(w) {
   const names = xColumnsOf(w)
   if (names.length < 2) return names.join(', ')
+  //: Same order as `trimColumnLabels` in templates/shared/dashboard.js: the trailing number first,
+  //: because a shapefile's 10-character truncation makes the PREFIXES disagree (GDP_PerC_9 then
+  //: GDP_Per_10) and there is then no common affix to find.
+  const tails = names.map(n => (String(n).match(/(\d+)$/) || [null, null])[1])
+  if (tails.every(Boolean) && new Set(tails).size === names.length) {
+    return formatXLabels(tails.map(t => String(Number(t))), w).join(', ')
+  }
   let pre = names[0], suf = names[0]
   for (const n of names.slice(1)) {
     let p = 0
@@ -229,15 +242,19 @@ function xAxisPreview(w) {
   if (suf.length && !SEP.test(suf[0])) suf = ''
   const out = names.map(n => n.slice(pre.length, n.length - suf.length).replace(/^[_\-. ]+|[_\-. ]+$/g, ''))
   const trimmed = out.every(v => v.length) ? out : names
-  //: …then the author's own formatting, exactly as `formatColumnLabels` applies it at runtime.
+  return formatXLabels(trimmed, w).join(', ')
+}
+
+//: The author's own formatting, exactly as `formatColumnLabels` applies it at runtime.
+function formatXLabels(labels, w) {
   const off = Number(w?.dataSource?.xLabelOffset) || 0
   const patRaw = w?.dataSource?.xLabelPattern
   const pat = (patRaw && patRaw.includes('{}')) ? patRaw : null
-  return trimmed.map((lab) => {
+  return labels.map((lab) => {
     let v = String(lab)
     if (off) { const n = Number(v); if (v !== '' && isFinite(n)) v = String(n + off) }
     return pat ? pat.split('{}').join(v) : v
-  }).join(', ')
+  })
 }
 function isNumeric(type) {
   return /int|numeric|decimal|double|real|float|serial|bigint|smallint/i.test(String(type || ''))
@@ -1213,6 +1230,10 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
           <div>
             <span class="text-[10px] text-muted-foreground flex items-center gap-1 mb-1">
               Columns as the X axis
+              <button @click="allXColumns(selected)"
+                class="ml-auto text-[10px] text-primary hover:text-primary/80">All</button>
+              <button @click="noXColumns(selected)"
+                class="text-[10px] text-muted-foreground hover:text-foreground">None</button>
               <InfoHint label="About plotting columns as the axis">
                 For data where one variable is spread across many columns — gdp_1990, gdp_2000,
                 gdp_2010. Each column you pick becomes a point on the axis, aggregated with the
@@ -1259,6 +1280,7 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
               </label>
             </div>
             <p v-if="xColumnsOf(selected).length" class="text-[10px] text-muted-foreground/70 mt-1 leading-snug">
+              <span class="text-foreground/70">{{ xColumnsOf(selected).length }} columns.</span>
               Axis will read: <span class="text-foreground/80">{{ xAxisPreview(selected) }}</span>
             </p>
             <p v-if="xColumnsOf(selected).length === 1" class="text-[10px] text-amber-500/90 mt-1 leading-snug">
