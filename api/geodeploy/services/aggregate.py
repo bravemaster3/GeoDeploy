@@ -37,7 +37,13 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 #: Aggregations. `count` takes no field.
-OPS = {"count", "sum", "avg", "min", "max"}
+#: `bounds` is not a summary of a column like the others — it is the EXTENT of whatever the current
+#: filter selects, four numbers in lon/lat. It lives here rather than in its own endpoint because it
+#: takes exactly the same filters, geometry and joins as every other question the dashboard asks,
+#: and a second endpoint would be a second place to keep that in step.
+OPS = {"count", "sum", "avg", "min", "max", "bounds"}
+#: The ops that summarise no column and therefore need no `field`.
+FIELDLESS_OPS = {"count", "bounds"}
 
 #: `date_trunc` units, spelled the same in Postgres and DuckDB — which is why the time-bucket
 #: implementation below is genuinely shared rather than two lookalike branches.
@@ -431,7 +437,7 @@ async def _postgis_aggregate_uncached(db, layer, spec: dict) -> dict:
     op = spec.get("op", "count")
     if op not in OPS:
         raise AggregateError(f"Unsupported aggregation: {op}")
-    field = None if op == "count" else _check_field(spec.get("field"), known, "field")
+    field = None if op in FIELDLESS_OPS else _check_field(spec.get("field"), known, "field")
     filters = normalize_filters(spec.get("filters"), known)
     geometry = spec.get("geometry") if isinstance(spec.get("geometry"), dict) else None
 
@@ -464,6 +470,15 @@ async def _postgis_aggregate_uncached(db, layer, spec: dict) -> dict:
         order = {"value_asc": "ORDER BY 2 ASC NULLS LAST",
                  "key_asc": "ORDER BY 1 ASC NULLS LAST"}.get(
                      spec.get("sort") or "value_desc", "ORDER BY 2 DESC NULLS LAST")
+    # THE EXTENT of the filtered set. Asked before the group-by branch because it never groups: the
+    # caller wants one rectangle for everything the filter selects, not one per category.
+    if op == "bounds":
+        g4326 = f"ST_Transform({qi(geom_col)}, 4326)"
+        row = (await db.execute(text(
+            f"SELECT ST_XMin(e), ST_YMin(e), ST_XMax(e), ST_YMax(e) "
+            f"FROM (SELECT ST_Extent({g4326}) AS e FROM {table} {where}) t"), params)).first()
+        return _bounds_out(row)
+
     # KEYS ONLY: no measures, no count, no ordering by a value that is not computed. The caller is
     # building a predicate, not a chart, so every column but the key is work nobody reads.
     if spec.get("keysOnly"):
@@ -732,6 +747,37 @@ def _duck_bbox_prune(meta: dict, geometry: dict | None) -> tuple[str | None, Any
         return f"struct_extract({qi(col)}, '{fields[f]}')"
     return (f"{ce('xmin')} <= {bbox[2]} AND {ce('xmax')} >= {bbox[0]} "
             f"AND {ce('ymin')} <= {bbox[3]} AND {ce('ymax')} >= {bbox[1]}"), geom
+
+
+def _duck_bounds(conn, src: str, meta: dict, cols: dict, where_sql: str) -> dict:
+    """The extent of the filtered set, in lon/lat.
+
+    Prefers the COVERING bbox struct the prep step writes: four numeric columns whose min/max is the
+    extent, with no geometry decoded at all. Falls back to the geometry itself when a layer has no
+    covering column — correct either way, and the difference is whole seconds on a large file.
+
+    Reprojected at the END rather than per row: the extent of the reprojected set and the reprojected
+    extent differ only for a shape spanning a projection's discontinuity, and reprojecting four
+    numbers instead of millions is the reason this is worth asking for at all.
+    """
+    covering = meta.get("covering")
+    if covering:
+        col, f = covering
+        def ce(k):
+            return f"struct_extract({qi(col)}, '{f[k]}')"
+        sel = f"MIN({ce('xmin')}), MIN({ce('ymin')}), MAX({ce('xmax')}), MAX({ce('ymax')})"
+    else:
+        g = qi(_duck_geom_col(meta, cols))
+        sel = f"MIN(ST_XMin({g})), MIN(ST_YMin({g})), MAX(ST_XMax({g})), MAX(ST_YMax({g}))"
+    row = conn.execute(f"SELECT {sel} FROM {src} {where_sql}").fetchone()
+    if not row or row[0] is None:
+        return {"bounds": None}
+    b = [float(row[0]), float(row[1]), float(row[2]), float(row[3])]
+    src_epsg = meta.get("epsg") or "EPSG:4326"
+    if src_epsg not in ("EPSG:4326", "4326"):
+        from . import duckdb_engine
+        b = list(duckdb_engine._reproject_bbox(b, src_epsg, "EPSG:4326"))
+    return {"bounds": b}
 
 
 def _duck_geom_col(meta: dict, cols: dict) -> str:
@@ -1111,7 +1157,7 @@ def _parquet_aggregate_uncached(layer, spec: dict) -> dict:
     op = spec.get("op", "count")
     if op not in OPS:
         raise AggregateError(f"Unsupported aggregation: {op}")
-    field = None if op == "count" else _check_field(spec.get("field"), known, "field")
+    field = None if op in FIELDLESS_OPS else _check_field(spec.get("field"), known, "field")
     filters = normalize_filters(spec.get("filters"), known)
     geometry = spec.get("geometry") if isinstance(spec.get("geometry"), dict) else None
     group_by = spec.get("groupBy")
@@ -1143,6 +1189,10 @@ def _parquet_aggregate_uncached(layer, spec: dict) -> dict:
             order = ("ORDER BY 1 ASC" if bucket else
                      {"value_asc": "ORDER BY 2 ASC", "key_asc": "ORDER BY 1 ASC"}.get(
                          spec.get("sort") or "value_desc", "ORDER BY 2 DESC"))
+            # THE EXTENT — see the PostGIS branch.
+            if op == "bounds":
+                return _duck_bounds(conn, src, meta, cols, where_sql)
+
             # KEYS ONLY — see the PostGIS branch: a predicate, not a chart.
             if spec.get("keysOnly"):
                 limit = max(2, min(int(spec.get("limit") or 12), MAX_KEYS))
@@ -1447,6 +1497,20 @@ def _series_specs(spec: dict, known: set[str]) -> list[dict]:
     op = spec.get("op", "count")
     field = None if op == "count" else spec.get("field")
     return [{"op": op, "field": field, "label": _series_label(op, field)}]
+
+
+def _bounds_out(row) -> dict:
+    """`{bounds: [minx, miny, maxx, maxy]}` in lon/lat, or `{bounds: None}`.
+
+    None is a real answer and the caller must handle it: a filter that matches nothing has no
+    extent, and neither does a set whose every geometry is null. Flying the map to a rectangle
+    invented for that case would be worse than not moving at all."""
+    if not row or row[0] is None:
+        return {"bounds": None}
+    b = [float(row[0]), float(row[1]), float(row[2]), float(row[3])]
+    # A single point selects a zero-area box, which `fitBounds` cannot frame — it is left to the
+    # client, which knows its own viewport and can simply centre on it.
+    return {"bounds": b}
 
 
 def _keys_out(rows, limit: int) -> dict:

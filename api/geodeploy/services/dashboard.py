@@ -254,6 +254,12 @@ def _normalize_source(widget_type: str, source: dict | None) -> dict | None:
         # narrowed rather than quietly drawing everything. Default False because a map that narrows
         # for a small selection and stops for a large one is a worse thing to hand someone
         # unasked-for than a map that never claimed to narrow at all.
+        # ON by default, unlike `linkedFilter`. The two are opposites in what they risk: following a
+        # linked filter can leave a map that LOOKS filtered and is not, which must be opted into;
+        # framing the features a chart just selected is only a camera move, and it is what almost
+        # everyone expects when they click a bar. Off is one checkbox away for the dashboards where
+        # comparing categories in a fixed frame matters more.
+        out["zoomToFilter"] = bool(src.get("zoomToFilter", True))
         out["linkedFilter"] = bool(src.get("linkedFilter"))
         # A CHOICE, not a free number. The failure mode of too large a value is a sluggish map and a
         # fat response rather than an error, which is the kind of setting an author should not be

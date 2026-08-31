@@ -993,6 +993,17 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
               @input="patchWidget(selected.id, { dataSource: { tolPx: Number($event.target.value) } })"
               class="w-full accent-primary" />
           </label>
+          <label class="flex items-center gap-1.5 text-[11px] cursor-pointer select-none">
+            <input type="checkbox" class="accent-primary"
+              :checked="selected.dataSource?.zoomToFilter !== false"
+              @change="patchWidget(selected.id, { dataSource: { zoomToFilter: $event.target.checked } })" />
+            Zoom to what a chart selects
+            <InfoHint label="About zooming to a chart's selection">
+              Clicking a bar or a slice frames the features it selected. Charts only — a slider or a
+              search box is a control you are working in, and moving the camera under the hand using
+              it fights you. Turn it off where comparing categories in a fixed view matters more.
+            </InfoHint>
+          </label>
           <!-- The map following a LINKED filter. Off by default, and the one setting here whose
                failure mode is a map that LOOKS narrowed and is not — so the bound stays one click
                away rather than being left to the docs. -->

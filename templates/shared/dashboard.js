@@ -285,7 +285,8 @@ window.GD_DASHBOARD = (function () {
     widgets.forEach(function (w) { byId[w.id] = w; });
     // `geomPinned` = the geometry came from a deliberate act (a click, a drawn polygon, a dragged
     // box) rather than from the map moving. See `publishGeom`.
-    const state = { attr: {}, geom: null, geomPinned: false, selection: null };
+    const state = { attr: {}, geom: null, geomPinned: false, selection: null,
+                    lastAttr: null };
     const listeners = {};      // widgetId → refresh fn (a TARGET re-queries)
     const selfListeners = {};  // widgetId → fn (a SOURCE redraws its own active state, no query)
     const barListeners = [];
@@ -365,12 +366,18 @@ window.GD_DASHBOARD = (function () {
         state.attr[sourceId] = { layerKey: layerKeyOf(byId[sourceId]),
                                  layerId: layerIdOf(byId[sourceId]), targets: targets,
                                  expr: expr, label: label };
+        // WHO published last. Only the map reads it, to decide whether the newest filter was a
+        // chart click worth framing the camera on; targets otherwise see a set, not an order.
+        state.lastAttr = sourceId;
         notify(affected(prev && prev.targets, targets));
         notifySelf(sourceId);
       },
       clearAttr: function (sourceId, quiet) {
         const prev = state.attr[sourceId];
         if (!prev) return;
+        // Clearing is not publishing: un-selecting a bar must not fly the camera to what was just
+        // let go of. Only forget it if the source being cleared IS the last publisher.
+        if (state.lastAttr === sourceId) state.lastAttr = null;
         delete state.attr[sourceId];
         if (!quiet) { notify(prev.targets); notifySelf(sourceId); }
       },
@@ -448,6 +455,16 @@ window.GD_DASHBOARD = (function () {
           (out[f.layerId] || (out[f.layerId] = [])).push(f.expr);
         }
         return out;
+      },
+      //: The attribute filter published MOST RECENTLY, with the type of the widget that published
+      //: it — everything the map needs to decide whether this was a chart click worth framing.
+      //: Tracked here because the store is the only place that sees the publications in order; a
+      //: target only ever sees the resulting set.
+      lastAttrSource: function () {
+        const id = state.lastAttr;
+        if (!id || !state.attr[id]) return null;
+        const f = state.attr[id], w = byId[id];
+        return { id: id, type: w && w.type, layerId: f.layerId, expr: f.expr };
       },
       selectionFor: function (w) {
         const sel = state.selection;
@@ -2112,6 +2129,7 @@ window.GD_DASHBOARD = (function () {
       // The map as a TARGET: an attribute filter pointed at it is applied to the MapLibre layers
       // drawing its selection layer, so filtering the dashboard visibly narrows the map too.
       applyMapFilter(w, env);
+      zoomToFilter(w, env);
     }
     return { el: wrap, refresh: refresh, isMap: true };
   };
@@ -2268,6 +2286,31 @@ window.GD_DASHBOARD = (function () {
 
   //: The distinct data layers the style draws, in style order. An external layer is skipped for the
   //: same reason it always was: its features are somebody else's and carry none of our columns.
+  //: Frame what a CHART just selected.
+  //:
+  //: Charts only, deliberately. A selector or a search box is a control the visitor is working in —
+  //: moving the camera under someone adjusting a slider is the map arguing with the hand using it —
+  //: and a table row already flies to its own feature. A chart segment is the one case where the
+  //: selection IS a set of features with an extent and clicking it says "show me these".
+  //:
+  //: The extent comes from the server (`op: 'bounds'`), because the browser only holds the tiles it
+  //: has drawn: computing it client-side would frame the part of the selection that happens to be
+  //: on screen, which is the answer least worth having.
+  function zoomToFilter(w, env) {
+    if (!(w.dataSource && w.dataSource.zoomToFilter)) return;
+    if (!env.fitBbox) return;
+    const src = env.store.lastAttrSource && env.store.lastAttrSource();
+    if (!src || src.type !== 'chart' || src.layerId == null) return;
+    env.api.aggregate('mapfit:' + w.id, src.layerId,
+      { op: 'bounds', filters: [src.expr], geometry: null })
+      .then(function (r) {
+        // `null` is a real answer — a filter that matches nothing has no extent — and moving the
+        // camera to a rectangle invented for that case is worse than not moving at all.
+        if (r && r.bounds) env.fitBbox(r.bounds);
+      })
+      .catch(function () { /* a camera move is never worth an error in front of the visitor */ });
+  }
+
   function drawnLayerIds(env) {
     const seen = {}, out = [];
     (env.style.layers || []).forEach(function (lyr) {
