@@ -195,16 +195,27 @@ function numericFields(w) { return fieldsOf(w).filter(c => isNumeric(c.type)) }
 //: How many columns may form the X axis. Mirrors `MAX_X_COLUMNS` in services/dashboard.py.
 const MAX_X_COLUMNS = 120
 function xColumnsOf(w) { return w?.dataSource?.xColumns || [] }
+//: Bars only. `colorMode` colours bars and `valueLabels` prints numbers on them; a line chart takes
+//: neither — its colours come from the series palette and it has no bar to write on. Both were shown
+//: for every chart kind, so choosing Line left two controls on screen that did nothing, and one of
+//: them was called "Bar colours" while no bars were in sight.
+function isBarChart(w) { return ['bar', 'hbar'].includes(w?.style?.chart || 'bar') }
 //: Every numeric column at once. A wide file is wide by nature -- 57 years of GDP is 57 clicks --
 //: and a picker that only takes them one at a time is not a picker for this data.
-function allXColumns(w) {
-  patchWidget(w.id, { dataSource: { xColumns: numericFields(w).map(f => f.name).slice(0, MAX_X_COLUMNS) } })
-}
+function allXColumns(w) { setXColumns(w, numericFields(w).map(f => f.name)) }
 function noXColumns(w) { patchWidget(w.id, { dataSource: { xColumns: [] } }) }
 function toggleXColumn(w, name) {
   const cur = xColumnsOf(w)
   const next = cur.includes(name) ? cur.filter(c => c !== name) : [...cur, name]
-  patchWidget(w.id, { dataSource: { xColumns: next.slice(0, MAX_X_COLUMNS) } })
+  setXColumns(w, next)
+}
+//: Choosing columns implies reading them, so Count -- which reads none -- becomes Sum, the same
+//: promotion the single Field picker makes. Left on Count the runtime would silently use Sum
+//: anyway, and a panel that says one thing while the chart does another is worse than either.
+function setXColumns(w, cols) {
+  const patch = { xColumns: cols.slice(0, MAX_X_COLUMNS) }
+  if (patch.xColumns.length && (w.dataSource?.op || 'count') === 'count') patch.op = 'sum'
+  patchWidget(w.id, { dataSource: patch })
 }
 //: What the trimmed axis will read, shown while choosing so the author can see whether the columns
 //: they picked produce sensible ticks. Same rule as the runtime's `trimColumnLabels`.
@@ -1198,7 +1209,12 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
               <select :value="selected.dataSource?.op || 'count'"
                 @change="setAggOp(selected, $event.target.value)"
                 class="w-full text-xs bg-background border border-border rounded px-2 py-1 focus:outline-none focus:border-primary/60">
-                <option v-for="o in AGG_OPS" :key="o.id" :value="o.id">{{ o.name }}</option>
+                <!-- Count is dropped once columns form the axis: COUNT(*) does not read the
+                     column at all, so every point on the axis would be the same number — a flat
+                     line saying how many rows are in the group. -->
+                <option v-for="o in AGG_OPS.filter(o => !(selected.type === 'chart'
+                          && xColumnsOf(selected).length && o.id === 'count'))"
+                  :key="o.id" :value="o.id">{{ o.name }}</option>
               </select>
             </label>
             <!-- ALWAYS shown, not only once the aggregation is something other than Count.
@@ -1286,6 +1302,19 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
             <p v-if="xColumnsOf(selected).length === 1" class="text-[10px] text-amber-500/90 mt-1 leading-snug">
               One column is a single point — pick at least two for an axis.
             </p>
+            <label v-if="xColumnsOf(selected).length && selected.dataSource?.groupBy"
+              class="flex items-center gap-1.5 text-[11px] cursor-pointer select-none mt-2">
+              <input type="checkbox" class="accent-primary"
+                :checked="!!selected.dataSource?.meanLine"
+                @change="patchWidget(selected.id, { dataSource: { meanLine: $event.target.checked } })" />
+              Add an overall line
+              <InfoHint label="About the overall line">
+                One more line across the same columns, for everything currently selected rather than
+                for one group — drawn thicker and in the accent colour. It is asked as its own
+                question, so it is the figure over the whole selection and not the average of the
+                lines that happened to fit under “Max groups”.
+              </InfoHint>
+            </label>
           </div>
         </template>
 
@@ -1373,7 +1402,7 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
                 <option v-for="k in CHART_KINDS" :key="k.id" :value="k.id">{{ k.name }}</option>
               </select>
             </label>
-            <label class="block">
+            <label v-if="isBarChart(selected)" class="block">
               <span class="text-[10px] text-muted-foreground block mb-0.5">Bar colours</span>
               <select :value="selected.style?.colorMode || 'single'"
                 @change="patchWidget(selected.id, { style: { colorMode: $event.target.value } })"
@@ -1383,7 +1412,7 @@ function bandCount(w) { return layerOf(w)?.band_count || 1 }
                 <option value="sequential">Shaded (ordered)</option>
               </select>
             </label>
-            <label class="block">
+            <label v-if="isBarChart(selected)" class="block">
               <span class="text-[10px] text-muted-foreground block mb-0.5">Values on bars</span>
               <select :value="selected.style?.valueLabels == null ? '' : (selected.style.valueLabels ? 'on' : 'off')"
                 @change="patchWidget(selected.id, { style: { valueLabels: $event.target.value === '' ? null : $event.target.value === 'on' } })"

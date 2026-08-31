@@ -453,6 +453,25 @@ async def _postgis_aggregate_uncached(db, layer, spec: dict) -> dict:
 
     group_by = spec.get("groupBy")
     if not group_by:
+        # SEVERAL MEASURES, NO GROUPING. The grouped path has always answered N aggregates in
+        # one pass; ungrouped it ignored `series` and answered the single `op`/`field` — so
+        # "average of these 56 columns over everything" was unaskable, and asking it with an op
+        # that needs a field but no field to give came back 400.
+        #
+        # It is the shape a chart's OVERALL line needs: the same measures as the per-group
+        # lines, over the whole selection rather than one group. Answered in the same shape as
+        # the grouped reply (`values` alongside `value`) so the client reads one thing.
+        if spec.get("series"):
+            series = _series_specs(spec, known)
+            vals = ", ".join(f"{_pg_value_expr(sp['op'], sp['field'])} AS v{i}"
+                             for i, sp in enumerate(series))
+            row = (await db.execute(
+                text(f"SELECT {vals}, COUNT(*) AS n FROM {table} {where}"), params)).first()
+            values = [_num(row[i]) for i in range(len(series))] if row else []
+            return {"op": op, "value": values[0] if values else None, "values": values,
+                    "count": int(row[len(series)]) if row else 0,
+                    "series": [{"label": sp["label"], "op": sp["op"], "field": sp.get("field")}
+                               for sp in series]}
         row = (await db.execute(text(f"SELECT {value} AS v, COUNT(*) AS n FROM {table} {where}"),
                                 params)).first()
         return {"op": op, "value": _num(row[0]) if row else None,
@@ -1180,6 +1199,25 @@ def _parquet_aggregate_uncached(layer, spec: dict) -> dict:
             # PURE SQL — one columnar pass, row groups pruned by the attribute predicates.
             value = _duck_value_expr(op, field)
             if not group_by:
+            # SEVERAL MEASURES, NO GROUPING. The grouped path has always answered N aggregates in
+            # one pass; ungrouped it ignored `series` and answered the single `op`/`field` — so
+            # "average of these 56 columns over everything" was unaskable, and asking it with an op
+            # that needs a field but no field to give came back 400.
+            #
+            # It is the shape a chart's OVERALL line needs: the same measures as the per-group
+            # lines, over the whole selection rather than one group. Answered in the same shape as
+            # the grouped reply (`values` alongside `value`) so the client reads one thing.
+                if spec.get("series"):
+                    series = _series_specs(spec, known)
+                    vals = ", ".join(_duck_value_expr(sp["op"], sp.get("field"))
+                                     for sp in series)
+                    row = conn.execute(
+                        f"SELECT {vals}, COUNT(*) FROM {src} {where_sql}").fetchone()
+                    values = [_num(row[i]) for i in range(len(series))] if row else []
+                    return {"op": op, "value": values[0] if values else None, "values": values,
+                            "count": int(row[len(series)]) if row else 0,
+                            "series": [{"label": sp["label"], "op": sp["op"],
+                                        "field": sp.get("field")} for sp in series]}
                 row = conn.execute(
                     f"SELECT {value}, COUNT(*) FROM {src} {where_sql}").fetchone()
                 return {"op": op, "value": _num(row[0]) if row else None,

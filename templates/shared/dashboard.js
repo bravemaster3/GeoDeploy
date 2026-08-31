@@ -1157,6 +1157,27 @@ window.GD_DASHBOARD = (function () {
         // rather than the request — a measure the server dropped (a field the layer lost) then
         // disappears from the legend too, instead of labelling someone else's line.
         multi = (data && data.series) || [];
+        // THE OVERALL LINE, asked as its own question rather than derived from the answer above.
+        //
+        // Averaging the plotted series would average the groups that SURVIVED `limit` — the top 12,
+        // or 100 — and label the result as the average of everything. Asking the same aggregation
+        // with no grouping gives the real figure over the current filters, whatever the group cap.
+        // One extra request, and only when it is switched on.
+        if (xcols.length && ds.meanLine && ds.groupBy) {
+          env.api.aggregate(w.id + ':mean', ds.layerId, specFor(w, env.store, {
+            op: ds.op, series: series, limit: 2, sort: 'key_asc',
+          })).then(function (mean) {
+            const row = (mean && mean.groups && mean.groups[0]) || null;
+            const vals = row ? (row.values || [row.value]) : (mean ? [mean.value] : null);
+            if (!vals || !groups.length) return;
+            // Appended AFTER the transpose, as one more value on each tick — the same shape every
+            // other series has, so nothing downstream needs to know it is special except the marker
+            // that draws it thicker.
+            groups.forEach(function (g, i) { g.values = (g.values || []).concat([vals[i]]); });
+            multi = multi.concat([{ label: 'Average', __mean: true }]);
+            render();
+          }).catch(function () { /* the per-group lines are still a chart without it */ });
+        }
         if (xcols.length && multi.length) {
           // Labels come from the ANSWER's series, not the request's columns, for the same reason:
           // a column the server dropped must not leave its name on another column's ticks.
@@ -1247,7 +1268,11 @@ window.GD_DASHBOARD = (function () {
     const y = function (v) { return H - padB - ((v - ext.lo) / span) * (H - padT - padB); };
 
     for (let s = 0; s < m; s++) {
-      const colour = PALETTE[s % PALETTE.length];
+      // The overall line is drawn in the theme's own accent and twice as thick: it is not one more
+      // country, and a reader scanning fifty lines of palette colour needs to find it without
+      // consulting the legend.
+      const mean = !!(series[s] && series[s].__mean);
+      const colour = mean ? accent() : PALETTE[s % PALETTE.length];
       const pts = groups.map(function (g, i) { return x(i) + ',' + y(seriesValues(g, m)[s]); });
       if (filled && m === 1) {
         // Only a SINGLE series is ever area-filled: stacked translucent fills over each other read
@@ -1258,7 +1283,7 @@ window.GD_DASHBOARD = (function () {
         }));
       }
       svg.appendChild(svgEl('polyline', { points: pts.join(' '), fill: 'none',
-                                          stroke: colour, 'stroke-width': 1.8,
+                                          stroke: colour, 'stroke-width': mean ? 3.4 : 1.8,
                                           'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
       groups.forEach(function (g, i) {
         const v = seriesValues(g, m)[s];

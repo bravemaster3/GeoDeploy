@@ -338,6 +338,10 @@ def _normalize_source(widget_type: str, source: dict | None) -> dict | None:
                 xcols.append(name)
         if xcols:
             ref["xColumns"] = xcols
+            # An overall line across the columns, beside the per-group ones. Its own question:
+            # "one line per country" and "the average of all of them" are different answers, and
+            # averaging the plotted lines would average the TOP N groups rather than the selection.
+            ref["meanLine"] = bool(src.get("meanLine"))
             # WHAT THE TICKS SAY once the shared part of the column names is gone. `gdp60, gdp61`
             # already trim to `60, 61`; these turn those into what they stand for.
             #
