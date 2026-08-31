@@ -37,6 +37,9 @@ Vue 3 single-page dashboard — the browser-only control panel for setup, data u
 - `vite.config.js` dev proxy must stay aligned with `nginx/nginx.conf` (prefix stripping + titiler port 80).
 
 ## Last updated
-2026-08-18 (link previews: `og:`/`twitter:` tags in `index.html`, `public/og-image.png`, and the `__GEODEPLOY_ORIGIN__` → `$public_scheme://$host` `sub_filter` in `nginx.conf`. Because that rule ships **inside this image**, `docker compose build geodeploy-ui` + recreate is enough for the dashboard's card — the outer nginx does not have to be touched.)
+2026-08-31 (`index.html`: the shell's `<title>` names the product, not just the brand. Nothing in
+the app sets `document.title`, so that static string is the whole title of the only page of ours
+search engines had indexed — the demo instance. Meta and og descriptions widened to match.)
+
 2026-08-13 (ramp reverse toggle + swatch strip in `components/portal/LayerPanel.vue`; class-count
 ceiling raised 9 → 12 to match the server; the symbology-twin rounding fix above)
