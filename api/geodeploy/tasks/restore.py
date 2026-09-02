@@ -117,6 +117,7 @@ def restore_snapshot(cfg, key: str, manifest: dict, tmp_dir: str, on_step=None) 
         # Repair what replacing the database broke — the schema is now the SNAPSHOT'S, and its
         # in-flight rows are frozen. Inside this function so no caller can forget them.
         # FIRST, before anything reads setup_config: the row now describes the snapshot's instance.
+        detail["setup_config"] = _repair_setup_config()
         detail["own_db"] = _restore_own_db_settings()
         detail["own_storage"] = _restore_own_storage_settings()
         detail["schema"] = _reapply_schema_migrations()
@@ -497,6 +498,61 @@ def _republish_portals() -> dict:
     except Exception as exc:      # noqa: BLE001
         logger.warning("restore: portal republish pass failed: %s", exc)
         return {"rebuilt": 0, "failed": [str(exc)[:200]]}
+
+
+#: `setup_config` holds ONE row, `id = 1`. These put it back to that when a restore has left more.
+_SETUP_CONFIG_REPAIR = (
+    # Keep a single row, preferring one that actually names a database host: the row the live API
+    # inserts during the restore is a bare `SetupConfig(id=1)` with every field defaulted, so
+    # "has a host" is what tells the snapshot's real row from the placeholder.
+    """DELETE FROM setup_config WHERE ctid NOT IN (
+         SELECT ctid FROM setup_config
+          ORDER BY (coalesce(postgis_host, '') <> '') DESC, ctid
+          LIMIT 1)""",
+    # And put the primary key back, which pg_restore could not add while the duplicate existed.
+    """DO $$
+       BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'setup_config_pkey') THEN
+           ALTER TABLE setup_config ADD CONSTRAINT setup_config_pkey PRIMARY KEY (id);
+         END IF;
+       END $$""",
+)
+
+
+def _repair_setup_config() -> dict:
+    """Collapse `setup_config` back to one row with its primary key.
+
+    THE RACE. `pg_restore --clean` drops `setup_config` and recreates it EMPTY. The API is still
+    serving throughout — that is the whole point of an in-place restore — and the first request that
+    reads the instance's configuration finds no `id = 1`, so `routers/setup._get_or_create_config`
+    inserts a fresh default row into the gap. `pg_restore` then COPYs the snapshot's row in on top,
+    and its closing `ADD CONSTRAINT setup_config_pkey PRIMARY KEY (id)` fails:
+
+        could not create unique index "setup_config_pkey"
+        DETAIL: Key (id)=(1) is duplicated.
+
+    The table is then left with two rows AND no primary key, permanently, and every later restore
+    can add another. Whichever row the API reads first decides whether it believes it has a
+    database: observed in production as "GeoDeploy cannot reach its database" on an instance whose
+    database was answering perfectly — the blank row won, and it names no host.
+
+    Ordered before `_restore_own_db_settings()` deliberately: that function UPDATEs this row, and
+    with duplicates present it would fix one copy while the API kept reading the other.
+
+    Not a new problem introduced by keeping the PostGIS extension (see `services/restore`), but the
+    same class: a restore is DDL against a live system, and everything it drops is missing for a
+    moment that something else can act on.
+    """
+    applied, failed = 0, []
+    for stmt in _SETUP_CONFIG_REPAIR:
+        try:
+            with state_db.connect() as conn:
+                conn.execute(stmt)
+            applied += 1
+        except Exception as exc:      # noqa: BLE001 — the data is back; report and carry on
+            logger.warning("restore: setup_config repair step failed: %s", exc)
+            failed.append(str(exc)[:200])
+    return {"applied": applied, "failed": failed}
 
 
 def _recycle_own_connections() -> dict:
