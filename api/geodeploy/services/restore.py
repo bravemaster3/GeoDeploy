@@ -105,12 +105,23 @@ _BENIGN_RESTORE_ERRORS = (
     "cannot drop extension",
     "must be owner of extension",       # a managed Postgres refuses the drop for a different reason
     "extension \"postgis\" already exists",
+    # KEEPING the extensions has a consequence: the schemas they own (`topology` and `tiger` from
+    # postgis_topology and postgis_tiger_geocoder, which the standard postgis image installs) now
+    # survive the restore too. The dump still carries their DROP and CREATE, so pg_restore reports
+    # that it cannot drop a schema things depend on, and then that the schema already exists. Both
+    # are the intended outcome stated as an error — the schema is exactly where it should be.
+    "cannot drop schema",
+    "must be owner of schema",
 )
 
 
 def _benign(line: str) -> bool:
     low = line.lower()
-    return any(marker.lower() in low for marker in _BENIGN_RESTORE_ERRORS)
+    if any(marker.lower() in low for marker in _BENIGN_RESTORE_ERRORS):
+        return True
+    # `schema "tiger" already exists` — tolerated, while a TABLE that already exists is not, because
+    # that would mean `--clean` failed to drop something it was supposed to replace.
+    return 'already exists' in low and 'schema "' in low
 
 
 #: Entry types in a `pg_restore -l` table of contents that must never be replayed.
@@ -186,19 +197,33 @@ def restore_database(dump_path: str) -> dict:
     # touched BY it (see toc_without_extensions). Failure here is not fatal: a managed Postgres may
     # refuse `CREATE EXTENSION` to a non-superuser, and on any instance that already has PostGIS —
     # which is every instance with a vector layer — the statement is a no-op anyway.
-    ensure = subprocess.run(["psql", *conn, "-v", "ON_ERROR_STOP=0", "-c",
-                             "CREATE EXTENSION IF NOT EXISTS postgis"],
-                            env=env, capture_output=True, text=True, timeout=300)
-    if ensure.returncode != 0:
-        logger.warning("restore: could not ensure the postgis extension (%s) — continuing, the "
-                       "database may already have it", (ensure.stderr or "").strip()[:200])
+    #
+    # OSError as well as a non-zero exit: `psql` is a NEW dependency of this function, and the one
+    # thing it must never do is turn a working restore into a failed one. The image pins
+    # postgresql-client-16 for pg_dump, so it is there — but a missing binary raises FileNotFoundError
+    # from subprocess.run rather than returning a code, and letting that escape would mean an
+    # instance that can no longer restore at all. This step is best-effort by design: every instance
+    # that has a vector layer already has the extension.
+    try:
+        ensure = subprocess.run(["psql", *conn, "-v", "ON_ERROR_STOP=0", "-c",
+                                 "CREATE EXTENSION IF NOT EXISTS postgis"],
+                                env=env, capture_output=True, text=True, timeout=300)
+        if ensure.returncode != 0:
+            logger.warning("restore: could not ensure the postgis extension (%s) — continuing, the "
+                           "database may already have it", (ensure.stderr or "").strip()[:200])
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("restore: could not run psql to ensure the postgis extension (%s) — "
+                       "continuing; the database almost certainly already has it", exc)
 
     # Filter the TOC rather than restoring the dump wholesale, so `--clean` never emits
     # `DROP EXTENSION`. If listing fails for any reason we fall back to the plain restore: a
     # restore that works and may strand open connections beats no restore at all.
     toc_path = None
-    listing = subprocess.run(["pg_restore", "-l", dump_path],
-                             env=env, capture_output=True, text=True, timeout=3600)
+    try:
+        listing = subprocess.run(["pg_restore", "-l", dump_path],
+                                 env=env, capture_output=True, text=True, timeout=3600)
+    except (OSError, subprocess.SubprocessError) as exc:
+        listing = subprocess.CompletedProcess([], 1, "", str(exc))
     if listing.returncode == 0 and listing.stdout.strip():
         fd, toc_path = tempfile.mkstemp(suffix=".toc", prefix="gd-restore-")
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
