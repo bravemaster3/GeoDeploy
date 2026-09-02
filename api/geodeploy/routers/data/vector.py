@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import uuid
 from typing import Any
@@ -18,6 +19,25 @@ from ...schemas import DefaultStyle, JobStatus, LayerRename, PortalRefOut, Shari
 from ...services import martin as martin_svc
 from ...tasks.vector_ingest import ingest_vector
 from . import exports
+
+logger = logging.getLogger(__name__)
+
+
+def _upstream(what: str, exc: Exception) -> HTTPException:
+    """Report a failed read as 502 — and LOG it, which is the half that was missing.
+
+    Every one of these handlers turned an unexpected exception into
+    `HTTPException(502, f"...: {exc}")` and logged nothing. The message is real and useful, but it
+    only ever reaches the response BODY: uvicorn's access line shows the bare status, and the
+    dashboard runtime renders `Request failed (502)` without the detail. So the one string naming
+    the cause was written to the one place nobody reads, and a widget that had stopped working gave
+    an operator with a shell on the box nothing at all to go on.
+
+    `logger.exception` puts the traceback in the service log, where `docker compose logs` and
+    Settings -> Infrastructure both already look.
+    """
+    logger.exception("%s (layer read failed)", what)
+    return HTTPException(502, f"{what}: {exc}")
 from ..common import (apply_sharing, demo_upload_cap, busy_job_progress, by_ref, creator_names, portals_using,
                       prune_layer_from_portals, record_audit, visible_to)
 
@@ -1002,7 +1022,7 @@ async def vector_scatter(layer_ref: str, req: ScatterRequest,
     except agg.AggregateError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(502, f"Could not plot this layer: {exc}") from exc
+        raise _upstream("Could not plot this layer", exc) from exc
 
 
 @router.post("/{layer_ref}/profile")
@@ -1025,7 +1045,7 @@ async def vector_profile(layer_ref: str, req: ProfileRequest,
     except agg.AggregateError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(502, f"Could not describe this layer: {exc}") from exc
+        raise _upstream("Could not describe this layer", exc) from exc
 
 
 @router.post("/{layer_ref}/aggregate")
@@ -1055,7 +1075,7 @@ async def vector_aggregate(layer_ref: str, req: AggregateRequest,
     except agg.AggregateError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(502, f"Could not summarise this layer: {exc}") from exc
+        raise _upstream("Could not summarise this layer", exc) from exc
 
 
 @router.post("/{layer_ref}/table")
@@ -1081,7 +1101,7 @@ async def vector_table(layer_ref: str, req: TableRequest, db: AsyncSession = Dep
     except agg.AggregateError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(502, f"Could not read this layer: {exc}") from exc
+        raise _upstream("Could not read this layer", exc) from exc
 
 
 class PickRequest(BaseModel):
@@ -1118,7 +1138,7 @@ async def vector_pick(layer_ref: str, req: PickRequest, db: AsyncSession = Depen
     except agg.AggregateError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(502, f"Could not read this layer: {exc}") from exc
+        raise _upstream("Could not read this layer", exc) from exc
     if not hit:
         # 204, not 404: "nothing is under your click" is a normal outcome of clicking a map, and a
         # 404 in the console on every empty click reads as a broken portal.
@@ -1147,7 +1167,7 @@ async def vector_distinct(layer_ref: str, field: str, limit: int = 200,
     except agg.AggregateError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(502, f"Could not read this field: {exc}") from exc
+        raise _upstream("Could not read this field", exc) from exc
 
 
 @router.post("/{layer_id}/tile", response_model=VectorLayerOut)
@@ -1275,7 +1295,7 @@ async def field_stats(
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(502, f"Could not read the field: {exc}") from exc
+            raise _upstream("Could not read the field", exc) from exc
     else:
         stats = await _postgis_field_stats(db, layer, field)
 
