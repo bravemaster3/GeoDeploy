@@ -5,7 +5,7 @@ description: >-
 
 # Roadmap
 
-GeoDeploy is at **v1.5.3**. Everything under *In v1.0* and in the releases after it is built and
+GeoDeploy is at **v1.5.4**. Everything under *In v1.0* and in the releases after it is built and
 running in production; the groups at the end are what comes next.
 
 <div class="gd-legend" markdown>
@@ -341,6 +341,23 @@ standard image installs. A failed restore is worse than the bug it was fixing.</
 - [x] **An end-to-end restore test** — dump a real spatial table, restore it through the real code
       path, assert the rows come back and the `geometry` type keeps the same OID. It is what caught
       the v1.5.2 regression, which the pure-function tests could not see
+
+</div>
+
+<div class="gd-rel done" markdown>
+### v1.5.4 — a restore that does not lie about the database
+<span class="gd-when">Shipped · 2 Sep 2026</span>
+
+<p class="gd-goal">An in-place restore is DDL against a live system. Everything it drops is missing
+for a moment that something else can act on — and one of those moments left an instance insisting it
+had no database.</p>
+
+- [x] **`setup_config` survives a restore as one row with its primary key.** The API inserts a blank
+      default row into the window where `--clean` has emptied the table, the snapshot's row lands on
+      top, and the primary key can no longer be created — leaving two rows, no key, and an instance
+      that reports "cannot reach its database" while the database answers normally
+- [x] Repaired before `_restore_own_db_settings()`, which updates that row and would otherwise fix
+      one copy while the API read the other
 
 </div>
 

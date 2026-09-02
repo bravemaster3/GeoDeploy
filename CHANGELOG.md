@@ -6,6 +6,39 @@ upgrade needs manual work.
 
 ## Unreleased
 
+## v1.5.4 — 2026-09-02
+
+**A restore could leave an instance reporting "GeoDeploy cannot reach its database" while the
+database was answering perfectly.** Found on the demo, whose hourly reset restores under a live API.
+
+- **A restore now leaves `setup_config` as one row with its primary key.** `pg_restore --clean`
+  drops that table and recreates it EMPTY, and the API keeps serving throughout — that is what an
+  in-place restore means. The first request to read the instance's configuration finds no `id = 1`,
+  so a fresh default row is inserted into the gap. `pg_restore` then COPYs the snapshot's row on top
+  and its closing `ADD CONSTRAINT setup_config_pkey PRIMARY KEY (id)` fails with `Key (id)=(1) is
+  duplicated`.
+
+  The table is then left with **two rows and no primary key, permanently** — and because the key is
+  gone, every later restore can add another. Which row the API reads decides whether it believes it
+  has a database, and the inserted one is blank: it names no host, so a healthy instance reports
+  itself unreachable. Published portals keep working throughout, because they are static bundles
+  served by nginx and never read `setup_config` — which makes the fault look stranger than it is.
+
+  The repair runs in the restore's repair phase, before `_restore_own_db_settings()`: that function
+  UPDATEs this row, and with duplicates present it would fix one copy while the API read the other.
+  It keeps whichever row names a database host, which is what distinguishes the snapshot's real row
+  from the placeholder, and puts the primary key back.
+
+**If you are on an affected instance**, updating repairs it at the next restore. To fix it
+immediately:
+
+```sql
+DELETE FROM setup_config WHERE ctid NOT IN (
+  SELECT ctid FROM setup_config
+   ORDER BY (coalesce(postgis_host, '') <> '') DESC, ctid LIMIT 1);
+ALTER TABLE setup_config ADD CONSTRAINT setup_config_pkey PRIMARY KEY (id);
+```
+
 ## v1.5.3 — 2026-09-02
 
 **Fixes a regression in v1.5.2.** If you are on v1.5.2 and your database has `postgis_topology` or

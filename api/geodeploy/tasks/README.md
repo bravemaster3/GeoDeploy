@@ -190,7 +190,12 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
-2026-09-02 (`restore.py`: `_recycle_own_connections()` disposes this worker's engine after the
+2026-09-02 (`restore.py`: `_repair_setup_config()` collapses `setup_config` back to ONE row
+and restores its primary key. `pg_restore --clean` empties the table, the live API inserts a blank
+default into the gap, the snapshot's row lands on top and ADD CONSTRAINT fails — leaving two rows,
+no key, and an instance reporting "cannot reach its database" while the database answers. Runs
+BEFORE `_restore_own_db_settings()`, which updates that row. Plus `_recycle_own_connections()`.)
+
 database is replaced, beside the schema and Martin repairs. A connection open across a restore keeps
 backend-local caches describing objects that were dropped and rebuilt; celery both RUNS the restore
 and serves bbox-clipped exports, so it is the most exposed process.)
