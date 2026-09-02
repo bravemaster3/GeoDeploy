@@ -190,7 +190,11 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
-2026-08-07 (**a world shapefile 500'd every Martin tile, because of Antarctica.** `vector_ingest`
+2026-09-02 (`restore.py`: `_recycle_own_connections()` disposes this worker's engine after the
+database is replaced, beside the schema and Martin repairs. A connection open across a restore keeps
+backend-local caches describing objects that were dropped and rebuilt; celery both RUNS the restore
+and serves bbox-clipped exports, so it is the most exposed process.)
+
 now clips 4326 storage to the Web Mercator band via `_store_geom_sql` (±85.05112878°). EPSG:3857 is
 undefined past that, and PROJ does not degrade — it raises `transform: tolerance condition error
 (-20)` (lwgeom_pg.c) inside **Martin's own** ST_Transform, so Martin returns 500 for every tile at

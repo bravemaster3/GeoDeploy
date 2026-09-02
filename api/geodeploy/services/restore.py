@@ -113,6 +113,63 @@ def _benign(line: str) -> bool:
     return any(marker.lower() in low for marker in _BENIGN_RESTORE_ERRORS)
 
 
+#: Entry types in a `pg_restore -l` table of contents that must never be replayed.
+#:
+#: A TOC line looks like `2; 3079 16385 EXTENSION - postgis geodeploy`: id, catalog oid, object oid,
+#: TYPE, schema, name, owner. We drop the extension itself and any comment attached to one.
+_TOC_EXTENSION_TYPES = ("EXTENSION",)
+
+
+def toc_without_extensions(toc: str) -> str:
+    """Strip EXTENSION entries from a `pg_restore -l` listing.
+
+    THE BUG THIS FIXES. The dump contains `CREATE EXTENSION postgis`, so `--clean` emits a matching
+    `DROP EXTENSION`. Tables are dropped first, so by the time that DROP runs nothing depends on the
+    extension any more and it SUCCEEDS — then `CREATE EXTENSION` builds a new one, and the
+    `geometry` type and `gist_geometry_ops_2d` operator family come back with NEW OIDs.
+
+    Every database connection that was open across the restore is then holding PostGIS's
+    per-backend operator cache pointed at objects that no longer exist. `COUNT(*)` still works
+    because it touches no spatial operator; anything using `&&` or `ST_Intersects` fails with
+    `no spatial operator found for 'st_intersects': opfamily N type M` until the process is
+    restarted. Observed in production on the demo instance, where the hourly reset restores under a
+    live API: two errors an hour apart named two different pairs of OIDs, which is the extension
+    being rebuilt underneath the running service.
+
+    `pool_pre_ping` does not help — those connections are alive and healthy, and `SELECT 1` passes.
+    The only reliable fix is to stop the OIDs changing at all: a data restore has no business
+    replacing the extension. The dump's tables and indexes bind to it by name, so leaving the
+    installed one alone is both correct and what every other object in the dump expects.
+    """
+    kept = []
+    for line in toc.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(";"):
+            kept.append(line)               # comments and blanks are inert; keep the file readable
+            continue
+        # `id; catalog oid TYPE ...` — the type is the token after the two numeric oids.
+        parts = stripped.split()
+        obj_type = parts[3] if len(parts) > 3 else ""
+        if obj_type in _TOC_EXTENSION_TYPES:
+            continue
+        # `COMMENT - EXTENSION postgis` — a comment whose target is an extension.
+        if obj_type == "COMMENT" and "EXTENSION" in parts[4:6]:
+            continue
+        kept.append(line)
+    return "\n".join(kept) + "\n"
+
+
+def _pg_env(settings):
+    return dict(os.environ, PGPASSWORD=settings.postgis_password or "")
+
+
+def _pg_conn_args(settings) -> list:
+    return ["-h", settings.postgis_host or "postgres",
+            "-p", str(settings.postgis_port or 5432),
+            "-U", settings.postgis_user or "geodeploy",
+            "-d", settings.postgis_db or "geodeploy"]
+
+
 def restore_database(dump_path: str) -> dict:
     """`pg_restore --clean --if-exists` over the live database.
 
@@ -122,13 +179,47 @@ def restore_database(dump_path: str) -> dict:
     to drop. `--no-owner/--no-acl` because the dump may come from an install whose DB role differs.
     """
     settings = get_settings()
-    env = dict(os.environ, PGPASSWORD=settings.postgis_password or "")
-    cmd = ["pg_restore", "-h", settings.postgis_host or "postgres",
-           "-p", str(settings.postgis_port or 5432),
-           "-U", settings.postgis_user or "geodeploy",
-           "-d", settings.postgis_db or "geodeploy",
-           "--clean", "--if-exists", "--no-owner", "--no-acl", dump_path]
-    proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=6 * 3600)
+    env = _pg_env(settings)
+    conn = _pg_conn_args(settings)
+
+    # The extension must EXIST before the restore (a fresh instance may have none) and must not be
+    # touched BY it (see toc_without_extensions). Failure here is not fatal: a managed Postgres may
+    # refuse `CREATE EXTENSION` to a non-superuser, and on any instance that already has PostGIS —
+    # which is every instance with a vector layer — the statement is a no-op anyway.
+    ensure = subprocess.run(["psql", *conn, "-v", "ON_ERROR_STOP=0", "-c",
+                             "CREATE EXTENSION IF NOT EXISTS postgis"],
+                            env=env, capture_output=True, text=True, timeout=300)
+    if ensure.returncode != 0:
+        logger.warning("restore: could not ensure the postgis extension (%s) — continuing, the "
+                       "database may already have it", (ensure.stderr or "").strip()[:200])
+
+    # Filter the TOC rather than restoring the dump wholesale, so `--clean` never emits
+    # `DROP EXTENSION`. If listing fails for any reason we fall back to the plain restore: a
+    # restore that works and may strand open connections beats no restore at all.
+    toc_path = None
+    listing = subprocess.run(["pg_restore", "-l", dump_path],
+                             env=env, capture_output=True, text=True, timeout=3600)
+    if listing.returncode == 0 and listing.stdout.strip():
+        fd, toc_path = tempfile.mkstemp(suffix=".toc", prefix="gd-restore-")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(toc_without_extensions(listing.stdout))
+    else:
+        logger.warning("restore: pg_restore -l failed (%s) — restoring without a TOC filter; open "
+                       "connections may need the services restarted afterwards",
+                       (listing.stderr or "").strip()[:200])
+
+    cmd = ["pg_restore", *conn, "--clean", "--if-exists", "--no-owner", "--no-acl"]
+    if toc_path:
+        cmd += ["-L", toc_path]
+    cmd.append(dump_path)
+    try:
+        proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=6 * 3600)
+    finally:
+        if toc_path:
+            try:
+                os.unlink(toc_path)
+            except OSError:
+                pass
     # pg_restore exits non-zero for benign "does not exist, skipping" noise under --clean, so a
     # failure is judged on stderr content, not the code alone.
     err = (proc.stderr or "").strip()

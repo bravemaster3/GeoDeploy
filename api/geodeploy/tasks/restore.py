@@ -120,6 +120,7 @@ def restore_snapshot(cfg, key: str, manifest: dict, tmp_dir: str, on_step=None) 
         detail["own_db"] = _restore_own_db_settings()
         detail["own_storage"] = _restore_own_storage_settings()
         detail["schema"] = _reapply_schema_migrations()
+        detail["pool"] = _recycle_own_connections()
         detail["stale_runs_cleared"] = _clear_restored_running_rows()
         # Keep the destination we just read the backup FROM, when the restored copy is unreadable.
         detail["backup_destination"] = _restore_backup_destination(saved_destination)
@@ -496,6 +497,37 @@ def _republish_portals() -> dict:
     except Exception as exc:      # noqa: BLE001
         logger.warning("restore: portal republish pass failed: %s", exc)
         return {"rebuilt": 0, "failed": [str(exc)[:200]]}
+
+
+def _recycle_own_connections() -> dict:
+    """Drop this worker's pooled connections after the database has been replaced.
+
+    A restore is DDL on a live system, and a connection open across it keeps backend-local caches
+    describing objects that were dropped and rebuilt. `pool_pre_ping` does not catch that: the
+    connection is alive and `SELECT 1` succeeds — it is the CONTENTS of the caches that are wrong.
+
+    This worker is the process most exposed to it, because it is the one that just ran the restore
+    and it holds the sessions bbox-clipped exports run on. Disposing the engine here is in-process
+    and cheap; the pool refills lazily with connections that see the new database.
+
+    The API is a separate process and cannot be reached from here — which is why the real fix is
+    `services/restore.toc_without_extensions`, keeping the PostGIS extension (and therefore every
+    type and operator OID) untouched so that no session goes stale in the first place. This is the
+    belt to that pair of braces.
+    """
+    try:
+        from .. import database
+
+        engine = getattr(database, "engine", None)
+        if engine is None:
+            return {"disposed": False, "reason": "no engine on this process"}
+        import asyncio
+
+        asyncio.run(engine.dispose())
+        return {"disposed": True}
+    except Exception as exc:      # noqa: BLE001 — the data is back; a stale pool is not worth failing over
+        logger.warning("restore: could not recycle this worker's connections: %s", exc)
+        return {"disposed": False, "error": str(exc)[:200]}
 
 
 def _regenerate_martin() -> None:

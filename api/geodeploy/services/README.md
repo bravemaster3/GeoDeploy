@@ -203,6 +203,15 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   `api/tests/test_native_crs.py`.
 
 ## Last updated
+2026-09-02 (`restore.py`: **the restore no longer replaces the PostGIS extension.** `--clean` drops
+the dump's objects in reverse dependency order, so tables go first and the `DROP EXTENSION postgis`
+the dump carries then SUCCEEDS — and the rebuilt `geometry` / `gist_geometry_ops_2d` come back with
+new OIDs, stranding every connection open across the restore. Spatial predicates then fail with
+`no spatial operator found` while `COUNT(*)` keeps working. `toc_without_extensions()` filters those
+entries out of the `pg_restore -l` listing and the restore runs with `-L`; `CREATE EXTENSION IF NOT
+EXISTS` runs first so a fresh instance still restores. `pool_pre_ping` cannot catch this — the
+connections are alive, only their caches are stale.)
+
 2026-08-31 (`dashboard.py`: `grid.fit` — `"rows"` (default, unchanged) or `"screen"`, which lets the
 runtime stretch the rows to the viewport. Default stays `"rows"` so no published board restyles.)
 
