@@ -5,7 +5,7 @@ description: >-
 
 # Roadmap
 
-GeoDeploy is at **v1.5.1**. Everything under *In v1.0* and in the releases after it is built and
+GeoDeploy is at **v1.5.2**. Everything under *In v1.0* and in the releases after it is built and
 running in production; the groups at the end are what comes next.
 
 <div class="gd-legend" markdown>
@@ -308,6 +308,24 @@ which is the only way this list could have been written.</p>
 
 </div>
 
+<div class="gd-rel done" markdown>
+### v1.5.2 — a restore that leaves spatial queries working
+<span class="gd-when">Shipped · 2 Sep 2026</span>
+
+<p class="gd-goal">A backup you cannot restore is a guess — and so is one that restores while
+quietly breaking every spatial query until somebody restarts the service.</p>
+
+- [x] **The restore no longer replaces the PostGIS extension.** `--clean` dropped it successfully
+      (tables go first, so nothing depends on it by then) and the rebuilt `geometry` type came back
+      with new OIDs, stranding every connection open across the restore. Spatial predicates failed;
+      `COUNT(*)` did not, which is what made it look like a dashboard bug
+- [x] **The worker recycles its connections after a restore**, beside the schema and Martin repairs
+      it already did
+- [x] **A 502 logs the exception it was raised for** — the message naming the cause used to reach
+      only the response body, which neither the service log nor the dashboard shows
+
+</div>
+
 ---
 
 ## Next up
@@ -478,7 +496,7 @@ the tile URLs are all already served. This is about giving them somewhere to be 
       backup, without a shell. Today `GEODEPLOY_SECRET_KEY` is edited in `.env` only, and is
       deliberately absent from the environment editor: setting it in place would leave every
       already-encrypted setting unreadable, with no error at the moment of the change.
-- [ ] Choose a version when updating — hold back, or step down after a bad one
+- [x] Choose a version when updating — hold back, or step down after a bad one ([four targets](updating.md#choosing-a-version): development, latest release, a specific release, or a branch)
 - [ ] Unattended install from environment variables, so provisioning can be scripted
 
 </div>
@@ -489,7 +507,6 @@ the tile URLs are all already served. This is about giving them somewhere to be 
 
 <p class="gd-goal">Capabilities that change what a portal can be.</p>
 
-- [ ] **Dashboard experience** — charts, stats and filters bound to layer attributes
 - [ ] **Temporal layers** with a time slider
 - [ ] **3D terrain and 3D tiles** in the globe view
 - [ ] Live connectors — scheduled re-sync, so published maps stay current

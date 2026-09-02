@@ -6,6 +6,48 @@ upgrade needs manual work.
 
 ## Unreleased
 
+## v1.5.2 — 2026-09-02
+
+A restore could leave a running instance unable to answer any spatial query. One fix, and the
+logging that should have made it a five-minute diagnosis.
+
+### Restoring a backup no longer breaks spatial queries
+
+- **The restore no longer drops and recreates the PostGIS extension.** `pg_restore --clean` drops
+  the objects in the dump in reverse dependency order, so tables go first and the `DROP EXTENSION
+  postgis` the dump also carries runs when nothing depends on it any more — and therefore succeeds.
+  `CREATE EXTENSION` then rebuilds `geometry` and `gist_geometry_ops_2d` with **new OIDs**.
+
+  Every connection open across that restore keeps PostGIS's per-backend operator cache pointing at
+  objects that no longer exist. `COUNT(*)` still worked, because it touches no spatial operator;
+  every query using `&&` or `ST_Intersects` failed with `no spatial operator found for
+  'st_intersects': opfamily N type M` until the service was restarted. On a dashboard that meant
+  every widget reporting `Request failed (502)` the moment you drew a box, while the map itself
+  looked fine.
+
+  The extension is now filtered out of the restore's table of contents, so its OIDs never change
+  and no session is stranded. `CREATE EXTENSION IF NOT EXISTS postgis` runs first, so restoring
+  onto a fresh instance still works.
+
+  Anyone restoring a backup onto a running instance with PostGIS layers could hit this. It showed
+  up hourly on the demo instance, whose reset restores under a live API — two errors an hour apart
+  named two different pairs of OIDs, which is the extension being rebuilt underneath the service.
+
+  `pool_pre_ping` (already enabled) cannot catch it: those connections are alive and `SELECT 1`
+  succeeds. It is the cache contents that go stale, not the socket.
+
+- **The worker recycles its own connections after a restore**, alongside the schema and Martin
+  repairs it already performed. Celery both runs the restore and serves bbox-clipped exports, so it
+  was the process most exposed.
+
+### Diagnosing the next one
+
+- **A 502 now logs the exception it was raised for.** Seven handlers in the vector router turned an
+  unexpected error into `HTTPException(502, f"...: {exc}")` and logged nothing, so the one string
+  naming the cause reached only the response body — where uvicorn's access log does not show it and
+  the dashboard renders `Request failed (502)` without it. Finding this bug meant reproducing it by
+  hand with `curl` to read a body the browser had already discarded.
+
 ## v1.5.1 — 2026-08-31
 
 A fortnight of building real dashboards with v1.5. Almost everything here is something that could
