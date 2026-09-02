@@ -6,6 +6,30 @@ upgrade needs manual work.
 
 ## Unreleased
 
+## v1.5.3 — 2026-09-02
+
+**Fixes a regression in v1.5.2.** If you are on v1.5.2 and your database has `postgis_topology` or
+`postgis_tiger_geocoder` installed — which the standard PostGIS image does — restoring a backup
+fails outright. Take this one.
+
+- **A restore no longer fails on the schemas its extensions own.** v1.5.2 stopped the restore
+  dropping the PostGIS extensions, which was right, but their schemas (`topology`, `tiger`) then
+  could not be dropped *or* recreated either. `pg_restore` reported `cannot drop schema topology
+  because other objects depend on it` and `schema "tiger" already exists`, neither of which was on
+  the tolerated list, so the restore raised and did nothing. Both are now recognised as the intended
+  outcome — the schema is exactly where it should be. `already exists` is tolerated for schemas
+  only; a table that already exists still fails, because that would mean `--clean` did not drop
+  something it was meant to replace.
+- **A missing `psql` can no longer fail a restore.** v1.5.2 added a `CREATE EXTENSION IF NOT EXISTS
+  postgis` step before the restore. A missing binary raises rather than returning an exit code, so
+  on an image without `postgresql-client` that best-effort step would have taken the whole restore
+  down with it. It now degrades to a warning, as intended.
+- **An end-to-end restore test.** Builds a real spatial table, dumps it the way `backup.py` does,
+  restores it through `restore_database()`, and asserts the rows return, the `geometry` type keeps
+  the SAME OID, and `&&` / `ST_Intersects` still run. The v1.5.2 regression is exactly what it
+  caught; the previous tests covered the table-of-contents filter as a pure function and could not
+  see it.
+
 ## v1.5.2 — 2026-09-02
 
 A restore could leave a running instance unable to answer any spatial query. One fix, and the

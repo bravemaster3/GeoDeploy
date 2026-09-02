@@ -5,7 +5,7 @@ description: >-
 
 # Roadmap
 
-GeoDeploy is at **v1.5.2**. Everything under *In v1.0* and in the releases after it is built and
+GeoDeploy is at **v1.5.3**. Everything under *In v1.0* and in the releases after it is built and
 running in production; the groups at the end are what comes next.
 
 <div class="gd-legend" markdown>
@@ -323,6 +323,24 @@ quietly breaking every spatial query until somebody restarts the service.</p>
       it already did
 - [x] **A 502 logs the exception it was raised for** — the message naming the cause used to reach
       only the response body, which neither the service log nor the dashboard shows
+
+</div>
+
+<div class="gd-rel done" markdown>
+### v1.5.3 — the restore fix, finished
+<span class="gd-when">Shipped · 2 Sep 2026</span>
+
+<p class="gd-goal">v1.5.2 kept the PostGIS extensions installed and then could not restore at all on
+a database that has <code>postgis_topology</code> or <code>postgis_tiger_geocoder</code> — which the
+standard image installs. A failed restore is worse than the bug it was fixing.</p>
+
+- [x] **A restore no longer fails on the schemas its extensions own** — `topology` and `tiger` can
+      be neither dropped nor recreated once the extension stays, and that is the intended outcome,
+      not an error
+- [x] **A missing `psql` degrades to a warning** rather than taking the restore down with it
+- [x] **An end-to-end restore test** — dump a real spatial table, restore it through the real code
+      path, assert the rows come back and the `geometry` type keeps the same OID. It is what caught
+      the v1.5.2 regression, which the pure-function tests could not see
 
 </div>
 
