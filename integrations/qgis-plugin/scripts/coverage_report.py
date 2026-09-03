@@ -86,9 +86,12 @@ LINES = {
     "SimpleLine":        (EXACT,  "colour, width, custom dash pattern (in line-width multiples, "
                                   "MapLibre's unit), cap, join and offset. A polygon OUTLINE gets "
                                   "the same vocabulary, because an outline is a line"),
-    "MarkerLine":        (TODO,   "`symbol-placement: line` with `symbol-spacing` - this is how "
-                                  "MapLibre draws ticks on a boundary and arrows on a river"),
-    "HashLine":          (TODO,   "same placement trick with a short line icon"),
+    "MarkerLine":        (EXACT,  "a second render layer at `symbol-placement: line`, spaced by "
+                                  "the interval and rotated WITH the line - the repeated symbol is "
+                                  "shipped as a picture, because MapLibre needs pixels rather than "
+                                  "a description. Read across ALL symbol layers, so the stroke "
+                                  "under a decorated line still travels"),
+    "HashLine":          (EXACT,  "the same layer, with the hash rendered as the icon"),
     "ArrowLine":         (TODO,   "same, with an arrow icon"),
     "InterpolatedLine":  (TODO,   "data-driven `line-width` exists; colour needs `line-gradient` "
                                   "with `lineMetrics`"),
@@ -142,8 +145,9 @@ PROPERTY_GROUPS = [
      "trims have no MapLibre equivalent",
      ("customDash", "dashPatternOffset", "capStyle", "joinStyle", "outlineStyle", "blankSegments",
       "trimStart", "trimEnd")),
-    ("marker placement along a line", TODO,
-     "`symbol-placement: line` + `symbol-spacing`",
+    ("marker placement along a line", APPROX,
+     "the interval and the rotation travel; the placement MODE (vertex, first, last, centre) and "
+     "the offset along the line do not yet",
      ("placement", "interval", "averageAngleLength", "skipMultiples", "showMarker",
       "extraItems", "lineClipping", "markerClipping", "clipPoints")),
     ("pattern fills", TODO, "generated tileable canvas images",

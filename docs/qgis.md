@@ -175,6 +175,16 @@ Two consequences worth knowing:
   portal's `style.json`, so a marker that renders past about 96 KB is drawn plainly instead, and the
   Log Messages panel says so.
 
+### Markers along a line
+
+Ticks on a boundary, arrows on a river, chevrons on a one-way street — QGIS's marker line and hashed
+line repeat a symbol down a line, and the portal draws the same thing: the same picture at the same
+interval, **rotated to follow the line** rather than always pointing up the screen.
+
+A decorated line is usually two symbol layers in QGIS — a plain stroke with the markers stacked on
+top — and both travel. That combination used to arrive as a plain line, because only the first
+symbol layer was ever read.
+
 ### Labels
 
 Labels travel. The text (an attribute or an expression), the size, the colour, the halo — QGIS calls

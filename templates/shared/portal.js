@@ -475,7 +475,23 @@
 
   // Generate point-marker icons on demand (also covers the first render gap).
   map.on('styleimagemissing', function (e) {
-    if (!e.id || e.id.indexOf('gd-pt-') !== 0 || map.hasImage(e.id)) return;
+    if (!e.id || map.hasImage(e.id)) return;
+    // A PICTURE the plugin rendered (`gd-img-`) cannot be built from its id — the id is a hash of
+    // the pixels, not a description of them — so it is found in the layer metadata that carries it.
+    // `ensurePointImages` normally registers these up front; this is the late path, for a layer
+    // whose style arrived after load.
+    if (e.id.indexOf('gd-img-') === 0) {
+      var owner = (STYLE.layers || []).find(function (x) {
+        return x.metadata && Array.isArray(x.metadata['geodeploy:markerImages'])
+          && x.metadata['geodeploy:markerImages'].some(function (im) { return im.id === e.id; });
+      });
+      if (owner) {
+        var picture = owner.metadata['geodeploy:markerImages'].find(function (im) { return im.id === e.id; });
+        if (picture && picture.image) setMarkerPicture(e.id, picture.image);
+      }
+      return;
+    }
+    if (e.id.indexOf('gd-pt-') !== 0) return;
     // The id CARRIES its parameters (gd-pt-<shape>-<hex>-<size>), so any missing image can be built
     // from the id alone. It used to be looked up from the layer's metadata, which only worked while
     // a layer had exactly ONE icon — a classified point layer has one per class, and `icon-image`

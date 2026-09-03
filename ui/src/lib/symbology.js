@@ -668,3 +668,37 @@ export function labelScope(labels = {}) {
   }
   return out
 }
+
+
+// ── Markers along a line ─────────────────────────────────────────────────────────────────────────
+// Twins of `symbology.line_marker` / `line_marker_layout`. QGIS repeats a symbol down a line —
+// arrows on a river, ticks on a boundary — and MapLibre draws exactly that with a symbol layer at
+// `symbol-placement: line`, so it is a real translation rather than an approximation.
+
+export const DEFAULT_LINE_MARKER_SPACING = 40
+
+/** `style.line_marker` when a line carries markers along it, else `{}`. */
+export function lineMarker (style = {}) {
+  const block = style.line_marker
+  if (!block || typeof block !== 'object') return {}
+  // The picture lives under `image` here, not `marker_image`: a line's decoration and a point's
+  // marker are different things that share a mechanism.
+  const uri = block.image
+  return (typeof uri === 'string' && uri.startsWith('data:image/')) ? block : {}
+}
+
+/** The `layout` for the symbol layer that repeats a marker along a line. */
+export function lineMarkerLayout (block = {}) {
+  const raw = Number(block.spacing)
+  const spacing = Number.isFinite(raw) ? raw : DEFAULT_LINE_MARKER_SPACING
+  return {
+    'icon-image': pictureId(block.image),
+    // ALONG the line and rotated WITH it — `icon-rotation-alignment: map` is what makes an arrow
+    // point downstream rather than always up the screen.
+    'symbol-placement': 'line',
+    'symbol-spacing': Math.max(1, Math.round(spacing * 100) / 100),
+    'icon-rotation-alignment': 'map',
+    'icon-allow-overlap': true,
+    'icon-ignore-placement': true,
+  }
+}

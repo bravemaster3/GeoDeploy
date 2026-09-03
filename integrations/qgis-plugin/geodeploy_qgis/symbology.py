@@ -2928,6 +2928,11 @@ def _style_from_symbol(symbol) -> dict:
     except ImportError:                 # pragma: no cover - the branches below still run
         pass
 
+    # A DECORATED LINE whose first symbol layer is the decoration itself — ticks with no stroke
+    # under them — never reaches the simple-line branch below, so the markers are read here.
+    if layer0 is not None and not isinstance(layer0, QgsSimpleLineSymbolLayer):
+        style.update(_line_decoration_symbol(symbol))
+
     # A MARKER WE HAVE NO WORDS FOR TRAVELS AS ITS PICTURE. Anything but a SINGLE plain simple
     # marker — an SVG, a raster or font marker, an ellipse, a filled marker, or several layers
     # stacked — used to arrive as a coloured dot. Rendering the symbol is the honest translation,
@@ -2971,6 +2976,7 @@ def _style_from_symbol(symbol) -> dict:
         style["lineType"] = ("dashed" if pen == enum(Qt, "PenStyle", "DashLine")
                              else "dotted" if pen == enum(Qt, "PenStyle", "DotLine") else "solid")
         style.update(_line_decoration_of(layer0, style.get("line_width")))
+        style.update(_line_decoration_symbol(symbol))
     elif isinstance(layer0, QgsSimpleFillSymbolLayer):
         opacity = number(symbol.opacity)
         if opacity is not None:
@@ -3244,6 +3250,82 @@ def _marker_picture(symbol) -> str | None:
     except Exception as exc:            # noqa: BLE001 - a picture is never worth failing the style
         _log("Could not render this layer's marker to an image ({0}: {1}); it will be drawn as a "
              "plain marker.".format(type(exc).__name__, exc))
+        return None
+
+
+def _line_decoration_symbol(symbol) -> dict:
+    """`line_marker` for a line symbol carrying markers along it, or `{}`.
+
+    QGIS's marker line and hashed line repeat a symbol at an interval down a line — arrows on a
+    river, ticks on a boundary, chevrons on a one-way street. MapLibre draws exactly this with a
+    `symbol` layer at `symbol-placement: line`, so it is an honest translation rather than an
+    approximation: the same picture at the same spacing, rotated to the line.
+
+    SCANNED ACROSS EVERY SYMBOL LAYER, not just the first, because a decorated line is nearly always
+    TWO layers — a simple line for the stroke and a marker line on top of it. Reading only
+    `symbolLayer(0)` is what made "a road with ticks" arrive as a plain road.
+    """
+    if not QGIS or symbol is None:
+        return {}
+    try:
+        from qgis.core import QgsLineSymbol
+        if not isinstance(symbol, QgsLineSymbol):
+            return {}
+        from qgis.core import QgsMarkerLineSymbolLayer
+        try:                            # QGIS 3.24+; a build without it just skips hashed lines
+            from qgis.core import QgsHashedLineSymbolLayer
+            decorators = (QgsMarkerLineSymbolLayer, QgsHashedLineSymbolLayer)
+        except ImportError:             # pragma: no cover
+            decorators = (QgsMarkerLineSymbolLayer,)
+
+        for i in range(symbol.symbolLayerCount()):
+            sl = symbol.symbolLayer(i)
+            if not isinstance(sl, decorators):
+                continue
+            sub = getattr(sl, "subSymbol", lambda: None)()
+            if sub is None:
+                continue
+            picture = _marker_picture(sub) if hasattr(sub, "size") else _symbol_picture(sub)
+            if not picture:
+                continue
+            out = {"image": picture}
+            interval = _number(getattr(sl, "interval", lambda: None)(), None)
+            if interval:
+                # QGIS states the interval in the symbol layer's own unit (points by default);
+                # `symbol-spacing` is in pixels, the unit every other size here is stated in.
+                out["spacing"] = round(interval / CSS_PX_TO_POINTS, 2)
+            return {"line_marker": out}
+    except Exception as exc:            # noqa: BLE001 - a decoration is never worth failing a style
+        _log("Could not read this line's markers ({0}: {1}).".format(type(exc).__name__, exc))
+    return {}
+
+
+def _symbol_picture(symbol) -> str | None:
+    """Any symbol rendered to a PNG data URI — the general form of `_marker_picture`.
+
+    A hashed line's sub-symbol is a LINE symbol, not a marker, so it has no `size()` to scale by; it
+    is rendered at a fixed tick size instead. Same contract otherwise: the pixels travel because
+    MapLibre needs pixels, not a description.
+    """
+    if not QGIS or symbol is None:
+        return None
+    try:
+        from qgis.PyQt.QtCore import QBuffer, QByteArray, QIODevice, QSize
+        image = symbol.asImage(QSize(MIN_PICTURE_PX, MIN_PICTURE_PX))
+        if image is None or image.isNull():
+            return None
+        data = QByteArray()
+        buf = QBuffer(data)
+        mode = getattr(QIODevice, "OpenModeFlag", QIODevice)
+        buf.open(getattr(mode, "WriteOnly"))
+        if not image.save(buf, "PNG"):
+            return None
+        raw = bytes(data)
+        if len(raw) > MAX_PICTURE_BYTES:
+            return None
+        import base64
+        return "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
+    except Exception:                   # noqa: BLE001  # nosec B110 - intentional: a decoration is optional
         return None
 
 

@@ -57,9 +57,14 @@ export function registerMarkerImages(map, specs) {
   if (!map || map.__gdMarkerHook) return
   map.__gdMarkerHook = true
   map.on('styleimagemissing', (e) => {
-    if (!e.id || !e.id.startsWith('gd-pt-') || map.hasImage(e.id)) return
+    // Two id prefixes, two ways of getting an image. `gd-pt-` is a shape this code DRAWS from the
+    // id's own parameters; `gd-img-` is a picture the QGIS plugin rendered, whose pixels arrive in
+    // the spec because nothing about them can be reconstructed from an id.
+    if (!e.id || map.hasImage(e.id)) return
+    if (!e.id.startsWith('gd-pt-') && !e.id.startsWith('gd-img-')) return
     const spec = (map.__gdMarkerSpecs || {})[e.id]
     if (!spec) return
+    if (spec.image) { loadMarkerPicture(map, e.id, spec.image); return }
     const im = markerImage(spec.shape, spec.color, spec.size, spec.outline, spec.outline_width)
     try { map.addImage(e.id, im, { pixelRatio: im.pixelRatio }) } catch { /* already added */ }
   })

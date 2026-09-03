@@ -897,6 +897,54 @@ def marker_pictures():
           symbology.merge_style({}, got).get("marker_image") == got.get("marker_image"))
 
 
+# ══ 11. Markers along a line ═════════════════════════════════════════════════════════════════════
+
+def line_decorations():
+    section("Markers along a line — QGIS's marker line → symbol-placement: line")
+    from qgis.core import (QgsLineSymbol, QgsMarkerLineSymbolLayer, QgsMarkerSymbol,
+                           QgsSimpleLineSymbolLayer, QgsSimpleMarkerSymbolLayer,
+                           QgsSingleSymbolRenderer)
+
+    def with_markers(stroke_first):
+        """A line symbol with ticks along it, optionally over a plain stroke — which is how QGIS
+        builds a decorated line, and the case reading only symbolLayer(0) used to lose."""
+        deco = QgsMarkerLineSymbolLayer()
+        deco.setInterval(6.0)
+        sub = QgsMarkerSymbol()
+        sub.changeSymbolLayer(0, QgsSimpleMarkerSymbolLayer())
+        sub.setSize(4.0)
+        deco.setSubSymbol(sub)
+        sym = QgsLineSymbol()
+        if stroke_first:
+            sym.changeSymbolLayer(0, QgsSimpleLineSymbolLayer())
+            sym.appendSymbolLayer(deco)
+        else:
+            sym.changeSymbolLayer(0, deco)
+        layer = make_layer("LineString")
+        layer.setRenderer(QgsSingleSymbolRenderer(sym))
+        return symbology.from_qgis(layer) or {}
+
+    got = with_markers(stroke_first=True)
+    block = got.get("line_marker") or {}
+    check("a decorated line carries its markers",
+          str(block.get("image") or "").startswith("data:image/png;base64,"),
+          "a road with ticks used to arrive as a plain road")
+    check("the interval travels", block.get("spacing") is not None, repr(block.get("spacing")))
+    check("the stroke under it still travels", got.get("line_width") is not None,
+          "reading only the decoration would lose the road itself")
+
+    # …and when the decoration IS the first symbol layer, with no stroke under it.
+    block = (with_markers(stroke_first=False).get("line_marker") or {})
+    check("a bare marker line carries its markers too",
+          str(block.get("image") or "").startswith("data:image/png;base64,"), repr(list(block)))
+
+    # A plain line must NOT carry a decoration, or every line style would grow a bitmap.
+    layer = make_layer("LineString")
+    symbology.apply(layer, {"color": "#111", "line_width": 2})
+    check("a plain line carries no decoration",
+          "line_marker" not in (symbology.from_qgis(layer) or {}))
+
+
 def main():
     audit()
     round_trip()
@@ -909,6 +957,7 @@ def main():
     natives()
     labelling()
     marker_pictures()
+    line_decorations()
     print("\n{0} checks, {1} failed".format(CHECKS[0], len(FAILURES)))
     for name in FAILURES:
         print("  - {0}".format(name))

@@ -267,6 +267,12 @@ Findings in `vendor/` are fixed in `cli/geodeploy` and re-vendored — never edi
 `vendor.py --check` fails.
 
 ## Last updated
+2026-09-03e (**markers along a line.** QGIS's marker line and hashed line repeat a symbol down a
+line; `_line_decoration_symbol` reads it across ALL symbol layers — a decorated line is nearly always
+a plain stroke with the markers stacked on top, and reading only `symbolLayer(0)` is what made a road
+with ticks arrive as a plain road. The repeated symbol ships as a picture and the server draws it at
+`symbol-placement: line`. 202 checks green on QGIS 3.44 and 4.2.)
+
 2026-09-03d (**markers that are pictures, labels, fonts.** A marker symbol GeoDeploy has no words
 for — SVG, raster, font, ellipse, filled, or several layers stacked — is now RENDERED by QGIS and
 shipped as a PNG data URI (`style.marker_image`, `symbology._marker_picture`), instead of arriving

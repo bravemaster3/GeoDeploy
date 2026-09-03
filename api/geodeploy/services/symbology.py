@@ -934,6 +934,44 @@ def font_stack(font) -> list[str]:
     return [name, DEFAULT_LABEL_FONT]
 
 
+def line_marker(style: dict) -> dict:
+    """`style.line_marker` when a line carries markers along it, else `{}`.
+
+    QGIS's marker line and hashed line repeat a symbol down a line — arrows on a river, ticks on a
+    boundary. MapLibre draws exactly that with `symbol-placement: line`, so it is a real translation
+    rather than an approximation, and the plugin ships the repeated symbol as a picture because
+    MapLibre needs pixels rather than a description of them.
+    """
+    block = style.get("line_marker")
+    if not isinstance(block, dict):
+        return {}
+    # The picture lives under `image` here, not `marker_image`: a line's decoration and a point's
+    # marker are different things that happen to share a mechanism, and giving them the same key
+    # would make a line style look like a point style to everything that inspects one.
+    uri = block.get("image")
+    return block if isinstance(uri, str) and uri.startswith("data:image/") else {}
+
+
+DEFAULT_LINE_MARKER_SPACING = 40
+
+
+def line_marker_layout(block: dict) -> dict:
+    """The `layout` for the symbol layer that repeats a marker along a line."""
+    spacing = _label_num(block.get("spacing"), DEFAULT_LINE_MARKER_SPACING)
+    return {
+        "icon-image": picture_id(block["image"]),
+        # ALONG the line, and rotated WITH it — `icon-rotation-alignment: map` is what turns an
+        # arrow into an arrow pointing downstream rather than one always pointing up the screen.
+        "symbol-placement": "line",
+        "symbol-spacing": max(1.0, round(spacing, 2)),
+        "icon-rotation-alignment": "map",
+        # A decoration that is dropped where it collides is a decoration missing from half the line,
+        # which reads as a rendering fault rather than a placement rule.
+        "icon-allow-overlap": True,
+        "icon-ignore-placement": True,
+    }
+
+
 def label_paint(labels: dict, opacity: float = 1.0) -> dict:
     """The `paint` half — colour, halo, and the layer's opacity carried through."""
     out = {

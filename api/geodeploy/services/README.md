@@ -209,6 +209,13 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   way a canvas shape can — so a classified layer keeps its classification everywhere except the
   icon. `templates/shared/portal.js::setMarkerPicture` and `ui/src/lib/markerImage.js::loadMarkerPicture`
   are the two runtime halves; both register with `pixelRatio: 2`, matching the plugin's render scale.
+- **Markers along a line (2026-09-03):** `style.line_marker` becomes a second render layer at
+  `symbol-placement: line` (`portal_generator._line_marker_layer`, `symbology.line_marker_layout`),
+  spaced by the QGIS interval and `icon-rotation-alignment: map` so an arrow points downstream. The
+  repeated symbol travels as a picture, like any marker GeoDeploy cannot describe. **It carries its
+  own `geodeploy:markerImages`** — the runtime registers bitmaps from that key and only the FIRST
+  render layer gets the full metadata block, so the stamping loop MERGES rather than assigns; it
+  used to assign, which erased the decoration's image and the ticks never appeared.
 - `titiler.py` is called from `routers/data/raster.py` and `portal_generator.py`.
 - `portal_generator.py` reads `templates/` (mounted at `/templates`) and writes `data/portals/`.
 - `cog_converter.py` is called from `tasks/raster_ingest.py`.

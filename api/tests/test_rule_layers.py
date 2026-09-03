@@ -461,3 +461,62 @@ class TestMarkerPictures:
         assert sym.marker_picture({"marker_image": value}) is None
         assert sym.icon_image_expression({"marker": "square", "radius": 5,
                                           "marker_image": value}).startswith("gd-pt-")
+
+
+class TestLineMarkers:
+    """QGIS repeats a symbol down a line — arrows on a river, ticks on a boundary. MapLibre draws
+    exactly that with `symbol-placement: line`, so it is a translation, not an approximation."""
+
+    def _cfg(self, **block):
+        return {"layer_id": 7, "layer_type": "vector", "opacity": 1.0,
+                "style": {"color": "#111", "line_marker": dict({"image": PNG}, **block)}}
+
+    def test_a_second_layer_is_emitted_beside_the_line(self):
+        """A second render LAYER, not a property of the line: MapLibre draws a line and places
+        symbols along it with two different layer types — which is how QGIS builds it too."""
+        out = pg._vector_layers("src", _Layer(), self._cfg())
+        assert [ml["id"] for ml in out] == ["vector-7", "vector-7-linemarkers"]
+        assert out[1]["type"] == "symbol"
+
+    def test_it_is_placed_along_the_line_and_rotated_with_it(self):
+        """`icon-rotation-alignment: map` is what makes an arrow point downstream rather than
+        always up the screen."""
+        layout = pg._vector_layers("src", _Layer(), self._cfg())[1]["layout"]
+        assert layout["symbol-placement"] == "line"
+        assert layout["icon-rotation-alignment"] == "map"
+
+    def test_the_spacing_travels(self):
+        out = pg._vector_layers("src", _Layer(), self._cfg(spacing=25))
+        assert out[1]["layout"]["symbol-spacing"] == 25
+
+    def test_a_missing_spacing_gets_a_default_rather_than_zero(self):
+        from geodeploy.services import symbology as sym
+        out = pg._vector_layers("src", _Layer(), self._cfg())
+        assert out[1]["layout"]["symbol-spacing"] == sym.DEFAULT_LINE_MARKER_SPACING
+
+    def test_a_decoration_is_never_dropped_for_colliding(self):
+        """One missing every few metres reads as a rendering fault rather than a placement rule."""
+        layout = pg._vector_layers("src", _Layer(), self._cfg())[1]["layout"]
+        assert layout["icon-allow-overlap"] is True
+
+    def test_it_carries_its_own_images(self):
+        """Only the FIRST render layer gets the full `geodeploy:*` block, and the runtime registers
+        marker bitmaps from `geodeploy:markerImages` — so the decoration must carry its own."""
+        from geodeploy.services import symbology as sym
+        out = pg._vector_layers("src", _Layer(), self._cfg())
+        assert out[1]["metadata"]["geodeploy:markerImages"] == [
+            {"id": sym.picture_id(PNG), "image": PNG}]
+
+    def test_the_layers_own_filter_reaches_the_decoration(self):
+        cfg = self._cfg()
+        cfg["style"]["filter"] = [">", ["get", "pop"], 5]
+        out = pg._vector_layers("src", _Layer(), cfg)
+        assert out[1]["filter"] == [">", ["get", "pop"], 5]
+
+    @pytest.mark.parametrize("block", [{}, {"image": None}, {"image": "http://x/y.png"}, "nope"])
+    def test_anything_without_a_data_uri_emits_no_decoration(self, block):
+        """The value comes from a client. A URL would make the style depend on a host nobody
+        controls, and a non-string would crash the id."""
+        cfg = {"layer_id": 7, "layer_type": "vector", "opacity": 1.0,
+               "style": {"color": "#111", "line_marker": block}}
+        assert [ml["id"] for ml in pg._vector_layers("src", _Layer(), cfg)] == ["vector-7"]

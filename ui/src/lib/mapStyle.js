@@ -34,6 +34,9 @@ import {
   labelLayout as symLabelLayout,
   labelPaint as symLabelPaint,
   labelScope as symLabelScope,
+  pictureId as symPictureId,
+  lineMarker as symLineMarker,
+  lineMarkerLayout as symLineMarkerLayout,
 } from '@/lib/symbology'
 
 export function buildMapStyle({ configs = [], layers = [], rasters = [], sources = [],
@@ -289,6 +292,20 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
             'icon-ignore-placement': true,
           },
           paint: { 'icon-opacity': symMarkerOpacity(st, opacity) },
+        })
+      }
+
+      // MARKERS ALONG A LINE: a second render layer beside the line, because MapLibre draws a line
+      // and places symbols along it with two different layer types — which is how QGIS builds it
+      // too, a simple line with a marker line stacked on top. Mirrors _line_marker_layer.
+      const lineMark = symLineMarker(st)
+      if (Object.keys(lineMark).length) {
+        markerSpecs[symPictureId(lineMark.image)] = { id: symPictureId(lineMark.image), image: lineMark.image }
+        style.layers.push({
+          id: `${srcId}-linemarkers`,
+          type: 'symbol', source: srcId, 'source-layer': sourceLayer,
+          layout: symLineMarkerLayout(lineMark),
+          paint: { 'icon-opacity': opacity },
         })
       }
 

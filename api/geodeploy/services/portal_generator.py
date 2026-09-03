@@ -265,7 +265,13 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
             # just geodeploy:layer_id so the runtime can toggle every sub-layer together (portal.js
             # visibility toggle should target all layers sharing geodeploy:layer_id — parity TODO).
             for i, ml in enumerate(ml_layers):
-                ml["metadata"] = meta if i == 0 else {"geodeploy:layer_id": layer.id, "geodeploy:part": True}
+                # MERGED, not assigned: a builder may already have set metadata of its own — the
+                # line-marker layer carries `geodeploy:markerImages` so the runtime can register its
+                # bitmap, and only the first layer gets the full block. Overwriting it here meant
+                # the decoration's image was never created and the ticks never appeared.
+                standard = meta if i == 0 else {"geodeploy:layer_id": layer.id,
+                                                "geodeploy:part": True}
+                ml["metadata"] = dict(ml.get("metadata") or {}, **standard)
                 if not cfg.get("visible", True):
                     ml.setdefault("layout", {})["visibility"] = "none"
             layers.extend(ml_layers)
@@ -1714,6 +1720,9 @@ def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
         base = _vector_layer(source_id, layer, cfg)
         outline = _polygon_outline_layer(source_id, layer, cfg, base)
         built = [base, outline] if outline else [base]
+        decoration = _line_marker_layer(source_id, layer, cfg)
+        if decoration:
+            built.append(decoration)
         return _scoped(built + ([labels] if labels else []), style)
     source_layer = _source_layer_name(layer)
     out: list[dict] = []
@@ -1753,6 +1762,33 @@ def _scoped(layers: list[dict], style: dict) -> list[dict]:
         if own_filter is not None:
             ml["filter"] = symbology.combined_filter(ml.get("filter"), own_filter)
     return layers
+
+
+def _line_marker_layer(source_id: str, layer, cfg: dict) -> dict | None:
+    """The symbol layer repeating a marker along a line, or None.
+
+    A SECOND render layer beside the line, not a property of it: MapLibre draws a line and places
+    symbols along it with two different layer types, and QGIS builds it the same way — a simple line
+    for the stroke with a marker line stacked on top. Reading only `symbolLayer(0)` is what used to
+    make a road with ticks arrive as a plain road.
+
+    It carries its own `geodeploy:markerImages`, because the runtime registers marker bitmaps from
+    that key and only the FIRST render layer gets the full metadata block.
+    """
+    style = cfg.get("style") or {}
+    block = symbology.line_marker(style)
+    if not block:
+        return None
+    return {
+        "id": f"vector-{layer.id}-linemarkers",
+        "type": "symbol",
+        "source": source_id,
+        "source-layer": _source_layer_name(layer),
+        "layout": symbology.line_marker_layout(block),
+        "paint": {"icon-opacity": cfg.get("opacity", 1.0)},
+        "metadata": {"geodeploy:markerImages": [
+            {"id": symbology.picture_id(block["image"]), "image": block["image"]}]},
+    }
 
 
 def _rule_layers(source_id: str, layer, cfg: dict) -> list[dict] | None:
