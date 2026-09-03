@@ -37,6 +37,14 @@ User documentation is `docs/cli.md`; this file is the technical note.
 - `portals.py` — portal CRUD and `layer_configs` surgery. `layer_configs[0]` = top of the list =
   drawn on top. `editable_config()` drops server-owned fields before a round-trip PUT.
 - `styles.py` — the style vocabulary of `api/geodeploy/services/symbology.py`, in both directions.
+- `expressions.py` — **QGIS expressions ⇄ MapLibre expressions**, over a subset that is declared
+  rather than discovered. A rule is a filter, and so is a subset string and every data-defined
+  property, so this is what lets rule-based rendering travel at all. Anything outside the subset
+  raises `Unsupported` **naming the construct** — the fidelity report is built from those names, and
+  a translator that silently approximates publishes a map the author never saw. `to_maplibre` is
+  generous (its input is whatever somebody typed in QGIS); `from_maplibre` is deliberately narrow
+  (its input is a filter GeoDeploy itself stored). The SERVER never calls either: a rule arrives
+  already translated, so there is one translator rather than two that would drift.
   `build_style()` **assembles** it from plain arguments; `parse()`/`Style` **reads** one back
   (mode, field, classes, categories, size, extrusion, rescale) so a consumer — the QGIS plugin —
   does not re-decide what `color_mode: "graduated"` implies. `Style` is a reader, not a schema: it
