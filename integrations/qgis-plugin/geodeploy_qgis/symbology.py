@@ -3086,7 +3086,7 @@ def _layer_scope_of(qgis_layer) -> dict:
                 out["minzoom"] = lo
             if hi is not None:
                 out["maxzoom"] = hi
-    except Exception:                   # noqa: BLE001 - a scale range is never worth failing a read
+    except Exception:                   # noqa: BLE001 - a scale range is never worth failing a read  # nosec B110 - intentional: a scale range is never worth failing a read
         pass
 
     try:
@@ -3128,7 +3128,7 @@ def _line_decoration_of(layer0, line_width) -> dict:
                 out["dash_pattern"] = [round(v / width, 4) for v in raw]
                 # A custom pattern is the real dash; the preset name would contradict it.
                 out["lineType"] = "solid"
-    except Exception:                   # noqa: BLE001 - a dash is never worth failing the read
+    except Exception:                   # noqa: BLE001 - a dash is never worth failing the read  # nosec B110 - intentional: a dash is never worth failing the read
         pass
 
     for getter, table, scope, key in (("penCapStyle", _CAP_STYLES, "PenCapStyle", "line_cap"),
@@ -3170,7 +3170,7 @@ def _marker_placement_of(symbol, layer0) -> dict:
             if x or y:
                 out["marker_offset"] = [round(x / CSS_PX_TO_POINTS, 3),
                                         round(y / CSS_PX_TO_POINTS, 3)]
-        except Exception:               # noqa: BLE001 - not every build returns a QPointF
+        except Exception:               # noqa: BLE001 - not every build returns a QPointF  # nosec B110 - intentional: not every QGIS build returns a QPointF here
             pass
     fn = getattr(symbol, "opacity", None)
     if callable(fn):

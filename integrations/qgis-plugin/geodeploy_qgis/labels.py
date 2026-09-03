@@ -158,7 +158,7 @@ def _first_rule_settings(labeling):
         for rule in labeling.rootRule().children():
             if rule.settings() is not None:
                 return rule.settings()
-    except Exception:                   # noqa: BLE001
+    except Exception:                   # noqa: BLE001  # nosec B110 - intentional: a font we cannot read is not a font we must fail on
         pass
     return None
 
@@ -209,7 +209,7 @@ def _read_format(settings, labels: dict, notes: list) -> None:
         labels["size"] = round(size / _PT, 2)
     try:
         labels["color"] = symbology._hex(fmt.color())
-    except Exception:                   # noqa: BLE001
+    except Exception:                   # noqa: BLE001  # nosec B110 - intentional: a colour we cannot read leaves the default standing
         pass
     opacity = symbology._number(_value(fmt, "opacity", None), None)
     if opacity is not None and opacity < 1.0:
@@ -222,7 +222,7 @@ def _read_format(settings, labels: dict, notes: list) -> None:
             if width:
                 labels["halo_width"] = round(width / _PT, 2)
                 labels["halo_color"] = symbology._hex(buffer_settings.color())
-    except Exception:                   # noqa: BLE001 - no buffer is not an error
+    except Exception:                   # noqa: BLE001 - no buffer is not an error  # nosec B110 - intentional: a label with no buffer is normal
         pass
 
     for getter, key, note in (("shadow", None, "its label shadow"),
@@ -231,7 +231,7 @@ def _read_format(settings, labels: dict, notes: list) -> None:
             block = getattr(fmt, getter)()
             if block is not None and block.enabled():
                 notes.append("{0} has no MapLibre equivalent and was not carried".format(note))
-        except Exception:               # noqa: BLE001
+        except Exception:               # noqa: BLE001  # nosec B110 - intentional: a shadow or background we cannot inspect is simply not reported
             pass
 
 
@@ -302,14 +302,14 @@ def _read_placement(settings, labels: dict) -> None:
         labels["transform"] = {1: "uppercase", 2: "lowercase"}.get(cap, "none")
         if labels["transform"] == "none":
             labels.pop("transform")
-    except Exception:                   # noqa: BLE001
+    except Exception:                   # noqa: BLE001  # nosec B110 - intentional: a capitalisation we cannot read leaves the text as written
         pass
 
     try:
         spacing = symbology._number(settings.format().font().letterSpacing(), 0)
         if spacing:
             labels["letter_spacing"] = round(spacing / 100.0, 3)
-    except Exception:                   # noqa: BLE001
+    except Exception:                   # noqa: BLE001  # nosec B110 - intentional: letter spacing is cosmetic and optional
         pass
 
     if _value(settings, "displayAll", False):
@@ -334,7 +334,7 @@ def _read_scope(settings, labels: dict) -> None:
             labels["minzoom"] = lo
         if hi is not None:
             labels["maxzoom"] = hi
-    except Exception:                   # noqa: BLE001 - a scale range is never worth failing a read
+    except Exception:                   # noqa: BLE001 - a scale range is never worth failing a read  # nosec B110 - intentional: a scale range is never worth failing a read
         pass
 
 

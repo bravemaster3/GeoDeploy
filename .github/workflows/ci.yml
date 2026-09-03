@@ -230,7 +230,12 @@ jobs:
           # conflict, which is why the declarations live in the code rather than in a config file.
           python -m bandit -q -r . -f json -o bandit-plain.json || true
           python -m bandit -r . -t B101,B110,B112,B310,B314,B405,B605 -f json                  -o bandit-selected.json 2> bandit-selected.log || true
-          if grep -qi "non-exclusive\|ERROR" bandit-selected.log; then
+          # MATCH THE LEVEL FIELD, not the substring. Bandit echoes every word of a `# nosec`
+          # comment back as `Test in comment: <word> is not a test name or id` — so a declaration
+          # that happened to contain the word "error" made this grep fire and failed the build with
+          # "bandit could not run with -t", which is not what went wrong. Its real messages are
+          # tab-separated with ERROR in the level field.
+          if grep -qE "^\[[a-z]+\][[:space:]]+ERROR|[Nn]on-exclusive" bandit-selected.log; then
             echo "bandit could not run with -t (the way plugins.qgis.org invokes it):"
             cat bandit-selected.log
             exit 1
