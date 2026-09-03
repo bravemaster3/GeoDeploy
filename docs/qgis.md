@@ -122,8 +122,8 @@ to GeoDeploy** (the layer's default style) or **Push group to portal** (that por
 
 What travels:
 
-- **Vectors** — single symbol, graduated and categorized; colour, marker shape, radius, line width
-  and dash, fill opacity, outline colour and width; size from a field.
+- **Vectors** — single symbol, graduated, categorized and **rule-based**; colour, marker shape,
+  radius, line width and dash, fill opacity, outline colour and width; size from a field.
 - **Rasters** — colour ramp and its direction, stretch, band selection, a colour per pixel value,
   hillshade with its Z factor, and contour interval and line width.
 
@@ -139,14 +139,82 @@ pass through the API.
 A layer that cannot be sent is named with the reason rather than failing silently — a remote layer,
 or one with unsaved edits.
 
+### Rule-based layers
+
+A rule-based layer travels as its rules. Each rule keeps its own filter, its own symbol, its own
+label and its own scale range, and GeoDeploy draws one map layer per rule — so a layer with three
+rules looks the same in the portal as it does in QGIS. Nested rules are flattened (a child's
+condition becomes the parent's *and* its own), and an **else** rule becomes "none of the others".
+
+Rule filters are translated between QGIS's expression language and the map's. That covers the
+comparisons, `AND`/`OR`/`NOT`, `IN`, `BETWEEN`, `IS NULL`, `LIKE` with a wildcard at either end,
+arithmetic, `CASE WHEN`, and the common string and number functions. **A filter outside that set is
+reported and its rule is left behind**, rather than published as a rule that draws everything —
+which would be a different map, not a simpler one. The Log Messages panel names the rule and the
+part it could not read.
+
+A rule's scale range becomes a zoom range on the published map, so a rule that only draws below
+1:10 000 in QGIS only draws at those zooms in the portal.
+
+### Markers QGIS draws and a web map cannot describe
+
+An SVG marker, a raster or font marker, an ellipse, a filled marker, or several markers stacked into
+one symbol — these used to arrive in the portal as a coloured dot of the right size, because a web
+map has no way to *describe* them.
+
+They now arrive as themselves. The plugin asks QGIS to **render the symbol** and sends the picture,
+so the portal draws what you drew. One mechanism covers every kind of marker QGIS has, including
+ones it adds later.
+
+Two consequences worth knowing:
+
+- **A picture is one image for every feature.** A bitmap cannot be recoloured per class the way a
+  generated shape can, so a classified layer with a picture marker draws the same icon for every
+  class. The classification still applies to everything else.
+- **Very large symbols are refused rather than shipped.** A style travels in every published
+  portal's `style.json`, so a marker that renders past about 96 KB is drawn plainly instead, and the
+  Log Messages panel says so.
+
+### Labels
+
+Labels travel. The text (an attribute or an expression), the size, the colour, the halo — QGIS calls
+it a buffer — the offset, the rotation, the wrapping, the capitalisation, whether labels may overlap,
+their priority and their own scale range all arrive in the portal and go back again.
+
+Two things to know:
+
+- **Fonts are mapped, not carried.** A web map draws text from a glyph set, and a font the set does
+  not contain renders as *nothing at all* — no error, no fallback, no text. So a label's font is
+  matched to one the portal can actually draw, keeping bold and italic. The Log Messages panel names
+  the substitution when it happens.
+- **Shadows, background shapes and callouts do not travel.** A web map draws a halo and nothing
+  else, and the leader line from a displaced label back to its feature is a second geometry with
+  nowhere to go.
+
+Rule-based labelling is read as its first rule, and says so.
+
+### 2.5D
+
+A 2.5D layer arrives in GeoDeploy as a **real 3D extrusion** — which you can orbit, and QGIS's
+pseudo-perspective block cannot be. It is not the same picture: the web map has one colour and a
+vertical shading gradient where QGIS has a roof, walls and a shadow. The roof colour becomes the
+extrusion's colour; the angle, the wall colour and the shadow are stored, so opening the layer in
+QGIS again gives you 2.5D back rather than a plain extrusion to rebuild.
+
+The height and viewing angle are **project settings** in QGIS, not layer ones, so changing them
+changes every 2.5D layer in the project — GeoDeploy stores them per layer, which is the one place
+the two models genuinely differ. The height is in the project's map units and GeoDeploy reads it as
+metres; those agree in a projected CRS and not in a geographic one.
+
 ## Known limitations
 
 - **3D extrusion is not drawn.** A layer's extrusion is stored and rendered by GeoDeploy as usual,
   and the plugin carries it safely — opening an extruded layer and pushing it back does not remove
   it — but QGIS shows those polygons flat, so 3D cannot be edited here yet.
-- **Symbology QGIS has and GeoDeploy does not** — inverted polygons, 2.5D, hatch and gradient fills,
-  line offsets, markers along a line, multi-layer symbols, rule-based rendering, labels — is
-  simplified on the way in and not carried back.
+- **Symbology QGIS has and GeoDeploy does not** — inverted polygons, hatch and gradient fills,
+  markers along a line, and stacked LINE or FILL symbols — is simplified on the way in and not
+  carried back. Stacked MARKER symbols travel as a picture.
+- **A layer's own scale range is not carried yet**, although a *rule's* is.
 - **3D units are not converted.** GeoDeploy's heights and radii are metres; QGIS 3D measures in the
   project's map units. Those agree in a projected CRS and do not in a geographic one.
 - A raster must be uploaded from a local file: re-encoding one would mean choosing compression and

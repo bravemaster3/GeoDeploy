@@ -1851,6 +1851,25 @@
       outlineWidth: m[5] === undefined ? undefined : parseFloat(m[5]),
     };
   }
+  // A marker the plugin RENDERED, rather than one drawn from a shape name. A QGIS symbol GeoDeploy
+  // has no words for — an SVG, raster or font marker, a multi-layer symbol — arrives as a PNG data
+  // URI: there is nothing to parameterise, the pixels ARE the marker. Asynchronous, because
+  // decoding an image is. Twin of `loadMarkerPicture` in ui/src/lib/markerImage.js.
+  function setMarkerPicture(imgId, dataUri) {
+    try {
+      var img = new Image();
+      img.onload = function () {
+        try {
+          // pixelRatio 2: the plugin renders at twice the marker's CSS size to stay crisp, the same
+          // trade markerImage() makes with its own canvas.
+          if (map.hasImage(imgId)) map.updateImage(imgId, img);
+          else map.addImage(imgId, img, { pixelRatio: 2 });
+        } catch (e) { /* one marker is not worth the map */ }
+      };
+      img.onerror = function () {};
+      img.src = dataUri;
+    } catch (e) { /* as above */ }
+  }
   function setMarkerImage(imgId, shape, color, size, outline, outlineWidth) {
     // The WHOLE body is guarded, not just the add/update. `markerImage()` builds a canvas — it can
     // fail (no 2D context in a restricted browser, an unknown shape, a zero-sized canvas) and it
@@ -1888,7 +1907,10 @@
       // time that class scrolls into view, which looks like the map is still loading.
       const all = l.metadata['geodeploy:markerImages'];
       if (Array.isArray(all) && all.length) {
-        all.forEach(function (im) { setMarkerImage(im.id, im.shape, im.color, im.size, im.outline, im.outline_width); });
+        all.forEach(function (im) {
+          if (im.image) setMarkerPicture(im.id, im.image);
+          else setMarkerImage(im.id, im.shape, im.color, im.size, im.outline, im.outline_width);
+        });
         return;
       }
       if (l.metadata['geodeploy:marker'] === undefined) return;
