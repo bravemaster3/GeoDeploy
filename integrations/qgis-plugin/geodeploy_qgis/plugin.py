@@ -135,6 +135,16 @@ class GeoDeployDock(QDockWidget):
         self.connect_btn = QPushButton("Connect")
         self.connect_btn.clicked.connect(self.connect_to_instance)
         row.addWidget(self.connect_btn)
+        # RE-READ THE CATALOG WITHOUT RECONNECTING. The list was refreshed only as a side effect of
+        # connecting, uploading or saving a style — so a layer added from the web UI, a portal
+        # published in another window, or an instance that has been reset since you connected all
+        # left the panel showing something that is no longer true, with no way to ask again short
+        # of typing the URL and connecting from scratch.
+        self.refresh_btn = QPushButton("Refresh")
+        self.refresh_btn.setToolTip("Re-read this instance's layers and portals.")
+        self.refresh_btn.clicked.connect(self.refresh_catalog)
+        self.refresh_btn.setEnabled(False)
+        row.addWidget(self.refresh_btn)
         outer.addLayout(row)
 
         self.token = QLineEdit()
@@ -284,6 +294,8 @@ class GeoDeployDock(QDockWidget):
         explanation is its own kind of dead end.
         """
         signed_in = bool(self.instance and self.instance.token)
+        # Refresh needs a CONNECTION, not a token — anonymous browsing is a first-class mode here.
+        self.refresh_btn.setEnabled(bool(self.instance))
         for button, own in self._write_actions:
             button.setEnabled(signed_in)
             # `own` is the button's real explanation, captured when the dock was built — kept in a
@@ -452,6 +464,7 @@ class GeoDeployDock(QDockWidget):
         # be on QGIS's requests, not only on ours.
         self._install_auth()
         self._apply_auth_ui()
+        self._load_fonts()
         who = f"signed in as {info.get('user')}" if info.get("authenticated") else "not signed in"
         extra = ("" if info.get("index_available")
                  else " — this instance does not publish an index, so only what your token can see "
@@ -467,6 +480,62 @@ class GeoDeployDock(QDockWidget):
                       f"{info.get('public_portals', 0)} are public.")
         self._say(f"{info.get('url')} — {who}. {counts}{extra}")
         self.refresh_layers()
+
+    def _load_fonts(self):
+        """Ask the instance which label faces it can draw, and tell the label translator.
+
+        WHICH FONTS EXIST IS PER-INSTANCE, not per-plugin: `templates/shared/fonts/` is a drop-in
+        directory, so an operator who installs Noto Serif has an instance that renders serif labels
+        correctly — and a plugin working from a compiled-in list would map every serif onto the sans
+        anyway, throwing away a substitution the server was ready to do properly.
+
+        Best-effort and public: the route needs no token, and an instance too old to publish it
+        simply leaves the shipped list in place.
+        """
+        try:
+            from . import labels as _labels
+        except ImportError:             # pragma: no cover - labels.py is optional
+            return
+        try:
+            answer = self.instance.client.get("/fonts", auth=False) or {}
+            _labels.set_available(answer.get("fonts"))
+        except Exception as exc:        # noqa: BLE001 - never block connecting over a font list
+            symbology._log("Could not read this instance's font list ({0}); using the faces "
+                           "GeoDeploy ships.".format(exc), level="info")
+
+    def refresh_catalog(self):
+        """Ask the instance for its catalog again, keeping the current connection and selection.
+
+        Separate from `refresh_layers` because it is a USER ACTION and has to behave like one: it
+        says what it is doing, and it reports an expired credential in terms of what to do about it
+        rather than as a bare HTTP 401.
+        """
+        if not self.instance:
+            self._say("Connect to an instance first.", MSG_WARNING)
+            return
+        self._say("Refreshing…", bar=False)
+        try:
+            self.refresh_layers()
+        except Exception as exc:        # noqa: BLE001 - a refresh must not take the dock down
+            self._say(self._auth_hint(exc), MSG_WARNING)
+            return
+        self._say("Refreshed.", bar=False)
+
+    def _auth_hint(self, exc) -> str:
+        """An expired-credential message that names the likeliest cause instead of the status code.
+
+        A token that worked ten minutes ago and does not now is almost always one of two things, and
+        neither is obvious from `HTTP 401`: it was revoked, or the instance is a DEMO and has been
+        restored to its seed since — demo mode replaces the whole database on the hour, which
+        deletes every token a visitor created along with everything else they made.
+        """
+        text = str(exc)
+        if "401" in text or "token" in text.lower() or "unauthor" in text.lower():
+            return ("This instance no longer accepts that token ({0}). Create a new one under "
+                    "Settings → API tokens and connect again. On a public demo this is normal: the "
+                    "instance is restored to its starting state periodically, and every token made "
+                    "since then goes with it.".format(text))
+        return "Could not refresh: {0}".format(text)
 
     def refresh_layers(self):
         if not self.instance:
@@ -1734,7 +1803,7 @@ class GeoDeployDock(QDockWidget):
             return
         layers = [lyr for lyr in layers if lyr.name() in set(chosen)]
 
-        jobs = []           # (name, path, temporary, style)
+        jobs = []           # (name, path, temporary, style, source_layer)
         refused = []
         for layer in layers:
             try:
@@ -1754,7 +1823,9 @@ class GeoDeployDock(QDockWidget):
                 style = symbology.raster_from_qgis(layer, self._colormaps())
             else:
                 style = symbology.from_qgis(layer)
-            jobs.append((layer.name(), path, temporary, style))
+            # THE QGIS LAYER ITSELF rides along, so a successful upload can link it to what
+            # it became on the instance — see `_uploaded`.
+            jobs.append((layer.name(), path, temporary, style, layer))
 
         if not jobs:
             # Everything was refused — say why, for each, rather than a generic failure.
@@ -1765,8 +1836,8 @@ class GeoDeployDock(QDockWidget):
         total = len(jobs)
 
         def work():
-            uploaded, styled, failed = [], [], list(refused)
-            for index, (name, path, temporary, style) in enumerate(jobs, start=1):
+            uploaded, styled, failed, linked = [], [], list(refused), []
+            for index, (name, path, temporary, style, source_layer) in enumerate(jobs, start=1):
                 # Reported from the worker thread: a queue that looks frozen for four of five files
                 # is worse than no progress at all.
                 self._progress.emit("Uploading {0} ({1} of {2})…".format(name, index, total))
@@ -1783,6 +1854,19 @@ class GeoDeployDock(QDockWidget):
                                 else {"opacity": 1.0, "style": style, "popup_fields": []})
                         api.set_default_style(result.layer_id, body)
                         styled.append(name)
+                    # LINK THE LAYER YOU ALREADY HAVE OPEN to what it just became. Without this the
+                    # obvious next step failed: upload a layer, restyle it in QGIS, press "Save
+                    # styling to GeoDeploy", and be told "A layer must have been ADDED from
+                    # GeoDeploy to be saved back to it" — about the very layer just uploaded. The
+                    # identity is all `layer_identity` needs, so the layer keeps its own local data
+                    # source (no reload, no round trip over the network) and still answers "yes, I
+                    # am that GeoDeploy layer" to Save styling, Restyle, and a portal push.
+                    #
+                    # Collected here and APPLIED ON THE MAIN THREAD in `_uploaded`: this runs inside
+                    # a QgsTask, and touching a map layer's properties off the main thread is how a
+                    # plugin crashes QGIS rather than merely failing.
+                    if getattr(result, "layer_id", None) and source_layer is not None:
+                        linked.append((source_layer, result.layer_id, result.plan.layer_type))
                     uploaded.append(name)
                 except Exception as exc:            # noqa: BLE001 - one bad layer, not the batch
                     # Four good layers must still arrive when the third one is broken.
@@ -1791,7 +1875,8 @@ class GeoDeployDock(QDockWidget):
                     if temporary:
                         # A multi-gigabyte export is not left behind in temp because upload failed.
                         shutil.rmtree(os.path.dirname(path), ignore_errors=True)
-            return {"uploaded": uploaded, "styled": styled, "failed": failed}
+            return {"uploaded": uploaded, "styled": styled, "failed": failed,
+                    "linked": linked}
 
         self._busy(True)
         self._say("Uploading {0} layer(s)… large files go straight to storage.".format(total),
@@ -1807,6 +1892,16 @@ class GeoDeployDock(QDockWidget):
         uploaded = result.get("uploaded") or []
         failed = result.get("failed") or []
         styled = result.get("styled") or []
+
+        # On the main thread, where touching a layer is safe — see the note in `work()`.
+        linked = 0
+        for source_layer, layer_id, kind in (result.get("linked") or []):
+            try:
+                portal_sync.tag_layer(source_layer, self.instance.url, layer_id, kind)
+                linked += 1
+            except Exception as exc:    # noqa: BLE001 - the upload landed; the link is a bonus
+                symbology._log("Uploaded, but could not link {0} to its GeoDeploy layer: {1}"
+                               .format(getattr(source_layer, "name", lambda: "a layer")(), exc))
         # Only claim what was actually sent. A renderer we cannot translate produces no style, and
         # saying "styling sent" anyway is how a silent no-op passes for a feature.
         if styled and len(styled) == len(uploaded):
@@ -1818,9 +1913,13 @@ class GeoDeployDock(QDockWidget):
         else:
             styling = ""
 
+        # Say that the link happened, because it changes what the user can do next.
+        link_note = (" Now linked to GeoDeploy — restyle in QGIS and press “Save styling to "
+                     "GeoDeploy”." if linked else "")
+
         if uploaded and not failed:
             what = uploaded[0] if len(uploaded) == 1 else f"{len(uploaded)} layers"
-            self._say(f"Uploaded {what}.{styling}")
+            self._say(f"Uploaded {what}.{styling}{link_note}")
         elif uploaded and failed:
             # Partial success is its own outcome. Reporting it as failure hides work that landed;
             # reporting it as success hides work that did not.

@@ -68,7 +68,76 @@ _SIMPLE_KEYS = (
     ("classes_n", "classes_n"),
     ("size_field", "size_field"),
     ("size_mode", "size_mode"),
+    # 2026-09-03: things MapLibre draws natively that GeoDeploy had no word for until the QGIS
+    # round trip needed them. Each is an EXACT round trip rather than an approximation.
+    ("line_cap", "line_cap"),
+    ("line_join", "line_join"),
+    ("line_offset", "line_offset"),
+    ("marker_rotation", "marker_rotation"),
+    ("marker_opacity", "marker_opacity"),
+    ("min_zoom", "minzoom"),
+    ("max_zoom", "maxzoom"),
 )
+
+#: The fontstacks a portal can serve — the twin of `services/symbology.LABEL_FONTS`. A stack the
+#: glyph source lacks renders as NOTHING at all, so this list is deliberately short.
+LABEL_FONTS = ("Noto Sans Regular", "Noto Sans Bold", "Noto Sans Italic")
+
+LINE_CAPS = ("butt", "round", "square")
+LINE_JOINS = ("bevel", "round", "miter")
+
+
+def parse_number_list(raw: Any, label: str, length: Optional[int] = None) -> List[float]:
+    """`"3,2,1,2"` or a real list → `[3.0, 2.0, 1.0, 2.0]`. Used by dash patterns and offsets."""
+    if isinstance(raw, str):
+        raw = [part for part in raw.replace(" ", "").split(",") if part]
+    if not isinstance(raw, (list, tuple)):
+        raise ValidationError(400, "{0} must be a comma-separated list of numbers.".format(label))
+    out = []
+    for part in raw:
+        try:
+            out.append(float(part))
+        except (TypeError, ValueError):
+            raise ValidationError(400, "{0}: {1!r} is not a number.".format(label, part))
+    if length is not None and len(out) != length:
+        raise ValidationError(400, "{0} needs exactly {1} numbers.".format(label, length))
+    return out
+
+
+#: The scale denominator one Web Mercator tile pixel covers at zoom 0, at the equator and 96 dpi.
+#: MapLibre, QGIS and every slippy-map tool agree on this number; it is what makes a QGIS scale
+#: threshold and a MapLibre zoom threshold the same statement about the map.
+SCALE_AT_ZOOM_0 = 559082264.0287178
+
+
+def zoom_for_scale(denominator: Any) -> Optional[float]:
+    """A QGIS scale DENOMINATOR as a MapLibre zoom level, or None for "no limit".
+
+    QGIS states visibility as a scale range and MapLibre as a zoom range, and the two run in
+    OPPOSITE directions: a denominator gets larger as you zoom out, a zoom level smaller. So a
+    layer's `minimumScale` (its most-zoomed-OUT limit, the larger denominator) becomes `minzoom`,
+    and `maximumScale` becomes `maxzoom` — which reads backwards and is right.
+
+    0 is QGIS's "unset" for both ends, and it must not become zoom 29: a rule with no lower limit
+    would then be invisible everywhere.
+    """
+    try:
+        value = float(denominator)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    import math
+    return round(math.log(SCALE_AT_ZOOM_0 / value, 2), 3)
+
+
+def scale_for_zoom(zoom: Any) -> Optional[float]:
+    """The inverse, for writing a MapLibre zoom back into a QGIS scale threshold."""
+    try:
+        value = float(zoom)
+    except (TypeError, ValueError):
+        return None
+    return SCALE_AT_ZOOM_0 / (2.0 ** value)
 
 
 def build_style(base: Optional[Dict[str, Any]] = None, **kw: Any) -> Dict[str, Any]:
@@ -85,6 +154,13 @@ def build_style(base: Optional[Dict[str, Any]] = None, **kw: Any) -> Dict[str, A
             style[key] = value
 
     _validate(style)
+    for key, allowed, flag in (("line_cap", LINE_CAPS, "--line-cap"),
+                               ("line_join", LINE_JOINS, "--line-join")):
+        value = style.get(key)
+        if value is not None and str(value).lower() not in allowed:
+            # MapLibre rejects the WHOLE style over an invalid enum, so this must fail here rather
+            # than produce a portal that renders nothing.
+            raise ValidationError(400, "{0} must be one of: {1}.".format(flag, ", ".join(allowed)))
 
     stops = kw.get("size_stops")
     if stops is not None:
@@ -106,10 +182,89 @@ def build_style(base: Optional[Dict[str, Any]] = None, **kw: Any) -> Dict[str, A
     if extrusion is not None:
         style["extrusion"] = extrusion
 
+    dash = kw.get("dash_pattern")
+    if dash is not None:
+        # In MULTIPLES OF THE LINE WIDTH, which is MapLibre's unit — a pattern in pixels would
+        # change shape every time somebody changed the width.
+        pattern = parse_number_list(dash, "--dash-pattern")
+        if len(pattern) < 2:
+            raise ValidationError(400, "--dash-pattern needs at least a dash and a gap.")
+        style["dash_pattern"] = pattern
+    if kw.get("no_dash_pattern"):
+        style.pop("dash_pattern", None)
+    offset = kw.get("marker_offset")
+    if offset is not None:
+        style["marker_offset"] = parse_number_list(offset, "--marker-offset", length=2)
+    if kw.get("no_symbol") is not None:
+        style["no_symbol"] = bool(kw["no_symbol"])
+        if not style["no_symbol"]:
+            style.pop("no_symbol", None)
+
+    labels = kw.get("labels")
+    if labels:
+        # MERGED, not replaced: `--label-size 14` alone must not wipe the colour and halo somebody
+        # already set, exactly as `--color` does not reset the marker shape.
+        merged = dict(style.get("labels") or {})
+        merged.update({k: v for k, v in labels.items() if v is not None})
+        # Naming any label property turns labelling ON — asking for a label size on an unlabelled
+        # layer and getting nothing would be a puzzle, not a safeguard.
+        merged["enabled"] = True
+        style["labels"] = merged
+    if kw.get("clear_labels"):
+        style.pop("labels", None)
+
+    rules = kw.get("rules")
+    if rules is not None:
+        style["rules"] = parse_rules(rules)
+
     if kw.get("clear_classification"):
         for key in ("color_mode", "color_field", "classes", "categories", "other_color"):
             style.pop(key, None)
+    if kw.get("clear_rules"):
+        # Separate from `clear_classification` because they are different modes, not two spellings
+        # of one: dropping the rules of a rule-based layer leaves the single symbol underneath,
+        # which is the layer's own shape and the sensible thing to fall back to.
+        style.pop("rules", None)
     return style
+
+
+def parse_rules(raw: Any) -> List[Dict[str, Any]]:
+    """Validate a rule list far enough that a broken one fails HERE rather than on a published map.
+
+    Deliberately shallow: the FILTER is not re-checked, because it was produced by
+    `expressions.to_maplibre` and re-deriving it in a second place is exactly the drift this package
+    avoids elsewhere. What is checked is the shape a renderer will index into.
+    """
+    if isinstance(raw, str):
+        import json
+        try:
+            raw = json.loads(raw)
+        except ValueError as exc:
+            raise ValidationError(400, "Rules must be JSON: {0}".format(exc))
+    if not isinstance(raw, list):
+        raise ValidationError(400, "Rules must be a list of rule objects.")
+    out: List[Dict[str, Any]] = []
+    for i, rule in enumerate(raw):
+        if not isinstance(rule, dict):
+            raise ValidationError(400, "Rule {0} is not an object.".format(i + 1))
+        entry: Dict[str, Any] = {"label": str(rule.get("label") or "")}
+        if rule.get("filter") is not None:
+            entry["filter"] = rule["filter"]
+        if rule.get("expression"):
+            entry["expression"] = str(rule["expression"])
+        inner = rule.get("style")
+        if inner is not None and not isinstance(inner, dict):
+            raise ValidationError(400, "Rule {0}'s style must be an object.".format(i + 1))
+        entry["style"] = dict(inner or {})
+        for key in ("minzoom", "maxzoom"):
+            if rule.get(key) is None:
+                continue
+            try:
+                entry[key] = float(rule[key])
+            except (TypeError, ValueError):
+                raise ValidationError(400, "Rule {0}'s {1} must be a number.".format(i + 1, key))
+        out.append(entry)
+    return out
 
 
 def build_extrusion(base: Optional[Dict[str, Any]] = None, **kw: Any) -> Optional[Dict[str, Any]]:
@@ -307,8 +462,23 @@ class Style(object):
 
     @property
     def mode(self) -> str:
-        """`single` | `graduated` | `categorized` — never None, so a caller can switch on it."""
+        """`single` | `graduated` | `categorized` | `rules` — never None, so a caller can switch.
+
+        RULES OUTRANK `color_mode`. A rule-based style also carries the first rule's shape at the
+        top level, `color_mode: "single"` included, so that a renderer knowing nothing about rules
+        still draws something recognisable. Reading that first would report a rule-based layer as a
+        plain one — and then a push would flatten it.
+        """
+        if self.raw.get("rules"):
+            return "rules"
         return self.raw.get("color_mode") or "single"
+
+    @property
+    def rules(self) -> List[Dict[str, Any]]:
+        """The rule list, or `[]`. Each entry is `{label, expression, filter, style, minzoom,
+        maxzoom}` — see the QGIS plugin's `rules.py` for what each means and who writes it."""
+        raw = self.raw.get("rules")
+        return [r for r in raw if isinstance(r, dict)] if isinstance(raw, list) else []
 
     @property
     def field(self) -> Optional[str]:
@@ -412,6 +582,13 @@ class Style(object):
         dialog) and cannot make a request per keystroke. The two agree; `test_styles_jobs` pins the
         labels against the server's format.
         """
+        if self.mode == "rules":
+            # One entry per rule, in the order they draw. A rule's label is what its author wrote in
+            # QGIS's rule editor, so it is already legend text; a rule with none falls back to its
+            # expression, which is at least a description of what it selects.
+            return [{"color": (r.get("style") or {}).get("color") or self.color,
+                     "label": str(r.get("label") or r.get("expression") or "rule")}
+                    for r in self.rules]
         if self.mode == "graduated":
             out = []
             for c in self.classes:
