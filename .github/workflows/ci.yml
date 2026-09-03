@@ -93,6 +93,47 @@ jobs:
           geodeploy --version
           geodeploy --help > /dev/null
 
+  qgis-real:
+    # THE ONE JOB THAT RUNS AGAINST QGIS ITSELF, and the reason it exists is worth stating: every
+    # other plugin test stubs the QGIS classes, and the stubs used to share a base that handed each
+    # symbol layer a `setWidth`/`width` pair only `QgsSimpleLineSymbolLayer` really has. The plugin
+    # called `setWidth` on a FILL, the stubbed suite went green, and in real QGIS every polygon
+    # layer raised AttributeError — drawn in QGIS's own default colour on the way in, uploaded with
+    # no styling at all on the way out. It shipped, and a user found it.
+    #
+    # A stub cannot be trusted to describe an API this wide. This job asserts the same round trip
+    # against a real PyQGIS on both ends of the supported range, and audits that every QGIS name the
+    # plugin calls exists there — which is what catches an enum QGIS moves into the `Qgis` namespace
+    # between versions, the failure that otherwise reads as "the plugin silently does nothing".
+    name: QGIS ${{ matrix.qgis }} (real PyQGIS)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # `ltr` is the version most people run; `4.2` is the Qt6 build. metadata.txt claims
+        # 3.28 through 4.99, and these are the two ends anyone can actually install today.
+        qgis: [ltr, "4.2"]
+    container:
+      image: qgis/qgis:${{ matrix.qgis }}
+      # Offscreen rather than xvfb: nothing here opens a window, it only builds renderers and
+      # symbols, and QgsApplication refuses to start without a platform plugin of some kind.
+      env:
+        QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: The symbology round trip, against QGIS itself
+        working-directory: integrations/qgis-plugin
+        run: python3 scripts/test_real_qgis.py
+
+      - name: Every symbol QGIS offers is classified
+        # Reads QGIS's OWN registries — symbol layers, renderers, data-defined properties — and
+        # joins them against the verdicts declared in the script. Fails when this QGIS offers
+        # something the table does not classify, so a new QGIS version forces a decision instead
+        # of quietly widening a gap nobody has written down.
+        working-directory: integrations/qgis-plugin
+        run: python3 scripts/coverage_report.py
+
   qgis-plugin:
     name: QGIS plugin
     runs-on: ubuntu-latest

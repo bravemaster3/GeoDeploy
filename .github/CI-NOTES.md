@@ -19,6 +19,16 @@ GitHub Actions CI and the community-template validation pipeline.
     is what catches syntax or stdlib use that would break there. The install line is `.[dev]` and
     nothing else — the package must stay dependency-free, and this job failing on a missing wheel
     would mean one had crept in.
+  - **qgis-plugin** job: the stubbed plugin tests, the dock smoke test, flake8 and the bandit scan
+    plugins.qgis.org runs. No QGIS — the `qgis` module is not pip-installable.
+  - **qgis-real** job (added 2026-09-03): a matrix of `qgis/qgis:ltr` (3.44) and `qgis/qgis:4.2`,
+    run as **container jobs** with `QT_QPA_PLATFORM=offscreen`, executing
+    `integrations/qgis-plugin/scripts/test_real_qgis.py`. **Why a second QGIS job at all:** every
+    other plugin test stubs the QGIS classes, and the stubs shared a base that gave each symbol
+    layer a `setWidth`/`width` pair only `QgsSimpleLineSymbolLayer` really has. The plugin called
+    `setWidth` on a FILL, this workflow went green, and in real QGIS every polygon layer raised
+    `AttributeError` — it shipped, and a user reported it. Offscreen rather than xvfb because
+    nothing opens a window; the images are ~3.5 GB, so this job is the slow one.
 - `workflows/publish-cli.yml` — publishes `cli/` to PyPI on a **`cli-v*`** tag, via **Trusted
   Publishing**: PyPI verifies a short-lived OIDC token minted by GitHub for this repo, workflow
   filename and environment, so no API token is stored anywhere. `workflow_dispatch` runs the same
@@ -66,8 +76,4 @@ crossing actually required, checked rather than assumed (2026-08-30):
 - The API test suite is minimal (`/health`, initial setup status).
 
 ## Last updated
-2026-08-30 (every `actions/*` step bumped to its latest major — checkout v7, setup-python v7,
-setup-node v7, upload-artifact v7, download-artifact v8, upload-pages-artifact v5, deploy-pages v5.
-See **Action versions** for what each crossing required.)
-
-2026-08-13 (added `publish-cli.yml` — Trusted Publishing to PyPI on a `cli-v*` tag)
+2026-09-03 (added the `qgis-real` matrix job — the plugin's symbology round trip against a real PyQGIS on 3.44 and 4.2)
