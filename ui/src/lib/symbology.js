@@ -47,7 +47,14 @@ export const CATEGORY_COLORS = [
 export const DEFAULT_COLOR = '#3b82f6'
 export const DEFAULT_OTHER_COLOR = '#9ca3af'
 
-/** `count` colours sampled evenly from a named ramp. Nearest-stop, matching ramp_colors(). */
+/**
+ * `count` colours sampled evenly from a named ramp. Twin of `symbology.ramp_colors`.
+ *
+ * INTERPOLATED between the anchor stops, not snapped to the nearest one. Snapping was the earlier
+ * behaviour and it had a ceiling nobody had written down: the ramps are seven stops, so eight
+ * classes produced seven colours and twelve produced seven — two classes drawn identically in a
+ * legend that says they differ. That is what the old 12-class cap was really working around.
+ */
 export function rampColors(name, count, reverse = false) {
   const stops = RAMPS[name] || RAMPS.viridis
   if (count <= 0) return []
@@ -55,15 +62,65 @@ export function rampColors(name, count, reverse = false) {
   const out = []
   for (let i = 0; i < count; i++) {
     const pos = (i * (stops.length - 1)) / (count - 1)
-    // `Math.floor(pos + 0.5)` — the twin of `int(pos + 0.5)` in symbology.ramp_colors. Math.round()
-    // rounds half UP and Python's round() rounds half to EVEN, so the two disagreed at every .5
-    // position: a 5-class viridis differed in its fourth colour. Same formula, no drift.
-    out.push(stops[Math.floor(pos + 0.5)])
+    const lo = Math.floor(pos)
+    const hi = Math.min(lo + 1, stops.length - 1)
+    out.push(blend(stops[lo], stops[hi], pos - lo))
   }
   // Reverse the sampled OUTPUT, not the stop list — the twin of symbology.ramp_colors, which must
   // produce the identical array or the editor preview and the published portal disagree about which
   // class is which colour.
   return reverse ? out.reverse() : out
+}
+
+/**
+ * `a` and `b` mixed in RGB, `t` from 0 to 1. Twin of `symbology._blend`.
+ *
+ * `Math.floor(x + 0.5)`, not Math.round(): Python's round() is half-to-EVEN and JavaScript's is
+ * half-UP, so the two would land on a different byte wherever a channel came out on .5. Half-up
+ * written this way is identical in both languages.
+ */
+function blend(a, b, t) {
+  if (t <= 0) return a
+  if (t >= 1) return b
+  const ch = (s, i) => parseInt(s.slice(1 + i * 2, 3 + i * 2), 16)
+  const hex = (n) => Math.floor(n + 0.5).toString(16).padStart(2, '0')
+  return '#' + [0, 1, 2].map(i => hex(ch(a, i) + (ch(b, i) - ch(a, i)) * t)).join('')
+}
+
+//: The reciprocal golden ratio — see `symbology._GOLDEN`.
+const GOLDEN = 0.6180339887498949
+
+/**
+ * The colour for the `index`-th category, for as many categories as a layer has.
+ * Twin of `symbology.category_color`.
+ *
+ * The twelve hand-picked colours first; past those the hue wheel takes over rather than cycling,
+ * which would draw two categories identically. Deterministic, so a category keeps its colour when
+ * the data gains a value.
+ */
+export function categoryColor(index) {
+  if (index < CATEGORY_COLORS.length) return CATEGORY_COLORS[index]
+  const n = index - CATEGORY_COLORS.length
+  const hue = (n * GOLDEN) % 1.0
+  const sat = 0.58 + 0.16 * (n % 2)
+  const light = 0.42 + 0.14 * (Math.floor(n / 2) % 3)
+  return hslHex(hue, sat, light)
+}
+
+/** HSL (0-1) to `#rrggbb`. Twin of `symbology._hsl_hex` — the same arithmetic, deliberately. */
+function hslHex(h, s, l) {
+  const channel = (p, q, t0) => {
+    let t = t0 % 1.0
+    if (t < 0) t += 1.0
+    if (t < 1 / 6) return p + (q - p) * 6 * t
+    if (t < 1 / 2) return q
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6
+    return p
+  }
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s
+  const p = 2 * l - q
+  const hex = (n) => Math.floor(n * 255 + 0.5).toString(16).padStart(2, '0')
+  return '#' + hex(channel(p, q, h + 1 / 3)) + hex(channel(p, q, h)) + hex(channel(p, q, h - 1 / 3))
 }
 
 /**
@@ -223,7 +280,31 @@ export function parseMarkerImageId(id) {
 }
 
 /** `icon-image`: one id, or a data-driven choice. Mirrors colorExpression stop for stop. */
+/**
+ * The id for a marker PICTURE. Twin of `symbology.picture_id` — FNV-1a, because an id computed
+ * differently here would have the preview asking for an image the portal never registers.
+ */
+export function pictureId (dataUri) {
+  let h = 0x811c9dc5
+  const s = String(dataUri || '')
+  for (let i = 0; i < s.length; i++) {
+    h = Math.imul(h ^ (s.charCodeAt(i) & 0xff), 0x01000193) >>> 0
+  }
+  return 'gd-img-' + h.toString(16).padStart(8, '0')
+}
+
+/** The marker bitmap this style carries, or null. Twin of `symbology.marker_picture`. */
+export function markerPicture (style = {}) {
+  const uri = style.marker_image
+  return (typeof uri === 'string' && uri.startsWith('data:image/')) ? uri : null
+}
+
 export function iconImageExpression(style = {}) {
+  // A PICTURE WINS OVER A SHAPE, and it is ONE image for every feature: a raster icon cannot be
+  // recoloured per class the way a generated shape can. Mirrors symbology.icon_image_expression.
+  const picture = markerPicture(style)
+  if (picture) return pictureId(picture)
+
   const shape = style.marker || 'circle'
   const size = style.radius ?? 5
   const [ol, ow] = markerOutline(style)
@@ -255,6 +336,11 @@ export function iconImageExpression(style = {}) {
 
 /** Every marker bitmap this style needs: [{id, shape, color, size}]. */
 export function markerImages(style = {}) {
+  const picture = markerPicture(style)
+  // One entry, carrying the PIXELS — the runtime registers it from the data URI instead of drawing
+  // a shape. Mirrors symbology.marker_images.
+  if (picture) return [{ id: pictureId(picture), image: picture }]
+
   const shape = style.marker || 'circle'
   const size = style.radius ?? 5
   const [ol, ow] = markerOutline(style)
@@ -367,4 +453,218 @@ export function pillarRadius(style = {}, bbox = null) {
   const d = extentMetres(bbox)
   if (d) return Math.min(Math.max(d / PILLAR_RADIUS_FRACTION, 5), 100000)
   return DEFAULT_PILLAR_RADIUS_M
+}
+
+// ── Line decoration, marker placement, and layer scope ───────────────────────────────────────────
+// Twins of `services/symbology.py`'s block of the same name (2026-09-03). Every one of these is
+// something MapLibre draws natively and GeoDeploy simply had no word for, so each is an EXACT round
+// trip from QGIS rather than an approximation.
+
+/** `lineType` as a dash array, in MULTIPLES OF THE LINE WIDTH — MapLibre's own unit. */
+export const LINE_TYPE_DASHES = { dashed: [2, 1.5], dotted: [0.4, 1.8] }
+
+const LINE_CAPS = ['butt', 'round', 'square']
+const LINE_JOINS = ['bevel', 'round', 'miter']
+
+/**
+ * The `line-dasharray` for a style, or null for a solid line. Twin of `symbology.dash_array`.
+ *
+ * An explicit `dash_pattern` wins over `lineType`: the named types are the two presets a web map
+ * always had, and a pattern read out of QGIS is the real thing the author drew. Stored in line-width
+ * multiples, not pixels — a pattern in absolute units would change shape with the width.
+ */
+export function dashArray(style = {}) {
+  const pattern = style.dash_pattern
+  if (Array.isArray(pattern) && pattern.length >= 2) {
+    const out = []
+    for (const v of pattern) {
+      const n = Number(v)
+      if (!Number.isFinite(n)) return null
+      out.push(Math.round(n * 10000) / 10000)
+    }
+    // MapLibre wants pairs; an odd-length pattern repeats inverted, which is not what QGIS drew.
+    return out.length % 2 === 0 ? out : out.concat([out[out.length - 1]])
+  }
+  return LINE_TYPE_DASHES[style.lineType] || null
+}
+
+/** `line-cap` / `line-join` — LAYOUT properties. Twin of `symbology.line_layout`. */
+export function lineLayout(style = {}) {
+  const out = {}
+  const cap = String(style.line_cap || '').toLowerCase()
+  const join = String(style.line_join || '').toLowerCase()
+  if (LINE_CAPS.includes(cap)) out['line-cap'] = cap
+  if (LINE_JOINS.includes(join)) out['line-join'] = join
+  return out
+}
+
+/** `line-offset` in pixels, or null. Twin of `symbology.line_offset`. */
+export function lineOffset(style = {}) {
+  const n = Number(style.line_offset)
+  if (!Number.isFinite(n) || !n) return null
+  return Math.round(n * 1000) / 1000
+}
+
+/** `icon-rotate` and `icon-offset`. Twin of `symbology.marker_layout`. */
+export function markerLayout(style = {}) {
+  const out = {}
+  const rot = Number(style.marker_rotation)
+  if (Number.isFinite(rot) && rot) out['icon-rotate'] = Math.round(((rot % 360) + 360) % 360 * 1000) / 1000
+  const off = style.marker_offset
+  if (Array.isArray(off) && off.length === 2) {
+    const x = Number(off[0]); const y = Number(off[1])
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      out['icon-offset'] = [Math.round(x * 1000) / 1000, Math.round(y * 1000) / 1000]
+    }
+  }
+  return out
+}
+
+/** The layer's opacity times the marker's own. Twin of `symbology.marker_opacity`. */
+export function markerOpacity(style = {}, opacity = 1) {
+  const own = Number(style.marker_opacity)
+  if (!Number.isFinite(own)) return opacity
+  return Math.round(opacity * Math.max(0, Math.min(1, own)) * 10000) / 10000
+}
+
+/**
+ * `minzoom` / `maxzoom` / `filter` that belong to the LAYER rather than to one render layer.
+ * Twin of `symbology.layer_scope`.
+ *
+ * Clamped to MapLibre's 0-24: QGIS stores scale thresholds far outside it, and one out-of-range
+ * number makes MapLibre reject the WHOLE style rather than ignore it.
+ */
+export function layerScope(style = {}) {
+  const out = {}
+  for (const key of ['minzoom', 'maxzoom']) {
+    const raw = Number(style[key])
+    if (!Number.isFinite(raw)) continue
+    const z = Math.max(0, Math.min(24, raw))
+    if ((key === 'minzoom' && z > 0) || (key === 'maxzoom' && z < 24)) out[key] = Math.round(z * 1000) / 1000
+  }
+  if (style.filter != null) out.filter = style.filter
+  return out
+}
+
+/** Two MapLibre filters ANDed, flattened. Twin of `symbology.combined_filter`. */
+export function combinedFilter(a, b) {
+  if (a == null) return b
+  if (b == null) return a
+  const parts = []
+  for (const node of [a, b]) {
+    if (Array.isArray(node) && node[0] === 'all') parts.push(...node.slice(1))
+    else parts.push(node)
+  }
+  return ['all', ...parts]
+}
+
+/** QGIS's "No symbols" renderer: listed and legible, draws nothing. Twin of `draws_nothing`. */
+export function drawsNothing(style = {}) {
+  return Boolean(style.no_symbol)
+}
+
+// ── Labels ───────────────────────────────────────────────────────────────────────────────────────
+// Twins of `services/symbology.py`'s label block. A label is a second thing drawn for the same
+// feature — its own colour, size and zoom range — so it becomes its own MapLibre `symbol` layer.
+
+/**
+ * The faces SHIPPED with GeoDeploy — not a limit. `templates/shared/fonts/` is a drop-in directory
+ * and `/api/fonts` lists whatever is installed, so a UI that wants the real list should ask.
+ */
+export const LABEL_FONTS = ['Noto Sans Regular', 'Noto Sans Bold', 'Noto Sans Italic']
+
+/**
+ * A `text-font` STACK — the face asked for, then the one always shipped. Twin of
+ * `symbology.font_stack`.
+ *
+ * MapLibre reads `text-font` as a preference list and uses the first face its glyphs have, so this
+ * draws an installed face when there is one and still draws the label when there is not. Rewriting
+ * an unknown face to the fallback here instead would discard a font the operator had installed —
+ * only the server knows what is there.
+ */
+export function fontStack (font) {
+  const name = String(font || '').trim()
+  if (!name || name === DEFAULT_LABEL_FONT) return [DEFAULT_LABEL_FONT]
+  return [name, DEFAULT_LABEL_FONT]
+}
+export const DEFAULT_LABEL_FONT = 'Noto Sans Regular'
+export const DEFAULT_LABEL_SIZE = 12
+export const DEFAULT_LABEL_COLOR = '#333333'
+export const DEFAULT_LABEL_HALO = '#ffffff'
+
+const LABEL_ANCHORS = ['center', 'left', 'right', 'top', 'bottom',
+  'top-left', 'top-right', 'bottom-left', 'bottom-right']
+const LABEL_TRANSFORMS = ['none', 'uppercase', 'lowercase']
+
+const lnum = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : d }
+
+/** The label block when a layer is labelled, else `{}`. Twin of `symbology.labels_of`. */
+export function labelsOf(style = {}) {
+  const l = style.labels
+  if (!l || typeof l !== 'object' || !l.enabled) return {}
+  return (l.field || l.expression != null) ? l : {}
+}
+
+/** The `text-field`. An expression wins over a field name. Twin of `symbology.label_text`. */
+export function labelText(labels = {}) {
+  if (labels.expression != null) return labels.expression
+  return ['to-string', ['get', String(labels.field)]]
+}
+
+/** The `layout` half of a label layer. Twin of `symbology.label_layout`. */
+export function labelLayout(labels = {}) {
+  const size = lnum(labels.size, DEFAULT_LABEL_SIZE)
+  const out = {
+    'text-field': labelText(labels),
+    'text-font': fontStack(labels.font),
+    'text-size': size,
+    'text-allow-overlap': Boolean(labels.allow_overlap),
+  }
+  if (String(labels.placement || 'point').toLowerCase() === 'line') out['symbol-placement'] = 'line'
+  const anchor = String(labels.anchor || '').toLowerCase()
+  if (LABEL_ANCHORS.includes(anchor)) out['text-anchor'] = anchor
+  const off = labels.offset
+  if (Array.isArray(off) && off.length === 2 && size) {
+    const x = Number(off[0]); const y = Number(off[1])
+    // `text-offset` is in EMS and GeoDeploy states offsets in pixels — divide by the text size.
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      out['text-offset'] = [Math.round(x / size * 1000) / 1000, Math.round(y / size * 1000) / 1000]
+    }
+  }
+  const rot = lnum(labels.rotation, null)
+  if (rot) out['text-rotate'] = Math.round(((rot % 360) + 360) % 360 * 1000) / 1000
+  const width = lnum(labels.max_width, null)
+  if (width && width > 0) out['text-max-width'] = Math.round(width * 100) / 100
+  const transform = String(labels.transform || '').toLowerCase()
+  if (LABEL_TRANSFORMS.includes(transform) && transform !== 'none') out['text-transform'] = transform
+  const spacing = lnum(labels.letter_spacing, null)
+  if (spacing) out['text-letter-spacing'] = Math.round(spacing * 1000) / 1000
+  const priority = lnum(labels.priority, null)
+  // QGIS priority runs 0-10, higher = more important; MapLibre places LOWER sort keys first, and
+  // what is placed first wins the space. So the scale is inverted.
+  if (priority != null) out['symbol-sort-key'] = Math.round(-priority * 1000) / 1000
+  return out
+}
+
+/** The `paint` half. Twin of `symbology.label_paint`. */
+export function labelPaint(labels = {}, opacity = 1) {
+  const out = { 'text-color': labels.color || DEFAULT_LABEL_COLOR, 'text-opacity': opacity }
+  const halo = lnum(labels.halo_width, 0)
+  if (halo && halo > 0) {
+    out['text-halo-color'] = labels.halo_color || DEFAULT_LABEL_HALO
+    out['text-halo-width'] = Math.round(halo * 100) / 100
+  }
+  return out
+}
+
+/** A label's OWN zoom range, which QGIS keeps separately. Twin of `symbology.label_scope`. */
+export function labelScope(labels = {}) {
+  const out = {}
+  for (const key of ['minzoom', 'maxzoom']) {
+    const raw = lnum(labels[key], null)
+    if (raw == null) continue
+    const z = Math.max(0, Math.min(24, raw))
+    if ((key === 'minzoom' && z > 0) || (key === 'maxzoom' && z < 24)) out[key] = Math.round(z * 1000) / 1000
+  }
+  return out
 }

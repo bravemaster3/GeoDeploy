@@ -22,6 +22,18 @@ import {
   polygonOutlineWidth,
   POLYGON_OUTLINE_WIDTH,
   NO_OUTLINE,
+  dashArray as symDashArray,
+  lineLayout as symLineLayout,
+  lineOffset as symLineOffset,
+  markerLayout as symMarkerLayout,
+  markerOpacity as symMarkerOpacity,
+  layerScope as symLayerScope,
+  combinedFilter as symCombinedFilter,
+  drawsNothing as symDrawsNothing,
+  labelsOf as symLabelsOf,
+  labelLayout as symLabelLayout,
+  labelPaint as symLabelPaint,
+  labelScope as symLabelScope,
 } from '@/lib/symbology'
 
 export function buildMapStyle({ configs = [], layers = [], rasters = [], sources = [],
@@ -36,7 +48,11 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
   const markerSpecs = {}
   const style = {
     version: 8,
-    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+    // The same route `portal_generator.GLYPHS_URL` names. Whether a glyph range comes from this
+    // instance's own font set or is redirected to MapLibre's public one is decided server-side —
+    // only the server knows what is installed, and if the preview and the portal each guessed they
+    // would disagree the moment an operator installed a set. See `routers/fonts.py`.
+    glyphs: `${location.origin}/api/fonts/{fontstack}/{range}.pbf`,
     sources: {
       basemap: {
         type: 'raster',
@@ -58,9 +74,50 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
       : b.slice()
   }
 
+  // RULE-BASED LAYERS BECOME SEVERAL CONFIGS, one per rule, before the draw loop ever sees them.
+  // A QGIS rule tree flattens to a list of render layers — each with its own filter, symbol and
+  // zoom range — and that is exactly what `style.rules` holds (see the plugin's rules.py and
+  // portal_generator._rule_layers, which this mirrors). Expanding here rather than branching inside
+  // the loop means every geometry, every marker and every outline is built by the code that already
+  // builds them; a second renderer for rules is how the preview and the published portal drift.
+  //
+  // `rules[0]` draws FIRST (underneath), matching QGIS's own rule order, so the expansion keeps
+  // list order and the surrounding reverse() still applies to LAYERS, not to rules within one.
+  const expandRules = (cfg) => {
+    const rules = cfg.style?.rules
+    if (!Array.isArray(rules) || !rules.length) return [cfg]
+    const base = { ...(cfg.style || {}) }
+    delete base.rules
+    return rules.filter(r => r && typeof r === 'object').map((rule, i) => {
+      const merged = { ...base, ...(rule.style || {}) }
+      // A rule is ONE symbol, never a classification: its colour lives in the rule, so a
+      // color_mode inherited from the layer would classify inside a rule and draw the wrong colour.
+      for (const k of ['color_mode', 'classes', 'categories', 'color_field', 'classes_n']) delete merged[k]
+      return { ...cfg, style: merged, __rule: rule, __ruleIndex: i }
+    })
+  }
+  // MapLibre rejects a whole style over a zoom outside 0-24, and QGIS stores thresholds well past
+  // both ends, so the range is clamped rather than trusted. Twin of _apply_rule_scope.
+  const ruleScope = (cfg) => {
+    const rule = cfg.__rule
+    if (!rule) return {}
+    const out = {}
+    if (rule.filter != null) out.filter = rule.filter
+    for (const key of ['minzoom', 'maxzoom']) {
+      const raw = Number(rule[key])
+      if (!Number.isFinite(raw)) continue
+      const z = Math.max(0, Math.min(24, raw))
+      if ((key === 'minzoom' && z > 0) || (key === 'maxzoom' && z < 24)) out[key] = Math.round(z * 1000) / 1000
+    }
+    return out
+  }
+  //: A rule's layers need ids of their own, or MapLibre sees one layer defined N times.
+  const mlId = (srcId, cfg, suffix) =>
+    `${srcId}${cfg.__rule ? `-r${cfg.__ruleIndex}` : ''}${suffix ? `-${suffix}` : ''}`
+
   // Draw order follows the folder tree (flattened, top→bottom); top of the list draws on top → reverse.
   // Parity with portal_generator.generate_style. Falls back to config order if a node lacks a config.
-  for (const cfg of [...configs].reverse()) {
+  for (const cfg of [...configs].reverse().flatMap(expandRules)) {
     if (cfg.visible === false) continue
     if (cfg.layer_type === 'elevation') { expandBounds(cfg.bbox); continue }  // deck-only (see refreshDeck)
     if (cfg.layer_type === 'vector') {
@@ -108,19 +165,30 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
         continue
       }
       const st = cfg.style || {}
+      // "NO SYMBOLS" IS A RENDERER, not an empty style: QGIS's `nullSymbol` draws nothing while the
+      // layer stays listed and identifiable. Mirrors portal_generator._vector_layers.
+      const drawsNothing = symDrawsNothing(st)
       const opacity = cfg.opacity ?? 1.0
       const geom = (layer.geometry_type || '').toLowerCase()
+      // Where this layer's own render layers start, so the LAYER's zoom range and subset filter can
+      // be applied to all of them below — a QGIS scale range and subset string apply to everything
+      // the layer draws, fill and outline alike. Mirrors portal_generator._scoped.
+      const scopeFrom = style.layers.length
       // Colour may be a data-driven EXPRESSION (graduated / categorized). `lib/symbology` is the
       // twin of services/symbology.py, so the preview and the published portal classify features
       // identically — see the parity note in that file.
       const color = symColorExpression(st)
 
-      if (geom.includes('polygon')) {
+      if (drawsNothing) {
+        // QGIS's "No symbols": no geometry, but the labels below still draw. That is how a layer
+        // kept only for its labels works. Mirrors portal_generator._vector_layers.
+      } else if (geom.includes('polygon')) {
         if (symIsExtruded(st)) {
           // 3D: a different layer TYPE, not a paint variation. Needs pitch to be visible at all —
           // `ensurePitchFor3D` below tilts the preview the first time an extrusion appears.
           style.layers.push({
-            id: srcId, type: 'fill-extrusion', source: srcId, 'source-layer': sourceLayer,
+            id: mlId(srcId, cfg), ...ruleScope(cfg),
+            type: 'fill-extrusion', source: srcId, 'source-layer': sourceLayer,
             paint: symExtrusionPaint(st, opacity),
           })
         } else {
@@ -144,17 +212,23 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
           if (st.outline_color === NO_OUTLINE || wantsOutlineLayer) fillPaint['fill-antialias'] = false
           else fillPaint['fill-outline-color'] = st.outline_color || '#1d4ed8'
           style.layers.push({
-            id: srcId, type: 'fill', source: srcId, 'source-layer': sourceLayer, paint: fillPaint,
+            id: mlId(srcId, cfg), ...ruleScope(cfg),
+            type: 'fill', source: srcId, 'source-layer': sourceLayer, paint: fillPaint,
           })
           if (wantsOutlineLayer) {
             style.layers.push({
-              id: `${srcId}-outline`, type: 'line', source: srcId, 'source-layer': sourceLayer,
+              id: mlId(srcId, cfg, 'outline'), ...ruleScope(cfg),
+              type: 'line', source: srcId, 'source-layer': sourceLayer,
               paint: {
                 'line-color': st.outline_color || '#1d4ed8',
                 'line-width': outlineWidth,
                 // The layer's opacity, not the fill's: a 45% wash with a solid border is the
                 // ordinary way to draw a polygon.
                 'line-opacity': opacity,
+                // An outline IS a line, so the line vocabulary applies to it. Mirrors
+                // portal_generator._outline_paint.
+                ...(symDashArray(st) ? { 'line-dasharray': symDashArray(st) } : {}),
+                ...(symLineOffset(st) != null ? { 'line-offset': symLineOffset(st) } : {}),
               },
             })
           }
@@ -165,10 +239,17 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
           'line-width': symSizeExpression(st, st.line_width ?? 2),
           'line-opacity': opacity,
         }
-        if (st.lineType === 'dashed') linePaint['line-dasharray'] = [2, 1.5]
-        else if (st.lineType === 'dotted') linePaint['line-dasharray'] = [0.4, 1.8]
+        // An explicit `dash_pattern` (QGIS's custom dash vector) wins over the two named presets;
+        // both are in line-width multiples, which is MapLibre's unit. Mirrors _vector_layer.
+        const dashes = symDashArray(st)
+        if (dashes) linePaint['line-dasharray'] = dashes
+        const lineOff = symLineOffset(st)
+        if (lineOff != null) linePaint['line-offset'] = lineOff
+        const lineLay = symLineLayout(st)
         style.layers.push({
-          id: srcId, type: 'line', source: srcId, 'source-layer': sourceLayer, paint: linePaint,
+          id: mlId(srcId, cfg), ...ruleScope(cfg),
+          type: 'line', source: srcId, 'source-layer': sourceLayer, paint: linePaint,
+          ...(Object.keys(lineLay).length ? { layout: lineLay } : {}),
         })
       } else if (symIsExtruded(st) && layer.storage_backend !== 'geoparquet') {
         // POINTS IN 3D: pillars. MapLibre extrudes fills only, so the geometry has to become a
@@ -187,7 +268,8 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
           minzoom: 0, maxzoom: 22,
         }
         style.layers.push({
-          id: srcId, type: 'fill-extrusion', source: pillarSrc, 'source-layer': 'pillars',
+          id: mlId(srcId, cfg), ...ruleScope(cfg),
+          type: 'fill-extrusion', source: pillarSrc, 'source-layer': 'pillars',
           paint: symExtrusionPaint(st, opacity),
         })
       } else {
@@ -197,15 +279,47 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
         // these disagree, the preview shows a style the portal will not render.
         symMarkerImages(st).forEach((im) => { markerSpecs[im.id] = im })
         style.layers.push({
-          id: srcId, type: 'symbol', source: srcId, 'source-layer': sourceLayer,
+          id: mlId(srcId, cfg), ...ruleScope(cfg),
+          type: 'symbol', source: srcId, 'source-layer': sourceLayer,
           layout: {
+            ...symMarkerLayout(st),
             'icon-image': symIconImageExpression(st),
             'icon-size': symIconSizeExpression(st),
             'icon-allow-overlap': true,
             'icon-ignore-placement': true,
           },
-          paint: { 'icon-opacity': opacity },
+          paint: { 'icon-opacity': symMarkerOpacity(st, opacity) },
         })
+      }
+
+      // LABELS: their own `symbol` layer, pushed after the geometry so they draw above it. A label
+      // has its own zoom range, must sit above every geometry, and a point layer's own layer is
+      // already a symbol layer carrying an icon — so merging the two would tie a label's placement
+      // to its marker's. Mirrors portal_generator._label_layer.
+      const labels = symLabelsOf(st)
+      if (Object.keys(labels).length) {
+        style.layers.push({
+          id: `${srcId}-labels`,
+          type: 'symbol', source: srcId, 'source-layer': sourceLayer,
+          layout: symLabelLayout(labels),
+          paint: symLabelPaint(labels, opacity),
+          ...symLabelScope(labels),
+        })
+      }
+
+      // The LAYER's own zoom range and subset filter onto everything it just pushed. A rule's zoom
+      // range is already the narrower one where both exist, so it is not overwritten; a rule's
+      // filter is ANDed with the layer's, because in QGIS both are true at once. Mirrors
+      // portal_generator._scoped.
+      const scope = symLayerScope(st)
+      if (Object.keys(scope).length) {
+        const ownFilter = scope.filter
+        for (const ml of style.layers.slice(scopeFrom)) {
+          for (const [k, v] of Object.entries(scope)) {
+            if (k !== 'filter' && ml[k] === undefined) ml[k] = v
+          }
+          if (ownFilter != null) ml.filter = symCombinedFilter(ml.filter, ownFilter)
+        }
       }
 
       expandBounds(layer.bbox)

@@ -80,7 +80,7 @@
                 <div v-if="colorMode === 'graduated' && config.style?.color_field" class="flex gap-1.5">
                   <label class="flex-1">
                     <span class="text-[11px] text-muted-foreground">Classes</span>
-                    <input type="number" min="2" max="12" :value="classCount" @change="setClassCount($event.target.value)"
+                    <input type="number" min="2" max="100" :value="classCount" @change="setClassCount($event.target.value)"
                       class="w-full text-xs border border-border rounded px-1.5 py-1 mt-0.5" />
                   </label>
                   <label class="flex-[1.4]">
@@ -851,7 +851,10 @@ function pickColorField(field) {
 }
 // 12, not 9: the server clamps `classes` to 12 in routers/data/vector.py, and a control that stops
 // at 9 silently refuses counts the classifier would have produced (issue #10).
-function setClassCount(n) { refreshClasses({ classes_n: Math.max(2, Math.min(12, parseInt(n) || 5)) }) }
+// 2-100, matching the server's clamp in `field-stats`. The old ceiling of 12 was working around
+// `rampColors` snapping to one of seven anchor stops — twelve classes in seven colours — which is
+// fixed; QGIS has no cap here and neither should this.
+function setClassCount(n) { refreshClasses({ classes_n: Math.max(2, Math.min(100, parseInt(n) || 5)) }) }
 function setMethod(m) { refreshClasses({ class_method: m }) }
 function setRamp(r) { refreshClasses({ color_ramp: r }) }
 /**

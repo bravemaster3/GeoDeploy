@@ -71,3 +71,32 @@ export function setMarkerSpecs(map, specs) {
   if (!map) return
   map.__gdMarkerSpecs = { ...(map.__gdMarkerSpecs || {}), ...(specs || {}) }
 }
+
+
+/**
+ * Register a marker bitmap the plugin RENDERED, rather than one drawn from a shape name.
+ *
+ * A QGIS symbol GeoDeploy has no words for — an SVG marker, a raster or font marker, a multi-layer
+ * symbol — arrives as a PNG data URI. There is nothing to draw and nothing to parameterise: the
+ * pixels are the marker. Asynchronous because decoding an image is, which is why this returns a
+ * promise rather than an ImageData like `markerImage` does.
+ *
+ * The twin lives in `templates/shared/portal.js::setMarkerPicture`.
+ */
+export function loadMarkerPicture(map, id, dataUri) {
+  return new Promise((resolve) => {
+    if (!map || !id || !dataUri) return resolve(false)
+    const img = new Image()
+    img.onload = () => {
+      try {
+        // pixelRatio 2: the plugin renders at twice the marker's CSS size so the icon stays crisp,
+        // the same trade `markerImage` makes with its own canvas.
+        if (map.hasImage(id)) map.updateImage(id, img)
+        else map.addImage(id, img, { pixelRatio: 2 })
+      } catch (e) { /* one marker is not worth the map */ }
+      resolve(true)
+    }
+    img.onerror = () => resolve(false)
+    img.src = dataUri
+  })
+}

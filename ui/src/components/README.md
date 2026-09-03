@@ -91,6 +91,10 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
 
 ## Dependencies / relationships
 - Read/write through `../../stores/` (mostly `data` and `portals`) and call the backend via `../../api`.
+- `LayerPanel.vue`'s class-count spin box is **2–100** (2026-09-03), matching the server's clamp in
+  `field-stats`. It was 2–12, and that cap was working around `rampColors` snapping to one of seven
+  anchor stops — twelve classes came out in seven colours. Ramps interpolate now, so N classes give
+  N distinct colours; see `api/geodeploy/services/README.md` for the parity note.
 - `LayerPanel.vue` reads layer metadata (`columns`, `geometry_type`, `band_count`, `default_style`) from the data store; its style fields must stay consistent with the paint logic in `views/PortalEditor.vue` and the backend `portal_generator.py`.
 - Icons from `../../views/icons.js`.
 
