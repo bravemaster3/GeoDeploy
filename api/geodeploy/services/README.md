@@ -167,6 +167,48 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
 ## Dependencies / relationships
 - `postgis.py`/`minio.py` talk to the Docker daemon (`docker.from_env()`) and reuse each other's constants. They are called from `routers/setup.py`.
 - `martin.py` is called from `routers/data/vector.py` (on upload/delete), `routers/admin.py` (manual reload), and `tasks/vector_ingest.py` (after ingest).
+- **Rule-based layers (2026-09-03):** `portal_generator._rule_layers` emits **one render layer per
+  rule** in `style.rules`, each built by the ordinary `_vector_layer` path from the layer's style
+  with the rule's laid over it — so a rule is drawn by the code that already draws everything else,
+  rather than by a second renderer. The rule's `filter` and its `minzoom`/`maxzoom` are applied by
+  `_apply_rule_scope`, which **clamps the zoom range to 0–24**: QGIS stores scale thresholds well
+  outside that, and one out-of-range number makes MapLibre reject the WHOLE style. Ids are
+  `vector-{id}-r{n}` (plus `-outline`). Rules take precedence over the `style.maplibre` raw-paint
+  passthrough. **PARITY: `ui/src/lib/mapStyle.js` expands the same list before its draw loop**
+  (`expandRules` / `ruleScope` / `mlId`) — change both together. Pinned by `tests/test_rule_layers.py`.
+- **Ramps interpolate, and the class cap is 100 (2026-09-03):** `symbology.ramp_colors` blends
+  between a ramp's seven anchor stops instead of snapping to the nearest. Snapping had a ceiling
+  nobody had written down — **eight classes produced seven colours and twelve produced seven** — so
+  two classes were drawn identically under a legend saying they differed, and *that* is what the old
+  12-class cap was working around. `field-stats` now clamps to 2–100 (QGIS has never capped it), and
+  `LayerPanel.vue`'s spin box matches. Past twelve categories, `symbology.category_color` hands out a
+  golden-ratio hue wheel rather than cycling the palette, so a 40-value column gets 40 distinct
+  colours; it is deterministic, so a category keeps its colour when the data gains a value.
+  **PARITY: `ui/src/lib/symbology.js` holds `rampColors`/`blend`/`categoryColor`/`hslHex` as exact
+  twins** — verified byte-for-byte over every ramp × {1,2,3,5,7,8,9,12,20,50} plus 60 categories.
+  Note this CHANGES the colours a newly computed ramp produces (stored styles keep theirs, since a
+  class carries its own colour).
+- **Labels (2026-09-03), new to the platform:** `style.labels` becomes its own MapLibre `symbol`
+  layer via `symbology.label_layout` / `label_paint` / `label_scope` and
+  `portal_generator._label_layer`. Its OWN layer, not text on the geometry's, for three reasons that
+  would each be a bug otherwise: a label has its own zoom range, it must draw above every geometry
+  (layer order is the only thing that decides that), and a point layer's own layer is already a
+  `symbol` layer carrying an icon. Emitted for rule-based layers too, and it is the ONLY thing
+  emitted when `no_symbol` is set — which is how a layer kept for its labels works.
+- **Glyphs:** `routers/fonts.py` serves `/api/fonts/{fontstack}/{range}.pbf` from
+  `templates/shared/fonts/` when a set is installed and **redirects to MapLibre's public set**
+  otherwise. Both style builders name that one route: only the server knows what is installed, and
+  if `portal_generator` and `mapStyle.js` each guessed they would disagree the moment an operator
+  installed a set. A fontstack the glyph source lacks draws **nothing at all** — no error — which is
+  why `LABEL_FONTS` is a short allow-list and an unknown font falls back rather than being carried.
+- **Marker pictures (2026-09-03):** `style.marker_image` is a PNG data URI the QGIS plugin renders
+  from a symbol GeoDeploy cannot describe. `symbology.picture_id` (FNV-1a, content-addressed, twinned
+  in `ui/src/lib/symbology.js`) names it; `icon_image_expression` returns that id in preference to a
+  generated shape, and `marker_images` emits `{id, image}` so the runtime registers it from the
+  pixels. **A picture is ONE image for every feature** — a bitmap cannot be recoloured per class the
+  way a canvas shape can — so a classified layer keeps its classification everywhere except the
+  icon. `templates/shared/portal.js::setMarkerPicture` and `ui/src/lib/markerImage.js::loadMarkerPicture`
+  are the two runtime halves; both register with `pixelRatio: 2`, matching the plugin's render scale.
 - `titiler.py` is called from `routers/data/raster.py` and `portal_generator.py`.
 - `portal_generator.py` reads `templates/` (mounted at `/templates`) and writes `data/portals/`.
 - `cog_converter.py` is called from `tasks/raster_ingest.py`.

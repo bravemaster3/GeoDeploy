@@ -332,6 +332,16 @@ deliberately NOT visibility-filtered (published portals depend on them).
   the author PLACED, so a dashboard-only layer never appears in the layer list or the legend.
 - `data/__init__.py`, `__init__.py` — package markers.
 
+- `fonts.py` (2026-09-03) — `GET /api/fonts/{fontstack}/{range}.pbf`, and **public on purpose**: a
+  published portal is read by anonymous visitors, and glyphs behind a login would draw no labels for
+  any of them. Serves this instance's own set from `templates/shared/fonts/` when one is installed,
+  and **302s to MapLibre's public set** otherwise — so a fresh install still draws labels instead of
+  leaving every one blank, and an operator who bundles fonts gets self-hosting with no config. Both
+  style builders (`services/portal_generator.GLYPHS_URL` and `ui/src/lib/mapStyle.js`) name this one
+  route, because only the server knows what is installed. The fontstack and range are regex-checked
+  **and** the resolved path is confirmed to sit inside the font directory: the value comes from the
+  URL and is used to read a file.
+
 ## Dependencies / relationships
 - Depends on `..services` (provisioning, tile URLs, portal generation), `..tasks` (Celery dispatch), `..models`, `..schemas`, `..deps` (auth), `..database`.
 - All vector tile URLs handed to the frontend are built by `services.martin.get_tile_url`; raster by `services.titiler.get_tile_url`. If a tile path format changes, change it there, not here.

@@ -1282,7 +1282,13 @@ async def field_stats(
     if known and field not in known:
         raise HTTPException(400, f"No such field on this layer: {field}")
 
-    classes = max(2, min(int(classes), 12))
+    # UP TO 100 CLASSES. The old ceiling was 12 and it was working around a defect rather than a
+    # limit: `ramp_colors` snapped to the nearest of seven anchor stops, so twelve classes came out
+    # in SEVEN colours. That is fixed (it interpolates now), and QGIS has never had a cap here — a
+    # graduated layer with twenty classes is an ordinary thing to build. 100 is high enough to stop
+    # being the thing anyone notices and low enough that a runaway request cannot ask the database
+    # for a legend nobody could read.
+    classes = max(2, min(int(classes), 100))
     if method not in ("quantile", "equal", "jenks"):
         raise HTTPException(400, "method must be quantile, equal or jenks.")
 

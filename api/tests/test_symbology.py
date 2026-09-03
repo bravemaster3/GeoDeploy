@@ -395,10 +395,61 @@ def test_data_driven_detection_still_reports_per_feature_variation():
 # ── Ramps ────────────────────────────────────────────────────────────────────────────────────────
 
 def test_a_ramp_yields_the_requested_number_of_distinct_colours():
-    for n in (3, 5, 7, 9):
-        colors = sym.ramp_colors("viridis", n)
-        assert len(colors) == n
-        assert colors[0] != colors[-1]
+    """EVERY count, not just the small ones — and DISTINCT, which is the part that used to fail.
+
+    The ramps are seven anchor stops. Snapping to the nearest of them meant eight classes came out
+    in seven colours and twelve in seven, so a graduated legend could name two classes that were
+    drawn identically. That is what capped the class count at 12; interpolating removes both the
+    duplicates and the reason for the cap.
+    """
+    for name in sym.RAMPS:
+        for n in (2, 3, 5, 7, 8, 9, 12, 20, 50, 100):
+            colors = sym.ramp_colors(name, n)
+            assert len(colors) == n, (name, n)
+            assert len(set(colors)) == n, (name, n, "repeated colours")
+            assert colors[0] != colors[-1]
+
+
+def test_the_ends_of_a_ramp_are_always_its_own_ends():
+    """Interpolation must not drift off the ramp: whatever the count, the first and last colours are
+    the ramp's own first and last, or a legend's extremes stop meaning "the extreme"."""
+    for name, stops in sym.RAMPS.items():
+        for n in (2, 5, 13, 40):
+            colors = sym.ramp_colors(name, n)
+            assert colors[0] == stops[0] and colors[-1] == stops[-1], (name, n)
+
+
+# ── Qualitative colours, past the twelve that are hand-picked ────────────────────────────────────
+
+def test_categories_keep_getting_distinct_colours_past_the_palette():
+    """Cycling `CATEGORY_COLORS` drew category 13 exactly like category 1. QGIS never does that —
+    its random ramp keeps generating — and a categorized layer over a 30-value column is ordinary."""
+    colors = [sym.category_color(i) for i in range(120)]
+    assert len(set(colors)) == 120
+
+
+def test_the_hand_picked_twelve_come_first_and_are_unchanged():
+    """Existing layers must not be recoloured: the first twelve are the palette they always were."""
+    assert [sym.category_color(i) for i in range(12)] == sym.CATEGORY_COLORS
+
+
+def test_a_categorys_colour_does_not_move_when_the_data_gains_a_value():
+    """Deterministic, not random: adding a 20th value must not repaint the other nineteen."""
+    assert sym.category_color(18) == sym.category_color(18)
+    before = [sym.category_color(i) for i in range(19)]
+    after = [sym.category_color(i) for i in range(20)]
+    assert after[:19] == before
+
+
+def test_generated_colours_are_valid_hex():
+    for i in range(12, 200):
+        c = sym.category_color(i)
+        assert len(c) == 7 and c[0] == "#" and int(c[1:], 16) >= 0
+
+
+def test_build_categories_uses_the_generated_palette_beyond_twelve():
+    cats = sym.build_categories(["v{0}".format(i) for i in range(40)])
+    assert len({c["color"] for c in cats}) == 40
 
 
 def test_an_unknown_ramp_falls_back_rather_than_failing():
@@ -416,12 +467,16 @@ def test_the_sampled_colours_are_pinned_against_the_javascript_twin():
     editor preview no longer matches what the portal publishes.
     """
     assert sym.ramp_colors("viridis", 5) == [
-        "#440154", "#365c8d", "#277f8e", "#4ac16d", "#fde725"]
+        "#440154", "#3e4786", "#277f8e", "#35b17a", "#fde725"]
     assert sym.ramp_colors("magma", 5) == [
-        "#000004", "#8c2981", "#de4968", "#fecf92", "#fcfdbf"]
+        "#000004", "#641c79", "#de4968", "#feb780", "#fcfdbf"]
+    # NINE CLASSES, NINE COLOURS. This list used to read
+    #   "#f7fbff", "#deebf7", "#c6dbef", "#c6dbef", "#9ecae1", "#6baed6", "#3182bd", "#3182bd", …
+    # — the duplicates pinned as expected behaviour, because sampling snapped to the nearest of
+    # seven anchor stops. Two classes were drawn identically under a legend saying they differed.
     assert sym.ramp_colors("blues", 9) == [
-        "#f7fbff", "#deebf7", "#c6dbef", "#c6dbef", "#9ecae1",
-        "#6baed6", "#3182bd", "#3182bd", "#08519c"]
+        "#f7fbff", "#e4eff9", "#d2e3f3", "#bcd7ec", "#9ecae1",
+        "#78b5d9", "#4e98ca", "#2776b5", "#08519c"]
 
 
 # ── Reversing a ramp (issue #11) ─────────────────────────────────────────────────────────────────

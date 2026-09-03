@@ -78,14 +78,61 @@ CATEGORY_COLORS: list[str] = [
 DEFAULT_COLOR = "#3b82f6"
 DEFAULT_OTHER_COLOR = "#9ca3af"
 
+#: The reciprocal golden ratio. Stepping a hue wheel by it spreads any number of categories about as
+#: far apart as they can be, and — unlike a random palette — the Nth colour is the same every time,
+#: which is what stops a category changing colour when the data gains a value.
+_GOLDEN = 0.6180339887498949
+
+
+def category_color(index: int) -> str:
+    """The colour for the `index`-th category, for as many categories as a layer has.
+
+    The twelve hand-picked colours come first because they are the most distinguishable set and
+    cover the common cases. Past those, cycling would draw two categories identically — which QGIS
+    never does, since its random ramp keeps generating — so the wheel takes over: the hue advances
+    by the golden ratio and the lightness and saturation alternate, giving neighbours in the legend
+    a difference in value as well as in hue.
+    """
+    if index < len(CATEGORY_COLORS):
+        return CATEGORY_COLORS[index]
+    n = index - len(CATEGORY_COLORS)
+    hue = (n * _GOLDEN) % 1.0
+    sat = 0.58 + 0.16 * (n % 2)
+    light = 0.42 + 0.14 * ((n // 2) % 3)
+    return _hsl_hex(hue, sat, light)
+
+
+def _hsl_hex(h: float, s: float, ll: float) -> str:
+    """HSL (0-1) to `#rrggbb`. Written to be transliterated: the twin in `ui/src/lib/symbology.js`
+    is the same arithmetic, and `int(x + 0.5)` is half-up in both languages where round() is not."""
+    def channel(p, q, t):
+        t = t % 1.0
+        if t < 1 / 6:
+            return p + (q - p) * 6 * t
+        if t < 1 / 2:
+            return q
+        if t < 2 / 3:
+            return p + (q - p) * (2 / 3 - t) * 6
+        return p
+    q = ll * (1 + s) if ll < 0.5 else ll + s - ll * s
+    p = 2 * ll - q
+    return "#{0:02x}{1:02x}{2:02x}".format(
+        int(channel(p, q, h + 1 / 3) * 255 + 0.5),
+        int(channel(p, q, h) * 255 + 0.5),
+        int(channel(p, q, h - 1 / 3) * 255 + 0.5))
+
 
 def ramp_colors(name: str, count: int, reverse: bool = False) -> list[str]:
     """`count` colours sampled evenly from a named ramp, optionally end-to-end reversed.
 
-    Nearest-stop sampling, not channel interpolation: the ramps above are already perceptually
-    tuned, and a hand-rolled RGB blend between two of their stops can leave the uniform path — the
-    property that makes them worth using. For the class counts a legend can actually be read at
-    (3–9) the sampled stops are visually distinct anyway.
+    INTERPOLATED between the anchor stops, not snapped to the nearest one. Snapping was the earlier
+    behaviour and it had a hard ceiling nobody had written down: the ramps are defined by seven
+    stops, so **eight classes produced seven colours and twelve produced seven** — two classes
+    drawn identically, in a legend that says they are different. That is why the class count was
+    capped at twelve, and the cap was treating the symptom.
+    Interpolating between adjacent stops of an already perceptually-tuned ramp stays close enough to
+    the uniform path to be the right trade — and it is what QGIS and matplotlib do with the same
+    ramps, so a GeoDeploy legend and a QGIS one now agree at every class count.
 
     `reverse` is a FLAG rather than a second table of reversed ramps: which end means "high" is a
     cartographic choice (a dark basemap often wants the light end for low values), and doubling nine
@@ -101,12 +148,30 @@ def ramp_colors(name: str, count: int, reverse: bool = False) -> list[str]:
     out = []
     for i in range(count):
         pos = i * (len(stops) - 1) / (count - 1)
-        # `int(pos + 0.5)`, NOT `round()`. Python's round() is round-half-to-EVEN and JavaScript's
-        # Math.round() is round-half-UP, so the twin in ui/src/lib/symbology.js picked a different
-        # stop wherever `pos` landed on .5 — which is every 5- and 9-class ramp, in all nine ramps.
-        # Half-up is expressible identically in both languages, so the two cannot drift again.
-        out.append(stops[int(pos + 0.5)])
+        lo = int(pos)
+        hi = min(lo + 1, len(stops) - 1)
+        out.append(_blend(stops[lo], stops[hi], pos - lo))
     return out[::-1] if reverse else out
+
+
+def _blend(a: str, b: str, t: float) -> str:
+    """`a` and `b` mixed in RGB, `t` from 0 to 1, as `#rrggbb`.
+
+    `int(x + 0.5)`, NOT `round()`. Python's round() is round-half-to-EVEN and JavaScript's
+    Math.round() is round-half-UP, so the twin in `ui/src/lib/symbology.js` would land on a
+    different byte wherever a channel came out on .5. Half-up is expressible identically in both
+    languages, so the two cannot drift.
+    """
+    if t <= 0:
+        return a
+    if t >= 1:
+        return b
+    ar, ag, ab = int(a[1:3], 16), int(a[3:5], 16), int(a[5:7], 16)
+    br, bg, bb = int(b[1:3], 16), int(b[3:5], 16), int(b[5:7], 16)
+    return "#{0:02x}{1:02x}{2:02x}".format(
+        int(ar + (br - ar) * t + 0.5),
+        int(ag + (bg - ag) * t + 0.5),
+        int(ab + (bb - ab) * t + 0.5))
 
 
 # ── Classification ───────────────────────────────────────────────────────────────────────────────
@@ -234,7 +299,7 @@ def build_categories(values: list, ramp: str | None = None,
             colors = ramp_colors(ramp, max(len(values), 1), reverse)
             color = colors[i] if i < len(colors) else DEFAULT_OTHER_COLOR
         else:
-            color = CATEGORY_COLORS[i % len(CATEGORY_COLORS)]
+            color = category_color(i)
         out.append({"value": v, "color": color})
     return out
 
@@ -477,6 +542,32 @@ def marker_image_id(shape: str, color: str, size, outline: str | None = DEFAULT_
     return f"gd-pt-{(shape or 'circle')}-{hexish}-{_px(size)}-{ohex}-{ow}"
 
 
+def picture_id(data_uri: str) -> str:
+    """The id for a marker PICTURE — a bitmap rendered from a symbol GeoDeploy cannot describe.
+
+    CONTENT-ADDRESSED, like `marker_image_id`, and for the same reason: fifty layers using the same
+    airport icon should register one image, not fifty. FNV-1a because it has to produce the identical
+    id in `ui/src/lib/symbology.js` — a hash whose implementations disagreed would have the editor
+    preview asking for an image the published portal never registers.
+    """
+    h = 0x811c9dc5
+    for ch in (data_uri or ""):
+        h = ((h ^ (ord(ch) & 0xFF)) * 0x01000193) & 0xFFFFFFFF
+    return "gd-img-{0:08x}".format(h)
+
+
+def marker_picture(style: dict):
+    """The marker bitmap this style carries, or None.
+
+    A `marker_image` is what the QGIS plugin sends when the author's symbol is one GeoDeploy has no
+    words for — an SVG marker, a raster marker, a font marker, a filled or ellipse marker, or a
+    multi-layer symbol. Rather than approximate it as a coloured dot, the plugin renders the SYMBOL
+    ITSELF to a PNG and ships the pixels, so the portal draws the picture the author drew.
+    """
+    uri = style.get("marker_image")
+    return uri if isinstance(uri, str) and uri.startswith("data:image/") else None
+
+
 def icon_image_expression(style: dict):
     """`icon-image` for a point layer: one id, or a data-driven choice between per-class ids.
 
@@ -484,6 +575,14 @@ def icon_image_expression(style: dict):
     feature gets is the class its colour would have been. Anything else would be a second
     classification that could disagree with the first.
     """
+    # A PICTURE WINS OVER A SHAPE. When the plugin has sent the rendered symbol, that bitmap is the
+    # marker — and it is ONE image for every feature, because a raster icon cannot be recoloured per
+    # class the way a generated shape can. A classified layer keeps its classification everywhere
+    # else (a line's colour, a polygon's fill); only the icon stops varying.
+    picture = marker_picture(style)
+    if picture:
+        return picture_id(picture)
+
     shape = style.get("marker") or "circle"
     size = style.get("radius", 5)
     ol, ow = marker_outline(style)
@@ -526,6 +625,12 @@ def marker_images(style: dict) -> list[dict]:
     discovering them one `styleimagemissing` event at a time — with a classified layer, that would
     otherwise be a visible pop-in of markers as each class first appears on screen.
     """
+    picture = marker_picture(style)
+    if picture:
+        # One entry, carrying the PIXELS. The runtime registers it from the data URI instead of
+        # drawing a shape — see `setMarkerImage` in templates/shared/portal.js.
+        return [{"id": picture_id(picture), "image": picture}]
+
     shape = style.get("marker") or "circle"
     size = style.get("radius", 5)
     ol, ow = marker_outline(style)
@@ -562,6 +667,307 @@ def icon_size_expression(style: dict):
     if expr is None:
         return 1
     return ["/", expr, base]
+
+
+# ── Line decoration, marker placement, and layer scope ───────────────────────────────────────────
+# Added 2026-09-03 for the QGIS round trip. Every one of these is something MapLibre draws natively
+# and GeoDeploy simply had no word for, so each is an EXACT round trip rather than an approximation.
+# The twins are `ui/src/lib/symbology.js` (editor preview) and `portal_generator` (published style).
+
+#: `lineType` as a dash array, in MULTIPLES OF THE LINE WIDTH — which is the unit MapLibre's
+#: `line-dasharray` uses, and the reason a dash pattern is stored that way rather than in pixels: a
+#: pattern in absolute units would change shape every time somebody changed the width.
+LINE_TYPE_DASHES = {"dashed": [2, 1.5], "dotted": [0.4, 1.8]}
+
+_LINE_CAPS = ("butt", "round", "square")
+_LINE_JOINS = ("bevel", "round", "miter")
+
+
+def dash_array(style: dict):
+    """The `line-dasharray` for a style, or None for a solid line.
+
+    An explicit `dash_pattern` wins over `lineType`: the named types are the two presets a web map
+    always had, and a pattern read out of QGIS is the real thing the author drew.
+    """
+    pattern = style.get("dash_pattern")
+    if isinstance(pattern, (list, tuple)) and len(pattern) >= 2:
+        out = []
+        for value in pattern:
+            try:
+                out.append(round(float(value), 4))
+            except (TypeError, ValueError):
+                return None
+        # MapLibre wants pairs; an odd-length pattern repeats inverted, which is not what QGIS drew.
+        return out if len(out) % 2 == 0 else out + [out[-1]]
+    return LINE_TYPE_DASHES.get(style.get("lineType"))
+
+
+def line_layout(style: dict) -> dict:
+    """`line-cap` / `line-join` — LAYOUT properties, not paint, which is why they are their own dict."""
+    out = {}
+    cap = str(style.get("line_cap") or "").lower()
+    join = str(style.get("line_join") or "").lower()
+    if cap in _LINE_CAPS:
+        out["line-cap"] = cap
+    if join in _LINE_JOINS:
+        out["line-join"] = join
+    return out
+
+
+def line_offset(style: dict):
+    """`line-offset` in pixels, or None. Positive is to the LEFT of the direction of travel in
+    MapLibre and to the right in QGIS, so the sign is flipped where it is read, not here."""
+    value = style.get("line_offset")
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return round(value, 3) if value else None
+
+
+def marker_layout(style: dict) -> dict:
+    """`icon-rotate` and `icon-offset` for a point layer.
+
+    `icon-offset` is in units of the ICON's own size in MapLibre, and GeoDeploy states it in CSS
+    pixels like every other size, so it is divided by the generated bitmap's size at render time —
+    see `icon_size_expression` for why the bitmap is drawn at a fixed size and scaled.
+    """
+    out = {}
+    rotation = style.get("marker_rotation")
+    try:
+        rotation = float(rotation)
+    except (TypeError, ValueError):
+        rotation = None
+    if rotation:
+        out["icon-rotate"] = round(rotation % 360, 3)
+    offset = style.get("marker_offset")
+    if isinstance(offset, (list, tuple)) and len(offset) == 2:
+        try:
+            out["icon-offset"] = [round(float(offset[0]), 3), round(float(offset[1]), 3)]
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def marker_opacity(style: dict, opacity: float) -> float:
+    """The layer's opacity times the marker's own, which QGIS keeps separately."""
+    own = style.get("marker_opacity")
+    try:
+        own = float(own)
+    except (TypeError, ValueError):
+        return opacity
+    return round(opacity * max(0.0, min(1.0, own)), 4)
+
+
+def layer_scope(style: dict) -> dict:
+    """`minzoom` / `maxzoom` / `filter` that belong to the LAYER rather than to one render layer.
+
+    A QGIS layer carries a scale range and a subset string, and both apply to everything it draws —
+    a polygon's fill AND its outline, every rule of a rule-based renderer. So they are applied by
+    the caller to every render layer a style emits, not baked into one of them.
+
+    The zoom range is clamped to MapLibre's own 0-24: QGIS stores scale thresholds far outside it,
+    and one out-of-range number makes MapLibre reject the WHOLE style rather than ignore it. The
+    twin of this clamp is `_apply_rule_scope`, which does the same for a rule.
+    """
+    out = {}
+    for key in ("minzoom", "maxzoom"):
+        value = style.get(key)
+        if value is None:
+            continue
+        try:
+            value = max(0.0, min(24.0, float(value)))
+        except (TypeError, ValueError):
+            continue
+        if (key == "minzoom" and value > 0) or (key == "maxzoom" and value < 24):
+            out[key] = round(value, 3)
+    if style.get("filter") is not None:
+        out["filter"] = style["filter"]
+    return out
+
+
+def combined_filter(a, b):
+    """Two MapLibre filters ANDed, flattened. Either may be None."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    parts = []
+    for node in (a, b):
+        if isinstance(node, list) and node and node[0] == "all":
+            parts.extend(node[1:])
+        else:
+            parts.append(node)
+    return ["all"] + parts
+
+
+def draws_nothing(style: dict) -> bool:
+    """QGIS's "No symbols" renderer: the layer is listed and legible, and draws nothing."""
+    return bool(style.get("no_symbol"))
+
+
+# ── Labels ───────────────────────────────────────────────────────────────────────────────────────
+# `style.labels` is its own block rather than more top-level keys, because a label is a second thing
+# drawn for the same feature: it has its own colour, its own size, its own zoom range, and it is
+# emitted as its own MapLibre `symbol` layer so it can sit above every geometry on the map.
+#
+#     labels = {"enabled": bool,
+#               "field": "name",                    the common case — one attribute
+#               "expression": <maplibre expr>,      …or anything the translator produced
+#               "qgis_expression": "…",             the QGIS source, carried for the round trip
+#               "font": "Noto Sans Regular", "size": 12, "color": "#000",
+#               "halo_color": "#fff", "halo_width": 1,
+#               "offset": [x, y], "rotation": 0, "anchor": "center",
+#               "placement": "point" | "line", "max_width": 10,
+#               "transform": "none" | "uppercase" | "lowercase",
+#               "letter_spacing": 0, "allow_overlap": False, "priority": 0,
+#               "minzoom": n, "maxzoom": n}
+
+#: The faces SHIPPED with GeoDeploy. Not a limit: `templates/shared/fonts/` is a drop-in directory
+#: and `routers/fonts.py` serves and lists whatever is in it, so an operator can add Noto Serif,
+#: Noto Sans Mono or anything else with `scripts/build_glyphs.js`. This tuple is what a UI offers
+#: when it has not asked the instance, and what `GET /api/fonts` returns on a default install.
+LABEL_FONTS = ("Noto Sans Regular", "Noto Sans Bold", "Noto Sans Italic")
+DEFAULT_LABEL_FONT = "Noto Sans Regular"
+DEFAULT_LABEL_SIZE = 12
+DEFAULT_LABEL_COLOR = "#333333"
+DEFAULT_LABEL_HALO = "#ffffff"
+
+_ANCHORS = ("center", "left", "right", "top", "bottom",
+            "top-left", "top-right", "bottom-left", "bottom-right")
+_TRANSFORMS = ("none", "uppercase", "lowercase")
+
+
+def labels_of(style: dict) -> dict:
+    """The label block when a layer is labelled, else `{}`."""
+    labels = (style or {}).get("labels")
+    if not isinstance(labels, dict) or not labels.get("enabled"):
+        return {}
+    # A label with nothing to say draws nothing; `text-field` is the one key with no default.
+    return labels if (labels.get("field") or labels.get("expression") is not None) else {}
+
+
+def label_text(labels: dict):
+    """The `text-field` value: a translated expression if there is one, else a plain field read.
+
+    An EXPRESSION wins over a field name because a QGIS label is an expression in the general case —
+    `"name" || ' (' || "year" || ')'` is an ordinary thing to label with — and the translator has
+    already turned it into something MapLibre can evaluate.
+    """
+    expression = labels.get("expression")
+    if expression is not None:
+        return expression
+    # `to-string` because MapLibre's text-field wants a string and a numeric column is common.
+    return ["to-string", ["get", str(labels.get("field"))]]
+
+
+def label_layout(labels: dict) -> dict:
+    """The `layout` half of a label layer — everything about placement and glyph selection."""
+    size = _label_num(labels.get("size"), DEFAULT_LABEL_SIZE)
+    out = {
+        "text-field": label_text(labels),
+        "text-font": font_stack(labels.get("font")),
+        "text-size": size,
+        # Labels are the one thing on the map that MUST be allowed to move out of the way of each
+        # other, so overlap stays off unless the author asked for it.
+        "text-allow-overlap": bool(labels.get("allow_overlap")),
+    }
+    placement = str(labels.get("placement") or "point").lower()
+    if placement == "line":
+        # QGIS's "curved" and "parallel to line" both become this: MapLibre bends the text along
+        # the geometry, which is the same intent and not the same algorithm.
+        out["symbol-placement"] = "line"
+
+    anchor = str(labels.get("anchor") or "").lower()
+    if anchor in _ANCHORS:
+        out["text-anchor"] = anchor
+
+    offset = labels.get("offset")
+    if isinstance(offset, (list, tuple)) and len(offset) == 2 and size:
+        # `text-offset` is in EMS, and GeoDeploy states every offset in pixels — so it is divided by
+        # the text size, which is what an em is.
+        try:
+            out["text-offset"] = [round(float(offset[0]) / size, 3),
+                                  round(float(offset[1]) / size, 3)]
+        except (TypeError, ValueError):
+            pass
+
+    rotation = _label_num(labels.get("rotation"), None)
+    if rotation:
+        out["text-rotate"] = round(rotation % 360, 3)
+
+    width = _label_num(labels.get("max_width"), None)
+    if width and width > 0:
+        out["text-max-width"] = round(width, 2)
+
+    transform = str(labels.get("transform") or "").lower()
+    if transform in _TRANSFORMS and transform != "none":
+        out["text-transform"] = transform
+
+    spacing = _label_num(labels.get("letter_spacing"), None)
+    if spacing:
+        out["text-letter-spacing"] = round(spacing, 3)
+
+    priority = _label_num(labels.get("priority"), None)
+    if priority is not None:
+        # QGIS's priority runs 0-10 with HIGHER meaning more important; MapLibre's sort key places
+        # LOWER first, and what is placed first wins the space. So the scale is inverted.
+        out["symbol-sort-key"] = round(-priority, 3)
+    return out
+
+
+def font_stack(font) -> list[str]:
+    """A `text-font` stack: the face asked for, then the one always shipped.
+
+    A STACK, NOT A NAME, and that is the point. MapLibre reads `text-font` as a PREFERENCE LIST and
+    uses the first face the glyph source has — so naming the requested face followed by the fallback
+    means an instance that has it draws it, and one that does not still draws the label. The
+    alternative, rewriting an unknown face to the fallback at publish time, would silently discard a
+    font the operator had actually installed, since only the server knows what is there.
+
+    A face the glyph source lacks and no fallback is the failure this avoids: MapLibre renders such
+    a label as nothing at all — no error, no warning, no text.
+    """
+    name = str(font or "").strip()
+    if not name or name == DEFAULT_LABEL_FONT:
+        return [DEFAULT_LABEL_FONT]
+    return [name, DEFAULT_LABEL_FONT]
+
+
+def label_paint(labels: dict, opacity: float = 1.0) -> dict:
+    """The `paint` half — colour, halo, and the layer's opacity carried through."""
+    out = {
+        "text-color": labels.get("color") or DEFAULT_LABEL_COLOR,
+        "text-opacity": opacity,
+    }
+    halo = _label_num(labels.get("halo_width"), 0)
+    if halo and halo > 0:
+        out["text-halo-color"] = labels.get("halo_color") or DEFAULT_LABEL_HALO
+        out["text-halo-width"] = round(halo, 2)
+    return out
+
+
+def label_scope(labels: dict) -> dict:
+    """A label's OWN zoom range, which QGIS keeps separately from the layer's."""
+    out = {}
+    for key in ("minzoom", "maxzoom"):
+        value = _label_num(labels.get(key), None)
+        if value is None:
+            continue
+        value = max(0.0, min(24.0, value))
+        if (key == "minzoom" and value > 0) or (key == "maxzoom" and value < 24):
+            out[key] = round(value, 3)
+    return out
+
+
+def _label_num(value, default):
+    """A finite float or `default`. NOT `_num` — that name is taken further down by the legend's
+    number FORMATTER, which returns a string, and the collision silently shadowed this one."""
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return default
+    return out if out == out and out not in (float("inf"), float("-inf")) else default
 
 
 def is_extruded(style: dict) -> bool:

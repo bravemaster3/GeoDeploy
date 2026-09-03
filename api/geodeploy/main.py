@@ -13,7 +13,7 @@ from .json_safe import SafeJSONResponse
 from . import database
 from .database import Base
 from .routers import (public, setup, auth, auth_oidc, portals, stac, templates, admin, basemaps, users,
-                      tokens, audit, interop, ogcapi, backups)
+                      tokens, audit, interop, ogcapi, backups, fonts)
 from .routers.data import vector, raster, sources, discover
 # The migration list lives in its own module because the Celery worker re-applies it after a
 # RESTORE (pg_restore --clean installs the SNAPSHOT's schema, losing every column added since);
@@ -489,7 +489,10 @@ async def _public_data_cors(request, call_next):
 for router in [setup.router, auth.router, auth_oidc.router, users.router, tokens.router,
                audit.router, portals.router, templates.router, admin.router, basemaps.router,
                vector.router, raster.router, sources.router, discover.router, stac.router,
-               ogcapi.router, interop.router, backups.router, public.router]:
+               ogcapi.router, interop.router, backups.router, public.router,
+               # PUBLIC on purpose: a published portal is read by anonymous visitors, and a map
+               # whose glyphs need a login would draw no labels for any of them.
+               fonts.router]:
     app.include_router(router, prefix="/api")
 
 # Serve published portals as static files
