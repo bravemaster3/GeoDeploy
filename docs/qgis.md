@@ -286,6 +286,16 @@ metres; those agree in a projected CRS and not in a geographic one.
 
 Both symbology gaps are tracked as *Every symbol QGIS can draw* on the [roadmap](roadmap.md).
 
+### If a token stops working
+
+An upload that worked five minutes ago and refuses now is almost always one of two things, and
+neither is obvious from `HTTP 401`: the token was revoked, or the instance is a **demo** and has
+been reset since. The plugin says so rather than showing the status code, on every action that
+writes.
+
+On the official demo the reset is hourly, on the hour, and it deletes tokens along with everything
+else. The Settings → API tokens page says so too, on a demo instance.
+
 ## If something looks wrong
 
 The plugin explains itself in **View ▸ Panels ▸ Log Messages**, under the **GeoDeploy** tab. A style

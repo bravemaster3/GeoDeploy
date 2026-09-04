@@ -496,7 +496,7 @@ class GeoDeployDock(QDockWidget):
     def _connected(self, job):
         self._busy(False)
         if job.error:
-            self._say(job.error, MSG_CRITICAL)
+            self._say(self._explain(job.error), MSG_CRITICAL)
             return
         info = job.result or {}
         # Before any layer is added: an OAPIF layer is fetched by QGIS itself, so the token has to
@@ -560,21 +560,46 @@ class GeoDeployDock(QDockWidget):
             return
         self._say("Refreshed.", bar=False)
 
-    def _auth_hint(self, exc) -> str:
-        """An expired-credential message that names the likeliest cause instead of the status code.
+    @staticmethod
+    def _is_auth_failure(text: str) -> bool:
+        """Does this failure look like a rejected credential rather than a broken request?
+
+        Matched on the TEXT because it arrives as one: these come back through a worker thread as
+        strings, long after the status code was a number. `authoriz`/`authoris` rather than
+        `unauthor` — a server that answers "Not authorized" is saying the same thing, and both
+        spellings are in the wild.
+        """
+        low = (text or "").lower()
+        return ("401" in low or "403" in low or "token" in low
+                or "authoriz" in low or "authoris" in low)
+
+    def _explain(self, exc) -> str:
+        """A failure message that names the likeliest CAUSE instead of the status code.
 
         A token that worked ten minutes ago and does not now is almost always one of two things, and
         neither is obvious from `HTTP 401`: it was revoked, or the instance is a DEMO and has been
         restored to its seed since — demo mode replaces the whole database on the hour, which
-        deletes every token a visitor created along with everything else they made.
+        deletes every token a visitor created along with everything else they made. A tester hit
+        exactly that while working through the plugin: an upload that had worked five minutes
+        earlier started refusing, and nothing said why.
+
+        Anything that is NOT an auth failure comes back unchanged, which is what lets every failure
+        path use this. It was reachable only from `refresh_catalog` before, so the writes — the
+        upload, the style save, the portal push, which are the operations a token is actually FOR —
+        each reported the bare error instead.
         """
         text = str(exc)
-        if "401" in text or "token" in text.lower() or "unauthor" in text.lower():
-            return ("This instance no longer accepts that token ({0}). Create a new one under "
-                    "Settings → API tokens and connect again. On a public demo this is normal: the "
-                    "instance is restored to its starting state periodically, and every token made "
-                    "since then goes with it.".format(text))
-        return "Could not refresh: {0}".format(text)
+        if not self._is_auth_failure(text):
+            return text
+        return ("This instance no longer accepts that token ({0}). Create a new one under "
+                "Settings → API tokens and connect again. On a public demo this is normal: the "
+                "instance is restored to its starting state periodically — hourly on the "
+                "official one — and every token made since then goes with it.".format(text))
+
+    def _auth_hint(self, exc) -> str:
+        """`_explain`, with the wording a REFRESH wants for anything that is not an auth failure."""
+        text = str(exc)
+        return self._explain(exc) if self._is_auth_failure(text) else "Could not refresh: {0}".format(text)
 
     def refresh_layers(self):
         if not self.instance:
@@ -595,7 +620,7 @@ class GeoDeployDock(QDockWidget):
     def _listed(self, job):
         self._busy(False)
         if job.error:
-            self._say(job.error, MSG_CRITICAL)
+            self._say(self._explain(job.error), MSG_CRITICAL)
             return
         result = job.result or {}
         self._rows = result.get("layers") or []
@@ -1229,7 +1254,7 @@ class GeoDeployDock(QDockWidget):
     def _portal_opened(self, job):
         self._busy(False)
         if job.error:
-            self._say(job.error, MSG_CRITICAL)
+            self._say(self._explain(job.error), MSG_CRITICAL)
             return
         doc = job.result or {}
         configs = doc.get("layer_configs") or []
@@ -1523,7 +1548,7 @@ class GeoDeployDock(QDockWidget):
     def _group_pushed(self, job):
         self._busy(False)
         if job.error:
-            self._say(job.error, MSG_CRITICAL)
+            self._say(self._explain(job.error), MSG_CRITICAL)
             return
         result = job.result or {}
         doc = result.get("portal") or {}
@@ -1795,7 +1820,7 @@ class GeoDeployDock(QDockWidget):
     def _style_saved(self, job):
         self._busy(False)
         if job.error:
-            self._say(job.error, MSG_CRITICAL)
+            self._say(self._explain(job.error), MSG_CRITICAL)
             return
         result = job.result or {}
         saved, skipped = result.get("saved") or [], result.get("skipped") or []
@@ -1925,7 +1950,7 @@ class GeoDeployDock(QDockWidget):
     def _uploaded(self, job):
         self._busy(False)
         if job.error:
-            self._say(job.error, MSG_CRITICAL)
+            self._say(self._explain(job.error), MSG_CRITICAL)
             return
         result = job.result or {}
         uploaded = result.get("uploaded") or []
@@ -1962,10 +1987,11 @@ class GeoDeployDock(QDockWidget):
         elif uploaded and failed:
             # Partial success is its own outcome. Reporting it as failure hides work that landed;
             # reporting it as success hides work that did not.
-            self._say(f"Uploaded {len(uploaded)}, but {len(failed)} did not: " + " | ".join(failed),
-                      MSG_WARNING)
+            self._say(self._explain(f"Uploaded {len(uploaded)}, but {len(failed)} did not: "
+                                    + " | ".join(failed)), MSG_WARNING)
         else:
-            self._say(" | ".join(failed) or "Nothing was uploaded.", MSG_CRITICAL)
+            self._say(self._explain(" | ".join(failed)) if failed else "Nothing was uploaded.",
+                      MSG_CRITICAL)
         if uploaded:
             self.refresh_layers()
 

@@ -10,7 +10,10 @@
     </svg>
     <p class="flex-1 min-w-0 text-xs leading-relaxed text-amber-100">
       <strong class="font-semibold">This is a demo.</strong>
-      Everything here — layers, portals, accounts — is
+      <!-- API TOKENS ARE NAMED EXPLICITLY. "accounts" does not read as "the token you pasted into
+           QGIS", and a tester lost exactly that mid-session: an upload that had worked five minutes
+           earlier started refusing, with nothing connecting it to the reset. -->
+      Everything here — layers, portals, accounts, API tokens — is
       <strong>deleted every hour, on the hour</strong><span v-if="countdown"> — next wipe in
       <strong>{{ countdown }}</strong></span>. Don't build a portal here that you intend to keep,
       and don't put anything private here: everyone trying the demo shares this workspace, and can

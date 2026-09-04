@@ -798,6 +798,16 @@
             </div>
             <button @click="showTokenModal = true" class="btn-primary text-xs px-3 py-1.5">Create token</button>
           </header>
+          <!-- ON A DEMO, SAY IT WHERE THE TOKEN IS MADE. The site banner says the instance is wiped
+               hourly, but it lists "layers, portals, accounts" — which nobody reads as "the token
+               you are about to paste into QGIS". A tester lost one mid-session and saw only a
+               refusal from an upload that had worked minutes before. This is the page where that
+               fact is actionable, because it is the page where the replacement is made. -->
+          <p v-if="isDemo" class="mx-3 mt-3 px-3 py-2 rounded-lg bg-amber-500/10
+                                  border border-amber-500/30 text-[11px] text-amber-200/90">
+            This demo is reset every hour, and tokens go with it. If the QGIS plugin or a script
+            suddenly starts refusing a token that worked, that is why — make a new one here.
+          </p>
           <div class="p-2">
             <div v-if="tokensLoading" class="px-3 py-6 text-sm text-muted-foreground/70 text-center">Loading…</div>
             <div v-else-if="!tokens.length" class="px-3 py-8 text-sm text-muted-foreground/70 text-center">
@@ -909,7 +919,7 @@ import api, { changePassword, logoutAll, controlService, getEmailSettings, sendT
               listBackupRuns, startBackup, listStoredBackups, deleteStoredBackup,
               deleteBackupRun, clearBackupRuns,
               restorePreflight, startRestore,
-              getPublicIndex, setPublicIndex } from '@/api'
+              getPublicIndex, setPublicIndex, getDemoInfo } from '@/api'
 import TokenModal from '@/components/users/TokenModal.vue'
 import InfrastructurePanel from '@/components/infra/InfrastructurePanel.vue'
 
@@ -1438,8 +1448,13 @@ function openRequestedTab() {
 
 watch(() => [route.query.tab, route.hash], openRequestedTab)
 
+// `getDemoInfo` answers on every install (`{demo:false}` normally), so this is one request and no
+// branching — the note below simply does not render on a real server.
+const isDemo = ref(false)
+
 onMounted(() => {
   openRequestedTab()
+  getDemoInfo().then(({ data }) => { isDemo.value = !!data?.demo }).catch(() => {})
   loadTokens()  // per-user — everyone has an API tokens tab
   // Health/stats/email endpoints are admin-only server-side — don't fire doomed requests as editor/viewer.
   if (auth.isAdmin) {

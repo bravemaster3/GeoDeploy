@@ -140,7 +140,30 @@ def main() -> int:
 
     # 1. CONSTRUCT the dock. This is what QGIS does on the first click, and it is where a missing
     #    method surfaces — every `connect(self.x)` resolves `x` right here.
-    plugin_mod.GeoDeployDock(Any())
+    dock = plugin_mod.GeoDeployDock(Any())
+
+    # A REJECTED TOKEN MUST EXPLAIN ITSELF, on every path and not only on refresh. The demo instance
+    # is reset hourly, which deletes any token a visitor made — and a tester hit exactly that: an
+    # upload that had worked five minutes earlier started refusing, with nothing connecting the two.
+    # The writes are the operations a token is FOR, and each of them reported the bare error.
+    for failure in ("HTTP 401: Unauthorized", "401 Client Error", "invalid token",
+                    "403 Forbidden", "Not authorized"):
+        said = dock._explain(failure)
+        assert failure in said, "the original error must survive: " + said
+        assert "API tokens" in said, "no instruction to make a new one: " + said
+        assert "demo" in said.lower(), "no mention of the reset: " + said
+
+    # …and anything that is NOT an auth failure passes through untouched, which is what lets every
+    # failure path call it. A network timeout dressed up as a token problem is its own wrong answer.
+    for other in ("Connection refused", "HTTP 500: Internal Server Error",
+                  "No such file or directory", "GDAL could not open the source"):
+        assert dock._explain(other) == other, dock._explain(other)
+
+    # A refresh keeps its own wording for the non-auth case.
+    assert dock._auth_hint("Connection refused").startswith("Could not refresh:")
+    assert "API tokens" in dock._auth_hint("HTTP 401")
+    print("auth messages -> a rejected token explains itself; other failures pass through")
+
     print("constructed GeoDeployDock")
 
     # 2. Belt and braces: every method the UI names must exist on the class, including any wired
