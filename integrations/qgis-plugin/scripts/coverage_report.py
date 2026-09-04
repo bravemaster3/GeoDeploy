@@ -50,8 +50,13 @@ RENDERERS = {
                                         "SAMPLED at five stops rather than described, because "
                                         "QGIS's may be a gradient, a scheme or a hand-built list "
                                         "and only its colours are common to all three"),
-    "pointCluster":            (TODO,   "portal_generator already clusters; wire the renderer to it"),
-    "pointDisplacement":       (TODO,   "no web equivalent; cluster is the honest approximation"),
+    "pointCluster":            (CARRIED, "GeoDeploy clusters at TILING time — tippecanoe builds the "
+                                          "groups into the archive — so a style push cannot turn it "
+                                          "on. The sub-renderer's symbol travels and the push REPORTS "
+                                          "what was lost, which is the failure mode that matters: the "
+                                          "push succeeds and the map quietly stops clustering"),
+    "pointDisplacement":       (CARRIED, "no web equivalent; the symbol travels and the push says "
+                                          "clustering is the nearest thing GeoDeploy has"),
     "25dRenderer":             (APPROX, "becomes a real `fill-extrusion`, which is better than the "
                                         "pseudo-3D block but not the same picture: MapLibre has one "
                                         "colour plus a vertical gradient and NO shadow. Height and "
@@ -60,9 +65,13 @@ RENDERERS = {
                                         "angle, wall and shadow ride along in `extrusion.qgis25d` "
                                         "so a round trip comes back as 2.5D, not as a plain "
                                         "extrusion. Height is in MAP UNITS, read as metres"),
-    "invertedPolygonRenderer": (TODO,   "a server-derived mask source (the layer's union subtracted "
-                                        "from the world), the device `services/pillars` already uses"),
-    "mergedFeatureRenderer":   (TODO,   "draws as the underlying symbol; overlap differs"),
+    "invertedPolygonRenderer": (CARRIED, "a server-derived mask source (the layer's union subtracted "
+                                          "from the world) would draw it, and `services/pillars` is "
+                                          "the shape of that device. Until then the polygons "
+                                          "themselves are drawn and the push says so — it is the "
+                                          "INVERSE of the picture, not a subtle difference"),
+    "mergedFeatureRenderer":   (CARRIED, "draws as the underlying symbol; the push says the joins "
+                                          "QGIS dissolves will be visible"),
     "embeddedSymbol":          (TODO,   "per-feature symbols have no tile representation - carry only"),
     "nullSymbol":              (EXACT,  "carried as `no_symbol`; the style emits NO render layer, so the layer stays listed and identifiable and draws nothing"),
 }

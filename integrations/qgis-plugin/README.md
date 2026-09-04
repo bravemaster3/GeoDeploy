@@ -278,6 +278,14 @@ Findings in `vendor/` are fixed in `cli/geodeploy` and re-vendored — never edi
 `vendor.py --check` fails.
 
 ## Last updated
+2026-09-04 (`symbology._grouping_note`: **a renderer that GROUPS features now says what the push
+loses.** A cluster, a displacement ring, a merged-feature dissolve and an inverted polygon all draw
+perfectly well through their sub-renderer's symbol — so the push SUCCEEDS and the map quietly stops
+clustering, or draws the inverse of the picture. That is the failure mode worth catching: not an
+error, a silent change. Clustering in particular cannot be turned on by a style push at all, because
+GeoDeploy clusters at TILING time (tippecanoe builds the groups into the archive), so the note says
+to tick "Cluster points" and re-tile. Coverage: four renderers move TODO → CARRIED, leaving 12.)
+
 2026-09-04 (`symbology._gradient_midpoint`: **a gradient fill reads as its MIDDLE, not one end.**
 `symbol.color()` is the ramp's START, so a polygon filled dark-green-to-pale-yellow arrived as pale
 yellow — not obviously a bug, just a map looking nothing like the one in QGIS. MapLibre has no

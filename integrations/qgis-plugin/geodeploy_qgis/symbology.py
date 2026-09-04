@@ -2785,6 +2785,41 @@ def _symbols_of(renderer) -> list:
     return []
 
 
+
+#: Renderers that GROUP features rather than symbolising them — a cluster bubble, a displaced ring
+#: of overlapping points. Their sub-renderer's symbol is what GeoDeploy will actually draw, which is
+#: honest as far as it goes, but the grouping itself is lost.
+_GROUPING_RENDERERS = {
+    "QgsPointClusterRenderer": (
+        "clusters overlapping points into one bubble. GeoDeploy clusters at TILING time rather than "
+        "in the style — tippecanoe builds the groups into the archive — so this cannot be turned on "
+        "by a style push. Tick \"Cluster points\" on the layer in GeoDeploy and re-tile it; the "
+        "symbol below is what an unclustered point will draw."),
+    "QgsPointDisplacementRenderer": (
+        "spreads overlapping points into a ring around their centre. MapLibre has no equivalent, "
+        "and GeoDeploy's clustering is the nearest honest approximation — it groups them rather "
+        "than displacing them. The symbol below is what each point will draw."),
+    "QgsMergedFeatureRenderer": (
+        "dissolves touching features before drawing them. GeoDeploy draws them as they are stored, "
+        "so where two features overlap you will see the join that QGIS hides."),
+    "QgsInvertedPolygonRenderer": (
+        "fills everything OUTSIDE the polygons. GeoDeploy has no mask layer, so the polygons "
+        "themselves are drawn instead — the inverse of the picture you are looking at."),
+}
+
+
+def _grouping_note(renderer):
+    """A sentence naming what a grouping renderer does that this push cannot carry, or None.
+
+    These renderers do not fail — the sub-renderer's symbol reads perfectly well, so the push
+    SUCCEEDS and the layer draws. What is lost is the arrangement, which is the entire point of
+    choosing one, and losing it silently is the failure mode: the author sees a successful push and
+    a map that has quietly stopped clustering.
+    """
+    name = type(renderer).__name__ if renderer is not None else ""
+    body = _GROUPING_RENDERERS.get(name)
+    return "This layer's QGIS renderer {0}".format(body) if body else None
+
 def from_qgis(qgis_layer) -> dict:
     """The GeoDeploy style dict for a QGIS layer's current renderer.
 
@@ -2823,6 +2858,14 @@ def from_qgis(qgis_layer) -> dict:
         scoped = dict(style, **_layer_scope_of(qgis_layer))
         # LABELS TOO. They hang off the layer beside the renderer, so they are true whatever the
         # renderer is — including "No symbols", which is how a layer kept for its labels is drawn.
+        # A GROUPING renderer draws perfectly well through its sub-renderer's symbol, so nothing
+        # fails — which is exactly why it has to be said out loud. See `_grouping_note`.
+        grouping = _grouping_note(renderer)
+        if grouping:
+            _log("{0}: {1}".format(
+                qgis_layer.name() if hasattr(qgis_layer, "name") else "This layer", grouping),
+                level="warning")
+
         try:
             try:                        # a package, inside QGIS
                 from . import labels as _labels

@@ -1257,6 +1257,66 @@ def gradients():
           str((symbology.from_qgis(plain) or {}).get("color", "")).lower() == "#123456",
           repr(symbology.from_qgis(plain)))
 
+
+# ══ 17. Grouping renderers ═══════════════════════════════════════════════════════════════════════
+
+def grouping_renderers():
+    section("Cluster / displacement / merged / inverted — what a successful push still loses")
+    from qgis.core import QgsMarkerSymbol, QgsSingleSymbolRenderer
+
+    made = 0
+    for name in ("QgsPointClusterRenderer", "QgsPointDisplacementRenderer",
+                 "QgsMergedFeatureRenderer", "QgsInvertedPolygonRenderer"):
+        try:
+            import qgis.core as qc
+            cls = getattr(qc, name)
+        except AttributeError:          # pragma: no cover - not in this build
+            continue
+        geom = "Polygon" if name in ("QgsMergedFeatureRenderer",
+                                     "QgsInvertedPolygonRenderer") else "Point"
+        layer = make_layer(geom)
+        inner = QgsSingleSymbolRenderer(
+            QgsMarkerSymbol.createSimple({"color": "#ff8800"})
+            if geom == "Point" else layer.renderer().symbol().clone())
+        # TWO CONSTRUCTOR SHAPES. `QgsMergedFeatureRenderer` REQUIRES its sub-renderer as an
+        # argument ("not enough arguments" for both overloads without one), while the others take
+        # none and are given it afterwards. Trying both is the difference between testing this
+        # renderer and skipping it.
+        renderer = None
+        for build in (lambda: cls(inner.clone()), lambda: cls()):
+            try:
+                renderer = build()
+                break
+            except Exception:           # noqa: BLE001 - try the other shape
+                continue
+        if renderer is None:
+            check("grouping: {0} constructible".format(name), False, "neither constructor form")
+            continue
+        try:
+            if not renderer.embeddedRenderer():
+                renderer.setEmbeddedRenderer(inner.clone())
+            layer.setRenderer(renderer)
+        except Exception as exc:        # noqa: BLE001
+            check("grouping: {0} constructible".format(name), False, repr(exc))
+            continue
+        made += 1
+        style = symbology.from_qgis(layer) or {}
+        # THE POINT: it still produces a usable style. The renderer groups features; the SYMBOL
+        # underneath is what GeoDeploy draws, and that reads perfectly well — which is exactly why
+        # the loss has to be announced rather than left to be noticed.
+        check("grouping: {0} still yields a style".format(name), bool(style), repr(style))
+        check("grouping: {0} is named as lossy".format(name),
+              symbology._grouping_note(layer.renderer()) is not None,
+              "no note — the author would see a clean push and a changed map")
+
+    check("grouping: at least one was testable in this build", made > 0, "none constructed")
+
+    # An ORDINARY renderer must produce no such note, or every push would carry a warning.
+    plain = make_layer("Point")
+    symbology.apply(plain, {"color": "#123456"})
+    check("grouping: a plain renderer says nothing",
+          symbology._grouping_note(plain.renderer()) is None)
+
 def main():
     audit()
     round_trip()
@@ -1274,6 +1334,7 @@ def main():
     density_and_centroids()
     arrow_lines()
     gradients()
+    grouping_renderers()
     print("\n{0} checks, {1} failed".format(CHECKS[0], len(FAILURES)))
     for name in FAILURES:
         print("  - {0}".format(name))
