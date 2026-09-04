@@ -91,6 +91,11 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
 
 ## Dependencies / relationships
 - Read/write through `../../stores/` (mostly `data` and `portals`) and call the backend via `../../api`.
+- **The "Other" colour is editable** (2026-09-04). The categorized legend drew the `match`
+  fallback as a swatch with the picker **disabled**, directly above a hint reading "the rest draw in
+  the Other colour" — naming a colour with no way to choose it. On a truncated column that fallback
+  is most of the map. It writes `style.other_color`, which both renderers and the QGIS plugin have
+  always read; only the panel never set it.
 - **Direction arrows on a line** (2026-09-04), drawn in the browser into the same `line_marker`
   key and the same PNG data URI the plugin's `arrows.py` produces — so an arrow drawn here and a
   QGIS arrow line are the same thing to every renderer. Forward, back or both, with a spacing.

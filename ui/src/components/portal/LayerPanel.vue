@@ -135,9 +135,14 @@
                 </p>
                 <div v-if="legend.length" class="space-y-0.5 max-h-40 overflow-y-auto pr-1">
                   <div v-for="(e, i) in legend" :key="i" class="flex items-center gap-1.5">
+                    <!-- "Other" IS EDITABLE. It was disabled — while the hint below it said the
+                         remaining values draw in the Other colour, which left no way to choose
+                         that colour. It has no `value` to edit, but it does have a colour: it is
+                         the `match` fallback, `style.other_color`, which both renderers and the
+                         QGIS plugin have always read. -->
                     <input type="color" :value="e.color" @input="setEntryColor(i, $event.target.value)"
-                      :disabled="e.isOther"
-                      class="w-5 h-5 rounded border border-border/50 cursor-pointer p-0 flex-shrink-0 disabled:opacity-60" />
+                      :title="e.isOther ? 'Everything not listed above' : e.label"
+                      class="w-5 h-5 rounded border border-border/50 cursor-pointer p-0 flex-shrink-0" />
                     <span class="text-[11px] text-muted-foreground truncate">{{ e.label }}</span>
                   </div>
                 </div>
@@ -1396,10 +1401,14 @@ function setEntryColor(i, color) {
   if (colorMode.value === 'graduated') {
     const classes = (props.config.style?.classes || []).map((c, j) => j === i ? { ...c, color } : c)
     emitStyle({ classes })
-  } else {
-    const cats = (props.config.style?.categories || []).map((c, j) => j === i ? { ...c, color } : c)
-    emitStyle({ categories: cats })
+    return
   }
+  // Past the last category is the `match` fallback — every value the classification did not list,
+  // which on a truncated column is most of them. It is a separate key, not a category with no
+  // value, because that is how MapLibre's `match` and QGIS's own "all other values" both spell it.
+  const cats = props.config.style?.categories || []
+  if (i >= cats.length) { emitStyle({ other_color: color }); return }
+  emitStyle({ categories: cats.map((c, j) => j === i ? { ...c, color } : c) })
 }
 
 // Which layers can be given 3D, and why the others cannot:
