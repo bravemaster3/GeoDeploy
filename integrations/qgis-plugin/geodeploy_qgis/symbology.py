@@ -2813,6 +2813,15 @@ def from_qgis(qgis_layer) -> dict:
                     style["other_color"] = other
                 return with_3d(style)
 
+        # A HEATMAP is a renderer of its own, and MapLibre has the same layer type — so this is an
+        # exact translation rather than an approximation. It must be recognised before the generic
+        # fallback, whose `symbols()` on a heatmap returns the ramp's symbol and would send a plain
+        # dot for a density surface.
+        if type(renderer).__name__ == "QgsHeatmapRenderer":
+            block = _heatmap_of(renderer)
+            if block:
+                return with_scope({"color_mode": "single", "heatmap": block})
+
         # "NO SYMBOLS" is a renderer, not an empty style: the layer stays in the tree, listed and
         # identifiable, and draws nothing. Kept for its popups or (one day) its labels alone.
         if type(renderer).__name__ == "QgsNullSymbolRenderer":
@@ -3074,6 +3083,30 @@ def _apply_layer_scope(qgis_layer, style: dict) -> None:
             qgis_layer.setScaleBasedVisibility(True)
     except Exception as exc:            # noqa: BLE001 - a scale range must not stop a layer loading
         _log("Could not apply the layer's scale range: {0}".format(exc))
+
+
+def _heatmap_of(renderer) -> dict:
+    """`{enabled, radius, ramp, weight_field}` from a `QgsHeatmapRenderer`.
+
+    The RAMP is sampled rather than described: QGIS's is a `QgsColorRamp` object that may be a
+    gradient, a ColorBrewer scheme or a hand-built list, and only its colours are common to all
+    three. Five samples is enough for MapLibre's `interpolate` to reproduce the same sweep.
+    """
+    try:
+        radius = _number(getattr(renderer, "radius", lambda: None)(), 20) or 20
+        out = {"enabled": True, "radius": round(radius, 2)}
+        weight = (getattr(renderer, "weightExpression", lambda: "")() or "").strip()
+        if weight:
+            # Only a bare field travels: a weight EXPRESSION would need the translator, and the
+            # weight is a number per feature rather than a filter, which is a different problem.
+            out["weight_field"] = weight.strip('"')
+        ramp = getattr(renderer, "colorRamp", lambda: None)()
+        if ramp is not None and hasattr(ramp, "color"):
+            out["ramp"] = [_hex(ramp.color(i / 4.0)) for i in range(5)]
+        return out
+    except Exception as exc:            # noqa: BLE001 - a heatmap must not cost the whole style
+        _log("Could not read the heatmap renderer ({0}: {1}).".format(type(exc).__name__, exc))
+        return {}
 
 
 def _layer_scope_of(qgis_layer) -> dict:

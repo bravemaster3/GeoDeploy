@@ -89,6 +89,8 @@ def from_qgis(symbol):
             block, note = _tile_for(symbol.symbolLayer(i))
             if note:
                 notes.append(note)
+            if block and "__centroid__" in block:
+                return {"centroid_marker": block["__centroid__"]}, notes
             if block:
                 return {"fill_pattern": block}, notes
     except Exception as exc:            # noqa: BLE001 - a pattern is never worth failing a style
@@ -107,11 +109,39 @@ def _tile_for(sl):
         return _point_tile(sl)
     if isinstance(sl, QgsRandomMarkerFillSymbolLayer):
         return _random_tile(sl)
+    if _is_centroid(sl):
+        # NOT a tile: a centroid fill draws ONE marker per polygon, at its centre. MapLibre places a
+        # symbol layer's icons at a polygon's label point by default, so it is a marker, not a
+        # pattern — returned under its own key so the caller can tell the two apart.
+        marker = _centroid_marker(sl)
+        return ({"__centroid__": marker} if marker else None), None
     if isinstance(sl, QgsSVGFillSymbolLayer):
         return _image_tile(sl, sl.svgFilePath(), _px_of(sl, "patternWidth"), svg=True)
     if isinstance(sl, QgsRasterFillSymbolLayer):
         return _image_tile(sl, sl.imageFilePath(), _px_of(sl, "width"), svg=False)
     return None, None
+
+
+def _is_centroid(sl) -> bool:
+    try:
+        from qgis.core import QgsCentroidFillSymbolLayer
+        return isinstance(sl, QgsCentroidFillSymbolLayer)
+    except ImportError:                 # pragma: no cover
+        return False
+
+
+def _centroid_marker(sl):
+    """The marker a centroid fill puts at each polygon's centre, as a picture."""
+    from qgis.PyQt.QtCore import QSize
+    sub = getattr(sl, "subSymbol", lambda: None)()
+    if sub is None:
+        return None
+    try:
+        image = sub.asImage(QSize(48, 48))
+    except Exception:                   # noqa: BLE001  # nosec B110 - intentional: a sub-symbol we cannot draw is not a marker
+        return None
+    block = _encode(image)
+    return block
 
 
 def _brush_tile(sl):

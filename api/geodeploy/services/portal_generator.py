@@ -1708,6 +1708,13 @@ def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
     # when the renderer draws nothing, which is exactly how a layer kept for its labels alone works.
     labels = _label_layer(source_id, layer, cfg)
 
+    # A HEATMAP REPLACES THE FEATURES. It is a different layer TYPE, not a paint variation, and
+    # drawing the points as well would put a pin on every hot spot — so this returns instead of
+    # adding. Labels still ride along, because a heatmap with named peaks is a normal thing to want.
+    heat = _heatmap_layer(source_id, layer, cfg)
+    if heat:
+        return _scoped([heat] + ([labels] if labels else []), style)
+
     if symbology.draws_nothing(style):
         return _scoped([labels], style) if labels else []
 
@@ -1723,6 +1730,9 @@ def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
         decoration = _line_marker_layer(source_id, layer, cfg)
         if decoration:
             built.append(decoration)
+        centroids = _centroid_marker_layer(source_id, layer, cfg)
+        if centroids:
+            built.append(centroids)
         return _scoped(built + ([labels] if labels else []), style)
     source_layer = _source_layer_name(layer)
     out: list[dict] = []
@@ -1762,6 +1772,46 @@ def _scoped(layers: list[dict], style: dict) -> list[dict]:
         if own_filter is not None:
             ml["filter"] = symbology.combined_filter(ml.get("filter"), own_filter)
     return layers
+
+
+def _centroid_marker_layer(source_id: str, layer, cfg: dict) -> dict | None:
+    """A symbol at each polygon's centre — QGIS's centroid fill.
+
+    MapLibre places a `symbol` layer's icons at a polygon's LABEL POINT by default, which is the
+    point a label would sit on: inside the shape even when it is concave, where a true centroid can
+    fall outside it. So this is one extra layer and no geometry work.
+    """
+    block = symbology.centroid_marker(cfg.get("style") or {})
+    if not block:
+        return None
+    return {
+        "id": f"vector-{layer.id}-centroids",
+        "type": "symbol",
+        "source": source_id,
+        "source-layer": _source_layer_name(layer),
+        "layout": {
+            "icon-image": symbology.picture_id(block["image"]),
+            "icon-allow-overlap": True,
+            "icon-ignore-placement": True,
+        },
+        "paint": {"icon-opacity": cfg.get("opacity", 1.0)},
+        "metadata": {"geodeploy:markerImages": [
+            {"id": symbology.picture_id(block["image"]), "image": block["image"]}]},
+    }
+
+
+def _heatmap_layer(source_id: str, layer, cfg: dict) -> dict | None:
+    """A density surface instead of features — MapLibre's own `heatmap` layer type."""
+    block = symbology.heatmap(cfg.get("style") or {})
+    if not block:
+        return None
+    return {
+        "id": f"vector-{layer.id}",
+        "type": "heatmap",
+        "source": source_id,
+        "source-layer": _source_layer_name(layer),
+        "paint": symbology.heatmap_paint(block, cfg.get("opacity", 1.0)),
+    }
 
 
 def _line_marker_layer(source_id: str, layer, cfg: dict) -> dict | None:

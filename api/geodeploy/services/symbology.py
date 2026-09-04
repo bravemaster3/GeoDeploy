@@ -958,6 +958,62 @@ def fill_pattern(style: dict) -> dict:
     return block if isinstance(uri, str) and uri.startswith("data:image/") else {}
 
 
+def centroid_marker(style: dict) -> dict:
+    """`style.centroid_marker` when a polygon carries a symbol at its centre, else `{}`.
+
+    QGIS's centroid fill draws a marker at each polygon's centre. MapLibre places a `symbol` layer's
+    icons at a polygon's label point by DEFAULT, so this is one extra layer and no arithmetic — the
+    renderer already solves the hard half (a label point sits inside a concave shape, where a true
+    centroid can fall outside it).
+    """
+    block = style.get("centroid_marker")
+    if not isinstance(block, dict):
+        return {}
+    uri = block.get("image")
+    return block if isinstance(uri, str) and uri.startswith("data:image/") else {}
+
+
+#: What a heatmap fades between when the style names no ramp. Transparent at the low end, because a
+#: heatmap that paints its own background is a coloured rectangle rather than a density map.
+DEFAULT_HEATMAP_RAMP = ["rgba(0,0,255,0)", "#3b82f6", "#22c55e", "#eab308", "#ef4444"]
+
+
+def heatmap(style: dict) -> dict:
+    """`style.heatmap` when a layer is drawn as density, else `{}`."""
+    block = style.get("heatmap")
+    return block if isinstance(block, dict) and block.get("enabled") else {}
+
+
+def heatmap_paint(block: dict, opacity: float = 1.0) -> dict:
+    """The paint for a `heatmap` layer — MapLibre's own layer type, so this is an exact translation.
+
+    `heatmap-color` is an `interpolate` over `heatmap-density`, which runs 0 to 1 whatever the data
+    holds; QGIS's ramp is sampled the same way. The FIRST stop must be transparent or the whole
+    viewport is painted at density zero — the single mistake that makes a heatmap look broken.
+    """
+    ramp = [c for c in (block.get("ramp") or []) if isinstance(c, str)] or DEFAULT_HEATMAP_RAMP
+    color: list = ["interpolate", ["linear"], ["heatmap-density"]]
+    for i, stop in enumerate(ramp):
+        position = i / float(len(ramp) - 1) if len(ramp) > 1 else 0.0
+        # Position 0 has to be fully transparent; a ramp that starts opaque floods the map.
+        color.extend([round(position, 4), "rgba(0,0,255,0)" if i == 0 and not
+                      str(stop).startswith("rgba") else stop])
+    paint = {
+        "heatmap-color": color,
+        "heatmap-radius": _label_num(block.get("radius"), 20),
+        "heatmap-opacity": opacity,
+    }
+    field = (block.get("weight_field") or "").strip()
+    if field:
+        # WEIGHTED BY A COLUMN, which is what makes a heatmap of population different from one of
+        # locations. Normalised against the column's maximum so the ramp spans the data.
+        top = _label_num(block.get("weight_max"), 0) or 0
+        if top > 0:
+            paint["heatmap-weight"] = [
+                "interpolate", ["linear"], ["to-number", ["get", field], 0], 0, 0, top, 1]
+    return paint
+
+
 def line_marker(style: dict) -> dict:
     """`style.line_marker` when a line carries markers along it, else `{}`.
 

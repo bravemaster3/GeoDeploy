@@ -1049,6 +1049,52 @@ def fill_patterns():
     assert QgsRasterFillSymbolLayer  # imported for the reader's benefit
 
 
+# ══ 13. Heatmaps and centroid fills ══════════════════════════════════════════════════════════════
+
+def density_and_centroids():
+    section("Heatmaps and centroid fills")
+    from qgis.core import (QgsCentroidFillSymbolLayer, QgsFillSymbol, QgsHeatmapRenderer,
+                           QgsMarkerSymbol, QgsSimpleFillSymbolLayer, QgsSimpleMarkerSymbolLayer,
+                           QgsSingleSymbolRenderer)
+
+    # A HEATMAP is a renderer of its own, and MapLibre has the same layer type.
+    layer = make_layer("Point")
+    heat = QgsHeatmapRenderer()
+    heat.setRadius(18.0)
+    layer.setRenderer(heat)
+    style = symbology.from_qgis(layer) or {}
+    block = style.get("heatmap") or {}
+    check("heatmap: recognised as its own renderer", bool(block.get("enabled")), repr(style))
+    check("heatmap: the radius travels", block.get("radius") == 18.0, repr(block.get("radius")))
+    check("heatmap: the ramp is SAMPLED, not described",
+          isinstance(block.get("ramp"), list) and len(block["ramp"]) == 5,
+          "QGIS's ramp may be a gradient, a scheme or a hand-built list; only the colours are "
+          "common to all three — got {0!r}".format(block.get("ramp")))
+    check("heatmap: it does not fall through to a plain dot",
+          "radius" not in style and "marker" not in style,
+          "the generic fallback would send the ramp's symbol for a density surface")
+
+    # A CENTROID FILL is one marker per polygon, not a pattern — it must not be read as a tile.
+    layer = make_layer("Polygon")
+    cf = QgsCentroidFillSymbolLayer()
+    sub = QgsMarkerSymbol()
+    sub.changeSymbolLayer(0, QgsSimpleMarkerSymbolLayer())
+    sub.setSize(3.0)
+    cf.setSubSymbol(sub)
+    sym = QgsFillSymbol()
+    sym.changeSymbolLayer(0, QgsSimpleFillSymbolLayer())
+    sym.appendSymbolLayer(cf)
+    layer.setRenderer(QgsSingleSymbolRenderer(sym))
+    style = symbology.from_qgis(layer) or {}
+    marker = style.get("centroid_marker") or {}
+    check("centroid fill: carries a marker",
+          str(marker.get("image") or "").startswith("data:image/png;base64,"), repr(list(marker)))
+    check("centroid fill: is NOT read as a pattern tile", "fill_pattern" not in style,
+          "one marker per polygon is not a repeating fill")
+    check("centroid fill: the plain fill under it still travels",
+          style.get("fill_opacity") is not None, repr(list(style)))
+
+
 def main():
     audit()
     round_trip()
@@ -1063,6 +1109,7 @@ def main():
     marker_pictures()
     line_decorations()
     fill_patterns()
+    density_and_centroids()
     print("\n{0} checks, {1} failed".format(CHECKS[0], len(FAILURES)))
     for name in FAILURES:
         print("  - {0}".format(name))

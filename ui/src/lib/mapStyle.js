@@ -35,6 +35,9 @@ import {
   labelPaint as symLabelPaint,
   labelScope as symLabelScope,
   pictureId as symPictureId,
+  centroidMarker as symCentroidMarker,
+  heatmap as symHeatmap,
+  heatmapPaint as symHeatmapPaint,
   fillPattern as symFillPattern,
   lineMarker as symLineMarker,
   lineMarkerLayout as symLineMarkerLayout,
@@ -183,7 +186,16 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
       // identically — see the parity note in that file.
       const color = symColorExpression(st)
 
-      if (drawsNothing) {
+      // A HEATMAP REPLACES THE FEATURES — a different layer TYPE, not a paint variation. Drawing
+      // the points as well would put a pin on every hot spot. Mirrors _heatmap_layer.
+      const heat = symHeatmap(st)
+      if (Object.keys(heat).length) {
+        style.layers.push({
+          id: mlId(srcId, cfg), ...ruleScope(cfg),
+          type: 'heatmap', source: srcId, 'source-layer': sourceLayer,
+          paint: symHeatmapPaint(heat, opacity),
+        })
+      } else if (drawsNothing) {
         // QGIS's "No symbols": no geometry, but the labels below still draw. That is how a layer
         // kept only for its labels works. Mirrors portal_generator._vector_layers.
       } else if (geom.includes('polygon')) {
@@ -315,6 +327,24 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
           id: `${srcId}-linemarkers`,
           type: 'symbol', source: srcId, 'source-layer': sourceLayer,
           layout: symLineMarkerLayout(lineMark),
+          paint: { 'icon-opacity': opacity },
+        })
+      }
+
+      // A SYMBOL AT EACH POLYGON'S CENTRE — QGIS's centroid fill. MapLibre places a symbol layer's
+      // icons at a polygon's label point by default, so this is one layer and no geometry work.
+      // Mirrors _centroid_marker_layer.
+      const centroid = symCentroidMarker(st)
+      if (Object.keys(centroid).length) {
+        markerSpecs[symPictureId(centroid.image)] = { id: symPictureId(centroid.image), image: centroid.image }
+        style.layers.push({
+          id: `${srcId}-centroids`,
+          type: 'symbol', source: srcId, 'source-layer': sourceLayer,
+          layout: {
+            'icon-image': symPictureId(centroid.image),
+            'icon-allow-overlap': true,
+            'icon-ignore-placement': true,
+          },
           paint: { 'icon-opacity': opacity },
         })
       }

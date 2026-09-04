@@ -45,8 +45,11 @@ RENDERERS = {
                                         "range. Nesting flattens with AND, ELSE becomes NOT(the "
                                         "siblings), and a filter outside the expression subset is "
                                         "DROPPED with a note rather than widened"),
-    "heatmapRenderer":         (TODO,   "MapLibre has a native `heatmap` layer type - radius, "
-                                        "weight, intensity and ramp all map over"),
+    "heatmapRenderer":         (EXACT,  "MapLibre's own `heatmap` layer type: the radius, the "
+                                        "weight column and the ramp all travel. The ramp is "
+                                        "SAMPLED at five stops rather than described, because "
+                                        "QGIS's may be a gradient, a scheme or a hand-built list "
+                                        "and only its colours are common to all three"),
     "pointCluster":            (TODO,   "portal_generator already clusters; wire the renderer to it"),
     "pointDisplacement":       (TODO,   "no web equivalent; cluster is the honest approximation"),
     "25dRenderer":             (APPROX, "becomes a real `fill-extrusion`, which is better than the "
@@ -118,8 +121,9 @@ FILLS = {
     "SVGFill":           (EXACT,  "the source image IS the tile, rendered at `patternWidth` the way "
                                   "QGIS repeats it"),
     "RasterFill":        (EXACT,  "the same, scaled to `width`"),
-    "CentroidFill":      (TODO,   "a `symbol` layer over a polygon source places at the centroid by "
-                                  "default - nearly free"),
+    "CentroidFill":      (EXACT,  "a `symbol` layer over a polygon source places at the LABEL "
+                                  "POINT by default - inside the shape even when it is concave, "
+                                  "where a true centroid can fall outside it"),
     "GradientFill":      (TODO,   "MapLibre has no fill gradient; flat fill at the ramp's midpoint, "
                                   "reported as approximated"),
     "ShapeburstFill":    (TODO,   "a distance transform inside each polygon - genuinely out of "

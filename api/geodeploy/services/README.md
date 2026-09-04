@@ -223,6 +223,13 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   that reads as if it applied. `fill-opacity` still applies, which is how a hatch stays a wash. The
   tile is registered through `marker_images` — the runtime's one "create these images" channel — and
   it OUTRANKS a marker picture there, since a style carrying both is a polygon.
+- **Heatmaps and centroid markers (2026-09-04):** `style.heatmap` becomes MapLibre's own `heatmap`
+  layer type (`_heatmap_layer`), which REPLACES the feature layers rather than adding to them —
+  drawing the points as well would put a pin on every hot spot. Labels still ride along. The first
+  ramp stop is forced transparent: a ramp that starts opaque paints the whole viewport at density
+  zero, which is the one mistake that makes a heatmap look broken. `style.centroid_marker` becomes a
+  `symbol` layer over the polygon source (`_centroid_marker_layer`) — MapLibre places icons at a
+  polygon's LABEL POINT by default, which is inside a concave shape where a true centroid is not.
 - `titiler.py` is called from `routers/data/raster.py` and `portal_generator.py`.
 - `portal_generator.py` reads `templates/` (mounted at `/templates`) and writes `data/portals/`.
 - `cog_converter.py` is called from `tasks/raster_ingest.py`.

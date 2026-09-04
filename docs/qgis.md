@@ -175,6 +175,17 @@ Two consequences worth knowing:
   portal's `style.json`, so a marker that renders past about 96 KB is drawn plainly instead, and the
   Log Messages panel says so.
 
+### Heatmaps and centroid fills
+
+A **heatmap** layer travels as a heatmap: the radius, the weighting column and the colour ramp all
+arrive, and the portal draws a density surface rather than a pile of dots. The ramp is sampled at
+five stops, because QGIS's may be a gradient, a named scheme or a hand-built list and only the
+colours are common to all three.
+
+A **centroid fill** — one marker at each polygon's centre — arrives as a marker layer. The portal
+places it at the polygon's *label point*, which sits inside the shape even when it is concave, where
+a true centroid can fall outside it.
+
 ### Patterned fills
 
 Hatches, cross-hatches and dense fills, line and point patterns, and polygons filled with an SVG or

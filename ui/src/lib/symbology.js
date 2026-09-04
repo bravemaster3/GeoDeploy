@@ -718,3 +718,53 @@ export function fillPattern (style = {}) {
   const uri = block.image
   return (typeof uri === 'string' && uri.startsWith('data:image/')) ? block : {}
 }
+
+
+// ── Centroid markers and heatmaps ────────────────────────────────────────────────────────────────
+// Twins of `symbology.centroid_marker` / `heatmap` / `heatmap_paint`.
+
+/** `style.centroid_marker` — a symbol at each polygon's centre, QGIS's centroid fill. */
+export function centroidMarker (style = {}) {
+  const block = style.centroid_marker
+  if (!block || typeof block !== 'object') return {}
+  const uri = block.image
+  return (typeof uri === 'string' && uri.startsWith('data:image/')) ? block : {}
+}
+
+/** What a heatmap fades between when the style names no ramp. Transparent at the low end. */
+export const DEFAULT_HEATMAP_RAMP = ['rgba(0,0,255,0)', '#3b82f6', '#22c55e', '#eab308', '#ef4444']
+
+/** `style.heatmap` when a layer is drawn as density, else `{}`. */
+export function heatmap (style = {}) {
+  const block = style.heatmap
+  return (block && typeof block === 'object' && block.enabled) ? block : {}
+}
+
+/**
+ * The paint for a `heatmap` layer. Twin of `symbology.heatmap_paint`.
+ *
+ * The FIRST stop must be transparent or the whole viewport is painted at density zero — the single
+ * mistake that makes a heatmap look broken.
+ */
+export function heatmapPaint (block = {}, opacity = 1) {
+  const ramp = (block.ramp || []).filter(c => typeof c === 'string')
+  const stops = ramp.length ? ramp : DEFAULT_HEATMAP_RAMP
+  const color = ['interpolate', ['linear'], ['heatmap-density']]
+  stops.forEach((stop, i) => {
+    const position = stops.length > 1 ? i / (stops.length - 1) : 0
+    color.push(Math.round(position * 10000) / 10000,
+      (i === 0 && !String(stop).startsWith('rgba')) ? 'rgba(0,0,255,0)' : stop)
+  })
+  const radius = Number(block.radius)
+  const paint = {
+    'heatmap-color': color,
+    'heatmap-radius': Number.isFinite(radius) ? radius : 20,
+    'heatmap-opacity': opacity,
+  }
+  const field = String(block.weight_field || '').trim()
+  const top = Number(block.weight_max)
+  if (field && Number.isFinite(top) && top > 0) {
+    paint['heatmap-weight'] = ['interpolate', ['linear'], ['to-number', ['get', field], 0], 0, 0, top, 1]
+  }
+  return paint
+}
