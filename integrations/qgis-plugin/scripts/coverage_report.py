@@ -128,8 +128,12 @@ FILLS = {
     "CentroidFill":      (EXACT,  "a `symbol` layer over a polygon source places at the LABEL "
                                   "POINT by default - inside the shape even when it is concave, "
                                   "where a true centroid can fall outside it"),
-    "GradientFill":      (TODO,   "MapLibre has no fill gradient; flat fill at the ramp's midpoint, "
-                                  "reported as approximated"),
+    "GradientFill":      (APPROX, "MapLibre has no fill gradient of any kind, so a flat fill "
+                                  "is the whole of what can be drawn. Read at the ramp's "
+                                  "MIDPOINT rather than `symbol.color()`, which is its "
+                                  "START — on a pale-to-dark ramp that is the near-white "
+                                  "end, so the polygon arrived as one extreme of itself. "
+                                  "`symbology._gradient_midpoint`"),
     "ShapeburstFill":    (TODO,   "a distance transform inside each polygon - genuinely out of "
                                   "reach; carry the QML"),
     "GeometryGenerator": (TODO,   "see the marker entry"),

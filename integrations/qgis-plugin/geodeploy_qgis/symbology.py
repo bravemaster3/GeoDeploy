@@ -2046,6 +2046,62 @@ def _geometry_name(qgis_layer):
 
 # ── QGIS → GeoDeploy ─────────────────────────────────────────────────────────────────────────────
 
+
+#: Symbol layers whose colour is a RAMP rather than a colour. MapLibre has no gradient of any kind —
+#: not across a fill, not along or across a line — so each of these can only be drawn flat, and the
+#: question is merely WHICH flat colour is least wrong. The middle of the ramp, in every case.
+_GRADIENT_LAYERS = ("QgsGradientFillSymbolLayer", "QgsLineburstSymbolLayer",
+                    "QgsShapeburstFillSymbolLayer")
+
+
+def _gradient_midpoint(symbol_layer):
+    """`#rrggbb` halfway along a gradient symbol layer's ramp, or None if it is not one.
+
+    `color()`/`color2()` are the two ends for a two-colour gradient; a layer set to use a named
+    ramp instead exposes it through `colorRamp()`, which can be sampled directly at 0.5. Both are
+    tried, because QGIS lets an author switch between them and the one that is not in use returns
+    something unhelpful rather than raising.
+    """
+    if symbol_layer is None or type(symbol_layer).__name__ not in _GRADIENT_LAYERS:
+        return None
+    ramp = _call(symbol_layer, "colorRamp")
+    if ramp is not None and hasattr(ramp, "color"):
+        try:
+            return _hex(ramp.color(0.5)).lower()
+        except Exception:               # noqa: BLE001  # nosec B110 - fall back to the two ends
+            pass
+    first, second = _call(symbol_layer, "color"), _call(symbol_layer, "color2")
+    if first is None:
+        return None
+    if second is None:
+        return _hex(first).lower()
+    try:
+        return _blend_hex(_hex(first), _hex(second), 0.5)
+    except Exception:                   # noqa: BLE001  # nosec B110 - one end is better than none
+        return _hex(first).lower()
+
+
+def _blend_hex(first: str, second: str, t: float) -> str:
+    """Two `#rrggbb` mixed in RGB. The same mixing `symbology.ramp_colors` does on the server, so a
+    gradient's midpoint here and a ramp's midpoint there agree."""
+    def parts(value):
+        v = str(value).lstrip("#")[:6]
+        return [int(v[i:i + 2], 16) for i in (0, 2, 4)]
+    a, b = parts(first), parts(second)
+    return "#{0:02x}{1:02x}{2:02x}".format(*[int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3)])
+
+
+def _call(obj, name):
+    """A no-argument getter's value, or None. Qt getters differ between builds and a missing one
+    must not cost the whole style."""
+    fn = getattr(obj, name, None)
+    if not callable(fn):
+        return None
+    try:
+        return fn()
+    except Exception:                   # noqa: BLE001  # nosec B110 - a value we cannot read is None
+        return None
+
 def _hex(color) -> str:
     return color.name() if hasattr(color, "name") else str(color)
 
@@ -2948,8 +3004,13 @@ def _style_from_symbol(symbol) -> dict:
     back changed how it draws. Dividing by the same constant the writer multiplies by is the whole
     fix, and `test_tile_symbology` now round-trips to keep it that way.
     """
-    style = {"color": _hex(symbol.color())}
     layer0 = symbol.symbolLayer(0) if symbol.symbolLayerCount() else None
+    # A GRADIENT reads as its MIDPOINT, not as `symbol.color()` — which is the ramp's START, and on
+    # a light-to-dark ramp that is the near-white end. A polygon filled dark green to pale yellow
+    # arrived as pale yellow: not obviously a bug, just a map that looks nothing like the one in
+    # QGIS. MapLibre has no fill or line gradient at all, so a flat colour is the whole of what can
+    # be drawn; taking the middle of the ramp is the closest single colour to it.
+    style = {"color": _gradient_midpoint(layer0) or _hex(symbol.color())}
 
     def number(getter):
         """A finite float from a Qt getter, or None. A missing size must not cost the COLOUR too —

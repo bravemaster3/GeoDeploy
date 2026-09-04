@@ -1216,6 +1216,47 @@ def arrow_lines():
           (double.get("width") or 0) > (single.get("width") or 0),
           "{0} vs {1}".format(double.get("width"), single.get("width")))
 
+
+# ══ 16. Gradients ════════════════════════════════════════════════════════════════════════════════
+
+def gradients():
+    section("Gradient fills — MapLibre has none, so which flat colour is least wrong")
+    try:
+        from qgis.core import (QgsFillSymbol, QgsGradientFillSymbolLayer, QgsSingleSymbolRenderer)
+    except ImportError:                 # pragma: no cover
+        check("gradient: available in this QGIS", False, "QgsGradientFillSymbolLayer is missing")
+        return
+    from qgis.PyQt.QtGui import QColor
+
+    sl = QgsGradientFillSymbolLayer()
+    sl.setColor(QColor("#000000"))
+    sl.setColor2(QColor("#ffffff"))
+    symbol = QgsFillSymbol()
+    symbol.changeSymbolLayer(0, sl)
+    layer = make_layer("Polygon")
+    layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+
+    style = symbology.from_qgis(layer) or {}
+    # `symbol.color()` is the ramp's START. On a dark-to-pale ramp that is the dark end, and on a
+    # pale-to-dark one it is nearly white — so a gradient-filled polygon arrived as one extreme of
+    # itself. Not obviously a bug; just a map that looks nothing like the one in QGIS.
+    check("gradient: reads the MIDDLE of the ramp, not one end",
+          str(style.get("color", "")).lower() in ("#808080", "#7f7f7f"),
+          "got {0!r}".format(style.get("color")))
+
+    sl.setColor(QColor("#204080"))
+    sl.setColor2(QColor("#204080"))
+    style = symbology.from_qgis(layer) or {}
+    check("gradient: a ramp between one colour and itself is that colour",
+          str(style.get("color", "")).lower() == "#204080", repr(style.get("color")))
+
+    # A PLAIN fill must be untouched by any of this — it is the overwhelmingly common case.
+    plain = make_layer("Polygon")
+    symbology.apply(plain, {"color": "#123456", "fill_opacity": 0.5})
+    check("gradient: a plain fill still reads its own colour",
+          str((symbology.from_qgis(plain) or {}).get("color", "")).lower() == "#123456",
+          repr(symbology.from_qgis(plain)))
+
 def main():
     audit()
     round_trip()
@@ -1232,6 +1273,7 @@ def main():
     fill_patterns()
     density_and_centroids()
     arrow_lines()
+    gradients()
     print("\n{0} checks, {1} failed".format(CHECKS[0], len(FAILURES)))
     for name in FAILURES:
         print("  - {0}".format(name))

@@ -278,6 +278,14 @@ Findings in `vendor/` are fixed in `cli/geodeploy` and re-vendored — never edi
 `vendor.py --check` fails.
 
 ## Last updated
+2026-09-04 (`symbology._gradient_midpoint`: **a gradient fill reads as its MIDDLE, not one end.**
+`symbol.color()` is the ramp's START, so a polygon filled dark-green-to-pale-yellow arrived as pale
+yellow — not obviously a bug, just a map looking nothing like the one in QGIS. MapLibre has no
+gradient of any kind, across a fill or along a line, so a flat colour is the whole of what can be
+drawn and the middle of the ramp is the closest single colour to it. Covers `GradientFill`,
+`Lineburst` and `ShapeburstFill`, and samples a named `colorRamp()` at 0.5 when the layer uses one
+instead of two end colours. Coverage: GradientFill TODO → APPROX, leaving 16.)
+
 2026-09-04 (`qgis25d.py`: **a data-defined 2.5D height now travels.** QGIS's 2.5D dialog accepts an
 EXPRESSION for the height, not only a number, and stores whatever was typed in the project variable
 as a string — so `float()` raised and every data-driven 2.5D layer silently arrived at the DEFAULT
