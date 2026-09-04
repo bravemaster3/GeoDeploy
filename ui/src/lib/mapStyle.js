@@ -521,8 +521,13 @@ export function contourParams(style) {
   const out = {}
   const increment = Number(style?.increment)
   const thickness = Number(style?.thickness)
-  out.increment = Number.isFinite(increment) && increment > 0 ? increment : 35
-  out.thickness = Number.isFinite(thickness) && thickness > 0 ? Math.trunc(thickness) : 1
+  // INTEGERS, CLAMPED to the bounds TiTiler declares at `GET /algorithms/contours`:
+  // increment 0-999, thickness 0-10, minz/maxz ±99999, and every one typed `integer`. A fractional
+  // increment is a 422 on every tile, which hides the layer completely. Mirrors
+  // services/titiler.py::_contour_params.
+  const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, Math.round(n)))
+  out.increment = Number.isFinite(increment) && increment > 0 ? clamp(increment, 1, 999) : 35
+  out.thickness = Number.isFinite(thickness) && thickness > 0 ? clamp(thickness, 1, 10) : 1
   let lo = Number(style?.minz)
   let hi = Number(style?.maxz)
   if (!(Number.isFinite(lo) && Number.isFinite(hi) && hi > lo)) {
@@ -530,8 +535,8 @@ export function contourParams(style) {
     lo = Number(parts[0]); hi = Number(parts[1])
   }
   if (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo) {
-    out.minz = Math.floor(lo)
-    out.maxz = Math.ceil(hi)
+    out.minz = Math.max(-99999, Math.floor(lo))
+    out.maxz = Math.min(99999, Math.ceil(hi))
   }
   return JSON.stringify(out)
 }

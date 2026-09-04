@@ -155,9 +155,25 @@ MAX_COLOR_CLASSES = 128
 
 #: TiTiler's own defaults for the contours algorithm. `minz`/`maxz` are the giveaway: they span the
 #: whole earth, from the Mariana Trench to Everest, because the algorithm is written for global DEMs.
-CONTOUR_INCREMENT = 35.0
+CONTOUR_INCREMENT = 35
 CONTOUR_THICKNESS = 1
 _CONTOUR_MINZ, _CONTOUR_MAXZ = -12000.0, 8000.0
+
+#: THE BOUNDS TITILER ITSELF DECLARES, read from `GET /algorithms/contours` on the running image:
+#:
+#:     increment  integer  0 – 999
+#:     thickness  integer  0 – 10
+#:     minz/maxz  integer  ±99999
+#:
+#: **Every one of them is an `integer`.** `increment` used to be sent as a float, which TiTiler
+#: accepted while it was typed loosely; it now rejects the whole tile request with a 422 for a
+#: fractional one — and a raster whose tiles all 422 does not draw at all, so a contour layer that
+#: had been working simply vanished after an update. TiTiler runs from `:latest` here, so its
+#: contract can tighten under us without any change on our side — this is the second parameter to go
+#: that way, after `minz`/`maxz` (clamped a few lines below, for the same reason).
+CONTOUR_MAX_INCREMENT = 999
+CONTOUR_MAX_THICKNESS = 10
+CONTOUR_Z_LIMIT = 99999
 
 
 def _contour_params(increment, thickness, minz, maxz, rescale) -> str | None:
@@ -177,14 +193,24 @@ def _contour_params(increment, thickness, minz, maxz, rescale) -> str | None:
     background should span something other than the data.
     """
     values: dict = {}
-    for key, value, default in (("increment", increment, CONTOUR_INCREMENT),
-                                ("thickness", thickness, CONTOUR_THICKNESS)):
+    for key, value, default, top in (
+            ("increment", increment, CONTOUR_INCREMENT, CONTOUR_MAX_INCREMENT),
+            ("thickness", thickness, CONTOUR_THICKNESS, CONTOUR_MAX_THICKNESS)):
         try:
             number = float(value) if value not in (None, "") else float(default)
         except (TypeError, ValueError):
             number = float(default)
         if number > 0:
-            values[key] = int(number) if key == "thickness" else number
+            # ROUNDED AND CLAMPED, because TiTiler types both as integers with bounds and answers a
+            # 422 for anything outside them — which fails every tile and hides the layer entirely.
+            # A contour interval of 12.5 becomes 13: a slightly different spacing is a far better
+            # outcome than a raster that does not draw, and the alternative is refusing a number the
+            # UI happily accepted.
+            # `int(x + 0.5)`, NOT `round()`. Python rounds half to EVEN and JavaScript rounds half
+            # UP, so an interval of 12.5 would become 12 here and 13 in `mapStyle.js` — the editor
+            # preview and the published portal drawing contours at different spacings. Half-up is
+            # expressible identically in both, which is the same fix `ramp_colors` needed.
+            values[key] = max(1, min(top, int(number + 0.5)))
     lo, hi = _range_of(minz, maxz, rescale)
     if lo is not None:
         # INTEGERS, and not by preference: TiTiler types `minz`/`maxz` as `int` and rejects the whole
@@ -192,7 +218,8 @@ def _contour_params(increment, thickness, minz, maxz, rescale) -> str | None:
         # because the stretch these borrow from is very often fractional (a stored DEM range here is
         # `182.789993,315.959992`). Floor and ceil rather than round, so the band always WIDENS to
         # contain the data instead of clipping the extremes to a flat colour.
-        values["minz"], values["maxz"] = math.floor(lo), math.ceil(hi)
+        values["minz"] = max(-CONTOUR_Z_LIMIT, math.floor(lo))
+        values["maxz"] = min(CONTOUR_Z_LIMIT, math.ceil(hi))
     return json.dumps(values, separators=(",", ":")) if values else None
 
 

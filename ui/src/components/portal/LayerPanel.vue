@@ -825,8 +825,11 @@
                   <label class="text-xs text-muted-foreground" title="Spacing between contour lines, in the raster's own units">
                     Interval
                   </label>
-                  <input type="number" min="0" step="any" :value="config.style?.increment ?? 35"
-                    @input="emitStyle({ increment: parseFloat($event.target.value) || null })"
+                  <!-- WHOLE NUMBERS, 1-999: TiTiler types the contour interval as an integer and
+                       422s the tile for anything else, which hides the layer rather than rounding
+                       it. `step="any"` here is how a fractional one got in. -->
+                  <input type="number" min="1" max="999" step="1" :value="config.style?.increment ?? 35"
+                    @input="emitStyle({ increment: parseInt($event.target.value, 10) || null })"
                     class="mt-0.5 w-full text-xs border border-border rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary/60" />
                 </div>
                 <div class="w-20">

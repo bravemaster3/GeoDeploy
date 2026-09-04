@@ -21,6 +21,9 @@ clipping the extremes to a flat colour.
 """
 import json
 
+import pytest
+
+from geodeploy.services import titiler
 from geodeploy.services.titiler import get_tile_url, tile_url_from_style
 
 
@@ -79,18 +82,26 @@ def test_increment_and_thickness_travel():
     assert p["increment"] == 10 and p["thickness"] == 2
 
 
-def test_thickness_is_an_integer_and_increment_is_not():
-    """TiTiler's own types: `increment: float`, `thickness: int`. A float thickness 422s."""
+def test_every_contour_parameter_is_an_integer():
+    """TiTiler USED to type `increment` as a float, and this test asserted exactly that. It does not
+    any more — `GET /algorithms/contours` on the current `:latest` image declares increment,
+    thickness, minz and maxz all as `integer` — so a fractional interval now 422s every tile and the
+    layer does not draw at all. The old expectation was what let that reach an instance.
+
+    TiTiler runs from `:latest` here, so this is a contract that can tighten without any change on
+    our side. If it loosens again, the rounding is still correct; if it tightens further, this test
+    is where it will show."""
     p = _algo_params(get_tile_url("k.tif", algorithm="contours", increment=12.5, thickness=2.0,
                                   settings=_FakeSettings()))
-    assert p["increment"] == 12.5
+    assert p["increment"] == 13, "half-UP, so the JS twin in mapStyle.js agrees"
+    assert isinstance(p["increment"], int)
     assert isinstance(p["thickness"], int) and p["thickness"] == 2
 
 
 def test_defaults_are_titilers_own():
     """A layer that only ticks the box still gets a working interval rather than nothing."""
     p = _algo_params(get_tile_url("k.tif", algorithm="contours", settings=_FakeSettings()))
-    assert p["increment"] == 35.0 and p["thickness"] == 1
+    assert p["increment"] == 35 and p["thickness"] == 1
     # …and no range at all when there is no stretch to borrow, rather than an invented one.
     assert "minz" not in p
 
@@ -139,3 +150,53 @@ def test_an_empty_or_missing_style_is_a_plain_tile_url():
     for style in ({}, None):
         assert tile_url_from_style("k.tif", style, settings=_FakeSettings()) == get_tile_url(
             "k.tif", settings=_FakeSettings())
+
+
+# ── TiTiler's integer contract (2026-09-04) ──────────────────────────────────────────────────────
+# Read from `GET /algorithms/contours` on the running `:latest` image:
+#
+#     increment  integer  0 – 999
+#     thickness  integer  0 – 10
+#     minz/maxz  integer  ±99999
+#
+# EVERY ONE IS AN INTEGER. `increment` used to be sent as a float, which TiTiler accepted while it
+# was typed loosely; it now 422s the whole tile request for a fractional one — and a raster whose
+# tiles all 422 does not draw AT ALL, so a working contour layer simply disappeared after an update.
+# TiTiler runs from `:latest` here, so its contract can tighten without any change on our side.
+
+class TestContourIntegerContract:
+    def test_a_fractional_interval_is_rounded_rather_than_sent(self):
+        """A 422 on every tile hides the layer; a slightly different spacing does not."""
+        params = json.loads(titiler._contour_params(12.5, 1, 0, 100, None))
+        assert params["increment"] == 13
+        assert isinstance(params["increment"], int)
+
+    def test_rounding_is_half_UP_so_the_two_renderers_agree(self):
+        """Python rounds half to EVEN and JavaScript half UP, so `round()` here would put the
+        editor preview and the published portal on different contour spacings. `int(x + 0.5)` is
+        expressible identically in both — the same fix `ramp_colors` needed."""
+        assert json.loads(titiler._contour_params(12.5, 1, 0, 100, None))["increment"] == 13
+        assert json.loads(titiler._contour_params(1.5, 1, 0, 100, None))["increment"] == 2
+
+    def test_every_value_sent_is_an_int(self):
+        params = json.loads(titiler._contour_params(35, 2, 10.4, 99.6, None))
+        assert all(isinstance(v, int) for v in params.values()), params
+
+    @pytest.mark.parametrize("increment, expected", [(9999, 999), (0.4, 1), (1000, 999)])
+    def test_the_interval_is_clamped_to_titilers_range(self, increment, expected):
+        assert json.loads(titiler._contour_params(
+            increment, 1, 0, 100, None))["increment"] == expected
+
+    @pytest.mark.parametrize("thickness, expected", [(99, 10), (0.4, 1), (11, 10)])
+    def test_the_thickness_is_clamped_too(self, thickness, expected):
+        assert json.loads(titiler._contour_params(
+            35, thickness, 0, 100, None))["thickness"] == expected
+
+    def test_the_z_range_is_clamped_to_titilers_range(self):
+        params = json.loads(titiler._contour_params(35, 1, -500000, 500000, None))
+        assert params["minz"] == -99999 and params["maxz"] == 99999
+
+    def test_a_fractional_stretch_still_widens_to_contain_the_data(self):
+        """Floor and ceil, not round: the band must never clip the extremes to a flat colour."""
+        params = json.loads(titiler._contour_params(35, 1, None, None, "182.789993,315.959992"))
+        assert params["minz"] == 182 and params["maxz"] == 316
