@@ -23,6 +23,8 @@ import json
 
 import pytest
 
+from urllib.parse import quote
+
 from geodeploy.services import titiler
 from geodeploy.services.titiler import get_tile_url, tile_url_from_style
 
@@ -326,3 +328,82 @@ class TestDefaultInterval:
         p = _algo_params(get_tile_url("k.tif", algorithm="contours", settings=_FakeSettings()))
         assert p["increment"] == 35
         assert "minz" not in p
+
+
+class TestContourColours:
+    """TiTiler's contour algorithm hard-codes `cmap.get("terrain")` and black lines, and returns a
+    finished RGB image — so a downstream colormap is ignored and ticking "Contour lines" took the
+    layer's colours away with no way to get them back. The picture is reproduced as band maths plus
+    an explicit colormap whenever the style asks for anything the algorithm cannot express.
+    """
+
+    STRETCH = "0.5563,0.9477"
+
+    def _url(self, **style):
+        return get_tile_url("k.tif", algorithm="contours", increment=0.05,
+                            rescale=self.STRETCH, settings=_FakeSettings(), **style)
+
+    def test_the_defaults_still_use_titilers_own_algorithm(self):
+        """The promise that keeps every published contour layer rendering exactly as it did."""
+        url = self._url()
+        assert "algorithm=contours" in url
+        assert "colormap=" not in url
+
+    def test_writing_the_defaults_out_is_the_same_as_leaving_them(self):
+        assert self._url(contour_palette="terrain", contour_color="#000000") == self._url()
+
+    def test_a_chosen_palette_replaces_the_algorithm_rather_than_layering_on_it(self):
+        """Running both would contour an already-coloured RGB image."""
+        url = self._url(contour_palette="viridis")
+        assert "algorithm=contours" not in url
+        assert "expression=" in url and "colormap=" in url
+
+    def test_an_unknown_palette_falls_back_instead_of_reaching_the_url(self):
+        """The value comes from a client, and it selects a table of colours here."""
+        assert self._url(contour_palette="../../etc/passwd") == self._url()
+
+    def test_a_line_colour_that_is_not_a_colour_falls_back_too(self):
+        assert self._url(contour_color="javascript:alert(1)") == self._url()
+
+    def test_lines_can_take_the_palette_instead_of_one_colour(self):
+        """So a reader can tell which line is which height rather than counting from the edge. The
+        band is SHIFTED past the relief's range — 1..N is the ground, N+1..2N the lines — because
+        one number has to carry both "this is a line" and "it is this high"."""
+        from geodeploy.services import titiler as t
+        url = self._url(contour_palette="viridis", contour_line_palette=True)
+        assert "algorithm=contours" not in url
+        assert quote(str(t.CONTOUR_BANDS) + "+where", safe="") in url
+
+    def test_palette_lines_force_our_own_drawing_even_on_the_default_palette(self):
+        """`terrain` + black is normally the algorithm's job, but the algorithm cannot colour a
+        line by its value at all."""
+        url = self._url(contour_line_palette=True)
+        assert "algorithm=contours" not in url
+
+    def test_the_relief_can_be_switched_off(self):
+        """Coloured lines over a coloured ground read as neither, so the ground goes transparent —
+        not white, which would hide the basemap just as thoroughly."""
+        url = self._url(contour_palette="viridis", contour_line_palette=True,
+                        contour_relief=False)
+        assert "algorithm=contours" not in url
+        assert quote('[0,0,0,0]', safe="") in url
+
+    def test_an_absent_relief_key_means_it_is_ON(self):
+        """`tile_url_from_style` unpacks every key of a stored style, and an absent one arrives as
+        None. A plain `bool(None)` would have switched the relief off for every layer that had
+        never set it — the default silently inverted for all of them."""
+        assert self._url(contour_relief=None) == self._url()
+        assert "algorithm=contours" in tile_url_from_style(
+            "k.tif", {"algorithm": "contours", "rescale": self.STRETCH, "increment": 0.05},
+            settings=_FakeSettings())
+
+    def test_every_contour_key_reaches_the_url_through_the_style(self):
+        """`STYLE_KEYS` is what carries a raster property to all seven surfaces; a key missing from
+        it silently serves the layer in a style nobody chose."""
+        from geodeploy.services import titiler as t
+        for key in ("contour_palette", "contour_color", "contour_line_palette", "contour_relief"):
+            assert key in t.STYLE_KEYS, key
+        url = tile_url_from_style("k.tif", {
+            "algorithm": "contours", "rescale": self.STRETCH, "increment": 0.05,
+            "contour_palette": "viridis", "contour_line_palette": True}, settings=_FakeSettings())
+        assert "colormap=" in url and "algorithm=contours" not in url

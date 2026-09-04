@@ -266,6 +266,15 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   `api/tests/test_native_crs.py`.
 
 ## Last updated
+2026-09-04 (`titiler.py`: **contour lines can be coloured by their own value**, and the relief
+behind them can be switched off. A line takes its band number SHIFTED past the relief's range —
+1..N is the ground, N+1..2N the lines — because one band of output has to carry both "this pixel is
+a line" and "it is this high". With the relief off the ground goes TRANSPARENT rather than white, so
+the lines are read over the basemap. Both force GeoDeploy's own drawing path, since TiTiler's
+algorithm can express neither. `contour_relief` defaults to None, not True, because
+`tile_url_from_style` unpacks absent keys as None and a `bool()` of that would have inverted the
+default for every existing layer.)
+
 2026-09-04 (`symbology.legend_entries`: **the legend describes the symbologies the round trip
 added.** It knew only graduated and categorized COLOUR, so a rule-based layer and a heatmap both
 returned `[]` — no legend at all — and a classified layer of dashed lines or star markers came out

@@ -27,6 +27,12 @@ def get_tile_url(
     thickness: float | str | None = None,
     contour_palette: str | None = None,
     contour_color: str | None = None,
+    contour_line_palette: bool | None = None,
+    # `None`, NOT `True`: `tile_url_from_style` unpacks every key of a stored style through
+    # `STYLE_KEYS`, and an absent one arrives as None. A default of True would still be overridden
+    # by that None, so every layer that had never set it would render with its relief switched OFF —
+    # the default silently inverted for every existing contour layer. None means "not stated".
+    contour_relief: bool | None = None,
     minz: float | str | None = None,
     maxz: float | str | None = None,
     settings=None,
@@ -102,7 +108,11 @@ def get_tile_url(
             lo, hi = _range_of(minz, maxz, rescale)
             step = increment if increment not in (None, "") else _default_increment(lo, hi)
             scale = _contour_scale(step, lo, hi)
-            if _contours_are_default(contour_palette, contour_color):
+            # A line that follows the palette, or a relief switched off, is something TiTiler's
+            # algorithm cannot express either — so both force GeoDeploy's own drawing path.
+            relief = contour_relief is not False       # absent means "yes", see the signature
+            plain = (not contour_line_palette) and relief
+            if plain and _contours_are_default(contour_palette, contour_color):
                 # TiTiler's own algorithm draws exactly this, so use it and keep the URL
                 # byte-identical to what every existing contour layer already has.
                 if scale != 1:
@@ -127,10 +137,12 @@ def get_tile_url(
                 expr = _contour_expression(
                     band, float(step), values.get("thickness", CONTOUR_THICKNESS),
                     lo if lo is not None else _CONTOUR_MINZ,
-                    hi if hi is not None else _CONTOUR_MAXZ)
+                    hi if hi is not None else _CONTOUR_MAXZ,
+                    bool(contour_line_palette))
                 palette, colour = _contour_colours(contour_palette, contour_color)
                 url += f"&expression={quote(expr, safe='')}"
-                url += f"&colormap={quote(_contour_colormap(palette, colour), safe='')}"
+                cmap = _contour_colormap(palette, colour, bool(contour_line_palette), relief)
+                url += f"&colormap={quote(cmap, safe='')}"
     # colormap only makes sense for single-band output (one selected band, or a
     # single-band raster). It is ignored when an algorithm or an RGB composite is active.
     elif len(bands) != 3:
@@ -166,7 +178,7 @@ def _expression_band(bands) -> int:
 #: map, not by the tile server, and sending it would be a parameter TiTiler ignores.
 STYLE_KEYS = ("colormap", "colormap_reverse", "rescale", "algorithm", "zfactor", "bidx",
               "color_classes", "increment", "thickness", "minz", "maxz",
-              "contour_palette", "contour_color")
+              "contour_palette", "contour_color", "contour_line_palette", "contour_relief")
 
 
 def tile_url_from_style(s3_key: str, style: dict | None, band_count: int | None = None,
@@ -372,7 +384,8 @@ def _contours_are_default(style_palette, style_color) -> bool:
 CONTOUR_LINE_FRACTION = 0.03
 
 
-def _contour_expression(band: int, increment, thickness, lo: float, hi: float) -> str:
+def _contour_expression(band: int, increment, thickness, lo: float, hi: float,
+                        line_palette: bool = False) -> str:
     """The contour picture as band maths, so the COLOURS become ours.
 
     TiTiler's `Contours` algorithm hard-codes both halves of what it draws:
@@ -398,15 +411,26 @@ def _contour_expression(band: int, increment, thickness, lo: float, hi: float) -
     # In DATA UNITS, as a fraction of the interval — see `CONTOUR_LINE_FRACTION`.
     width = max(step * CONTOUR_LINE_FRACTION * max(float(thickness or 1), 1.0), step * 1e-4)
     top = CONTOUR_BANDS
-    return ("where((b{b}%{inc})<{thick},0,"
-            "where(b{b}<={lo},1,"
-            "where(b{b}>={hi},{top},"
-            "1+{steps}*(b{b}-{lo})/{span})))").format(
-                b=band, inc=_trim(step), thick=_trim(width), lo=_trim(lo), hi=_trim(hi),
-                top=top, steps=top - 1, span=_trim(span))
+    # The band a pixel falls in, clamped at both ends. Written once and substituted twice below,
+    # because a line has to know its own band too when the lines follow the palette.
+    band_expr = ("where(b{b}<={lo},1,"
+                 "where(b{b}>={hi},{top},"
+                 "1+{steps}*(b{b}-{lo})/{span}))").format(
+                     b=band, lo=_trim(lo), hi=_trim(hi), top=top, steps=top - 1,
+                     span=_trim(span))
+    if not line_palette:
+        # One colour for every line: band 0, which the colormap paints with it.
+        return "where((b{b}%{inc})<{thick},0,{band})".format(
+            b=band, inc=_trim(step), thick=_trim(width), band=band_expr)
+    # LINES COLOURED BY THEIR OWN VALUE. A line takes its band number SHIFTED past the background's
+    # range, so 1..N is the relief and N+1..2N is the lines — one number carrying both facts, which
+    # is the only way to say "this pixel is a line, and it is this high" in a single band of output.
+    return "where((b{b}%{inc})<{thick},{top}+{band},{band})".format(
+        b=band, inc=_trim(step), thick=_trim(width), top=top, band=band_expr)
 
 
-def _contour_colormap(palette: str, line_colour: str) -> str:
+def _contour_colormap(palette: str, line_colour: str, line_palette: bool = False,
+                      relief: bool = True) -> str:
     """The explicit colormap the expression above is coloured through, as JSON.
 
     THE INTERVAL FORM — `[[[lo, hi], [r, g, b, a]], …]` — not the discrete `{value: colour}` one.
@@ -418,9 +442,21 @@ def _contour_colormap(palette: str, line_colour: str) -> str:
     graduated symbology uses — so a raster's contour background and a vector layer's classes drawn
     from the same named ramp are the same colours.
     """
-    intervals = [[[-0.5, 0.5], _rgba(line_colour)]]
-    for i, hexcolour in enumerate(symbology.ramp_colors(palette, CONTOUR_BANDS), start=1):
-        intervals.append([[i - 0.5, i + 0.5], _rgba(hexcolour)])
+    ramp = symbology.ramp_colors(palette, CONTOUR_BANDS)
+    # TRANSPARENT, not white: with the relief switched off the lines are meant to be read over the
+    # basemap, and a white background would hide it just as thoroughly as a coloured one.
+    ground = [_rgba(c) for c in ramp] if relief else [[0, 0, 0, 0]] * CONTOUR_BANDS
+    intervals = []
+    if not line_palette:
+        intervals.append([[-0.5, 0.5], _rgba(line_colour)])
+    for i, colour in enumerate(ground, start=1):
+        intervals.append([[i - 0.5, i + 0.5], colour])
+    if line_palette:
+        # The second half of the range: the same band, drawn as a LINE. `1..N` is the relief and
+        # `N+1..2N` the lines, matching the shift `_contour_expression` applies.
+        for i, hexcolour in enumerate(ramp, start=1):
+            intervals.append([[CONTOUR_BANDS + i - 0.5, CONTOUR_BANDS + i + 0.5],
+                              _rgba(hexcolour)])
     return json.dumps(intervals, separators=(",", ":"))
 
 

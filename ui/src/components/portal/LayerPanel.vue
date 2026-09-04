@@ -1020,13 +1020,33 @@
                     <option v-for="r in CONTOUR_PALETTES" :key="r" :value="r">{{ r }}</option>
                   </select>
                 </div>
-                <div>
+                <div v-if="!config.style?.contour_line_palette">
                   <label class="text-xs text-muted-foreground block">Line colour</label>
                   <input type="color" :value="config.style?.contour_color || '#000000'"
                     @input="emitStyle({ contour_color: $event.target.value })"
                     class="mt-0.5 h-7 w-12 border border-border rounded cursor-pointer bg-transparent" />
                 </div>
               </div>
+              <!-- LINES COLOURED BY THEIR OWN VALUE. Each line takes the palette colour of the band
+                   it sits on, so a reader can tell which line is which height instead of counting
+                   them from the edge. The line's own colour picker goes away while this is on,
+                   because it would set a colour nothing draws. -->
+              <label v-if="config.style?.algorithm === 'contours'"
+                     class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" :checked="!!config.style?.contour_line_palette"
+                  @change="emitStyle({ contour_line_palette: $event.target.checked || undefined })"
+                  class="accent-primary" />
+                <span class="text-[11px] text-foreground">Colour the lines by their value</span>
+              </label>
+              <!-- …and the relief behind them, which is usually what you want OFF once the lines
+                   carry the colour: coloured lines over a coloured ground read as neither. -->
+              <label v-if="config.style?.algorithm === 'contours'"
+                     class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" :checked="config.style?.contour_relief !== false"
+                  @change="emitStyle({ contour_relief: $event.target.checked ? undefined : false })"
+                  class="accent-primary" />
+                <span class="text-[11px] text-foreground">Shade the relief behind the lines</span>
+              </label>
               <div v-if="config.style?.algorithm === 'contours'"
                    class="flex h-2 rounded overflow-hidden" aria-hidden="true">
                 <span v-for="(c, i) in contourPalettePreview" :key="i" class="flex-1"

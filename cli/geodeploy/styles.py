@@ -38,7 +38,8 @@ NO_OUTLINE = "none"
 #: FORGOTTEN does not fail. It quietly serves the layer in a style nobody chose.
 RASTER_STYLE_KEYS = ("colormap", "colormap_reverse", "rescale", "algorithm", "zfactor", "bidx",
                      "color_classes", "increment", "thickness", "minz", "maxz",
-                     "contour_palette", "contour_color")
+                     "contour_palette", "contour_color", "contour_line_palette",
+                     "contour_relief")
 
 #: CLI/keyword name → the key the style dict actually uses. Only `line_type` differs, and it
 #: differs because the stored key is camelCase (`lineType`) for historical reasons.
@@ -64,6 +65,8 @@ _SIMPLE_KEYS = (
     # black lines; naming either makes GeoDeploy draw the contours itself instead.
     ("contour_palette", "contour_palette"),
     ("contour_color", "contour_color"),
+    ("contour_line_palette", "contour_line_palette"),
+    ("contour_relief", "contour_relief"),
     ("bidx", "bidx"),
     ("other_color", "other_color"),
     ("color_field", "color_field"),

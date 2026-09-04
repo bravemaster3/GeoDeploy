@@ -637,7 +637,8 @@ P_RASTER_ALGO_SIG = "geodeploy/raster_algorithm_sig"
 
 #: The keys that belong to a server-side algorithm rather than to a renderer QGIS can build.
 _ALGORITHM_KEYS = ("algorithm", "increment", "thickness", "minz", "maxz", "zfactor",
-                   "contour_palette", "contour_color")
+                   "contour_palette", "contour_color",
+                   "contour_line_palette", "contour_relief")
 
 
 #: Every visual key, with the value the MAP supplies when a style omits it. Used only to COMPARE two
@@ -755,7 +756,8 @@ def comparable_style(style: dict | None, geometry: str | None = None) -> dict:
 #: would linger harmlessly: TiTiler ignores them without the algorithm that reads them.
 _RASTER_KEYS = ("colormap", "colormap_reverse", "rescale", "bidx", "color_classes",
                 "algorithm", "zfactor", "increment", "thickness", "minz", "maxz",
-                "contour_palette", "contour_color")
+                "contour_palette", "contour_color", "contour_line_palette",
+                "contour_relief")
 
 #: Contour defaults, mirrored from `services/titiler`. Needed here only so that an absent value and
 #: an explicitly written one compare as the same map.
@@ -858,6 +860,11 @@ def _comparable_raster(style: dict | None) -> dict:
         colour = _hex_rgba(style.get("contour_color") or CONTOUR_COLOR)
         out["contour_palette"] = palette
         out["contour_color"] = colour
+        # Both are part of the picture: lines coloured by value look nothing like lines in one
+        # colour, and a relief switched off is a different map from a shaded one. Absent means the
+        # default, so a layer that has never been given either compares equal to one written out.
+        out["contour_line_palette"] = bool(style.get("contour_line_palette"))
+        out["contour_relief"] = style.get("contour_relief") is not False
         for key in ("minz", "maxz"):
             if style.get(key) is not None:
                 out[key] = round(_number(style.get(key), 0.0), 6)

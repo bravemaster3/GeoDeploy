@@ -535,6 +535,10 @@ function contourColours(style) {
 }
 
 export function contoursAreDefault(style) {
+  // Palette-coloured lines and a relief switched off are things TiTiler's algorithm cannot express
+  // either, so both force GeoDeploy's own drawing path regardless of the two colours.
+  if (style?.contour_line_palette) return false
+  if (style?.contour_relief === false) return false
   const { palette, colour } = contourColours(style)
   return palette === CONTOUR_DEFAULT_PALETTE && colour === CONTOUR_DEFAULT_COLOR
 }
@@ -548,16 +552,20 @@ const trim = (n) => (String(Number(n).toFixed(6)).replace(/0+$/, '').replace(/\.
 // the whole raster came back one flat colour. 0.03 reproduces TiTiler's default (1/35).
 export const CONTOUR_LINE_FRACTION = 0.03
 
-export function contourExpression(band, increment, thickness, lo, hi) {
+export function contourExpression(band, increment, thickness, lo, hi, linePalette = false) {
   const span = (Number(hi) - Number(lo)) > 0 ? Number(hi) - Number(lo) : 1
   const step = Number(increment) || 1
   const width = Math.max(step * CONTOUR_LINE_FRACTION * Math.max(Number(thickness) || 1, 1),
     step * 1e-4)
   const top = CONTOUR_BANDS
-  return `where((b${band}%${trim(step)})<${trim(width)},0,`
-    + `where(b${band}<=${trim(lo)},1,`
+  // The band a pixel falls in, clamped at both ends — written once and used twice, because a line
+  // has to know its own band too when the lines follow the palette.
+  const bandExpr = `where(b${band}<=${trim(lo)},1,`
     + `where(b${band}>=${trim(hi)},${top},`
-    + `1+${top - 1}*(b${band}-${trim(lo)})/${trim(span)})))`
+    + `1+${top - 1}*(b${band}-${trim(lo)})/${trim(span)}))`
+  if (!linePalette) return `where((b${band}%${trim(step)})<${trim(width)},0,${bandExpr})`
+  // Lines take their band SHIFTED past the relief's range: 1..N is the ground, N+1..2N the lines.
+  return `where((b${band}%${trim(step)})<${trim(width)},${top}+${bandExpr},${bandExpr})`
 }
 
 function rgba(hex) {
@@ -571,11 +579,16 @@ function rgba(hex) {
 // The INTERVAL form, not the discrete one: the expression produces floats, and a discrete map
 // matches exact integers only — measured against the running image, that coloured 156 pixels of a
 // tile where intervals coloured 2704.
-export function contourColormap(palette, lineColour) {
-  const out = [[[-0.5, 0.5], rgba(lineColour)]]
-  rampColors(palette, CONTOUR_BANDS).forEach((c, i) => {
-    out.push([[i + 0.5, i + 1.5], rgba(c)])
-  })
+export function contourColormap(palette, lineColour, linePalette = false, relief = true) {
+  const ramp = rampColors(palette, CONTOUR_BANDS)
+  // TRANSPARENT, not white: with the relief off the lines are read over the basemap, and white
+  // would hide it as thoroughly as a colour would.
+  const ground = relief ? ramp.map(rgba) : ramp.map(() => [0, 0, 0, 0])
+  const out = linePalette ? [] : [[[-0.5, 0.5], rgba(lineColour)]]
+  ground.forEach((c, i) => out.push([[i + 0.5, i + 1.5], c]))
+  if (linePalette) {
+    ramp.forEach((c, i) => out.push([[CONTOUR_BANDS + i + 0.5, CONTOUR_BANDS + i + 1.5], rgba(c)]))
+  }
   return JSON.stringify(out)
 }
 
@@ -714,10 +727,13 @@ export function rasterTilesUrl(baseTileUrl, style, bandCount) {
         if (at >= 0) params.splice(at, 1)
         const p = JSON.parse(contourParams(style, scale) || '{}')
         const { palette, colour } = contourColours(style)
+        const linePalette = !!style.contour_line_palette
+        const relief = style.contour_relief !== false
         const expr = contourExpression(expressionBand(bands), step, p.thickness ?? 1,
-          lo ?? -12000, hi ?? 8000)
+          lo ?? -12000, hi ?? 8000, linePalette)
         params.push(`expression=${encodeURIComponent(expr)}`)
-        params.push(`colormap=${encodeURIComponent(contourColormap(palette, colour))}`)
+        params.push(
+          `colormap=${encodeURIComponent(contourColormap(palette, colour, linePalette, relief))}`)
       }
     }
   } else if (bands.length !== 3) {
