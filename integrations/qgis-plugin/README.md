@@ -278,6 +278,17 @@ Findings in `vendor/` are fixed in `cli/geodeploy` and re-vendored — never edi
 `vendor.py --check` fails.
 
 ## Last updated
+2026-09-04 (`qgis25d.py`: **a data-defined 2.5D height now travels.** QGIS's 2.5D dialog accepts an
+EXPRESSION for the height, not only a number, and stores whatever was typed in the project variable
+as a string — so `float()` raised and every data-driven 2.5D layer silently arrived at the DEFAULT
+height. The buildings drew; they were the wrong height, with nothing anywhere saying so. Verified
+against real QGIS: `levels`, `"levels"` and `levels * 3` all store the string unchanged, and
+`Qgs25DRenderer` has no height method at all, so the variable really is the only place to look. A
+bare column, a quoted one, and a column times a constant become GeoDeploy's `field`/`scale`, which
+is the same picture; anything richer falls back to a fixed height and is REPORTED, because a wrong
+height that draws is worse than one that says why it could not. Also: `terrain` joins the raster
+keys, so a DEM used as 3D terrain keeps that through a QGIS round trip.)
+
 2026-09-04 (`arrows.py`: **QGIS's arrow line round-trips.** `QgsArrowSymbolLayer` is not a decorated
 stroke — it is a filled POLYGON, a tapered shaft with a triangular head, which is why it matched
 none of the marker-line classes and arrived as a plain line with its direction gone. The head is

@@ -174,6 +174,51 @@ def _expression_band(bands) -> int:
     """
     return int(bands[0]) if bands else 1
 
+
+#: MapLibre's own terrain exaggeration bounds. 0 is flat (and so pointless); past about 10 a DEM
+#: becomes spikes rather than relief.
+TERRAIN_MIN_EXAGGERATION = 0.1
+TERRAIN_MAX_EXAGGERATION = 10.0
+TERRAIN_DEFAULT_EXAGGERATION = 1.5
+
+
+def terrain_tile_url(s3_key: str, settings=None) -> str:
+    """Tiles of a DEM encoded as Mapbox Terrain-RGB, for a MapLibre `raster-dem` source.
+
+    THIS IS A SECOND URL FOR THE SAME RASTER, not a restyling of the first. A DEM drawn as terrain
+    is doing two different jobs at once: it is a picture (coloured, hillshaded, contoured — whatever
+    the layer's style says) and it is a HEIGHTFIELD that deforms the map. MapLibre reads the second
+    from its own source type, in an encoding that is not a picture at all — R, G and B are the bytes
+    of a number — so a colormap or a stretch applied to it would corrupt the heights rather than
+    style them. Hence no style keys here, deliberately.
+
+    TiTiler's `terrainrgb` defaults are `interval=0.1` and `baseval=-10000`, which IS the Mapbox
+    encoding, so nothing needs stating and MapLibre's `encoding: "mapbox"` reads it directly.
+    """
+    if settings is None:
+        settings = get_settings()
+    cog_url = f"s3://{settings.storage_bucket}/{s3_key}"
+    return (f"/raster/cog/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}.png"
+            f"?url={cog_url}&algorithm=terrainrgb")
+
+
+def terrain_of(style: dict) -> dict | None:
+    """`{"exaggeration": n}` when a raster style asks to be the map's terrain, else None.
+
+    MapLibre's terrain is a property of the MAP, not of a layer — one heightfield deforms
+    everything — so this is "use this raster as the terrain", and a portal with two such rasters
+    uses the first. That is a real limitation of the renderer rather than a choice, and the panel
+    says so rather than letting an author wonder why the second did nothing.
+    """
+    block = (style or {}).get("terrain")
+    if not isinstance(block, dict) or not block.get("enabled"):
+        return None
+    try:
+        value = float(block.get("exaggeration", TERRAIN_DEFAULT_EXAGGERATION))
+    except (TypeError, ValueError):
+        value = TERRAIN_DEFAULT_EXAGGERATION
+    return {"exaggeration": min(max(value, TERRAIN_MIN_EXAGGERATION), TERRAIN_MAX_EXAGGERATION)}
+
 #: Every key of a raster style that changes the PICTURE. `opacity` is not here: it is applied by the
 #: map, not by the tile server, and sending it would be a parameter TiTiler ignores.
 STYLE_KEYS = ("colormap", "colormap_reverse", "rescale", "algorithm", "zfactor", "bidx",

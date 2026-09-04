@@ -39,7 +39,7 @@ NO_OUTLINE = "none"
 RASTER_STYLE_KEYS = ("colormap", "colormap_reverse", "rescale", "algorithm", "zfactor", "bidx",
                      "color_classes", "increment", "thickness", "minz", "maxz",
                      "contour_palette", "contour_color", "contour_line_palette",
-                     "contour_relief")
+                     "contour_relief", "terrain")
 
 #: CLI/keyword name → the key the style dict actually uses. Only `line_type` differs, and it
 #: differs because the stored key is camelCase (`lineType`) for historical reasons.
@@ -67,6 +67,7 @@ _SIMPLE_KEYS = (
     ("contour_color", "contour_color"),
     ("contour_line_palette", "contour_line_palette"),
     ("contour_relief", "contour_relief"),
+    ("terrain", "terrain"),
     ("bidx", "bidx"),
     ("other_color", "other_color"),
     ("color_field", "color_field"),

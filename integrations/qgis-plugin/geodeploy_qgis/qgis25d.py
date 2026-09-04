@@ -35,6 +35,8 @@ path has and is tracked with it.
 """
 from __future__ import annotations
 
+import re as _re
+
 try:                                    # a package, inside QGIS
     from . import symbology
 except ImportError:                     # pragma: no cover - exec'd standalone by the test harness
@@ -74,7 +76,7 @@ def from_qgis(qgis_layer, renderer):
     if not is_25d(renderer):
         return None, notes
 
-    height = _project_variable(HEIGHT_VARIABLE, DEFAULT_HEIGHT)
+    height, height_field, height_scale, height_expr = _height_of()
     angle = _project_variable(ANGLE_VARIABLE, DEFAULT_ANGLE)
 
     roof = _hex_of(renderer, "roofColor") or symbology.DEFAULT_COLOR
@@ -94,7 +96,14 @@ def from_qgis(qgis_layer, renderer):
             block[key] = value
 
     extrusion = {"enabled": True, "color": roof, "qgis25d": block}
-    if height:
+    # A DATA-DEFINED HEIGHT becomes a FIELD, which is what GeoDeploy's extrusion already speaks —
+    # see `_height_of`. A plain number stays a number, and the two are mutually exclusive: a fixed
+    # height left beside a field would be a value the renderers ignore and a reader would not.
+    if height_field:
+        extrusion["field"] = height_field
+        if height_scale not in (None, 1, 1.0):
+            extrusion["scale"] = height_scale
+    elif height:
         extrusion["height"] = height
 
     # THE FLAT STYLE UNDERNEATH matters as much as the extrusion: the roof colour is what a viewer
@@ -107,9 +116,69 @@ def from_qgis(qgis_layer, renderer):
     notes.append("2.5D is drawn as a real 3D extrusion on the web, which is not the same picture: "
                  "its shadow and its viewing angle have no MapLibre equivalent and are stored "
                  "rather than drawn. Height {0} is in the project's MAP UNITS; GeoDeploy reads it "
-                 "as metres, which agree only in a projected CRS.".format(height))
+                 "as metres, which agree only in a projected CRS.".format(height_field or height))
+    if height_expr:
+        # Said out loud rather than left as a silent fallback: the layer WILL draw, at a height
+        # nobody chose, and the only clue would be that the buildings look wrong.
+        notes.append("The 2.5D height is the expression `{0}`, which GeoDeploy's extrusion cannot "
+                     "express — it reads a column, optionally scaled. The layer is pushed at a "
+                     "fixed height of {1} instead; set a height field on it in GeoDeploy to drive "
+                     "it from the data.".format(height_expr, height))
     return style, notes
 
+
+
+#: `levels`, `"levels"`, `levels * 3`, `3 * levels` — the shapes a 2.5D height expression takes when
+#: it is driven by a column. Anything more elaborate is a real expression and is reported, not
+#: guessed at.
+_FIELD_ONLY = _re.compile(r'^\s*"?([A-Za-z_][\w ]*?)"?\s*$')
+_FIELD_TIMES = _re.compile(r'^\s*"?([A-Za-z_][\w ]*?)"?\s*\*\s*([0-9]*\.?[0-9]+)\s*$')
+_TIMES_FIELD = _re.compile(r'^\s*([0-9]*\.?[0-9]+)\s*\*\s*"?([A-Za-z_][\w ]*?)"?\s*$')
+
+
+def _height_of():
+    """`(height, field, scale, unsupported_expression)` for the 2.5D height.
+
+    QGIS's 2.5D dialog accepts an EXPRESSION for the height, not only a number, and stores whatever
+    was typed in the project variable as a string. Reading that with `float()` raises, so every
+    data-driven 2.5D layer silently arrived at the default height — the buildings drew, at a height
+    nobody chose, with no error to trace. Verified against real QGIS: setting the variable to
+    `levels`, `"levels"` or `levels * 3` stores the string unchanged, and `Qgs25DRenderer` has no
+    height method at all, so the variable really is the only place to look.
+
+    A bare column name, a quoted one, and a column times a constant become GeoDeploy's own
+    `field`/`scale`, which is exactly the same picture. Anything richer is NOT guessed at: it falls
+    back to the default height and is REPORTED, because a wrong height that draws is worse than one
+    that says why it could not.
+    """
+    raw = _raw_variable(HEIGHT_VARIABLE)
+    if raw in (None, ""):
+        return DEFAULT_HEIGHT, None, None, None
+    try:
+        return float(raw), None, None, None
+    except (TypeError, ValueError):
+        pass
+    text = str(raw).strip()
+    match = _FIELD_ONLY.match(text)
+    if match:
+        return DEFAULT_HEIGHT, match.group(1).strip(), None, None
+    match = _FIELD_TIMES.match(text)
+    if match:
+        return DEFAULT_HEIGHT, match.group(1).strip(), float(match.group(2)), None
+    match = _TIMES_FIELD.match(text)
+    if match:
+        return DEFAULT_HEIGHT, match.group(2).strip(), float(match.group(1)), None
+    return DEFAULT_HEIGHT, None, None, text
+
+
+def _raw_variable(name):
+    """The project variable UNCONVERTED — `_project_variable` coerces to float, which is the whole
+    problem this exists to see around."""
+    try:
+        from qgis.core import QgsExpressionContextUtils, QgsProject
+        return QgsExpressionContextUtils.projectScope(QgsProject.instance()).variable(name)
+    except Exception:                   # noqa: BLE001  # nosec B110 - a missing variable is not an error
+        return None
 
 def _project_variable(name: str, fallback: float) -> float:
     """A project-scope expression variable as a float. 2.5D keeps its height and angle here."""

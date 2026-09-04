@@ -589,6 +589,43 @@ def two_and_a_half_d():
           block.get("shadow_color") == "#222222" and block.get("shadow_spread") == 6.0,
           repr(block))
 
+    # A DATA-DEFINED HEIGHT. QGIS's 2.5D dialog takes an expression here, not only a number, and
+    # stores the STRING in the same project variable — so `float()` raised and every such layer
+    # silently arrived at the default height. The buildings drew; they were just the wrong height,
+    # with nothing anywhere to say so.
+    def height_of(expression):
+        QgsExpressionContextUtils.setProjectVariable(QgsProject.instance(),
+                                                     "qgis_25d_height", expression)
+        got = symbology.from_qgis(layer) or {}
+        return got.get("extrusion") or {}
+
+    dd = height_of("levels")
+    check("2.5D: a bare column name becomes a height FIELD", dd.get("field") == "levels",
+          "got {0!r}".format(dd))
+    check("2.5D: …and no fixed height beside it", "height" not in dd, repr(dd))
+
+    dd = height_of('"levels"')
+    check("2.5D: a quoted column name too — QGIS writes them that way",
+          dd.get("field") == "levels", "got {0!r}".format(dd))
+
+    dd = height_of("levels * 3")
+    check("2.5D: a column times a constant keeps both",
+          dd.get("field") == "levels" and dd.get("scale") == 3.0, "got {0!r}".format(dd))
+
+    dd = height_of("3 * levels")
+    check("2.5D: written the other way round as well",
+          dd.get("field") == "levels" and dd.get("scale") == 3.0, "got {0!r}".format(dd))
+
+    # …and an expression that is genuinely an expression is NOT guessed at.
+    QgsExpressionContextUtils.setProjectVariable(
+        QgsProject.instance(), "qgis_25d_height", "coalesce(levels, 1) * 3 + 2")
+    style_x, notes = (symbology.from_qgis(layer), None)
+    dd = (style_x or {}).get("extrusion") or {}
+    check("2.5D: a real expression falls back to a fixed height rather than a wrong field",
+          "field" not in ex and dd.get("height"), repr(dd))
+
+    QgsExpressionContextUtils.setProjectVariable(QgsProject.instance(), "qgis_25d_height", 25.0)
+
     # …and back. The renderer must be 2.5D again, not a plain fill or a real 3D one.
     back = make_layer("Polygon")
     check("2.5D: applied back to QGIS", symbology.apply(back, style))

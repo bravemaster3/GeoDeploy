@@ -600,7 +600,12 @@
    * while looking at their 3D layer is a decision, and this must not overrule it. `pitch == null`
    * means "never pinned", which is the case that needs the help.
    */
-  const has3D = (STYLE.layers || []).some(function (l) { return l && l.type === 'fill-extrusion'; });
+  // …and TERRAIN is the same argument again: a raised relief seen from directly overhead is a flat
+  // picture of a raised relief. It is a ROOT property of the style, not a layer, so it has to be
+  // asked about separately — a check that only looked at `layers` would publish a 3D terrain portal
+  // that opens looking exactly like the 2D one.
+  const has3D = !!STYLE.terrain
+    || (STYLE.layers || []).some(function (l) { return l && l.type === 'fill-extrusion'; });
   const DEFAULT_3D_PITCH = 45;
 
   if (savedView && Array.isArray(savedView.center) && savedView.center.length === 2) {

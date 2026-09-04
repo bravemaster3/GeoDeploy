@@ -963,6 +963,33 @@
                   Reverse the palette
                 </label>
               </div>
+              <!-- 3D TERRAIN. Beside the algorithm rather than inside it: an algorithm replaces
+                   the PICTURE, terrain adds a heightfield under whatever picture there is — so a
+                   hillshaded or contoured DEM draped over its own relief is one tick, not a choice
+                   between them. Single-band only: three bands are a photograph, not elevation. -->
+              <div v-if="(layer?.band_count || 1) === 1" class="pt-1 border-t border-border/50">
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" :checked="terrainOn"
+                    @change="setTerrainOn($event.target.checked)" class="accent-primary" />
+                  <span class="text-xs text-foreground">3D terrain — raise the map by this DEM</span>
+                </label>
+                <div v-if="terrainOn" class="mt-1.5 space-y-1.5 pl-5">
+                  <label class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-16">Height ×</span>
+                    <input type="range" min="0.1" max="10" step="0.1" :value="terrainExaggeration"
+                      @input="setTerrain({ exaggeration: parseFloat($event.target.value) })"
+                      class="flex-1 h-1 accent-primary" />
+                    <span class="text-[11px] text-muted-foreground/70 w-8 text-right tabular-nums">
+                      {{ terrainExaggeration }}×
+                    </span>
+                  </label>
+                  <p class="text-[11px] text-muted-foreground/70 leading-snug">
+                    The whole map is raised, not just this layer — MapLibre has one terrain, so the
+                    first layer that asks for it wins. The map tilts so you can see it.
+                  </p>
+                </div>
+              </div>
+
               <!-- ONE CHOICE, not two checkboxes: TiTiler takes a single `algorithm`, so hillshade
                    and contours are mutually exclusive and a pair of ticks would let the user ask
                    for something that cannot be rendered. -->
@@ -1144,7 +1171,8 @@ import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps, getRaste
 import { RAMPS, DIVERGING, NO_OUTLINE, markerOutline, legendEntries, rampColors,
          representativeColor, pillarRadius } from '@/lib/symbology'
 import LegendSwatch from '@/components/LegendSwatch.vue'
-import { contourRange, defaultIncrement, rasterStyleOf } from '@/lib/mapStyle'
+import { contourRange, defaultIncrement, rasterStyleOf,
+         TERRAIN_DEFAULT_EXAGGERATION } from '@/lib/mapStyle'
 import { TrashIcon, LocateIcon } from '@/views/icons'
 
 const props = defineProps({
@@ -1950,6 +1978,25 @@ function clearQgisStyling() {
     marker_image: undefined,
     line_marker: undefined,
   })
+}
+
+// 3D TERRAIN — the raster equivalent of a polygon's extrusion, and the reason a DEM is 2.5D data
+// in the first place. It is NOT one of the `algorithm` choices above: those replace the picture
+// (hillshade returns finished relief, contours return a coloured RGB image), while terrain leaves
+// the picture alone and adds a HEIGHTFIELD under it. A hillshaded DEM draped over its own terrain
+// is the normal thing to want, and a single dropdown would have made them exclusive.
+const terrainOn = computed(() => !!props.config.style?.terrain?.enabled)
+const terrainExaggeration = computed(() =>
+  props.config.style?.terrain?.exaggeration ?? TERRAIN_DEFAULT_EXAGGERATION)
+
+function setTerrain(patch) {
+  emitStyle({ terrain: { ...(props.config.style?.terrain || {}), ...patch } })
+}
+
+function setTerrainOn(on) {
+  if (!on) { emitStyle({ terrain: undefined }); return }
+  setTerrain({ enabled: true,
+    exaggeration: props.config.style?.terrain?.exaggeration ?? TERRAIN_DEFAULT_EXAGGERATION })
 }
 
 // The ramps a contour BACKGROUND can use. Only ramps GeoDeploy holds the actual colours for — the

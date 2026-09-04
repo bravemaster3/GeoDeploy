@@ -653,6 +653,7 @@ function renderMap() {
   setMarkerSpecs(map.value, markerSpecs)
   applyStyle(style)
   fitToBbox(lonLatBbox(bounds) || lonLatBbox(l.bbox))
+  tiltIfThreeD(style)
 }
 
 onMounted(async () => {
@@ -699,6 +700,18 @@ watch([loaded, layer, styleForMap], () => renderMap(), { deep: true, immediate: 
 //   * ZOOM TO THE LAYER, which MapLibre has no control for and which matters most here: a layer
 //     that never came into view leaves an empty map with no clue whether the data is missing or
 //     merely elsewhere.
+// The one automatic tilt, when the layer being previewed is 3D. Same argument as the portal and
+// the editor: an extrusion or a raised terrain seen from directly overhead is indistinguishable
+// from the flat version, so the preview would look like the feature had done nothing.
+let pitched3D = false
+function tiltIfThreeD(style) {
+  if (pitched3D || !style) return
+  const is3D = !!style.terrain || (style.layers || []).some(l => l.type === 'fill-extrusion')
+  if (!is3D) return
+  pitched3D = true
+  if (map.value && map.value.getPitch() === 0) map.value.easeTo({ pitch: 45, duration: 600 })
+}
+
 let controlsAdded = false
 watch(loaded, (ready) => {
   if (!ready || controlsAdded) return

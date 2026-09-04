@@ -757,7 +757,7 @@ def comparable_style(style: dict | None, geometry: str | None = None) -> dict:
 _RASTER_KEYS = ("colormap", "colormap_reverse", "rescale", "bidx", "color_classes",
                 "algorithm", "zfactor", "increment", "thickness", "minz", "maxz",
                 "contour_palette", "contour_color", "contour_line_palette",
-                "contour_relief")
+                "contour_relief", "terrain")
 
 #: Contour defaults, mirrored from `services/titiler`. Needed here only so that an absent value and
 #: an explicitly written one compare as the same map.

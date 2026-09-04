@@ -108,6 +108,13 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
   the Other colour" — naming a colour with no way to choose it. On a truncated column that fallback
   is most of the map. It writes `style.other_color`, which both renderers and the QGIS plugin have
   always read; only the panel never set it.
+- **3D terrain for a raster** (2026-09-04) — the answer to "rasters can be 2.5D too, no?". It sits
+  BESIDE the `algorithm` dropdown rather than inside it: an algorithm replaces the picture
+  (hillshade returns finished relief, contours a coloured RGB image), while terrain leaves the
+  picture alone and adds a heightfield under it — so a hillshaded or contoured DEM draped over its
+  own relief is one tick, not a choice between them. Single-band only; three bands are a photograph.
+  The panel says the whole map is raised, because MapLibre has one terrain and the topmost layer
+  that asks for it wins.
 - **Arrow SIZE** (2026-09-04) regenerates the tile rather than scaling it through `icon-size`: the
   image is what every renderer draws and what the plugin reads back, so a size living only in the
   layout would be lost the moment the style left this panel. One number scales head length and

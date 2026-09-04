@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 from ..config import get_settings
 from .martin import get_tile_url as vector_tile_url
+from .titiler import terrain_of, terrain_tile_url
 from .titiler import tile_url_from_style as raster_tile_url
 from . import external_sources as ext_svc
 from . import pillars
@@ -100,6 +101,10 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
     """
     sources = {}
     layers = []
+    # A dict rather than a plain variable so the raster branch can `setdefault` into it from inside
+    # the loop without a `nonlocal`: MapLibre applies ONE terrain to the whole map, so the first
+    # raster that asks for it wins and the rest are quietly ignored.
+    terrain_request: dict = {}
     deck_layers = []  # GeoParquet + 3D-Z elevation layers rendered by the deck.gl overlay (not MapLibre)
     elev_seq = 0      # counter for synthetic ids of inline elevation deck layers ("elev-0", …)
     layers_info = []  # per-layer documentation for the portal About panel (name, abstract, links)
@@ -308,6 +313,32 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                                           band_count=layer.band_count)],
                 "tileSize": 256,
             }
+            # 3D TERRAIN. A DEM asked to be the terrain does two jobs at once: it stays the picture
+            # above (coloured, hillshaded, contoured — whatever its style says) and it becomes a
+            # HEIGHTFIELD that deforms the map. MapLibre reads the second from a `raster-dem` source
+            # in Terrain-RGB, where R/G/B are the bytes of a number rather than a colour — so it is
+            # a SECOND source for the same file, never a restyling of the first.
+            _terrain = terrain_of(rstyle)
+            if _terrain:
+                dem_id = f"{source_id}-dem"
+                sources[dem_id] = {
+                    "type": "raster-dem",
+                    "tiles": [terrain_tile_url(layer.s3_key)],
+                    "tileSize": 256,
+                    # TiTiler's `terrainrgb` defaults ARE the Mapbox encoding (interval 0.1,
+                    # baseval -10000), so this reads it directly.
+                    "encoding": "mapbox",
+                }
+                if _rb_terrain := _lonlat_bounds(layer.bbox):
+                    sources[dem_id]["bounds"] = _rb_terrain
+                # Terrain is a property of the MAP, not of a layer — one heightfield deforms
+                # everything — so when two rasters ask, the TOPMOST in the portal's layer list wins.
+                # Assignment, not `setdefault`: this loop runs in REVERSE (index 0 is the top of the
+                # list and must be painted last), so the last write is the topmost layer. A
+                # `setdefault` here would have handed the map to the BOTTOM one, which is the layer
+                # a reader is least likely to think of as the terrain.
+                terrain_request["terrain"] = {"source": dem_id,
+                                              "exaggeration": _terrain["exaggeration"]}
             # Where the data actually IS. Without this MapLibre requests tiles across the whole
             # viewport at every zoom, and the tile server answers 404 for every one that misses the
             # raster — a console full of failed requests, and real traffic spent proving that a COG
@@ -473,7 +504,8 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
     # no layer contributed an extent (raw `bounds` is still the inverted sentinel there, which would
     # be baked as a real extent and open the map on nothing).
     return {"sources": sources, "layers": layers, "bounds": valid_bounds, "core_fitted": core_fitted,
-            "deck_layers": deck_layers, "layers_info": layers_info, "layer_tree": layer_tree}
+            "deck_layers": deck_layers, "layers_info": layers_info, "layer_tree": layer_tree,
+            "terrain": terrain_request.get("terrain")}
 
 
 def _layer_info(layer, kind: str) -> dict:
@@ -851,6 +883,11 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
         "sprite": basemap_style.get("sprite", ""),
         "sources": {**basemap_style.get("sources", {}), **user_data["sources"]},
         "layers": basemap_style.get("layers", []) + user_data["layers"],
+        # 3D TERRAIN is a ROOT property of the style spec, not a layer and not a custom key —
+        # MapLibre applies it itself when the style loads, so a published portal needs no runtime
+        # code to raise its relief. `**` rather than a `"terrain": None`, because the spec has no
+        # null form and a null would be a style error on every portal that has no terrain.
+        **({"terrain": user_data["terrain"]} if user_data.get("terrain") else {}),
         # Custom key — MapLibre ignores unknown top-level keys
         "geodeploy": {
             "bounds": user_data.get("bounds"),

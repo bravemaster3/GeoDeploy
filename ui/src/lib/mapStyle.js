@@ -410,6 +410,22 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
         id: srcId, type: 'raster', source: srcId,
         paint: { 'raster-opacity': cfg.opacity ?? 1.0, ...(cfg.style?.paint || {}) },
       })
+      // 3D TERRAIN: a SECOND source for the same file, in Terrain-RGB, where R/G/B are the bytes of
+      // a number rather than a colour — so it carries no style at all. The layer above stays the
+      // picture. `terrain` is a ROOT property of the style spec, which MapLibre applies itself.
+      // First raster wins: one heightfield deforms the whole map.
+      const terr = terrainOf(cfg.style)
+      if (terr && !style.terrain) {
+        const demId = `${srcId}-dem`
+        style.sources[demId] = {
+          type: 'raster-dem',
+          tiles: [terrainTilesUrl(layer.tile_url)],
+          tileSize: 256,
+          encoding: 'mapbox',
+        }
+        if (rbounds) style.sources[demId].bounds = rbounds
+        style.terrain = { source: demId, exaggeration: terr.exaggeration }
+      }
       expandBounds(layer.bbox)
 
     } else if (cfg.layer_type === 'external') {
@@ -680,6 +696,26 @@ export function contourParams(style, scale = 1) {
 // Mirrors services/titiler.py::_expression_band.
 export function expressionBand(bands) {
   return (bands && bands.length) ? Number(bands[0]) : 1
+}
+
+// 3D TERRAIN for a raster. Mirrors services/titiler.py::terrain_of / terrain_tile_url.
+export const TERRAIN_DEFAULT_EXAGGERATION = 1.5
+
+export function terrainOf(style) {
+  const block = style?.terrain
+  if (!block || typeof block !== 'object' || !block.enabled) return null
+  const value = Number(block.exaggeration ?? TERRAIN_DEFAULT_EXAGGERATION)
+  return { exaggeration: Math.min(Math.max(Number.isFinite(value) ? value : 1.5, 0.1), 10) }
+}
+
+// The DEM's own tiles: the layer's base URL with `algorithm=terrainrgb` and NOTHING else. TiTiler's
+// defaults for it (interval 0.1, baseval -10000) are the Mapbox encoding, so MapLibre reads it
+// directly. Deliberately NOT built through `rasterTilesUrl`: every style key that would add — a
+// colormap, a stretch, a band selection — would corrupt a heightfield rather than style it.
+export function terrainTilesUrl(baseTileUrl) {
+  const base = (baseTileUrl || '').split('&')[0]
+  const url = `${base}&algorithm=terrainrgb`
+  return url.startsWith('/') ? location.origin + url : url
 }
 
 // Build a raster tile URL from the layer's base URL + the configured raster style.
