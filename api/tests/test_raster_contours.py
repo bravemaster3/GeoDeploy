@@ -98,8 +98,12 @@ def test_every_contour_parameter_is_an_integer():
     assert isinstance(p["thickness"], int) and p["thickness"] == 2
 
 
-def test_defaults_are_titilers_own():
-    """A layer that only ticks the box still gets a working interval rather than nothing."""
+def test_defaults_are_titilers_own_when_there_is_nothing_to_derive_from():
+    """A layer that only ticks the box still gets a working interval rather than nothing.
+
+    With NO stretch there is nothing to derive an interval from, so TiTiler's own 35 stands. When
+    there is one, the default follows the data instead — see `TestDefaultInterval`, and the raster
+    whose whole range is 0.4 units wide that 35 rendered as a flat rectangle."""
     p = _algo_params(get_tile_url("k.tif", algorithm="contours", settings=_FakeSettings()))
     assert p["increment"] == 35 and p["thickness"] == 1
     # …and no range at all when there is no stretch to borrow, rather than an invented one.
@@ -108,11 +112,16 @@ def test_defaults_are_titilers_own():
 
 def test_nonsense_values_fall_back_instead_of_breaking_the_tile():
     """A style arrives from JSON, a dialog and a QGIS getter; one bad number must not 422 every
-    tile the layer has."""
+    tile the layer has.
+
+    The fallback is now the interval DERIVED from the stretch rather than TiTiler's 35: a range of
+    1-5 gets lines every 0.5, which is eight of them, where 35 would have drawn none at all. The
+    range is scaled by the same factor that makes 0.5 expressible as an integer — 100 — so the lines
+    and the relief behind them still describe the same numbers."""
     p = _algo_params(get_tile_url("k.tif", algorithm="contours", increment="", thickness="two",
                                   minz="x", maxz=None, rescale="1,5", settings=_FakeSettings()))
-    assert p["increment"] == 35.0 and p["thickness"] == 1
-    assert (p["minz"], p["maxz"]) == (1, 5)
+    assert p["increment"] == 50 and p["thickness"] == 1
+    assert (p["minz"], p["maxz"]) == (100, 500)
 
 
 def test_a_colormap_is_still_ignored_under_contours():
@@ -200,3 +209,120 @@ class TestContourIntegerContract:
         """Floor and ceil, not round: the band must never clip the extremes to a flat colour."""
         params = json.loads(titiler._contour_params(35, 1, None, None, "182.789993,315.959992"))
         assert params["minz"] == 182 and params["maxz"] == 316
+
+
+class TestSubUnitRasters:
+    """A raster whose whole range is narrower than 1.
+
+    TiTiler's contour interval is an `integer` with a minimum of 0, so **1 is the finest interval it
+    can express** — and a vegetation index running 0.5563-0.9477 is narrower than that end to end.
+    Every pixel fell in one band and the tile came back a single flat colour: not an error, not a
+    missing tile, a dark rectangle. Reported as "the layer displays all dark, and I can't change the
+    interval to an appropriate value", which was exactly true — no integer was appropriate.
+
+    Measured against the running image on a 0.556-0.947 float raster: at `increment=1` the tile
+    holds ONE distinct colour; with `expression=b1*1000` at `increment=50` it holds 77.
+    """
+
+    STRETCH = "0.5563,0.9477"
+
+    def test_the_data_is_scaled_so_a_fine_interval_becomes_expressible(self):
+        url = get_tile_url("k.tif", algorithm="contours", increment=0.05, rescale=self.STRETCH,
+                           settings=_FakeSettings())
+        assert "expression=b1*1000" in url
+        assert _algo_params(url)["increment"] == 50
+
+    def test_the_colour_range_is_scaled_by_the_same_factor(self):
+        """Or the relief would be coloured over 0-1 while the lines were drawn across 556-947 —
+        which is the flat rectangle again, with contours faintly on top of it."""
+        p = _algo_params(get_tile_url("k.tif", algorithm="contours", increment=0.05,
+                                      rescale=self.STRETCH, settings=_FakeSettings()))
+        assert (p["minz"], p["maxz"]) == (556, 948)
+
+    def test_the_thickness_is_not_scaled(self):
+        """It is a width in PIXELS, not a value in the data — scaling it would draw a 1 px line
+        1000 px wide, which is the whole tile."""
+        p = _algo_params(get_tile_url("k.tif", algorithm="contours", increment=0.05, thickness=2,
+                                      rescale=self.STRETCH, settings=_FakeSettings()))
+        assert p["thickness"] == 2
+
+    def test_a_dem_in_metres_is_untouched(self):
+        """The URL for ordinary elevation data must be byte-identical to what it was — an interval
+        of 1 or more is already expressible, so there is nothing to scale."""
+        url = get_tile_url("k.tif", algorithm="contours", increment=25,
+                           rescale="182.79,315.96", settings=_FakeSettings())
+        assert "expression" not in url
+        assert _algo_params(url)["increment"] == 25
+
+    @pytest.mark.parametrize("increment,factor,scaled", [
+        (0.5, 100, 50), (0.1, 100, 10), (0.05, 1000, 50), (0.01, 1000, 10), (0.002, 10000, 20)])
+    def test_the_factor_gives_the_interval_two_significant_digits(self, increment, factor, scaled):
+        """Enough that rounding the scaled interval to an integer costs nothing visible."""
+        url = get_tile_url("k.tif", algorithm="contours", increment=increment, rescale="0,1",
+                           settings=_FakeSettings())
+        assert "expression=b1*{0}".format(factor) in url
+        assert _algo_params(url)["increment"] == scaled
+
+    def test_a_range_too_wide_to_scale_falls_back_rather_than_overflowing(self):
+        """`minz`/`maxz` cap at +/-99999. A raster spanning -50000..50000 cannot be multiplied at
+        all, so the interval clamps to 1 — the honest limit — instead of sending a value TiTiler
+        would 422."""
+        url = get_tile_url("k.tif", algorithm="contours", increment=0.05,
+                           rescale="-50000,50000", settings=_FakeSettings())
+        assert "expression" not in url
+        p = _algo_params(url)
+        assert p["increment"] == 1
+        assert abs(p["minz"]) <= 99999 and abs(p["maxz"]) <= 99999
+
+    def test_the_scaling_expression_names_the_selected_band(self):
+        """`bN` names a band of the DATASET and `&bidx=` is IGNORED once an expression is present —
+        measured on a two-band raster whose band 1 is flat and band 2 a ramp: `bidx=2` with
+        `expression=b1*1000` returns one colour, with `b2*1000` it returns 77. A hard-coded `b1`
+        would contour the wrong band and look like plausible data rather than a fault."""
+        url = get_tile_url("k.tif", algorithm="contours", increment=0.05, bidx=[2],
+                           rescale=self.STRETCH, settings=_FakeSettings())
+        assert "expression=b2*1000" in url
+
+    def test_hillshade_exaggeration_names_the_selected_band_too(self):
+        """The same bug, already shipped: `expression=b1*{z}` was hard-coded, so exaggerating a
+        multiband raster hillshaded band 1 whatever the author had picked."""
+        url = get_tile_url("k.tif", algorithm="hillshade", zfactor=3, bidx=[2],
+                           settings=_FakeSettings())
+        assert "expression=b2*3" in url
+
+
+class TestDefaultInterval:
+    """What "just tick the box" draws.
+
+    TiTiler's own default is 35 — a sensible contour interval for a global DEM in metres, and a
+    catastrophic one for anything else. On the 0.556-0.947 raster it is far wider than the data, so
+    ticking "Contour lines" produced the flat dark rectangle before the author had typed anything at
+    all. Same lesson as `symbology.pillar_radius`: a default that does not depend on the data means
+    ticking a box can show nothing.
+    """
+
+    def test_the_default_follows_the_data(self):
+        p = _algo_params(get_tile_url("k.tif", algorithm="contours", rescale="0.5563,0.9477",
+                                      settings=_FakeSettings()))
+        # ~0.039 of range per line, snapped up to a tidy 0.05, then scaled x1000.
+        assert p["increment"] == 50
+
+    def test_it_lands_on_a_tidy_number(self):
+        """Nobody labels a contour "every 3.7 units"."""
+        from geodeploy.services.titiler import _default_increment
+        assert _default_increment(182.79, 315.96) == 20
+        assert _default_increment(0, 1) == 0.1
+        assert _default_increment(0, 1000) == 100
+
+    def test_roughly_ten_lines_across_the_data(self):
+        """Two reads as a mistake and fifty as hatching."""
+        from geodeploy.services.titiler import _default_increment
+        for lo, hi in ((0, 1), (182.79, 315.96), (0.5563, 0.9477), (-20, 60)):
+            lines = (hi - lo) / _default_increment(lo, hi)
+            assert 3 <= lines <= 20, (lo, hi, lines)
+
+    def test_titilers_own_default_survives_when_there_is_no_stretch(self):
+        """Nothing to derive from, so nothing invented."""
+        p = _algo_params(get_tile_url("k.tif", algorithm="contours", settings=_FakeSettings()))
+        assert p["increment"] == 35
+        assert "minz" not in p

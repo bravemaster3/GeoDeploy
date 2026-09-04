@@ -93,9 +93,16 @@ def get_tile_url(
             except (TypeError, ValueError):
                 z = 1.0
             if z and z != 1.0:
-                url += f"&expression=b1*{z}"
+                url += f"&expression=b{_expression_band(bands)}*{z}"
         elif algorithm == "contours":
-            params = _contour_params(increment, thickness, minz, maxz, rescale)
+            lo, hi = _range_of(minz, maxz, rescale)
+            scale = _contour_scale(
+                increment if increment not in (None, "") else _default_increment(lo, hi), lo, hi)
+            if scale != 1:
+                # The data is multiplied BEFORE the algorithm runs, which is the only way to ask
+                # TiTiler for an interval finer than 1 — see `_contour_scale`.
+                url += f"&expression=b{_expression_band(bands)}*{scale}"
+            params = _contour_params(increment, thickness, minz, maxz, rescale, scale)
             if params:
                 url += f"&algorithm_params={quote(params, safe='')}"
     # colormap only makes sense for single-band output (one selected band, or a
@@ -114,6 +121,20 @@ def get_tile_url(
             url += f"&colormap_name={name}_r" if colormap_reverse else f"&colormap_name={name}"
     return url
 
+
+
+def _expression_band(bands) -> int:
+    """Which band an `expression` should read.
+
+    `bN` NAMES A BAND OF THE DATASET, and `&bidx=` is IGNORED whenever an expression is present —
+    measured against the running image on a two-band raster whose band 1 is flat and band 2 a ramp:
+    `bidx=2&expression=b1*1000` contours the flat band and returns one colour, while
+    `bidx=2&expression=b2*1000` returns 77. So the expression has to carry the band selection
+    itself; leaving `b1` hard-coded silently renders the wrong band, which looks like plausible
+    data rather than a fault. (This is why the hillshade z-factor above uses it too — it had `b1`
+    written in, so exaggerating a multiband raster hillshaded band 1 whatever the user picked.)
+    """
+    return int(bands[0]) if bands else 1
 
 #: Every key of a raster style that changes the PICTURE. `opacity` is not here: it is applied by the
 #: map, not by the tile server, and sending it would be a parameter TiTiler ignores.
@@ -175,8 +196,99 @@ CONTOUR_MAX_INCREMENT = 999
 CONTOUR_MAX_THICKNESS = 10
 CONTOUR_Z_LIMIT = 99999
 
+#: THE FACTORS THE DATA MAY BE MULTIPLIED BY before contouring. See `_contour_scale`.
+CONTOUR_SCALES = (10, 100, 1000, 10000, 100000)
 
-def _contour_params(increment, thickness, minz, maxz, rescale) -> str | None:
+
+#: A tidy interval is one of these times a power of ten. The set every contour map uses — nobody
+#: labels a contour "every 3.7 units" — and the reason the default is snapped rather than left as
+#: `range / 10`.
+_NICE_STEPS = (1.0, 2.0, 2.5, 5.0, 10.0)
+
+#: Roughly how many lines across the data a default should draw. Ten reads as relief; two reads as
+#: a mistake and fifty as hatching.
+CONTOUR_TARGET_LINES = 10
+
+
+def _default_increment(lo, hi) -> float:
+    """The interval to use when the author has only ticked the box, derived from the DATA.
+
+    TiTiler's own default is 35, which is a sensible contour interval for a global DEM in metres and
+    a catastrophic one for anything else. The vegetation index that prompted this ranges 0.5563 to
+    0.9477: at 35 — or at any integer, which is all TiTiler's `increment` could express before
+    `_contour_scale` — the whole raster falls inside a single band and the tile is one flat colour.
+    Ticking "Contour lines" therefore turned the layer into a dark rectangle, and no value the UI
+    would accept could fix it. Reported exactly that way.
+
+    So the default follows the data, snapped to a tidy number: this is the same lesson as
+    `symbology.pillar_radius`, where a hard-coded 30 m default made bars about three thousandths of
+    a pixel wide on a world map — rendered perfectly, and completely invisible. A default that
+    depends on the data means ticking the box shows something, and the author adjusts from there
+    rather than guessing which number makes anything appear at all.
+    """
+    try:
+        span = float(hi) - float(lo)
+    except (TypeError, ValueError):
+        return float(CONTOUR_INCREMENT)
+    if not (span > 0):
+        return float(CONTOUR_INCREMENT)
+    raw = span / CONTOUR_TARGET_LINES
+    power = math.floor(math.log10(raw))
+    base = 10.0 ** power
+    for step in _NICE_STEPS:
+        if raw <= step * base * 1.0000001:
+            return step * base
+    return 10.0 * base
+
+
+def _contour_scale(increment, lo, hi) -> int:
+    """The power of ten to multiply the DATA by so that an integer interval can express `increment`.
+
+    THE PROBLEM: TiTiler's contour interval is an `integer`, minimum 0 — so the finest interval it
+    can take is **1**. A vegetation index ranging 0.5563–0.9477 is narrower than that, end to end.
+    Every pixel lands in one band and the tile comes back as a single flat colour: not an error, not
+    a missing layer, just a dark rectangle. Reported as "the layer displays all dark, and I can't
+    change the interval to an appropriate value", which is exactly right — there is no appropriate
+    integer.
+
+    THE FIX: contour a scaled copy. `expression=b1*1000` multiplies the data before the algorithm
+    sees it, so that same index becomes 556–947 and an interval of 0.05 becomes a perfectly ordinary
+    50. Verified against the running image on a 0.556–0.947 float raster: at `increment=1` the tile
+    holds **one** distinct colour, and with the expression at `increment=50` it holds **77**.
+
+    The multiplier is chosen so the scaled interval has two significant digits — enough that
+    rounding it to an integer costs nothing visible — and then held back to whatever still fits
+    TiTiler's own bounds, since `increment` may not exceed 999 and `minz`/`maxz` may not exceed
+    ±99999. A DEM in metres never reaches this code at all: an interval of 1 or more is already
+    expressible, so the URL is byte-identical to what it was.
+    """
+    try:
+        step = float(increment)
+    except (TypeError, ValueError):
+        return 1
+    if not (0 < step < 1):
+        return 1
+    extreme = 0.0
+    for edge in (lo, hi):
+        try:
+            extreme = max(extreme, abs(float(edge)))
+        except (TypeError, ValueError):
+            continue
+    best = 1
+    for factor in CONTOUR_SCALES:
+        if step * factor > CONTOUR_MAX_INCREMENT:
+            break
+        if extreme and extreme * factor > CONTOUR_Z_LIMIT:
+            break
+        if step * factor >= 1:
+            best = factor
+        if step * factor >= 10:
+            break
+    return best
+
+
+
+def _contour_params(increment, thickness, minz, maxz, rescale, scale: int = 1) -> str | None:
     """`algorithm_params` JSON for the contours algorithm, or None when there is nothing to send.
 
     WHY `minz`/`maxz` DEFAULT TO THE STRETCH, which is the whole reason this function exists rather
@@ -193,8 +305,9 @@ def _contour_params(increment, thickness, minz, maxz, rescale) -> str | None:
     background should span something other than the data.
     """
     values: dict = {}
+    lo, hi = _range_of(minz, maxz, rescale)
     for key, value, default, top in (
-            ("increment", increment, CONTOUR_INCREMENT, CONTOUR_MAX_INCREMENT),
+            ("increment", increment, _default_increment(lo, hi), CONTOUR_MAX_INCREMENT),
             ("thickness", thickness, CONTOUR_THICKNESS, CONTOUR_MAX_THICKNESS)):
         try:
             number = float(value) if value not in (None, "") else float(default)
@@ -210,16 +323,19 @@ def _contour_params(increment, thickness, minz, maxz, rescale) -> str | None:
             # UP, so an interval of 12.5 would become 12 here and 13 in `mapStyle.js` — the editor
             # preview and the published portal drawing contours at different spacings. Half-up is
             # expressible identically in both, which is the same fix `ramp_colors` needed.
+            # SCALED FIRST for the interval, because the data it measures was scaled too — see
+            # `_contour_scale`. `thickness` is a width in PIXELS, not a data value, so it is not.
+            if key == "increment":
+                number *= scale
             values[key] = max(1, min(top, int(number + 0.5)))
-    lo, hi = _range_of(minz, maxz, rescale)
     if lo is not None:
         # INTEGERS, and not by preference: TiTiler types `minz`/`maxz` as `int` and rejects the whole
         # tile request with a 422 for a fractional one — `input_value=182.789993` — which matters
         # because the stretch these borrow from is very often fractional (a stored DEM range here is
         # `182.789993,315.959992`). Floor and ceil rather than round, so the band always WIDENS to
         # contain the data instead of clipping the extremes to a flat colour.
-        values["minz"] = max(-CONTOUR_Z_LIMIT, math.floor(lo))
-        values["maxz"] = min(CONTOUR_Z_LIMIT, math.ceil(hi))
+        values["minz"] = max(-CONTOUR_Z_LIMIT, math.floor(lo * scale))
+        values["maxz"] = min(CONTOUR_Z_LIMIT, math.ceil(hi * scale))
     return json.dumps(values, separators=(",", ":")) if values else None
 
 

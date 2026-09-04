@@ -512,33 +512,94 @@ function explicitColormap(classes, reverse) {
   return Object.keys(mapping).length ? JSON.stringify(mapping) : null
 }
 
-// CONTOUR parameters. Mirrors services/titiler._contour_params, and the two traps are the same:
-// TiTiler's contours colours the data across minz–maxz with a built-in terrain ramp and draws the
-// lines on that, so its planet-sized defaults (−12000..8000) render a survey DEM as one flat band —
-// hence borrowing the layer's own stretch. And it types minz/maxz as INT, rejecting the whole tile
-// request for a fractional one, so the borrowed range is floored and ceiled to widen rather than clip.
-export function contourParams(style) {
-  const out = {}
-  const increment = Number(style?.increment)
-  const thickness = Number(style?.thickness)
-  // INTEGERS, CLAMPED to the bounds TiTiler declares at `GET /algorithms/contours`:
-  // increment 0-999, thickness 0-10, minz/maxz ±99999, and every one typed `integer`. A fractional
-  // increment is a 422 on every tile, which hides the layer completely. Mirrors
-  // services/titiler.py::_contour_params.
-  const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, Math.round(n)))
-  out.increment = Number.isFinite(increment) && increment > 0 ? clamp(increment, 1, 999) : 35
-  out.thickness = Number.isFinite(thickness) && thickness > 0 ? clamp(thickness, 1, 10) : 1
+// The interval to use when the author has only ticked the box, derived from the DATA rather than
+// taken from TiTiler's 35 — which is a fine contour interval for a global DEM in metres and a
+// catastrophic one for a vegetation index running 0.556-0.947, where it puts the whole raster in
+// one band and draws a flat dark rectangle. Snapped to a tidy number, because nobody labels a
+// contour "every 3.7 units". Mirrors services/titiler.py::_default_increment.
+const NICE_STEPS = [1, 2, 2.5, 5, 10]
+export const CONTOUR_TARGET_LINES = 10
+
+export function defaultIncrement(lo, hi) {
+  const span = Number(hi) - Number(lo)
+  if (!Number.isFinite(span) || span <= 0) return 35
+  const raw = span / CONTOUR_TARGET_LINES
+  const base = Math.pow(10, Math.floor(Math.log10(raw)))
+  for (const step of NICE_STEPS) {
+    if (raw <= step * base * 1.0000001) return step * base
+  }
+  return 10 * base
+}
+
+// The power of ten the DATA is multiplied by before contouring. Mirrors
+// services/titiler.py::_contour_scale, which carries the full reasoning: TiTiler's interval is an
+// integer with a minimum of 0, so 1 is the finest it can take — and a vegetation index running
+// 0.556-0.947 is narrower than that end to end, which renders as one flat dark band. Scaling the
+// data with `expression=b1*1000` turns an interval of 0.05 into an ordinary 50.
+export const CONTOUR_SCALES = [10, 100, 1000, 10000, 100000]
+
+export function contourScale(increment, lo, hi) {
+  const step = Number(increment)
+  if (!Number.isFinite(step) || step <= 0 || step >= 1) return 1
+  let extreme = 0
+  for (const edge of [lo, hi]) {
+    const n = Number(edge)
+    if (Number.isFinite(n)) extreme = Math.max(extreme, Math.abs(n))
+  }
+  let best = 1
+  for (const factor of CONTOUR_SCALES) {
+    if (step * factor > 999) break
+    if (extreme && extreme * factor > 99999) break
+    if (step * factor >= 1) best = factor
+    if (step * factor >= 10) break
+  }
+  return best
+}
+
+// The stretch a contour layer colours its relief over, as `[lo, hi]` or `[null, null]`. Split out
+// because both `contourParams` and the URL builder need it — the URL to choose the scale, the
+// params to scale the range with it. Mirrors services/titiler.py::_range_of.
+export function contourRange(style) {
   let lo = Number(style?.minz)
   let hi = Number(style?.maxz)
   if (!(Number.isFinite(lo) && Number.isFinite(hi) && hi > lo)) {
     const parts = String(style?.rescale || '').split(',')
     lo = Number(parts[0]); hi = Number(parts[1])
   }
-  if (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo) {
-    out.minz = Math.max(-99999, Math.floor(lo))
-    out.maxz = Math.min(99999, Math.ceil(hi))
+  return (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo) ? [lo, hi] : [null, null]
+}
+
+// CONTOUR parameters. Mirrors services/titiler._contour_params, and the traps are the same:
+// TiTiler's contours colours the data across minz–maxz with a built-in terrain ramp and draws the
+// lines on that, so its planet-sized defaults (−12000..8000) render a survey DEM as one flat band —
+// hence borrowing the layer's own stretch. And every parameter is typed INT, so a fractional one is
+// a 422 on every tile: the interval reaches an integer by scaling the DATA instead (see
+// `contourScale`), and the borrowed range is floored and ceiled to widen rather than clip.
+export function contourParams(style, scale = 1) {
+  const out = {}
+  const increment = Number(style?.increment)
+  const thickness = Number(style?.thickness)
+  // Half-up rounding via Math.round, matched on the server by `int(x + 0.5)` rather than `round()`:
+  // Python rounds half to EVEN, so a 12.5 would land on 12 there and 13 here — the preview and the
+  // published portal drawing contours at different spacings.
+  const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, Math.round(n)))
+  const [dlo, dhi] = contourRange(style)
+  out.increment = clamp((Number.isFinite(increment) && increment > 0
+    ? increment : defaultIncrement(dlo, dhi)) * scale, 1, 999)
+  out.thickness = Number.isFinite(thickness) && thickness > 0 ? clamp(thickness, 1, 10) : 1
+  const [lo, hi] = contourRange(style)
+  if (lo !== null) {
+    out.minz = Math.max(-99999, Math.floor(lo * scale))
+    out.maxz = Math.min(99999, Math.ceil(hi * scale))
   }
   return JSON.stringify(out)
+}
+
+// Which band an `expression` should read. `bN` names a band of the DATASET and `&bidx=` is ignored
+// whenever an expression is present, so the expression has to carry the band selection itself.
+// Mirrors services/titiler.py::_expression_band.
+export function expressionBand(bands) {
+  return (bands && bands.length) ? Number(bands[0]) : 1
 }
 
 // Build a raster tile URL from the layer's base URL + the configured raster style.
@@ -566,10 +627,17 @@ export function rasterTilesUrl(baseTileUrl, style, bandCount) {
   if (style?.algorithm) {
     params.push(`algorithm=${style.algorithm}`)
     if (style.algorithm === 'hillshade' && style.zfactor && Number(style.zfactor) !== 1) {
-      params.push(`expression=b1*${style.zfactor}`)
+      // `b1` was hard-coded here, so exaggerating a multiband raster hillshaded band 1 whatever
+      // band the author had picked — `bidx` is ignored once an expression is present.
+      params.push(`expression=b${expressionBand(bands)}*${style.zfactor}`)
     }
     if (style.algorithm === 'contours') {
-      const p = contourParams(style)
+      const [lo, hi] = contourRange(style)
+      const scale = contourScale(Number(style.increment) > 0
+        ? Number(style.increment) : defaultIncrement(lo, hi), lo, hi)
+      // Scaling the DATA is the only way to ask TiTiler for an interval finer than 1.
+      if (scale !== 1) params.push(`expression=b${expressionBand(bands)}*${scale}`)
+      const p = contourParams(style, scale)
       if (p) params.push(`algorithm_params=${encodeURIComponent(p)}`)
     }
   } else if (bands.length !== 3) {

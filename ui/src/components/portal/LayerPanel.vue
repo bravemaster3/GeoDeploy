@@ -477,10 +477,23 @@
                     {{ config.style?.heatmap?.radius ?? 20 }}px
                   </span>
                 </div>
-                <select :value="heatmapRampName" @change="setHeatmapRamp($event.target.value)"
-                  class="w-full text-xs border border-border rounded px-1.5 py-1">
-                  <option v-for="r in heatmapRamps" :key="r.name" :value="r.name">{{ r.label }}</option>
-                </select>
+                <!-- THE RAMPS AS RAMPS. They were a dropdown of names — "Blue to red", "Dark to
+                     yellow" — which asks the author to picture a gradient from a phrase when the
+                     gradient itself fits in the same space. A colour ramp is the one thing that
+                     genuinely cannot be described better in words than shown; QGIS, matplotlib and
+                     every GIS that offers ramps draws them, and for the same reason. The first stop
+                     is transparent, so each swatch sits on a chequerboard that makes the fade to
+                     nothing visible rather than looking like the strip just starts pale. -->
+                <div class="grid grid-cols-2 gap-1">
+                  <button v-for="r in heatmapRamps" :key="r.name" type="button"
+                    @click="setHeatmapRamp(r.name)" :title="r.label" :aria-label="r.label"
+                    :aria-pressed="heatmapRampName === r.name"
+                    class="h-6 rounded border transition-colors"
+                    :class="heatmapRampName === r.name
+                      ? 'border-primary ring-1 ring-primary/60' : 'border-border hover:border-primary/60'"
+                    :style="{ backgroundImage: rampSwatch(r), backgroundSize: '8px 8px, 8px 8px, auto',
+                              backgroundPosition: '0 0, 4px 4px, 0 0' }"></button>
+                </div>
                 <select :value="config.style?.heatmap?.weight_field || ''"
                   @change="setHeatmapWeight($event.target.value)"
                   class="w-full text-xs border border-border rounded px-1.5 py-1">
@@ -912,11 +925,15 @@
                   <label class="text-xs text-muted-foreground" title="Spacing between contour lines, in the raster's own units">
                     Interval
                   </label>
-                  <!-- WHOLE NUMBERS, 1-999: TiTiler types the contour interval as an integer and
-                       422s the tile for anything else, which hides the layer rather than rounding
-                       it. `step="any"` here is how a fractional one got in. -->
-                  <input type="number" min="1" max="999" step="1" :value="config.style?.increment ?? 35"
-                    @input="emitStyle({ increment: parseInt($event.target.value, 10) || null })"
+                  <!-- DECIMALS ARE ALLOWED AGAIN, and they now work. TiTiler types the interval as
+                       an integer with a minimum of 0, so 1 is the finest it can express — and a
+                       vegetation index running 0.556-0.947 is narrower than that end to end, which
+                       drew the whole raster as one flat dark band with no interval able to fix it.
+                       `mapStyle.js`/`titiler.py` scale the DATA instead (`expression=b1*1000`), so
+                       an interval of 0.05 becomes an ordinary 50 and the number typed here is the
+                       one in the raster's own units. -->
+                  <input type="number" min="0" step="any" :value="contourInterval"
+                    @input="emitStyle({ increment: parseFloat($event.target.value) || null })"
                     class="mt-0.5 w-full text-xs border border-border rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary/60" />
                 </div>
                 <div class="w-20">
@@ -930,7 +947,7 @@
                    behind the lines is drawn over. Without it TiTiler spans −12000–8000 m and a
                    survey DEM comes out one flat colour, so say what the numbers are doing. -->
               <p v-if="config.style?.algorithm === 'contours'" class="text-xs text-muted-foreground">
-                Lines every {{ config.style?.increment ?? 35 }} units, over the stretch below —
+                Lines every {{ contourInterval }} units, over the stretch below —
                 that range colours the relief behind them.
                 <button v-if="!config.style?.rescale" @click="autoStretch" :disabled="autoStretching"
                   class="text-primary hover:text-primary/80 font-medium disabled:opacity-50">
@@ -1017,7 +1034,7 @@ import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps, getRaste
 // the legend here must describe exactly what the published portal will draw.
 import { RAMPS, DIVERGING, NO_OUTLINE, markerOutline, legendEntries, rampColors,
          representativeColor, pillarRadius } from '@/lib/symbology'
-import { rasterStyleOf } from '@/lib/mapStyle'
+import { contourRange, defaultIncrement, rasterStyleOf } from '@/lib/mapStyle'
 import { TrashIcon, LocateIcon } from '@/views/icons'
 
 const props = defineProps({
@@ -1506,6 +1523,19 @@ const heatmapRampName = computed(() => {
   return hit ? hit.name : 'heat'
 })
 
+// A ramp drawn as a ramp: the colours as a left-to-right gradient, over a chequerboard so the
+// transparent first stop reads as transparent rather than as a pale start. Two `linear-gradient`s
+// make the chequer squares — no image to load, and it works on either theme because the squares are
+// black at 6% over the panel's own background.
+function rampSwatch(ramp) {
+  const stops = ramp.colors.map((c, i) => `${c} ${(i / (ramp.colors.length - 1) * 100).toFixed(0)}%`)
+  return [
+    `linear-gradient(to right, ${stops.join(', ')})`,
+    'linear-gradient(45deg, rgba(128,128,128,.28) 25%, transparent 25%, transparent 75%, rgba(128,128,128,.28) 75%)',
+    'linear-gradient(45deg, rgba(128,128,128,.28) 25%, transparent 25%, transparent 75%, rgba(128,128,128,.28) 75%)',
+  ].join(', ')
+}
+
 function setHeatmap(patch) {
   emitStyle({ heatmap: { ...(props.config.style?.heatmap || {}), ...patch, enabled: true } })
 }
@@ -1668,6 +1698,17 @@ function clearQgisStyling() {
     line_marker: undefined,
   })
 }
+
+// What the interval box shows: the author's number, or the default the renderers will actually use
+// — derived from the raster's own stretch, not TiTiler's global-DEM 35. Showing 35 while the tiles
+// were drawn at 0.05 would be a hint that lies about the map. Mirrors
+// `lib/mapStyle.js::defaultIncrement` and `services/titiler.py::_default_increment`.
+const contourInterval = computed(() => {
+  const own = Number(props.config.style?.increment)
+  if (Number.isFinite(own) && own > 0) return own
+  const [lo, hi] = contourRange(props.config.style || {})
+  return defaultIncrement(lo, hi)
+})
 
 function setExtrusion(patch) {
   emitStyle({ extrusion: { ...(props.config.style?.extrusion || {}), ...patch } })

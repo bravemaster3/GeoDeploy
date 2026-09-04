@@ -285,7 +285,11 @@
           <Fact label="Attribution" :value="layer.attribution" />
           <Fact label="Keywords" :value="layer.keywords" />
         </dl>
-        <p v-if="layer.abstract" class="text-xs text-muted-foreground mt-2 whitespace-pre-line">
+        <!-- A description is free text somebody pasted, and it very often holds a source URL —
+             one unbroken run of characters with nowhere to wrap, which pushed the text out through
+             the side of the card. `anywhere` breaks such a run only when it has to. -->
+        <p v-if="layer.abstract"
+           class="text-xs text-muted-foreground mt-2 whitespace-pre-line [overflow-wrap:anywhere]">
           {{ layer.abstract }}
         </p>
         <p class="text-[11px] text-muted-foreground/60 mt-2">
@@ -349,10 +353,15 @@ import { tileTitle, isTiling, confirmTiling } from '@/lib/tiling'
 // is absent — a "Bands: —" line on a vector layer is noise pretending to be information.
 const Fact = (props) => (props.value === undefined || props.value === null || props.value === '')
   ? null
+  // `min-w-0` + `overflow-wrap: anywhere` on the value, because a flex child will not shrink below
+  // its content's intrinsic width — so an attribution holding a long URL pushed straight out
+  // through the side of the card instead of wrapping. `anywhere` rather than `break-all`: it breaks
+  // a run of characters only when there is no other way, so ordinary prose still wraps at spaces.
   : h('div', { class: 'flex items-baseline justify-between gap-3' }, [
       h('dt', { class: 'text-xs text-muted-foreground/70 flex-shrink-0', title: props.hint || '' },
         props.label),
-      h('dd', { class: props.mono ? 'text-xs font-mono text-right break-all' : 'text-sm text-right' },
+      h('dd', { class: 'min-w-0 [overflow-wrap:anywhere] ' + (props.mono
+        ? 'text-xs font-mono text-right break-all' : 'text-sm text-right') },
         String(props.value)),
     ])
 Fact.props = ['label', 'value', 'mono', 'hint']
