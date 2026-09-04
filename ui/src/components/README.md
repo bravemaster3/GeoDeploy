@@ -91,6 +91,15 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
 
 ## Dependencies / relationships
 - Read/write through `../../stores/` (mostly `data` and `portals`) and call the backend via `../../api`.
+- `LayerPanel.vue` gained **labels**, a **visible zoom range**, and a **"Styled in QGIS"** block
+  (2026-09-04). The first two are authoring controls; the third is not — rules, a pattern fill, a
+  rendered marker and markers along a line are drawn but not editable here, and each of them
+  **outranks** the controls above it. Without naming them, the colour picker appears to do nothing
+  on such a layer and there is no way to find out why; the block says what is in charge and offers
+  one button to hand control back. Labels sit behind their own switch, following the 3D block: an
+  off switch and one line of text is the whole cost when you do not want them.
+- **`StyleModal.vue` gets all of it for free** — the layer's own page hosts this same component
+  rather than defining a second styling UI, and it persists the whole `style` dict.
 - `LayerPanel.vue`'s class-count spin box is **2–100** (2026-09-03), matching the server's clamp in
   `field-stats`. It was 2–12, and that cap was working around `rampColors` snapping to one of seven
   anchor stops — twelve classes came out in seven colours. Ramps interpolate now, so N classes give

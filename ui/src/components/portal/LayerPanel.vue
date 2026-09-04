@@ -368,6 +368,100 @@
               </div>
             </div>
 
+            <!-- LABELS. New to the platform in 2026-09; there was no way to label a layer at all
+                 before, here or anywhere. Collapsed behind its own switch, following the 3D block
+                 above: an off switch and one line of text is the whole cost when you do not want
+                 labels, and QGIS's own labelling tab is a panel you open rather than a wall you
+                 scroll past. -->
+            <div v-if="canLabel" class="pt-1 border-t border-border/50">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" :checked="labelsOn"
+                  @change="setLabelsOn($event.target.checked)" class="accent-primary" />
+                <span class="text-xs text-foreground">Label features</span>
+              </label>
+              <div v-if="labelsOn" class="mt-1.5 space-y-1.5 pl-5">
+                <select :value="config.style?.labels?.field || ''"
+                  @change="setLabels({ field: $event.target.value })"
+                  class="w-full text-xs border border-border rounded px-1.5 py-1">
+                  <option value="">Choose a field…</option>
+                  <option v-for="f in styleFields" :key="f.name" :value="f.name">{{ f.name }}</option>
+                </select>
+                <div class="flex items-center gap-2">
+                  <input type="color" :value="config.style?.labels?.color || '#333333'"
+                    @input="setLabels({ color: $event.target.value })"
+                    class="w-6 h-6 rounded border border-border cursor-pointer p-0" />
+                  <span class="text-[11px] text-muted-foreground">Size</span>
+                  <input type="number" min="6" max="48" step="1" :value="config.style?.labels?.size ?? 12"
+                    @change="setLabels({ size: parseFloat($event.target.value) || 12 })"
+                    class="w-14 text-xs border border-border rounded px-1.5 py-0.5" />
+                  <span class="text-[11px] text-muted-foreground/70">px</span>
+                </div>
+                <!-- The halo is what makes a label readable over a busy basemap, so it is on by
+                     default and offered here rather than hidden deeper. QGIS calls it a buffer. -->
+                <div class="flex items-center gap-2">
+                  <input type="color" :value="config.style?.labels?.halo_color || '#ffffff'"
+                    @input="setLabels({ halo_color: $event.target.value })"
+                    class="w-6 h-6 rounded border border-border cursor-pointer p-0" />
+                  <span class="text-[11px] text-muted-foreground">Halo</span>
+                  <input type="number" min="0" max="6" step="0.5" :value="config.style?.labels?.halo_width ?? 1"
+                    @change="setLabels({ halo_width: parseFloat($event.target.value) || 0 })"
+                    class="w-14 text-xs border border-border rounded px-1.5 py-0.5" />
+                  <span class="text-[11px] text-muted-foreground/70">px</span>
+                </div>
+                <label v-if="geomType === 'line'" class="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" :checked="config.style?.labels?.placement === 'line'"
+                    @change="setLabels({ placement: $event.target.checked ? 'line' : 'point' })"
+                    class="accent-primary" />
+                  <span class="text-[11px] text-muted-foreground">Bend the text along the line</span>
+                </label>
+                <p class="text-[11px] text-muted-foreground/70 leading-snug">
+                  Drawn above every layer on the map. A portal draws the fonts its glyph set
+                  contains; anything else is matched to the nearest it has.
+                </p>
+              </div>
+            </div>
+
+            <!-- WHERE IT DRAWS. QGIS keeps this on the layer rather than in its symbology, and so
+                 does GeoDeploy — it applies to everything the layer draws, its labels included. Two
+                 numbers, so it stays one line rather than a section. -->
+            <div v-if="config.layer_type === 'vector'" class="pt-1 border-t border-border/50">
+              <label class="text-xs text-muted-foreground">Visible zoom range</label>
+              <div class="flex items-center gap-2 mt-0.5">
+                <input type="number" min="0" max="24" step="1" placeholder="0"
+                  :value="config.style?.minzoom ?? ''"
+                  @change="setZoom('minzoom', $event.target.value)"
+                  class="w-16 text-xs border border-border rounded px-1.5 py-0.5" />
+                <span class="text-[11px] text-muted-foreground/70">to</span>
+                <input type="number" min="0" max="24" step="1" placeholder="24"
+                  :value="config.style?.maxzoom ?? ''"
+                  @change="setZoom('maxzoom', $event.target.value)"
+                  class="w-16 text-xs border border-border rounded px-1.5 py-0.5" />
+                <span class="text-[11px] text-muted-foreground/70">leave blank for no limit</span>
+              </div>
+            </div>
+
+            <!-- SYMBOLOGY THAT CAME FROM QGIS. Rules, a pattern fill, a rendered marker and markers
+                 along a line are all drawn here but not editable here — and each of them OUTRANKS
+                 the controls above, so without this the colour picker would appear to do nothing
+                 and there would be no way to find out why. Naming what is in charge, and offering
+                 one button to hand control back, is the whole point of the block. -->
+            <div v-if="qgisStyling.length" class="pt-1 border-t border-border/50">
+              <p class="text-xs text-foreground">Styled in QGIS</p>
+              <ul class="mt-1 space-y-0.5">
+                <li v-for="item in qgisStyling" :key="item" class="text-[11px] text-muted-foreground">
+                  • {{ item }}
+                </li>
+              </ul>
+              <p class="text-[11px] text-muted-foreground/70 mt-1 leading-snug">
+                This is drawn on the map but edited in QGIS. It takes precedence over the controls
+                above.
+              </p>
+              <button @click="clearQgisStyling"
+                class="mt-1.5 text-[11px] text-primary hover:text-primary/80 font-medium">
+                Use simple styling instead
+              </button>
+            </div>
+
             <!-- Popup fields -->
             <div v-if="layer?.columns?.length">
               <div class="flex items-center justify-between mb-1">
@@ -1037,6 +1131,69 @@ function setNoOutline(on) {
   // Turning it back ON restores the geometry's own default rather than whatever was last picked:
   // the previous colour is gone from the style, and guessing one would be worse than a known start.
   emitStyle({ outline_color: on ? NO_OUTLINE : (geomType.value === 'point' ? '#ffffff' : '#1d4ed8') })
+}
+
+// ── Labels ──────────────────────────────────────────────────────────────────
+// A label is a second thing drawn for the same feature, so it lives in its own block of the style
+// and becomes its own MapLibre layer — see services/symbology.label_layout. Rasters have nothing to
+// label, and neither does an external source we do not hold the attributes for.
+const canLabel = computed(() => props.config.layer_type === 'vector' && styleFields.value.length > 0)
+const labelsOn = computed(() => !!props.config.style?.labels?.enabled)
+
+function setLabels(patch) {
+  // MERGED, and enabling as soon as anything is set: naming a size on an unlabelled layer and
+  // getting nothing would be a puzzle rather than a safeguard. Mirrors the CLI's `--label-*`.
+  emitStyle({ labels: { ...(props.config.style?.labels || {}), ...patch, enabled: true } })
+}
+
+function setLabelsOn(on) {
+  if (!on) {
+    // Turned OFF rather than deleted, so the field and colours are still there when it is turned
+    // back on — the same courtesy the classification controls give.
+    emitStyle({ labels: { ...(props.config.style?.labels || {}), enabled: false } })
+    return
+  }
+  const first = styleFields.value[0]
+  emitStyle({
+    labels: {
+      field: first ? first.name : '',
+      ...(props.config.style?.labels || {}),
+      enabled: true,
+    },
+  })
+}
+
+// ── Where the layer draws ───────────────────────────────────────────────────
+function setZoom(key, raw) {
+  const text = String(raw ?? '').trim()
+  if (!text) { emitStyle({ [key]: undefined }); return }
+  const z = Math.max(0, Math.min(24, parseFloat(text)))
+  emitStyle({ [key]: Number.isFinite(z) ? z : undefined })
+}
+
+// ── Symbology authored in QGIS ──────────────────────────────────────────────
+// Each of these OUTRANKS the controls above — rules replace the single symbol, a pattern replaces
+// the fill colour, a rendered marker replaces the shape. Naming them is what stops the colour
+// picker looking broken; `clearQgisStyling` is the way back.
+const qgisStyling = computed(() => {
+  const st = props.config.style || {}
+  const out = []
+  const rules = Array.isArray(st.rules) ? st.rules.length : 0
+  if (rules) out.push(`${rules} rule${rules === 1 ? '' : 's'}, each with its own filter and symbol`)
+  if (st.fill_pattern?.image) out.push('A pattern fill — a hatch, or an image tiled across the shape')
+  if (st.marker_image) out.push('A marker drawn in QGIS, carried as a picture')
+  if (st.line_marker?.image) out.push('Markers repeated along the line')
+  if (st.labels?.qgis_font?.family) out.push(`Labels in ${st.labels.qgis_font.family}`)
+  return out
+})
+
+function clearQgisStyling() {
+  emitStyle({
+    rules: undefined,
+    fill_pattern: undefined,
+    marker_image: undefined,
+    line_marker: undefined,
+  })
 }
 
 function setExtrusion(patch) {
