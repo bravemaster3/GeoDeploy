@@ -111,9 +111,16 @@ LINES = {
                                   "end, and the shaft does not taper. `arrows.py`"),
     "InterpolatedLine":  (TODO,   "data-driven `line-width` exists; colour needs `line-gradient` "
                                   "with `lineMetrics`"),
-    "Lineburst":         (TODO,   "a gradient across the line's width - approximate to flat"),
-    "RasterLine":        (TODO,   "approximate to the dominant colour"),
-    "FilledLine":        (TODO,   "a line drawn as a filled buffer - approximate to width"),
+    "Lineburst":         (APPROX, "a gradient across the line's width; MapLibre has no gradient "
+                                  "of any kind, so it is flattened to the MIDDLE of the ramp - "
+                                  "`symbology._gradient_midpoint`"),
+    "RasterLine":        (APPROX, "a line stroked with an IMAGE, so there is no colour to read: "
+                                  "flattened to the average of the image's OPAQUE pixels (the "
+                                  "transparent surround would drag every one of them toward "
+                                  "nothing) - `symbology._image_average`"),
+    "FilledLine":        (APPROX, "a polygon wearing a line's clothes: QGIS buffers the line and "
+                                  "fills it, so the colour is on the FILL sub-symbol and the layer "
+                                  "has no stroke colour of its own - `symbology._sub_symbol_colour`"),
     "LinearReferencing": (TODO,   "chainage labels along a line. Labels landed in #98, and that is "
                                   "NOT enough: `symbol-placement: line` repeats the SAME text at "
                                   "every placement, and the distance-along-the-line is not an "

@@ -2054,6 +2054,82 @@ _GRADIENT_LAYERS = ("QgsGradientFillSymbolLayer", "QgsLineburstSymbolLayer",
                     "QgsShapeburstFillSymbolLayer")
 
 
+def _representative_colour(symbol_layer):
+    """The one flat colour that best stands for a symbol layer MapLibre cannot draw, or None.
+
+    Three shapes, each losing something different and each with an obvious least-wrong answer:
+
+    * a GRADIENT (fill, lineburst, shapeburst) — the middle of its ramp;
+    * a FILLED LINE, which QGIS draws as a buffered polygon — the colour of the fill under it,
+      because the layer itself has no stroke colour to read;
+    * a RASTER LINE, stroked with an image — the average of that image's opaque pixels.
+
+    All three used to fall through to `symbol.color()`, which for a gradient is the ramp's START and
+    for the other two is whatever the layer happens to expose — often black, or the default blue.
+    """
+    return (_gradient_midpoint(symbol_layer)
+            or _sub_symbol_colour(symbol_layer)
+            or _image_average(symbol_layer))
+
+
+#: A line QGIS draws as a filled buffer. Its colour lives on the fill sub-symbol, exactly as an
+#: arrow's does — the layer is a polygon wearing a line's clothes.
+_FILLED_LINE_LAYERS = ("QgsFilledLineSymbolLayer",)
+
+
+def _sub_symbol_colour(symbol_layer):
+    """The fill colour under a filled line, or None."""
+    if symbol_layer is None or type(symbol_layer).__name__ not in _FILLED_LINE_LAYERS:
+        return None
+    sub = _call(symbol_layer, "subSymbol")
+    colour = _call(sub, "color") if sub is not None else None
+    try:
+        return _hex(colour).lower() if colour is not None else None
+    except Exception:                   # noqa: BLE001  # nosec B110 - fall back to the symbol's own
+        return None
+
+
+#: A line stroked with an image. There is no colour to read at all — the picture IS the colour.
+_RASTER_LINE_LAYERS = ("QgsRasterLineSymbolLayer",)
+
+
+def _image_average(symbol_layer):
+    """The average colour of a raster line's image, or None.
+
+    Averaging the OPAQUE pixels only: these images are usually a stroke on transparency, and
+    including the transparent surround pulls every one of them toward whatever the unpainted pixels
+    happen to hold. Sampled on a grid rather than pixel by pixel, because the image can be large and
+    this runs while a style is being read.
+    """
+    if symbol_layer is None or type(symbol_layer).__name__ not in _RASTER_LINE_LAYERS:
+        return None
+    path = _call(symbol_layer, "path")
+    if not path:
+        return None
+    try:
+        from qgis.PyQt.QtGui import QImage
+        image = QImage(str(path))
+        if image.isNull():
+            return None
+        step = max(1, min(image.width(), image.height()) // 16)
+        total = [0, 0, 0]
+        seen = 0
+        for x in range(0, image.width(), step):
+            for y in range(0, image.height(), step):
+                pixel = image.pixelColor(x, y)
+                if pixel.alpha() < 8:
+                    continue
+                total[0] += pixel.red()
+                total[1] += pixel.green()
+                total[2] += pixel.blue()
+                seen += 1
+        if not seen:
+            return None
+        return "#{0:02x}{1:02x}{2:02x}".format(*[c // seen for c in total])
+    except Exception:                   # noqa: BLE001  # nosec B110 - an image we cannot read is None
+        return None
+
+
 def _gradient_midpoint(symbol_layer):
     """`#rrggbb` halfway along a gradient symbol layer's ramp, or None if it is not one.
 
@@ -3053,7 +3129,7 @@ def _style_from_symbol(symbol) -> dict:
     # arrived as pale yellow: not obviously a bug, just a map that looks nothing like the one in
     # QGIS. MapLibre has no fill or line gradient at all, so a flat colour is the whole of what can
     # be drawn; taking the middle of the ramp is the closest single colour to it.
-    style = {"color": _gradient_midpoint(layer0) or _hex(symbol.color())}
+    style = {"color": _representative_colour(layer0) or _hex(symbol.color())}
 
     def number(getter):
         """A finite float from a Qt getter, or None. A missing size must not cost the COLOUR too —

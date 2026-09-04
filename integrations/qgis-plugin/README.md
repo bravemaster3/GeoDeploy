@@ -278,6 +278,16 @@ Findings in `vendor/` are fixed in `cli/geodeploy` and re-vendored — never edi
 `vendor.py --check` fails.
 
 ## Last updated
+2026-09-04 (`symbology._representative_colour`: **three more symbol layers that MapLibre cannot draw
+now pick a sensible flat colour** instead of falling through to `symbol.color()`. A FILLED LINE is a
+polygon wearing a line's clothes — QGIS buffers the line and fills it, so the colour is on the fill
+sub-symbol and the layer has no stroke colour of its own. A RASTER LINE is stroked with an image, so
+there is no colour to read at all: it is averaged over the image's OPAQUE pixels, because the
+transparent surround these images usually carry would drag every one of them toward nothing. And
+`Lineburst` was already handled by the gradient midpoint but still listed as a TODO. Coverage:
+Lineburst, RasterLine and FilledLine move TODO → APPROX, leaving **9** — from 19 at the start of
+this branch.)
+
 2026-09-04 (`symbology._grouping_note`: **a renderer that GROUPS features now says what the push
 loses.** A cluster, a displacement ring, a merged-feature dissolve and an inverted polygon all draw
 perfectly well through their sub-renderer's symbol — so the push SUCCEEDS and the map quietly stops

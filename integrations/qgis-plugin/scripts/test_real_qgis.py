@@ -1250,6 +1250,31 @@ def gradients():
     check("gradient: a ramp between one colour and itself is that colour",
           str(style.get("color", "")).lower() == "#204080", repr(style.get("color")))
 
+    # A FILLED LINE is a polygon wearing a line's clothes: QGIS buffers the line and fills it, so
+    # the colour lives on the fill sub-symbol and the layer itself has no stroke colour to read.
+    try:
+        import qgis.core as qc
+        from qgis.PyQt.QtGui import QColor
+        cls = getattr(qc, "QgsFilledLineSymbolLayer", None)
+    except Exception:                   # noqa: BLE001  # pragma: no cover
+        cls = None
+    if cls is None:
+        check("filled line: present in this QGIS", True, "not in this build - skipped")
+    else:
+        from qgis.core import QgsLineSymbol, QgsSingleSymbolRenderer
+        sl = cls()
+        sub = sl.subSymbol()
+        if sub is not None and hasattr(sub, "setColor"):
+            sub.setColor(QColor("#227744"))     # IN PLACE - setSubSymbol(subSymbol()) double-frees
+        sym = QgsLineSymbol()
+        sym.changeSymbolLayer(0, sl)
+        layer = make_layer("LineString")
+        layer.setRenderer(QgsSingleSymbolRenderer(sym))
+        got = symbology.from_qgis(layer) or {}
+        check("filled line: reads the colour of the fill under it",
+              str(got.get("color", "")).lower() == "#227744",
+              "got {0!r} - the layer itself has no stroke colour".format(got.get("color")))
+
     # A PLAIN fill must be untouched by any of this — it is the overwhelmingly common case.
     plain = make_layer("Polygon")
     symbology.apply(plain, {"color": "#123456", "fill_opacity": 0.5})
