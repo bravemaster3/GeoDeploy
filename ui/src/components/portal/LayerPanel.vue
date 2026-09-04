@@ -368,6 +368,70 @@
               </div>
             </div>
 
+            <!-- HEATMAP. A renderer, not a paint option: it REPLACES the points with a density
+                 surface, so it sits with the other "what is this layer" choices rather than among
+                 the colours it makes irrelevant. Points only — a density map of polygons is not a
+                 thing QGIS offers either. -->
+            <div v-if="geomType === 'point' && config.layer_type === 'vector'"
+                 class="pt-1 border-t border-border/50">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" :checked="heatmapOn"
+                  @change="setHeatmapOn($event.target.checked)" class="accent-primary" />
+                <span class="text-xs text-foreground">Draw as a heatmap</span>
+              </label>
+              <div v-if="heatmapOn" class="mt-1.5 space-y-1.5 pl-5">
+                <div class="flex items-center gap-2">
+                  <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Radius</span>
+                  <input type="range" min="4" max="80" step="1"
+                    :value="config.style?.heatmap?.radius ?? 20"
+                    @input="setHeatmap({ radius: parseFloat($event.target.value) })"
+                    class="flex-1 h-1 accent-primary" />
+                  <span class="text-[11px] text-muted-foreground/70 w-8 text-right">
+                    {{ config.style?.heatmap?.radius ?? 20 }}px
+                  </span>
+                </div>
+                <select :value="heatmapRampName" @change="setHeatmapRamp($event.target.value)"
+                  class="w-full text-xs border border-border rounded px-1.5 py-1">
+                  <option v-for="r in heatmapRamps" :key="r.name" :value="r.name">{{ r.label }}</option>
+                </select>
+                <select :value="config.style?.heatmap?.weight_field || ''"
+                  @change="setHeatmapWeight($event.target.value)"
+                  class="w-full text-xs border border-border rounded px-1.5 py-1">
+                  <option value="">Every point counts the same</option>
+                  <option v-for="f in numericFields" :key="f.name" :value="f.name">
+                    Weight by {{ f.name }}
+                  </option>
+                </select>
+                <p class="text-[11px] text-muted-foreground/70 leading-snug">
+                  The points themselves stop drawing — a heatmap answers "where are these
+                  concentrated", not "where is each one".
+                </p>
+              </div>
+            </div>
+
+            <!-- HATCHES. The tile is generated here, in the browser, exactly as the QGIS plugin
+                 generates one from a QGIS symbol — same `fill_pattern` key, same data URI, so a
+                 hatch made here and one pushed from QGIS are the same thing to every renderer.
+                 Presets rather than angle-and-spacing boxes: those are what people pick, and the
+                 four offered are the four angles at which a square tile actually closes. -->
+            <div v-if="geomType === 'polygon' && config.layer_type === 'vector'"
+                 class="pt-1 border-t border-border/50">
+              <label class="text-xs text-muted-foreground">Fill pattern</label>
+              <div class="flex flex-wrap items-center gap-1 mt-1">
+                <button v-for="h in hatchPresets" :key="h.name" type="button" :title="h.title"
+                  @click="setHatch(h.name)"
+                  class="w-7 h-7 rounded border overflow-hidden flex items-center justify-center"
+                  :class="activeHatch === h.name
+                    ? 'border-primary ring-1 ring-primary/40' : 'border-border hover:border-primary/50'">
+                  <span v-if="h.name === 'none'" class="text-[9px] text-muted-foreground">none</span>
+                  <img v-else :src="hatchPreview(h.name)" alt="" class="w-full h-full" />
+                </button>
+              </div>
+              <p v-if="activeHatch !== 'none'" class="text-[11px] text-muted-foreground/70 mt-1">
+                The pattern replaces the fill colour; opacity still applies.
+              </p>
+            </div>
+
             <!-- LABELS. New to the platform in 2026-09; there was no way to label a layer at all
                  before, here or anywhere. Collapsed behind its own switch, following the 3D block
                  above: an off switch and one line of text is the whole cost when you do not want
@@ -414,10 +478,173 @@
                     class="accent-primary" />
                   <span class="text-[11px] text-muted-foreground">Bend the text along the line</span>
                 </label>
+
+                <!-- WHERE THE TEXT SITS. A nine-way anchor rather than two number boxes, because
+                     "above the point" is what somebody means and "y offset -12" is how a renderer
+                     spells it. The offset boxes are still there underneath for the cases the grid
+                     cannot say. QGIS gives the same choice the same way. -->
+                <div v-if="config.style?.labels?.placement !== 'line'">
+                  <label class="text-[11px] text-muted-foreground">Position</label>
+                  <div class="grid grid-cols-3 gap-0.5 mt-0.5 w-[4.5rem]">
+                    <button v-for="a in labelAnchors" :key="a.value" type="button"
+                      :title="a.title" @click="setLabels({ anchor: a.value })"
+                      class="h-5 rounded border text-[9px] leading-none"
+                      :class="(config.style?.labels?.anchor || 'center') === a.value
+                        ? 'border-primary bg-primary/20 text-foreground'
+                        : 'border-border text-muted-foreground/60 hover:border-primary/50'">
+                      {{ a.mark }}
+                    </button>
+                  </div>
+                </div>
+
+                <button type="button" @click="toggle('labelMore')"
+                  class="text-[11px] text-primary hover:text-primary/80">
+                  {{ open.labelMore ? '− Fewer' : '+ More' }} label options
+                </button>
+                <div v-if="open.labelMore" class="space-y-1.5 pt-0.5">
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-14">Nudge</span>
+                    <input type="number" step="1" :value="labelOffset[0]" title="Left / right, px"
+                      @change="setLabelOffset(0, $event.target.value)"
+                      class="w-14 text-xs border border-border rounded px-1.5 py-0.5" />
+                    <input type="number" step="1" :value="labelOffset[1]" title="Up / down, px"
+                      @change="setLabelOffset(1, $event.target.value)"
+                      class="w-14 text-xs border border-border rounded px-1.5 py-0.5" />
+                    <span class="text-[11px] text-muted-foreground/70">px</span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-14">Rotate</span>
+                    <input type="number" step="5" min="0" max="359"
+                      :value="config.style?.labels?.rotation ?? 0"
+                      @change="setLabels({ rotation: parseFloat($event.target.value) || 0 })"
+                      class="w-14 text-xs border border-border rounded px-1.5 py-0.5" />
+                    <span class="text-[11px] text-muted-foreground/70">°</span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-14">Wrap at</span>
+                    <input type="number" step="1" min="0" max="60"
+                      :value="config.style?.labels?.max_width ?? ''" placeholder="no wrap"
+                      @change="setLabels({ max_width: parseFloat($event.target.value) || undefined })"
+                      class="w-16 text-xs border border-border rounded px-1.5 py-0.5" />
+                    <span class="text-[11px] text-muted-foreground/70">characters</span>
+                  </div>
+                  <select :value="config.style?.labels?.transform || 'none'"
+                    @change="setLabels({ transform: $event.target.value })"
+                    class="w-full text-xs border border-border rounded px-1.5 py-1">
+                    <option value="none">As written</option>
+                    <option value="uppercase">UPPERCASE</option>
+                    <option value="lowercase">lowercase</option>
+                  </select>
+                  <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" :checked="!!config.style?.labels?.allow_overlap"
+                      @change="setLabels({ allow_overlap: $event.target.checked })"
+                      class="accent-primary" />
+                    <span class="text-[11px] text-muted-foreground">
+                      Draw every label, even where they collide
+                    </span>
+                  </label>
+                  <!-- Priority decides which label wins the space when two want it. QGIS runs it
+                       0-10 with higher meaning more important, and so does this; the map inverts
+                       it, because MapLibre places the LOWEST sort key first. -->
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-14">Priority</span>
+                    <input type="range" min="0" max="10" step="1"
+                      :value="config.style?.labels?.priority ?? 5"
+                      @input="setLabels({ priority: parseFloat($event.target.value) })"
+                      class="flex-1 h-1 accent-primary" />
+                    <span class="text-[11px] text-muted-foreground/70 w-4 text-right">
+                      {{ config.style?.labels?.priority ?? 5 }}
+                    </span>
+                  </div>
+                </div>
+
                 <p class="text-[11px] text-muted-foreground/70 leading-snug">
                   Drawn above every layer on the map. A portal draws the fonts its glyph set
                   contains; anything else is matched to the nearest it has.
                 </p>
+              </div>
+            </div>
+
+            <!-- THE REST OF THE VOCABULARY, behind one disclosure. Every one of these round-trips
+                 from QGIS already; putting them all on screen would cost every user the clarity of
+                 this panel to serve the few who want a mitred join. Open it and they are there. -->
+            <div v-if="config.layer_type === 'vector' && geomType !== 'unknown'"
+                 class="pt-1 border-t border-border/50">
+              <button type="button" @click="toggle('more')"
+                class="text-[11px] text-primary hover:text-primary/80">
+                {{ open.more ? '−' : '+' }} More {{ geomType }} options
+              </button>
+              <div v-if="open.more" class="mt-1.5 space-y-1.5">
+                <template v-if="geomType === 'line' || geomType === 'polygon'">
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Ends</span>
+                    <select :value="config.style?.line_cap || 'butt'"
+                      @change="emitStyle({ line_cap: $event.target.value })"
+                      class="flex-1 text-xs border border-border rounded px-1.5 py-1">
+                      <option value="butt">Flat</option>
+                      <option value="round">Round</option>
+                      <option value="square">Square</option>
+                    </select>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Corners</span>
+                    <select :value="config.style?.line_join || 'miter'"
+                      @change="emitStyle({ line_join: $event.target.value })"
+                      class="flex-1 text-xs border border-border rounded px-1.5 py-1">
+                      <option value="miter">Sharp</option>
+                      <option value="round">Round</option>
+                      <option value="bevel">Cut off</option>
+                    </select>
+                  </div>
+                </template>
+                <div v-if="geomType === 'line'" class="flex items-center gap-2">
+                  <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Offset</span>
+                  <input type="number" step="0.5" :value="config.style?.line_offset ?? 0"
+                    @change="emitStyle({ line_offset: parseFloat($event.target.value) || undefined })"
+                    class="w-16 text-xs border border-border rounded px-1.5 py-0.5" />
+                  <span class="text-[11px] text-muted-foreground/70">px to one side</span>
+                </div>
+                <template v-if="geomType === 'point'">
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Rotate</span>
+                    <input type="number" step="5" min="0" max="359"
+                      :value="config.style?.marker_rotation ?? 0"
+                      @change="emitStyle({ marker_rotation: parseFloat($event.target.value) || undefined })"
+                      class="w-16 text-xs border border-border rounded px-1.5 py-0.5" />
+                    <span class="text-[11px] text-muted-foreground/70">°</span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Nudge</span>
+                    <input type="number" step="1" :value="markerOffset[0]" title="Left / right, px"
+                      @change="setMarkerOffset(0, $event.target.value)"
+                      class="w-14 text-xs border border-border rounded px-1.5 py-0.5" />
+                    <input type="number" step="1" :value="markerOffset[1]" title="Up / down, px"
+                      @change="setMarkerOffset(1, $event.target.value)"
+                      class="w-14 text-xs border border-border rounded px-1.5 py-0.5" />
+                    <span class="text-[11px] text-muted-foreground/70">px</span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Fade</span>
+                    <input type="range" min="0" max="1" step="0.05"
+                      :value="config.style?.marker_opacity ?? 1"
+                      @input="emitStyle({ marker_opacity: parseFloat($event.target.value) })"
+                      class="flex-1 h-1 accent-primary" />
+                    <span class="text-[11px] text-muted-foreground/70 w-8 text-right">
+                      {{ Math.round((config.style?.marker_opacity ?? 1) * 100) }}%
+                    </span>
+                  </div>
+                </template>
+                <!-- A layer that draws nothing is not a broken one: it is how you keep a layer for
+                     its labels, or its popups, without its geometry cluttering the map. QGIS calls
+                     the renderer "No symbols". -->
+                <label class="flex items-center gap-2 cursor-pointer pt-0.5">
+                  <input type="checkbox" :checked="!!config.style?.no_symbol"
+                    @change="emitStyle({ no_symbol: $event.target.checked || undefined })"
+                    class="accent-primary" />
+                  <span class="text-[11px] text-muted-foreground">
+                    Draw no shapes — keep the labels and popups only
+                  </span>
+                </label>
               </div>
             </div>
 
@@ -691,7 +918,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useDataStore } from '@/stores/data'
 import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps, getRasterStats,
          getRasterUniqueValues,
@@ -1131,6 +1358,159 @@ function setNoOutline(on) {
   // Turning it back ON restores the geometry's own default rather than whatever was last picked:
   // the previous colour is gone from the style, and guessing one would be worse than a known start.
   emitStyle({ outline_color: on ? NO_OUTLINE : (geomType.value === 'point' ? '#ffffff' : '#1d4ed8') })
+}
+
+// ── Disclosure ──────────────────────────────────────────────────────────────
+// One object rather than a ref per section: the panel already carries a lot of state, and "which
+// sections are open" is one fact about the view, not five.
+const open = reactive({ labelMore: false, more: false })
+function toggle(name) { open[name] = !open[name] }
+
+// Nine positions, in the order they appear in the grid. "Above the point" is what somebody means;
+// `text-anchor: bottom` is how MapLibre spells it, and the two read as opposites — the anchor names
+// the part of the TEXT that touches the point, so text sitting above it is anchored at its bottom.
+const labelAnchors = [
+  { value: 'bottom-right', mark: '↖', title: 'Above and left' },
+  { value: 'bottom', mark: '↑', title: 'Above' },
+  { value: 'bottom-left', mark: '↗', title: 'Above and right' },
+  { value: 'right', mark: '←', title: 'Left' },
+  { value: 'center', mark: '•', title: 'Centred on the point' },
+  { value: 'left', mark: '→', title: 'Right' },
+  { value: 'top-right', mark: '↙', title: 'Below and left' },
+  { value: 'top', mark: '↓', title: 'Below' },
+  { value: 'top-left', mark: '↘', title: 'Below and right' },
+]
+
+const labelOffset = computed(() => {
+  const o = props.config.style?.labels?.offset
+  return Array.isArray(o) && o.length === 2 ? o : [0, 0]
+})
+
+function setLabelOffset(i, raw) {
+  const next = [...labelOffset.value]
+  next[i] = parseFloat(raw) || 0
+  setLabels({ offset: (next[0] || next[1]) ? next : undefined })
+}
+
+// ── Heatmap ─────────────────────────────────────────────────────────────────
+// A renderer, not a paint option: it replaces the points entirely.
+const heatmapOn = computed(() => !!props.config.style?.heatmap?.enabled)
+
+// The first stop MUST be transparent, or the whole viewport is painted at density zero — the one
+// mistake that makes a heatmap look broken rather than merely wrong. Named ramps rather than a
+// colour picker, because a heatmap ramp is a sequence and five colours picked by hand rarely make
+// a good one.
+const heatmapRamps = [
+  { name: 'heat', label: 'Blue to red', colors: ['rgba(0,0,255,0)', '#3b82f6', '#22c55e', '#eab308', '#ef4444'] },
+  { name: 'magma', label: 'Dark to yellow', colors: ['rgba(0,0,4,0)', '#3b0f70', '#8c2981', '#fe9f6d', '#fcfdbf'] },
+  { name: 'blues', label: 'Pale to deep blue', colors: ['rgba(247,251,255,0)', '#c6dbef', '#6baed6', '#3182bd', '#08519c'] },
+  { name: 'reds', label: 'Pale to deep red', colors: ['rgba(255,245,240,0)', '#fcbba1', '#fb6a4a', '#de2d26', '#a50f15'] },
+]
+
+const heatmapRampName = computed(() => {
+  const current = JSON.stringify(props.config.style?.heatmap?.ramp || [])
+  const hit = heatmapRamps.find(r => JSON.stringify(r.colors) === current)
+  return hit ? hit.name : 'heat'
+})
+
+function setHeatmap(patch) {
+  emitStyle({ heatmap: { ...(props.config.style?.heatmap || {}), ...patch, enabled: true } })
+}
+
+function setHeatmapOn(on) {
+  if (!on) { emitStyle({ heatmap: undefined }); return }
+  setHeatmap({ radius: props.config.style?.heatmap?.radius ?? 20, ramp: heatmapRamps[0].colors })
+}
+
+function setHeatmapRamp(name) {
+  setHeatmap({ ramp: (heatmapRamps.find(r => r.name === name) || heatmapRamps[0]).colors })
+}
+
+async function setHeatmapWeight(field) {
+  if (!field) { setHeatmap({ weight_field: undefined, weight_max: undefined }); return }
+  // THE MAXIMUM COMES FROM THE SERVER, not from the column list — a column here is a name and a
+  // type, and nothing in the browser knows how big its values get. The weight is normalised against
+  // it so the ramp spans the data instead of saturating on the first large value; without a
+  // maximum the renderer leaves the weight alone and the field would silently do nothing.
+  //
+  // Same endpoint the classifier uses, for the same reason: one place decides what a column holds.
+  setHeatmap({ weight_field: field })
+  try {
+    const { data } = await getFieldStats(props.config.layer_id, { field, classes: 2 })
+    if (Number.isFinite(data?.max)) setHeatmap({ weight_field: field, weight_max: data.max })
+  } catch (e) {
+    // A weight that cannot be normalised still draws — every point simply counts the same, which
+    // is the unweighted map rather than a broken one.
+  }
+}
+
+// ── Hatches ─────────────────────────────────────────────────────────────────
+// The tile is generated HERE, in the browser, into the same `fill_pattern` key and the same PNG
+// data URI the QGIS plugin produces — so a hatch made here and one pushed from QGIS are the same
+// thing to every renderer. The four angles offered are the four at which a square tile CLOSES;
+// see the plugin's fills.py for why the rest cannot.
+const hatchPresets = [
+  { name: 'none', title: 'Solid fill' },
+  { name: 'horizontal', title: 'Horizontal lines' },
+  { name: 'vertical', title: 'Vertical lines' },
+  { name: 'forward', title: 'Diagonal lines' },
+  { name: 'back', title: 'Diagonal lines, the other way' },
+  { name: 'cross', title: 'Cross-hatch' },
+]
+
+function hatchTile(name, color) {
+  const side = 12
+  const cv = document.createElement('canvas')
+  cv.width = side
+  cv.height = side
+  const ctx = cv.getContext('2d')
+  if (!ctx) return null
+  ctx.strokeStyle = color || '#333333'
+  ctx.lineWidth = 1.5
+  const line = (x1, y1, x2, y2) => {
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke()
+  }
+  // Every stroke is drawn at BOTH edges as well as the middle, so the tile closes when repeated.
+  if (name === 'horizontal' || name === 'cross') {
+    line(-1, 0, side + 1, 0); line(-1, side, side + 1, side); line(-1, side / 2, side + 1, side / 2)
+  }
+  if (name === 'vertical' || name === 'cross') {
+    line(0, -1, 0, side + 1); line(side, -1, side, side + 1); line(side / 2, -1, side / 2, side + 1)
+  }
+  if (name === 'forward') {
+    for (const k of [-1, 0, 1]) line(k * side - 1, side + 1, k * side + side + 1, -1)
+  }
+  if (name === 'back') {
+    for (const k of [-1, 0, 1]) line(k * side - 1, -1, k * side + side + 1, side + 1)
+  }
+  return cv.toDataURL('image/png')
+}
+
+const activeHatch = computed(() => props.config.style?.fill_pattern?.hatch || 'none')
+
+function hatchPreview(name) {
+  return hatchTile(name, props.config.style?.color || '#333333')
+}
+
+function setHatch(name) {
+  if (name === 'none') { emitStyle({ fill_pattern: undefined }); return }
+  const image = hatchTile(name, props.config.style?.color || '#333333')
+  if (!image) return
+  // `hatch` rides alongside the pixels so this panel can show which preset is selected. Nothing
+  // renders from it — the image is what draws — so a tile pushed from QGIS simply highlights none.
+  emitStyle({ fill_pattern: { image, width: 12, height: 12, hatch: name } })
+}
+
+// ── Marker placement ────────────────────────────────────────────────────────
+const markerOffset = computed(() => {
+  const o = props.config.style?.marker_offset
+  return Array.isArray(o) && o.length === 2 ? o : [0, 0]
+})
+
+function setMarkerOffset(i, raw) {
+  const next = [...markerOffset.value]
+  next[i] = parseFloat(raw) || 0
+  emitStyle({ marker_offset: (next[0] || next[1]) ? next : undefined })
 }
 
 // ── Labels ──────────────────────────────────────────────────────────────────

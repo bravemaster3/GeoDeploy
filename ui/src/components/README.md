@@ -91,6 +91,16 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
 
 ## Dependencies / relationships
 - Read/write through `../../stores/` (mostly `data` and `portals`) and call the backend via `../../api`.
+- `LayerPanel.vue` (2026-09-04, second pass) now authors most of the vocabulary the QGIS round trip
+  added, arranged so the panel does not become a wall: **label positioning** as a nine-way anchor
+  grid ("above the point" is what somebody means; `text-anchor: bottom` is how MapLibre spells the
+  same thing, and the two read as opposites) with nudge/rotate/wrap/case/overlap/priority behind
+  *More label options*; **Draw as a heatmap** for point layers, with named ramps because a heatmap
+  ramp is a sequence and five hand-picked colours rarely make a good one; **fill pattern presets**
+  for polygons, whose tile is generated *in the browser* into the same `fill_pattern` data URI the
+  plugin produces, so a hatch made here and one pushed from QGIS are the same thing to every
+  renderer; and *More {geometry} options* holding cap, join, line offset, marker rotation/nudge/fade
+  and "draw no shapes".
 - `LayerPanel.vue` gained **labels**, a **visible zoom range**, and a **"Styled in QGIS"** block
   (2026-09-04). The first two are authoring controls; the third is not — rules, a pattern fill, a
   rendered marker and markers along a line are drawn but not editable here, and each of them
