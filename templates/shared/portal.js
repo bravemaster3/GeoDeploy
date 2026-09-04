@@ -2847,16 +2847,36 @@
   function effectiveHillshade(srcId) {
     return effectiveAlgorithm(srcId) === 'hillshade';
   }
-  /** {increment, thickness} for contours — the viewer's, else what the author baked in. */
+  /** {increment, thickness} for contours — the viewer's, else what the author baked in.
+   *
+   * THE INTERVAL COMES FROM `geodeploy:contour`, NOT FROM THE URL. The URL's `algorithm_params`
+   * holds the SCALED interval: the data is multiplied so TiTiler's integer-only `increment` can
+   * express a fractional one, so an interval of 0.1 appears there as 10 — and the legend said
+   * "every 10" about lines drawn every 0.1. `thickness` is a width in pixels and is never scaled,
+   * so it can still be read from either.
+   */
   function effectiveContours(srcId) {
     const st = rasterState[srcId] || {};
     let baked = {};
     try { baked = JSON.parse(parseRasterParams(srcId).algorithm_params || '{}') || {}; } catch (e) { baked = {}; }
+    const authored = contourMeta(srcId);
     const pick = (key, fallback) => {
       if (st[key] !== undefined && st[key] !== '') return Number(st[key]);
       return baked[key] != null ? Number(baked[key]) : fallback;
     };
-    return { increment: pick('increment', 35), thickness: pick('thickness', 1) };
+    const increment = (st.increment !== undefined && st.increment !== '')
+      ? Number(st.increment)
+      : (authored && authored.increment != null ? Number(authored.increment)
+        : pick('increment', 35));
+    return { increment: increment, thickness: pick('thickness', 1) };
+  }
+
+  /** `geodeploy:contour` — the interval and range as the AUTHOR typed them, baked at publish. */
+  function contourMeta(srcId) {
+    const layer = (STYLE.layers || []).find(function (l) {
+      return l && l.source === srcId && l.metadata && l.metadata['geodeploy:type'] === 'raster';
+    });
+    return (layer && layer.metadata && layer.metadata['geodeploy:contour']) || null;
   }
   function effectiveZfactor(srcId) {
     const st = rasterState[srcId] || {};
@@ -3008,8 +3028,18 @@
       : algorithm === 'contours' ? 'terrain'
       : effectiveColormap(srcId);
     const p = effectiveRescale(srcId).split(',');
-    const mn = (p[0] !== undefined && p[0] !== '') ? p[0] : 'min';
-    const mx = (p[1] !== undefined && p[1] !== '') ? p[1] : 'max';
+    let mn = (p[0] !== undefined && p[0] !== '') ? p[0] : 'min';
+    let mx = (p[1] !== undefined && p[1] !== '') ? p[1] : 'max';
+    // CONTOURS NEVER SEND `&rescale=`: they consume the stretch as `minz`/`maxz` instead, so the
+    // ends of this bar fell through to the literal words "min" and "max" — a legend for a coloured
+    // relief that declines to say what it is coloured over. The real numbers are baked.
+    if (algorithm === 'contours') {
+      const authored = contourMeta(srcId);
+      if (authored && authored.minz != null) {
+        mn = authored.minz;
+        mx = authored.maxz;
+      }
+    }
     const grad = LEGEND_GRADIENTS[cmap] || LEGEND_GRADIENTS.gray;
     let html = '<div class="legend-bar" style="background:' + grad + '"></div>' +
       '<div class="legend-range"><span>' + escHtml(String(mn)) + '</span><span>' + escHtml(String(mx)) + '</span></div>';
@@ -3018,9 +3048,16 @@
       // gradient above says what the colours mean, and this says what the lines mean.
       const c = effectiveContours(srcId);
       html += '<div class="legend-range"><span>contour lines</span><span>every ' +
-        escHtml(String(c.increment)) + '</span></div>';
+        escHtml(String(c.increment)) + ' ' + escHtml(contourUnits(srcId)) + '</span></div>';
     }
     return html;
+  }
+
+  /** What a contour interval is measured IN. The raster's own values have no stated unit — a DEM
+   *  is metres, a vegetation index is nothing at all — so this says "units" rather than inventing
+   *  one, which is what turns a bare "every 10" into a sentence. */
+  function contourUnits(srcId) {
+    return 'units';
   }
 
   function updateRasterLegend(srcId) {

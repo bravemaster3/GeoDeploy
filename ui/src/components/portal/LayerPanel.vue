@@ -998,6 +998,32 @@
                     class="mt-0.5 w-full text-xs border border-border rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary/60" />
                 </div>
               </div>
+              <!-- THE CONTOUR COLOURS. TiTiler's algorithm hard-codes both — `cmap.get("terrain")`
+                   for the background and black for the lines — so neither could be chosen. The
+                   server reproduces the same picture as band maths plus an explicit colormap when
+                   either differs from those defaults, and uses the algorithm untouched when they
+                   do not, so an existing layer renders byte-identically. -->
+              <div v-if="config.style?.algorithm === 'contours'" class="flex items-end gap-2">
+                <div class="flex-1 min-w-0">
+                  <label class="text-xs text-muted-foreground">Relief palette</label>
+                  <select :value="config.style?.contour_palette || 'terrain'"
+                    @change="emitStyle({ contour_palette: $event.target.value })"
+                    class="mt-0.5 w-full text-xs border border-border rounded px-1.5 py-1">
+                    <option v-for="r in CONTOUR_PALETTES" :key="r" :value="r">{{ r }}</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="text-xs text-muted-foreground block">Line colour</label>
+                  <input type="color" :value="config.style?.contour_color || '#000000'"
+                    @input="emitStyle({ contour_color: $event.target.value })"
+                    class="mt-0.5 h-7 w-12 border border-border rounded cursor-pointer bg-transparent" />
+                </div>
+              </div>
+              <div v-if="config.style?.algorithm === 'contours'"
+                   class="flex h-2 rounded overflow-hidden" aria-hidden="true">
+                <span v-for="(c, i) in contourPalettePreview" :key="i" class="flex-1"
+                  :style="{ backgroundColor: c }"></span>
+              </div>
               <!-- The stretch is not decoration under contours: it is the range the coloured relief
                    behind the lines is drawn over. Without it TiTiler spans −12000–8000 m and a
                    survey DEM comes out one flat colour, so say what the numbers are doing. -->
@@ -1874,6 +1900,16 @@ function clearQgisStyling() {
     line_marker: undefined,
   })
 }
+
+// The ramps a contour BACKGROUND can use. Only ramps GeoDeploy holds the actual colours for — the
+// server builds the colormap itself, so a name it cannot resolve to RGB is a name it cannot draw.
+// `terrain` is the hypsometric default and matches what TiTiler's own algorithm bakes in, so
+// leaving it alone keeps the picture identical and the URL byte-for-byte what it already was.
+const CONTOUR_PALETTES = ['terrain', 'viridis', 'magma', 'blues', 'greens', 'oranges', 'reds',
+  'rdbu', 'brbg', 'spectral']
+
+const contourPalettePreview = computed(() =>
+  rampColors(props.config.style?.contour_palette || 'terrain', 12))
 
 // What the interval box shows: the author's number, or the default the renderers will actually use
 // — derived from the raster's own stretch, not TiTiler's global-DEM 35. Showing 35 while the tiles

@@ -1,9 +1,11 @@
 """TiTiler integration — raster tile URL construction."""
 import json
 import math
+import re
 from urllib.parse import quote
 
 from ..config import get_settings
+from . import symbology
 
 COLORMAPS = [
     "viridis", "plasma", "inferno", "magma", "cividis",
@@ -23,6 +25,8 @@ def get_tile_url(
     colormap_reverse: bool = False,
     increment: float | str | None = None,
     thickness: float | str | None = None,
+    contour_palette: str | None = None,
+    contour_color: str | None = None,
     minz: float | str | None = None,
     maxz: float | str | None = None,
     settings=None,
@@ -96,15 +100,37 @@ def get_tile_url(
                 url += f"&expression=b{_expression_band(bands)}*{z}"
         elif algorithm == "contours":
             lo, hi = _range_of(minz, maxz, rescale)
-            scale = _contour_scale(
-                increment if increment not in (None, "") else _default_increment(lo, hi), lo, hi)
-            if scale != 1:
-                # The data is multiplied BEFORE the algorithm runs, which is the only way to ask
-                # TiTiler for an interval finer than 1 — see `_contour_scale`.
-                url += f"&expression=b{_expression_band(bands)}*{scale}"
-            params = _contour_params(increment, thickness, minz, maxz, rescale, scale)
-            if params:
-                url += f"&algorithm_params={quote(params, safe='')}"
+            step = increment if increment not in (None, "") else _default_increment(lo, hi)
+            scale = _contour_scale(step, lo, hi)
+            if _contours_are_default(contour_palette, contour_color):
+                # TiTiler's own algorithm draws exactly this, so use it and keep the URL
+                # byte-identical to what every existing contour layer already has.
+                if scale != 1:
+                    # The data is multiplied BEFORE the algorithm runs, which is the only way to
+                    # ask TiTiler for an interval finer than 1 — see `_contour_scale`.
+                    url += f"&expression=b{_expression_band(bands)}*{scale}"
+                params = _contour_params(increment, thickness, minz, maxz, rescale, scale)
+                if params:
+                    url += f"&algorithm_params={quote(params, safe='')}"
+            else:
+                # A CHOSEN palette or line colour, which the algorithm cannot express — it hard-codes
+                # `terrain` and black. Reproduced as band maths plus an explicit colormap; see
+                # `_contour_expression`. No `algorithm=` at all, so this replaces it rather than
+                # layering on top: running both would contour an already-coloured RGB image.
+                url = url.replace("&algorithm=contours", "")
+                values = json.loads(_contour_params(increment, thickness, minz, maxz,
+                                                    rescale, scale) or "{}")
+                band = _expression_band(bands)
+                # `scale` multiplies the data so a sub-unit interval is expressible; here the
+                # interval is ours to choose freely, so the data is left alone and the raw interval
+                # is used — one fewer transform between the number typed and the lines drawn.
+                expr = _contour_expression(
+                    band, float(step), values.get("thickness", CONTOUR_THICKNESS),
+                    lo if lo is not None else _CONTOUR_MINZ,
+                    hi if hi is not None else _CONTOUR_MAXZ)
+                palette, colour = _contour_colours(contour_palette, contour_color)
+                url += f"&expression={quote(expr, safe='')}"
+                url += f"&colormap={quote(_contour_colormap(palette, colour), safe='')}"
     # colormap only makes sense for single-band output (one selected band, or a
     # single-band raster). It is ignored when an algorithm or an RGB composite is active.
     elif len(bands) != 3:
@@ -139,7 +165,8 @@ def _expression_band(bands) -> int:
 #: Every key of a raster style that changes the PICTURE. `opacity` is not here: it is applied by the
 #: map, not by the tile server, and sending it would be a parameter TiTiler ignores.
 STYLE_KEYS = ("colormap", "colormap_reverse", "rescale", "algorithm", "zfactor", "bidx",
-              "color_classes", "increment", "thickness", "minz", "maxz")
+              "color_classes", "increment", "thickness", "minz", "maxz",
+              "contour_palette", "contour_color")
 
 
 def tile_url_from_style(s3_key: str, style: dict | None, band_count: int | None = None,
@@ -286,6 +313,134 @@ def _contour_scale(increment, lo, hi) -> int:
             break
     return best
 
+
+
+#: How many colour bands the contour BACKGROUND is drawn in when GeoDeploy colours it itself.
+#: Every band is an interval in the colormap and every interval rides in the URL of every tile
+#: request, so this is bounded by what a proxy accepts, exactly as `MAX_COLOR_CLASSES` is: ~70 bytes
+#: per interval percent-encoded, so 32 lands near 2.4 kB and leaves room for a long object key under
+#: nginx's 8 kB `large_client_header_buffers`. It is also enough: the background of a contour map is
+#: read as bands between the lines, not as a continuous surface, and hypsometric tints are banded by
+#: convention anyway.
+#: A `#rgb` or `#rrggbb` colour. Anything else came from a client and is refused
+#: rather than interpolated into a URL.
+_HEX = re.compile(r"^#(?:[0-9a-f]{3}|[0-9a-f]{6})$")
+
+CONTOUR_BANDS = 32
+
+#: The line colour TiTiler's own algorithm bakes in, and the palette it bakes in. When the style asks
+#: for exactly these, the algorithm is used unchanged and the URL is byte-identical to what every
+#: existing contour layer already has.
+CONTOUR_DEFAULT_COLOR = "#000000"
+CONTOUR_DEFAULT_PALETTE = "terrain"
+
+
+def _contour_colours(style_palette, style_color) -> tuple:
+    """`(palette, line_colour)` for a contour layer, defaulted to what TiTiler itself draws."""
+    palette = (style_palette or CONTOUR_DEFAULT_PALETTE).strip().lower()
+    colour = (style_color or CONTOUR_DEFAULT_COLOR).strip().lower()
+    if palette not in symbology.RAMPS:
+        palette = CONTOUR_DEFAULT_PALETTE
+    if not _HEX.match(colour):
+        colour = CONTOUR_DEFAULT_COLOR
+    return palette, colour
+
+
+def _contours_are_default(style_palette, style_color) -> bool:
+    """True when TiTiler's own algorithm draws exactly what was asked for.
+
+    Worth its own function because the answer decides between two completely different URLs, and
+    "the default still uses the algorithm" is the promise that keeps every published contour layer
+    rendering exactly as it did.
+    """
+    palette, colour = _contour_colours(style_palette, style_color)
+    return palette == CONTOUR_DEFAULT_PALETTE and colour == CONTOUR_DEFAULT_COLOR
+
+
+#: How wide a contour line is, as a FRACTION of the interval, per unit of `thickness`.
+#:
+#: TiTiler's own test is `data % increment < thickness`, where `thickness` is in DATA UNITS despite
+#: being described as a line width — it only looks like a pixel width because the algorithm's
+#: default interval is 35 metres, so `< 1` selects about 3% of the gap. GeoDeploy's own expression
+#: does NOT scale the data (it can use the real interval directly), so a thickness of 1 against an
+#: interval of 0.05 made `b1 % 0.05 < 1` true for EVERY pixel: the whole raster came back as one
+#: flat sheet of line colour. Measured — 1 distinct colour across the tile.
+#:
+#: Expressed as a fraction of the interval instead, a line is the same relative width whatever the
+#: data measures. 0.03 is chosen to match what TiTiler draws at its own defaults (1/35 = 0.029), so
+#: the default picture is unchanged.
+CONTOUR_LINE_FRACTION = 0.03
+
+
+def _contour_expression(band: int, increment, thickness, lo: float, hi: float) -> str:
+    """The contour picture as band maths, so the COLOURS become ours.
+
+    TiTiler's `Contours` algorithm hard-codes both halves of what it draws:
+
+        arr = linear_rescale(data, (minz, maxz), (1, 255))
+        arr, _ = apply_cmap(arr, cmap.get("terrain"))            # the palette
+        arr = numpy.where(data % increment < thickness, 0, arr)  # black lines
+
+    Neither is a parameter, so a layer could not be given a different palette or a line colour that
+    is not black. This reproduces it with an expression — verified operator by operator against the
+    running image: `%`, comparisons and `where()` all survive the parser — and leaves the colouring
+    to an explicit colormap, which is where a choice can finally be made.
+
+    A line pixel becomes 0. Everything else becomes a BAND NUMBER, 1..CONTOUR_BANDS, clamped at both
+    ends by nested `where`s: an unclamped value outside the stretch lands in no interval at all, and
+    a value the colormap does not cover is drawn TRANSPARENT — holes punched in the map exactly
+    where the data is highest and lowest.
+    """
+    span = float(hi) - float(lo)
+    if span <= 0:
+        span = 1.0
+    step = float(increment) or 1.0
+    # In DATA UNITS, as a fraction of the interval — see `CONTOUR_LINE_FRACTION`.
+    width = max(step * CONTOUR_LINE_FRACTION * max(float(thickness or 1), 1.0), step * 1e-4)
+    top = CONTOUR_BANDS
+    return ("where((b{b}%{inc})<{thick},0,"
+            "where(b{b}<={lo},1,"
+            "where(b{b}>={hi},{top},"
+            "1+{steps}*(b{b}-{lo})/{span})))").format(
+                b=band, inc=_trim(step), thick=_trim(width), lo=_trim(lo), hi=_trim(hi),
+                top=top, steps=top - 1, span=_trim(span))
+
+
+def _contour_colormap(palette: str, line_colour: str) -> str:
+    """The explicit colormap the expression above is coloured through, as JSON.
+
+    THE INTERVAL FORM — `[[[lo, hi], [r, g, b, a]], …]` — not the discrete `{value: colour}` one.
+    The expression produces FLOATS, and a discrete map matches exact integers only: measured against
+    the running image, the discrete form coloured 156 pixels of a tile where the interval form
+    coloured 2704. A contour map with 94% of its pixels missing is not a subtle difference.
+
+    Band 0 is the lines. Bands 1..N are the palette, interpolated by the same `ramp_colors` the
+    graduated symbology uses — so a raster's contour background and a vector layer's classes drawn
+    from the same named ramp are the same colours.
+    """
+    intervals = [[[-0.5, 0.5], _rgba(line_colour)]]
+    for i, hexcolour in enumerate(symbology.ramp_colors(palette, CONTOUR_BANDS), start=1):
+        intervals.append([[i - 0.5, i + 0.5], _rgba(hexcolour)])
+    return json.dumps(intervals, separators=(",", ":"))
+
+
+def _rgba(hexcolour: str) -> list:
+    """`#rrggbb` → `[r, g, b, 255]`. Opaque: transparency in a contour background would show the
+    basemap through the relief, which reads as a rendering fault rather than a choice."""
+    value = (hexcolour or "").lstrip("#")
+    if len(value) == 3:
+        value = "".join(c * 2 for c in value)
+    try:
+        return [int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16), 255]
+    except (ValueError, IndexError):
+        return [0, 0, 0, 255]
+
+
+def _trim(value: float) -> str:
+    """A number for an expression string: no trailing `.0`, and never scientific notation — the
+    parser reads `1e-05` as a name, not a number."""
+    out = "{0:.6f}".format(float(value)).rstrip("0").rstrip(".")
+    return out or "0"
 
 
 def _contour_params(increment, thickness, minz, maxz, rescale, scale: int = 1) -> str | None:

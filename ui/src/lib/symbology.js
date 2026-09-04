@@ -31,6 +31,10 @@ export const RAMPS = {
   rdbu: ['#b2182b', '#ef8a62', '#fddbc7', '#f7f7f7', '#d1e5f0', '#67a9cf', '#2166ac'],
   brbg: ['#8c510a', '#d8b365', '#f6e8c3', '#f5f5f5', '#c7eae5', '#5ab4ac', '#01665e'],
   spectral: ['#d53e4f', '#fc8d59', '#fee08b', '#ffffbf', '#e6f598', '#99d594', '#3288bd'],
+  // Hypsometric — sea through lowland green to rock and snow. Matplotlib's `terrain`, which is what
+  // TiTiler's contour algorithm bakes in: having it here is what lets a contour layer be given a
+  // DIFFERENT palette while still being able to reproduce the original exactly.
+  terrain: ['#333399', '#0d9dda', '#28c85a', '#9bd96a', '#f2e394', '#ab8661', '#ffffff'],
 }
 
 // Ramps with a meaningful midpoint — offered separately in the picker, because using one for data

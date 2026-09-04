@@ -356,6 +356,19 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                                       else c.get("value"))}
                         for c in (rstyle.get("color_classes") or []) if isinstance(c, dict)
                     ] or None,
+                    # THE CONTOUR NUMBERS AS THE AUTHOR TYPED THEM.
+                    #
+                    # The legend used to read them back out of the tile URL, which is wrong twice
+                    # over. The interval there is SCALED — the data is multiplied so that TiTiler's
+                    # integer-only `increment` can express a fractional one, so an interval of 0.1
+                    # appears in the URL as 10, and the legend said "every 10" for lines drawn every
+                    # 0.1. And the range is not in the URL as `rescale` at all, because contours
+                    # consume the stretch as `minz`/`maxz` — so the legend printed the literal words
+                    # "min" and "max" where the numbers should be.
+                    #
+                    # Baked in the author's own units, like `geodeploy:classes` above and for the
+                    # same reason: the URL is what draws the map, not what describes it.
+                    "geodeploy:contour": _contour_meta(rstyle),
                 },
             }
             if not cfg.get("visible", True):
@@ -1840,6 +1853,30 @@ def _line_marker_layer(source_id: str, layer, cfg: dict) -> dict | None:
             {"id": symbology.picture_id(block["image"]), "image": block["image"]}]},
     }
 
+
+
+def _contour_meta(rstyle: dict) -> dict | None:
+    """`{increment, minz, maxz}` in the author's own units, or None when this is not a contour layer.
+
+    Read by the published legend so it states the interval that was typed rather than the scaled one
+    the tile URL carries. `_default_increment` is consulted for the same reason the renderer
+    consults it: a layer that only ticked the box has an interval, it just never wrote it down.
+    """
+    if (rstyle or {}).get("algorithm") != "contours":
+        return None
+    from . import titiler as titiler_svc
+    lo, hi = titiler_svc._range_of(rstyle.get("minz"), rstyle.get("maxz"), rstyle.get("rescale"))
+    step = rstyle.get("increment")
+    if step in (None, ""):
+        step = titiler_svc._default_increment(lo, hi)
+    try:
+        step = float(step)
+    except (TypeError, ValueError):
+        return None
+    out: dict = {"increment": int(step) if step == int(step) else step}
+    if lo is not None:
+        out["minz"], out["maxz"] = lo, hi
+    return out
 
 def _rule_layers(source_id: str, layer, cfg: dict) -> list[dict] | None:
     """One render layer per rule in `style.rules`, or None when this layer is not rule-based.

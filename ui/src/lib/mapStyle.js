@@ -41,6 +41,11 @@ import {
   fillPattern as symFillPattern,
   lineMarker as symLineMarker,
   lineMarkerLayout as symLineMarkerLayout,
+  // For the contour colouring below, which builds its own colormap from a named ramp — the same
+  // ramps and the same interpolation the graduated symbology uses, so a raster's relief and a
+  // vector layer's classes drawn from one name are the same colours.
+  RAMPS,
+  rampColors,
 } from '@/lib/symbology'
 
 export function buildMapStyle({ configs = [], layers = [], rasters = [], sources = [],
@@ -512,6 +517,68 @@ function explicitColormap(classes, reverse) {
   return Object.keys(mapping).length ? JSON.stringify(mapping) : null
 }
 
+// THE CONTOUR COLOURS, mirroring services/titiler.py. TiTiler's contour algorithm hard-codes its
+// palette (`terrain`) and its line colour (black), so a chosen one is drawn by reproducing the
+// algorithm as band maths plus an explicit colormap. When the style asks for those defaults the
+// algorithm is used untouched and the URL stays byte-identical to what a published layer has.
+export const CONTOUR_BANDS = 32
+export const CONTOUR_DEFAULT_COLOR = '#000000'
+export const CONTOUR_DEFAULT_PALETTE = 'terrain'
+
+function contourColours(style) {
+  const palette = String(style?.contour_palette || CONTOUR_DEFAULT_PALETTE).trim().toLowerCase()
+  const colour = String(style?.contour_color || CONTOUR_DEFAULT_COLOR).trim().toLowerCase()
+  return {
+    palette: RAMPS[palette] ? palette : CONTOUR_DEFAULT_PALETTE,
+    colour: /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/.test(colour) ? colour : CONTOUR_DEFAULT_COLOR,
+  }
+}
+
+export function contoursAreDefault(style) {
+  const { palette, colour } = contourColours(style)
+  return palette === CONTOUR_DEFAULT_PALETTE && colour === CONTOUR_DEFAULT_COLOR
+}
+
+const trim = (n) => (String(Number(n).toFixed(6)).replace(/0+$/, '').replace(/\.$/, '') || '0')
+
+// How wide a contour line is, as a FRACTION of the interval, per unit of `thickness`. TiTiler's
+// own `data % increment < thickness` is in DATA UNITS despite the name — it only reads as a pixel
+// width because its default interval is 35, so `< 1` selects ~3% of the gap. Here the data is not
+// scaled, so a thickness of 1 against an interval of 0.05 made the test true for EVERY pixel and
+// the whole raster came back one flat colour. 0.03 reproduces TiTiler's default (1/35).
+export const CONTOUR_LINE_FRACTION = 0.03
+
+export function contourExpression(band, increment, thickness, lo, hi) {
+  const span = (Number(hi) - Number(lo)) > 0 ? Number(hi) - Number(lo) : 1
+  const step = Number(increment) || 1
+  const width = Math.max(step * CONTOUR_LINE_FRACTION * Math.max(Number(thickness) || 1, 1),
+    step * 1e-4)
+  const top = CONTOUR_BANDS
+  return `where((b${band}%${trim(step)})<${trim(width)},0,`
+    + `where(b${band}<=${trim(lo)},1,`
+    + `where(b${band}>=${trim(hi)},${top},`
+    + `1+${top - 1}*(b${band}-${trim(lo)})/${trim(span)})))`
+}
+
+function rgba(hex) {
+  let v = String(hex || '').replace('#', '')
+  if (v.length === 3) v = v.split('').map(c => c + c).join('')
+  const n = parseInt(v, 16)
+  if (!Number.isFinite(n) || v.length !== 6) return [0, 0, 0, 255]
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255, 255]
+}
+
+// The INTERVAL form, not the discrete one: the expression produces floats, and a discrete map
+// matches exact integers only — measured against the running image, that coloured 156 pixels of a
+// tile where intervals coloured 2704.
+export function contourColormap(palette, lineColour) {
+  const out = [[[-0.5, 0.5], rgba(lineColour)]]
+  rampColors(palette, CONTOUR_BANDS).forEach((c, i) => {
+    out.push([[i + 0.5, i + 1.5], rgba(c)])
+  })
+  return JSON.stringify(out)
+}
+
 // The interval to use when the author has only ticked the box, derived from the DATA rather than
 // taken from TiTiler's 35 — which is a fine contour interval for a global DEM in metres and a
 // catastrophic one for a vegetation index running 0.556-0.947, where it puts the whole raster in
@@ -633,12 +700,25 @@ export function rasterTilesUrl(baseTileUrl, style, bandCount) {
     }
     if (style.algorithm === 'contours') {
       const [lo, hi] = contourRange(style)
-      const scale = contourScale(Number(style.increment) > 0
-        ? Number(style.increment) : defaultIncrement(lo, hi), lo, hi)
-      // Scaling the DATA is the only way to ask TiTiler for an interval finer than 1.
-      if (scale !== 1) params.push(`expression=b${expressionBand(bands)}*${scale}`)
-      const p = contourParams(style, scale)
-      if (p) params.push(`algorithm_params=${encodeURIComponent(p)}`)
+      const step = Number(style.increment) > 0 ? Number(style.increment) : defaultIncrement(lo, hi)
+      const scale = contourScale(step, lo, hi)
+      if (contoursAreDefault(style)) {
+        // Scaling the DATA is the only way to ask TiTiler for an interval finer than 1.
+        if (scale !== 1) params.push(`expression=b${expressionBand(bands)}*${scale}`)
+        const p = contourParams(style, scale)
+        if (p) params.push(`algorithm_params=${encodeURIComponent(p)}`)
+      } else {
+        // A chosen palette or line colour, which the algorithm cannot express — so it is not used
+        // at all here; running both would contour an already-coloured RGB image.
+        const at = params.indexOf('algorithm=contours')
+        if (at >= 0) params.splice(at, 1)
+        const p = JSON.parse(contourParams(style, scale) || '{}')
+        const { palette, colour } = contourColours(style)
+        const expr = contourExpression(expressionBand(bands), step, p.thickness ?? 1,
+          lo ?? -12000, hi ?? 8000)
+        params.push(`expression=${encodeURIComponent(expr)}`)
+        params.push(`colormap=${encodeURIComponent(contourColormap(palette, colour))}`)
+      }
     }
   } else if (bands.length !== 3) {
     // A CLASSIFIED raster, which this used to drop entirely: only `colormap` was mirrored, so a
