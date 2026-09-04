@@ -190,6 +190,16 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
+2026-09-04 (`vector_ingest`: **every layer of a multi-layer source is ingested, not just the first**
+— issue #95. `fiona.open(path)` with no `layer=` returns the first layer and says nothing about the
+rest, so a packaged QGIS project of nine layers became one layer with eight gone and no symptom
+anywhere. `_spatial_layers` lists them, skipping QGIS's `layer_styles` by name and any other
+attribute-only table by asking whether it has a geometry at all. The fan-out happens INSIDE the one
+task rather than as a task per layer, because the upload is a single temp file this task deletes in
+its `finally` — siblings would race it — and because the caller keeps polling one job. The first
+layer reuses the row the upload created; the rest get rows of their own. One bad layer is marked in
+error and the others still import; the job fails only if every layer did.)
+
 2026-09-02 (`restore.py`: `_repair_setup_config()` collapses `setup_config` back to ONE row
 and restores its primary key. `pg_restore --clean` empties the table, the live API inserts a blank
 default into the gap, the snapshot's row lands on top and ADD CONSTRAINT fails — leaving two rows,
