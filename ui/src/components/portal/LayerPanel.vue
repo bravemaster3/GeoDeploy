@@ -578,7 +578,15 @@
                 </button>
               </div>
               <label v-if="activeArrow !== 'none'" class="flex items-center gap-2 mt-1.5">
-                <span class="text-[11px] text-muted-foreground flex-shrink-0">Every</span>
+                <span class="text-[11px] text-muted-foreground flex-shrink-0 w-10">Size</span>
+                <input type="range" min="4" max="48" step="1" :value="arrowSize"
+                  @change="setArrowSize($event.target.value)" class="flex-1 h-1 accent-primary" />
+                <span class="text-[11px] text-muted-foreground/70 w-8 text-right tabular-nums">
+                  {{ arrowSize }}px
+                </span>
+              </label>
+              <label v-if="activeArrow !== 'none'" class="flex items-center gap-2 mt-1.5">
+                <span class="text-[11px] text-muted-foreground flex-shrink-0 w-10">Every</span>
                 <input type="number" min="10" step="10"
                   :value="config.style?.line_marker?.spacing ?? 90"
                   @change="setArrowSpacing($event.target.value)"
@@ -1765,10 +1773,17 @@ const arrowPresets = [
   { name: 'double', title: 'Arrows both ways' },
 ]
 
-function arrowTile(name, color) {
+// Head SIZE, in pixels. QGIS's arrow states a head length and a head thickness separately; one
+// number here scales both together at the proportions an arrowhead reads best at (a head slightly
+// longer than it is wide), because two boxes for one visual decision is how a panel becomes a form.
+// The plugin keeps QGIS's two apart, so an arrow pushed FROM QGIS keeps its own proportions.
+const ARROW_SIZE_DEFAULT = 10
+
+function arrowTile(name, color, size) {
   if (name === 'none') return null
-  const h = 10
-  const len = 9
+  const px = Math.max(4, Math.min(48, Number(size) || ARROW_SIZE_DEFAULT))
+  const h = px
+  const len = Math.round(px * 0.9)
   const w = name === 'double' ? len * 2 : len
   const cv = document.createElement('canvas')
   cv.width = w
@@ -1791,18 +1806,34 @@ function arrowTile(name, color) {
 const activeArrow = computed(() => props.config.style?.line_marker?.preset || 'none')
 
 function arrowPreview(name) {
-  const tile = arrowTile(name, props.config.style?.color || '#333333')
+  // The PRESET swatch is drawn at a fixed size so the four buttons stay the same shape whatever
+  // the layer's arrows are set to — a row of buttons that resize as you drag a slider is a row
+  // that is hard to aim at.
+  const tile = arrowTile(name, props.config.style?.color || '#333333', ARROW_SIZE_DEFAULT)
   return tile ? tile.image : null
 }
 
-function setArrow(name) {
+const arrowSize = computed(() => props.config.style?.line_marker?.size ?? ARROW_SIZE_DEFAULT)
+
+function setArrowSize(value) {
+  const marker = props.config.style?.line_marker
+  if (!marker?.preset) return
+  // The IMAGE is regenerated, not scaled by `icon-size`: the tile is what every renderer draws and
+  // what the plugin reads, so a size that lived only in the layout would be lost the moment the
+  // style left this panel. Same reasoning as the hatch tiles.
+  setArrow(marker.preset, value)
+}
+
+function setArrow(name, size) {
   if (name === 'none') { emitStyle({ line_marker: undefined }); return }
-  const tile = arrowTile(name, props.config.style?.color || '#333333')
+  const px = Number(size) || props.config.style?.line_marker?.size || ARROW_SIZE_DEFAULT
+  const tile = arrowTile(name, props.config.style?.color || '#333333', px)
   if (!tile) return
   emitStyle({
     line_marker: {
       ...tile,
       preset: name,
+      size: px,
       spacing: props.config.style?.line_marker?.spacing ?? DEFAULT_ARROW_SPACING,
     },
   })

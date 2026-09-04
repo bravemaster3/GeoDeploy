@@ -108,6 +108,13 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
   the Other colour" — naming a colour with no way to choose it. On a truncated column that fallback
   is most of the map. It writes `style.other_color`, which both renderers and the QGIS plugin have
   always read; only the panel never set it.
+- **Arrow SIZE** (2026-09-04) regenerates the tile rather than scaling it through `icon-size`: the
+  image is what every renderer draws and what the plugin reads back, so a size living only in the
+  layout would be lost the moment the style left this panel. One number scales head length and
+  thickness together — QGIS keeps its two apart, and an arrow pushed FROM QGIS keeps its own
+  proportions. Direction comes from the LINE'S OWN vertex order (`symbol-placement: line` +
+  `icon-rotation-alignment: map`), so "forward" means along the way the feature was digitised; it
+  is not a per-feature choice, and reversing it is what the "back" preset is for.
 - **Direction arrows on a line** (2026-09-04), drawn in the browser into the same `line_marker`
   key and the same PNG data URI the plugin's `arrows.py` produces — so an arrow drawn here and a
   QGIS arrow line are the same thing to every renderer. Forward, back or both, with a spacing.
