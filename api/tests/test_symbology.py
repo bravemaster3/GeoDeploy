@@ -13,6 +13,11 @@ import pytest
 
 from geodeploy.services import symbology as sym
 
+#: A real 1x1 transparent PNG, as a data URI. The legend only checks the SHAPE of the string, but a
+#: valid image keeps the fixture honest if anything downstream ever decodes it.
+PNG = ("data:image/png;base64,"
+       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+
 
 # ── Classification ───────────────────────────────────────────────────────────────────────────────
 
@@ -623,3 +628,85 @@ def test_a_bbox_that_is_not_lonlat_is_refused():
     assert sym.extent_metres("[319000, 6390000, 410000, 6480000]") is None
     assert sym.pillar_radius({}, "[319000, 6390000, 410000, 6480000]") == \
         sym.DEFAULT_PILLAR_RADIUS_M
+
+
+class TestLegendCoversTheNewSymbologies:
+    """A legend that disagrees with the map is worse than no legend.
+
+    `legend_entries` only knew about graduated and categorized COLOUR, so every symbology added for
+    the QGIS round trip drew a map the legend could not describe: a rule-based layer and a heatmap
+    both returned `[]`, and a classified layer of dashed lines or star markers came out as a column
+    of plain squares. Reported as "legends don't display the new symbologies yet".
+    """
+
+    def test_a_heatmap_gets_a_ramp_not_classes(self):
+        """It has no classes to list. Returning the classes of the symbology it REPLACED would
+        describe a map nobody is looking at."""
+        style = {"color_mode": "graduated",
+                 "classes": [{"min": 0, "max": 5, "color": "#111"}],
+                 "heatmap": {"enabled": True, "ramp": ["rgba(0,0,255,0)", "#3b82f6", "#ef4444"]}}
+        entries = sym.legend_entries(style)
+        assert len(entries) == 1
+        assert entries[0]["heatmap"] is True
+        assert entries[0]["ramp"] == ["rgba(0,0,255,0)", "#3b82f6", "#ef4444"]
+
+    def test_rules_outrank_the_fallback_colour_mode(self):
+        """Same precedence the renderers use: a rule-based style's `color_mode` is only the shape
+        for viewers that know nothing about rules."""
+        style = {"color_mode": "categorized",
+                 "categories": [{"value": "a", "color": "#111"}],
+                 "rules": [{"label": "Big", "style": {"color": "#ff0000"}},
+                           {"label": "Small", "style": {"color": "#00ff00"}}]}
+        entries = sym.legend_entries(style)
+        assert [e["label"] for e in entries] == ["Big", "Small"]
+        assert [e["color"] for e in entries] == ["#ff0000", "#00ff00"]
+        assert all(e["rule"] for e in entries)
+
+    def test_a_rule_without_a_label_is_described_by_its_expression(self):
+        """Which is at least a statement of what it selects. Matches `cli/geodeploy/styles.py`."""
+        entries = sym.legend_entries({"rules": [{"expression": "pop > 1000"}]})
+        assert entries[0]["label"] == "pop > 1000"
+
+    def test_each_rule_carries_its_own_symbol(self):
+        """A rule-based layer varies by EVERYTHING at once. Drawing every rule with the layer's
+        base symbol reports a dashed rule and a solid one as the same thing."""
+        style = {"color": "#111", "rules": [
+            {"label": "A", "style": {"color": "#f00", "dash": "dashed", "line_width": 4}},
+            {"label": "B", "style": {"color": "#0f0"}}]}
+        a, b = sym.legend_entries(style)
+        assert a["dash"] == "dashed" and a["line_width"] == 4
+        assert "dash" not in b
+
+    def test_a_rule_inherits_what_it_does_not_override(self):
+        """A rule that only changes colour is still drawn with the layer's marker shape."""
+        style = {"color": "#111", "shape": "star",
+                 "rules": [{"label": "A", "style": {"color": "#f00"}}]}
+        assert sym.legend_entries(style)[0]["shape"] == "star"
+
+    def test_a_classified_layer_carries_its_shape_to_every_swatch(self):
+        """A square swatch actively misreports a layer drawn with stars."""
+        style = {"color_mode": "categorized", "shape": "star", "dash": "dotted",
+                 "categories": [{"value": "a", "color": "#111"}, {"value": "b", "color": "#222"}]}
+        entries = sym.legend_entries(style)
+        assert len(entries) == 3                          # two categories plus "Other"
+        assert all(e["shape"] == "star" for e in entries)
+
+    def test_a_pattern_travels_as_its_TILE_not_as_the_block(self):
+        """A swatch needs pixels; the rest of the block describes how MapLibre repeats them."""
+        style = {"color_mode": "categorized",
+                 "categories": [{"value": "a", "color": "#111"}],
+                 "fill_pattern": {"image": PNG, "width": 12, "height": 12, "hatch": "cross"}}
+        assert sym.legend_entries(style)[0]["fill_pattern"] == PNG
+
+    @pytest.mark.parametrize("block", [{}, {"image": "http://x/y.png"}, {"image": None}, "nope"])
+    def test_a_pattern_that_is_not_a_data_uri_is_not_carried(self, block):
+        """The value comes from a client, and it goes straight into an `img src` and a CSS
+        `url()` — so anything but the shape a generated tile has is refused, not sanitised."""
+        style = {"color_mode": "categorized", "categories": [{"value": "a", "color": "#111"}],
+                 "fill_pattern": block}
+        assert "fill_pattern" not in sym.legend_entries(style)[0]
+
+    def test_a_single_symbol_still_has_no_legend(self):
+        """One swatch repeating the layer's colour says nothing its own swatch does not. The
+        `/legend` endpoint synthesises a row for callers that need one; that is presentation."""
+        assert sym.legend_entries({"color": "#abcdef", "shape": "star"}) == []

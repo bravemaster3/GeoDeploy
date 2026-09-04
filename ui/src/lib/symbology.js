@@ -379,9 +379,54 @@ export function iconSizeExpression(style = {}) {
 }
 
 /** What a legend should show: [{color, label}], or [] for a single symbol. */
+// Per-ENTRY symbology a swatch can draw. A classified layer varies only by colour, so a coloured
+// square sufficed — but a rule-based one varies by everything at once (one rule dashed, another
+// with a marker, a third hatched), and a row of squares reports none of it. Mirrors
+// services/symbology.py::_LEGEND_SYMBOL_KEYS.
+const LEGEND_SYMBOL_KEYS = ['dash', 'shape', 'marker_image', 'fill_pattern', 'line_width',
+  'outline_color', 'outline_width', 'fill_opacity']
+
+function legendSymbol(style = {}) {
+  const out = {}
+  for (const key of LEGEND_SYMBOL_KEYS) {
+    const value = style[key]
+    if (value === null || value === undefined || value === '') continue
+    if (key === 'fill_pattern') {
+      const image = value && typeof value === 'object' ? value.image : null
+      if (typeof image === 'string' && image.startsWith('data:')) out.fill_pattern = image
+      continue
+    }
+    if (key === 'marker_image' && !String(value).startsWith('data:')) continue
+    out[key] = value
+  }
+  return out
+}
+
 export function legendEntries(style = {}) {
+  // A HEATMAP IS NOT A SET OF CLASSES — it has a ramp, and density runs 0-1 whatever the data
+  // holds. Returning [] here made a heatmap layer show the classes of the symbology it replaced,
+  // which is a legend for a map nobody is looking at.
+  const heat = style.heatmap || {}
+  if (heat.enabled) {
+    const ramp = (heat.ramp || []).filter(c => typeof c === 'string')
+    return [{ color: ramp[ramp.length - 1], label: 'Density', ramp, heatmap: true }]
+  }
+  // RULES BEFORE CLASSES, the same precedence the renderers use: a rule-based style's `color_mode`
+  // is only a fallback for viewers that know nothing about rules.
+  if (Array.isArray(style.rules) && style.rules.length) {
+    return style.rules.filter(r => r && typeof r === 'object').map((rule, i) => {
+      const rstyle = (rule.style && typeof rule.style === 'object') ? rule.style : {}
+      return {
+        color: rstyle.color || style.color || DEFAULT_COLOR,
+        label: String(rule.label || rule.expression || `Rule ${i + 1}`),
+        rule: true,
+        ...legendSymbol({ ...style, ...rstyle }),
+      }
+    })
+  }
   const mode = style.color_mode || 'single'
   if (mode === 'graduated') {
+    const shared = legendSymbol(style)
     return (style.classes || []).map((c) => {
       const lo = c.min, hi = c.max
       let label
@@ -389,14 +434,18 @@ export function legendEntries(style = {}) {
       else if (lo === null || lo === undefined) label = `< ${fmtNum(hi)}`
       else if (hi === null || hi === undefined) label = `≥ ${fmtNum(lo)}`
       else label = `${fmtNum(lo)} – ${fmtNum(hi)}`
-      return { color: c.color, label }
+      return { color: c.color, label, ...shared }
     })
   }
   if (mode === 'categorized') {
-    const out = (style.categories || []).map((c) => ({ color: c.color, label: String(c.value) }))
+    const shared = legendSymbol(style)
+    const out = (style.categories || []).map((c) => ({
+      color: c.color, label: String(c.value), ...shared }))
     // The `match` expression has a fallback colour, so the legend must explain it — otherwise every
     // unlisted value is drawn in a colour the legend does not mention.
-    if (out.length) out.push({ color: style.other_color || DEFAULT_OTHER_COLOR, label: 'Other' })
+    if (out.length) {
+      out.push({ color: style.other_color || DEFAULT_OTHER_COLOR, label: 'Other', ...shared })
+    }
     return out
   }
   return []

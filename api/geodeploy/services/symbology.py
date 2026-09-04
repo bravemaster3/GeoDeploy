@@ -1155,6 +1155,34 @@ def pillar_radius(style: dict, bbox=None) -> float:
     return DEFAULT_PILLAR_RADIUS_M
 
 
+#: Per-ENTRY symbology a legend swatch can draw. A classified layer varies only by colour, so a
+#: coloured square was enough — but a rule-based one varies by everything at once (one rule dashed,
+#: another with a marker, a third with a hatch), and a row of squares reports none of it. These ride
+#: on the entry so every drawer can render the actual symbol rather than a stand-in for it.
+_LEGEND_SYMBOL_KEYS = ("dash", "shape", "marker_image", "fill_pattern", "line_width",
+                       "outline_color", "outline_width", "fill_opacity")
+
+
+def _legend_symbol(style: dict) -> dict:
+    """The drawable bits of a style, for one legend swatch. Absent keys are simply not carried."""
+    out = {}
+    for key in _LEGEND_SYMBOL_KEYS:
+        value = (style or {}).get(key)
+        if value in (None, ""):
+            continue
+        if key == "fill_pattern":
+            # The TILE, not the block: a swatch needs pixels, and the rest of the block describes
+            # how MapLibre should repeat them.
+            image = value.get("image") if isinstance(value, dict) else None
+            if isinstance(image, str) and image.startswith("data:"):
+                out["fill_pattern"] = image
+            continue
+        if key == "marker_image" and not str(value).startswith("data:"):
+            continue
+        out[key] = value
+    return out
+
+
 def legend_entries(style: dict) -> list[dict]:
     """What a legend should show for this layer: `[{color, label, …}]`, or [] for single symbols.
 
@@ -1168,6 +1196,38 @@ def legend_entries(style: dict) -> list[dict]:
     display string containing an EN dash and `≥`, which is precisely the re-derivation this
     function exists to stop. Drawing a legend needs the label; being the map needs the number.
     """
+    # A HEATMAP IS NOT A SET OF CLASSES, so it has no swatches — it has a ramp, and density runs
+    # 0-1 whatever the data holds. One entry carrying the colours lets a drawer show the gradient;
+    # returning [] made a heatmap layer show the CLASSES of the symbology it replaced, which is a
+    # legend for a map nobody is looking at.
+    heat = style.get("heatmap") or {}
+    if heat.get("enabled"):
+        return [{"color": (heat.get("ramp") or [None])[-1], "label": "Density",
+                 "ramp": [c for c in (heat.get("ramp") or []) if isinstance(c, str)],
+                 "heatmap": True}]
+
+    # RULES BEFORE CLASSES, the same precedence `apply`/`_vector_layers` use: a rule-based style's
+    # `color_mode` is only the fallback shape for viewers that know nothing about rules. Each rule
+    # carries its own symbol, so each entry carries the drawable parts of it — a row of plain
+    # squares would report a dashed rule, a hatched rule and a marker rule as identical.
+    rules = style.get("rules")
+    if isinstance(rules, list) and rules:
+        out = []
+        for i, rule in enumerate(rules):
+            if not isinstance(rule, dict):
+                continue
+            rstyle = rule.get("style") if isinstance(rule.get("style"), dict) else {}
+            merged = dict(style, **rstyle)
+            # Label, then EXPRESSION, then a number — matching `cli/geodeploy/styles.py::legend`.
+            # A rule's label is what its author typed in QGIS's rule editor, so it is already
+            # legend text; a rule with none is at least described by what it selects.
+            entry = {"color": rstyle.get("color") or style.get("color") or DEFAULT_COLOR,
+                     "label": str(rule.get("label") or rule.get("expression")
+                                  or "Rule {0}".format(i + 1)), "rule": True}
+            entry.update(_legend_symbol(merged))
+            out.append(entry)
+        return out
+
     mode = style.get("color_mode") or "single"
     if mode == "graduated":
         out = []
@@ -1181,17 +1241,24 @@ def legend_entries(style: dict) -> list[dict]:
                 label = f"≥ {_num(lo)}"
             else:
                 label = f"{_num(lo)} – {_num(hi)}"
-            out.append({"color": c.get("color"), "label": label, "min": lo, "max": hi})
+            entry = {"color": c.get("color"), "label": label, "min": lo, "max": hi}
+            entry.update(_legend_symbol(style))
+            out.append(entry)
         return out
     if mode == "categorized":
-        out = [{"color": c.get("color"), "label": str(c.get("value")), "value": c.get("value")}
+        shared = _legend_symbol(style)
+        out = [dict({"color": c.get("color"), "label": str(c.get("value")),
+                     "value": c.get("value")}, **shared)
                for c in style.get("categories") or []]
         if out:
             # "Other" carries no value on purpose: it is the fallback for everything NOT listed,
             # and a renderer needs to be able to tell it apart from a category whose value is null.
-            out.append({"color": style.get("other_color") or DEFAULT_OTHER_COLOR, "label": "Other",
-                        "value": None, "other": True})
+            out.append(dict({"color": style.get("other_color") or DEFAULT_OTHER_COLOR,
+                             "label": "Other", "value": None, "other": True}, **shared))
         return out
+    # A SINGLE symbol still has no legend of its own — one swatch repeating the layer's colour says
+    # nothing the layer's own swatch does not. The `/legend` endpoint synthesises one for callers
+    # that need a row regardless; that is a presentation decision, and it belongs there.
     return []
 
 

@@ -119,12 +119,18 @@ jobs:
       # symbols, and QgsApplication refuses to start without a platform plugin of some kind.
       env:
         QT_QPA_PLATFORM: offscreen
+        # UNBUFFERED, because the failure mode these jobs actually hit is a SIGABRT from QGIS's C++
+        # side — and Python's block buffering then discards everything printed before it. A real
+        # abort here reported `corrupted size vs. prev_size` and not one of the 233 check lines, so
+        # there was no way to tell which check was running. `notes_for_future.md` records the same
+        # trap with `tail` swallowing a pipeline's exit status; this is its other half.
+        PYTHONUNBUFFERED: "1"
     steps:
       - uses: actions/checkout@v7
 
       - name: The symbology round trip, against QGIS itself
         working-directory: integrations/qgis-plugin
-        run: python3 scripts/test_real_qgis.py
+        run: python3 -u scripts/test_real_qgis.py
 
       - name: Every symbol QGIS offers is classified
         # Reads QGIS's OWN registries — symbol layers, renderers, data-defined properties — and
@@ -132,7 +138,7 @@ jobs:
         # something the table does not classify, so a new QGIS version forces a decision instead
         # of quietly widening a gap nobody has written down.
         working-directory: integrations/qgis-plugin
-        run: python3 scripts/coverage_report.py
+        run: python3 -u scripts/coverage_report.py
 
   qgis-plugin:
     name: QGIS plugin

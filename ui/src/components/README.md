@@ -91,6 +91,18 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
 
 ## Dependencies / relationships
 - Read/write through `../../stores/` (mostly `data` and `portals`) and call the backend via `../../api`.
+- **`LegendSwatch` draws pictures, patterns and ramps** (2026-09-04), not only SVG shapes. A
+  rendered marker and a pattern tile are PIXELS — QGIS drew them, and redrawing them as a circle is
+  the exact loss the swatch exists to avoid; a heatmap has no classes at all, only a ramp. Each
+  falls back to the SVG when absent, so every existing caller is untouched. The layer page passes
+  each entry's own symbol through, because a rule-based layer varies by everything at once.
+- **The heatmap ramp is a dropdown plus one preview bar** (2026-09-04), the same control the
+  graduated ramp uses, with **Reverse**. Twelve ramps, and adding one is a single table entry.
+  Reversing flips the colours and rebuilds the transparent stop at whichever is now lowest —
+  reversing the finished list would strand transparency at the HIGH end, painting the whole
+  viewport at density zero. (An earlier attempt drew each ramp as its own CSS gradient over a
+  chequerboard; the `background-size` list applied to the gradient layer too, repeating it every
+  8px, so the four ramps rendered as boxes of vertical stripes.)
 - **The "Other" colour is editable** (2026-09-04). The categorized legend drew the `match`
   fallback as a swatch with the picker **disabled**, directly above a hint reading "the rest draw in
   the Other colour" — naming a colour with no way to choose it. On a truncated column that fallback

@@ -151,9 +151,15 @@
             </p>
             <div v-if="legend.length" class="space-y-1">
               <div v-for="(e, i) in legend" :key="i" class="flex items-center gap-2">
-                <LegendSwatch :geom="swatchGeom" :color="e.color" :marker="markerShape"
-                  :dash="lineDash" :size="16"
-              :outline-color="outlineColor" :outline-width="outlineWidth" />
+                <!-- Each entry's OWN symbol where it has one. A classified layer varies only by
+                     colour, so every row shared the layer's dash and marker — but a rule-based
+                     layer varies by everything at once, and drawing its rules with one base symbol
+                     reports a dashed rule, a hatched rule and a star rule as identical. -->
+                <LegendSwatch :geom="swatchGeom" :color="e.color"
+                  :marker="e.shape || markerShape" :dash="e.dash || lineDash" :size="16"
+                  :image="e.marker_image" :pattern="e.fill_pattern" :ramp="e.ramp"
+                  :outline-color="e.outline_color || outlineColor"
+                  :outline-width="e.outline_width ?? outlineWidth" />
                 <span class="text-[11px] text-muted-foreground truncate">{{ e.label }}</span>
               </div>
             </div>

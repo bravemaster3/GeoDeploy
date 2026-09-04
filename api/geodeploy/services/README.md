@@ -266,6 +266,18 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   `api/tests/test_native_crs.py`.
 
 ## Last updated
+2026-09-04 (`symbology.legend_entries`: **the legend describes the symbologies the round trip
+added.** It knew only graduated and categorized COLOUR, so a rule-based layer and a heatmap both
+returned `[]` — no legend at all — and a classified layer of dashed lines or star markers came out
+as a column of plain squares. Heatmaps return a RAMP (density runs 0-1, there are no classes);
+rules return one entry each, ahead of `color_mode`, matching the precedence the renderers use; and
+every entry now carries the drawable parts of its own symbol (`dash`, `shape`, `marker_image`, a
+`fill_pattern` TILE, outline, widths) so a swatch can be the symbol rather than a stand-in. A
+pattern is carried only as a `data:` URI — it reaches an `img src` and a CSS `url()`, so anything
+else is refused rather than sanitised. Mirrored in `ui/src/lib/symbology.js`,
+`templates/shared/portal.js` and `cli/geodeploy/styles.py`; the rule label falls back to the
+EXPRESSION before a number, which is what the CLI already did.)
+
 2026-09-04 (`titiler.py::_contour_params`: **every contour parameter is now rounded and clamped to
 an integer.** `GET /algorithms/contours` declares increment 0-999, thickness 0-10 and minz/maxz
 +/-99999, all `integer` — `increment` used to be typed as a float and we sent one, so after TiTiler

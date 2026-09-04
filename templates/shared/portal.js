@@ -2719,6 +2719,57 @@
     return typeof c === 'string' ? { color: c, width: 1 } : null;
   }
 
+  // ONE ENTRY'S OWN SYMBOL, when it has one. A classified layer varies only by colour, so every
+  // row could share the layer's dash/shape/outline — but a RULE-BASED layer varies by everything at
+  // once, and drawing all its rules with the layer's base symbol reports a dashed rule, a hatched
+  // rule and a star-marker rule as three identical squares. `legend_entries` puts the drawable bits
+  // on each entry for exactly this; anything it did not carry falls back to the layer's.
+  function entrySwatch(entry, geom, color, dash, shape, outline) {
+    const e = entry || {};
+    if (e.heatmap && Array.isArray(e.ramp) && e.ramp.length) return rampSwatch(e.ramp);
+    if (e.marker_image) {
+      return '<img class="legend-swatch-img" src="' + dataUri(e.marker_image) + '" alt="" />';
+    }
+    if (e.fill_pattern) {
+      // The tile itself, tiled — a swatch showing the pattern is worth more than a square of the
+      // colour the pattern replaces.
+      return '<span class="legend-swatch-tile" style="background-image:url(' +
+        dataUri(e.fill_pattern) + ')"></span>';
+    }
+    var ol = outline;
+    if (e.outline_color || e.outline_width != null) {
+      ol = { color: e.outline_color || (outline && outline.color),
+             width: e.outline_width != null ? e.outline_width : (outline && outline.width) };
+    }
+    return legendSwatch(geom, e.color || color || '#999', e.dash || dash, e.shape || shape, ol);
+  }
+
+  // A heatmap has no classes to list — it has a ramp, and density runs 0 to 1 whatever the data
+  // holds. Drawn as the gradient itself over a chequer, because the first stop is transparent and a
+  // bar that merely starts pale misstates where the layer stops drawing.
+  function rampSwatch(ramp) {
+    const stops = ramp.map(function (c, i) {
+      return cssColor(c) + ' ' + Math.round(i / Math.max(1, ramp.length - 1) * 100) + '%';
+    }).join(',');
+    return '<span class="legend-swatch-ramp" style="background-image:linear-gradient(to right,' +
+      stops + ')"></span>';
+  }
+
+  // Only the shape a generated tile actually has. These strings reach an `img src` and a CSS
+  // `url()`, and HTML-escaping is the wrong guard for the second: inside a style attribute the
+  // parser unescapes before CSS ever sees it. Base64 has no quotes or parens, so a value that
+  // contains any is not one of ours and is refused rather than sanitised.
+  function dataUri(value) {
+    const s = String(value || '');
+    return /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(s) ? s : '';
+  }
+
+  // Likewise for a colour dropped into a gradient: a hex, an rgb()/rgba(), or nothing.
+  function cssColor(value) {
+    const s = String(value || '').trim();
+    return /^#[0-9a-f]{3,8}$/i.test(s) || /^rgba?\([\d.,\s%]+\)$/i.test(s) ? s : 'transparent';
+  }
+
   function legendSwatch(geom, color, dash, shape, outline) {
     const c = color || '#3b82f6';
     if (geom === 'line') {
@@ -2878,7 +2929,7 @@
     // swatch button uses; it was simply never reached from here.
     const rows = entries.map(function (e) {
       return '<div class="legend-class">' +
-        legendSwatch(geom, e.color || '#999', dash, shape, outline) +
+        entrySwatch(e, geom, e.color || '#999', dash, shape, outline) +
         '<span class="legend-label">' + escHtml(e.label == null ? '' : String(e.label)) + '</span>' +
         '</div>';
     }).join('');
@@ -2892,9 +2943,17 @@
     const head = '<button type="button" class="legend-toggle" aria-expanded="true" ' +
       'title="Hide these classes">' +
       '<span class="legend-caret" aria-hidden="true">▾</span>' +
-      '<span class="legend-count">' + entries.length + ' classes</span></button>';
+      '<span class="legend-count">' + legendCount(entries) + '</span></button>';
     return '<div class="layer-legend legend-classes">' + head +
       '<div class="legend-body">' + by + rows + sizeHtml + '</div></div>';
+  }
+
+  // What the rows ARE. "1 classes" was both wrong and ungrammatical for a heatmap, and a
+  // rule-based layer has rules rather than classes — the word is part of what the legend says.
+  function legendCount(entries) {
+    if (entries.length === 1 && entries[0] && entries[0].heatmap) return 'Density';
+    const noun = (entries[0] && entries[0].rule) ? 'rule' : 'class';
+    return entries.length + ' ' + noun + (entries.length === 1 ? '' : noun === 'rule' ? 's' : 'es');
   }
 
   function rasterLegendHtml(layer) {

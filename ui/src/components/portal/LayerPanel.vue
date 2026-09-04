@@ -135,12 +135,20 @@
                 </p>
                 <div v-if="legend.length" class="space-y-0.5 max-h-40 overflow-y-auto pr-1">
                   <div v-for="(e, i) in legend" :key="i" class="flex items-center gap-1.5">
+                    <!-- A RULE or a HEATMAP entry has no colour this panel can set: a rule's colour
+                         lives in the rule, and a heatmap's is a ramp. Both are read-only here (the
+                         "Styled in QGIS" block and the ramp control own them), so they show the
+                         symbol rather than a picker that would write nowhere. -->
+                    <LegendSwatch v-if="e.rule || e.heatmap" :geom="geomType" :color="e.color"
+                      :marker="e.shape" :dash="e.dash" :size="18"
+                      :image="e.marker_image" :pattern="e.fill_pattern" :ramp="e.ramp" />
                     <!-- "Other" IS EDITABLE. It was disabled — while the hint below it said the
                          remaining values draw in the Other colour, which left no way to choose
                          that colour. It has no `value` to edit, but it does have a colour: it is
                          the `match` fallback, `style.other_color`, which both renderers and the
                          QGIS plugin have always read. -->
-                    <input type="color" :value="e.color" @input="setEntryColor(i, $event.target.value)"
+                    <input v-else type="color" :value="e.color"
+                      @input="setEntryColor(i, $event.target.value)"
                       :title="e.isOther ? 'Everything not listed above' : e.label"
                       class="w-5 h-5 rounded border border-border/50 cursor-pointer p-0 flex-shrink-0" />
                     <span class="text-[11px] text-muted-foreground truncate">{{ e.label }}</span>
@@ -482,22 +490,36 @@
                     {{ config.style?.heatmap?.radius ?? 20 }}px
                   </span>
                 </div>
-                <!-- THE RAMPS AS RAMPS. They were a dropdown of names — "Blue to red", "Dark to
-                     yellow" — which asks the author to picture a gradient from a phrase when the
-                     gradient itself fits in the same space. A colour ramp is the one thing that
-                     genuinely cannot be described better in words than shown; QGIS, matplotlib and
-                     every GIS that offers ramps draws them, and for the same reason. The first stop
-                     is transparent, so each swatch sits on a chequerboard that makes the fade to
-                     nothing visible rather than looking like the strip just starts pale. -->
-                <div class="grid grid-cols-2 gap-1">
-                  <button v-for="r in heatmapRamps" :key="r.name" type="button"
-                    @click="setHeatmapRamp(r.name)" :title="r.label" :aria-label="r.label"
-                    :aria-pressed="heatmapRampName === r.name"
-                    class="h-6 rounded border transition-colors"
-                    :class="heatmapRampName === r.name
-                      ? 'border-primary ring-1 ring-primary/60' : 'border-border hover:border-primary/60'"
-                    :style="{ backgroundImage: rampSwatch(r), backgroundSize: '8px 8px, 8px 8px, auto',
-                              backgroundPosition: '0 0, 4px 4px, 0 0' }"></button>
+                <!-- THE SAME CONTROL AS THE GRADUATED RAMP ABOVE: a name, and one flat bar under
+                     it. A previous attempt drew each ramp as its own CSS gradient over a
+                     chequerboard and the `background-size` list applied to the gradient layer as
+                     well, repeating it every 8px — four boxes of vertical stripes. Spans with a
+                     flat `backgroundColor`, exactly as `rampPreview` does it, have no such trap.
+                     The first stop is transparent, which is what stops the whole viewport being
+                     painted at density zero; it gets a chequer so it reads as a fade to nothing
+                     rather than as a ramp that just starts pale. -->
+                <div class="block">
+                  <span class="text-[11px] text-muted-foreground">Colour ramp</span>
+                  <select :value="heatmapRampName" @change="setHeatmapRamp($event.target.value)"
+                    class="mt-0.5 w-full text-xs border border-border rounded px-1.5 py-1">
+                    <option v-for="r in heatmapRamps" :key="r.name" :value="r.name">{{ r.label }}</option>
+                  </select>
+                  <div class="flex items-center justify-between gap-2 mt-1">
+                    <div class="flex h-2 flex-1 rounded overflow-hidden" aria-hidden="true"
+                         :style="CHECKER">
+                      <span v-for="(c, i) in heatmapPreview" :key="i" class="flex-1"
+                        :style="{ backgroundColor: c }"></span>
+                    </div>
+                    <!-- Reversing flips the COLOURS and rebuilds the transparent stop at whichever
+                         is now lowest — see `heatmapColors`. Density always fades out at the bottom
+                         end; what changes is which hue it fades from. -->
+                    <label class="flex items-center gap-1 text-[11px] text-muted-foreground
+                                  cursor-pointer shrink-0">
+                      <input type="checkbox" :checked="heatmapReverse"
+                        @change="toggleHeatmapReverse" class="cursor-pointer" />
+                      Reverse
+                    </label>
+                  </div>
                 </div>
                 <select :value="config.style?.heatmap?.weight_field || ''"
                   @change="setHeatmapWeight($event.target.value)"
@@ -1067,6 +1089,7 @@ import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps, getRaste
 // the legend here must describe exactly what the published portal will draw.
 import { RAMPS, DIVERGING, NO_OUTLINE, markerOutline, legendEntries, rampColors,
          representativeColor, pillarRadius } from '@/lib/symbology'
+import LegendSwatch from '@/components/LegendSwatch.vue'
 import { contourRange, defaultIncrement, rasterStyleOf } from '@/lib/mapStyle'
 import { TrashIcon, LocateIcon } from '@/views/icons'
 
@@ -1543,34 +1566,67 @@ function setLabelOffset(i, raw) {
 // A renderer, not a paint option: it replaces the points entirely.
 const heatmapOn = computed(() => !!props.config.style?.heatmap?.enabled)
 
-// The first stop MUST be transparent, or the whole viewport is painted at density zero — the one
-// mistake that makes a heatmap look broken rather than merely wrong. Named ramps rather than a
-// colour picker, because a heatmap ramp is a sequence and five colours picked by hand rarely make
-// a good one.
+// The ramps a heatmap can use. A NAME plus its opaque colours, low density first — the transparent
+// stop is added by `heatmapColors`, never stored in this table, so reversing cannot strand it at
+// the wrong end. Adding a ramp here is the whole job of adding a ramp.
 const heatmapRamps = [
-  { name: 'heat', label: 'Blue to red', colors: ['rgba(0,0,255,0)', '#3b82f6', '#22c55e', '#eab308', '#ef4444'] },
-  { name: 'magma', label: 'Dark to yellow', colors: ['rgba(0,0,4,0)', '#3b0f70', '#8c2981', '#fe9f6d', '#fcfdbf'] },
-  { name: 'blues', label: 'Pale to deep blue', colors: ['rgba(247,251,255,0)', '#c6dbef', '#6baed6', '#3182bd', '#08519c'] },
-  { name: 'reds', label: 'Pale to deep red', colors: ['rgba(255,245,240,0)', '#fcbba1', '#fb6a4a', '#de2d26', '#a50f15'] },
+  { name: 'heat', label: 'Blue → green → red', colors: ['#3b82f6', '#22c55e', '#eab308', '#ef4444'] },
+  { name: 'magma', label: 'Magma (dark → yellow)', colors: ['#3b0f70', '#8c2981', '#de4968', '#fe9f6d', '#fcfdbf'] },
+  { name: 'inferno', label: 'Inferno (dark → pale)', colors: ['#420a68', '#932667', '#dd513a', '#fca50a', '#fcffa4'] },
+  { name: 'viridis', label: 'Viridis (blue → yellow)', colors: ['#440154', '#31688e', '#35b779', '#fde725'] },
+  { name: 'plasma', label: 'Plasma (blue → yellow)', colors: ['#0d0887', '#9c179e', '#ed7953', '#f0f921'] },
+  { name: 'turbo', label: 'Turbo (blue → red)', colors: ['#30123b', '#28bbec', '#a4fc3c', '#fb8022', '#7a0403'] },
+  { name: 'blues', label: 'Blues', colors: ['#c6dbef', '#6baed6', '#3182bd', '#08519c'] },
+  { name: 'greens', label: 'Greens', colors: ['#c7e9c0', '#74c476', '#31a354', '#006d2c'] },
+  { name: 'reds', label: 'Reds', colors: ['#fcbba1', '#fb6a4a', '#de2d26', '#a50f15'] },
+  { name: 'purples', label: 'Purples', colors: ['#dadaeb', '#9e9ac8', '#756bb1', '#54278f'] },
+  { name: 'oranges', label: 'Oranges', colors: ['#fdd0a2', '#fd8d3c', '#e6550d', '#a63603'] },
+  { name: 'spectral', label: 'Spectral (diverging)', colors: ['#3288bd', '#99d594', '#e6f598', '#fc8d59', '#d53e4f'] },
 ]
 
+// A `#rrggbb` as the same colour at zero alpha — so the ramp fades out through its OWN low colour
+// rather than through MapLibre's blue default. The renderers force the first stop transparent
+// whatever they are given, which is the real safety net; this only decides which hue it fades from.
+function transparentOf(hex) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex || ''))
+  if (!m) return 'rgba(0,0,255,0)'
+  return `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},0)`
+}
+
+// THE STORED RAMP: a transparent stop, then the colours. Reversing flips the colours and rebuilds
+// the transparent stop from whichever is now lowest — reversing the finished list instead would put
+// transparency at the HIGH end, which paints the whole viewport at density zero. That is the one
+// mistake that makes a heatmap look broken rather than merely wrong, so it is done here, once.
+function heatmapColors(name, reverse) {
+  const ramp = heatmapRamps.find(r => r.name === name) || heatmapRamps[0]
+  const colors = reverse ? [...ramp.colors].reverse() : ramp.colors
+  return [transparentOf(colors[0]), ...colors]
+}
+
+// The chosen ramp is remembered BY NAME beside the colours it produced — the same device
+// `fill_pattern.hatch` and `line_marker.preset` use. Matching the stored colour list back against
+// the table would work until the day a ramp's colours are edited or reversed, at which point the
+// dropdown would silently jump to the first entry.
 const heatmapRampName = computed(() => {
-  const current = JSON.stringify(props.config.style?.heatmap?.ramp || [])
-  const hit = heatmapRamps.find(r => JSON.stringify(r.colors) === current)
+  const block = props.config.style?.heatmap || {}
+  if (block.ramp_name && heatmapRamps.some(r => r.name === block.ramp_name)) return block.ramp_name
+  // A heatmap saved before ramps had names, or one pushed from QGIS: fall back to matching colours.
+  const current = JSON.stringify(block.ramp || [])
+  const hit = heatmapRamps.find(r => JSON.stringify(heatmapColors(r.name, false)) === current)
   return hit ? hit.name : 'heat'
 })
 
-// A ramp drawn as a ramp: the colours as a left-to-right gradient, over a chequerboard so the
-// transparent first stop reads as transparent rather than as a pale start. Two `linear-gradient`s
-// make the chequer squares — no image to load, and it works on either theme because the squares are
-// black at 6% over the panel's own background.
-function rampSwatch(ramp) {
-  const stops = ramp.colors.map((c, i) => `${c} ${(i / (ramp.colors.length - 1) * 100).toFixed(0)}%`)
-  return [
-    `linear-gradient(to right, ${stops.join(', ')})`,
-    'linear-gradient(45deg, rgba(128,128,128,.28) 25%, transparent 25%, transparent 75%, rgba(128,128,128,.28) 75%)',
-    'linear-gradient(45deg, rgba(128,128,128,.28) 25%, transparent 25%, transparent 75%, rgba(128,128,128,.28) 75%)',
-  ].join(', ')
+const heatmapReverse = computed(() => !!props.config.style?.heatmap?.reverse)
+
+const heatmapPreview = computed(() => heatmapColors(heatmapRampName.value, heatmapReverse.value))
+
+// A chequerboard behind the preview bar, so the transparent end reads as a fade to nothing rather
+// than as a ramp that merely starts pale. ONE background image, deliberately: the first attempt
+// drew each ramp as its own gradient over a chequer and the `background-size` list applied to the
+// gradient layer too, repeating it every 8px — a box of vertical stripes instead of a ramp.
+const CHECKER = {
+  backgroundImage: 'repeating-conic-gradient(rgba(128,128,128,.3) 0% 25%, transparent 0% 50%)',
+  backgroundSize: '8px 8px',
 }
 
 function setHeatmap(patch) {
@@ -1579,11 +1635,20 @@ function setHeatmap(patch) {
 
 function setHeatmapOn(on) {
   if (!on) { emitStyle({ heatmap: undefined }); return }
-  setHeatmap({ radius: props.config.style?.heatmap?.radius ?? 20, ramp: heatmapRamps[0].colors })
+  setHeatmap({ radius: props.config.style?.heatmap?.radius ?? 20,
+               ramp_name: heatmapRamps[0].name, reverse: false,
+               ramp: heatmapColors(heatmapRamps[0].name, false) })
 }
 
+// `ramp` is what every renderer reads; `ramp_name` and `reverse` are how this panel remembers the
+// choice that produced it. All three are written together so they can never disagree.
 function setHeatmapRamp(name) {
-  setHeatmap({ ramp: (heatmapRamps.find(r => r.name === name) || heatmapRamps[0]).colors })
+  setHeatmap({ ramp_name: name, ramp: heatmapColors(name, heatmapReverse.value) })
+}
+
+function toggleHeatmapReverse() {
+  const reverse = !heatmapReverse.value
+  setHeatmap({ reverse, ramp: heatmapColors(heatmapRampName.value, reverse) })
 }
 
 async function setHeatmapWeight(field) {
