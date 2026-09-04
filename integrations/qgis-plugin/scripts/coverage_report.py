@@ -114,7 +114,13 @@ LINES = {
     "Lineburst":         (TODO,   "a gradient across the line's width - approximate to flat"),
     "RasterLine":        (TODO,   "approximate to the dominant colour"),
     "FilledLine":        (TODO,   "a line drawn as a filled buffer - approximate to width"),
-    "LinearReferencing": (TODO,   "chainage labels along a line; needs labels first (#98)"),
+    "LinearReferencing": (TODO,   "chainage labels along a line. Labels landed in #98, and that is "
+                                  "NOT enough: `symbol-placement: line` repeats the SAME text at "
+                                  "every placement, and the distance-along-the-line is not an "
+                                  "attribute MapLibre can compute. The values have to be GENERATED "
+                                  "— point features at intervals carrying their measure — which is "
+                                  "the device `services/pillars` already uses for point bars. A "
+                                  "data route, not a style one"),
     "GeometryGenerator": (TODO,   "see the marker entry"),
 }
 
