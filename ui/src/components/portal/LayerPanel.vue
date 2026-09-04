@@ -323,33 +323,58 @@
               </div>
             </div>
 
-            <!-- 3D. Polygons extrude directly (MapLibre raises a fill); POINTS become pillars —
-                 a column standing at each location, served as a buffered polygon by the shared
-                 Martin function (services/pillars), so the layer keeps the renderer it already had.
-                 Lines are excluded: there is no sensible column for a line, and QGIS/GeoLibre do not
-                 offer one either. Hidden without a numeric field — an enabled switch that cannot do
-                 anything is worse than an absent one. -->
+            <!-- 3D / 2.5D. Polygons rise directly (MapLibre raises a fill, deck extrudes the mesh);
+                 POINTS become bars — a column standing at each location, served as a buffered
+                 polygon by the shared Martin function (services/pillars), so the layer keeps the
+                 renderer it already had. Lines are excluded: there is no sensible column for a line,
+                 and QGIS/GeoLibre do not offer one either.
+
+                 TWO height sources, because QGIS has two renderers here and they are not variations
+                 of one control: a 2.5D renderer gives every feature the SAME height (its height is a
+                 project variable, not a field), while attribute-driven 3D reads a column. Offering
+                 only the second is what made a 2.5D style from QGIS uneditable — and hid this whole
+                 section for any layer with no numeric column, which is most building footprints. -->
             <div v-if="canExtrude" class="pt-1 border-t border-border/50">
               <label class="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" :checked="!!config.style?.extrusion?.enabled"
-                  @change="setExtrusion({ enabled: $event.target.checked })" class="accent-primary" />
+                  @change="setExtrusionOn($event.target.checked)" class="accent-primary" />
                 <span class="text-xs text-foreground">
-                  {{ geomType === 'point' ? '3D — bars by a field' : '3D — extrude by a field' }}
+                  {{ geomType === 'point' ? '3D — bars at each point' : '3D — raise these polygons' }}
                 </span>
               </label>
               <div v-if="config.style?.extrusion?.enabled" class="mt-1.5 space-y-1.5 pl-5">
-                <select :value="config.style?.extrusion?.field || ''"
-                  @change="setExtrusion({ field: $event.target.value })"
-                  class="w-full text-xs border border-border rounded px-1.5 py-1">
-                  <option value="">Choose a height field…</option>
-                  <option v-for="f in numericFields" :key="f.name" :value="f.name">{{ f.name }}</option>
-                </select>
-                <label class="flex items-center gap-2">
-                  <span class="text-[11px] text-muted-foreground flex-shrink-0">Height ×</span>
-                  <input type="number" min="0.01" step="0.5" :value="config.style?.extrusion?.scale ?? 1"
-                    @change="setExtrusion({ scale: parseFloat($event.target.value) || 1 })"
+                <div class="flex items-center gap-2">
+                  <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Height</span>
+                  <select :value="extrusionMode" @change="setExtrusionMode($event.target.value)"
+                    class="flex-1 text-xs border border-border rounded px-1.5 py-1">
+                    <option value="fixed">The same for all</option>
+                    <option value="field" :disabled="!numericFields.length">From a field</option>
+                  </select>
+                </div>
+                <!-- One flat height: the 2.5D case. In metres, like every other height here, so a
+                     number that came from QGIS's map units may need adjusting once. -->
+                <label v-if="extrusionMode === 'fixed'" class="flex items-center gap-2">
+                  <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12"></span>
+                  <input type="number" min="0" step="1"
+                    :value="config.style?.extrusion?.height ?? FLAT_HEIGHT_M"
+                    @change="setExtrusion({ height: Math.max(0, parseFloat($event.target.value) || 0) })"
                     class="w-20 text-xs border border-border rounded px-1.5 py-0.5" />
+                  <span class="text-[11px] text-muted-foreground/70">m tall</span>
                 </label>
+                <template v-else>
+                  <select :value="config.style?.extrusion?.field || ''"
+                    @change="setExtrusion({ field: $event.target.value })"
+                    class="w-full text-xs border border-border rounded px-1.5 py-1">
+                    <option value="">Choose a height field…</option>
+                    <option v-for="f in numericFields" :key="f.name" :value="f.name">{{ f.name }}</option>
+                  </select>
+                  <label class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0">Height ×</span>
+                    <input type="number" min="0.01" step="0.5" :value="config.style?.extrusion?.scale ?? 1"
+                      @change="setExtrusion({ scale: parseFloat($event.target.value) || 1 })"
+                      class="w-20 text-xs border border-border rounded px-1.5 py-0.5" />
+                  </label>
+                </template>
                 <!-- Points only: a polygon already has a footprint, a point has none — so the bar
                      needs a width before it can be drawn at all. (The code calls these "pillars"
                      — services/pillars.py, and the tile function name is baked into published
@@ -361,9 +386,71 @@
                     class="w-20 text-xs border border-border rounded px-1.5 py-0.5" />
                   <span class="text-[11px] text-muted-foreground/70">m</span>
                 </label>
+                <button type="button" @click="toggle('more3d')"
+                  class="text-[11px] text-primary hover:text-primary/80">
+                  {{ open.more3d ? '−' : '+' }} More 3D options
+                </button>
+                <div v-if="open.more3d" class="space-y-1.5">
+                  <!-- The ROOF colour in QGIS's vocabulary: MapLibre paints the whole volume one
+                       colour with a vertical gradient down the walls, so this is the only colour a
+                       3D layer has. Blank means "whatever the flat symbology uses", which keeps a
+                       layer's 2D and 3D forms in agreement unless somebody asks otherwise. -->
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Colour</span>
+                    <input type="color" :value="config.style?.extrusion?.color || config.style?.color || '#3b82f6'"
+                      @input="setExtrusion({ color: $event.target.value })"
+                      class="h-6 w-10 border border-border rounded cursor-pointer bg-transparent" />
+                    <button v-if="config.style?.extrusion?.color" type="button"
+                      @click="setExtrusion({ color: undefined })"
+                      class="text-[11px] text-primary hover:text-primary/80">match the fill</button>
+                  </div>
+                  <!-- Where the volume STARTS. A floor number times the multiplier gives a storey
+                       that floats above the ground; a plain number lifts everything equally. -->
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Base</span>
+                    <select :value="baseMode" @change="setBaseMode($event.target.value)"
+                      class="flex-1 text-xs border border-border rounded px-1.5 py-1">
+                      <option value="ground">On the ground</option>
+                      <option value="fixed">A fixed height up</option>
+                      <option value="field" :disabled="!numericFields.length">From a field</option>
+                    </select>
+                  </div>
+                  <label v-if="baseMode === 'fixed'" class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12"></span>
+                    <input type="number" min="0" step="1" :value="config.style?.extrusion?.base || 0"
+                      @change="setExtrusion({ base: Math.max(0, parseFloat($event.target.value) || 0) })"
+                      class="w-20 text-xs border border-border rounded px-1.5 py-0.5" />
+                    <span class="text-[11px] text-muted-foreground/70">m up</span>
+                  </label>
+                  <select v-if="baseMode === 'field'" :value="config.style?.extrusion?.base || ''"
+                    @change="setExtrusion({ base: $event.target.value })"
+                    class="w-full text-xs border border-border rounded px-1.5 py-1">
+                    <option value="">Choose a base field…</option>
+                    <option v-for="f in numericFields" :key="f.name" :value="f.name">{{ f.name }}</option>
+                  </select>
+                  <label class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Solid</span>
+                    <input type="range" min="0.1" max="1" step="0.05"
+                      :value="config.style?.extrusion?.opacity ?? 1"
+                      @input="setExtrusion({ opacity: parseFloat($event.target.value) })"
+                      class="flex-1 accent-primary" />
+                    <span class="text-[11px] text-muted-foreground/70 w-8 text-right tabular-nums">
+                      {{ Math.round((config.style?.extrusion?.opacity ?? 1) * 100) }}%
+                    </span>
+                  </label>
+                </div>
                 <p class="text-[11px] text-muted-foreground/70 leading-snug">
-                  The field is in metres. Use the multiplier when it is not — floors × 3, say.
+                  Heights are in metres. Use the multiplier when the field is not — floors × 3, say.
                   The map tilts so you can see it.
+                </p>
+                <!-- What a 2.5D style loses on the way here, said once, where the height is. QGIS
+                     rakes its walls off at an angle and drops a shadow; MapLibre raises a true
+                     volume and has neither. The angle and shadow are still CARRIED (in
+                     `extrusion.qgis25d`) so they survive the trip back — this says so rather than
+                     leaving the difference to be discovered on screen. -->
+                <p v-if="from25D" class="text-[11px] text-muted-foreground/70 leading-snug">
+                  From a QGIS 2.5D layer. Its viewing angle and shadow are kept for the trip back to
+                  QGIS, but the web map raises a real volume and draws neither.
                 </p>
               </div>
             </div>
@@ -1336,7 +1423,10 @@ function setSizePx(index, value) {
 }
 
 const canExtrude = computed(() => {
-  if (!numericFields.value.length) return false
+  // NOT gated on a numeric column any more. It was, back when a height could only come from a
+  // field — which hid the whole 3D section for a building-footprints layer carrying no height
+  // attribute, the single most common thing anyone wants to extrude, and made a 2.5D style pushed
+  // from QGIS impossible to edit here. A flat height needs no column at all.
   if (geomType.value === 'line') return false
   // An UNKNOWN geometry gets no 3D. "Unknown" is a real stored value — Fiona reports it for any
   // shapefile with a generic or mixed header — and offering "extrude by a field" for it produced a
@@ -1366,7 +1456,7 @@ function setNoOutline(on) {
 // ── Disclosure ──────────────────────────────────────────────────────────────
 // One object rather than a ref per section: the panel already carries a lot of state, and "which
 // sections are open" is one fact about the view, not five.
-const open = reactive({ labelMore: false, more: false })
+const open = reactive({ labelMore: false, more: false, more3d: false })
 function toggle(name) { open[name] = !open[name] }
 
 // Nine positions, in the order they appear in the grid. "Above the point" is what somebody means;
@@ -1582,6 +1672,62 @@ function clearQgisStyling() {
 function setExtrusion(patch) {
   emitStyle({ extrusion: { ...(props.config.style?.extrusion || {}), ...patch } })
 }
+
+// ── 3D / 2.5D ───────────────────────────────────────────────────────────────
+// A height for a layer that has no height column. QGIS's 2.5D renderer defaults to 10 (in map
+// units); metres is what every height in GeoDeploy means, and 10 m is a three-storey building —
+// so ticking the box on a footprints layer shows something recognisable rather than nothing.
+const FLAT_HEIGHT_M = 10
+
+// Which of QGIS's two 3D renderers this style is: a field makes it attribute-driven, no field
+// makes it 2.5D. Derived rather than stored, so a style arriving from the plugin, the CLI or an
+// older portal lands in the right mode without a migration.
+const extrusionMode = computed(() => (props.config.style?.extrusion?.field ? 'field' : 'fixed'))
+
+function setExtrusionMode(mode) {
+  if (mode === 'field') {
+    // `height` is left behind deliberately: switching back restores the number that was typed,
+    // and the renderers all ignore it while a field is set.
+    setExtrusion({ field: numericFields.value[0]?.name || '' })
+  } else {
+    setExtrusion({ field: '', height: props.config.style?.extrusion?.height ?? FLAT_HEIGHT_M })
+  }
+}
+
+function setExtrusionOn(on) {
+  if (!on) { setExtrusion({ enabled: false }); return }
+  // Ticking the box must DRAW something. Without a height of some kind every renderer raises the
+  // layer by zero — a control that reports itself as on while the map is unchanged, which reads as
+  // a broken feature. A layer with a numeric column keeps the old behaviour (pick the column);
+  // one without gets a flat height, which is the only thing that can work for it.
+  const ex = props.config.style?.extrusion || {}
+  if (ex.field || ex.height) { setExtrusion({ enabled: true }); return }
+  if (numericFields.value.length) {
+    setExtrusion({ enabled: true, field: numericFields.value[0].name })
+  } else {
+    setExtrusion({ enabled: true, height: FLAT_HEIGHT_M })
+  }
+}
+
+// `base` is overloaded in the style — a NUMBER lifts every volume equally, a STRING names a column
+// — which is exactly how MapLibre's own `fill-extrusion-base` is used, and how the paint builders
+// on both sides already read it. The select turns that into three named choices.
+const baseMode = computed(() => {
+  const base = props.config.style?.extrusion?.base
+  if (typeof base === 'string' && base) return 'field'
+  return Number(base) > 0 ? 'fixed' : 'ground'
+})
+
+function setBaseMode(mode) {
+  if (mode === 'ground') setExtrusion({ base: 0 })
+  else if (mode === 'fixed') setExtrusion({ base: FLAT_HEIGHT_M })
+  else setExtrusion({ base: numericFields.value[0]?.name || '' })
+}
+
+// Present only on a style that CAME from a 2.5D renderer — the plugin writes the angle and shadow
+// it could not translate into this block so the trip back to QGIS can rebuild them.
+const from25D = computed(() => !!props.config.style?.extrusion?.qgis25d)
+
 
 // The bar footprint the SERVER will use when the author has not chosen one — derived from the
 // layer's own extent (parity: `symbology.pillar_radius`). Shown in the input so the number on

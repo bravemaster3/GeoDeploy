@@ -737,12 +737,20 @@
         // name (renamed, or a re-prep that dropped it) → no extrusion, rather than a flat mesh.
         const aex = d.extrusion || {};
         const acol = (aex.enabled && aex.field && t.getChild) ? t.getChild(aex.field) : null;
+        // A FIXED height, with no field at all, is the shape QGIS's 2.5D renderer has: every
+        // building the same 10 m. Requiring a column meant that style travelled from QGIS, passed
+        // through the style envelope intact, and then rendered FLAT here — the one transport where
+        // it silently did nothing. `getElevation` is declared `{type: 'accessor'}`, so a constant is
+        // a legal value for it; the scale stays at 1 because the multiplier belongs to the field
+        // (`extrusion_paint` applies it the same way — the height itself is already in metres).
+        const aflat = (aex.enabled && !aex.field) ? (Number(aex.height) || 0) : 0;
+        const arise = acol || (aflat > 0 ? aflat : null);
         return new DK.geo.GeoArrowPolygonLayer({
           id: 'deck_' + d.layer_id, data: t, pickable: true,
-          filled: true, stroked: !acol && !noOutline,   // walls plus an outline is a smudge at any pitch
-          extruded: !!acol,
-          getElevation: acol || undefined,
-          elevationScale: Number(aex.scale) || 1,
+          filled: true, stroked: !arise && !noOutline,  // walls plus an outline is a smudge at any pitch
+          extruded: !!arise,
+          getElevation: arise || undefined,
+          elevationScale: acol ? (Number(aex.scale) || 1) : 1,
           getFillColor: rgb.concat(Math.round(255 * op * (d.fill_opacity != null ? d.fill_opacity : 0.45))),
           getLineColor: outline.concat(Math.round(255 * op)),
           lineWidthUnits: 'pixels',
@@ -784,7 +792,9 @@
     // PostGIS path does in the tile server. Until that is mirrored here, the editor hides 3D for
     // deck-rendered point layers rather than offering something that does nothing.
     const ex = d.extrusion || {};
-    const extruded = isPoly && !!ex.enabled && !!ex.field;
+    // Either a height field or one flat height for everything — see the GeoArrow branch above.
+    const exFlat = (!ex.field && Number(ex.height) > 0) ? Number(ex.height) : 0;
+    const extruded = isPoly && !!ex.enabled && (!!ex.field || exFlat > 0);
     const exScale = Number(ex.scale) || 1;
     return new DK.GeoJsonLayer({
       id: 'deck_' + d.layer_id,
@@ -799,9 +809,8 @@
       extruded: extruded,
       // A feature missing the property, or holding a non-numeric one, becomes 0 rather than NaN —
       // NaN propagates into the mesh and drops the whole layer, not just that feature.
-      getElevation: extruded
-        ? function (f) { const v = Number((f.properties || {})[ex.field]); return (isFinite(v) ? v : 0) * exScale; }
-        : 0,
+      getElevation: !extruded ? 0 : (exFlat > 0 ? exFlat
+        : function (f) { const v = Number((f.properties || {})[ex.field]); return (isFinite(v) ? v : 0) * exScale; }),
       getFillColor: rgb.concat(Math.round(255 * op * (isPoly ? (d.fill_opacity != null ? d.fill_opacity : 0.45) : 1))),
       getLineColor: (isPoly ? outline : rgb).concat(Math.round(255 * op)),
       lineWidthUnits: 'pixels',

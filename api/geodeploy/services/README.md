@@ -266,6 +266,15 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   `api/tests/test_native_crs.py`.
 
 ## Last updated
+2026-09-04 (`titiler.py::_contour_params`: **every contour parameter is now rounded and clamped to
+an integer.** `GET /algorithms/contours` declares increment 0-999, thickness 0-10 and minz/maxz
++/-99999, all `integer` — `increment` used to be typed as a float and we sent one, so after TiTiler
+tightened it every tile 422'd and a working contour layer simply stopped drawing, with no error
+anywhere. TiTiler runs from `:latest`, so this can happen again; `notes_temp/notes_for_future.md`
+carries the diagnosis. Half-up rounding is written out as `int(x + 0.5)` rather than `round()`,
+because Python rounds half to even and the JS twin in `ui/src/lib/mapStyle.js` rounds half up — a
+12.5 interval would otherwise draw at different spacings in the preview and the published portal.)
+
 2026-09-02 (`restore.py`: **the restore no longer replaces the PostGIS extension.** `--clean` drops
 the dump's objects in reverse dependency order, so tables go first and the `DROP EXTENSION postgis`
 the dump carries then SUCCEEDS — and the rebuilt `geometry` / `gist_geometry_ops_2d` come back with

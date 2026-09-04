@@ -238,6 +238,57 @@ def test_extrusion_is_off_unless_it_has_something_to_extrude_by():
     assert sym.is_extruded({"extrusion": {"enabled": True, "field": "h"}})
 
 
+# ── 2.5D: one flat height, no field ──────────────────────────────────────────────────────────────
+# QGIS has TWO 3D renderers and they are not variations of one control. `Qgs25DRenderer` gives every
+# feature the same height — the height is a PROJECT VARIABLE (`@qgis_25d_height`), not an attribute
+# — while attribute-driven 3D reads a column. Supporting only the second meant a 2.5D style survived
+# the whole trip from QGIS and then rendered flat, and that the web UI hid its 3D controls entirely
+# for any layer with no numeric column, which is most building footprints.
+
+class TestFlatHeightExtrusion:
+
+    def test_a_height_with_no_field_is_a_plain_number(self):
+        """Not an expression: there is no attribute to read, so the volume is the same everywhere."""
+        paint = sym.extrusion_paint({"extrusion": {"enabled": True, "height": 12}}, 1.0)
+        assert paint["fill-extrusion-height"] == 12
+
+    def test_a_field_still_wins_when_both_are_present(self):
+        """A style can carry a leftover `height` from before the author switched to a column — the
+        UI keeps it deliberately so switching back restores the number. It must not win."""
+        paint = sym.extrusion_paint(
+            {"extrusion": {"enabled": True, "field": "h", "height": 12, "scale": 2}}, 1.0)
+        assert paint["fill-extrusion-height"] == ["*", ["to-number", ["get", "h"], 0], 2]
+
+    def test_a_flat_height_counts_as_extruded(self):
+        """`is_extruded` decides whether a `fill-extrusion` layer is emitted at all, and whether a
+        GeoParquet layer's deck descriptor carries the block. A 2.5D style has no field, so a
+        field-only test made the layer draw flat with no error anywhere."""
+        assert sym.is_extruded({"extrusion": {"enabled": True, "height": 10}})
+        assert not sym.is_extruded({"extrusion": {"enabled": True, "height": 0}})
+
+    def test_the_roof_colour_overrides_the_fill(self):
+        """QGIS's 2.5D renderer names a roof colour and a wall colour; MapLibre paints one volume
+        with a vertical gradient, so the roof is the only one it can honour."""
+        style = {"color": "#111111", "extrusion": {"enabled": True, "height": 8, "color": "#ff8800"}}
+        assert sym.extrusion_paint(style, 1.0)["fill-extrusion-color"] == "#ff8800"
+
+    def test_without_a_roof_colour_it_matches_the_flat_symbology(self):
+        """So a layer's 2D and 3D forms agree unless somebody asks otherwise."""
+        style = {"color": "#111111", "extrusion": {"enabled": True, "height": 8}}
+        assert sym.extrusion_paint(style, 1.0)["fill-extrusion-color"] == "#111111"
+
+    def test_a_base_field_lifts_the_volume_off_the_ground(self):
+        """`base` is overloaded exactly as MapLibre overloads `fill-extrusion-base`: a number lifts
+        everything equally, a string names a column."""
+        paint = sym.extrusion_paint(
+            {"extrusion": {"enabled": True, "height": 9, "base": "floor", "scale": 3}}, 1.0)
+        assert paint["fill-extrusion-base"] == ["*", ["to-number", ["get", "floor"], 0], 3]
+
+    def test_a_numeric_base_stays_a_number(self):
+        paint = sym.extrusion_paint({"extrusion": {"enabled": True, "height": 9, "base": 4}}, 1.0)
+        assert paint["fill-extrusion-base"] == 4
+
+
 # ── Point markers: shapes AND per-feature colour ─────────────────────────────────────────────────
 # The first implementation switched a classified point layer to a `circle`, losing the marker shape.
 # Rejected outright: "I should be able to choose a different marker and still use the graduated

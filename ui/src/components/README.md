@@ -91,6 +91,17 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
 
 ## Dependencies / relationships
 - Read/write through `../../stores/` (mostly `data` and `portals`) and call the backend via `../../api`.
+- **3D takes TWO height sources** (2026-09-04), because QGIS has two renderers here and they are not
+  variations of one control: `Qgs25DRenderer` gives every feature the SAME height — its height is a
+  project variable, `@qgis_25d_height`, not an attribute — while attribute-driven 3D reads a column.
+  The panel offered only the second, and `canExtrude` returned false without a numeric column, so
+  the entire 3D section was **hidden for a building-footprints layer with no height attribute** and
+  a 2.5D style pushed from QGIS could not be edited at all. *More 3D options* adds the roof colour
+  (MapLibre paints one volume with a vertical gradient, so the roof is the only colour it can
+  honour), a base — on the ground / a fixed lift / from a field, mirroring how MapLibre itself
+  overloads `fill-extrusion-base` — and a solidity slider. A style that came from 2.5D says so, and
+  says what the web cannot draw: QGIS rakes its walls off at an angle and drops a shadow, both of
+  which are still *carried* in `extrusion.qgis25d` for the trip back.
 - `LayerPanel.vue` (2026-09-04, second pass) now authors most of the vocabulary the QGIS round trip
   added, arranged so the panel does not become a wall: **label positioning** as a nine-way anchor
   grid ("above the point" is what somebody means; `text-anchor: bottom` is how MapLibre spells the
