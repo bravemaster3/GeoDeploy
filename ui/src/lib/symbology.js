@@ -336,6 +336,13 @@ export function iconImageExpression(style = {}) {
 
 /** Every marker bitmap this style needs: [{id, shape, color, size}]. */
 export function markerImages(style = {}) {
+  // A FILL TILE is an image this style needs, so it belongs here — this list is the runtime's one
+  // channel for "create these images". A fill layer is not a symbol layer, so the tile is created
+  // through `styleimagemissing`, which can only find it if the id is in a layer's specs.
+  // Mirrors symbology.marker_images.
+  const tile = fillPattern(style)
+  if (Object.keys(tile).length) return [{ id: pictureId(tile.image), image: tile.image }]
+
   const picture = markerPicture(style)
   // One entry, carrying the PIXELS — the runtime registers it from the data URI instead of drawing
   // a shape. Mirrors symbology.marker_images.
@@ -701,4 +708,13 @@ export function lineMarkerLayout (block = {}) {
     'icon-allow-overlap': true,
     'icon-ignore-placement': true,
   }
+}
+
+
+/** `style.fill_pattern` when a polygon is patterned rather than flat. Twin of `fill_pattern`. */
+export function fillPattern (style = {}) {
+  const block = style.fill_pattern
+  if (!block || typeof block !== 'object') return {}
+  const uri = block.image
+  return (typeof uri === 'string' && uri.startsWith('data:image/')) ? block : {}
 }

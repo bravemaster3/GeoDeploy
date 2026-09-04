@@ -35,6 +35,7 @@ import {
   labelPaint as symLabelPaint,
   labelScope as symLabelScope,
   pictureId as symPictureId,
+  fillPattern as symFillPattern,
   lineMarker as symLineMarker,
   lineMarkerLayout as symLineMarkerLayout,
 } from '@/lib/symbology'
@@ -214,6 +215,15 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
             && outlineWidth > POLYGON_OUTLINE_WIDTH
           if (st.outline_color === NO_OUTLINE || wantsOutlineLayer) fillPaint['fill-antialias'] = false
           else fillPaint['fill-outline-color'] = st.outline_color || '#1d4ed8'
+          // A PATTERN REPLACES THE COLOUR: MapLibre draws `fill-pattern` instead of `fill-color`,
+          // and the tile carries its own colours. `fill-opacity` still applies, which is how a
+          // hatch stays a wash. Mirrors portal_generator._vector_layer.
+          const tile = symFillPattern(st)
+          if (Object.keys(tile).length) {
+            delete fillPaint['fill-color']
+            fillPaint['fill-pattern'] = symPictureId(tile.image)
+            markerSpecs[symPictureId(tile.image)] = { id: symPictureId(tile.image), image: tile.image }
+          }
           style.layers.push({
             id: mlId(srcId, cfg), ...ruleScope(cfg),
             type: 'fill', source: srcId, 'source-layer': sourceLayer, paint: fillPaint,

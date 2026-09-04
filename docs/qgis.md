@@ -175,6 +175,25 @@ Two consequences worth knowing:
   portal's `style.json`, so a marker that renders past about 96 KB is drawn plainly instead, and the
   Log Messages panel says so.
 
+### Patterned fills
+
+Hatches, cross-hatches and dense fills, line and point patterns, and polygons filled with an SVG or
+an image all travel. The portal repeats the same tile at the same spacing.
+
+One honest limit. A repeating tile has to *close* — its right edge must line up with its left — and a
+square tile only closes at hatch angles of 0°, 45°, 90° and 135°. A hatch at 30° has no tile that
+repeats, so it is drawn at the nearest angle that does, and the Log Messages panel says so. A few
+degrees out is a slightly wrong hatch; a tile that does not close is a seam every few pixels, which
+reads as a fault rather than a pattern.
+
+A **randomly scattered** fill is drawn as an evenly spaced one at the same density, for the same
+reason: randomness has no repeating tile. That one is a different picture, and it is reported as
+such.
+
+A patterned polygon in QGIS is usually a plain fill with the pattern stacked on top, and both halves
+travel — as with lines, the pattern is looked for across every symbol layer rather than just the
+first.
+
 ### Markers along a line
 
 Ticks on a boundary, arrows on a river, chevrons on a one-way street — QGIS's marker line and hashed
@@ -221,9 +240,9 @@ metres; those agree in a projected CRS and not in a geographic one.
 - **3D extrusion is not drawn.** A layer's extrusion is stored and rendered by GeoDeploy as usual,
   and the plugin carries it safely — opening an extruded layer and pushing it back does not remove
   it — but QGIS shows those polygons flat, so 3D cannot be edited here yet.
-- **Symbology QGIS has and GeoDeploy does not** — inverted polygons, hatch and gradient fills,
-  markers along a line, and stacked LINE or FILL symbols — is simplified on the way in and not
-  carried back. Stacked MARKER symbols travel as a picture.
+- **Symbology QGIS has and GeoDeploy does not** — inverted polygons, gradient and shapeburst
+  fills, and stacked LINE symbols beyond a stroke with one decoration — is simplified on the way in
+  and not carried back. Stacked MARKER and FILL symbols travel as a picture or a tile.
 - **A layer's own scale range is not carried yet**, although a *rule's* is.
 - **3D units are not converted.** GeoDeploy's heights and radii are metres; QGIS 3D measures in the
   project's map units. Those agree in a projected CRS and do not in a geographic one.

@@ -2977,11 +2977,12 @@ def _style_from_symbol(symbol) -> dict:
                              else "dotted" if pen == enum(Qt, "PenStyle", "DotLine") else "solid")
         style.update(_line_decoration_of(layer0, style.get("line_width")))
         style.update(_line_decoration_symbol(symbol))
-    elif isinstance(layer0, QgsSimpleFillSymbolLayer):
+    elif isinstance(layer0, QgsSimpleFillSymbolLayer) or _is_fill(symbol):
         opacity = number(symbol.opacity)
         if opacity is not None:
             style["fill_opacity"] = round(opacity, 3)
-        style["outline_color"] = _stroke_of(layer0)
+        if isinstance(layer0, QgsSimpleFillSymbolLayer):
+            style["outline_color"] = _stroke_of(layer0)
         # The border WIDTH, which used to be dropped because GeoDeploy could not draw one: a
         # MapLibre fill strokes its own edge at a fixed hairline. It draws one now (a `line` layer
         # beside the fill), so the number is worth carrying — divided by the same constant the
@@ -2989,9 +2990,14 @@ def _style_from_symbol(symbol) -> dict:
         # same reason the writer sets it through `_set_stroke_width`: `layer0.width` is a LINE's
         # method, and reaching for it here raised `AttributeError` before `from_qgis` had a style to
         # return — so a single-symbol polygon uploaded with no styling at all.
-        width = _stroke_width_of(layer0)
+        width = _stroke_width_of(layer0) if isinstance(layer0, QgsSimpleFillSymbolLayer) else None
         if width is not None:
             style["outline_width"] = round(width / CSS_PX_TO_POINTS, 2)
+        # A PATTERNED FILL — hatch, cross, dense, line, point, SVG or raster — travels as a tile
+        # that repeats seamlessly. Scanned across every symbol layer, because a patterned polygon
+        # is usually a plain fill with a hatch stacked on it. See `fills.py` for why the tile is
+        # REBUILT rather than photographed.
+        style.update(_fill_pattern_of(symbol))
     style.update(_size_from_qgis(symbol, layer0))
     return style
 
@@ -3327,6 +3333,34 @@ def _symbol_picture(symbol) -> str | None:
         return "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
     except Exception:                   # noqa: BLE001  # nosec B110 - intentional: a decoration is optional
         return None
+
+
+def _is_fill(symbol) -> bool:
+    """True for a fill symbol, whatever its first layer happens to be — a polygon patterned with a
+    hatch has a symbol layer this module has no branch for, and it is still a fill."""
+    try:
+        from qgis.core import QgsFillSymbol
+        return isinstance(symbol, QgsFillSymbol)
+    except ImportError:                 # pragma: no cover
+        return False
+
+
+def _fill_pattern_of(symbol) -> dict:
+    """`{"fill_pattern": {...}}` for a patterned fill, else `{}`."""
+    try:
+        try:                            # a package, inside QGIS
+            from . import fills as _fills
+        except ImportError:             # exec'd standalone by the test harness
+            import fills as _fills
+        block, notes = _fills.from_qgis(symbol)
+        for note in notes:
+            _log("This layer's fill: {0}".format(note), level="info")
+        return block
+    except ImportError:                 # pragma: no cover - fills.py is optional
+        return {}
+    except Exception as exc:            # noqa: BLE001 - a pattern is never worth failing a style
+        _log("Could not read the fill pattern ({0}: {1}).".format(type(exc).__name__, exc))
+        return {}
 
 
 def _stroke_of(layer0) -> str:

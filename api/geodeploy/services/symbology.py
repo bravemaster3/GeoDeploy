@@ -625,6 +625,15 @@ def marker_images(style: dict) -> list[dict]:
     discovering them one `styleimagemissing` event at a time — with a classified layer, that would
     otherwise be a visible pop-in of markers as each class first appears on screen.
     """
+    # A FILL TILE IS AN IMAGE THIS STYLE NEEDS, so it belongs here: this list is the runtime's one
+    # channel for "create these images", and it is stamped on the layer's metadata. A fill layer is
+    # not a `symbol` layer, so the runtime creates the tile through `styleimagemissing` rather than
+    # up front — but it can only do that if the id is findable in some layer's metadata, which is
+    # exactly what this puts there.
+    tile = fill_pattern(style)
+    if tile:
+        return [{"id": picture_id(tile["image"]), "image": tile["image"]}]
+
     picture = marker_picture(style)
     if picture:
         # One entry, carrying the PIXELS. The runtime registers it from the data URI instead of
@@ -932,6 +941,21 @@ def font_stack(font) -> list[str]:
     if not name or name == DEFAULT_LABEL_FONT:
         return [DEFAULT_LABEL_FONT]
     return [name, DEFAULT_LABEL_FONT]
+
+
+def fill_pattern(style: dict) -> dict:
+    """`style.fill_pattern` when a polygon is patterned rather than flat, else `{}`.
+
+    The tile is REBUILT by the plugin from QGIS's parameters rather than photographed, because
+    `fill-pattern` repeats the image it is given and a rendered patch does not tile — it shows a
+    seam every few pixels. See the plugin's `fills.py` for which patterns close and which are
+    snapped to make them.
+    """
+    block = style.get("fill_pattern")
+    if not isinstance(block, dict):
+        return {}
+    uri = block.get("image")
+    return block if isinstance(uri, str) and uri.startswith("data:image/") else {}
 
 
 def line_marker(style: dict) -> dict:

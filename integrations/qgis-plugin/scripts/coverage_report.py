@@ -103,14 +103,21 @@ LINES = {
 }
 
 FILLS = {
-    "SimpleFill":        (APPROX, "colour, opacity and outline exact; the Qt BRUSH STYLE (hatch, "
-                                  "cross, dense) is dropped - `fill-pattern` against a generated "
-                                  "tileable canvas image"),
-    "LinePatternFill":   (TODO,   "`fill-pattern`, angle and spacing encoded in the image id"),
-    "PointPatternFill":  (TODO,   "`fill-pattern` from a generated image"),
-    "RandomMarkerFill":  (TODO,   "approximate to the regular point pattern"),
-    "SVGFill":           (TODO,   "asset upload, then `fill-pattern` (#101)"),
-    "RasterFill":        (TODO,   "asset upload, then `fill-pattern` (#101)"),
+    "SimpleFill":        (EXACT,  "colour, opacity and outline; the Qt BRUSH STYLE (hatch, cross, "
+                                  "dense) becomes a `fill-pattern` tile painted with the same "
+                                  "QBrush QGIS draws with, at a multiple of Qt's 8px period so it "
+                                  "closes"),
+    "LinePatternFill":   (APPROX, "a REBUILT tile - spacing, width and colour exact; the ANGLE is "
+                                  "snapped to 0/45/90/135, the only angles at which a square tile "
+                                  "closes. A seam every tile is worse than a few degrees"),
+    "PointPatternFill":  (EXACT,  "the tile is exactly distanceX x distanceY, so it closes by "
+                                  "construction; the marker is drawn at all nine offsets so an "
+                                  "overhang reappears on the far edge"),
+    "RandomMarkerFill":  (APPROX, "drawn as a REGULAR grid at the same density and reported as "
+                                  "one - randomness has no repeating tile"),
+    "SVGFill":           (EXACT,  "the source image IS the tile, rendered at `patternWidth` the way "
+                                  "QGIS repeats it"),
+    "RasterFill":        (EXACT,  "the same, scaled to `width`"),
     "CentroidFill":      (TODO,   "a `symbol` layer over a polygon source places at the centroid by "
                                   "default - nearly free"),
     "GradientFill":      (TODO,   "MapLibre has no fill gradient; flat fill at the ramp's midpoint, "
@@ -150,7 +157,9 @@ PROPERTY_GROUPS = [
      "the offset along the line do not yet",
      ("placement", "interval", "averageAngleLength", "skipMultiples", "showMarker",
       "extraItems", "lineClipping", "markerClipping", "clipPoints")),
-    ("pattern fills", TODO, "generated tileable canvas images",
+    ("pattern fills", APPROX,
+     "spacing, angle, line width and the marker all travel into a rebuilt tile; the per-row "
+     "displacement and random seed do not",
      ("lineAngle", "lineDistance", "distanceX", "distanceY", "displacementX", "displacementY",
       "fillStyle", "densityArea", "pointCount", "randomOffsetX", "randomOffsetY", "randomSeed")),
     ("gradient", APPROX, "no MapLibre fill gradient - flat fill at the midpoint",
@@ -158,7 +167,9 @@ PROPERTY_GROUPS = [
       "gradientRef2X", "gradientRef2Y", "gradientRef1Centroid", "gradientRef2Centroid")),
     ("shapeburst", CARRIED, "a distance transform; no web equivalent",
      ("shapeburstIgnoreRings", "shapeburstMaxDist", "shapeburstWholeShape")),
-    ("external picture", TODO, "asset upload plus sprite generation (#101)",
+    ("external picture", EXACT,
+     "an SVG, raster or font source is rendered by QGIS and its pixels travel - for a marker as an "
+     "icon, for a fill as a tile",
      ("file", "name", "char", "fontFamily", "fontStyle", "preserveAspectRatio")),
     ("interpolated line", TODO, "`line-gradient` with `lineMetrics`",
      ("lineStartWidthValue", "lineEndWidthValue")),

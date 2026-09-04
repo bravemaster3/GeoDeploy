@@ -945,6 +945,110 @@ def line_decorations():
           "line_marker" not in (symbology.from_qgis(layer) or {}))
 
 
+# ══ 12. Pattern fills ════════════════════════════════════════════════════════════════════════════
+
+def fill_patterns():
+    section("Pattern fills — the tile is REBUILT so it repeats, not photographed")
+    import base64
+    import glob
+    from qgis.core import (QgsFillSymbol, QgsLinePatternFillSymbolLayer, QgsMarkerSymbol,
+                           QgsPointPatternFillSymbolLayer, QgsRasterFillSymbolLayer,
+                           QgsSimpleFillSymbolLayer, QgsSimpleMarkerSymbolLayer,
+                           QgsSingleSymbolRenderer, QgsSVGFillSymbolLayer)
+    from qgis.PyQt.QtCore import Qt
+    svgs = sorted(glob.glob("/usr/share/qgis/svg/**/*.svg", recursive=True))
+
+    def read(symbol_layer, stack_under=False):
+        sym = QgsFillSymbol()
+        if stack_under:
+            sym.changeSymbolLayer(0, QgsSimpleFillSymbolLayer())
+            sym.appendSymbolLayer(symbol_layer)
+        else:
+            sym.changeSymbolLayer(0, symbol_layer)
+        layer = make_layer("Polygon")
+        layer.setRenderer(QgsSingleSymbolRenderer(sym))
+        return symbology.from_qgis(layer) or {}
+
+    def tile_of(style):
+        block = style.get("fill_pattern") or {}
+        uri = str(block.get("image") or "")
+        return block, uri
+
+    # A Qt hatch on a plain fill — the commonest patterned polygon there is, and the case that
+    # needs scanning past symbolLayer(0).
+    hatch = QgsSimpleFillSymbolLayer()
+    hatch.setBrushStyle(symbology.enum(Qt, "BrushStyle", "BDiagPattern"))
+    block, uri = tile_of(read(hatch, stack_under=True))
+    check("a hatch stacked on a fill is found", uri.startswith("data:image/png;base64,"),
+          "reading only symbolLayer(0) sees the plain half")
+    check("the hatch tile is a multiple of Qt's 8px period",
+          block.get("width", 0) % 8 == 0,
+          "got {0} — any other size shows a seam".format(block.get("width")))
+
+    # A plain fill must NOT produce a tile.
+    plain = QgsSimpleFillSymbolLayer()
+    check("a plain fill has no tile", not (read(plain).get("fill_pattern")),
+          "a solid colour is describable and needs no bitmap")
+
+    # Line pattern: the tile side follows the angle, because only some angles close.
+    for angle, expect_diagonal in ((0.0, False), (90.0, False), (45.0, True)):
+        lp = QgsLinePatternFillSymbolLayer()
+        lp.setDistance(4.0)
+        lp.setLineAngle(angle)
+        block, uri = tile_of(read(lp))
+        check("line pattern at {0:g} deg makes a tile".format(angle),
+              uri.startswith("data:image/png;base64,"), repr(list(block)))
+        if block:
+            square = block.get("width") == block.get("height")
+            check("line pattern at {0:g} deg is square".format(angle), square,
+                  "{0}x{1}".format(block.get("width"), block.get("height")))
+
+    # An angle with no square tile is snapped rather than seamed.
+    lp = QgsLinePatternFillSymbolLayer()
+    lp.setDistance(4.0)
+    lp.setLineAngle(30.0)
+    block, uri = tile_of(read(lp))
+    check("an unclosable angle still makes a tile", uri.startswith("data:image/png;base64,"),
+          "a snapped angle beats a seam every tile")
+
+    # Point pattern: the tile is exactly the grid spacing, so it closes by construction.
+    pp = QgsPointPatternFillSymbolLayer()
+    pp.setDistanceX(5.0)
+    pp.setDistanceY(3.0)
+    sub = QgsMarkerSymbol()
+    sub.changeSymbolLayer(0, QgsSimpleMarkerSymbolLayer())
+    sub.setSize(2.0)
+    pp.setSubSymbol(sub)
+    block, uri = tile_of(read(pp))
+    check("point pattern makes a tile", uri.startswith("data:image/png;base64,"), repr(list(block)))
+    check("its tile is NOT square, because the grid is not",
+          block.get("width") != block.get("height"),
+          "{0}x{1} — a square tile would change the spacing".format(
+              block.get("width"), block.get("height")))
+
+    # An SVG fill: the source image is the tile.
+    sf = QgsSVGFillSymbolLayer(svgs[0], 6.0)
+    block, uri = tile_of(read(sf))
+    check("an SVG fill makes a tile", uri.startswith("data:image/png;base64,"), repr(list(block)))
+
+    # Millimetres must not be read as pixels — that turns a 4 mm hatch into a 4 px block.
+    lp = QgsLinePatternFillSymbolLayer()
+    lp.setDistance(4.0)
+    lp.setLineAngle(0.0)
+    block, _ = tile_of(read(lp))
+    check("a millimetre spacing becomes ~15px, not 4",
+          block.get("width", 0) >= 12,
+          "got {0} — reading mm as px makes a hatch a solid block".format(block.get("width")))
+
+    # The tile really is a PNG.
+    if uri:
+        raw = base64.b64decode(uri.split(",", 1)[1])
+        signature = bytes([137, 80, 78, 71, 13, 10, 26, 10])
+        check("the tile is a real PNG", raw[:8] == signature, repr(raw[:8]))
+
+    assert QgsRasterFillSymbolLayer  # imported for the reader's benefit
+
+
 def main():
     audit()
     round_trip()
@@ -958,6 +1062,7 @@ def main():
     labelling()
     marker_pictures()
     line_decorations()
+    fill_patterns()
     print("\n{0} checks, {1} failed".format(CHECKS[0], len(FAILURES)))
     for name in FAILURES:
         print("  - {0}".format(name))

@@ -57,6 +57,17 @@ fastest source it offers, and upload a QGIS layer back — with its styling. Sit
     exists for that. And a FONT is not carried verbatim: MapLibre draws **nothing at all** for a
     fontstack its glyphs lack, so a family is mapped onto the stacks the instance can serve, keeping
     weight and slant. Shadows, background shapes and callouts are named as not carried.
+  - `fills.py` — **pattern fills ⇄ `style.fill_pattern`**. Unlike a marker, a fill is drawn by
+    REPEATING a tile, and `fill-pattern` repeats whatever image it is given — so a rendered preview
+    is not enough: it shows a seam every tile. This module rebuilds the tile from QGIS's own
+    parameters so it closes. Qt brush styles close at any multiple of Qt's 8px period; a point
+    pattern closes at exactly `distanceX × distanceY` (with the marker drawn at all nine offsets so
+    an overhang reappears on the far edge); an SVG or raster fill IS its own tile at `patternWidth`.
+    A line hatch closes only at 0/45/90/135°, so any other angle is **snapped and reported** — a
+    seam every tile is worse than a few degrees. A random marker fill has no period at all and is
+    drawn as a regular grid at the same density, which is a different picture and says so. Every
+    size goes through `_px_of`: QGIS states these in MILLIMETRES by default, and reading one as a
+    pixel turns a 4 mm hatch into a solid block.
   - `vendor/geodeploy/` — the published client, checked in (see below).
 - `scripts/test_real_qgis.py` — **the round trip against a real PyQGIS**, and the only test here
   that is not stubbed. Every other `scripts/test_*.py` replaces the QGIS classes, and the stubs
@@ -267,6 +278,10 @@ Findings in `vendor/` are fixed in `cli/geodeploy` and re-vendored — never edi
 `vendor.py --check` fails.
 
 ## Last updated
+2026-09-04 (**pattern fills** — see `fills.py`. Hatch, cross and dense brush styles, line and point
+patterns, SVG and raster fills all travel as a tile that repeats cleanly. 217 checks green on QGIS
+3.44 and 4.2; coverage EXACT 27 / APPROX 16 / CARRIED 4 / TODO 21.)
+
 2026-09-03e (**markers along a line.** QGIS's marker line and hashed line repeat a symbol down a
 line; `_line_decoration_symbol` reads it across ALL symbol layers — a decorated line is nearly always
 a plain stroke with the markers stacked on top, and reading only `symbolLayer(0)` is what made a road

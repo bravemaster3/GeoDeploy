@@ -216,6 +216,13 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   own `geodeploy:markerImages`** — the runtime registers bitmaps from that key and only the FIRST
   render layer gets the full metadata block, so the stamping loop MERGES rather than assigns; it
   used to assign, which erased the decoration's image and the ticks never appeared.
+- **Pattern fills (2026-09-04):** `style.fill_pattern` carries a tile the plugin REBUILT (not
+  photographed — `fill-pattern` repeats the image it is given, and a rendered patch shows a seam
+  every tile). `symbology.fill_pattern` validates it and `_vector_layer` sets `fill-pattern`,
+  **removing `fill-color`**: MapLibre draws one or the other, and leaving the colour set is a no-op
+  that reads as if it applied. `fill-opacity` still applies, which is how a hatch stays a wash. The
+  tile is registered through `marker_images` — the runtime's one "create these images" channel — and
+  it OUTRANKS a marker picture there, since a style carrying both is a polygon.
 - `titiler.py` is called from `routers/data/raster.py` and `portal_generator.py`.
 - `portal_generator.py` reads `templates/` (mounted at `/templates`) and writes `data/portals/`.
 - `cog_converter.py` is called from `tasks/raster_ingest.py`.

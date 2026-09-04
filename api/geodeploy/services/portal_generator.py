@@ -1943,6 +1943,13 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
             "fill-color": color,
             "fill-opacity": opacity * style.get("fill_opacity", 0.45),
         }
+        # A PATTERN REPLACES THE COLOUR. MapLibre draws `fill-pattern` INSTEAD of `fill-color` —
+        # the tile carries its own colours — so leaving the colour set would be a no-op that reads
+        # as if it still applied. `fill-opacity` still does, which is how a hatch stays a wash.
+        pattern = symbology.fill_pattern(style)
+        if pattern:
+            fill_paint.pop("fill-color", None)
+            fill_paint["fill-pattern"] = symbology.picture_id(pattern["image"])
         # Removing a fill's outline is `fill-antialias: false`, NOT omitting fill-outline-color.
         # Omitting it makes the outline MATCH FILL-COLOR (the spec's default), which is why "None"
         # produced a visible dark edge instead of none — reported as "it drew a black outline".

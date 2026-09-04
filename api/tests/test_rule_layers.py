@@ -520,3 +520,69 @@ class TestLineMarkers:
         cfg = {"layer_id": 7, "layer_type": "vector", "opacity": 1.0,
                "style": {"color": "#111", "line_marker": block}}
         assert [ml["id"] for ml in pg._vector_layers("src", _Layer(), cfg)] == ["vector-7"]
+
+
+class TestFillPatterns:
+    """A hatch, a line or point pattern, an SVG or raster fill. The tile is REBUILT by the plugin
+    from QGIS's parameters rather than photographed, because `fill-pattern` repeats the image it is
+    given and a rendered patch shows a seam every tile."""
+
+    def _cfg(self, **style):
+        return {"layer_id": 7, "layer_type": "vector", "opacity": 1.0,
+                "style": dict({"color": "#111",
+                               "fill_pattern": {"image": PNG, "width": 16, "height": 16}}, **style)}
+
+    def test_the_pattern_replaces_the_colour(self):
+        """MapLibre draws `fill-pattern` INSTEAD of `fill-color` — the tile carries its own
+        colours — so leaving the colour set is a no-op that reads as if it still applied."""
+        from geodeploy.services import symbology as sym
+        out = pg._vector_layers("src", _Layer(geometry_type="Polygon"), self._cfg())
+        paint = out[0]["paint"]
+        assert paint["fill-pattern"] == sym.picture_id(PNG)
+        assert "fill-color" not in paint
+
+    def test_the_opacity_still_applies(self):
+        """Which is how a hatch stays a wash rather than becoming opaque."""
+        out = pg._vector_layers("src", _Layer(geometry_type="Polygon"),
+                                self._cfg(fill_opacity=0.5))
+        assert out[0]["paint"]["fill-opacity"] == 0.5
+
+    def test_the_tile_is_registered_through_the_one_image_channel(self):
+        """A fill layer is not a `symbol` layer, so the runtime creates the tile via
+        `styleimagemissing` — which can only find it if the id is in a layer's metadata."""
+        from geodeploy.services import symbology as sym
+        images = sym.marker_images(self._cfg()["style"])
+        assert images == [{"id": sym.picture_id(PNG), "image": PNG}]
+
+    def test_a_tile_outranks_a_marker_picture_on_the_same_style(self):
+        from geodeploy.services import symbology as sym
+        style = dict(self._cfg()["style"], marker_image=PNG + "x")
+        assert sym.marker_images(style)[0]["id"] == sym.picture_id(PNG)
+
+    def test_the_outline_still_draws_over_a_pattern(self):
+        out = pg._vector_layers("src", _Layer(geometry_type="Polygon"),
+                                self._cfg(outline_color="#000000", outline_width=3))
+        assert [ml["id"] for ml in out] == ["vector-7", "vector-7-outline"]
+        assert out[1]["paint"]["line-color"] == "#000000"
+
+    @pytest.mark.parametrize("block", [{}, {"image": None}, {"image": "http://x/y.png"}, "nope", 7])
+    def test_anything_without_a_data_uri_leaves_the_colour_alone(self, block):
+        cfg = {"layer_id": 7, "layer_type": "vector", "opacity": 1.0,
+               "style": {"color": "#123456", "fill_pattern": block}}
+        paint = pg._vector_layers("src", _Layer(geometry_type="Polygon"), cfg)[0]["paint"]
+        assert paint["fill-color"] == "#123456"
+        assert "fill-pattern" not in paint
+
+    def test_a_line_layer_is_unaffected(self):
+        """`fill_pattern` on a line is meaningless; it must not reach the paint."""
+        paint = pg._vector_layers("src", _Layer(), self._cfg())[0]["paint"]
+        assert "fill-pattern" not in paint
+
+    def test_a_rule_can_carry_its_own_pattern(self):
+        from geodeploy.services import symbology as sym
+        rules = [{"label": "A", "filter": ["==", ["get", "k"], "a"],
+                  "style": {"fill_pattern": {"image": PNG}}}]
+        cfg = {"layer_id": 7, "layer_type": "vector", "opacity": 1.0,
+               "style": {"color": "#111", "rules": rules}}
+        out = pg._vector_layers("src", _Layer(geometry_type="Polygon"), cfg)
+        assert out[0]["paint"]["fill-pattern"] == sym.picture_id(PNG)
