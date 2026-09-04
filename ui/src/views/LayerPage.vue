@@ -584,7 +584,7 @@ const extent = computed(() => {
 // Through the shared composable, not a hand-rolled maplibregl.Map: it is what registers the
 // `pmtiles://` protocol (a tiled GeoParquet layer fails with 'URL scheme "pmtiles" is not
 // supported' without it), and it owns the map's lifecycle and the globe/zoom controls.
-const { map, loaded, applyStyle, fitToBbox, addFullscreen, addZoomToExtent } =
+const { map, loaded, applyStyle, fitToBbox, addFullscreen, addZoomToExtent, addTilt } =
   useMaplibre('gd-layer-map', { version: 8, sources: {}, layers: [] })
 const mapNote = ref('')
 
@@ -693,9 +693,10 @@ watch([loaded, layer, styleForMap], () => renderMap(), { deep: true, immediate: 
 
 // THE CONTROLS THIS MAP WAS MISSING, added once the map exists. Zoom and the globe come from the
 // composable; these three are what a layer preview actually needs and had none of:
-//   * TILT, via `visualizePitch` on the navigation control (in the composable, so every map gains
-//     it) — without it a 2.5D or extruded layer could only be looked at from directly overhead,
-//     which is the one angle at which 3D is invisible.
+//   * TILT, as a real BUTTON — the same one the portal has. `visualizePitch` on the navigation
+//     control was not enough: it shows pitch on the compass and lets you drag it, but right-drag
+//     and compass-drag are not things a reader knows to try, so a 2.5D or extruded layer still had
+//     no visible way to be seen from the side.
 //   * FULLSCREEN, because a 52vh map is not much to inspect a raster in.
 //   * ZOOM TO THE LAYER, which MapLibre has no control for and which matters most here: a layer
 //     that never came into view leaves an empty map with no clue whether the data is missing or
@@ -716,6 +717,7 @@ let controlsAdded = false
 watch(loaded, (ready) => {
   if (!ready || controlsAdded) return
   controlsAdded = true
+  addTilt()
   addFullscreen()
   addZoomToExtent(() => lonLatBbox(layer.value?.bbox), 'Zoom to this layer')
 }, { immediate: true })

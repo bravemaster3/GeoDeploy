@@ -85,8 +85,13 @@ def _stub_qgis():
         setattr(core, name, _AnyMeta(name, (_Any,), {}))
     core.Qgis = type("Qgis", (), {"Info": 0, "Warning": 1, "Critical": 2, "Success": 3})
 
+    # FLAT spellings only, deliberately. Real Qt6 scopes these (`Qt.TextFormat.RichText`) and Qt5
+    # does not, and `compat.enum` tries the scoped name before falling back to the flat one — so a
+    # stub carrying only flat names exercises the fallback, and a name missing from BOTH raises
+    # exactly as it would on a real build. That is what caught `Qt.RichText` here rather than in
+    # somebody's QGIS 4.
     pyqt.QtCore.Qt = type("Qt", (), {"RightDockWidgetArea": 2, "UserRole": 32, "DashLine": 2,
-                                     "DotLine": 3, "NoPen": 0})
+                                     "DotLine": 3, "NoPen": 0, "RichText": 1})
     pyqt.QtCore.QUrl = _AnyMeta("QUrl", (_Any,), {})
     pyqt.QtCore.pyqtSignal = lambda *a, **k: type("Signal", (), {"connect": lambda self, f: None,
                                                                  "emit": lambda self, *x: None})()

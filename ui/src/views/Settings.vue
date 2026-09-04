@@ -897,7 +897,7 @@
 
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import ConnectionDetails from '@/components/infra/ConnectionDetails.vue'
 import { useSystemStore } from '@/stores/system'
 import { useAuthStore } from '@/stores/auth'
@@ -916,6 +916,7 @@ import InfrastructurePanel from '@/components/infra/InfrastructurePanel.vue'
 const systemStore = useSystemStore()
 const auth = useAuthStore()
 const router = useRouter()
+const route = useRoute()
 const martinBusy = ref(false)
 const martinMsg = ref(null)
 const busySvc = ref(null)
@@ -1422,7 +1423,23 @@ async function svcAction(name, action) {
   }
 }
 
+// A LINK CAN NAME A TAB. `/settings?tab=api` opens on API tokens rather than on whichever tab
+// happens to be first for this role — which for an admin is Infrastructure, three tabs away from
+// what the link was about. The QGIS plugin points here when its write actions are greyed out for
+// want of a token; a link that lands on the wrong page is worse than no link, because the reader
+// concludes the thing they were sent for is not there.
+//
+// Only a tab this user can actually SEE: the admin tabs are filtered out for an editor, and
+// honouring `?tab=infra` for one of them would open a blank panel.
+function openRequestedTab() {
+  const wanted = String(route.query.tab || route.hash.replace(/^#/, '') || '').trim()
+  if (wanted && tabs.value.some(t => t.id === wanted)) activeTab.value = wanted
+}
+
+watch(() => [route.query.tab, route.hash], openRequestedTab)
+
 onMounted(() => {
+  openRequestedTab()
   loadTokens()  // per-user — everyone has an API tokens tab
   // Health/stats/email endpoints are admin-only server-side — don't fire doomed requests as editor/viewer.
   if (auth.isAdmin) {

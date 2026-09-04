@@ -244,6 +244,22 @@ class GeoDeployDock(QDockWidget):
         self.save_style_btn.clicked.connect(self.save_style)
         outer.addWidget(self.save_style_btn)
 
+        # WHY THEY ARE GREY, ON SCREEN. The reason lived only in a tooltip, and field testing found
+        # exactly what that costs: "'Upload selected layers' always seems to be greyed out - is this
+        # not implemented yet, or is it a problem that I don't have a login?" Nobody hovers a button
+        # they have already concluded is unfinished. So the answer has to be visible without being
+        # asked for, and actionable - hence a link to the tokens page of the instance you are
+        # actually connected to, rather than a sentence telling you to go and find it.
+        self.auth_hint = QLabel()
+        self.auth_hint.setWordWrap(True)
+        self.auth_hint.setOpenExternalLinks(True)
+        # `enum`, not `Qt.RichText`: Qt6 scopes it as `Qt.TextFormat.RichText`, so the flat
+        # spelling is an AttributeError on QGIS 4. Exactly the trap `compat.py` exists for,
+        # and the dock smoke test is what caught it before a user did.
+        self.auth_hint.setTextFormat(enum(Qt, "TextFormat", "RichText"))
+        self.auth_hint.setStyleSheet("color: palette(mid); font-size: 11px;")
+        outer.addWidget(self.auth_hint)
+
         # The actions that genuinely need a credential, each with the explanation it already carries.
         self._write_actions = [(b, b.toolTip()) for b in
                                (self.push_group_btn, self.upload_btn, self.save_style_btn)]
@@ -304,7 +320,30 @@ class GeoDeployDock(QDockWidget):
             button.setToolTip(own if signed_in else
                               "Needs a token with write access — paste one above and connect "
                               "again.\n\n" + own)
+        self.auth_hint.setVisible(not signed_in)
+        if not signed_in:
+            self.auth_hint.setText(self._token_hint())
         self._on_selection_changed()
+
+    def _token_hint(self) -> str:
+        """The one sentence a person needs in order to un-grey the buttons, with somewhere to click.
+
+        (Not to be confused with `_auth_hint`, which explains a 401 that has already happened. This
+        one exists so that it does not.)
+
+        Two versions, because the useful next step differs. With no connection there is no instance
+        whose tokens page could be linked, so the answer is "connect first". Once connected
+        anonymously the answer is a specific page on a specific server, so it is LINKED rather than
+        described - which is the difference between an explanation and an instruction.
+        """
+        if not self.instance:
+            return ("Uploading and saving styles need an API token. Connect to an instance first, "
+                    "then create one under <b>Settings &rarr; API tokens</b>.")
+        base = (self.instance.url or "").rstrip("/")
+        return ("Connected without a token, so uploading and saving styles are unavailable. "
+                'Create one under <a href="{0}/settings?tab=api">Settings &rarr; API tokens</a> '
+                "on this instance, paste it into the token box above, and connect "
+                "again.".format(base))
 
     def _install_auth(self):
         """Attach the token to QGIS's OWN requests for this instance's host.

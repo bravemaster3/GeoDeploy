@@ -73,6 +73,30 @@ anything that writes: uploading, saving a style, pushing a portal.
 
 If you have already run `geodeploy login` at a shell, the plugin finds that token by itself.
 
+### Getting a token
+
+The write buttons — **Upload selected layers**, **Save styling to GeoDeploy**, **Push group to
+portal** — are greyed out until the plugin has one. That is the answer to the most common question
+about this plugin: they are not unfinished, they are unavailable.
+
+1. Sign in to your instance in a browser.
+2. Go to **Settings → API tokens** (every account has this tab, not just admins).
+3. **Create token**, give it a name, and choose one with **write** access.
+4. Copy it once — it is shown only at creation.
+5. Paste it into the plugin's **Token** box and press **Connect** again.
+
+The plugin links straight to that page: when the write buttons are greyed out it says so under
+them, with a link to the tokens page of the instance you are connected to.
+
+#### Quick start against the demo
+
+    URL:   https://demo.geodeploy.org
+    Token: create one under Settings -> API tokens after signing in
+
+Connect, pick any layer in QGIS, tick **Send its styling too**, and press **Upload selected
+layers**. It appears in **My Data** on the instance, styled the way QGIS drew it. Note that the demo
+resets hourly, which invalidates tokens — if writes suddenly start failing, make a new one.
+
 ## Add a layer
 
 Select a layer and press **Add to map**. It arrives styled as GeoDeploy draws it.
