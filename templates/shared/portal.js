@@ -2847,7 +2847,22 @@
   function effectiveAlgorithm(srcId) {
     const st = rasterState[srcId] || {};
     if (st.algorithm !== undefined) return st.algorithm || '';
-    return parseRasterParams(srcId).algorithm || '';
+    const fromUrl = parseRasterParams(srcId).algorithm;
+    if (fromUrl) return fromUrl;
+    // A CONTOUR LAYER WITH CHOSEN COLOURS CARRIES NO `algorithm=` AT ALL. TiTiler's own algorithm
+    // hard-codes its palette and its black lines, so a layer that asks for anything else is drawn
+    // by GeoDeploy instead — band maths plus an explicit colormap — and `algorithm=contours` is
+    // deliberately absent from the URL, because running both would contour an already-coloured
+    // image.
+    //
+    // Reading the algorithm back out of the URL therefore said "none", with two visible
+    // consequences: the style popover offered "None" for a layer plainly drawing contours, and the
+    // legend fell into the CLASSIFIED-raster branch and rendered the interval colormap as a class
+    // list — sixty-odd black swatches labelled 0, 1, 2, 3… which are the array's own indices.
+    //
+    // `geodeploy:contour` is baked at publish for exactly this kind of question: what the layer IS,
+    // rather than what its URL happens to spell.
+    return contourMeta(srcId) ? 'contours' : '';
   }
   function effectiveHillshade(srcId) {
     return effectiveAlgorithm(srcId) === 'hillshade';
@@ -3012,7 +3027,14 @@
       }
       let mapping = null;
       try { mapping = JSON.parse(parseRasterParams(srcId).colormap || 'null'); } catch (e) { mapping = null; }
-      if (mapping && typeof mapping === 'object' && Object.keys(mapping).length) {
+      // NOT AN ARRAY. TiTiler takes two colormap shapes: `{value: colour}`, which is a classified
+      // raster and is what this branch draws, and `[[[lo, hi], colour], …]`, which is a continuous
+      // one cut into intervals. An array passes `typeof === 'object'`, and `Object.keys` on it
+      // hands back "0", "1", "2"… — so the second shape rendered as a class list labelled by its
+      // own indices. Belt and braces beside the `effectiveAlgorithm` fix above: any future caller
+      // sending intervals gets no legend rather than a nonsense one.
+      if (mapping && typeof mapping === 'object' && !Array.isArray(mapping)
+          && Object.keys(mapping).length) {
         // `legend-class` / `legend-label` are the classes the VECTOR legend already uses and
         // portal.css already styles — a classified raster's legend is the same list, so it should
         // look like one rather than inventing a second set of names with no CSS behind them.

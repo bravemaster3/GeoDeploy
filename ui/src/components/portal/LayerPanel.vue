@@ -175,7 +175,17 @@
                   <span class="text-xs text-muted-foreground/70">{{ Math.round((config.style?.fill_opacity ?? 0.45) * 100) }}%</span>
                 </div>
                 <input type="range" min="0" max="1" step="0.05" :value="config.style?.fill_opacity ?? 0.45"
-                  @input="emitStyle({ fill_opacity: parseFloat($event.target.value) })" class="w-full h-1 accent-primary" />
+                  @input="emitStyle({ fill_opacity: parseFloat($event.target.value) })"
+                  :disabled="!!config.style?.extrusion?.enabled"
+                  class="w-full h-1 accent-primary disabled:opacity-40" />
+                <!-- A 3D polygon draws a `fill-extrusion` layer INSTEAD of a `fill` one, so this
+                     slider moves nothing while 3D is on. Saying so beats leaving it live and inert,
+                     which is how somebody spends a minute wondering why nothing changes. -->
+                <p v-if="config.style?.extrusion?.enabled"
+                   class="text-[11px] text-muted-foreground/70 leading-snug mt-0.5">
+                  Not used while 3D is on — the raised volume has its own opacity, under
+                  <em>More 3D options</em>.
+                </p>
               </div>
               <div>
                 <label class="text-xs text-muted-foreground">Outline color</label>
@@ -441,8 +451,12 @@
                     <option value="">Choose a base field…</option>
                     <option v-for="f in numericFields" :key="f.name" :value="f.name">{{ f.name }}</option>
                   </select>
+                  <!-- NOT the same slider as "Fill opacity" above, and the old label ("Solid")
+                       did nothing to say so. A polygon with 3D on emits a `fill-extrusion` layer
+                       INSTEAD of a `fill` one — `portal_generator._vector_layer` returns early —
+                       so the flat fill's opacity is inert here and this is the one that applies. -->
                   <label class="flex items-center gap-2">
-                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Solid</span>
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-16">Opacity</span>
                     <input type="range" min="0.1" max="1" step="0.05"
                       :value="config.style?.extrusion?.opacity ?? 1"
                       @input="setExtrusion({ opacity: parseFloat($event.target.value) })"
@@ -451,6 +465,10 @@
                       {{ Math.round((config.style?.extrusion?.opacity ?? 1) * 100) }}%
                     </span>
                   </label>
+                  <p class="text-[11px] text-muted-foreground/70 leading-snug">
+                    This is the opacity of the raised volume. While 3D is on it replaces
+                    <em>Fill opacity</em> above, which belongs to the flat shape and is not drawn.
+                  </p>
                 </div>
                 <p class="text-[11px] text-muted-foreground/70 leading-snug">
                   Heights are in metres. Use the multiplier when the field is not — floors × 3, say.

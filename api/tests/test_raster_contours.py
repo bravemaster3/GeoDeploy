@@ -407,3 +407,76 @@ class TestContourColours:
             "algorithm": "contours", "rescale": self.STRETCH, "increment": 0.05,
             "contour_palette": "viridis", "contour_line_palette": True}, settings=_FakeSettings())
         assert "colormap=" in url and "algorithm=contours" not in url
+
+
+# The published-style half of the contour story needs a layer and the generator. Kept beside the
+# tests that use it rather than in a shared fixture: it exists to answer one question, which is
+# whether a coloured contour layer still ANNOUNCES itself as contours.
+from geodeploy.services import portal_generator as pg           # noqa: E402
+
+
+class _RasterLayer:
+    id = 7
+    name = "dem"
+    s3_key = "rasters/dem.tif"
+    band_count = 1
+    bbox = json.dumps([10.0, 50.0, 11.0, 51.0])
+    default_style = "{}"
+    uid = "abc"
+
+class TestTheLayerStillSaysItIsContours:
+    """A coloured contour layer carries no `algorithm=` at all, and everything downstream that asked
+    the URL "what is this?" got the wrong answer.
+
+    The published legend reads the algorithm to decide what kind of legend to draw. With none, it
+    took the CLASSIFIED-raster branch, found the explicit colormap, and rendered it as a class list —
+    sixty-odd near-black swatches labelled 0, 1, 2, 3…, which are the interval array's own INDICES.
+    The style popover had the same problem in a quieter way: it offered "None" for a layer plainly
+    drawing contours.
+
+    So the fact has to be recorded where it is true rather than inferred from a URL that no longer
+    spells it. `geodeploy:contour` is baked at publish for exactly that, and `portal.js`'s
+    `effectiveAlgorithm` falls back to it.
+    """
+
+    def _meta(self, style):
+        cfg = {"layer_id": 7, "layer_type": "raster", "opacity": 1.0, "visible": True,
+               "style": style}
+        out = pg.generate_style([cfg], [], [_RasterLayer()])
+        layer = next(ml for ml in out["layers"]
+                     if (ml.get("metadata") or {}).get("geodeploy:type") == "raster")
+        return layer["metadata"]
+
+    def test_a_coloured_contour_layer_is_still_marked_as_contours(self):
+        meta = self._meta({"algorithm": "contours", "increment": 0.3,
+                           "rescale": "0.5563,0.9477", "contour_palette": "viridis",
+                           "contour_line_palette": True, "contour_relief": False})
+        assert meta["geodeploy:contour"] is not None
+        assert meta["geodeploy:contour"]["increment"] == 0.3
+
+    def test_its_tile_url_really_does_drop_the_algorithm(self):
+        """The premise of the bug, pinned — so if this ever stops being true, the reason for the
+        metadata fallback is visible rather than mysterious."""
+        url = get_tile_url("k.tif", algorithm="contours", increment=0.3, rescale="0.5563,0.9477",
+                           contour_palette="viridis", settings=_FakeSettings())
+        assert "algorithm=contours" not in url
+        assert "colormap=" in url
+
+    def test_the_colormap_it_sends_is_a_LIST_not_a_value_map(self):
+        """Which is why rendering it as a class list produced indices. TiTiler takes both shapes;
+        only `{value: colour}` is a classification."""
+        p = _params(get_tile_url("k.tif", algorithm="contours", increment=0.3,
+                                 rescale="0.5563,0.9477", contour_palette="viridis",
+                                 settings=_FakeSettings()))
+        assert isinstance(json.loads(p["colormap"][0]), list)   # `_params` gives lists
+
+    def test_an_ordinary_contour_layer_is_marked_too(self):
+        """The default palette still routes through TiTiler's algorithm, so the URL DOES say
+        contours — but the metadata must be there either way, or the legend would depend on which
+        colours the author happened to pick."""
+        meta = self._meta({"algorithm": "contours", "increment": 10, "rescale": "0,100"})
+        assert meta["geodeploy:contour"]["increment"] == 10
+
+    def test_a_raster_that_is_not_contours_carries_none(self):
+        assert self._meta({"colormap": "viridis"})["geodeploy:contour"] is None
+        assert self._meta({"algorithm": "hillshade"})["geodeploy:contour"] is None
