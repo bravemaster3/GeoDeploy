@@ -37,7 +37,11 @@ export function useMaplibre(containerId, initialStyle = null) {
     })
 
     if (maplibregl.GlobeControl) { globeCtrl = new maplibregl.GlobeControl(); map.value.addControl(globeCtrl, 'top-right') }
-    navCtrl = new maplibregl.NavigationControl()
+    // `visualizePitch` turns the compass into a TILT control: dragging it pitches the map,
+    // and it shows the current pitch rather than only the bearing. Without it a 3D layer —
+    // an extrusion, a 2.5D style — could only be seen flat unless the viewer happened to
+    // know that right-drag tilts, which is not a thing anyone knows.
+    navCtrl = new maplibregl.NavigationControl({ visualizePitch: true })
     map.value.addControl(navCtrl, 'top-right')
     map.value.on('load', () => (loaded.value = true))
   })
@@ -50,7 +54,7 @@ export function useMaplibre(containerId, initialStyle = null) {
     if (navCtrl) { map.value.removeControl(navCtrl); navCtrl = null }
     map.value.addControl(control, 'top-right')
     if (maplibregl.GlobeControl) { globeCtrl = new maplibregl.GlobeControl(); map.value.addControl(globeCtrl, 'top-right') }
-    navCtrl = new maplibregl.NavigationControl()
+    navCtrl = new maplibregl.NavigationControl({ visualizePitch: true })
     map.value.addControl(navCtrl, 'top-right')
   }
 
@@ -88,5 +92,49 @@ export function useMaplibre(containerId, initialStyle = null) {
     } catch { /* keep current view */ }
   }
 
-  return { map, loaded, applyStyle, fitToBbox, jumpTo, addTopRightControlFirst }
+
+  /** MapLibre's own fullscreen button. The element it expands is the map's CONTAINER, so the
+   *  legend and any overlay inside it come along — expanding the canvas alone would leave the
+   *  legend behind on the page. */
+  function addFullscreen() {
+    if (!map.value || !maplibregl.FullscreenControl) return
+    const el = document.getElementById(containerId)
+    map.value.addControl(
+      new maplibregl.FullscreenControl(el ? { container: el.parentElement || el } : {}),
+      'top-right')
+  }
+
+  /** A "zoom to the data" button. MapLibre has no such control, and it is the one thing a viewer
+   *  wants most on a layer they have panned away from — or on one that never came into view,
+   *  where the map is otherwise empty with no clue whether the data is missing or elsewhere. */
+  function addZoomToExtent(getBbox, title = 'Zoom to the layer') {
+    if (!map.value) return
+    const control = {
+      onAdd() {
+        const wrap = document.createElement('div')
+        wrap.className = 'maplibregl-ctrl maplibregl-ctrl-group'
+        const btn = document.createElement('button')
+        btn.type = 'button'
+        btn.title = title
+        btn.setAttribute('aria-label', title)
+        // An inline SVG rather than a glyph: the control group's own font is not ours to rely on,
+        // and a missing glyph renders as a blank button that looks broken rather than absent.
+        btn.innerHTML = '<span class="maplibregl-ctrl-icon" aria-hidden="true" '
+          + 'style="display:flex;align-items:center;justify-content:center">'
+          + '<svg width="15" height="15" viewBox="0 0 18 18" fill="none" stroke="currentColor" '
+          + 'stroke-width="1.6" stroke-linecap="round">'
+          + '<path d="M2 6V2h4M16 6V2h-4M2 12v4h4M16 12v4h-4"/>'
+          + '<circle cx="9" cy="9" r="2.5"/></svg></span>'
+        btn.addEventListener('click', () => fitToBbox(getBbox()))
+        wrap.appendChild(btn)
+        this._wrap = wrap
+        return wrap
+      },
+      onRemove() { this._wrap?.parentNode?.removeChild(this._wrap) },
+    }
+    map.value.addControl(control, 'top-right')
+  }
+
+  return { map, loaded, applyStyle, fitToBbox, jumpTo, addTopRightControlFirst,
+           addFullscreen, addZoomToExtent }
 }

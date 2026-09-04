@@ -636,7 +636,8 @@ P_RASTER_ALGO = "geodeploy/raster_algorithm"
 P_RASTER_ALGO_SIG = "geodeploy/raster_algorithm_sig"
 
 #: The keys that belong to a server-side algorithm rather than to a renderer QGIS can build.
-_ALGORITHM_KEYS = ("algorithm", "increment", "thickness", "minz", "maxz", "zfactor")
+_ALGORITHM_KEYS = ("algorithm", "increment", "thickness", "minz", "maxz", "zfactor",
+                   "contour_palette", "contour_color")
 
 
 #: Every visual key, with the value the MAP supplies when a style omits it. Used only to COMPARE two
@@ -753,12 +754,27 @@ def comparable_style(style: dict | None, geometry: str | None = None) -> dict:
 #: those two names here is what makes switching AWAY from contours clear them too. Until then they
 #: would linger harmlessly: TiTiler ignores them without the algorithm that reads them.
 _RASTER_KEYS = ("colormap", "colormap_reverse", "rescale", "bidx", "color_classes",
-                "algorithm", "zfactor", "increment", "thickness", "minz", "maxz")
+                "algorithm", "zfactor", "increment", "thickness", "minz", "maxz",
+                "contour_palette", "contour_color")
 
-#: TiTiler's own contour defaults, mirrored from `services/titiler`. Needed here only so that an
-#: absent interval and an explicitly written 35 compare as the same map.
-CONTOUR_INCREMENT = 35.0
+#: Contour defaults, mirrored from `services/titiler`. Needed here only so that an absent value and
+#: an explicitly written one compare as the same map.
+#:
+#: `None` FOR THE INTERVAL, and not an oversight: the server's default is DERIVED FROM THE DATA
+#: (range ÷ 10, snapped to a tidy number) rather than being TiTiler's global-DEM 35, because 35 is a
+#: catastrophic interval for anything that is not elevation in metres — on a vegetation index
+#: running 0.55-0.95 it drew one flat band. The plugin cannot compute that default: it does not have
+#: the raster's range. So "absent" is compared as absent, which is correct — two layers that both
+#: leave it alone are the same map whatever the server picks for them.
+CONTOUR_INCREMENT = None
 CONTOUR_THICKNESS = 1
+
+#: What TiTiler's own algorithm bakes in, and therefore what "no choice made" means for these two.
+#: A style asking for exactly these renders through the algorithm untouched; anything else is drawn
+#: by GeoDeploy from an explicit colormap. Both spellings must compare equal or a layer nobody
+#: touched reports itself as edited on every push.
+CONTOUR_PALETTE = "terrain"
+CONTOUR_COLOR = "#000000"
 
 
 def _is_raster_style(style) -> bool:
@@ -830,8 +846,18 @@ def _comparable_raster(style: dict | None) -> dict:
         # reported as "unchanged". Defaulted, because an absent value draws as TiTiler's default and
         # `5` written explicitly is the same map as nothing written at all.
         for key, default in (("increment", CONTOUR_INCREMENT), ("thickness", CONTOUR_THICKNESS)):
-            value = _number(style.get(key), default)
+            raw = style.get(key)
+            if raw in (None, "") and default is None:
+                continue                # absent stays absent — the server derives it from the data
+            value = _number(raw, default if default is not None else 0.0)
             out[key] = round(value, 6) if key == "increment" else int(value)
+        # THE CONTOUR COLOURS are part of the picture, so a change of palette or line colour is a
+        # real edit — and they are defaulted to what TiTiler bakes in, so a layer that has never
+        # been given either does not report itself as edited the first time it is read back.
+        palette = str(style.get("contour_palette") or CONTOUR_PALETTE).strip().lower()
+        colour = _hex_rgba(style.get("contour_color") or CONTOUR_COLOR)
+        out["contour_palette"] = palette
+        out["contour_color"] = colour
         for key in ("minz", "maxz"):
             if style.get(key) is not None:
                 out[key] = round(_number(style.get(key), 0.0), 6)

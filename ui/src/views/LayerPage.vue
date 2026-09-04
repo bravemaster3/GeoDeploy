@@ -584,8 +584,8 @@ const extent = computed(() => {
 // Through the shared composable, not a hand-rolled maplibregl.Map: it is what registers the
 // `pmtiles://` protocol (a tiled GeoParquet layer fails with 'URL scheme "pmtiles" is not
 // supported' without it), and it owns the map's lifecycle and the globe/zoom controls.
-const { map, loaded, applyStyle, fitToBbox } = useMaplibre('gd-layer-map',
-  { version: 8, sources: {}, layers: [] })
+const { map, loaded, applyStyle, fitToBbox, addFullscreen, addZoomToExtent } =
+  useMaplibre('gd-layer-map', { version: 8, sources: {}, layers: [] })
 const mapNote = ref('')
 
 /** The layer as a portal would configure it — one entry, drawn by the shared builder. */
@@ -689,6 +689,23 @@ onMounted(async () => {
 })
 // The map is created on mount by the composable, so wait for it AND for the layer to arrive.
 watch([loaded, layer, styleForMap], () => renderMap(), { deep: true, immediate: true })
+
+// THE CONTROLS THIS MAP WAS MISSING, added once the map exists. Zoom and the globe come from the
+// composable; these three are what a layer preview actually needs and had none of:
+//   * TILT, via `visualizePitch` on the navigation control (in the composable, so every map gains
+//     it) — without it a 2.5D or extruded layer could only be looked at from directly overhead,
+//     which is the one angle at which 3D is invisible.
+//   * FULLSCREEN, because a 52vh map is not much to inspect a raster in.
+//   * ZOOM TO THE LAYER, which MapLibre has no control for and which matters most here: a layer
+//     that never came into view leaves an empty map with no clue whether the data is missing or
+//     merely elsewhere.
+let controlsAdded = false
+watch(loaded, (ready) => {
+  if (!ready || controlsAdded) return
+  controlsAdded = true
+  addFullscreen()
+  addZoomToExtent(() => lonLatBbox(layer.value?.bbox), 'Zoom to this layer')
+}, { immediate: true })
 
 // -- actions ---------------------------------------------------------------------------------
 const showStyle = ref(false)
