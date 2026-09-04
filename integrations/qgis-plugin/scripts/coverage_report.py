@@ -317,9 +317,13 @@ def main():
         print("\n{0} problem(s):".format(len(problems)))
         for p in problems:
             print("  - {0}".format(p))
-    app.exitQgis()
     return 1 if problems else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    code = main()
+    # See the note in `test_real_qgis.py`: QGIS 3.44 can abort during interpreter teardown, long
+    # after the answer is known. Nothing here outlives the process, so leave before the storm.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
