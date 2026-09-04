@@ -91,6 +91,13 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
 
 ## Dependencies / relationships
 - Read/write through `../../stores/` (mostly `data` and `portals`) and call the backend via `../../api`.
+- **Direction arrows on a line** (2026-09-04), drawn in the browser into the same `line_marker`
+  key and the same PNG data URI the plugin's `arrows.py` produces — so an arrow drawn here and a
+  QGIS arrow line are the same thing to every renderer. Forward, back or both, with a spacing.
+  Direction is the whole point of a flow, a one-way street or a river, and there was no way to show
+  it without QGIS. A hatch or arrow this panel drew carries a `hatch`/`preset` name, which is how
+  the "Styled in QGIS" block knows not to claim it — it would otherwise say "edited in QGIS" about
+  a control the author had just used.
 - **3D takes TWO height sources** (2026-09-04), because QGIS has two renderers here and they are not
   variations of one control: `Qgs25DRenderer` gives every feature the SAME height — its height is a
   project variable, `@qgis_25d_height`, not an attribute — while attribute-driven 3D reads a column.

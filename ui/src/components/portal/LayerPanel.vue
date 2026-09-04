@@ -532,6 +532,34 @@
               </p>
             </div>
 
+            <!-- DIRECTION ARROWS. The same trick as the hatches above, for lines: the head is drawn
+                 here, in the browser, into the same `line_marker` key and the same PNG data URI the
+                 QGIS plugin's `arrows.py` produces — so an arrow drawn here and a QGIS arrow line
+                 are the same thing to every renderer. Direction is the whole point of a flow, a
+                 one-way street or a river, and there was no way to show it without QGIS. -->
+            <div v-if="geomType === 'line' && config.layer_type === 'vector'"
+                 class="pt-1 border-t border-border/50">
+              <label class="text-xs text-muted-foreground">Direction arrows</label>
+              <div class="flex flex-wrap items-center gap-1 mt-1">
+                <button v-for="a in arrowPresets" :key="a.name" type="button" :title="a.title"
+                  @click="setArrow(a.name)"
+                  class="h-7 min-w-[28px] px-1 rounded border overflow-hidden flex items-center justify-center"
+                  :class="activeArrow === a.name
+                    ? 'border-primary ring-1 ring-primary/40' : 'border-border hover:border-primary/50'">
+                  <span v-if="a.name === 'none'" class="text-[9px] text-muted-foreground">none</span>
+                  <img v-else :src="arrowPreview(a.name)" alt="" class="h-2.5" />
+                </button>
+              </div>
+              <label v-if="activeArrow !== 'none'" class="flex items-center gap-2 mt-1.5">
+                <span class="text-[11px] text-muted-foreground flex-shrink-0">Every</span>
+                <input type="number" min="10" step="10"
+                  :value="config.style?.line_marker?.spacing ?? 90"
+                  @change="setArrowSpacing($event.target.value)"
+                  class="w-20 text-xs border border-border rounded px-1.5 py-0.5" />
+                <span class="text-[11px] text-muted-foreground/70">px</span>
+              </label>
+            </div>
+
             <!-- LABELS. New to the platform in 2026-09; there was no way to label a layer at all
                  before, here or anywhere. Collapsed behind its own switch, following the 3D block
                  above: an off switch and one line of text is the whole cost when you do not want
@@ -1624,6 +1652,72 @@ function setHatch(name) {
   emitStyle({ fill_pattern: { image, width: 12, height: 12, hatch: name } })
 }
 
+// ── Direction arrows ────────────────────────────────────────────────────────
+// Generated HERE, in the browser, into the same `line_marker` key and the same PNG data URI the
+// QGIS plugin's `arrows.py` produces — so an arrow drawn here and one pushed from QGIS are the same
+// thing to every renderer. The head points along +x because `symbol-placement: line` with
+// `icon-rotation-alignment: map` gives an icon the line's own bearing at rotation 0; a head drawn
+// pointing up would sit across the line instead of along it.
+const arrowPresets = [
+  { name: 'none', title: 'No arrows' },
+  { name: 'forward', title: 'Arrows along the line' },
+  { name: 'back', title: 'Arrows against the line' },
+  { name: 'double', title: 'Arrows both ways' },
+]
+
+function arrowTile(name, color) {
+  if (name === 'none') return null
+  const h = 10
+  const len = 9
+  const w = name === 'double' ? len * 2 : len
+  const cv = document.createElement('canvas')
+  cv.width = w
+  cv.height = h
+  const ctx = cv.getContext('2d')
+  if (!ctx) return null
+  ctx.fillStyle = color || '#333333'
+  const tri = (ax, ay, bx, by, cx, cy) => {
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.lineTo(cx, cy); ctx.closePath(); ctx.fill()
+  }
+  if (name === 'forward') tri(w, h / 2, 0, 0, 0, h)
+  if (name === 'back') tri(0, h / 2, w, 0, w, h)
+  if (name === 'double') { tri(0, h / 2, len, 0, len, h); tri(w, h / 2, len, 0, len, h) }
+  return { image: cv.toDataURL('image/png'), width: w, height: h }
+}
+
+// Only an arrow this panel drew is highlighted. A `line_marker` from QGIS — ticks, chevrons, a real
+// `QgsArrowSymbolLayer` — carries no `preset`, so it selects none of these rather than being
+// mislabelled as one of them, and the "Styled in QGIS" block explains it instead.
+const activeArrow = computed(() => props.config.style?.line_marker?.preset || 'none')
+
+function arrowPreview(name) {
+  const tile = arrowTile(name, props.config.style?.color || '#333333')
+  return tile ? tile.image : null
+}
+
+function setArrow(name) {
+  if (name === 'none') { emitStyle({ line_marker: undefined }); return }
+  const tile = arrowTile(name, props.config.style?.color || '#333333')
+  if (!tile) return
+  emitStyle({
+    line_marker: {
+      ...tile,
+      preset: name,
+      spacing: props.config.style?.line_marker?.spacing ?? DEFAULT_ARROW_SPACING,
+    },
+  })
+}
+
+// Pixels between arrowheads. Far enough apart to read as direction markers rather than a dotted
+// line; matches `arrows.DEFAULT_SPACING_PX` so a QGIS arrow and one drawn here space alike.
+const DEFAULT_ARROW_SPACING = 90
+
+function setArrowSpacing(value) {
+  const marker = props.config.style?.line_marker
+  if (!marker) return
+  emitStyle({ line_marker: { ...marker, spacing: Math.max(10, parseFloat(value) || DEFAULT_ARROW_SPACING) } })
+}
+
 // ── Marker placement ────────────────────────────────────────────────────────
 const markerOffset = computed(() => {
   const o = props.config.style?.marker_offset
@@ -1683,9 +1777,17 @@ const qgisStyling = computed(() => {
   const out = []
   const rules = Array.isArray(st.rules) ? st.rules.length : 0
   if (rules) out.push(`${rules} rule${rules === 1 ? '' : 's'}, each with its own filter and symbol`)
-  if (st.fill_pattern?.image) out.push('A pattern fill — a hatch, or an image tiled across the shape')
+  // A hatch or an arrow this panel DREW is not QGIS styling — it is editable right above, and
+  // listing it here would say "edited in QGIS" about a control the author just used. Both carry a
+  // `hatch`/`preset` name for exactly this; anything from QGIS has neither.
+  if (st.fill_pattern?.image && !st.fill_pattern.hatch) {
+    out.push('A pattern fill — a hatch, or an image tiled across the shape')
+  }
   if (st.marker_image) out.push('A marker drawn in QGIS, carried as a picture')
-  if (st.line_marker?.image) out.push('Markers repeated along the line')
+  if (st.line_marker?.image && !st.line_marker.preset) {
+    out.push(st.line_marker.arrow ? 'An arrow line drawn in QGIS'
+      : 'Markers repeated along the line')
+  }
   if (st.labels?.qgis_font?.family) out.push(`Labels in ${st.labels.qgis_font.family}`)
   return out
 })

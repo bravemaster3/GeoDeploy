@@ -1095,6 +1095,90 @@ def density_and_centroids():
           style.get("fill_opacity") is not None, repr(list(style)))
 
 
+
+# ══ 15. Arrow lines ══════════════════════════════════════════════════════════════════════════════
+
+def arrow_lines():
+    section("QGIS's arrow line — a filled polygon, not a decorated stroke")
+    from qgis.core import QgsArrowSymbolLayer, QgsLineSymbol, QgsSingleSymbolRenderer
+
+    def arrow_layer(**kw):
+        sl = QgsArrowSymbolLayer()
+        sl.setArrowWidth(kw.get("width", 2.0))
+        sl.setArrowStartWidth(kw.get("start_width", 1.0))
+        sl.setHeadLength(kw.get("head_length", 3.0))
+        sl.setHeadThickness(kw.get("head_thickness", 4.0))
+        if "head_type" in kw:
+            sl.setHeadType(kw["head_type"])
+        # IN PLACE, with no `setSubSymbol`: `subSymbol()` is a borrowed pointer the layer owns and
+        # `setSubSymbol()` takes ownership, so handing the same one back is a double free — QGIS
+        # segfaults during the next render with no traceback. Same trap as the renderer ranges.
+        sub = sl.subSymbol()
+        if sub is not None and hasattr(sub, "setColor"):
+            from qgis.PyQt.QtGui import QColor
+            sub.setColor(QColor(kw.get("colour", "#cc3300")))
+        sym = QgsLineSymbol()
+        sym.changeSymbolLayer(0, sl)
+        layer = make_layer("LineString")
+        layer.setRenderer(QgsSingleSymbolRenderer(sym))
+        return layer
+
+    layer = arrow_layer()
+    style = symbology.from_qgis(layer) or {}
+    block = style.get("line_marker") or {}
+    check("an arrow line carries a head image",
+          str(block.get("image") or "").startswith("data:image/png;base64,"),
+          "an arrow used to arrive as a plain line, with its direction gone — the one thing it is "
+          "drawn for")
+    check("the shaft's width travels as the line width", style.get("line_width") is not None,
+          "an arrow IS the line; dropping the shaft leaves a hairline under a big head")
+    check("the fill's colour becomes the line colour",
+          str(style.get("color") or "").lower() == "#cc3300",
+          "an arrow is a filled polygon — its colour lives on the fill sub-symbol, "
+          "not on a stroke: " + repr(style.get("color")))
+    check("the head is spaced along the line", (block.get("spacing") or 0) > 0,
+          repr(block.get("spacing")))
+
+    carried = block.get("arrow") or {}
+    check("the arrow's own parameters ride along",
+          all(k in carried for k in ("width", "head_length", "head_thickness", "head_type")),
+          repr(sorted(carried)))
+
+    # THE TRIP BACK. A style carrying `line_marker.arrow` must rebuild a real arrow symbol layer,
+    # not the marker line its image alone would suggest.
+    back = make_layer("LineString")
+    symbology.apply(back, style)
+    rebuilt = back.renderer().symbol().symbolLayer(0)
+    check("it returns to QGIS as a real arrow symbol layer",
+          isinstance(rebuilt, QgsArrowSymbolLayer), type(rebuilt).__name__)
+    if isinstance(rebuilt, QgsArrowSymbolLayer):
+        check("the head keeps its proportions", rebuilt.headThickness() > rebuilt.headLength() / 2,
+              "{0} x {1}".format(rebuilt.headLength(), rebuilt.headThickness()))
+
+    # A line marker AUTHORED in GeoDeploy has no `arrow` block and must stay a marker line —
+    # turning every decorated line into an arrow would invent a picture nobody asked for.
+    plain = make_layer("LineString")
+    try:                                # a package, inside QGIS
+        from geodeploy_qgis import arrows as _arrows
+    except ImportError:
+        import arrows as _arrows
+    picture = _arrows.head_image(6, 6, "#0088ff") or {}
+    symbology.apply(plain, {"color": "#111", "line_width": 2,
+                            "line_marker": {"image": picture.get("image"), "spacing": 30}})
+    check("a hand-authored line marker is NOT turned into an arrow",
+          not isinstance(plain.renderer().symbol().symbolLayer(0), QgsArrowSymbolLayer),
+          type(plain.renderer().symbol().symbolLayer(0)).__name__)
+
+    # A double head is two triangles back to back, so it must be wider than a single one.
+    single = (symbology.from_qgis(arrow_layer()) or {}).get("line_marker") or {}
+    double = (symbology.from_qgis(arrow_layer(
+        head_type=QgsArrowSymbolLayer.HeadDouble
+        if hasattr(QgsArrowSymbolLayer, "HeadDouble")
+        else QgsArrowSymbolLayer.HeadType.HeadDouble)) or {}).get("line_marker") or {}
+    check("a double-headed arrow draws a wider image",
+          (double.get("width") or 0) > (single.get("width") or 0),
+          "{0} vs {1}".format(double.get("width"), single.get("width")))
+
 def main():
     audit()
     round_trip()
@@ -1110,12 +1194,23 @@ def main():
     line_decorations()
     fill_patterns()
     density_and_centroids()
+    arrow_lines()
     print("\n{0} checks, {1} failed".format(CHECKS[0], len(FAILURES)))
     for name in FAILURES:
         print("  - {0}".format(name))
-    QGS.exitQgis()
     return 1 if FAILURES else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    code = main()
+    # QGIS 3.44 can abort during INTERPRETER TEARDOWN — `free(): invalid next size (fast)`, exit
+    # 134 — long after every check has run and passed: Python frees its wrappers in an order QGIS's
+    # C++ side does not survive, and a script that builds symbols, images and painters gives it
+    # plenty to get wrong. Nothing here outlives the process, so leave before the storm. `os._exit`
+    # skips the flush, hence doing it by hand. (`exitQgis()` is dropped for the same reason.)
+    #
+    # Beware when running this locally: piping to `tail` hides the crash, because a pipeline's exit
+    # status is the LAST command's. Capture and test `$?`, or check `${PIPESTATUS[0]}`.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)

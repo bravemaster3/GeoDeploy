@@ -95,7 +95,11 @@ LINES = {
                                   "a description. Read across ALL symbol layers, so the stroke "
                                   "under a decorated line still travels"),
     "HashLine":          (EXACT,  "the same layer, with the hash rendered as the icon"),
-    "ArrowLine":         (TODO,   "same, with an arrow icon"),
+    "ArrowLine":         (APPROX, "a filled polygon, not a decorated stroke: the shaft becomes "
+                                  "`line-width` and the head is REBUILT as an icon repeated at "
+                                  "`symbol-placement: line`. The head is exact; QGIS draws ONE "
+                                  "arrow per feature and MapLibre cannot place an icon at a line's "
+                                  "end, and the shaft does not taper. `arrows.py`"),
     "InterpolatedLine":  (TODO,   "data-driven `line-width` exists; colour needs `line-gradient` "
                                   "with `lineMetrics`"),
     "Lineburst":         (TODO,   "a gradient across the line's width - approximate to flat"),
@@ -177,7 +181,8 @@ PROPERTY_GROUPS = [
      ("file", "name", "char", "fontFamily", "fontStyle", "preserveAspectRatio")),
     ("interpolated line", TODO, "`line-gradient` with `lineMetrics`",
      ("lineStartWidthValue", "lineEndWidthValue")),
-    ("arrow shape", TODO, "an arrow icon along the line",
+    ("arrow shape", APPROX, "the head is rebuilt at its own proportions and repeated along the "
+     "line; single, reversed and double heads all draw. See `arrows.py`",
      ("arrowType", "arrowHeadType")),
     ("effects", CARRIED, "MapLibre exposes no blur or blend modes", ("blurRadius",)),
     ("enabled", EXACT, "an unchecked symbol layer is simply not emitted", ("enabled",)),

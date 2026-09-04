@@ -118,7 +118,7 @@ def head_image(length_px: float, thickness_px: float, colour: str,
     Drawing it pointing up would put every arrow across the line instead of along it.
     """
     try:
-        from qgis.PyQt.QtCore import QPointF
+        from qgis.PyQt.QtCore import QPointF, Qt
         from qgis.PyQt.QtGui import QBrush, QColor, QPolygonF
 
         length = max(2.0, min(float(length_px), MAX_HEAD_PX))
@@ -128,7 +128,7 @@ def head_image(length_px: float, thickness_px: float, colour: str,
         image = fills._canvas(w, h)
         painter = fills._painter(image)
         try:
-            painter.setPen(enum(__import__("qgis").PyQt.QtCore.Qt, "PenStyle", "NoPen"))
+            painter.setPen(enum(Qt, "PenStyle", "NoPen"))
             painter.setBrush(QBrush(QColor(colour or symbology.DEFAULT_COLOR)))
             # One head fills the canvas; a double head is two, back to back, so the pair reads as
             # "both ways" rather than as one arrow twice the size.
@@ -192,7 +192,7 @@ def to_qgis(symbol, style) -> bool:
         colour = (style or {}).get("color")
         if colour:
             _set_fill_colour(sl, colour)
-        symbology._replace_symbol_layers(symbol, [sl])
+        _only_layer(symbol, sl)
         return True
     except Exception as exc:            # noqa: BLE001
         symbology._log("Could not rebuild the arrow line ({0}: {1}).".format(
@@ -251,13 +251,18 @@ def _fill_colour(sl) -> str:
 
 
 def _set_fill_colour(sl, colour) -> None:
+    """Recolour the arrow's fill IN PLACE.
+
+    NOT `setSubSymbol(subSymbol())`. `subSymbol()` hands back a BORROWED pointer that the symbol
+    layer still owns, while `setSubSymbol()` TAKES OWNERSHIP — so passing the same pointer back
+    makes the layer free the symbol it is about to use, and QGIS segfaults with no traceback at all.
+    Mutating the borrowed object is both safe and sufficient: it IS the layer's own fill.
+    """
     try:
         from qgis.PyQt.QtGui import QColor
         sub = _call(sl, "subSymbol")
         if sub is not None and hasattr(sub, "setColor"):
             sub.setColor(QColor(colour))
-            if hasattr(sl, "setSubSymbol"):
-                sl.setSubSymbol(sub)
     except Exception:                   # noqa: BLE001  # nosec B110 - a colour we cannot set is not fatal
         pass
 
@@ -270,3 +275,18 @@ def _spacing(sl, head_len: float) -> float:
     that keeps a short feature from getting none at all.
     """
     return max(DEFAULT_SPACING_PX, head_len * 6.0)
+
+
+def _only_layer(symbol, sl) -> None:
+    """Make `sl` the symbol's single layer.
+
+    `changeSymbolLayer` then delete the rest, rather than clearing first: a QgsSymbol must always
+    hold at least one layer, and emptying it is what makes QGIS segfault later rather than raise
+    here. Deleted from the END so the indices ahead of the cursor do not shift under it.
+    """
+    if symbol.symbolLayerCount():
+        symbol.changeSymbolLayer(0, sl)
+        for i in range(symbol.symbolLayerCount() - 1, 0, -1):
+            symbol.deleteSymbolLayer(i)
+    else:                               # pragma: no cover - a symbol with no layers is not a thing
+        symbol.appendSymbolLayer(sl)

@@ -278,6 +278,19 @@ Findings in `vendor/` are fixed in `cli/geodeploy` and re-vendored — never edi
 `vendor.py --check` fails.
 
 ## Last updated
+2026-09-04 (`arrows.py`: **QGIS's arrow line round-trips.** `QgsArrowSymbolLayer` is not a decorated
+stroke — it is a filled POLYGON, a tapered shaft with a triangular head, which is why it matched
+none of the marker-line classes and arrived as a plain line with its direction gone. The head is
+rebuilt at QGIS's own proportions and repeated with `symbol-placement: line`; the shaft becomes the
+line width and the fill's colour becomes the line colour. Two honest losses, reported rather than
+hidden: QGIS draws one arrow per feature and MapLibre cannot place an icon at a line's end, and the
+shaft does not taper. The parameters ride in `line_marker.arrow` so the trip back rebuilds a real
+arrow layer — the same trick `extrusion.qgis25d` uses. **Trap:** `subSymbol()` hands back a BORROWED
+pointer the layer owns while `setSubSymbol()` takes ownership, so passing the same one back is a
+double free — QGIS segfaults with no traceback, and buffered stdout takes the log with it. Recolour
+in place. Also fixed here: `test_real_qgis.py` never got the `os._exit` teardown fix that
+`notes_for_future.md` claims for both scripts; only `coverage_report.py` had it.)
+
 2026-09-04 (**pattern fills** — see `fills.py`. Hatch, cross and dense brush styles, line and point
 patterns, SVG and raster fills all travel as a tile that repeats cleanly. 217 checks green on QGIS
 3.44 and 4.2; coverage EXACT 27 / APPROX 16 / CARRIED 4 / TODO 21.)

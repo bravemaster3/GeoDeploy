@@ -1081,6 +1081,18 @@ def apply_to_qgis(qgis_layer, style: dict) -> bool:
     except ImportError:                 # pragma: no cover - qgis25d.py is optional
         pass
 
+    # AN ARROW LINE goes back as a real `QgsArrowSymbolLayer` rather than the marker line its
+    # image alone would suggest — the parameters rode along in `line_marker.arrow` for exactly this.
+    # A line marker AUTHORED in GeoDeploy carries no such block and stays a marker line, because
+    # that is what it is. Same rule as the 2.5D renderer above.
+    arrow = _arrows()
+    if arrow is not None and arrow.carried(style):
+        symbol = _symbol_for(qgis_layer, style.get("color"), style)
+        if symbol is not None and arrow.to_qgis(symbol, style):
+            qgis_layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+            qgis_layer.triggerRepaint()
+            return True
+
     # RULES BEFORE CLASSES. A style carrying `rules` is rule-based, and its `color_mode` is only the
     # fallback shape for viewers that know nothing about rules — reading that first would draw a
     # rule-based layer as one flat symbol and then report it as edited on the way back.
@@ -3292,6 +3304,18 @@ def _marker_picture(symbol) -> str | None:
         return None
 
 
+
+def _arrows():
+    """The `arrows` module, or None. Optional in exactly the way `qgis25d` and `rules` are."""
+    try:
+        try:                            # a package, inside QGIS
+            from . import arrows
+        except ImportError:             # exec'd standalone by the test harness
+            import arrows
+        return arrows
+    except ImportError:                 # pragma: no cover - arrows.py is optional
+        return None
+
 def _line_decoration_symbol(symbol) -> dict:
     """`line_marker` for a line symbol carrying markers along it, or `{}`.
 
@@ -3316,6 +3340,17 @@ def _line_decoration_symbol(symbol) -> dict:
             decorators = (QgsMarkerLineSymbolLayer, QgsHashedLineSymbolLayer)
         except ImportError:             # pragma: no cover
             decorators = (QgsMarkerLineSymbolLayer,)
+
+        # AN ARROW IS NOT A MARKER LINE. `QgsArrowSymbolLayer` is a filled polygon — a tapered shaft
+        # with a triangular head — so it matches none of the classes above and used to arrive as a
+        # plain line with its direction gone, which is the one thing an arrow is drawn for. It is
+        # scanned first because it supplies the shaft's width and colour as well as the head.
+        arrow = _arrows()
+        if arrow is not None:
+            for i in range(symbol.symbolLayerCount()):
+                out = arrow.from_qgis(symbol.symbolLayer(i))
+                if out:
+                    return out
 
         for i in range(symbol.symbolLayerCount()):
             sl = symbol.symbolLayer(i)
