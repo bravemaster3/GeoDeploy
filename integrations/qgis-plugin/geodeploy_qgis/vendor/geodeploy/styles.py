@@ -582,6 +582,14 @@ class Style(object):
         dialog) and cannot make a request per keystroke. The two agree; `test_styles_jobs` pins the
         labels against the server's format.
         """
+        heat = self.raw.get("heatmap") or {}
+        if isinstance(heat, dict) and heat.get("enabled"):
+            # A HEATMAP HAS NO CLASSES — it has a ramp, and density runs 0-1 whatever the data
+            # holds. Returning the classes of the symbology it replaced would describe a map nobody
+            # is looking at. Mirrors `services/symbology.legend_entries`.
+            ramp = [c for c in (heat.get("ramp") or []) if isinstance(c, str)]
+            return [{"color": ramp[-1] if ramp else self.color, "label": "Density",
+                     "ramp": ramp, "heatmap": True}]
         if self.mode == "rules":
             # One entry per rule, in the order they draw. A rule's label is what its author wrote in
             # QGIS's rule editor, so it is already legend text; a rule with none falls back to its
