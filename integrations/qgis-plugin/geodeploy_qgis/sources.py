@@ -334,6 +334,17 @@ def raster_style_from_tile_url(url: str) -> dict:
             mapping = json.loads(unquote(str(explicit)))
         except ValueError:
             mapping = None
+        # TITILER TAKES TWO COLORMAP SHAPES AND ONLY ONE IS A CLASSIFICATION. `{value: colour}` is
+        # this branch. `[[[lo, hi], colour], …]` is a CONTINUOUS ramp cut into intervals, which is
+        # what a contour layer with a chosen palette sends — and it is a LIST, so `.items()` raised
+        # `AttributeError: 'list' object has no attribute 'items'`.
+        #
+        # That exception escaped into `_portal_opened`, which is what made this fatal rather than
+        # cosmetic: opening a portal as a group aborted part way through, so the raster drew
+        # unstyled AND the layers after it in the group were never added to the tree at all. A
+        # colormap we cannot read must cost the colormap, never the portal.
+        if not isinstance(mapping, dict):
+            mapping = None
         classes = []
         for value, rgba in sorted((mapping or {}).items(),
                                   key=lambda kv: int(kv[0]) if str(kv[0]).lstrip("-").isdigit()

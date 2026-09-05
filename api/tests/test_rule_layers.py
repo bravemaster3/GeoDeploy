@@ -554,6 +554,24 @@ class TestFillPatterns:
         images = sym.marker_images(self._cfg()["style"])
         assert images == [{"id": sym.picture_id(PNG), "image": PNG}]
 
+    def test_a_pattern_AND_a_centre_marker_are_both_registered(self):
+        """The runtime's ONE channel for "create these images" used to `return` on the first kind it
+        found. A polygon can carry both, and only the tile was listed — so the runtime asked for the
+        centre marker, could not find it in any layer's metadata, and logged
+        `Image "gd-img-…" could not be loaded` while drawing nothing there."""
+        from geodeploy.services import symbology as sym
+        other = PNG.replace("data:image/png;base64,", "data:image/png;base64,zz")
+        style = dict(self._cfg()["style"], centroid_marker={"image": other})
+        ids = [image["id"] for image in sym.marker_images(style)]
+        assert sym.picture_id(PNG) in ids, ids
+        assert sym.picture_id(other) in ids, ids
+
+    def test_a_patterned_polygon_still_gets_no_marker_shapes(self):
+        """A fill tile means this is a polygon, which has no marker — appending generated shapes
+        would register a circle nothing ever draws."""
+        from geodeploy.services import symbology as sym
+        assert all("image" in entry for entry in sym.marker_images(self._cfg()["style"]))
+
     def test_a_tile_outranks_a_marker_picture_on_the_same_style(self):
         from geodeploy.services import symbology as sym
         style = dict(self._cfg()["style"], marker_image=PNG + "x")

@@ -373,3 +373,288 @@ def _encode(image):
                 "width": image.width(), "height": image.height()}
     except Exception:                   # noqa: BLE001  # nosec B110 - intentional: a pattern is optional
         return None
+
+
+# ── GeoDeploy → QGIS ─────────────────────────────────────────────────────────────────────────────
+
+#: The browser's hatch presets, as the ANGLES QGIS draws them at. These are the four angles at which
+#: a square tile closes, which is why the presets offer exactly these — see `_line_tile`.
+#:
+#: A LIST, not a single angle, because `cross` is two hatches crossing. It was missing from the
+#: first version of this table, so a cross-hatch fell through to the raster path and came back as a
+#: picture — right on screen, wrong in kind: a picture cannot be recoloured or classified.
+_HATCH_ANGLES = {"horizontal": [0.0], "vertical": [90.0], "forward": [45.0], "back": [135.0],
+                 "cross": [0.0, 90.0]}
+
+
+def to_qgis(symbol, style) -> bool:
+    """Rebuild a pattern fill on `symbol` from `style.fill_pattern`. True when done.
+
+    THE HALF THAT WAS MISSING. `from_qgis` has read patterns out of QGIS since this module existed,
+    but nothing put one back — so a layer whose GeoDeploy style is a hatch opened in QGIS as a plain
+    fill, with the hatch simply gone. Reported from testing exactly that way: "a layer that is
+    supposed to have hashed polygons opened with colors instead".
+
+    TWO ROUTES, because the tile can come from two places:
+
+    * A hatch made in GeoDeploy's browser carries its preset NAME (`fill_pattern.hatch`). That
+      rebuilds as a real `QgsLinePatternFillSymbolLayer` at the matching angle — a native QGIS hatch
+      the author can then edit, recolour and classify, which a picture is not.
+    * Anything else — an SVG fill, a raster fill, a Qt brush, a tile from another tool — is PIXELS,
+      and the honest reconstruction is those pixels: a `QgsRasterFillSymbolLayer` over the image.
+    """
+    block = (style or {}).get("fill_pattern")
+    if not QGIS_FILLS or symbol is None or not isinstance(block, dict):
+        return False
+    uri = block.get("image")
+    if not isinstance(uri, str) or not uri.startswith("data:image/"):
+        return False
+    try:
+        from qgis.core import QgsFillSymbol
+        if not isinstance(symbol, QgsFillSymbol):
+            return False
+        layers = (_hatch_layers(block, style) if block.get("hatch") in _HATCH_ANGLES
+                  else [_raster_layer(uri, block)])
+        layers = [one for one in layers if one is not None]
+        if not layers:
+            return False
+        # UNDER the pattern, the plain fill the style also describes: QGIS draws a pattern over
+        # whatever is beneath it, and a hatch on nothing is a hatch on the basemap. This is the same
+        # stack `from_qgis` reads back — a simple fill with the pattern on top of it.
+        symbol.changeSymbolLayer(0, _plain_fill(style))
+        for i in range(symbol.symbolLayerCount() - 1, 0, -1):
+            symbol.deleteSymbolLayer(i)
+        for one in layers:
+            symbol.appendSymbolLayer(one)
+        return True
+    except Exception as exc:            # noqa: BLE001 - a pattern is never worth failing a style
+        symbology._log("Could not rebuild this fill's pattern ({0}: {1}).".format(
+            type(exc).__name__, exc))
+        return False
+
+
+def _plain_fill(style):
+    """The flat fill that sits under a pattern, in the style's own colour and opacity."""
+    from qgis.core import QgsSimpleFillSymbolLayer
+    from qgis.PyQt.QtGui import QColor
+    fill = QgsSimpleFillSymbolLayer()
+    colour = QColor(style.get("color") or symbology.DEFAULT_COLOR)
+    opacity = symbology._number(style.get("fill_opacity"), None)
+    if opacity is not None:
+        colour.setAlphaF(max(0.0, min(1.0, opacity)))
+    fill.setColor(colour)
+    outline = style.get("outline_color")
+    if outline and outline != "none":
+        fill.setStrokeColor(QColor(outline))
+    elif outline == "none":
+        from qgis.PyQt.QtCore import Qt
+        fill.setStrokeStyle(symbology.enum(Qt, "PenStyle", "NoPen"))
+    return fill
+
+
+def _hatch_layers(block, style):
+    """Native QGIS hatches for a preset made in the browser — two of them for a cross."""
+    return [_hatch_layer(block, style, angle) for angle in _HATCH_ANGLES[block["hatch"]]]
+
+
+def _hatch_layer(block, style, angle):
+    """One native QGIS hatch at one angle."""
+    from qgis.core import QgsLinePatternFillSymbolLayer
+    from qgis.PyQt.QtGui import QColor
+    hatch = QgsLinePatternFillSymbolLayer()
+    hatch.setLineAngle(angle)
+    # The browser draws its tiles at 12px with a 1.5px stroke and lines every half-tile. Converted
+    # back to millimetres so QGIS's own units mean what they say — a distance left in pixels here
+    # would render at a quarter of its size on a printed map.
+    hatch.setDistance(round((block.get("height") or 12) / 2.0 / MM_TO_PX, 3))
+    hatch.setLineWidth(round(1.5 / MM_TO_PX, 3))
+    hatch.setColor(QColor(style.get("color") or symbology.DEFAULT_COLOR))
+    return hatch
+
+
+def _raster_layer(uri, block):
+    """A `QgsRasterFillSymbolLayer` over the tile's pixels, written to a file QGIS can read.
+
+    QGIS wants a PATH, not bytes, and it reads that path lazily — every repaint — so the file has to
+    outlive this call. Written into QGIS's own profile directory under a CONTENT hash: the same tile
+    always lands on the same path, so opening one layer twice writes one file, and two layers
+    sharing a pattern share it.
+    """
+    from qgis.core import QgsRasterFillSymbolLayer
+    path = picture_file(uri)
+    if path is None:
+        return None
+    layer = QgsRasterFillSymbolLayer()
+    layer.setImageFilePath(path)
+    width = block.get("width")
+    if width:
+        layer.setWidth(round(float(width) / MM_TO_PX, 3))
+    return layer
+
+
+def _pattern_dir() -> str:
+    """Where rebuilt pattern images live. Inside QGIS's own profile, so they survive a restart and
+    are removed with the profile rather than accumulating in a temp directory nobody cleans."""
+    import os
+    try:
+        from qgis.core import QgsApplication
+        base = QgsApplication.qgisSettingsDirPath()
+    except Exception:                   # noqa: BLE001 - fall back to a temp directory
+        base = ""
+    if not base:
+        import tempfile
+        base = tempfile.gettempdir()
+    out = os.path.join(base, "geodeploy_patterns")
+    os.makedirs(out, exist_ok=True)
+    return out
+
+
+# ── Pictures back INTO QGIS ──────────────────────────────────────────────────────────────────────
+#
+# THE SAME BUG THREE MORE TIMES. `fill_pattern` could be read out of QGIS and never put back, so a
+# hatched layer opened as a plain colour. `marker_image`, `line_marker` and `centroid_marker` were
+# in exactly the same state — every one of them written by `from_qgis` and read by nothing — and a
+# systematic GeoDeploy → QGIS → GeoDeploy test over the whole vocabulary is what found them, rather
+# than three more bug reports.
+#
+# All three are PIXELS, so all three rebuild the same way: write the data URI to a file QGIS can
+# read, and point a raster symbol layer at it.
+
+
+def picture_of(style, key):
+    """The `data:` URI a style carries under `key`, or "". `marker_image` is a bare string; the
+    others are blocks with the image inside, and callers should not have to know which."""
+    value = (style or {}).get(key)
+    if isinstance(value, dict):
+        value = value.get("image")
+    return value if isinstance(value, str) and value.startswith("data:image/") else ""
+
+def picture_file(uri: str):
+    """A `data:image/…` URI written to a file QGIS can read, or None.
+
+    QGIS wants a PATH and reads it lazily — every repaint — so the file must outlive this call.
+    Named by a CONTENT hash in QGIS's own profile directory: the same picture always lands on the
+    same path, so opening a layer twice writes one file and two layers sharing a marker share it.
+    """
+    import base64
+    import hashlib
+    import os
+
+    if not isinstance(uri, str) or not uri.startswith("data:image/"):
+        return None
+    head, _, payload = uri.partition(",")
+    if not payload:
+        return None
+    try:
+        raw = base64.b64decode(payload)
+    except Exception:                   # noqa: BLE001  # nosec B110 - a URI we cannot decode
+        return None
+    ext = ".png" if "png" in head else (".jpg" if "jpeg" in head else ".img")
+    digest = hashlib.sha1(raw).hexdigest()[:16]     # nosec B324 - a filename, not a credential
+    path = os.path.join(_pattern_dir(), "gd-pic-{0}{1}".format(digest, ext))
+    if not os.path.exists(path):
+        try:
+            with open(path, "wb") as fh:
+                fh.write(raw)
+        except OSError:
+            return None
+    return path
+
+
+def raster_marker(uri: str, size_px=None):
+    """A `QgsRasterMarkerSymbolLayer` over a picture, or None.
+
+    The plugin renders a QGIS marker at `PICTURE_SCALE`× its on-screen size so it stays crisp, so
+    the picture is that many times larger than the marker it stands for. Dividing here is what makes
+    a marker survive the round trip at the size it started, rather than doubling on every trip.
+    """
+    path = picture_file(uri)
+    if path is None:
+        return None
+    try:
+        from qgis.core import QgsRasterMarkerSymbolLayer
+        marker = QgsRasterMarkerSymbolLayer(path)
+        if size_px:
+            marker.setSize(round(float(size_px) / symbology.PICTURE_SCALE / MM_TO_PX * 2, 3))
+        return marker
+    except Exception as exc:            # noqa: BLE001 - a marker is never worth failing a style
+        symbology._log("Could not rebuild this marker picture ({0}: {1}).".format(
+            type(exc).__name__, exc))
+        return None
+
+
+def marker_to_qgis(symbol, style) -> bool:
+    """Replace a marker symbol's layers with the picture the style carries. True when done."""
+    uri = (style or {}).get("marker_image")
+    if symbol is None or not isinstance(uri, str):
+        return False
+    marker = raster_marker(uri, symbology._number(style.get("radius"), 5) * 2)
+    if marker is None:
+        return False
+    return _only_layer(symbol, marker)
+
+
+def line_marker_to_qgis(symbol, style) -> bool:
+    """Put the style's repeated marker back along the line, over the stroke it already has."""
+    block = (style or {}).get("line_marker")
+    if symbol is None or not isinstance(block, dict):
+        return False
+    marker = raster_marker(block.get("image"))
+    if marker is None:
+        return False
+    try:
+        from qgis.core import QgsMarkerLineSymbolLayer, QgsMarkerSymbol
+        sub = QgsMarkerSymbol()
+        sub.changeSymbolLayer(0, marker)
+        deco = QgsMarkerLineSymbolLayer()
+        deco.setSubSymbol(sub)          # a NEW symbol, so nothing borrowed is handed back
+        spacing = symbology._number(block.get("spacing"), None)
+        if spacing:
+            # `symbol-spacing` is pixels; QGIS's interval is in the layer's own unit (points).
+            deco.setInterval(round(spacing * symbology.CSS_PX_TO_POINTS, 2))
+        # APPENDED, not replacing: a decorated line is a stroke WITH markers on it, and dropping the
+        # stroke would lose the road under the ticks — the same mistake `_line_decoration_symbol`
+        # exists to avoid when reading.
+        symbol.appendSymbolLayer(deco)
+        return True
+    except Exception as exc:            # noqa: BLE001
+        symbology._log("Could not rebuild the markers along this line ({0}: {1}).".format(
+            type(exc).__name__, exc))
+        return False
+
+
+def centroid_to_qgis(symbol, style) -> bool:
+    """Put the style's centre marker back as a QGIS centroid fill, over the plain fill."""
+    block = (style or {}).get("centroid_marker")
+    if symbol is None or not isinstance(block, dict):
+        return False
+    marker = raster_marker(block.get("image"))
+    if marker is None:
+        return False
+    try:
+        from qgis.core import QgsCentroidFillSymbolLayer, QgsMarkerSymbol
+        sub = QgsMarkerSymbol()
+        sub.changeSymbolLayer(0, marker)
+        centroid = QgsCentroidFillSymbolLayer()
+        centroid.setSubSymbol(sub)
+        symbol.changeSymbolLayer(0, _plain_fill(style))
+        for i in range(symbol.symbolLayerCount() - 1, 0, -1):
+            symbol.deleteSymbolLayer(i)
+        symbol.appendSymbolLayer(centroid)
+        return True
+    except Exception as exc:            # noqa: BLE001
+        symbology._log("Could not rebuild this centre marker ({0}: {1}).".format(
+            type(exc).__name__, exc))
+        return False
+
+
+def _only_layer(symbol, layer) -> bool:
+    """Make `layer` the symbol's single layer. A QgsSymbol must always hold at least one, so this
+    changes the first and deletes the rest rather than clearing and refilling."""
+    if symbol.symbolLayerCount():
+        symbol.changeSymbolLayer(0, layer)
+        for i in range(symbol.symbolLayerCount() - 1, 0, -1):
+            symbol.deleteSymbolLayer(i)
+    else:                               # pragma: no cover - a symbol with no layers is not a thing
+        symbol.appendSymbolLayer(layer)
+    return True

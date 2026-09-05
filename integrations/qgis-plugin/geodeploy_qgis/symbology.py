@@ -360,8 +360,12 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
     symbol = QgsSymbol.defaultSymbol(geometry_type)
     if symbol is None:
         return None
-    if color:
-        symbol.setColor(QColor(color))
+    # ALWAYS SET A COLOUR. `defaultSymbol` picks a RANDOM one, so a style that named none left
+    # whatever QGIS happened to choose that second — the layer opened a different colour every
+    # time, which reads as the styling not being applied at all (and is indistinguishable from it).
+    # A style with no colour is a style that did not care; the platform default is the honest answer
+    # and it is at least the SAME answer twice.
+    symbol.setColor(QColor(color or DEFAULT_COLOR))
     layer0 = symbol.symbolLayer(0) if symbol.symbolLayerCount() else None
     if layer0 is None:
         return symbol
@@ -729,6 +733,14 @@ def comparable_style(style: dict | None, geometry: str | None = None) -> dict:
                            if isinstance(item, dict)]
     # DERIVED, not chosen: `classes_n` is `len(classes)`, and only one side bothers to write it.
     merged.pop("classes_n", None)
+    # LABELS, filled from the same table on both sides for the same reason everything else is. QGIS
+    # has no "unset": labelling a layer gives it a font, a priority and a typeface record whether or
+    # not anybody chose them, so a layer labelled in GeoDeploy — where naming a field is enough —
+    # came back with three keys it never had and reported itself as restyled. Exactly the
+    # "filled-in defaults counted" problem the class lists above already solve.
+    labels = merged.get("labels")
+    if isinstance(labels, dict):
+        merged["labels"] = _comparable_labels(labels)
     # 3D, reduced to what is actually drawn — an extrusion switched off is the same map as none.
     extrusion = _comparable_extrusion(merged.pop("extrusion", None))
     if extrusion:
@@ -949,6 +961,40 @@ def _comparable_extrusion(ex):
     return out
 
 
+
+#: What QGIS fills in for a label nobody configured. Both sides of a comparison get these, so a
+#: style that stated none compares equal to one QGIS has completed.
+_LABEL_DEFAULTS = {"priority": 5.0, "size": 10.0, "color": "#000000", "placement": "",
+                   "halo_width": 0.0, "transform": "", "max_width": 0, "rotation": 0.0,
+                   "allow_overlap": False}
+
+
+def _comparable_labels(labels: dict) -> dict:
+    """A label block reduced to what a viewer would SEE.
+
+    `qgis_font` is dropped outright: it is a CARRIER, not a choice — the plugin records the original
+    typeface so QGIS gets it back, and the web map never draws from it. Comparing it made every
+    labelled layer that had been through QGIS once look edited forever after.
+    """
+    out = dict(_LABEL_DEFAULTS)
+    out.update({k: v for k, v in labels.items() if v is not None})
+    out.pop("qgis_font", None)
+    # `font` follows the typeface, so it is derived too — but only when it is the DEFAULT face. A
+    # font somebody actually chose is a real difference and must still register.
+    try:
+        from . import labels as _labels_mod
+    except ImportError:                 # pragma: no cover - exec'd standalone
+        try:
+            import labels as _labels_mod
+        except ImportError:
+            _labels_mod = None
+    if _labels_mod is not None and out.get("font") == getattr(_labels_mod, "DEFAULT_FONT", None):
+        out.pop("font", None)
+    for key in ("color", "halo_color", "font"):
+        if isinstance(out.get(key), str):
+            out[key] = out[key].strip().lower()
+    return out
+
 def _comparable_class(item: dict) -> dict:
     """One class or category, with its colour case-folded and its BOUNDS as floats.
 
@@ -1125,6 +1171,58 @@ def apply_to_qgis(qgis_layer, style: dict) -> bool:
             qgis_layer.setRenderer(QgsSingleSymbolRenderer(symbol))
             qgis_layer.triggerRepaint()
             return True
+
+    # "DRAWS NOTHING" comes back as nothing. QGIS's null renderer is read into `no_symbol` and was
+    # never written back, so a layer deliberately set to draw no shapes — kept for its labels, say —
+    # opened here as an ordinary coloured layer. Checked before everything else because it is not a
+    # symbol at all: there is no colour, pattern or marker to build.
+    if style.get("no_symbol"):
+        try:
+            from qgis.core import QgsNullSymbolRenderer
+            qgis_layer.setRenderer(QgsNullSymbolRenderer())
+            qgis_layer.triggerRepaint()
+            return True
+        except ImportError:             # pragma: no cover - QGIS has had this since 2.x
+            pass
+
+    # A PATTERN FILL comes back as a pattern. `fills.from_qgis` has read these out of QGIS since the
+    # module existed and nothing ever put one BACK, so a layer whose GeoDeploy style is a hatch
+    # opened here as a plain fill with the hatch simply gone — reported from testing as "a layer
+    # that is supposed to have hashed polygons opened with colors instead".
+    try:
+        try:                            # a package, inside QGIS
+            from . import fills as _fills
+        except ImportError:             # exec'd standalone by the test harness
+            import fills as _fills
+        # EVERY PICTURE, not just the pattern. All four of these could be read OUT of QGIS and
+        # none could be put back, so a layer styled with any of them in GeoDeploy opened here as a
+        # plain colour. The systematic round-trip test is what found the other three; the hatch was
+        # simply the one somebody noticed first.
+        symbol = None
+        for carries, rebuild in ((_fills.has_pattern, _fills.to_qgis),
+                                 (lambda st: bool(_fills.picture_of(st, "marker_image")),
+                                  _fills.marker_to_qgis),
+                                 (lambda st: bool(_fills.picture_of(st, "centroid_marker")),
+                                  _fills.centroid_to_qgis)):
+            if not carries(style):
+                continue
+            symbol = _symbol_for(qgis_layer, style.get("color"), style)
+            if symbol is not None and rebuild(symbol, style):
+                # A LINE MARKER rides ON TOP of whatever the line already is, so it is applied
+                # after rather than instead — see `line_marker_to_qgis`.
+                _fills.line_marker_to_qgis(symbol, style)
+                qgis_layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+                qgis_layer.triggerRepaint()
+                return True
+        # …and on its own, with no other picture, it still has to reach the line.
+        if _fills.picture_of(style, "line_marker"):
+            symbol = _symbol_for(qgis_layer, style.get("color"), style)
+            if symbol is not None and _fills.line_marker_to_qgis(symbol, style):
+                qgis_layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+                qgis_layer.triggerRepaint()
+                return True
+    except ImportError:                 # pragma: no cover - fills.py is optional
+        pass
 
     # RULES BEFORE CLASSES. A style carrying `rules` is rule-based, and its `color_mode` is only the
     # fallback shape for viewers that know nothing about rules — reading that first would draw a

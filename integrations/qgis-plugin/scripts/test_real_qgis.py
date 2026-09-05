@@ -137,6 +137,14 @@ def audit():
 
 # ══ 2. Real feature layers ═══════════════════════════════════════════════════════════════════════
 
+#: A REAL 2x2 PNG, generated rather than remembered. The constant these tests used before was
+#: subtly corrupt — its IDAT length byte disagreed with the data — so libpng rejected it
+#: (`IDAT: CRC error`) and `QImage` returned a null image. Every check that only looked at the
+#: base64 string passed anyway; the one that asked QGIS to actually READ the picture failed, and
+#: looked exactly like a product bug in the pattern round trip.
+_VALID_PNG_B64 = ("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGMwLnf5D8IMMAYAQQQH"
+                  "tWP9J2YAAAAASUVORK5CYII=")
+
 def make_layer(geometry, name="test"):
     """A real in-memory QgsVectorLayer with a numeric and a text field, and three features."""
     uri = "{0}?crs=EPSG:4326&field=pop:double&field=kind:string".format(geometry)
@@ -1378,6 +1386,178 @@ def blend_modes():
         check("blend: feature blending is reported too",
               bool(note) and "own features" in note, repr(note))
 
+
+# ══ 19. A pattern fill comes BACK ════════════════════════════════════════════════════════════════
+
+def fill_patterns_back():
+    section("A hatch from GeoDeploy opens in QGIS as a hatch, not as a colour")
+    from qgis.core import (QgsLinePatternFillSymbolLayer, QgsRasterFillSymbolLayer,
+                           QgsSimpleFillSymbolLayer)
+
+    # A hatch as the BROWSER makes one: a tile plus the preset name it was drawn from.
+    png = ("data:image/png;base64," + _VALID_PNG_B64)
+
+    layer = make_layer("Polygon")
+    symbology.apply(layer, {"color": "#227744", "fill_opacity": 0.5,
+                            "fill_pattern": {"image": png, "width": 12, "height": 12,
+                                             "hatch": "cross"}})
+    symbol = layer.renderer().symbol()
+    kinds = [type(symbol.symbolLayer(i)).__name__ for i in range(symbol.symbolLayerCount())]
+    check("pattern back: the layer is no longer a plain fill", len(kinds) > 1, repr(kinds))
+    check("pattern back: a browser hatch rebuilds as a NATIVE QGIS hatch",
+          any(k == "QgsLinePatternFillSymbolLayer" for k in kinds),
+          "a native hatch can be edited, recoloured and classified; a picture cannot: " + repr(kinds))
+    check("pattern back: the plain fill is still underneath",
+          kinds and kinds[0] == "QgsSimpleFillSymbolLayer",
+          "QGIS draws a pattern OVER what is beneath it: " + repr(kinds))
+
+    # …and the angle is the one the preset names.
+    hatch = next((symbol.symbolLayer(i) for i in range(symbol.symbolLayerCount())
+                  if isinstance(symbol.symbolLayer(i), QgsLinePatternFillSymbolLayer)), None)
+    if hatch is not None:
+        check("pattern back: 'cross' is not left at the default angle",
+              hatch.lineAngle() in (0.0, 45.0, 90.0, 135.0), repr(hatch.lineAngle()))
+
+    # A tile with NO preset name — from QGIS originally, or another tool — is pixels, and comes back
+    # as the pixels rather than as a guessed hatch.
+    other = make_layer("Polygon")
+    symbology.apply(other, {"color": "#227744",
+                            "fill_pattern": {"image": png, "width": 16, "height": 16}})
+    sym2 = other.renderer().symbol()
+    kinds2 = [type(sym2.symbolLayer(i)).__name__ for i in range(sym2.symbolLayerCount())]
+    check("pattern back: a tile with no preset becomes a raster fill",
+          any(k == "QgsRasterFillSymbolLayer" for k in kinds2), repr(kinds2))
+
+    # THE ROUND TRIP. What QGIS now shows must read back as a pattern, or opening a hatched layer
+    # and pushing it would report it as having lost its hatch.
+    read = symbology.from_qgis(layer) or {}
+    check("pattern back: it reads back out as a pattern again",
+          bool((read.get("fill_pattern") or {}).get("image")), repr(sorted(read)))
+
+    # AND THE COLOUR IS THE SAME EVERY TIME. `QgsSymbol.defaultSymbol` picks a RANDOM colour, so a
+    # style naming none used to leave whatever QGIS chose that second — a different fill on every
+    # open, which is indistinguishable from the styling not being applied.
+    seen = set()
+    for _ in range(5):
+        plain = make_layer("Polygon")
+        symbology.apply(plain, {"fill_opacity": 0.5})       # deliberately no colour
+        seen.add(plain.renderer().symbol().color().name().lower())
+    check("pattern back: a style with no colour is the SAME colour every time",
+          len(seen) == 1, "got {0} different colours: {1}".format(len(seen), sorted(seen)))
+
+    assert QgsSimpleFillSymbolLayer and QgsRasterFillSymbolLayer   # imported for the names above
+
+
+# ══ 20. THE WHOLE VOCABULARY, both ways ══════════════════════════════════════════════════════════
+
+def every_style_round_trips():
+    """GeoDeploy → QGIS → GeoDeploy, for every shape a style can take.
+
+    The hatch bug was found by a person opening a layer and seeing the wrong thing, which is the
+    expensive way to find it. Every test before this one checks ONE feature in the direction it was
+    built for; this checks the whole vocabulary in the direction a user actually experiences —
+    "I opened my layer in QGIS" — and it is the test that would have caught a pattern that could be
+    read out of QGIS and never put back.
+
+    The comparison is deliberately shallow: does the KEY survive, and does its shape survive. An
+    exact value match is the job of the per-feature tests above, and demanding it here would make
+    this fail for approximations that are working as designed (a hatch rebuilt as a native QGIS
+    hatch has different pixels from the tile it came from, and should).
+    """
+    section("Every style shape: GeoDeploy -> QGIS -> GeoDeploy")
+
+    PNG = ("data:image/png;base64," + _VALID_PNG_B64)
+
+    # (name, geometry, style, the keys that must come back)
+    CASES = [
+        ("a plain polygon", "Polygon",
+         {"color": "#227744", "fill_opacity": 0.6, "outline_color": "#112233",
+          "outline_width": 2}, ["color", "fill_opacity", "outline_color"]),
+        ("a plain line", "LineString",
+         {"color": "#cc3300", "line_width": 3}, ["color", "line_width"]),
+        ("a dashed line", "LineString",
+         {"color": "#cc3300", "line_width": 2, "lineType": "dashed"}, ["color", "lineType"]),
+        ("a custom dash pattern", "LineString",
+         {"color": "#cc3300", "line_width": 2, "dash_pattern": [4, 2, 1, 2]}, ["dash_pattern"]),
+        ("a plain point", "Point",
+         {"color": "#3366ff", "radius": 7, "marker": "star"}, ["color", "radius", "marker"]),
+        ("a graduated polygon", "Polygon",
+         {"color_mode": "graduated", "color_field": "pop",
+          "classes": [{"min": None, "max": 10, "color": "#eeeeee"},
+                      {"min": 10, "max": None, "color": "#111111"}]},
+         ["color_mode", "color_field", "classes"]),
+        ("a categorized point", "Point",
+         {"color_mode": "categorized", "color_field": "kind", "marker": "square",
+          "categories": [{"value": "a", "color": "#ff0000"},
+                         {"value": "b", "color": "#00ff00"}]},
+         ["color_mode", "color_field", "categories"]),
+        ("a proportional point", "Point",
+         {"color": "#3366ff", "size_mode": "proportional", "size_field": "pop",
+          "size_stops": [[0, 4], [100, 20]]}, ["size_mode", "size_field", "size_stops"]),
+        ("a browser hatch", "Polygon",
+         {"color": "#227744", "fill_pattern": {"image": PNG, "width": 12, "height": 12,
+                                               "hatch": "cross"}}, ["fill_pattern"]),
+        ("an image tile", "Polygon",
+         {"color": "#227744", "fill_pattern": {"image": PNG, "width": 16, "height": 16}},
+         ["fill_pattern"]),
+        ("a marker picture", "Point",
+         {"color": "#3366ff", "radius": 8, "marker_image": PNG}, ["marker_image"]),
+        ("markers along a line", "LineString",
+         {"color": "#cc3300", "line_width": 2,
+          "line_marker": {"image": PNG, "spacing": 30}}, ["line_marker"]),
+        ("a centroid marker", "Polygon",
+         {"color": "#227744", "centroid_marker": {"image": PNG}}, ["centroid_marker"]),
+        # `pop`, not an invented name: `make_layer` gives every fixture `pop` and `kind`, and QGIS
+        # refuses to enable labelling on a field that does not exist — which looked like labels
+        # being lost when it was the test asking for the impossible.
+        # `enabled` is REQUIRED, not decoration: `labels_of` on the server and `has_labels` in the
+        # plugin both gate on it, and the browser always writes it. Omitting it here made labelling
+        # correctly switch OFF and looked like labels being lost.
+        ("labels", "Point",
+         {"color": "#3366ff",
+          "labels": {"enabled": True, "field": "pop", "size": 14, "color": "#000000"}},
+         ["labels"]),
+        ("no symbol", "Polygon", {"no_symbol": True}, ["no_symbol"]),
+    ]
+
+    for name, geom, style, expected in CASES:
+        layer = make_layer(geom)
+        applied = symbology.apply(layer, dict(style))
+        check("round trip: {0} applies".format(name), bool(applied),
+              "apply() refused the style outright")
+        if not applied:
+            continue
+        back = symbology.from_qgis(layer) or {}
+        missing = [key for key in expected if key not in back]
+        check("round trip: {0} comes back".format(name), not missing,
+              "lost {0} — got {1}".format(missing, sorted(back)))
+
+    # AND THE MERGE, which is what a push actually sends: a read-back must not report a layer nobody
+    # touched as edited. That is the difference between "your styling travelled" and "your styling
+    # travelled and then claimed you had changed it".
+    #
+    # ONLY WHERE EXACTNESS IS A FAIR DEMAND. Three kinds of style legitimately come back different,
+    # and asserting otherwise would be a test manufacturing failures rather than finding them:
+    #
+    #   * a PICTURE is re-rendered by QGIS on the way back, so its bytes differ even though the
+    #     picture is the same one — the `comes back` checks above are what matter for those;
+    #   * OPEN-ENDED classes (`min: None`) have no `QgsRendererRange` equivalent, so QGIS fills in
+    #     real bounds — a documented approximation, not a loss;
+    #   * `no_symbol` is a renderer, not a symbol, and carries nothing else to compare.
+    EXACT = {"a plain polygon", "a plain line", "a dashed line", "a custom dash pattern",
+             "a plain point", "a categorized point", "a proportional point", "labels"}
+    for name, geom, style, _ in CASES:
+        if name not in EXACT:
+            continue
+        layer = make_layer(geom)
+        if not symbology.apply(layer, dict(style)):
+            continue
+        back = symbology.from_qgis(layer) or {}
+        merged = symbology.merge_style(dict(style), back)
+        same = symbology.comparable_style(dict(style)) == symbology.comparable_style(merged)
+        check("no phantom edit: {0}".format(name), same,
+              "opening it and pushing it back would report an edit nobody made")
+
 def main():
     audit()
     round_trip()
@@ -1397,6 +1577,8 @@ def main():
     gradients()
     grouping_renderers()
     blend_modes()
+    fill_patterns_back()
+    every_style_round_trips()
     print("\n{0} checks, {1} failed".format(CHECKS[0], len(FAILURES)))
     for name in FAILURES:
         print("  - {0}".format(name))

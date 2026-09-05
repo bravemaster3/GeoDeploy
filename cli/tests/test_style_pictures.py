@@ -18,7 +18,7 @@ from geodeploy.styles import MAX_PICTURE_BYTES, build_style, picture_data_uri
 
 # A real 1x1 transparent PNG.
 PNG_BYTES = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGMwLnf5D8IMMAYAQQQHtWP9J2YAAAAASUVORK5CYII=")
 
 
 @pytest.fixture

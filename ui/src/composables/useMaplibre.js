@@ -145,7 +145,7 @@ export function useMaplibre(containerId, initialStyle = null) {
         // maps in the same product must not be drawn two different ways — a reader learns an icon
         // once. (That runtime is a standalone bundle the app cannot import, so this is matched by
         // hand, like `LegendSwatch` matches `legendSwatch`: change one, change the other.)
-        btn.innerHTML = '<span class="maplibregl-ctrl-icon" aria-hidden="true" '
+        btn.innerHTML = '<span class="gd-ctrl-glyph" aria-hidden="true" '
           + 'style="display:flex;align-items:center;justify-content:center">'
           + '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
           + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
@@ -192,7 +192,7 @@ export function useMaplibre(containerId, initialStyle = null) {
         button.type = 'button'
         button.title = 'Tilt the map (3D view)'
         button.setAttribute('aria-label', 'Tilt the map (3D view)')
-        button.innerHTML = '<span class="maplibregl-ctrl-icon" aria-hidden="true" '
+        button.innerHTML = '<span class="gd-ctrl-glyph" aria-hidden="true" '
           + 'style="display:flex;align-items:center;justify-content:center">'
           + '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
           + 'stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round">'

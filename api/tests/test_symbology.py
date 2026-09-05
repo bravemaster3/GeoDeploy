@@ -16,7 +16,7 @@ from geodeploy.services import symbology as sym
 #: A real 1x1 transparent PNG, as a data URI. The legend only checks the SHAPE of the string, but a
 #: valid image keeps the fixture honest if anything downstream ever decodes it.
 PNG = ("data:image/png;base64,"
-       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+       "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGMwLnf5D8IMMAYAQQQHtWP9J2YAAAAASUVORK5CYII=")
 
 
 # ── Classification ───────────────────────────────────────────────────────────────────────────────

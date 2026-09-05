@@ -1297,103 +1297,115 @@ class GeoDeployDock(QDockWidget):
             author built, so they come across as folders rather than being flattened."""
             nonlocal added
             for item in node_list:
-                if item.get("children") is not None:
-                    sub = parent.addGroup(item.get("name") or "Folder")
-                    sub.setCustomProperty(portal_sync.P_FOLDER_ID, str(item.get("id") or ""))
-                    sub.setExpanded(not item.get("collapsed"))
-                    place(item.get("children") or [], sub)
-                    continue
-                key = (int(item.get("layer_id")), str(item.get("layer_type") or "vector"))
-                cfg = by_key.get(key)
-                if cfg is None:
-                    continue
-                label = str(cfg.get("name") or cfg.get("layer_id"))
-                layer_row = self._row_for(cfg.get("layer_id"), cfg.get("layer_type"))
-                layer = None
-                portal_url = (cfg.get("source") or {}).get("url")
-                # EDITABLE MODE INVERTS THE PRIORITY. The portal's own source is what makes the
-                # group look like the portal, and it is also the one thing that cannot be restyled:
-                # tiles have no categorized or graduated renderer and a server-rendered raster
-                # reaches QGIS as colour. Asked for the editable group, each layer is opened from
-                # its DATA instead and then painted with the portal's styling below — same picture,
-                # but every renderer QGIS has now applies to it.
-                if editable and layer_row is not None:
-                    source = sources.describe(layer_row, prefer_attributes=True)
-                    layer = (self._open_best(layer_row, source,
-                                             layer_row.get("name") or "layer")[0]
-                             if source else None)
-                if layer is None and portal_url and not editable:
-                    # THE PORTAL'S OWN SOURCE, for every layer type, because that is what "open the
-                    # portal" means.
-                    #
-                    # For a RASTER it is the styling: the server colours these, and the portal bakes
-                    # its colormap, stretch, band choice and hillshade into the tile URL — the same
-                    # raster reads `&colormap_name=terrain` in one portal, a bare `&rescale=` in
-                    # another and `&algorithm=hillshade&expression=b1*5.0` in a third. For a VECTOR
-                    # it is which tiles: a 3D point layer is drawn from a `pillars` function that
-                    # buffers the points into polygons, and nothing in the layer's own listing entry
-                    # points there. Either way, going through the layer's entry instead draws
-                    # something the portal does not show.
-                    layer = self._layer_from_portal_source(cfg, label)
-                if layer is None and layer_row is not None and not editable:
-                    source = sources.describe(layer_row)
-                    layer = (self._open_best(layer_row, source,
-                                             layer_row.get("name") or "layer")[0]
-                             if source else None)
-                if layer is None and portal_url:
-                    # Not in the listing, or its data would not open: a layer that is not itself
-                    # published, on a portal that is. The portal's own style says where it draws
-                    # from, and that source is readable by anyone who can read the portal — which
-                    # is the whole point. In editable mode this is a fallback rather than the
-                    # first choice, so such a layer still appears; it simply cannot be restyled.
-                    layer = self._layer_from_portal_source(cfg, label)
-                    if editable:
-                        _log_editable_fallback(label)
-                if layer is None:
-                    missing.append(label)
-                    continue
-                project.addMapLayer(layer, False)   # False: placed into the group, not the root
-                tree_node = parent.addLayer(layer)
-                tree_node.setItemVisibilityChecked(bool(cfg.get("visible", True)))
-                # OPACITY IS PART OF THE PICTURE. The portal stores it per layer and the push path
-                # already sends it back, but nothing applied it on the way IN — so a half-transparent
-                # overlay opened solid, hid what it was drawn over, and pushing the group back then
-                # reported it as a change the user never made.
-                _set_opacity(layer, cfg.get("opacity"))
-                style = (cfg.get("style") or {}) if self.styled.isChecked() else {}
-                # A PORTAL'S RASTER COLOURS LIVE IN ITS TILE URL, not in its layer_config: the
-                # server does the colouring, so `style` for a raster is usually empty and the
-                # colormap, stretch, band and algorithm are baked into the template. Opened as a
-                # GeoTIFF there is nothing to read them from — so they are parsed back out, and the
-                # raster arrives coloured as THIS portal draws it rather than as the layer's default.
-                if style is not None and editable and cfg.get("layer_type") == "raster" and portal_url:
-                    baked = sources.raster_style_from_tile_url(portal_url)
-                    if baked:
-                        style = symbology.merge_style(style, baked)
-                # Rasters are no longer excluded: opened from their GeoTIFF they have real bands and
-                # `symbology.apply` builds them a renderer. Server-rendered tiles still have nothing
-                # to style, and `raster_to_qgis` declines those itself.
-                if style:
-                    # THE PORTAL'S style wins over the layer's default here — that is what opening
-                    # a portal means. Through the dispatcher, so a tile layer gets the tile
-                    # renderer instead of silently keeping the colour it was born with.
-                    #
-                    # The GEOMETRY has to come with it. A portal may show a layer that is not in
-                    # the public listing, and `layer_row` is then None — so the renderer was left
-                    # guessing, guessed "point", and drew polygons as a dot per vertex. The
-                    # published style records the geometry; prefer it, since it describes the very
-                    # tiles being drawn.
-                    row_for_style = dict(layer_row or {})
-                    if cfg.get("geometry_type"):
-                        row_for_style["geometry_type"] = cfg["geometry_type"]
-                    symbology.apply(layer, style, row_for_style)
-                    # 3D needs a FEATURE layer to hang a renderer on. Opened as the portal draws it,
-                    # an extruded layer is a tile layer and QGIS's 3D view shows it flat — which
-                    # reads as "3D is not implemented" unless somebody says otherwise.
-                    if symbology.is_extruded(style) and not isinstance(layer, QgsVectorLayer):
-                        flat_3d.append(label)
-                added += 1
+                try:
+                    if item.get("children") is not None:
+                        sub = parent.addGroup(item.get("name") or "Folder")
+                        sub.setCustomProperty(portal_sync.P_FOLDER_ID, str(item.get("id") or ""))
+                        sub.setExpanded(not item.get("collapsed"))
+                        place(item.get("children") or [], sub)
+                        continue
+                    key = (int(item.get("layer_id")), str(item.get("layer_type") or "vector"))
+                    cfg = by_key.get(key)
+                    if cfg is None:
+                        continue
+                    label = str(cfg.get("name") or cfg.get("layer_id"))
+                    layer_row = self._row_for(cfg.get("layer_id"), cfg.get("layer_type"))
+                    layer = None
+                    portal_url = (cfg.get("source") or {}).get("url")
+                    # EDITABLE MODE INVERTS THE PRIORITY. The portal's own source is what makes the
+                    # group look like the portal, and it is also the one thing that cannot be restyled:
+                    # tiles have no categorized or graduated renderer and a server-rendered raster
+                    # reaches QGIS as colour. Asked for the editable group, each layer is opened from
+                    # its DATA instead and then painted with the portal's styling below — same picture,
+                    # but every renderer QGIS has now applies to it.
+                    if editable and layer_row is not None:
+                        source = sources.describe(layer_row, prefer_attributes=True)
+                        layer = (self._open_best(layer_row, source,
+                                                 layer_row.get("name") or "layer")[0]
+                                 if source else None)
+                    if layer is None and portal_url and not editable:
+                        # THE PORTAL'S OWN SOURCE, for every layer type, because that is what "open the
+                        # portal" means.
+                        #
+                        # For a RASTER it is the styling: the server colours these, and the portal bakes
+                        # its colormap, stretch, band choice and hillshade into the tile URL — the same
+                        # raster reads `&colormap_name=terrain` in one portal, a bare `&rescale=` in
+                        # another and `&algorithm=hillshade&expression=b1*5.0` in a third. For a VECTOR
+                        # it is which tiles: a 3D point layer is drawn from a `pillars` function that
+                        # buffers the points into polygons, and nothing in the layer's own listing entry
+                        # points there. Either way, going through the layer's entry instead draws
+                        # something the portal does not show.
+                        layer = self._layer_from_portal_source(cfg, label)
+                    if layer is None and layer_row is not None and not editable:
+                        source = sources.describe(layer_row)
+                        layer = (self._open_best(layer_row, source,
+                                                 layer_row.get("name") or "layer")[0]
+                                 if source else None)
+                    if layer is None and portal_url:
+                        # Not in the listing, or its data would not open: a layer that is not itself
+                        # published, on a portal that is. The portal's own style says where it draws
+                        # from, and that source is readable by anyone who can read the portal — which
+                        # is the whole point. In editable mode this is a fallback rather than the
+                        # first choice, so such a layer still appears; it simply cannot be restyled.
+                        layer = self._layer_from_portal_source(cfg, label)
+                        if editable:
+                            _log_editable_fallback(label)
+                    if layer is None:
+                        missing.append(label)
+                        continue
+                    project.addMapLayer(layer, False)   # False: placed into the group, not the root
+                    tree_node = parent.addLayer(layer)
+                    tree_node.setItemVisibilityChecked(bool(cfg.get("visible", True)))
+                    # OPACITY IS PART OF THE PICTURE. The portal stores it per layer and the push path
+                    # already sends it back, but nothing applied it on the way IN — so a half-transparent
+                    # overlay opened solid, hid what it was drawn over, and pushing the group back then
+                    # reported it as a change the user never made.
+                    _set_opacity(layer, cfg.get("opacity"))
+                    style = (cfg.get("style") or {}) if self.styled.isChecked() else {}
+                    # A PORTAL'S RASTER COLOURS LIVE IN ITS TILE URL, not in its layer_config: the
+                    # server does the colouring, so `style` for a raster is usually empty and the
+                    # colormap, stretch, band and algorithm are baked into the template. Opened as a
+                    # GeoTIFF there is nothing to read them from — so they are parsed back out, and the
+                    # raster arrives coloured as THIS portal draws it rather than as the layer's default.
+                    if style is not None and editable and cfg.get("layer_type") == "raster" and portal_url:
+                        baked = sources.raster_style_from_tile_url(portal_url)
+                        if baked:
+                            style = symbology.merge_style(style, baked)
+                    # Rasters are no longer excluded: opened from their GeoTIFF they have real bands and
+                    # `symbology.apply` builds them a renderer. Server-rendered tiles still have nothing
+                    # to style, and `raster_to_qgis` declines those itself.
+                    if style:
+                        # THE PORTAL'S style wins over the layer's default here — that is what opening
+                        # a portal means. Through the dispatcher, so a tile layer gets the tile
+                        # renderer instead of silently keeping the colour it was born with.
+                        #
+                        # The GEOMETRY has to come with it. A portal may show a layer that is not in
+                        # the public listing, and `layer_row` is then None — so the renderer was left
+                        # guessing, guessed "point", and drew polygons as a dot per vertex. The
+                        # published style records the geometry; prefer it, since it describes the very
+                        # tiles being drawn.
+                        row_for_style = dict(layer_row or {})
+                        if cfg.get("geometry_type"):
+                            row_for_style["geometry_type"] = cfg["geometry_type"]
+                        symbology.apply(layer, style, row_for_style)
+                        # 3D needs a FEATURE layer to hang a renderer on. Opened as the portal draws it,
+                        # an extruded layer is a tile layer and QGIS's 3D view shows it flat — which
+                        # reads as "3D is not implemented" unless somebody says otherwise.
+                        if symbology.is_extruded(style) and not isinstance(layer, QgsVectorLayer):
+                            flat_3d.append(label)
+                    added += 1
 
+                except Exception as exc:        # noqa: BLE001
+                    # ONE LAYER MUST NOT COST THE GROUP. A colormap this build could not
+                    # parse threw out of here, and because the exception escaped the LOOP,
+                    # every layer AFTER it was never added to the tree — a portal opened
+                    # with its raster unstyled and a polygon simply missing from the layer
+                    # list, which reads as the polygon having been lost rather than as one
+                    # style having failed to parse.
+                    symbology._log("Could not add {0} to the group ({1}: {2}); the rest of "
+                                   "the portal is still opening.".format(
+                                       item.get("name") or item.get("layer_id"),
+                                       type(exc).__name__, exc), level="warning")
         # A portal with no folders is a flat list — the configs themselves, in order.
         # layer_configs[0] is the TOP, and adding in the same order puts it at the top here too.
         tree = doc.get("layer_groups") or [

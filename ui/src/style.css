@@ -114,6 +114,26 @@
 }
 .dark .maplibregl-ctrl-group button + button { border-top-color: hsl(var(--border)); }
 .dark .maplibregl-ctrl-group button:hover { background: hsl(var(--muted)); }
+/* OUR OWN control glyphs, drawn as inline SVG in `currentColor` rather than as a background
+   image. They deliberately do NOT carry `maplibregl-ctrl-icon`: that class exists to be inverted in
+   dark mode (see below), which is right for MapLibre's dark PNG glyphs and exactly wrong for an SVG
+   that already draws in the theme's foreground colour — it turned the tilt and zoom-to-layer
+   buttons dark on a dark button, which is to say invisible. Colour comes from the theme instead, so
+   both modes are correct without a filter. */
+.maplibregl-ctrl button .gd-ctrl-glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: #333;
+}
+.dark .maplibregl-ctrl button .gd-ctrl-glyph { color: hsl(var(--foreground)); }
+.maplibregl-ctrl-group button.gd-active .gd-ctrl-glyph,
+.dark .maplibregl-ctrl-group button.gd-active .gd-ctrl-glyph {
+  color: hsl(var(--primary-foreground));
+}
+
 .dark .maplibregl-ctrl button .maplibregl-ctrl-icon {
   filter: invert(1) hue-rotate(180deg) brightness(1.05);
 }

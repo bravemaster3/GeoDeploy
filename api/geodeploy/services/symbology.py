@@ -629,20 +629,43 @@ def marker_images(style: dict) -> list[dict]:
     discovering them one `styleimagemissing` event at a time — with a classified layer, that would
     otherwise be a visible pop-in of markers as each class first appears on screen.
     """
-    # A FILL TILE IS AN IMAGE THIS STYLE NEEDS, so it belongs here: this list is the runtime's one
-    # channel for "create these images", and it is stamped on the layer's metadata. A fill layer is
-    # not a `symbol` layer, so the runtime creates the tile through `styleimagemissing` rather than
-    # up front — but it can only do that if the id is findable in some layer's metadata, which is
-    # exactly what this puts there.
+    # EVERY PICTURE, NOT THE FIRST KIND FOUND. This used to `return` on the first of these it saw,
+    # which was fine while a style could only have one — but a polygon can carry a pattern fill AND
+    # a marker at its centre, and a line a stroke and a repeated marker. Only the tile was
+    # registered, so the runtime asked for the other image, could not find it in any layer's
+    # metadata, and logged `Image "gd-img-…" could not be loaded` while drawing nothing there.
+    #
+    # This list is the runtime's ONE channel for "create these images". A fill tile and a centroid
+    # marker are not `symbol` layers, so they arrive through `styleimagemissing` rather than up
+    # front — and that only works if the id is findable here.
+    pictures, out = [], []
     tile = fill_pattern(style)
     if tile:
-        return [{"id": picture_id(tile["image"]), "image": tile["image"]}]
-
+        pictures.append(tile["image"])
     picture = marker_picture(style)
     if picture:
-        # One entry, carrying the PIXELS. The runtime registers it from the data URI instead of
-        # drawing a shape — see `setMarkerImage` in templates/shared/portal.js.
-        return [{"id": picture_id(picture), "image": picture}]
+        # The PIXELS, registered from the data URI instead of a shape being drawn — see
+        # `setMarkerPicture` in templates/shared/portal.js.
+        pictures.append(picture)
+    centre = centroid_marker(style)
+    if centre.get("image"):
+        pictures.append(centre["image"])
+    decoration = line_marker(style)
+    if decoration.get("image"):
+        pictures.append(decoration["image"])
+    seen_pictures = set()
+    for uri in pictures:
+        iid = picture_id(uri)
+        if iid in seen_pictures:
+            continue
+        seen_pictures.add(iid)
+        out.append({"id": iid, "image": uri})
+    # STOP HERE for anything that is not a point drawing generated shapes. A marker PICTURE replaces
+    # those shapes outright, and a fill TILE means this is a polygon, which has no marker at all —
+    # continuing would append a circle nothing ever draws. (A centroid or line marker does not stop
+    # it: those sit beside a symbology that may still generate its own shapes.)
+    if picture or tile:
+        return out
 
     shape = style.get("marker") or "circle"
     size = style.get("radius", 5)
@@ -655,7 +678,7 @@ def marker_images(style: dict) -> list[dict]:
         colors += [c["color"] for c in (style.get("categories") or []) if c.get("color")]
         colors.append(style.get("other_color") or DEFAULT_OTHER_COLOR)
 
-    seen, out = set(), []
+    seen = set()
     for c in colors:
         iid = marker_image_id(shape, c, size, ol, ow)
         if iid in seen:
