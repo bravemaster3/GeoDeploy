@@ -167,6 +167,69 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
 ## Dependencies / relationships
 - `postgis.py`/`minio.py` talk to the Docker daemon (`docker.from_env()`) and reuse each other's constants. They are called from `routers/setup.py`.
 - `martin.py` is called from `routers/data/vector.py` (on upload/delete), `routers/admin.py` (manual reload), and `tasks/vector_ingest.py` (after ingest).
+- **Rule-based layers (2026-09-03):** `portal_generator._rule_layers` emits **one render layer per
+  rule** in `style.rules`, each built by the ordinary `_vector_layer` path from the layer's style
+  with the rule's laid over it — so a rule is drawn by the code that already draws everything else,
+  rather than by a second renderer. The rule's `filter` and its `minzoom`/`maxzoom` are applied by
+  `_apply_rule_scope`, which **clamps the zoom range to 0–24**: QGIS stores scale thresholds well
+  outside that, and one out-of-range number makes MapLibre reject the WHOLE style. Ids are
+  `vector-{id}-r{n}` (plus `-outline`). Rules take precedence over the `style.maplibre` raw-paint
+  passthrough. **PARITY: `ui/src/lib/mapStyle.js` expands the same list before its draw loop**
+  (`expandRules` / `ruleScope` / `mlId`) — change both together. Pinned by `tests/test_rule_layers.py`.
+- **Ramps interpolate, and the class cap is 100 (2026-09-03):** `symbology.ramp_colors` blends
+  between a ramp's seven anchor stops instead of snapping to the nearest. Snapping had a ceiling
+  nobody had written down — **eight classes produced seven colours and twelve produced seven** — so
+  two classes were drawn identically under a legend saying they differed, and *that* is what the old
+  12-class cap was working around. `field-stats` now clamps to 2–100 (QGIS has never capped it), and
+  `LayerPanel.vue`'s spin box matches. Past twelve categories, `symbology.category_color` hands out a
+  golden-ratio hue wheel rather than cycling the palette, so a 40-value column gets 40 distinct
+  colours; it is deterministic, so a category keeps its colour when the data gains a value.
+  **PARITY: `ui/src/lib/symbology.js` holds `rampColors`/`blend`/`categoryColor`/`hslHex` as exact
+  twins** — verified byte-for-byte over every ramp × {1,2,3,5,7,8,9,12,20,50} plus 60 categories.
+  Note this CHANGES the colours a newly computed ramp produces (stored styles keep theirs, since a
+  class carries its own colour).
+- **Labels (2026-09-03), new to the platform:** `style.labels` becomes its own MapLibre `symbol`
+  layer via `symbology.label_layout` / `label_paint` / `label_scope` and
+  `portal_generator._label_layer`. Its OWN layer, not text on the geometry's, for three reasons that
+  would each be a bug otherwise: a label has its own zoom range, it must draw above every geometry
+  (layer order is the only thing that decides that), and a point layer's own layer is already a
+  `symbol` layer carrying an icon. Emitted for rule-based layers too, and it is the ONLY thing
+  emitted when `no_symbol` is set — which is how a layer kept for its labels works.
+- **Glyphs:** `routers/fonts.py` serves `/api/fonts/{fontstack}/{range}.pbf` from
+  `templates/shared/fonts/` when a set is installed and **redirects to MapLibre's public set**
+  otherwise. Both style builders name that one route: only the server knows what is installed, and
+  if `portal_generator` and `mapStyle.js` each guessed they would disagree the moment an operator
+  installed a set. A fontstack the glyph source lacks draws **nothing at all** — no error — which is
+  why `LABEL_FONTS` is a short allow-list and an unknown font falls back rather than being carried.
+- **Marker pictures (2026-09-03):** `style.marker_image` is a PNG data URI the QGIS plugin renders
+  from a symbol GeoDeploy cannot describe. `symbology.picture_id` (FNV-1a, content-addressed, twinned
+  in `ui/src/lib/symbology.js`) names it; `icon_image_expression` returns that id in preference to a
+  generated shape, and `marker_images` emits `{id, image}` so the runtime registers it from the
+  pixels. **A picture is ONE image for every feature** — a bitmap cannot be recoloured per class the
+  way a canvas shape can — so a classified layer keeps its classification everywhere except the
+  icon. `templates/shared/portal.js::setMarkerPicture` and `ui/src/lib/markerImage.js::loadMarkerPicture`
+  are the two runtime halves; both register with `pixelRatio: 2`, matching the plugin's render scale.
+- **Markers along a line (2026-09-03):** `style.line_marker` becomes a second render layer at
+  `symbol-placement: line` (`portal_generator._line_marker_layer`, `symbology.line_marker_layout`),
+  spaced by the QGIS interval and `icon-rotation-alignment: map` so an arrow points downstream. The
+  repeated symbol travels as a picture, like any marker GeoDeploy cannot describe. **It carries its
+  own `geodeploy:markerImages`** — the runtime registers bitmaps from that key and only the FIRST
+  render layer gets the full metadata block, so the stamping loop MERGES rather than assigns; it
+  used to assign, which erased the decoration's image and the ticks never appeared.
+- **Pattern fills (2026-09-04):** `style.fill_pattern` carries a tile the plugin REBUILT (not
+  photographed — `fill-pattern` repeats the image it is given, and a rendered patch shows a seam
+  every tile). `symbology.fill_pattern` validates it and `_vector_layer` sets `fill-pattern`,
+  **removing `fill-color`**: MapLibre draws one or the other, and leaving the colour set is a no-op
+  that reads as if it applied. `fill-opacity` still applies, which is how a hatch stays a wash. The
+  tile is registered through `marker_images` — the runtime's one "create these images" channel — and
+  it OUTRANKS a marker picture there, since a style carrying both is a polygon.
+- **Heatmaps and centroid markers (2026-09-04):** `style.heatmap` becomes MapLibre's own `heatmap`
+  layer type (`_heatmap_layer`), which REPLACES the feature layers rather than adding to them —
+  drawing the points as well would put a pin on every hot spot. Labels still ride along. The first
+  ramp stop is forced transparent: a ramp that starts opaque paints the whole viewport at density
+  zero, which is the one mistake that makes a heatmap look broken. `style.centroid_marker` becomes a
+  `symbol` layer over the polygon source (`_centroid_marker_layer`) — MapLibre places icons at a
+  polygon's LABEL POINT by default, which is inside a concave shape where a true centroid is not.
 - `titiler.py` is called from `routers/data/raster.py` and `portal_generator.py`.
 - `portal_generator.py` reads `templates/` (mounted at `/templates`) and writes `data/portals/`.
 - `cog_converter.py` is called from `tasks/raster_ingest.py`.
@@ -203,6 +266,36 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   `api/tests/test_native_crs.py`.
 
 ## Last updated
+2026-09-04 (`titiler.py`: **contour lines can be coloured by their own value**, and the relief
+behind them can be switched off. A line takes its band number SHIFTED past the relief's range —
+1..N is the ground, N+1..2N the lines — because one band of output has to carry both "this pixel is
+a line" and "it is this high". With the relief off the ground goes TRANSPARENT rather than white, so
+the lines are read over the basemap. Both force GeoDeploy's own drawing path, since TiTiler's
+algorithm can express neither. `contour_relief` defaults to None, not True, because
+`tile_url_from_style` unpacks absent keys as None and a `bool()` of that would have inverted the
+default for every existing layer.)
+
+2026-09-04 (`symbology.legend_entries`: **the legend describes the symbologies the round trip
+added.** It knew only graduated and categorized COLOUR, so a rule-based layer and a heatmap both
+returned `[]` — no legend at all — and a classified layer of dashed lines or star markers came out
+as a column of plain squares. Heatmaps return a RAMP (density runs 0-1, there are no classes);
+rules return one entry each, ahead of `color_mode`, matching the precedence the renderers use; and
+every entry now carries the drawable parts of its own symbol (`dash`, `shape`, `marker_image`, a
+`fill_pattern` TILE, outline, widths) so a swatch can be the symbol rather than a stand-in. A
+pattern is carried only as a `data:` URI — it reaches an `img src` and a CSS `url()`, so anything
+else is refused rather than sanitised. Mirrored in `ui/src/lib/symbology.js`,
+`templates/shared/portal.js` and `cli/geodeploy/styles.py`; the rule label falls back to the
+EXPRESSION before a number, which is what the CLI already did.)
+
+2026-09-04 (`titiler.py::_contour_params`: **every contour parameter is now rounded and clamped to
+an integer.** `GET /algorithms/contours` declares increment 0-999, thickness 0-10 and minz/maxz
++/-99999, all `integer` — `increment` used to be typed as a float and we sent one, so after TiTiler
+tightened it every tile 422'd and a working contour layer simply stopped drawing, with no error
+anywhere. TiTiler runs from `:latest`, so this can happen again; `notes_temp/notes_for_future.md`
+carries the diagnosis. Half-up rounding is written out as `int(x + 0.5)` rather than `round()`,
+because Python rounds half to even and the JS twin in `ui/src/lib/mapStyle.js` rounds half up — a
+12.5 interval would otherwise draw at different spacings in the preview and the published portal.)
+
 2026-09-02 (`restore.py`: **the restore no longer replaces the PostGIS extension.** `--clean` drops
 the dump's objects in reverse dependency order, so tables go first and the `DROP EXTENSION postgis`
 the dump carries then SUCCEEDS — and the rebuilt `geometry` / `gist_geometry_ops_2d` come back with

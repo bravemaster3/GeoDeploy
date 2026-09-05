@@ -29,7 +29,72 @@ fastest source it offers, and upload a QGIS layer back — with its styling. Sit
     and new breaks come from the instance's `/field-stats`, exactly as the CLI does. The raster half
     is `raster_to_qgis` / `raster_from_qgis` (colormap, stretch, band, colour-per-value, hillshade),
     and `comparable_style` folds both shapes so a round trip reports only real edits.
+  - `rules.py` — **rule-based rendering ⇄ `style.rules`**. A QGIS rule tree flattens to a list of
+    render layers, one per leaf, each carrying the AND of the filters above it and the narrowest
+    scale range on its path; that list is `style.rules`, and the server draws one MapLibre layer per
+    entry. Each rule stores BOTH its MapLibre `filter` (what the web renders) and the QGIS
+    `expression` it came from (what QGIS gets back — a round trip should hand somebody the text they
+    typed). An ELSE rule becomes NOT(its siblings); a filter outside the expression subset is
+    dropped with a note rather than widened, because a rule that draws everything is a different
+    map, not a degraded one. `rules[0]` draws FIRST — QGIS's order, and the opposite of
+    `layer_configs`.
+  - `qgis25d.py` — **QGIS's 2.5D renderer ⇄ GeoDeploy's extrusion**. 2.5D is not 3D: it draws a
+    flat map with a pseudo-perspective block, built from a shadow fill and two GEOMETRY GENERATORS
+    that extrude the outline. Two consequences shape the whole module: the height and angle are
+    **project variables** (`@qgis_25d_height` / `@qgis_25d_angle`), which is why `Qgs25DRenderer`
+    exposes colours and no `height()`; and the geometry generators cannot travel, so what does is
+    the thing they imitate — a real `fill-extrusion`. That is *better* than 2.5D and not the same
+    picture, so the roof colour becomes the extrusion colour and the angle, wall and shadow ride
+    along in `extrusion.qgis25d`, which is what makes a round trip come back as 2.5D rather than as
+    a plain extrusion somebody has to rebuild.
+  - `labels.py` — **QGIS labelling ⇄ `style.labels`**. GeoDeploy had no labels at all before this;
+    they were added to the platform and the plugin together. Text (a field, or an expression put
+    through the translator), font, size, colour, halo (QGIS's buffer), offset, rotation, wrap,
+    transform, letter spacing, overlap, priority and the label's own scale range all travel.
+    **Two sharp edges:** `QgsPalLayerSettings` mixes plain ATTRIBUTES (`fieldName`, `xOffset`,
+    `priority`, `scaleVisibility`) with METHODS (`format()`), and calling an attribute raises a
+    `TypeError` that a blanket handler turns into "this layer has no labels" — silently; `_value`
+    exists for that. And a FONT is not carried verbatim: MapLibre draws **nothing at all** for a
+    fontstack its glyphs lack, so a family is mapped onto the stacks the instance can serve, keeping
+    weight and slant. Shadows, background shapes and callouts are named as not carried.
+  - `fills.py` — **pattern fills ⇄ `style.fill_pattern`**. Unlike a marker, a fill is drawn by
+    REPEATING a tile, and `fill-pattern` repeats whatever image it is given — so a rendered preview
+    is not enough: it shows a seam every tile. This module rebuilds the tile from QGIS's own
+    parameters so it closes. Qt brush styles close at any multiple of Qt's 8px period; a point
+    pattern closes at exactly `distanceX × distanceY` (with the marker drawn at all nine offsets so
+    an overhang reappears on the far edge); an SVG or raster fill IS its own tile at `patternWidth`.
+    A line hatch closes only at 0/45/90/135°, so any other angle is **snapped and reported** — a
+    seam every tile is worse than a few degrees. A random marker fill has no period at all and is
+    drawn as a regular grid at the same density, which is a different picture and says so. Every
+    size goes through `_px_of`: QGIS states these in MILLIMETRES by default, and reading one as a
+    pixel turns a 4 mm hatch into a solid block.
   - `vendor/geodeploy/` — the published client, checked in (see below).
+- `scripts/test_real_qgis.py` — **the round trip against a real PyQGIS**, and the only test here
+  that is not stubbed. Every other `scripts/test_*.py` replaces the QGIS classes, and the stubs
+  used to share a base handing each symbol layer a `setWidth`/`width` pair that only
+  `QgsSimpleLineSymbolLayer` has: the plugin called `setWidth` on a FILL, CI went green, and in
+  real QGIS every polygon layer raised `AttributeError` — QGIS drew it in its own default colour,
+  and pushing it back uploaded no styling at all. Shipped, and a user found it. This file audits
+  that every QGIS name the plugin calls exists on that QGIS, then applies and reads back a style
+  per geometry per mode, for feature layers and for the vector-tile renderer. Run it locally with
+  Docker, on both ends of the supported range:
+
+      docker run --rm -v "$PWD/integrations/qgis-plugin":/src -w /src -e QT_QPA_PLATFORM=offscreen qgis/qgis:ltr python3 scripts/test_real_qgis.py
+      # ...and again with qgis/qgis:4.2 for the Qt6 build. CI runs both (job `qgis-real`).
+
+  **When you add a stub method anywhere in `scripts/`, put it on the narrowest class that really
+  has it and add the matching assertion here.** A stub more generous than the API it stands for
+  does not test the code; it tests itself.
+- `scripts/coverage_report.py` — **the symbology coverage matrix, read out of QGIS's own
+  registries** rather than remembered. Joins `symbolLayerRegistry()`, `rendererRegistry()` and the
+  data-defined property definitions against the verdicts declared in the script itself, and **fails
+  when this QGIS offers something the table does not classify** — so a new QGIS version forces a
+  decision instead of quietly widening a gap nobody wrote down. Four verdicts, each a promise about
+  the round trip: `EXACT` (MapLibre draws it natively), `APPROX` (something close, deliberately
+  chosen), `CARRIED` (stored and handed back, never drawn), `TODO` (not carried yet — the note says
+  what it would take). On QGIS 4.2: 30 symbol-layer types, 12 renderers, 74 symbol properties and
+  125 label properties, currently `EXACT: 7  APPROX: 9  CARRIED: 4  TODO: 43`. Runs in CI beside
+  `test_real_qgis.py`.
 - `scripts/vendor.py` — refresh the vendored copy; `--check` in CI.
 
 ## Dependencies / relationships
@@ -213,6 +278,115 @@ Findings in `vendor/` are fixed in `cli/geodeploy` and re-vendored — never edi
 `vendor.py --check` fails.
 
 ## Last updated
+2026-09-04 (`symbology._representative_colour`: **three more symbol layers that MapLibre cannot draw
+now pick a sensible flat colour** instead of falling through to `symbol.color()`. A FILLED LINE is a
+polygon wearing a line's clothes — QGIS buffers the line and fills it, so the colour is on the fill
+sub-symbol and the layer has no stroke colour of its own. A RASTER LINE is stroked with an image, so
+there is no colour to read at all: it is averaged over the image's OPAQUE pixels, because the
+transparent surround these images usually carry would drag every one of them toward nothing. And
+`Lineburst` was already handled by the gradient midpoint but still listed as a TODO. Coverage:
+Lineburst, RasterLine and FilledLine move TODO → APPROX, leaving **9** — from 19 at the start of
+this branch.)
+
+2026-09-04 (`symbology._grouping_note`: **a renderer that GROUPS features now says what the push
+loses.** A cluster, a displacement ring, a merged-feature dissolve and an inverted polygon all draw
+perfectly well through their sub-renderer's symbol — so the push SUCCEEDS and the map quietly stops
+clustering, or draws the inverse of the picture. That is the failure mode worth catching: not an
+error, a silent change. Clustering in particular cannot be turned on by a style push at all, because
+GeoDeploy clusters at TILING time (tippecanoe builds the groups into the archive), so the note says
+to tick "Cluster points" and re-tile. Coverage: four renderers move TODO → CARRIED, leaving 12.)
+
+2026-09-04 (`symbology._gradient_midpoint`: **a gradient fill reads as its MIDDLE, not one end.**
+`symbol.color()` is the ramp's START, so a polygon filled dark-green-to-pale-yellow arrived as pale
+yellow — not obviously a bug, just a map looking nothing like the one in QGIS. MapLibre has no
+gradient of any kind, across a fill or along a line, so a flat colour is the whole of what can be
+drawn and the middle of the ramp is the closest single colour to it. Covers `GradientFill`,
+`Lineburst` and `ShapeburstFill`, and samples a named `colorRamp()` at 0.5 when the layer uses one
+instead of two end colours. Coverage: GradientFill TODO → APPROX, leaving 16.)
+
+2026-09-04 (`qgis25d.py`: **a data-defined 2.5D height now travels.** QGIS's 2.5D dialog accepts an
+EXPRESSION for the height, not only a number, and stores whatever was typed in the project variable
+as a string — so `float()` raised and every data-driven 2.5D layer silently arrived at the DEFAULT
+height. The buildings drew; they were the wrong height, with nothing anywhere saying so. Verified
+against real QGIS: `levels`, `"levels"` and `levels * 3` all store the string unchanged, and
+`Qgs25DRenderer` has no height method at all, so the variable really is the only place to look. A
+bare column, a quoted one, and a column times a constant become GeoDeploy's `field`/`scale`, which
+is the same picture; anything richer falls back to a fixed height and is REPORTED, because a wrong
+height that draws is worse than one that says why it could not. Also: `terrain` joins the raster
+keys, so a DEM used as 3D terrain keeps that through a QGIS round trip.)
+
+2026-09-04 (`arrows.py`: **QGIS's arrow line round-trips.** `QgsArrowSymbolLayer` is not a decorated
+stroke — it is a filled POLYGON, a tapered shaft with a triangular head, which is why it matched
+none of the marker-line classes and arrived as a plain line with its direction gone. The head is
+rebuilt at QGIS's own proportions and repeated with `symbol-placement: line`; the shaft becomes the
+line width and the fill's colour becomes the line colour. Two honest losses, reported rather than
+hidden: QGIS draws one arrow per feature and MapLibre cannot place an icon at a line's end, and the
+shaft does not taper. The parameters ride in `line_marker.arrow` so the trip back rebuilds a real
+arrow layer — the same trick `extrusion.qgis25d` uses. **Trap:** `subSymbol()` hands back a BORROWED
+pointer the layer owns while `setSubSymbol()` takes ownership, so passing the same one back is a
+double free — QGIS segfaults with no traceback, and buffered stdout takes the log with it. Recolour
+in place. Also fixed here: `test_real_qgis.py` never got the `os._exit` teardown fix that
+`notes_for_future.md` claims for both scripts; only `coverage_report.py` had it.)
+
+2026-09-04 (**pattern fills** — see `fills.py`. Hatch, cross and dense brush styles, line and point
+patterns, SVG and raster fills all travel as a tile that repeats cleanly. 217 checks green on QGIS
+3.44 and 4.2; coverage EXACT 27 / APPROX 16 / CARRIED 4 / TODO 21.)
+
+2026-09-03e (**markers along a line.** QGIS's marker line and hashed line repeat a symbol down a
+line; `_line_decoration_symbol` reads it across ALL symbol layers — a decorated line is nearly always
+a plain stroke with the markers stacked on top, and reading only `symbolLayer(0)` is what made a road
+with ticks arrive as a plain road. The repeated symbol ships as a picture and the server draws it at
+`symbol-placement: line`. 202 checks green on QGIS 3.44 and 4.2.)
+
+2026-09-03d (**markers that are pictures, labels, fonts.** A marker symbol GeoDeploy has no words
+for — SVG, raster, font, ellipse, filled, or several layers stacked — is now RENDERED by QGIS and
+shipped as a PNG data URI (`style.marker_image`, `symbology._marker_picture`), instead of arriving
+as a coloured dot. MapLibre does not need to understand an icon, only to have its pixels, so one
+branch covers every marker kind including future ones; the id is content-addressed (FNV-1a, twinned
+in `ui/src/lib/symbology.js`) so two layers with the same icon share one image. Capped at 96 KB,
+since a style rides in every published portal's style.json. Labels and their fonts landed in the
+same round — see `labels.py`. 197 checks green on QGIS 3.44 and 4.2.)
+
+2026-09-03c (**rule-based rendering, 2.5D, and the class cap.** Rules travel as `style.rules` — one
+entry per leaf of the QGIS rule tree, each with its filter translated by the new
+`geodeploy.expressions`, its own symbol and its own zoom range; ELSE becomes NOT(siblings), nesting
+ANDs, and a filter outside the expression subset is DROPPED with a note rather than widened.
+**2.5D** becomes a real `fill-extrusion`, with the angle/wall/shadow carried in `extrusion.qgis25d`
+so the round trip returns 2.5D — note its height and angle are PROJECT variables, not renderer
+properties. **Ramps now interpolate**: they used to snap to one of seven anchor stops, so 8 classes
+gave 7 colours and 12 gave 7 — which is what the old 12-class cap was working around. Classes are
+now 2–100 and categories past twelve get a generated hue wheel instead of a cycled palette. 144
+checks green on 3.44 and 4.2.)
+
+2026-09-03b (**four more reader defects, all found by running `from_qgis` over a REAL 16-layer QGIS 4
+project rather than over memory layers** — the synthetic harness proves the loop closes, not that it
+survives symbology a person authored. (1) `renderer.symbols(None)` raises `TypeError` on QGIS 4, so
+every rule-based layer uploaded nothing at all; `_symbols_of` now tries a real `QgsRenderContext`
+first and walks the rule tree, cloning what it finds. (2) The graduated and categorized branches
+returned the classes and NO shape — the cause of "correct categories but no dashed lines"; both now
+merge the first class symbol's shape, minus its colour. (3) Non-simple symbol layers (SVG, raster,
+font markers; marker lines) returned colour only; size is now read from the SYMBOL, which has it
+whatever sits inside. (4) `QgsRendererRange.symbol()` and `QgsRendererCategory.symbol()` are
+BORROWED from temporaries — holding one past the loop segfaults QGIS with no traceback, and piped
+stdout is lost, so rerun with `python3 -u` when a run dies silently. Result on that project: 16 of 16
+layers carry real symbology, where 9 did before. Also: an upload now LINKS the QGIS layer it came
+from to the new GeoDeploy layer, so Save styling and Restyle work without reopening; a **Refresh**
+button beside Connect; and an expired token is explained rather than shown as HTTP 401.)
+
+2026-09-03 (**the polygon symbology bug, found by a user and confirmed against real QGIS.**
+`QgsSimpleFillSymbolLayer` has `setStrokeWidth`/`strokeWidth`, never `setWidth`/`width` — the plugin
+called the line setter on a fill in BOTH directions, so every polygon layer raised `AttributeError`:
+`apply_to_vector_tiles` swallowed it into "Could not style the vector tiles" and QGIS drew its own
+default colour, and `from_qgis` swallowed it into `{}` so a polygon uploaded unstyled. Fixed via
+`_set_stroke_width` / `_stroke_width_of`, with `setStrokeWidthUnit` added to `_use_points` (a fill's
+outline was otherwise measured in millimetres against a CSS-pixel number). Three fixes came with it:
+the tile branch of `from_qgis` caught only `ImportError`, so anything the tile reader raised escaped
+into `save_style` with no handler; `apply_to_vector_tiles` let one geometry's failure abort the
+whole renderer, which is what left GeoParquet layers with no `geometry_type` completely unstyled;
+and `other_color` was missing from `_STYLE_DEFAULTS`, so a categorized layer opened and pushed
+straight back read as edited. `scripts/test_real_qgis.py` and the CI `qgis-real` matrix are the
+answer to how this survived a green suite — 105 checks, 0 failed on 3.44 and 4.2.)
+
 2026-08-18c (**CORRECTION to the entry below: 3D extrusion does not draw in QGIS AT ALL, not merely
 on tiles.** Tested for real — a 3D portal opened editable, zoomed to, then View ▸ New 3D Map View —
 and the polygons are still FLAT. So the previous entry's implication, that the editable portal mode

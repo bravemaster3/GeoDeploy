@@ -475,7 +475,23 @@
 
   // Generate point-marker icons on demand (also covers the first render gap).
   map.on('styleimagemissing', function (e) {
-    if (!e.id || e.id.indexOf('gd-pt-') !== 0 || map.hasImage(e.id)) return;
+    if (!e.id || map.hasImage(e.id)) return;
+    // A PICTURE the plugin rendered (`gd-img-`) cannot be built from its id — the id is a hash of
+    // the pixels, not a description of them — so it is found in the layer metadata that carries it.
+    // `ensurePointImages` normally registers these up front; this is the late path, for a layer
+    // whose style arrived after load.
+    if (e.id.indexOf('gd-img-') === 0) {
+      var owner = (STYLE.layers || []).find(function (x) {
+        return x.metadata && Array.isArray(x.metadata['geodeploy:markerImages'])
+          && x.metadata['geodeploy:markerImages'].some(function (im) { return im.id === e.id; });
+      });
+      if (owner) {
+        var picture = owner.metadata['geodeploy:markerImages'].find(function (im) { return im.id === e.id; });
+        if (picture && picture.image) setMarkerPicture(e.id, picture.image);
+      }
+      return;
+    }
+    if (e.id.indexOf('gd-pt-') !== 0) return;
     // The id CARRIES its parameters (gd-pt-<shape>-<hex>-<size>), so any missing image can be built
     // from the id alone. It used to be looked up from the layer's metadata, which only worked while
     // a layer had exactly ONE icon — a classified point layer has one per class, and `icon-image`
@@ -584,7 +600,12 @@
    * while looking at their 3D layer is a decision, and this must not overrule it. `pitch == null`
    * means "never pinned", which is the case that needs the help.
    */
-  const has3D = (STYLE.layers || []).some(function (l) { return l && l.type === 'fill-extrusion'; });
+  // …and TERRAIN is the same argument again: a raised relief seen from directly overhead is a flat
+  // picture of a raised relief. It is a ROOT property of the style, not a layer, so it has to be
+  // asked about separately — a check that only looked at `layers` would publish a 3D terrain portal
+  // that opens looking exactly like the 2D one.
+  const has3D = !!STYLE.terrain
+    || (STYLE.layers || []).some(function (l) { return l && l.type === 'fill-extrusion'; });
   const DEFAULT_3D_PITCH = 45;
 
   if (savedView && Array.isArray(savedView.center) && savedView.center.length === 2) {
@@ -721,12 +742,20 @@
         // name (renamed, or a re-prep that dropped it) → no extrusion, rather than a flat mesh.
         const aex = d.extrusion || {};
         const acol = (aex.enabled && aex.field && t.getChild) ? t.getChild(aex.field) : null;
+        // A FIXED height, with no field at all, is the shape QGIS's 2.5D renderer has: every
+        // building the same 10 m. Requiring a column meant that style travelled from QGIS, passed
+        // through the style envelope intact, and then rendered FLAT here — the one transport where
+        // it silently did nothing. `getElevation` is declared `{type: 'accessor'}`, so a constant is
+        // a legal value for it; the scale stays at 1 because the multiplier belongs to the field
+        // (`extrusion_paint` applies it the same way — the height itself is already in metres).
+        const aflat = (aex.enabled && !aex.field) ? (Number(aex.height) || 0) : 0;
+        const arise = acol || (aflat > 0 ? aflat : null);
         return new DK.geo.GeoArrowPolygonLayer({
           id: 'deck_' + d.layer_id, data: t, pickable: true,
-          filled: true, stroked: !acol && !noOutline,   // walls plus an outline is a smudge at any pitch
-          extruded: !!acol,
-          getElevation: acol || undefined,
-          elevationScale: Number(aex.scale) || 1,
+          filled: true, stroked: !arise && !noOutline,  // walls plus an outline is a smudge at any pitch
+          extruded: !!arise,
+          getElevation: arise || undefined,
+          elevationScale: acol ? (Number(aex.scale) || 1) : 1,
           getFillColor: rgb.concat(Math.round(255 * op * (d.fill_opacity != null ? d.fill_opacity : 0.45))),
           getLineColor: outline.concat(Math.round(255 * op)),
           lineWidthUnits: 'pixels',
@@ -768,7 +797,9 @@
     // PostGIS path does in the tile server. Until that is mirrored here, the editor hides 3D for
     // deck-rendered point layers rather than offering something that does nothing.
     const ex = d.extrusion || {};
-    const extruded = isPoly && !!ex.enabled && !!ex.field;
+    // Either a height field or one flat height for everything — see the GeoArrow branch above.
+    const exFlat = (!ex.field && Number(ex.height) > 0) ? Number(ex.height) : 0;
+    const extruded = isPoly && !!ex.enabled && (!!ex.field || exFlat > 0);
     const exScale = Number(ex.scale) || 1;
     return new DK.GeoJsonLayer({
       id: 'deck_' + d.layer_id,
@@ -783,9 +814,8 @@
       extruded: extruded,
       // A feature missing the property, or holding a non-numeric one, becomes 0 rather than NaN —
       // NaN propagates into the mesh and drops the whole layer, not just that feature.
-      getElevation: extruded
-        ? function (f) { const v = Number((f.properties || {})[ex.field]); return (isFinite(v) ? v : 0) * exScale; }
-        : 0,
+      getElevation: !extruded ? 0 : (exFlat > 0 ? exFlat
+        : function (f) { const v = Number((f.properties || {})[ex.field]); return (isFinite(v) ? v : 0) * exScale; }),
       getFillColor: rgb.concat(Math.round(255 * op * (isPoly ? (d.fill_opacity != null ? d.fill_opacity : 0.45) : 1))),
       getLineColor: (isPoly ? outline : rgb).concat(Math.round(255 * op)),
       lineWidthUnits: 'pixels',
@@ -1851,6 +1881,25 @@
       outlineWidth: m[5] === undefined ? undefined : parseFloat(m[5]),
     };
   }
+  // A marker the plugin RENDERED, rather than one drawn from a shape name. A QGIS symbol GeoDeploy
+  // has no words for — an SVG, raster or font marker, a multi-layer symbol — arrives as a PNG data
+  // URI: there is nothing to parameterise, the pixels ARE the marker. Asynchronous, because
+  // decoding an image is. Twin of `loadMarkerPicture` in ui/src/lib/markerImage.js.
+  function setMarkerPicture(imgId, dataUri) {
+    try {
+      var img = new Image();
+      img.onload = function () {
+        try {
+          // pixelRatio 2: the plugin renders at twice the marker's CSS size to stay crisp, the same
+          // trade markerImage() makes with its own canvas.
+          if (map.hasImage(imgId)) map.updateImage(imgId, img);
+          else map.addImage(imgId, img, { pixelRatio: 2 });
+        } catch (e) { /* one marker is not worth the map */ }
+      };
+      img.onerror = function () {};
+      img.src = dataUri;
+    } catch (e) { /* as above */ }
+  }
   function setMarkerImage(imgId, shape, color, size, outline, outlineWidth) {
     // The WHOLE body is guarded, not just the add/update. `markerImage()` builds a canvas — it can
     // fail (no 2D context in a restricted browser, an unknown shape, a zero-sized canvas) and it
@@ -1888,7 +1937,10 @@
       // time that class scrolls into view, which looks like the map is still loading.
       const all = l.metadata['geodeploy:markerImages'];
       if (Array.isArray(all) && all.length) {
-        all.forEach(function (im) { setMarkerImage(im.id, im.shape, im.color, im.size, im.outline, im.outline_width); });
+        all.forEach(function (im) {
+          if (im.image) setMarkerPicture(im.id, im.image);
+          else setMarkerImage(im.id, im.shape, im.color, im.size, im.outline, im.outline_width);
+        });
         return;
       }
       if (l.metadata['geodeploy:marker'] === undefined) return;
@@ -2672,6 +2724,57 @@
     return typeof c === 'string' ? { color: c, width: 1 } : null;
   }
 
+  // ONE ENTRY'S OWN SYMBOL, when it has one. A classified layer varies only by colour, so every
+  // row could share the layer's dash/shape/outline — but a RULE-BASED layer varies by everything at
+  // once, and drawing all its rules with the layer's base symbol reports a dashed rule, a hatched
+  // rule and a star-marker rule as three identical squares. `legend_entries` puts the drawable bits
+  // on each entry for exactly this; anything it did not carry falls back to the layer's.
+  function entrySwatch(entry, geom, color, dash, shape, outline) {
+    const e = entry || {};
+    if (e.heatmap && Array.isArray(e.ramp) && e.ramp.length) return rampSwatch(e.ramp);
+    if (e.marker_image) {
+      return '<img class="legend-swatch-img" src="' + dataUri(e.marker_image) + '" alt="" />';
+    }
+    if (e.fill_pattern) {
+      // The tile itself, tiled — a swatch showing the pattern is worth more than a square of the
+      // colour the pattern replaces.
+      return '<span class="legend-swatch-tile" style="background-image:url(' +
+        dataUri(e.fill_pattern) + ')"></span>';
+    }
+    var ol = outline;
+    if (e.outline_color || e.outline_width != null) {
+      ol = { color: e.outline_color || (outline && outline.color),
+             width: e.outline_width != null ? e.outline_width : (outline && outline.width) };
+    }
+    return legendSwatch(geom, e.color || color || '#999', e.dash || dash, e.shape || shape, ol);
+  }
+
+  // A heatmap has no classes to list — it has a ramp, and density runs 0 to 1 whatever the data
+  // holds. Drawn as the gradient itself over a chequer, because the first stop is transparent and a
+  // bar that merely starts pale misstates where the layer stops drawing.
+  function rampSwatch(ramp) {
+    const stops = ramp.map(function (c, i) {
+      return cssColor(c) + ' ' + Math.round(i / Math.max(1, ramp.length - 1) * 100) + '%';
+    }).join(',');
+    return '<span class="legend-swatch-ramp" style="background-image:linear-gradient(to right,' +
+      stops + ')"></span>';
+  }
+
+  // Only the shape a generated tile actually has. These strings reach an `img src` and a CSS
+  // `url()`, and HTML-escaping is the wrong guard for the second: inside a style attribute the
+  // parser unescapes before CSS ever sees it. Base64 has no quotes or parens, so a value that
+  // contains any is not one of ours and is refused rather than sanitised.
+  function dataUri(value) {
+    const s = String(value || '');
+    return /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(s) ? s : '';
+  }
+
+  // Likewise for a colour dropped into a gradient: a hex, an rgb()/rgba(), or nothing.
+  function cssColor(value) {
+    const s = String(value || '').trim();
+    return /^#[0-9a-f]{3,8}$/i.test(s) || /^rgba?\([\d.,\s%]+\)$/i.test(s) ? s : 'transparent';
+  }
+
   function legendSwatch(geom, color, dash, shape, outline) {
     const c = color || '#3b82f6';
     if (geom === 'line') {
@@ -2744,21 +2847,56 @@
   function effectiveAlgorithm(srcId) {
     const st = rasterState[srcId] || {};
     if (st.algorithm !== undefined) return st.algorithm || '';
-    return parseRasterParams(srcId).algorithm || '';
+    const fromUrl = parseRasterParams(srcId).algorithm;
+    if (fromUrl) return fromUrl;
+    // A CONTOUR LAYER WITH CHOSEN COLOURS CARRIES NO `algorithm=` AT ALL. TiTiler's own algorithm
+    // hard-codes its palette and its black lines, so a layer that asks for anything else is drawn
+    // by GeoDeploy instead — band maths plus an explicit colormap — and `algorithm=contours` is
+    // deliberately absent from the URL, because running both would contour an already-coloured
+    // image.
+    //
+    // Reading the algorithm back out of the URL therefore said "none", with two visible
+    // consequences: the style popover offered "None" for a layer plainly drawing contours, and the
+    // legend fell into the CLASSIFIED-raster branch and rendered the interval colormap as a class
+    // list — sixty-odd black swatches labelled 0, 1, 2, 3… which are the array's own indices.
+    //
+    // `geodeploy:contour` is baked at publish for exactly this kind of question: what the layer IS,
+    // rather than what its URL happens to spell.
+    return contourMeta(srcId) ? 'contours' : '';
   }
   function effectiveHillshade(srcId) {
     return effectiveAlgorithm(srcId) === 'hillshade';
   }
-  /** {increment, thickness} for contours — the viewer's, else what the author baked in. */
+  /** {increment, thickness} for contours — the viewer's, else what the author baked in.
+   *
+   * THE INTERVAL COMES FROM `geodeploy:contour`, NOT FROM THE URL. The URL's `algorithm_params`
+   * holds the SCALED interval: the data is multiplied so TiTiler's integer-only `increment` can
+   * express a fractional one, so an interval of 0.1 appears there as 10 — and the legend said
+   * "every 10" about lines drawn every 0.1. `thickness` is a width in pixels and is never scaled,
+   * so it can still be read from either.
+   */
   function effectiveContours(srcId) {
     const st = rasterState[srcId] || {};
     let baked = {};
     try { baked = JSON.parse(parseRasterParams(srcId).algorithm_params || '{}') || {}; } catch (e) { baked = {}; }
+    const authored = contourMeta(srcId);
     const pick = (key, fallback) => {
       if (st[key] !== undefined && st[key] !== '') return Number(st[key]);
       return baked[key] != null ? Number(baked[key]) : fallback;
     };
-    return { increment: pick('increment', 35), thickness: pick('thickness', 1) };
+    const increment = (st.increment !== undefined && st.increment !== '')
+      ? Number(st.increment)
+      : (authored && authored.increment != null ? Number(authored.increment)
+        : pick('increment', 35));
+    return { increment: increment, thickness: pick('thickness', 1) };
+  }
+
+  /** `geodeploy:contour` — the interval and range as the AUTHOR typed them, baked at publish. */
+  function contourMeta(srcId) {
+    const layer = (STYLE.layers || []).find(function (l) {
+      return l && l.source === srcId && l.metadata && l.metadata['geodeploy:type'] === 'raster';
+    });
+    return (layer && layer.metadata && layer.metadata['geodeploy:contour']) || null;
   }
   function effectiveZfactor(srcId) {
     const st = rasterState[srcId] || {};
@@ -2831,7 +2969,7 @@
     // swatch button uses; it was simply never reached from here.
     const rows = entries.map(function (e) {
       return '<div class="legend-class">' +
-        legendSwatch(geom, e.color || '#999', dash, shape, outline) +
+        entrySwatch(e, geom, e.color || '#999', dash, shape, outline) +
         '<span class="legend-label">' + escHtml(e.label == null ? '' : String(e.label)) + '</span>' +
         '</div>';
     }).join('');
@@ -2845,9 +2983,17 @@
     const head = '<button type="button" class="legend-toggle" aria-expanded="true" ' +
       'title="Hide these classes">' +
       '<span class="legend-caret" aria-hidden="true">▾</span>' +
-      '<span class="legend-count">' + entries.length + ' classes</span></button>';
+      '<span class="legend-count">' + legendCount(entries) + '</span></button>';
     return '<div class="layer-legend legend-classes">' + head +
       '<div class="legend-body">' + by + rows + sizeHtml + '</div></div>';
+  }
+
+  // What the rows ARE. "1 classes" was both wrong and ungrammatical for a heatmap, and a
+  // rule-based layer has rules rather than classes — the word is part of what the legend says.
+  function legendCount(entries) {
+    if (entries.length === 1 && entries[0] && entries[0].heatmap) return 'Density';
+    const noun = (entries[0] && entries[0].rule) ? 'rule' : 'class';
+    return entries.length + ' ' + noun + (entries.length === 1 ? '' : noun === 'rule' ? 's' : 'es');
   }
 
   function rasterLegendHtml(layer) {
@@ -2881,7 +3027,14 @@
       }
       let mapping = null;
       try { mapping = JSON.parse(parseRasterParams(srcId).colormap || 'null'); } catch (e) { mapping = null; }
-      if (mapping && typeof mapping === 'object' && Object.keys(mapping).length) {
+      // NOT AN ARRAY. TiTiler takes two colormap shapes: `{value: colour}`, which is a classified
+      // raster and is what this branch draws, and `[[[lo, hi], colour], …]`, which is a continuous
+      // one cut into intervals. An array passes `typeof === 'object'`, and `Object.keys` on it
+      // hands back "0", "1", "2"… — so the second shape rendered as a class list labelled by its
+      // own indices. Belt and braces beside the `effectiveAlgorithm` fix above: any future caller
+      // sending intervals gets no legend rather than a nonsense one.
+      if (mapping && typeof mapping === 'object' && !Array.isArray(mapping)
+          && Object.keys(mapping).length) {
         // `legend-class` / `legend-label` are the classes the VECTOR legend already uses and
         // portal.css already styles — a classified raster's legend is the same list, so it should
         // look like one rather than inventing a second set of names with no CSS behind them.
@@ -2902,8 +3055,18 @@
       : algorithm === 'contours' ? 'terrain'
       : effectiveColormap(srcId);
     const p = effectiveRescale(srcId).split(',');
-    const mn = (p[0] !== undefined && p[0] !== '') ? p[0] : 'min';
-    const mx = (p[1] !== undefined && p[1] !== '') ? p[1] : 'max';
+    let mn = (p[0] !== undefined && p[0] !== '') ? p[0] : 'min';
+    let mx = (p[1] !== undefined && p[1] !== '') ? p[1] : 'max';
+    // CONTOURS NEVER SEND `&rescale=`: they consume the stretch as `minz`/`maxz` instead, so the
+    // ends of this bar fell through to the literal words "min" and "max" — a legend for a coloured
+    // relief that declines to say what it is coloured over. The real numbers are baked.
+    if (algorithm === 'contours') {
+      const authored = contourMeta(srcId);
+      if (authored && authored.minz != null) {
+        mn = authored.minz;
+        mx = authored.maxz;
+      }
+    }
     const grad = LEGEND_GRADIENTS[cmap] || LEGEND_GRADIENTS.gray;
     let html = '<div class="legend-bar" style="background:' + grad + '"></div>' +
       '<div class="legend-range"><span>' + escHtml(String(mn)) + '</span><span>' + escHtml(String(mx)) + '</span></div>';
@@ -2912,9 +3075,16 @@
       // gradient above says what the colours mean, and this says what the lines mean.
       const c = effectiveContours(srcId);
       html += '<div class="legend-range"><span>contour lines</span><span>every ' +
-        escHtml(String(c.increment)) + '</span></div>';
+        escHtml(String(c.increment)) + ' ' + escHtml(contourUnits(srcId)) + '</span></div>';
     }
     return html;
+  }
+
+  /** What a contour interval is measured IN. The raster's own values have no stated unit — a DEM
+   *  is metres, a vegetation index is nothing at all — so this says "units" rather than inventing
+   *  one, which is what turns a bare "every 10" into a sentence. */
+  function contourUnits(srcId) {
+    return 'units';
   }
 
   function updateRasterLegend(srcId) {

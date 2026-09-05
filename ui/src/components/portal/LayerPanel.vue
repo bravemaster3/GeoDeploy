@@ -80,7 +80,7 @@
                 <div v-if="colorMode === 'graduated' && config.style?.color_field" class="flex gap-1.5">
                   <label class="flex-1">
                     <span class="text-[11px] text-muted-foreground">Classes</span>
-                    <input type="number" min="2" max="12" :value="classCount" @change="setClassCount($event.target.value)"
+                    <input type="number" min="2" max="100" :value="classCount" @change="setClassCount($event.target.value)"
                       class="w-full text-xs border border-border rounded px-1.5 py-1 mt-0.5" />
                   </label>
                   <label class="flex-[1.4]">
@@ -135,9 +135,22 @@
                 </p>
                 <div v-if="legend.length" class="space-y-0.5 max-h-40 overflow-y-auto pr-1">
                   <div v-for="(e, i) in legend" :key="i" class="flex items-center gap-1.5">
-                    <input type="color" :value="e.color" @input="setEntryColor(i, $event.target.value)"
-                      :disabled="e.isOther"
-                      class="w-5 h-5 rounded border border-border/50 cursor-pointer p-0 flex-shrink-0 disabled:opacity-60" />
+                    <!-- A RULE or a HEATMAP entry has no colour this panel can set: a rule's colour
+                         lives in the rule, and a heatmap's is a ramp. Both are read-only here (the
+                         "Styled in QGIS" block and the ramp control own them), so they show the
+                         symbol rather than a picker that would write nowhere. -->
+                    <LegendSwatch v-if="e.rule || e.heatmap" :geom="geomType" :color="e.color"
+                      :marker="e.shape" :dash="e.dash" :size="18"
+                      :image="e.marker_image" :pattern="e.fill_pattern" :ramp="e.ramp" />
+                    <!-- "Other" IS EDITABLE. It was disabled — while the hint below it said the
+                         remaining values draw in the Other colour, which left no way to choose
+                         that colour. It has no `value` to edit, but it does have a colour: it is
+                         the `match` fallback, `style.other_color`, which both renderers and the
+                         QGIS plugin have always read. -->
+                    <input v-else type="color" :value="e.color"
+                      @input="setEntryColor(i, $event.target.value)"
+                      :title="e.isOther ? 'Everything not listed above' : e.label"
+                      class="w-5 h-5 rounded border border-border/50 cursor-pointer p-0 flex-shrink-0" />
                     <span class="text-[11px] text-muted-foreground truncate">{{ e.label }}</span>
                   </div>
                 </div>
@@ -162,7 +175,17 @@
                   <span class="text-xs text-muted-foreground/70">{{ Math.round((config.style?.fill_opacity ?? 0.45) * 100) }}%</span>
                 </div>
                 <input type="range" min="0" max="1" step="0.05" :value="config.style?.fill_opacity ?? 0.45"
-                  @input="emitStyle({ fill_opacity: parseFloat($event.target.value) })" class="w-full h-1 accent-primary" />
+                  @input="emitStyle({ fill_opacity: parseFloat($event.target.value) })"
+                  :disabled="!!config.style?.extrusion?.enabled"
+                  class="w-full h-1 accent-primary disabled:opacity-40" />
+                <!-- A 3D polygon draws a `fill-extrusion` layer INSTEAD of a `fill` one, so this
+                     slider moves nothing while 3D is on. Saying so beats leaving it live and inert,
+                     which is how somebody spends a minute wondering why nothing changes. -->
+                <p v-if="config.style?.extrusion?.enabled"
+                   class="text-[11px] text-muted-foreground/70 leading-snug mt-0.5">
+                  Not used while 3D is on — the raised volume has its own opacity, under
+                  <em>More 3D options</em>.
+                </p>
               </div>
               <div>
                 <label class="text-xs text-muted-foreground">Outline color</label>
@@ -205,12 +228,30 @@
               </div>
               <div>
                 <label class="text-xs text-muted-foreground">Line style</label>
-                <select :value="config.style?.lineType || 'solid'" @change="emitStyle({ lineType: $event.target.value })"
+                <select :value="lineTypeShown" @change="setLineType($event.target.value)"
                   class="mt-0.5 w-full text-xs border border-border rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary/60">
                   <option value="solid">Solid</option>
                   <option value="dashed">Dashed</option>
                   <option value="dotted">Dotted</option>
+                  <!-- Only selectable by HAVING one: a custom pattern comes from QGIS or from the
+                       box below, and offering "Custom" as a choice would leave nothing to choose. -->
+                  <option value="custom" :disabled="!dashPattern">Custom pattern</option>
                 </select>
+              </div>
+              <!-- THE PATTERN ITSELF. QGIS lets an author draw any dash pattern and one arrives as
+                   `dash_pattern`, which OUTRANKS `lineType` — so such a line used to show "Solid"
+                   here while drawing dashes, with no way to see or clear the real pattern. -->
+              <div>
+                <label class="text-xs text-muted-foreground">Custom dash pattern</label>
+                <input type="text" :value="dashText" @change="setDashPattern($event.target.value)"
+                  placeholder="e.g. 4, 2, 1, 2 — leave empty for none"
+                  class="mt-0.5 w-full text-xs border border-border rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+                <p class="text-[11px] text-muted-foreground/70 mt-0.5 leading-snug">
+                  Dash and gap lengths, in multiples of the line width — so the pattern keeps its
+                  shape when the width changes.
+                  <span v-if="dashPreview">At {{ config.style?.line_width ?? 2 }}px that is
+                    {{ dashPreview }}.</span>
+                </p>
               </div>
             </div>
 
@@ -323,33 +364,58 @@
               </div>
             </div>
 
-            <!-- 3D. Polygons extrude directly (MapLibre raises a fill); POINTS become pillars —
-                 a column standing at each location, served as a buffered polygon by the shared
-                 Martin function (services/pillars), so the layer keeps the renderer it already had.
-                 Lines are excluded: there is no sensible column for a line, and QGIS/GeoLibre do not
-                 offer one either. Hidden without a numeric field — an enabled switch that cannot do
-                 anything is worse than an absent one. -->
+            <!-- 3D / 2.5D. Polygons rise directly (MapLibre raises a fill, deck extrudes the mesh);
+                 POINTS become bars — a column standing at each location, served as a buffered
+                 polygon by the shared Martin function (services/pillars), so the layer keeps the
+                 renderer it already had. Lines are excluded: there is no sensible column for a line,
+                 and QGIS/GeoLibre do not offer one either.
+
+                 TWO height sources, because QGIS has two renderers here and they are not variations
+                 of one control: a 2.5D renderer gives every feature the SAME height (its height is a
+                 project variable, not a field), while attribute-driven 3D reads a column. Offering
+                 only the second is what made a 2.5D style from QGIS uneditable — and hid this whole
+                 section for any layer with no numeric column, which is most building footprints. -->
             <div v-if="canExtrude" class="pt-1 border-t border-border/50">
               <label class="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" :checked="!!config.style?.extrusion?.enabled"
-                  @change="setExtrusion({ enabled: $event.target.checked })" class="accent-primary" />
+                  @change="setExtrusionOn($event.target.checked)" class="accent-primary" />
                 <span class="text-xs text-foreground">
-                  {{ geomType === 'point' ? '3D — bars by a field' : '3D — extrude by a field' }}
+                  {{ geomType === 'point' ? '3D — bars at each point' : '3D — raise these polygons' }}
                 </span>
               </label>
               <div v-if="config.style?.extrusion?.enabled" class="mt-1.5 space-y-1.5 pl-5">
-                <select :value="config.style?.extrusion?.field || ''"
-                  @change="setExtrusion({ field: $event.target.value })"
-                  class="w-full text-xs border border-border rounded px-1.5 py-1">
-                  <option value="">Choose a height field…</option>
-                  <option v-for="f in numericFields" :key="f.name" :value="f.name">{{ f.name }}</option>
-                </select>
-                <label class="flex items-center gap-2">
-                  <span class="text-[11px] text-muted-foreground flex-shrink-0">Height ×</span>
-                  <input type="number" min="0.01" step="0.5" :value="config.style?.extrusion?.scale ?? 1"
-                    @change="setExtrusion({ scale: parseFloat($event.target.value) || 1 })"
+                <div class="flex items-center gap-2">
+                  <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Height</span>
+                  <select :value="extrusionMode" @change="setExtrusionMode($event.target.value)"
+                    class="flex-1 text-xs border border-border rounded px-1.5 py-1">
+                    <option value="fixed">The same for all</option>
+                    <option value="field" :disabled="!numericFields.length">From a field</option>
+                  </select>
+                </div>
+                <!-- One flat height: the 2.5D case. In metres, like every other height here, so a
+                     number that came from QGIS's map units may need adjusting once. -->
+                <label v-if="extrusionMode === 'fixed'" class="flex items-center gap-2">
+                  <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12"></span>
+                  <input type="number" min="0" step="1"
+                    :value="config.style?.extrusion?.height ?? FLAT_HEIGHT_M"
+                    @change="setExtrusion({ height: Math.max(0, parseFloat($event.target.value) || 0) })"
                     class="w-20 text-xs border border-border rounded px-1.5 py-0.5" />
+                  <span class="text-[11px] text-muted-foreground/70">m tall</span>
                 </label>
+                <template v-else>
+                  <select :value="config.style?.extrusion?.field || ''"
+                    @change="setExtrusion({ field: $event.target.value })"
+                    class="w-full text-xs border border-border rounded px-1.5 py-1">
+                    <option value="">Choose a height field…</option>
+                    <option v-for="f in numericFields" :key="f.name" :value="f.name">{{ f.name }}</option>
+                  </select>
+                  <label class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0">Height ×</span>
+                    <input type="number" min="0.01" step="0.5" :value="config.style?.extrusion?.scale ?? 1"
+                      @change="setExtrusion({ scale: parseFloat($event.target.value) || 1 })"
+                      class="w-20 text-xs border border-border rounded px-1.5 py-0.5" />
+                  </label>
+                </template>
                 <!-- Points only: a polygon already has a footprint, a point has none — so the bar
                      needs a width before it can be drawn at all. (The code calls these "pillars"
                      — services/pillars.py, and the tile function name is baked into published
@@ -361,11 +427,492 @@
                     class="w-20 text-xs border border-border rounded px-1.5 py-0.5" />
                   <span class="text-[11px] text-muted-foreground/70">m</span>
                 </label>
+                <button type="button" @click="toggle('more3d')"
+                  class="text-[11px] text-primary hover:text-primary/80">
+                  {{ open.more3d ? '−' : '+' }} More 3D options
+                </button>
+                <div v-if="open.more3d" class="space-y-1.5">
+                  <!-- The ROOF colour in QGIS's vocabulary: MapLibre paints the whole volume one
+                       colour with a vertical gradient down the walls, so this is the only colour a
+                       3D layer has. Blank means "whatever the flat symbology uses", which keeps a
+                       layer's 2D and 3D forms in agreement unless somebody asks otherwise. -->
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Colour</span>
+                    <input type="color" :value="config.style?.extrusion?.color || config.style?.color || '#3b82f6'"
+                      @input="setExtrusion({ color: $event.target.value })"
+                      class="h-6 w-10 border border-border rounded cursor-pointer bg-transparent" />
+                    <button v-if="config.style?.extrusion?.color" type="button"
+                      @click="setExtrusion({ color: undefined })"
+                      class="text-[11px] text-primary hover:text-primary/80">match the fill</button>
+                  </div>
+                  <!-- Where the volume STARTS. A floor number times the multiplier gives a storey
+                       that floats above the ground; a plain number lifts everything equally. -->
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Base</span>
+                    <select :value="baseMode" @change="setBaseMode($event.target.value)"
+                      class="flex-1 text-xs border border-border rounded px-1.5 py-1">
+                      <option value="ground">On the ground</option>
+                      <option value="fixed">A fixed height up</option>
+                      <option value="field" :disabled="!numericFields.length">From a field</option>
+                    </select>
+                  </div>
+                  <label v-if="baseMode === 'fixed'" class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12"></span>
+                    <input type="number" min="0" step="1" :value="config.style?.extrusion?.base || 0"
+                      @change="setExtrusion({ base: Math.max(0, parseFloat($event.target.value) || 0) })"
+                      class="w-20 text-xs border border-border rounded px-1.5 py-0.5" />
+                    <span class="text-[11px] text-muted-foreground/70">m up</span>
+                  </label>
+                  <select v-if="baseMode === 'field'" :value="config.style?.extrusion?.base || ''"
+                    @change="setExtrusion({ base: $event.target.value })"
+                    class="w-full text-xs border border-border rounded px-1.5 py-1">
+                    <option value="">Choose a base field…</option>
+                    <option v-for="f in numericFields" :key="f.name" :value="f.name">{{ f.name }}</option>
+                  </select>
+                  <!-- NOT the same slider as "Fill opacity" above, and the old label ("Solid")
+                       did nothing to say so. A polygon with 3D on emits a `fill-extrusion` layer
+                       INSTEAD of a `fill` one — `portal_generator._vector_layer` returns early —
+                       so the flat fill's opacity is inert here and this is the one that applies. -->
+                  <label class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-16">Opacity</span>
+                    <input type="range" min="0.1" max="1" step="0.05"
+                      :value="config.style?.extrusion?.opacity ?? 1"
+                      @input="setExtrusion({ opacity: parseFloat($event.target.value) })"
+                      class="flex-1 accent-primary" />
+                    <span class="text-[11px] text-muted-foreground/70 w-8 text-right tabular-nums">
+                      {{ Math.round((config.style?.extrusion?.opacity ?? 1) * 100) }}%
+                    </span>
+                  </label>
+                  <p class="text-[11px] text-muted-foreground/70 leading-snug">
+                    This is the opacity of the raised volume. While 3D is on it replaces
+                    <em>Fill opacity</em> above, which belongs to the flat shape and is not drawn.
+                  </p>
+                </div>
                 <p class="text-[11px] text-muted-foreground/70 leading-snug">
-                  The field is in metres. Use the multiplier when it is not — floors × 3, say.
+                  Heights are in metres. Use the multiplier when the field is not — floors × 3, say.
                   The map tilts so you can see it.
                 </p>
+                <!-- What a 2.5D style loses on the way here, said once, where the height is. QGIS
+                     rakes its walls off at an angle and drops a shadow; MapLibre raises a true
+                     volume and has neither. The angle and shadow are still CARRIED (in
+                     `extrusion.qgis25d`) so they survive the trip back — this says so rather than
+                     leaving the difference to be discovered on screen. -->
+                <p v-if="from25D" class="text-[11px] text-muted-foreground/70 leading-snug">
+                  From a QGIS 2.5D layer. Its viewing angle and shadow are kept for the trip back to
+                  QGIS, but the web map raises a real volume and draws neither.
+                </p>
               </div>
+            </div>
+
+            <!-- HEATMAP. A renderer, not a paint option: it REPLACES the points with a density
+                 surface, so it sits with the other "what is this layer" choices rather than among
+                 the colours it makes irrelevant. Points only — a density map of polygons is not a
+                 thing QGIS offers either. -->
+            <div v-if="geomType === 'point' && config.layer_type === 'vector'"
+                 class="pt-1 border-t border-border/50">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" :checked="heatmapOn"
+                  @change="setHeatmapOn($event.target.checked)" class="accent-primary" />
+                <span class="text-xs text-foreground">Draw as a heatmap</span>
+              </label>
+              <div v-if="heatmapOn" class="mt-1.5 space-y-1.5 pl-5">
+                <div class="flex items-center gap-2">
+                  <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Radius</span>
+                  <input type="range" min="4" max="80" step="1"
+                    :value="config.style?.heatmap?.radius ?? 20"
+                    @input="setHeatmap({ radius: parseFloat($event.target.value) })"
+                    class="flex-1 h-1 accent-primary" />
+                  <span class="text-[11px] text-muted-foreground/70 w-8 text-right">
+                    {{ config.style?.heatmap?.radius ?? 20 }}px
+                  </span>
+                </div>
+                <!-- THE SAME CONTROL AS THE GRADUATED RAMP ABOVE: a name, and one flat bar under
+                     it. A previous attempt drew each ramp as its own CSS gradient over a
+                     chequerboard and the `background-size` list applied to the gradient layer as
+                     well, repeating it every 8px — four boxes of vertical stripes. Spans with a
+                     flat `backgroundColor`, exactly as `rampPreview` does it, have no such trap.
+                     The first stop is transparent, which is what stops the whole viewport being
+                     painted at density zero; it gets a chequer so it reads as a fade to nothing
+                     rather than as a ramp that just starts pale. -->
+                <div class="block">
+                  <span class="text-[11px] text-muted-foreground">Colour ramp</span>
+                  <select :value="heatmapRampName" @change="setHeatmapRamp($event.target.value)"
+                    class="mt-0.5 w-full text-xs border border-border rounded px-1.5 py-1">
+                    <option v-for="r in heatmapRamps" :key="r.name" :value="r.name">{{ r.label }}</option>
+                  </select>
+                  <div class="flex items-center justify-between gap-2 mt-1">
+                    <div class="flex h-2 flex-1 rounded overflow-hidden" aria-hidden="true"
+                         :style="CHECKER">
+                      <span v-for="(c, i) in heatmapPreview" :key="i" class="flex-1"
+                        :style="{ backgroundColor: c }"></span>
+                    </div>
+                    <!-- Reversing flips the COLOURS and rebuilds the transparent stop at whichever
+                         is now lowest — see `heatmapColors`. Density always fades out at the bottom
+                         end; what changes is which hue it fades from. -->
+                    <label class="flex items-center gap-1 text-[11px] text-muted-foreground
+                                  cursor-pointer shrink-0">
+                      <input type="checkbox" :checked="heatmapReverse"
+                        @change="toggleHeatmapReverse" class="cursor-pointer" />
+                      Reverse
+                    </label>
+                  </div>
+                </div>
+                <select :value="config.style?.heatmap?.weight_field || ''"
+                  @change="setHeatmapWeight($event.target.value)"
+                  class="w-full text-xs border border-border rounded px-1.5 py-1">
+                  <option value="">Every point counts the same</option>
+                  <option v-for="f in numericFields" :key="f.name" :value="f.name">
+                    Weight by {{ f.name }}
+                  </option>
+                </select>
+                <p class="text-[11px] text-muted-foreground/70 leading-snug">
+                  The points themselves stop drawing — a heatmap answers "where are these
+                  concentrated", not "where is each one".
+                </p>
+              </div>
+            </div>
+
+            <!-- HATCHES. The tile is generated here, in the browser, exactly as the QGIS plugin
+                 generates one from a QGIS symbol — same `fill_pattern` key, same data URI, so a
+                 hatch made here and one pushed from QGIS are the same thing to every renderer.
+                 Presets rather than angle-and-spacing boxes: those are what people pick, and the
+                 four offered are the four angles at which a square tile actually closes. -->
+            <div v-if="geomType === 'polygon' && config.layer_type === 'vector'"
+                 class="pt-1 border-t border-border/50">
+              <label class="text-xs text-muted-foreground">Fill pattern</label>
+              <div class="flex flex-wrap items-center gap-1 mt-1">
+                <button v-for="h in hatchPresets" :key="h.name" type="button" :title="h.title"
+                  @click="setHatch(h.name)"
+                  class="w-7 h-7 rounded border overflow-hidden flex items-center justify-center"
+                  :class="activeHatch === h.name
+                    ? 'border-primary ring-1 ring-primary/40' : 'border-border hover:border-primary/50'">
+                  <span v-if="h.name === 'none'" class="text-[9px] text-muted-foreground">none</span>
+                  <img v-else :src="hatchPreview(h.name)" alt="" class="w-full h-full" />
+                </button>
+              </div>
+              <p v-if="activeHatch !== 'none'" class="text-[11px] text-muted-foreground/70 mt-1">
+                The pattern replaces the fill colour; opacity still applies.
+              </p>
+            </div>
+
+            <!-- DIRECTION ARROWS. The same trick as the hatches above, for lines: the head is drawn
+                 here, in the browser, into the same `line_marker` key and the same PNG data URI the
+                 QGIS plugin's `arrows.py` produces — so an arrow drawn here and a QGIS arrow line
+                 are the same thing to every renderer. Direction is the whole point of a flow, a
+                 one-way street or a river, and there was no way to show it without QGIS. -->
+            <div v-if="geomType === 'line' && config.layer_type === 'vector'"
+                 class="pt-1 border-t border-border/50">
+              <label class="text-xs text-muted-foreground">Direction arrows</label>
+              <div class="flex flex-wrap items-center gap-1 mt-1">
+                <button v-for="a in arrowPresets" :key="a.name" type="button" :title="a.title"
+                  @click="setArrow(a.name)"
+                  class="h-7 min-w-[28px] px-1 rounded border overflow-hidden flex items-center justify-center"
+                  :class="activeArrow === a.name
+                    ? 'border-primary ring-1 ring-primary/40' : 'border-border hover:border-primary/50'">
+                  <span v-if="a.name === 'none'" class="text-[9px] text-muted-foreground">none</span>
+                  <img v-else :src="arrowPreview(a.name)" alt="" class="h-2.5" />
+                </button>
+              </div>
+              <label v-if="activeArrow !== 'none'" class="flex items-center gap-2 mt-1.5">
+                <span class="text-[11px] text-muted-foreground flex-shrink-0 w-10">Size</span>
+                <input type="range" min="4" max="48" step="1" :value="arrowSize"
+                  @change="setArrowSize($event.target.value)" class="flex-1 h-1 accent-primary" />
+                <span class="text-[11px] text-muted-foreground/70 w-8 text-right tabular-nums">
+                  {{ arrowSize }}px
+                </span>
+              </label>
+              <label v-if="activeArrow !== 'none'" class="flex items-center gap-2 mt-1.5">
+                <span class="text-[11px] text-muted-foreground flex-shrink-0 w-10">Every</span>
+                <input type="number" min="10" step="10"
+                  :value="config.style?.line_marker?.spacing ?? 90"
+                  @change="setArrowSpacing($event.target.value)"
+                  class="w-20 text-xs border border-border rounded px-1.5 py-0.5" />
+                <span class="text-[11px] text-muted-foreground/70">px</span>
+              </label>
+            </div>
+
+              <!-- A MARKER AT EACH POLYGON'S CENTRE — QGIS's centroid fill. It arrived from the
+                   plugin and drew correctly, but there was no way to ADD one here, so centre dots
+                   meant a trip through QGIS. Drawn in the browser into the same `centroid_marker`
+                   key and the same PNG data URI the plugin produces. -->
+              <div v-if="geomType === 'polygon' && config.layer_type === 'vector'"
+                   class="pt-1 border-t border-border/50">
+                <label class="text-xs text-muted-foreground">Marker at the centre</label>
+                <div class="flex flex-wrap items-center gap-1 mt-1">
+                  <button v-for="m in centroidShapes" :key="m.name" type="button" :title="m.title"
+                    @click="setCentroid(m.name)"
+                    class="w-7 h-7 rounded border overflow-hidden flex items-center justify-center"
+                    :class="activeCentroid === m.name
+                      ? 'border-primary ring-1 ring-primary/40' : 'border-border hover:border-primary/50'">
+                    <span v-if="m.name === 'none'" class="text-[9px] text-muted-foreground">none</span>
+                    <img v-else :src="centroidPreview(m.name)" alt="" class="w-5 h-5" />
+                  </button>
+                </div>
+                <label v-if="activeCentroid !== 'none'" class="flex items-center gap-2 mt-1.5">
+                  <span class="text-[11px] text-muted-foreground flex-shrink-0 w-10">Size</span>
+                  <input type="range" min="4" max="40" step="1" :value="centroidSize"
+                    @change="setCentroidSize($event.target.value)" class="flex-1 h-1 accent-primary" />
+                  <span class="text-[11px] text-muted-foreground/70 w-8 text-right tabular-nums">
+                    {{ centroidSize }}px
+                  </span>
+                </label>
+              </div>
+
+            <!-- LABELS. New to the platform in 2026-09; there was no way to label a layer at all
+                 before, here or anywhere. Collapsed behind its own switch, following the 3D block
+                 above: an off switch and one line of text is the whole cost when you do not want
+                 labels, and QGIS's own labelling tab is a panel you open rather than a wall you
+                 scroll past. -->
+            <div v-if="canLabel" class="pt-1 border-t border-border/50">
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" :checked="labelsOn"
+                  @change="setLabelsOn($event.target.checked)" class="accent-primary" />
+                <span class="text-xs text-foreground">Label features</span>
+              </label>
+              <div v-if="labelsOn" class="mt-1.5 space-y-1.5 pl-5">
+                <select :value="config.style?.labels?.field || ''"
+                  @change="setLabels({ field: $event.target.value })"
+                  class="w-full text-xs border border-border rounded px-1.5 py-1">
+                  <option value="">Choose a field…</option>
+                  <option v-for="f in styleFields" :key="f.name" :value="f.name">{{ f.name }}</option>
+                </select>
+                <div class="flex items-center gap-2">
+                  <input type="color" :value="config.style?.labels?.color || '#333333'"
+                    @input="setLabels({ color: $event.target.value })"
+                    class="w-6 h-6 rounded border border-border cursor-pointer p-0" />
+                  <span class="text-[11px] text-muted-foreground">Size</span>
+                  <input type="number" min="6" max="48" step="1" :value="config.style?.labels?.size ?? 12"
+                    @change="setLabels({ size: parseFloat($event.target.value) || 12 })"
+                    class="w-14 text-xs border border-border rounded px-1.5 py-0.5" />
+                  <span class="text-[11px] text-muted-foreground/70">px</span>
+                </div>
+                <!-- The halo is what makes a label readable over a busy basemap, so it is on by
+                     default and offered here rather than hidden deeper. QGIS calls it a buffer. -->
+                <div class="flex items-center gap-2">
+                  <input type="color" :value="config.style?.labels?.halo_color || '#ffffff'"
+                    @input="setLabels({ halo_color: $event.target.value })"
+                    class="w-6 h-6 rounded border border-border cursor-pointer p-0" />
+                  <span class="text-[11px] text-muted-foreground">Halo</span>
+                  <input type="number" min="0" max="6" step="0.5" :value="config.style?.labels?.halo_width ?? 1"
+                    @change="setLabels({ halo_width: parseFloat($event.target.value) || 0 })"
+                    class="w-14 text-xs border border-border rounded px-1.5 py-0.5" />
+                  <span class="text-[11px] text-muted-foreground/70">px</span>
+                </div>
+                <label v-if="geomType === 'line'" class="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" :checked="config.style?.labels?.placement === 'line'"
+                    @change="setLabels({ placement: $event.target.checked ? 'line' : 'point' })"
+                    class="accent-primary" />
+                  <span class="text-[11px] text-muted-foreground">Bend the text along the line</span>
+                </label>
+
+                <!-- WHERE THE TEXT SITS. A nine-way anchor rather than two number boxes, because
+                     "above the point" is what somebody means and "y offset -12" is how a renderer
+                     spells it. The offset boxes are still there underneath for the cases the grid
+                     cannot say. QGIS gives the same choice the same way. -->
+                <div v-if="config.style?.labels?.placement !== 'line'">
+                  <label class="text-[11px] text-muted-foreground">Position</label>
+                  <div class="grid grid-cols-3 gap-0.5 mt-0.5 w-[4.5rem]">
+                    <button v-for="a in labelAnchors" :key="a.value" type="button"
+                      :title="a.title" @click="setLabels({ anchor: a.value })"
+                      class="h-5 rounded border text-[9px] leading-none"
+                      :class="(config.style?.labels?.anchor || 'center') === a.value
+                        ? 'border-primary bg-primary/20 text-foreground'
+                        : 'border-border text-muted-foreground/60 hover:border-primary/50'">
+                      {{ a.mark }}
+                    </button>
+                  </div>
+                </div>
+
+                <button type="button" @click="toggle('labelMore')"
+                  class="text-[11px] text-primary hover:text-primary/80">
+                  {{ open.labelMore ? '− Fewer' : '+ More' }} label options
+                </button>
+                <div v-if="open.labelMore" class="space-y-1.5 pt-0.5">
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-14">Nudge</span>
+                    <input type="number" step="1" :value="labelOffset[0]" title="Left / right, px"
+                      @change="setLabelOffset(0, $event.target.value)"
+                      class="w-14 text-xs border border-border rounded px-1.5 py-0.5" />
+                    <input type="number" step="1" :value="labelOffset[1]" title="Up / down, px"
+                      @change="setLabelOffset(1, $event.target.value)"
+                      class="w-14 text-xs border border-border rounded px-1.5 py-0.5" />
+                    <span class="text-[11px] text-muted-foreground/70">px</span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-14">Rotate</span>
+                    <input type="number" step="5" min="0" max="359"
+                      :value="config.style?.labels?.rotation ?? 0"
+                      @change="setLabels({ rotation: parseFloat($event.target.value) || 0 })"
+                      class="w-14 text-xs border border-border rounded px-1.5 py-0.5" />
+                    <span class="text-[11px] text-muted-foreground/70">°</span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-14">Wrap at</span>
+                    <input type="number" step="1" min="0" max="60"
+                      :value="config.style?.labels?.max_width ?? ''" placeholder="no wrap"
+                      @change="setLabels({ max_width: parseFloat($event.target.value) || undefined })"
+                      class="w-16 text-xs border border-border rounded px-1.5 py-0.5" />
+                    <span class="text-[11px] text-muted-foreground/70">characters</span>
+                  </div>
+                  <select :value="config.style?.labels?.transform || 'none'"
+                    @change="setLabels({ transform: $event.target.value })"
+                    class="w-full text-xs border border-border rounded px-1.5 py-1">
+                    <option value="none">As written</option>
+                    <option value="uppercase">UPPERCASE</option>
+                    <option value="lowercase">lowercase</option>
+                  </select>
+                  <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" :checked="!!config.style?.labels?.allow_overlap"
+                      @change="setLabels({ allow_overlap: $event.target.checked })"
+                      class="accent-primary" />
+                    <span class="text-[11px] text-muted-foreground">
+                      Draw every label, even where they collide
+                    </span>
+                  </label>
+                  <!-- Priority decides which label wins the space when two want it. QGIS runs it
+                       0-10 with higher meaning more important, and so does this; the map inverts
+                       it, because MapLibre places the LOWEST sort key first. -->
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-14">Priority</span>
+                    <input type="range" min="0" max="10" step="1"
+                      :value="config.style?.labels?.priority ?? 5"
+                      @input="setLabels({ priority: parseFloat($event.target.value) })"
+                      class="flex-1 h-1 accent-primary" />
+                    <span class="text-[11px] text-muted-foreground/70 w-4 text-right">
+                      {{ config.style?.labels?.priority ?? 5 }}
+                    </span>
+                  </div>
+                </div>
+
+                <p class="text-[11px] text-muted-foreground/70 leading-snug">
+                  Drawn above every layer on the map. A portal draws the fonts its glyph set
+                  contains; anything else is matched to the nearest it has.
+                </p>
+              </div>
+            </div>
+
+            <!-- THE REST OF THE VOCABULARY, behind one disclosure. Every one of these round-trips
+                 from QGIS already; putting them all on screen would cost every user the clarity of
+                 this panel to serve the few who want a mitred join. Open it and they are there. -->
+            <div v-if="config.layer_type === 'vector' && geomType !== 'unknown'"
+                 class="pt-1 border-t border-border/50">
+              <button type="button" @click="toggle('more')"
+                class="text-[11px] text-primary hover:text-primary/80">
+                {{ open.more ? '−' : '+' }} More {{ geomType }} options
+              </button>
+              <div v-if="open.more" class="mt-1.5 space-y-1.5">
+                <template v-if="geomType === 'line' || geomType === 'polygon'">
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Ends</span>
+                    <select :value="config.style?.line_cap || 'butt'"
+                      @change="emitStyle({ line_cap: $event.target.value })"
+                      class="flex-1 text-xs border border-border rounded px-1.5 py-1">
+                      <option value="butt">Flat</option>
+                      <option value="round">Round</option>
+                      <option value="square">Square</option>
+                    </select>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Corners</span>
+                    <select :value="config.style?.line_join || 'miter'"
+                      @change="emitStyle({ line_join: $event.target.value })"
+                      class="flex-1 text-xs border border-border rounded px-1.5 py-1">
+                      <option value="miter">Sharp</option>
+                      <option value="round">Round</option>
+                      <option value="bevel">Cut off</option>
+                    </select>
+                  </div>
+                </template>
+                <div v-if="geomType === 'line'" class="flex items-center gap-2">
+                  <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Offset</span>
+                  <input type="number" step="0.5" :value="config.style?.line_offset ?? 0"
+                    @change="emitStyle({ line_offset: parseFloat($event.target.value) || undefined })"
+                    class="w-16 text-xs border border-border rounded px-1.5 py-0.5" />
+                  <span class="text-[11px] text-muted-foreground/70">px to one side</span>
+                </div>
+                <template v-if="geomType === 'point'">
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Rotate</span>
+                    <input type="number" step="5" min="0" max="359"
+                      :value="config.style?.marker_rotation ?? 0"
+                      @change="emitStyle({ marker_rotation: parseFloat($event.target.value) || undefined })"
+                      class="w-16 text-xs border border-border rounded px-1.5 py-0.5" />
+                    <span class="text-[11px] text-muted-foreground/70">°</span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Nudge</span>
+                    <input type="number" step="1" :value="markerOffset[0]" title="Left / right, px"
+                      @change="setMarkerOffset(0, $event.target.value)"
+                      class="w-14 text-xs border border-border rounded px-1.5 py-0.5" />
+                    <input type="number" step="1" :value="markerOffset[1]" title="Up / down, px"
+                      @change="setMarkerOffset(1, $event.target.value)"
+                      class="w-14 text-xs border border-border rounded px-1.5 py-0.5" />
+                    <span class="text-[11px] text-muted-foreground/70">px</span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-12">Fade</span>
+                    <input type="range" min="0" max="1" step="0.05"
+                      :value="config.style?.marker_opacity ?? 1"
+                      @input="emitStyle({ marker_opacity: parseFloat($event.target.value) })"
+                      class="flex-1 h-1 accent-primary" />
+                    <span class="text-[11px] text-muted-foreground/70 w-8 text-right">
+                      {{ Math.round((config.style?.marker_opacity ?? 1) * 100) }}%
+                    </span>
+                  </div>
+                </template>
+                <!-- A layer that draws nothing is not a broken one: it is how you keep a layer for
+                     its labels, or its popups, without its geometry cluttering the map. QGIS calls
+                     the renderer "No symbols". -->
+                <label class="flex items-center gap-2 cursor-pointer pt-0.5">
+                  <input type="checkbox" :checked="!!config.style?.no_symbol"
+                    @change="emitStyle({ no_symbol: $event.target.checked || undefined })"
+                    class="accent-primary" />
+                  <span class="text-[11px] text-muted-foreground">
+                    Draw no shapes — keep the labels and popups only
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <!-- WHERE IT DRAWS. QGIS keeps this on the layer rather than in its symbology, and so
+                 does GeoDeploy — it applies to everything the layer draws, its labels included. Two
+                 numbers, so it stays one line rather than a section. -->
+            <div v-if="config.layer_type === 'vector'" class="pt-1 border-t border-border/50">
+              <label class="text-xs text-muted-foreground">Visible zoom range</label>
+              <div class="flex items-center gap-2 mt-0.5">
+                <input type="number" min="0" max="24" step="1" placeholder="0"
+                  :value="config.style?.minzoom ?? ''"
+                  @change="setZoom('minzoom', $event.target.value)"
+                  class="w-16 text-xs border border-border rounded px-1.5 py-0.5" />
+                <span class="text-[11px] text-muted-foreground/70">to</span>
+                <input type="number" min="0" max="24" step="1" placeholder="24"
+                  :value="config.style?.maxzoom ?? ''"
+                  @change="setZoom('maxzoom', $event.target.value)"
+                  class="w-16 text-xs border border-border rounded px-1.5 py-0.5" />
+                <span class="text-[11px] text-muted-foreground/70">leave blank for no limit</span>
+              </div>
+            </div>
+
+            <!-- SYMBOLOGY THAT CAME FROM QGIS. Rules, a pattern fill, a rendered marker and markers
+                 along a line are all drawn here but not editable here — and each of them OUTRANKS
+                 the controls above, so without this the colour picker would appear to do nothing
+                 and there would be no way to find out why. Naming what is in charge, and offering
+                 one button to hand control back, is the whole point of the block. -->
+            <div v-if="qgisStyling.length" class="pt-1 border-t border-border/50">
+              <p class="text-xs text-foreground">Styled in QGIS</p>
+              <ul class="mt-1 space-y-0.5">
+                <li v-for="item in qgisStyling" :key="item" class="text-[11px] text-muted-foreground">
+                  • {{ item }}
+                </li>
+              </ul>
+              <p class="text-[11px] text-muted-foreground/70 mt-1 leading-snug">
+                This is drawn on the map but edited in QGIS. It takes precedence over the controls
+                above.
+              </p>
+              <button @click="clearQgisStyling"
+                class="mt-1.5 text-[11px] text-primary hover:text-primary/80 font-medium">
+                Use simple styling instead
+              </button>
             </div>
 
             <!-- Popup fields -->
@@ -479,6 +1026,33 @@
                   Reverse the palette
                 </label>
               </div>
+              <!-- 3D TERRAIN. Beside the algorithm rather than inside it: an algorithm replaces
+                   the PICTURE, terrain adds a heightfield under whatever picture there is — so a
+                   hillshaded or contoured DEM draped over its own relief is one tick, not a choice
+                   between them. Single-band only: three bands are a photograph, not elevation. -->
+              <div v-if="(layer?.band_count || 1) === 1" class="pt-1 border-t border-border/50">
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" :checked="terrainOn"
+                    @change="setTerrainOn($event.target.checked)" class="accent-primary" />
+                  <span class="text-xs text-foreground">3D terrain — raise the map by this DEM</span>
+                </label>
+                <div v-if="terrainOn" class="mt-1.5 space-y-1.5 pl-5">
+                  <label class="flex items-center gap-2">
+                    <span class="text-[11px] text-muted-foreground flex-shrink-0 w-16">Height ×</span>
+                    <input type="range" min="0.1" max="10" step="0.1" :value="terrainExaggeration"
+                      @input="setTerrain({ exaggeration: parseFloat($event.target.value) })"
+                      class="flex-1 h-1 accent-primary" />
+                    <span class="text-[11px] text-muted-foreground/70 w-8 text-right tabular-nums">
+                      {{ terrainExaggeration }}×
+                    </span>
+                  </label>
+                  <p class="text-[11px] text-muted-foreground/70 leading-snug">
+                    The whole map is raised, not just this layer — MapLibre has one terrain, so the
+                    first layer that asks for it wins. The map tilts so you can see it.
+                  </p>
+                </div>
+              </div>
+
               <!-- ONE CHOICE, not two checkboxes: TiTiler takes a single `algorithm`, so hillshade
                    and contours are mutually exclusive and a pair of ticks would let the user ask
                    for something that cannot be rendered. -->
@@ -504,7 +1078,14 @@
                   <label class="text-xs text-muted-foreground" title="Spacing between contour lines, in the raster's own units">
                     Interval
                   </label>
-                  <input type="number" min="0" step="any" :value="config.style?.increment ?? 35"
+                  <!-- DECIMALS ARE ALLOWED AGAIN, and they now work. TiTiler types the interval as
+                       an integer with a minimum of 0, so 1 is the finest it can express — and a
+                       vegetation index running 0.556-0.947 is narrower than that end to end, which
+                       drew the whole raster as one flat dark band with no interval able to fix it.
+                       `mapStyle.js`/`titiler.py` scale the DATA instead (`expression=b1*1000`), so
+                       an interval of 0.05 becomes an ordinary 50 and the number typed here is the
+                       one in the raster's own units. -->
+                  <input type="number" min="0" step="any" :value="contourInterval"
                     @input="emitStyle({ increment: parseFloat($event.target.value) || null })"
                     class="mt-0.5 w-full text-xs border border-border rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary/60" />
                 </div>
@@ -515,11 +1096,57 @@
                     class="mt-0.5 w-full text-xs border border-border rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary/60" />
                 </div>
               </div>
+              <!-- THE CONTOUR COLOURS. TiTiler's algorithm hard-codes both — `cmap.get("terrain")`
+                   for the background and black for the lines — so neither could be chosen. The
+                   server reproduces the same picture as band maths plus an explicit colormap when
+                   either differs from those defaults, and uses the algorithm untouched when they
+                   do not, so an existing layer renders byte-identically. -->
+              <div v-if="config.style?.algorithm === 'contours'" class="flex items-end gap-2">
+                <div class="flex-1 min-w-0">
+                  <label class="text-xs text-muted-foreground">Relief palette</label>
+                  <select :value="config.style?.contour_palette || 'terrain'"
+                    @change="emitStyle({ contour_palette: $event.target.value })"
+                    class="mt-0.5 w-full text-xs border border-border rounded px-1.5 py-1">
+                    <option v-for="r in CONTOUR_PALETTES" :key="r" :value="r">{{ r }}</option>
+                  </select>
+                </div>
+                <div v-if="!config.style?.contour_line_palette">
+                  <label class="text-xs text-muted-foreground block">Line colour</label>
+                  <input type="color" :value="config.style?.contour_color || '#000000'"
+                    @input="emitStyle({ contour_color: $event.target.value })"
+                    class="mt-0.5 h-7 w-12 border border-border rounded cursor-pointer bg-transparent" />
+                </div>
+              </div>
+              <!-- LINES COLOURED BY THEIR OWN VALUE. Each line takes the palette colour of the band
+                   it sits on, so a reader can tell which line is which height instead of counting
+                   them from the edge. The line's own colour picker goes away while this is on,
+                   because it would set a colour nothing draws. -->
+              <label v-if="config.style?.algorithm === 'contours'"
+                     class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" :checked="!!config.style?.contour_line_palette"
+                  @change="emitStyle({ contour_line_palette: $event.target.checked || undefined })"
+                  class="accent-primary" />
+                <span class="text-[11px] text-foreground">Colour the lines by their value</span>
+              </label>
+              <!-- …and the relief behind them, which is usually what you want OFF once the lines
+                   carry the colour: coloured lines over a coloured ground read as neither. -->
+              <label v-if="config.style?.algorithm === 'contours'"
+                     class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" :checked="config.style?.contour_relief !== false"
+                  @change="emitStyle({ contour_relief: $event.target.checked ? undefined : false })"
+                  class="accent-primary" />
+                <span class="text-[11px] text-foreground">Shade the relief behind the lines</span>
+              </label>
+              <div v-if="config.style?.algorithm === 'contours'"
+                   class="flex h-2 rounded overflow-hidden" aria-hidden="true">
+                <span v-for="(c, i) in contourPalettePreview" :key="i" class="flex-1"
+                  :style="{ backgroundColor: c }"></span>
+              </div>
               <!-- The stretch is not decoration under contours: it is the range the coloured relief
                    behind the lines is drawn over. Without it TiTiler spans −12000–8000 m and a
                    survey DEM comes out one flat colour, so say what the numbers are doing. -->
               <p v-if="config.style?.algorithm === 'contours'" class="text-xs text-muted-foreground">
-                Lines every {{ config.style?.increment ?? 35 }} units, over the stretch below —
+                Lines every {{ contourInterval }} units, over the stretch below —
                 that range colours the relief behind them.
                 <button v-if="!config.style?.rescale" @click="autoStretch" :disabled="autoStretching"
                   class="text-primary hover:text-primary/80 font-medium disabled:opacity-50">
@@ -597,7 +1224,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useDataStore } from '@/stores/data'
 import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps, getRasterStats,
          getRasterUniqueValues,
@@ -606,7 +1233,9 @@ import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps, getRaste
 // the legend here must describe exactly what the published portal will draw.
 import { RAMPS, DIVERGING, NO_OUTLINE, markerOutline, legendEntries, rampColors,
          representativeColor, pillarRadius } from '@/lib/symbology'
-import { rasterStyleOf } from '@/lib/mapStyle'
+import LegendSwatch from '@/components/LegendSwatch.vue'
+import { contourRange, defaultIncrement, rasterStyleOf,
+         TERRAIN_DEFAULT_EXAGGERATION } from '@/lib/mapStyle'
 import { TrashIcon, LocateIcon } from '@/views/icons'
 
 const props = defineProps({
@@ -851,7 +1480,10 @@ function pickColorField(field) {
 }
 // 12, not 9: the server clamps `classes` to 12 in routers/data/vector.py, and a control that stops
 // at 9 silently refuses counts the classifier would have produced (issue #10).
-function setClassCount(n) { refreshClasses({ classes_n: Math.max(2, Math.min(12, parseInt(n) || 5)) }) }
+// 2-100, matching the server's clamp in `field-stats`. The old ceiling of 12 was working around
+// `rampColors` snapping to one of seven anchor stops — twelve classes in seven colours — which is
+// fixed; QGIS has no cap here and neither should this.
+function setClassCount(n) { refreshClasses({ classes_n: Math.max(2, Math.min(100, parseInt(n) || 5)) }) }
 function setMethod(m) { refreshClasses({ class_method: m }) }
 function setRamp(r) { refreshClasses({ color_ramp: r }) }
 /**
@@ -937,10 +1569,14 @@ function setEntryColor(i, color) {
   if (colorMode.value === 'graduated') {
     const classes = (props.config.style?.classes || []).map((c, j) => j === i ? { ...c, color } : c)
     emitStyle({ classes })
-  } else {
-    const cats = (props.config.style?.categories || []).map((c, j) => j === i ? { ...c, color } : c)
-    emitStyle({ categories: cats })
+    return
   }
+  // Past the last category is the `match` fallback — every value the classification did not list,
+  // which on a truncated column is most of them. It is a separate key, not a category with no
+  // value, because that is how MapLibre's `match` and QGIS's own "all other values" both spell it.
+  const cats = props.config.style?.categories || []
+  if (i >= cats.length) { emitStyle({ other_color: color }); return }
+  emitStyle({ categories: cats.map((c, j) => j === i ? { ...c, color } : c) })
 }
 
 // Which layers can be given 3D, and why the others cannot:
@@ -1009,7 +1645,10 @@ function setSizePx(index, value) {
 }
 
 const canExtrude = computed(() => {
-  if (!numericFields.value.length) return false
+  // NOT gated on a numeric column any more. It was, back when a height could only come from a
+  // field — which hid the whole 3D section for a building-footprints layer carrying no height
+  // attribute, the single most common thing anyone wants to extrude, and made a 2.5D style pushed
+  // from QGIS impossible to edit here. A flat height needs no column at all.
   if (geomType.value === 'line') return false
   // An UNKNOWN geometry gets no 3D. "Unknown" is a real stored value — Fiona reports it for any
   // shapefile with a generic or mixed header — and offering "extrude by a field" for it produced a
@@ -1036,9 +1675,605 @@ function setNoOutline(on) {
   emitStyle({ outline_color: on ? NO_OUTLINE : (geomType.value === 'point' ? '#ffffff' : '#1d4ed8') })
 }
 
+// ── Disclosure ──────────────────────────────────────────────────────────────
+// One object rather than a ref per section: the panel already carries a lot of state, and "which
+// sections are open" is one fact about the view, not five.
+const open = reactive({ labelMore: false, more: false, more3d: false })
+function toggle(name) { open[name] = !open[name] }
+
+// Nine positions, in the order they appear in the grid. "Above the point" is what somebody means;
+// `text-anchor: bottom` is how MapLibre spells it, and the two read as opposites — the anchor names
+// the part of the TEXT that touches the point, so text sitting above it is anchored at its bottom.
+const labelAnchors = [
+  { value: 'bottom-right', mark: '↖', title: 'Above and left' },
+  { value: 'bottom', mark: '↑', title: 'Above' },
+  { value: 'bottom-left', mark: '↗', title: 'Above and right' },
+  { value: 'right', mark: '←', title: 'Left' },
+  { value: 'center', mark: '•', title: 'Centred on the point' },
+  { value: 'left', mark: '→', title: 'Right' },
+  { value: 'top-right', mark: '↙', title: 'Below and left' },
+  { value: 'top', mark: '↓', title: 'Below' },
+  { value: 'top-left', mark: '↘', title: 'Below and right' },
+]
+
+const labelOffset = computed(() => {
+  const o = props.config.style?.labels?.offset
+  return Array.isArray(o) && o.length === 2 ? o : [0, 0]
+})
+
+function setLabelOffset(i, raw) {
+  const next = [...labelOffset.value]
+  next[i] = parseFloat(raw) || 0
+  setLabels({ offset: (next[0] || next[1]) ? next : undefined })
+}
+
+// ── Heatmap ─────────────────────────────────────────────────────────────────
+// A renderer, not a paint option: it replaces the points entirely.
+const heatmapOn = computed(() => !!props.config.style?.heatmap?.enabled)
+
+// The ramps a heatmap can use. A NAME plus its opaque colours, low density first — the transparent
+// stop is added by `heatmapColors`, never stored in this table, so reversing cannot strand it at
+// the wrong end. Adding a ramp here is the whole job of adding a ramp.
+const heatmapRamps = [
+  { name: 'heat', label: 'Blue → green → red', colors: ['#3b82f6', '#22c55e', '#eab308', '#ef4444'] },
+  { name: 'magma', label: 'Magma (dark → yellow)', colors: ['#3b0f70', '#8c2981', '#de4968', '#fe9f6d', '#fcfdbf'] },
+  { name: 'inferno', label: 'Inferno (dark → pale)', colors: ['#420a68', '#932667', '#dd513a', '#fca50a', '#fcffa4'] },
+  { name: 'viridis', label: 'Viridis (blue → yellow)', colors: ['#440154', '#31688e', '#35b779', '#fde725'] },
+  { name: 'plasma', label: 'Plasma (blue → yellow)', colors: ['#0d0887', '#9c179e', '#ed7953', '#f0f921'] },
+  { name: 'turbo', label: 'Turbo (blue → red)', colors: ['#30123b', '#28bbec', '#a4fc3c', '#fb8022', '#7a0403'] },
+  { name: 'blues', label: 'Blues', colors: ['#c6dbef', '#6baed6', '#3182bd', '#08519c'] },
+  { name: 'greens', label: 'Greens', colors: ['#c7e9c0', '#74c476', '#31a354', '#006d2c'] },
+  { name: 'reds', label: 'Reds', colors: ['#fcbba1', '#fb6a4a', '#de2d26', '#a50f15'] },
+  { name: 'purples', label: 'Purples', colors: ['#dadaeb', '#9e9ac8', '#756bb1', '#54278f'] },
+  { name: 'oranges', label: 'Oranges', colors: ['#fdd0a2', '#fd8d3c', '#e6550d', '#a63603'] },
+  { name: 'spectral', label: 'Spectral (diverging)', colors: ['#3288bd', '#99d594', '#e6f598', '#fc8d59', '#d53e4f'] },
+]
+
+// A `#rrggbb` as the same colour at zero alpha — so the ramp fades out through its OWN low colour
+// rather than through MapLibre's blue default. The renderers force the first stop transparent
+// whatever they are given, which is the real safety net; this only decides which hue it fades from.
+function transparentOf(hex) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex || ''))
+  if (!m) return 'rgba(0,0,255,0)'
+  return `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},0)`
+}
+
+// THE STORED RAMP: a transparent stop, then the colours. Reversing flips the colours and rebuilds
+// the transparent stop from whichever is now lowest — reversing the finished list instead would put
+// transparency at the HIGH end, which paints the whole viewport at density zero. That is the one
+// mistake that makes a heatmap look broken rather than merely wrong, so it is done here, once.
+function heatmapColors(name, reverse) {
+  const ramp = heatmapRamps.find(r => r.name === name) || heatmapRamps[0]
+  const colors = reverse ? [...ramp.colors].reverse() : ramp.colors
+  return [transparentOf(colors[0]), ...colors]
+}
+
+// The chosen ramp is remembered BY NAME beside the colours it produced — the same device
+// `fill_pattern.hatch` and `line_marker.preset` use. Matching the stored colour list back against
+// the table would work until the day a ramp's colours are edited or reversed, at which point the
+// dropdown would silently jump to the first entry.
+const heatmapRampName = computed(() => {
+  const block = props.config.style?.heatmap || {}
+  if (block.ramp_name && heatmapRamps.some(r => r.name === block.ramp_name)) return block.ramp_name
+  // A heatmap saved before ramps had names, or one pushed from QGIS: fall back to matching colours.
+  const current = JSON.stringify(block.ramp || [])
+  const hit = heatmapRamps.find(r => JSON.stringify(heatmapColors(r.name, false)) === current)
+  return hit ? hit.name : 'heat'
+})
+
+const heatmapReverse = computed(() => !!props.config.style?.heatmap?.reverse)
+
+const heatmapPreview = computed(() => heatmapColors(heatmapRampName.value, heatmapReverse.value))
+
+// A chequerboard behind the preview bar, so the transparent end reads as a fade to nothing rather
+// than as a ramp that merely starts pale. ONE background image, deliberately: the first attempt
+// drew each ramp as its own gradient over a chequer and the `background-size` list applied to the
+// gradient layer too, repeating it every 8px — a box of vertical stripes instead of a ramp.
+const CHECKER = {
+  backgroundImage: 'repeating-conic-gradient(rgba(128,128,128,.3) 0% 25%, transparent 0% 50%)',
+  backgroundSize: '8px 8px',
+}
+
+function setHeatmap(patch) {
+  emitStyle({ heatmap: { ...(props.config.style?.heatmap || {}), ...patch, enabled: true } })
+}
+
+function setHeatmapOn(on) {
+  if (!on) { emitStyle({ heatmap: undefined }); return }
+  setHeatmap({ radius: props.config.style?.heatmap?.radius ?? 20,
+               ramp_name: heatmapRamps[0].name, reverse: false,
+               ramp: heatmapColors(heatmapRamps[0].name, false) })
+}
+
+// `ramp` is what every renderer reads; `ramp_name` and `reverse` are how this panel remembers the
+// choice that produced it. All three are written together so they can never disagree.
+function setHeatmapRamp(name) {
+  setHeatmap({ ramp_name: name, ramp: heatmapColors(name, heatmapReverse.value) })
+}
+
+function toggleHeatmapReverse() {
+  const reverse = !heatmapReverse.value
+  setHeatmap({ reverse, ramp: heatmapColors(heatmapRampName.value, reverse) })
+}
+
+async function setHeatmapWeight(field) {
+  if (!field) { setHeatmap({ weight_field: undefined, weight_max: undefined }); return }
+  // THE MAXIMUM COMES FROM THE SERVER, not from the column list — a column here is a name and a
+  // type, and nothing in the browser knows how big its values get. The weight is normalised against
+  // it so the ramp spans the data instead of saturating on the first large value; without a
+  // maximum the renderer leaves the weight alone and the field would silently do nothing.
+  //
+  // Same endpoint the classifier uses, for the same reason: one place decides what a column holds.
+  setHeatmap({ weight_field: field })
+  try {
+    const { data } = await getFieldStats(props.config.layer_id, { field, classes: 2 })
+    if (Number.isFinite(data?.max)) setHeatmap({ weight_field: field, weight_max: data.max })
+  } catch (e) {
+    // A weight that cannot be normalised still draws — every point simply counts the same, which
+    // is the unweighted map rather than a broken one.
+  }
+}
+
+// ── Hatches ─────────────────────────────────────────────────────────────────
+// The tile is generated HERE, in the browser, into the same `fill_pattern` key and the same PNG
+// data URI the QGIS plugin produces — so a hatch made here and one pushed from QGIS are the same
+// thing to every renderer. The four angles offered are the four at which a square tile CLOSES;
+// see the plugin's fills.py for why the rest cannot.
+const hatchPresets = [
+  { name: 'none', title: 'Solid fill' },
+  { name: 'horizontal', title: 'Horizontal lines' },
+  { name: 'vertical', title: 'Vertical lines' },
+  { name: 'forward', title: 'Diagonal lines' },
+  { name: 'back', title: 'Diagonal lines, the other way' },
+  { name: 'cross', title: 'Cross-hatch' },
+]
+
+function hatchTile(name, color) {
+  const side = 12
+  const cv = document.createElement('canvas')
+  cv.width = side
+  cv.height = side
+  const ctx = cv.getContext('2d')
+  if (!ctx) return null
+  ctx.strokeStyle = color || '#333333'
+  ctx.lineWidth = 1.5
+  const line = (x1, y1, x2, y2) => {
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke()
+  }
+  // Every stroke is drawn at BOTH edges as well as the middle, so the tile closes when repeated.
+  if (name === 'horizontal' || name === 'cross') {
+    line(-1, 0, side + 1, 0); line(-1, side, side + 1, side); line(-1, side / 2, side + 1, side / 2)
+  }
+  if (name === 'vertical' || name === 'cross') {
+    line(0, -1, 0, side + 1); line(side, -1, side, side + 1); line(side / 2, -1, side / 2, side + 1)
+  }
+  if (name === 'forward') {
+    for (const k of [-1, 0, 1]) line(k * side - 1, side + 1, k * side + side + 1, -1)
+  }
+  if (name === 'back') {
+    for (const k of [-1, 0, 1]) line(k * side - 1, -1, k * side + side + 1, side + 1)
+  }
+  return cv.toDataURL('image/png')
+}
+
+const activeHatch = computed(() => props.config.style?.fill_pattern?.hatch || 'none')
+
+function hatchPreview(name) {
+  return hatchTile(name, props.config.style?.color || '#333333')
+}
+
+function setHatch(name) {
+  if (name === 'none') { emitStyle({ fill_pattern: undefined }); return }
+  const image = hatchTile(name, props.config.style?.color || '#333333')
+  if (!image) return
+  // `hatch` rides alongside the pixels so this panel can show which preset is selected. Nothing
+  // renders from it — the image is what draws — so a tile pushed from QGIS simply highlights none.
+  emitStyle({ fill_pattern: { image, width: 12, height: 12, hatch: name } })
+}
+
+// ── Direction arrows ────────────────────────────────────────────────────────
+// Generated HERE, in the browser, into the same `line_marker` key and the same PNG data URI the
+// QGIS plugin's `arrows.py` produces — so an arrow drawn here and one pushed from QGIS are the same
+// thing to every renderer. The head points along +x because `symbol-placement: line` with
+// `icon-rotation-alignment: map` gives an icon the line's own bearing at rotation 0; a head drawn
+// pointing up would sit across the line instead of along it.
+const arrowPresets = [
+  { name: 'none', title: 'No arrows' },
+  { name: 'forward', title: 'Arrows along the line' },
+  { name: 'back', title: 'Arrows against the line' },
+  { name: 'double', title: 'Arrows both ways' },
+]
+
+// Head SIZE, in pixels. QGIS's arrow states a head length and a head thickness separately; one
+// number here scales both together at the proportions an arrowhead reads best at (a head slightly
+// longer than it is wide), because two boxes for one visual decision is how a panel becomes a form.
+// The plugin keeps QGIS's two apart, so an arrow pushed FROM QGIS keeps its own proportions.
+const ARROW_SIZE_DEFAULT = 10
+
+function arrowTile(name, color, size) {
+  if (name === 'none') return null
+  const px = Math.max(4, Math.min(48, Number(size) || ARROW_SIZE_DEFAULT))
+  const h = px
+  const len = Math.round(px * 0.9)
+  const w = name === 'double' ? len * 2 : len
+  const cv = document.createElement('canvas')
+  cv.width = w
+  cv.height = h
+  const ctx = cv.getContext('2d')
+  if (!ctx) return null
+  ctx.fillStyle = color || '#333333'
+  const tri = (ax, ay, bx, by, cx, cy) => {
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.lineTo(cx, cy); ctx.closePath(); ctx.fill()
+  }
+  if (name === 'forward') tri(w, h / 2, 0, 0, 0, h)
+  if (name === 'back') tri(0, h / 2, w, 0, w, h)
+  if (name === 'double') { tri(0, h / 2, len, 0, len, h); tri(w, h / 2, len, 0, len, h) }
+  return { image: cv.toDataURL('image/png'), width: w, height: h }
+}
+
+// Only an arrow this panel drew is highlighted. A `line_marker` from QGIS — ticks, chevrons, a real
+// `QgsArrowSymbolLayer` — carries no `preset`, so it selects none of these rather than being
+// mislabelled as one of them, and the "Styled in QGIS" block explains it instead.
+const activeArrow = computed(() => props.config.style?.line_marker?.preset || 'none')
+
+function arrowPreview(name) {
+  // The PRESET swatch is drawn at a fixed size so the four buttons stay the same shape whatever
+  // the layer's arrows are set to — a row of buttons that resize as you drag a slider is a row
+  // that is hard to aim at.
+  const tile = arrowTile(name, props.config.style?.color || '#333333', ARROW_SIZE_DEFAULT)
+  return tile ? tile.image : null
+}
+
+const arrowSize = computed(() => props.config.style?.line_marker?.size ?? ARROW_SIZE_DEFAULT)
+
+function setArrowSize(value) {
+  const marker = props.config.style?.line_marker
+  if (!marker?.preset) return
+  // The IMAGE is regenerated, not scaled by `icon-size`: the tile is what every renderer draws and
+  // what the plugin reads, so a size that lived only in the layout would be lost the moment the
+  // style left this panel. Same reasoning as the hatch tiles.
+  setArrow(marker.preset, value)
+}
+
+function setArrow(name, size) {
+  if (name === 'none') { emitStyle({ line_marker: undefined }); return }
+  const px = Number(size) || props.config.style?.line_marker?.size || ARROW_SIZE_DEFAULT
+  const tile = arrowTile(name, props.config.style?.color || '#333333', px)
+  if (!tile) return
+  emitStyle({
+    line_marker: {
+      ...tile,
+      preset: name,
+      size: px,
+      spacing: props.config.style?.line_marker?.spacing ?? DEFAULT_ARROW_SPACING,
+    },
+  })
+}
+
+// Pixels between arrowheads. Far enough apart to read as direction markers rather than a dotted
+// line; matches `arrows.DEFAULT_SPACING_PX` so a QGIS arrow and one drawn here space alike.
+const DEFAULT_ARROW_SPACING = 90
+
+function setArrowSpacing(value) {
+  const marker = props.config.style?.line_marker
+  if (!marker) return
+  emitStyle({ line_marker: { ...marker, spacing: Math.max(10, parseFloat(value) || DEFAULT_ARROW_SPACING) } })
+}
+
+// ── Custom dash pattern ─────────────────────────────────────────────────────
+// QGIS lets an author draw ANY dash pattern, and one arrives as `dash_pattern` — a list of dash and
+// gap lengths that OUTRANKS `lineType`. The panel offered only solid/dashed/dotted, so such a line
+// showed "Solid" in the dropdown while drawing dashes: a control stating something the map
+// contradicts, and no way to edit or clear the real pattern.
+//
+// The unit is MULTIPLES OF THE LINE WIDTH, which is MapLibre's own — a pattern in pixels would
+// change shape every time somebody changed the width. Same unit the CLI's `--dash-pattern` takes.
+const dashPattern = computed(() => {
+  const p = props.config.style?.dash_pattern
+  return (Array.isArray(p) && p.length >= 2) ? p : null
+})
+
+const dashText = computed(() => (dashPattern.value || []).join(', '))
+
+// What the line-style dropdown should SAY. A custom pattern is not one of the three presets, so it
+// selects none of them rather than misreporting itself as the nearest.
+const lineTypeShown = computed(() =>
+  dashPattern.value ? 'custom' : (props.config.style?.lineType || 'solid'))
+
+function setLineType(value) {
+  // Choosing a preset CLEARS the custom pattern, because the pattern would otherwise keep winning
+  // and the choice would appear to do nothing.
+  if (value === 'custom') return
+  emitStyle({ lineType: value, dash_pattern: undefined })
+}
+
+function setDashPattern(raw) {
+  const parts = String(raw).split(/[,\s]+/).map(s => parseFloat(s))
+    .filter(n => Number.isFinite(n) && n > 0)
+  // At least a dash and a gap. Fewer is not a pattern, and MapLibre wants PAIRS — an odd-length
+  // array repeats inverted, which is not what anyone draws. Mirrors `symbology.dash_array`.
+  if (parts.length < 2) { emitStyle({ dash_pattern: undefined }); return }
+  emitStyle({ dash_pattern: parts.length % 2 ? [...parts, parts[parts.length - 1]] : parts })
+}
+
+// A preview of the pattern at the layer's own width, so what is typed can be seen before saving.
+const dashPreview = computed(() => {
+  const pattern = dashPattern.value
+  if (!pattern) return ''
+  const w = Math.max(1, Number(props.config.style?.line_width) || 2)
+  return pattern.map(n => (n * w).toFixed(1)).join(' ')
+})
+
+// ── Centroid marker ─────────────────────────────────────────────────────────
+// QGIS's centroid fill puts a marker at each polygon's centre. It arrived from the plugin and drew
+// correctly, but there was no way to add one here — so a polygon layer could only get centre dots
+// by going through QGIS.
+//
+// Drawn in the browser into the same `centroid_marker` key and the same PNG data URI the plugin
+// produces, exactly as the hatches and arrows are, so one made here and one pushed from QGIS are
+// the same thing to every renderer. MapLibre places a symbol layer's icons at a polygon's LABEL
+// POINT by default, which is the hard half already solved: a label point sits inside a concave
+// shape, where a true centroid can fall outside it.
+const CENTROID_SIZE_DEFAULT = 10
+
+const centroidShapes = [
+  { name: 'none', title: 'No centre marker' },
+  { name: 'circle', title: 'Circle' },
+  { name: 'square', title: 'Square' },
+  { name: 'triangle', title: 'Triangle' },
+  { name: 'diamond', title: 'Diamond' },
+  { name: 'cross', title: 'Cross' },
+]
+
+function centroidTile(shape, color, size) {
+  if (shape === 'none') return null
+  const px = Math.max(4, Math.min(40, Number(size) || CENTROID_SIZE_DEFAULT))
+  const pad = 2                       // room for the outline, which is drawn centred on the edge
+  const side = px + pad * 2
+  const cv = document.createElement('canvas')
+  cv.width = side
+  cv.height = side
+  const ctx = cv.getContext('2d')
+  if (!ctx) return null
+  const c = pad + px / 2
+  const r = px / 2
+  ctx.fillStyle = color || '#333333'
+  // A WHITE OUTLINE, like the generated point markers: a dark dot on a dark polygon is invisible,
+  // and the marker is meant to be read against the fill it sits on.
+  ctx.strokeStyle = '#ffffff'
+  ctx.lineWidth = 1.5
+  ctx.beginPath()
+  if (shape === 'circle') ctx.arc(c, c, r, 0, Math.PI * 2)
+  else if (shape === 'square') ctx.rect(c - r, c - r, px, px)
+  else if (shape === 'triangle') {
+    ctx.moveTo(c, c - r); ctx.lineTo(c + r, c + r); ctx.lineTo(c - r, c + r); ctx.closePath()
+  } else if (shape === 'diamond') {
+    ctx.moveTo(c, c - r); ctx.lineTo(c + r, c); ctx.lineTo(c, c + r); ctx.lineTo(c - r, c)
+    ctx.closePath()
+  } else if (shape === 'cross') {
+    const t = r * 0.38
+    const pts = [[-t, -r], [t, -r], [t, -t], [r, -t], [r, t], [t, t], [t, r], [-t, r],
+                 [-t, t], [-r, t], [-r, -t], [-t, -t]]
+    pts.forEach(([dx, dy], i) => (i ? ctx.lineTo(c + dx, c + dy) : ctx.moveTo(c + dx, c + dy)))
+    ctx.closePath()
+  }
+  ctx.fill()
+  ctx.stroke()
+  return { image: cv.toDataURL('image/png'), width: side, height: side }
+}
+
+// Only a marker this panel drew is highlighted — one rendered by QGIS carries no `shape`, so it
+// selects none of these rather than being mislabelled as the nearest.
+const activeCentroid = computed(() => props.config.style?.centroid_marker?.shape || 'none')
+const centroidSize = computed(() =>
+  props.config.style?.centroid_marker?.size ?? CENTROID_SIZE_DEFAULT)
+
+function centroidPreview(shape) {
+  const tile = centroidTile(shape, props.config.style?.color || '#333333', 14)
+  return tile ? tile.image : null
+}
+
+function setCentroid(shape, size) {
+  if (shape === 'none') { emitStyle({ centroid_marker: undefined }); return }
+  const px = Number(size) || centroidSize.value
+  const tile = centroidTile(shape, props.config.style?.color || '#333333', px)
+  if (!tile) return
+  emitStyle({ centroid_marker: { ...tile, shape, size: px } })
+}
+
+function setCentroidSize(value) {
+  const shape = activeCentroid.value
+  if (shape !== 'none') setCentroid(shape, value)
+}
+
+// ── Marker placement ────────────────────────────────────────────────────────
+const markerOffset = computed(() => {
+  const o = props.config.style?.marker_offset
+  return Array.isArray(o) && o.length === 2 ? o : [0, 0]
+})
+
+function setMarkerOffset(i, raw) {
+  const next = [...markerOffset.value]
+  next[i] = parseFloat(raw) || 0
+  emitStyle({ marker_offset: (next[0] || next[1]) ? next : undefined })
+}
+
+// ── Labels ──────────────────────────────────────────────────────────────────
+// A label is a second thing drawn for the same feature, so it lives in its own block of the style
+// and becomes its own MapLibre layer — see services/symbology.label_layout. Rasters have nothing to
+// label, and neither does an external source we do not hold the attributes for.
+const canLabel = computed(() => props.config.layer_type === 'vector' && styleFields.value.length > 0)
+const labelsOn = computed(() => !!props.config.style?.labels?.enabled)
+
+function setLabels(patch) {
+  // MERGED, and enabling as soon as anything is set: naming a size on an unlabelled layer and
+  // getting nothing would be a puzzle rather than a safeguard. Mirrors the CLI's `--label-*`.
+  emitStyle({ labels: { ...(props.config.style?.labels || {}), ...patch, enabled: true } })
+}
+
+function setLabelsOn(on) {
+  if (!on) {
+    // Turned OFF rather than deleted, so the field and colours are still there when it is turned
+    // back on — the same courtesy the classification controls give.
+    emitStyle({ labels: { ...(props.config.style?.labels || {}), enabled: false } })
+    return
+  }
+  const first = styleFields.value[0]
+  emitStyle({
+    labels: {
+      field: first ? first.name : '',
+      ...(props.config.style?.labels || {}),
+      enabled: true,
+    },
+  })
+}
+
+// ── Where the layer draws ───────────────────────────────────────────────────
+function setZoom(key, raw) {
+  const text = String(raw ?? '').trim()
+  if (!text) { emitStyle({ [key]: undefined }); return }
+  const z = Math.max(0, Math.min(24, parseFloat(text)))
+  emitStyle({ [key]: Number.isFinite(z) ? z : undefined })
+}
+
+// ── Symbology authored in QGIS ──────────────────────────────────────────────
+// Each of these OUTRANKS the controls above — rules replace the single symbol, a pattern replaces
+// the fill colour, a rendered marker replaces the shape. Naming them is what stops the colour
+// picker looking broken; `clearQgisStyling` is the way back.
+const qgisStyling = computed(() => {
+  const st = props.config.style || {}
+  const out = []
+  const rules = Array.isArray(st.rules) ? st.rules.length : 0
+  if (rules) out.push(`${rules} rule${rules === 1 ? '' : 's'}, each with its own filter and symbol`)
+  // A hatch or an arrow this panel DREW is not QGIS styling — it is editable right above, and
+  // listing it here would say "edited in QGIS" about a control the author just used. Both carry a
+  // `hatch`/`preset` name for exactly this; anything from QGIS has neither.
+  if (st.fill_pattern?.image && !st.fill_pattern.hatch) {
+    out.push('A pattern fill — a hatch, or an image tiled across the shape')
+  }
+  if (st.marker_image) out.push('A marker drawn in QGIS, carried as a picture')
+  if (st.line_marker?.image && !st.line_marker.preset) {
+    out.push(st.line_marker.arrow ? 'An arrow line drawn in QGIS'
+      : 'Markers repeated along the line')
+  }
+  // Same rule as the hatches and arrows: a centre marker this panel drew carries a `shape`, so it
+  // is editable above and must not be listed as something only QGIS can change.
+  if (st.centroid_marker?.image && !st.centroid_marker.shape) {
+    out.push('A marker at each polygon’s centre, drawn in QGIS')
+  }
+  if (st.labels?.qgis_font?.family) out.push(`Labels in ${st.labels.qgis_font.family}`)
+  return out
+})
+
+function clearQgisStyling() {
+  emitStyle({
+    rules: undefined,
+    fill_pattern: undefined,
+    marker_image: undefined,
+    line_marker: undefined,
+    centroid_marker: undefined,
+  })
+}
+
+// 3D TERRAIN — the raster equivalent of a polygon's extrusion, and the reason a DEM is 2.5D data
+// in the first place. It is NOT one of the `algorithm` choices above: those replace the picture
+// (hillshade returns finished relief, contours return a coloured RGB image), while terrain leaves
+// the picture alone and adds a HEIGHTFIELD under it. A hillshaded DEM draped over its own terrain
+// is the normal thing to want, and a single dropdown would have made them exclusive.
+const terrainOn = computed(() => !!props.config.style?.terrain?.enabled)
+const terrainExaggeration = computed(() =>
+  props.config.style?.terrain?.exaggeration ?? TERRAIN_DEFAULT_EXAGGERATION)
+
+function setTerrain(patch) {
+  emitStyle({ terrain: { ...(props.config.style?.terrain || {}), ...patch } })
+}
+
+function setTerrainOn(on) {
+  if (!on) { emitStyle({ terrain: undefined }); return }
+  setTerrain({ enabled: true,
+    exaggeration: props.config.style?.terrain?.exaggeration ?? TERRAIN_DEFAULT_EXAGGERATION })
+}
+
+// The ramps a contour BACKGROUND can use. Only ramps GeoDeploy holds the actual colours for — the
+// server builds the colormap itself, so a name it cannot resolve to RGB is a name it cannot draw.
+// `terrain` is the hypsometric default and matches what TiTiler's own algorithm bakes in, so
+// leaving it alone keeps the picture identical and the URL byte-for-byte what it already was.
+const CONTOUR_PALETTES = ['terrain', 'viridis', 'magma', 'blues', 'greens', 'oranges', 'reds',
+  'rdbu', 'brbg', 'spectral']
+
+const contourPalettePreview = computed(() =>
+  rampColors(props.config.style?.contour_palette || 'terrain', 12))
+
+// What the interval box shows: the author's number, or the default the renderers will actually use
+// — derived from the raster's own stretch, not TiTiler's global-DEM 35. Showing 35 while the tiles
+// were drawn at 0.05 would be a hint that lies about the map. Mirrors
+// `lib/mapStyle.js::defaultIncrement` and `services/titiler.py::_default_increment`.
+const contourInterval = computed(() => {
+  const own = Number(props.config.style?.increment)
+  if (Number.isFinite(own) && own > 0) return own
+  const [lo, hi] = contourRange(props.config.style || {})
+  return defaultIncrement(lo, hi)
+})
+
 function setExtrusion(patch) {
   emitStyle({ extrusion: { ...(props.config.style?.extrusion || {}), ...patch } })
 }
+
+// ── 3D / 2.5D ───────────────────────────────────────────────────────────────
+// A height for a layer that has no height column. QGIS's 2.5D renderer defaults to 10 (in map
+// units); metres is what every height in GeoDeploy means, and 10 m is a three-storey building —
+// so ticking the box on a footprints layer shows something recognisable rather than nothing.
+const FLAT_HEIGHT_M = 10
+
+// Which of QGIS's two 3D renderers this style is: a field makes it attribute-driven, no field
+// makes it 2.5D. Derived rather than stored, so a style arriving from the plugin, the CLI or an
+// older portal lands in the right mode without a migration.
+const extrusionMode = computed(() => (props.config.style?.extrusion?.field ? 'field' : 'fixed'))
+
+function setExtrusionMode(mode) {
+  if (mode === 'field') {
+    // `height` is left behind deliberately: switching back restores the number that was typed,
+    // and the renderers all ignore it while a field is set.
+    setExtrusion({ field: numericFields.value[0]?.name || '' })
+  } else {
+    setExtrusion({ field: '', height: props.config.style?.extrusion?.height ?? FLAT_HEIGHT_M })
+  }
+}
+
+function setExtrusionOn(on) {
+  if (!on) { setExtrusion({ enabled: false }); return }
+  // Ticking the box must DRAW something. Without a height of some kind every renderer raises the
+  // layer by zero — a control that reports itself as on while the map is unchanged, which reads as
+  // a broken feature. A layer with a numeric column keeps the old behaviour (pick the column);
+  // one without gets a flat height, which is the only thing that can work for it.
+  const ex = props.config.style?.extrusion || {}
+  if (ex.field || ex.height) { setExtrusion({ enabled: true }); return }
+  if (numericFields.value.length) {
+    setExtrusion({ enabled: true, field: numericFields.value[0].name })
+  } else {
+    setExtrusion({ enabled: true, height: FLAT_HEIGHT_M })
+  }
+}
+
+// `base` is overloaded in the style — a NUMBER lifts every volume equally, a STRING names a column
+// — which is exactly how MapLibre's own `fill-extrusion-base` is used, and how the paint builders
+// on both sides already read it. The select turns that into three named choices.
+const baseMode = computed(() => {
+  const base = props.config.style?.extrusion?.base
+  if (typeof base === 'string' && base) return 'field'
+  return Number(base) > 0 ? 'fixed' : 'ground'
+})
+
+function setBaseMode(mode) {
+  if (mode === 'ground') setExtrusion({ base: 0 })
+  else if (mode === 'fixed') setExtrusion({ base: FLAT_HEIGHT_M })
+  else setExtrusion({ base: numericFields.value[0]?.name || '' })
+}
+
+// Present only on a style that CAME from a 2.5D renderer — the plugin writes the angle and shadow
+// it could not translate into this block so the trip back to QGIS can rebuild them.
+const from25D = computed(() => !!props.config.style?.extrusion?.qgis25d)
+
 
 // The bar footprint the SERVER will use when the author has not chosen one — derived from the
 // layer's own extent (parity: `symbology.pillar_radius`). Shown in the input so the number on

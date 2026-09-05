@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 from ..config import get_settings
 from .martin import get_tile_url as vector_tile_url
+from .titiler import terrain_of, terrain_tile_url
 from .titiler import tile_url_from_style as raster_tile_url
 from . import external_sources as ext_svc
 from . import pillars
@@ -100,6 +101,10 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
     """
     sources = {}
     layers = []
+    # A dict rather than a plain variable so the raster branch can `setdefault` into it from inside
+    # the loop without a `nonlocal`: MapLibre applies ONE terrain to the whole map, so the first
+    # raster that asks for it wins and the rest are quietly ignored.
+    terrain_request: dict = {}
     deck_layers = []  # GeoParquet + 3D-Z elevation layers rendered by the deck.gl overlay (not MapLibre)
     elev_seq = 0      # counter for synthetic ids of inline elevation deck layers ("elev-0", …)
     layers_info = []  # per-layer documentation for the portal About panel (name, abstract, links)
@@ -265,7 +270,13 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
             # just geodeploy:layer_id so the runtime can toggle every sub-layer together (portal.js
             # visibility toggle should target all layers sharing geodeploy:layer_id — parity TODO).
             for i, ml in enumerate(ml_layers):
-                ml["metadata"] = meta if i == 0 else {"geodeploy:layer_id": layer.id, "geodeploy:part": True}
+                # MERGED, not assigned: a builder may already have set metadata of its own — the
+                # line-marker layer carries `geodeploy:markerImages` so the runtime can register its
+                # bitmap, and only the first layer gets the full block. Overwriting it here meant
+                # the decoration's image was never created and the ticks never appeared.
+                standard = meta if i == 0 else {"geodeploy:layer_id": layer.id,
+                                                "geodeploy:part": True}
+                ml["metadata"] = dict(ml.get("metadata") or {}, **standard)
                 if not cfg.get("visible", True):
                     ml.setdefault("layout", {})["visibility"] = "none"
             layers.extend(ml_layers)
@@ -302,6 +313,32 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                                           band_count=layer.band_count)],
                 "tileSize": 256,
             }
+            # 3D TERRAIN. A DEM asked to be the terrain does two jobs at once: it stays the picture
+            # above (coloured, hillshaded, contoured — whatever its style says) and it becomes a
+            # HEIGHTFIELD that deforms the map. MapLibre reads the second from a `raster-dem` source
+            # in Terrain-RGB, where R/G/B are the bytes of a number rather than a colour — so it is
+            # a SECOND source for the same file, never a restyling of the first.
+            _terrain = terrain_of(rstyle)
+            if _terrain:
+                dem_id = f"{source_id}-dem"
+                sources[dem_id] = {
+                    "type": "raster-dem",
+                    "tiles": [terrain_tile_url(layer.s3_key)],
+                    "tileSize": 256,
+                    # TiTiler's `terrainrgb` defaults ARE the Mapbox encoding (interval 0.1,
+                    # baseval -10000), so this reads it directly.
+                    "encoding": "mapbox",
+                }
+                if _rb_terrain := _lonlat_bounds(layer.bbox):
+                    sources[dem_id]["bounds"] = _rb_terrain
+                # Terrain is a property of the MAP, not of a layer — one heightfield deforms
+                # everything — so when two rasters ask, the TOPMOST in the portal's layer list wins.
+                # Assignment, not `setdefault`: this loop runs in REVERSE (index 0 is the top of the
+                # list and must be painted last), so the last write is the topmost layer. A
+                # `setdefault` here would have handed the map to the BOTTOM one, which is the layer
+                # a reader is least likely to think of as the terrain.
+                terrain_request["terrain"] = {"source": dem_id,
+                                              "exaggeration": _terrain["exaggeration"]}
             # Where the data actually IS. Without this MapLibre requests tiles across the whole
             # viewport at every zoom, and the tile server answers 404 for every one that misses the
             # raster — a console full of failed requests, and real traffic spent proving that a COG
@@ -350,6 +387,19 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                                       else c.get("value"))}
                         for c in (rstyle.get("color_classes") or []) if isinstance(c, dict)
                     ] or None,
+                    # THE CONTOUR NUMBERS AS THE AUTHOR TYPED THEM.
+                    #
+                    # The legend used to read them back out of the tile URL, which is wrong twice
+                    # over. The interval there is SCALED — the data is multiplied so that TiTiler's
+                    # integer-only `increment` can express a fractional one, so an interval of 0.1
+                    # appears in the URL as 10, and the legend said "every 10" for lines drawn every
+                    # 0.1. And the range is not in the URL as `rescale` at all, because contours
+                    # consume the stretch as `minz`/`maxz` — so the legend printed the literal words
+                    # "min" and "max" where the numbers should be.
+                    #
+                    # Baked in the author's own units, like `geodeploy:classes` above and for the
+                    # same reason: the URL is what draws the map, not what describes it.
+                    "geodeploy:contour": _contour_meta(rstyle),
                 },
             }
             if not cfg.get("visible", True):
@@ -454,7 +504,8 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
     # no layer contributed an extent (raw `bounds` is still the inverted sentinel there, which would
     # be baked as a real extent and open the map on nothing).
     return {"sources": sources, "layers": layers, "bounds": valid_bounds, "core_fitted": core_fitted,
-            "deck_layers": deck_layers, "layers_info": layers_info, "layer_tree": layer_tree}
+            "deck_layers": deck_layers, "layers_info": layers_info, "layer_tree": layer_tree,
+            "terrain": terrain_request.get("terrain")}
 
 
 def _layer_info(layer, kind: str) -> dict:
@@ -828,10 +879,15 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
     # Merge basemap + user layers into a single complete MapLibre style
     full_style = {
         "version": 8,
-        "glyphs": "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
+        "glyphs": _glyphs_url(),
         "sprite": basemap_style.get("sprite", ""),
         "sources": {**basemap_style.get("sources", {}), **user_data["sources"]},
         "layers": basemap_style.get("layers", []) + user_data["layers"],
+        # 3D TERRAIN is a ROOT property of the style spec, not a layer and not a custom key —
+        # MapLibre applies it itself when the style loads, so a published portal needs no runtime
+        # code to raise its relief. `**` rather than a `"terrain": None`, because the spec has no
+        # null form and a null would be a style error on every portal that has no terrain.
+        **({"terrain": user_data["terrain"]} if user_data.get("terrain") else {}),
         # Custom key — MapLibre ignores unknown top-level keys
         "geodeploy": {
             "bounds": user_data.get("bounds"),
@@ -1646,16 +1702,88 @@ def _cluster_layers(source_id: str, layer, cfg: dict) -> list[dict]:
     ]
 
 
+#: The one glyph URL both style builders name — see `routers/fonts.py`. Whether a range comes from
+#: this instance's own font set or is redirected to MapLibre's public one is decided THERE, because
+#: only the server knows what is installed: if the published style and the editor preview each
+#: guessed, they would disagree the moment an operator installed a set.
+GLYPHS_URL = "/api/fonts/{fontstack}/{range}.pbf"
+
+
+def _glyphs_url() -> str:
+    return GLYPHS_URL
+
+
+def _label_layer(source_id: str, layer, cfg: dict) -> dict | None:
+    """A `symbol` layer drawing this layer's labels, or None when it has none.
+
+    ITS OWN LAYER, not text bolted onto the geometry's. Three reasons, and each of them would
+    otherwise be a bug: a label has its own zoom range, which QGIS keeps separately from the
+    layer's; labels must draw ABOVE every geometry on the map, not interleaved with it, and layer
+    order is the only thing that decides that; and a point layer's geometry layer is already a
+    `symbol` layer carrying an icon, so merging the two would tie a label's placement to its
+    marker's.
+    """
+    style = cfg.get("style") or {}
+    labels = symbology.labels_of(style)
+    if not labels:
+        return None
+    built = {
+        "id": f"vector-{layer.id}-labels",
+        "type": "symbol",
+        "source": source_id,
+        "source-layer": _source_layer_name(layer),
+        "layout": symbology.label_layout(labels),
+        "paint": symbology.label_paint(labels, cfg.get("opacity", 1.0)),
+    }
+    built.update(symbology.label_scope(labels))
+    return built
+
+
 def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
     """The MapLibre render layers for one vector layer — usually one, but a **raw-paint passthrough**
     (`style.maplibre.layers`, used by the GeoLibre importer to carry data-driven/extrusion symbology
     we can't express with the friendly keys) can emit several (e.g. fill + outline line). Each raw
     entry supplies `type`/`paint`/`layout`/`filter`/`suffix`; we wire the layer id + source-layer."""
-    raw = ((cfg.get("style") or {}).get("maplibre") or {}).get("layers")
+    # RULES FIRST. A rule-based layer is N render layers, one per rule, each with its own filter,
+    # its own symbol and its own zoom range — which is exactly what QGIS's rule tree flattens to
+    # (see the plugin's `rules.py`). The style also carries the first rule's shape at the top level
+    # as a `single` fallback, so a viewer that knows nothing about rules still draws something; that
+    # is why this branch has to come BEFORE the single-symbol path rather than after it.
+    style = cfg.get("style") or {}
+
+    # "NO SYMBOLS" IS A RENDERER, not an empty style. QGIS's `nullSymbol` draws nothing while the
+    # layer stays in the tree, listed and identifiable — which is how a layer is kept for its
+    # popups or its labels alone. An empty list is exactly that.
+    # A label layer rides along with whatever draws the geometry — and is the ONLY thing emitted
+    # when the renderer draws nothing, which is exactly how a layer kept for its labels alone works.
+    labels = _label_layer(source_id, layer, cfg)
+
+    # A HEATMAP REPLACES THE FEATURES. It is a different layer TYPE, not a paint variation, and
+    # drawing the points as well would put a pin on every hot spot — so this returns instead of
+    # adding. Labels still ride along, because a heatmap with named peaks is a normal thing to want.
+    heat = _heatmap_layer(source_id, layer, cfg)
+    if heat:
+        return _scoped([heat] + ([labels] if labels else []), style)
+
+    if symbology.draws_nothing(style):
+        return _scoped([labels], style) if labels else []
+
+    rule_layers = _rule_layers(source_id, layer, cfg)
+    if rule_layers is not None:
+        return _scoped(rule_layers + ([labels] if labels else []), style)
+
+    raw = style.get("maplibre", {}).get("layers") if isinstance(style.get("maplibre"), dict) else None
     if not raw:
         base = _vector_layer(source_id, layer, cfg)
         outline = _polygon_outline_layer(source_id, layer, cfg, base)
-        return [base, outline] if outline else [base]
+        built = [base, outline] if outline else [base]
+        decoration = _line_marker_layer(source_id, layer, cfg)
+        if decoration:
+            built.append(decoration)
+        centroids = _centroid_marker_layer(source_id, layer, cfg)
+        if centroids:
+            built.append(centroids)
+        return _scoped(built + ([labels] if labels else []), style)
     source_layer = _source_layer_name(layer)
     out: list[dict] = []
     for i, entry in enumerate(raw):
@@ -1669,7 +1797,190 @@ def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
         if entry.get("layout"):
             ml["layout"] = dict(entry["layout"])
         out.append(ml)
-    return out or [_vector_layer(source_id, layer, cfg)]
+    if labels:
+        out.append(labels)
+    return _scoped(out or [_vector_layer(source_id, layer, cfg)], style)
+
+
+def _scoped(layers: list[dict], style: dict) -> list[dict]:
+    """The LAYER's own zoom range and subset filter onto every render layer it emits.
+
+    A QGIS layer's scale range and subset string apply to everything it draws — a polygon's fill AND
+    its outline, every rule of a rule-based renderer — so they are applied here rather than baked
+    into whichever layer happened to be built first. A rule's own filter is ANDed with the layer's
+    rather than replaced, because in QGIS both are true at once.
+    """
+    scope = symbology.layer_scope(style)
+    if not scope:
+        return layers
+    own_filter = scope.pop("filter", None)
+    for ml in layers:
+        for key, value in scope.items():
+            # A rule's zoom range is already the narrower one where both exist — it was intersected
+            # with its parents when the rules were read — so it is not overwritten here.
+            ml.setdefault(key, value)
+        if own_filter is not None:
+            ml["filter"] = symbology.combined_filter(ml.get("filter"), own_filter)
+    return layers
+
+
+def _centroid_marker_layer(source_id: str, layer, cfg: dict) -> dict | None:
+    """A symbol at each polygon's centre — QGIS's centroid fill.
+
+    MapLibre places a `symbol` layer's icons at a polygon's LABEL POINT by default, which is the
+    point a label would sit on: inside the shape even when it is concave, where a true centroid can
+    fall outside it. So this is one extra layer and no geometry work.
+    """
+    block = symbology.centroid_marker(cfg.get("style") or {})
+    if not block:
+        return None
+    return {
+        "id": f"vector-{layer.id}-centroids",
+        "type": "symbol",
+        "source": source_id,
+        "source-layer": _source_layer_name(layer),
+        "layout": {
+            "icon-image": symbology.picture_id(block["image"]),
+            "icon-allow-overlap": True,
+            "icon-ignore-placement": True,
+        },
+        "paint": {"icon-opacity": cfg.get("opacity", 1.0)},
+        "metadata": {"geodeploy:markerImages": [
+            {"id": symbology.picture_id(block["image"]), "image": block["image"]}]},
+    }
+
+
+def _heatmap_layer(source_id: str, layer, cfg: dict) -> dict | None:
+    """A density surface instead of features — MapLibre's own `heatmap` layer type."""
+    block = symbology.heatmap(cfg.get("style") or {})
+    if not block:
+        return None
+    return {
+        "id": f"vector-{layer.id}",
+        "type": "heatmap",
+        "source": source_id,
+        "source-layer": _source_layer_name(layer),
+        "paint": symbology.heatmap_paint(block, cfg.get("opacity", 1.0)),
+    }
+
+
+def _line_marker_layer(source_id: str, layer, cfg: dict) -> dict | None:
+    """The symbol layer repeating a marker along a line, or None.
+
+    A SECOND render layer beside the line, not a property of it: MapLibre draws a line and places
+    symbols along it with two different layer types, and QGIS builds it the same way — a simple line
+    for the stroke with a marker line stacked on top. Reading only `symbolLayer(0)` is what used to
+    make a road with ticks arrive as a plain road.
+
+    It carries its own `geodeploy:markerImages`, because the runtime registers marker bitmaps from
+    that key and only the FIRST render layer gets the full metadata block.
+    """
+    style = cfg.get("style") or {}
+    block = symbology.line_marker(style)
+    if not block:
+        return None
+    return {
+        "id": f"vector-{layer.id}-linemarkers",
+        "type": "symbol",
+        "source": source_id,
+        "source-layer": _source_layer_name(layer),
+        "layout": symbology.line_marker_layout(block),
+        "paint": {"icon-opacity": cfg.get("opacity", 1.0)},
+        "metadata": {"geodeploy:markerImages": [
+            {"id": symbology.picture_id(block["image"]), "image": block["image"]}]},
+    }
+
+
+
+def _contour_meta(rstyle: dict) -> dict | None:
+    """`{increment, minz, maxz}` in the author's own units, or None when this is not a contour layer.
+
+    Read by the published legend so it states the interval that was typed rather than the scaled one
+    the tile URL carries. `_default_increment` is consulted for the same reason the renderer
+    consults it: a layer that only ticked the box has an interval, it just never wrote it down.
+    """
+    if (rstyle or {}).get("algorithm") != "contours":
+        return None
+    from . import titiler as titiler_svc
+    lo, hi = titiler_svc._range_of(rstyle.get("minz"), rstyle.get("maxz"), rstyle.get("rescale"))
+    step = rstyle.get("increment")
+    if step in (None, ""):
+        step = titiler_svc._default_increment(lo, hi)
+    try:
+        step = float(step)
+    except (TypeError, ValueError):
+        return None
+    out: dict = {"increment": int(step) if step == int(step) else step}
+    if lo is not None:
+        out["minz"], out["maxz"] = lo, hi
+    return out
+
+def _rule_layers(source_id: str, layer, cfg: dict) -> list[dict] | None:
+    """One render layer per rule in `style.rules`, or None when this layer is not rule-based.
+
+    WHY EACH RULE GOES THROUGH `_vector_layer` RATHER THAN CARRYING ITS OWN PAINT. A rule's `style`
+    is the same friendly vocabulary a single-symbol layer uses — colour, width, dash, marker,
+    radius, fill opacity, outline — so building it with the ordinary path means a rule is drawn by
+    the code that already draws everything else. A rule carrying finished MapLibre paint would be a
+    second renderer to keep in step with the four that already have to agree.
+
+    The layer's own style is the BASE and the rule's is laid over it, so a rule that names only a
+    colour inherits the layer's width and dash rather than silently falling back to the map's
+    defaults — which is what QGIS does too, since a rule's symbol starts as a copy.
+
+    Order: `rules[0]` draws FIRST, i.e. underneath, matching QGIS's rule order. MapLibre draws in
+    list order, so the list is emitted as-is.
+    """
+    rules = (cfg.get("style") or {}).get("rules")
+    if not isinstance(rules, list) or not rules:
+        return None
+    base_style = {k: v for k, v in (cfg.get("style") or {}).items() if k != "rules"}
+    out: list[dict] = []
+    for i, rule in enumerate(rules):
+        if not isinstance(rule, dict):
+            continue
+        merged = dict(base_style)
+        merged.update(rule.get("style") or {})
+        # A rule is one symbol, never a classification: its colours live in the rule list, so a
+        # `color_mode` inherited from the layer would try to classify inside a rule and draw the
+        # wrong colour entirely.
+        for key in ("color_mode", "classes", "categories", "color_field", "classes_n"):
+            merged.pop(key, None)
+        rule_cfg = dict(cfg, style=merged)
+        built = _vector_layer(source_id, layer, rule_cfg)
+        built["id"] = f"vector-{layer.id}-r{i}"
+        _apply_rule_scope(built, rule)
+        out.append(built)
+        outline = _polygon_outline_layer(source_id, layer, rule_cfg, built)
+        if outline:
+            outline["id"] = f"vector-{layer.id}-r{i}-outline"
+            _apply_rule_scope(outline, rule)
+            out.append(outline)
+    return out or None
+
+
+def _apply_rule_scope(ml: dict, rule: dict) -> None:
+    """A rule's filter and zoom range onto one built render layer.
+
+    `minzoom`/`maxzoom` come from the rule's QGIS scale range (`styles.zoom_for_scale` in the
+    client does the conversion, because the two run in opposite directions). They are clamped to
+    MapLibre's own 0-24 range: QGIS happily stores a threshold far outside it, and a `maxzoom` of
+    29 makes MapLibre reject the whole style rather than ignore the number.
+    """
+    if rule.get("filter") is not None:
+        ml["filter"] = rule["filter"]
+    for key in ("minzoom", "maxzoom"):
+        value = rule.get(key)
+        if value is None:
+            continue
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            continue
+        value = max(0.0, min(24.0, value))
+        # A minzoom of 0 and a maxzoom of 24 are the defaults; writing them only adds noise.
+        if (key == "minzoom" and value > 0) or (key == "maxzoom" and value < 24):
+            ml[key] = round(value, 3)
 
 
 def _polygon_outline_layer(source_id: str, layer, cfg: dict, base: dict) -> dict | None:
@@ -1703,19 +2014,32 @@ def _polygon_outline_layer(source_id: str, layer, cfg: dict, base: dict) -> dict
         "type": "line",
         "source": source_id,
         "source-layer": _source_layer_name(layer),
-        "paint": {
-            "line-color": symbology.outline_color(style),
-            "line-width": symbology.outline_width_px(style),
-            # The outline follows the layer's own opacity, not the FILL's: a polygon drawn as a
-            # 45% wash with a solid border is the ordinary way to draw one, and tying the border to
-            # `fill_opacity` would make it fade with the wash.
-            "line-opacity": cfg.get("opacity", 1.0),
-        },
+        "paint": _outline_paint(style, cfg),
         # No metadata here on purpose: the caller stamps it, giving the FIRST layer the full
         # `geodeploy:*` block and every other one `{layer_id, part: True}` — which is what keeps the
         # switcher listing this layer once while the eye toggle hides the outline with its fill.
         # Setting any here would be overwritten, and would read as if it mattered.
     }
+
+
+def _outline_paint(style: dict, cfg: dict) -> dict:
+    """A polygon outline's paint. Its own function because an outline IS a line, and the line
+    vocabulary — dash pattern, offset — applies to it exactly as it does to a line layer."""
+    paint = {
+        "line-color": symbology.outline_color(style),
+        "line-width": symbology.outline_width_px(style),
+        # The outline follows the layer's own opacity, not the FILL's: a polygon drawn as a 45%
+        # wash with a solid border is the ordinary way to draw one, and tying the border to
+        # `fill_opacity` would make it fade with the wash.
+        "line-opacity": cfg.get("opacity", 1.0),
+    }
+    dashes = symbology.dash_array(style)
+    if dashes:
+        paint["line-dasharray"] = dashes
+    offset = symbology.line_offset(style)
+    if offset is not None:
+        paint["line-offset"] = offset
+    return paint
 
 
 def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
@@ -1743,6 +2067,13 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
             "fill-color": color,
             "fill-opacity": opacity * style.get("fill_opacity", 0.45),
         }
+        # A PATTERN REPLACES THE COLOUR. MapLibre draws `fill-pattern` INSTEAD of `fill-color` —
+        # the tile carries its own colours — so leaving the colour set would be a no-op that reads
+        # as if it still applied. `fill-opacity` still does, which is how a hatch stays a wash.
+        pattern = symbology.fill_pattern(style)
+        if pattern:
+            fill_paint.pop("fill-color", None)
+            fill_paint["fill-pattern"] = symbology.picture_id(pattern["image"])
         # Removing a fill's outline is `fill-antialias: false`, NOT omitting fill-outline-color.
         # Omitting it makes the outline MATCH FILL-COLOR (the spec's default), which is why "None"
         # produced a visible dark edge instead of none — reported as "it drew a black outline".
@@ -1765,18 +2096,26 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
             "line-width": symbology.size_expression(style, style.get("line_width", 2)),
             "line-opacity": opacity,
         }
-        line_type = style.get("lineType")
-        if line_type == "dashed":
-            paint["line-dasharray"] = [2, 1.5]
-        elif line_type == "dotted":
-            paint["line-dasharray"] = [0.4, 1.8]
-        return {
+        # An explicit `dash_pattern` (read out of QGIS's custom dash vector) wins over the two
+        # named presets. Both are in MULTIPLES OF THE LINE WIDTH, which is MapLibre's unit — see
+        # `symbology.dash_array` for why a pattern is not stored in pixels.
+        dashes = symbology.dash_array(style)
+        if dashes:
+            paint["line-dasharray"] = dashes
+        offset = symbology.line_offset(style)
+        if offset is not None:
+            paint["line-offset"] = offset
+        built = {
             "id": f"vector-{layer.id}",
             "type": "line",
             "source": source_id,
             "source-layer": source_layer,
             "paint": paint,
         }
+        layout = symbology.line_layout(style)
+        if layout:
+            built["layout"] = layout
+        return built
     # POINTS IN 3D: a pillar standing at each location. MapLibre extrudes FILLS only, so there is no
     # point form of fill-extrusion — the geometry has to become a polygon. `services/pillars` serves
     # exactly that: one shared Martin FUNCTION buffers the points by a radius in metres and returns
@@ -1810,14 +2149,14 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
         "type": "symbol",
         "source": source_id,
         "source-layer": source_layer,
-        "layout": {
+        "layout": dict({
             "icon-image": symbology.icon_image_expression(style),
             "icon-size": symbology.icon_size_expression(style),
             "icon-allow-overlap": True,
             "icon-ignore-placement": True,
-        },
+        }, **symbology.marker_layout(style)),
         "paint": {
-            "icon-opacity": opacity,
+            "icon-opacity": symbology.marker_opacity(style, opacity),
         },
     }
 

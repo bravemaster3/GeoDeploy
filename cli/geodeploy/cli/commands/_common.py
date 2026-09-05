@@ -14,7 +14,8 @@ from typing import Any, Dict, List, Optional
 
 from ...errors import ValidationError
 from ...styles import (CLASSIFY_METHODS, COLOR_MODES, LINE_TYPES, MARKERS, RAMPS, build_style,
-                       parse_categories, parse_classes)
+                       parse_categories, parse_classes, parse_number_list,
+                       LINE_CAPS, LINE_JOINS, LABEL_FONTS)
 
 
 def add_style_args(parser, raster: bool = True) -> None:
@@ -46,7 +47,7 @@ def add_style_args(parser, raster: bool = True) -> None:
     driven.add_argument("--classify", nargs="?", const="quantile", choices=CLASSIFY_METHODS,
                         help="compute classes from the data: quantile (default), equal, jenks")
     driven.add_argument("--classes", type=int, default=None,
-                        help="how many classes to compute (2-12, default 5)")
+                        help="how many classes to compute (2-100, default 5)")
     driven.add_argument("--ramp", choices=RAMPS, help="colour ramp for computed classes")
     driven.add_argument("--reverse-ramp", action="store_true",
                         help="run the ramp the other way (light end for the low values)")
@@ -99,6 +100,85 @@ def add_style_args(parser, raster: bool = True) -> None:
                           help="high end of the contour colour range (defaults to --rescale)")
         rast.add_argument("--bidx", help="band selection: '1' or '3,2,1' for an RGB composite")
 
+    # The line and marker vocabulary MapLibre draws natively. Each round-trips exactly from QGIS.
+    line = parser.add_argument_group("lines and markers")
+    line.add_argument("--dash-pattern",
+                      help="dash and gap lengths in MULTIPLES OF THE LINE WIDTH, e.g. '3,2' or "
+                           "'3,2,1,2' — wins over --line-type")
+    line.add_argument("--no-dash-pattern", action="store_true",
+                      help="drop a custom dash pattern, leaving --line-type")
+    line.add_argument("--line-cap", choices=LINE_CAPS, help="how a line ends")
+    line.add_argument("--line-join", choices=LINE_JOINS, help="how a line turns a corner")
+    line.add_argument("--line-offset", type=float,
+                      help="draw the line this many pixels to one side (negative for the other)")
+    line.add_argument("--marker-rotation", type=float, help="turn each marker, in degrees")
+    line.add_argument("--marker-offset", help="move each marker, as 'x,y' in pixels")
+    line.add_argument("--marker-opacity", type=float, help="the marker's own opacity, 0-1")
+
+    # PICTURES FROM A FILE. These three keys already SURVIVED a CLI restyle — `build_style` merges
+    # onto the existing style, so a marker rendered by the QGIS plugin was never dropped — but there
+    # was no way to SET one without QGIS. A PNG or SVG on disk is the obvious other source, and the
+    # renderers cannot tell the two apart: both arrive as the same data URI.
+    pics = parser.add_argument_group("pictures (from a local image file)")
+    pics.add_argument("--marker-image", metavar="FILE",
+                      help="draw each point as this image instead of a generated shape")
+    pics.add_argument("--fill-pattern", metavar="FILE",
+                      help="tile this image across each polygon (it must tile seamlessly)")
+    pics.add_argument("--line-marker", metavar="FILE",
+                      help="repeat this image along each line, rotated with it")
+    pics.add_argument("--centroid-marker", metavar="FILE",
+                      help="place this image at each polygon's centre")
+    for flag, what in (("--no-marker-image", "the point picture"),
+                       ("--no-fill-pattern", "the polygon pattern"),
+                       ("--no-line-marker", "the markers along the line"),
+                       ("--no-centroid-marker", "the centre marker")):
+        pics.add_argument(flag, action="store_true", help="remove {0}".format(what))
+    pics.add_argument("--line-marker-spacing", type=float,
+                      help="pixels between repeated line markers")
+
+    # Scale range and "draws nothing" belong to the LAYER, not to one symbol.
+    scope = parser.add_argument_group("where the layer draws")
+    scope.add_argument("--min-zoom", type=float,
+                       help="hide the layer below this zoom (QGIS's most-zoomed-OUT scale limit)")
+    scope.add_argument("--max-zoom", type=float, help="hide the layer above this zoom")
+    scope.add_argument("--no-symbol", action="store_true",
+                       help="draw nothing, but keep the layer listed — QGIS's No symbols renderer")
+    scope.add_argument("--symbol", dest="no_symbol", action="store_false", default=None,
+                       help="undo --no-symbol")
+
+    # LABELS. Their own group because a label is a second thing drawn for the same feature — its
+    # own text, font, colour and zoom range — and it becomes its own MapLibre layer.
+    lab = parser.add_argument_group("labels")
+    lab.add_argument("--label-field", help="the attribute to label with — turns labelling ON")
+    lab.add_argument("--no-labels", action="store_true", help="stop labelling this layer")
+    lab.add_argument("--label-size", type=float, help="label text size in pixels")
+    lab.add_argument("--label-color", help="label text colour")
+    lab.add_argument("--label-font", choices=LABEL_FONTS,
+                     help="a portal can only draw the fonts its glyph set contains")
+    lab.add_argument("--label-halo-color", help="colour of the outline behind the text")
+    lab.add_argument("--label-halo-width", type=float, help="halo width in pixels (0 for none)")
+    lab.add_argument("--label-offset", help="move the text, as 'x,y' in pixels")
+    lab.add_argument("--label-placement", choices=("point", "line"),
+                     help="place the text at a point, or bend it along the line")
+    lab.add_argument("--label-transform", choices=("none", "uppercase", "lowercase"))
+    lab.add_argument("--label-max-width", type=float, help="wrap the text at this many ems")
+    lab.add_argument("--label-allow-overlap", action="store_true",
+                     help="draw every label even where they collide")
+    lab.add_argument("--label-priority", type=float,
+                     help="0-10, higher wins the space when labels collide")
+    lab.add_argument("--label-min-zoom", type=float, help="hide the labels below this zoom")
+    lab.add_argument("--label-max-zoom", type=float, help="hide the labels above this zoom")
+
+    # RULES. A rule list is not something anyone types at a shell — it comes out of QGIS, through
+    # the plugin — so the CLI's job is to move one around and to get rid of one, not to compose it
+    # field by field. `--rules @file.json` is how a rule-based style is scripted into an instance.
+    parser.add_argument("--rules",
+                        help="a JSON list (or @file.json) of rule objects — "
+                             '{label, expression, filter, style, minzoom, maxzoom} — usually '
+                             "written by the QGIS plugin")
+    parser.add_argument("--no-rules", action="store_true",
+                        help="drop the rule list, leaving the layer's own single symbol")
+
     parser.add_argument("--style-json",
                         help="a JSON object (or @file.json) merged in last — the escape hatch for "
                              "anything these flags do not cover")
@@ -133,7 +213,9 @@ def style_from_args(args, client=None, layer_ref: Optional[Any] = None,
                  "rescale", "algorithm", "zfactor", "increment", "thickness", "minz", "maxz",
                  "color_field", "color_mode", "size_field", "other_color", "size_stops",
                  "extrude_field", "extrude_scale", "extrude_base", "extrude_color",
-                 "extrude_opacity", "extrude_radius"):
+                 "extrude_opacity", "extrude_radius",
+                 "line_cap", "line_join", "line_offset", "marker_rotation", "marker_opacity",
+                 "min_zoom", "max_zoom"):
         kwargs[name] = getattr(args, name, None)
     if getattr(args, "bidx", None):
         kwargs["bidx"] = [int(b) for b in str(args.bidx).replace(" ", "").split(",") if b]
@@ -147,6 +229,43 @@ def style_from_args(args, client=None, layer_ref: Optional[Any] = None,
         kwargs["categories"] = parse_categories(args.categories)
     if getattr(args, "no_classification", False):
         kwargs["clear_classification"] = True
+    for arg, key in (("marker_image", "marker_image"), ("fill_pattern", "fill_pattern"),
+                     ("line_marker", "line_marker"), ("centroid_marker", "centroid_marker")):
+        path = getattr(args, arg, None)
+        if path:
+            kwargs[key] = path
+        if getattr(args, "no_" + arg, False):
+            kwargs["no_" + key] = True
+    if getattr(args, "line_marker_spacing", None) is not None:
+        kwargs["line_marker_spacing"] = args.line_marker_spacing
+    for name in ("dash_pattern", "marker_offset", "no_dash_pattern", "no_symbol"):
+        value = getattr(args, name, None)
+        if value is not None and value is not False:
+            kwargs[name] = value
+        elif name == "no_symbol" and value is False:
+            kwargs[name] = False          # `--symbol` explicitly turns it back on
+    labels = {}
+    for arg, key in (("label_field", "field"), ("label_size", "size"), ("label_color", "color"),
+                     ("label_font", "font"), ("label_halo_color", "halo_color"),
+                     ("label_halo_width", "halo_width"), ("label_placement", "placement"),
+                     ("label_transform", "transform"), ("label_max_width", "max_width"),
+                     ("label_priority", "priority"), ("label_min_zoom", "minzoom"),
+                     ("label_max_zoom", "maxzoom")):
+        value = getattr(args, arg, None)
+        if value is not None:
+            labels[key] = value
+    if getattr(args, "label_offset", None):
+        labels["offset"] = parse_number_list(args.label_offset, "--label-offset", length=2)
+    if getattr(args, "label_allow_overlap", False):
+        labels["allow_overlap"] = True
+    if labels:
+        kwargs["labels"] = labels
+    if getattr(args, "no_labels", False):
+        kwargs["clear_labels"] = True
+    if getattr(args, "rules", None):
+        kwargs["rules"] = read_json_arg(args.rules, "--rules", allow_list=True)
+    if getattr(args, "no_rules", False):
+        kwargs["clear_rules"] = True
 
     style = build_style(style, **kwargs)
 
@@ -156,11 +275,15 @@ def style_from_args(args, client=None, layer_ref: Optional[Any] = None,
     return style
 
 
-def read_json_arg(value: str, label: str) -> Dict[str, Any]:
+def read_json_arg(value: str, label: str, allow_list: bool = False):
     """A JSON object given inline, or `@path` to read it from a file (or `@-` for stdin).
 
     `utf-8-sig` on the file: PowerShell's `>` writes UTF-16 or a BOM, which is how the reference
     script's `portal-set` used to fail on Windows with an unreadable JSON error.
+
+    `allow_list` is for `--rules`, which is a JSON ARRAY rather than an object — the object check
+    below is otherwise the thing that catches a style file with the wrong shape, and loosening it
+    for everything would trade a clear message for a confusing one further down.
     """
     text = value
     if value.startswith("@"):
@@ -174,6 +297,10 @@ def read_json_arg(value: str, label: str) -> Dict[str, Any]:
         data = json.loads(text)
     except ValueError as exc:
         raise ValidationError(400, "{0} is not valid JSON: {1}".format(label, exc))
+    if allow_list:
+        if not isinstance(data, list):
+            raise ValidationError(400, "{0} must be a JSON list.".format(label))
+        return data
     if not isinstance(data, dict):
         raise ValidationError(400, "{0} must be a JSON object.".format(label))
     return data

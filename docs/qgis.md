@@ -73,6 +73,30 @@ anything that writes: uploading, saving a style, pushing a portal.
 
 If you have already run `geodeploy login` at a shell, the plugin finds that token by itself.
 
+### Getting a token
+
+The write buttons — **Upload selected layers**, **Save styling to GeoDeploy**, **Push group to
+portal** — are greyed out until the plugin has one. That is the answer to the most common question
+about this plugin: they are not unfinished, they are unavailable.
+
+1. Sign in to your instance in a browser.
+2. Go to **Settings → API tokens** (every account has this tab, not just admins).
+3. **Create token**, give it a name, and choose one with **write** access.
+4. Copy it once — it is shown only at creation.
+5. Paste it into the plugin's **Token** box and press **Connect** again.
+
+The plugin links straight to that page: when the write buttons are greyed out it says so under
+them, with a link to the tokens page of the instance you are connected to.
+
+#### Quick start against the demo
+
+    URL:   https://demo.geodeploy.org
+    Token: create one under Settings -> API tokens after signing in
+
+Connect, pick any layer in QGIS, tick **Send its styling too**, and press **Upload selected
+layers**. It appears in **My Data** on the instance, styled the way QGIS drew it. Note that the demo
+resets hourly, which invalidates tokens — if writes suddenly start failing, make a new one.
+
 ## Add a layer
 
 Select a layer and press **Add to map**. It arrives styled as GeoDeploy draws it.
@@ -122,8 +146,8 @@ to GeoDeploy** (the layer's default style) or **Push group to portal** (that por
 
 What travels:
 
-- **Vectors** — single symbol, graduated and categorized; colour, marker shape, radius, line width
-  and dash, fill opacity, outline colour and width; size from a field.
+- **Vectors** — single symbol, graduated, categorized and **rule-based**; colour, marker shape,
+  radius, line width and dash, fill opacity, outline colour and width; size from a field.
 - **Rasters** — colour ramp and its direction, stretch, band selection, a colour per pixel value,
   hillshade with its Z factor, and contour interval and line width.
 
@@ -139,20 +163,192 @@ pass through the API.
 A layer that cannot be sent is named with the reason rather than failing silently — a remote layer,
 or one with unsaved edits.
 
-## Known limitations
+### Rule-based layers
 
-- **3D extrusion is not drawn.** A layer's extrusion is stored and rendered by GeoDeploy as usual,
-  and the plugin carries it safely — opening an extruded layer and pushing it back does not remove
-  it — but QGIS shows those polygons flat, so 3D cannot be edited here yet.
-- **Symbology QGIS has and GeoDeploy does not** — inverted polygons, 2.5D, hatch and gradient fills,
-  line offsets, markers along a line, multi-layer symbols, rule-based rendering, labels — is
-  simplified on the way in and not carried back.
-- **3D units are not converted.** GeoDeploy's heights and radii are metres; QGIS 3D measures in the
+A rule-based layer travels as its rules. Each rule keeps its own filter, its own symbol, its own
+label and its own scale range, and GeoDeploy draws one map layer per rule — so a layer with three
+rules looks the same in the portal as it does in QGIS. Nested rules are flattened (a child's
+condition becomes the parent's *and* its own), and an **else** rule becomes "none of the others".
+
+Rule filters are translated between QGIS's expression language and the map's. That covers the
+comparisons, `AND`/`OR`/`NOT`, `IN`, `BETWEEN`, `IS NULL`, `LIKE` with a wildcard at either end,
+arithmetic, `CASE WHEN`, and the common string and number functions. **A filter outside that set is
+reported and its rule is left behind**, rather than published as a rule that draws everything —
+which would be a different map, not a simpler one. The Log Messages panel names the rule and the
+part it could not read.
+
+A rule's scale range becomes a zoom range on the published map, so a rule that only draws below
+1:10 000 in QGIS only draws at those zooms in the portal.
+
+### Markers QGIS draws and a web map cannot describe
+
+An SVG marker, a raster or font marker, an ellipse, a filled marker, or several markers stacked into
+one symbol — these used to arrive in the portal as a coloured dot of the right size, because a web
+map has no way to *describe* them.
+
+They now arrive as themselves. The plugin asks QGIS to **render the symbol** and sends the picture,
+so the portal draws what you drew. One mechanism covers every kind of marker QGIS has, including
+ones it adds later.
+
+Two consequences worth knowing:
+
+- **A picture is one image for every feature.** A bitmap cannot be recoloured per class the way a
+  generated shape can, so a classified layer with a picture marker draws the same icon for every
+  class. The classification still applies to everything else.
+- **Very large symbols are refused rather than shipped.** A style travels in every published
+  portal's `style.json`, so a marker that renders past about 96 KB is drawn plainly instead, and the
+  Log Messages panel says so.
+
+### Heatmaps and centroid fills
+
+A **heatmap** layer travels as a heatmap: the radius, the weighting column and the colour ramp all
+arrive, and the portal draws a density surface rather than a pile of dots. The ramp is sampled at
+five stops, because QGIS's may be a gradient, a named scheme or a hand-built list and only the
+colours are common to all three.
+
+A **centroid fill** — one marker at each polygon's centre — arrives as a marker layer. The portal
+places it at the polygon's *label point*, which sits inside the shape even when it is concave, where
+a true centroid can fall outside it.
+
+### Patterned fills
+
+Hatches, cross-hatches and dense fills, line and point patterns, and polygons filled with an SVG or
+an image all travel. The portal repeats the same tile at the same spacing.
+
+One honest limit. A repeating tile has to *close* — its right edge must line up with its left — and a
+square tile only closes at hatch angles of 0°, 45°, 90° and 135°. A hatch at 30° has no tile that
+repeats, so it is drawn at the nearest angle that does, and the Log Messages panel says so. A few
+degrees out is a slightly wrong hatch; a tile that does not close is a seam every few pixels, which
+reads as a fault rather than a pattern.
+
+A **randomly scattered** fill is drawn as an evenly spaced one at the same density, for the same
+reason: randomness has no repeating tile. That one is a different picture, and it is reported as
+such.
+
+A patterned polygon in QGIS is usually a plain fill with the pattern stacked on top, and both halves
+travel — as with lines, the pattern is looked for across every symbol layer rather than just the
+first.
+
+### Markers along a line
+
+Ticks on a boundary, arrows on a river, chevrons on a one-way street — QGIS's marker line and hashed
+line repeat a symbol down a line, and the portal draws the same thing: the same picture at the same
+interval, **rotated to follow the line** rather than always pointing up the screen.
+
+A decorated line is usually two symbol layers in QGIS — a plain stroke with the markers stacked on
+top — and both travel. That combination used to arrive as a plain line, because only the first
+symbol layer was ever read.
+
+### Labels
+
+Labels travel. The text (an attribute or an expression), the size, the colour, the halo — QGIS calls
+it a buffer — the offset, the rotation, the wrapping, the capitalisation, whether labels may overlap,
+their priority and their own scale range all arrive in the portal and go back again.
+
+Two things to know:
+
+- **Fonts are mapped, not carried.** A web map draws text from a glyph set, and a font the set does
+  not contain renders as *nothing at all* — no error, no fallback, no text. So a label's font is
+  matched to one the portal can actually draw, keeping bold and italic. The Log Messages panel names
+  the substitution when it happens.
+- **Shadows, background shapes and callouts do not travel.** A web map draws a halo and nothing
+  else, and the leader line from a displaced label back to its feature is a second geometry with
+  nowhere to go.
+
+Rule-based labelling is read as its first rule, and says so.
+
+### 2.5D
+
+A 2.5D layer arrives in GeoDeploy as a **real 3D extrusion** — which you can orbit, and QGIS's
+pseudo-perspective block cannot be. It is not the same picture: the web map has one colour and a
+vertical shading gradient where QGIS has a roof, walls and a shadow. The roof colour becomes the
+extrusion's colour; the angle, the wall colour and the shadow are stored, so opening the layer in
+QGIS again gives you 2.5D back rather than a plain extrusion to rebuild.
+
+The height and viewing angle are **project settings** in QGIS, not layer ones, so changing them
+changes every 2.5D layer in the project — GeoDeploy stores them per layer, which is the one place
+the two models genuinely differ. The height is in the project's map units and GeoDeploy reads it as
+metres; those agree in a projected CRS and not in a geographic one.
+
+## What does not travel
+
+Most of QGIS's symbology reaches GeoDeploy exactly, and a good deal of the rest reaches it as a
+stated approximation. This is the list of what does **not**, and why — so that a map that comes out
+different is a thing you were told about rather than a thing you have to discover.
+
+**The plugin says these out loud when you push.** None of them makes a push fail; that is exactly
+why they are written down. A push that succeeds and quietly changes the map is the failure worth
+guarding against.
+
+### Impossible in a web map, and unlikely to change
+
+| QGIS | What happens instead |
+|---|---|
+| **Blend modes** (Multiply, Screen, Overlay…) on a layer or between its features | Drawn **Normal**. MapLibre has no blend modes at all — every "blend" in its style spec is sky, fog or atmosphere. Lowering the layer's opacity is the nearest thing. |
+| **Geometry generators** | Not carried. These are arbitrary expressions that produce *new geometry*; there is nothing to translate them into. The QML is kept so QGIS gets them back. |
+| **Shapeburst fill** | A distance transform inside each polygon. Out of reach; the QML is kept. |
+| **Mask markers** | A clipping mask, with no MapLibre equivalent. Carried, not drawn. |
+| **Embedded (per-feature) symbols** | A vector tile has no way to carry a different symbol per feature. Carried, not drawn. |
+| **Draw effects** (blur, drop shadow, glow) | MapLibre exposes none of them. |
+
+### Possible, but not built
+
+| QGIS | Why not yet |
+|---|---|
+| **Interpolated line** (a colour ramp *along* a line) | Needs MapLibre's `line-gradient`, which the style spec permits **only** on GeoJSON sources with `lineMetrics: true` — a vector tile clips features at tile boundaries, so no tile knows the whole line's length. GeoDeploy's own layers are vector tiles. An external GeoJSON layer could do it. |
+| **Linear referencing** (chainage labels along a line) | Labels exist now, and that is not enough: `symbol-placement: line` repeats the *same* text at every placement, and distance-along-the-line is not something MapLibre can compute. The values would have to be generated server-side as point features carrying their measure. |
+| **Point clustering** | GeoDeploy clusters, but at **tiling** time rather than in the style — so a QGIS cluster renderer cannot switch it on. Tick *Cluster points* on the layer and re-tile. |
+| **Inverted polygons** | Would need a server-derived mask (the layer's union subtracted from the world). Until then the polygons themselves are drawn — the inverse of the picture. |
+| **Point displacement** | No web equivalent. Clustering is the nearest honest approximation. |
+| **Merged features** | Drawn as the underlying symbol, so the joins QGIS dissolves stay visible. |
+| **A layer's own scale range** | Not carried yet, although a *rule's* is. |
+
+### Approximated, and reported as such
+
+These do travel, but not identically. Each is a deliberate choice with the reasoning recorded in
+`scripts/coverage_report.py`, which is checked against QGIS's own registries so the list cannot
+drift from what the plugin does:
+
+- **Gradients** — fill, lineburst and shapeburst read as the **middle** of their ramp. MapLibre has
+  no gradient of any kind, so one flat colour is all there is; the midpoint is the closest one.
+- **Raster lines** — a line stroked with an image becomes the average of that image's opaque pixels.
+- **Filled lines** — a buffered-and-filled line becomes an ordinary line in the fill's colour.
+- **Line pattern fills** — the angle is snapped to 0/45/90/135°, the only angles at which a square
+  tile closes. A seam every tile is worse than a few degrees.
+- **Random marker fills** — drawn as a regular grid at the same density; randomness has no
+  repeating tile.
+- **Arrow lines** — the head is rebuilt and repeated along the line. QGIS draws one arrow per
+  feature and MapLibre cannot place an icon at a line's end, and the shaft does not taper.
+- **Vector fields** — rendered as a picture, so the layer draws, but the arrows cannot follow the
+  data per feature.
+- **Simple markers** — six of QGIS's shapes are native; anything else is rendered to an image.
+- **2.5D** — becomes a real 3D extrusion. Its viewing angle and shadow have no MapLibre equivalent;
+  both are stored so they survive the trip back to QGIS.
+- **3D units are not converted.** GeoDeploy's heights and radii are metres; QGIS measures in the
   project's map units. Those agree in a projected CRS and do not in a geographic one.
+
+### Other
+
+- **3D extrusion cannot be edited in QGIS.** It is stored, rendered by GeoDeploy, and carried safely
+  — opening an extruded layer and pushing it back does not remove it — but QGIS shows those polygons
+  flat.
 - A raster must be uploaded from a local file: re-encoding one would mean choosing compression and
   resampling on your behalf, and ingest converts to a COG anyway.
 
-Both symbology gaps are tracked as *Every symbol QGIS can draw* on the [roadmap](roadmap.md).
+The full table, generated from QGIS's registries rather than written by hand, is
+`integrations/qgis-plugin/scripts/coverage_report.py`. It fails CI when this QGIS offers something
+the table does not classify, so a new QGIS version forces a decision instead of quietly widening a
+gap.
+
+### If a token stops working
+
+An upload that worked five minutes ago and refuses now is almost always one of two things, and
+neither is obvious from `HTTP 401`: the token was revoked, or the instance is a **demo** and has
+been reset since. The plugin says so rather than showing the status code, on every action that
+writes.
+
+On the official demo the reset is hourly, on the hour, and it deletes tokens along with everything
+else. The Settings → API tokens page says so too, on a demo instance.
 
 ## If something looks wrong
 

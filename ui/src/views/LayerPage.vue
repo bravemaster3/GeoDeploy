@@ -151,9 +151,15 @@
             </p>
             <div v-if="legend.length" class="space-y-1">
               <div v-for="(e, i) in legend" :key="i" class="flex items-center gap-2">
-                <LegendSwatch :geom="swatchGeom" :color="e.color" :marker="markerShape"
-                  :dash="lineDash" :size="16"
-              :outline-color="outlineColor" :outline-width="outlineWidth" />
+                <!-- Each entry's OWN symbol where it has one. A classified layer varies only by
+                     colour, so every row shared the layer's dash and marker — but a rule-based
+                     layer varies by everything at once, and drawing its rules with one base symbol
+                     reports a dashed rule, a hatched rule and a star rule as identical. -->
+                <LegendSwatch :geom="swatchGeom" :color="e.color"
+                  :marker="e.shape || markerShape" :dash="e.dash || lineDash" :size="16"
+                  :image="e.marker_image" :pattern="e.fill_pattern" :ramp="e.ramp"
+                  :outline-color="e.outline_color || outlineColor"
+                  :outline-width="e.outline_width ?? outlineWidth" />
                 <span class="text-[11px] text-muted-foreground truncate">{{ e.label }}</span>
               </div>
             </div>
@@ -285,7 +291,11 @@
           <Fact label="Attribution" :value="layer.attribution" />
           <Fact label="Keywords" :value="layer.keywords" />
         </dl>
-        <p v-if="layer.abstract" class="text-xs text-muted-foreground mt-2 whitespace-pre-line">
+        <!-- A description is free text somebody pasted, and it very often holds a source URL —
+             one unbroken run of characters with nowhere to wrap, which pushed the text out through
+             the side of the card. `anywhere` breaks such a run only when it has to. -->
+        <p v-if="layer.abstract"
+           class="text-xs text-muted-foreground mt-2 whitespace-pre-line [overflow-wrap:anywhere]">
           {{ layer.abstract }}
         </p>
         <p class="text-[11px] text-muted-foreground/60 mt-2">
@@ -349,10 +359,15 @@ import { tileTitle, isTiling, confirmTiling } from '@/lib/tiling'
 // is absent — a "Bands: —" line on a vector layer is noise pretending to be information.
 const Fact = (props) => (props.value === undefined || props.value === null || props.value === '')
   ? null
+  // `min-w-0` + `overflow-wrap: anywhere` on the value, because a flex child will not shrink below
+  // its content's intrinsic width — so an attribution holding a long URL pushed straight out
+  // through the side of the card instead of wrapping. `anywhere` rather than `break-all`: it breaks
+  // a run of characters only when there is no other way, so ordinary prose still wraps at spaces.
   : h('div', { class: 'flex items-baseline justify-between gap-3' }, [
       h('dt', { class: 'text-xs text-muted-foreground/70 flex-shrink-0', title: props.hint || '' },
         props.label),
-      h('dd', { class: props.mono ? 'text-xs font-mono text-right break-all' : 'text-sm text-right' },
+      h('dd', { class: 'min-w-0 [overflow-wrap:anywhere] ' + (props.mono
+        ? 'text-xs font-mono text-right break-all' : 'text-sm text-right') },
         String(props.value)),
     ])
 Fact.props = ['label', 'value', 'mono', 'hint']
@@ -569,8 +584,8 @@ const extent = computed(() => {
 // Through the shared composable, not a hand-rolled maplibregl.Map: it is what registers the
 // `pmtiles://` protocol (a tiled GeoParquet layer fails with 'URL scheme "pmtiles" is not
 // supported' without it), and it owns the map's lifecycle and the globe/zoom controls.
-const { map, loaded, applyStyle, fitToBbox } = useMaplibre('gd-layer-map',
-  { version: 8, sources: {}, layers: [] })
+const { map, loaded, applyStyle, fitToBbox, addFullscreen, addZoomToExtent, addTilt } =
+  useMaplibre('gd-layer-map', { version: 8, sources: {}, layers: [] })
 const mapNote = ref('')
 
 /** The layer as a portal would configure it — one entry, drawn by the shared builder. */
@@ -638,6 +653,7 @@ function renderMap() {
   setMarkerSpecs(map.value, markerSpecs)
   applyStyle(style)
   fitToBbox(lonLatBbox(bounds) || lonLatBbox(l.bbox))
+  tiltIfThreeD(style)
 }
 
 onMounted(async () => {
@@ -674,6 +690,37 @@ onMounted(async () => {
 })
 // The map is created on mount by the composable, so wait for it AND for the layer to arrive.
 watch([loaded, layer, styleForMap], () => renderMap(), { deep: true, immediate: true })
+
+// THE CONTROLS THIS MAP WAS MISSING, added once the map exists. Zoom and the globe come from the
+// composable; these three are what a layer preview actually needs and had none of:
+//   * TILT, as a real BUTTON — the same one the portal has. `visualizePitch` on the navigation
+//     control was not enough: it shows pitch on the compass and lets you drag it, but right-drag
+//     and compass-drag are not things a reader knows to try, so a 2.5D or extruded layer still had
+//     no visible way to be seen from the side.
+//   * FULLSCREEN, because a 52vh map is not much to inspect a raster in.
+//   * ZOOM TO THE LAYER, which MapLibre has no control for and which matters most here: a layer
+//     that never came into view leaves an empty map with no clue whether the data is missing or
+//     merely elsewhere.
+// The one automatic tilt, when the layer being previewed is 3D. Same argument as the portal and
+// the editor: an extrusion or a raised terrain seen from directly overhead is indistinguishable
+// from the flat version, so the preview would look like the feature had done nothing.
+let pitched3D = false
+function tiltIfThreeD(style) {
+  if (pitched3D || !style) return
+  const is3D = !!style.terrain || (style.layers || []).some(l => l.type === 'fill-extrusion')
+  if (!is3D) return
+  pitched3D = true
+  if (map.value && map.value.getPitch() === 0) map.value.easeTo({ pitch: 45, duration: 600 })
+}
+
+let controlsAdded = false
+watch(loaded, (ready) => {
+  if (!ready || controlsAdded) return
+  controlsAdded = true
+  addTilt()
+  addFullscreen()
+  addZoomToExtent(() => lonLatBbox(layer.value?.bbox), 'Zoom to this layer')
+}, { immediate: true })
 
 // -- actions ---------------------------------------------------------------------------------
 const showStyle = ref(false)

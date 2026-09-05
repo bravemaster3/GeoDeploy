@@ -57,9 +57,14 @@ export function registerMarkerImages(map, specs) {
   if (!map || map.__gdMarkerHook) return
   map.__gdMarkerHook = true
   map.on('styleimagemissing', (e) => {
-    if (!e.id || !e.id.startsWith('gd-pt-') || map.hasImage(e.id)) return
+    // Two id prefixes, two ways of getting an image. `gd-pt-` is a shape this code DRAWS from the
+    // id's own parameters; `gd-img-` is a picture the QGIS plugin rendered, whose pixels arrive in
+    // the spec because nothing about them can be reconstructed from an id.
+    if (!e.id || map.hasImage(e.id)) return
+    if (!e.id.startsWith('gd-pt-') && !e.id.startsWith('gd-img-')) return
     const spec = (map.__gdMarkerSpecs || {})[e.id]
     if (!spec) return
+    if (spec.image) { loadMarkerPicture(map, e.id, spec.image); return }
     const im = markerImage(spec.shape, spec.color, spec.size, spec.outline, spec.outline_width)
     try { map.addImage(e.id, im, { pixelRatio: im.pixelRatio }) } catch { /* already added */ }
   })
@@ -70,4 +75,33 @@ export function registerMarkerImages(map, specs) {
 export function setMarkerSpecs(map, specs) {
   if (!map) return
   map.__gdMarkerSpecs = { ...(map.__gdMarkerSpecs || {}), ...(specs || {}) }
+}
+
+
+/**
+ * Register a marker bitmap the plugin RENDERED, rather than one drawn from a shape name.
+ *
+ * A QGIS symbol GeoDeploy has no words for — an SVG marker, a raster or font marker, a multi-layer
+ * symbol — arrives as a PNG data URI. There is nothing to draw and nothing to parameterise: the
+ * pixels are the marker. Asynchronous because decoding an image is, which is why this returns a
+ * promise rather than an ImageData like `markerImage` does.
+ *
+ * The twin lives in `templates/shared/portal.js::setMarkerPicture`.
+ */
+export function loadMarkerPicture(map, id, dataUri) {
+  return new Promise((resolve) => {
+    if (!map || !id || !dataUri) return resolve(false)
+    const img = new Image()
+    img.onload = () => {
+      try {
+        // pixelRatio 2: the plugin renders at twice the marker's CSS size so the icon stays crisp,
+        // the same trade `markerImage` makes with its own canvas.
+        if (map.hasImage(id)) map.updateImage(id, img)
+        else map.addImage(id, img, { pixelRatio: 2 })
+      } catch (e) { /* one marker is not worth the map */ }
+      resolve(true)
+    }
+    img.onerror = () => resolve(false)
+    img.src = dataUri
+  })
 }

@@ -117,6 +117,22 @@
 .dark .maplibregl-ctrl button .maplibregl-ctrl-icon {
   filter: invert(1) hue-rotate(180deg) brightness(1.05);
 }
+/* The TILT button's on-state. Mirrors `.gd-tilt-btn.active` in templates/shared/portal.css — the
+   same control on two maps in one product should look the same in both. Without it the button
+   toggles the map and never says which way it is set, which is worse than no toggle: the reader
+   cannot tell a flat map from a broken button.
+   The dark rule sits OUTSIDE the `.dark` block below deliberately — the accent reads on either
+   theme, and the icon's invert filter is undone here so a white glyph stays white on the accent
+   rather than being flipped back to dark. */
+.maplibregl-ctrl-group button.gd-active {
+  background: hsl(var(--primary));
+}
+.maplibregl-ctrl-group button.gd-active .maplibregl-ctrl-icon,
+.dark .maplibregl-ctrl-group button.gd-active .maplibregl-ctrl-icon {
+  color: hsl(var(--primary-foreground));
+  filter: none;
+}
+
 .dark .maplibregl-ctrl-attrib { background: rgba(0, 0, 0, .4); }
 .dark .maplibregl-ctrl-attrib a { color: hsl(var(--muted-foreground)); }
 

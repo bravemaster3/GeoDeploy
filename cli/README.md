@@ -37,6 +37,14 @@ User documentation is `docs/cli.md`; this file is the technical note.
 - `portals.py` — portal CRUD and `layer_configs` surgery. `layer_configs[0]` = top of the list =
   drawn on top. `editable_config()` drops server-owned fields before a round-trip PUT.
 - `styles.py` — the style vocabulary of `api/geodeploy/services/symbology.py`, in both directions.
+- `expressions.py` — **QGIS expressions ⇄ MapLibre expressions**, over a subset that is declared
+  rather than discovered. A rule is a filter, and so is a subset string and every data-defined
+  property, so this is what lets rule-based rendering travel at all. Anything outside the subset
+  raises `Unsupported` **naming the construct** — the fidelity report is built from those names, and
+  a translator that silently approximates publishes a map the author never saw. `to_maplibre` is
+  generous (its input is whatever somebody typed in QGIS); `from_maplibre` is deliberately narrow
+  (its input is a filter GeoDeploy itself stored). The SERVER never calls either: a rule arrives
+  already translated, so there is one translator rather than two that would drift.
   `build_style()` **assembles** it from plain arguments; `parse()`/`Style` **reads** one back
   (mode, field, classes, categories, size, extrusion, rescale) so a consumer — the QGIS plugin —
   does not re-decide what `color_mode: "graduated"` implies. `Style` is a reader, not a schema: it
@@ -192,5 +200,13 @@ the CLI yet; see below).
   run on, and only the second one is visible to a user with an old install.
 
 ## Last updated
+2026-09-05 (`styles.picture_data_uri` + `--marker-image` / `--fill-pattern` / `--line-marker` /
+`--centroid-marker`, each taking a local image FILE. These four keys already *survived* a CLI
+restyle — `build_style` merges onto the existing style, so a marker the QGIS plugin rendered was
+never dropped by `--color red` — but there was no way to SET one without going through QGIS, which
+made "can it all be done from the CLI?" a no for the part of the vocabulary that is pixels rather
+than words. The size ceiling is the plugin's own 96 KB on RAW bytes, deliberately: a file the CLI
+accepted that the plugin would have refused is two ceilings for one key.)
+
 2026-08-12 (created — packaged CLI + Python client, replacing `examples/geodeploy_cli.py`; then
 `browse` + anonymous layer download on top of the new `/api/public` and per-layer export endpoints)

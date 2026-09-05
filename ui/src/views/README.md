@@ -72,6 +72,10 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 - Raster layer `bbox` from the API is in source CRS (not lon/lat) — using it directly for `fitToBbox` can throw "Invalid LngLat" (see tasks/raster notes). Prefer zooming via vector bounds or TiTiler TileJSON.
 
 ## Last updated
+2026-09-04 (`PortalEditor.vue::makeDeckLayer`: a deck-rendered polygon now extrudes on a FIXED
+height as well as a field — the 2.5D shape. It required a field, so a 2.5D style previewed flat
+while the published portal raised it. Mirrors `templates/shared/portal.js`, both branches.)
+
 2026-08-24 (**V-16 dashboard archetype** — `PortalEditor` gains a fourth Experience and mounts
 `DashboardBuilder` for it. `dashboardLayers` deliberately excludes external sources (no attribute
 table to summarise, no COG to sample) and offers only layers the portal actually places, since a

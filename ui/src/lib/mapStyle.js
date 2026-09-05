@@ -22,6 +22,30 @@ import {
   polygonOutlineWidth,
   POLYGON_OUTLINE_WIDTH,
   NO_OUTLINE,
+  dashArray as symDashArray,
+  lineLayout as symLineLayout,
+  lineOffset as symLineOffset,
+  markerLayout as symMarkerLayout,
+  markerOpacity as symMarkerOpacity,
+  layerScope as symLayerScope,
+  combinedFilter as symCombinedFilter,
+  drawsNothing as symDrawsNothing,
+  labelsOf as symLabelsOf,
+  labelLayout as symLabelLayout,
+  labelPaint as symLabelPaint,
+  labelScope as symLabelScope,
+  pictureId as symPictureId,
+  centroidMarker as symCentroidMarker,
+  heatmap as symHeatmap,
+  heatmapPaint as symHeatmapPaint,
+  fillPattern as symFillPattern,
+  lineMarker as symLineMarker,
+  lineMarkerLayout as symLineMarkerLayout,
+  // For the contour colouring below, which builds its own colormap from a named ramp — the same
+  // ramps and the same interpolation the graduated symbology uses, so a raster's relief and a
+  // vector layer's classes drawn from one name are the same colours.
+  RAMPS,
+  rampColors,
 } from '@/lib/symbology'
 
 export function buildMapStyle({ configs = [], layers = [], rasters = [], sources = [],
@@ -36,7 +60,11 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
   const markerSpecs = {}
   const style = {
     version: 8,
-    glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
+    // The same route `portal_generator.GLYPHS_URL` names. Whether a glyph range comes from this
+    // instance's own font set or is redirected to MapLibre's public one is decided server-side —
+    // only the server knows what is installed, and if the preview and the portal each guessed they
+    // would disagree the moment an operator installed a set. See `routers/fonts.py`.
+    glyphs: `${location.origin}/api/fonts/{fontstack}/{range}.pbf`,
     sources: {
       basemap: {
         type: 'raster',
@@ -58,9 +86,50 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
       : b.slice()
   }
 
+  // RULE-BASED LAYERS BECOME SEVERAL CONFIGS, one per rule, before the draw loop ever sees them.
+  // A QGIS rule tree flattens to a list of render layers — each with its own filter, symbol and
+  // zoom range — and that is exactly what `style.rules` holds (see the plugin's rules.py and
+  // portal_generator._rule_layers, which this mirrors). Expanding here rather than branching inside
+  // the loop means every geometry, every marker and every outline is built by the code that already
+  // builds them; a second renderer for rules is how the preview and the published portal drift.
+  //
+  // `rules[0]` draws FIRST (underneath), matching QGIS's own rule order, so the expansion keeps
+  // list order and the surrounding reverse() still applies to LAYERS, not to rules within one.
+  const expandRules = (cfg) => {
+    const rules = cfg.style?.rules
+    if (!Array.isArray(rules) || !rules.length) return [cfg]
+    const base = { ...(cfg.style || {}) }
+    delete base.rules
+    return rules.filter(r => r && typeof r === 'object').map((rule, i) => {
+      const merged = { ...base, ...(rule.style || {}) }
+      // A rule is ONE symbol, never a classification: its colour lives in the rule, so a
+      // color_mode inherited from the layer would classify inside a rule and draw the wrong colour.
+      for (const k of ['color_mode', 'classes', 'categories', 'color_field', 'classes_n']) delete merged[k]
+      return { ...cfg, style: merged, __rule: rule, __ruleIndex: i }
+    })
+  }
+  // MapLibre rejects a whole style over a zoom outside 0-24, and QGIS stores thresholds well past
+  // both ends, so the range is clamped rather than trusted. Twin of _apply_rule_scope.
+  const ruleScope = (cfg) => {
+    const rule = cfg.__rule
+    if (!rule) return {}
+    const out = {}
+    if (rule.filter != null) out.filter = rule.filter
+    for (const key of ['minzoom', 'maxzoom']) {
+      const raw = Number(rule[key])
+      if (!Number.isFinite(raw)) continue
+      const z = Math.max(0, Math.min(24, raw))
+      if ((key === 'minzoom' && z > 0) || (key === 'maxzoom' && z < 24)) out[key] = Math.round(z * 1000) / 1000
+    }
+    return out
+  }
+  //: A rule's layers need ids of their own, or MapLibre sees one layer defined N times.
+  const mlId = (srcId, cfg, suffix) =>
+    `${srcId}${cfg.__rule ? `-r${cfg.__ruleIndex}` : ''}${suffix ? `-${suffix}` : ''}`
+
   // Draw order follows the folder tree (flattened, top→bottom); top of the list draws on top → reverse.
   // Parity with portal_generator.generate_style. Falls back to config order if a node lacks a config.
-  for (const cfg of [...configs].reverse()) {
+  for (const cfg of [...configs].reverse().flatMap(expandRules)) {
     if (cfg.visible === false) continue
     if (cfg.layer_type === 'elevation') { expandBounds(cfg.bbox); continue }  // deck-only (see refreshDeck)
     if (cfg.layer_type === 'vector') {
@@ -108,19 +177,39 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
         continue
       }
       const st = cfg.style || {}
+      // "NO SYMBOLS" IS A RENDERER, not an empty style: QGIS's `nullSymbol` draws nothing while the
+      // layer stays listed and identifiable. Mirrors portal_generator._vector_layers.
+      const drawsNothing = symDrawsNothing(st)
       const opacity = cfg.opacity ?? 1.0
       const geom = (layer.geometry_type || '').toLowerCase()
+      // Where this layer's own render layers start, so the LAYER's zoom range and subset filter can
+      // be applied to all of them below — a QGIS scale range and subset string apply to everything
+      // the layer draws, fill and outline alike. Mirrors portal_generator._scoped.
+      const scopeFrom = style.layers.length
       // Colour may be a data-driven EXPRESSION (graduated / categorized). `lib/symbology` is the
       // twin of services/symbology.py, so the preview and the published portal classify features
       // identically — see the parity note in that file.
       const color = symColorExpression(st)
 
-      if (geom.includes('polygon')) {
+      // A HEATMAP REPLACES THE FEATURES — a different layer TYPE, not a paint variation. Drawing
+      // the points as well would put a pin on every hot spot. Mirrors _heatmap_layer.
+      const heat = symHeatmap(st)
+      if (Object.keys(heat).length) {
+        style.layers.push({
+          id: mlId(srcId, cfg), ...ruleScope(cfg),
+          type: 'heatmap', source: srcId, 'source-layer': sourceLayer,
+          paint: symHeatmapPaint(heat, opacity),
+        })
+      } else if (drawsNothing) {
+        // QGIS's "No symbols": no geometry, but the labels below still draw. That is how a layer
+        // kept only for its labels works. Mirrors portal_generator._vector_layers.
+      } else if (geom.includes('polygon')) {
         if (symIsExtruded(st)) {
           // 3D: a different layer TYPE, not a paint variation. Needs pitch to be visible at all —
           // `ensurePitchFor3D` below tilts the preview the first time an extrusion appears.
           style.layers.push({
-            id: srcId, type: 'fill-extrusion', source: srcId, 'source-layer': sourceLayer,
+            id: mlId(srcId, cfg), ...ruleScope(cfg),
+            type: 'fill-extrusion', source: srcId, 'source-layer': sourceLayer,
             paint: symExtrusionPaint(st, opacity),
           })
         } else {
@@ -143,18 +232,33 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
             && outlineWidth > POLYGON_OUTLINE_WIDTH
           if (st.outline_color === NO_OUTLINE || wantsOutlineLayer) fillPaint['fill-antialias'] = false
           else fillPaint['fill-outline-color'] = st.outline_color || '#1d4ed8'
+          // A PATTERN REPLACES THE COLOUR: MapLibre draws `fill-pattern` instead of `fill-color`,
+          // and the tile carries its own colours. `fill-opacity` still applies, which is how a
+          // hatch stays a wash. Mirrors portal_generator._vector_layer.
+          const tile = symFillPattern(st)
+          if (Object.keys(tile).length) {
+            delete fillPaint['fill-color']
+            fillPaint['fill-pattern'] = symPictureId(tile.image)
+            markerSpecs[symPictureId(tile.image)] = { id: symPictureId(tile.image), image: tile.image }
+          }
           style.layers.push({
-            id: srcId, type: 'fill', source: srcId, 'source-layer': sourceLayer, paint: fillPaint,
+            id: mlId(srcId, cfg), ...ruleScope(cfg),
+            type: 'fill', source: srcId, 'source-layer': sourceLayer, paint: fillPaint,
           })
           if (wantsOutlineLayer) {
             style.layers.push({
-              id: `${srcId}-outline`, type: 'line', source: srcId, 'source-layer': sourceLayer,
+              id: mlId(srcId, cfg, 'outline'), ...ruleScope(cfg),
+              type: 'line', source: srcId, 'source-layer': sourceLayer,
               paint: {
                 'line-color': st.outline_color || '#1d4ed8',
                 'line-width': outlineWidth,
                 // The layer's opacity, not the fill's: a 45% wash with a solid border is the
                 // ordinary way to draw a polygon.
                 'line-opacity': opacity,
+                // An outline IS a line, so the line vocabulary applies to it. Mirrors
+                // portal_generator._outline_paint.
+                ...(symDashArray(st) ? { 'line-dasharray': symDashArray(st) } : {}),
+                ...(symLineOffset(st) != null ? { 'line-offset': symLineOffset(st) } : {}),
               },
             })
           }
@@ -165,10 +269,17 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
           'line-width': symSizeExpression(st, st.line_width ?? 2),
           'line-opacity': opacity,
         }
-        if (st.lineType === 'dashed') linePaint['line-dasharray'] = [2, 1.5]
-        else if (st.lineType === 'dotted') linePaint['line-dasharray'] = [0.4, 1.8]
+        // An explicit `dash_pattern` (QGIS's custom dash vector) wins over the two named presets;
+        // both are in line-width multiples, which is MapLibre's unit. Mirrors _vector_layer.
+        const dashes = symDashArray(st)
+        if (dashes) linePaint['line-dasharray'] = dashes
+        const lineOff = symLineOffset(st)
+        if (lineOff != null) linePaint['line-offset'] = lineOff
+        const lineLay = symLineLayout(st)
         style.layers.push({
-          id: srcId, type: 'line', source: srcId, 'source-layer': sourceLayer, paint: linePaint,
+          id: mlId(srcId, cfg), ...ruleScope(cfg),
+          type: 'line', source: srcId, 'source-layer': sourceLayer, paint: linePaint,
+          ...(Object.keys(lineLay).length ? { layout: lineLay } : {}),
         })
       } else if (symIsExtruded(st) && layer.storage_backend !== 'geoparquet') {
         // POINTS IN 3D: pillars. MapLibre extrudes fills only, so the geometry has to become a
@@ -187,7 +298,8 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
           minzoom: 0, maxzoom: 22,
         }
         style.layers.push({
-          id: srcId, type: 'fill-extrusion', source: pillarSrc, 'source-layer': 'pillars',
+          id: mlId(srcId, cfg), ...ruleScope(cfg),
+          type: 'fill-extrusion', source: pillarSrc, 'source-layer': 'pillars',
           paint: symExtrusionPaint(st, opacity),
         })
       } else {
@@ -197,15 +309,79 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
         // these disagree, the preview shows a style the portal will not render.
         symMarkerImages(st).forEach((im) => { markerSpecs[im.id] = im })
         style.layers.push({
-          id: srcId, type: 'symbol', source: srcId, 'source-layer': sourceLayer,
+          id: mlId(srcId, cfg), ...ruleScope(cfg),
+          type: 'symbol', source: srcId, 'source-layer': sourceLayer,
           layout: {
+            ...symMarkerLayout(st),
             'icon-image': symIconImageExpression(st),
             'icon-size': symIconSizeExpression(st),
             'icon-allow-overlap': true,
             'icon-ignore-placement': true,
           },
+          paint: { 'icon-opacity': symMarkerOpacity(st, opacity) },
+        })
+      }
+
+      // MARKERS ALONG A LINE: a second render layer beside the line, because MapLibre draws a line
+      // and places symbols along it with two different layer types — which is how QGIS builds it
+      // too, a simple line with a marker line stacked on top. Mirrors _line_marker_layer.
+      const lineMark = symLineMarker(st)
+      if (Object.keys(lineMark).length) {
+        markerSpecs[symPictureId(lineMark.image)] = { id: symPictureId(lineMark.image), image: lineMark.image }
+        style.layers.push({
+          id: `${srcId}-linemarkers`,
+          type: 'symbol', source: srcId, 'source-layer': sourceLayer,
+          layout: symLineMarkerLayout(lineMark),
           paint: { 'icon-opacity': opacity },
         })
+      }
+
+      // A SYMBOL AT EACH POLYGON'S CENTRE — QGIS's centroid fill. MapLibre places a symbol layer's
+      // icons at a polygon's label point by default, so this is one layer and no geometry work.
+      // Mirrors _centroid_marker_layer.
+      const centroid = symCentroidMarker(st)
+      if (Object.keys(centroid).length) {
+        markerSpecs[symPictureId(centroid.image)] = { id: symPictureId(centroid.image), image: centroid.image }
+        style.layers.push({
+          id: `${srcId}-centroids`,
+          type: 'symbol', source: srcId, 'source-layer': sourceLayer,
+          layout: {
+            'icon-image': symPictureId(centroid.image),
+            'icon-allow-overlap': true,
+            'icon-ignore-placement': true,
+          },
+          paint: { 'icon-opacity': opacity },
+        })
+      }
+
+      // LABELS: their own `symbol` layer, pushed after the geometry so they draw above it. A label
+      // has its own zoom range, must sit above every geometry, and a point layer's own layer is
+      // already a symbol layer carrying an icon — so merging the two would tie a label's placement
+      // to its marker's. Mirrors portal_generator._label_layer.
+      const labels = symLabelsOf(st)
+      if (Object.keys(labels).length) {
+        style.layers.push({
+          id: `${srcId}-labels`,
+          type: 'symbol', source: srcId, 'source-layer': sourceLayer,
+          layout: symLabelLayout(labels),
+          paint: symLabelPaint(labels, opacity),
+          ...symLabelScope(labels),
+        })
+      }
+
+      // The LAYER's own zoom range and subset filter onto everything it just pushed. A rule's zoom
+      // range is already the narrower one where both exist, so it is not overwritten; a rule's
+      // filter is ANDed with the layer's, because in QGIS both are true at once. Mirrors
+      // portal_generator._scoped.
+      const scope = symLayerScope(st)
+      if (Object.keys(scope).length) {
+        const ownFilter = scope.filter
+        for (const ml of style.layers.slice(scopeFrom)) {
+          for (const [k, v] of Object.entries(scope)) {
+            if (k !== 'filter' && ml[k] === undefined) ml[k] = v
+          }
+          if (ownFilter != null) ml.filter = symCombinedFilter(ml.filter, ownFilter)
+        }
       }
 
       expandBounds(layer.bbox)
@@ -234,6 +410,22 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
         id: srcId, type: 'raster', source: srcId,
         paint: { 'raster-opacity': cfg.opacity ?? 1.0, ...(cfg.style?.paint || {}) },
       })
+      // 3D TERRAIN: a SECOND source for the same file, in Terrain-RGB, where R/G/B are the bytes of
+      // a number rather than a colour — so it carries no style at all. The layer above stays the
+      // picture. `terrain` is a ROOT property of the style spec, which MapLibre applies itself.
+      // First raster wins: one heightfield deforms the whole map.
+      const terr = terrainOf(cfg.style)
+      if (terr && !style.terrain) {
+        const demId = `${srcId}-dem`
+        style.sources[demId] = {
+          type: 'raster-dem',
+          tiles: [terrainTilesUrl(layer.tile_url)],
+          tileSize: 256,
+          encoding: 'mapbox',
+        }
+        if (rbounds) style.sources[demId].bounds = rbounds
+        style.terrain = { source: demId, exaggeration: terr.exaggeration }
+      }
       expandBounds(layer.bbox)
 
     } else if (cfg.layer_type === 'external') {
@@ -341,28 +533,189 @@ function explicitColormap(classes, reverse) {
   return Object.keys(mapping).length ? JSON.stringify(mapping) : null
 }
 
-// CONTOUR parameters. Mirrors services/titiler._contour_params, and the two traps are the same:
-// TiTiler's contours colours the data across minz–maxz with a built-in terrain ramp and draws the
-// lines on that, so its planet-sized defaults (−12000..8000) render a survey DEM as one flat band —
-// hence borrowing the layer's own stretch. And it types minz/maxz as INT, rejecting the whole tile
-// request for a fractional one, so the borrowed range is floored and ceiled to widen rather than clip.
-export function contourParams(style) {
-  const out = {}
-  const increment = Number(style?.increment)
-  const thickness = Number(style?.thickness)
-  out.increment = Number.isFinite(increment) && increment > 0 ? increment : 35
-  out.thickness = Number.isFinite(thickness) && thickness > 0 ? Math.trunc(thickness) : 1
+// THE CONTOUR COLOURS, mirroring services/titiler.py. TiTiler's contour algorithm hard-codes its
+// palette (`terrain`) and its line colour (black), so a chosen one is drawn by reproducing the
+// algorithm as band maths plus an explicit colormap. When the style asks for those defaults the
+// algorithm is used untouched and the URL stays byte-identical to what a published layer has.
+export const CONTOUR_BANDS = 32
+export const CONTOUR_DEFAULT_COLOR = '#000000'
+export const CONTOUR_DEFAULT_PALETTE = 'terrain'
+
+function contourColours(style) {
+  const palette = String(style?.contour_palette || CONTOUR_DEFAULT_PALETTE).trim().toLowerCase()
+  const colour = String(style?.contour_color || CONTOUR_DEFAULT_COLOR).trim().toLowerCase()
+  return {
+    palette: RAMPS[palette] ? palette : CONTOUR_DEFAULT_PALETTE,
+    colour: /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/.test(colour) ? colour : CONTOUR_DEFAULT_COLOR,
+  }
+}
+
+export function contoursAreDefault(style) {
+  // Palette-coloured lines and a relief switched off are things TiTiler's algorithm cannot express
+  // either, so both force GeoDeploy's own drawing path regardless of the two colours.
+  if (style?.contour_line_palette) return false
+  if (style?.contour_relief === false) return false
+  const { palette, colour } = contourColours(style)
+  return palette === CONTOUR_DEFAULT_PALETTE && colour === CONTOUR_DEFAULT_COLOR
+}
+
+const trim = (n) => (String(Number(n).toFixed(6)).replace(/0+$/, '').replace(/\.$/, '') || '0')
+
+// How wide a contour line is, as a FRACTION of the interval, per unit of `thickness`. TiTiler's
+// own `data % increment < thickness` is in DATA UNITS despite the name — it only reads as a pixel
+// width because its default interval is 35, so `< 1` selects ~3% of the gap. Here the data is not
+// scaled, so a thickness of 1 against an interval of 0.05 made the test true for EVERY pixel and
+// the whole raster came back one flat colour. 0.03 reproduces TiTiler's default (1/35).
+export const CONTOUR_LINE_FRACTION = 0.03
+
+export function contourExpression(band, increment, thickness, lo, hi, linePalette = false) {
+  const span = (Number(hi) - Number(lo)) > 0 ? Number(hi) - Number(lo) : 1
+  const step = Number(increment) || 1
+  const width = Math.max(step * CONTOUR_LINE_FRACTION * Math.max(Number(thickness) || 1, 1),
+    step * 1e-4)
+  const top = CONTOUR_BANDS
+  // The band a pixel falls in, clamped at both ends — written once and used twice, because a line
+  // has to know its own band too when the lines follow the palette.
+  const bandExpr = `where(b${band}<=${trim(lo)},1,`
+    + `where(b${band}>=${trim(hi)},${top},`
+    + `1+${top - 1}*(b${band}-${trim(lo)})/${trim(span)}))`
+  if (!linePalette) return `where((b${band}%${trim(step)})<${trim(width)},0,${bandExpr})`
+  // Lines take their band SHIFTED past the relief's range: 1..N is the ground, N+1..2N the lines.
+  return `where((b${band}%${trim(step)})<${trim(width)},${top}+${bandExpr},${bandExpr})`
+}
+
+function rgba(hex) {
+  let v = String(hex || '').replace('#', '')
+  if (v.length === 3) v = v.split('').map(c => c + c).join('')
+  const n = parseInt(v, 16)
+  if (!Number.isFinite(n) || v.length !== 6) return [0, 0, 0, 255]
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255, 255]
+}
+
+// The INTERVAL form, not the discrete one: the expression produces floats, and a discrete map
+// matches exact integers only — measured against the running image, that coloured 156 pixels of a
+// tile where intervals coloured 2704.
+export function contourColormap(palette, lineColour, linePalette = false, relief = true) {
+  const ramp = rampColors(palette, CONTOUR_BANDS)
+  // TRANSPARENT, not white: with the relief off the lines are read over the basemap, and white
+  // would hide it as thoroughly as a colour would.
+  const ground = relief ? ramp.map(rgba) : ramp.map(() => [0, 0, 0, 0])
+  const out = linePalette ? [] : [[[-0.5, 0.5], rgba(lineColour)]]
+  ground.forEach((c, i) => out.push([[i + 0.5, i + 1.5], c]))
+  if (linePalette) {
+    ramp.forEach((c, i) => out.push([[CONTOUR_BANDS + i + 0.5, CONTOUR_BANDS + i + 1.5], rgba(c)]))
+  }
+  return JSON.stringify(out)
+}
+
+// The interval to use when the author has only ticked the box, derived from the DATA rather than
+// taken from TiTiler's 35 — which is a fine contour interval for a global DEM in metres and a
+// catastrophic one for a vegetation index running 0.556-0.947, where it puts the whole raster in
+// one band and draws a flat dark rectangle. Snapped to a tidy number, because nobody labels a
+// contour "every 3.7 units". Mirrors services/titiler.py::_default_increment.
+const NICE_STEPS = [1, 2, 2.5, 5, 10]
+export const CONTOUR_TARGET_LINES = 10
+
+export function defaultIncrement(lo, hi) {
+  const span = Number(hi) - Number(lo)
+  if (!Number.isFinite(span) || span <= 0) return 35
+  const raw = span / CONTOUR_TARGET_LINES
+  const base = Math.pow(10, Math.floor(Math.log10(raw)))
+  for (const step of NICE_STEPS) {
+    if (raw <= step * base * 1.0000001) return step * base
+  }
+  return 10 * base
+}
+
+// The power of ten the DATA is multiplied by before contouring. Mirrors
+// services/titiler.py::_contour_scale, which carries the full reasoning: TiTiler's interval is an
+// integer with a minimum of 0, so 1 is the finest it can take — and a vegetation index running
+// 0.556-0.947 is narrower than that end to end, which renders as one flat dark band. Scaling the
+// data with `expression=b1*1000` turns an interval of 0.05 into an ordinary 50.
+export const CONTOUR_SCALES = [10, 100, 1000, 10000, 100000]
+
+export function contourScale(increment, lo, hi) {
+  const step = Number(increment)
+  if (!Number.isFinite(step) || step <= 0 || step >= 1) return 1
+  let extreme = 0
+  for (const edge of [lo, hi]) {
+    const n = Number(edge)
+    if (Number.isFinite(n)) extreme = Math.max(extreme, Math.abs(n))
+  }
+  let best = 1
+  for (const factor of CONTOUR_SCALES) {
+    if (step * factor > 999) break
+    if (extreme && extreme * factor > 99999) break
+    if (step * factor >= 1) best = factor
+    if (step * factor >= 10) break
+  }
+  return best
+}
+
+// The stretch a contour layer colours its relief over, as `[lo, hi]` or `[null, null]`. Split out
+// because both `contourParams` and the URL builder need it — the URL to choose the scale, the
+// params to scale the range with it. Mirrors services/titiler.py::_range_of.
+export function contourRange(style) {
   let lo = Number(style?.minz)
   let hi = Number(style?.maxz)
   if (!(Number.isFinite(lo) && Number.isFinite(hi) && hi > lo)) {
     const parts = String(style?.rescale || '').split(',')
     lo = Number(parts[0]); hi = Number(parts[1])
   }
-  if (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo) {
-    out.minz = Math.floor(lo)
-    out.maxz = Math.ceil(hi)
+  return (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo) ? [lo, hi] : [null, null]
+}
+
+// CONTOUR parameters. Mirrors services/titiler._contour_params, and the traps are the same:
+// TiTiler's contours colours the data across minz–maxz with a built-in terrain ramp and draws the
+// lines on that, so its planet-sized defaults (−12000..8000) render a survey DEM as one flat band —
+// hence borrowing the layer's own stretch. And every parameter is typed INT, so a fractional one is
+// a 422 on every tile: the interval reaches an integer by scaling the DATA instead (see
+// `contourScale`), and the borrowed range is floored and ceiled to widen rather than clip.
+export function contourParams(style, scale = 1) {
+  const out = {}
+  const increment = Number(style?.increment)
+  const thickness = Number(style?.thickness)
+  // Half-up rounding via Math.round, matched on the server by `int(x + 0.5)` rather than `round()`:
+  // Python rounds half to EVEN, so a 12.5 would land on 12 there and 13 here — the preview and the
+  // published portal drawing contours at different spacings.
+  const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, Math.round(n)))
+  const [dlo, dhi] = contourRange(style)
+  out.increment = clamp((Number.isFinite(increment) && increment > 0
+    ? increment : defaultIncrement(dlo, dhi)) * scale, 1, 999)
+  out.thickness = Number.isFinite(thickness) && thickness > 0 ? clamp(thickness, 1, 10) : 1
+  const [lo, hi] = contourRange(style)
+  if (lo !== null) {
+    out.minz = Math.max(-99999, Math.floor(lo * scale))
+    out.maxz = Math.min(99999, Math.ceil(hi * scale))
   }
   return JSON.stringify(out)
+}
+
+// Which band an `expression` should read. `bN` names a band of the DATASET and `&bidx=` is ignored
+// whenever an expression is present, so the expression has to carry the band selection itself.
+// Mirrors services/titiler.py::_expression_band.
+export function expressionBand(bands) {
+  return (bands && bands.length) ? Number(bands[0]) : 1
+}
+
+// 3D TERRAIN for a raster. Mirrors services/titiler.py::terrain_of / terrain_tile_url.
+export const TERRAIN_DEFAULT_EXAGGERATION = 1.5
+
+export function terrainOf(style) {
+  const block = style?.terrain
+  if (!block || typeof block !== 'object' || !block.enabled) return null
+  const value = Number(block.exaggeration ?? TERRAIN_DEFAULT_EXAGGERATION)
+  return { exaggeration: Math.min(Math.max(Number.isFinite(value) ? value : 1.5, 0.1), 10) }
+}
+
+// The DEM's own tiles: the layer's base URL with `algorithm=terrainrgb` and NOTHING else. TiTiler's
+// defaults for it (interval 0.1, baseval -10000) are the Mapbox encoding, so MapLibre reads it
+// directly. Deliberately NOT built through `rasterTilesUrl`: every style key that would add — a
+// colormap, a stretch, a band selection — would corrupt a heightfield rather than style it.
+export function terrainTilesUrl(baseTileUrl) {
+  const base = (baseTileUrl || '').split('&')[0]
+  const url = `${base}&algorithm=terrainrgb`
+  return url.startsWith('/') ? location.origin + url : url
 }
 
 // Build a raster tile URL from the layer's base URL + the configured raster style.
@@ -390,11 +743,34 @@ export function rasterTilesUrl(baseTileUrl, style, bandCount) {
   if (style?.algorithm) {
     params.push(`algorithm=${style.algorithm}`)
     if (style.algorithm === 'hillshade' && style.zfactor && Number(style.zfactor) !== 1) {
-      params.push(`expression=b1*${style.zfactor}`)
+      // `b1` was hard-coded here, so exaggerating a multiband raster hillshaded band 1 whatever
+      // band the author had picked — `bidx` is ignored once an expression is present.
+      params.push(`expression=b${expressionBand(bands)}*${style.zfactor}`)
     }
     if (style.algorithm === 'contours') {
-      const p = contourParams(style)
-      if (p) params.push(`algorithm_params=${encodeURIComponent(p)}`)
+      const [lo, hi] = contourRange(style)
+      const step = Number(style.increment) > 0 ? Number(style.increment) : defaultIncrement(lo, hi)
+      const scale = contourScale(step, lo, hi)
+      if (contoursAreDefault(style)) {
+        // Scaling the DATA is the only way to ask TiTiler for an interval finer than 1.
+        if (scale !== 1) params.push(`expression=b${expressionBand(bands)}*${scale}`)
+        const p = contourParams(style, scale)
+        if (p) params.push(`algorithm_params=${encodeURIComponent(p)}`)
+      } else {
+        // A chosen palette or line colour, which the algorithm cannot express — so it is not used
+        // at all here; running both would contour an already-coloured RGB image.
+        const at = params.indexOf('algorithm=contours')
+        if (at >= 0) params.splice(at, 1)
+        const p = JSON.parse(contourParams(style, scale) || '{}')
+        const { palette, colour } = contourColours(style)
+        const linePalette = !!style.contour_line_palette
+        const relief = style.contour_relief !== false
+        const expr = contourExpression(expressionBand(bands), step, p.thickness ?? 1,
+          lo ?? -12000, hi ?? 8000, linePalette)
+        params.push(`expression=${encodeURIComponent(expr)}`)
+        params.push(
+          `colormap=${encodeURIComponent(contourColormap(palette, colour, linePalette, relief))}`)
+      }
     }
   } else if (bands.length !== 3) {
     // A CLASSIFIED raster, which this used to drop entirely: only `colormap` was mirrored, so a

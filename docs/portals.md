@@ -157,3 +157,29 @@ Two rules keep this predictable:
 
 Per-portal branding (accent colour, font, logo, light/dark) is set in the editor and overrides the
 template, whichever experience you are in.
+
+## Fonts for labels
+
+A web map draws text from **glyph sets**, not from the fonts on the reader's computer — so a portal
+can only label in faces the instance itself carries. GeoDeploy ships **Noto Sans** in Regular, Bold
+and Italic, which covers Latin, Greek, Cyrillic and Vietnamese.
+
+That is a drop-in directory, not a fixed list. To add a face — a serif, a monospace, your
+organisation's own — generate its glyphs from a TTF and copy them in:
+
+```bash
+docker run --rm -v "$PWD":/w -w /w node:20-bookworm bash -lc   'npm i --no-audit --no-fund fontnik && node scripts/build_glyphs.js NotoSerif-Regular.ttf "templates/shared/fonts/Noto Serif Regular"'
+```
+
+No rebuild and no restart: the next map that asks for it gets it, `GET /api/fonts` starts listing
+it, and the QGIS plugin offers it the next time it connects. A face is about 780 KB.
+
+**What happens to a font the instance does not have.** Nothing breaks and nothing goes blank. The
+label is drawn in the nearest face that *is* installed — a serif stays a serif, a monospace stays a
+monospace, and bold and italic are preserved — and the plugin says which substitution it made. The
+published style names the requested face *and* the fallback, so if you install the real one later,
+portals already published start using it without being republished.
+
+**QGIS is unaffected.** It draws with the fonts on your own machine, and a label pushed from QGIS
+keeps its original typeface and gets it back unchanged. The substitution only ever applies to what
+the web portal draws.

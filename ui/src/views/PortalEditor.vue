@@ -1425,7 +1425,10 @@ function makeDeckLayer(cfg) {
   // portal will not render. Points are excluded (deck extrudes polygons; a pillar needs the
   // geometry buffered, which only the PostGIS tile path does).
   const ex = cfg.style?.extrusion || {}
-  const extruded = isPoly && !!ex.enabled && !!ex.field
+  // Either a height field, or one flat height for every feature — the shape a QGIS 2.5D renderer
+  // has. Without the second the preview drew such a layer FLAT while the published portal raised it.
+  const exFlat = (!ex.field && Number(ex.height) > 0) ? Number(ex.height) : 0
+  const extruded = isPoly && !!ex.enabled && (!!ex.field || exFlat > 0)
   // "none" is a sentinel, not a colour — hex-parsing it yields NaN, which deck renders as BLACK.
   const noOutline = cfg.style?.outline_color === NO_OUTLINE
   const exScale = Number(ex.scale) || 1
@@ -1438,9 +1441,8 @@ function makeDeckLayer(cfg) {
     stroked: isLine || (!extruded && !(isPoly && noOutline)),
     extruded,
     // Non-numeric or missing → 0, not NaN: NaN propagates into the mesh and drops the whole layer.
-    getElevation: extruded
-      ? (f) => { const v = Number((f.properties || {})[ex.field]); return (isFinite(v) ? v : 0) * exScale }
-      : 0,
+    getElevation: !extruded ? 0 : (exFlat > 0 ? exFlat
+      : (f) => { const v = Number((f.properties || {})[ex.field]); return (isFinite(v) ? v : 0) * exScale }),
     getFillColor: [...rgb, Math.round(255 * opacity * (isPoly ? (cfg.style?.fill_opacity ?? 0.45) : 1))],
     getLineColor: isPoly ? [...outline, Math.round(255 * opacity)] : [...rgb, Math.round(255 * opacity)],
     lineWidthUnits: 'pixels',
@@ -1647,7 +1649,10 @@ watch([layerConfigs, layerTree, loaded, basemap, basemapCatalog, ready], () => {
   // while looking at a flat preview appears to do NOTHING. Tilt once, the first time an extrusion
   // shows up, and never again: after that the camera is the author's to place (the same reasoning
   // as the camera watcher above, which only moves on the first build).
-  if (!pitched3D && style.layers.some(l => l.type === 'fill-extrusion')) {
+  // TERRAIN counts as 3D too, and it is a ROOT property rather than a layer — a check that only
+  // looked at `layers` would leave a raised relief being viewed from straight overhead, which is
+  // the one angle at which it looks exactly like the flat version.
+  if (!pitched3D && (style.terrain || style.layers.some(l => l.type === 'fill-extrusion'))) {
     pitched3D = true
     if (map.value && map.value.getPitch() === 0) map.value.easeTo({ pitch: 45, duration: 600 })
   }

@@ -13,6 +13,11 @@ import pytest
 
 from geodeploy.services import symbology as sym
 
+#: A real 1x1 transparent PNG, as a data URI. The legend only checks the SHAPE of the string, but a
+#: valid image keeps the fixture honest if anything downstream ever decodes it.
+PNG = ("data:image/png;base64,"
+       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+
 
 # ── Classification ───────────────────────────────────────────────────────────────────────────────
 
@@ -238,6 +243,57 @@ def test_extrusion_is_off_unless_it_has_something_to_extrude_by():
     assert sym.is_extruded({"extrusion": {"enabled": True, "field": "h"}})
 
 
+# ── 2.5D: one flat height, no field ──────────────────────────────────────────────────────────────
+# QGIS has TWO 3D renderers and they are not variations of one control. `Qgs25DRenderer` gives every
+# feature the same height — the height is a PROJECT VARIABLE (`@qgis_25d_height`), not an attribute
+# — while attribute-driven 3D reads a column. Supporting only the second meant a 2.5D style survived
+# the whole trip from QGIS and then rendered flat, and that the web UI hid its 3D controls entirely
+# for any layer with no numeric column, which is most building footprints.
+
+class TestFlatHeightExtrusion:
+
+    def test_a_height_with_no_field_is_a_plain_number(self):
+        """Not an expression: there is no attribute to read, so the volume is the same everywhere."""
+        paint = sym.extrusion_paint({"extrusion": {"enabled": True, "height": 12}}, 1.0)
+        assert paint["fill-extrusion-height"] == 12
+
+    def test_a_field_still_wins_when_both_are_present(self):
+        """A style can carry a leftover `height` from before the author switched to a column — the
+        UI keeps it deliberately so switching back restores the number. It must not win."""
+        paint = sym.extrusion_paint(
+            {"extrusion": {"enabled": True, "field": "h", "height": 12, "scale": 2}}, 1.0)
+        assert paint["fill-extrusion-height"] == ["*", ["to-number", ["get", "h"], 0], 2]
+
+    def test_a_flat_height_counts_as_extruded(self):
+        """`is_extruded` decides whether a `fill-extrusion` layer is emitted at all, and whether a
+        GeoParquet layer's deck descriptor carries the block. A 2.5D style has no field, so a
+        field-only test made the layer draw flat with no error anywhere."""
+        assert sym.is_extruded({"extrusion": {"enabled": True, "height": 10}})
+        assert not sym.is_extruded({"extrusion": {"enabled": True, "height": 0}})
+
+    def test_the_roof_colour_overrides_the_fill(self):
+        """QGIS's 2.5D renderer names a roof colour and a wall colour; MapLibre paints one volume
+        with a vertical gradient, so the roof is the only one it can honour."""
+        style = {"color": "#111111", "extrusion": {"enabled": True, "height": 8, "color": "#ff8800"}}
+        assert sym.extrusion_paint(style, 1.0)["fill-extrusion-color"] == "#ff8800"
+
+    def test_without_a_roof_colour_it_matches_the_flat_symbology(self):
+        """So a layer's 2D and 3D forms agree unless somebody asks otherwise."""
+        style = {"color": "#111111", "extrusion": {"enabled": True, "height": 8}}
+        assert sym.extrusion_paint(style, 1.0)["fill-extrusion-color"] == "#111111"
+
+    def test_a_base_field_lifts_the_volume_off_the_ground(self):
+        """`base` is overloaded exactly as MapLibre overloads `fill-extrusion-base`: a number lifts
+        everything equally, a string names a column."""
+        paint = sym.extrusion_paint(
+            {"extrusion": {"enabled": True, "height": 9, "base": "floor", "scale": 3}}, 1.0)
+        assert paint["fill-extrusion-base"] == ["*", ["to-number", ["get", "floor"], 0], 3]
+
+    def test_a_numeric_base_stays_a_number(self):
+        paint = sym.extrusion_paint({"extrusion": {"enabled": True, "height": 9, "base": 4}}, 1.0)
+        assert paint["fill-extrusion-base"] == 4
+
+
 # ── Point markers: shapes AND per-feature colour ─────────────────────────────────────────────────
 # The first implementation switched a classified point layer to a `circle`, losing the marker shape.
 # Rejected outright: "I should be able to choose a different marker and still use the graduated
@@ -395,10 +451,61 @@ def test_data_driven_detection_still_reports_per_feature_variation():
 # ── Ramps ────────────────────────────────────────────────────────────────────────────────────────
 
 def test_a_ramp_yields_the_requested_number_of_distinct_colours():
-    for n in (3, 5, 7, 9):
-        colors = sym.ramp_colors("viridis", n)
-        assert len(colors) == n
-        assert colors[0] != colors[-1]
+    """EVERY count, not just the small ones — and DISTINCT, which is the part that used to fail.
+
+    The ramps are seven anchor stops. Snapping to the nearest of them meant eight classes came out
+    in seven colours and twelve in seven, so a graduated legend could name two classes that were
+    drawn identically. That is what capped the class count at 12; interpolating removes both the
+    duplicates and the reason for the cap.
+    """
+    for name in sym.RAMPS:
+        for n in (2, 3, 5, 7, 8, 9, 12, 20, 50, 100):
+            colors = sym.ramp_colors(name, n)
+            assert len(colors) == n, (name, n)
+            assert len(set(colors)) == n, (name, n, "repeated colours")
+            assert colors[0] != colors[-1]
+
+
+def test_the_ends_of_a_ramp_are_always_its_own_ends():
+    """Interpolation must not drift off the ramp: whatever the count, the first and last colours are
+    the ramp's own first and last, or a legend's extremes stop meaning "the extreme"."""
+    for name, stops in sym.RAMPS.items():
+        for n in (2, 5, 13, 40):
+            colors = sym.ramp_colors(name, n)
+            assert colors[0] == stops[0] and colors[-1] == stops[-1], (name, n)
+
+
+# ── Qualitative colours, past the twelve that are hand-picked ────────────────────────────────────
+
+def test_categories_keep_getting_distinct_colours_past_the_palette():
+    """Cycling `CATEGORY_COLORS` drew category 13 exactly like category 1. QGIS never does that —
+    its random ramp keeps generating — and a categorized layer over a 30-value column is ordinary."""
+    colors = [sym.category_color(i) for i in range(120)]
+    assert len(set(colors)) == 120
+
+
+def test_the_hand_picked_twelve_come_first_and_are_unchanged():
+    """Existing layers must not be recoloured: the first twelve are the palette they always were."""
+    assert [sym.category_color(i) for i in range(12)] == sym.CATEGORY_COLORS
+
+
+def test_a_categorys_colour_does_not_move_when_the_data_gains_a_value():
+    """Deterministic, not random: adding a 20th value must not repaint the other nineteen."""
+    assert sym.category_color(18) == sym.category_color(18)
+    before = [sym.category_color(i) for i in range(19)]
+    after = [sym.category_color(i) for i in range(20)]
+    assert after[:19] == before
+
+
+def test_generated_colours_are_valid_hex():
+    for i in range(12, 200):
+        c = sym.category_color(i)
+        assert len(c) == 7 and c[0] == "#" and int(c[1:], 16) >= 0
+
+
+def test_build_categories_uses_the_generated_palette_beyond_twelve():
+    cats = sym.build_categories(["v{0}".format(i) for i in range(40)])
+    assert len({c["color"] for c in cats}) == 40
 
 
 def test_an_unknown_ramp_falls_back_rather_than_failing():
@@ -416,12 +523,16 @@ def test_the_sampled_colours_are_pinned_against_the_javascript_twin():
     editor preview no longer matches what the portal publishes.
     """
     assert sym.ramp_colors("viridis", 5) == [
-        "#440154", "#365c8d", "#277f8e", "#4ac16d", "#fde725"]
+        "#440154", "#3e4786", "#277f8e", "#35b17a", "#fde725"]
     assert sym.ramp_colors("magma", 5) == [
-        "#000004", "#8c2981", "#de4968", "#fecf92", "#fcfdbf"]
+        "#000004", "#641c79", "#de4968", "#feb780", "#fcfdbf"]
+    # NINE CLASSES, NINE COLOURS. This list used to read
+    #   "#f7fbff", "#deebf7", "#c6dbef", "#c6dbef", "#9ecae1", "#6baed6", "#3182bd", "#3182bd", …
+    # — the duplicates pinned as expected behaviour, because sampling snapped to the nearest of
+    # seven anchor stops. Two classes were drawn identically under a legend saying they differed.
     assert sym.ramp_colors("blues", 9) == [
-        "#f7fbff", "#deebf7", "#c6dbef", "#c6dbef", "#9ecae1",
-        "#6baed6", "#3182bd", "#3182bd", "#08519c"]
+        "#f7fbff", "#e4eff9", "#d2e3f3", "#bcd7ec", "#9ecae1",
+        "#78b5d9", "#4e98ca", "#2776b5", "#08519c"]
 
 
 # ── Reversing a ramp (issue #11) ─────────────────────────────────────────────────────────────────
@@ -517,3 +628,85 @@ def test_a_bbox_that_is_not_lonlat_is_refused():
     assert sym.extent_metres("[319000, 6390000, 410000, 6480000]") is None
     assert sym.pillar_radius({}, "[319000, 6390000, 410000, 6480000]") == \
         sym.DEFAULT_PILLAR_RADIUS_M
+
+
+class TestLegendCoversTheNewSymbologies:
+    """A legend that disagrees with the map is worse than no legend.
+
+    `legend_entries` only knew about graduated and categorized COLOUR, so every symbology added for
+    the QGIS round trip drew a map the legend could not describe: a rule-based layer and a heatmap
+    both returned `[]`, and a classified layer of dashed lines or star markers came out as a column
+    of plain squares. Reported as "legends don't display the new symbologies yet".
+    """
+
+    def test_a_heatmap_gets_a_ramp_not_classes(self):
+        """It has no classes to list. Returning the classes of the symbology it REPLACED would
+        describe a map nobody is looking at."""
+        style = {"color_mode": "graduated",
+                 "classes": [{"min": 0, "max": 5, "color": "#111"}],
+                 "heatmap": {"enabled": True, "ramp": ["rgba(0,0,255,0)", "#3b82f6", "#ef4444"]}}
+        entries = sym.legend_entries(style)
+        assert len(entries) == 1
+        assert entries[0]["heatmap"] is True
+        assert entries[0]["ramp"] == ["rgba(0,0,255,0)", "#3b82f6", "#ef4444"]
+
+    def test_rules_outrank_the_fallback_colour_mode(self):
+        """Same precedence the renderers use: a rule-based style's `color_mode` is only the shape
+        for viewers that know nothing about rules."""
+        style = {"color_mode": "categorized",
+                 "categories": [{"value": "a", "color": "#111"}],
+                 "rules": [{"label": "Big", "style": {"color": "#ff0000"}},
+                           {"label": "Small", "style": {"color": "#00ff00"}}]}
+        entries = sym.legend_entries(style)
+        assert [e["label"] for e in entries] == ["Big", "Small"]
+        assert [e["color"] for e in entries] == ["#ff0000", "#00ff00"]
+        assert all(e["rule"] for e in entries)
+
+    def test_a_rule_without_a_label_is_described_by_its_expression(self):
+        """Which is at least a statement of what it selects. Matches `cli/geodeploy/styles.py`."""
+        entries = sym.legend_entries({"rules": [{"expression": "pop > 1000"}]})
+        assert entries[0]["label"] == "pop > 1000"
+
+    def test_each_rule_carries_its_own_symbol(self):
+        """A rule-based layer varies by EVERYTHING at once. Drawing every rule with the layer's
+        base symbol reports a dashed rule and a solid one as the same thing."""
+        style = {"color": "#111", "rules": [
+            {"label": "A", "style": {"color": "#f00", "dash": "dashed", "line_width": 4}},
+            {"label": "B", "style": {"color": "#0f0"}}]}
+        a, b = sym.legend_entries(style)
+        assert a["dash"] == "dashed" and a["line_width"] == 4
+        assert "dash" not in b
+
+    def test_a_rule_inherits_what_it_does_not_override(self):
+        """A rule that only changes colour is still drawn with the layer's marker shape."""
+        style = {"color": "#111", "shape": "star",
+                 "rules": [{"label": "A", "style": {"color": "#f00"}}]}
+        assert sym.legend_entries(style)[0]["shape"] == "star"
+
+    def test_a_classified_layer_carries_its_shape_to_every_swatch(self):
+        """A square swatch actively misreports a layer drawn with stars."""
+        style = {"color_mode": "categorized", "shape": "star", "dash": "dotted",
+                 "categories": [{"value": "a", "color": "#111"}, {"value": "b", "color": "#222"}]}
+        entries = sym.legend_entries(style)
+        assert len(entries) == 3                          # two categories plus "Other"
+        assert all(e["shape"] == "star" for e in entries)
+
+    def test_a_pattern_travels_as_its_TILE_not_as_the_block(self):
+        """A swatch needs pixels; the rest of the block describes how MapLibre repeats them."""
+        style = {"color_mode": "categorized",
+                 "categories": [{"value": "a", "color": "#111"}],
+                 "fill_pattern": {"image": PNG, "width": 12, "height": 12, "hatch": "cross"}}
+        assert sym.legend_entries(style)[0]["fill_pattern"] == PNG
+
+    @pytest.mark.parametrize("block", [{}, {"image": "http://x/y.png"}, {"image": None}, "nope"])
+    def test_a_pattern_that_is_not_a_data_uri_is_not_carried(self, block):
+        """The value comes from a client, and it goes straight into an `img src` and a CSS
+        `url()` — so anything but the shape a generated tile has is refused, not sanitised."""
+        style = {"color_mode": "categorized", "categories": [{"value": "a", "color": "#111"}],
+                 "fill_pattern": block}
+        assert "fill_pattern" not in sym.legend_entries(style)[0]
+
+    def test_a_single_symbol_still_has_no_legend(self):
+        """One swatch repeating the layer's colour says nothing its own swatch does not. The
+        `/legend` endpoint synthesises a row for callers that need one; that is presentation."""
+        assert sym.legend_entries({"color": "#abcdef", "shape": "star"}) == []
