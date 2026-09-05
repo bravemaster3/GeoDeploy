@@ -150,10 +150,18 @@ def scale_for_zoom(zoom: Any) -> Optional[float]:
 
 
 
-#: Image types a picture key may carry. The renderers accept any `data:image/…`, but reading an
-#: arbitrary file off disk and calling it an image is how a style ends up holding a PDF.
+#: Image types a picture key may carry. Reading an arbitrary file off disk and calling it an image
+#: is how a style ends up holding a PDF.
+#:
+#: **SVG IS DELIBERATELY ABSENT**, though the renderers would accept the URI. Every picture in a
+#: style is handed to `new Image()` and then to `map.addImage(id, img, {pixelRatio: 2})` — RASTER
+#: pixels at twice their CSS size, which is what the QGIS plugin renders and what that pixel ratio
+#: is for. An SVG is neither: one with no intrinsic width and height draws at zero size in an
+#: `<img>`, and one with them draws at half, because nothing scaled it by two. The plugin does not
+#: ship SVG either — it RASTERISES it through `QSvgRenderer` first (`fills._image_tile`), which is
+#: the working path. Rasterise the file and pass the PNG.
 _PICTURE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                  ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml"}
+                  ".gif": "image/gif", ".webp": "image/webp"}
 
 #: How big a picture may be, in RAW bytes before encoding. It rides in the style of every layer that
 #: uses it, and in the style.json of every portal that includes that layer — so this is a budget,
@@ -178,8 +186,15 @@ def picture_data_uri(path: str, flag: str) -> str:
     ext = os.path.splitext(path)[1].lower()
     mime = _PICTURE_TYPES.get(ext)
     if not mime:
-        raise ValidationError(400, "{0} must be one of: {1} (got {2}).".format(
-            flag, ", ".join(sorted(_PICTURE_TYPES)), ext or "no extension"))
+        hint = ""
+        if ext == ".svg":
+            # Worth its own sentence: SVG is the type somebody is most likely to reach for, and
+            # "not in the list" would read as an oversight rather than a decision.
+            hint = (" An SVG cannot be used directly — the map registers pictures as raster pixels "
+                    "at 2x size, so an SVG draws at zero or half. Export it to PNG at twice the "
+                    "size you want and pass that. (The QGIS plugin rasterises SVG the same way.)")
+        raise ValidationError(400, "{0} must be one of: {1} (got {2}).{3}".format(
+            flag, ", ".join(sorted(_PICTURE_TYPES)), ext or "no extension", hint))
     try:
         with open(path, "rb") as fh:
             raw = fh.read()

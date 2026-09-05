@@ -37,11 +37,24 @@ class TestReadingTheFile:
 
     @pytest.mark.parametrize("name,mime", [("a.png", "image/png"), ("a.jpg", "image/jpeg"),
                                            ("a.jpeg", "image/jpeg"), ("a.gif", "image/gif"),
-                                           ("a.webp", "image/webp"), ("a.svg", "image/svg+xml")])
+                                           ("a.webp", "image/webp")])
     def test_every_accepted_type_names_itself_correctly(self, tmp_path, name, mime):
         path = tmp_path / name
         path.write_bytes(PNG_BYTES)
         assert picture_data_uri(str(path), "--marker-image").startswith("data:%s;base64," % mime)
+
+    def test_an_svg_is_refused_and_says_what_to_do_instead(self, tmp_path):
+        """SVG is the type somebody is most likely to reach for, and it cannot work: every picture
+        in a style is handed to `new Image()` and then `addImage(..., {pixelRatio: 2})` — raster
+        pixels at twice their CSS size. An SVG with no intrinsic size draws at zero, one with a size
+        draws at half. The QGIS plugin rasterises SVG through `QSvgRenderer` rather than shipping
+        it, which is the working path and what the message points at."""
+        path = tmp_path / "icon.svg"
+        path.write_bytes(b'<svg xmlns="http://www.w3.org/2000/svg"><rect width="4" height="4"/></svg>')
+        with pytest.raises(ValidationError) as caught:
+            picture_data_uri(str(path), "--marker-image")
+        message = str(caught.value)
+        assert "SVG" in message and "PNG" in message, message
 
     def test_a_type_we_do_not_accept_is_refused_by_name(self, tmp_path):
         """Reading an arbitrary file off disk and calling it an image is how a style ends up
