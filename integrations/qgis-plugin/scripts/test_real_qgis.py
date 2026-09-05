@@ -1342,6 +1342,42 @@ def grouping_renderers():
     check("grouping: a plain renderer says nothing",
           symbology._grouping_note(plain.renderer()) is None)
 
+
+# ══ 18. Layer blending ═══════════════════════════════════════════════════════════════════════════
+
+def blend_modes():
+    section("Multiply / Screen / Overlay — QGIS blends layers, MapLibre cannot")
+    from qgis.PyQt.QtGui import QPainter
+
+    layer = make_layer("Polygon")
+    check("blend: a layer nobody has changed says nothing",
+          symbology._blend_note(layer) is None, repr(symbology._blend_note(layer)))
+
+    # Qt5 has it flat, Qt6 only inside `CompositionMode` — `symbology.enum` knows both, and it is
+    # reached through the module the harness already exec'd rather than by importing the package,
+    # which does not exist here. (QGIS 4.2 is where this bit: the flat lookup returned None and the
+    # fallback tried `import geodeploy_qgis`.)
+    multiply = symbology.enum(QPainter, "CompositionMode", "CompositionMode_Multiply")
+    layer.setBlendMode(multiply)
+    note = symbology._blend_note(layer)
+    check("blend: Multiply is reported", bool(note) and "Multiply" in note, repr(note))
+    check("blend: it says the web will draw NORMAL",
+          bool(note) and "NORMAL" in note,
+          "the push SUCCEEDS and the map is a different picture; that is the whole risk")
+
+    # …and the styling itself is unaffected: a blend mode is not a symbol, so it must not disturb
+    # the colours that DO travel.
+    style = symbology.from_qgis(layer) or {}
+    check("blend: the layer's symbology still travels", bool(style.get("color")), repr(style))
+
+    # Feature blending is the same idea between features of ONE layer, and reads the same way.
+    if hasattr(layer, "setFeatureBlendMode"):
+        plain = make_layer("Polygon")
+        plain.setFeatureBlendMode(multiply)
+        note = symbology._blend_note(plain)
+        check("blend: feature blending is reported too",
+              bool(note) and "own features" in note, repr(note))
+
 def main():
     audit()
     round_trip()
@@ -1360,6 +1396,7 @@ def main():
     arrow_lines()
     gradients()
     grouping_renderers()
+    blend_modes()
     print("\n{0} checks, {1} failed".format(CHECKS[0], len(FAILURES)))
     for name in FAILURES:
         print("  - {0}".format(name))

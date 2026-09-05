@@ -2884,6 +2884,72 @@ _GROUPING_RENDERERS = {
 }
 
 
+
+#: QPainter composition modes QGIS offers as layer BLENDING, by their Qt enum name, mapped to the
+#: word QGIS shows. `SourceOver` is "Normal" and is the default, so it is deliberately absent — a
+#: layer nobody has changed must not report anything.
+_BLEND_MODES = {
+    "CompositionMode_Multiply": "Multiply", "CompositionMode_Screen": "Screen",
+    "CompositionMode_Overlay": "Overlay", "CompositionMode_Darken": "Darken",
+    "CompositionMode_Lighten": "Lighten", "CompositionMode_ColorDodge": "Dodge",
+    "CompositionMode_ColorBurn": "Burn", "CompositionMode_HardLight": "Hard light",
+    "CompositionMode_SoftLight": "Soft light", "CompositionMode_Difference": "Difference",
+    "CompositionMode_Exclusion": "Exclusion", "CompositionMode_Plus": "Addition",
+}
+
+
+def _blend_note(qgis_layer):
+    """A sentence naming a blend mode the web map cannot honour, or None.
+
+    QGIS blends a layer with what is UNDER it — Multiply to darken a hillshade through a colour
+    ramp, Screen to lighten, and so on. **MapLibre has no layer blend modes at all**: every "blend"
+    in its style spec is sky, fog or atmosphere, and there is no `multiply` anywhere in it. So a
+    layer set to Multiply pushed to GeoDeploy draws NORMAL.
+
+    Nothing failed, which is the problem — the push succeeds and the map is a different picture,
+    with the two layers sitting flatly on top of each other instead of combining. Said out loud
+    here, with the nearest thing that does exist: opacity darkens an overlap too, less precisely.
+
+    Read from the LAYER, not the symbol: this is `QgsMapLayer.blendMode()` (Layer Properties →
+    Symbology → Layer rendering), which nothing else in this module looks at. `featureBlendMode()`
+    is the same idea between features of ONE layer, and is reported the same way.
+    """
+    if not QGIS or qgis_layer is None:
+        return None
+    names = []
+    for getter, what in (("blendMode", "with the layers under it"),
+                         ("featureBlendMode", "between its own features")):
+        mode = _call(qgis_layer, getter)
+        if mode is None:
+            continue
+        label = _blend_mode_name(mode)
+        if label:
+            names.append("{0} ({1})".format(label, what))
+    if not names:
+        return None
+    return ("This layer blends {0}. MapLibre has no blend modes at all, so it will draw NORMAL on "
+            "the web — the layers will sit on top of each other rather than combining. Lowering "
+            "the layer's opacity in GeoDeploy is the nearest thing to it.".format(" and ".join(names)))
+
+
+def _blend_mode_name(mode):
+    """The QGIS word for a QPainter composition mode, or None for Normal / anything unrecognised."""
+    try:
+        from qgis.PyQt.QtGui import QPainter
+    except ImportError:                 # pragma: no cover - QGIS always has it
+        return None
+    for enum_name, label in _BLEND_MODES.items():
+        member = getattr(QPainter, enum_name, None)
+        if member is None:
+            # Qt6 scopes them under `CompositionMode`; `compat.enum` knows both spellings.
+            try:
+                member = enum(QPainter, "CompositionMode", enum_name)
+            except Exception:           # noqa: BLE001  # nosec B112 - a name this build lacks
+                continue
+        if member is not None and mode == member:
+            return label
+    return None
+
 def _grouping_note(renderer):
     """A sentence naming what a grouping renderer does that this push cannot carry, or None.
 
@@ -2936,6 +3002,12 @@ def from_qgis(qgis_layer) -> dict:
         # renderer is — including "No symbols", which is how a layer kept for its labels is drawn.
         # A GROUPING renderer draws perfectly well through its sub-renderer's symbol, so nothing
         # fails — which is exactly why it has to be said out loud. See `_grouping_note`.
+        blend = _blend_note(qgis_layer)
+        if blend:
+            _log("{0}: {1}".format(
+                qgis_layer.name() if hasattr(qgis_layer, "name") else "This layer", blend),
+                level="warning")
+
         grouping = _grouping_note(renderer)
         if grouping:
             _log("{0}: {1}".format(

@@ -270,21 +270,75 @@ changes every 2.5D layer in the project — GeoDeploy stores them per layer, whi
 the two models genuinely differ. The height is in the project's map units and GeoDeploy reads it as
 metres; those agree in a projected CRS and not in a geographic one.
 
-## Known limitations
+## What does not travel
 
-- **3D extrusion is not drawn.** A layer's extrusion is stored and rendered by GeoDeploy as usual,
-  and the plugin carries it safely — opening an extruded layer and pushing it back does not remove
-  it — but QGIS shows those polygons flat, so 3D cannot be edited here yet.
-- **Symbology QGIS has and GeoDeploy does not** — inverted polygons, gradient and shapeburst
-  fills, and stacked LINE symbols beyond a stroke with one decoration — is simplified on the way in
-  and not carried back. Stacked MARKER and FILL symbols travel as a picture or a tile.
-- **A layer's own scale range is not carried yet**, although a *rule's* is.
-- **3D units are not converted.** GeoDeploy's heights and radii are metres; QGIS 3D measures in the
+Most of QGIS's symbology reaches GeoDeploy exactly, and a good deal of the rest reaches it as a
+stated approximation. This is the list of what does **not**, and why — so that a map that comes out
+different is a thing you were told about rather than a thing you have to discover.
+
+**The plugin says these out loud when you push.** None of them makes a push fail; that is exactly
+why they are written down. A push that succeeds and quietly changes the map is the failure worth
+guarding against.
+
+### Impossible in a web map, and unlikely to change
+
+| QGIS | What happens instead |
+|---|---|
+| **Blend modes** (Multiply, Screen, Overlay…) on a layer or between its features | Drawn **Normal**. MapLibre has no blend modes at all — every "blend" in its style spec is sky, fog or atmosphere. Lowering the layer's opacity is the nearest thing. |
+| **Geometry generators** | Not carried. These are arbitrary expressions that produce *new geometry*; there is nothing to translate them into. The QML is kept so QGIS gets them back. |
+| **Shapeburst fill** | A distance transform inside each polygon. Out of reach; the QML is kept. |
+| **Mask markers** | A clipping mask, with no MapLibre equivalent. Carried, not drawn. |
+| **Embedded (per-feature) symbols** | A vector tile has no way to carry a different symbol per feature. Carried, not drawn. |
+| **Draw effects** (blur, drop shadow, glow) | MapLibre exposes none of them. |
+
+### Possible, but not built
+
+| QGIS | Why not yet |
+|---|---|
+| **Interpolated line** (a colour ramp *along* a line) | Needs MapLibre's `line-gradient`, which the style spec permits **only** on GeoJSON sources with `lineMetrics: true` — a vector tile clips features at tile boundaries, so no tile knows the whole line's length. GeoDeploy's own layers are vector tiles. An external GeoJSON layer could do it. |
+| **Linear referencing** (chainage labels along a line) | Labels exist now, and that is not enough: `symbol-placement: line` repeats the *same* text at every placement, and distance-along-the-line is not something MapLibre can compute. The values would have to be generated server-side as point features carrying their measure. |
+| **Point clustering** | GeoDeploy clusters, but at **tiling** time rather than in the style — so a QGIS cluster renderer cannot switch it on. Tick *Cluster points* on the layer and re-tile. |
+| **Inverted polygons** | Would need a server-derived mask (the layer's union subtracted from the world). Until then the polygons themselves are drawn — the inverse of the picture. |
+| **Point displacement** | No web equivalent. Clustering is the nearest honest approximation. |
+| **Merged features** | Drawn as the underlying symbol, so the joins QGIS dissolves stay visible. |
+| **A layer's own scale range** | Not carried yet, although a *rule's* is. |
+
+### Approximated, and reported as such
+
+These do travel, but not identically. Each is a deliberate choice with the reasoning recorded in
+`scripts/coverage_report.py`, which is checked against QGIS's own registries so the list cannot
+drift from what the plugin does:
+
+- **Gradients** — fill, lineburst and shapeburst read as the **middle** of their ramp. MapLibre has
+  no gradient of any kind, so one flat colour is all there is; the midpoint is the closest one.
+- **Raster lines** — a line stroked with an image becomes the average of that image's opaque pixels.
+- **Filled lines** — a buffered-and-filled line becomes an ordinary line in the fill's colour.
+- **Line pattern fills** — the angle is snapped to 0/45/90/135°, the only angles at which a square
+  tile closes. A seam every tile is worse than a few degrees.
+- **Random marker fills** — drawn as a regular grid at the same density; randomness has no
+  repeating tile.
+- **Arrow lines** — the head is rebuilt and repeated along the line. QGIS draws one arrow per
+  feature and MapLibre cannot place an icon at a line's end, and the shaft does not taper.
+- **Vector fields** — rendered as a picture, so the layer draws, but the arrows cannot follow the
+  data per feature.
+- **Simple markers** — six of QGIS's shapes are native; anything else is rendered to an image.
+- **2.5D** — becomes a real 3D extrusion. Its viewing angle and shadow have no MapLibre equivalent;
+  both are stored so they survive the trip back to QGIS.
+- **3D units are not converted.** GeoDeploy's heights and radii are metres; QGIS measures in the
   project's map units. Those agree in a projected CRS and do not in a geographic one.
+
+### Other
+
+- **3D extrusion cannot be edited in QGIS.** It is stored, rendered by GeoDeploy, and carried safely
+  — opening an extruded layer and pushing it back does not remove it — but QGIS shows those polygons
+  flat.
 - A raster must be uploaded from a local file: re-encoding one would mean choosing compression and
   resampling on your behalf, and ingest converts to a COG anyway.
 
-Both symbology gaps are tracked as *Every symbol QGIS can draw* on the [roadmap](roadmap.md).
+The full table, generated from QGIS's registries rather than written by hand, is
+`integrations/qgis-plugin/scripts/coverage_report.py`. It fails CI when this QGIS offers something
+the table does not classify, so a new QGIS version forces a decision instead of quietly widening a
+gap.
 
 ### If a token stops working
 
