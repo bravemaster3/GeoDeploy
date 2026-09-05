@@ -115,6 +115,14 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
   own relief is one tick, not a choice between them. Single-band only; three bands are a photograph.
   The panel says the whole map is raised, because MapLibre has one terrain and the topmost layer
   that asks for it wins.
+- **Custom dash patterns and centre markers** (2026-09-05) — the last two things the browser could
+  not author. A `dash_pattern` from QGIS OUTRANKS `lineType`, so such a line showed "Solid" in the
+  dropdown while drawing dashes, with no way to see or clear the real pattern; it has its own box
+  now, in multiples of the line width (MapLibre's unit, so the shape survives a width change) and
+  the dropdown reads "Custom pattern" rather than misreporting itself as the nearest preset. And
+  `centroid_marker` — a marker at each polygon's centre, QGIS's centroid fill — is drawn in the
+  browser into the same key and the same PNG data URI the plugin produces, so one made here and one
+  pushed from QGIS are the same thing to every renderer.
 - **Arrow SIZE** (2026-09-04) regenerates the tile rather than scaling it through `icon-size`: the
   image is what every renderer draws and what the plugin reads back, so a size living only in the
   layout would be lost the moment the style left this panel. One number scales head length and

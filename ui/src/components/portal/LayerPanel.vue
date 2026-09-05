@@ -228,12 +228,30 @@
               </div>
               <div>
                 <label class="text-xs text-muted-foreground">Line style</label>
-                <select :value="config.style?.lineType || 'solid'" @change="emitStyle({ lineType: $event.target.value })"
+                <select :value="lineTypeShown" @change="setLineType($event.target.value)"
                   class="mt-0.5 w-full text-xs border border-border rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary/60">
                   <option value="solid">Solid</option>
                   <option value="dashed">Dashed</option>
                   <option value="dotted">Dotted</option>
+                  <!-- Only selectable by HAVING one: a custom pattern comes from QGIS or from the
+                       box below, and offering "Custom" as a choice would leave nothing to choose. -->
+                  <option value="custom" :disabled="!dashPattern">Custom pattern</option>
                 </select>
+              </div>
+              <!-- THE PATTERN ITSELF. QGIS lets an author draw any dash pattern and one arrives as
+                   `dash_pattern`, which OUTRANKS `lineType` — so such a line used to show "Solid"
+                   here while drawing dashes, with no way to see or clear the real pattern. -->
+              <div>
+                <label class="text-xs text-muted-foreground">Custom dash pattern</label>
+                <input type="text" :value="dashText" @change="setDashPattern($event.target.value)"
+                  placeholder="e.g. 4, 2, 1, 2 — leave empty for none"
+                  class="mt-0.5 w-full text-xs border border-border rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+                <p class="text-[11px] text-muted-foreground/70 mt-0.5 leading-snug">
+                  Dash and gap lengths, in multiples of the line width — so the pattern keeps its
+                  shape when the width changes.
+                  <span v-if="dashPreview">At {{ config.style?.line_width ?? 2 }}px that is
+                    {{ dashPreview }}.</span>
+                </p>
               </div>
             </div>
 
@@ -612,6 +630,33 @@
                 <span class="text-[11px] text-muted-foreground/70">px</span>
               </label>
             </div>
+
+              <!-- A MARKER AT EACH POLYGON'S CENTRE — QGIS's centroid fill. It arrived from the
+                   plugin and drew correctly, but there was no way to ADD one here, so centre dots
+                   meant a trip through QGIS. Drawn in the browser into the same `centroid_marker`
+                   key and the same PNG data URI the plugin produces. -->
+              <div v-if="geomType === 'polygon' && config.layer_type === 'vector'"
+                   class="pt-1 border-t border-border/50">
+                <label class="text-xs text-muted-foreground">Marker at the centre</label>
+                <div class="flex flex-wrap items-center gap-1 mt-1">
+                  <button v-for="m in centroidShapes" :key="m.name" type="button" :title="m.title"
+                    @click="setCentroid(m.name)"
+                    class="w-7 h-7 rounded border overflow-hidden flex items-center justify-center"
+                    :class="activeCentroid === m.name
+                      ? 'border-primary ring-1 ring-primary/40' : 'border-border hover:border-primary/50'">
+                    <span v-if="m.name === 'none'" class="text-[9px] text-muted-foreground">none</span>
+                    <img v-else :src="centroidPreview(m.name)" alt="" class="w-5 h-5" />
+                  </button>
+                </div>
+                <label v-if="activeCentroid !== 'none'" class="flex items-center gap-2 mt-1.5">
+                  <span class="text-[11px] text-muted-foreground flex-shrink-0 w-10">Size</span>
+                  <input type="range" min="4" max="40" step="1" :value="centroidSize"
+                    @change="setCentroidSize($event.target.value)" class="flex-1 h-1 accent-primary" />
+                  <span class="text-[11px] text-muted-foreground/70 w-8 text-right tabular-nums">
+                    {{ centroidSize }}px
+                  </span>
+                </label>
+              </div>
 
             <!-- LABELS. New to the platform in 2026-09; there was no way to label a layer at all
                  before, here or anywhere. Collapsed behind its own switch, following the 3D block
@@ -1915,6 +1960,132 @@ function setArrowSpacing(value) {
   emitStyle({ line_marker: { ...marker, spacing: Math.max(10, parseFloat(value) || DEFAULT_ARROW_SPACING) } })
 }
 
+// ── Custom dash pattern ─────────────────────────────────────────────────────
+// QGIS lets an author draw ANY dash pattern, and one arrives as `dash_pattern` — a list of dash and
+// gap lengths that OUTRANKS `lineType`. The panel offered only solid/dashed/dotted, so such a line
+// showed "Solid" in the dropdown while drawing dashes: a control stating something the map
+// contradicts, and no way to edit or clear the real pattern.
+//
+// The unit is MULTIPLES OF THE LINE WIDTH, which is MapLibre's own — a pattern in pixels would
+// change shape every time somebody changed the width. Same unit the CLI's `--dash-pattern` takes.
+const dashPattern = computed(() => {
+  const p = props.config.style?.dash_pattern
+  return (Array.isArray(p) && p.length >= 2) ? p : null
+})
+
+const dashText = computed(() => (dashPattern.value || []).join(', '))
+
+// What the line-style dropdown should SAY. A custom pattern is not one of the three presets, so it
+// selects none of them rather than misreporting itself as the nearest.
+const lineTypeShown = computed(() =>
+  dashPattern.value ? 'custom' : (props.config.style?.lineType || 'solid'))
+
+function setLineType(value) {
+  // Choosing a preset CLEARS the custom pattern, because the pattern would otherwise keep winning
+  // and the choice would appear to do nothing.
+  if (value === 'custom') return
+  emitStyle({ lineType: value, dash_pattern: undefined })
+}
+
+function setDashPattern(raw) {
+  const parts = String(raw).split(/[,\s]+/).map(s => parseFloat(s))
+    .filter(n => Number.isFinite(n) && n > 0)
+  // At least a dash and a gap. Fewer is not a pattern, and MapLibre wants PAIRS — an odd-length
+  // array repeats inverted, which is not what anyone draws. Mirrors `symbology.dash_array`.
+  if (parts.length < 2) { emitStyle({ dash_pattern: undefined }); return }
+  emitStyle({ dash_pattern: parts.length % 2 ? [...parts, parts[parts.length - 1]] : parts })
+}
+
+// A preview of the pattern at the layer's own width, so what is typed can be seen before saving.
+const dashPreview = computed(() => {
+  const pattern = dashPattern.value
+  if (!pattern) return ''
+  const w = Math.max(1, Number(props.config.style?.line_width) || 2)
+  return pattern.map(n => (n * w).toFixed(1)).join(' ')
+})
+
+// ── Centroid marker ─────────────────────────────────────────────────────────
+// QGIS's centroid fill puts a marker at each polygon's centre. It arrived from the plugin and drew
+// correctly, but there was no way to add one here — so a polygon layer could only get centre dots
+// by going through QGIS.
+//
+// Drawn in the browser into the same `centroid_marker` key and the same PNG data URI the plugin
+// produces, exactly as the hatches and arrows are, so one made here and one pushed from QGIS are
+// the same thing to every renderer. MapLibre places a symbol layer's icons at a polygon's LABEL
+// POINT by default, which is the hard half already solved: a label point sits inside a concave
+// shape, where a true centroid can fall outside it.
+const CENTROID_SIZE_DEFAULT = 10
+
+const centroidShapes = [
+  { name: 'none', title: 'No centre marker' },
+  { name: 'circle', title: 'Circle' },
+  { name: 'square', title: 'Square' },
+  { name: 'triangle', title: 'Triangle' },
+  { name: 'diamond', title: 'Diamond' },
+  { name: 'cross', title: 'Cross' },
+]
+
+function centroidTile(shape, color, size) {
+  if (shape === 'none') return null
+  const px = Math.max(4, Math.min(40, Number(size) || CENTROID_SIZE_DEFAULT))
+  const pad = 2                       // room for the outline, which is drawn centred on the edge
+  const side = px + pad * 2
+  const cv = document.createElement('canvas')
+  cv.width = side
+  cv.height = side
+  const ctx = cv.getContext('2d')
+  if (!ctx) return null
+  const c = pad + px / 2
+  const r = px / 2
+  ctx.fillStyle = color || '#333333'
+  // A WHITE OUTLINE, like the generated point markers: a dark dot on a dark polygon is invisible,
+  // and the marker is meant to be read against the fill it sits on.
+  ctx.strokeStyle = '#ffffff'
+  ctx.lineWidth = 1.5
+  ctx.beginPath()
+  if (shape === 'circle') ctx.arc(c, c, r, 0, Math.PI * 2)
+  else if (shape === 'square') ctx.rect(c - r, c - r, px, px)
+  else if (shape === 'triangle') {
+    ctx.moveTo(c, c - r); ctx.lineTo(c + r, c + r); ctx.lineTo(c - r, c + r); ctx.closePath()
+  } else if (shape === 'diamond') {
+    ctx.moveTo(c, c - r); ctx.lineTo(c + r, c); ctx.lineTo(c, c + r); ctx.lineTo(c - r, c)
+    ctx.closePath()
+  } else if (shape === 'cross') {
+    const t = r * 0.38
+    const pts = [[-t, -r], [t, -r], [t, -t], [r, -t], [r, t], [t, t], [t, r], [-t, r],
+                 [-t, t], [-r, t], [-r, -t], [-t, -t]]
+    pts.forEach(([dx, dy], i) => (i ? ctx.lineTo(c + dx, c + dy) : ctx.moveTo(c + dx, c + dy)))
+    ctx.closePath()
+  }
+  ctx.fill()
+  ctx.stroke()
+  return { image: cv.toDataURL('image/png'), width: side, height: side }
+}
+
+// Only a marker this panel drew is highlighted — one rendered by QGIS carries no `shape`, so it
+// selects none of these rather than being mislabelled as the nearest.
+const activeCentroid = computed(() => props.config.style?.centroid_marker?.shape || 'none')
+const centroidSize = computed(() =>
+  props.config.style?.centroid_marker?.size ?? CENTROID_SIZE_DEFAULT)
+
+function centroidPreview(shape) {
+  const tile = centroidTile(shape, props.config.style?.color || '#333333', 14)
+  return tile ? tile.image : null
+}
+
+function setCentroid(shape, size) {
+  if (shape === 'none') { emitStyle({ centroid_marker: undefined }); return }
+  const px = Number(size) || centroidSize.value
+  const tile = centroidTile(shape, props.config.style?.color || '#333333', px)
+  if (!tile) return
+  emitStyle({ centroid_marker: { ...tile, shape, size: px } })
+}
+
+function setCentroidSize(value) {
+  const shape = activeCentroid.value
+  if (shape !== 'none') setCentroid(shape, value)
+}
+
 // ── Marker placement ────────────────────────────────────────────────────────
 const markerOffset = computed(() => {
   const o = props.config.style?.marker_offset
@@ -1985,6 +2156,11 @@ const qgisStyling = computed(() => {
     out.push(st.line_marker.arrow ? 'An arrow line drawn in QGIS'
       : 'Markers repeated along the line')
   }
+  // Same rule as the hatches and arrows: a centre marker this panel drew carries a `shape`, so it
+  // is editable above and must not be listed as something only QGIS can change.
+  if (st.centroid_marker?.image && !st.centroid_marker.shape) {
+    out.push('A marker at each polygon’s centre, drawn in QGIS')
+  }
   if (st.labels?.qgis_font?.family) out.push(`Labels in ${st.labels.qgis_font.family}`)
   return out
 })
@@ -1995,6 +2171,7 @@ function clearQgisStyling() {
     fill_pattern: undefined,
     marker_image: undefined,
     line_marker: undefined,
+    centroid_marker: undefined,
   })
 }
 

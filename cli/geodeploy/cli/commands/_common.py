@@ -115,6 +115,27 @@ def add_style_args(parser, raster: bool = True) -> None:
     line.add_argument("--marker-offset", help="move each marker, as 'x,y' in pixels")
     line.add_argument("--marker-opacity", type=float, help="the marker's own opacity, 0-1")
 
+    # PICTURES FROM A FILE. These three keys already SURVIVED a CLI restyle — `build_style` merges
+    # onto the existing style, so a marker rendered by the QGIS plugin was never dropped — but there
+    # was no way to SET one without QGIS. A PNG or SVG on disk is the obvious other source, and the
+    # renderers cannot tell the two apart: both arrive as the same data URI.
+    pics = parser.add_argument_group("pictures (from a local image file)")
+    pics.add_argument("--marker-image", metavar="FILE",
+                      help="draw each point as this image instead of a generated shape")
+    pics.add_argument("--fill-pattern", metavar="FILE",
+                      help="tile this image across each polygon (it must tile seamlessly)")
+    pics.add_argument("--line-marker", metavar="FILE",
+                      help="repeat this image along each line, rotated with it")
+    pics.add_argument("--centroid-marker", metavar="FILE",
+                      help="place this image at each polygon's centre")
+    for flag, what in (("--no-marker-image", "the point picture"),
+                       ("--no-fill-pattern", "the polygon pattern"),
+                       ("--no-line-marker", "the markers along the line"),
+                       ("--no-centroid-marker", "the centre marker")):
+        pics.add_argument(flag, action="store_true", help="remove {0}".format(what))
+    pics.add_argument("--line-marker-spacing", type=float,
+                      help="pixels between repeated line markers")
+
     # Scale range and "draws nothing" belong to the LAYER, not to one symbol.
     scope = parser.add_argument_group("where the layer draws")
     scope.add_argument("--min-zoom", type=float,
@@ -208,6 +229,15 @@ def style_from_args(args, client=None, layer_ref: Optional[Any] = None,
         kwargs["categories"] = parse_categories(args.categories)
     if getattr(args, "no_classification", False):
         kwargs["clear_classification"] = True
+    for arg, key in (("marker_image", "marker_image"), ("fill_pattern", "fill_pattern"),
+                     ("line_marker", "line_marker"), ("centroid_marker", "centroid_marker")):
+        path = getattr(args, arg, None)
+        if path:
+            kwargs[key] = path
+        if getattr(args, "no_" + arg, False):
+            kwargs["no_" + key] = True
+    if getattr(args, "line_marker_spacing", None) is not None:
+        kwargs["line_marker_spacing"] = args.line_marker_spacing
     for name in ("dash_pattern", "marker_offset", "no_dash_pattern", "no_symbol"):
         value = getattr(args, name, None)
         if value is not None and value is not False:

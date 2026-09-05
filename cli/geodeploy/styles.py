@@ -149,6 +149,50 @@ def scale_for_zoom(zoom: Any) -> Optional[float]:
     return SCALE_AT_ZOOM_0 / (2.0 ** value)
 
 
+
+#: Image types a picture key may carry. The renderers accept any `data:image/…`, but reading an
+#: arbitrary file off disk and calling it an image is how a style ends up holding a PDF.
+_PICTURE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                  ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml"}
+
+#: How big a picture may be, in RAW bytes before encoding. It rides in the style of every layer that
+#: uses it, and in the style.json of every portal that includes that layer — so this is a budget,
+#: not a preference. The SAME number and the same measure as the QGIS plugin's own
+#: `symbology.MAX_PICTURE_BYTES`: a marker rendered by the plugin and one set from a file here end
+#: up in the same key, and two different ceilings would mean a file the CLI accepts and the plugin
+#: would have refused.
+MAX_PICTURE_BYTES = 96 * 1024
+
+
+def picture_data_uri(path: str, flag: str) -> str:
+    """A local image file as a `data:` URI, or a ValidationError saying why not.
+
+    THE SAME SHAPE THE QGIS PLUGIN PRODUCES. The plugin renders a QGIS symbol to a PNG and ships the
+    pixels; this reads a file somebody already has. The renderers cannot tell them apart, which is
+    the point — a marker set from the CLI and one pushed from QGIS are the same key with the same
+    kind of value.
+    """
+    import base64
+    import os
+
+    ext = os.path.splitext(path)[1].lower()
+    mime = _PICTURE_TYPES.get(ext)
+    if not mime:
+        raise ValidationError(400, "{0} must be one of: {1} (got {2}).".format(
+            flag, ", ".join(sorted(_PICTURE_TYPES)), ext or "no extension"))
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except OSError as exc:
+        raise ValidationError(400, "{0}: could not read {1} ({2}).".format(flag, path, exc))
+    if not raw:
+        raise ValidationError(400, "{0}: {1} is empty.".format(flag, path))
+    if len(raw) > MAX_PICTURE_BYTES:
+        raise ValidationError(400, "{0}: {1} is {2} KB, over the {3} KB a style may carry — it "
+                              "travels in every portal that uses this layer.".format(
+                                  flag, path, len(raw) // 1024, MAX_PICTURE_BYTES // 1024))
+    return "data:{0};base64,{1}".format(mime, base64.b64encode(raw).decode("ascii"))
+
 def build_style(base: Optional[Dict[str, Any]] = None, **kw: Any) -> Dict[str, Any]:
     """Merge only the styling arguments that were actually given onto `base`.
 
@@ -190,6 +234,31 @@ def build_style(base: Optional[Dict[str, Any]] = None, **kw: Any) -> Dict[str, A
     extrusion = build_extrusion(style.get("extrusion"), **kw)
     if extrusion is not None:
         style["extrusion"] = extrusion
+
+    # PICTURES. Each is a path on disk here and a data URI in the style — see `picture_data_uri`.
+    # `marker_image` is a bare string; the other three are blocks, because they carry a size or a
+    # spacing beside the pixels. An existing block is UPDATED rather than replaced, so setting a new
+    # image does not silently reset the spacing somebody chose.
+    for arg, flag in (("marker_image", "--marker-image"), ("fill_pattern", "--fill-pattern"),
+                      ("line_marker", "--line-marker"), ("centroid_marker", "--centroid-marker")):
+        path = kw.get(arg)
+        if path:
+            uri = picture_data_uri(str(path), flag)
+            if arg == "marker_image":
+                style[arg] = uri
+            else:
+                block = dict(style.get(arg) or {})
+                block["image"] = uri
+                style[arg] = block
+        if kw.get("no_" + arg):
+            style.pop(arg, None)
+    spacing = kw.get("line_marker_spacing")
+    if spacing is not None:
+        block = dict(style.get("line_marker") or {})
+        if not block.get("image"):
+            raise ValidationError(400, "--line-marker-spacing needs a --line-marker to space.")
+        block["spacing"] = float(spacing)
+        style["line_marker"] = block
 
     dash = kw.get("dash_pattern")
     if dash is not None:

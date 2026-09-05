@@ -200,5 +200,13 @@ the CLI yet; see below).
   run on, and only the second one is visible to a user with an old install.
 
 ## Last updated
+2026-09-05 (`styles.picture_data_uri` + `--marker-image` / `--fill-pattern` / `--line-marker` /
+`--centroid-marker`, each taking a local image FILE. These four keys already *survived* a CLI
+restyle — `build_style` merges onto the existing style, so a marker the QGIS plugin rendered was
+never dropped by `--color red` — but there was no way to SET one without going through QGIS, which
+made "can it all be done from the CLI?" a no for the part of the vocabulary that is pixels rather
+than words. The size ceiling is the plugin's own 96 KB on RAW bytes, deliberately: a file the CLI
+accepted that the plugin would have refused is two ceilings for one key.)
+
 2026-08-12 (created — packaged CLI + Python client, replacing `examples/geodeploy_cli.py`; then
 `browse` + anonymous layer download on top of the new `/api/public` and per-layer export endpoints)
