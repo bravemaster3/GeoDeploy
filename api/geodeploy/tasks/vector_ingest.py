@@ -27,6 +27,7 @@ from slugify import slugify
 from .. import state_db
 from ..celery_app import celery_app
 from ..config import get_settings
+from ..services import postgis
 from ..services import martin as martin_svc
 
 logger = logging.getLogger(__name__)
@@ -219,22 +220,36 @@ def _create_sibling(parent_layer_id: int, name: str, schema_name: str, table_nam
     with state_db.connect() as conn:
         conn.row_factory = state_db.dict_row
         parent = conn.execute(
-            "SELECT user_id, file_size FROM vector_layers WHERE id = ?",
+            "SELECT user_id, file_size, visibility, is_public FROM vector_layers WHERE id = ?",
             (parent_layer_id,)).fetchone()
         if not parent:
             raise ValueError("The layer this upload belongs to no longer exists.")
         parent = dict(parent)
+        # SHARING IS INHERITED, and it has to be written EXPLICITLY. `visibility` and `is_public`
+        # are `nullable=False` on the model with a default declared in PYTHON, which SQLAlchemy
+        # applies only to an ORM insert — this is raw SQL, so both arrived NULL and Postgres
+        # refused the row. A multi-layer upload therefore failed outright with
+        # `NotNullViolation: null value in column "visibility"`, and only on a FRESH instance: a
+        # database old enough to have got the column from `_apply_schema_migrations` got it as a
+        # plain nullable `ALTER TABLE ... ADD COLUMN`, so the same code worked there.
+        #
+        # Inherited from the parent rather than defaulted, because the sibling is the same upload:
+        # a user who marked the file public means all of its layers, and silently making layer two
+        # of a public GeoPackage organization-only would be a sharing decision nobody made.
         row = conn.execute(
             "INSERT INTO vector_layers (uid, user_id, name, table_name, schema_name, file_size, "
-            "status, storage_backend) VALUES (?, ?, ?, ?, ?, ?, 'processing', 'postgis') "
-            "RETURNING id",
+            "status, storage_backend, visibility, is_public) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'processing', 'postgis', ?, ?) RETURNING id",
             (new_uid(), parent["user_id"], name, table_name, schema_name,
-             parent.get("file_size"))).fetchone()
+             parent.get("file_size"), parent.get("visibility") or "organization",
+             bool(parent.get("is_public")))).fetchone()
         layer_id = (dict(row) if not isinstance(row, (int, float)) else {"id": row})["id"]
         job_id = str(_uuid.uuid4())
+        # `progress` is NOT NULL with its default declared in Python too — the same trap as
+        # `visibility` above, one table along, and it surfaced the moment that one was fixed.
         conn.execute(
-            "INSERT INTO upload_jobs (id, layer_id, layer_type, status) "
-            "VALUES (?, ?, 'vector', 'processing')", (job_id, layer_id))
+            "INSERT INTO upload_jobs (id, layer_id, layer_type, status, progress) "
+            "VALUES (?, ?, 'vector', 'processing', 0)", (job_id, layer_id))
     return layer_id, job_id
 
 
@@ -308,7 +323,10 @@ def _ingest_every_layer(job_id: str, layer_id: int, src_path: str, names: list, 
         share = int(85 * index / total) + 5
         step("Layer {0} of {1}: {2}".format(index + 1, total, name), share)
         safe = slugify(name, separator="_") or "layer_{0}".format(index + 1)
-        table = "{0}_{1}".format(safe, uuid.uuid4().hex[:6])
+        # The TABLE name is built by `postgis.unique_table_name`, not glued together here: a long
+        # layer name plus a random suffix runs past Postgres's 63-character identifier limit, and
+        # what gets silently truncated is the suffix — see the helper for the failure that caused.
+        table = postgis.unique_table_name(name, fallback=safe)
         if index == 0:
             target, target_job = layer_id, job_id
             _update_layer(layer_id, name=str(name), table_name=table)
@@ -800,7 +818,16 @@ def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir:
         cur.execute(f"INSERT INTO {_q(schema)}.{_q(table)} ({copycols}, geom) "
                     f"SELECT {copycols}, {geom_expr} FROM {_q(schema)}.{_q(stg)}")
         cur.execute(f"DROP TABLE {_q(schema)}.{_q(stg)}")
-        cur.execute(f"CREATE INDEX {_q(table + '_geom_idx')} ON {_q(schema)}.{_q(table)} USING GIST (geom)")
+        # UNNAMED, so POSTGRES names it — which is what `tasks/csv_import` has always done here.
+        #
+        # `table + "_geom_idx"` was the bug behind `relation "…_svg_marker_0645" already exists`.
+        # Postgres truncates every identifier at 63 characters, and it cuts the END: for a table
+        # name already at or near the limit, appending `_geom_idx` and truncating gives back THE
+        # TABLE'S OWN NAME, so `CREATE INDEX` collided with the table it was indexing. It failed on
+        # every attempt, with a different suffix each time — which is exactly why deleting the
+        # layers and retrying did not help. Postgres's own naming handles the truncation and
+        # de-duplicates, so there is nothing left to get wrong; the name is used nowhere else.
+        cur.execute(f"CREATE INDEX ON {_q(schema)}.{_q(table)} USING GIST (geom)")
         # bbox is stored in EPSG:4326 app-wide (map fit / viewport), even when the geometry is native —
         # transform the extent BOX only (cheap; a no-op when already 4326). Mirrors discover._table_bbox_4326.
         cur.execute(f"SELECT ST_XMin(e), ST_YMin(e), ST_XMax(e), ST_YMax(e) FROM "

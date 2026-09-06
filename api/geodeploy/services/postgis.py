@@ -3,6 +3,7 @@ import asyncio
 import os
 import secrets
 import string
+import uuid
 import docker
 import re
 
@@ -92,6 +93,38 @@ async def test_connection(host: str, port: int, db: str, user: str, password: st
 
 
 DB_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+
+#: Postgres truncates ANY identifier past this — silently, with at most a notice, and in `CREATE`
+#: and `DROP` alike. It is not an error, which is what makes it dangerous.
+MAX_IDENTIFIER = 63
+
+#: How many random hex characters make a table name unique. Six is 16.7M, which is plenty; the
+#: point below is that all six have to survive.
+TABLE_SUFFIX_LEN = 6
+
+
+def unique_table_name(name: str, prefix: str = "", fallback: str = "layer") -> str:
+    """A Postgres table name for `name`, unique and guaranteed to fit in an identifier.
+
+    THE BUG THIS EXISTS FOR. Every caller used to build `f"{slug}_{uuid4().hex[:6]}"` and trust it,
+    but a long layer name pushes that past 63 characters and Postgres truncates the END — which is
+    precisely where the random suffix is. Reported from a QGIS GeoPackage whose layer slugified to
+    58 characters: the name generated was 65 long, so only FOUR of the six random characters
+    survived, and the ingest died on `relation "…_svg_marker_0645" already exists`. Two layers in
+    one file sharing a long prefix collide outright, and re-uploading the same file is a coin flip
+    rather than a fresh table.
+
+    So the SLUG is what gets cut, never the suffix. The name stays readable — it is the front of it
+    that identifies the layer — and it stays unique, which is the part that has to be true.
+    """
+    from slugify import slugify
+
+    slug = slugify(name or "", separator="_") or fallback
+    suffix = "_" + uuid.uuid4().hex[:TABLE_SUFFIX_LEN]
+    head = "{0}{1}".format(prefix, slug)
+    # `rstrip` so a cut landing mid-word does not leave a doubled underscore against the suffix.
+    return head[:MAX_IDENTIFIER - len(suffix)].rstrip("_") + suffix
+
 
 
 async def create_database(host: str, port: int, admin_db: str, user: str, password: str,

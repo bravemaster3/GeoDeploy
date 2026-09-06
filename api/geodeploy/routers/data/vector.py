@@ -16,6 +16,7 @@ from ...database import get_db
 from ...deps import require_scope, resolve_optional_user
 from ...models import Portal, UploadJob, User, VectorLayer
 from ...schemas import DefaultStyle, JobStatus, LayerRename, PortalRefOut, SharingUpdate, VectorLayerOut
+from ...services import postgis
 from ...services import martin as martin_svc
 from ...tasks.vector_ingest import ingest_vector
 from . import exports
@@ -190,7 +191,7 @@ async def upload_vector(
     base_name = os.path.splitext(file.filename or "layer")[0]
     layer_name = slugify(base_name, separator="_")
     schema_name = f"geodeploy_u{user.id}"
-    table_name = f"{layer_name}_{uuid.uuid4().hex[:6]}"
+    table_name = postgis.unique_table_name(base_name)
 
     layer = VectorLayer(
         user_id=user.id,
@@ -260,7 +261,7 @@ async def upload_csv(
     base_name = os.path.splitext(file.filename or "layer")[0]
     layer_name = (name or "").strip() or base_name
     schema_name = f"geodeploy_u{user.id}"
-    table_name = f"csv_{csv_import.safe_name(layer_name, 'layer')}_{uuid.uuid4().hex[:6]}"
+    table_name = postgis.unique_table_name(layer_name, prefix="csv_")
 
     layer = VectorLayer(
         user_id=user.id, name=layer_name, table_name=table_name, schema_name=schema_name,
@@ -334,7 +335,7 @@ async def geoparquet_complete(
 
     base_name = os.path.splitext(os.path.basename(body.s3_key))[0]
     layer_name = (body.name or "").strip() or base_name
-    table_name = f"gpq_{slugify(layer_name, separator='_') or 'layer'}_{uuid.uuid4().hex[:6]}"
+    table_name = postgis.unique_table_name(layer_name, prefix="gpq_")
     schema_name = f"geodeploy_u{user.id}"
 
     layer = VectorLayer(

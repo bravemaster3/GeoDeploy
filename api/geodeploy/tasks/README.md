@@ -190,6 +190,8 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
+2026-09-06 (`vector_ingest._create_sibling`: **raw-SQL inserts must write every NOT NULL column themselves** — `vector_layers.visibility`, `vector_layers.is_public` and `upload_jobs.progress` all declare their default in Python, which SQLAlchemy applies only to an ORM insert, so a multi-layer upload died on a fresh install with `NotNullViolation`. Sharing is inherited from the parent row. Table names now come from `services.postgis.unique_table_name`.)
+
 2026-09-04 (`vector_ingest`: **every layer of a multi-layer source is ingested, not just the first**
 — issue #95. `fiona.open(path)` with no `layer=` returns the first layer and says nothing about the
 rest, so a packaged QGIS project of nine layers became one layer with eight gone and no symptom
