@@ -103,6 +103,27 @@ MAX_IDENTIFIER = 63
 TABLE_SUFFIX_LEN = 6
 
 
+def derived_name(base: str, suffix: str) -> str:
+    """`base_suffix`, guaranteed to fit an identifier AND to differ from `base`.
+
+    THE THIRD TIME the same 63-character cut caused an outage, so it is a function now. Anything
+    named after a table — a staging table, an index — is built by appending, and appending to a name
+    that is already at the limit gives BACK THE ORIGINAL NAME:
+
+        ("q" * 63 + "_stg")[:63] == "q" * 63
+
+    So `CREATE UNLOGGED TABLE {table}_stg` created a table called `{table}`, and the `CREATE TABLE
+    {table}` a few lines later failed with *relation "…" already exists* — on every attempt, which
+    is why deleting the layers and retrying never helped. The same shape had already broken the
+    geometry index. Cutting the BASE instead keeps both the suffix and the distinction.
+    """
+    tail = "_" + suffix.lstrip("_")
+    out = base[:MAX_IDENTIFIER - len(tail)].rstrip("_") + tail
+    # Belt and braces. `base` ends in a random hex suffix in every current caller, so it cannot end
+    # in `_stg`; a future caller with a different shape should still not get a silent collision.
+    return out if out != base else base[:MAX_IDENTIFIER - len(tail) - 1].rstrip("_") + tail
+
+
 def unique_table_name(name: str, prefix: str = "", fallback: str = "layer") -> str:
     """A Postgres table name for `name`, unique and guaranteed to fit in an identifier.
 

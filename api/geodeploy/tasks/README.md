@@ -190,7 +190,7 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
 ## Last updated
-2026-09-06 (`vector_ingest._create_sibling`: **raw-SQL inserts must write every NOT NULL column themselves** — `vector_layers.visibility`, `vector_layers.is_public` and `upload_jobs.progress` all declare their default in Python, which SQLAlchemy applies only to an ORM insert, so a multi-layer upload died on a fresh install with `NotNullViolation`. Sharing is inherited from the parent row. Table names now come from `services.postgis.unique_table_name`.)
+2026-09-06 (`vector_ingest._create_sibling`: **raw-SQL inserts must write every NOT NULL column themselves** — `vector_layers.visibility`, `vector_layers.is_public` and `upload_jobs.progress` all declare their default in Python, which SQLAlchemy applies only to an ORM insert, so a multi-layer upload died on a fresh install with `NotNullViolation`. Sharing is inherited from the parent row. Table names now come from `services.postgis.unique_table_name`, and names DERIVED from a table — the staging table, the geometry index — from `derived_name`; appending to a 63-character name returns that name unchanged, which is what `relation "…" already exists` was. `_ingest_via_copy` also handles a layer with NO attribute columns, which used to build `(, geom)`.)
 
 2026-09-04 (`vector_ingest`: **every layer of a multi-layer source is ingested, not just the first**
 — issue #95. `fiona.open(path)` with no `layer=` returns the first layer and says nothing about the

@@ -781,9 +781,21 @@ def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir:
     # Store geometry in its native SRID — NO ST_Transform (client_tr already handled the unknown-EPSG
     # fallback to 4326, so `store_srid` is always the CRS the WKB coordinates are already in).
     geom_sql = _store_geom_sql(store_srid)
-    stg = f"{table}_stg"
+    # NOT `f"{table}_stg"` — that truncates back to `table` itself for a long name, and
+    # the staging table then IS the destination table. See `postgis.derived_name`.
+    stg = postgis.derived_name(table, "stg")
     coldefs = ", ".join(f"{_q(db)} {_pg_type(col_schema[src])}" for src, db in zip(cols, db_cols))
     copycols = ", ".join(_q(db) for db in db_cols)
+    # A LAYER CAN HAVE NO ATTRIBUTES AT ALL — a `Mapping extent` polygon, a drawn boundary, a
+    # sketch: `fid` and `geom` and nothing else. Both lists are then empty strings, and every
+    # statement below that interpolated `{coldefs}, geom` produced `(, geom)` — a syntax error, in
+    # four places, so the layer could never be ingested. Reported from a real QGIS-packaged
+    # GeoPackage where exactly one of the nine layers had no columns.
+    #
+    # The separator travels WITH the list rather than being written into each statement, because
+    # that is the version there is no way to get wrong at the next call site.
+    coldefs = coldefs + ", " if coldefs else ""
+    copycols = copycols + ", " if copycols else ""
     conn = psycopg2.connect(dsn)
     try:
         cur = conn.cursor()
@@ -791,10 +803,10 @@ def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir:
         cur.execute("CREATE EXTENSION IF NOT EXISTS postgis")
         cur.execute(f"DROP TABLE IF EXISTS {_q(schema)}.{_q(table)}")
         cur.execute(f"DROP TABLE IF EXISTS {_q(schema)}.{_q(stg)}")
-        cur.execute(f"CREATE UNLOGGED TABLE {_q(schema)}.{_q(stg)} ({coldefs}, geom geometry)")
+        cur.execute(f"CREATE UNLOGGED TABLE {_q(schema)}.{_q(stg)} ({coldefs}geom geometry)")
         with open(tmp_csv, "r", encoding="utf-8", newline="") as fh:
             cur.copy_expert(
-                f"COPY {_q(schema)}.{_q(stg)} ({copycols}, geom) FROM STDIN WITH (FORMAT csv)", fh)
+                f"COPY {_q(schema)}.{_q(stg)} ({copycols}geom) FROM STDIN WITH (FORMAT csv)", fh)
         # Z, IF THE DATA HAS IT.
         #
         # `geometry(Geometry, srid)` is a TWO-dimensional type, so a single 3D feature made the
@@ -814,9 +826,9 @@ def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir:
         geom_expr = _geom_value(geom_sql, has_z)
         geom_col = _geom_column(store_srid, has_z)
         cur.execute(f"CREATE TABLE {_q(schema)}.{_q(table)} "
-                    f"(id serial primary key, {coldefs}, geom {geom_col})")
-        cur.execute(f"INSERT INTO {_q(schema)}.{_q(table)} ({copycols}, geom) "
-                    f"SELECT {copycols}, {geom_expr} FROM {_q(schema)}.{_q(stg)}")
+                    f"(id serial primary key, {coldefs}geom {geom_col})")
+        cur.execute(f"INSERT INTO {_q(schema)}.{_q(table)} ({copycols}geom) "
+                    f"SELECT {copycols}{geom_expr} FROM {_q(schema)}.{_q(stg)}")
         cur.execute(f"DROP TABLE {_q(schema)}.{_q(stg)}")
         # UNNAMED, so POSTGRES names it — which is what `tasks/csv_import` has always done here.
         #
