@@ -433,6 +433,51 @@ def to_qgis(symbol, style) -> bool:
         return False
 
 
+
+def decorate(symbol, style) -> bool:
+    """ADD the style's pattern / centre marker on top of a symbol that is already built and coloured.
+
+    The difference from `to_qgis` is the whole point. `to_qgis` REPLACES a symbol's layers, which is
+    right for a single symbol and wrong for a classified one: applied per class it threw away the
+    class colour, and applied once to the layer it threw away the classification itself — a
+    graduated, hatched polygon arrived in QGIS as one flat hatched colour.
+
+    This appends instead, so the fill underneath keeps whatever colour it was given — the class's
+    colour for a graduated layer, the layer's for a plain one — and one code path serves both.
+    """
+    if not QGIS_FILLS or symbol is None:
+        return False
+    try:
+        from qgis.core import QgsFillSymbol
+        if not isinstance(symbol, QgsFillSymbol):
+            return False
+    except Exception:                   # noqa: BLE001  # nosec B110
+        return False
+    added = False
+    block = (style or {}).get("fill_pattern")
+    if isinstance(block, dict) and str(block.get("image", "")).startswith("data:image/"):
+        layers = (_hatch_layers(block, style) if block.get("hatch") in _HATCH_ANGLES
+                  else [_raster_layer(block["image"], block)])
+        for one in layers:
+            if one is not None:
+                symbol.appendSymbolLayer(one)
+                added = True
+    centre = (style or {}).get("centroid_marker")
+    if isinstance(centre, dict) and str(centre.get("image", "")).startswith("data:image/"):
+        marker = raster_marker(centre.get("image"))
+        if marker is not None:
+            try:
+                from qgis.core import QgsCentroidFillSymbolLayer, QgsMarkerSymbol
+                sub = QgsMarkerSymbol()
+                sub.changeSymbolLayer(0, marker)
+                fill = QgsCentroidFillSymbolLayer()
+                fill.setSubSymbol(sub)
+                symbol.appendSymbolLayer(fill)
+                added = True
+            except Exception:           # noqa: BLE001  # nosec B110
+                pass
+    return added
+
 def _plain_fill(style):
     """The flat fill that sits under a pattern, in the style's own colour and opacity."""
     from qgis.core import QgsSimpleFillSymbolLayer

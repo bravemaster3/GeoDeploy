@@ -7,7 +7,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.4.0
+version=0.4.1
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -26,7 +26,18 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.4.0 - The symbology round trip, widened a long way. Expressions and RULE-BASED
+changelog=0.4.1 - Styling now arrives in QGIS the way GeoDeploy draws it, in both the cases
+    testing found it did not. A pattern fill, a marker picture, markers along a line, a centre
+    marker, "draws nothing" and a HEATMAP could all be read OUT of QGIS and none could be written
+    back, so those layers opened as a plain colour; all six now rebuild. A pattern is added per
+    SYMBOL rather than per layer, so a graduated hatched polygon keeps its classes instead of
+    collapsing to one flat hatch. And WITHOUT A TOKEN the plugin reads the public legend, which now
+    carries the heatmap ramp and the pattern tile - previously an anonymous layer arrived unstyled
+    because the style lives on an authenticated endpoint.
+    Also: a style naming no colour no longer opens a different colour every time (QGIS's default
+    symbol picks one at random), and one unreadable layer can no longer abort opening a whole
+    portal group.
+    0.4.0 - The symbology round trip, widened a long way. Expressions and RULE-BASED
     renderers travel; LABELS travel, with a shipped font set so the web draws the face QGIS drew;
     2.5D arrives as a real extrusion, including a DATA-DEFINED height (an expression in the project
     variable used to fall back to the default silently, so those buildings were the wrong height);

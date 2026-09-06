@@ -344,6 +344,28 @@ def _apply_marker_placement(symbol, layer0, style: dict) -> None:
                 pass
 
 
+
+def _decorate_symbol(symbol, style) -> None:
+    """Add a pattern fill or a centre marker on top of a symbol that is otherwise finished.
+
+    Called from `_symbol_of`, which is the ONE place every symbol is built — a single symbol, each
+    class of a graduated renderer, each category of a categorized one, and the vector-tile
+    renderer's symbols too. Doing it here rather than at the renderer is what lets a graduated
+    HATCHED polygon keep both halves: an earlier attempt replaced the whole symbol and the layer
+    arrived as one flat hatched colour with its classification gone.
+    """
+    try:
+        try:                            # a package, inside QGIS
+            from . import fills as _fills
+        except ImportError:             # exec'd standalone by the test harness
+            import fills as _fills
+        _fills.decorate(symbol, style)
+    except ImportError:                 # pragma: no cover - fills.py is optional
+        pass
+    except Exception as exc:            # noqa: BLE001 - a pattern is never worth failing a symbol
+        _log("Could not add this symbol's pattern ({0}: {1}).".format(type(exc).__name__, exc))
+
+
 def _symbol_for(qgis_layer, color: str | None, style: dict):
     """A single symbol matching a LAYER's geometry kind, coloured and sized from `style`."""
     return _symbol_of(qgis_layer.geometryType(), color, style)
@@ -360,6 +382,8 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
     symbol = QgsSymbol.defaultSymbol(geometry_type)
     if symbol is None:
         return None
+    # The picture, if the style has one, is added at the END of this function — after the colour and
+    # sizes below, because it goes ON TOP of the fill they configure.
     # ALWAYS SET A COLOUR. `defaultSymbol` picks a RANDOM one, so a style that named none left
     # whatever QGIS happened to choose that second — the layer opened a different colour every
     # time, which reads as the styling not being applied at all (and is indistinguishable from it).
@@ -368,6 +392,7 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
     symbol.setColor(QColor(color or DEFAULT_COLOR))
     layer0 = symbol.symbolLayer(0) if symbol.symbolLayerCount() else None
     if layer0 is None:
+        _decorate_symbol(symbol, style)
         return symbol
 
     # Size FROM A FIELD, which is independent of colour: a layer can be graduated by one column
@@ -430,6 +455,7 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
         # translucent. Applying it only when present meant QGIS drew them SOLID, so a layer that is
         # a soft wash in the browser arrived as a flat block of colour hiding everything under it.
         symbol.setOpacity(float(style.get("fill_opacity", DEFAULT_FILL_OPACITY)))
+    _decorate_symbol(symbol, style)
     return symbol
 
 
@@ -461,6 +487,36 @@ def style_from_legend(legend: dict) -> dict:
     entries = legend.get("entries") or []
     mode = legend.get("color_mode") or "single"
     style = {}
+
+    # A HEATMAP IS NOT A SET OF CLASSES, and it reaches here first because it replaces the
+    # symbology rather than refining it. Without this an anonymous heatmap layer arrived as plain
+    # points: the style lives on `default_style`, which only the AUTHENTICATED endpoints return, so
+    # `/legend` is the only source a token-less viewer has — and it does carry the ramp.
+    #
+    # Reported exactly this way: "with token it displayed heatmap, but without token it didn't."
+    heat = next((e for e in entries if e.get("heatmap")), None)
+    if heat is not None:
+        ramp = [c for c in (heat.get("ramp") or []) if isinstance(c, str)]
+        block = {"enabled": True}
+        if ramp:
+            block["ramp"] = ramp
+        return {"heatmap": block}
+
+    # PICTURES the legend carries per entry — a pattern tile, a rendered marker — which are the
+    # whole appearance of the layers that have them. Read from the FIRST entry that has one: a
+    # classified layer repeats the same picture on every class, because a bitmap cannot be
+    # recoloured per class the way a generated shape can.
+    for key in ("fill_pattern", "marker_image"):
+        picture = next((e.get(key) for e in entries
+                        if isinstance(e.get(key), str) and e[key].startswith("data:image/")), None)
+        if picture:
+            style[key] = {"image": picture} if key == "fill_pattern" else picture
+    for key in ("dash", "shape", "outline_color", "outline_width", "line_width", "fill_opacity"):
+        value = next((e.get(key) for e in entries if e.get(key) is not None), None)
+        if value is not None:
+            style["lineType" if key == "dash" else
+                  ("marker" if key == "shape" else key)] = value
+
     size = legend.get("size") or {}
     if size.get("field") and size.get("stops"):
         style["size_mode"] = "proportional"
@@ -1201,30 +1257,17 @@ def apply_to_qgis(qgis_layer, style: dict) -> bool:
             from . import fills as _fills
         except ImportError:             # exec'd standalone by the test harness
             import fills as _fills
-        # EVERY PICTURE, not just the pattern. All four of these could be read OUT of QGIS and
-        # none could be put back, so a layer styled with any of them in GeoDeploy opened here as a
-        # plain colour. The systematic round-trip test is what found the other three; the hatch was
-        # simply the one somebody noticed first.
-        symbol = None
-        for carries, rebuild in ((_fills.has_pattern, _fills.to_qgis),
-                                 (lambda st: bool(_fills.picture_of(st, "marker_image")),
-                                  _fills.marker_to_qgis),
-                                 (lambda st: bool(_fills.picture_of(st, "centroid_marker")),
-                                  _fills.centroid_to_qgis)):
-            if not carries(style):
+        # A MARKER PICTURE and a LINE MARKER still replace the symbol outright — a bitmap marker IS
+        # the marker, and a decorated line is a stroke plus a decoration. A pattern fill and a
+        # centre marker are NOT here: they are added per symbol inside `_symbol_of`, so a graduated
+        # hatched polygon keeps its classes. Handling them here replaced the whole renderer and the
+        # classification went with it.
+        for key, rebuild in (("marker_image", _fills.marker_to_qgis),
+                             ("line_marker", _fills.line_marker_to_qgis)):
+            if not _fills.picture_of(style, key):
                 continue
             symbol = _symbol_for(qgis_layer, style.get("color"), style)
             if symbol is not None and rebuild(symbol, style):
-                # A LINE MARKER rides ON TOP of whatever the line already is, so it is applied
-                # after rather than instead — see `line_marker_to_qgis`.
-                _fills.line_marker_to_qgis(symbol, style)
-                qgis_layer.setRenderer(QgsSingleSymbolRenderer(symbol))
-                qgis_layer.triggerRepaint()
-                return True
-        # …and on its own, with no other picture, it still has to reach the line.
-        if _fills.picture_of(style, "line_marker"):
-            symbol = _symbol_for(qgis_layer, style.get("color"), style)
-            if symbol is not None and _fills.line_marker_to_qgis(symbol, style):
                 qgis_layer.setRenderer(QgsSingleSymbolRenderer(symbol))
                 qgis_layer.triggerRepaint()
                 return True
@@ -1958,6 +2001,7 @@ def _polygon_3d(ex: dict, style: dict):
     elif hasattr(symbol, "setHeight"):
         symbol.setHeight(_number(base, 0.0))
     _set_material(symbol, ex.get("color") or style.get("color") or DEFAULT_COLOR)
+    _decorate_symbol(symbol, style)
     return symbol
 
 
@@ -1996,6 +2040,7 @@ def _point_3d(ex: dict, style: dict):
         except Exception:               # noqa: BLE001 - shape properties differ between builds  # nosec B110 - intentional: a cosmetic failure must not take down the layer
             pass
     _set_material(symbol, ex.get("color") or style.get("color") or DEFAULT_COLOR)
+    _decorate_symbol(symbol, style)
     return symbol
 
 
