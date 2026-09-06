@@ -56,6 +56,11 @@ ANGLE_VARIABLE = "qgis_25d_angle"
 DEFAULT_HEIGHT = 10.0
 DEFAULT_ANGLE = 70.0
 
+#: Set on a layer when THIS PLUGIN built the 2.5D renderer from a plain GeoDeploy extrusion rather
+#: than rebuilding one that came from QGIS. Reading such a layer back would otherwise invent a
+#: `qgis25d` block the stored style never had, and every one of those layers would look edited.
+P_SYNTHESISED = "geodeploy/25d_synthesised"
+
 
 def is_25d(renderer) -> bool:
     return bool(QGIS_25D and renderer is not None and isinstance(renderer, Qgs25DRenderer))
@@ -66,6 +71,38 @@ def carried(style) -> dict:
     extrusion = (style or {}).get("extrusion")
     block = extrusion.get("qgis25d") if isinstance(extrusion, dict) else None
     return block if isinstance(block, dict) else {}
+
+
+def applies(style, qgis_layer=None) -> bool:
+    """Whether to draw this style with QGIS's 2.5D renderer.
+
+    `carried()` alone used to be the test - only a style that CAME from 2.5D went back to it. That
+    was too strict: an extrusion authored in GeoDeploy is the same picture QGIS's 2.5D renderer
+    draws, and the alternative on the 2D canvas is a flat polygon that says nothing about height.
+    A 3D renderer is set as well (see `symbology.apply_3d`), so the layer is extruded in a 3D map
+    view AND reads as raised on the ordinary canvas.
+
+    Two things still rule it out, and both are properties of the renderer rather than of the style:
+
+    * **It is a POLYGON renderer.** `Qgs25DRenderer` builds its walls by extruding a ring; there is
+      nothing for it to do to a point or a line, and GeoDeploy draws extruded points as pillars,
+      which is a different shape.
+    * **It is SINGLE-SYMBOL.** `convertFromRenderer` keeps one symbol, so converting a classified
+      layer would silently throw the classes away - a graduated map replaced by one flat colour is
+      a worse loss than a map that is not raised. Those layers keep their classes and their 3D
+      renderer, which is where the height still shows.
+    """
+    if not QGIS_25D or not symbology.is_extruded(style):
+        return False
+    if carried(style):
+        return True
+    if (style or {}).get("color_mode") not in (None, "", "single"):
+        return False
+    if (style or {}).get("rules") or (style or {}).get("heatmap"):
+        return False
+    if qgis_layer is None:
+        return True
+    return (symbology._geometry_name(qgis_layer) or "polygon").startswith("polygon")
 
 
 # ── QGIS → GeoDeploy ─────────────────────────────────────────────────────────────────────────────
@@ -95,7 +132,12 @@ def from_qgis(qgis_layer, renderer):
         if value is not None:
             block[key] = value
 
-    extrusion = {"enabled": True, "color": roof, "qgis25d": block}
+    extrusion = {"enabled": True, "color": roof}
+    # Only a block the USER's project owns travels. One this plugin built from a plain GeoDeploy
+    # extrusion is dropped, or opening a layer and pushing it straight back would add a `qgis25d`
+    # the stored style never had and report an edit nobody made.
+    if not _was_synthesised(qgis_layer, block):
+        extrusion["qgis25d"] = block
     # A DATA-DEFINED HEIGHT becomes a FIELD, which is what GeoDeploy's extrusion already speaks —
     # see `_height_of`. A plain number stays a number, and the two are mutually exclusive: a fixed
     # height left beside a field would be a value the renderers ignore and a reader would not.
@@ -214,12 +256,12 @@ def _hex_of(renderer, name):
 def to_qgis(qgis_layer, style) -> bool:
     """Rebuild a 2.5D renderer from a style that carries one. True when set.
 
-    Only for a style whose `extrusion` carries `qgis25d` — i.e. one that CAME from 2.5D. A plain
-    extrusion authored in GeoDeploy stays a 3D renderer in QGIS, because that is what it is; turning
-    every extrusion into a pseudo-3D block would be inventing a picture nobody asked for.
+    Applied to any extrusion `applies()` accepts, not only one that came from QGIS. A block that
+    DID come from QGIS carries its angle, shadow and wall colours and gets them back exactly; one
+    authored in GeoDeploy gets QGIS's own defaults, which is what its 2.5D dialog would have used.
     """
     block = carried(style)
-    if not QGIS_25D or not block or qgis_layer is None:
+    if not QGIS_25D or qgis_layer is None or not applies(style, qgis_layer):
         return False
     try:
         from qgis.PyQt.QtGui import QColor
@@ -227,7 +269,11 @@ def to_qgis(qgis_layer, style) -> bool:
 
         # The variables FIRST: the geometry generators the renderer builds read them, so a renderer
         # installed before they are set draws at whatever the last project used.
-        _set_project_variable(HEIGHT_VARIABLE, extrusion.get("height") or DEFAULT_HEIGHT)
+        # A COLUMN-DRIVEN HEIGHT goes in as an EXPRESSION, which is how QGIS's own dialog stores
+        # one — verified: the project variable keeps `"Height" * 100` as typed. Writing only the
+        # number here was a real loss: every field-driven extrusion arrived as a city of identical
+        # blocks, and `from_qgis` has always read the expression back, so the two disagreed.
+        _set_height_variable(extrusion)
         _set_project_variable(ANGLE_VARIABLE, block.get("angle") or DEFAULT_ANGLE)
 
         renderer = Qgs25DRenderer.convertFromRenderer(qgis_layer.renderer())
@@ -250,12 +296,71 @@ def to_qgis(qgis_layer, style) -> bool:
             if callable(fn):
                 fn(value)
         qgis_layer.setRenderer(renderer)
+        # Remember whether the block is OURS. `from_qgis` compares against this, so a renderer this
+        # plugin invented reads back as the plain extrusion it came from, while one the user then
+        # adjusted in the 2.5D dialog differs and travels as the real edit it is.
+        _record_synthesised(qgis_layer, None if block else _synthesised_signature(renderer))
         qgis_layer.triggerRepaint()
         return True
     except Exception as exc:            # noqa: BLE001 - a style must never stop a layer loading
         symbology._log("Could not rebuild the 2.5D renderer: {0}: {1}".format(
             type(exc).__name__, exc))
         return False
+
+
+def _set_height_variable(extrusion: dict) -> None:
+    """The 2.5D height variable, from a field-and-scale or a fixed number."""
+    expression = symbology._height_expression(extrusion or {})
+    if expression:
+        _set_project_text(HEIGHT_VARIABLE, expression)
+        return
+    _set_project_variable(HEIGHT_VARIABLE, (extrusion or {}).get("height") or DEFAULT_HEIGHT)
+
+
+def _synthesised_signature(renderer) -> dict:
+    """The `qgis25d` block a freshly built renderer produces, to compare a later read against."""
+    block = {"angle": _project_variable(ANGLE_VARIABLE, DEFAULT_ANGLE)}
+    for name, key in (("wallColor", "wall_color"), ("shadowColor", "shadow_color")):
+        value = _hex_of(renderer, name)
+        if value:
+            block[key] = value
+    for name, key in (("shadowSpread", "shadow_spread"), ("shadowEnabled", "shadow_enabled"),
+                      ("wallShadingEnabled", "wall_shading")):
+        value = _call(renderer, name)
+        if value is not None:
+            block[key] = value
+    return block
+
+
+def _record_synthesised(qgis_layer, block) -> None:
+    if not hasattr(qgis_layer, "setCustomProperty"):
+        return
+    try:
+        import json
+        qgis_layer.setCustomProperty(
+            P_SYNTHESISED, json.dumps(block, sort_keys=True, default=str) if block else "")
+    except Exception:                   # noqa: BLE001  # nosec B110 - a note we cannot store is not an error
+        pass
+
+
+def _was_synthesised(qgis_layer, block) -> bool:
+    """True when `block` is exactly the one this plugin invented for a plain extrusion."""
+    try:
+        import json
+        recorded = qgis_layer.customProperty(P_SYNTHESISED) or ""
+        return bool(recorded) and recorded == json.dumps(block, sort_keys=True, default=str)
+    except Exception:                   # noqa: BLE001
+        return False
+
+
+def _set_project_text(name: str, value) -> None:
+    """A project variable kept as TEXT — `_set_project_variable` coerces to float, which is exactly
+    what a height expression must not be put through."""
+    try:
+        from qgis.core import QgsExpressionContextUtils, QgsProject
+        QgsExpressionContextUtils.setProjectVariable(QgsProject.instance(), name, str(value))
+    except Exception:                   # noqa: BLE001  # nosec B110 - a variable we cannot set is not fatal
+        pass
 
 
 def _set_project_variable(name: str, value) -> None:

@@ -649,13 +649,46 @@ def two_and_a_half_d():
           and (ex2.get("qgis25d") or {}).get("angle") == block.get("angle"),
           repr(ex2))
 
-    # A plain extrusion must NOT become 2.5D — it is a real 3D layer, not a pseudo-3D one.
+    # A PLAIN EXTRUSION — one authored in GeoDeploy, with no `qgis25d` block — must ALSO become
+    # 2.5D. It used to stay a flat fill on the theory that only QGIS's own 2.5D should come back as
+    # 2.5D; reported against a portal named "test 2.5D" whose layer opened flat, and the theory was
+    # wrong: on the 2D canvas the alternative is a polygon that says nothing about height.
     plain = make_layer("Polygon")
     symbology.apply(plain, {"color": "#3b82f6",
                             "extrusion": {"enabled": True, "height": 12}})
-    check("2.5D: a plain extrusion stays a plain renderer",
-          type(plain.renderer()).__name__ != "Qgs25DRenderer",
+    check("2.5D: a GeoDeploy extrusion opens as 2.5D",
+          type(plain.renderer()).__name__ == "Qgs25DRenderer",
           type(plain.renderer()).__name__)
+    # …and reading it back must not INVENT a `qgis25d` block, or every such layer would report
+    # itself as edited the moment it was opened.
+    plain_back = (symbology.from_qgis(plain) or {}).get("extrusion") or {}
+    check("2.5D: a synthesised renderer invents no qgis25d",
+          plain_back.get("enabled") and "qgis25d" not in plain_back, repr(plain_back))
+
+    # A CLASSIFIED extrusion keeps its classes: `Qgs25DRenderer` is single-symbol, so converting
+    # would silently throw them away — a worse loss than a map that is not raised. The 3D renderer
+    # still carries the height, which is where a 3D map view shows it.
+    graduated = make_layer("Polygon")
+    symbology.apply(graduated, {
+        "color_mode": "graduated", "color_field": "pop",
+        "classes": [{"min": 0, "max": 5, "color": "#eff3ff"},
+                    {"min": 5, "max": 10, "color": "#08519c"}],
+        "extrusion": {"enabled": True, "field": "pop"}})
+    check("2.5D: a classified extrusion keeps its classes",
+          type(graduated.renderer()).__name__ == "QgsGraduatedSymbolRenderer"
+          and len(graduated.renderer().ranges()) == 2,
+          type(graduated.renderer()).__name__)
+
+    # A FIELD-DRIVEN HEIGHT reaches QGIS as an EXPRESSION. Writing only the number meant every
+    # column-driven extrusion arrived as a city of identical blocks — and `from_qgis` has always
+    # read an expression back, so the two directions disagreed.
+    driven = make_layer("Polygon")
+    symbology.apply(driven, {"color": "#ef4444",
+                             "extrusion": {"enabled": True, "field": "pop", "scale": 100}})
+    height_var = QgsExpressionContextUtils.projectScope(
+        QgsProject.instance()).variable("qgis_25d_height")
+    check("2.5D: a field-driven height travels as an expression",
+          height_var == '"pop" * 100', repr(height_var))
 
 
 # ══ 8. The layer-level and line/marker vocabulary ════════════════════════════════════════════════

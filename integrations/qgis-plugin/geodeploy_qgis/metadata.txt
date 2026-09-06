@@ -7,7 +7,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.4.2
+version=0.4.3
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -26,7 +26,17 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.4.2 - Two things reported against 0.4.1. A heatmap now FADES IN at density zero the
+changelog=0.4.3 - A 2.5D layer authored in GEODEPLOY now opens as 2.5D in QGIS. It used to stay
+    a flat fill unless it had come from QGIS in the first place, which meant ticking "3D - raise
+    these polygons" in the browser produced a polygon that said nothing about height. You get both
+    renderers now: 2.5D on the ordinary canvas, and a 3D renderer so View > New 3D Map View shows
+    the real extrusion. A height driven by a FIELD travels as an expression rather than a number,
+    so the buildings vary instead of arriving as one flat slab. A classified layer keeps its
+    classes (2.5D is single-symbol) and a point layer stays pillars, both of which still get the 3D
+    renderer. And three things a TILED layer cannot draw - a heatmap, an extrusion, a raster
+    algorithm such as contours - now say so in the log instead of looking unstyled; a small heatmap
+    layer is opened from its data automatically so it simply works.
+    0.4.2 - Two things reported against 0.4.1. A heatmap now FADES IN at density zero the
     way the web draws it: QGIS's QColor cannot read the CSS `rgba(0,0,255,0)` GeoDeploy stores as
     the low stop, so it was silently dropped and the ramp started opaque - a flat wash over the
     layer instead of a density map. And a pattern fill is now EMBEDDED in the symbol rather than

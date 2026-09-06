@@ -1147,6 +1147,21 @@ def apply(qgis_layer, style: dict, row: dict | None = None) -> bool:
         # holds them as colour — and `raster_to_qgis` declines them rather than pretending.
         return raster_to_qgis(qgis_layer, style)
     if is_tiles:
+        # NOR CAN A HEATMAP, and for the same reason with a sharper edge: a heatmap is a renderer
+        # only `QgsVectorLayer` has, so a tiled layer draws the plain points underneath it and
+        # looks simply unstyled. Reported against `entrances` — 3.3M points served as PMTiles —
+        # where it happened with a token and without one, because the source, not the credential,
+        # is what decides it. `sources.prefers_attributes` now opens a SMALL heatmap layer from its
+        # data so it just works; this is the message for one too big for that to be honest.
+        if is_heatmap(style):
+            _log("{0} is drawn as a heatmap in GeoDeploy, but QGIS can only heatmap a FEATURE "
+                 "layer — from vector tiles it draws the points themselves. Open it from its data "
+                 "to see the heatmap: pick “Editable — each layer from its data” in Source, or "
+                 "select the layer and use “Restyle this layer…”. On a very large layer that is a "
+                 "slow load, which is why the tiles are the default. Its styling is unchanged "
+                 "either way."
+                 .format(qgis_layer.name() if hasattr(qgis_layer, "name") else "This layer"),
+                 level="info")
         # 3D CANNOT BE DRAWN ON TILES, and silence about that is how it reads as broken: the layer
         # arrives with the right colours, QGIS's 3D view shows it flat, and nothing anywhere says
         # why. A `QgsVectorLayer3DRenderer` needs a FEATURE layer — the extrusion is not lost (it
@@ -1197,15 +1212,17 @@ def apply_to_qgis(qgis_layer, style: dict) -> bool:
     except ImportError:                 # pragma: no cover - labels.py is optional
         pass
 
-    # 2.5D BEFORE EVERYTHING: it replaces the whole renderer, and it is only ever attempted for a
-    # style that CAME from 2.5D (`extrusion.qgis25d`). A plain extrusion authored in GeoDeploy stays
-    # a real 3D renderer here, because that is what it is.
+    # 2.5D BEFORE EVERYTHING: it replaces the whole renderer, so nothing set below would survive it.
+    # Every extrusion `qgis25d.applies` accepts comes through here — one authored in GeoDeploy as
+    # much as one that came from QGIS — because 2.5D is the picture GeoDeploy's extrusion describes
+    # and a flat polygon on the 2D canvas says nothing about height. The 3D renderer set above is
+    # what a 3D map view draws; this is what the ordinary canvas draws.
     try:
         try:                            # a package, inside QGIS
             from . import qgis25d as _25d
         except ImportError:             # exec'd standalone by the test harness
             import qgis25d as _25d
-        if _25d.carried(style):
+        if _25d.applies(style, qgis_layer):
             # The flat symbol first: `convertFromRenderer` wraps whatever the layer is wearing, so
             # the roof and walls inherit the colours set here.
             symbol = _symbol_for(qgis_layer, style.get("color"), style)
@@ -1506,6 +1523,25 @@ def raster_to_qgis(qgis_layer, style: dict) -> bool:
     band = bands[0] if bands else 1
     lo, hi = _rescale_pair(style)
     colormap, reverse = _colormap_of(style)
+
+    # AN ALGORITHM QGIS HAS NO RENDERER FOR is said out loud rather than quietly dropped. Contours
+    # are the case that matters: TiTiler draws them into each tile, while QGIS makes contours with
+    # a PROCESSING algorithm that outputs a VECTOR layer — there is no raster renderer in between.
+    # So a contoured raster opened from its GeoTIFF draws as the stretch underneath: real values,
+    # right extent, no lines, and nothing anywhere saying why. Reported exactly that way.
+    #
+    # Nothing is lost — the styling is still stored, still drawn by the tiles, and a push from here
+    # will not remove it (`P_RASTER_ALGO` exists for that) — so this is a note, not a failure.
+    algorithm = (style.get("algorithm") or "").strip().lower()
+    if algorithm and algorithm != "hillshade":
+        _log("{0} is drawn with GeoDeploy's “{1}” algorithm, which is computed per tile on the "
+             "server; QGIS has no raster renderer for it, so opening the GeoTIFF shows the values "
+             "with their colour ramp and no {1}. To see it as GeoDeploy draws it, open the layer "
+             "as its server-rendered tiles instead of its data. Its styling is unchanged either "
+             "way, and pushing from here will not remove it."
+             .format(qgis_layer.name() if hasattr(qgis_layer, "name") else "This raster",
+                     algorithm),
+             level="info")
     try:
         renderer, colormap_sig = None, None
         if (style.get("algorithm") or "").strip() == "hillshade":
@@ -1860,6 +1896,12 @@ def is_extruded(style: dict) -> bool:
     """
     ex = _extrusion_of(style)
     return bool(ex.get("enabled")) and bool(ex.get("field") or ex.get("height"))
+
+
+def is_heatmap(style: dict) -> bool:
+    """Whether this style is drawn as density — the same test `services/symbology.heatmap` makes."""
+    block = (style or {}).get("heatmap")
+    return bool(isinstance(block, dict) and block.get("enabled"))
 
 
 def _height_expression(ex: dict):

@@ -83,9 +83,52 @@ def prefers_attributes(layer: dict) -> bool:
     """
     if layer.get("layer_type") == "raster" or layer.get("kind") == "raster":
         return False
+    # A HEATMAP OVERRIDES THE BACKEND, because on tiles it is not a slower picture but a DIFFERENT
+    # one: `QgsHeatmapRenderer` exists only for `QgsVectorLayer`, so a tiled heatmap draws the bare
+    # points and reads as unstyled. Reported against `entrances`. Bounded by the feature count —
+    # past that, waiting out a multi-million-feature download to open a layer nobody asked to edit
+    # is the worse surprise, and `symbology.apply` says why the heatmap is missing instead.
+    if _heatmap_style(layer) and _fits_in_memory(layer):
+        return True
     if layer.get("storage_backend") == "postgis":
         return True
     return False
+
+
+#: Above this, a heatmap layer keeps its tiles and is explained rather than downloaded. Two hundred
+#: thousand points is a few seconds over a good link and is comfortably past what anybody hand-draws
+#: a density map from; `entrances`, the layer that prompted this, is sixteen times it.
+HEATMAP_FEATURE_LIMIT = 200_000
+
+
+def _heatmap_style(layer: dict) -> bool:
+    """Whether this row's stored style is a heatmap.
+
+    Only the AUTHENTICATED listing carries `default_style`, so this is silent for an anonymous
+    browse — which is right: the public row genuinely does not say, and guessing from the legend
+    here would put a network call inside a predicate the picker calls for every row.
+    """
+    stored = layer.get("default_style")
+    if isinstance(stored, str):
+        try:
+            import json
+            stored = json.loads(stored)
+        except (TypeError, ValueError):
+            return False
+    if not isinstance(stored, dict):
+        return False
+    style = stored.get("style") if isinstance(stored.get("style"), dict) else stored
+    block = style.get("heatmap")
+    return bool(isinstance(block, dict) and block.get("enabled"))
+
+
+def _fits_in_memory(layer: dict) -> bool:
+    count = layer.get("feature_count")
+    try:
+        return int(count) <= HEATMAP_FEATURE_LIMIT
+    except (TypeError, ValueError):
+        # An unknown count is not a licence to download an unknown amount.
+        return False
 
 
 def describe(layer: dict, prefer_attributes: bool | None = None) -> dict | None:

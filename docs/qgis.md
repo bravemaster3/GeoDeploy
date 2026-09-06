@@ -115,13 +115,37 @@ The **Source** picker shows what the selected layer offers, and opens on the sen
 The defaults differ because the backends are used for different things: PostGIS holds the layers
 people classify, and tiled GeoParquet holds the ones too large to read whole.
 
-!!! tip "Why can I not classify this layer?"
-    Which renderer QGIS offers is decided by the **source**, not by a setting. Server-rendered
-    raster tiles reach QGIS as one band of RGBA — "Singleband color data", with no bands to stretch
-    and no classes to build — and vector tiles have no categorized or graduated renderer at all.
+!!! warning "Why can I not change the symbology *type* of this layer?"
+    Which renderers QGIS offers is decided by the **source**, not by a setting, and on a tiled
+    source the choice is not available at all. This is a QGIS limitation, not a GeoDeploy one, and
+    it cannot be worked around from the plugin.
 
-    Switch the **Source** to the data surface, or select the layer and press **Restyle this
-    layer…**, which reopens it from its data *in place*, keeping the styling it already has.
+    * **Vector tiles / PMTiles** open as a `QgsVectorTileLayer`, whose only renderer is the
+      rule-based tile renderer. Single symbol, categorized, graduated, heatmap and 2.5D do not
+      exist for it — the Symbology tab lets you recolour the rules that are already there and
+      nothing more. A tile also carries no attribute statistics, so there is nothing to classify
+      *from*.
+    * **Server-rendered raster tiles** reach QGIS as one band of RGBA — "Singleband color data" —
+      with no bands to stretch and no classes to build. The colours are already painted into the
+      picture.
+
+    Both are fixed the same way: select the layer and press **Restyle this layer…**, which reopens
+    it *in place* from its data, keeping the styling it already has. Every QGIS renderer applies
+    from there, and **Save styling to GeoDeploy** sends it back. You can also choose the data
+    surface up front in the **Source** picker, or pick *Editable — each layer from its data* before
+    opening a portal.
+
+!!! note "Three things a tiled layer cannot draw"
+    The plugin says each of these in the log when it happens, rather than leaving you to notice:
+
+    | Styled in GeoDeploy as | On tiles, QGIS draws | Because |
+    | --- | --- | --- |
+    | **A heatmap** | the points themselves | `QgsHeatmapRenderer` exists only for a feature layer. A *small* heatmap layer is therefore opened from its data automatically; a very large one keeps its tiles, because the download is the worse surprise. |
+    | **3D / 2.5D** | flat | A 3D renderer needs a feature layer. |
+    | **A raster algorithm** (contours, hillshade) | the values, with their ramp | TiTiler computes these per tile. QGIS builds contours with a *processing* algorithm that outputs a **vector** layer — there is no raster renderer in between. Open it as tiles to see them. |
+
+    In every case the styling is untouched: it is still stored, still drawn by the portal, and
+    pushing the layer back from QGIS will not remove it.
 
 ## Open a portal
 
@@ -259,11 +283,29 @@ Rule-based labelling is read as its first rule, and says so.
 
 ### 2.5D
 
-A 2.5D layer arrives in GeoDeploy as a **real 3D extrusion** — which you can orbit, and QGIS's
-pseudo-perspective block cannot be. It is not the same picture: the web map has one colour and a
-vertical shading gradient where QGIS has a roof, walls and a shadow. The roof colour becomes the
-extrusion's colour; the angle, the wall colour and the shadow are stored, so opening the layer in
-QGIS again gives you 2.5D back rather than a plain extrusion to rebuild.
+**QGIS → GeoDeploy.** A 2.5D layer arrives as a **real 3D extrusion** — which you can orbit, and
+QGIS's pseudo-perspective block cannot be. It is not the same picture: the web map has one colour
+and a vertical shading gradient where QGIS has a roof, walls and a shadow. The roof colour becomes
+the extrusion's colour; the angle, the wall colour and the shadow are stored, so opening the layer
+in QGIS again gives you 2.5D back rather than a plain extrusion to rebuild.
+
+**GeoDeploy → QGIS.** Tick *3D — raise these polygons* on a polygon layer in GeoDeploy and it opens
+in QGIS as **2.5D**, whether or not it ever came from QGIS. You get two renderers, not one:
+
+* the **2.5D renderer** on the ordinary 2D canvas, so the layer reads as raised straight away;
+* a **3D renderer**, so *View → New 3D Map View* shows the true extrusion you can orbit.
+
+A height driven by a **field** travels as an expression (`"Height" * 100`), so the buildings vary
+the way they do on the web rather than arriving as one flat slab.
+
+Two layers keep the flat renderer instead, because `Qgs25DRenderer` cannot express them and
+replacing what they have would lose more than it gains:
+
+* a **classified** layer — 2.5D is single-symbol, so converting it would throw the classes away;
+* a **point or line** layer — 2.5D extrudes polygon rings. GeoDeploy draws extruded points as
+  pillars, which is a different shape.
+
+Both still get the 3D renderer, so the height is there in a 3D map view.
 
 The height and viewing angle are **project settings** in QGIS, not layer ones, so changing them
 changes every 2.5D layer in the project — GeoDeploy stores them per layer, which is the one place
