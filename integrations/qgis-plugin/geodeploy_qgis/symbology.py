@@ -4162,7 +4162,7 @@ def _has_fill_paint(symbol) -> bool:
             try:
                 if sl.brushStyle() == no_brush:
                     continue            # a fill layer that paints nothing
-            except Exception:           # noqa: BLE001
+            except Exception:           # noqa: BLE001  # nosec B110 - a layer that cannot be asked its brush is assumed to fill, which is the older behaviour
                 pass
         return True
     return False
