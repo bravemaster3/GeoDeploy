@@ -15,7 +15,7 @@
       <div class="px-4 py-3 overflow-y-auto">
         <!-- The SAME control the portal editor uses, rendered without its layer row. A second
              styling UI would be a second definition of the symbology vocabulary. -->
-        <LayerPanel :config="config" standalone @update="apply" />
+        <LayerPanel :config="config" standalone @update="apply" @busy="classifying = $event" />
       </div>
 
       <div class="flex items-center gap-2 px-4 py-3 border-t border-border/60">
@@ -24,8 +24,14 @@
           Portals already using this layer keep their own styling.
         </p>
         <button @click="$emit('close')" class="btn-secondary text-xs px-3 py-1.5">Cancel</button>
-        <button @click="save" :disabled="saving" class="btn-primary text-xs px-3 py-1.5">
-          {{ saving ? 'Saving…' : 'Save' }}
+        <!-- NOT WHILE A CLASSIFICATION IS IN FLIGHT. Choosing "Graduated" and a field clears the
+             classes and asks the server for new ones; saving in that window stored an empty
+             classification, which draws as one flat colour and reads as the styling being
+             ignored. -->
+        <button @click="save" :disabled="saving || classifying"
+          :title="classifying ? 'Waiting for the field to finish reading' : ''"
+          class="btn-primary text-xs px-3 py-1.5">
+          {{ saving ? 'Saving…' : (classifying ? 'Reading the field…' : 'Save') }}
         </button>
       </div>
     </div>
@@ -56,6 +62,9 @@ const emit = defineEmits(['close'])
 const dataStore = useDataStore()
 
 const saving = ref(false)
+// True while `LayerPanel` is asking the server for class breaks. The panel owns that request; this
+// component owns the Save button, so the state has to cross between them.
+const classifying = ref(false)
 const error = ref('')
 
 // LayerPanel speaks `layer_config` — the shape a portal stores. A layer's default_style is the same

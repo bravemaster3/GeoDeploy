@@ -124,6 +124,13 @@
                 </div>
 
                 <p v-if="statsBusy" class="text-[11px] text-muted-foreground/70">Reading the field…</p>
+                <!-- A classification with no classes draws as ONE FLAT COLOUR, which looks exactly
+                     like the styling having been ignored. Saying so beats leaving somebody to
+                     wonder why "graduated" changed nothing. -->
+                <p v-else-if="classifiedButEmpty" class="text-[11px] text-amber-300/80">
+                  No classes yet, so this draws in one colour. Pick the field again — or wait for
+                  the field to finish reading before saving.
+                </p>
                 <p v-else-if="statsError" class="text-[11px] text-red-400">{{ statsError }}</p>
 
                 <!-- The legend, editable. Each swatch is the actual colour the map will use, so this
@@ -1224,7 +1231,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useDataStore } from '@/stores/data'
 import { saveVectorDefaultStyle, saveRasterDefaultStyle, listColormaps, getRasterStats,
          getRasterUniqueValues,
@@ -1244,7 +1251,7 @@ const props = defineProps({
   // default-style actions — for a host that is not a portal layer list (My Data).
   standalone: { type: Boolean, default: false },
 })
-const emit = defineEmits(['remove', 'update', 'zoom', 'dragstart', 'dragend'])
+const emit = defineEmits(['remove', 'update', 'zoom', 'dragstart', 'dragend', 'busy'])
 
 const dataStore = useDataStore()
 const savingDefault = ref(false)
@@ -1410,7 +1417,24 @@ const COLOR_MODES = [
 const SEQUENTIAL = Object.keys(RAMPS).filter(r => !DIVERGING.includes(r))
 
 const statsBusy = ref(false)
+// TOLD TO THE HOST, because the host owns the Save button. Classifying is a SERVER round trip —
+// `field-stats` reads the column — and on a large layer it takes seconds: CA on the test instance
+// is 100,000 sampled rows. Picking "Graduated" and a field CLEARS the classes immediately and the
+// answer fills them in when it arrives, so a Save pressed in between stored `color_mode:
+// "graduated"` with `classes: []`. That renders as one flat colour, which is indistinguishable
+// from the classification having silently failed — and is exactly what it looked like.
+watch(statsBusy, (busy) => emit('busy', busy))
 const statsError = ref('')
+
+// Graduated or categorized, but with nothing to vary by. The renderers fall back to the base colour
+// in that state, so the map is a single flat colour while the panel claims a classification.
+const classifiedButEmpty = computed(() => {
+  const st = props.config.style || {}
+  const mode = st.color_mode || 'single'
+  if (mode === 'graduated') return !(st.classes || []).length
+  if (mode === 'categorized') return !(st.categories || []).length
+  return false
+})
 const truncatedCats = ref(false)
 
 const colorMode = computed(() => props.config.style?.color_mode || 'single')
