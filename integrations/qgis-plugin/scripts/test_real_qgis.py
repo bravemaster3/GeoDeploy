@@ -1518,6 +1518,13 @@ def every_style_round_trips():
           "labels": {"enabled": True, "field": "pop", "size": 14, "color": "#000000"}},
          ["labels"]),
         ("no symbol", "Polygon", {"no_symbol": True}, ["no_symbol"]),
+        # A DENSITY SURFACE. QGIS has `QgsHeatmapRenderer` and the read direction has always used
+        # it — only the write direction was missing, so a layer drawn as a heatmap in GeoDeploy
+        # opened here as plain points.
+        ("a heatmap", "Point",
+         {"heatmap": {"enabled": True, "radius": 25, "weight_field": "pop",
+                      "ramp": ["rgba(0,0,255,0)", "#3b82f6", "#22c55e", "#eab308", "#ef4444"]}},
+         ["heatmap"]),
     ]
 
     for name, geom, style, expected in CASES:
@@ -1544,6 +1551,15 @@ def every_style_round_trips():
     #   * OPEN-ENDED classes (`min: None`) have no `QgsRendererRange` equivalent, so QGIS fills in
     #     real bounds — a documented approximation, not a loss;
     #   * `no_symbol` is a renderer, not a symbol, and carries nothing else to compare.
+    layer = make_layer("Point")
+    symbology.apply(layer, {"heatmap": {"enabled": True, "radius": 25,
+                                        "ramp": ["rgba(0,0,255,0)", "#3b82f6", "#ef4444"]}})
+    check("round trip: a heatmap becomes QGIS's own heatmap renderer",
+          type(layer.renderer()).__name__ == "QgsHeatmapRenderer",
+          type(layer.renderer()).__name__)
+    got = (symbology.from_qgis(layer) or {}).get("heatmap") or {}
+    check("round trip: the heatmap radius survives", got.get("radius") == 25.0, repr(got))
+
     EXACT = {"a plain polygon", "a plain line", "a dashed line", "a custom dash pattern",
              "a plain point", "a categorized point", "a proportional point", "labels"}
     for name, geom, style, _ in CASES:

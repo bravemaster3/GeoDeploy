@@ -1172,6 +1172,13 @@ def apply_to_qgis(qgis_layer, style: dict) -> bool:
             qgis_layer.triggerRepaint()
             return True
 
+    # A HEATMAP comes back as a heatmap. QGIS HAS `QgsHeatmapRenderer` — the read direction has used
+    # it since heatmaps landed — and only the read direction existed, so a layer drawn as a density
+    # surface in GeoDeploy opened here as plain points. Reported from testing exactly that way.
+    # Checked early, like 2.5D: it replaces the whole renderer rather than decorating a symbol.
+    if _heatmap_to_qgis(qgis_layer, style):
+        return True
+
     # "DRAWS NOTHING" comes back as nothing. QGIS's null renderer is read into `no_symbol` and was
     # never written back, so a layer deliberately set to draw no shapes — kept for its labels, say —
     # opened here as an ordinary coloured layer. Checked before everything else because it is not a
@@ -3479,6 +3486,70 @@ def _apply_layer_scope(qgis_layer, style: dict) -> None:
     except Exception as exc:            # noqa: BLE001 - a scale range must not stop a layer loading
         _log("Could not apply the layer's scale range: {0}".format(exc))
 
+
+
+def _heatmap_to_qgis(qgis_layer, style) -> bool:
+    """Rebuild a `QgsHeatmapRenderer` from `style.heatmap`. True when set.
+
+    The mirror of `_heatmap_of`, and the same reasoning about the ramp: GeoDeploy stores the sampled
+    COLOURS, because QGIS's ramp may be a gradient, a scheme or a hand-built list and only the
+    colours are common to all three. Rebuilt as a gradient through those stops, which is the same
+    sweep MapLibre draws from them.
+
+    The FIRST stop is dropped when it is transparent: a heatmap ramp must fade to nothing at density
+    zero on the web, or the whole viewport is painted — but QGIS's heatmap already handles that end
+    itself, and handing it a transparent first stop gives a surface that never quite appears.
+    """
+    block = (style or {}).get("heatmap")
+    if not isinstance(block, dict) or not block.get("enabled"):
+        return False
+    try:
+        from qgis.core import QgsHeatmapRenderer
+    except ImportError:                 # pragma: no cover - QGIS has had this for years
+        return False
+    try:
+        renderer = QgsHeatmapRenderer()
+        radius = _number(block.get("radius"), None)
+        if radius:
+            renderer.setRadius(float(radius))
+        field = (block.get("weight_field") or "").strip()
+        if field and hasattr(renderer, "setWeightExpression"):
+            renderer.setWeightExpression('"{0}"'.format(field))
+        ramp = _colour_ramp([c for c in (block.get("ramp") or []) if isinstance(c, str)])
+        if ramp is not None:
+            renderer.setColorRamp(ramp)
+        qgis_layer.setRenderer(renderer)
+        qgis_layer.triggerRepaint()
+        return True
+    except Exception as exc:            # noqa: BLE001 - a heatmap must not cost the whole style
+        _log("Could not rebuild the heatmap renderer ({0}: {1}).".format(type(exc).__name__, exc))
+        return False
+
+
+def _colour_ramp(colours):
+    """A `QgsGradientColorRamp` through a list of `#rrggbb`, or None for fewer than two.
+
+    A transparent leading stop is dropped: it is there so the WEB fades out at density zero, and
+    QGIS's heatmap does that for itself — kept, it produces a surface that never quite appears.
+    """
+    from qgis.PyQt.QtGui import QColor
+    usable = []
+    for value in colours:
+        colour = QColor(value)
+        if not colour.isValid():
+            continue
+        if not usable and colour.alpha() == 0:
+            continue                    # the transparent low end — QGIS supplies its own
+        usable.append(colour)
+    if len(usable) < 2:
+        return None
+    try:
+        from qgis.core import QgsGradientColorRamp, QgsGradientStop
+        middle = [QgsGradientStop(i / float(len(usable) - 1), c)
+                  for i, c in enumerate(usable)][1:-1]
+        return QgsGradientColorRamp(usable[0], usable[-1], False, middle)
+    except Exception:                   # noqa: BLE001  # nosec B110 - a ramp we cannot build
+        return None
 
 def _heatmap_of(renderer) -> dict:
     """`{enabled, radius, ramp, weight_field}` from a `QgsHeatmapRenderer`.
