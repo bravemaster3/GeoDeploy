@@ -204,7 +204,10 @@ def _read_format(settings, labels: dict, notes: list) -> None:
                                    "italic": bool(font.italic())}
     except Exception:                   # noqa: BLE001
         labels["font"] = DEFAULT_FONT
-    size = symbology._number(_value(fmt, "size", None), None)
+    # IN THE UNIT THE FORMAT STATES, not assumed to be points: a label sized in millimetres — which
+    # is what QGIS's own dialog offers alongside points — came back nearly three times too small.
+    # Same defect as the symbol sizes; see `symbology._UNIT_TO_POINTS`.
+    size = symbology._points(_value(fmt, "size", None), symbology._call_or_none(fmt, "sizeUnit"))
     if size:
         labels["size"] = round(size / _PT, 2)
     try:
@@ -218,7 +221,8 @@ def _read_format(settings, labels: dict, notes: list) -> None:
     try:
         buffer_settings = fmt.buffer()
         if buffer_settings.enabled():
-            width = symbology._number(buffer_settings.size(), 0)
+            width = symbology._points(buffer_settings.size(),
+                                      symbology._call_or_none(buffer_settings, "sizeUnit"))
             if width:
                 labels["halo_width"] = round(width / _PT, 2)
                 labels["halo_color"] = symbology._hex(buffer_settings.color())
@@ -349,11 +353,13 @@ def to_qgis(qgis_layer, style) -> bool:
     """
     if not QGIS_LABELS or qgis_layer is None:
         return False
-    if not hasattr(qgis_layer, "setLabelsEnabled"):
+    if not hasattr(qgis_layer, "setLabeling"):
         return False
     if not has_labels(style):
         try:
-            qgis_layer.setLabelsEnabled(False)
+            qgis_layer.setLabeling(None)
+            if hasattr(qgis_layer, "setLabelsEnabled"):
+                qgis_layer.setLabelsEnabled(False)
         except Exception:               # noqa: BLE001  # nosec B110
             pass
         return False
@@ -399,6 +405,10 @@ def to_qgis(qgis_layer, style) -> bool:
                                   if hasattr(QFont, "SpacingType") else 0, 100 + spacing * 100)
         fmt.setFont(font)
         fmt.setSize(symbology._number(labels.get("size"), 12) * _PT)
+        # POINTS, stated rather than inherited — the same reason `symbology._use_points` exists for
+        # symbols. A format whose unit defaulted to millimetres would draw the number as a size
+        # nearly three times too large.
+        _points_unit(fmt, "setSizeUnit")
         if labels.get("color"):
             fmt.setColor(QColor(labels["color"]))
         opacity = symbology._number(labels.get("opacity"), None)
@@ -410,6 +420,7 @@ def to_qgis(qgis_layer, style) -> bool:
             buffer_settings = QgsTextBufferSettings()
             buffer_settings.setEnabled(True)
             buffer_settings.setSize(halo * _PT)
+            _points_unit(buffer_settings, "setSizeUnit")
             buffer_settings.setColor(QColor(labels.get("halo_color") or "#ffffff"))
             fmt.setBuffer(buffer_settings)
         settings.setFormat(fmt)
@@ -438,13 +449,112 @@ def to_qgis(qgis_layer, style) -> bool:
             if hi is not None:
                 settings.maximumScale = scale_for_zoom(hi)
 
-        qgis_layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
-        qgis_layer.setLabelsEnabled(True)
+        # A VECTOR TILE LAYER IS LABELLED DIFFERENTLY, and until now it was not labelled at all:
+        # the guard asked for `setLabelsEnabled`, which `QgsVectorTileLayer` does not have, so
+        # every layer opened from a portal as a group came back with its labels missing. Reported
+        # that way — "labels are so many in geodeploy, and when it comes back it has no label" —
+        # and the reason is the SOURCE, not the labels: opening a portal as a group gives tiles.
+        # The settings above are the same either way; only the wrapper differs.
+        if not _tile_labeling(qgis_layer, settings, style):
+            qgis_layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
+            if hasattr(qgis_layer, "setLabelsEnabled"):
+                qgis_layer.setLabelsEnabled(True)
         qgis_layer.triggerRepaint()
         return True
     except Exception as exc:            # noqa: BLE001 - labelling must never stop a layer loading
         symbology._log("Could not apply the labels: {0}: {1}".format(type(exc).__name__, exc))
         return False
+
+
+def _tile_labeling(qgis_layer, settings, style) -> bool:
+    """Label a `QgsVectorTileLayer`. False when this is not one, so the caller falls through.
+
+    A tile layer's labelling is a LIST OF STYLES, each scoped to a source-layer name, a geometry
+    type and a zoom range — because one tile set can carry many layers. GeoDeploy publishes one
+    source-layer per layer, so there is exactly one style here, and it is left unscoped by name
+    (`""` matches every source-layer) rather than guessing at a name that has to match exactly or
+    label nothing at all.
+    """
+    try:
+        from qgis.core import (QgsVectorTileBasicLabeling, QgsVectorTileBasicLabelingStyle,
+                               QgsVectorTileLayer)
+    except ImportError:                 # pragma: no cover - older QGIS
+        return False
+    if not isinstance(qgis_layer, QgsVectorTileLayer):
+        return False
+
+    tile_style = QgsVectorTileBasicLabelingStyle()
+    tile_style.setLabelSettings(settings)
+    tile_style.setStyleName("GeoDeploy labels")
+    tile_style.setLayerName("")
+    tile_style.setEnabled(True)
+    geometry = _tile_geometry_type(qgis_layer, style)
+    if geometry is not None:
+        try:
+            tile_style.setGeometryType(geometry)
+        except Exception:               # noqa: BLE001 - the default still labels something  # nosec B110
+            pass
+    # The layer's OWN zoom range, so labels do not appear at zooms the layer itself is hidden at.
+    lo, hi = style.get("minzoom"), style.get("maxzoom")
+    try:
+        tile_style.setMinZoomLevel(int(lo) if lo is not None else 0)
+        tile_style.setMaxZoomLevel(int(hi) if hi is not None else 22)
+    except (TypeError, ValueError):
+        pass
+
+    labeling = QgsVectorTileBasicLabeling()
+    labeling.setStyles([tile_style])
+    qgis_layer.setLabeling(labeling)
+    if hasattr(qgis_layer, "setLabelsEnabled"):
+        try:
+            qgis_layer.setLabelsEnabled(True)
+        except Exception:               # noqa: BLE001  # nosec B110
+            pass
+    return True
+
+
+def _tile_geometry_type(qgis_layer, style):
+    """The `QgsWkbTypes.GeometryType` a tile labelling style should be scoped to.
+
+    A tile layer cannot be asked its geometry — `symbology` records it on the layer for exactly
+    this reason — and the default (point) would label nothing on a line or polygon layer.
+    """
+    name = (symbology._geometry_name(qgis_layer) or "").lower()
+    try:
+        from qgis.core import QgsWkbTypes
+        from .compat import enum as _enum
+    except ImportError:                 # pragma: no cover
+        try:
+            from compat import enum as _enum
+            from qgis.core import QgsWkbTypes
+        except ImportError:
+            return None
+    which = ("LineGeometry" if name.startswith("line") else
+             "PolygonGeometry" if name.startswith("polygon") else "PointGeometry")
+    try:
+        return _enum(QgsWkbTypes, "GeometryType", which)
+    except Exception:                   # noqa: BLE001
+        return None
+
+
+def _points_unit(target, setter: str) -> None:
+    """State a text size in POINTS, so the number means the same thing on both sides."""
+    try:
+        from qgis.core import QgsUnitTypes
+        from .compat import enum as _enum
+    except ImportError:                 # pragma: no cover - exec'd standalone
+        try:
+            from compat import enum as _enum
+            from qgis.core import QgsUnitTypes
+        except ImportError:
+            return
+    fn = getattr(target, setter, None)
+    if not callable(fn):
+        return
+    try:
+        fn(_enum(QgsUnitTypes, "RenderUnit", "RenderPoints"))
+    except Exception:                   # noqa: BLE001 - the default still draws  # nosec B110
+        pass
 
 
 def _family_of(stack) -> str:

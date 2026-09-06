@@ -115,6 +115,61 @@ def _apply_data_defined_size(symbol, layer0, style: dict) -> None:
 #: pixel is 0.75 pt and the symbol keeps its size on screen wherever it is drawn.
 CSS_PX_TO_POINTS = 0.75
 
+#: QGIS states every size in a unit the symbol layer CHOOSES, and its default is MILLIMETRES — not
+#: points. Reading a size without asking the unit is therefore wrong for every style a person
+#: authored in QGIS, by a factor of 2.835: the reporter's 10 mm marker arrived as a radius of 6.67
+#: CSS px instead of 18.9 ("the markers appear small in the browser"), and a 0.66 mm line as 0.88 px
+#: instead of 2.49. It went unnoticed because the WRITE side calls `_use_points`, which forces the
+#: unit to points — so a style this plugin applied and then read back round-tripped perfectly, and
+#: only a style QGIS's own dialog had produced was wrong.
+#:
+#: Keyed by `QgsUnitTypes.RenderUnit`, whose values are stable across QGIS 3 and 4 (verified in
+#: both). Map units, metres-in-map-units and percentage are ABSENT on purpose: they depend on the
+#: render context and the map's scale, so there is no honest number to convert them to here.
+_UNIT_TO_POINTS = {
+    0: 72.0 / 25.4,                     # RenderMillimeters — the QGIS default
+    2: 0.75,                            # RenderPixels (device px at 96 dpi)
+    4: 1.0,                             # RenderPoints
+    5: 72.0,                            # RenderInches
+    6: 1.0,                             # RenderUnknownUnit — treated as points, as before
+}
+
+
+def _points(value, unit):
+    """`value`, stated in `unit`, converted to POINTS. None when it cannot be."""
+    number = _number(value, None)
+    if number is None:
+        return None
+    if unit is None:
+        return number                   # nothing said: the old assumption, points
+    try:
+        factor = _UNIT_TO_POINTS.get(int(unit))
+    except (TypeError, ValueError):
+        return number
+    return None if factor is None else number * factor
+
+
+def _first_symbol_layer(symbol):
+    """A symbol's first layer, or None — where the unit lives when the symbol itself has none."""
+    try:
+        return symbol.symbolLayer(0) if symbol.symbolLayerCount() else None
+    except Exception:                   # noqa: BLE001
+        return None
+
+
+def _sized(obj, getter: str, unit_getter: str):
+    """A symbol or symbol-layer size in POINTS, honouring the unit it is stated in."""
+    value = _call_or_none(obj, getter)
+    if value is None:
+        return None
+    return _points(value, _call_or_none(obj, unit_getter))
+
+
+def _css_px(obj, getter: str, unit_getter: str):
+    """The same size, in the CSS pixels every GeoDeploy style key is stated in."""
+    points = _sized(obj, getter, unit_getter)
+    return None if points is None else points / CSS_PX_TO_POINTS
+
 #: What the map draws a point as when its style says nothing: `circle-radius: 5` with a white 1 px
 #: stroke. Kept in step with `ui/src/lib/mapStyle.js`, `services/portal_generator.py` and
 #: `templates/shared/portal.js` — the same three surfaces the project's parity rule names. They are
@@ -185,14 +240,36 @@ def _set_stroke_width(layer0, width: float) -> None:
 
 
 def _stroke_width_of(layer0):
-    """A symbol layer's outline width in POINTS, or None. The inverse of `_set_stroke_width`."""
-    for name in ("strokeWidth", "outlineWidth"):
+    """A symbol layer's outline width in POINTS, or None. The inverse of `_set_stroke_width`.
+
+    Converted from the unit the layer states it in — millimetres by default — rather than assumed
+    to be points. See `_UNIT_TO_POINTS`.
+    """
+    for name, unit_name in (("strokeWidth", "strokeWidthUnit"),
+                            ("outlineWidth", "outlineWidthUnit")):
         fn = getattr(layer0, name, None)
         if callable(fn):
-            value = _number(fn(), None)
+            value = _sized(layer0, name, unit_name)
             if value is not None:
                 return value
     return None
+
+
+def _set_brush(layer0, filled: bool) -> bool:
+    """Turn a fill layer's brush on or off. False when this QGIS (or a stub) cannot.
+
+    Guarded rather than called directly because `setBrushStyle` is not on every symbol layer, and
+    an `AttributeError` here is swallowed by the caller into "could not style this layer" — which
+    is how a single missing method turns into a layer QGIS draws in its own default colour.
+    """
+    fn = getattr(layer0, "setBrushStyle", None)
+    if not callable(fn):
+        return False
+    try:
+        fn(enum(Qt, "BrushStyle", "SolidPattern" if filled else "NoBrush"))
+        return True
+    except Exception:                   # noqa: BLE001  # nosec B110 - a brush we cannot set is not fatal
+        return False
 
 
 def _use_points(symbol, layer0) -> None:
@@ -454,7 +531,15 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
         # carries `fill_opacity`, and the map fills the gap with 0.45: every portal draws polygons
         # translucent. Applying it only when present meant QGIS drew them SOLID, so a layer that is
         # a soft wash in the browser arrived as a flat block of colour hiding everything under it.
-        symbol.setOpacity(float(style.get("fill_opacity", DEFAULT_FILL_OPACITY)))
+        # `fill_opacity: 0` MEANS NO FILL, NOT AN INVISIBLE SYMBOL. QGIS's symbol opacity applies
+        # to the whole symbol, border included, so setting it to zero here made an outline-only
+        # polygon vanish completely on the way back. The brush is what has to go.
+        opacity = float(style.get("fill_opacity", DEFAULT_FILL_OPACITY))
+        if opacity <= 0 and _set_brush(layer0, False):
+            symbol.setOpacity(1.0)
+        else:
+            _set_brush(layer0, True)
+            symbol.setOpacity(opacity)
     _decorate_symbol(symbol, style)
     return symbol
 
@@ -1174,6 +1259,18 @@ def apply(qgis_layer, style: dict, row: dict | None = None) -> bool:
                  "layer and use “Restyle this layer…”. Its 3D styling is unchanged either way."
                  .format(qgis_layer.name() if hasattr(qgis_layer, "name") else "This layer"),
                  level="info")
+        # LABELS, which this path used to skip entirely — it returns here, and the only call to
+        # `labels.to_qgis` was down in `apply_to_qgis`. So a portal opened as a GROUP (tiles, the
+        # default) came back with every label missing. QGIS labels a tile layer perfectly well; it
+        # just takes `QgsVectorTileBasicLabeling` rather than the simple one.
+        try:
+            try:                        # a package, inside QGIS
+                from . import labels as _labels
+            except ImportError:         # exec'd standalone by the test harness
+                import labels as _labels
+            _labels.to_qgis(qgis_layer, style)
+        except ImportError:             # pragma: no cover - labels.py is optional
+            pass
         source_layer = qgis_layer.customProperty(P_SOURCE_LAYER) or None
         return apply_to_vector_tiles(qgis_layer, row or {}, source_layer, style)
     return apply_to_qgis(qgis_layer, style)
@@ -3263,6 +3360,7 @@ def from_qgis(qgis_layer) -> dict:
     try:
         if isinstance(renderer, QgsGraduatedSymbolRenderer):
             classes, shape = [], {}
+            filled = None
             for rng in renderer.ranges():
                 lo, hi = rng.lowerValue(), rng.upperValue()
                 # READ IT HERE, INSIDE THE LOOP. `QgsRendererRange.symbol()` hands back a pointer
@@ -3271,6 +3369,8 @@ def from_qgis(qgis_layer) -> dict:
                 # and QGIS segfaults the moment it is touched. Found exactly that way: a hard crash
                 # with no traceback, on the first graduated layer.
                 shape = shape or shape_of(rng.symbol())
+                if filled is None and _has_fill_paint(rng.symbol()):
+                    filled = round(_number(_call_or_none(rng.symbol(), "opacity"), 1.0), 3)
                 classes.append({
                     # ±inf becomes None: GeoDeploy's open edge, so data added later still draws.
                     "min": None if lo == float("-inf") else lo,
@@ -3278,6 +3378,9 @@ def from_qgis(qgis_layer) -> dict:
                     "color": _hex(rng.symbol().color()),
                 })
             if classes:
+                # One outline-only class must not make the whole layer outline-only — see
+                # `_fill_across_classes`.
+                shape = _fill_across_classes(shape, filled)
                 return with_3d(dict(shape,
                                     color_mode="graduated",
                                     color_field=renderer.classAttribute(),
@@ -3285,6 +3388,7 @@ def from_qgis(qgis_layer) -> dict:
 
         if isinstance(renderer, QgsCategorizedSymbolRenderer):
             categories, other, shape = [], None, {}
+            filled = None
             for cat in renderer.categories():
                 value = cat.value()
                 if value in (None, ""):
@@ -3293,8 +3397,11 @@ def from_qgis(qgis_layer) -> dict:
                 # Inside the loop, for the reason spelled out in the graduated branch above: a
                 # category's symbol is borrowed from a temporary and must not outlive it.
                 shape = shape or shape_of(cat.symbol())
+                if filled is None and _has_fill_paint(cat.symbol()):
+                    filled = round(_number(_call_or_none(cat.symbol(), "opacity"), 1.0), 3)
                 categories.append({"value": value, "color": _hex(cat.symbol().color())})
             if categories:
+                shape = _fill_across_classes(shape, filled)
                 style = dict(shape, color_mode="categorized",
                              color_field=renderer.classAttribute(), categories=categories)
                 if other:
@@ -3420,11 +3527,14 @@ def _style_from_symbol(symbol) -> dict:
     try:
         from qgis.core import QgsLineSymbol, QgsMarkerSymbol
         if isinstance(symbol, QgsMarkerSymbol):
-            size = number(symbol.size)
+            size = _css_px(symbol, "size", "sizeUnit")
             if size is not None:
-                style["radius"] = round(size / 2.0 / CSS_PX_TO_POINTS, 2)
+                style["radius"] = round(size / 2.0, 2)
         elif isinstance(symbol, QgsLineSymbol):
-            width = number(symbol.width)
+            # `QgsLineSymbol` has no `widthUnit` — only its symbol LAYERS have one — so the unit
+            # comes from the first layer, which is the one whose width `symbol.width()` reports.
+            width = _points(_call_or_none(symbol, "width"),
+                            _call_or_none(_first_symbol_layer(symbol), "widthUnit"))
             if width is not None:
                 style["line_width"] = round(width / CSS_PX_TO_POINTS, 2)
     except ImportError:                 # pragma: no cover - the branches below still run
@@ -3450,9 +3560,9 @@ def _style_from_symbol(symbol) -> dict:
             style["marker_image"] = picture
 
     if isinstance(layer0, QgsSimpleMarkerSymbolLayer):
-        size = number(symbol.size)
+        size = _css_px(symbol, "size", "sizeUnit")
         if size is not None:
-            style["radius"] = round(size / 2.0 / CSS_PX_TO_POINTS, 2)
+            style["radius"] = round(size / 2.0, 2)
         # THE OUTLINE, which this used to ignore entirely — so changing only a marker's stroke
         # produced a byte-identical style and the push reported "unchanged". Reported exactly that
         # way: "when I only change the symbol fill it detects the change; when I only change the
@@ -3470,10 +3580,17 @@ def _style_from_symbol(symbol) -> dict:
             ratio = stroke_pt / CSS_PX_TO_POINTS / float(radius)
             style["outline_width"] = round(max(0.0, min(1.0, ratio)), 3)
         style.update(_marker_placement_of(symbol, layer0))
-    elif isinstance(layer0, QgsSimpleLineSymbolLayer):
-        width = number(layer0.width)
+    elif isinstance(layer0, QgsSimpleLineSymbolLayer) and not _is_fill(symbol):
+        # `and not _is_fill` because A FILL SYMBOL CAN BEGIN WITH A LINE LAYER: an outline-only
+        # polygon — a study area, a mapping extent, an enclosure boundary — is a `QgsFillSymbol`
+        # whose ONLY layer is a `SimpleLine`. This branch matched it first and read it as a line,
+        # so the outline's colour arrived as `color`, GeoDeploy drew that as the FILL, and a
+        # dashed magenta rectangle came back as a solid magenta rectangle over the whole map.
+        # Reported exactly that way. Which branch runs must follow the SYMBOL's type, not the
+        # accident of which layer happens to be first.
+        width = _css_px(layer0, "width", "widthUnit")
         if width is not None:
-            style["line_width"] = round(width / CSS_PX_TO_POINTS, 2)
+            style["line_width"] = round(width, 2)
         pen = layer0.penStyle()
         style["lineType"] = ("dashed" if pen == enum(Qt, "PenStyle", "DashLine")
                              else "dotted" if pen == enum(Qt, "PenStyle", "DotLine") else "solid")
@@ -3495,6 +3612,13 @@ def _style_from_symbol(symbol) -> dict:
         width = _stroke_width_of(layer0) if isinstance(layer0, QgsSimpleFillSymbolLayer) else None
         if width is not None:
             style["outline_width"] = round(width / CSS_PX_TO_POINTS, 2)
+        # AN OUTLINE-ONLY POLYGON. Nothing in the symbol paints an area — every layer is a stroke,
+        # or the one fill layer has `NoBrush` — so the fill must be switched OFF rather than drawn
+        # in whatever colour the border happens to be. `fill_opacity: 0` is how GeoDeploy says
+        # that, and the border keys are what `_polygon_outline_layer` draws, dash and all.
+        if not _has_fill_paint(symbol):
+            style["fill_opacity"] = 0.0
+            style.update(_outline_from_strokes(symbol))
         # A PATTERNED FILL — hatch, cross, dense, line, point, SVG or raster — travels as a tile
         # that repeats seamlessly. Scanned across every symbol layer, because a patterned polygon
         # is usually a plain fill with a hatch stacked on it. See `fills.py` for why the tile is
@@ -3776,12 +3900,11 @@ def _line_decoration_of(layer0, line_width) -> dict:
         if name:
             out[key] = name
 
-    fn = getattr(layer0, "offset", None)
-    if callable(fn):
-        value = _number(fn(), None)
+    if callable(getattr(layer0, "offset", None)):
+        value = _css_px(layer0, "offset", "offsetUnit")
         if value:
             # The sign flip the writer applies, undone — see `_apply_line_decoration`.
-            out["line_offset"] = round(-value / CSS_PX_TO_POINTS, 3)
+            out["line_offset"] = round(-value, 3)
     return out
 
 
@@ -3799,10 +3922,11 @@ def _marker_placement_of(symbol, layer0) -> dict:
     if callable(fn):
         try:
             point = fn()
-            x, y = _number(point.x(), 0.0), _number(point.y(), 0.0)
+            factor = _points(1.0, _call_or_none(layer0, "offsetUnit")) or 1.0
+            x = _number(point.x(), 0.0) * factor / CSS_PX_TO_POINTS
+            y = _number(point.y(), 0.0) * factor / CSS_PX_TO_POINTS
             if x or y:
-                out["marker_offset"] = [round(x / CSS_PX_TO_POINTS, 3),
-                                        round(y / CSS_PX_TO_POINTS, 3)]
+                out["marker_offset"] = [round(x, 3), round(y, 3)]
         except Exception:               # noqa: BLE001 - not every build returns a QPointF  # nosec B110 - intentional: not every QGIS build returns a QPointF here
             pass
     fn = getattr(symbol, "opacity", None)
@@ -3853,7 +3977,10 @@ def _marker_picture(symbol) -> str | None:
             return None
         from qgis.PyQt.QtCore import QBuffer, QByteArray, QIODevice, QSize
 
-        size = _number(getattr(symbol, "size", lambda: None)(), 0) or 0
+        # IN POINTS, converted from whatever unit the symbol states — a 10 mm marker read as 10
+        # points renders a bitmap not much over a third of the size it should be, which is the
+        # "markers are great in QGIS but appear small in the browser" report.
+        size = _sized(symbol, "size", "sizeUnit") or 0
         px = int(max(MIN_PICTURE_PX, min(MAX_PICTURE_PX,
                                          round(size / CSS_PX_TO_POINTS * PICTURE_SCALE * 2))))
         image = symbol.asImage(QSize(px, px))
@@ -3939,11 +4066,12 @@ def _line_decoration_symbol(symbol) -> dict:
             if not picture:
                 continue
             out = {"image": picture}
-            interval = _number(getattr(sl, "interval", lambda: None)(), None)
+            interval = _css_px(sl, "interval", "intervalUnit")
             if interval:
-                # QGIS states the interval in the symbol layer's own unit (points by default);
-                # `symbol-spacing` is in pixels, the unit every other size here is stated in.
-                out["spacing"] = round(interval / CSS_PX_TO_POINTS, 2)
+                # QGIS states the interval in the symbol layer's OWN unit — millimetres unless
+                # somebody changed it. `symbol-spacing` is in CSS pixels, like every other size
+                # here, so the unit has to be asked for rather than assumed.
+                out["spacing"] = round(interval, 2)
             return {"line_marker": out}
     except Exception as exc:            # noqa: BLE001 - a decoration is never worth failing a style
         _log("Could not read this line's markers ({0}: {1}).".format(type(exc).__name__, exc))
@@ -3987,6 +4115,101 @@ def _is_fill(symbol) -> bool:
         return isinstance(symbol, QgsFillSymbol)
     except ImportError:                 # pragma: no cover
         return False
+
+
+def _fill_across_classes(shape: dict, filled) -> dict:
+    """Undo a no-fill read that only the FIRST class justified.
+
+    The layer-level keys are taken from the first class's symbol, so one outline-only class made
+    the whole layer outline-only — GeoDeploy carries a colour per class but only ONE fill opacity,
+    so every other class then drew as an invisible polygon. Seen on a real layer whose first
+    category is a hachure and whose others are solid fills.
+
+    `filled` is the opacity of the first class that DOES paint an area, or None when none does —
+    in which case the layer really is outline-only and the read stands.
+    """
+    if filled is None or shape.get("fill_opacity") != 0.0:
+        return shape
+    out = dict(shape)
+    out["fill_opacity"] = filled
+    return out
+
+
+def _has_fill_paint(symbol) -> bool:
+    """Whether any layer of this symbol actually paints an AREA.
+
+    A `QgsFillSymbol` is not necessarily filled: its layers can all be strokes (an outline-only
+    polygon), or its one fill layer can carry `NoBrush`. Both draw a border and nothing inside, and
+    both used to reach GeoDeploy as a solid block of the border's colour.
+
+    Anything that is not a `QgsFillSymbolLayer` — a line, a marker line, a centroid marker — does
+    not fill, so the test is that type plus the brush.
+    """
+    try:
+        from qgis.core import QgsFillSymbolLayer, QgsSimpleFillSymbolLayer
+    except ImportError:                 # pragma: no cover
+        return True                     # cannot tell: assume filled, which is the old behaviour
+    try:
+        no_brush = enum(Qt, "BrushStyle", "NoBrush")
+        count = symbol.symbolLayerCount()
+    except Exception:                   # noqa: BLE001 - cannot tell: assume filled, as before
+        return True
+    for i in range(count):
+        sl = symbol.symbolLayer(i)
+        if not isinstance(sl, QgsFillSymbolLayer):
+            continue
+        if isinstance(sl, QgsSimpleFillSymbolLayer):
+            try:
+                if sl.brushStyle() == no_brush:
+                    continue            # a fill layer that paints nothing
+            except Exception:           # noqa: BLE001
+                pass
+        return True
+    return False
+
+
+def _outline_from_strokes(symbol) -> dict:
+    """The border of an outline-only polygon, read off the LINE layer that draws it.
+
+    `_stroke_of`/`_stroke_width_of` read a `QgsSimpleFillSymbolLayer`'s own pen; there is no such
+    layer here, so the border lives on a `SimpleLine` symbol layer and is read with the same
+    vocabulary a line uses — including the dash, which is most of what these polygons are for.
+    """
+    try:
+        from qgis.core import QgsSimpleLineSymbolLayer
+    except ImportError:                 # pragma: no cover
+        return {}
+    out: dict = {}
+    try:
+        count = symbol.symbolLayerCount()
+    except Exception:                   # noqa: BLE001
+        return out
+    for i in range(count):
+        sl = symbol.symbolLayer(i)
+        if not isinstance(sl, QgsSimpleLineSymbolLayer):
+            continue
+        out["outline_color"] = _hex(sl.color())
+        width = _css_px(sl, "width", "widthUnit")
+        if width is not None:
+            out["outline_width"] = round(width, 2)
+        pen = _call_or_none(sl, "penStyle")
+        out["lineType"] = ("dashed" if pen == enum(Qt, "PenStyle", "DashLine")
+                           else "dotted" if pen == enum(Qt, "PenStyle", "DotLine") else "solid")
+        # The custom dash and the cap/join, which is what makes `5;2` come back as `5;2` rather
+        # than as MapLibre's generic dash.
+        out.update(_line_decoration_of(sl, out.get("outline_width")))
+        break
+    return out
+
+
+def _call_or_none(obj, name):
+    fn = getattr(obj, name, None)
+    if not callable(fn):
+        return None
+    try:
+        return fn()
+    except Exception:                   # noqa: BLE001
+        return None
 
 
 def _fill_pattern_of(symbol) -> dict:

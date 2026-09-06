@@ -498,8 +498,13 @@ def rule_based():
     check("rules: each keeps its own symbol",
           [r["style"].get("color") for r in got] == ["#ff0000", "#0000ff"],
           repr([r["style"].get("color") for r in got]))
+    # 1.5 and 3.0 MILLIMETRES — `QgsLineSymbol.createSimple` measures in QGIS's default unit, not
+    # in points. 1.5 mm is 4.25 pt is 5.67 CSS px. This used to expect 2.0 and 4.0, which is what
+    # you get by dividing by 0.75 as though the number were points: the layer then travelled to
+    # GeoDeploy nearly three times too thin, and the reporter's map came back with hairlines where
+    # QGIS drew real strokes.
     check("rules: each keeps its own width",
-          [r["style"].get("line_width") for r in got] == [2.0, 4.0],
+          [r["style"].get("line_width") for r in got] == [5.67, 11.34],
           repr([r["style"].get("line_width") for r in got]))
     check("rules: the label travels", got and got[0].get("label") == "A", repr(got[:1]))
 
@@ -826,8 +831,12 @@ def labelling():
     check("labels: the colour travels", lab.get("color") == "#204080", repr(lab.get("color")))
     check("labels: a bold font maps onto a stack we can serve",
           lab.get("font") == "Noto Sans Bold", repr(lab.get("font")))
+    # 1.5 MILLIMETRES: `QgsTextFormat` defaults its own size to points (hence 15 pt → 20 px above)
+    # but `QgsTextBufferSettings` defaults to millimetres, so the halo is 4.25 pt is 5.67 px. The
+    # two units sitting side by side in one dialog is exactly why the unit has to be read rather
+    # than assumed.
     check("labels: the buffer becomes a halo",
-          lab.get("halo_width") == 2.0 and lab.get("halo_color") == "#ffffff", repr(lab))
+          lab.get("halo_width") == 5.67 and lab.get("halo_color") == "#ffffff", repr(lab))
     check("labels: the offset travels", lab.get("offset") == [4.0, -8.0], repr(lab.get("offset")))
     check("labels: the priority travels", lab.get("priority") == 8, repr(lab.get("priority")))
 
@@ -1646,6 +1655,181 @@ def every_style_round_trips():
         check("no phantom edit: {0}".format(name), same,
               "opening it and pushing it back would report an edit nobody made")
 
+# ══ Units, and outline-only polygons ═════════════════════════════════════════════════════════════
+# Both reported from one real QGIS-packaged GeoPackage, and both are about reading what QGIS
+# actually holds rather than what this plugin would have written.
+
+def sizes_carry_their_unit():
+    section("Units — QGIS states every size in a unit of the symbol's choosing")
+    from qgis.core import (QgsLineSymbol, QgsMarkerSymbol, QgsSingleSymbolRenderer, QgsUnitTypes)
+    from compat import enum as _enum
+
+    MM = _enum(QgsUnitTypes, "RenderUnit", "RenderMillimeters")
+    PT = _enum(QgsUnitTypes, "RenderUnit", "RenderPoints")
+    PX = _enum(QgsUnitTypes, "RenderUnit", "RenderPixels")
+
+    # THE DEFAULT IS MILLIMETRES, not points — which is the whole bug. A 10 mm marker read as 10
+    # points gave a radius of 6.67 CSS px instead of 18.9: "the markers appear small in the
+    # browser". 10 mm = 28.35 pt, and a radius is half the size in CSS px.
+    layer = make_layer("Point")
+    marker = QgsMarkerSymbol.createSimple({"color": "#ff0000"})
+    marker.setSize(10.0)
+    marker.setSizeUnit(MM)
+    layer.setRenderer(QgsSingleSymbolRenderer(marker))
+    check("units: a 10 mm marker is a radius of 18.9 px",
+          (symbology.from_qgis(layer) or {}).get("radius") == 18.9,
+          repr((symbology.from_qgis(layer) or {}).get("radius")))
+
+    # The same number in POINTS is a different marker, and must read differently.
+    marker2 = QgsMarkerSymbol.createSimple({"color": "#ff0000"})
+    marker2.setSize(10.0)
+    marker2.setSizeUnit(PT)
+    layer.setRenderer(QgsSingleSymbolRenderer(marker2))
+    check("units: the same 10 in POINTS is a radius of 6.67 px",
+          (symbology.from_qgis(layer) or {}).get("radius") == 6.67,
+          repr((symbology.from_qgis(layer) or {}).get("radius")))
+
+    # …and in PIXELS it is neither.
+    marker3 = QgsMarkerSymbol.createSimple({"color": "#ff0000"})
+    marker3.setSize(10.0)
+    marker3.setSizeUnit(PX)
+    layer.setRenderer(QgsSingleSymbolRenderer(marker3))
+    check("units: 10 device pixels is a radius of 5 px",
+          (symbology.from_qgis(layer) or {}).get("radius") == 5.0,
+          repr((symbology.from_qgis(layer) or {}).get("radius")))
+
+    # A LINE's width, where the unit lives on the symbol LAYER — `QgsLineSymbol` has no
+    # `widthUnit` at all, so reading the symbol's width without reaching for the layer's unit
+    # silently fell back to points.
+    line_layer = make_layer("LineString")
+    line = QgsLineSymbol.createSimple({"color": "#0000ff"})
+    line.symbolLayer(0).setWidth(0.66)
+    line.symbolLayer(0).setWidthUnit(MM)
+    line_layer.setRenderer(QgsSingleSymbolRenderer(line))
+    check("units: a 0.66 mm line is 2.49 px",
+          (symbology.from_qgis(line_layer) or {}).get("line_width") == 2.49,
+          repr((symbology.from_qgis(line_layer) or {}).get("line_width")))
+
+    # THE ROUND TRIP STILL HOLDS. `_use_points` sets the unit on everything this plugin writes, so
+    # a style applied and read back is unchanged — which is exactly why the bug survived: every
+    # test wrote before it read.
+    applied = make_layer("Point")
+    symbology.apply_to_qgis(applied, {"color": "#ff0000", "radius": 12.0})
+    check("units: a radius survives apply → read unchanged",
+          (symbology.from_qgis(applied) or {}).get("radius") == 12.0,
+          repr((symbology.from_qgis(applied) or {}).get("radius")))
+    applied_line = make_layer("LineString")
+    symbology.apply_to_qgis(applied_line, {"color": "#0000ff", "line_width": 3.5})
+    check("units: a line width survives apply → read unchanged",
+          (symbology.from_qgis(applied_line) or {}).get("line_width") == 3.5,
+          repr((symbology.from_qgis(applied_line) or {}).get("line_width")))
+
+
+def outline_only_polygons():
+    section("Outline-only polygons — a fill symbol whose layers are all strokes")
+    from qgis.core import (QgsCategorizedSymbolRenderer, QgsFillSymbol, QgsRendererCategory,
+                           QgsSimpleLineSymbolLayer, QgsSingleSymbolRenderer)
+    from qgis.PyQt.QtCore import Qt
+    from qgis.PyQt.QtGui import QColor
+
+    from compat import enum
+
+    # THE REPORTED SHAPE: `Mapping extent` is one polygon whose symbol is a single `SimpleLine`.
+    # It used to be read by the LINE branch — first layer wins — so the border's colour arrived as
+    # `color`, GeoDeploy drew that as the fill, and a dashed outline came back as a solid magenta
+    # rectangle covering the map.
+    layer = make_layer("Polygon")
+    fill = QgsFillSymbol()
+    stroke = QgsSimpleLineSymbolLayer()
+    stroke.setColor(QColor("#cc22d2"))
+    stroke.setWidth(0.66)
+    stroke.setPenStyle(enum(Qt, "PenStyle", "DashLine"))
+    fill.changeSymbolLayer(0, stroke)
+    layer.setRenderer(QgsSingleSymbolRenderer(fill))
+
+    style = symbology.from_qgis(layer) or {}
+    check("no fill: the fill is switched off", style.get("fill_opacity") == 0.0,
+          repr(style.get("fill_opacity")))
+    check("no fill: the border keeps its colour", style.get("outline_color") == "#cc22d2",
+          repr(style.get("outline_color")))
+    check("no fill: the border keeps its dash", style.get("lineType") == "dashed",
+          repr(style.get("lineType")))
+    check("no fill: the border width is in millimetres (0.66 mm = 2.49 px)",
+          style.get("outline_width") == 2.49, repr(style.get("outline_width")))
+    check("no fill: it is not read as a line", "line_width" not in style, repr(sorted(style)))
+
+    # …and applying it back must leave the border VISIBLE. QGIS's symbol opacity covers the whole
+    # symbol, so `setOpacity(0)` would have made the polygon disappear entirely.
+    back = make_layer("Polygon")
+    symbology.apply_to_qgis(back, dict(style))
+    symbol = back.renderer().symbol()
+    check("no fill: the symbol is not made invisible", symbol.opacity() == 1.0,
+          repr(symbol.opacity()))
+    check("no fill: the brush is NoBrush",
+          symbol.symbolLayer(0).brushStyle() == enum(Qt, "BrushStyle", "NoBrush"),
+          repr(symbol.symbolLayer(0).brushStyle()))
+    again = symbology.from_qgis(back) or {}
+    check("no fill: it survives the round trip", again.get("fill_opacity") == 0.0,
+          repr(again.get("fill_opacity")))
+
+    # AN ORDINARY FILLED POLYGON IS UNTOUCHED — the guard has to be narrow.
+    plain = make_layer("Polygon")
+    symbology.apply_to_qgis(plain, {"color": "#3b82f6", "fill_opacity": 0.45,
+                                    "outline_color": "#1d4ed8"})
+    check("no fill: an ordinary polygon still fills",
+          (symbology.from_qgis(plain) or {}).get("fill_opacity") == 0.45,
+          repr((symbology.from_qgis(plain) or {}).get("fill_opacity")))
+
+    # ONE OUTLINE-ONLY CLASS MUST NOT EMPTY THE WHOLE LAYER. GeoDeploy carries a colour per class
+    # but only one fill opacity, and the layer-level keys come from the FIRST class — so a layer
+    # whose first category is a hachure and whose rest are solid fills drew as nothing at all.
+    cats_layer = make_layer("Polygon")
+    hollow = QgsFillSymbol()
+    hollow_stroke = QgsSimpleLineSymbolLayer()
+    hollow_stroke.setColor(QColor("#e9c9b0"))
+    hollow.changeSymbolLayer(0, hollow_stroke)
+    solid = QgsFillSymbol.createSimple({"color": "#d5b43c"})
+    cats_layer.setRenderer(QgsCategorizedSymbolRenderer("kind", [
+        QgsRendererCategory("a", hollow, "Hachure"),
+        QgsRendererCategory("b", solid, "Infrastructure")]))
+    cstyle = symbology.from_qgis(cats_layer) or {}
+    check("no fill: a filling class restores the layer's fill",
+          cstyle.get("fill_opacity") == 1.0, repr(cstyle.get("fill_opacity")))
+    check("no fill: …and the classes still travel",
+          len(cstyle.get("categories") or []) == 2, repr(cstyle.get("categories")))
+
+
+def tile_labels():
+    section("Labels on a vector TILE layer — what a portal opened as a group gets")
+    from qgis.core import QgsVectorTileLayer
+
+    from qgis.core import QgsProject
+    tiles_layer = QgsVectorTileLayer(
+        "type=xyz&url=https://example.invalid/{z}/{x}/{y}.pbf&zmin=0&zmax=14", "tiles")
+    QgsProject.instance().addMapLayer(tiles_layer)
+    tiles_layer.setCustomProperty(symbology.P_GEOMETRY, "point")
+
+    import labels as labels_mod
+    ok = labels_mod.to_qgis(tiles_layer, {"labels": {"enabled": True, "field": "name1",
+                                                     "size": 12.0, "color": "#232323"}})
+    # A tile layer has no `setLabelsEnabled`, so `to_qgis` returned False before this and every
+    # layer opened from a portal as a group came back with its labels missing.
+    check("tile labels: applied", ok, repr(ok))
+    labeling = tiles_layer.labeling()
+    check("tile labels: a basic tile labeling is set",
+          type(labeling).__name__ == "QgsVectorTileBasicLabeling", type(labeling).__name__)
+    styles = labeling.styles() if labeling else []
+    check("tile labels: one style", len(styles) == 1, repr(len(styles)))
+    check("tile labels: the field travels",
+          styles and styles[0].labelSettings().fieldName == "name1",
+          repr(styles[0].labelSettings().fieldName if styles else None))
+
+    # …and a style with NO labels must switch them off again rather than leave them standing.
+    labels_mod.to_qgis(tiles_layer, {"color": "#ff0000"})
+    check("tile labels: cleared when the style has none", tiles_layer.labeling() is None,
+          type(tiles_layer.labeling()).__name__ if tiles_layer.labeling() else "None")
+
+
 def main():
     audit()
     round_trip()
@@ -1667,6 +1851,9 @@ def main():
     blend_modes()
     fill_patterns_back()
     every_style_round_trips()
+    sizes_carry_their_unit()
+    outline_only_polygons()
+    tile_labels()
     print("\n{0} checks, {1} failed".format(CHECKS[0], len(FAILURES)))
     for name in FAILURES:
         print("  - {0}".format(name))

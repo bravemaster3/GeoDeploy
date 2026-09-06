@@ -332,6 +332,7 @@ guarding against.
 | **Mask markers** | A clipping mask, with no MapLibre equivalent. Carried, not drawn. |
 | **Embedded (per-feature) symbols** | A vector tile has no way to carry a different symbol per feature. Carried, not drawn. |
 | **Draw effects** (blur, drop shadow, glow) | MapLibre exposes none of them. |
+| **A per-class dash, marker or width** | GeoDeploy carries a **colour** per class, and one dash, one width and one fill opacity for the layer — taken from the first class. A categorized layer whose classes differ in more than colour keeps only the first class's version of the difference. Rule-based layers do not have this limit: every rule carries its own full symbol, so **converting the renderer to rule-based in QGIS** before pushing is the way to keep them. |
 
 ### Possible, but not built
 
@@ -344,6 +345,19 @@ guarding against.
 | **Point displacement** | No web equivalent. Clustering is the nearest honest approximation. |
 | **Merged features** | Drawn as the underlying symbol, so the joins QGIS dissolves stay visible. |
 | **A layer's own scale range** | Not carried yet, although a *rule's* is. |
+
+### Sizes, and the unit they are stated in
+
+QGIS states every size — a marker's diameter, a line's width, a label's height — in a unit the
+symbol itself carries, and its **default is millimetres**. GeoDeploy states them in CSS pixels.
+
+The plugin converts, so a 10 mm marker becomes a radius of 18.9 px and 10 pt becomes 6.67. On the
+way back it writes **points** explicitly, so a layer styled in GeoDeploy has an unambiguous size in
+QGIS rather than one that depends on a default.
+
+Two units cannot be converted at all, because they depend on the map: **map units** and
+**metres in map units** mean a different number of pixels at every zoom. A symbol measured in
+either keeps its number and is drawn at that many pixels, which is right at one scale only.
 
 ### Approximated, and reported as such
 

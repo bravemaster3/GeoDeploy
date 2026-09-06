@@ -7,7 +7,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.4.3
+version=0.4.4
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -26,7 +26,17 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.4.3 - A 2.5D layer authored in GEODEPLOY now opens as 2.5D in QGIS. It used to stay
+changelog=0.4.4 - Sizes are now read in the UNIT QGIS states them in. QGIS's default is
+    MILLIMETRES and this plugin had always read points, so every size authored in QGIS travelled
+    2.835x too small: a 10 mm marker became a 6.67 px radius ("the markers appear small in the
+    browser") and a 0.66 mm line a 0.88 px hairline. It went unnoticed because the plugin sets the
+    unit to points on everything it writes, so anything it had applied round-tripped perfectly.
+    An OUTLINE-ONLY POLYGON is no longer filled: a fill symbol whose layers are all strokes was
+    read by the line branch, so the border's colour arrived as the fill and a dashed extent
+    rectangle came back as a solid block over the map. A tile layer can now be LABELLED - it takes
+    a different labelling class, and asking for the wrong one meant every layer opened from a
+    portal as a group came back with no labels at all.
+    0.4.3 - A 2.5D layer authored in GEODEPLOY now opens as 2.5D in QGIS. It used to stay
     a flat fill unless it had come from QGIS in the first place, which meant ticking "3D - raise
     these polygons" in the browser produced a polygon that said nothing about height. You get both
     renderers now: 2.5D on the ordinary canvas, and a 3D renderer so View > New 3D Map View shows
