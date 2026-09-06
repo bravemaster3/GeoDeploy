@@ -1579,8 +1579,22 @@ async function refreshClasses(over = {}) {
       patch.color_mode = 'categorized'
       patch.categories = data.suggestion?.categories || []
       patch.classes = []
-      if (!patch.categories.length) statsError.value = 'That field has no values to group by.'
+      if (!patch.categories.length) {
+        // A NUMERIC column asked to be categorized is the common way here: `field-stats` maps
+        // numeric to CLASSES and text to CATEGORIES, so a postcode column answers with neither.
+        statsError.value = data.kind === 'numeric'
+          ? 'That field is numeric, so it has no values to group by — use Graduated for it.'
+          : 'That field has no values to group by.'
+      }
     }
+    // NEVER EMIT AN EMPTY CLASSIFICATION. A `color_mode` with no classes or categories behind it
+    // falls back to the base colour in every renderer, so the map goes one flat colour while the
+    // panel claims a classification — indistinguishable from the styling being ignored, and it is
+    // how two layers on a live instance ended up stored that way. The error above says what
+    // happened; the style is left as it was rather than replaced with one that cannot draw.
+    const nothingToDrawWith = (patch.color_mode === 'graduated' && !(patch.classes || []).length)
+      || (patch.color_mode === 'categorized' && !(patch.categories || []).length)
+    if (nothingToDrawWith) return
     emitStyle(patch)
   } catch (e) {
     statsError.value = e?.response?.data?.detail || 'Could not read that field.'
