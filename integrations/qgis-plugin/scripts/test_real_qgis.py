@@ -144,6 +144,7 @@ def audit():
 #: looked exactly like a product bug in the pattern round trip.
 _VALID_PNG_B64 = ("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGMwLnf5D8IMMAYAQQQH"
                   "tWP9J2YAAAAASUVORK5CYII=")
+_VALID_PNG_URI = "data:image/png;base64," + _VALID_PNG_B64
 
 def make_layer(geometry, name="test"):
     """A real in-memory QgsVectorLayer with a numeric and a text field, and three features."""
@@ -1559,6 +1560,44 @@ def every_style_round_trips():
           type(layer.renderer()).__name__)
     got = (symbology.from_qgis(layer) or {}).get("heatmap") or {}
     check("round trip: the heatmap radius survives", got.get("radius") == 25.0, repr(got))
+    # THE LOW END STAYS TRANSPARENT. The web fades a heatmap to nothing at density zero; dropping
+    # the transparent stop on the way into QGIS painted the surface to its edge instead, which is a
+    # flat wash over the whole layer rather than a density map.
+    ramp = layer.renderer().colorRamp()
+    check("round trip: the heatmap still fades in at density zero",
+          ramp is not None and ramp.color(0.0).alpha() == 0,
+          "alpha at 0 = %s" % (ramp.color(0.0).alpha() if ramp else "no ramp"))
+
+    # A PATTERN IS EMBEDDED, not written to disk. A file path is read lazily by QGIS on every
+    # repaint and has nowhere to report a failure, so a path it cannot read is a hatch that silently
+    # does not draw — which is what happened on a reporter's machine while working here.
+    poly = make_layer("Polygon")
+    symbology.apply(poly, {"color": "#227744",
+                           "fill_pattern": {"image": _VALID_PNG_URI, "width": 12, "height": 12}})
+    sym = poly.renderer().symbol()
+    raster = next((sym.symbolLayer(i) for i in range(sym.symbolLayerCount())
+                   if type(sym.symbolLayer(i)).__name__ == "QgsRasterFillSymbolLayer"), None)
+    check("round trip: the pattern travels embedded, with no file to lose",
+          raster is not None and raster.imageFilePath().startswith("base64:"),
+          repr(raster.imageFilePath()[:40]) if raster is not None else "no raster fill")
+
+    # …and a CLASSIFIED polygon keeps BOTH: the classes and the hatch on each of them.
+    both = make_layer("Polygon")
+    symbology.apply(both, {"color_mode": "graduated", "color_field": "pop",
+                           "classes": [{"min": 0, "max": 5, "color": "#ff0000"},
+                                       {"min": 5, "max": 10, "color": "#00ff00"}],
+                           "fill_pattern": {"image": _VALID_PNG_URI, "width": 12, "height": 12}})
+    renderer = both.renderer()
+    check("round trip: a graduated HATCHED polygon keeps its classes",
+          type(renderer).__name__ == "QgsGraduatedSymbolRenderer", type(renderer).__name__)
+    ranges = getattr(renderer, "ranges", lambda: [])()
+    if ranges:
+        first = ranges[0].symbol()
+        kinds = [type(first.symbolLayer(i)).__name__ for i in range(first.symbolLayerCount())]
+        check("round trip: …and each class carries the hatch",
+              any(k == "QgsRasterFillSymbolLayer" for k in kinds), repr(kinds))
+        check("round trip: …in its own class colour",
+              first.color().name().lower() == "#ff0000", first.color().name())
 
     EXACT = {"a plain polygon", "a plain line", "a dashed line", "a custom dash pattern",
              "a plain point", "a categorized point", "a proportional point", "labels"}

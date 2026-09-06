@@ -1360,6 +1360,10 @@ _BUILTIN_RAMPS = {
 }
 
 
+#: `rgb(...)` / `rgba(...)`, the CSS spellings a web style uses and Qt does not read.
+_re_rgba = re.compile(r"^rgba?\(([^)]*)\)$", re.I)
+
+
 def _qcolor(value):
     """A QColor from `#rgb`, `#rrggbb` or `#rrggbbaa`. None when it is not a colour.
 
@@ -3571,21 +3575,52 @@ def _heatmap_to_qgis(qgis_layer, style) -> bool:
         return False
 
 
-def _colour_ramp(colours):
-    """A `QgsGradientColorRamp` through a list of `#rrggbb`, or None for fewer than two.
 
-    A transparent leading stop is dropped: it is there so the WEB fades out at density zero, and
-    QGIS's heatmap does that for itself — kept, it produces a surface that never quite appears.
+def _ramp_colour(value):
+    """A `QColor` for one stop of a RAMP: a hex string, or a CSS `rgba()`.
+
+    Separate from `_qcolor`, which reads GeoDeploy's `#rrggbbaa` and is what everything else uses.
+    This one exists because a ramp is the one place a WEB spelling reaches the plugin verbatim.
+
+    `QColor` DOES NOT PARSE `rgba(0,0,255,0)` — it reports the string invalid. GeoDeploy stores a
+    heatmap's low stop in exactly that form, because a style is written for the web, so feeding it
+    straight to QColor dropped the stop and the ramp started opaque: the heatmap painted a flat wash
+    to the layer's edge instead of fading in. Measured before and after — `ramp.color(0.0).alpha()`
+    was 255 and is 0.
     """
     from qgis.PyQt.QtGui import QColor
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    match = _re_rgba.match(text)
+    if match:
+        parts = [p.strip() for p in match.group(1).split(",")]
+        try:
+            r, g, b = (int(float(parts[i])) for i in range(3))
+            a = int(round(float(parts[3]) * 255)) if len(parts) > 3 else 255
+        except (ValueError, IndexError):
+            return None
+        return QColor(max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)),
+                      max(0, min(255, a)))
+    colour = QColor(text)
+    return colour if colour.isValid() else None
+
+
+def _colour_ramp(colours):
+    """A `QgsGradientColorRamp` through a list of colours, or None for fewer than two.
+
+    THE TRANSPARENT LOW END IS KEPT. I dropped it at first, on the theory that QGIS's heatmap
+    supplies its own fade — it does not. Measured: with the stop dropped the ramp's colour at
+    density 0 comes back with alpha 255, so the whole surface is painted to its edge and the map
+    gets a flat wash where the web fades to nothing. Reported as exactly that difference.
+
+    `QColor` parses `rgba(r,g,b,a)` as well as `#rrggbb`, so an alpha stop survives into the ramp.
+    """
     usable = []
     for value in colours:
-        colour = QColor(value)
-        if not colour.isValid():
-            continue
-        if not usable and colour.alpha() == 0:
-            continue                    # the transparent low end — QGIS supplies its own
-        usable.append(colour)
+        colour = _ramp_colour(value)
+        if colour is not None:
+            usable.append(colour)
     if len(usable) < 2:
         return None
     try:

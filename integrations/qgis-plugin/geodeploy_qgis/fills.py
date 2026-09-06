@@ -266,10 +266,36 @@ def _marker_grid(sl, w: int, h: int):
     return _encode(image)
 
 
+
+def _embedded_tile(payload: str):
+    """`({image, width, height}, None)` for a `base64:` image the symbol carries inline."""
+    import base64
+    try:
+        raw = base64.b64decode(payload)
+    except Exception:                   # noqa: BLE001  # nosec B110
+        return None, None
+    try:
+        from qgis.PyQt.QtGui import QImage
+        image = QImage.fromData(raw)
+        if image.isNull():
+            return None, None
+        return ({"image": "data:image/png;base64," + payload,
+                 "width": image.width(), "height": image.height()}, None)
+    except Exception:                   # noqa: BLE001  # nosec B110
+        return None, None
+
+
 def _image_tile(sl, path: str, width_px: float, svg: bool):
-    """An SVG or raster fill: the source image IS the tile, at the width QGIS repeats it."""
+    """An SVG or raster fill: the source image IS the tile, at the width QGIS repeats it.
+
+    `path` may be a FILE or a `base64:` blob. The plugin writes patterns embedded now — a file path
+    is read lazily by QGIS and silently draws nothing when it cannot be read — so reading one back
+    has to handle both, or a pattern this plugin applied could not be read out again.
+    """
     if not path:
         return None, None
+    if str(path).startswith("base64:"):
+        return _embedded_tile(str(path)[len("base64:"):])
     side = int(max(MIN_TILE_PX, min(MAX_TILE_PX, round(width_px or 24))))
     image = _canvas(side)
     painter = _painter(image)
@@ -526,8 +552,8 @@ def _raster_layer(uri, block):
     sharing a pattern share it.
     """
     from qgis.core import QgsRasterFillSymbolLayer
-    path = picture_file(uri)
-    if path is None:
+    path = image_source(uri) or picture_file(uri)
+    if not path:
         return None
     layer = QgsRasterFillSymbolLayer()
     layer.setImageFilePath(path)
@@ -574,6 +600,26 @@ def picture_of(style, key):
         value = value.get("image")
     return value if isinstance(value, str) and value.startswith("data:image/") else ""
 
+
+def image_source(uri: str) -> str:
+    """A picture in the form QGIS's raster symbol layers take, or "".
+
+    `base64:` EMBEDDING RATHER THAN A FILE, verified accepted by
+    `QgsRasterFillSymbolLayer.setImageFilePath`. Writing a file worked here and did not on a
+    reporter's Windows QGIS — the hatch was in the symbol and nothing drew, which is what a path
+    QGIS cannot read looks like, because it reads that path lazily on every repaint and has nowhere
+    to complain to.
+
+    Embedding removes the filesystem from the question: no profile directory to differ, no
+    permissions, no separators, and the symbol stays self-contained if the project is saved or moved
+    to another machine. `picture_file` remains for a QGIS too old to accept the prefix.
+    """
+    if not isinstance(uri, str) or not uri.startswith("data:image/"):
+        return ""
+    payload = uri.partition(",")[2]
+    return ("base64:" + payload) if payload else ""
+
+
 def picture_file(uri: str):
     """A `data:image/…` URI written to a file QGIS can read, or None.
 
@@ -613,8 +659,9 @@ def raster_marker(uri: str, size_px=None):
     the picture is that many times larger than the marker it stands for. Dividing here is what makes
     a marker survive the round trip at the size it started, rather than doubling on every trip.
     """
-    path = picture_file(uri)
-    if path is None:
+    # The file is the fallback here rather than the first choice, for the same reason as the fill.
+    path = image_source(uri) or picture_file(uri)
+    if not path:
         return None
     try:
         from qgis.core import QgsRasterMarkerSymbolLayer
