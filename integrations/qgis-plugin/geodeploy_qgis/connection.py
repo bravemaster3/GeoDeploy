@@ -42,6 +42,51 @@ def http_url(url: str) -> str:
     return url
 
 
+def _client(url: str, token, **extras):
+    """`Client`, built with whatever keyword arguments THIS copy of the client understands.
+
+    THE VENDORED CLIENT AND THE PLUGIN SHIP TOGETHER BUT ARE NOT ALWAYS LOADED TOGETHER. Putting
+    `vendor/` on `sys.path` only decides where `geodeploy` is imported FROM the first time; after
+    that Python answers every `import geodeploy` from `sys.modules`. Upgrade the plugin without
+    restarting QGIS and the new `connection.py` runs against the OLD client — and a keyword the new
+    one added becomes `Client.__init__() got an unexpected keyword argument`, reported at the point
+    the user presses Connect, which is a hard stop on a working plugin for a message nobody can act
+    on. A user with `geodeploy` pip-installed can land in the same place.
+
+    So the extras are OFFERED, not required: anything this copy does not take is dropped, with a
+    note, and the plugin works exactly as it did before that keyword existed.
+    """
+    try:
+        return Client(url, token=token, **extras)
+    except TypeError as exc:
+        if "unexpected keyword argument" not in str(exc):
+            raise
+        import inspect
+        try:
+            accepted = set(inspect.signature(Client.__init__).parameters)
+        except (TypeError, ValueError):     # pragma: no cover - a client we cannot introspect
+            accepted = set()
+        kept = {k: v for k, v in extras.items() if k in accepted}
+        dropped = sorted(set(extras) - set(kept))
+        if dropped:
+            _log_stale_client(dropped)
+        return Client(url, token=token, **kept)
+
+
+def _log_stale_client(dropped) -> None:
+    """Say WHICH copy is in use, because "restart QGIS" is the fix and nothing else hints at it."""
+    try:
+        import geodeploy as _loaded
+        where = getattr(_loaded, "__file__", "?")
+        from . import symbology
+        symbology._log(
+            "The GeoDeploy client in use is an older copy than this plugin ships ({0}) — it does "
+            "not take {1}. The plugin still works; restarting QGIS will pick up the copy that came "
+            "with this version.".format(where, ", ".join(dropped)), level="warning")
+    except Exception:                       # noqa: BLE001  # nosec B110 - intentional: a note is never worth failing a connection
+        pass
+
+
 def _say_waiting(seconds: float, attempt: int, of: int) -> None:
     """Tell the user why nothing is happening, in the QGIS log."""
     try:
@@ -64,7 +109,7 @@ class Instance:
         # pushing a group is a burst of one request per layer — so the client waits a 429 out and
         # tries again rather than stopping partway and asking the user to press the button a second
         # time. Waiting silently for a minute looks exactly like a freeze, so it is announced.
-        self.client = Client(self.url, token=self.token, on_throttled=_say_waiting)
+        self.client = _client(self.url, self.token, on_throttled=_say_waiting)
         # url -> parsed document, or the GeoDeployError it failed with. Per CONNECTION, so
         # reconnecting is the way to drop it — these describe layers, and a layer's description
         # does not change while you are looking at it. See `fetch_json`.

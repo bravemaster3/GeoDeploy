@@ -7,7 +7,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.5.0
+version=0.5.1
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -26,7 +26,19 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.5.0 - A LINE DRAWN AS SEVERAL STROKES now travels as all of them. QGIS builds a
+changelog=0.5.1 - Two bugs 0.5.0 introduced, both reported within minutes of installing it.
+    CONNECTING COULD FAIL OUTRIGHT with "Client.__init__() got an unexpected keyword argument".
+    The client is vendored, but putting vendor/ on the path only decides where `geodeploy` is
+    imported FROM the first time - after that Python answers from its module cache, so upgrading
+    the plugin without restarting QGIS runs the new code against the OLD client. Anything the
+    plugin passes beyond the long-standing arguments is now OFFERED rather than required, so a
+    stale or pip-installed copy still connects; and the message no longer blames the URL for
+    something that was not the URL.
+    AND AN ENTIRE LAYER OF LABELS RENDERED AS "1". On the tile path a rule's FILTER was written
+    into the key that means "the expression that produces the label TEXT", so QGIS drew the
+    boolean result of `"type" = 'Water'` instead of the place name. Two different expressions,
+    two arguments.
+    0.5.0 - A LINE DRAWN AS SEVERAL STROKES now travels as all of them. QGIS builds a
     casing, a dashed overlay and a hatch by stacking simple lines inside ONE symbol, and this read
     only the first: a rule whose symbol is a solid RED line with a DASHED BLUE one over it - which
     on screen reads as blue - arrived as plain red. `line_stack` carries the rest and the map

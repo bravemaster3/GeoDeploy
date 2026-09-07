@@ -487,8 +487,16 @@ class GeoDeployDock(QDockWidget):
                     break
         try:
             self.instance = Instance(url, token)
-        except Exception as exc:                      # noqa: BLE001 - a bad URL is a message
+        except GeoDeployError as exc:                 # noqa: PERF203 - a bad URL is a message
             self._say(f"That URL will not do: {exc}", MSG_CRITICAL)
+            return
+        except Exception as exc:                      # noqa: BLE001
+            # NOT EVERY FAILURE HERE IS THE URL'S FAULT. Saying so sent a user hunting a typo in an
+            # address that was fine, when what had actually happened was a stale client module in a
+            # QGIS that had not been restarted after an upgrade. Only `GeoDeployError` means the
+            # address; everything else says what it was.
+            self._say("Could not open a connection: {0}: {1}".format(
+                type(exc).__name__, exc), MSG_CRITICAL)
             return
         self._busy(True)
         self._run(_Job("GeoDeploy: connecting", self.instance.check), self._connected)

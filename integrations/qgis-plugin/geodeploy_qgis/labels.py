@@ -740,7 +740,7 @@ def _tile_labeling(qgis_layer, settings, style) -> bool:
 
     geometry = _tile_geometry_type(qgis_layer, style)
 
-    def one(block, name, settings_for_style):
+    def one(block, name, settings_for_style, filter_expression=""):
         tile_style = QgsVectorTileBasicLabelingStyle()
         tile_style.setLabelSettings(settings_for_style)
         tile_style.setStyleName(name)
@@ -761,7 +761,12 @@ def _tile_labeling(qgis_layer, settings, style) -> bool:
             pass
         # A TILE STYLE CAN BE FILTERED, which is the whole reason label rules can travel here at
         # all: one style per rule, each scoped to the features that rule selects.
-        expression = (block.get("qgis_expression") or "").strip()
+        #
+        # THE FILTER IS PASSED IN, NOT SMUGGLED THROUGH THE BLOCK. It was briefly written into
+        # `qgis_expression` — a key that means "the expression that produces the label TEXT" — so
+        # `settings_of` set the text to `"type" = 'Water'` and QGIS drew its boolean result: an
+        # entire layer of place names rendered as "1". Two different expressions, two arguments.
+        expression = (filter_expression or "").strip()
         if expression and hasattr(tile_style, "setFilterExpression"):
             try:
                 tile_style.setFilterExpression(expression)
@@ -778,12 +783,11 @@ def _tile_labeling(qgis_layer, settings, style) -> bool:
             block = dict(base)
             block.update(rule.get("labels") or {})
             block.pop("rules", None)
-            block["qgis_expression"] = _rule_expression(rule)
             rule_settings = settings_of(block)
             if rule_settings is None:
                 continue
             styles.append(one(block, str(rule.get("label") or "Rule {0}".format(i + 1)),
-                              rule_settings))
+                              rule_settings, _rule_expression(rule)))
     if not styles:
         styles = [one(labels_block, "GeoDeploy labels", settings)]
 

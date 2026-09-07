@@ -221,6 +221,13 @@ jobs:
         # that opens in the layers' default colours or quietly loses a layer to a clashing id.
         run: python integrations/qgis-plugin/scripts/test_published_style.py
 
+      - name: A stale or foreign client does not stop the plugin connecting
+        # `vendor/` on sys.path only decides where `geodeploy` is imported FROM the first time;
+        # after that `sys.modules` answers. Upgrading the plugin without restarting QGIS runs the
+        # new code against the OLD client, and a keyword the new one added became a hard stop on
+        # Connect. Anything beyond the long-standing arguments is offered, not required.
+        run: python integrations/qgis-plugin/scripts/test_stale_client.py
+
       - name: The push dialog says where a restyle lands
         # `summarise` is the only place the plugin can explain that "Push group to portal" changes
         # THAT PORTAL and not the layers' own default styles. That sentence is a feature, and a

@@ -1217,6 +1217,34 @@ def label_rules():
     check("an ordinary labelling carries no rules", "rules" not in plain_read,
           json.dumps(sorted(plain_read))[:160])
 
+    # ── THE SAME RULES ON TILES, which is what a portal group opens on ───────────────────────────
+    try:
+        from qgis.core import QgsVectorTileLayer
+        tiles = QgsVectorTileLayer(
+            "type=xyz&url=https://example.invalid/{z}/{x}/{y}.pbf&zmin=0&zmax=14", "t")
+        QgsProject.instance().addMapLayer(tiles)
+        tiles.setCustomProperty(symbology.P_GEOMETRY, "point")
+        labels_mod.to_qgis(tiles, dict(style))
+        tile_styles = tiles.labeling().styles() if tiles.labeling() else []
+        check("tiles: one labelling style per rule", len(tile_styles) == len(SPEC),
+              len(tile_styles))
+        fields = [st.labelSettings().fieldName for st in tile_styles]
+        # THE TEXT IS THE FIELD, NOT THE FILTER. Writing the filter into the label text made every
+        # place name on the layer render as its boolean result — an entire layer of "1". The two
+        # expressions live in different places for a reason; this is that reason, asserted.
+        check("tiles: the label TEXT is the field", set(fields) == {"name"}, fields)
+        check("tiles: ...and none of them is an expression",
+              not any(st.labelSettings().isExpression for st in tile_styles),
+              [st.labelSettings().isExpression for st in tile_styles])
+        check("tiles: the FILTER is the rule's, kept separate",
+              [st.filterExpression() for st in tile_styles] == [e for _n, e, _c, _s in SPEC],
+              [st.filterExpression() for st in tile_styles])
+        colours = [st.labelSettings().format().color().name() for st in tile_styles]
+        check("tiles: each rule keeps its colour", colours == [c for _n, _e, c, _s in SPEC],
+              colours)
+    except ImportError:                                                          # pragma: no cover
+        skip("tile label rules", "no QgsVectorTileLayer on this QGIS")
+
     if WEB is not None:
         check("the map sees the rules", len(WEB.label_rules(labels)) == len(SPEC),
               len(WEB.label_rules(labels)))
