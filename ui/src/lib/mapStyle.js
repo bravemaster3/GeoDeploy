@@ -11,7 +11,7 @@
  * Everything it used to reach for in the editor's scope is now an argument, so the caller decides
  * what to draw and nothing here knows about editor state.
  */
-import { isNoBasemap as symIsNoBasemap } from './basemaps'
+import { isNoBasemap as symIsNoBasemap } from '@/lib/basemaps'
 import {
   colorExpression as symColorExpression,
   expandClasses as symExpandClasses,

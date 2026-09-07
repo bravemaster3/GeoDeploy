@@ -3754,11 +3754,24 @@
     return STYLE.layers.filter(function (l) {
       const meta = l.metadata || {};
       return !Object.keys(meta).some(function (k) { return k.indexOf('geodeploy:') === 0; });
-    }).map(function (l) { return l.id; });
+    }).map(function (l) { return l.id; })
+      // THE GROUND IS NEVER A BASEMAP. It is added at runtime today, so it is not in `STYLE.layers`
+      // and this changes nothing — but if it is ever baked into a published style, the rule above
+      // would class it as the template's basemap and hide it, and "no basemap" would go black
+      // again. One line, so that cannot happen quietly.
+      .filter(function (id) { return id !== 'gd-ground'; });
   }
 
   function setupBasemaps() {
     const firstId = (map.getStyle().layers[0] || {}).id;
+    // A GROUND UNDER EVERYTHING. Hiding every basemap leaves the map with no painted background at
+    // all, and what shows through is the canvas — black. "No basemap" is meant to be the data on a
+    // plain white ground, so the ground has to be a real layer. Added FIRST and never hidden: a
+    // basemap covers it completely, so it costs nothing when one is showing.
+    if (!map.getLayer('gd-ground')) {
+      map.addLayer({ id: 'gd-ground', type: 'background',
+        paint: { 'background-color': '#ffffff' } }, firstId);
+    }
     BASEMAPS.forEach(bm => {
       const srcId = 'gd-basemap-' + bm.id;
       if (!map.getSource(srcId)) {
