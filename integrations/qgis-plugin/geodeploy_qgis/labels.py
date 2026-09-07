@@ -32,6 +32,8 @@ map with no labels on it and nothing to say why.
 """
 from __future__ import annotations
 
+import math
+
 from geodeploy import expressions
 from geodeploy.styles import zoom_for_scale, scale_for_zoom
 
@@ -441,9 +443,147 @@ def _read_placement(settings, labels: dict) -> None:
     if priority is not None:
         labels["priority"] = priority
 
-    placement = str(_value(settings, "placement", "")).lower()
-    if "line" in placement or "curved" in placement or "perimeter" in placement:
+    if _placement_name(_value(settings, "placement", None)) == "line":
         labels["placement"] = "line"
+        position = _line_position_of(settings)
+        if position:
+            labels["line_position"] = position
+
+
+#: The QGIS placements that mean "along the geometry" rather than "at a point", BY NUMBER.
+#: `QgsPalLayerSettings.Placement` is a plain C++ enum: Line = 2, Curved = 3, PerimeterCurved = 7.
+#: The names are checked too, because Qt6 spells a member as `LabelPlacement.Curved` and Qt5 as a
+#: bare int — reading it as a WORD worked on one build and silently did nothing on the other.
+_ALONG_THE_LINE = (2, 3, 7)
+
+
+#: `Qgis.LabelLinePlacementFlag`: OnLine = 1, AboveLine = 2, BelowLine = 4, MapOrientation = 8.
+_ON_LINE, _ABOVE_LINE, _BELOW_LINE = 1, 2, 4
+
+
+def _line_position_of(settings) -> str:
+    """`"on"` / `"above"` / `"below"` — where along-the-line labels sit, or `""` if unreadable.
+
+    A contour's height is written ON the line, breaking it; a river's name sits above it. QGIS's
+    default for a placement nobody configured is ABOVE, so a contour layer rebuilt without this
+    came back with every height floating off its line — right numbers, wrong map.
+    """
+    flags = None
+    getter = getattr(settings, "lineSettings", None)
+    if callable(getter):
+        try:
+            flags = int(getter().placementFlags())
+        except Exception:               # noqa: BLE001  # nosec B110 - intentional: try the older spelling
+            flags = None
+    if flags is None:
+        try:
+            flags = int(_value(settings, "placementFlags", 0) or 0)
+        except (TypeError, ValueError):  # pragma: no cover - a QGIS we cannot ask
+            return ""
+    if flags & _ON_LINE:
+        return "on"
+    if flags & _ABOVE_LINE:
+        return "above"
+    if flags & _BELOW_LINE:
+        return "below"
+    return ""
+
+
+def _apply_line_position(settings, wanted: str) -> None:
+    """Put along-the-line labels on, above or below the line. Silent when this QGIS differs."""
+    flag = {"on": _ON_LINE, "above": _ABOVE_LINE, "below": _BELOW_LINE}.get(wanted)
+    if not flag:
+        return
+    # MAP ORIENTATION IS KEPT. Without it QGIS flips a label to stay upright relative to the SCREEN,
+    # which on a contour ring means the numbers face different ways on the two sides of a hill —
+    # not what the author had, and not what the browser draws.
+    value = flag | 8
+    getter = getattr(settings, "lineSettings", None)
+    setter = getattr(settings, "setLineSettings", None)
+    try:
+        if callable(getter) and callable(setter):
+            line = getter()
+            line.setPlacementFlags(_line_flags(value))
+            setter(line)
+            return
+        settings.placementFlags = value
+    except Exception as exc:            # noqa: BLE001 - the labels still draw, just placed by QGIS
+        symbology._log("This QGIS places along-the-line labels differently ({0}); they are placed "
+                       "the way it places them by default.".format(exc))
+
+
+def _line_flags(value: int):
+    """`value` as whatever type this QGIS's `setPlacementFlags` wants — an int, or a flags object."""
+    try:
+        from qgis.core import Qgis
+        return Qgis.LabelLinePlacementFlags(value)
+    except Exception:                   # noqa: BLE001 - an older QGIS takes the plain int
+        return value
+
+
+def _placement_name(placement) -> str:
+    """`"line"` when this QGIS placement follows the geometry, `"point"` when it sits at one.
+
+    WHY THIS EXISTS AT ALL. `str(placement).lower()` was the old test, and on QGIS LTR a placement
+    is an int, so `str(3)` is `"3"`: the check never matched, `labels["placement"]` was never
+    written, and every label came back with QGIS's default AroundPoint. On a POINT layer that is
+    invisible — it is the right answer anyway. On a LINE layer QGIS draws NOTHING AT ALL for a
+    point placement, so a contour layer's heights, a river's name and a road's number all vanished
+    on the way back while the same layer labelled correctly in the browser and in the file it came
+    from. Measured on the reported contour layer: 181 label pixels before, 0 after, 201 with only
+    the placement restored.
+    """
+    if placement is None:
+        return ""
+    try:
+        if int(placement) in _ALONG_THE_LINE:
+            return "line"
+        return "point"
+    except (TypeError, ValueError):
+        pass                            # a Qt6 enum member: read its name instead
+    text = str(getattr(placement, "name", placement)).lower()
+    if "curved" in text or "line" in text or "perimeter" in text:
+        return "line"
+    return "point" if text else ""
+
+
+def _apply_placement(settings, labels: dict, geometry=None) -> None:
+    """Place the labels the way the style asks — and never place a LINE's labels at a point.
+
+    Two jobs, and the second is the one that matters. A style that says `placement: "line"` gets a
+    curved placement, which is what `symbol-placement: line` means on the other side. A style that
+    says NOTHING gets a placement chosen from the GEOMETRY, because QGIS's default is AroundPoint
+    and a line labelled AroundPoint draws nothing: a line layer labelled in GeoDeploy — uploaded
+    there, never in QGIS — would otherwise come back looking unlabelled too. Points and polygons
+    keep the default, which is right for both.
+    """
+    try:
+        from qgis.core import QgsPalLayerSettings, QgsWkbTypes
+        try:
+            from .compat import enum as _enum
+        except ImportError:             # pragma: no cover - exec'd standalone
+            from compat import enum as _enum
+    except ImportError:                 # pragma: no cover - very old QGIS
+        return
+    stated = str(labels.get("placement") or "").lower()
+    is_line = False
+    if stated:
+        is_line = stated == "line"
+    elif geometry is not None:
+        try:
+            is_line = geometry == _enum(QgsWkbTypes, "GeometryType", "LineGeometry")
+        except Exception:               # noqa: BLE001  # nosec B110 - intentional: an unreadable geometry keeps QGIS's default
+            is_line = False
+    if not is_line:
+        return
+    try:
+        settings.placement = _enum(QgsPalLayerSettings, "Placement", "Curved")
+    except Exception as exc:            # noqa: BLE001 - a placement must not stop a label
+        symbology._log("Could not place these labels along the line ({0}); they are placed the "
+                       "way QGIS places labels by default.".format(exc))
+    # ON the line unless the author said otherwise — which is what `symbol-placement: line` draws
+    # in the browser, so the two surfaces agree, and what QGIS's own default (ABOVE) does not.
+    _apply_line_position(settings, str(labels.get("line_position") or "on").lower())
 
 
 def _read_scope(settings, labels: dict) -> None:
@@ -592,6 +732,11 @@ def to_qgis(qgis_layer, style) -> bool:
             qgis_layer.triggerRepaint()
             return True
         settings = settings_of(labels)
+        # WHERE THE LABELS SIT. Done here rather than in `settings_of` because it needs the layer:
+        # a style that states no placement takes one from the GEOMETRY, and a line labelled at a
+        # point is a line QGIS draws no labels for at all.
+        if settings:
+            _apply_placement(settings, labels, _geometry_of(qgis_layer, style))
 
         # A VECTOR TILE LAYER IS LABELLED DIFFERENTLY, and until now it was not labelled at all:
         # the guard asked for `setLabelsEnabled`, which `QgsVectorTileLayer` does not have, so
@@ -668,6 +813,7 @@ def _rule_labeling(qgis_layer, labels: dict) -> bool:
         settings = settings_of(block)
         if settings is None:
             continue
+        _apply_placement(settings, block, _geometry_of(qgis_layer, {"labels": labels}))
         rule = QgsRuleBasedLabeling.Rule(settings)
         rule.setDescription(str(entry.get("label") or ""))
         expression = _rule_expression(entry)
@@ -742,6 +888,10 @@ def _tile_labeling(qgis_layer, settings, style) -> bool:
 
     def one(block, name, settings_for_style, filter_expression="", zoom=None):
         tile_style = QgsVectorTileBasicLabelingStyle()
+        # THE SAME PLACEMENT THE FEATURE PATH USES. The fast draw has to draw what the portal
+        # draws; a line's labels placed at a point are drawn by neither, and were missing from the
+        # tile path for the same reason they were missing from the other one.
+        _apply_placement(settings_for_style, block, geometry)
         tile_style.setLabelSettings(settings_for_style)
         tile_style.setStyleName(name)
         tile_style.setLayerName("")
@@ -763,8 +913,16 @@ def _tile_labeling(qgis_layer, settings, style) -> bool:
         try:
             # CLAMPED to the range a tile pyramid has. QGIS stores a scale threshold far outside it
             # — 29 here — and a max zoom above the deepest tile is a promise nothing can keep.
-            tile_style.setMinZoomLevel(max(0, int(lo)) if lo is not None else 0)
-            tile_style.setMaxZoomLevel(min(22, int(hi)) if hi is not None else 22)
+            #
+            # AND ROUNDED THE WAY A ZOOM RANGE MEANS. A scale threshold converts to a FRACTIONAL
+            # zoom — 10.127, 13.771 — and a tile renderer only has whole ones. `int()` truncated,
+            # so a label whose range starts at 10.127 was given to zoom 10 and appeared a whole
+            # zoom level before it should: zoomed out, labels the browser had already dropped came
+            # back, then went again one step further out. The first WHOLE zoom inside the range is
+            # its ceiling at the near end and its floor at the far end, which is exactly what
+            # MapLibre draws when it compares the map's zoom against the same numbers.
+            tile_style.setMinZoomLevel(max(0, int(math.ceil(float(lo)))) if lo is not None else 0)
+            tile_style.setMaxZoomLevel(min(22, int(math.floor(float(hi)))) if hi is not None else 22)
         except (TypeError, ValueError):
             pass
         # A TILE STYLE CAN BE FILTERED, which is the whole reason label rules can travel here at
@@ -808,6 +966,21 @@ def _tile_labeling(qgis_layer, settings, style) -> bool:
         except Exception:               # noqa: BLE001  # nosec B110
             pass
     return True
+
+
+def _geometry_of(qgis_layer, style):
+    """The `GeometryType` of a layer, feature or tile — or None when it cannot be had.
+
+    A feature layer answers for itself; a tile layer cannot, and `symbology` records the geometry
+    on it for exactly that reason (`_tile_geometry_type`).
+    """
+    getter = getattr(qgis_layer, "geometryType", None)
+    if callable(getter):
+        try:
+            return getter()
+        except Exception:               # noqa: BLE001  # nosec B110 - intentional: fall through to the recorded one
+            pass
+    return _tile_geometry_type(qgis_layer, style or {})
 
 
 def _tile_geometry_type(qgis_layer, style):

@@ -7,7 +7,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.5.3
+version=0.5.4
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -26,7 +26,19 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.5.3 - A RULE IS A SYMBOL, and stacked strokes inside one now travel. A line
+changelog=0.5.4 - A LINE'S LABELS COME BACK. Reported against a contour layer: the heights
+    showed in the file and in the browser and were simply absent once the portal was opened in
+    QGIS. The label PLACEMENT never travelled - it was read by stringifying an enum, which on this
+    QGIS is an int, so the test never matched and QGIS's default (around a point) stood. A line
+    labelled around a point draws NOTHING in QGIS: 181 label pixels became 0, and 181 again once
+    the placement was restored. Whether the labels sit ON the line or above it travels too, and a
+    line layer labelled in GeoDeploy - which never saw QGIS to say - is placed along its line
+    rather than left with a default that draws nothing.
+    AND THE FAST DRAW NO LONGER SHOWS LABELS A ZOOM EARLY. A scale threshold converts to a
+    fractional zoom (10.127) and a tile renderer has only whole ones; truncating handed that to
+    zoom 10, so zoomed out, labels the browser had already dropped came back for one step. The
+    first whole zoom inside the range is its ceiling, which is what the browser draws.
+    0.5.3 - A RULE IS A SYMBOL, and stacked strokes inside one now travel. A line
     drawn as a solid red stroke with a dashed blue one over it published as plain red whenever it
     lived inside a rule - the single-symbol path had learnt to read the whole stack in 0.5.0, but
     the function that builds a RULE's style still read only the first stroke. (The other half of

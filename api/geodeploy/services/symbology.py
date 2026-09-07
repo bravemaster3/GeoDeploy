@@ -983,6 +983,13 @@ def draws_nothing(style: dict) -> bool:
 #               "halo_color": "#fff", "halo_width": 1,
 #               "offset": [x, y], "rotation": 0, "anchor": "center",
 #               "placement": "point" | "line", "max_width": 10,
+#               "line_position": "on" | "above" | "below",
+#                                                   where along-the-line labels sit. MapLibre has
+#                                                   no equivalent — `symbol-placement: line` always
+#                                                   draws ON the line — so this is carried for
+#                                                   QGIS's benefit and ignored here, which is why
+#                                                   "on" is what the plugin assumes when it is
+#                                                   missing: that is what the browser draws.
 #               "transform": "none" | "uppercase" | "lowercase",
 #               "letter_spacing": 0, "allow_overlap": False, "priority": 0,
 #               "minzoom": n, "maxzoom": n}

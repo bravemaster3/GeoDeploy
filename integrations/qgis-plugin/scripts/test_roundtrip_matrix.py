@@ -681,6 +681,15 @@ LABEL_MATRIX = (
 )
 
 
+def _line_flags(value: int):
+    """`value` as whatever this QGIS's `setPlacementFlags` takes — a flags object, or a plain int."""
+    try:
+        from qgis.core import Qgis
+        return Qgis.LabelLinePlacementFlags(value)
+    except Exception:                                                            # noqa: BLE001
+        return value
+
+
 def label_matrix():
     """Every label property, both directions, on a feature layer and on a vector-tile layer.
 
@@ -740,6 +749,76 @@ def label_matrix():
             check("tile labels ({0}): scoped to the right geometry".format(geometry),
                   styles[0].geometryType() == enum(QgsWkbTypes, "GeometryType", want),
                   styles[0].geometryType())
+            # A LINE'S LABELS MUST BE PLACED ALONG THE LINE, on the fast-draw path as much as the
+            # other one. QGIS draws NOTHING for a line labelled at a point, so this is the
+            # difference between a labelled contour layer and one that looks unlabelled.
+            if geometry == "line":
+                from qgis.core import QgsPalLayerSettings
+                check("tile labels (line): placed along the line, not at a point",
+                      styles[0].labelSettings().placement
+                      == enum(QgsPalLayerSettings, "Placement", "Curved"),
+                      str(styles[0].labelSettings().placement))
+
+    # ── A LINE'S LABELS, BOTH DIRECTIONS ─────────────────────────────────────────────────────────
+    # Reported as "it doesn't show the contour line values": the contour layer labelled correctly
+    # in the file and in the browser and came back with nothing. The placement never travelled —
+    # it was read with `str(placement).lower()`, and on this QGIS a placement is an int, so the
+    # test never matched and QGIS's default (AroundPoint) stood. A line labelled AroundPoint draws
+    # no labels at all: measured on the reported layer, 181 label pixels became 0.
+    line_layer = make_layer("LineString")
+    line_layer.setLabeling(None)
+    from qgis.core import QgsPalLayerSettings, QgsVectorLayerSimpleLabeling
+    curved = QgsPalLayerSettings()
+    curved.fieldName = "name"
+    curved.placement = enum(QgsPalLayerSettings, "Placement", "Curved")
+    line_settings = curved.lineSettings()
+    line_settings.setPlacementFlags(_line_flags(1 | 8))            # ON the line, map-oriented
+    curved.setLineSettings(line_settings)
+    line_layer.setLabeling(QgsVectorLayerSimpleLabeling(curved))
+    line_layer.setLabelsEnabled(True)
+    read = (symbology.from_qgis(line_layer) or {}).get("labels") or {}
+    check("a line label: its placement travels", read.get("placement") == "line", read.get("placement"))
+    check("a line label: ...and whether it sits ON the line",
+          read.get("line_position") == "on", read.get("line_position"))
+
+    back = make_layer("LineString")
+    labels_mod.to_qgis(back, {"labels": dict(read)})
+    got = back.labeling().settings()
+    check("a line label: comes back placed along the line",
+          got.placement == enum(QgsPalLayerSettings, "Placement", "Curved"), str(got.placement))
+    check("a line label: ...and back on the line",
+          int(got.lineSettings().placementFlags()) & 1, int(got.lineSettings().placementFlags()))
+
+    # A LINE LABELLED IN GEODEPLOY — no placement stated at all — must still be labelled along its
+    # line: QGIS's default would draw nothing, and that layer never went near QGIS to say so.
+    authored = make_layer("LineString")
+    labels_mod.to_qgis(authored, {"labels": {"enabled": True, "field": "name"}})
+    check("a line labelled in GeoDeploy: placed along the line anyway",
+          authored.labeling().settings().placement
+          == enum(QgsPalLayerSettings, "Placement", "Curved"),
+          str(authored.labeling().settings().placement))
+    point_layer = make_layer("Point")
+    labels_mod.to_qgis(point_layer, {"labels": {"enabled": True, "field": "name"}})
+    check("...while a point's labels keep the placement QGIS gives them",
+          point_layer.labeling().settings().placement
+          != enum(QgsPalLayerSettings, "Placement", "Curved"),
+          str(point_layer.labeling().settings().placement))
+
+    # ── A FRACTIONAL ZOOM ROUNDS THE WAY A RANGE MEANS ───────────────────────────────────────────
+    # A scale threshold converts to a fractional zoom, and a tile renderer only has whole ones.
+    # Truncating gave a label whose range starts at 10.127 to zoom 10, so it appeared a whole zoom
+    # level before the browser shows it: zoomed out, labels reappeared and then went again.
+    fractional = QgsVectorTileLayer(
+        "type=xyz&url=https://example.invalid/{z}/{x}/{y}.pbf&zmin=0&zmax=14", "frac")
+    QgsProject.instance().addMapLayer(fractional)
+    fractional.setCustomProperty(symbology.P_GEOMETRY, "point")
+    labels_mod.to_qgis(fractional, {"labels": {"enabled": True, "field": "name",
+                                               "minzoom": 10.127, "maxzoom": 14.186}})
+    st = fractional.labeling().styles()[0]
+    check("a fractional zoom: the label starts at the first WHOLE zoom inside its range",
+          st.minZoomLevel() == 11, st.minZoomLevel())
+    check("a fractional zoom: ...and ends at the last one",
+          st.maxZoomLevel() == 14, st.maxZoomLevel())
 
 
 # ══ 8. The tile renderer — what a portal group is actually drawn with ════════════════════════════
