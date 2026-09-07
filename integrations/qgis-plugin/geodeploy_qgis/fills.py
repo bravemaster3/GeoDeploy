@@ -692,7 +692,9 @@ def line_marker_to_qgis(symbol, style) -> bool:
     block = (style or {}).get("line_marker")
     if symbol is None or not isinstance(block, dict):
         return False
-    marker = raster_marker(block.get("image"))
+    # SIZED FROM THE BLOCK, not left at the raster marker's default — see the note beside `size`
+    # in `_line_decoration_symbol`.
+    marker = raster_marker(block.get("image"), symbology._number(block.get("size"), None))
     if marker is None:
         return False
     try:

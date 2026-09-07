@@ -1274,6 +1274,21 @@ def lines_made_of_markers():
     check("back in QGIS: and NO stroke was invented",
           "QgsSimpleLineSymbolLayer" not in kinds, kinds)
 
+    # THE REPEATED SYMBOL'S SIZE, which is a separate promise from its picture. QGIS rebuilds these
+    # as a RASTER marker, whose default size has nothing to do with the symbol it replaces — so
+    # without a size in the block the circles came back at 4 mm whatever they started as.
+    rebuilt = None
+    for i in range(symbol.symbolLayerCount()):
+        rebuilt = getattr(symbol.symbolLayer(i), "subSymbol", lambda: None)() or rebuilt
+    before = symbology._sized(sub, "size", "sizeUnit")
+    after = symbology._sized(rebuilt, "size", "sizeUnit") if rebuilt is not None else None
+    check("back in QGIS: the markers are the size they were",
+          before and after and 0.95 <= after / before <= 1.05,
+          "{0} pt -> {1} pt".format(round(before or 0, 2), round(after or 0, 2)))
+    check("...and the style carried that size rather than guessing it",
+          (style.get("line_marker") or {}).get("size"),
+          json.dumps(sorted((style.get("line_marker") or {}))))
+
     # AN ORDINARY LINE IS UNTOUCHED, and a DECORATED one keeps the stroke it really has.
     plain = make_layer("LineString")
     symbology.apply_to_qgis(plain, {"color": "#e24646", "line_width": 3})

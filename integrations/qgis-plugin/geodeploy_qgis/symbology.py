@@ -3925,6 +3925,20 @@ def _style_from_symbol(symbol) -> dict:
     if layer0 is not None and not isinstance(layer0, QgsSimpleLineSymbolLayer):
         style.update(_line_decoration_symbol(symbol))
 
+    # A LINE WITH NO STROKE AND NO DECORATION WOULD DRAW NOTHING AT ALL, and that is a worse answer
+    # than the band this replaced. `line_width: 0` is only honest while the MARKERS travel — and a
+    # picture can fail to travel: it is capped in bytes, and a symbol QGIS cannot rasterise
+    # produces none. So the zero is withdrawn rather than published, and the layer keeps a stroke
+    # in the colour it would have been drawn in. Wrong, but visible and correctable, which is the
+    # trade this codebase makes everywhere a translation runs out.
+    if style.get("line_width") == 0.0 and not style.get("line_marker"):
+        width = _points(_call_or_none(symbol, "width"),
+                        _call_or_none(_first_symbol_layer(symbol), "widthUnit"))
+        style["line_width"] = round((width or 0) / CSS_PX_TO_POINTS, 2) or DEFAULT_LINE_WIDTH
+        _log("This line is drawn entirely by symbols along it, and the symbol could not be "
+             "rendered to an image — so it travels as a plain line of the same width instead of "
+             "as nothing at all.")
+
     # A MARKER WE HAVE NO WORDS FOR TRAVELS AS ITS PICTURE. Anything but a SINGLE plain simple
     # marker — an SVG, a raster or font marker, an ellipse, a filled marker, or several layers
     # stacked — used to arrive as a coloured dot. Rendering the symbol is the honest translation,
@@ -4505,6 +4519,14 @@ def _line_decoration_symbol(symbol) -> dict:
             if not picture:
                 continue
             out = {"image": picture}
+            # THE REPEATED SYMBOL'S OWN SIZE. The web reads it off the bitmap — that is what
+            # `_rendered_at` guarantees — but QGIS rebuilding this gets a RASTER marker, whose
+            # default size has nothing to do with the symbol it replaces. Without this the circles
+            # along a line came back at QGIS's default 4 mm whatever they started as: a 10 px
+            # marker returned half again as large.
+            size = _css_px(sub, "size", "sizeUnit")
+            if size:
+                out["size"] = round(size, 2)
             interval = _css_px(sl, "interval", "intervalUnit")
             if interval:
                 # QGIS states the interval in the symbol layer's OWN unit — millimetres unless

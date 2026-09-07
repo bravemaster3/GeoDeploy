@@ -7,7 +7,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.4.8
+version=0.4.9
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -26,7 +26,14 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.4.8 - Five things reported against one map, all of them the plugin inventing
+changelog=0.4.9 - Two more found by checking the 0.4.8 fix on the reported layer instead of
+    trusting it. The circles along a line came back at QGIS's DEFAULT size whatever they started
+    as - a rebuilt line marker is a raster marker, whose default has nothing to do with the symbol
+    it replaces, and the style carried the picture and the spacing but never the size. And a line
+    that is drawn entirely by symbols would have drawn NOTHING at all if the picture failed to
+    render, which is capped in bytes: worse than the band it replaced, so the zero width is
+    withdrawn and the line keeps a stroke instead.
+    0.4.8 - Five things reported against one map, all of them the plugin inventing
     something the author never drew.
     A LINE MADE OF MARKERS HAS NO STROKE. QGIS's marker line draws circles at intervals and
     nothing between them, but `QgsLineSymbol.width()` reports its MARKER's size - so a line of
