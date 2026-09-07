@@ -132,6 +132,21 @@ jobs:
         working-directory: integrations/qgis-plugin
         run: python3 -u scripts/test_real_qgis.py
 
+      - name: The round trip as a matrix, generated from QGIS's registries
+        # The other half of the file above. That one is a REGRESSION suite — every check exists
+        # because a user hit something — so it cannot answer "is there anything QGIS can draw that
+        # we have never tried?". This instantiates every symbol layer the registry offers, builds
+        # every renderer it can build, and walks all eight render units, so a QGIS that gains one
+        # is covered the day it ships. Its first run found six defects the 337 hand-written checks
+        # had missed.
+        #
+        # The sections that ask what MapLibre would actually paint run here too: the script finds
+        # `api/geodeploy/services/symbology.py` relative to the checkout, and that module is pure
+        # stdlib precisely so it can be imported beside PyQGIS. It reports them as skipped rather
+        # than failing if it cannot.
+        working-directory: integrations/qgis-plugin
+        run: python3 -u scripts/test_roundtrip_matrix.py
+
       - name: Every symbol QGIS offers is classified
         # Reads QGIS's OWN registries — symbol layers, renderers, data-defined properties — and
         # joins them against the verdicts declared in the script. Fails when this QGIS offers

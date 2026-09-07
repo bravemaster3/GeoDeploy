@@ -1772,6 +1772,17 @@ def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
     if rule_layers is not None:
         return _scoped(rule_layers + ([labels] if labels else []), style)
 
+    # CLASSES THAT DIFFER BY MORE THAN THEIR COLOUR ARE RULES, and are drawn as rules. MapLibre can
+    # data-drive a colour, a width and an opacity, but NOT `line-dasharray` — so a categorized layer
+    # whose classes differ by dash cannot be one render layer whatever expression is written. See
+    # `symbology.expand_classes`, which returns None for an ordinary classified layer so that one is
+    # still drawn by the `step`/`match` expressions, in a single layer, exactly as before.
+    classed = symbology.expand_classes(style)
+    if classed:
+        split = _rule_layers(source_id, layer, dict(cfg, style=dict(style, rules=classed)))
+        if split:
+            return _scoped(split + ([labels] if labels else []), style)
+
     raw = style.get("maplibre", {}).get("layers") if isinstance(style.get("maplibre"), dict) else None
     if not raw:
         base = _vector_layer(source_id, layer, cfg)

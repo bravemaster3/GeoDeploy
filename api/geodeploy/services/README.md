@@ -265,8 +265,34 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   (`POST /data/vector/{id}/tile`); the fix only changes what new tiles contain. Regression test:
   `api/tests/test_native_crs.py`.
 
+## A class is more than a colour (2026-09-07)
+
+`symbology.CLASS_SHAPE_KEYS` names what a class of a classified layer may hold of its own — its
+dash, width, fill opacity, marker, outline. `class_style(style, entry)` lays a class's keys over the
+layer's; `expand_classes(style)` turns a classification that varies by more than colour into one
+pseudo-rule per class, and `portal_generator._vector_layers` feeds those to the SAME `_rule_layers`
+that draws a rule-based layer.
+
+**Why a class becomes a render layer rather than a data-driven expression.** MapLibre can vary a
+colour, an opacity and a width per feature, but `line-dasharray` is not data-driven at all — there
+is no expression that picks a dash from an attribute. So a layer whose classes differ by dash cannot
+be one render layer however it is written.
+
+**`expand_classes` returns None when the classes differ only in colour**, and that is not an
+optimisation — it is what keeps every classified layer already on every instance rendering byte for
+byte as it did, in one layer, through `color_expression`.
+
+**The graduated filters mirror `step`'s STOPS, not `min`/`max`.** `step` gives everything below the
+first boundary the first class's colour and everything above the last one the last class's, so
+filters read off the bounds literally would silently stop drawing the features outside the sampled
+range. `test_per_class_symbology.py` pins that.
+
+`legend_entries` builds each swatch from `class_style` too, or the legend shows a row of identical
+symbols for classes the map draws differently.
+
 ## Last updated
-2026-09-04 (`titiler.py`: **contour lines can be coloured by their own value**, and the relief
+2026-09-07b (`symbology.CLASS_SHAPE_KEYS` / `class_style` / `expand_classes`, and `legend_entries` built through them: **a class carries its own symbol, not just its colour**. See the section above for why a class becomes a render layer rather than a data-driven expression, and why an unvaried classification is deliberately left alone. Also `needs_outline_layer`: a polygon border asked to be DASHED gets its own line layer at any width — `fill-outline-color` is a colour with no width and no pattern, so a hairline dashed boundary drew solid. Tests: `api/tests/test_per_class_symbology.py`.)
+2026-09-07 (`titiler.py`: **contour lines can be coloured by their own value**, and the relief
 behind them can be switched off. A line takes its band number SHIFTED past the relief's range —
 1..N is the ground, N+1..2N the lines — because one band of output has to carry both "this pixel is
 a line" and "it is this high". With the relief off the ground goes TRANSPARENT rather than white, so

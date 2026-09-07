@@ -208,6 +208,88 @@ export function isExtruded(style = {}) {
 }
 
 /** True when colour or size varies per feature. */
+/**
+ * Keys a CLASS of a classified layer may hold OF ITS OWN, overriding the layer-level shape.
+ * Twin of `CLASS_SHAPE_KEYS` in `services/symbology.py` and in the QGIS plugin's `symbology.py`.
+ *
+ * A classified layer used to carry a colour per class and ONE shape for the whole layer, taken from
+ * the first class — so two categories in the same colour that differ only by DASH arrived
+ * identical, and the map lost the distinction it was made for.
+ */
+export const CLASS_SHAPE_KEYS = [
+  'line_width', 'lineType', 'dash_pattern', 'line_offset', 'line_cap', 'line_join',
+  'fill_opacity', 'fill_pattern', 'outline_color', 'outline_width',
+  'radius', 'marker', 'marker_image', 'marker_offset', 'line_marker', 'spacing',
+]
+
+/** The style ONE class draws with: the layer's shape with that class's own keys laid over it. */
+export function classStyle(style = {}, entry = {}) {
+  const out = { ...style }
+  for (const key of CLASS_SHAPE_KEYS) if (key in (entry || {})) out[key] = entry[key]
+  return out
+}
+
+/** The `classes` or `categories` of a classified style, in draw order. `[]` for anything else. */
+export function classEntries(style = {}) {
+  const mode = style.color_mode || 'single'
+  const key = mode === 'graduated' ? 'classes' : mode === 'categorized' ? 'categories' : null
+  if (!key) return []
+  return (style[key] || []).filter((c) => c && typeof c === 'object')
+}
+
+/**
+ * One RULE per class, when the classes differ by more than their colour. `null` otherwise.
+ * Twin of `symbology.expand_classes` — see it for why a class becomes a rule rather than a
+ * data-driven expression (short version: `line-dasharray` cannot be data-driven at all), and why
+ * the graduated filters mirror `step`'s stops instead of reading `min`/`max` literally.
+ */
+export function expandClasses(style = {}) {
+  const entries = classEntries(style)
+  if (!entries.length) return null
+  if (!entries.some((e) => CLASS_SHAPE_KEYS.some((k) => k in e))) return null
+  const field = (style.color_field || '').trim()
+  if (!field) return null
+  const base = { ...style }
+  for (const k of ['classes', 'categories', 'color_mode', 'color_field', 'classes_n', 'other_color', 'rules']) delete base[k]
+  const one = (entry, filter, label) => ({ filter, label, style: classStyle({ ...base, color: entry.color }, entry) })
+
+  if ((style.color_mode || '') === 'categorized') {
+    const values = entries.filter((e) => e.color).map((e) => String(e.value))
+    const out = []
+    // The catch-all draws FIRST, i.e. underneath the named categories — the order the `match`
+    // fallback and the QGIS tile renderer both put it in.
+    if (values.length) {
+      out.push({ filter: ['match', ['to-string', ['get', field]], values, false, true],
+        label: 'Other', style: { ...base, color: style.other_color || DEFAULT_OTHER_COLOR } })
+    }
+    for (const entry of entries) {
+      if (!entry.color) continue
+      const value = String(entry.value)
+      out.push(one(entry, ['==', ['to-string', ['get', field]], value], entry.label || value))
+    }
+    return out.length ? out : null
+  }
+
+  const coloured = entries.filter((e) => e.color)
+  if (!coloured.length) return null
+  const num = ['to-number', ['get', field]]
+  const ordered = [coloured[0], ...coloured.slice(1).filter((e) => e.min !== null && e.min !== undefined)]
+  const out = ordered.map((entry, i) => {
+    const parts = []
+    if (i > 0) parts.push(['>=', num, entry.min])
+    if (i + 1 < ordered.length) parts.push(['<', num, ordered[i + 1].min])
+    const filter = parts.length === 1 ? parts[0] : parts.length ? ['all', ...parts] : null
+    return one(entry, filter, entry.label || rangeLabel(entry))
+  })
+  return out.length ? out : null
+}
+
+function rangeLabel(entry) {
+  const lo = entry.min === null || entry.min === undefined ? '' : fmtNum(entry.min)
+  const hi = entry.max === null || entry.max === undefined ? '' : fmtNum(entry.max)
+  return `${lo} – ${hi}`.trim()
+}
+
 export function isDataDriven(style = {}) {
   const mode = style.color_mode || 'single'
   if (mode === 'graduated' && style.color_field && (style.classes || []).length) return true
@@ -429,8 +511,10 @@ export function legendEntries(style = {}) {
     })
   }
   const mode = style.color_mode || 'single'
+  // THE CLASS'S OWN SHAPE, not only the layer's. A class may carry its own dash, width, fill or
+  // marker (`CLASS_SHAPE_KEYS`), and a legend drawn from the layer's shape alone shows a row of
+  // identical swatches for classes the map draws differently. Twin of symbology.legend_entries.
   if (mode === 'graduated') {
-    const shared = legendSymbol(style)
     return (style.classes || []).map((c) => {
       const lo = c.min, hi = c.max
       let label
@@ -438,17 +522,18 @@ export function legendEntries(style = {}) {
       else if (lo === null || lo === undefined) label = `< ${fmtNum(hi)}`
       else if (hi === null || hi === undefined) label = `≥ ${fmtNum(lo)}`
       else label = `${fmtNum(lo)} – ${fmtNum(hi)}`
-      return { color: c.color, label, ...shared }
+      return { color: c.color, label, ...legendSymbol(classStyle(style, c)) }
     })
   }
   if (mode === 'categorized') {
-    const shared = legendSymbol(style)
     const out = (style.categories || []).map((c) => ({
-      color: c.color, label: String(c.value), ...shared }))
+      color: c.color, label: String(c.value), ...legendSymbol(classStyle(style, c)) }))
     // The `match` expression has a fallback colour, so the legend must explain it — otherwise every
-    // unlisted value is drawn in a colour the legend does not mention.
+    // unlisted value is drawn in a colour the legend does not mention. It is drawn in the LAYER's
+    // shape, because that is what the split's catch-all layer draws it in.
     if (out.length) {
-      out.push({ color: style.other_color || DEFAULT_OTHER_COLOR, label: 'Other', ...shared })
+      out.push({ color: style.other_color || DEFAULT_OTHER_COLOR, label: 'Other',
+        ...legendSymbol(style) })
     }
     return out
   }

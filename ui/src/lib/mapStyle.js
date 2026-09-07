@@ -13,6 +13,7 @@
  */
 import {
   colorExpression as symColorExpression,
+  expandClasses as symExpandClasses,
   sizeExpression as symSizeExpression,
   extrusionPaint as symExtrusionPaint,
   isExtruded as symIsExtruded,
@@ -96,7 +97,12 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
   // `rules[0]` draws FIRST (underneath), matching QGIS's own rule order, so the expansion keeps
   // list order and the surrounding reverse() still applies to LAYERS, not to rules within one.
   const expandRules = (cfg) => {
-    const rules = cfg.style?.rules
+    // CLASSES THAT DIFFER BY MORE THAN COLOUR ARE RULES. MapLibre can data-drive a colour, a width
+    // and an opacity, but `line-dasharray` not at all — so a categorized layer whose classes differ
+    // by dash cannot be one render layer whatever expression is written. `expandClasses` returns
+    // null for an ordinary classified layer, which is still drawn by `colorExpression` in ONE
+    // layer, exactly as before. Twin of portal_generator._vector_layers.
+    const rules = cfg.style?.rules || symExpandClasses(cfg.style || {})
     if (!Array.isArray(rules) || !rules.length) return [cfg]
     const base = { ...(cfg.style || {}) }
     delete base.rules
@@ -228,8 +234,12 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
           // only above the hairline, so existing portals render byte-identically. Mirrors
           // portal_generator._polygon_outline_layer.
           const outlineWidth = polygonOutlineWidth(st)
+          // A DASH OR AN OFFSET ALSO NEEDS THE LINE LAYER: `fill-outline-color` is a colour with no
+          // width and no pattern, so a hairline border asked to be dashed drew SOLID. Twin of
+          // symbology.needs_outline_layer.
           const wantsOutlineLayer = st.outline_color !== NO_OUTLINE
-            && outlineWidth > POLYGON_OUTLINE_WIDTH
+            && (outlineWidth > POLYGON_OUTLINE_WIDTH
+              || symDashArray(st) != null || symLineOffset(st) != null)
           if (st.outline_color === NO_OUTLINE || wantsOutlineLayer) fillPaint['fill-antialias'] = false
           else fillPaint['fill-outline-color'] = st.outline_color || '#1d4ed8'
           // A PATTERN REPLACES THE COLOUR: MapLibre draws `fill-pattern` instead of `fill-color`,

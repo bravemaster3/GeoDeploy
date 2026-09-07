@@ -1521,8 +1521,13 @@ class GeoDeployDock(QDockWidget):
                 portal_sync.tag_layer(qgis_layer, instance_url, result.layer_id, kind)
                 style = style_for(qgis_layer, kind)
                 if style:
-                    body = (dict(style, opacity=1.0) if kind == "raster"
-                            else {"opacity": 1.0, "style": style, "popup_fields": []})
+                    # THE LAYER'S OWN OPACITY, not 1.0. A layer drawn at 40% in QGIS arrived fully
+                    # opaque, because opacity is a property of the LAYER rather than of its symbol
+                    # and nothing on this path ever asked for it. `portals._opacity_of` is the one
+                    # place that reads it, so the three push paths cannot drift apart.
+                    alpha = portal_sync._opacity_of(qgis_layer)
+                    body = (dict(style, opacity=alpha) if kind == "raster"
+                            else {"opacity": alpha, "style": style, "popup_fields": []})
                     client.layers.api(kind).set_default_style(result.layer_id, body)
                 sent.append(name)
 
@@ -1926,8 +1931,9 @@ class GeoDeployDock(QDockWidget):
                         api = client.layers.api(kind)
                         # The two kinds take different bodies. A raster's IS the style; a vector's
                         # wraps it, alongside opacity and popup fields.
-                        body = (dict(style, opacity=1.0) if kind == "raster"
-                                else {"opacity": 1.0, "style": style, "popup_fields": []})
+                        alpha = portal_sync._opacity_of(source_layer)
+                        body = (dict(style, opacity=alpha) if kind == "raster"
+                                else {"opacity": alpha, "style": style, "popup_fields": []})
                         api.set_default_style(result.layer_id, body)
                         styled.append(name)
                     # LINK THE LAYER YOU ALREADY HAVE OPEN to what it just became. Without this the

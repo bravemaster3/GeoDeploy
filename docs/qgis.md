@@ -178,6 +178,20 @@ What travels:
 Classification is never recomputed inside the plugin: breaks come from the instance, so a QGIS
 legend and a published legend cannot disagree about which feature is which colour.
 
+### A class is more than a colour
+
+A category or a range keeps **its own symbol**, not just its colour — its dash, its width, its fill
+opacity, its marker shape and size, its outline. Two categories in the same colour that differ only
+by dash arrive as two different lines, in the browser and back in QGIS, and so does a class drawn as
+a hollow hatch among classes that are filled.
+
+Where a class differs by something a single map layer cannot vary per feature — a dash above all,
+which MapLibre cannot data-drive at all — GeoDeploy draws **one map layer per class**, filtered to
+it, exactly as it does for a rule-based layer. Classes that differ only in colour are still drawn as
+one layer, so nothing about an ordinary classified map changes.
+
+The legend follows the same rule: a swatch shows the symbol *that class* is drawn with.
+
 ## Upload
 
 **Upload selected layer(s)…** sends whatever is selected in the Layers panel, with its styling.
@@ -186,6 +200,18 @@ pass through the API.
 
 A layer that cannot be sent is named with the reason rather than failing silently — a remote layer,
 or one with unsaved edits.
+
+### What an instance accepts
+
+`.gpkg`, `.geojson` / `.json`, `.csv`, `.parquet`, `.tif` / `.tiff`, and `.zip`. A **GeoPackage
+holding several layers** is ingested as several layers, not just the first.
+
+A `.zip` is searched all the way down, so a shapefile inside a folder — which is what nearly every
+"download this dataset" button produces — is found. Any other single-file dataset the server's GDAL
+can read (a GeoPackage, a GeoJSON, a FlatGeobuf, a KML, a GML) is also read from inside a zip, which
+is the way to upload a format that is not on the list above. If an archive holds more than one
+dataset, the shapefile wins and the rest are named in the job log — upload them separately to get
+all of them.
 
 ### Rule-based layers
 
@@ -332,7 +358,6 @@ guarding against.
 | **Mask markers** | A clipping mask, with no MapLibre equivalent. Carried, not drawn. |
 | **Embedded (per-feature) symbols** | A vector tile has no way to carry a different symbol per feature. Carried, not drawn. |
 | **Draw effects** (blur, drop shadow, glow) | MapLibre exposes none of them. |
-| **A per-class dash, marker or width** | GeoDeploy carries a **colour** per class, and one dash, one width and one fill opacity for the layer — taken from the first class. A categorized layer whose classes differ in more than colour keeps only the first class's version of the difference. Rule-based layers do not have this limit: every rule carries its own full symbol, so **converting the renderer to rule-based in QGIS** before pushing is the way to keep them. |
 
 ### Possible, but not built
 

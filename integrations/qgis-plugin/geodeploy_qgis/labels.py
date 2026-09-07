@@ -310,9 +310,34 @@ def _read_placement(settings, labels: dict) -> None:
         pass
 
     try:
-        spacing = symbology._number(settings.format().font().letterSpacing(), 0)
-        if spacing:
-            labels["letter_spacing"] = round(spacing / 100.0, 3)
+        font = settings.format().font()
+        spacing = symbology._number(font.letterSpacing(), 0)
+        # QT'S PERCENTAGE SPACING IS 100 = NORMAL, and the writer duly sets `100 + value * 100` —
+        # but this read `value / 100`, so a spacing of 1.5 went out, came back as 2.5, and drifted
+        # further on every trip. `text-letter-spacing` is in EMS and 0 is normal, so the inverse of
+        # what the writer does is the whole conversion.
+        # `int()` ON A Qt6 ENUM RAISES. PyQt6 spells `QFont.SpacingType` as a real Python enum, not
+        # an int, so int-ing it throws a TypeError that this try swallowed — and letter spacing
+        # silently stopped travelling on QGIS 4 alone. Compared as a MEMBER, both builds agree.
+        try:
+            from qgis.PyQt.QtGui import QFont as _QFont
+            percentage_type = (_QFont.SpacingType.PercentageSpacing
+                               if hasattr(_QFont, "SpacingType") else 0)
+        except ImportError:             # pragma: no cover
+            percentage_type = 0
+        percentage = getattr(font, "letterSpacingType", lambda: percentage_type)() == percentage_type
+        # QT'S DEFAULT IS 0, NOT 100, even though 100 is what "normal" means once somebody sets it:
+        # a font nobody touched reports `letterSpacing() == 0` with the percentage type, so reading
+        # that as (0 - 100) / 100 gave every ordinary label a spacing of -1 em and made every
+        # labelled layer report itself as edited.
+        if percentage and (not spacing or abs(spacing - 100.0) < 1e-6):
+            value = 0.0
+        elif percentage:
+            value = (spacing - 100.0) / 100.0
+        else:
+            value = spacing / max(symbology._number(settings.format().size(), 12) or 12, 1e-6)
+        if round(value, 3):
+            labels["letter_spacing"] = round(value, 3)
     except Exception:                   # noqa: BLE001  # nosec B110 - intentional: letter spacing is cosmetic and optional
         pass
 
@@ -404,6 +429,11 @@ def to_qgis(qgis_layer, style) -> bool:
             font.setLetterSpacing(QFont.SpacingType.PercentageSpacing
                                   if hasattr(QFont, "SpacingType") else 0, 100 + spacing * 100)
         fmt.setFont(font)
+        # CAPITALISATION, which was read and never written — so a layer labelled in CAPITALS in
+        # QGIS went to GeoDeploy as `transform: "uppercase"`, drew in capitals on the map, and came
+        # back in mixed case. QGIS keeps this on the text FORMAT, not on the font, and the enum
+        # lives on `Qgis` in 4.x and on `QgsStringUtils` in 3.x — hence the two spellings.
+        _set_capitalization(fmt, labels.get("transform"))
         fmt.setSize(symbology._number(labels.get("size"), 12) * _PT)
         # POINTS, stated rather than inherited — the same reason `symbology._use_points` exists for
         # symbols. A format whose unit defaulted to millimetres would draw the number as a size
@@ -464,6 +494,34 @@ def to_qgis(qgis_layer, style) -> bool:
     except Exception as exc:            # noqa: BLE001 - labelling must never stop a layer loading
         symbology._log("Could not apply the labels: {0}: {1}".format(type(exc).__name__, exc))
         return False
+
+
+def _set_capitalization(fmt, transform) -> None:
+    """`uppercase` / `lowercase` onto a `QgsTextFormat`. Silent when this QGIS spells it elsewhere.
+
+    The inverse of the `{1: "uppercase", 2: "lowercase"}` read — and it is read from the same
+    `format().capitalization()`, so the two cannot drift apart.
+    """
+    wanted = (transform or "").strip().lower()
+    if wanted not in ("uppercase", "lowercase"):
+        return
+    name = "AllUppercase" if wanted == "uppercase" else "AllLowercase"
+    setter = getattr(fmt, "setCapitalization", None)
+    if not callable(setter):
+        return
+    try:                                # a package, inside QGIS
+        from .compat import enum
+    except ImportError:                 # exec'd standalone by the test harness
+        from compat import enum
+    for module_name, holder in (("qgis.core", "Qgis"), ("qgis.core", "QgsStringUtils")):
+        try:
+            owner = getattr(__import__(module_name, fromlist=[holder]), holder)
+            setter(enum(owner, "Capitalization", name))
+            return
+        except Exception:               # noqa: BLE001 - try the other spelling  # nosec B112 - intentional: each attempt is one QGIS version's API
+            continue
+    symbology._log("This QGIS spells label capitalisation differently; the text case did not "
+                   "travel. The labels themselves are unaffected.")
 
 
 def _tile_labeling(qgis_layer, settings, style) -> bool:

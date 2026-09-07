@@ -428,6 +428,115 @@ def outline_color(style: dict, default: str = "#1d4ed8"):
     return raw if raw is not None else default
 
 
+#: Keys a CLASS of a classified layer may hold OF ITS OWN, overriding the layer-level shape.
+#: Twin of `CLASS_SHAPE_KEYS` in `ui/src/lib/symbology.js` and in the QGIS plugin's `symbology.py`,
+#: which is what reads them out of QGIS in the first place.
+#:
+#: A classified layer used to carry a colour per class and ONE shape for the whole layer, taken from
+#: the first class — so two categories in the same colour that differ only by DASH arrived
+#: identical, and the map lost the distinction it was made for. Reported on exactly that layer.
+CLASS_SHAPE_KEYS = (
+    "line_width", "lineType", "dash_pattern", "line_offset", "line_cap", "line_join",
+    "fill_opacity", "fill_pattern", "outline_color", "outline_width",
+    "radius", "marker", "marker_image", "marker_offset", "line_marker", "spacing",
+)
+
+
+def class_style(style: dict, entry: dict) -> dict:
+    """The style ONE class draws with: the layer's shape with that class's own keys laid over it."""
+    extra = {k: v for k, v in (entry or {}).items() if k in CLASS_SHAPE_KEYS}
+    return dict(style, **extra) if extra else dict(style)
+
+
+def class_entries(style: dict) -> list[dict]:
+    """The `classes` or `categories` of a classified style, in draw order. `[]` for anything else."""
+    mode = style.get("color_mode") or "single"
+    key = "classes" if mode == "graduated" else "categories" if mode == "categorized" else None
+    if not key:
+        return []
+    return [c for c in (style.get(key) or []) if isinstance(c, dict)]
+
+
+def expand_classes(style: dict) -> list[dict] | None:
+    """One RULE per class, when the classes differ by more than their colour. None otherwise.
+
+    WHY A CLASS BECOMES A RULE INSTEAD OF A DATA-DRIVEN EXPRESSION. MapLibre can vary a colour, an
+    opacity and a width per feature, but **`line-dasharray` is not data-driven** — a dash cannot be
+    chosen from an attribute at all. So a layer whose classes differ by dash simply cannot be drawn
+    as one render layer, whatever expression is written. One layer per class can draw every
+    difference, is what QGIS's own rule-based renderer already flattens to here, and goes through
+    the ordinary single-symbol builder — so nothing about markers, outlines or patterns needs a
+    second implementation.
+
+    The cost is N render layers instead of one, which is why this returns None whenever the classes
+    differ by colour alone: an ordinary classified layer is built exactly as it was before, by the
+    `step`/`match` expressions in `color_expression`.
+
+    The filters mirror `color_expression` STOP FOR STOP rather than reading `min`/`max` literally,
+    because splitting must not change which features draw. `step` gives everything below the first
+    boundary the first class's colour and everything above the last boundary the last one's, and a
+    class whose `min` is None past the first position is skipped by `step` entirely — so it is
+    skipped here too.
+    """
+    entries = class_entries(style)
+    if not entries:
+        return None
+    if not any(k in e for e in entries for k in CLASS_SHAPE_KEYS):
+        return None
+    field = (style.get("color_field") or "").strip()
+    if not field:
+        return None
+    base = {k: v for k, v in style.items()
+            if k not in ("classes", "categories", "color_mode", "color_field",
+                         "classes_n", "other_color", "rules")}
+
+    def one(entry, filt, label):
+        return {"filter": filt, "label": label,
+                "style": class_style(dict(base, color=entry.get("color")), entry)}
+
+    if (style.get("color_mode") or "") == "categorized":
+        values = [str(e.get("value")) for e in entries if e.get("color")]
+        out = []
+        # THE CATCH-ALL DRAWS FIRST, i.e. underneath the named categories — the same order the
+        # `match` fallback and the QGIS tile renderer put it in. `match` rather than `in` for the
+        # test: it is the older, more widely supported expression, and a filter is a place where a
+        # renderer that does not understand the expression drops the layer silently.
+        other = style.get("other_color") or DEFAULT_OTHER_COLOR
+        if values:
+            out.append({"filter": ["match", ["to-string", ["get", field]], values, False, True],
+                        "label": "Other", "style": dict(base, color=other)})
+        for entry in entries:
+            if not entry.get("color"):
+                continue
+            value = str(entry.get("value"))
+            out.append(one(entry, ["==", ["to-string", ["get", field]], value],
+                           entry.get("label") or value))
+        return out or None
+
+    # GRADUATED. Rebuild `step`'s stop list, then read the intervals off it.
+    coloured = [e for e in entries if e.get("color")]
+    if not coloured:
+        return None
+    num = ["to-number", ["get", field]]
+    stops = [e for e in coloured[1:] if e.get("min") is not None]
+    ordered = [coloured[0]] + stops
+    out = []
+    for i, entry in enumerate(ordered):
+        parts = []
+        if i > 0:
+            parts.append([">=", num, entry["min"]])
+        if i + 1 < len(ordered):
+            parts.append(["<", num, ordered[i + 1]["min"]])
+        filt = parts[0] if len(parts) == 1 else (["all", *parts] if parts else None)
+        out.append(one(entry, filt, entry.get("label") or _range_label(entry)))
+    return out or None
+
+
+def _range_label(entry: dict) -> str:
+    lo, hi = entry.get("min"), entry.get("max")
+    return "{0} – {1}".format("" if lo is None else _num(lo), "" if hi is None else _num(hi)).strip()
+
+
 def is_data_driven(style: dict) -> bool:
     """True when colour or size varies per feature."""
     mode = style.get("color_mode") or "single"
@@ -520,7 +629,13 @@ def needs_outline_layer(style: dict) -> bool:
     """
     if outline_color(style) is None:
         return False                     # no outline at all; nothing to widen
-    return outline_width_px(style) > POLYGON_OUTLINE_WIDTH
+    if outline_width_px(style) > POLYGON_OUTLINE_WIDTH:
+        return True
+    # A DASH IS ALSO SOMETHING A FILL'S OWN EDGE CANNOT DRAW. `fill-outline-color` is a colour with
+    # no width and no pattern, so a hairline border asked to be dashed drew solid — a dashed
+    # boundary is one of the commonest things a cartographer means by an outline, and it was
+    # silently ignored on every polygon narrower than a pixel and a half. Same for an offset.
+    return dash_array(style) is not None or line_offset(style) is not None
 
 
 def _px(value, default=5):
@@ -1269,13 +1384,17 @@ def legend_entries(style: dict) -> list[dict]:
             else:
                 label = f"{_num(lo)} – {_num(hi)}"
             entry = {"color": c.get("color"), "label": label, "min": lo, "max": hi}
-            entry.update(_legend_symbol(style))
+            # THE CLASS'S OWN SHAPE, not only the layer's. A class may carry its own dash, width,
+            # fill or marker (`CLASS_SHAPE_KEYS`), and a legend drawn from the layer's shape alone
+            # shows a row of identical swatches for classes the map draws differently — which is
+            # the same loss the map itself used to have, one surface further on.
+            entry.update(_legend_symbol(class_style(style, c)))
             out.append(entry)
         return out
     if mode == "categorized":
         shared = _legend_symbol(style)
         out = [dict({"color": c.get("color"), "label": str(c.get("value")),
-                     "value": c.get("value")}, **shared)
+                     "value": c.get("value")}, **_legend_symbol(class_style(style, c)))
                for c in style.get("categories") or []]
         if out:
             # "Other" carries no value on purpose: it is the fallback for everything NOT listed,

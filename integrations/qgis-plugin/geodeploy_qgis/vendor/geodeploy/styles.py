@@ -591,12 +591,19 @@ class Style(object):
     @property
     def classes(self) -> List[Dict[str, Any]]:
         """`[{min, max, color}]` for a graduated style. `min`/`max` may be None at the ends — that
-        is an OPEN bucket ("< 10", "≥ 90"), not missing data."""
+        is an OPEN bucket ("< 10", "≥ 90"), not missing data.
+
+        A class may also carry SHAPE keys of its own — `line_width`, `lineType`, `fill_opacity`,
+        `radius`, `marker`, … — which override the layer's for that class alone. They are absent
+        whenever every class shares the layer's shape, which is the ordinary case."""
         return [c for c in (self.raw.get("classes") or []) if isinstance(c, dict)]
 
     @property
     def categories(self) -> List[Dict[str, Any]]:
-        """`[{value, color}]` for a categorized style. Anything not listed takes `other_color`."""
+        """`[{value, color}]` for a categorized style. Anything not listed takes `other_color`.
+
+        As with `classes`, a category may carry shape keys of its own that override the layer's —
+        which is how two categories in the same colour can differ by dash."""
         return [c for c in (self.raw.get("categories") or []) if isinstance(c, dict)]
 
     @property

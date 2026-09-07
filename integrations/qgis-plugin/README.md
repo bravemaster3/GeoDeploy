@@ -85,6 +85,38 @@ fastest source it offers, and upload a QGIS layer back — with its styling. Sit
   **When you add a stub method anywhere in `scripts/`, put it on the narrowest class that really
   has it and add the matching assertion here.** A stub more generous than the API it stands for
   does not test the code; it tests itself.
+- `scripts/test_roundtrip_matrix.py` — **the round trip as a MATRIX, generated from QGIS's own
+  registries rather than from a list somebody typed.** `test_real_qgis.py` grew case by case, each
+  one a bug a user hit; it is a regression suite and reads like one, and it cannot answer the
+  question that keeps producing those bugs — *is there anything QGIS can draw that we have never
+  tried?* This file instantiates **every symbol-layer type** `symbolLayerRegistry()` offers, builds
+  **every renderer** `rendererRegistry()` can build, and walks **every one of the eight render
+  units**, so a QGIS that gains one next year is covered the day it ships. It also mounts
+  `api/geodeploy/services/symbology.py` — pure stdlib, therefore importable in the QGIS container —
+  and asks what MapLibre would actually paint, which closes the loop the four-surface parity rule
+  exists for. 443 checks on 3.44 and 4.2. Run it with the api directory mounted:
+
+      docker run --rm -v "$PWD/integrations/qgis-plugin":/src -v "$PWD/api":/api -w /src \
+          -e QT_QPA_PLATFORM=offscreen qgis/qgis:ltr python3 -u scripts/test_roundtrip_matrix.py
+
+  The `/api` mount is optional; without it the MapLibre sections report as skipped.
+  **Six real defects came out of its first run**, which is the argument for generating a matrix
+  rather than writing one: a stroke-only marker shape (a cross, an X) drawn in white because the
+  colour went on a brush QGIS never paints with; a polygon's dashed border read and never written
+  back; label capitalisation the same; letter spacing that did not invert; a picture-backed marker
+  that reported the layer as edited on every push; and a shorthand `#f00` comparing unequal to
+  `#ff0000`.
+- `scripts/e2e_live.py` — **the same trip against a REAL instance**, which is the part no amount of
+  in-QGIS testing reaches: what survives an INGEST. A style is read out of QGIS, written into a
+  file, parsed by GDAL on a server, loaded into PostGIS, tiled, baked into a portal's `style.json`
+  and handed back, and every one of those steps has lost something at least once. It writes the
+  same six features out in ten formats, uploads each, and checks four surfaces — what the plugin
+  sends, what the instance stored, what the published bundle draws, and what comes back to QGIS.
+  Needs `GEODEPLOY_URL` and `GEODEPLOY_TOKEN`; creates layers and a portal and deletes them again
+  (`GEODEPLOY_KEEP=1` to keep them). **Deliberately not in CI** — it needs an instance and a write
+  token. Note that its portal section reads the PUBLISHED bundle, so it measures the API version
+  the instance is running: a failure there with the plugin sections green means the instance has
+  not been rebuilt.
 - `scripts/coverage_report.py` — **the symbology coverage matrix, read out of QGIS's own
   registries** rather than remembered. Joins `symbolLayerRegistry()`, `rendererRegistry()` and the
   data-defined property definitions against the verdicts declared in the script itself, and **fails
@@ -186,6 +218,15 @@ rather than following the platform's — see the note in `CHANGELOG.md`.
   spec survives a push, so a round trip cannot delete a portal's 3D (proven against every extrusion
   on the live instance). Candidate causes for whoever picks this up are in
   `notes_temp/notes_for_future.md`; the feature is on the roadmap under "Every symbol QGIS can draw".
+- **A CLASS CARRIES ITS OWN SYMBOL**, not just its colour — `symbology.CLASS_SHAPE_KEYS` is the
+  vocabulary, `class_overrides` reads it and `class_style` writes it. Before this, GeoDeploy held a
+  colour per class and one shape for the layer, taken from the FIRST class: two categories in the
+  same colour that differed only by dash arrived identical. A class records only what differs from
+  the layer, so an ordinary classified layer (same shape, different colours) is byte-identical to
+  what it produced before — which is what keeps every existing style and every existing portal
+  unchanged. On the web side `symbology.expand_classes` turns a classification that varies by more
+  than colour into one render layer per class, because **`line-dasharray` cannot be data-driven at
+  all**; that goes through the same `_rule_layers` machinery a rule-based layer already uses.
 - **What is NOT carried yet, and where it is tracked:** QGIS draws far more than GeoDeploy's
   vocabulary — inverted polygons, 2.5D, hatch and gradient fills, line offsets, markers along a
   line, multi-layer symbols, rule-based rendering, labels. Those are simplified on the way in and
@@ -278,6 +319,23 @@ Findings in `vendor/` are fixed in `cli/geodeploy` and re-vendored — never edi
 `vendor.py --check` fails.
 
 ## Last updated
+2026-09-07 (**a CLASS carries its own symbol now, not just its colour** — `CLASS_SHAPE_KEYS`,
+`class_overrides` on the way out and `class_style` on the way in. GeoDeploy held a colour per class
+and ONE shape for the layer, taken from the first class, so two categories in the same colour that
+differed only by dash arrived identical and the map lost the distinction it was made for. A class
+records only what DIFFERS from the layer, which is what keeps an ordinary classified layer
+byte-identical to what it produced before. On the web side `expand_classes` draws one render layer
+per class when the classes vary by more than colour — `line-dasharray` cannot be data-driven at all,
+so no expression could have done it — through the same `_rule_layers` a rule-based layer uses.
+**And `scripts/test_roundtrip_matrix.py`, generated from QGIS's own registries**, which found six
+more on its first run: a stroke-only marker shape drawn in white (`shapeIsFilled` — the colour was
+going on a brush QGIS never paints with); a polygon's dashed border read and never written back, and
+drawn solid in the browser too at hairline widths because a fill's own edge cannot dash; label
+capitalisation read and never written; label letter spacing that did not invert (1.5 → 2.5, drifting
+every trip); a picture-backed marker reporting the layer as edited on every push, now handed back
+through `P_PICTURES` while the symbol still matches; and `#f00` comparing unequal to `#ff0000`.
+`scripts/e2e_live.py` is the same trip against a real instance, in ten file formats.)
+
 2026-09-04 (`symbology._representative_colour`: **three more symbol layers that MapLibre cannot draw
 now pick a sensible flat colour** instead of falling through to `symbol.color()`. A FILLED LINE is a
 polygon wearing a line's clothes — QGIS buffers the line and fills it, so the colour is on the fill

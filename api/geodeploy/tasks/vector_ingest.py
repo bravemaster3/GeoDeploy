@@ -397,18 +397,67 @@ def _open(src_path: str, layer: str | None = None):
     """
     return fiona.open(src_path, layer=layer) if layer else fiona.open(src_path)
 
+#: What a ZIP may contain, best first. A shapefile leads because that is why ZIPs are accepted at
+#: all — it is the one format that IS several files — but nothing about the archive says the thing
+#: inside has to be one. A GeoPackage, a GeoJSON, a FlatGeobuf, a KML or a GML zipped for size or
+#: for email is an ordinary thing to be handed, and refusing it with "ZIP file contains no .shp
+#: file" describes neither what was wrong nor what to do.
+_ZIP_DATASETS = (".shp", ".gpkg", ".geojson", ".json", ".fgb", ".kml", ".gml", ".tab", ".sqlite")
+
+
+def _safe_extract(archive: zipfile.ZipFile, destination: str) -> None:
+    """`extractall`, minus the entries that would write outside `destination`.
+
+    A ZIP entry may name `../../etc/whatever`, and `extractall` will happily follow it. Nothing
+    here is more than a few lines of guard, and the alternative is arbitrary file write from an
+    upload — so the members are filtered rather than trusted.
+    """
+    root = os.path.realpath(destination)
+    safe = []
+    for member in archive.infolist():
+        target = os.path.realpath(os.path.join(destination, member.filename))
+        if target == root or target.startswith(root + os.sep):
+            safe.append(member)
+    archive.extractall(destination, members=safe)   # nosec B202 - members filtered above
+
+
 def _resolve_source(file_path: str) -> str:
-    """Unzip shapefile ZIPs; return a path Fiona can open."""
-    if file_path.endswith(".zip"):
-        extract_dir = file_path + "_extracted"
-        os.makedirs(extract_dir, exist_ok=True)
-        with zipfile.ZipFile(file_path) as z:
-            z.extractall(extract_dir)
-        shps = [os.path.join(extract_dir, f) for f in os.listdir(extract_dir) if f.endswith(".shp")]
-        if not shps:
-            raise ValueError("ZIP file contains no .shp file.")
-        return shps[0]
-    return file_path
+    """Unzip an archive; return a path Fiona can open.
+
+    Searched RECURSIVELY. A shapefile exported by QGIS or ArcGIS is very often zipped inside a
+    folder of its own, and the old non-recursive listing reported that archive as containing no
+    shapefile at all — a correct-looking upload refused for a reason that was not true.
+    """
+    if not file_path.endswith(".zip"):
+        return file_path
+    extract_dir = file_path + "_extracted"
+    os.makedirs(extract_dir, exist_ok=True)
+    with zipfile.ZipFile(file_path) as z:
+        _safe_extract(z, extract_dir)
+
+    found: dict[str, list[str]] = {}
+    for root, _dirs, files in os.walk(extract_dir):
+        for name in files:
+            if name.startswith("."):            # __MACOSX sidecars and friends
+                continue
+            ext = os.path.splitext(name)[1].lower()
+            if ext in _ZIP_DATASETS:
+                found.setdefault(ext, []).append(os.path.join(root, name))
+    for ext in _ZIP_DATASETS:
+        paths = sorted(found.get(ext) or [])
+        if not paths:
+            continue
+        if len(paths) > 1:
+            # SAY SO. Taking the first of several silently ingests one dataset out of a bag of
+            # them and reports success, which reads as data loss rather than as a limitation.
+            logger.warning("ZIP holds %d %s datasets; ingesting %s. Upload them separately to "
+                           "get all of them.", len(paths), ext, os.path.basename(paths[0]))
+        return paths[0]
+    raise ValueError(
+        "ZIP file contains no dataset this can read. Looked for: {0}. Found: {1}.".format(
+            ", ".join(_ZIP_DATASETS),
+            ", ".join(sorted({os.path.splitext(f)[1].lower() or "(no extension)"
+                              for _r, _d, fs in os.walk(extract_dir) for f in fs})) or "nothing"))
 
 
 def _source_size(src_path: str) -> int:

@@ -7,7 +7,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.4.4
+version=0.4.5
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -26,7 +26,23 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.4.4 - Sizes are now read in the UNIT QGIS states them in. QGIS's default is
+changelog=0.4.5 - A CLASS IS MORE THAN A COLOUR. A category or a range now keeps its own
+    symbol - its dash, its width, its fill opacity, its marker shape and size, its outline - where
+    before GeoDeploy carried a colour per class and one shape for the whole layer, taken from the
+    first class. Two categories in the same colour that differed only by dash arrived identical,
+    and the map lost the distinction it was made for. Classes that differ only in colour are
+    unchanged, so an ordinary classified layer is drawn exactly as it was.
+    Four more defects found by putting every symbol layer, every renderer and every render unit
+    this QGIS has through the round trip: a CROSS or X marker was drawn in white, because those
+    shapes have no inside and the colour was being set on a brush QGIS never paints with; a
+    POLYGON'S DASHED BORDER was read and never written back, so a dashed boundary went to
+    GeoDeploy correctly and returned solid (and a hairline one drew solid in the browser too,
+    since a fill's own edge cannot dash); LABEL CAPITALISATION was read and never written; and
+    LABEL LETTER SPACING did not invert, so 1.5 came back as 2.5 and drifted further every trip.
+    A marker QGIS draws as a picture - an SVG, a font or a raster marker - no longer reports the
+    layer as edited on every push: the bitmap that was applied is handed back while the symbol
+    still matches, instead of being photographed again slightly differently each time.
+    0.4.4 - Sizes are now read in the UNIT QGIS states them in. QGIS's default is
     MILLIMETRES and this plugin had always read points, so every size authored in QGIS travelled
     2.835x too small: a 10 mm marker became a 6.67 px radius ("the markers appear small in the
     browser") and a 0.66 mm line a 0.88 px hairline. It went unnoticed because the plugin sets the
