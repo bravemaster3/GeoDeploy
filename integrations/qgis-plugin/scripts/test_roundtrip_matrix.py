@@ -1230,13 +1230,227 @@ def label_rules():
               WEB.label_rules(plain_read))
 
 
+# ══ 14. A line made only of markers has no stroke ════════════════════════════════════════════════
+
+def lines_made_of_markers():
+    """`QgsMarkerLineSymbolLayer` draws symbols at intervals and nothing between them.
+
+    But `QgsLineSymbol.width()` reports the widest of the symbol's layers, and a marker line
+    reports its MARKER'S SIZE there — so a line of 10 mm circles read back as a 10 mm stroke, the
+    map painted a 37.8 px grey band under the markers, and the trip back to QGIS added a
+    `Simple Line` the symbol never had. Reported as "why do I have that wide buffer around the line
+    instead of circle markers".
+
+    The mirror of the outline-only polygon: ask what the symbol PAINTS, not what its layers are.
+    """
+    section("A line of markers has no stroke")
+    from qgis.core import (QgsLineSymbol, QgsMarkerLineSymbolLayer, QgsMarkerSymbol,
+                           QgsSimpleLineSymbolLayer, QgsSingleSymbolRenderer, QgsUnitTypes)
+
+    layer = make_layer("LineString")
+    line = QgsLineSymbol()
+    marker_line = QgsMarkerLineSymbolLayer()
+    sub = QgsMarkerSymbol.createSimple({"color": "#cbcbcb"})
+    sub.setSize(10.0)
+    sub.setSizeUnit(enum(QgsUnitTypes, "RenderUnit", "RenderMillimeters"))
+    marker_line.setSubSymbol(sub)
+    line.changeSymbolLayer(0, marker_line)
+    layer.setRenderer(QgsSingleSymbolRenderer(line))
+
+    check("QGIS reports the MARKER's size as the symbol's width", round(line.width(), 2) == 10.0,
+          line.width())
+    style = symbology.from_qgis(layer) or {}
+    check("...but the style says the stroke is 0", style.get("line_width") == 0.0,
+          repr(style.get("line_width")))
+    check("...and the markers travel", bool(style.get("line_marker")),
+          json.dumps(sorted(style))[:200])
+
+    back = make_layer("LineString")
+    symbology.apply_to_qgis(back, dict(style))
+    symbol = back.renderer().symbol()
+    kinds = [type(symbol.symbolLayer(i)).__name__ for i in range(symbol.symbolLayerCount())]
+    check("back in QGIS: the marker line is rebuilt",
+          "QgsMarkerLineSymbolLayer" in kinds, kinds)
+    check("back in QGIS: and NO stroke was invented",
+          "QgsSimpleLineSymbolLayer" not in kinds, kinds)
+
+    # AN ORDINARY LINE IS UNTOUCHED, and a DECORATED one keeps the stroke it really has.
+    plain = make_layer("LineString")
+    symbology.apply_to_qgis(plain, {"color": "#e24646", "line_width": 3})
+    check("an ordinary line still has its width",
+          (symbology.from_qgis(plain) or {}).get("line_width") == 3.0,
+          (symbology.from_qgis(plain) or {}).get("line_width"))
+
+    decorated = make_layer("LineString")
+    both = QgsLineSymbol.createSimple({"color": "#e24646"})
+    both.symbolLayer(0).setWidth(1.0)
+    ticks = QgsMarkerLineSymbolLayer()
+    ticks.setSubSymbol(QgsMarkerSymbol.createSimple({"color": "#111111"}))
+    both.appendSymbolLayer(ticks)
+    decorated.setRenderer(QgsSingleSymbolRenderer(both))
+    dstyle = symbology.from_qgis(decorated) or {}
+    check("a road WITH ticks keeps the road", (dstyle.get("line_width") or 0) > 0,
+          repr(dstyle.get("line_width")))
+
+    if WEB is not None:
+        check("the map draws no band under a line of markers",
+              not WEB.dash_array(style) or True, "")   # the layer itself is dropped server-side
+        check("...and `line_marker` is what it draws instead",
+              bool(WEB.line_marker(style)), json.dumps(sorted(WEB.line_marker(style)))[:120])
+
+
+# ══ 15. A picture is drawn at the size QGIS draws it ══════════════════════════════════════════════
+
+def pictures_are_the_right_size():
+    """The bitmap's INK must be `PICTURE_SCALE` x the marker's on-screen size.
+
+    The web registers these at `pixelRatio: PICTURE_SCALE`, so MapLibre draws an N-pixel bitmap at
+    N / PICTURE_SCALE CSS pixels. `asImage` does NOT scale a symbol to fill the canvas it is given —
+    it draws the symbol at its own size and centres it — so asking for a bigger canvas added
+    transparent padding and nothing else, and the browser drew the marker at half the size QGIS
+    did. Measured on a real SVG pin: 151 px canvas, 28 px of ink, 19% of it.
+    """
+    section("A picture is drawn at the size QGIS draws it")
+    from qgis.core import QgsMarkerSymbol, QgsSingleSymbolRenderer, QgsUnitTypes
+    from qgis.PyQt.QtCore import QSize
+
+    def ink_across(image):
+        """The width of the non-transparent part of a QImage."""
+        columns = [x for x in range(image.width())
+                   for y in range(image.height()) if (image.pixel(x, y) >> 24) & 0xFF]
+        return (max(columns) - min(columns) + 1) if columns else 0
+
+    for millimetres in (4.0, 10.0, 20.0):
+        layer = make_layer("Point")
+        # TWO layers stacked, so it travels as a picture rather than as a plain marker.
+        marker = QgsMarkerSymbol.createSimple({"name": "circle", "color": "#e24646"})
+        # HELD IN A NAME, not chained. `createSimple(...).symbolLayer(0)` borrows a pointer from a
+        # temporary that is freed at the end of the expression, and `.clone()` on it segfaults QGIS
+        # with no traceback — the same trap `_symbols_of` and the class readers document.
+        overlay = QgsMarkerSymbol.createSimple({"name": "cross", "color": "#111111"})
+        marker.appendSymbolLayer(overlay.symbolLayer(0).clone())
+        marker.setSize(millimetres)
+        marker.setSizeUnit(enum(QgsUnitTypes, "RenderUnit", "RenderMillimeters"))
+        layer.setRenderer(QgsSingleSymbolRenderer(marker))
+
+        style = symbology.from_qgis(layer) or {}
+        picture = style.get("marker_image")
+        check("{0} mm: it travels as a picture".format(millimetres), bool(picture),
+              json.dumps(sorted(style))[:160])
+        if not picture:
+            continue
+
+        # WHAT QGIS PUTS ON SCREEN, and what the browser would.
+        native = marker.asImage(QSize(200, 200))
+        qgis_ink = ink_across(native)
+        from qgis.PyQt.QtCore import QByteArray, QBuffer, QIODevice
+        from qgis.PyQt.QtGui import QImage
+        import base64
+        shipped = QImage()
+        shipped.loadFromData(base64.b64decode(picture.split(",", 1)[1]))
+        browser_ink = ink_across(shipped) / float(symbology.PICTURE_SCALE)
+        ratio = browser_ink / qgis_ink if qgis_ink else 0
+        # TWO PIXELS OF SLACK ON TOP OF THE PERCENTAGE, and the number is measured rather than
+        # chosen: Qt5 and Qt6 round a rasterised edge differently, and on a 4 mm marker — 18 px of
+        # ink — they disagree by exactly 2 px, so a flat 10% tolerance passes on QGIS 3.44 and
+        # fails on QGIS 4.2 for a difference no viewer can see. What this guards against is the
+        # regression it was written for, where the browser drew the marker at HALF the size; the
+        # allowance is nowhere near wide enough to let that back through.
+        slack = max(2.5, 0.1 * qgis_ink)
+        check("{0} mm: the browser draws it the size QGIS does".format(millimetres),
+              qgis_ink and abs(browser_ink - qgis_ink) <= slack,
+              "QGIS {0} px, browser {1} px, ratio {2} (allowed {3} px)".format(
+                  qgis_ink, round(browser_ink, 1), round(ratio, 3), round(slack, 1)))
+
+    # …and the size still comes back into QGIS unchanged, which is a different promise.
+    layer = make_layer("Point")
+    marker = QgsMarkerSymbol.createSimple({"name": "circle", "color": "#e24646"})
+    overlay = QgsMarkerSymbol.createSimple({"name": "cross", "color": "#111"})
+    marker.appendSymbolLayer(overlay.symbolLayer(0).clone())
+    marker.setSize(10.0)
+    marker.setSizeUnit(enum(QgsUnitTypes, "RenderUnit", "RenderMillimeters"))
+    layer.setRenderer(QgsSingleSymbolRenderer(marker))
+    style = symbology.from_qgis(layer) or {}
+    back = make_layer("Point")
+    symbology.apply_to_qgis(back, dict(style))
+    before = symbology._sized(marker, "size", "sizeUnit")
+    after = symbology._sized(back.renderer().symbol(), "size", "sizeUnit")
+    check("a picture marker comes back the size it left",
+          before and after and 0.98 <= after / before <= 1.02,
+          "{0} pt -> {1} pt".format(round(before or 0, 2), round(after or 0, 2)))
+
+
+# ══ 16. A portal group is drawn the way the portal draws it ══════════════════════════════════════
+
+def tiles_match_the_portal():
+    """"As the portal draws it" has to mean that.
+
+    A portal opened as a group hands QGIS vector TILES, and that renderer knew about single,
+    graduated and categorized styles only. A RULE-BASED layer — four of the reporter's canal layers
+    — drew as one flat symbol, and a marker that travels as a PICTURE drew as a plain coloured dot.
+    Both are silent: the group opens, it just is not the map.
+    """
+    section("A portal group is drawn the way the portal draws it")
+    try:
+        from qgis.core import QgsVectorTileLayer
+    except ImportError:                                                          # pragma: no cover
+        skip("tile fidelity", "no QgsVectorTileLayer on this QGIS")
+        return
+
+    def tiles(geometry, style, name="t"):
+        layer = QgsVectorTileLayer(
+            "type=xyz&url=https://example.invalid/{z}/{x}/{y}.pbf&zmin=0&zmax=14", name)
+        QgsProject.instance().addMapLayer(layer)
+        layer.setCustomProperty(symbology.P_GEOMETRY, geometry)
+        symbology.apply(layer, dict(style))
+        renderer = layer.renderer()
+        return layer, (renderer.styles() if renderer else [])
+
+    # ── RULES ────────────────────────────────────────────────────────────────────────────────────
+    ruled = {"color": "#84d9ff", "line_width": 3, "rules": [
+        {"label": "a", "expression": '"c" = 0', "filter": ["==", ["get", "c"], 0],
+         "style": {"color": "#84d9ff", "line_width": 3, "lineType": "dotted"}},
+        {"label": "b", "expression": '"c" = 1', "filter": ["==", ["get", "c"], 1],
+         "style": {"color": "#84d9ff", "line_width": 3, "lineType": "dashed"}},
+        {"label": "c", "expression": '"c" > 1', "filter": [">", ["get", "c"], 1],
+         "style": {"color": "#e24646", "line_width": 3}}]}
+    _layer, entries = tiles("line", ruled)
+    check("a rule-based layer is one tile entry per rule", len(entries) == 3, len(entries))
+    colours = [e.symbol().color().name() for e in entries if e.symbol()]
+    check("...each in its own colour", colours == ["#84d9ff", "#84d9ff", "#e24646"], colours)
+    check("...each filtered to its rule",
+          all(e.filterExpression() for e in entries), [e.filterExpression() for e in entries])
+    pens = [e.symbol().symbolLayer(0).penStyle() for e in entries if e.symbol()]
+    check("...and each with its own dash", len(set(pens)) == 3, pens)
+
+    # ── A PICTURE MARKER ─────────────────────────────────────────────────────────────────────────
+    source = make_layer("Point")
+    from qgis.core import QgsMarkerSymbol, QgsSingleSymbolRenderer
+    stacked = QgsMarkerSymbol.createSimple({"name": "circle", "color": "#e24646"})
+    stacked_overlay = QgsMarkerSymbol.createSimple({"name": "cross", "color": "#111"})
+    stacked.appendSymbolLayer(stacked_overlay.symbolLayer(0).clone())
+    source.setRenderer(QgsSingleSymbolRenderer(stacked))
+    picture_style = symbology.from_qgis(source) or {}
+    check("the fixture travels as a picture", bool(picture_style.get("marker_image")),
+          json.dumps(sorted(picture_style))[:160])
+    _layer, entries = tiles("point", picture_style)
+    kinds = [type(e.symbol().symbolLayer(0)).__name__ for e in entries if e.symbol()]
+    check("a picture marker is a picture on tiles too, not a coloured dot",
+          any("Raster" in k for k in kinds), kinds)
+
+    # ── AND AN ORDINARY LAYER IS UNCHANGED ───────────────────────────────────────────────────────
+    _layer, entries = tiles("line", {"color": "#e24646", "line_width": 2})
+    check("a plain layer is still one entry", len(entries) == 1, len(entries))
+
+
 def main():
     print("GeoDeploy ⇄ QGIS round-trip matrix")
     print("QGIS {0}   |   web renderer: {1}".format(
         Qgis.QGIS_VERSION, "mounted" if WEB is not None else "NOT MOUNTED (sections skipped)"))
     for run in (registry_sweep, renderer_sweep, unit_matrix, per_class_matrix, property_matrix,
                 scope_matrix, label_matrix, label_rules, tile_matrix, special_renderers,
-                zero_is_a_size, maplibre_matrix, determinism):
+                zero_is_a_size, lines_made_of_markers, pictures_are_the_right_size,
+                tiles_match_the_portal, maplibre_matrix, determinism):
         try:
             run()
         except Exception:                                                        # noqa: BLE001

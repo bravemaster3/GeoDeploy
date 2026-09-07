@@ -265,6 +265,17 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   (`POST /data/vector/{id}/tile`); the fix only changes what new tiles contain. Regression test:
   `api/tests/test_native_crs.py`.
 
+## A layer that can never draw (2026-09-07)
+
+`_apply_rule_scope` drops a `minzoom`/`maxzoom` pair that is inverted. MapLibre honours
+`minzoom > maxzoom` literally — the layer is never rendered, at any zoom, with no error anywhere —
+and a plugin that read a QGIS scale range from the wrong ends published eight label layers like
+that. A whole place-names layer vanished from the map with nothing to chase.
+
+The range is dropped rather than trusted, because a style can arrive from an older plugin, an
+import or a hand edit. **Drawing at every zoom is wrong and visible; drawing at none is wrong and
+invisible, and only one of those gets reported.**
+
 ## A labelling is a tree (2026-09-07)
 
 `symbology.label_rules(labels)` reads `labels.rules`, and `portal_generator._label_layers` emits ONE
@@ -303,6 +314,7 @@ range. `test_per_class_symbology.py` pins that.
 symbols for classes the map draws differently.
 
 ## Last updated
+2026-09-07d (`_apply_rule_scope` drops an INVERTED zoom range — see the section above — and `_vector_layers` no longer publishes a base line layer under a line of markers.)
 2026-09-07c (`symbology.label_rules` + `portal_generator._label_layers`: **one label layer per label rule.** See the section above. Tests: `api/tests/test_label_rules.py`.)
 2026-09-07b (`symbology.CLASS_SHAPE_KEYS` / `class_style` / `expand_classes`, and `legend_entries` built through them: **a class carries its own symbol, not just its colour**. See the section above for why a class becomes a render layer rather than a data-driven expression, and why an unvaried classification is deliberately left alone. Also `needs_outline_layer`: a polygon border asked to be DASHED gets its own line layer at any width — `fill-outline-color` is a colour with no width and no pattern, so a hairline dashed boundary drew solid. Tests: `api/tests/test_per_class_symbology.py`.)
 2026-09-07 (`titiler.py`: **contour lines can be coloured by their own value**, and the relief

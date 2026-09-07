@@ -655,9 +655,10 @@ def picture_file(uri: str):
 def raster_marker(uri: str, size_px=None):
     """A `QgsRasterMarkerSymbolLayer` over a picture, or None.
 
-    The plugin renders a QGIS marker at `PICTURE_SCALE`× its on-screen size so it stays crisp, so
-    the picture is that many times larger than the marker it stands for. Dividing here is what makes
-    a marker survive the round trip at the size it started, rather than doubling on every trip.
+    THE SIZE COMES FROM THE STYLE, NOT FROM THE BITMAP. `size_px` is the marker's diameter in CSS
+    pixels — the same number the map draws it at — so the picture's own resolution is irrelevant
+    here, and tying the two together is how a marker could change size when only the rendering
+    resolution changed. `symbology._rendered_at` states the other half of the contract.
     """
     # The file is the fallback here rather than the first choice, for the same reason as the fill.
     path = image_source(uri) or picture_file(uri)
@@ -667,7 +668,7 @@ def raster_marker(uri: str, size_px=None):
         from qgis.core import QgsRasterMarkerSymbolLayer
         marker = QgsRasterMarkerSymbolLayer(path)
         if size_px:
-            marker.setSize(round(float(size_px) / symbology.PICTURE_SCALE / MM_TO_PX * 2, 3))
+            marker.setSize(round(float(size_px) / MM_TO_PX, 3))
         return marker
     except Exception as exc:            # noqa: BLE001 - a marker is never worth failing a style
         symbology._log("Could not rebuild this marker picture ({0}: {1}).".format(
@@ -708,6 +709,15 @@ def line_marker_to_qgis(symbol, style) -> bool:
         # stroke would lose the road under the ticks — the same mistake `_line_decoration_symbol`
         # exists to avoid when reading.
         symbol.appendSymbolLayer(deco)
+        # …unless there is no stroke. A line of markers has a width of ZERO, and leaving the
+        # invisible `Simple Line` standing puts a layer in the user's symbology dialog that their
+        # original never had — which is exactly how the returned symbol was reported: "Marker Line"
+        # plus a "Simple Line" nobody drew. Removed back to front so the indices stay valid.
+        if not symbology._number(style.get("line_width"), 1):
+            for index in range(symbol.symbolLayerCount() - 2, -1, -1):
+                layer = symbol.symbolLayer(index)
+                if type(layer).__name__ == "QgsSimpleLineSymbolLayer":
+                    symbol.deleteSymbolLayer(index)
         return True
     except Exception as exc:            # noqa: BLE001
         symbology._log("Could not rebuild the markers along this line ({0}: {1}).".format(

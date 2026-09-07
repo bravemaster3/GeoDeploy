@@ -225,6 +225,22 @@ rather than following the platform's — see the note in `CHANGELOG.md`.
   spec survives a push, so a round trip cannot delete a portal's 3D (proven against every extrusion
   on the live instance). Candidate causes for whoever picks this up are in
   `notes_temp/notes_for_future.md`; the feature is on the roadmap under "Every symbol QGIS can draw".
+- **A LINE MADE ONLY OF MARKERS HAS NO STROKE** (`_has_stroke_paint`). `QgsLineSymbol.width()`
+  reports the widest of its layers, and `QgsMarkerLineSymbolLayer` reports its MARKER'S size there
+  — so a line of 10 mm circles read back as a 10 mm stroke and the map drew a 37.8 px band under
+  the markers. The mirror of `_has_fill_paint`, and the same rule: **ask what the symbol PAINTS,
+  not what its layers are called.** The style says `line_width: 0`, which is now honoured
+  everywhere, and `portal_generator` drops the base line layer rather than publishing an invisible
+  one.
+- **A PICTURE'S INK IS `PICTURE_SCALE` × ITS ON-SCREEN SIZE** (`_rendered_at`). The web registers
+  these at `pixelRatio: PICTURE_SCALE`, so an N-pixel bitmap draws at N / PICTURE_SCALE CSS px —
+  which only matches QGIS if the INK is that big. `asImage(QSize(n, n))` does **not** scale a
+  symbol to fill `n`; it draws the symbol at its own size and centres it. So the first size fix
+  enlarged the canvas from 53 to 151 px and changed nothing a viewer could see: 28 px of ink in a
+  151 px bitmap, 19% of it, and the browser drew the pin at half the size. The symbol is cloned and
+  scaled **in its own unit** before rendering — switching the unit to pixels rendered an SVG marker
+  completely empty — and the canvas keeps a margin, because a symbol's ink overhangs its nominal
+  box and `asImage` CLIPS.
 - **A LABELLING IS A TREE, not its first leaf.** `labels.rules` carries one entry per leaf of a
   `QgsRuleBasedLabeling`, the same shape `style.rules` uses, and the server draws one label layer
   per rule. Reading only the first rule — which is what `_first_rule_settings` did — sent a names
@@ -340,6 +356,7 @@ Findings in `vendor/` are fixed in `cli/geodeploy` and re-vendored — never edi
 `vendor.py --check` fails.
 
 ## Last updated
+2026-09-07d (**a line of markers has no stroke; a picture is drawn at the size QGIS draws it; label rules were read from the wrong end of the scale range; and a portal group now draws rules and pictures.** Four fixes, all reported against one map, all of them the plugin adding something the author never drew. See the entries above for each. New sections in `test_roundtrip_matrix.py`: `A line of markers has no stroke`, `A picture is drawn at the size QGIS draws it` — which measures the INK, because the previous size fix enlarged the canvas and moved nothing — and `A portal group is drawn the way the portal draws it`. 489 checks.)
 2026-09-07d (`diffdialog`: **the push dialog says where a restyle lands.** *Push group to portal* writes THAT portal's `layer_configs`; a layer's own default style is written only by *Save styling to GeoDeploy* — and the dialog said neither, so a bare "Restyled (3)" read as though the layers themselves were changing. A NEW layer gets both, because an uploaded layer has no default to preserve. `section()` now takes a note, indented less than the names so it is not read as one of them. Tests: `scripts/test_push_summary.py`, 26 checks, in CI.)
 2026-09-07c (`labels.py`: **a rule-based LABELLING travels as its rules**, not as its first leaf — `labels.rules`, the same shape `style.rules` uses, with `portal_generator._label_layers` drawing one label layer per rule. And **a size of zero is a size**: `_stated()` replaces `get("radius") or DEFAULT` so a marker sized 0 stays 0 in both directions. Tests: the `Label rules` and `Zero is a size` sections of `test_roundtrip_matrix.py`, and `api/tests/test_label_rules.py`.)
 2026-09-07 (**a CLASS carries its own symbol now, not just its colour** — `CLASS_SHAPE_KEYS`,

@@ -1762,6 +1762,14 @@ def _label_layers(source_id: str, layer, cfg: dict) -> list[dict]:
     return out or [one(base, "labels")]
 
 
+def _number_or(value, default: float) -> float:
+    """A number the style STATES, or `default` when it states none. Zero is a number."""
+    try:
+        return default if value is None else float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
     """The MapLibre render layers for one vector layer — usually one, but a **raw-paint passthrough**
     (`style.maplibre.layers`, used by the GeoLibre importer to carry data-driven/extrusion symbology
@@ -1813,6 +1821,12 @@ def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
         built = [base, outline] if outline else [base]
         decoration = _line_marker_layer(source_id, layer, cfg)
         if decoration:
+            # A LINE OF MARKERS HAS NO STROKE UNDER IT. QGIS's marker line draws symbols at
+            # intervals and nothing between them, so a base `line` layer here would be a band the
+            # author never drew — which is exactly what a 10 mm marker line produced once its size
+            # was mistaken for a width. A width of 0 is how the style says "no stroke".
+            if base.get("type") == "line" and not _number_or(style.get("line_width"), 2):
+                built = [ml for ml in built if ml is not base]
             built.append(decoration)
         centroids = _centroid_marker_layer(source_id, layer, cfg)
         if centroids:
@@ -2014,6 +2028,17 @@ def _apply_rule_scope(ml: dict, rule: dict) -> None:
         # A minzoom of 0 and a maxzoom of 24 are the defaults; writing them only adds noise.
         if (key == "minzoom" and value > 0) or (key == "maxzoom" and value < 24):
             ml[key] = round(value, 3)
+    # AN INVERTED RANGE DRAWS NOTHING, EVER. MapLibre honours `minzoom > maxzoom` literally: the
+    # layer is simply never rendered, at any zoom, with no error anywhere. A plugin that read a
+    # QGIS scale range from the wrong ends published eight label layers like that and a whole
+    # place-names layer vanished from the map with nothing to chase.
+    #
+    # A style can come from anywhere — an older plugin, an import, a hand edit — so the range is
+    # DROPPED rather than trusted. Drawing at every zoom is wrong and visible; drawing at none is
+    # wrong and invisible, and only one of those gets reported.
+    if ml.get("minzoom") is not None and ml.get("maxzoom") is not None             and ml["minzoom"] > ml["maxzoom"]:
+        ml.pop("minzoom", None)
+        ml.pop("maxzoom", None)
 
 
 def _polygon_outline_layer(source_id: str, layer, cfg: dict, base: dict) -> dict | None:

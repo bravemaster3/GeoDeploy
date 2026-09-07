@@ -223,13 +223,23 @@ def _read_label_rules(labeling, notes: list) -> list:
 
 
 def _rule_zoom_range(rule, lo, hi):
-    """A label rule's own scale range as zooms, narrowed by whatever it inherits."""
+    """A label rule's own scale range as zooms, narrowed by whatever it inherits.
+
+    QGIS's `minimumScale` IS THE ZOOMED-OUT END, and the naming is the trap: a scale is a fraction,
+    so the *minimum* scale is the one with the LARGEST denominator. Measured on the reporter's own
+    layer — Town labels have `minimumScale` 1:500,000 and small settlements 1:30,000, and a town is
+    the one you see first as you zoom out — so `minimumScale` maps to `minzoom` and `maximumScale`
+    to `maxzoom`, exactly as `_read_scope` already does for a label's own range.
+
+    Reading them the other way round produced `minzoom: 24, maxzoom: 13.6` on every rule, and a
+    MapLibre layer whose minzoom is above its maxzoom draws NOTHING — so a whole place-names layer
+    silently vanished from the map.
+    """
     try:
         if not rule.dependsOnScale():
             return lo, hi
-        # QGIS: minimumScale is the SMALLEST denominator (closest view) → the highest zoom.
-        low = zoom_for_scale(rule.maximumScale()) if rule.maximumScale() else None
-        high = zoom_for_scale(rule.minimumScale()) if rule.minimumScale() else None
+        low = zoom_for_scale(rule.minimumScale()) if rule.minimumScale() else None
+        high = zoom_for_scale(rule.maximumScale()) if rule.maximumScale() else None
     except Exception:                   # noqa: BLE001
         return lo, hi
     out_lo = low if lo is None else (low if low is not None and low > lo else lo)
@@ -600,6 +610,26 @@ def to_qgis(qgis_layer, style) -> bool:
         return False
 
 
+def _rule_expression(entry: dict) -> str:
+    """The QGIS filter text for one label rule.
+
+    The CARRIED source wins — a rule that came from QGIS goes back as the text its author typed.
+    Only one authored in GeoDeploy has to be rebuilt from its MapLibre filter.
+    """
+    expression = (entry.get("expression") or "").strip()
+    if expression:
+        return expression
+    node = entry.get("filter")
+    if node is None:
+        return ""
+    try:
+        return expressions.from_maplibre(node)
+    except Exception as exc:            # noqa: BLE001 - an unfiltered rule is visible and fixable
+        symbology._log("Label rule {0!r} has a filter QGIS cannot be given ({1}); it is shown "
+                       "unfiltered.".format(entry.get("label") or "", exc))
+        return ""
+
+
 def _rule_labeling(qgis_layer, labels: dict) -> bool:
     """Rebuild a `QgsRuleBasedLabeling` from `labels.rules`. False when there is nothing to build.
 
@@ -616,6 +646,16 @@ def _rule_labeling(qgis_layer, labels: dict) -> bool:
         return False
     if not hasattr(qgis_layer, "setLabeling"):
         return False
+    # A VECTOR TILE LAYER TAKES A DIFFERENT LABELLING CLASS ENTIRELY. `setLabeling` exists on both,
+    # so handing a `QgsRuleBasedLabeling` to a tile layer is accepted by Python and then labels
+    # nothing — which is how a portal opened as a group lost every label on its names layer. Tiles
+    # carry rules as several `QgsVectorTileBasicLabelingStyle`s instead; `_tile_labeling` does that.
+    try:
+        from qgis.core import QgsVectorTileLayer
+        if isinstance(qgis_layer, QgsVectorTileLayer):
+            return False
+    except ImportError:                 # pragma: no cover - older QGIS has no tile layers
+        pass
 
     base = {k: v for k, v in labels.items() if k != "rules"}
     root = QgsRuleBasedLabeling.Rule(None)
@@ -630,24 +670,17 @@ def _rule_labeling(qgis_layer, labels: dict) -> bool:
             continue
         rule = QgsRuleBasedLabeling.Rule(settings)
         rule.setDescription(str(entry.get("label") or ""))
-        # THE CARRIED SOURCE WINS, exactly as it does for a render rule: a rule that came from
-        # QGIS goes back as the text its author typed. Only one authored in GeoDeploy has to be
-        # reconstructed from its MapLibre filter.
-        expression = (entry.get("expression") or "").strip()
-        if not expression and entry.get("filter") is not None:
-            try:
-                expression = expressions.from_maplibre(entry["filter"])
-            except Exception as exc:    # noqa: BLE001 - an unfiltered rule is visible and fixable
-                symbology._log("Label rule {0!r} has a filter QGIS cannot be given ({1}); it is "
-                               "shown unfiltered.".format(entry.get("label") or "", exc))
-                expression = ""
+        expression = _rule_expression(entry)
         if expression:
             rule.setFilterExpression(expression)
         lo, hi = entry.get("minzoom"), entry.get("maxzoom")
         if lo is not None or hi is not None:
             try:
-                rule.setMinimumScale(scale_for_zoom(hi) if hi is not None else 0)
-                rule.setMaximumScale(scale_for_zoom(lo) if lo is not None else 0)
+                # `minzoom` is the zoomed-OUT end, and so is QGIS's `minimumScale` — see
+                # `_rule_zoom_range`. They correspond directly; it is `scale_for_zoom` that
+                # inverts the number, not the pairing.
+                rule.setMinimumScale(scale_for_zoom(lo) if lo is not None else 0)
+                rule.setMaximumScale(scale_for_zoom(hi) if hi is not None else 0)
             except Exception:           # noqa: BLE001  # nosec B110 - intentional: a scale range this QGIS spells differently must not cost the rule its symbol
                 pass
         root.appendChild(rule)
@@ -705,27 +738,57 @@ def _tile_labeling(qgis_layer, settings, style) -> bool:
     if not isinstance(qgis_layer, QgsVectorTileLayer):
         return False
 
-    tile_style = QgsVectorTileBasicLabelingStyle()
-    tile_style.setLabelSettings(settings)
-    tile_style.setStyleName("GeoDeploy labels")
-    tile_style.setLayerName("")
-    tile_style.setEnabled(True)
     geometry = _tile_geometry_type(qgis_layer, style)
-    if geometry is not None:
+
+    def one(block, name, settings_for_style):
+        tile_style = QgsVectorTileBasicLabelingStyle()
+        tile_style.setLabelSettings(settings_for_style)
+        tile_style.setStyleName(name)
+        tile_style.setLayerName("")
+        tile_style.setEnabled(True)
+        if geometry is not None:
+            try:
+                tile_style.setGeometryType(geometry)
+            except Exception:           # noqa: BLE001 - the default still labels something  # nosec B110 - intentional: a geometry this QGIS names differently must not cost the labels
+                pass
+        # The zoom range, so labels do not appear at zooms the layer itself is hidden at.
+        lo = block.get("minzoom", style.get("minzoom"))
+        hi = block.get("maxzoom", style.get("maxzoom"))
         try:
-            tile_style.setGeometryType(geometry)
-        except Exception:               # noqa: BLE001 - the default still labels something  # nosec B110
+            tile_style.setMinZoomLevel(int(lo) if lo is not None else 0)
+            tile_style.setMaxZoomLevel(int(hi) if hi is not None else 22)
+        except (TypeError, ValueError):
             pass
-    # The layer's OWN zoom range, so labels do not appear at zooms the layer itself is hidden at.
-    lo, hi = style.get("minzoom"), style.get("maxzoom")
-    try:
-        tile_style.setMinZoomLevel(int(lo) if lo is not None else 0)
-        tile_style.setMaxZoomLevel(int(hi) if hi is not None else 22)
-    except (TypeError, ValueError):
-        pass
+        # A TILE STYLE CAN BE FILTERED, which is the whole reason label rules can travel here at
+        # all: one style per rule, each scoped to the features that rule selects.
+        expression = (block.get("qgis_expression") or "").strip()
+        if expression and hasattr(tile_style, "setFilterExpression"):
+            try:
+                tile_style.setFilterExpression(expression)
+            except Exception:           # noqa: BLE001  # nosec B110 - intentional: an unfiltered style labels too much, which is visible and fixable
+                pass
+        return tile_style
+
+    labels_block = (style or {}).get("labels") or {}
+    rules = [r for r in (labels_block.get("rules") or []) if isinstance(r, dict)]
+    styles = []
+    if len(rules) > 1:
+        base = {k: v for k, v in labels_block.items() if k != "rules"}
+        for i, rule in enumerate(rules):
+            block = dict(base)
+            block.update(rule.get("labels") or {})
+            block.pop("rules", None)
+            block["qgis_expression"] = _rule_expression(rule)
+            rule_settings = settings_of(block)
+            if rule_settings is None:
+                continue
+            styles.append(one(block, str(rule.get("label") or "Rule {0}".format(i + 1)),
+                              rule_settings))
+    if not styles:
+        styles = [one(labels_block, "GeoDeploy labels", settings)]
 
     labeling = QgsVectorTileBasicLabeling()
-    labeling.setStyles([tile_style])
+    labeling.setStyles(styles)
     qgis_layer.setLabeling(labeling)
     if hasattr(qgis_layer, "setLabelsEnabled"):
         try:

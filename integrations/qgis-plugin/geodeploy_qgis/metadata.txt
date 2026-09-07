@@ -7,7 +7,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.4.7
+version=0.4.8
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -26,7 +26,25 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.4.7 - The push dialog now says WHERE a restyle lands. "Push group to portal"
+changelog=0.4.8 - Five things reported against one map, all of them the plugin inventing
+    something the author never drew.
+    A LINE MADE OF MARKERS HAS NO STROKE. QGIS's marker line draws circles at intervals and
+    nothing between them, but `QgsLineSymbol.width()` reports its MARKER's size - so a line of
+    10 mm circles was read as a 10 mm stroke, the map painted a 37.8 px grey band underneath, and
+    the trip back added a "Simple Line" the symbol never had. Reported as "why do I have that wide
+    buffer around the line instead of circle markers".
+    A PICTURE IS NOW DRAWN AT THE SIZE QGIS DRAWS IT. `asImage` does not scale a symbol to fill
+    the canvas it is given, so the earlier size fix enlarged the canvas and added transparent
+    padding while the marker stayed put: a pin QGIS drew 27 px across arrived 14 px in the browser.
+    The symbol is scaled before rendering now, measured at 0.98 of QGIS rather than 0.5.
+    LABEL RULES WERE READ FROM THE WRONG END of the scale range, producing minzoom 24 with
+    maxzoom 13.6 - and MapLibre honours that literally, so all eight label layers of a place-names
+    layer drew NOTHING, at any zoom, with no error anywhere.
+    A PORTAL OPENED AS A GROUP now draws what the portal draws. That renderer knew about single,
+    graduated and categorized styles only: a RULE-BASED layer became one flat symbol, a marker
+    that travels as a picture became a plain dot, and a layer whose geometry was not in the row
+    was styled for all three geometry types at once.
+    0.4.7 - The push dialog now says WHERE a restyle lands. "Push group to portal"
     changes that portal; a layer's own default style - what its page shows, and what every other
     portal starts from - is changed only by "Save styling to GeoDeploy". The dialog listed
     "Restyled (3)" and said neither, so restyling inside a group and then finding the layer's own

@@ -151,6 +151,38 @@ def test_a_rules_zoom_range_reaches_its_layer():
     assert (built[0].get("minzoom"), built[0].get("maxzoom")) == (8, 14)
 
 
+def test_a_layer_that_could_never_draw_is_not_published():
+    """MapLibre honours `minzoom > maxzoom` literally — the layer never renders, at any zoom, with
+    no error anywhere. A plugin that read a QGIS scale range from the wrong ends published eight
+    label layers like that, and a whole place-names layer vanished from the map with nothing to
+    chase. The range is dropped rather than trusted: drawing everywhere is wrong and visible;
+    drawing nowhere is wrong and invisible."""
+    style = {"labels": {"enabled": True, "field": "n", "color": "#111",
+                        "rules": [{"label": "A", "filter": ["==", ["get", "t"], "a"],
+                                   "minzoom": 24, "maxzoom": 13.6,
+                                   "labels": {"enabled": True}}]}}
+    built = label_layers(build(style))
+    assert len(built) == 1
+    lo, hi = built[0].get("minzoom"), built[0].get("maxzoom")
+    assert not (lo is not None and hi is not None and lo > hi),         "published a layer that can never draw: minzoom {0} > maxzoom {1}".format(lo, hi)
+
+
+def test_a_sane_range_is_left_alone():
+    style = {"labels": {"enabled": True, "field": "n", "color": "#111",
+                        "rules": [{"label": "A", "filter": ["==", ["get", "t"], "a"],
+                                   "minzoom": 10.127, "maxzoom": 18,
+                                   "labels": {"enabled": True}}]}}
+    built = label_layers(build(style))
+    assert (built[0].get("minzoom"), built[0].get("maxzoom")) == (10.127, 18)
+
+
+def test_no_layer_a_portal_publishes_can_be_invisible_by_zoom():
+    """The invariant, over everything a real style emits — not just the label layers."""
+    for ml in build(RULED):
+        lo, hi = ml.get("minzoom"), ml.get("maxzoom")
+        assert not (lo is not None and hi is not None and lo > hi), ml.get("id")
+
+
 def test_a_rule_zoom_outside_maplibres_range_is_clamped():
     """QGIS stores scale thresholds far outside 0-24, and ONE out-of-range number makes MapLibre
     reject the whole style rather than ignore it."""

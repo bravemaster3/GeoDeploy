@@ -288,11 +288,18 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
         const lineOff = symLineOffset(st)
         if (lineOff != null) linePaint['line-offset'] = lineOff
         const lineLay = symLineLayout(st)
-        style.layers.push({
-          id: mlId(srcId, cfg), ...ruleScope(cfg),
-          type: 'line', source: srcId, 'source-layer': sourceLayer, paint: linePaint,
-          ...(Object.keys(lineLay).length ? { layout: lineLay } : {}),
-        })
+        // A LINE OF MARKERS HAS NO STROKE UNDER IT. QGIS's marker line draws symbols at intervals
+        // and nothing between them, so a base `line` layer here would be a band the author never
+        // drew — which is what a 10 mm marker line produced once its size was mistaken for a
+        // width. A width of 0 is how the style says "no stroke". Mirrors _vector_layers.
+        const strokeWidth = st.line_width == null ? 2 : Number(st.line_width)
+        if (strokeWidth || !Object.keys(symLineMarker(st)).length) {
+          style.layers.push({
+            id: mlId(srcId, cfg), ...ruleScope(cfg),
+            type: 'line', source: srcId, 'source-layer': sourceLayer, paint: linePaint,
+            ...(Object.keys(lineLay).length ? { layout: lineLay } : {}),
+          })
+        }
       } else if (symIsExtruded(st) && layer.storage_backend !== 'geoparquet') {
         // POINTS IN 3D: pillars. MapLibre extrudes fills only, so the geometry has to become a
         // polygon — the shared Martin function buffers the points by a radius in metres and serves

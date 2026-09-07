@@ -2738,6 +2738,54 @@ def _hex(color) -> str:
 MAX_COLOR_CLASSES = 128
 
 
+def _rules_of(style: dict) -> list:
+    """`style.rules` as a list of dicts, or `[]`. See `rules.py` for the shape."""
+    raw = (style or {}).get("rules")
+    if not isinstance(raw, list):
+        return []
+    return [r for r in raw if isinstance(r, dict)]
+
+
+def _rule_filter_text(rule: dict) -> str:
+    """The QGIS expression one rule filters on — the carried source first, then the MapLibre
+    filter rebuilt. Shared with `rules.to_qgis`, which is where the reasoning lives."""
+    try:
+        try:                            # a package, inside QGIS
+            from . import rules as _rules
+        except ImportError:             # exec'd standalone by the test harness
+            import rules as _rules
+        return _rules._expression_for(rule)
+    except Exception:                   # noqa: BLE001 - an unfiltered rule still draws
+        return str(rule.get("expression") or "")
+
+
+def _apply_pictures(symbol, style: dict) -> None:
+    """Rebuild a marker picture or a line decoration onto an already-built symbol.
+
+    `_symbol_of` draws the shapes GeoDeploy has words for; anything it does not — an SVG marker, a
+    font marker, markers along a line — travels as a rendered PNG and has to be put back. The
+    feature path does this in `apply_to_qgis`; this is the same step for the tile renderer.
+    """
+    if symbol is None or not style:
+        return
+    try:
+        try:                            # a package, inside QGIS
+            from . import fills as _fills
+        except ImportError:             # exec'd standalone by the test harness
+            import fills as _fills
+    except ImportError:                 # pragma: no cover - fills.py is optional
+        return
+    for key, rebuild in (("marker_image", _fills.marker_to_qgis),
+                         ("line_marker", _fills.line_marker_to_qgis)):
+        if not _fills.picture_of(style, key):
+            continue
+        try:
+            rebuild(symbol, style)
+        except Exception as exc:        # noqa: BLE001 - the plain symbol is still drawn
+            _log("Could not rebuild the {0} for this tile layer ({1}: {2}); it is drawn as a plain "
+                 "symbol.".format(key, type(exc).__name__, exc))
+
+
 def apply_to_vector_tiles(tile_layer, row: dict, source_layer: str | None,
                           style: dict | None = None) -> bool:
     """Draw a vector TILE layer with the layer's real symbology — classes and all.
@@ -2770,7 +2818,12 @@ def apply_to_vector_tiles(tile_layer, row: dict, source_layer: str | None,
     # both. When the geometry is genuinely unknown, every type gets a style instead, so whatever the
     # tiles hold is drawn with a symbol that suits it; a tile layer may legitimately carry more than
     # one geometry anyway.
-    geom = (row.get("geometry_type") or "").lower()
+    # THE ROW FIRST, THEN WHAT THE PLUGIN RECORDED. A tile layer cannot be asked what geometry it
+    # holds, which is why `P_GEOMETRY` is written onto it when the layer is built — `_geometry_name`
+    # and `style_from_vector_tiles` have always read it, and this did not. Without a row (or with
+    # one that carries no geometry) every layer was styled for all three geometry types at once, so
+    # a rule-based line arrived as three times as many renderer entries as it has rules.
+    geom = (row.get("geometry_type") or _geometry_name(tile_layer) or "").lower()
     if "polygon" in geom:
         geometry_types = [enum(QgsWkbTypes, "GeometryType", "PolygonGeometry")]
     elif "line" in geom:
@@ -2790,7 +2843,7 @@ def apply_to_vector_tiles(tile_layer, row: dict, source_layer: str | None,
     except Exception:                   # noqa: BLE001 - fall through to a single symbol
         model = None
 
-    def _style(name, colour, expression, entry=None):
+    def _style(name, colour, expression, entry=None, merged=False):
         """One renderer entry per geometry type this layer may hold — usually exactly one.
 
         `entry` is the CLASS this is drawing, whose own shape keys (a dash, a width, a fill) are
@@ -2799,7 +2852,16 @@ def apply_to_vector_tiles(tile_layer, row: dict, source_layer: str | None,
         every class with the first one's symbol.
         """
         out = []
-        symbol_style = class_style(style or {}, entry) if entry else style
+        # A CLASS passes only the keys it OVERRIDES, so it is laid over the layer's shape here. A
+        # RULE passes its whole merged style and must not be merged again — `merged` says which,
+        # because guessing from the content cannot work: both carry a `color`, and treating a class
+        # as pre-merged silently drops the layer's width and dash from every class.
+        if entry is None:
+            symbol_style = style
+        elif merged:
+            symbol_style = entry
+        else:
+            symbol_style = class_style(style or {}, entry)
         for geometry_type in geometry_types:
             # THE SAME symbol builder the feature path uses — marker shape, radius, line width,
             # dash, fill opacity and data-defined size all included. A second implementation here
@@ -2813,6 +2875,12 @@ def apply_to_vector_tiles(tile_layer, row: dict, source_layer: str | None,
             # geometry only, and says so.
             try:
                 symbol = _symbol_of(geometry_type, colour, symbol_style)
+                # A MARKER OR A LINE DECORATION THAT TRAVELS AS A PICTURE HAS TO BE REBUILT HERE
+                # TOO. The feature path does this in `apply_to_qgis`; the tile path did not, so a
+                # layer whose symbol is an SVG pin — anything GeoDeploy has no words for — opened
+                # from a portal group as a plain coloured dot. "As the portal draws it" has to mean
+                # that, and a black circle where the portal shows a red pin is the opposite.
+                _apply_pictures(symbol, symbol_style)
             except Exception as exc:    # noqa: BLE001 - the other geometries must still draw
                 _log("Could not build the {0} symbol for this tile layer ({1}: {2}); its other "
                      "geometries are still styled.".format(geometry_type, type(exc).__name__, exc))
@@ -2831,7 +2899,21 @@ def apply_to_vector_tiles(tile_layer, row: dict, source_layer: str | None,
 
     styles = []
     try:
-        if model is not None and model.mode == "graduated" and model.field and model.classes:
+        # RULES FIRST, the same precedence every other renderer here uses. A rule-based layer has
+        # its shape at the TOP LEVEL only as a fallback for viewers that know nothing about rules,
+        # and this renderer was one of them: four rules drew as one flat symbol, which is most of
+        # why a portal opened as a group looked like a different map from the portal.
+        rule_entries = _rules_of(style)
+        if rule_entries:
+            for i, rule in enumerate(rule_entries):
+                merged = dict(style or {})
+                merged.update(rule.get("style") or {})
+                for key in ("color_mode", "classes", "categories", "color_field", "classes_n",
+                            "rules"):
+                    merged.pop(key, None)
+                styles.extend(_style("rule-{0}".format(i), merged.get("color"),
+                                     _rule_filter_text(rule) or None, merged, merged=True))
+        elif model is not None and model.mode == "graduated" and model.field and model.classes:
             for i, cls in enumerate(model.classes):
                 # Open edges mean "everything below/above", exactly as they do on the map.
                 lo, hi = cls.get("min"), cls.get("max")
@@ -3821,12 +3903,20 @@ def _style_from_symbol(symbol) -> dict:
             if size is not None:
                 style["radius"] = round(size / 2.0, 2)
         elif isinstance(symbol, QgsLineSymbol):
-            # `QgsLineSymbol` has no `widthUnit` — only its symbol LAYERS have one — so the unit
-            # comes from the first layer, which is the one whose width `symbol.width()` reports.
-            width = _points(_call_or_none(symbol, "width"),
-                            _call_or_none(_first_symbol_layer(symbol), "widthUnit"))
-            if width is not None:
-                style["line_width"] = round(width / CSS_PX_TO_POINTS, 2)
+            # A LINE MADE ONLY OF MARKERS HAS NO STROKE WIDTH. `symbol.width()` reports the widest
+            # of the symbol's layers, and a marker line reports its MARKER's size there — so a line
+            # of 10 mm circles arrived as a 10 mm stroke and the map drew a band under the markers.
+            if not _has_stroke_paint(symbol):
+                # Zero is a size, and it is now honoured on every surface: the map draws no line and
+                # QGIS gets a stroke of nothing, leaving the markers to be the line as they were.
+                style["line_width"] = 0.0
+            else:
+                # `QgsLineSymbol` has no `widthUnit` — only its symbol LAYERS have one — so the unit
+                # comes from the first layer, which is the one whose width `symbol.width()` reports.
+                width = _points(_call_or_none(symbol, "width"),
+                                _call_or_none(_first_symbol_layer(symbol), "widthUnit"))
+                if width is not None:
+                    style["line_width"] = round(width / CSS_PX_TO_POINTS, 2)
     except ImportError:                 # pragma: no cover - the branches below still run
         pass
 
@@ -4250,9 +4340,58 @@ MAX_PICTURE_BYTES = 96 * 1024
 #: high-DPI display. The runtime registers it with `pixelRatio: 2` to match.
 PICTURE_SCALE = 2
 
+#: How much roomier than the ink the canvas is made, so a symbol that overhangs its
+#: nominal box is not clipped. See `_rendered_at`.
+PICTURE_MARGIN = 2
+
 #: And never smaller than this, so a tiny marker still yields a usable image.
 MIN_PICTURE_PX = 32
 MAX_PICTURE_PX = 256
+
+
+def _rendered_at(symbol, css: float):
+    """`symbol` drawn into a bitmap whose INK is `PICTURE_SCALE`x its on-screen size. None if not.
+
+    THE CONTRACT, and it is worth stating because two halves of it disagreed for months. The web
+    registers these bitmaps at `pixelRatio: PICTURE_SCALE`, so MapLibre draws a bitmap of N pixels
+    at N / PICTURE_SCALE CSS pixels. For the browser to draw the marker the size QGIS draws it, the
+    INK has to be exactly `css * PICTURE_SCALE` pixels across.
+
+    `QgsMarkerSymbol.asImage(QSize(n, n))` does NOT scale the symbol to fill `n` — it draws the
+    symbol at its own size and centres it in whatever canvas you ask for. So enlarging the canvas
+    added transparent padding and nothing else: a 10 mm pin rendered into a 151 px bitmap whose ink
+    was 28 px, 19% of it, and the browser drew the pin at 14 CSS px where QGIS drew 37.8. Measured,
+    not guessed — the first fix here enlarged the canvas and was reported still wrong.
+
+    So the symbol is CLONED and re-sized in device pixels to the size we want it drawn at, and the
+    canvas is made to match. Cloned because the caller's symbol belongs to a live layer.
+    """
+    from qgis.PyQt.QtCore import QSize
+    # THE CANVAS IS ROOMIER THAN THE INK, deliberately. A symbol's drawn extent is not its nominal
+    # size — a cross over a dot, or a wide stroke, overhangs its bounding box — and `asImage` CLIPS
+    # to the canvas it is given. Sized to the nominal, a 4 mm marker whose ink is 18 px was cut to
+    # 15 and the browser drew it small again. The padding costs almost nothing: it is transparent,
+    # and PNG compresses it away. A floor so a degenerate size cannot ask for a 0x0 image; a ceiling
+    # because the bitmap rides in every published style and bytes are the real budget.
+    px = int(min(MAX_PICTURE_PX, max(4, round(css * PICTURE_SCALE * PICTURE_MARGIN))))
+    try:
+        clone = symbol.clone()
+    except Exception:                   # noqa: BLE001 - render the original rather than nothing
+        return symbol.asImage(QSize(px, px))
+    # SCALED IN ITS OWN UNIT, never re-united. Setting the size unit to pixels and the size to the
+    # canvas rendered an SVG marker COMPLETELY EMPTY — measured, on the reporter's own layer — so
+    # the symbol keeps the unit its author chose and only the number is multiplied. That also keeps
+    # a symbol whose parts are sized in different units internally consistent.
+    for getter, setter in (("size", "setSize"), ("width", "setWidth")):
+        current = _number(_call_or_none(clone, getter), None)
+        if current is None or not callable(getattr(clone, setter, None)):
+            continue
+        try:
+            getattr(clone, setter)(current * PICTURE_SCALE)
+        except Exception:               # noqa: BLE001 - an unscalable symbol still renders  # nosec B110 - intentional: the unscaled picture is the old behaviour, not a failure
+            pass
+        break
+    return clone.asImage(QSize(px, px))
 
 
 def _marker_picture(symbol) -> str | None:
@@ -4277,15 +4416,13 @@ def _marker_picture(symbol) -> str | None:
         from qgis.core import QgsMarkerSymbol
         if not isinstance(symbol, QgsMarkerSymbol):
             return None
-        from qgis.PyQt.QtCore import QBuffer, QByteArray, QIODevice, QSize
+        from qgis.PyQt.QtCore import QBuffer, QByteArray, QIODevice
 
         # IN POINTS, converted from whatever unit the symbol states — a 10 mm marker read as 10
         # points renders a bitmap not much over a third of the size it should be, which is the
         # "markers are great in QGIS but appear small in the browser" report.
         size = _sized(symbol, "size", "sizeUnit") or 0
-        px = int(max(MIN_PICTURE_PX, min(MAX_PICTURE_PX,
-                                         round(size / CSS_PX_TO_POINTS * PICTURE_SCALE * 2))))
-        image = symbol.asImage(QSize(px, px))
+        image = _rendered_at(symbol, size / CSS_PX_TO_POINTS)
         if image is None or image.isNull():
             return None
 
@@ -4390,8 +4527,14 @@ def _symbol_picture(symbol) -> str | None:
     if not QGIS or symbol is None:
         return None
     try:
-        from qgis.PyQt.QtCore import QBuffer, QByteArray, QIODevice, QSize
-        image = symbol.asImage(QSize(MIN_PICTURE_PX, MIN_PICTURE_PX))
+        from qgis.PyQt.QtCore import QBuffer, QByteArray, QIODevice
+        # A LINE sub-symbol has no `size()` to scale by, so a tick is rendered at a fixed size —
+        # but it is rendered to FILL its canvas for the same reason a marker is, or the map draws a
+        # tick a fraction of the size QGIS draws.
+        width = _points(_call_or_none(symbol, "width"),
+                        _call_or_none(_first_symbol_layer(symbol), "widthUnit"))
+        image = _rendered_at(symbol, (width or 0) / CSS_PX_TO_POINTS
+                             or MIN_PICTURE_PX / float(PICTURE_SCALE))
         if image is None or image.isNull():
             return None
         data = QByteArray()
@@ -4435,6 +4578,64 @@ def _fill_across_classes(shape: dict, filled) -> dict:
     out = dict(shape)
     out["fill_opacity"] = filled
     return out
+
+
+def _has_stroke_paint(symbol) -> bool:
+    """Whether any layer of this line symbol actually draws a LINE along the geometry.
+
+    A `QgsMarkerLineSymbolLayer` draws markers AT INTERVALS and no stroke between them — the
+    markers are the line. But `QgsLineSymbol.width()` reports the widest of its layers, and a
+    marker line reports its MARKER'S SIZE there, so a line of 10 mm circles read back as a 10 mm
+    stroke: the map painted a 37.8 px grey band underneath the markers, and the trip back to QGIS
+    added a `Simple Line` the symbol never had. Reported as "why do I have that wide buffer around
+    the line instead of circle markers".
+
+    The mirror image of `_has_fill_paint`, and the same rule: ask what the symbol PAINTS, not what
+    its first layer is called.
+    """
+    try:
+        from qgis.core import QgsLineSymbolLayer, QgsSimpleLineSymbolLayer
+    except ImportError:                 # pragma: no cover - very old QGIS
+        return True
+    count = getattr(symbol, "symbolLayerCount", lambda: 0)()
+    if not count:
+        return True
+    strokes = 0
+    for i in range(count):
+        layer = symbol.symbolLayer(i)
+        if layer is None or not getattr(layer, "enabled", lambda: True)():
+            continue
+        # A marker line, a hashed line and an arrow are all `QgsLineSymbolLayer`s that do NOT draw
+        # a plain stroke, so the class alone does not answer it. `QgsSimpleLineSymbolLayer` does,
+        # and so does anything that reports a pen style other than NoPen.
+        if isinstance(layer, QgsSimpleLineSymbolLayer):
+            try:
+                if layer.penStyle() == enum(Qt, "PenStyle", "NoPen"):
+                    continue
+            except Exception:           # noqa: BLE001 - a pen we cannot read is a pen  # nosec B110 - intentional: treating it as a stroke is the safe direction
+                pass
+            strokes += 1
+        elif isinstance(layer, QgsLineSymbolLayer) and not _draws_only_decoration(layer):
+            strokes += 1
+    return strokes > 0
+
+
+#: Line symbol layers that place SYMBOLS along a line and draw no stroke of their own. QGIS names
+#: them all `QgsLineSymbolLayer`, so the class is not enough to tell them from a real stroke.
+_DECORATION_LINE_LAYERS = ("QgsMarkerLineSymbolLayer", "QgsHashedLineSymbolLayer",
+                           "QgsArrowSymbolLayer", "QgsRasterLineSymbolLayer",
+                           "QgsLineburstSymbolLayer", "QgsInterpolatedLineSymbolLayer")
+
+
+def _draws_only_decoration(layer) -> bool:
+    """True for a symbol layer that decorates a line rather than stroking it.
+
+    Raster, lineburst and interpolated lines DO paint along the whole line, so they are strokes for
+    this purpose — they are excluded from the decoration list by name below. Only the two that
+    place discrete symbols, and the arrow (which is a filled shape), draw nothing between them.
+    """
+    return type(layer).__name__ in ("QgsMarkerLineSymbolLayer", "QgsHashedLineSymbolLayer",
+                                    "QgsArrowSymbolLayer")
 
 
 def _has_fill_paint(symbol) -> bool:
