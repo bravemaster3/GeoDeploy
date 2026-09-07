@@ -826,7 +826,7 @@ def special_renderers():
     """Rule-based rendering, 2.5D and heatmaps — each of which has its own module and its own trap."""
     section("Rules, 2.5D and heatmaps")
     from qgis.core import (QgsFillSymbol, QgsLineSymbol, QgsRuleBasedRenderer,
-                           QgsSingleSymbolRenderer)
+                           QgsSimpleLineSymbolLayer, QgsSingleSymbolRenderer)
 
     # ── RULES. A rule tree flattens to one render layer per leaf, each carrying the AND of the
     # filters above it. `rules[0]` draws FIRST, which is QGIS's order and the opposite of a portal's
@@ -857,6 +857,45 @@ def special_renderers():
     again = symbology.from_qgis(back) or {}
     check("...with the same number of rules", len(again.get("rules") or []) == 2,
           len(again.get("rules") or []))
+
+    # A RULE'S SYMBOL STACKS STROKES LIKE ANY OTHER SYMBOL — a solid line with a dashed one over it
+    # is the everyday way to draw "planned" or "under construction", and it is a SYMBOL property,
+    # so it belongs to a rule exactly as much as to a single-symbol layer. `_style_from_symbol`,
+    # which builds a rule's style, read only the first stroke long after `_style_of` had learnt to
+    # read them all: the rule published as plain red and the blue was simply gone.
+    stacked = make_layer("LineString")
+    stack_root = QgsRuleBasedRenderer.Rule(None)
+    two = QgsLineSymbol.createSimple({"color": "#d40000"})
+    two.symbolLayer(0).setWidth(1.0)
+    over = QgsSimpleLineSymbolLayer()
+    over.setColor(QColor("#1f4fd8"))
+    over.setWidth(1.0)
+    over.setPenStyle(enum(Qt, "PenStyle", "DashLine"))
+    two.appendSymbolLayer(over)
+    stack_root.appendChild(QgsRuleBasedRenderer.Rule(two, 0, 0, '"c" > 1', "confident"))
+    stacked.setRenderer(QgsRuleBasedRenderer(stack_root))
+    s_style = symbology.from_qgis(stacked) or {}
+    rule_style = ((s_style.get("rules") or [{}])[0].get("style") or {})
+    entries = rule_style.get("line_stack") or []
+    check("a rule's stacked stroke travels", len(entries) == 1, json.dumps(rule_style)[:250])
+    if entries:
+        check("...with its own colour", entries[0].get("color", "").lower() == "#1f4fd8",
+              entries[0].get("color"))
+        check("...and its own dash", entries[0].get("lineType") == "dashed",
+              entries[0].get("lineType"))
+    back_stack = make_layer("LineString")
+    symbology.apply_to_qgis(back_stack, dict(s_style))
+    rebuilt = back_stack.renderer().rootRule().children()[0].symbol()
+    check("...and comes back as two strokes, not one", rebuilt.symbolLayerCount() == 2,
+          rebuilt.symbolLayerCount())
+    if rebuilt.symbolLayerCount() == 2:
+        check("...the overlay still blue and dashed",
+              rebuilt.symbolLayer(1).color().name().lower() == "#1f4fd8"
+              and rebuilt.symbolLayer(1).penStyle() == enum(Qt, "PenStyle", "DashLine"),
+              # `str`, not `int`: on Qt6 a PyQt enum is not an integer and `int()` on one raises —
+              # in a DETAIL string, which only runs when the check has already failed, so it turns
+              # a readable failure into a traceback. The same trap `test_qt6_compat.py` exists for.
+              (rebuilt.symbolLayer(1).color().name(), str(rebuilt.symbolLayer(1).penStyle())))
 
     # ── 2.5D. Height and angle are PROJECT VARIABLES, not renderer properties, which is why
     # `Qgs25DRenderer` has colours and no `height()`. What travels is a real `fill-extrusion`, with

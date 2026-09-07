@@ -3943,6 +3943,15 @@ def _style_from_symbol(symbol) -> dict:
     if layer0 is not None and not isinstance(layer0, QgsSimpleLineSymbolLayer):
         style.update(_line_decoration_symbol(symbol))
 
+    # A RULE'S SYMBOL STACKS STROKES LIKE ANY OTHER. This function builds the style for one symbol
+    # inside a rule tree or a class list, and it read only the first stroke — so a rule drawn as a
+    # solid RED line with a DASHED BLUE one over it published as plain red, while the SAME symbol on
+    # a single-symbol layer published correctly (`_style_of` had already learnt this). Reported as
+    # "the symbology with the red and blue line thing doesn't display correctly".
+    stack = _stroke_stack(symbol)
+    if stack:
+        style["line_stack"] = stack
+
     # A LINE WITH NO STROKE AND NO DECORATION WOULD DRAW NOTHING AT ALL, and that is a worse answer
     # than the band this replaced. `line_width: 0` is only honest while the MARKERS travel — and a
     # picture can fail to travel: it is capped in bytes, and a symbol QGIS cannot rasterise

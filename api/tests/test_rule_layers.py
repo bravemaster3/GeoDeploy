@@ -604,3 +604,56 @@ class TestFillPatterns:
                "style": {"color": "#111", "rules": rules}}
         out = pg._vector_layers("src", _Layer(geometry_type="Polygon"), cfg)
         assert out[0]["paint"]["fill-pattern"] == sym.picture_id(PNG)
+
+
+class TestARuleIsASymbol:
+    """A rule draws everything a single symbol draws, not just its base layer.
+
+    REPORTED AS "the symbology with the red and blue line thing doesn't display correctly" on a
+    published portal whose editor preview was right. The preview expands rules into configs and
+    runs its whole draw body per rule, so it drew the stacked stroke; the generator had a separate,
+    narrower rules branch that built only `_vector_layer` + outline. Everything a symbol stacks —
+    a second stroke, a line of markers, a centroid symbol — was silently dropped for rule-based
+    layers alone. `_drawn_layers` is now the one answer to "what does this symbol draw", and both
+    branches call it.
+    """
+
+    STACKED = [{"label": "Confident", "filter": ["==", ["get", "c"], 1],
+                "style": {"color": "#d40000", "line_width": 3, "lineType": "solid",
+                          "line_stack": [{"color": "#1f4fd8", "line_width": 3,
+                                          "lineType": "dashed"}]}}]
+
+    def test_a_stacked_stroke_inside_a_rule_is_drawn(self):
+        out = pg._vector_layers("src", _Layer(), _cfg(self.STACKED))
+        assert len(out) == 2, [ml["id"] for ml in out]
+        assert out[1]["paint"]["line-color"] == "#1f4fd8"
+        assert out[1]["paint"].get("line-dasharray")
+
+    def test_the_overlay_keeps_the_rule_in_its_id(self):
+        out = pg._vector_layers("src", _Layer(), _cfg(self.STACKED))
+        assert [ml["id"] for ml in out] == ["vector-7-r0", "vector-7-r0-s0"]
+
+    def test_the_overlay_is_scoped_to_the_rule_it_belongs_to(self):
+        # Without the filter the blue dashes would be drawn over EVERY feature, including the ones
+        # another rule draws — a rule's extras are as much part of that rule as its base.
+        out = pg._vector_layers("src", _Layer(), _cfg(self.STACKED))
+        assert out[1]["filter"] == ["==", ["get", "c"], 1]
+
+    def test_the_base_and_outline_are_named_exactly_as_before(self):
+        # An already-published portal must render byte for byte the same: this fix ADDS layers.
+        out = pg._vector_layers("src", _Layer(geometry_type="Polygon"),
+                                _cfg([{"label": "A", "filter": ["==", ["get", "k"], "a"],
+                                       "style": {"color": "#aabbcc", "outline_width": 4,
+                                                 "outline_color": "#112233"}}]))
+        assert [ml["id"] for ml in out] == ["vector-7-r0", "vector-7-r0-outline"]
+
+    def test_a_rule_that_is_a_line_of_markers_draws_the_markers(self):
+        rules = [{"label": "Planned", "filter": ["==", ["get", "k"], "p"],
+                  "style": {"color": "#888888", "line_width": 0,
+                            "line_marker": {"image": "data:image/png;base64,iVBORw0KGgo=",
+                                            "size": 10, "spacing": 20}}}]
+        out = pg._vector_layers("src", _Layer(), _cfg(rules))
+        kinds = [(ml["id"], ml["type"]) for ml in out]
+        assert ("vector-7-r0-linemarkers", "symbol") in kinds, kinds
+        # …and no band under them: a zero width is how the style says "no stroke".
+        assert "vector-7-r0" not in [ml["id"] for ml in out], kinds

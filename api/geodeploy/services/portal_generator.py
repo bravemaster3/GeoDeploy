@@ -1770,6 +1770,53 @@ def _number_or(value, default: float) -> float:
         return default
 
 
+def _drawn_layers(source_id: str, layer, cfg: dict) -> list[dict]:
+    """Everything ONE symbol draws: the base, and the extras stacked with it.
+
+    A symbol is not one render layer. A polygon whose outline is wider than a hairline needs a
+    `line` beside its `fill`; a line built from a casing and a dashed overlay needs one `line` per
+    stroke; a marker line needs a `symbol` layer and often no line at all; a centroid fill needs a
+    `symbol` at each shape's middle. MapLibre has no equivalent of QGIS's symbol layers, so the
+    stack becomes a stack of render layers, drawn in the order QGIS draws them.
+
+    WHY THIS IS A FUNCTION RATHER THAN THE BODY OF THE SINGLE-SYMBOL BRANCH. A rule is a symbol
+    too. `_rule_layers` used to build only `_vector_layer` + outline per rule, so a rule whose
+    symbol was a red line under blue dashes published as plain red, and a rule whose symbol was a
+    line of circles published as a plain line — while the SAME styles on a single-symbol layer
+    published correctly, and both looked right in the editor's preview (which expands rules into
+    configs and runs its whole body per rule). One function, both callers, no third path to drift.
+    """
+    style = cfg.get("style") or {}
+    base = _vector_layer(source_id, layer, cfg)
+    outline = _polygon_outline_layer(source_id, layer, cfg, base)
+    built = [base, outline] if outline else [base]
+    # A LINE DRAWN AS SEVERAL STROKES STACKED — a casing, a dashed overlay, a hatch. QGIS
+    # builds these by stacking simple lines in one symbol and MapLibre by stacking `line`
+    # layers, so this is a direct mapping. Reading only the first stroke made a red line with
+    # blue dashes over it arrive as plain red.
+    for i, extra in enumerate(symbology.stroke_stack(style)):
+        over = dict(cfg, style=dict(style, **extra))
+        over["style"].pop("line_stack", None)
+        drawn = _vector_layer(source_id, layer, over)
+        if drawn.get("type") != "line":
+            continue                          # a stack is a LINE idea; nothing else stacks
+        drawn["id"] = "{0}-s{1}".format(base["id"], i)
+        built.append(drawn)
+    decoration = _line_marker_layer(source_id, layer, cfg)
+    if decoration:
+        # A LINE OF MARKERS HAS NO STROKE UNDER IT. QGIS's marker line draws symbols at
+        # intervals and nothing between them, so a base `line` layer here would be a band the
+        # author never drew — which is exactly what a 10 mm marker line produced once its size
+        # was mistaken for a width. A width of 0 is how the style says "no stroke".
+        if base.get("type") == "line" and not _number_or(style.get("line_width"), 2):
+            built = [ml for ml in built if ml is not base]
+        built.append(decoration)
+    centroids = _centroid_marker_layer(source_id, layer, cfg)
+    if centroids:
+        built.append(centroids)
+    return built
+
+
 def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
     """The MapLibre render layers for one vector layer — usually one, but a **raw-paint passthrough**
     (`style.maplibre.layers`, used by the GeoLibre importer to carry data-driven/extrusion symbology
@@ -1816,34 +1863,7 @@ def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
 
     raw = style.get("maplibre", {}).get("layers") if isinstance(style.get("maplibre"), dict) else None
     if not raw:
-        base = _vector_layer(source_id, layer, cfg)
-        outline = _polygon_outline_layer(source_id, layer, cfg, base)
-        built = [base, outline] if outline else [base]
-        # A LINE DRAWN AS SEVERAL STROKES STACKED — a casing, a dashed overlay, a hatch. QGIS
-        # builds these by stacking simple lines in one symbol and MapLibre by stacking `line`
-        # layers, so this is a direct mapping. Reading only the first stroke made a red line with
-        # blue dashes over it arrive as plain red.
-        for i, extra in enumerate(symbology.stroke_stack(style)):
-            over = dict(cfg, style=dict(style, **extra))
-            over["style"].pop("line_stack", None)
-            drawn = _vector_layer(source_id, layer, over)
-            if drawn.get("type") != "line":
-                continue                          # a stack is a LINE idea; nothing else stacks
-            drawn["id"] = "{0}-s{1}".format(base["id"], i)
-            built.append(drawn)
-        decoration = _line_marker_layer(source_id, layer, cfg)
-        if decoration:
-            # A LINE OF MARKERS HAS NO STROKE UNDER IT. QGIS's marker line draws symbols at
-            # intervals and nothing between them, so a base `line` layer here would be a band the
-            # author never drew — which is exactly what a 10 mm marker line produced once its size
-            # was mistaken for a width. A width of 0 is how the style says "no stroke".
-            if base.get("type") == "line" and not _number_or(style.get("line_width"), 2):
-                built = [ml for ml in built if ml is not base]
-            built.append(decoration)
-        centroids = _centroid_marker_layer(source_id, layer, cfg)
-        if centroids:
-            built.append(centroids)
-        return _scoped(built + labels, style)
+        return _scoped(_drawn_layers(source_id, layer, cfg) + labels, style)
     source_layer = _source_layer_name(layer)
     out: list[dict] = []
     for i, entry in enumerate(raw):
@@ -2006,15 +2026,17 @@ def _rule_layers(source_id: str, layer, cfg: dict) -> list[dict] | None:
         for key in ("color_mode", "classes", "categories", "color_field", "classes_n"):
             merged.pop(key, None)
         rule_cfg = dict(cfg, style=merged)
-        built = _vector_layer(source_id, layer, rule_cfg)
-        built["id"] = f"vector-{layer.id}-r{i}"
-        _apply_rule_scope(built, rule)
-        out.append(built)
-        outline = _polygon_outline_layer(source_id, layer, rule_cfg, built)
-        if outline:
-            outline["id"] = f"vector-{layer.id}-r{i}-outline"
-            _apply_rule_scope(outline, rule)
-            out.append(outline)
+        # A RULE IS A SYMBOL, and a symbol is drawn by `_drawn_layers` — stacked strokes, a line of
+        # markers, a centroid symbol and all. Building only the base here published a rule whose
+        # symbol was a red line under blue dashes as plain red, and one whose symbol was a line of
+        # circles as a plain line, while the same styles on a single-symbol layer were right.
+        # Every id keeps the rule in it, so the rule's own base and outline are named exactly as
+        # they were before and an already-published portal renders byte for byte the same.
+        prefix = f"vector-{layer.id}"
+        for ml in _drawn_layers(source_id, layer, rule_cfg):
+            ml["id"] = ml["id"].replace(prefix, f"{prefix}-r{i}", 1)
+            _apply_rule_scope(ml, rule)
+            out.append(ml)
     return out or None
 
 
