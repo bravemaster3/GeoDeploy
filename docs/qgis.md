@@ -155,7 +155,10 @@ and that difference is the point.
 
 The **Source** picker offers a portal two ways:
 
-- **As the portal draws it** — the published tiles. Fastest, and exactly what a visitor sees.
+- **Fast preview — the portal's tiles** — the published tiles, coloured and generalized by
+  the server. Fastest to draw and close to the published map. It is a preview, not a
+  facsimile: QGIS's tile renderer and the portal's are different engines, so labels can sit
+  differently and a tile renderer has no categorized or graduated renderer to nudge.
 - **Editable — each layer from its data** — every layer opened from its own data and *then* painted
   with the portal's styling. Slower to draw, and the whole of QGIS's symbology applies.
 

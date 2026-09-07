@@ -1595,7 +1595,12 @@ def pictures_are_the_right_size():
 # ══ 16. A portal group is drawn the way the portal draws it ══════════════════════════════════════
 
 def tiles_match_the_portal():
-    """"As the portal draws it" has to mean that.
+    """A fast preview may be approximate; it may not be a different map.
+
+    The picker no longer promises "as the portal draws it" — QGIS's tile renderer and MapLibre are
+    different engines and the label was read as a guarantee. What it still promises is a PREVIEW of
+    the published map, and these are the differences that break that word rather than soften it: a
+    rule-based layer flattened to one symbol, or a picture marker drawn as a plain dot.
 
     A portal opened as a group hands QGIS vector TILES, and that renderer knew about single,
     graduated and categorized styles only. A RULE-BASED layer — four of the reporter's canal layers

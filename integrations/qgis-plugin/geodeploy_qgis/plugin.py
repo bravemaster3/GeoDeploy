@@ -709,11 +709,17 @@ class GeoDeployDock(QDockWidget):
     #: The two ways to open a PORTAL, offered in the same picker as a layer's sources because it is
     #: the same question one level up: draw it as published, or open what can actually be edited.
     PORTAL_SOURCES = [
+        # "AS THE PORTAL DRAWS IT" WAS A PROMISE THIS CANNOT KEEP, and it was read as one: every
+        # difference between the tile renderer and the published map came back as a bug report
+        # against a label that said the two were the same. QGIS's tile renderer and MapLibre are
+        # different engines — they place labels differently, generalize differently, and a tile
+        # renderer has no categorized or graduated renderer at all. "Fast preview" says what it is
+        # and what it is for, and the tooltip says where it stops.
         {"kind": "portal-tiles", "is_data": False,
-         "label": "As the portal draws it — fast",
-         "why": "Every layer from the source the portal publishes: tiles, coloured and generalized "
-                "by the server. Fastest to draw, and exactly what a visitor sees — but tiles offer "
-                "no categorized or graduated renderer, so symbology can only be nudged."},
+         "label": "Fast preview — the portal's tiles",
+         "why": "Every layer from the tiles the portal publishes — coloured and generalized by the "
+                "server. Fastest to draw and close to the published map, though a tile renderer "
+                "cannot reproduce every symbol exactly. Open it Editable to change the symbology."},
         {"kind": "portal-data", "is_data": True,
          "label": "Editable — each layer from its data",
          "why": "Every layer opened from its own data — features for a vector, the GeoTIFF for a "
@@ -821,7 +827,7 @@ class GeoDeployDock(QDockWidget):
                 # `symbology.apply` picks the renderer from the layer's TYPE — feature, raster and
                 # vector-tile layers need different ones, and choosing here by source kind is how
                 # the two drifted apart before.
-                applied = (", styled as the portal draws it"
+                applied = (", styled the way the portal styles it"
                            if symbology.apply(layer, style, row)
                            else " — but its saved style could not be applied; the reason is in "
                                 "View > Panels > Log Messages, under GeoDeploy")
@@ -1440,7 +1446,7 @@ class GeoDeployDock(QDockWidget):
                      + ", ".join(flat_3d[:3]) + ") - reopen the portal with Source set to "
                      "“Editable” to see and edit it. The 3D itself is unchanged.")
         how = ("every layer from its data, so all of QGIS's symbology applies" if editable
-               else "as the portal draws it")
+               else "as a fast preview from the portal's tiles")
         self._say("Opened " + str(doc.get("title")) + " as a group - " + str(added) +
                   " layer(s), " + how + "." + note + " Restyle it, then use Push group to portal.",
                   MSG_WARNING if (missing or not_editable or flat_3d) else MSG_INFO)
