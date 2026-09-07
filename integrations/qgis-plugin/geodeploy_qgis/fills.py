@@ -694,6 +694,22 @@ def marker_to_qgis(symbol, style) -> bool:
     return _only_layer(symbol, marker)
 
 
+def _points_unit(target, setter: str) -> None:
+    """State a size in POINTS on whatever has its own unit setter. Silent when it has none.
+
+    Every number this plugin writes is in points — see `symbology._use_points` — and a setter left
+    at QGIS's default means millimetres, which is 2.835x larger and looks like a different symbol.
+    """
+    fn = getattr(target, setter, None)
+    if not callable(fn):
+        return
+    try:
+        from qgis.core import QgsUnitTypes
+        fn(symbology.enum(QgsUnitTypes, "RenderUnit", "RenderPoints"))
+    except Exception:                   # noqa: BLE001  # nosec B110 - intentional: a unit this QGIS spells differently must not cost the decoration
+        pass
+
+
 def line_marker_to_qgis(symbol, style) -> bool:
     """Put the style's repeated marker back along the line, over the stroke it already has."""
     block = (style or {}).get("line_marker")
@@ -712,8 +728,14 @@ def line_marker_to_qgis(symbol, style) -> bool:
         deco.setSubSymbol(sub)          # a NEW symbol, so nothing borrowed is handed back
         spacing = symbology._number(block.get("spacing"), None)
         if spacing:
-            # `symbol-spacing` is pixels; QGIS's interval is in the layer's own unit (points).
+            # `symbol-spacing` is CSS pixels; QGIS's interval is in the symbol layer's OWN unit —
+            # and that unit defaults to MILLIMETRES, which nothing here was setting. So 20 px of
+            # spacing was written as 15 and left to mean 15 mm: the markers came back nearly three
+            # times as far apart, which on a thin line reads as "the circles are missing". The same
+            # mistake `_use_points` exists to prevent everywhere else, in the one place that has
+            # its own unit setter.
             deco.setInterval(round(spacing * symbology.CSS_PX_TO_POINTS, 2))
+            _points_unit(deco, "setIntervalUnit")
         # APPENDED, not replacing: a decorated line is a stroke WITH markers on it, and dropping the
         # stroke would lose the road under the ticks — the same mistake `_line_decoration_symbol`
         # exists to avoid when reading.

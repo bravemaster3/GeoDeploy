@@ -7,7 +7,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.5.1
+version=0.5.2
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -26,7 +26,17 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.5.1 - Two bugs 0.5.0 introduced, both reported within minutes of installing it.
+changelog=0.5.2 - Two things the FAST DRAW ("as the portal draws it") got wrong, both of
+    which made a layer look like it was missing.
+    THE CIRCLES ALONG A LINE SAT NEARLY THREE TIMES TOO FAR APART. The spacing between markers
+    travelled as a number without its unit, so 20 screen pixels was rebuilt as 15 MILLIMETRES -
+    QGIS's default unit, not the one the number was measured in. On a long thin line that reads as
+    "the markers are not drawn at all". Spacing is now stated in points, like every other size.
+    AND EVERY LABEL IN A RULE TREE APPEARED AT ONCE. A rule's zoom range lives on the RULE, beside
+    its filter; the tile path read it from the label settings instead and gave every rule the
+    LAYER's range - so a hamlet's name showed as far out as a city's, and the map was unreadable
+    zoomed out. Each rule now keeps the scale range it was drawn with.
+    0.5.1 - Two bugs 0.5.0 introduced, both reported within minutes of installing it.
     CONNECTING COULD FAIL OUTRIGHT with "Client.__init__() got an unexpected keyword argument".
     The client is vendored, but putting vendor/ on the path only decides where `geodeploy` is
     imported FROM the first time - after that Python answers from its module cache, so upgrading

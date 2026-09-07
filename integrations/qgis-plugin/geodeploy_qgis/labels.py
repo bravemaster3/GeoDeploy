@@ -740,7 +740,7 @@ def _tile_labeling(qgis_layer, settings, style) -> bool:
 
     geometry = _tile_geometry_type(qgis_layer, style)
 
-    def one(block, name, settings_for_style, filter_expression=""):
+    def one(block, name, settings_for_style, filter_expression="", zoom=None):
         tile_style = QgsVectorTileBasicLabelingStyle()
         tile_style.setLabelSettings(settings_for_style)
         tile_style.setStyleName(name)
@@ -751,12 +751,20 @@ def _tile_labeling(qgis_layer, settings, style) -> bool:
                 tile_style.setGeometryType(geometry)
             except Exception:           # noqa: BLE001 - the default still labels something  # nosec B110 - intentional: a geometry this QGIS names differently must not cost the labels
                 pass
-        # The zoom range, so labels do not appear at zooms the layer itself is hidden at.
-        lo = block.get("minzoom", style.get("minzoom"))
-        hi = block.get("maxzoom", style.get("maxzoom"))
+        # THE RULE'S OWN ZOOM RANGE, NOT THE LAYER'S. A label rule tree is how a names layer says a
+        # town appears at 1:500,000 and a hamlet only at 1:30,000, and that range is recorded on the
+        # RULE — `entry["minzoom"]`, beside its filter — not inside the label settings the rule
+        # merges over the layer's. Reading it from the merged block gave every rule the LAYER's
+        # range, so every place name appeared at once from the zoom the layer itself starts at:
+        # "all labels are displaying when it should hide some and only show them adaptively".
+        source = zoom if zoom is not None else block
+        lo = source.get("minzoom", style.get("minzoom"))
+        hi = source.get("maxzoom", style.get("maxzoom"))
         try:
-            tile_style.setMinZoomLevel(int(lo) if lo is not None else 0)
-            tile_style.setMaxZoomLevel(int(hi) if hi is not None else 22)
+            # CLAMPED to the range a tile pyramid has. QGIS stores a scale threshold far outside it
+            # — 29 here — and a max zoom above the deepest tile is a promise nothing can keep.
+            tile_style.setMinZoomLevel(max(0, int(lo)) if lo is not None else 0)
+            tile_style.setMaxZoomLevel(min(22, int(hi)) if hi is not None else 22)
         except (TypeError, ValueError):
             pass
         # A TILE STYLE CAN BE FILTERED, which is the whole reason label rules can travel here at
@@ -787,7 +795,7 @@ def _tile_labeling(qgis_layer, settings, style) -> bool:
             if rule_settings is None:
                 continue
             styles.append(one(block, str(rule.get("label") or "Rule {0}".format(i + 1)),
-                              rule_settings, _rule_expression(rule)))
+                              rule_settings, _rule_expression(rule), rule))
     if not styles:
         styles = [one(labels_block, "GeoDeploy labels", settings)]
 

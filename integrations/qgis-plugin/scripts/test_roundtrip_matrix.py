@@ -1145,9 +1145,14 @@ def label_rules():
             ("Woodland", '"kind" = \'wood\'', "#599c30", 9.0),
             ("Town", '"kind" = \'town\'', "#372d0b", 11.0))
 
+    #: The scale each rule starts showing at — a town from much further out
+    #: than a wood. Different per rule, because that is the whole point of
+    #: labelling by rule and the thing the tile path was throwing away.
+    SCALES = (45000, 200000, 500000)
+
     layer = make_layer("Point")
     root = QgsRuleBasedLabeling.Rule(None)
-    for name, expression, colour, size in SPEC:
+    for (name, expression, colour, size), scale in zip(SPEC, SCALES):
         settings = QgsPalLayerSettings()
         settings.fieldName = "name"
         fmt = QgsTextFormat()
@@ -1159,6 +1164,10 @@ def label_rules():
         rule = QgsRuleBasedLabeling.Rule(settings)
         rule.setDescription(name)
         rule.setFilterExpression(expression)
+        # A DIFFERENT SCALE PER RULE, which is the whole point of labelling by rule: the bigger the
+        # place, the further out you see its name.
+        rule.setMinimumScale(scale)
+        rule.setMaximumScale(1)
         root.appendChild(rule)
     layer.setLabeling(QgsRuleBasedLabeling(root))
     layer.setLabelsEnabled(True)
@@ -1242,6 +1251,14 @@ def label_rules():
         colours = [st.labelSettings().format().color().name() for st in tile_styles]
         check("tiles: each rule keeps its colour", colours == [c for _n, _e, c, _s in SPEC],
               colours)
+        # EACH RULE'S OWN ZOOM RANGE. A label rule tree is how a names layer says a town appears
+        # zoomed out and a hamlet only close in; the range lives on the RULE, beside its filter,
+        # not in the label settings it merges over the layer's. Reading it from the merged block
+        # gave every rule the LAYER's range and every place name appeared at once.
+        zooms = [(st.minZoomLevel(), st.maxZoomLevel()) for st in tile_styles]
+        check("tiles: each rule keeps its own zoom range", len(set(zooms)) > 1, zooms)
+        check("tiles: ...clamped to a range a tile pyramid has",
+              all(0 <= lo <= 22 and 0 <= hi <= 22 for lo, hi in zooms), zooms)
     except ImportError:                                                          # pragma: no cover
         skip("tile label rules", "no QgsVectorTileLayer on this QGIS")
 
@@ -1282,6 +1299,8 @@ def lines_made_of_markers():
     sub.setSize(10.0)
     sub.setSizeUnit(enum(QgsUnitTypes, "RenderUnit", "RenderMillimeters"))
     marker_line.setSubSymbol(sub)
+    marker_line.setInterval(20.0)
+    marker_line.setIntervalUnit(enum(QgsUnitTypes, "RenderUnit", "RenderPixels"))
     line.changeSymbolLayer(0, marker_line)
     layer.setRenderer(QgsSingleSymbolRenderer(line))
 
@@ -1321,6 +1340,22 @@ def lines_made_of_markers():
 
     before = _ink(sub)
     after = _ink(rebuilt) if rebuilt is not None else 0
+    # THE SPACING CARRIES ITS UNIT TOO. `setInterval` leaves the unit at QGIS's default —
+    # millimetres — so 20 CSS px of spacing written as 15 meant 15 mm, and the markers came back
+    # nearly three times as far apart. On a thin line that reads as "the circles are missing".
+    spacing_layer = None
+    for i in range(symbol.symbolLayerCount()):
+        if type(symbol.symbolLayer(i)).__name__ == "QgsMarkerLineSymbolLayer":
+            spacing_layer = symbol.symbolLayer(i)
+    if spacing_layer is not None:
+        check("back in QGIS: the spacing is stated in points, not left as millimetres",
+              int(spacing_layer.intervalUnit()) == 4, int(spacing_layer.intervalUnit()))
+        check("back in QGIS: ...so the markers are as far apart as they were",
+              abs(symbology._css_px(spacing_layer, "interval", "intervalUnit")
+                  - symbology._css_px(marker_line, "interval", "intervalUnit")) < 0.5,
+              (symbology._css_px(spacing_layer, "interval", "intervalUnit"),
+               symbology._css_px(marker_line, "interval", "intervalUnit")))
+
     check("back in QGIS: the markers are the size they were",
           before and after and abs(after - before) <= max(2.5, 0.1 * before),
           "QGIS drew {0} px, gets {1} px back".format(before, after))
