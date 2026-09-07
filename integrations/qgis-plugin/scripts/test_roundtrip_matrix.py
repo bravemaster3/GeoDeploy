@@ -1640,6 +1640,40 @@ def tiles_match_the_portal():
     pens = [e.symbol().symbolLayer(0).penStyle() for e in entries if e.symbol()]
     check("...and each with its own dash", len(set(pens)) == 3, pens)
 
+    # ── A RULE LADDER: EACH RUNG AT ITS OWN ZOOMS ────────────────────────────────────────────────
+    # A rule tree is how a layer says "generalized outlines zoomed out, full detail zoomed in", and
+    # a tile renderer style left with no zoom range is active at EVERY zoom — so the fast preview
+    # drew every rung at once and the layer never thinned out the way the portal and the editable
+    # copy both do. Reported as layers not disappearing at the same zoom, worst zoomed out.
+    #
+    # The two ends round differently because they MEAN differently: MapLibre draws for
+    # `minzoom <= z < maxzoom` while QGIS's `isActive` is inclusive at both ends.
+    ladder = {"color": "#84d9ff", "rules": [
+        {"label": "far", "expression": '"c" = 0', "minzoom": 8.127, "maxzoom": 10.771,
+         "style": {"color": "#84d9ff"}},
+        {"label": "mid", "expression": '"c" = 1', "minzoom": 10.771, "maxzoom": 13.0,
+         "style": {"color": "#e24646"}},
+        {"label": "near", "expression": '"c" = 2', "minzoom": 13.0,
+         "style": {"color": "#111111"}}]}
+    _layer, rungs = tiles("polygon", ladder, "ladder")
+    ranges = [(e.minZoomLevel(), e.maxZoomLevel()) for e in rungs]
+    # `-1` is QGIS's "no limit", which is exactly what a rule with no `maxzoom` means — a ceiling
+    # of 22 would be a limit the style never stated.
+    check("a rule ladder: each rung keeps its own zooms", ranges == [(9, 10), (11, 12), (13, -1)],
+          ranges)
+    # …and the rungs must TILE the zooms: exactly one active at each, no gap and no overlap, which
+    # is what the portal does and what "thins out" means.
+    active = [sum(1 for e in rungs if e.isActive(z)) for z in range(9, 20)]
+    check("a rule ladder: exactly one rung draws at each zoom", set(active) == {1}, active)
+    check("a rule ladder: and none of them below its first zoom",
+          not any(e.isActive(8) for e in rungs), [e.isActive(8) for e in rungs])
+    # A rule with no range of its own is still drawn at every zoom the LAYER is — the range is
+    # optional, and an absent one must not become a range of nothing.
+    _layer, plain_rungs = tiles("line", ruled, "unranged")
+    check("a rule with no zoom range is drawn at every zoom",
+          all(e.minZoomLevel() < 0 and e.maxZoomLevel() < 0 for e in plain_rungs),
+          [(e.minZoomLevel(), e.maxZoomLevel()) for e in plain_rungs])
+
     # ── A PICTURE MARKER ─────────────────────────────────────────────────────────────────────────
     source = make_layer("Point")
     from qgis.core import QgsMarkerSymbol, QgsSingleSymbolRenderer

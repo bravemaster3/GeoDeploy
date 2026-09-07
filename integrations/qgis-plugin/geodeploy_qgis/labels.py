@@ -922,7 +922,11 @@ def _tile_labeling(qgis_layer, settings, style) -> bool:
             # its ceiling at the near end and its floor at the far end, which is exactly what
             # MapLibre draws when it compares the map's zoom against the same numbers.
             tile_style.setMinZoomLevel(max(0, int(math.ceil(float(lo)))) if lo is not None else 0)
-            tile_style.setMaxZoomLevel(min(22, int(math.floor(float(hi)))) if hi is not None else 22)
+            # THE TOP END IS EXCLUSIVE ON ONE SIDE AND INCLUSIVE ON THE OTHER. MapLibre draws for
+            # `minzoom <= z < maxzoom`; QGIS's `isActive` is `min <= z <= max` — asked of QGIS, not
+            # assumed. The last whole zoom inside the range is therefore `ceil(hi) - 1`.
+            tile_style.setMaxZoomLevel(
+                max(0, min(22, int(math.ceil(float(hi))) - 1)) if hi is not None else 22)
         except (TypeError, ValueError):
             pass
         # A TILE STYLE CAN BE FILTERED, which is the whole reason label rules can travel here at

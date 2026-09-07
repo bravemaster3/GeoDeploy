@@ -7,7 +7,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.5.4
+version=0.5.5
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -26,7 +26,17 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.5.4 - A LINE'S LABELS COME BACK. Reported against a contour layer: the heights
+changelog=0.5.5 - THE FAST PREVIEW NOW THINS OUT THE WAY THE PORTAL DOES. A rule tree is how
+    a layer says "generalized outlines zoomed out, full detail zoomed in" - three rules, three
+    zoom ranges - and a tile renderer style left with no range is active at EVERY zoom, so the
+    fast path drew every rung of the ladder at once. Each rule and each class now carries its own
+    range, converted the way the two sides mean it: MapLibre draws for min <= z < max where QGIS
+    is inclusive at both ends, so the last whole zoom is ceil(max) - 1. Checked zoom by zoom
+    against a portal's own published style.
+    Also: the source picker says "Fast preview - the portal's tiles" rather than "As the portal
+    draws it". The old label was a promise a different rendering engine cannot keep, and every
+    remaining difference arrived as a report against it.
+    0.5.4 - A LINE'S LABELS COME BACK. Reported against a contour layer: the heights
     showed in the file and in the browser and were simply absent once the portal was opened in
     QGIS. The label PLACEMENT never travelled - it was read by stringifying an enum, which on this
     QGIS is an int, so the test never matched and QGIS's default (around a point) stood. A line

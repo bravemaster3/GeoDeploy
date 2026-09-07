@@ -2798,6 +2798,41 @@ def _apply_pictures(symbol, style: dict) -> None:
                  "symbol.".format(key, type(exc).__name__, exc))
 
 
+def _tile_style_zoom(tile_style, scope) -> None:
+    """One rule's (or class's) own zoom range onto its renderer style. Silent when it has none.
+
+    A tile renderer style carries a zoom range the way a MapLibre layer carries `minzoom`/`maxzoom`,
+    and leaving it unset (-1, -1) means EVERY zoom. So a rule ladder — a generalized symbol zoomed
+    out, the detailed one zoomed in — drew every rung at once on the fast preview while the portal
+    and the editable copy both showed one at a time.
+
+    The rounding is the same one the labels use and for the same reason: a scale threshold converts
+    to a FRACTIONAL zoom and a tile renderer has only whole ones, so the first whole zoom inside a
+    range is its ceiling. Truncating instead would draw a rule a whole zoom level before the portal
+    does.
+
+    A zoom range does not mean the same thing on the two sides, and the difference shows at the top
+    end: MapLibre draws a layer for `minzoom <= z < maxzoom` — the maximum is EXCLUSIVE — while
+    QGIS's `isActive` is `min <= z <= max`, inclusive (asked of QGIS, not assumed). So the last
+    whole zoom a range covers is `ceil(hi) - 1`, which is `floor(hi)` for the fractional numbers a
+    scale threshold produces and one less for a round number somebody typed in GeoDeploy.
+    """
+    if not isinstance(scope, dict):
+        return
+    lo, hi = scope.get("minzoom"), scope.get("maxzoom")
+    if lo is None and hi is None:
+        return
+    import math
+    try:
+        if lo is not None:
+            tile_style.setMinZoomLevel(max(0, int(math.ceil(float(lo)))))
+        if hi is not None:
+            tile_style.setMaxZoomLevel(max(0, min(22, int(math.ceil(float(hi))) - 1)))
+    except (TypeError, ValueError, AttributeError) as exc:
+        _log("A rule's zoom range could not be applied to the tiles ({0}); it is drawn at every "
+             "zoom the layer is.".format(exc))
+
+
 def apply_to_vector_tiles(tile_layer, row: dict, source_layer: str | None,
                           style: dict | None = None) -> bool:
     """Draw a vector TILE layer with the layer's real symbology — classes and all.
@@ -2855,7 +2890,7 @@ def apply_to_vector_tiles(tile_layer, row: dict, source_layer: str | None,
     except Exception:                   # noqa: BLE001 - fall through to a single symbol
         model = None
 
-    def _style(name, colour, expression, entry=None, merged=False):
+    def _style(name, colour, expression, entry=None, merged=False, scope=None):
         """One renderer entry per geometry type this layer may hold — usually exactly one.
 
         `entry` is the CLASS this is drawing, whose own shape keys (a dash, a width, a fill) are
@@ -2906,6 +2941,7 @@ def apply_to_vector_tiles(tile_layer, row: dict, source_layer: str | None,
             entry.setEnabled(True)
             if expression:
                 entry.setFilterExpression(expression)
+            _tile_style_zoom(entry, scope)
             out.append(entry)
         return out
 
@@ -2923,8 +2959,14 @@ def apply_to_vector_tiles(tile_layer, row: dict, source_layer: str | None,
                 for key in ("color_mode", "classes", "categories", "color_field", "classes_n",
                             "rules"):
                     merged.pop(key, None)
+                # A RULE'S OWN ZOOM RANGE. A rule tree is how a layer says "generalized outlines
+                # zoomed out, full detail zoomed in" — three rules, three ranges — and the tile
+                # renderer drew all of them at every zoom, so the fast preview never thinned out
+                # the way the portal and the editable copy both do. Reported as layers not
+                # disappearing at the same zoom, worst zoomed out.
                 styles.extend(_style("rule-{0}".format(i), merged.get("color"),
-                                     _rule_filter_text(rule) or None, merged, merged=True))
+                                     _rule_filter_text(rule) or None, merged, merged=True,
+                                     scope=rule))
         elif model is not None and model.mode == "graduated" and model.field and model.classes:
             for i, cls in enumerate(model.classes):
                 # Open edges mean "everything below/above", exactly as they do on the map.
@@ -2939,14 +2981,14 @@ def apply_to_vector_tiles(tile_layer, row: dict, source_layer: str | None,
                     op = "<=" if i == len(model.classes) - 1 else "<"
                     parts.append("{0} {1} {2}".format(field, op, hi))
                 styles.extend(_style("class-{0}".format(i), cls.get("color"),
-                                     " AND ".join(parts) or None, cls))
+                                     " AND ".join(parts) or None, cls, scope=cls))
         elif model is not None and model.mode == "categorized" and model.field and model.categories:
             for i, cat in enumerate(model.categories):
                 value = cat.get("value")
                 literal = ("'" + str(value).replace("'", "''") + "'"
                            if not isinstance(value, (int, float)) else str(value))
                 styles.extend(_style("cat-{0}".format(i), cat.get("color"),
-                                     '"{0}" = {1}'.format(model.field, literal), cat))
+                                     '"{0}" = {1}'.format(model.field, literal), cat, scope=cat))
             # Everything not listed, drawn in the same "other" colour the map uses. First in the
             # list = drawn underneath the named categories.
             styles[:0] = _style("other", model.other_color or "#9ca3af", None)
