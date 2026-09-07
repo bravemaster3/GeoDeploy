@@ -32,6 +32,8 @@ import {
   combinedFilter as symCombinedFilter,
   drawsNothing as symDrawsNothing,
   labelsOf as symLabelsOf,
+  labelRules as symLabelRules,
+  labelText as symLabelText,
   labelLayout as symLabelLayout,
   labelPaint as symLabelPaint,
   labelScope as symLabelScope,
@@ -367,16 +369,41 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
       // LABELS: their own `symbol` layer, pushed after the geometry so they draw above it. A label
       // has its own zoom range, must sit above every geometry, and a point layer's own layer is
       // already a symbol layer carrying an icon — so merging the two would tie a label's placement
-      // to its marker's. Mirrors portal_generator._label_layer.
+      // to its marker's. Mirrors portal_generator._label_layers.
+      //
+      // ONE LAYER PER LABEL RULE where the layer labels by rules. A rule-based labelling is a tree
+      // exactly like rule-based rendering — it is how a names layer says water is blue at 9pt and a
+      // town brown at 11 — and drawing only the top-level block, which is the first rule's settings
+      // kept as a fallback, put every name in one colour at one size.
       const labels = symLabelsOf(st)
       if (Object.keys(labels).length) {
-        style.layers.push({
-          id: `${srcId}-labels`,
-          type: 'symbol', source: srcId, 'source-layer': sourceLayer,
-          layout: symLabelLayout(labels),
-          paint: symLabelPaint(labels, opacity),
-          ...symLabelScope(labels),
-        })
+        const labelRuleList = symLabelRules(labels)
+        const pushLabels = (block, suffix, rule) => {
+          if (!symLabelText(block)) return
+          style.layers.push({
+            id: `${srcId}-${suffix}`,
+            type: 'symbol', source: srcId, 'source-layer': sourceLayer,
+            layout: symLabelLayout(block),
+            paint: symLabelPaint(block, opacity),
+            ...symLabelScope(block),
+            ...(rule ? ruleScope({ __rule: rule, __ruleIndex: 0 }) : {}),
+          })
+        }
+        if (!labelRuleList.length) {
+          pushLabels(labels, 'labels', null)
+        } else {
+          const labelBase = { ...labels }
+          delete labelBase.rules
+          const before = style.layers.length
+          labelRuleList.forEach((rule, i) => {
+            const block = { ...labelBase, ...(rule.labels || {}) }
+            delete block.rules
+            pushLabels(block, `labels-r${i}`, rule)
+          })
+          // A rule list that drew nothing still has to label the layer, or switching to rules would
+          // silently remove every label it had.
+          if (style.layers.length === before) pushLabels(labelBase, 'labels', null)
+        }
       }
 
       // The LAYER's own zoom range and subset filter onto everything it just pushed. A rule's zoom

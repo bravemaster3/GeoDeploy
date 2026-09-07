@@ -751,6 +751,21 @@ export function labelsOf(style = {}) {
 }
 
 /** The `text-field`. An expression wins over a field name. Twin of `symbology.label_text`. */
+/**
+ * The label rule list, or `[]`. Each entry is `{label, expression, filter, labels, min/maxzoom}`.
+ * Twin of `symbology.label_rules`.
+ *
+ * THE SAME SHAPE `style.rules` USES, because it is the same idea: QGIS labels by rules — water blue
+ * at 9pt, woodland green, a town brown at 11 — and one symbol layer per rule is the only way to
+ * draw that. The top-level block stays the FALLBACK, so a renderer that knows nothing about label
+ * rules still labels the layer.
+ */
+export function labelRules(labels = {}) {
+  const raw = (labels || {}).rules
+  if (!Array.isArray(raw)) return []
+  return raw.filter((r) => r && typeof r === 'object' && r.labels && typeof r.labels === 'object')
+}
+
 export function labelText(labels = {}) {
   if (labels.expression != null) return labels.expression
   return ['to-string', ['get', String(labels.field)]]

@@ -265,6 +265,18 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   (`POST /data/vector/{id}/tile`); the fix only changes what new tiles contain. Regression test:
   `api/tests/test_native_crs.py`.
 
+## A labelling is a tree (2026-09-07)
+
+`symbology.label_rules(labels)` reads `labels.rules`, and `portal_generator._label_layers` emits ONE
+label layer per rule, filtered to it. QGIS labels a names layer by rule — water blue at 9pt,
+woodland green, a town brown at 11 — and MapLibre cannot vary text colour or size per feature within
+one layer, so a rule has to be a layer. The top-level block stays as the fallback, which is what a
+renderer knowing nothing about label rules draws; `label_rules` returning `[]` is that renderer's
+view.
+
+A rule list that produces no drawable text still labels the layer from the base block: switching to
+rules must never silently remove every label a layer had.
+
 ## A class is more than a colour (2026-09-07)
 
 `symbology.CLASS_SHAPE_KEYS` names what a class of a classified layer may hold of its own — its
@@ -291,6 +303,7 @@ range. `test_per_class_symbology.py` pins that.
 symbols for classes the map draws differently.
 
 ## Last updated
+2026-09-07c (`symbology.label_rules` + `portal_generator._label_layers`: **one label layer per label rule.** See the section above. Tests: `api/tests/test_label_rules.py`.)
 2026-09-07b (`symbology.CLASS_SHAPE_KEYS` / `class_style` / `expand_classes`, and `legend_entries` built through them: **a class carries its own symbol, not just its colour**. See the section above for why a class becomes a render layer rather than a data-driven expression, and why an unvaried classification is deliberately left alone. Also `needs_outline_layer`: a polygon border asked to be DASHED gets its own line layer at any width — `fill-outline-color` is a colour with no width and no pattern, so a hairline dashed boundary drew solid. Tests: `api/tests/test_per_class_symbology.py`.)
 2026-09-07 (`titiler.py`: **contour lines can be coloured by their own value**, and the relief
 behind them can be switched off. A line takes its band number SHIFTED past the relief's range —

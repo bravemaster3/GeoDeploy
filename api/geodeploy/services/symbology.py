@@ -998,6 +998,23 @@ def labels_of(style: dict) -> dict:
     return labels if (labels.get("field") or labels.get("expression") is not None) else {}
 
 
+def label_rules(labels: dict) -> list[dict]:
+    """The label rule list, or `[]`. Each entry is `{label, expression, filter, labels, min/maxzoom}`.
+
+    THE SAME SHAPE `style.rules` USES, because it is the same idea: QGIS labels by rules — water
+    blue at 9pt, woodland green, a town brown at 11 — and one MapLibre symbol layer per rule is the
+    only way to draw that. Reading the first rule alone, which is what the plugin used to send, made
+    every place name on a names layer the same colour and size.
+
+    The top-level block stays the FALLBACK, so a renderer that knows nothing about label rules still
+    labels the layer; `label_rules` returning `[]` is what that renderer sees.
+    """
+    raw = (labels or {}).get("rules")
+    if not isinstance(raw, list):
+        return []
+    return [r for r in raw if isinstance(r, dict) and isinstance(r.get("labels"), dict)]
+
+
 def label_text(labels: dict):
     """The `text-field` value: a translated expression if there is one, else a plain field read.
 

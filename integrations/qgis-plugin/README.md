@@ -218,6 +218,20 @@ rather than following the platform's — see the note in `CHANGELOG.md`.
   spec survives a push, so a round trip cannot delete a portal's 3D (proven against every extrusion
   on the live instance). Candidate causes for whoever picks this up are in
   `notes_temp/notes_for_future.md`; the feature is on the roadmap under "Every symbol QGIS can draw".
+- **A LABELLING IS A TREE, not its first leaf.** `labels.rules` carries one entry per leaf of a
+  `QgsRuleBasedLabeling`, the same shape `style.rules` uses, and the server draws one label layer
+  per rule. Reading only the first rule — which is what `_first_rule_settings` did — sent a names
+  layer's seven label colours and five sizes as one, and the note saying so went to a log while the
+  map drew the wrong thing. The top-level block is still the first rule's settings, kept as the
+  fallback for a renderer that knows nothing about label rules. **Trap:** bracketing a lone
+  expression when combining it with its parents' adds a pair of parentheses on EVERY round trip;
+  `"type" = 'Water'` becomes `(("type" = 'Water'))` and deeper. Wrap only when there is more than
+  one term — the key exists to hand somebody back the text they typed.
+- **A SIZE OF ZERO IS A SIZE.** `Number(size) || 5` and `style.get("radius") or DEFAULT` both read a
+  deliberate 0 as "unset". A place-names layer whose 355 points are sized 0 so only the labels show
+  drew as 355 amber dots in the browser, and came back from GeoDeploy with a 5 px marker it never
+  had. `_stated()` on the QGIS side and an explicit `Number.isFinite` on the web side; the default
+  applies only when there is no number at all.
 - **A CLASS CARRIES ITS OWN SYMBOL**, not just its colour — `symbology.CLASS_SHAPE_KEYS` is the
   vocabulary, `class_overrides` reads it and `class_style` writes it. Before this, GeoDeploy held a
   colour per class and one shape for the layer, taken from the FIRST class: two categories in the
@@ -319,6 +333,7 @@ Findings in `vendor/` are fixed in `cli/geodeploy` and re-vendored — never edi
 `vendor.py --check` fails.
 
 ## Last updated
+2026-09-07c (`labels.py`: **a rule-based LABELLING travels as its rules**, not as its first leaf — `labels.rules`, the same shape `style.rules` uses, with `portal_generator._label_layers` drawing one label layer per rule. And **a size of zero is a size**: `_stated()` replaces `get("radius") or DEFAULT` so a marker sized 0 stays 0 in both directions. Tests: the `Label rules` and `Zero is a size` sections of `test_roundtrip_matrix.py`, and `api/tests/test_label_rules.py`.)
 2026-09-07 (**a CLASS carries its own symbol now, not just its colour** — `CLASS_SHAPE_KEYS`,
 `class_overrides` on the way out and `class_style` on the way in. GeoDeploy held a colour per class
 and ONE shape for the layer, taken from the first class, so two categories in the same colour that

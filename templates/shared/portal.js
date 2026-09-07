@@ -500,7 +500,7 @@
     if (spec) { setMarkerImage(e.id, spec.shape, spec.color, spec.size, spec.outline, spec.outlineWidth); return; }
     const l = (STYLE.layers || []).find(x => x.layout && x.layout['icon-image'] === e.id);
     const m = (l && l.metadata) || {};
-    setMarkerImage(e.id, m['geodeploy:marker'] || 'circle', m['geodeploy:markerColor'] || '#3b82f6', m['geodeploy:markerSize'] || 5);
+    setMarkerImage(e.id, m['geodeploy:marker'] || 'circle', m['geodeploy:markerColor'] || '#3b82f6', _markerSize(m));
   });
 
   // ── Auto-fit to data bounds ─────────────────────────────
@@ -1844,8 +1844,20 @@
     else if (shape === 'cross') { const a = crossPoints(cx, cy, r).split(' '); a.forEach((pt, i) => { const xy = pt.split(','); i ? ctx.lineTo(+xy[0], +xy[1]) : ctx.moveTo(+xy[0], +xy[1]); }); ctx.closePath(); }
     else { ctx.arc(cx, cy, r, 0, Math.PI * 2); }
   }
+  //: The marker size a layer records, with 0 kept as 0. `|| 5` here was the same falsy-zero bug
+  //: as in markerImage(): a layer whose marker is deliberately invisible had it read back as 5.
+  function _markerSize(meta) {
+    const n = Number((meta || {})['geodeploy:markerSize']);
+    return Number.isFinite(n) && n >= 0 ? n : 5;
+  }
+
   function markerImage(shape, color, size, outline, outlineWidth) {
-    const dpr = 2, r = Math.max(3, Number(size) || 5);
+    // A SIZE OF ZERO IS A SIZE, NOT A MISSING VALUE. `Number(size) || 5` turned a marker its
+    // author deliberately sized 0 into a 5 px dot, and `Math.max(3, ...)` enlarged every marker
+    // under 3 px to 3. Reported on a place-names layer whose points exist only to carry labels:
+    // QGIS draws nothing and the portal drew 355 amber dots. Twin of ui/src/lib/markerImage.js.
+    const n = Number(size);
+    const dpr = 2, r = Number.isFinite(n) && n >= 0 ? n : 5;
     // A RATIO of the radius, not pixels: a 3 px ring around a 4 px dot and around a 20 px dot are
     // different symbols, and resizing a layer should keep the outline in proportion. 0.28 is what
     // the old hard-coded stroke was, so an unstyled marker is pixel-identical to before.
@@ -1945,7 +1957,7 @@
       }
       if (l.metadata['geodeploy:marker'] === undefined) return;
       setMarkerImage(l.layout['icon-image'], l.metadata['geodeploy:marker'] || 'circle',
-        l.metadata['geodeploy:markerColor'] || '#3b82f6', l.metadata['geodeploy:markerSize'] || 5);
+        l.metadata['geodeploy:markerColor'] || '#3b82f6', _markerSize(l.metadata));
     } catch (e) { /* one layer's icons are not worth the rest of the load handler */ } });
   }
 
@@ -3112,7 +3124,7 @@
       const m = layer.metadata || {};
       const imgId = (layer.layout && layer.layout['icon-image']) || ('gd-pt-' + m['geodeploy:layer_id']);
       const curShape = m['geodeploy:marker'] || 'circle';
-      const curSize = m['geodeploy:markerSize'] || 5;
+      const curSize = _markerSize(m);
       const shapeOpts = MARKER_SHAPES.map(s =>
         `<option value="${s}"${s === curShape ? ' selected' : ''}>${s[0].toUpperCase() + s.slice(1)}</option>`).join('');
       return `<div class="layer-style-row" data-style-for="${layer.id}">` +

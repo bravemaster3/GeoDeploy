@@ -127,16 +127,20 @@ def from_qgis(qgis_layer):
         return None, notes
 
     kind = type(labeling).__name__
+    rules = []
     if kind == "QgsRuleBasedLabeling":
-        # RULE-BASED LABELLING is a tree like rule-based rendering, and one MapLibre symbol layer
-        # per rule is the same shape — but a label layer also carries text, and the rules usually
-        # differ in FONT rather than in which features they label. Reading the first rule's
-        # settings is a real approximation, so it says so rather than looking complete.
+        # RULE-BASED LABELLING IS A TREE, exactly like rule-based rendering, and the rules are how a
+        # names layer says that water is blue at 9pt and a town is brown at 11. Reading only the
+        # first leaf — which is what this did — sent SEVEN colours and five sizes as one, and the
+        # note saying so was in a log nobody reads while the map drew every name identically.
+        #
+        # So the tree travels: `labels.rules`, one entry per leaf, the same shape `style.rules`
+        # uses. The first rule's settings stay at the top level as the fallback, so a renderer that
+        # knows nothing about label rules still draws something recognisable.
+        rules = _read_label_rules(labeling, notes)
         settings = _first_rule_settings(labeling)
         if settings is None:
             return None, notes
-        notes.append("its labels are rule-based; the first rule's text and font were taken and the "
-                     "other rules were not")
     else:
         try:
             settings = labeling.settings()
@@ -150,7 +154,87 @@ def from_qgis(qgis_layer):
     _read_format(settings, labels, notes)
     _read_placement(settings, labels)
     _read_scope(settings, labels)
+    if len(rules) > 1:
+        labels["rules"] = rules
     return labels, notes
+
+
+def _read_label_rules(labeling, notes: list) -> list:
+    """Every leaf of a label rule tree, flattened — `[{label, expression, filter, labels, …}]`.
+
+    Flattened the way `rules.py` flattens a RENDER rule tree, and for the same reason: MapLibre has
+    no nesting, so a child's condition is ANDed with its parents' and the narrowest scale range on
+    the path wins. A rule whose filter cannot be translated is DROPPED with a note rather than
+    widened to everything — a rule that labels every feature is a different map, not a degraded one.
+    """
+    out = []
+
+    def walk(rule, inherited_filter, inherited_expr, lo, hi):
+        for child in rule.children():
+            expression = (child.filterExpression() or "").strip()
+            # WRAPPED ONLY WHEN THERE IS SOMETHING TO COMBINE. Bracketing a lone expression grows
+            # it by a pair of parentheses on EVERY round trip — `"type" = 'Water'` becomes
+            # `(("type" = 'Water'))` and then deeper — and the promise this key exists for is that
+            # a round trip hands somebody back the text they typed.
+            parts = [e for e in (inherited_expr, expression) if e]
+            combined_expr = (parts[0] if len(parts) == 1
+                             else " AND ".join("({0})".format(e) for e in parts))
+            child_lo, child_hi = _rule_zoom_range(child, lo, hi)
+            node = inherited_filter
+            if expression:
+                translated, reason = expressions.try_maplibre(expression)
+                if translated is None:
+                    notes.append("its label rule {0!r} filters on {1}, which {2} — that rule was "
+                                 "left behind rather than labelling everything"
+                                 .format(child.description() or expression, expression, reason))
+                    continue
+                node = (translated if inherited_filter is None
+                        else ["all", inherited_filter, translated])
+            settings = child.settings()
+            if settings is not None and child.active():
+                block = {"enabled": True}
+                _read_text(settings, block, notes)
+                _read_format(settings, block, notes)
+                _read_placement(settings, block)
+                _read_scope(settings, block)
+                if block.get("enabled"):
+                    entry = {"label": child.description() or combined_expr or "Labels",
+                             "labels": block}
+                    if node is not None:
+                        entry["filter"] = node
+                    if combined_expr:
+                        entry["expression"] = combined_expr
+                    # THE RULE'S scale range, which is separate from the label settings' own. The
+                    # narrower of the two is what QGIS actually draws with.
+                    if child_lo is not None:
+                        entry["minzoom"] = max(child_lo, block.get("minzoom", child_lo))
+                    if child_hi is not None:
+                        entry["maxzoom"] = min(child_hi, block.get("maxzoom", child_hi))
+                    out.append(entry)
+            walk(child, node, combined_expr, child_lo, child_hi)
+
+    try:
+        walk(labeling.rootRule(), None, "", None, None)
+    except Exception as exc:            # noqa: BLE001 - the first rule is still returned above
+        notes.append("its label rules could not be read ({0}); the first rule was sent alone"
+                     .format(type(exc).__name__))
+        return []
+    return out
+
+
+def _rule_zoom_range(rule, lo, hi):
+    """A label rule's own scale range as zooms, narrowed by whatever it inherits."""
+    try:
+        if not rule.dependsOnScale():
+            return lo, hi
+        # QGIS: minimumScale is the SMALLEST denominator (closest view) → the highest zoom.
+        low = zoom_for_scale(rule.maximumScale()) if rule.maximumScale() else None
+        high = zoom_for_scale(rule.minimumScale()) if rule.minimumScale() else None
+    except Exception:                   # noqa: BLE001
+        return lo, hi
+    out_lo = low if lo is None else (low if low is not None and low > lo else lo)
+    out_hi = high if hi is None else (high if high is not None and high < hi else hi)
+    return out_lo, out_hi
 
 
 def _first_rule_settings(labeling):
@@ -369,6 +453,105 @@ def _read_scope(settings, labels: dict) -> None:
 
 # ── GeoDeploy → QGIS ─────────────────────────────────────────────────────────────────────────────
 
+def settings_of(labels: dict):
+    """A `QgsPalLayerSettings` built from one `labels` block, or None when it cannot be.
+
+    Pulled out of `to_qgis` so that a label RULE can be built with exactly the same code. A
+    rule-based labelling is a tree of these, and reading only the first one is what made a layer
+    whose place names are coloured by type — water blue, woodland green, towns brown — arrive with
+    every name in the first rule's colour.
+    """
+    from qgis.PyQt.QtGui import QColor, QFont
+    settings = QgsPalLayerSettings()
+
+
+    expression = (labels.get("qgis_expression") or "").strip()
+    if expression:
+        settings.fieldName = expression
+        settings.isExpression = True
+    elif labels.get("expression") is not None:
+        # Authored in GeoDeploy: rebuild QGIS text from the MapLibre expression, the same way
+        # a rule's filter is rebuilt when it has no carried source.
+        try:
+            settings.fieldName = expressions.from_maplibre(labels["expression"])
+            settings.isExpression = True
+        except Exception:           # noqa: BLE001 - fall back to the plain field, if any
+            settings.fieldName = str(labels.get("field") or "")
+    else:
+        settings.fieldName = str(labels.get("field") or "")
+    if not settings.fieldName:
+        return False
+
+    fmt = QgsTextFormat()
+    # THE CARRIED FAMILY WINS. A label that came from QGIS goes back in the typeface its author
+    # chose, not in the stack the portal had to substitute to draw it. Only a label authored in
+    # GeoDeploy — which has no carried font — falls back to the stack name.
+    carried = labels.get("qgis_font")
+    if isinstance(carried, dict) and carried.get("family"):
+        font = QFont(str(carried["family"]))
+        font.setBold(bool(carried.get("bold")))
+        font.setItalic(bool(carried.get("italic")))
+    else:
+        font = QFont(_family_of(labels.get("font")))
+        font.setBold("Bold" in str(labels.get("font") or ""))
+        font.setItalic("Italic" in str(labels.get("font") or ""))
+    spacing = symbology._number(labels.get("letter_spacing"), None)
+    if spacing:
+        font.setLetterSpacing(QFont.SpacingType.PercentageSpacing
+                              if hasattr(QFont, "SpacingType") else 0, 100 + spacing * 100)
+    fmt.setFont(font)
+    # CAPITALISATION, which was read and never written — so a layer labelled in CAPITALS in
+    # QGIS went to GeoDeploy as `transform: "uppercase"`, drew in capitals on the map, and came
+    # back in mixed case. QGIS keeps this on the text FORMAT, not on the font, and the enum
+    # lives on `Qgis` in 4.x and on `QgsStringUtils` in 3.x — hence the two spellings.
+    _set_capitalization(fmt, labels.get("transform"))
+    fmt.setSize(symbology._number(labels.get("size"), 12) * _PT)
+    # POINTS, stated rather than inherited — the same reason `symbology._use_points` exists for
+    # symbols. A format whose unit defaulted to millimetres would draw the number as a size
+    # nearly three times too large.
+    _points_unit(fmt, "setSizeUnit")
+    if labels.get("color"):
+        fmt.setColor(QColor(labels["color"]))
+    opacity = symbology._number(labels.get("opacity"), None)
+    if opacity is not None:
+        fmt.setOpacity(max(0.0, min(1.0, opacity)))
+
+    halo = symbology._number(labels.get("halo_width"), 0)
+    if halo:
+        buffer_settings = QgsTextBufferSettings()
+        buffer_settings.setEnabled(True)
+        buffer_settings.setSize(halo * _PT)
+        _points_unit(buffer_settings, "setSizeUnit")
+        buffer_settings.setColor(QColor(labels.get("halo_color") or "#ffffff"))
+        fmt.setBuffer(buffer_settings)
+    settings.setFormat(fmt)
+
+    offset = labels.get("offset")
+    if isinstance(offset, (list, tuple)) and len(offset) == 2:
+        settings.xOffset = symbology._number(offset[0], 0) * _PT
+        settings.yOffset = symbology._number(offset[1], 0) * _PT
+    rotation = symbology._number(labels.get("rotation"), None)
+    if rotation:
+        settings.angleOffset = rotation
+    width = symbology._number(labels.get("max_width"), None)
+    if width:
+        settings.autoWrapLength = int(width)
+    if labels.get("allow_overlap"):
+        settings.displayAll = True
+    priority = symbology._number(labels.get("priority"), None)
+    if priority is not None:
+        settings.priority = int(max(0, min(10, priority)))
+
+    lo, hi = labels.get("minzoom"), labels.get("maxzoom")
+    if lo is not None or hi is not None:
+        settings.scaleVisibility = True
+        if lo is not None:
+            settings.minimumScale = scale_for_zoom(lo)
+        if hi is not None:
+            settings.maximumScale = scale_for_zoom(hi)
+    return settings
+
+
 def to_qgis(qgis_layer, style) -> bool:
     """Label `qgis_layer` the way `style.labels` describes. True when labelling was set.
 
@@ -391,93 +574,14 @@ def to_qgis(qgis_layer, style) -> bool:
 
     labels = style["labels"]
     try:
-        from qgis.PyQt.QtGui import QColor, QFont
-        settings = QgsPalLayerSettings()
-
-        expression = (labels.get("qgis_expression") or "").strip()
-        if expression:
-            settings.fieldName = expression
-            settings.isExpression = True
-        elif labels.get("expression") is not None:
-            # Authored in GeoDeploy: rebuild QGIS text from the MapLibre expression, the same way
-            # a rule's filter is rebuilt when it has no carried source.
-            try:
-                settings.fieldName = expressions.from_maplibre(labels["expression"])
-                settings.isExpression = True
-            except Exception:           # noqa: BLE001 - fall back to the plain field, if any
-                settings.fieldName = str(labels.get("field") or "")
-        else:
-            settings.fieldName = str(labels.get("field") or "")
-        if not settings.fieldName:
-            return False
-
-        fmt = QgsTextFormat()
-        # THE CARRIED FAMILY WINS. A label that came from QGIS goes back in the typeface its author
-        # chose, not in the stack the portal had to substitute to draw it. Only a label authored in
-        # GeoDeploy — which has no carried font — falls back to the stack name.
-        carried = labels.get("qgis_font")
-        if isinstance(carried, dict) and carried.get("family"):
-            font = QFont(str(carried["family"]))
-            font.setBold(bool(carried.get("bold")))
-            font.setItalic(bool(carried.get("italic")))
-        else:
-            font = QFont(_family_of(labels.get("font")))
-            font.setBold("Bold" in str(labels.get("font") or ""))
-            font.setItalic("Italic" in str(labels.get("font") or ""))
-        spacing = symbology._number(labels.get("letter_spacing"), None)
-        if spacing:
-            font.setLetterSpacing(QFont.SpacingType.PercentageSpacing
-                                  if hasattr(QFont, "SpacingType") else 0, 100 + spacing * 100)
-        fmt.setFont(font)
-        # CAPITALISATION, which was read and never written — so a layer labelled in CAPITALS in
-        # QGIS went to GeoDeploy as `transform: "uppercase"`, drew in capitals on the map, and came
-        # back in mixed case. QGIS keeps this on the text FORMAT, not on the font, and the enum
-        # lives on `Qgis` in 4.x and on `QgsStringUtils` in 3.x — hence the two spellings.
-        _set_capitalization(fmt, labels.get("transform"))
-        fmt.setSize(symbology._number(labels.get("size"), 12) * _PT)
-        # POINTS, stated rather than inherited — the same reason `symbology._use_points` exists for
-        # symbols. A format whose unit defaulted to millimetres would draw the number as a size
-        # nearly three times too large.
-        _points_unit(fmt, "setSizeUnit")
-        if labels.get("color"):
-            fmt.setColor(QColor(labels["color"]))
-        opacity = symbology._number(labels.get("opacity"), None)
-        if opacity is not None:
-            fmt.setOpacity(max(0.0, min(1.0, opacity)))
-
-        halo = symbology._number(labels.get("halo_width"), 0)
-        if halo:
-            buffer_settings = QgsTextBufferSettings()
-            buffer_settings.setEnabled(True)
-            buffer_settings.setSize(halo * _PT)
-            _points_unit(buffer_settings, "setSizeUnit")
-            buffer_settings.setColor(QColor(labels.get("halo_color") or "#ffffff"))
-            fmt.setBuffer(buffer_settings)
-        settings.setFormat(fmt)
-
-        offset = labels.get("offset")
-        if isinstance(offset, (list, tuple)) and len(offset) == 2:
-            settings.xOffset = symbology._number(offset[0], 0) * _PT
-            settings.yOffset = symbology._number(offset[1], 0) * _PT
-        rotation = symbology._number(labels.get("rotation"), None)
-        if rotation:
-            settings.angleOffset = rotation
-        width = symbology._number(labels.get("max_width"), None)
-        if width:
-            settings.autoWrapLength = int(width)
-        if labels.get("allow_overlap"):
-            settings.displayAll = True
-        priority = symbology._number(labels.get("priority"), None)
-        if priority is not None:
-            settings.priority = int(max(0, min(10, priority)))
-
-        lo, hi = labels.get("minzoom"), labels.get("maxzoom")
-        if lo is not None or hi is not None:
-            settings.scaleVisibility = True
-            if lo is not None:
-                settings.minimumScale = scale_for_zoom(lo)
-            if hi is not None:
-                settings.maximumScale = scale_for_zoom(hi)
+        # RULE-BASED LABELLING FIRST, for the same reason `apply_to_qgis` checks `rules` before
+        # `color_mode`: the top-level block is only the first rule's settings, kept so that a
+        # viewer knowing nothing about label rules still draws something. Reading it first would
+        # flatten seven colours into one.
+        if _rule_labeling(qgis_layer, labels):
+            qgis_layer.triggerRepaint()
+            return True
+        settings = settings_of(labels)
 
         # A VECTOR TILE LAYER IS LABELLED DIFFERENTLY, and until now it was not labelled at all:
         # the guard asked for `setLabelsEnabled`, which `QgsVectorTileLayer` does not have, so
@@ -494,6 +598,66 @@ def to_qgis(qgis_layer, style) -> bool:
     except Exception as exc:            # noqa: BLE001 - labelling must never stop a layer loading
         symbology._log("Could not apply the labels: {0}: {1}".format(type(exc).__name__, exc))
         return False
+
+
+def _rule_labeling(qgis_layer, labels: dict) -> bool:
+    """Rebuild a `QgsRuleBasedLabeling` from `labels.rules`. False when there is nothing to build.
+
+    The inverse of `_read_label_rules`. Each rule gets the QGIS expression it came from where one
+    was recorded — a round trip should hand somebody back the text they typed — and falls back to
+    translating the MapLibre filter otherwise, which is what a rule authored in GeoDeploy has.
+    """
+    rules = labels.get("rules")
+    if not isinstance(rules, list) or len(rules) < 2:
+        return False
+    try:
+        from qgis.core import QgsRuleBasedLabeling
+    except ImportError:                 # pragma: no cover - very old QGIS
+        return False
+    if not hasattr(qgis_layer, "setLabeling"):
+        return False
+
+    base = {k: v for k, v in labels.items() if k != "rules"}
+    root = QgsRuleBasedLabeling.Rule(None)
+    built = 0
+    for entry in rules:
+        if not isinstance(entry, dict):
+            continue
+        block = dict(base)
+        block.update(entry.get("labels") or {})
+        settings = settings_of(block)
+        if settings is None:
+            continue
+        rule = QgsRuleBasedLabeling.Rule(settings)
+        rule.setDescription(str(entry.get("label") or ""))
+        # THE CARRIED SOURCE WINS, exactly as it does for a render rule: a rule that came from
+        # QGIS goes back as the text its author typed. Only one authored in GeoDeploy has to be
+        # reconstructed from its MapLibre filter.
+        expression = (entry.get("expression") or "").strip()
+        if not expression and entry.get("filter") is not None:
+            try:
+                expression = expressions.from_maplibre(entry["filter"])
+            except Exception as exc:    # noqa: BLE001 - an unfiltered rule is visible and fixable
+                symbology._log("Label rule {0!r} has a filter QGIS cannot be given ({1}); it is "
+                               "shown unfiltered.".format(entry.get("label") or "", exc))
+                expression = ""
+        if expression:
+            rule.setFilterExpression(expression)
+        lo, hi = entry.get("minzoom"), entry.get("maxzoom")
+        if lo is not None or hi is not None:
+            try:
+                rule.setMinimumScale(scale_for_zoom(hi) if hi is not None else 0)
+                rule.setMaximumScale(scale_for_zoom(lo) if lo is not None else 0)
+            except Exception:           # noqa: BLE001  # nosec B110 - intentional: a scale range this QGIS spells differently must not cost the rule its symbol
+                pass
+        root.appendChild(rule)
+        built += 1
+    if not built:
+        return False
+    qgis_layer.setLabeling(QgsRuleBasedLabeling(root))
+    if hasattr(qgis_layer, "setLabelsEnabled"):
+        qgis_layer.setLabelsEnabled(True)
+    return True
 
 
 def _set_capitalization(fmt, transform) -> None:

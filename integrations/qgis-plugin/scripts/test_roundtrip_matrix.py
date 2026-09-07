@@ -1065,13 +1065,178 @@ def determinism():
                         if first[i] != second[i]), -1)))
 
 
+# ══ 12. A size of zero is a size ═════════════════════════════════════════════════════════════════
+
+def zero_is_a_size():
+    """A marker sized 0 must draw as nothing, on every surface.
+
+    `Number(size) || 5` and `style.get("radius") or DEFAULT` both read a deliberate 0 as "unset" and
+    substitute 5. Reported on a place-names layer: 355 points whose marker QGIS sizes 0 — the
+    ordinary way to make a layer that exists only to carry labels — drew as 355 amber dots in the
+    browser, in a colour QGIS never paints. The same mistake ran in the opposite direction too, so
+    opening that layer from GeoDeploy gave it a 5 px marker it never had.
+    """
+    section("Zero is a size, not a missing value")
+    from qgis.core import QgsLineSymbol, QgsMarkerSymbol, QgsSingleSymbolRenderer
+
+    layer = make_layer("Point")
+    marker = QgsMarkerSymbol.createSimple({"color": "#e5b636"})
+    marker.setSize(0.0)
+    layer.setRenderer(QgsSingleSymbolRenderer(marker))
+    style = symbology.from_qgis(layer) or {}
+    check("a zero-sized marker reads as radius 0", style.get("radius") == 0.0,
+          repr(style.get("radius")))
+
+    back = make_layer("Point")
+    symbology.apply_to_qgis(back, dict(style))
+    check("...and comes back sized 0, not 5",
+          round(back.renderer().symbol().size(), 4) == 0.0, back.renderer().symbol().size())
+
+    # A LINE of width 0 is the same promise.
+    line_layer = make_layer("LineString")
+    line = QgsLineSymbol.createSimple({"color": "#e5b636"})
+    line.symbolLayer(0).setWidth(0.0)
+    line_layer.setRenderer(QgsSingleSymbolRenderer(line))
+    read = symbology.from_qgis(line_layer) or {}
+    check("a zero-width line reads as 0", read.get("line_width") == 0.0, repr(read.get("line_width")))
+    line_back = make_layer("LineString")
+    symbology.apply_to_qgis(line_back, dict(read))
+    check("...and comes back 0, not the map's default 2",
+          round(line_back.renderer().symbol().symbolLayer(0).width(), 4) == 0.0,
+          line_back.renderer().symbol().symbolLayer(0).width())
+
+    # A STYLE THAT NAMES NO SIZE still gets the map's default — the point is to tell the two apart.
+    absent = make_layer("Point")
+    symbology.apply_to_qgis(absent, {"color": "#3b82f6"})
+    check("a style that names no radius still gets the map's default",
+          round(absent.renderer().symbol().size(), 3)
+          == round(symbology.DEFAULT_POINT_RADIUS * 2 * symbology.CSS_PX_TO_POINTS, 3),
+          absent.renderer().symbol().size())
+
+    if WEB is not None:
+        check("the map keeps 0 in the icon id",
+              WEB.marker_image_id("circle", "#e5b636", 0, "#232323", 0).endswith("-0-232323-0"),
+              WEB.marker_image_id("circle", "#e5b636", 0, "#232323", 0))
+        check("...and a style with no radius still asks for the default",
+              "-5-" in WEB.marker_image_id("circle", "#e5b636", None),
+              WEB.marker_image_id("circle", "#e5b636", None))
+
+
+# ══ 13. Labels by RULE — seven colours, not one ══════════════════════════════════════════════════
+
+def label_rules():
+    """A rule-based labelling is a tree, and every leaf has its own colour, size and font.
+
+    Reported on a names layer that colours water blue, woodland green and towns brown at five
+    different sizes: the plugin read the FIRST rule and sent it as the whole labelling, so every
+    place name on the map was drawn in water-blue at one size. The note saying so went to a log
+    nobody reads while the map drew the wrong thing.
+    """
+    section("Label rules — a labelling tree, not its first leaf")
+    try:
+        from qgis.core import QgsRuleBasedLabeling
+    except ImportError:                                                          # pragma: no cover
+        skip("label rules", "no QgsRuleBasedLabeling on this QGIS")
+        return
+    from qgis.core import QgsPalLayerSettings, QgsTextFormat
+    from qgis.PyQt.QtGui import QColor
+
+    SPEC = (("Water", '"kind" = \'water\'', "#318fae", 9.0),
+            ("Woodland", '"kind" = \'wood\'', "#599c30", 9.0),
+            ("Town", '"kind" = \'town\'', "#372d0b", 11.0))
+
+    layer = make_layer("Point")
+    root = QgsRuleBasedLabeling.Rule(None)
+    for name, expression, colour, size in SPEC:
+        settings = QgsPalLayerSettings()
+        settings.fieldName = "name"
+        fmt = QgsTextFormat()
+        fmt.setColor(QColor(colour))
+        fmt.setSize(size)
+        fmt.setSizeUnit(enum(__import__("qgis.core", fromlist=["QgsUnitTypes"]).QgsUnitTypes,
+                             "RenderUnit", "RenderPoints"))
+        settings.setFormat(fmt)
+        rule = QgsRuleBasedLabeling.Rule(settings)
+        rule.setDescription(name)
+        rule.setFilterExpression(expression)
+        root.appendChild(rule)
+    layer.setLabeling(QgsRuleBasedLabeling(root))
+    layer.setLabelsEnabled(True)
+
+    style = symbology.from_qgis(layer) or {}
+    labels = style.get("labels") or {}
+    rules = labels.get("rules") or []
+    check("every rule travels", len(rules) == len(SPEC), len(rules))
+    check("each keeps its own colour",
+          [r["labels"].get("color") for r in rules] == [c for _n, _e, c, _s in SPEC],
+          [r["labels"].get("color") for r in rules])
+    check("each keeps its own size",
+          len({r["labels"].get("size") for r in rules}) == 2,
+          [r["labels"].get("size") for r in rules])
+    check("each keeps the QGIS expression its author typed",
+          [r.get("expression") for r in rules] == [e for _n, e, _c, _s in SPEC],
+          [r.get("expression") for r in rules])
+    check("each carries a MapLibre filter too",
+          all(r.get("filter") is not None for r in rules),
+          json.dumps([r.get("filter") for r in rules], default=str)[:200])
+    check("the top-level block is still the first rule, as a fallback",
+          labels.get("color") == SPEC[0][2], labels.get("color"))
+
+    # ── back ─────────────────────────────────────────────────────────────────────────────────────
+    back = make_layer("Point")
+    symbology.apply_to_qgis(back, dict(style))
+    labels_mod.to_qgis(back, dict(style))
+    labeling = back.labeling()
+    check("a rule tree is rebuilt", type(labeling).__name__ == "QgsRuleBasedLabeling",
+          type(labeling).__name__)
+    got = [(c.description(), c.settings().format().color().name(), c.filterExpression())
+           for c in labeling.rootRule().children() if c.settings() is not None]
+    check("with every rule", len(got) == len(SPEC), len(got))
+    check("...its colours", [g[1] for g in got] == [c for _n, _e, c, _s in SPEC], [g[1] for g in got])
+    check("...and its filters", [g[2] for g in got] == [e for _n, e, _c, _s in SPEC],
+          [g[2] for g in got])
+
+    # THE EXPRESSION MUST NOT GROW. Bracketing a lone expression adds a pair of parentheses on every
+    # trip — `"kind" = 'water'` becomes `(("kind" = 'water'))` and deeper — and this key exists
+    # precisely to hand somebody back the text they typed.
+    again = symbology.from_qgis(back) or {}
+    twice = [r.get("expression") for r in ((again.get("labels") or {}).get("rules") or [])]
+    check("the expressions are unchanged after a round trip",
+          twice == [e for _n, e, _c, _s in SPEC], twice)
+    third = make_layer("Point")
+    symbology.apply_to_qgis(third, dict(again))
+    labels_mod.to_qgis(third, dict(again))
+    thrice = [r.get("expression")
+              for r in (((symbology.from_qgis(third) or {}).get("labels") or {}).get("rules") or [])]
+    check("...and after a second one", thrice == twice, thrice)
+
+    # A SIMPLE labelling must not grow a `rules` key it never had.
+    plain = make_layer("Point")
+    labels_mod.to_qgis(plain, {"labels": {"enabled": True, "field": "name", "color": "#111111"}})
+    plain_read = (symbology.from_qgis(plain) or {}).get("labels") or {}
+    check("an ordinary labelling carries no rules", "rules" not in plain_read,
+          json.dumps(sorted(plain_read))[:160])
+
+    if WEB is not None:
+        check("the map sees the rules", len(WEB.label_rules(labels)) == len(SPEC),
+              len(WEB.label_rules(labels)))
+        painted = []
+        base = {k: v for k, v in labels.items() if k != "rules"}
+        for rule in WEB.label_rules(labels):
+            painted.append(WEB.label_paint(dict(base, **rule["labels"]), 1.0).get("text-color"))
+        check("...and paints each in its own colour",
+              painted == [c for _n, _e, c, _s in SPEC], painted)
+        check("an ordinary labelling is one layer to the map", WEB.label_rules(plain_read) == [],
+              WEB.label_rules(plain_read))
+
+
 def main():
     print("GeoDeploy ⇄ QGIS round-trip matrix")
     print("QGIS {0}   |   web renderer: {1}".format(
         Qgis.QGIS_VERSION, "mounted" if WEB is not None else "NOT MOUNTED (sections skipped)"))
     for run in (registry_sweep, renderer_sweep, unit_matrix, per_class_matrix, property_matrix,
-                scope_matrix, label_matrix, tile_matrix, special_renderers, maplibre_matrix,
-                determinism):
+                scope_matrix, label_matrix, label_rules, tile_matrix, special_renderers,
+                zero_is_a_size, maplibre_matrix, determinism):
         try:
             run()
         except Exception:                                                        # noqa: BLE001

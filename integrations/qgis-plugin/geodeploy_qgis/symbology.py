@@ -357,6 +357,18 @@ def _number(value, default):
     return out if out == out and out not in (float("inf"), float("-inf")) else default
 
 
+def _stated(value, default: float) -> float:
+    """A size the style STATES, or `default` when it states none. Zero is a size.
+
+    `style.get("radius") or DEFAULT` reads a deliberate 0 as "unset" and substitutes 5, which is how
+    a marker somebody sized 0 — the ordinary way to make a point layer that exists only to carry
+    labels — came back from GeoDeploy as a 5 px dot. The web renderer already gets this right
+    (`.get("line_width", 2)`, `?? 2`); this is the same rule on the QGIS side.
+    """
+    number = _number(value, None)
+    return default if number is None else number
+
+
 def _outline_px(style: dict) -> float:
     """A marker's outline width in CSS pixels: `radius * outline_width`, the ratio the map uses."""
     ratio = max(0.0, min(1.0, _number(style.get("outline_width"), DEFAULT_MARKER_OUTLINE_RATIO)))
@@ -637,7 +649,7 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
         # alike), so a layer with no saved radius matches the web instead of matching nothing.
         #
         # GeoDeploy's radius is in CSS PIXELS and QGIS's size is a DIAMETER, hence the doubling.
-        symbol.setSize(float(style.get("radius") or DEFAULT_POINT_RADIUS) * 2 * CSS_PX_TO_POINTS)
+        symbol.setSize(_stated(style.get("radius"), DEFAULT_POINT_RADIUS) * 2 * CSS_PX_TO_POINTS)
         outline = style.get("outline_color")
         # A SHAPE WITH NO INSIDE IS DRAWN WITH ITS PEN. A cross, an X, a line, an arrow head — QGIS
         # calls these "not filled", and `symbol.setColor()` above set a brush none of them use. The
@@ -661,7 +673,7 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
         _use_points(symbol, layer0)
         # Always set, defaulted to the map's `line-width: 2` — QGIS's own default is 0.26 mm, a
         # hairline, so an unstyled line came out far thinner than the portal draws it.
-        layer0.setWidth(float(style.get("line_width") or DEFAULT_LINE_WIDTH) * CSS_PX_TO_POINTS)
+        layer0.setWidth(_stated(style.get("line_width"), DEFAULT_LINE_WIDTH) * CSS_PX_TO_POINTS)
         _apply_line_decoration(layer0, style)
     elif isinstance(layer0, QgsSimpleFillSymbolLayer):
         outline = style.get("outline_color")
@@ -3857,7 +3869,7 @@ def _style_from_symbol(symbol) -> dict:
         # "stroke color now works well, but stroke width doesn't seem to be saved" — it was never
         # read, and never applied either.
         stroke_pt = _stroke_width_of(layer0)
-        radius = style.get("radius") or DEFAULT_POINT_RADIUS
+        radius = _stated(style.get("radius"), DEFAULT_POINT_RADIUS)
         if stroke_pt is not None and radius:
             ratio = stroke_pt / CSS_PX_TO_POINTS / float(radius)
             style["outline_width"] = round(max(0.0, min(1.0, ratio)), 3)

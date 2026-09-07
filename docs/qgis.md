@@ -192,6 +192,21 @@ one layer, so nothing about an ordinary classified map changes.
 
 The legend follows the same rule: a swatch shows the symbol *that class* is drawn with.
 
+### Labels by rule
+
+A **rule-based labelling** travels as its rules, the same way rule-based rendering does. A names
+layer that draws water in blue at 9pt, woodland in green and towns in brown at 11 arrives with all
+of them — GeoDeploy draws one label layer per rule, filtered to it — and comes back to QGIS as a
+rule tree with the filter text you typed. Nested rules are flattened, and a rule whose filter falls
+outside the translatable set is left behind with a note rather than labelling everything.
+
+### A size of zero is a size
+
+A symbol you have deliberately sized **0** draws as nothing, here and in the browser, exactly as it
+does in QGIS. That matters more than it sounds: a point layer whose markers are sized 0 so that only
+its labels show is the ordinary way to build a place-names layer, and a renderer that reads 0 as
+"unset" turns it into a field of dots.
+
 ## Upload
 
 **Upload selected layer(s)…** sends whatever is selected in the Layers panel, with its styling.

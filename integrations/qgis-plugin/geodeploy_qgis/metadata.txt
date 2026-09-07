@@ -7,7 +7,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.4.5
+version=0.4.6
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -26,7 +26,18 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.4.5 - A CLASS IS MORE THAN A COLOUR. A category or a range now keeps its own
+changelog=0.4.6 - A LABELLING IS A TREE, NOT ITS FIRST LEAF. QGIS labels a place-names
+    layer by rule - water blue at 9pt, woodland green, a town brown at 11 - and this plugin read
+    the FIRST rule and sent it as the whole labelling, so every name on the map came out in one
+    colour at one size. All eight rules now travel, each with the filter text its author typed,
+    and the trip back rebuilds the rule tree. Reported as "this layer has different colours from
+    what it had in qgis".
+    AND A SIZE OF ZERO IS A SIZE. A marker deliberately sized 0 - the ordinary way to make a point
+    layer that exists only to carry labels - was read as "unset" and drawn at 5, so 355 invisible
+    points became 355 coloured dots in the browser, and opening the layer back in QGIS gave it a
+    marker it never had. The same for a line of width 0. A default now applies only where there is
+    no number at all.
+    0.4.5 - A CLASS IS MORE THAN A COLOUR. A category or a range now keeps its own
     symbol - its dash, its width, its fill opacity, its marker shape and size, its outline - where
     before GeoDeploy carried a colour per class and one shape for the whole layer, taken from the
     first class. Two categories in the same colour that differed only by dash arrived identical,

@@ -73,6 +73,8 @@ FAILURES = []
 CHECKS = [0]
 CURRENT = [""]
 CREATED = {"vector": [], "raster": [], "portal": []}
+#: What the instance held BEFORE this run — everything else that appears is ours.
+SEEN = {"vector": set(), "raster": set()}
 DASH = enum(Qt, "PenStyle", "DashLine")
 NOBRUSH = enum(Qt, "BrushStyle", "NoBrush")
 
@@ -353,6 +355,32 @@ def styled_copy(path, styler, geometry, layer_name=None):
     return styler(layer)
 
 
+def known_ids(client, kind="vector"):
+    """Every layer id the instance has right now."""
+    try:
+        rows = client.layers.api(kind).list()
+    except Exception:                                                            # noqa: BLE001
+        return set()
+    rows = rows if isinstance(rows, list) else (rows or {}).get("items") or []
+    return {r.get("id") for r in rows if isinstance(r, dict) and r.get("id") is not None}
+
+
+def claim_new(client, kind="vector"):
+    """Record every layer that has appeared since the last check as OURS, and return the new ids.
+
+    AN UPLOAD DOES NOT ALWAYS CREATE ONE LAYER. A multi-layer GeoPackage creates a SIBLING per
+    layer inside it, each with its own id, and only the first comes back from `upload()`. Tracking
+    the returned id alone left 58 layers behind on a real instance across a handful of runs — and
+    the run reported a clean cleanup, which is worse than leaving them, because nobody goes looking.
+    """
+    fresh = known_ids(client, kind) - SEEN[kind]
+    SEEN[kind] |= fresh
+    for layer_id in sorted(fresh):
+        if layer_id not in CREATED[kind]:
+            CREATED[kind].append(layer_id)
+    return fresh
+
+
 def wait_ready(client, layer_id, seconds=180):
     """An ingest is a Celery job; the style and the tiles are not there until it finishes."""
     deadline = time.time() + seconds
@@ -414,9 +442,15 @@ def run_case(client, entry):
         return None
     layer_id = getattr(result, "layer_id", None)
     check("{0}: uploads and returns a layer".format(label), bool(layer_id), result.as_dict())
+    siblings = claim_new(client, "vector")
     if not layer_id:
         return None
-    CREATED["vector"].append(layer_id)
+    if layer_id not in CREATED["vector"]:
+        CREATED["vector"].append(layer_id)
+    if entry.get("multilayer"):
+        check("{0}: every layer in the file was ingested".format(label),
+              len(siblings) >= entry["multilayer"],
+              "{0} layers appeared, expected {1}".format(len(siblings), entry["multilayer"]))
 
     row = wait_ready(client, layer_id)
     check("{0}: the ingest finished ready".format(label), (row.get("status") or "") == "ready",
@@ -529,7 +563,9 @@ def run_raster(client):
     check("the raster uploads and returns a layer", bool(layer_id), result.as_dict())
     if not layer_id:
         return
-    CREATED["raster"].append(layer_id)
+    claim_new(client, "raster")
+    if layer_id not in CREATED["raster"]:
+        CREATED["raster"].append(layer_id)
     check("...as a RASTER, not a vector", result.plan.layer_type == "raster",
           result.plan.layer_type)
 
@@ -795,6 +831,10 @@ def reopen_in_qgis(client, results):
 
 def cleanup(client):
     section("Cleanup")
+    # ONE LAST SWEEP. A case that raised part-way through never got to claim what it made, and a
+    # layer left behind is the failure mode nobody notices — the run says it cleaned up.
+    for kind in ("vector", "raster"):
+        claim_new(client, kind)
     if KEEP:
         print("  GEODEPLOY_KEEP is set — leaving {0} layers and {1} portals in place.".format(
             len(CREATED["vector"]), len(CREATED["portal"])))
@@ -812,6 +852,13 @@ def cleanup(client):
                 print("  deleted {0} layer {1}".format(kind, layer_id))
             except Exception as exc:                                             # noqa: BLE001
                 print("  !! {0} layer {1} not deleted: {2}".format(kind, layer_id, exc))
+    # VERIFIED, not assumed. Saying "nothing was left behind" without looking is how 58 layers
+    # accumulated across a handful of runs.
+    for kind in ("vector", "raster"):
+        left = sorted(known_ids(client, kind) - SEEN[kind] - set(CREATED[kind]))
+        remaining = sorted(known_ids(client, kind) & set(CREATED[kind]))
+        check("nothing this run created is still on the instance ({0})".format(kind),
+              not remaining and not left, "still there: {0}".format(remaining + left))
 
 
 def main():
@@ -823,6 +870,11 @@ def main():
     client = Client(URL, token=TOKEN)
     who = client.whoami()
     print("signed in as {0}".format(who.get("email") or who.get("name") or who))
+
+    for kind in ("vector", "raster"):
+        SEEN[kind] = known_ids(client, kind)
+    print("the instance already holds {0} vector and {1} raster layers; anything that appears "
+          "from here is this run's".format(len(SEEN["vector"]), len(SEEN["raster"])))
 
     results = []
     try:

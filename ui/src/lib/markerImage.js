@@ -19,7 +19,13 @@ function crossPts(cx, cy, r) {
 }
 
 export function markerImage(shape, color, size, outline, outlineWidth) {
-  const dpr = 2, r = Math.max(3, Number(size) || 5)
+  // A SIZE OF ZERO IS A SIZE, NOT A MISSING VALUE. `Number(size) || 5` turned a marker its author
+  // deliberately sized 0 into a 5 px dot, and `Math.max(3, ...)` enlarged every marker under 3 px
+  // to 3. Both are the same mistake: treating a real number the map should honour as an absent one.
+  // Reported on a place-names layer whose points exist only to carry labels — QGIS draws nothing
+  // and the browser drew 355 amber dots. The default applies only when there is no number at all.
+  const n = Number(size)
+  const dpr = 2, r = Number.isFinite(n) && n >= 0 ? n : 5
   // Outline width is a RATIO of the radius (see portal.js) so it stays proportional when a layer is
   // resized; 0.28 reproduces the old hard-coded stroke exactly.
   const ow = outlineWidth == null ? 0.28 : Number(outlineWidth)

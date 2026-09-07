@@ -1713,30 +1713,53 @@ def _glyphs_url() -> str:
     return GLYPHS_URL
 
 
-def _label_layer(source_id: str, layer, cfg: dict) -> dict | None:
-    """A `symbol` layer drawing this layer's labels, or None when it has none.
+def _label_layers(source_id: str, layer, cfg: dict) -> list[dict]:
+    """Every label layer this layer draws — usually one, but ONE PER RULE when it labels by rules.
 
-    ITS OWN LAYER, not text bolted onto the geometry's. Three reasons, and each of them would
-    otherwise be a bug: a label has its own zoom range, which QGIS keeps separately from the
-    layer's; labels must draw ABOVE every geometry on the map, not interleaved with it, and layer
-    order is the only thing that decides that; and a point layer's geometry layer is already a
-    `symbol` layer carrying an icon, so merging the two would tie a label's placement to its
-    marker's.
+    A rule-based labelling is a tree exactly like rule-based rendering, and it is how a names layer
+    says that water is blue at 9pt and a town brown at 11. Drawing only the top-level block — which
+    is the first rule's settings, kept as a fallback — put every name in one colour at one size.
+
+    Order follows the rule list, and labels sit above the geometry either way, so the rules draw in
+    the order QGIS declares them.
     """
     style = cfg.get("style") or {}
     labels = symbology.labels_of(style)
     if not labels:
-        return None
-    built = {
-        "id": f"vector-{layer.id}-labels",
-        "type": "symbol",
-        "source": source_id,
-        "source-layer": _source_layer_name(layer),
-        "layout": symbology.label_layout(labels),
-        "paint": symbology.label_paint(labels, cfg.get("opacity", 1.0)),
-    }
-    built.update(symbology.label_scope(labels))
-    return built
+        return []
+    opacity = cfg.get("opacity", 1.0)
+    source_layer = _source_layer_name(layer)
+
+    def one(block, suffix, scope=None):
+        built = {
+            "id": f"vector-{layer.id}-{suffix}",
+            "type": "symbol",
+            "source": source_id,
+            "source-layer": source_layer,
+            "layout": symbology.label_layout(block),
+            "paint": symbology.label_paint(block, opacity),
+        }
+        built.update(symbology.label_scope(block))
+        if scope:
+            _apply_rule_scope(built, scope)
+        return built
+
+    rules = symbology.label_rules(labels)
+    if not rules:
+        return [one(labels, "labels")]
+
+    base = {k: v for k, v in labels.items() if k != "rules"}
+    out = []
+    for i, rule in enumerate(rules):
+        block = dict(base)
+        block.update(rule.get("labels") or {})
+        block.pop("rules", None)
+        if not symbology.label_text(block):
+            continue
+        out.append(one(block, f"labels-r{i}", rule))
+    # A rule list that produced nothing drawable still has to label the layer, or switching to
+    # rules would silently remove every label it had.
+    return out or [one(base, "labels")]
 
 
 def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
@@ -1756,21 +1779,21 @@ def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
     # popups or its labels alone. An empty list is exactly that.
     # A label layer rides along with whatever draws the geometry — and is the ONLY thing emitted
     # when the renderer draws nothing, which is exactly how a layer kept for its labels alone works.
-    labels = _label_layer(source_id, layer, cfg)
+    labels = _label_layers(source_id, layer, cfg)
 
     # A HEATMAP REPLACES THE FEATURES. It is a different layer TYPE, not a paint variation, and
     # drawing the points as well would put a pin on every hot spot — so this returns instead of
     # adding. Labels still ride along, because a heatmap with named peaks is a normal thing to want.
     heat = _heatmap_layer(source_id, layer, cfg)
     if heat:
-        return _scoped([heat] + ([labels] if labels else []), style)
+        return _scoped([heat] + labels, style)
 
     if symbology.draws_nothing(style):
-        return _scoped([labels], style) if labels else []
+        return _scoped(labels, style) if labels else []
 
     rule_layers = _rule_layers(source_id, layer, cfg)
     if rule_layers is not None:
-        return _scoped(rule_layers + ([labels] if labels else []), style)
+        return _scoped(rule_layers + labels, style)
 
     # CLASSES THAT DIFFER BY MORE THAN THEIR COLOUR ARE RULES, and are drawn as rules. MapLibre can
     # data-drive a colour, a width and an opacity, but NOT `line-dasharray` — so a categorized layer
@@ -1781,7 +1804,7 @@ def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
     if classed:
         split = _rule_layers(source_id, layer, dict(cfg, style=dict(style, rules=classed)))
         if split:
-            return _scoped(split + ([labels] if labels else []), style)
+            return _scoped(split + labels, style)
 
     raw = style.get("maplibre", {}).get("layers") if isinstance(style.get("maplibre"), dict) else None
     if not raw:
@@ -1794,7 +1817,7 @@ def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
         centroids = _centroid_marker_layer(source_id, layer, cfg)
         if centroids:
             built.append(centroids)
-        return _scoped(built + ([labels] if labels else []), style)
+        return _scoped(built + labels, style)
     source_layer = _source_layer_name(layer)
     out: list[dict] = []
     for i, entry in enumerate(raw):
@@ -1808,8 +1831,7 @@ def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
         if entry.get("layout"):
             ml["layout"] = dict(entry["layout"])
         out.append(ml)
-    if labels:
-        out.append(labels)
+    out.extend(labels)
     return _scoped(out or [_vector_layer(source_id, layer, cfg)], style)
 
 
