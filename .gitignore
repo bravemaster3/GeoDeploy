@@ -61,3 +61,7 @@ examples/.venv/
 
 # The built plugin archive — produced by integrations/qgis-plugin/scripts/build.py
 integrations/qgis-plugin/dist/
+
+# `mkdocs build` output. CI builds in a clean checkout and uploads the artefact;
+# a local build otherwise leaves a few hundred files looking like untracked work.
+site/

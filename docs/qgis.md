@@ -231,6 +231,18 @@ pass through the API.
 A layer that cannot be sent is named with the reason rather than failing silently — a remote layer,
 or one with unsaved edits.
 
+### Why upload from here rather than from the browser
+
+Because the styling travels. A file does not carry yours in any form GeoDeploy reads — a GeoPackage
+saved by *Package Layers* has a `layer_styles` table, a shapefile may have a `.qml` beside it, and
+uploading either through the web gives you the data with a generated default style.
+
+Sending the layer from QGIS keeps the symbology, and keeps more of it than the file could. A symbol
+GeoDeploy has no vocabulary for — an SVG marker, a font marker, a hatch or pattern fill — is
+**rendered by QGIS and sent as an image**, so the portal draws the thing you drew. A style embedded
+in a file only names a path to an SVG on the machine that wrote it, which is of no use anywhere
+else.
+
 ### What an instance accepts
 
 `.gpkg`, `.geojson` / `.json`, `.csv`, `.parquet`, `.tif` / `.tiff`, and `.zip`. A **GeoPackage
