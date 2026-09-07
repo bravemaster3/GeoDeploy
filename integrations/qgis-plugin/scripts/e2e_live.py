@@ -479,6 +479,133 @@ def run_case(client, entry):
             "row": stored_row}
 
 
+# ══ A RASTER, which is a different shape of style entirely ═══════════════════════════════════════
+
+def write_geotiff(path):
+    """A small single-band GeoTIFF with values well outside 0-255.
+
+    THE RANGE IS THE POINT. Non-8-bit data renders BLACK on a tile server that assumes 0-255, so the
+    min/max stretch is the difference between a visible layer and a black rectangle — which is why
+    `rescale` is the raster key that matters most and the first thing to check survived.
+    """
+    from osgeo import gdal, osr
+    driver = gdal.GetDriverByName("GTiff")
+    dataset = driver.Create(path, 64, 64, 1, gdal.GDT_Float32)
+    dataset.SetGeoTransform((-2.0, 0.002, 0, 53.2, 0, -0.002))
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(4326)
+    dataset.SetProjection(srs.ExportToWkt())
+    band = dataset.GetRasterBand(1)
+    rows = [[120.0 + x * 3.5 + y * 1.25 for x in range(64)] for y in range(64)]
+    try:
+        import numpy
+        band.WriteArray(numpy.array(rows, dtype="float32"))
+    except ImportError:                                                          # pragma: no cover
+        import struct
+        for y, row in enumerate(rows):
+            band.WriteRaster(0, y, 64, 1, struct.pack("<64f", *row))
+    band.SetNoDataValue(-9999.0)
+    dataset.FlushCache()
+    dataset = None
+    return path
+
+
+def run_raster(client):
+    """A GeoTIFF, all the way round. A raster style is `{colormap, rescale, bidx, algorithm}` — a
+    different shape from a vector's classes, and it has its own reader and writer on both sides."""
+    section("GeoTIFF — a raster, which has its own style vocabulary")
+    from qgis.core import QgsRasterLayer
+
+    path = write_geotiff(os.path.join(WORK, "terrain.tif"))
+    check("a GeoTIFF was written", os.path.getsize(path) > 1000, os.path.getsize(path))
+
+    name = "E2E {0} GeoTIFF".format(RUN)
+    try:
+        result = client.uploads.upload(path, name=name, wait=True)
+    except Exception as exc:                                                     # noqa: BLE001
+        check("the raster uploads", False, "{0}: {1}".format(type(exc).__name__, exc))
+        return
+    layer_id = getattr(result, "layer_id", None)
+    check("the raster uploads and returns a layer", bool(layer_id), result.as_dict())
+    if not layer_id:
+        return
+    CREATED["raster"].append(layer_id)
+    check("...as a RASTER, not a vector", result.plan.layer_type == "raster",
+          result.plan.layer_type)
+
+    deadline = time.time() + 240
+    row = {}
+    while time.time() < deadline:
+        row = client.layers.api("raster").get(layer_id)
+        if (row.get("status") or "").lower() in ("ready", "error", "failed"):
+            break
+        time.sleep(3)
+    check("the raster ingest finished ready", (row.get("status") or "") == "ready",
+          "{0} — {1}".format(row.get("status"), str(row.get("error"))[:200]))
+    if (row.get("status") or "") != "ready":
+        return
+
+    # THE COLORMAP NAME IS ONLY CLAIMED WHEN THE SERVER HAS ONE BY THAT NAME. QGIS ramps and
+    # TiTiler colormaps are different catalogues that happen to share many names, and a wrong one
+    # is worse than the default — so the instance is asked.
+    try:
+        colormaps = client.layers.api("raster").colormaps()
+    except Exception:                                                            # noqa: BLE001
+        colormaps = []
+    check("the instance lists its colormaps", bool(colormaps), len(colormaps or []))
+    ramp = "viridis" if "viridis" in (colormaps or []) else (colormaps or ["terrain"])[0]
+
+    # THE STYLE COMES OUT OF A REAL QGIS RENDERER, not written by hand here. That is the whole
+    # point: hand-writing it tests the API's schema and nothing about the plugin, and it is exactly
+    # how a first attempt at this section sent `rescale` as a LIST and got a 422 — a bug in the
+    # harness that the plugin does not have, because `_rescale_text` writes "min,max".
+    source = QgsRasterLayer(path, "e2e source", "gdal")
+    QgsProject.instance().addMapLayer(source)
+    check("QGIS can open the GeoTIFF", source.isValid(),
+          source.error().summary() if not source.isValid() else "")
+    if not source.isValid():
+        return
+    symbology.raster_to_qgis(source, {"colormap": ramp, "rescale": "120,420", "bidx": [1]})
+    style = symbology.raster_from_qgis(source, colormaps) or {}
+    check("QGIS produced a raster style", bool(style), json.dumps(style)[:200])
+    check("...with the stretch as the STRING the API takes",
+          isinstance(style.get("rescale"), str), repr(style.get("rescale")))
+
+    client.layers.api("raster").set_default_style(layer_id, dict(style, opacity=1.0))
+    stored = client.layers.api("raster").get(layer_id).get("default_style") or {}
+    diff = {k: (style.get(k), stored.get(k)) for k in style if style.get(k) != stored.get(k)}
+    check("the raster style is stored as sent", not diff, json.dumps(diff, default=str))
+
+    # ── back into QGIS, through the same reader and writer the plugin uses ───────────────────────
+    fresh = QgsRasterLayer(path, "e2e raster", "gdal")
+    QgsProject.instance().addMapLayer(fresh)
+    applied = symbology.raster_to_qgis(fresh, dict(stored))
+    check("the stored raster style applies in QGIS", applied, repr(applied))
+    back = symbology.raster_from_qgis(fresh, colormaps) or {}
+    # OPACITY IS THE LAYER'S, not the style's, on both sides of this — a raster's stored document
+    # happens to hold it in the same dict as the colouring, but `raster_from_qgis` reads a RENDERER
+    # and a renderer has no opacity. Comparing them would report every raster as restyled.
+    a = symbology.comparable_style({k: v for k, v in stored.items() if k != "opacity"}, "raster")
+    b = symbology.comparable_style(back, "raster")
+    diff = {k: (a.get(k), b.get(k)) for k in set(a) | set(b) if a.get(k) != b.get(k)}
+    check("the raster style survives the trip back", not diff, json.dumps(diff, default=str))
+    check("...including the stretch, which is the difference between a picture and a black square",
+          [round(float(v), 1) for v in str(back.get("rescale") or "").split(",") if v]
+          == [120.0, 420.0], repr(back.get("rescale")))
+
+    # A HILLSHADE is a real renderer on both sides, so it must read back as one rather than as the
+    # colormap it replaces.
+    shaded = QgsRasterLayer(path, "e2e hillshade", "gdal")
+    QgsProject.instance().addMapLayer(shaded)
+    symbology.raster_to_qgis(shaded, {"algorithm": "hillshade", "zfactor": 5.0,
+                                      "rescale": "120,420"})
+    read = symbology.raster_from_qgis(shaded, colormaps) or {}
+    check("a hillshade reads back as a hillshade", read.get("algorithm") == "hillshade",
+          json.dumps(read)[:200])
+    check("...at the exaggeration it was given", abs((read.get("zfactor") or 0) - 5.0) < 0.01,
+          read.get("zfactor"))
+
+
 # ══ The portal — what the browser actually draws ═════════════════════════════════════════════════
 
 #: The front door refuses a default `Python-urllib/3.x` with a 403, and that 403 reads exactly like
@@ -678,12 +805,13 @@ def cleanup(client):
             print("  deleted portal {0}".format(portal_id))
         except Exception as exc:                                                 # noqa: BLE001
             print("  !! portal {0} not deleted: {1}".format(portal_id, exc))
-    for layer_id in CREATED["vector"]:
-        try:
-            client.layers.api("vector").delete(layer_id)
-            print("  deleted layer {0}".format(layer_id))
-        except Exception as exc:                                                 # noqa: BLE001
-            print("  !! layer {0} not deleted: {1}".format(layer_id, exc))
+    for kind in ("vector", "raster"):
+        for layer_id in CREATED[kind]:
+            try:
+                client.layers.api(kind).delete(layer_id)
+                print("  deleted {0} layer {1}".format(kind, layer_id))
+            except Exception as exc:                                             # noqa: BLE001
+                print("  !! {0} layer {1} not deleted: {2}".format(kind, layer_id, exc))
 
 
 def main():
@@ -710,6 +838,13 @@ def main():
                 print("!! {0} raised:".format(entry["label"]))
                 traceback.print_exc()
                 FAILURES.append("[{0}] raised".format(entry["label"]))
+
+        try:
+            run_raster(client)
+        except Exception:                                                        # noqa: BLE001
+            print("!! the raster case raised:")
+            traceback.print_exc()
+            FAILURES.append("[GeoTIFF] raised")
 
         ready = [r for r in results if r]
         if ready:
