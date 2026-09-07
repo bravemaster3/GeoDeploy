@@ -3712,6 +3712,12 @@
          tiles: ['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png', 'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png'],
          attribution: '© OpenStreetMap contributors',
          thumb: 'https://a.tile.openstreetmap.org/4/8/5.png' }];
+  //: A chequerboard, drawn inline: the swatch for "nothing" must not itself need a tile server.
+  const NO_BASEMAP_THUMB = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">' +
+    '<rect width="64" height="64" fill="#fff"/>' +
+    '<path d="M0 0h16v16H0zM32 0h16v16H32zM16 16h16v16H16zM48 16h16v16H48z' +
+    'M0 32h16v16H0zM32 32h16v16H32zM16 48h16v16H16zM48 48h16v16H48z" fill="#e6e6e6"/></svg>');
   const BASEMAPS = BASEMAP_CATALOG;
   // The admin's chosen basemap, baked into the base layer at publish. Portals published BEFORE
   // basemap selection have no defaultBasemap → keep the template's own baked basemap (the '__default__'
@@ -3724,12 +3730,31 @@
   const BASE_REPOINTED = !!((STYLE.geodeploy || {}).baseRepointed);
   // Switcher options: catalog entries, plus a leading "Default" (the template's baked base) when the
   // portal didn't pick a basemap.
-  const BASEMAP_OPTS = HAS_DEFAULT_ENTRY
+  //: "No basemap" — the data on a plain ground, which is how you read a dense layer, check a
+  //: transparency, or take a figure for print without a map underneath it. A sentinel rather than a
+  //: catalog entry, because there is no source to add: `selectBasemap` simply shows none of them.
+  const NO_BASEMAP = '__none__';
+  const BASEMAP_OPTS = (HAS_DEFAULT_ENTRY
     ? [{ id: '__default__', name: 'Default', thumb: BASEMAP_CATALOG[0].thumb }].concat(BASEMAP_CATALOG)
-    : BASEMAP_CATALOG;
+    : BASEMAP_CATALOG.slice()
+  ).concat([{ id: NO_BASEMAP, name: 'None', thumb: NO_BASEMAP_THUMB }]);
 
   function builtinBasemapIds() {
-    return STYLE.layers.filter(l => !(l.metadata && l.metadata['geodeploy:name'])).map(l => l.id);
+    // A LAYER IS THE TEMPLATE'S BASEMAP ONLY IF IT IS NOT ONE OF OURS, and "ours" cannot be
+    // decided by `geodeploy:name` — only the FIRST render layer of a GeoDeploy layer carries it.
+    // A polygon's `-outline`, a `-labels` layer, `-linemarkers`, and every `-r0`/`-r1` of a
+    // rule-based or split classification carry `geodeploy:layer_id` and nothing else. Filtering on
+    // the name meant choosing a basemap HID all of them: an outline-only polygon vanished
+    // completely (its fill is transparent — the outline IS the layer), labels went, and every
+    // class past the first went with them. Reported as "changing the basemap makes the rectangle
+    // box disappear, and same as some other layers".
+    //
+    // Any `geodeploy:` key at all marks a layer as the portal's own. `portal_generator` guarantees
+    // every render layer it emits carries at least `geodeploy:layer_id`.
+    return STYLE.layers.filter(function (l) {
+      const meta = l.metadata || {};
+      return !Object.keys(meta).some(function (k) { return k.indexOf('geodeploy:') === 0; });
+    }).map(function (l) { return l.id; });
   }
 
   function setupBasemaps() {
@@ -4779,14 +4804,28 @@
   }
 
   function selectBasemap(id) {
-    // '__default__' → show the template's baked base layer(s); any catalog id → hide the baked base
-    // and show that catalog raster instead.
+    // '__default__' → show the template's baked base layer(s); '__none__' → show none at all;
+    // any catalog id → hide the baked base and show that catalog raster instead.
     const showBuiltin = id === '__default__';
-    builtinBasemapIds().forEach(lid => { if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', showBuiltin ? 'visible' : 'none'); });
-    BASEMAPS.forEach(bm => {
+    builtinBasemapIds().forEach(function (lid) {
+      // NEVER TOUCH ONE OF OURS. `builtinBasemapIds` already excludes them, and this is the second
+      // lock on the same door: choosing a basemap is allowed to change the basemap and nothing
+      // else, and when it once did more the symptom was a layer silently vanishing — the kind of
+      // thing a user reports as "the box disappeared" and nobody can reproduce from a description.
+      if (isOurs(lid)) return;
+      if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', showBuiltin ? 'visible' : 'none');
+    });
+    BASEMAPS.forEach(function (bm) {
       const lid = 'gd-basemap-' + bm.id;
       if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', bm.id === id ? 'visible' : 'none');
     });
+  }
+
+  //: Whether a render layer belongs to the portal rather than to the template's basemap.
+  function isOurs(layerId) {
+    const found = (STYLE.layers || []).filter(function (l) { return l.id === layerId; })[0];
+    const meta = (found && found.metadata) || {};
+    return Object.keys(meta).some(function (k) { return k.indexOf('geodeploy:') === 0; });
   }
 
   function basemapIcon() {

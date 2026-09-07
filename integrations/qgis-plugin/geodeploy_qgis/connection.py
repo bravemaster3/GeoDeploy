@@ -42,13 +42,29 @@ def http_url(url: str) -> str:
     return url
 
 
+def _say_waiting(seconds: float, attempt: int, of: int) -> None:
+    """Tell the user why nothing is happening, in the QGIS log."""
+    try:
+        from . import symbology
+        symbology._log(
+            "The instance is rate-limiting uploads, which is what it does when several layers are "
+            "sent at once. Waiting {0:.0f}s and trying again ({1} of {2}).".format(
+                seconds, attempt, of), level="info")
+    except Exception:                   # noqa: BLE001  # nosec B110 - intentional: a message is never worth failing an upload
+        pass
+
+
 class Instance:
     """One connection. `token` may be None — that is a supported way to use this, not an error."""
 
     def __init__(self, url: str, token: str | None = None):
         self.url = normalize_url(url)
         self.token = token or None
-        self.client = Client(self.url, token=self.token)
+        # A THROTTLED REQUEST IS PROGRESS, NOT A HANG. An instance limits its upload route, and
+        # pushing a group is a burst of one request per layer — so the client waits a 429 out and
+        # tries again rather than stopping partway and asking the user to press the button a second
+        # time. Waiting silently for a minute looks exactly like a freeze, so it is announced.
+        self.client = Client(self.url, token=self.token, on_throttled=_say_waiting)
         # url -> parsed document, or the GeoDeployError it failed with. Per CONNECTION, so
         # reconnecting is the way to drop it — these describe layers, and a layer's description
         # does not change while you are looking at it. See `fetch_json`.

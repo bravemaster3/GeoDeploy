@@ -1819,6 +1819,18 @@ def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
         base = _vector_layer(source_id, layer, cfg)
         outline = _polygon_outline_layer(source_id, layer, cfg, base)
         built = [base, outline] if outline else [base]
+        # A LINE DRAWN AS SEVERAL STROKES STACKED — a casing, a dashed overlay, a hatch. QGIS
+        # builds these by stacking simple lines in one symbol and MapLibre by stacking `line`
+        # layers, so this is a direct mapping. Reading only the first stroke made a red line with
+        # blue dashes over it arrive as plain red.
+        for i, extra in enumerate(symbology.stroke_stack(style)):
+            over = dict(cfg, style=dict(style, **extra))
+            over["style"].pop("line_stack", None)
+            drawn = _vector_layer(source_id, layer, over)
+            if drawn.get("type") != "line":
+                continue                          # a stack is a LINE idea; nothing else stacks
+            drawn["id"] = "{0}-s{1}".format(base["id"], i)
+            built.append(drawn)
         decoration = _line_marker_layer(source_id, layer, cfg)
         if decoration:
             # A LINE OF MARKERS HAS NO STROKE UNDER IT. QGIS's marker line draws symbols at

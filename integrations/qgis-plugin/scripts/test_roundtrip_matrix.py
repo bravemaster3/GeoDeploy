@@ -1280,11 +1280,22 @@ def lines_made_of_markers():
     rebuilt = None
     for i in range(symbol.symbolLayerCount()):
         rebuilt = getattr(symbol.symbolLayer(i), "subSymbol", lambda: None)() or rebuilt
-    before = symbology._sized(sub, "size", "sizeUnit")
-    after = symbology._sized(rebuilt, "size", "sizeUnit") if rebuilt is not None else None
+    # MEASURED AS INK, not as the stated size: a rebuilt marker is a RASTER marker whose stated
+    # size is its CANVAS, and the canvas is deliberately `PICTURE_MARGIN` roomier than the symbol.
+    # Comparing the stated numbers passed while the marker drew at half.
+    from qgis.PyQt.QtCore import QSize as _QSize
+
+    def _ink(symbol):
+        image = symbol.asImage(_QSize(300, 300))
+        columns = [x for x in range(image.width())
+                   for y in range(image.height()) if (image.pixel(x, y) >> 24) & 0xFF]
+        return (max(columns) - min(columns) + 1) if columns else 0
+
+    before = _ink(sub)
+    after = _ink(rebuilt) if rebuilt is not None else 0
     check("back in QGIS: the markers are the size they were",
-          before and after and 0.95 <= after / before <= 1.05,
-          "{0} pt -> {1} pt".format(round(before or 0, 2), round(after or 0, 2)))
+          before and after and abs(after - before) <= max(2.5, 0.1 * before),
+          "QGIS drew {0} px, gets {1} px back".format(before, after))
     check("...and the style carried that size rather than guessing it",
           (style.get("line_marker") or {}).get("size"),
           json.dumps(sorted((style.get("line_marker") or {}))))
@@ -1377,7 +1388,12 @@ def pictures_are_the_right_size():
               "QGIS {0} px, browser {1} px, ratio {2} (allowed {3} px)".format(
                   qgis_ink, round(browser_ink, 1), round(ratio, 3), round(slack, 1)))
 
-    # …and the size still comes back into QGIS unchanged, which is a different promise.
+    # …AND IT COMES BACK INTO QGIS AT THE SIZE IT LEFT, measured as INK. Comparing the nominal
+    # sizes here passed while the marker was drawn at HALF, because QGIS sizes a raster marker by
+    # its CANVAS and the canvas is deliberately `PICTURE_MARGIN` roomier than the symbol. That is
+    # the third time in this file's history that measuring a stated number instead of a drawn one
+    # let a size bug through; the rule is now explicit — for anything that travels as a picture,
+    # measure the pixels.
     layer = make_layer("Point")
     marker = QgsMarkerSymbol.createSimple({"name": "circle", "color": "#e24646"})
     overlay = QgsMarkerSymbol.createSimple({"name": "cross", "color": "#111"})
@@ -1388,11 +1404,11 @@ def pictures_are_the_right_size():
     style = symbology.from_qgis(layer) or {}
     back = make_layer("Point")
     symbology.apply_to_qgis(back, dict(style))
-    before = symbology._sized(marker, "size", "sizeUnit")
-    after = symbology._sized(back.renderer().symbol(), "size", "sizeUnit")
+    before = ink_across(marker.asImage(QSize(300, 300)))
+    after = ink_across(back.renderer().symbol().asImage(QSize(300, 300)))
     check("a picture marker comes back the size it left",
-          before and after and 0.98 <= after / before <= 1.02,
-          "{0} pt -> {1} pt".format(round(before or 0, 2), round(after or 0, 2)))
+          before and after and abs(after - before) <= max(2.5, 0.1 * before),
+          "QGIS drew {0} px, gets {1} px back".format(before, after))
 
 
 # ══ 16. A portal group is drawn the way the portal draws it ══════════════════════════════════════
@@ -1458,6 +1474,80 @@ def tiles_match_the_portal():
     check("a plain layer is still one entry", len(entries) == 1, len(entries))
 
 
+# ══ 17. A line drawn as several strokes stacked ══════════════════════════════════════════════════
+
+def stacked_strokes():
+    """QGIS builds a casing, a dashed overlay and a hatch by stacking simple lines in ONE symbol.
+
+    Reading only the first threw the rest away. Reported on a rule whose symbol is a solid RED line
+    with a dashed BLUE one over it: on screen that reads as blue, and it arrived as plain red —
+    "in the original the blue appears more; now I see mostly red". The legend swatch showed it too,
+    blue-and-red before and solid red after, which is what made it findable.
+
+    MapLibre stacks `line` layers, so the mapping is direct; each entry is the line vocabulary
+    again, laid over the layer's.
+    """
+    section("A line drawn as several strokes stacked")
+    from qgis.core import QgsLineSymbol, QgsSimpleLineSymbolLayer, QgsSingleSymbolRenderer
+    from qgis.PyQt.QtGui import QColor
+
+    layer = make_layer("LineString")
+    symbol = QgsLineSymbol.createSimple({"color": "#e24646"})
+    symbol.symbolLayer(0).setWidth(3.0)
+    over = QgsSimpleLineSymbolLayer()
+    over.setColor(QColor("#84d9ff"))
+    over.setWidth(3.0)
+    over.setPenStyle(enum(Qt, "PenStyle", "DashLine"))
+    symbol.appendSymbolLayer(over)
+    layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+
+    style = symbology.from_qgis(layer) or {}
+    stack = style.get("line_stack") or []
+    check("the overlay travels", len(stack) == 1, json.dumps(stack))
+    check("...in its own colour", stack and stack[0].get("color") == "#84d9ff", json.dumps(stack))
+    check("...with its own dash", stack and stack[0].get("lineType") == "dashed", json.dumps(stack))
+    check("the base keeps the layer's own colour", style.get("color") == "#e24646",
+          style.get("color"))
+
+    back = make_layer("LineString")
+    symbology.apply_to_qgis(back, dict(style))
+    rebuilt = back.renderer().symbol()
+    colours = [rebuilt.symbolLayer(i).color().name() for i in range(rebuilt.symbolLayerCount())]
+    check("back in QGIS: both strokes are there", colours == ["#e24646", "#84d9ff"], colours)
+    pens = [rebuilt.symbolLayer(i).penStyle() for i in range(rebuilt.symbolLayerCount())]
+    check("back in QGIS: and the overlay is still dashed",
+          pens[1] == enum(Qt, "PenStyle", "DashLine"), pens)
+    stable(back, "LineString", "a stacked stroke")
+
+    # AN ORDINARY LINE GAINS NOTHING, or every line style on every instance would grow a key.
+    plain = make_layer("LineString")
+    symbology.apply_to_qgis(plain, {"color": "#e24646", "line_width": 3})
+    check("an ordinary line carries no stack",
+          "line_stack" not in (symbology.from_qgis(plain) or {}),
+          json.dumps(sorted(symbology.from_qgis(plain) or {})))
+
+    # A MARKER LINE IS NOT A STROKE, and must not be mistaken for one.
+    from qgis.core import QgsMarkerLineSymbolLayer, QgsMarkerSymbol
+    decorated = make_layer("LineString")
+    road = QgsLineSymbol.createSimple({"color": "#111111"})
+    ticks = QgsMarkerLineSymbolLayer()
+    ticks.setSubSymbol(QgsMarkerSymbol.createSimple({"color": "#ff0000"}))
+    road.appendSymbolLayer(ticks)
+    decorated.setRenderer(QgsSingleSymbolRenderer(road))
+    dstyle = symbology.from_qgis(decorated) or {}
+    check("a marker line is a decoration, not a stacked stroke",
+          not dstyle.get("line_stack") and dstyle.get("line_marker"),
+          json.dumps(sorted(dstyle)))
+
+    if WEB is not None:
+        check("the map sees the stack", len(WEB.stroke_stack(style)) == 1,
+              len(WEB.stroke_stack(style)))
+        merged = dict(style, **WEB.stroke_stack(style)[0])
+        check("...and draws the overlay dashed over a solid base",
+              WEB.dash_array(merged) and not WEB.dash_array(style),
+              "{0} over {1}".format(WEB.dash_array(merged), WEB.dash_array(style)))
+
+
 def main():
     print("GeoDeploy ⇄ QGIS round-trip matrix")
     print("QGIS {0}   |   web renderer: {1}".format(
@@ -1465,7 +1555,8 @@ def main():
     for run in (registry_sweep, renderer_sweep, unit_matrix, per_class_matrix, property_matrix,
                 scope_matrix, label_matrix, label_rules, tile_matrix, special_renderers,
                 zero_is_a_size, lines_made_of_markers, pictures_are_the_right_size,
-                tiles_match_the_portal, maplibre_matrix, determinism):
+                tiles_match_the_portal, stacked_strokes, maplibre_matrix,
+                determinism):
         try:
             run()
         except Exception:                                                        # noqa: BLE001

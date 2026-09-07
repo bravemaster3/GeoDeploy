@@ -290,6 +290,20 @@ function rangeLabel(entry) {
   return `${lo} – ${hi}`.trim()
 }
 
+/**
+ * Extra strokes drawn OVER a line's own, bottom to top. `[]` for an ordinary line.
+ * Twin of `symbology.stroke_stack`.
+ *
+ * QGIS builds a casing, a dashed overlay and a railway hatch by stacking simple lines inside one
+ * symbol; MapLibre stacks `line` layers. The mapping is direct, so each entry is just the line
+ * vocabulary again, laid over the layer's.
+ */
+export function strokeStack(style = {}) {
+  const raw = (style || {}).line_stack
+  if (!Array.isArray(raw)) return []
+  return raw.filter((e) => e && typeof e === 'object')
+}
+
 export function isDataDriven(style = {}) {
   const mode = style.color_mode || 'single'
   if (mode === 'graduated' && style.color_field && (style.classes || []).length) return true

@@ -7,7 +7,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.4.9
+version=0.5.0
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -26,7 +26,20 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.4.9 - Two more found by checking the 0.4.8 fix on the reported layer instead of
+changelog=0.5.0 - A LINE DRAWN AS SEVERAL STROKES now travels as all of them. QGIS builds a
+    casing, a dashed overlay and a hatch by stacking simple lines inside ONE symbol, and this read
+    only the first: a rule whose symbol is a solid RED line with a DASHED BLUE one over it - which
+    on screen reads as blue - arrived as plain red. `line_stack` carries the rest and the map
+    stacks them the same way.
+    A PICTURE MARKER COMES BACK THE SIZE IT LEFT. QGIS sizes a raster marker by its CANVAS, and the
+    canvas is deliberately roomier than the symbol so ink that overhangs is not clipped - so the
+    pin came back at half. The browser was right all along, which is why this only showed on the
+    way home.
+    A PORTAL GROUP now honours each layer's SCALE RANGE; before, every layer drew at every zoom.
+    And a RATE-LIMITED upload is waited out rather than failed: pushing a group is one request per
+    layer, an instance throttles that route, and the push used to stop partway with "HTTP 429" and
+    have to be repeated.
+    0.4.9 - Two more found by checking the 0.4.8 fix on the reported layer instead of
     trusting it. The circles along a line came back at QGIS's DEFAULT size whatever they started
     as - a rebuilt line marker is a raster marker, whose default has nothing to do with the symbol
     it replaces, and the style carried the picture and the spacing but never the size. And a line

@@ -668,7 +668,14 @@ def raster_marker(uri: str, size_px=None):
         from qgis.core import QgsRasterMarkerSymbolLayer
         marker = QgsRasterMarkerSymbolLayer(path)
         if size_px:
-            marker.setSize(round(float(size_px) / MM_TO_PX, 3))
+            # QGIS SIZES A RASTER MARKER BY ITS CANVAS, and the canvas is deliberately roomier than
+            # the symbol inside it: `symbology._rendered_at` leaves a `PICTURE_MARGIN` of padding so
+            # ink that overhangs the nominal box is not clipped. `size_px` describes the SYMBOL, so
+            # the canvas has to be that much larger or the marker comes back at 1 / PICTURE_MARGIN
+            # of its size — reported as "point markers don't round trip correctly in size", and
+            # invisible from the browser, which scales by pixel ratio and lands on the ink.
+            canvas = float(size_px) * symbology.PICTURE_MARGIN
+            marker.setSize(round(canvas / MM_TO_PX, 3))
         return marker
     except Exception as exc:            # noqa: BLE001 - a marker is never worth failing a style
         symbology._log("Could not rebuild this marker picture ({0}: {1}).".format(

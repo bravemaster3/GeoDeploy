@@ -43,7 +43,40 @@ export const BASEMAPS = [
 /** What a map uses when nobody has chosen: the first entry, by definition of "default". */
 export const DEFAULT_BASEMAP = BASEMAPS[0]
 
+/**
+ * "No basemap" — the data on a plain ground.
+ *
+ * That is how you read a dense layer, judge a fill's transparency, or take a figure for print
+ * without a map under it. It sits BESIDE the catalog rather than in it: `BASEMAPS` mirrors the
+ * server's `BASEMAP_CATALOG` id for id, and an entry with no tiles in that mirror would be a
+ * standing invitation to send it somewhere that expects a tile URL.
+ *
+ * The chequerboard thumbnail is drawn inline, because the swatch for "nothing" must not itself
+ * need a tile server.
+ */
+export const NO_BASEMAP = {
+  id: '__none__',
+  name: 'None',
+  tiles: [],
+  attribution: '',
+  thumb: 'data:image/svg+xml;utf8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">' +
+    '<rect width="64" height="64" fill="#fff"/>' +
+    '<path d="M0 0h16v16H0zM32 0h16v16H32zM16 16h16v16H16zM48 16h16v16H48z' +
+    'M0 32h16v16H0zM32 32h16v16H32zM16 48h16v16H16zM48 48h16v16H48z" fill="#e6e6e6"/></svg>'),
+}
+
+/** Everything a basemap picker should offer: the catalog, then "None". */
+export const BASEMAP_OPTIONS = BASEMAPS.concat([NO_BASEMAP])
+
+/** Whether an id (or entry) means "draw no basemap at all". */
+export function isNoBasemap(basemap) {
+  const id = basemap && typeof basemap === 'object' ? basemap.id : basemap
+  return id === NO_BASEMAP.id
+}
+
 /** The catalog entry for an id, falling back to the default rather than returning nothing. */
 export function basemapById(id) {
+  if (isNoBasemap(id)) return NO_BASEMAP
   return BASEMAPS.find(b => b.id === id) || DEFAULT_BASEMAP
 }

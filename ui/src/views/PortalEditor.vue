@@ -567,7 +567,7 @@ import {
   markerImages as symMarkerImages,
 } from '@/lib/symbology'
 import { buildMapStyle, lonLatBbox, rasterStyleOf, rasterTilesUrl } from '@/lib/mapStyle'
-import { BASEMAPS } from '@/lib/basemaps'
+import { BASEMAPS, NO_BASEMAP } from '@/lib/basemaps'
 import { registerMarkerImages, setMarkerSpecs } from '@/lib/markerImage'
 import { capturePortalThumbnail } from '@/composables/portalThumbnail'
 import maplibregl from 'maplibre-gl'
@@ -945,7 +945,9 @@ const basemap = ref(null)  // chosen basemap catalog id; null → first catalog 
 // one-place change on the server. The inline list is only an instant bootstrap/offline fallback so
 // the preview never flashes blank before the fetch resolves. (Declared here — above the watches
 // that reference it at setup time — to avoid a temporal-dead-zone error.)
-const basemapCatalog = ref(BASEMAPS)
+// The catalog plus "None". The fetch that replaces this with the server's list appends it
+// again, so the option survives whatever the instance offers.
+const basemapCatalog = ref(BASEMAPS.concat([NO_BASEMAP]))
 
 // Drag-to-reorder layers (top of list = top of map)
 const dragIndex = ref(null)
@@ -1168,7 +1170,9 @@ onMounted(async () => {
     portalsStore.refresh(),
     dataStore.refresh(),
     listBasemaps().then(({ data }) => {
-      if (Array.isArray(data) && data.length) basemapCatalog.value = data
+      // …plus "None", which is not one of the server's basemaps and must survive the
+      // catalog being replaced by it.
+      if (Array.isArray(data) && data.length) basemapCatalog.value = data.concat([NO_BASEMAP])
     }).catch(() => { /* keep the bootstrap fallback */ }),
     // R2: ensure the gd_session cookie exists so the same-origin preview iframe passes the nginx gate.
     syncSession().catch(() => { /* best-effort */ }),

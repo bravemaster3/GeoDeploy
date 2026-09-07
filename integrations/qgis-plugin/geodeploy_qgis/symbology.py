@@ -675,6 +675,7 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
         # hairline, so an unstyled line came out far thinner than the portal draws it.
         layer0.setWidth(_stated(style.get("line_width"), DEFAULT_LINE_WIDTH) * CSS_PX_TO_POINTS)
         _apply_line_decoration(layer0, style)
+        _apply_stroke_stack(symbol, style)
     elif isinstance(layer0, QgsSimpleFillSymbolLayer):
         outline = style.get("outline_color")
         if outline == "none":
@@ -1494,8 +1495,19 @@ def _picture_signature(qgis_layer) -> str:
 
 
 def _record_pictures(qgis_layer, style: dict) -> None:
-    """Remember the bitmaps this style carried, beside the symbols they were turned into."""
+    """Remember the bitmaps this style carried, beside the symbols they were turned into.
+
+    THE SIZE IS RECORDED WITH THEM, and that is not an extra: QGIS sizes a raster marker by its
+    CANVAS, which `_rendered_at` deliberately leaves `PICTURE_MARGIN` roomier than the symbol. So
+    reading the rebuilt marker's size back gives the canvas, not the marker — a radius that doubles
+    on every trip. The recorded number is the truth about what the style asked for; the symbol's
+    own is an artefact of how the picture is packed.
+    """
     carried = {k: style[k] for k in PICTURE_KEYS if style.get(k)}
+    if carried:
+        for key in ("radius", "line_width"):
+            if style.get(key) is not None:
+                carried[key] = style[key]
     setter = getattr(qgis_layer, "setCustomProperty", None)
     if not callable(setter):
         return
@@ -2946,6 +2958,12 @@ def apply_to_vector_tiles(tile_layer, row: dict, source_layer: str | None,
         renderer = QgsVectorTileBasicRenderer()
         renderer.setStyles(styles)
         tile_layer.setRenderer(renderer)
+        # THE LAYER'S OWN SCALE RANGE, which only the feature path applied. A portal opened as a
+        # group drew every layer at every zoom, so a detail layer meant for 1:5000 covered the map
+        # at 1:250000 — the portal itself honours the range, so "as the portal draws it" did not.
+        # It is a property of the LAYER, not of its symbology, which is exactly why it has to be
+        # applied on both paths rather than inside one renderer.
+        _apply_layer_scope(tile_layer, style)
         tile_layer.triggerRepaint()
         return True
     except Exception as exc:            # noqa: BLE001 - never stop a layer loading over a style
@@ -3994,6 +4012,14 @@ def _style_from_symbol(symbol) -> dict:
                              else "dotted" if pen == enum(Qt, "PenStyle", "DotLine") else "solid")
         style.update(_line_decoration_of(layer0, style.get("line_width")))
         style.update(_line_decoration_symbol(symbol))
+        # A LINE DRAWN AS SEVERAL STROKES STACKED. QGIS builds a casing, a dashed overlay, a
+        # railway hatch and a dozen other everyday things by stacking simple lines in one symbol,
+        # and reading only the first threw the rest away. Reported on a rule whose symbol is a
+        # SOLID RED line with a DASHED BLUE one over it: on screen it reads as blue, and it arrived
+        # as plain red — "in the original the blue appears more; now I see mostly red".
+        stack = _stroke_stack(symbol)
+        if stack:
+            style["line_stack"] = stack
     elif isinstance(layer0, QgsSimpleFillSymbolLayer) or _is_fill(symbol):
         opacity = number(symbol.opacity)
         if opacity is not None:
@@ -4599,6 +4625,70 @@ def _fill_across_classes(shape: dict, filled) -> dict:
         return shape
     out = dict(shape)
     out["fill_opacity"] = filled
+    return out
+
+
+def _apply_stroke_stack(symbol, style: dict) -> None:
+    """Rebuild `line_stack` as extra simple-line layers over the base. The inverse of the reader."""
+    stack = [e for e in (style.get("line_stack") or []) if isinstance(e, dict)]
+    if not stack or symbol is None:
+        return
+    try:
+        from qgis.core import QgsSimpleLineSymbolLayer
+        from qgis.PyQt.QtGui import QColor
+    except ImportError:                 # pragma: no cover
+        return
+    for entry in stack:
+        try:
+            extra = QgsSimpleLineSymbolLayer()
+            extra.setColor(QColor(entry.get("color") or style.get("color") or DEFAULT_COLOR))
+            extra.setWidth(_stated(entry.get("line_width"),
+                                   _stated(style.get("line_width"), DEFAULT_LINE_WIDTH))
+                           * CSS_PX_TO_POINTS)
+            _use_points(symbol, extra)
+            _apply_line_decoration(extra, entry)
+            symbol.appendSymbolLayer(extra)
+        except Exception as exc:        # noqa: BLE001 - the base line still draws
+            _log("Could not rebuild a stacked stroke ({0}: {1}); the line is drawn with the "
+                 "strokes that could be.".format(type(exc).__name__, exc))
+
+
+def _stroke_stack(symbol) -> list:
+    """Every stroke ABOVE the first one, as its own set of line keys. `[]` for an ordinary line.
+
+    The first stroke is the layer's own `color`/`line_width`/`lineType`; these are what is drawn
+    over it, bottom to top, which is the order QGIS draws them in and the order MapLibre draws
+    stacked line layers in. An entry holds only what it needs: a renderer that knows nothing about
+    the key ignores it and draws the base line, which is what happened before this existed.
+    """
+    try:
+        from qgis.core import QgsSimpleLineSymbolLayer
+    except ImportError:                 # pragma: no cover - very old QGIS
+        return []
+    out = []
+    seen_first = False
+    for i in range(getattr(symbol, "symbolLayerCount", lambda: 0)()):
+        layer = symbol.symbolLayer(i)
+        if not isinstance(layer, QgsSimpleLineSymbolLayer):
+            continue                    # a marker line is `line_marker`, not a stroke
+        if not getattr(layer, "enabled", lambda: True)():
+            continue
+        if not seen_first:
+            seen_first = True           # the base, already read into the top-level keys
+            continue
+        entry = {"color": _hex(layer.color())}
+        width = _css_px(layer, "width", "widthUnit")
+        if width is not None:
+            entry["line_width"] = round(width, 2)
+        try:
+            pen = layer.penStyle()
+            entry["lineType"] = ("dashed" if pen == enum(Qt, "PenStyle", "DashLine")
+                                 else "dotted" if pen == enum(Qt, "PenStyle", "DotLine")
+                                 else "solid")
+        except Exception:               # noqa: BLE001  # nosec B110 - intentional: a pen we cannot read is drawn solid
+            pass
+        entry.update(_line_decoration_of(layer, entry.get("line_width")))
+        out.append(entry)
     return out
 
 

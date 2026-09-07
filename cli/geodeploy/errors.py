@@ -72,12 +72,30 @@ class ValidationError(APIError):
     """400 / 413 / 422 — the request itself was wrong: bad geometry columns, oversized file."""
 
 
+class RateLimited(APIError):
+    """Too many requests, too quickly — the server refused this one and wants it later.
+
+    NOT A FAILURE OF THE REQUEST. The instance's front door rejects these before they ever reach the
+    application, so nothing was created, nothing was half-done, and sending the same request again
+    after a wait is safe even when it is a POST. That is what makes `Client` retry them for you.
+
+    `retry_after` is the server's own answer in seconds when it gave one.
+    """
+
+    def __init__(self, status, detail, url="", payload=None, retry_after=None):
+        super().__init__(status, detail, url, payload)
+        self.retry_after = retry_after
+
+
 class ServerError(APIError):
     """5xx — the instance failed. Worth retrying; not worth reformulating the request."""
 
 
-def from_status(status: int, detail: str, url: str = "", payload: Any = None) -> APIError:
+def from_status(status: int, detail: str, url: str = "", payload: Any = None,
+                retry_after: Any = None) -> APIError:
     """Map an HTTP status onto the class above that a caller can act on."""
+    if status == 429:
+        return RateLimited(status, detail, url, payload, retry_after)
     if status == 401:
         return AuthError(status, detail, url, payload)
     if status == 403:

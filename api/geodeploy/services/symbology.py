@@ -537,6 +537,19 @@ def _range_label(entry: dict) -> str:
     return "{0} – {1}".format("" if lo is None else _num(lo), "" if hi is None else _num(hi)).strip()
 
 
+def stroke_stack(style: dict) -> list[dict]:
+    """Extra strokes drawn OVER a line's own, bottom to top. `[]` for an ordinary line.
+
+    QGIS builds a casing, a dashed overlay and a railway hatch by stacking simple lines inside one
+    symbol; MapLibre stacks `line` layers. The mapping is direct, so each entry is just the line
+    vocabulary again — a colour, a width, a dash — laid over the layer's.
+    """
+    raw = (style or {}).get("line_stack")
+    if not isinstance(raw, list):
+        return []
+    return [e for e in raw if isinstance(e, dict)]
+
+
 def is_data_driven(style: dict) -> bool:
     """True when colour or size varies per feature."""
     mode = style.get("color_mode") or "single"

@@ -11,6 +11,7 @@
  * Everything it used to reach for in the editor's scope is now an argument, so the caller decides
  * what to draw and nothing here knows about editor state.
  */
+import { isNoBasemap as symIsNoBasemap } from './basemaps'
 import {
   colorExpression as symColorExpression,
   expandClasses as symExpandClasses,
@@ -43,6 +44,7 @@ import {
   heatmapPaint as symHeatmapPaint,
   fillPattern as symFillPattern,
   lineMarker as symLineMarker,
+  strokeStack as symStrokeStack,
   lineMarkerLayout as symLineMarkerLayout,
   // For the contour colouring below, which builds its own colormap from a named ramp — the same
   // ramps and the same interpolation the graduated symbology uses, so a raster's relief and a
@@ -68,15 +70,23 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
     // only the server knows what is installed, and if the preview and the portal each guessed they
     // would disagree the moment an operator installed a set. See `routers/fonts.py`.
     glyphs: `${location.origin}/api/fonts/{fontstack}/{range}.pbf`,
-    sources: {
-      basemap: {
-        type: 'raster',
-        tiles: bm.tiles,
-        tileSize: 256,
-        attribution: bm.attribution,
-      },
-    },
-    layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }],
+    sources: {},
+    layers: [],
+  }
+  // "NO BASEMAP" IS A REAL CHOICE, not a missing one: the data on a plain ground, which is how you
+  // read a dense layer or judge a fill's transparency. A `background` layer rather than nothing at
+  // all, so the map has a defined colour instead of whatever shows through the canvas.
+  if (symIsNoBasemap(bm)) {
+    style.layers.push({ id: 'basemap', type: 'background',
+      paint: { 'background-color': '#ffffff' } })
+  } else {
+    style.sources.basemap = {
+      type: 'raster',
+      tiles: bm.tiles,
+      tileSize: 256,
+      attribution: bm.attribution,
+    }
+    style.layers.push({ id: 'basemap', type: 'raster', source: 'basemap' })
   }
 
   // Merge every visible layer's bbox (skipping non-lon/lat bboxes, e.g. an old
@@ -300,6 +310,25 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
             ...(Object.keys(lineLay).length ? { layout: lineLay } : {}),
           })
         }
+        // STACKED STROKES over the base — a casing, a dashed overlay. QGIS stacks simple lines in
+        // one symbol; MapLibre stacks `line` layers. Mirrors _vector_layers.
+        symStrokeStack(st).forEach((extra, i) => {
+          const over = { ...st, ...extra }
+          delete over.line_stack
+          const paint = {
+            'line-color': over.color || color,
+            'line-width': symSizeExpression(over, over.line_width ?? 2),
+            'line-opacity': opacity,
+          }
+          const d = symDashArray(over)
+          if (d) paint['line-dasharray'] = d
+          const o = symLineOffset(over)
+          if (o != null) paint['line-offset'] = o
+          style.layers.push({
+            id: mlId(srcId, cfg, `s${i}`), ...ruleScope(cfg),
+            type: 'line', source: srcId, 'source-layer': sourceLayer, paint,
+          })
+        })
       } else if (symIsExtruded(st) && layer.storage_backend !== 'geoparquet') {
         // POINTS IN 3D: pillars. MapLibre extrudes fills only, so the geometry has to become a
         // polygon — the shared Martin function buffers the points by a radius in metres and serves
