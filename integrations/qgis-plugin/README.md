@@ -117,6 +117,13 @@ fastest source it offers, and upload a QGIS layer back — with its styling. Sit
   token. Note that its portal section reads the PUBLISHED bundle, so it measures the API version
   the instance is running: a failure there with the plugin sections green means the instance has
   not been rebuilt.
+- `scripts/test_push_summary.py` — **what the push dialog tells you before you press OK.**
+  `diffdialog.summarise` was written GUI-free "so it can be tested without a GUI" and then nothing
+  tested it. It is the only place the plugin can explain WHERE a restyle lands — *Push group to
+  portal* writes that portal's `layer_configs`, while a layer's own default style is written only by
+  *Save styling to GeoDeploy* — and a bare "Restyled (3)" reads as though the layers themselves are
+  being changed. That sentence is a feature, and a feature made of words breaks when the words are
+  edited, so it has a test: 26 checks, in CI.
 - `scripts/coverage_report.py` — **the symbology coverage matrix, read out of QGIS's own
   registries** rather than remembered. Joins `symbolLayerRegistry()`, `rendererRegistry()` and the
   data-defined property definitions against the verdicts declared in the script itself, and **fails
@@ -333,6 +340,7 @@ Findings in `vendor/` are fixed in `cli/geodeploy` and re-vendored — never edi
 `vendor.py --check` fails.
 
 ## Last updated
+2026-09-07d (`diffdialog`: **the push dialog says where a restyle lands.** *Push group to portal* writes THAT portal's `layer_configs`; a layer's own default style is written only by *Save styling to GeoDeploy* — and the dialog said neither, so a bare "Restyled (3)" read as though the layers themselves were changing. A NEW layer gets both, because an uploaded layer has no default to preserve. `section()` now takes a note, indented less than the names so it is not read as one of them. Tests: `scripts/test_push_summary.py`, 26 checks, in CI.)
 2026-09-07c (`labels.py`: **a rule-based LABELLING travels as its rules**, not as its first leaf — `labels.rules`, the same shape `style.rules` uses, with `portal_generator._label_layers` drawing one label layer per rule. And **a size of zero is a size**: `_stated()` replaces `get("radius") or DEFAULT` so a marker sized 0 stays 0 in both directions. Tests: the `Label rules` and `Zero is a size` sections of `test_roundtrip_matrix.py`, and `api/tests/test_label_rules.py`.)
 2026-09-07 (**a CLASS carries its own symbol now, not just its colour** — `CLASS_SHAPE_KEYS`,
 `class_overrides` on the way out and `class_style` on the way in. GeoDeploy held a colour per class

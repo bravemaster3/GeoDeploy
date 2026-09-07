@@ -7,7 +7,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.4.6
+version=0.4.7
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -26,7 +26,13 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.4.6 - A LABELLING IS A TREE, NOT ITS FIRST LEAF. QGIS labels a place-names
+changelog=0.4.7 - The push dialog now says WHERE a restyle lands. "Push group to portal"
+    changes that portal; a layer's own default style - what its page shows, and what every other
+    portal starts from - is changed only by "Save styling to GeoDeploy". The dialog listed
+    "Restyled (3)" and said neither, so restyling inside a group and then finding the layer's own
+    page unchanged looked like a bug. A layer that is NEW gets both, because an uploaded layer has
+    no default style to preserve, and the dialog says that too.
+    0.4.6 - A LABELLING IS A TREE, NOT ITS FIRST LEAF. QGIS labels a place-names
     layer by rule - water blue at 9pt, woodland green, a town brown at 11 - and this plugin read
     the FIRST rule and sent it as the whole labelling, so every name on the map came out in one
     colour at one size. All eight rules now travel, each with the filter text its author typed,

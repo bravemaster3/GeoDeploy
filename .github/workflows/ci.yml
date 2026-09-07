@@ -221,6 +221,12 @@ jobs:
         # that opens in the layers' default colours or quietly loses a layer to a clashing id.
         run: python integrations/qgis-plugin/scripts/test_published_style.py
 
+      - name: The push dialog says where a restyle lands
+        # `summarise` is the only place the plugin can explain that "Push group to portal" changes
+        # THAT PORTAL and not the layers' own default styles. That sentence is a feature, and a
+        # feature made of words still breaks when somebody edits the words.
+        run: python integrations/qgis-plugin/scripts/test_push_summary.py
+
       - name: Enums resolve on Qt5 and Qt6 alike
         # QGIS 4 is Qt6, where an enum member is only reachable through its scope. The migration
         # touched 94 call sites; one flat `Qgis.Warning` typed later would be invisible until a user

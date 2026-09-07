@@ -168,6 +168,21 @@ what will change.
 A layer opens looking like the portal, and what you change in QGIS goes home — press **Save styling
 to GeoDeploy** (the layer's default style) or **Push group to portal** (that portal only).
 
+!!! info "Which button changes what"
+
+    A layer has **one default style** — what its own page shows, and what a portal starts from when
+    you add it — and **a style per portal** that has it. The two buttons write different things, and
+    that is on purpose: restyling a layer for one portal should not change how it looks on the
+    others.
+
+    | | Writes |
+    |---|---|
+    | **Save styling to GeoDeploy** | the layer's default style |
+    | **Push group to portal** | that portal's styling, for layers already on the instance |
+    | **Push group to portal**, for a layer that is *new* | both — an uploaded layer has no default style yet, so the one it arrives with becomes it |
+
+    The confirmation dialog says which of these each layer is getting before anything is sent.
+
 What travels:
 
 - **Vectors** — single symbol, graduated, categorized and **rule-based**; colour, marker shape,
