@@ -1830,6 +1830,65 @@ def tile_labels():
           type(tiles_layer.labeling()).__name__ if tiles_layer.labeling() else "None")
 
 
+def external_services():
+    """A layer served by somebody else, described from the URI QGIS ITSELF wrote for it.
+
+    `scripts/test_external_sources.py` tests the same parsing against URIs pasted into it, which is
+    fast and runs anywhere. This is the half that keeps those fixtures honest: QGIS encodes the
+    connection here, so a change to the grammar QGIS writes fails on a real QGIS rather than
+    quietly making the plugin unable to read a WMS somebody added last week.
+    """
+    section("A service layer becomes an external source")
+    from qgis.core import QgsDataSourceUri, QgsProviderRegistry, QgsRasterLayer, QgsVectorLayer
+    import external
+
+    registry = QgsProviderRegistry.instance()
+    xyz_uri = registry.encodeUri("wms", {"type": "xyz",
+                                         "url": "https://tile.example.org/{z}/{x}/{y}.png",
+                                         "zmin": 0, "zmax": 19})
+    spec = external.spec_from_uri("wms", xyz_uri)
+    check("XYZ: QGIS's own encoding is understood", (spec or {}).get("source_type") == "xyz", spec)
+    check("XYZ: the {z}/{x}/{y} template survives being un-percent-encoded",
+          (spec or {}).get("url") == "https://tile.example.org/{z}/{x}/{y}.png", spec)
+
+    wms = QgsDataSourceUri()
+    wms.setParam("url", "https://example.org/wms")
+    wms.setParam("layers", "topo")
+    wms.setParam("format", "image/png")
+    wms.setParam("crs", "EPSG:3857")
+    spec = external.spec_from_uri("wms", wms.encodedUri().data().decode())
+    check("WMS: read as a wms source", (spec or {}).get("source_type") == "wms", spec)
+    check("WMS: naming the layer the server needs", (spec or {}).get("layer_name") == "topo", spec)
+
+    wfs = QgsDataSourceUri()
+    wfs.setParam("url", "https://example.org/wfs")
+    wfs.setParam("typename", "ms:roads")
+    wfs.setParam("version", "auto")
+    wfs.setParam("srsname", "EPSG:4326")
+    spec = external.spec_from_uri("WFS", wfs.uri(False))
+    check("WFS: the quoted grammar is read too", (spec or {}).get("source_type") == "wfs", spec)
+    check("WFS: naming its typeName", (spec or {}).get("layer_name") == "ms:roads", spec)
+
+    # …and through a REAL layer, which is how the plugin asks: the provider key comes from the
+    # layer rather than from the caller, and it is not spelled the way the URI is.
+    layer = QgsVectorLayer(wfs.uri(False), "Roads", "WFS")
+    described = external.describe(layer)
+    check("a WFS layer describes itself", (described or {}).get("source_type") == "wfs", described)
+    check("...under the name it has in the project",
+          (described or {}).get("name") == "Roads", described)
+    raster = QgsRasterLayer(xyz_uri, "Tiles", "wms")
+    check("an XYZ layer describes itself",
+          (external.describe(raster) or {}).get("source_type") == "xyz",
+          external.describe(raster))
+    check("...and both are remote",
+          external.is_remote(layer) and external.is_remote(raster))
+
+    # A LOCAL LAYER IS NOT A SERVICE, which is the boundary that keeps every ordinary push working.
+    local = make_layer("Point")
+    check("a memory layer is not a service", external.describe(local) is None)
+    check("...and is not remote", not external.is_remote(local))
+
+
 def main():
     audit()
     round_trip()
@@ -1854,6 +1913,7 @@ def main():
     sizes_carry_their_unit()
     outline_only_polygons()
     tile_labels()
+    external_services()
     print("\n{0} checks, {1} failed".format(CHECKS[0], len(FAILURES)))
     for name in FAILURES:
         print("  - {0}".format(name))

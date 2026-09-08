@@ -22,7 +22,7 @@ from qgis.PyQt.QtWidgets import (QAbstractItemView, QAction, QCheckBox, QComboBo
                                  QHBoxLayout, QLabel, QLineEdit, QProgressBar,
                                  QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from . import (diffdialog, export, portals as portal_sync, sources, symbology,
+from . import (diffdialog, export, external, portals as portal_sync, sources, symbology,
                uploadpicker)
 from .connection import GeoDeployError, Instance, saved_instances
 try:                                    # a package, inside QGIS
@@ -1021,6 +1021,12 @@ class GeoDeployDock(QDockWidget):
                     layer.setCustomProperty(symbology.P_GEOMETRY,
                                             cfg.get("geometry_type") or "")
                     self._set_tile_extent(layer, doc.get("bounds"))
+            elif kind == "geojson":
+                # AN EXTERNAL WFS, drawn by the portal through GeoDeploy's own GeoJSON proxy — the
+                # proxy exists so an unauthenticated portal is not blocked by the provider's CORS
+                # policy, and using it here means QGIS sees exactly the features the portal shows.
+                # `/vsicurl/` so GDAL streams it rather than being handed a path it cannot open.
+                layer = QgsVectorLayer("/vsicurl/" + url, name, "ogr")
             else:
                 return None
         except Exception as exc:        # noqa: BLE001 - one layer must not stop the group
@@ -1029,6 +1035,9 @@ class GeoDeployDock(QDockWidget):
         if layer is None or not layer.isValid():
             return None
         if self.instance:
+            # THE TYPE THE CONFIG STATES, which for an external source is "external". Defaulting to
+            # "vector" here would tag somebody else's WMS as GeoDeploy vector layer N, and the next
+            # push would quietly point the portal at whatever layer N happens to be.
             portal_sync.tag_layer(layer, self.instance.url, cfg.get("layer_id"),
                                   cfg.get("layer_type") or "vector")
         return layer
@@ -1499,6 +1508,12 @@ class GeoDeployDock(QDockWidget):
             self, title or "Untitled portal",
             {"unchanged": plan["unchanged"], "restyled": plan["restyled"], "added": plan["added"],
              "uploads": [name for name, _layer, _node in plan["uploads"]],
+             # A service is named WITH ITS ADDRESS: "OS Open Raster" says nothing about whose
+             # server the portal will be fetching from, and that is the fact being approved.
+             "sources": ["{0} — {1} {2}".format(name, spec["source_type"].upper(), spec["url"])
+                         for name, _layer, _node, spec in plan.get("sources") or []],
+             "unsupported": ["{0} — {1}".format(name, why)
+                             for name, why in plan.get("unsupported") or []],
              "removed": plan["removed"], "rename": plan.get("rename")},
             creating=portal_id is None)
         if not go:
@@ -1506,6 +1521,7 @@ class GeoDeployDock(QDockWidget):
             return
 
         uploads = list(plan["uploads"]) if upload_new else []
+        remote_sources = list(plan.get("sources") or []) if upload_new else []
         keep_removed = [] if drop_removed else [
             cfg for cfg in current
             if (int(cfg.get("layer_id")), str(cfg.get("layer_type")))
@@ -1517,13 +1533,49 @@ class GeoDeployDock(QDockWidget):
 
         def work():
             sent = []
+            # What could not be added, with its reason — reported at the end rather than raised,
+            # because a portal that publishes nine of ten layers is worth having and the tenth is
+            # worth naming.
+            failed = []
+            # SERVICES FIRST, because they are the cheap half: registering one sends no data, and
+            # doing them before a long upload means a group of ten layers with one WMS in it shows
+            # the WMS on the portal even if an upload later fails.
+            registered = []
+            for index, (name, qgis_layer, _node, spec) in enumerate(remote_sources, start=1):
+                self._progress.emit("Registering {0} ({1} of {2})…".format(
+                    name, index, len(remote_sources)))
+                try:
+                    made = client.sources.create(**spec)
+                except GeoDeployError as exc:
+                    # ONE SERVICE MUST NOT COST THE PORTAL. A WFS is PROBED when it is created, so
+                    # a typo in a typeName or a provider that is down fails here — and that is a
+                    # reason to leave one layer out, not to abandon a push the user has approved.
+                    failed.append("{0}: {1}".format(name, exc))
+                    continue
+                source_id = (made or {}).get("id")
+                if source_id is None:
+                    failed.append("{0}: the instance registered it without giving it an id".format(name))
+                    continue
+                # TAGGED like an upload, so the re-plan below puts it in its place in the group's
+                # order and the next push sees an existing source rather than registering a second
+                # copy of the same service.
+                portal_sync.tag_layer(qgis_layer, instance_url, source_id, "external")
+                registered.append(name)
+
             for index, (name, qgis_layer, _node) in enumerate(uploads, start=1):
                 # Reported from the worker thread: publishing a group of five files is a long
                 # operation, and silence through it reads as a hang.
                 self._progress.emit("Uploading {0} ({1} of {2})…".format(name, index, len(uploads)))
                 # Upload, then TAG the QGIS layer with the id it was given. The tag is what makes
                 # the next push see it as an existing layer rather than a new one all over again.
-                path, temporary = export.prepare(qgis_layer)
+                try:
+                    path, temporary = export.prepare(qgis_layer)
+                except export.NotUploadable as exc:
+                    # ONE UNSENDABLE LAYER MUST NOT COST THE PUSH EITHER. This used to raise
+                    # straight out of the worker, so a group containing anything that could not be
+                    # written out published NOTHING — with a message about that one layer.
+                    failed.append("{0}: {1}".format(name, exc))
+                    continue
                 try:
                     result = client.uploads.upload(path, name=name, wait=True)
                 finally:
@@ -1569,6 +1621,8 @@ class GeoDeployDock(QDockWidget):
                     except OSError:
                         pass
             return {"portal": doc, "uploaded": sent, "kept": len(keep_removed),
+                    "registered": registered, "failed": failed,
+                    "unsupported": [n for n, _why in plan.get("unsupported") or []],
                     "skipped": [n for n, _l, _x in final["uploads"]]}
 
         self._busy(True)
@@ -1588,12 +1642,21 @@ class GeoDeployDock(QDockWidget):
             bits.append("uploaded " + str(len(result["uploaded"])))
         if result.get("kept"):
             bits.append("kept " + str(result["kept"]) + " you chose not to remove")
+        if result.get("registered"):
+            bits.append("registered " + str(len(result["registered"])) + " external source(s)")
         if result.get("skipped"):
             bits.append("left out " + ", ".join(result["skipped"][:3]))
+        if result.get("unsupported"):
+            bits.append("no external kind for " + ", ".join(result["unsupported"][:3]))
+        # NAMED WITH THE REASON, and at WARNING, because "published" plus a silent omission is the
+        # one outcome nobody can debug from the map.
+        if result.get("failed"):
+            bits.append("could not add " + "; ".join(result["failed"][:3]))
         detail = (" (" + "; ".join(bits) + ")") if bits else ""
         base = self.instance.url.rstrip("/") if self.instance else ""
         self._say("Portal " + str(doc.get("title")) + " published: " +
-                  base + "/p/" + str(doc.get("slug")) + detail)
+                  base + "/p/" + str(doc.get("slug")) + detail,
+                  MSG_WARNING if (result.get("failed") or result.get("unsupported")) else MSG_INFO)
         self.refresh_layers()
 
     def open_in_browser(self):
@@ -1884,6 +1947,19 @@ class GeoDeployDock(QDockWidget):
         # visible with its reason rather than turning into an error after the fact.
         candidates = []
         for layer in layers:
+            # A SERVICE IS REGISTERED, NOT UPLOADED, and it is offered here rather than refused:
+            # there is no file to send, GeoDeploy holds it as a reference, and the row says so.
+            spec = external.describe(layer)
+            if spec is not None:
+                candidates.append((layer.name(), None,
+                                   "added as a {0} external source — nothing is uploaded".format(
+                                       spec["source_type"].upper())))
+                continue
+            if external.is_remote(layer):
+                why = external.refusal(layer)
+                if why:
+                    candidates.append((layer.name(), why))
+                    continue
             try:
                 export.check(layer)
                 candidates.append((layer.name(), None))
@@ -1899,8 +1975,13 @@ class GeoDeployDock(QDockWidget):
         layers = [lyr for lyr in layers if lyr.name() in set(chosen)]
 
         jobs = []           # (name, path, temporary, style, source_layer)
+        service_jobs = []   # (name, spec, source_layer) — registered, never uploaded
         refused = []
         for layer in layers:
+            spec = external.describe(layer)
+            if spec is not None:
+                service_jobs.append((layer.name(), spec, layer))
+                continue
             try:
                 # Not `layer.source()`: a filtered layer's file holds MORE than the layer does, and
                 # a memory or PostGIS layer has no file at all. `prepare` writes those out first.
@@ -1922,7 +2003,7 @@ class GeoDeployDock(QDockWidget):
             # it became on the instance — see `_uploaded`.
             jobs.append((layer.name(), path, temporary, style, layer))
 
-        if not jobs:
+        if not jobs and not service_jobs:
             # Everything was refused — say why, for each, rather than a generic failure.
             self._say(" | ".join(refused) or "Nothing could be uploaded.", MSG_WARNING)
             return
@@ -1932,6 +2013,25 @@ class GeoDeployDock(QDockWidget):
 
         def work():
             uploaded, styled, failed, linked = [], [], list(refused), []
+            registered = []
+            # THE SERVICES FIRST, and each one's failure is its own: a WFS is probed as it is
+            # created, so an unreachable host or a wrong typeName surfaces here — for that layer.
+            for name, spec, source_layer in service_jobs:
+                self._progress.emit("Registering {0}…".format(name))
+                try:
+                    made = client.sources.create(**spec)
+                except Exception as exc:            # noqa: BLE001 - one service, not the batch
+                    failed.append("{0}: {1}".format(name, exc))
+                    continue
+                source_id = (made or {}).get("id")
+                if source_id is None:
+                    failed.append("{0}: registered without an id".format(name))
+                    continue
+                # Linked like an upload — applied on the main thread in `_uploaded` — so the layer
+                # already open answers "yes, I am that GeoDeploy source" to a later portal push.
+                if source_layer is not None:
+                    linked.append((source_layer, source_id, "external"))
+                registered.append(name)
             for index, (name, path, temporary, style, source_layer) in enumerate(jobs, start=1):
                 # Reported from the worker thread: a queue that looks frozen for four of five files
                 # is worse than no progress at all.
@@ -1972,7 +2072,7 @@ class GeoDeployDock(QDockWidget):
                         # A multi-gigabyte export is not left behind in temp because upload failed.
                         shutil.rmtree(os.path.dirname(path), ignore_errors=True)
             return {"uploaded": uploaded, "styled": styled, "failed": failed,
-                    "linked": linked}
+                    "linked": linked, "registered": registered}
 
         self._busy(True)
         self._say("Uploading {0} layer(s)… large files go straight to storage.".format(total),
@@ -2013,9 +2113,22 @@ class GeoDeployDock(QDockWidget):
         link_note = (" Now linked to GeoDeploy — restyle in QGIS and press “Save styling to "
                      "GeoDeploy”." if linked else "")
 
+        registered = result.get("registered") or []
+        # SAID SEPARATELY, because "uploaded" would be untrue: nothing was copied, and what the
+        # portal shows tomorrow is whatever the provider serves then.
+        service_note = ""
+        if registered:
+            service_note = (" Registered {0} as an external source — referenced from the "
+                            "provider, not copied.".format(registered[0]) if len(registered) == 1
+                            else " Registered {0} external sources — referenced from their "
+                                 "providers, not copied.".format(len(registered)))
+        if registered and not uploaded and not failed:
+            self._say(service_note.strip() + link_note)
+            self.refresh_layers()
+            return
         if uploaded and not failed:
             what = uploaded[0] if len(uploaded) == 1 else f"{len(uploaded)} layers"
-            self._say(f"Uploaded {what}.{styling}{link_note}")
+            self._say(f"Uploaded {what}.{styling}{service_note}{link_note}")
         elif uploaded and failed:
             # Partial success is its own outcome. Reporting it as failure hides work that landed;
             # reporting it as success hides work that did not.

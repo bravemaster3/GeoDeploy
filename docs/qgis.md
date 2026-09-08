@@ -231,8 +231,25 @@ its labels show is the ordinary way to build a place-names layer, and a renderer
 Large files go straight to object storage in parallel parts, so a multi-gigabyte GeoPackage does not
 pass through the API.
 
-A layer that cannot be sent is named with the reason rather than failing silently — a remote layer,
-or one with unsaved edits.
+A layer that cannot be sent is named with the reason rather than failing silently — one with
+unsaved edits, or a service GeoDeploy has no kind for.
+
+### A layer served by somebody else
+
+A **WMS**, an **XYZ tile set** or a **WFS** open in QGIS is not uploaded — it is registered as an
+**external source**: a reference GeoDeploy stores and fetches at view time, never a copy. Push one
+on its own or inside a group and the row says so before anything happens ("added as a WMS external
+source — nothing is uploaded"), and the provider's attribution travels with it, because a portal
+shows that credit.
+
+Nothing is downloaded and nothing is duplicated, so the portal keeps showing whatever the provider
+serves — including their next update, and their outages.
+
+GeoDeploy's external sources are XYZ, WMS and WFS. Anything else served over the network — a WMTS,
+third-party vector tiles or PMTiles, an OGC API - Features endpoint, an ArcGIS REST service — is
+named in the push summary with the reason rather than being registered as the nearest thing that
+would fetch from the wrong kind of endpoint and draw nothing. For those, save the data locally and
+upload that. (Many WMTS servers also serve plain XYZ tiles; added that way, they work.)
 
 ### Why upload from here rather than from the browser
 

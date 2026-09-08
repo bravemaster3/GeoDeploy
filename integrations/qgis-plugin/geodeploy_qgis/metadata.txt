@@ -7,7 +7,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.5.5
+version=0.6.0
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -26,7 +26,21 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.5.5 - THE FAST PREVIEW NOW THINS OUT THE WAY THE PORTAL DOES. A rule tree is how
+changelog=0.6.0 - A LAYER SERVED BY SOMEBODY ELSE CAN NOW BE PUSHED. A WMS, an XYZ tile set
+    or a WFS has no file to upload, and GeoDeploy has held exactly that as an "external source" -
+    a reference fetched at view time - since long before this plugin knew about it. Pushing one was
+    refused with "served from elsewhere, not a local file"; inside a GROUP it was worse, because
+    the layer fell in with the local files and the first export aborted the whole publish, so one
+    basemap in a group meant nothing reached the portal. Now it is registered, the provider's
+    attribution travels with it, and the dialog says "nothing is uploaded" before anything happens.
+    What GeoDeploy has no kind for - WMTS, third-party vector tiles or PMTiles, OGC API - Features,
+    ArcGIS REST - is named with the reason instead of being registered as the nearest neighbour
+    that would fetch from the wrong endpoint and draw nothing.
+    AND A PORTAL'S OWN EXTERNAL SOURCES SURVIVE THE ROUND TRIP. Their identity was read as the
+    KIND they hold, so a WMS source opened as "raster layer N" and pushing the group back pointed
+    the portal at whatever layer N happened to be. A portal's WFS layer also opens now, through the
+    same GeoJSON proxy the portal draws it with.
+    0.5.5 - THE FAST PREVIEW NOW THINS OUT THE WAY THE PORTAL DOES. A rule tree is how
     a layer says "generalized outlines zoomed out, full detail zoomed in" - three rules, three
     zoom ranges - and a tile renderer style left with no range is active at EVERY zoom, so the
     fast path drew every rung of the ladder at once. Each rule and each class now carries its own
