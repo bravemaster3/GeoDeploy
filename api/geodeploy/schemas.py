@@ -539,11 +539,17 @@ class RasterLayerOut(BaseModel):
 
 class ExternalSourceCreate(BaseModel):
     name: str
-    source_type: str = Field(pattern="^(xyz|wms|wfs)$")
+    source_type: str = Field(pattern="^(xyz|wms|wmts|wfs|ogcapi|vectortile|pmtiles)$")
     url: str
-    layer_name: str | None = None     # WMS layers= / WFS typeName (required for wms/wfs)
+    # WMS `layers` / WMTS layer / WFS typeName / OGC API collection id. Required for wms, wmts and
+    # wfs; optional for ogcapi when the URL already names the collection.
+    layer_name: str | None = None
+    # The layer INSIDE a vector tile or PMTiles archive. Probed where the provider publishes it
+    # (TileJSON `vector_layers`, PMTiles metadata) and required when it does not.
+    source_layer: str | None = None
+    matrix_set: str | None = None     # WMTS TileMatrixSet (default GoogleMapsCompatible)
     version: str | None = None        # WMS (default 1.3.0) / WFS (default 2.0.0)
-    image_format: str | None = None   # WMS image format (default image/png)
+    image_format: str | None = None   # WMS/WMTS image format (default image/png)
     attribution: str | None = None
 
 
@@ -551,6 +557,10 @@ class ExternalSourceOut(BaseModel):
     id: int
     user_id: int | None = None
     created_by: str | None = None
+    source_layer: str | None = None
+    matrix_set: str | None = None
+    min_zoom: int | None = None
+    max_zoom: int | None = None
     name: str
     source_type: str
     kind: str                         # raster | vector

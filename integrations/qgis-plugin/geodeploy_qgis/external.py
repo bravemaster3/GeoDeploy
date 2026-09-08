@@ -13,12 +13,14 @@ the pieces GeoDeploy needs are written down — the service address, which layer
 which version. There are two grammars (`&`-joined for WMS/XYZ, space-joined `key='value'` for WFS),
 neither is documented as a contract, and both are read here rather than in three call sites.
 
-WHAT IS DELIBERATELY REFUSED. GeoDeploy's `source_type` is `xyz | wms | wfs`, so a service outside
-that set has no honest home: a WMTS, a third-party vector-tile or PMTiles set, an OGC API - Features
-endpoint, an ArcGIS REST service. Registering one as the nearest neighbour would publish a portal
-layer that fetches from the wrong kind of endpoint and draws nothing, silently. Each is refused BY
-NAME instead, because "GeoDeploy has no kind for WMTS yet" is actionable and "cannot be uploaded"
-is not.
+WHAT IS DELIBERATELY REFUSED. GeoDeploy holds `xyz | wms | wmts | wfs | ogcapi | vectortile |
+pmtiles` — everything a web map can actually draw from somebody else's server. A service outside
+that set has no honest home: an ArcGIS REST service, or a WCS (which is not a display service at
+all — GetCoverage returns a coverage, not map images, so there is nothing to draw without first
+ingesting it). Registering one as the nearest neighbour would publish a portal layer that fetches
+from the wrong kind of endpoint and draws nothing, silently. Each is refused BY NAME instead,
+because "GeoDeploy has no kind for this yet, here is what to do" is actionable and "cannot be
+uploaded" is not.
 """
 from __future__ import annotations
 
@@ -26,19 +28,33 @@ import re
 from urllib.parse import unquote
 
 #: What `POST /api/data/sources` accepts. Restated from `cli/geodeploy/sources.py` deliberately —
-#: this file must not import a client to answer a question about a QGIS layer.
-SOURCE_TYPES = ("xyz", "wms", "wfs")
+#: this file must not import a client to answer a question about a QGIS layer. An instance too OLD
+#: for one of these answers 422, which is a clear message naming the field; the alternative is
+#: asking every instance what it supports before every push.
+SOURCE_TYPES = ("xyz", "wms", "wmts", "wfs", "ogcapi", "vectortile", "pmtiles")
 
 #: A source that IS an address, rather than one that CONTAINS an address in a `url=` parameter.
 REMOTE_PREFIXES = ("http://", "https://", "/vsicurl")
 
 #: Providers with a service GeoDeploy has no `source_type` for, and what to say about each.
 UNSUPPORTED_PROVIDERS = {
-    "vectortile": "vector tiles (including PMTiles)",
     "arcgismapserver": "an ArcGIS MapServer service",
     "arcgisfeatureserver": "an ArcGIS FeatureServer service",
-    "oapif": "an OGC API - Features service",
-    "ogcapif": "an OGC API - Features service",
+    "afs": "an ArcGIS FeatureServer service",
+    "wcs": ("a WCS coverage service, which is not a display service at all: GetCoverage returns a "
+            "coverage rather than map images, so there is nothing a web map can draw from it. Most "
+            "WCS servers publish the same data over WMS"),
+}
+
+#: How QGIS spells the providers this DOES support, mapped to GeoDeploy's own names. `wms` is
+#: absent because that one provider serves three different things (XYZ, WMS and WMTS) and only the
+#: URI can tell them apart — see `spec_from_uri`.
+PROVIDER_TYPES = {
+    "wfs": "wfs",
+    "wfs2": "wfs",
+    "oapif": "ogcapi",
+    "ogcapif": "ogcapi",
+    "vectortile": "vectortile",
 }
 
 #: A quoted pair in `QgsDataSourceUri` form: `typename='ms:roads'`. Doubled quotes are escapes.
@@ -47,6 +63,31 @@ _QUOTED_PAIR = re.compile(r"([A-Za-z_][\w.]*)='((?:[^']|'')*)'")
 _BARE_PAIR = re.compile(r"(?:^|\s)([A-Za-z_][\w.]*)=([^\s'][^\s]*)")
 #: How the two grammars are told apart. The `&`-joined one never quotes a value.
 _IS_QUOTED_FORM = re.compile(r"(?:^|\s)[A-Za-z_][\w.]*='")
+
+
+#: WMTS RESTful templates name their axes differently from every slippy map. Same numbers, same
+#: order, different words. The twin of `services/external_sources._TEMPLATE_TOKENS`: the plugin
+#: cannot import the server's copy, and the two are asserted to agree in
+#: `scripts/test_external_sources.py`.
+_TEMPLATE_TOKENS = (
+    ("{TileMatrix}", "{z}"), ("{tilematrix}", "{z}"),
+    ("{TileRow}", "{y}"), ("{tilerow}", "{y}"),
+    ("{TileCol}", "{x}"), ("{tilecol}", "{x}"),
+)
+
+
+def normalise_template(url: str) -> str:
+    """A tile template in MapLibre's tokens, whatever the provider called them."""
+    out = url or ""
+    for found, replacement in _TEMPLATE_TOKENS:
+        out = out.replace(found, replacement)
+    return out
+
+
+def is_tile_template(url: str) -> bool:
+    """Whether this URL is a per-tile template rather than a service endpoint."""
+    text = normalise_template(url or "")
+    return "{z}" in text and "{x}" in text and "{y}" in text
 
 
 def parse_uri(text: str) -> dict:
@@ -103,13 +144,56 @@ def spec_from_uri(provider: str, uri: str) -> dict | None:
                 # version string the provider never claimed.
                 "version": None if version.lower() in ("", "auto") else version}
 
+    if key in ("oapif", "ogcapif"):
+        # OGC API - Features. QGIS stores the LANDING PAGE plus a `typename` for the collection,
+        # and GeoDeploy accepts either that pair or a URL that already names the collection.
+        collection = (params.get("typename") or params.get("collection") or "").strip()
+        spec = {"source_type": "ogcapi", "url": url}
+        if collection:
+            spec["layer_name"] = collection
+        elif "/collections/" not in url:
+            return None                 # nothing names the collection: see `refusal_from_uri`
+        return spec
+
+    if key == "vectortile":
+        # A vector tile set, or a PMTiles archive — QGIS uses one provider for both and the URI
+        # says which. GeoDeploy stores them as different kinds because it fetches them differently
+        # (a template per tile; ranged reads of one file).
+        style_url = (params.get("styleUrl") or "").strip()
+        if url.lower().endswith(".pmtiles") or (params.get("type") or "").lower() == "pmtiles":
+            spec = {"source_type": "pmtiles", "url": url}
+        elif not is_tile_template(url) and not url.lower().endswith(".json"):
+            return None                 # neither a template nor a TileJSON: nothing to fetch
+        else:
+            spec = {"source_type": "vectortile", "url": normalise_template(url)}
+        if style_url:
+            # Carried nowhere yet, but worth NOT silently dropping: a style URL is how a vector
+            # tile set says how it wants to be drawn, and GeoDeploy has no field for it.
+            _log_dropped("the tile set's own style URL", style_url)
+        return spec
+
     if key == "wms":
+        # ONE QGIS PROVIDER, THREE SERVICES. `type=xyz` is a tile template; a `tileMatrixSet` means
+        # WMTS; anything else with `layers` is a WMS. Telling them apart is the whole job here,
+        # because sending a WMTS as a WMS produces a layer that fetches GetMap from a server that
+        # only speaks GetTile — which draws nothing, with no error.
         kind = (params.get("type") or "").strip().lower()
         if kind == "xyz":
-            return {"source_type": "xyz", "url": url}
-        if kind or params.get("tileMatrixSet"):
-            return None                 # WMTS and friends — see `refusal_from_uri`
+            return {"source_type": "xyz", "url": normalise_template(url)}
+        matrix = (params.get("tileMatrixSet") or params.get("tilematrixset") or "").strip()
         layers = params.get("layers")
+        if kind == "wmts" or matrix:
+            if not layers:
+                return None
+            spec = {"source_type": "wmts", "url": url, "layer_name": layers}
+            if matrix:
+                spec["matrix_set"] = matrix
+            image_format = (params.get("format") or "").strip()
+            if image_format:
+                spec["image_format"] = image_format
+            return spec
+        if kind:
+            return None                 # a `type=` this does not know — refused by name
         if not layers:
             return None
         spec = {"source_type": "wms", "url": url, "layer_name": layers}
@@ -121,6 +205,19 @@ def spec_from_uri(provider: str, uri: str) -> dict | None:
             spec["version"] = version
         return spec
     return None
+
+
+def _log_dropped(what: str, value: str) -> None:
+    """Say what could not travel, rather than dropping it in silence."""
+    try:
+        try:
+            from . import symbology
+        except ImportError:             # pragma: no cover - exec'd standalone
+            import symbology
+        symbology._log("{0} could not travel with this source ({1}); it is registered without "
+                       "it.".format(what, str(value)[:120]))
+    except Exception:                   # noqa: BLE001  # nosec B110 - intentional: a note is never worth failing a push
+        pass
 
 
 def refusal_from_uri(provider: str, uri: str) -> str | None:
@@ -137,14 +234,21 @@ def refusal_from_uri(provider: str, uri: str) -> str | None:
                 "locally and upload that instead.".format(named))
     if key == "wms":
         kind = (params.get("type") or "").strip().lower()
-        if kind == "wmts" or params.get("tileMatrixSet"):
-            return ("this is a WMTS service, and GeoDeploy's external sources are XYZ, WMS and "
-                    "WFS. Many WMTS servers also serve plain XYZ tiles — adding it that way works.")
-        if kind and kind != "xyz":
-            return ("this is a {0} source, and GeoDeploy's external sources are XYZ, WMS and "
-                    "WFS.".format(kind))
+        if kind and kind not in ("xyz", "wmts"):
+            return ("this is a {0} source, and GeoDeploy's external sources are XYZ, WMS, WMTS, "
+                    "WFS, OGC API - Features, vector tiles and PMTiles.".format(kind))
         if not params.get("layers"):
-            return "this WMS layer names no `layers`, so there is nothing to register."
+            return ("this layer names no `layers`, so there is nothing to register — a WMS or WMTS "
+                    "source has to say which layer of the service it draws.")
+    if key == "vectortile":
+        if not (is_tile_template(params.get("url") or "")
+                or (params.get("url") or "").lower().endswith((".json", ".pmtiles"))):
+            return ("this tile set is neither a {z}/{x}/{y} template, a TileJSON nor a .pmtiles "
+                    "archive, so there is no address to fetch tiles from.")
+    if key in ("oapif", "ogcapif") and not (params.get("typename") or params.get("collection")
+                                            or "/collections/" in (params.get("url") or "")):
+        return ("this OGC API layer names no collection, so there is nothing to register — the "
+                "URL has to contain /collections/<id>, or the collection has to be named.")
     if key in ("wfs", "wfs2") and not (params.get("typename") or params.get("typeName")):
         return "this WFS layer names no `typename`, so there is nothing to register."
     url = (params.get("url") or "").strip()

@@ -531,25 +531,48 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
       const srcId = `ext_${src.id}`
       const abs = (u) => (u && u.startsWith('/')) ? location.origin + u : u
       const op = cfg.opacity ?? 1.0
+      // A tiled source's own zoom range, when the provider stated one. Left off when it did not:
+      // no range means every zoom, which is what a bare XYZ template means. Mirrors
+      // portal_generator._zoom_range.
+      const zoomRange = (o) => {
+        if (src.min_zoom != null) o.minzoom = Math.max(0, Number(src.min_zoom))
+        if (src.max_zoom != null) o.maxzoom = Math.min(24, Number(src.max_zoom))
+        return o
+      }
+      // Which of the three source SHAPES this kind uses. Mirrors the external branch of
+      // portal_generator.generate_style — raster tiles, vector tiles, or proxied GeoJSON.
+      const tiled = ['xyz', 'wms', 'wmts', 'vectortile', 'pmtiles'].includes(src.source_type)
       if (src.kind === 'raster') {
         if (!src.tile_url) continue
-        style.sources[srcId] = { type: 'raster', tiles: [abs(src.tile_url)], tileSize: 256 }
+        style.sources[srcId] = zoomRange({ type: 'raster', tiles: [abs(src.tile_url)], tileSize: 256 })
         if (src.attribution) style.sources[srcId].attribution = src.attribution
         style.layers.push({ id: `external-${src.id}`, type: 'raster', source: srcId, paint: { 'raster-opacity': op } })
       } else {
-        if (!src.data_url) continue
-        style.sources[srcId] = { type: 'geojson', data: abs(src.data_url) }
+        // VECTOR TILES (a third-party set, or a remote PMTiles archive read tile-by-tile by the
+        // API) arrive as ordinary {z}/{x}/{y} MVT through our tile proxy — so the browser needs no
+        // PMTiles library and the provider needs no CORS policy. Everything else is GeoJSON.
+        if (tiled) {
+          if (!src.tile_url) continue
+          style.sources[srcId] = zoomRange({ type: 'vector', tiles: [abs(src.tile_url)] })
+        } else {
+          if (!src.data_url) continue
+          style.sources[srcId] = { type: 'geojson', data: abs(src.data_url) }
+        }
         if (src.attribution) style.sources[srcId].attribution = src.attribution
         const geom = src.geometry_type || 'polygon'
         const color = cfg.style?.color || '#3b82f6'
+        // THE LAYER INSIDE THE TILE. A vector tile is a container of named layers and a style that
+        // names none draws nothing at all — silently, because an unmatched `source-layer` is not an
+        // error in MapLibre.
+        const inTile = (tiled && src.source_layer) ? { 'source-layer': src.source_layer } : {}
         if (geom === 'polygon') {
-          style.layers.push({ id: `external-${src.id}`, type: 'fill', source: srcId,
+          style.layers.push({ id: `external-${src.id}`, type: 'fill', source: srcId, ...inTile,
             paint: { 'fill-color': color, 'fill-opacity': op * (cfg.style?.fill_opacity ?? 0.45), 'fill-outline-color': cfg.style?.outline_color || '#1d4ed8' } })
         } else if (geom === 'line') {
-          style.layers.push({ id: `external-${src.id}`, type: 'line', source: srcId,
+          style.layers.push({ id: `external-${src.id}`, type: 'line', source: srcId, ...inTile,
             paint: { 'line-color': color, 'line-width': cfg.style?.line_width ?? 2, 'line-opacity': op } })
         } else {
-          style.layers.push({ id: `external-${src.id}`, type: 'circle', source: srcId,
+          style.layers.push({ id: `external-${src.id}`, type: 'circle', source: srcId, ...inTile,
             paint: { 'circle-color': color, 'circle-radius': cfg.style?.radius ?? 5, 'circle-opacity': op, 'circle-stroke-color': '#fff', 'circle-stroke-width': 1 } })
         }
       }

@@ -24,14 +24,16 @@ fastest source it offers, and upload a QGIS layer back — with its styling. Sit
     shows. `raster_style_from_tile_url` reads a portal's baked raster styling back OUT of its tile
     template, which is the only place a portal records how it colours a raster.
   - `export.py` — what to actually upload for a given layer.
-  - `external.py` — a layer served by somebody ELSE (WMS / XYZ / WFS) as a GeoDeploy
-    `external_source`: a reference, fetched at view time, never ingested. Reads QGIS's two
-    provider-URI grammars (`&`-joined for WMS/XYZ, space-joined `key='value'` for WFS) in one
-    place, and refuses BY NAME what GeoDeploy has no `source_type` for — WMTS, vector tiles and
-    PMTiles, OGC API - Features, ArcGIS REST — because registering one as the nearest neighbour
-    publishes a portal layer that fetches from the wrong kind of endpoint and draws nothing.
-    Tests: `scripts/test_external_sources.py` (URIs QGIS itself encoded) and the
-    `external_services` section of `scripts/test_real_qgis.py` (which re-derives them).
+  - `external.py` — a layer served by somebody ELSE as a GeoDeploy `external_source`: a
+    reference, fetched at view time, never ingested. Every kind the instance holds — XYZ, WMS,
+    WMTS, WFS, OGC API - Features, vector tiles, PMTiles. Reads QGIS's two provider-URI grammars
+    (`&`-joined for WMS/XYZ/WMTS, space-joined `key='value'` for WFS and OAPIF) in one place, and
+    tells apart the THREE services QGIS's single `wms` provider serves — sending a WMTS as a WMS
+    publishes a layer asking GetMap of a server that only speaks GetTile, which draws nothing with
+    no error. Refuses BY NAME what has no home: ArcGIS REST, and WCS (not a display service at
+    all). Tests: `scripts/test_external_sources.py` (51, from URIs QGIS itself encoded, and it
+    compares the plugin's vocabulary against the server's) and the `external_services` section of
+    `scripts/test_real_qgis.py`, which re-derives them.
   - `symbology.py` — GeoDeploy style ⇄ QGIS renderer, **both directions, vector and raster**.
     Classification is never recomputed here: breaks are read from the style or from the renderer,
     and new breaks come from the instance's `/field-stats`, exactly as the CLI does. The raster half
@@ -364,6 +366,7 @@ Findings in `vendor/` are fixed in `cli/geodeploy` and re-vendored — never edi
 `vendor.py --check` fails.
 
 ## Last updated
+2026-09-08b (**every kind of external source.** `xyz | wms | wfs` becomes `xyz | wms | wmts | wfs | ogcapi | vectortile | pmtiles` on the instance, and the plugin pushes all of them. The interesting part is that QGIS's single `wms` provider serves THREE of them — XYZ, WMS and WMTS — and only the URI tells them apart; `spec_from_uri` does, because sending a WMTS as a WMS publishes a layer that asks GetMap of a server that only speaks GetTile. ArcGIS REST and WCS are refused by name, WCS with what it actually is. Also `label_per_part` (QGIS's "label every part") round-trips. 51 stub checks incl. a plugin-vs-server vocabulary comparison; 531 matrix, 349 real-QGIS. Plugin 0.6.1.)
 2026-09-08 (**external sources, both directions** — `external.py`. A WMS/XYZ/WFS layer is REGISTERED (`client.sources.create`) rather than uploaded, on the single-layer push and inside a group; `plan_push` returns `sources` and `unsupported` beside `uploads`, the dialog lists both before anything happens, and the push worker no longer dies on one unsendable layer (`export.prepare` raised straight out of it, so a group containing a basemap published NOTHING). On the way back, a portal's external source is keyed as `external` rather than as the kind it holds — it was opening as "raster layer N" and pushing back rebound the portal entry to a different layer — and a WFS source now opens through the portal's GeoJSON proxy. Verified against the live instance: created, read back, deleted. Tests: `scripts/test_external_sources.py` (36) + `external_services` in `test_real_qgis.py` (349). Plugin 0.6.0.)
 2026-09-07k (**a rule ladder thins out on the fast preview too.** A `QgsVectorTileBasicRendererStyle` with no zoom range is active at EVERY zoom, so a layer whose rules carry their own ranges — generalized zoomed out, detailed zoomed in — drew every rung at once, while the portal and the editable copy both showed one at a time. `_tile_style_zoom` applies each rule's and each class's own range. The conversion is not symmetric: MapLibre draws for `minzoom <= z < maxzoom` and QGIS's `isActive` is inclusive at both ends (asked of QGIS, not assumed), so the near end is `ceil(lo)` and the far end `ceil(hi) - 1`; the label path uses the same. Verified zoom by zoom against the reported portal's published style — 286's three rungs now agree at every zoom. 529 checks. Plugin 0.5.5.)
 2026-09-07j (**the fast option is a "Fast preview — the portal's tiles", not "As the portal draws it".** The old label was a promise the tile path cannot keep: QGIS's tile renderer and MapLibre are different engines, so every difference between them arrived as a bug report against a label that said they were the same. The tooltip and the "opened as a group" summary say the same thing now, and `docs/qgis.md` with them. The matrix section that tested the old phrase still tests the same behaviours — a preview may be approximate, it may not be a different map.)

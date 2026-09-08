@@ -1,12 +1,17 @@
-"""External data source connections — WMS/XYZ (raster) and WFS (vector).
+"""External data source connections — somebody else's service, displayed without ingesting it.
 
-These are displayed in portals WITHOUT ingesting: raster tiles are fetched directly by
-the browser; WFS features go through the public same-origin GeoJSON proxy below (avoids
-CORS). The provider's licence applies — `attribution` is surfaced on the map.
+`xyz`, `wms` and `wmts` are raster tiles the browser fetches from the provider. `wfs` and `ogcapi`
+are features fetched through the public same-origin GeoJSON proxy below. `vectortile` and `pmtiles`
+are tiles fetched through the tile proxy below — an MVT tile and a PMTiles range read are
+cross-origin XHRs, so a provider without a CORS policy would otherwise break them silently, as an
+empty layer with a console error the map's reader never sees. `services/external_sources` has the
+full table and the reasoning.
+
+The provider's licence applies — `attribution` is surfaced on the map.
 """
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from ...json_safe import SafeJSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -61,30 +66,76 @@ async def create_source(
         raise HTTPException(400, "URL must start with http:// or https://")
     kind = ext.kind_for(req.source_type)
 
-    if req.source_type in ("wms", "wfs") and not (req.layer_name or "").strip():
+    # A LAYER NAME IS PART OF THE ADDRESS for the services that have more than one layer behind one
+    # URL. `ogcapi` is the exception: its collection is often already IN the URL somebody pasted.
+    if req.source_type in ("wms", "wmts", "wfs") and not (req.layer_name or "").strip():
         raise HTTPException(400, f"{req.source_type.upper()} requires a layer name.")
+    if req.source_type == "ogcapi" and not ((req.layer_name or "").strip()
+                                            or ext.oapif_collection_of(url)):
+        raise HTTPException(
+            400, "An OGC API - Features source needs a collection: either in the URL "
+                 "(…/collections/<id>) or as the layer name.")
 
     geometry_type = None
     bbox_json = None
     version = req.version
+    source_layer = (req.source_layer or "").strip() or None
+    layer_name = (req.layer_name or "").strip() or None
+    min_zoom = max_zoom = None
 
+    # EVERY KIND THAT CAN BE VALIDATED IS VALIDATED HERE. A typo reported now, with the address in
+    # front of you, is a different thing from an empty layer on a published portal next week — and
+    # the probe is also where the style's missing pieces come from (which layer inside the tiles,
+    # which zooms, which extent, whether the archive is raster or vector).
     if req.source_type == "wfs":
-        # Probe the WFS to validate it and learn geometry type + extent.
         try:
-            info = await ext.probe_wfs(url, req.layer_name.strip(), req.version)
+            info = await ext.probe_wfs(url, layer_name, req.version)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(400, f"Could not connect to WFS: {exc}") from exc
         geometry_type = info["geometry_type"]
         version = info["version"]
         bbox_json = json.dumps(info["bbox"]) if info.get("bbox") else None
+    elif req.source_type == "ogcapi":
+        try:
+            info = await ext.probe_oapif(url, layer_name)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(400, f"Could not read that collection: {exc}") from exc
+        geometry_type = info["geometry_type"]
+        layer_name = info.get("collection") or layer_name
+        bbox_json = json.dumps(info["bbox"]) if info.get("bbox") else None
+    elif req.source_type == "vectortile":
+        try:
+            info = await ext.probe_vector_tiles(url, source_layer)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(400, f"Could not use that tile set: {exc}") from exc
+        # The TEMPLATE is stored, not the TileJSON URL: the style needs the thing MapLibre fetches,
+        # and resolving it once here means a portal is not at the mercy of a TileJSON that moves.
+        url = info["tiles"] or url
+        source_layer = info["source_layer"]
+        min_zoom, max_zoom = info.get("min_zoom"), info.get("max_zoom")
+        bbox_json = json.dumps(info["bbox"]) if info.get("bbox") else None
+    elif req.source_type == "pmtiles":
+        try:
+            info = await ext.probe_pmtiles(url, source_layer)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(400, f"Could not read that archive: {exc}") from exc
+        # An archive SAYS whether it holds raster or vector tiles, so the kind is read, not guessed.
+        kind = info["kind"]
+        source_layer = info.get("source_layer")
+        min_zoom, max_zoom = info.get("min_zoom"), info.get("max_zoom")
+        bbox_json = json.dumps(info["bbox"]) if info.get("bbox") else None
 
     src = ExternalSource(
         user_id=user.id,
-        name=req.name.strip() or req.layer_name or req.source_type.upper(),
+        name=req.name.strip() or layer_name or req.source_type.upper(),
         source_type=req.source_type,
         kind=kind,
         url=url,
-        layer_name=(req.layer_name or "").strip() or None,
+        layer_name=layer_name,
+        source_layer=source_layer,
+        matrix_set=(req.matrix_set or "").strip() or None,
+        min_zoom=min_zoom,
+        max_zoom=max_zoom,
         version=version,
         image_format=req.image_format,
         attribution=(req.attribution or "").strip() or None,
@@ -138,16 +189,70 @@ async def delete_source(source_id: int, user: User = Depends(require_scope("data
 
 @router.get("/{source_id}/features.geojson")
 async def source_features(source_id: int, db: AsyncSession = Depends(get_db)):
-    """PUBLIC GeoJSON proxy for a WFS source (published portals are unauthenticated).
+    """PUBLIC GeoJSON proxy for a source drawn from features (published portals are anonymous).
 
-    Only proxies a stored, admin-created source URL (no arbitrary URL from the caller),
-    so it is not an open SSRF — the caller only supplies the source id.
+    Only proxies a stored, admin-created source URL — the caller supplies an id, never an address —
+    so this is not an open SSRF.
     """
-    src = (await db.execute(select(ExternalSource).where(ExternalSource.id == source_id))).scalar_one_or_none()
-    if not src or src.kind != "vector":
-        raise HTTPException(404, "Vector source not found.")
+    src = (await db.execute(
+        select(ExternalSource).where(ExternalSource.id == source_id))).scalar_one_or_none()
+    # By SOURCE TYPE, not by kind: a `vectortile` source is vector too, and it is drawn from tiles.
+    # Answering here for one would hand the portal an empty feature collection for a layer that
+    # actually has a tile endpoint, which reads as "the source is broken".
+    if not src or src.source_type not in ext.PROXIED_FEATURE_TYPES:
+        raise HTTPException(404, "Feature source not found.")
     try:
-        gj = await ext.fetch_wfs_geojson(src)
+        if src.source_type == "ogcapi":
+            gj = await ext.fetch_oapif_geojson(src)
+        else:
+            gj = await ext.fetch_wfs_geojson(src)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(502, f"Upstream WFS error: {exc}") from exc
+        raise HTTPException(502, f"Upstream {src.source_type.upper()} error: {exc}") from exc
     return SafeJSONResponse(gj)
+
+
+@router.get("/{source_id}/tiles/{z}/{x}/{y}")
+async def source_tile(source_id: int, z: int, x: int, y: int,
+                      db: AsyncSession = Depends(get_db)):
+    """PUBLIC tile proxy for the kinds a browser cannot fetch cross-origin.
+
+    WHY THIS EXISTS. A raster tile is fetched the way the web has always fetched images and every
+    tile server is configured for it. An MVT tile is a cross-origin XHR, and a PMTiles archive is
+    read with byte RANGES — both need `Access-Control-Allow-Origin` from the provider, and a
+    provider who has not set one breaks the layer silently: an empty map and a console error the
+    reader will never see. Same-origin through us, it works for every visitor.
+
+    Same public terms as the GeoJSON proxy and Martin's `/tiles/` — a published portal is
+    unauthenticated, so its display sources must be too. And the same SSRF answer: the caller
+    supplies an id, never an address.
+
+    204 for a tile that genuinely is not there. A sparse archive is normal, and a 404 invites
+    clients to retry something that will never appear.
+    """
+    src = (await db.execute(
+        select(ExternalSource).where(ExternalSource.id == source_id))).scalar_one_or_none()
+    if not src or src.source_type not in ext.PROXIED_TILE_TYPES:
+        raise HTTPException(404, "Tiled source not found.")
+    if z < 0 or z > 24 or x < 0 or y < 0 or x >= (1 << z) or y >= (1 << z):
+        # Outside the pyramid entirely: not an error, just nothing — and refusing here keeps a
+        # crafted URL from becoming an upstream request.
+        return Response(status_code=204, headers=_TILE_HEADERS)
+
+    try:
+        if src.source_type == "pmtiles":
+            got = await ext.fetch_pmtiles_tile(src, z, x, y)
+            if got is None:
+                return Response(status_code=204, headers=_TILE_HEADERS)
+            body, media = got
+        else:
+            got = await ext.fetch_vector_tile(src, z, x, y)
+            if got is None:
+                return Response(status_code=204, headers=_TILE_HEADERS)
+            body, media = got
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"Upstream tile error: {exc}") from exc
+    return Response(body, media_type=media, headers=_TILE_HEADERS)
+
+
+#: A tile is public, immutable for an hour, and read cross-origin by portals on other hosts.
+_TILE_HEADERS = {"Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=3600"}

@@ -7,7 +7,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.6.0
+version=0.6.1
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -26,7 +26,17 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.6.0 - A LAYER SERVED BY SOMEBODY ELSE CAN NOW BE PUSHED. A WMS, an XYZ tile set
+changelog=0.6.1 - EVERY KIND OF SERVICE, not just three. GeoDeploy now holds XYZ, WMS, WMTS,
+    WFS, OGC API - Features, vector tiles and PMTiles, and the plugin pushes all of them. QGIS
+    serves three of those through ONE provider, and the URI is the only thing that tells them
+    apart: sending a WMTS as a WMS publishes a layer asking GetMap of a server that only speaks
+    GetTile, which draws nothing and says nothing. What still has no home is refused by name -
+    ArcGIS REST, and WCS, which is not a display service at all (GetCoverage returns a coverage,
+    not map images; most WCS servers publish the same data over WMS).
+    Also: a label's PLACEMENT and whether it sits on, above or below its line now travel, so a
+    contour layer's heights come back; QGIS's "label every part of multi-part features" travels
+    too. Both need the instance rebuilt to show in the browser.
+    0.6.0 - A LAYER SERVED BY SOMEBODY ELSE CAN NOW BE PUSHED. A WMS, an XYZ tile set
     or a WFS has no file to upload, and GeoDeploy has held exactly that as an "external source" -
     a reference fetched at view time - since long before this plugin knew about it. Pushing one was
     refused with "served from elsewhere, not a local file"; inside a GROUP it was worse, because

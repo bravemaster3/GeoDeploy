@@ -314,6 +314,30 @@ range. `test_per_class_symbology.py` pins that.
 symbols for classes the map draws differently.
 
 ## Last updated
+2026-09-08b (**external sources: every kind a web map can draw.** `xyz | wms | wfs` becomes
+`xyz | wms | wmts | wfs | ogcapi | vectortile | pmtiles`, with four new nullable columns
+(`source_layer`, `matrix_set`, `min_zoom`, `max_zoom`) and a migration for them.
+
+**CORS decides the architecture.** A raster tile is fetched the way the web has fetched images for
+twenty years; GeoJSON, an MVT tile and a PMTiles byte range are cross-origin XHRs, and a provider
+without `Access-Control-Allow-Origin` breaks those silently — an empty layer and a console error the
+map's reader never sees. So anything read as DATA is proxied same-origin, which is the rule the WFS
+proxy already set: `/data/sources/{id}/features.geojson` gains OGC API, and a new
+`/data/sources/{id}/tiles/{z}/{x}/{y}` serves vector tiles and PMTiles. A remote PMTiles archive is
+read HERE with `pmtiles_reader` (range requests, driven from a thread the way the GeoParquet tile
+route does it), so the portal needs no PMTiles library and the provider needs no CORS policy.
+
+Everything that can be validated is validated at ADD time, which is also where the style's missing
+pieces come from: which layer inside the tiles, which zooms, which extent, and — for PMTiles —
+whether the archive is raster or vector, read from its header.
+
+**WCS is deliberately not a kind**: GetCoverage returns a coverage, not map images, so registering
+one would publish a layer that draws nothing. `IMPORT_ONLY_HINT` says so and points at WMS.
+
+Tests: `api/tests/test_external_kinds.py` (60), including a hand-built PMTiles header — the media
+type of an MVT archive ends in "tile", so sniffing it for "mvt" registered every vector archive as
+raster. Found by reading a real Protomaps archive, not by reading the code.)
+## Last updated
 2026-09-08 (**`label_points.py`: one label per feature.** A label layer over a polygon source is drawn once per TILE the polygon touches — tiles clip, MapLibre places a symbol per geometry as delivered, and no style property can say "these four pieces are one shape" — so a big polygon carried its name in a grid across itself. A new Martin function source serves one `ST_PointOnSurface` per feature (a point lies in exactly one tile, so it is placed once by construction); `portal_generator._label_source` points a POLYGON's label layers at it, registering the source into the style. Points, lines-along-their-line and GeoParquet layers are untouched. `label_per_part` — QGIS's "label every part", off by default in both — dumps the parts instead. `martin._ensure_pillar_function` is now `_ensure_tile_functions` + `_ensure_function`, installing both. Tests: `api/tests/test_label_points.py`, half of them against real PostGIS.)
 2026-09-07e (**a rule is a symbol: `_drawn_layers`.** The rules branch built only `_vector_layer` + outline per rule, so everything a symbol STACKS — a second stroke, a line of markers, a centroid symbol — was dropped for rule-based layers alone, while the editor preview (which expands rules into configs and runs its whole body per rule) drew them. Reported as "the red and blue line doesn't display correctly" on a published portal that looked right in the editor. `_drawn_layers` is now the one answer to "what does this symbol draw" and both branches call it; a rule's extras keep the rule in their id and carry its filter and zoom range. Tests: `test_rule_layers.py::TestARuleIsASymbol`.)
 2026-09-07d (`_apply_rule_scope` drops an INVERTED zoom range — see the section above — and `_vector_layers` no longer publishes a base line layer under a line of markers.)

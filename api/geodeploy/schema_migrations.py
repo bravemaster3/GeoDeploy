@@ -70,4 +70,18 @@ PG_MIGRATIONS = [
     # existing archive was built without clustering, and False is exactly what that means. Turning it
     # on requires a re-tile, which is why it lives on the layer and not in a portal's style.
     "ALTER TABLE vector_layers ADD COLUMN IF NOT EXISTS cluster_points BOOLEAN DEFAULT FALSE",
+    # External sources beyond XYZ/WMS/WFS: vector tiles, PMTiles, OGC API - Features, WMTS.
+    #
+    # `source_layer` is the layer INSIDE a vector tile — a tile is a container of named layers, and
+    # a style naming none draws nothing at all, silently, so this is not optional decoration for
+    # those kinds. `matrix_set` is a WMTS TileMatrixSet. The zooms come from the probe (a TileJSON's
+    # minzoom/maxzoom, a PMTiles header) and are nullable because "not stated" is a real answer: a
+    # source with no zoom range is drawn at every zoom, which is what an XYZ template means.
+    #
+    # All four nullable and additive; every source already stored is one of the three kinds that
+    # needs none of them, so NULL is correct for all of them.
+    "ALTER TABLE external_sources ADD COLUMN IF NOT EXISTS source_layer TEXT",
+    "ALTER TABLE external_sources ADD COLUMN IF NOT EXISTS matrix_set TEXT",
+    "ALTER TABLE external_sources ADD COLUMN IF NOT EXISTS min_zoom INTEGER",
+    "ALTER TABLE external_sources ADD COLUMN IF NOT EXISTS max_zoom INTEGER",
 ]

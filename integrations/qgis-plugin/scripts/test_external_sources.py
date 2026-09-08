@@ -32,6 +32,26 @@ sys.path.insert(0, PLUGIN)
 import external                                                                  # noqa: E402
 from geodeploy_qgis import portals                                               # noqa: E402
 
+
+def _server_module():
+    """`api/geodeploy/services/external_sources.py`, when this checkout has it.
+
+    The plugin ships on its own — a user installs a zip — so the server is not importable in every
+    place this runs. When it IS (this repository, and CI), the two vocabularies are compared,
+    because two copies of one list in two languages is exactly the thing that drifts.
+    """
+    import importlib.util
+    path = os.path.join(PLUGIN, "..", "..", "api", "geodeploy", "services", "external_sources.py")
+    if not os.path.exists(path):
+        return None
+    spec = importlib.util.spec_from_file_location("gd_server_external_sources", path)
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception:                                                            # noqa: BLE001
+        return None                     # httpx missing, say: not a failure of the plugin
+    return module
+
 FAILURES = []
 CHECKS = [0]
 
@@ -56,6 +76,11 @@ WFS = (" pagingEnabled='true' srsname='EPSG:4326' typename='osm:water_areas' "
 WFS_PINNED = (" restrictToRequestBBOX=1 typename='ms:roads' "
               "url='https://example.org/wfs' version='2.0.0'")
 VECTOR_TILES = "type=xyz&url=https://example.org/tiles/%7Bz%7D/%7Bx%7D/%7By%7D.pbf&zmax=14&zmin=0"
+PMTILES = "type=xyz&url=https://files.example.org/basemap.pmtiles"
+OAPIF = (" pagingEnabled='true' restrictToRequestBBOX='1' typename='roads' "
+         "url='https://example.org/ogc' ")
+ARCGIS = "crs=EPSG:3857&url=https://example.org/arcgis/rest/services/Roads/MapServer"
+WCS = "url=https://example.org/wcs&identifier=dem&format=image/tiff"
 
 
 class FakeLayer(object):
@@ -119,28 +144,48 @@ def main():
           (external.spec_from_uri("WFS", WFS_PINNED) or {}).get("version") == "2.0.0",
           external.spec_from_uri("WFS", WFS_PINNED))
 
-    # ── and what is refused, by name ─────────────────────────────────────────────────────────────
+    # ── ONE QGIS PROVIDER, THREE SERVICES ────────────────────────────────────────────────────────
+    # `wms` serves XYZ, WMS and WMTS, and only the URI tells them apart. Sending a WMTS as a WMS
+    # would publish a layer asking GetMap of a server that only speaks GetTile: nothing drawn, no
+    # error anywhere.
+    wmts = external.spec_from_uri("wms", WMTS)
+    check("a WMTS is recognised as a WMTS", (wmts or {}).get("source_type") == "wmts", wmts)
+    check("...carrying its tile matrix set",
+          (wmts or {}).get("matrix_set") == "GoogleMapsCompatible", wmts)
+    check("...and the layer it draws", (wmts or {}).get("layer_name") == "topo", wmts)
+
+    tiles = external.spec_from_uri("vectortile", VECTOR_TILES)
+    check("a vector tile set is its own kind", (tiles or {}).get("source_type") == "vectortile",
+          tiles)
+    check("...with the template kept whole",
+          (tiles or {}).get("url") == "https://example.org/tiles/{z}/{x}/{y}.pbf", tiles)
+    pm = external.spec_from_uri("vectortile", PMTILES)
+    check("a PMTiles archive is recognised by its own extension",
+          (pm or {}).get("source_type") == "pmtiles", pm)
+    oapif = external.spec_from_uri("OAPIF", OAPIF)
+    check("an OGC API - Features layer travels",
+          (oapif or {}).get("source_type") == "ogcapi", oapif)
+    check("...naming its collection", (oapif or {}).get("layer_name") == "roads", oapif)
+
+    # ── and what still has no home, by name ──────────────────────────────────────────────────────
     print("\nWhat has no home, and says which")
-    check("a WMTS is not registered as something else",
-          external.spec_from_uri("wms", WMTS) is None, external.spec_from_uri("wms", WMTS))
-    why = external.refusal_from_uri("wms", WMTS) or ""
-    check("...and is refused BY NAME", "WMTS" in why, why)
-    check("...with the way forward, since most WMTS servers also serve XYZ",
-          "XYZ" in why, why)
-    for provider, word in (("vectortile", "vector tiles"),
-                           ("arcgismapserver", "ArcGIS"),
-                           ("oapif", "OGC API")):
-        text = external.refusal_from_uri(provider, "url=https://example.org/x") or ""
-        check("{0} is refused by name".format(provider), word in text, text)
+    check("ArcGIS REST is not registered as something else",
+          external.spec_from_uri("arcgismapserver", ARCGIS) is None,
+          external.spec_from_uri("arcgismapserver", ARCGIS))
+    why = external.refusal_from_uri("arcgismapserver", ARCGIS) or ""
+    check("...and is refused BY NAME", "ArcGIS" in why, why)
+    # A WCS is not a display service AT ALL, which is a different thing from "not supported yet" —
+    # so the message says what it is and where to go instead.
+    wcs_why = external.refusal_from_uri("wcs", WCS) or ""
+    check("a WCS says why it cannot be drawn", "coverage" in wcs_why.lower(), wcs_why)
+    check("...and points at the service that CAN be", "WMS" in wcs_why, wcs_why)
     check("a non-http address is not sent to an endpoint that would reject it",
           external.spec_from_uri("wms", "type=xyz&url=file:///tmp/tiles/{z}/{x}/{y}.png") is None,
           "accepted")
-
-    # A vector-tile SET served over XYZ is a vector-tile layer in QGIS, whatever its URL looks
-    # like — the provider is what decides, not the extension.
-    check("vector tiles are refused even though the URI looks like XYZ",
-          external.spec_from_uri("vectortile", VECTOR_TILES) is None,
-          external.spec_from_uri("vectortile", VECTOR_TILES))
+    check("a vector tile layer with no fetchable address is refused with a reason",
+          "template" in (external.refusal_from_uri(
+              "vectortile", "url=https://example.org/service") or ""),
+          external.refusal_from_uri("vectortile", "url=https://example.org/service"))
 
     # ── describing a whole layer ─────────────────────────────────────────────────────────────────
     print("\nDescribing the layer, not just its URI")
@@ -206,23 +251,24 @@ def main():
     group = Group([Node(Tagless("wms", XYZ, "OSM")),
                    Node(Tagless("WFS", WFS, "Water areas")),
                    Node(Tagless("vectortile", VECTOR_TILES, "Somebody's basemap")),
+                   Node(Tagless("arcgismapserver", ARCGIS, "A county service")),
                    Node(Tagless("ogr", "/data/roads.gpkg", "Roads"))])
     plan = portals.plan_push(group, lambda _l, _t: {}, [])
 
     names = [name for name, _l, _n, _s in plan.get("sources") or []]
-    check("a WMS/XYZ and a WFS are planned as external sources", names == ["OSM", "Water areas"],
-          names)
+    check("every service GeoDeploy can hold is planned as a source",
+          names == ["OSM", "Water areas", "Somebody's basemap"], names)
     kinds = [spec["source_type"] for _n, _l, _x, spec in plan.get("sources") or []]
-    check("...each as the right kind", kinds == ["xyz", "wfs"], kinds)
+    check("...each as the right kind", kinds == ["xyz", "wfs", "vectortile"], kinds)
     # THE BUG THIS PREVENTS: a remote layer used to land here, and `export.prepare` then raised
     # inside the push worker — which aborted the publish entirely.
     uploads = [name for name, _l, _n in plan.get("uploads") or []]
     check("only the local file is an upload", uploads == ["Roads"], uploads)
     unsupported = [name for name, _why in plan.get("unsupported") or []]
     check("the service we have no kind for is named, not attempted",
-          unsupported == ["Somebody's basemap"], unsupported)
+          unsupported == ["A county service"], unsupported)
     check("...with a reason a user can act on",
-          "vector tiles" in (plan["unsupported"][0][1] if plan.get("unsupported") else ""),
+          "ArcGIS" in (plan["unsupported"][0][1] if plan.get("unsupported") else ""),
           plan.get("unsupported"))
 
     # ── and the dialog says all of it before anything happens ────────────────────────────────────
@@ -237,6 +283,28 @@ def main():
           "not copied" in text or "not uploaded" in text, text)
     check("what will be left out is listed too", "Somebody's basemap" in text, text)
     check("...and uploads stay their own section", "Roads" in text, text)
+
+    # ── the plugin and the server must agree ─────────────────────────────────────────────────────
+    # Two copies of one vocabulary, in two languages, in two deployment units. They drift the way
+    # everything in this codebase drifts when nothing compares them.
+    print("\nThe plugin and the instance agree about what exists")
+    server = _server_module()
+    if server is None:
+        print("  --   skipped: the API package is not importable from here")
+    else:
+        check("the same source types",
+              tuple(external.SOURCE_TYPES) == tuple(server.SOURCE_TYPES),
+              (external.SOURCE_TYPES, server.SOURCE_TYPES))
+        check("the same template tokens",
+              external._TEMPLATE_TOKENS == server._TEMPLATE_TOKENS,
+              (external._TEMPLATE_TOKENS, server._TEMPLATE_TOKENS))
+        for uri, provider in ((XYZ, "wms"), (WMS, "wms"), (WMTS, "wms"), (WFS, "WFS"),
+                              (VECTOR_TILES, "vectortile"), (PMTILES, "vectortile"),
+                              (OAPIF, "OAPIF")):
+            spec = external.spec_from_uri(provider, uri) or {}
+            if spec:
+                check("the instance would accept a {0} source".format(spec["source_type"]),
+                      spec["source_type"] in server.SOURCE_TYPES, spec)
 
     print("\n{0} checks, {1} failed".format(CHECKS[0], len(FAILURES)))
     for name in FAILURES:

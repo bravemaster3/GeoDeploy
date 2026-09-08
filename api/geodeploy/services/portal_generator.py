@@ -433,8 +433,11 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 "geodeploy:bbox": src_bbox,
                 "geodeploy:attribution": src.attribution,
             }
+            tiled = src.source_type in ("xyz", "wms", "wmts", "vectortile", "pmtiles")
             if src.kind == "raster":
-                sources[source_id] = {"type": "raster", "tiles": [ext_svc.tile_url(src)], "tileSize": 256}
+                sources[source_id] = {"type": "raster", "tiles": [ext_svc.tile_url(src)],
+                                      "tileSize": 256}
+                _zoom_range(sources[source_id], src)
                 if src.attribution:
                     sources[source_id]["attribution"] = src.attribution
                 ext_layer = {
@@ -446,7 +449,26 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                 }
                 if not cfg.get("visible", True):
                     ext_layer["layout"] = {"visibility": "none"}
-            else:  # vector — WFS through the GeoJSON proxy
+            elif tiled:
+                # VECTOR TILES — a third-party set, or a remote PMTiles archive read tile-by-tile
+                # by us. Both arrive as ordinary `{z}/{x}/{y}` MVT through our tile proxy, so the
+                # style says `vector` and nothing in the portal needs a PMTiles library.
+                sources[source_id] = {"type": "vector", "tiles": [ext_svc.tile_url(src)]}
+                _zoom_range(sources[source_id], src)
+                if src.attribution:
+                    sources[source_id]["attribution"] = src.attribution
+                geom = src.geometry_type or "polygon"
+                ext_layer = _external_vector_layer(source_id, src, geom, estyle,
+                                                   cfg.get("opacity", 1.0))
+                # THE LAYER INSIDE THE TILE. A vector tile is a container of named layers, and a
+                # style that names none draws nothing at all — silently, because an unmatched
+                # `source-layer` is not an error in MapLibre. The probe insists on having it.
+                if src.source_layer:
+                    ext_layer["source-layer"] = src.source_layer
+                ext_layer["metadata"] = {**base_meta, "geodeploy:geometry": geom}
+                if not cfg.get("visible", True):
+                    ext_layer.setdefault("layout", {})["visibility"] = "none"
+            else:  # features — WFS or OGC API, through the GeoJSON proxy
                 sources[source_id] = {"type": "geojson", "data": ext_svc.features_url(src)}
                 if src.attribution:
                     sources[source_id]["attribution"] = src.attribution
@@ -1566,8 +1588,25 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
+def _zoom_range(source: dict, src) -> None:
+    """A tiled source's own zoom range, when the provider stated one.
+
+    Left off when it did not: a source with no range is drawn at every zoom, which is exactly what
+    a bare XYZ template means. Writing a made-up range instead would blank the layer outside it.
+    """
+    if getattr(src, "min_zoom", None) is not None:
+        source["minzoom"] = max(0, int(src.min_zoom))
+    if getattr(src, "max_zoom", None) is not None:
+        source["maxzoom"] = min(24, int(src.max_zoom))
+
+
 def _external_vector_layer(source_id: str, src, geom: str, style: dict, opacity: float) -> dict:
-    """A MapLibre layer for a WFS GeoJSON source (no source-layer; geom from the probe)."""
+    """A MapLibre layer for an external vector source — GeoJSON features or vector tiles alike.
+
+    The paint is the same either way; what differs is the SOURCE, and (for tiles) the
+    `source-layer` the caller adds. Geometry comes from the probe, because a style has to know
+    whether to draw a fill, a line or a circle before it has seen a single feature.
+    """
     color = style.get("color", "#3b82f6")
     lid = f"external-{src.id}"
     if geom == "polygon":

@@ -245,11 +245,18 @@ shows that credit.
 Nothing is downloaded and nothing is duplicated, so the portal keeps showing whatever the provider
 serves — including their next update, and their outages.
 
-GeoDeploy's external sources are XYZ, WMS and WFS. Anything else served over the network — a WMTS,
-third-party vector tiles or PMTiles, an OGC API - Features endpoint, an ArcGIS REST service — is
-named in the push summary with the reason rather than being registered as the nearest thing that
-would fetch from the wrong kind of endpoint and draw nothing. For those, save the data locally and
-upload that. (Many WMTS servers also serve plain XYZ tiles; added that way, they work.)
+GeoDeploy holds **XYZ**, **WMS**, **WMTS**, **WFS**, **OGC API - Features**, **vector tiles** and
+**PMTiles** — everything a web map can draw from somebody else's server. Push any of them and it is
+registered; the vector-tile and PMTiles kinds are served *through* your instance, so the provider
+does not need a CORS policy for your portal to work.
+
+Two things are refused, with the reason and the way forward rather than a generic failure:
+
+- an **ArcGIS REST** service, which GeoDeploy has no kind for;
+- a **WCS**, which is not a display service at all — GetCoverage returns a coverage (a GeoTIFF, a
+  NetCDF), not map images, so there is nothing a web map can draw from it without first rendering
+  it. Almost every WCS server publishes the same data over WMS; add it that way to *show* it, or
+  download the coverage and upload it as a raster layer to analyse it.
 
 ### Why upload from here rather than from the browser
 
