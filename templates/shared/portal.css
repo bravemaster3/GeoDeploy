@@ -467,6 +467,19 @@
     .layer-zoom:hover { background: var(--border); color: var(--accent); }
     .layer-zoom:disabled { opacity: .3; cursor: default; }
     .layer-zoom svg { width: 14px; height: 14px; }
+    /* A FINGER IS NOT A MOUSE POINTER. These are 22-24px, which is fine for a cursor and below
+       any usable touch target — and `.lg-zoom` is invisible until hover, which a touch screen
+       does not have at all. On a coarse pointer they grow to 34px and the folder's zoom is simply
+       shown; the hit area grows through padding and a negative margin, so the ICONS stay the size
+       they are and nothing about the desktop layout moves. */
+    @media (pointer: coarse) {
+      .layer-zoom, .layer-eye, .layer-swatch-btn, .lg-zoom {
+        width: 34px; height: 34px;
+      }
+      .layer-zoom svg { width: 16px; height: 16px; }
+      .lg-zoom { opacity: 1; }
+      .layer-row { gap: 4px; }
+    }
     .layer-opacity-row {
       display: flex; align-items: center; gap: 8px; margin-top: 8px;
     }

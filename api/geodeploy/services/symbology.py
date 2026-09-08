@@ -983,6 +983,12 @@ def draws_nothing(style: dict) -> bool:
 #               "halo_color": "#fff", "halo_width": 1,
 #               "offset": [x, y], "rotation": 0, "anchor": "center",
 #               "placement": "point" | "line", "max_width": 10,
+#               "label_per_part": False,
+#                                                   one label per PART of a multi-part feature
+#                                                   instead of one for the feature. QGIS's "label
+#                                                   every part", off there and off here: an
+#                                                   archipelago wants it, a country with two
+#                                                   islands does not.
 #               "line_position": "on" | "above" | "below",
 #                                                   where along-the-line labels sit. MapLibre has
 #                                                   no equivalent — `symbol-placement: line` always
@@ -1242,6 +1248,22 @@ def label_paint(labels: dict, opacity: float = 1.0) -> dict:
         out["text-halo-color"] = labels.get("halo_color") or DEFAULT_LABEL_HALO
         out["text-halo-width"] = round(halo, 2)
     return out
+
+
+def label_per_part(labels: dict) -> bool:
+    """Whether each PART of a multi-part feature is labelled, rather than the feature once.
+
+    QGIS calls it "label every part of multi-part features" and ships it OFF, which is the right
+    default in both places: an archipelago reads better with a name on each island, a country with
+    two islands reads worse with its name twice. Off, the label is drawn once per feature.
+
+    This is NOT what caused the same name to repeat across a big polygon — that was one label per
+    TILE, which nobody asked for and no style could switch off (see `services/label_points.py`).
+    The two are easy to confuse and the fix for the second is what makes this one meaningful:
+    until labels came from a point source, "once per feature" was not something the renderer could
+    be asked for at all.
+    """
+    return bool((labels or {}).get("label_per_part"))
 
 
 def label_scope(labels: dict) -> dict:

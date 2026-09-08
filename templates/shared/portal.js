@@ -622,7 +622,7 @@
   } else if (validLonLatBounds(bounds)) {
     try {
       map.fitBounds([[bounds[0], bounds[1]], [bounds[2], bounds[3]]], {
-        padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 },
+        padding: fitPadding(),
         duration: 0,
         pitch: has3D ? DEFAULT_3D_PITCH : 0,
       });
@@ -1287,7 +1287,7 @@
             const finish = function () { if (done) return; done = true; resolve(); };
             map.once('moveend', finish);
             map.fitBounds([[u[0], u[1]], [u[2], u[3]]], {
-              padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 },
+              padding: fitPadding(),
               duration: 650,
             });
             setTimeout(finish, 900);  // safety: a barely-moving camera may not emit moveend
@@ -1364,7 +1364,7 @@
         if (!validLonLatBounds(d.bbox)) return;
         try {
           map.fitBounds([[d.bbox[0], d.bbox[1]], [d.bbox[2], d.bbox[3]]],
-            { padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 } });
+            { padding: fitPadding() });
         } catch (e) { /* ignore */ }
       });
       container.appendChild(card);
@@ -2078,7 +2078,7 @@
         if (!validLonLatBounds(b)) return;
         try {
           map.fitBounds([[b[0], b[1]], [b[2], b[3]]], {
-            padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 },
+            padding: fitPadding(),
           });
         } catch (err) { /* ignore */ }
       });
@@ -2215,7 +2215,7 @@
     if (!b) return;
     try {
       map.fitBounds([[b[0], b[1]], [b[2], b[3]]],
-        { padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 } });
+        { padding: fitPadding() });
     } catch (e) { /* ignore */ }
   }
   function applyLayerGroups(tree) {
@@ -3828,7 +3828,38 @@
     if (sb && LAYOUT.panels.layerCatalog && LAYOUT.regions.layerList.mode === 'docked' && !sb.classList.contains('collapsed')) {
       p[LAYOUT.regions.layerList.side] = (sb.offsetWidth || 260) + 40;
     }
-    return p;
+    return clampPadding(p);
+  }
+
+  // PADDING BIGGER THAN THE MAP MEANS NO ZOOM AT ALL, silently. MapLibre cannot fit a box into a
+  // negative viewport, so it gives up and leaves the camera where it was — no exception to catch,
+  // nothing in the console for a user to report. On a phone the layer panel is 85vw, so
+  // "sidebar width + 40" was already wider than the whole canvas: every "Zoom to layer" tap did
+  // nothing, which reads exactly like a button that missed your finger.
+  //
+  // So the panel is avoided only while there is room to avoid it. Beyond that the map keeps a
+  // usable margin and the layer is fitted to the WHOLE canvas — partly behind the panel, which on
+  // a phone slides away over the map anyway, and which is in every case better than not moving.
+  function clampPadding(p) {
+    const canvas = map && map.getCanvas ? map.getCanvas() : null;
+    const w = (canvas && canvas.clientWidth) || 0;
+    const h = (canvas && canvas.clientHeight) || 0;
+    const out = { top: p.top, bottom: p.bottom, left: p.left, right: p.right };
+    // Half the canvas at most on each axis, so what is being zoomed to always has half the map.
+    if (w > 0 && out.left + out.right > w * 0.5) {
+      const spare = Math.max(0, w * 0.5);
+      if (out.left + out.right > 0) {
+        const scale = spare / (out.left + out.right);
+        out.left = Math.floor(out.left * scale);
+        out.right = Math.floor(out.right * scale);
+      }
+    }
+    if (h > 0 && out.top + out.bottom > h * 0.5) {
+      const scale = Math.max(0, h * 0.5) / (out.top + out.bottom);
+      out.top = Math.floor(out.top * scale);
+      out.bottom = Math.floor(out.bottom * scale);
+    }
+    return out;
   }
 
   function homeIcon() {

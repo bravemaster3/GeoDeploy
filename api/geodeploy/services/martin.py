@@ -58,7 +58,7 @@ async def regenerate_config(layers: list[dict], force: bool = False) -> None:
     """
     settings = get_settings()
     layers = await _attach_properties(layers, settings)
-    installed = await _ensure_pillar_function(settings)
+    installed = await _ensure_tile_functions(settings)
     config = _build_config(layers, settings)
     changed = _write_config(config, settings.martin_config_path)
     # Restarting Martin drops every in-flight tile request, so do it only when it can change what
@@ -83,8 +83,24 @@ def _pillar_body(create_sql: str) -> str:
     return parts[1] if len(parts) > 2 else create_sql
 
 
-async def _ensure_pillar_function(settings) -> bool:
-    """Create/refresh the shared `geodeploy.point_pillars` tile function (3D pillars for points).
+async def _ensure_tile_functions(settings) -> bool:
+    """Create/refresh every shared tile FUNCTION, returning whether Martin has to be restarted.
+
+    There are two, and they are installed together because they are installed for the same reason
+    and fail in the same way: `point_pillars` (3D bars for point layers) and `label_points` (one
+    label per feature, rather than one per tile a polygon touches). A new one added here is
+    installed on the next config rebuild on every existing instance, with no operator action.
+    """
+    changed = False
+    from . import label_points, pillars
+    for module in (pillars, label_points):
+        if await _ensure_function(settings, module):
+            changed = True
+    return changed
+
+
+async def _ensure_function(settings, module) -> bool:
+    """Create/refresh one shared tile function. True when Martin has to be RESTARTED.
 
     Done HERE rather than in a migration because it must exist wherever Martin's config names it,
     and this is the one place that writes that config — so the two cannot drift apart. `CREATE OR
@@ -95,8 +111,8 @@ async def _ensure_pillar_function(settings) -> bool:
     stop the tile config for every OTHER layer from being written — the pillars source simply
     returns nothing and 3D points do not draw.
 
-    Returns True when Martin has to be RESTARTED: either the function did not exist (so Martin
-    resolved its sources without it), or its BODY changed.
+    Either the function did not exist (so Martin resolved its sources without it), or its BODY
+    changed.
 
     The body case is not obvious and cost a real bug. Martin resolves a function source by name at
     startup and executes the current body per request, so a replaced body takes effect immediately —
@@ -106,8 +122,6 @@ async def _ensure_pillar_function(settings) -> bool:
     not work: the operator sees a deployed instance still drawing the broken geometry, with nothing
     in any log to explain it. Comparing `prosrc` catches exactly that.
     """
-    from . import pillars
-
     import asyncpg
     conn = None
     try:
@@ -116,13 +130,13 @@ async def _ensure_pillar_function(settings) -> bool:
             """SELECT p.prosrc FROM pg_proc p
                JOIN pg_namespace n ON n.oid = p.pronamespace
                WHERE n.nspname = $1 AND p.proname = $2""",
-            pillars.SCHEMA, pillars.FUNCTION,
+            module.SCHEMA, module.FUNCTION,
         )
-        await conn.execute(pillars.CREATE_SQL)
+        await conn.execute(module.CREATE_SQL)
         # `prosrc` is the body between the outer $$ delimiters — exactly what CREATE_SQL wraps.
-        return (current or "").strip() != _pillar_body(pillars.CREATE_SQL).strip()
+        return (current or "").strip() != _pillar_body(module.CREATE_SQL).strip()
     except Exception as exc:      # noqa: BLE001 — see docstring
-        _log.warning("could not install the 3D pillar tile function: %s", exc)
+        _log.warning("could not install the %s tile function: %s", module.QUALIFIED, exc)
         return False
     finally:
         if conn is not None:
@@ -207,9 +221,15 @@ def _build_config(layers: list[dict], settings) -> dict:
     # query parameters on the tile URL (services/pillars) — so this does not grow with the catalog.
     # Listed explicitly because naming `tables` above turns OFF Martin's auto-discovery, which would
     # otherwise have found the function on its own.
-    from . import pillars
+    from . import label_points, pillars
     postgres["functions"] = {
         pillars.FUNCTION: {"schema": pillars.SCHEMA, "function": pillars.FUNCTION},
+        # ONE LABEL PER FEATURE. A label layer over a polygon source is drawn once per TILE the
+        # polygon touches — tiles clip, and MapLibre cannot see that four clipped pieces are one
+        # shape — so a big polygon carried its name in a grid across itself. This serves the
+        # label's POINT, which lies in exactly one tile.
+        label_points.FUNCTION: {"schema": label_points.SCHEMA,
+                                "function": label_points.FUNCTION},
     }
     return {"listen_addresses": "0.0.0.0:3000", "postgres": postgres}
 

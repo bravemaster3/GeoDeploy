@@ -414,11 +414,35 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
       const labels = symLabelsOf(st)
       if (Object.keys(labels).length) {
         const labelRuleList = symLabelRules(labels)
+        // ONE LABEL PER FEATURE, from a POINT source. A label layer over a polygon source is drawn
+        // once per TILE the polygon touches: tiles clip, and MapLibre cannot see that four clipped
+        // pieces are one shape, so a big polygon carried its name in a grid across itself. A point
+        // lies in exactly one tile. Polygons only, and only for the PostGIS layers Martin's
+        // `label_points` function can serve. Mirrors portal_generator._label_source.
+        let labelSrc = srcId
+        let labelSourceLayer = sourceLayer
+        if (geom.includes('polygon') && layer.storage_backend !== 'geoparquet'
+            && layer.schema_name && layer.table_name) {
+          const perPart = !!labels.label_per_part
+          labelSrc = `labelpts_${layer.id}${perPart ? '_parts' : ''}`
+          labelSourceLayer = 'labels'
+          if (!style.sources[labelSrc]) {
+            const lq = new URLSearchParams({
+              schema: layer.schema_name, table: layer.table_name,
+              geom: layer.geometry_column || 'geom',
+            })
+            if (perPart) lq.set('per_part', '1')
+            style.sources[labelSrc] = {
+              type: 'vector', minzoom: 0, maxzoom: 22,
+              tiles: [`${location.origin}/tiles/label_points/{z}/{x}/{y}?${lq}`],
+            }
+          }
+        }
         const pushLabels = (block, suffix, rule) => {
           if (!symLabelText(block)) return
           style.layers.push({
             id: `${srcId}-${suffix}`,
-            type: 'symbol', source: srcId, 'source-layer': sourceLayer,
+            type: 'symbol', source: labelSrc, 'source-layer': labelSourceLayer,
             layout: symLabelLayout(block),
             paint: symLabelPaint(block, opacity),
             ...symLabelScope(block),

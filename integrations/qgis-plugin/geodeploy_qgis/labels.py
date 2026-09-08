@@ -443,6 +443,12 @@ def _read_placement(settings, labels: dict) -> None:
     if priority is not None:
         labels["priority"] = priority
 
+    # ONE LABEL PER PART, or one for the feature. QGIS ships this OFF and so does GeoDeploy, so
+    # only the ON case is worth carrying — and it is worth carrying: on an archipelago it is the
+    # difference between every island named and one name for the group.
+    if _value(settings, "labelPerPart", False):
+        labels["label_per_part"] = True
+
     if _placement_name(_value(settings, "placement", None)) == "line":
         labels["placement"] = "line"
         position = _line_position_of(settings)
@@ -688,6 +694,13 @@ def settings_of(labels: dict):
         settings.autoWrapLength = int(width)
     if labels.get("allow_overlap"):
         settings.displayAll = True
+    if labels.get("label_per_part"):
+        # Set only when asked: QGIS's own default is False, and writing False explicitly would be
+        # the same thing said louder.
+        try:
+            settings.labelPerPart = True
+        except Exception:               # noqa: BLE001  # nosec B110 - intentional: a QGIS that spells it differently still labels
+            pass
     priority = symbology._number(labels.get("priority"), None)
     if priority is not None:
         settings.priority = int(max(0, min(10, priority)))

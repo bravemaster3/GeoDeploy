@@ -673,6 +673,8 @@ LABEL_MATRIX = (
     ("uppercase", {"enabled": True, "field": "name", "transform": "uppercase"}),
     ("letter spacing", {"enabled": True, "field": "name", "letter_spacing": 1.5}),
     ("allow overlap", {"enabled": True, "field": "name", "allow_overlap": True}),
+    # One label per PART of a multi-part feature — QGIS's "label every part", off in both places.
+    ("label per part", {"enabled": True, "field": "name", "label_per_part": True}),
     ("a priority", {"enabled": True, "field": "name", "priority": 8}),
     ("its own zoom range", {"enabled": True, "field": "name", "minzoom": 6, "maxzoom": 14}),
     ("a bold italic font", {"enabled": True, "field": "name",

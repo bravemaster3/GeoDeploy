@@ -9,6 +9,7 @@ from .martin import get_tile_url as vector_tile_url
 from .titiler import terrain_of, terrain_tile_url
 from .titiler import tile_url_from_style as raster_tile_url
 from . import external_sources as ext_svc
+from . import label_points
 from . import pillars
 from . import symbology
 
@@ -218,7 +219,9 @@ def generate_style(layer_configs: list[dict], vector_layers: list, raster_layers
                     "minzoom": 0,
                     "maxzoom": 22,
                 }
-            ml_layers = _vector_layers(source_id, layer, cfg)
+            # `sources` is passed so a layer can REGISTER one of its own: a polygon's labels are
+            # drawn from a point source, or the name repeats once per tile the polygon touches.
+            ml_layers = _vector_layers(source_id, layer, cfg, sources)
             # A clustered archive draws TWO more layers: the cluster bubble and its count. Only when
             # the layer was actually tiled with clustering — the attributes they filter on do not
             # exist in an archive built without it, and a filter that matches nothing is an invisible
@@ -1713,7 +1716,51 @@ def _glyphs_url() -> str:
     return GLYPHS_URL
 
 
-def _label_layers(source_id: str, layer, cfg: dict) -> list[dict]:
+def _label_source(layer, cfg: dict, sources: dict | None) -> tuple[str, str] | None:
+    """A POINT source to label this layer from, registering it — or None to label the geometry.
+
+    ONE LABEL PER FEATURE, WHICH THE POLYGON SOURCE CANNOT GIVE. MapLibre places a symbol per
+    geometry as the tile delivers it, and a tile CLIPS: a polygon crossing four tiles is four
+    geometries to the renderer, each getting the name. On a big polygon that is the name repeated
+    in a grid across it, and no style property can say "these four are one shape". A point lies in
+    exactly one tile, so labelling from `label_points` is drawn once by construction.
+
+    Only for POLYGONS, and only for the PostGIS-backed layers that function can serve:
+
+    * a POINT layer is already one geometry in one tile;
+    * a LINE labelled ALONG the line is `symbol-placement: line`, where the repetition down the
+      line is the intent (QGIS's curved placement does the same) and MapLibre's own
+      `symbol-spacing` governs it — replacing that with one label at the middle of the line would
+      be a different map;
+    * a GeoParquet or PMTiles layer is not served by Martin at all, so there is no function to
+      call; those keep the previous behaviour rather than losing their labels.
+    """
+    if sources is None:
+        return None
+    style = cfg.get("style") or {}
+    if _geom_kind(getattr(layer, "geometry_type", None)) != "polygon":
+        return None
+    if getattr(layer, "storage_backend", "postgis") != "postgis":
+        return None
+    schema = getattr(layer, "schema_name", None)
+    table = getattr(layer, "table_name", None)
+    if not schema or not table:
+        return None
+    labels = symbology.labels_of(style)
+    per_part = symbology.label_per_part(labels)
+    source_id = "labelpts_{0}{1}".format(layer.id, "_parts" if per_part else "")
+    if source_id not in sources:
+        sources[source_id] = {
+            "type": "vector",
+            "tiles": [label_points.tile_url(
+                schema, table, getattr(layer, "geometry_column", None) or "geom", per_part)],
+            "minzoom": 0,
+            "maxzoom": 22,
+        }
+    return source_id, label_points.SOURCE_LAYER
+
+
+def _label_layers(source_id: str, layer, cfg: dict, sources: dict | None = None) -> list[dict]:
     """Every label layer this layer draws — usually one, but ONE PER RULE when it labels by rules.
 
     A rule-based labelling is a tree exactly like rule-based rendering, and it is how a names layer
@@ -1729,6 +1776,9 @@ def _label_layers(source_id: str, layer, cfg: dict) -> list[dict]:
         return []
     opacity = cfg.get("opacity", 1.0)
     source_layer = _source_layer_name(layer)
+    points = _label_source(layer, cfg, sources)
+    if points is not None:
+        source_id, source_layer = points
 
     def one(block, suffix, scope=None):
         built = {
@@ -1817,7 +1867,7 @@ def _drawn_layers(source_id: str, layer, cfg: dict) -> list[dict]:
     return built
 
 
-def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
+def _vector_layers(source_id: str, layer, cfg: dict, sources: dict | None = None) -> list[dict]:
     """The MapLibre render layers for one vector layer — usually one, but a **raw-paint passthrough**
     (`style.maplibre.layers`, used by the GeoLibre importer to carry data-driven/extrusion symbology
     we can't express with the friendly keys) can emit several (e.g. fill + outline line). Each raw
@@ -1834,7 +1884,7 @@ def _vector_layers(source_id: str, layer, cfg: dict) -> list[dict]:
     # popups or its labels alone. An empty list is exactly that.
     # A label layer rides along with whatever draws the geometry — and is the ONLY thing emitted
     # when the renderer draws nothing, which is exactly how a layer kept for its labels alone works.
-    labels = _label_layers(source_id, layer, cfg)
+    labels = _label_layers(source_id, layer, cfg, sources)
 
     # A HEATMAP REPLACES THE FEATURES. It is a different layer TYPE, not a paint variation, and
     # drawing the points as well would put a pin on every hot spot — so this returns instead of
