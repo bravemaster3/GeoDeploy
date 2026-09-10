@@ -2,12 +2,18 @@
 name=GeoDeploy
 qgisMinimumVersion=3.28
 qgisMaximumVersion=4.99
+; QGIS 4 IS A Qt6 BUILD, and the plugin manager there hides — or refuses to enable — a
+; plugin that has not said it works under Qt6. Claiming `qgisMaximumVersion=4.99` without
+; this says "I run on QGIS 4" to a human reading the page and nothing at all to the
+; installer. The claim is backed by `scripts/test_qt6_compat.py` (which walks the AST of
+; every module and refuses a flat enum) and by the full suite running on qgis:4.2 in CI.
+supportsQt6=True
 description=Browse a GeoDeploy instance, add its layers, and publish layers back to it.
 about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. This plugin connects
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.6.2
+version=0.7.0
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -26,7 +32,19 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.6.2 - WITHOUT A TOKEN, A PORTAL NOW OPENS EXACTLY AS IT DOES WITH ONE. There were
+changelog=0.7.0 - The release that closes the symbology round trip.
+    EVERY SYMBOL QGIS CAN DRAW, or an honest account of why not. Rule-based rendering, stacked
+    strokes (a casing under a road), markers along a line, hatch and pattern fills, gradients, line
+    offsets, 2.5D, per-class symbols, and labels - their rules, their placement, whether they sit
+    on or above a line, and whether every part of a multi-part feature gets one. What cannot travel
+    is named before you push rather than found afterwards.
+    EXTERNAL SOURCES, BOTH WAYS. A WMS, WMTS, XYZ, WFS, OGC API - Features, vector tile set or
+    PMTiles archive open in QGIS is registered as a GeoDeploy source rather than refused; a
+    portal's own external sources open and push back without being mistaken for something else.
+    WITHOUT A TOKEN, A PORTAL OPENS EXACTLY AS IT DOES WITH ONE. There used to be two code paths
+    and only one of them ever got the new features.
+    Declared supportsQt6, so QGIS 4 will actually offer this plugin.
+    0.6.2 - WITHOUT A TOKEN, A PORTAL NOW OPENS EXACTLY AS IT DOES WITH ONE. There were
     two implementations of "what does this portal look like": with a token the plugin read the
     styling the author wrote; without one it read the published style.json and translated the
     MapLibre paint backwards. That reverse is lossy - a rule tree, a stacked stroke, a per-class

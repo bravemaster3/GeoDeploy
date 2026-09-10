@@ -506,11 +506,22 @@ geodeploy portals download-area 3 "11.8,57.6,12.1,57.8" -o gothenburg.zip --form
     ```bash
     geodeploy sources add "Orthophoto" https://wms.example.org/wms --type wms --layer-name ortho_2025
     geodeploy sources add "OSM" 'https://tile.openstreetmap.org/{z}/{x}/{y}.png' --type xyz
+    geodeploy sources add "Topo" https://example.org/wmts --type wmts --layer-name topo
+    geodeploy sources add "Roads" https://example.org/ogc/collections/roads --type ogcapi
+    geodeploy sources add "Basemap" https://tiles.example.org/tiles.json --type vectortile
+    geodeploy sources add "Buildings" https://files.example.org/b.pmtiles --type pmtiles
     geodeploy sources list
     ```
 
-    A WFS is probed when registered, so a wrong `typeName` fails immediately rather than as an
-    empty layer on a published map.
+    Seven kinds: `xyz`, `wms`, `wmts`, `wfs`, `ogcapi`, `vectortile`, `pmtiles`. Everything that can
+    be checked is checked when it is registered — a WFS and an OGC API collection are fetched, a
+    TileJSON is read, a PMTiles header is parsed — so a wrong `typeName` or an unreachable host
+    fails immediately rather than as an empty layer on a published map. That is also where the
+    layer inside a tile set, its zoom range and its extent come from; `--source-layer` supplies it
+    for a service that does not publish one.
+
+    `WCS` is deliberately absent: `GetCoverage` returns a coverage, not map images, so there is
+    nothing a web map can draw from it. Add the same data over WMS, or upload the coverage.
 
 === "Data already on the server"
 

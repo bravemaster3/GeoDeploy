@@ -234,6 +234,16 @@ jobs:
         # feature made of words still breaks when somebody edits the words.
         run: python integrations/qgis-plugin/scripts/test_push_summary.py
 
+      - name: The packaged plugin is one the site will accept
+        # Every upload to plugins.qgis.org is validated there, and a rejection BURNS the version
+        # number — the fix has to go out as a new one. Some of what they check fails nowhere else:
+        # a missing `supportsQt6` is a plugin that simply does not appear in QGIS 4's manager, with
+        # nothing wrong in any log. Building the artifact here also proves the vendored client is
+        # in step, since `build.py` refuses to package a stale one.
+        run: |
+          python integrations/qgis-plugin/scripts/build.py
+          python integrations/qgis-plugin/scripts/test_package.py
+
       - name: A portal opens as well without a token as with one
         # There used to be two implementations of "what does this portal look like": the API's
         # authored `layer_configs`, and a backwards translation of the published MapLibre paint.

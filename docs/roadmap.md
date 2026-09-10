@@ -5,7 +5,7 @@ description: >-
 
 # Roadmap
 
-GeoDeploy is at **v1.5.4**. Everything under *In v1.0* and in the releases after it is built and
+GeoDeploy is at **v1.6**. Everything under *In v1.0* and in the releases after it is built and
 running in production; the groups at the end are what comes next.
 
 <div class="gd-legend" markdown>
@@ -361,6 +361,56 @@ had no database.</p>
 
 </div>
 
+<div class="gd-rel done" markdown>
+### v1.6 — every symbol QGIS can draw
+<span class="gd-when">Shipped · 10 Sep 2026</span>
+
+<p class="gd-goal">v1.4 made styling travel both ways for the symbology GeoDeploy itself has. This
+is the rest of what QGIS draws — and an honest account of where a web map cannot follow. Measured
+against real PyQGIS on both QGIS 3.44 LTR and QGIS 4.2, in CI, on every commit.</p>
+
+- [x] **Rule-based rendering**, both ways — a rule's filter, its symbol and its own scale range
+- [x] **Multi-layer symbols** — a casing under a road, a dashed overlay on a solid line — including
+      inside a rule, which was the half that lasted longest
+- [x] **Markers along a line** with their spacing, **line offsets**, **hatch and pattern fills**,
+      **gradient fills**, **2.5D**, **centroid fills**, **heatmaps**, **arrow lines**, **blend modes**
+- [x] **A class carries its own symbol**, not only its colour
+- [x] **Anything GeoDeploy has no words for travels as a picture** — an SVG or font marker rendered
+      by QGIS, at the size QGIS drew it, so the portal shows the thing you drew
+- [x] **Labels as symbology**: rule trees, the text expression, halo, letter spacing,
+      capitalisation, offset, priority, per-label scale ranges, and where the text sits — at a
+      point or bent along the line, on it or above it
+- [x] **One label per feature.** A big polygon carried its name once per tile it touched; labels for
+      polygons are drawn from a point inside the shape, with "label every part" as an option
+- [x] **A fidelity account before you push** — the push dialog names what will be uploaded,
+      registered, restyled and left out, and `coverage_report.py` classifies every symbol QGIS
+      offers as exact, approximated, carried or not yet done
+
+</div>
+
+<div class="gd-rel done" markdown>
+### v1.6 — somebody else's services, and the anonymous half
+<span class="gd-when">Shipped · 10 Sep 2026</span>
+
+<p class="gd-goal">A portal is rarely only your data, and a public portal should not be a lesser
+portal for the person reading it without an account.</p>
+
+- [x] **Seven kinds of external source** — XYZ, WMS, WMTS, WFS, OGC API - Features, third-party
+      vector tiles and remote PMTiles — from the web UI, the CLI and the QGIS plugin alike
+- [x] **Validated when added**: a WFS and an OGC API collection are fetched, a TileJSON is read, a
+      PMTiles header is parsed, so a wrong name fails then rather than as an empty published layer
+- [x] **Fetched through your instance where a browser would be blocked** by the provider's CORS
+      policy — GeoJSON, vector tiles, PMTiles ranges — so a source works for every visitor
+- [x] **WCS refused by name, with the way forward.** It is not a display service; most WCS servers
+      publish the same data over WMS
+- [x] **A public portal opens in QGIS exactly as it does with a token** — one code path now, and
+      `GET /api/public/portals/{slug}` serves the authored styling to anybody
+- [x] **Delete several layers at once** in My Data, with the portals they are used in named first
+- [x] **No basemap** as a choice, on a white ground; **zoom to layer works on a phone**; a control
+      flyout fits the screen it opens on
+
+</div>
+
 ---
 
 ## Next up
@@ -372,8 +422,9 @@ had no database.</p>
 <p class="gd-goal">Your data can already leave GeoDeploy in open formats. This is the return
 trip — edit in the tool you prefer, publish back.</p>
 
-<p class="gd-goal">The QGIS plugin and style interchange moved UP into v1.4 above; what is left here
-is the rest of the round trip, not yet scheduled.</p>
+<p class="gd-goal">The QGIS plugin and style interchange shipped in v1.4 and were finished in
+v1.6 above — including external services in both directions. What is left here is the rest of the
+round trip, not yet scheduled.</p>
 
 - [ ] **Push from GeoLibre** — a "Publish to GeoDeploy" plugin and a `.geolibre.json` importer
 - [ ] Write-back: expose a layer as editable GeoJSON and re-ingest the edit
@@ -401,46 +452,29 @@ same as one that has been.</p>
 </div>
 
 <div class="gd-rel" markdown>
-### Every symbol QGIS can draw
-<span class="gd-when">Planned · after dashboards</span>
+### What still cannot travel from QGIS
+<span class="gd-when">Planned</span>
 
-<p class="gd-goal">This was next after v1.4; dashboards moved ahead of it, so it is the release
-after. v1.4 made styling travel both ways for most of the symbology GeoDeploy itself
-has: single symbol, graduated and categorized, size from a field, raster colormaps, classes and
-contours, outlines. QGIS draws a great deal more than that, and today those symbols are quietly
-simplified on the way in. This is about closing that gap — and about being honest where it cannot be
-closed.</p>
+<p class="gd-goal">v1.6 closed most of this. What is left is the part where a web renderer genuinely
+cannot follow, plus one thing QGIS itself cannot draw.</p>
 
-Two different problems wear the same coat, and separating them is most of the work:
-
-- [ ] **3D extrusion, drawn in QGIS.** GeoDeploy renders extrusion and the plugin carries it safely
-      — a round trip cannot delete a layer's 3D — but QGIS still draws those polygons FLAT in a 3D
-      map view, so 3D cannot be edited there. This is the first thing on this list, because unlike
-      the rest it is half-built rather than absent.
-- [ ] **Symbols a web map can draw, which simply are not wired up yet.** These are real round
-      trips, each worth its own entry: **inverted polygons** (a mask — the world minus the layer,
-      which is how you dim everything outside a study area), **2.5D** (QGIS's shadowed
-      pseudo-3D block, distinct from the true extrusion v1.4 already carries), **hatch and
-      pattern fills**, **gradient fills**, **line offsets** and **markers along a line** (arrows on
-      a river, ticks on a boundary), **halos and buffers**, **multi-layer symbols** (a casing under
-      a road), and **rule-based rendering**, which is a superset of the categorized/graduated pair
-      and the one most real QGIS projects reach for.
 - [ ] **Symbols a web map cannot draw at all** — a shapeburst fill, an SVG marker from the user's
-      disk, a geometry generator. The plugin currently drops these, which loses the author's work
-      the first time they push. The answer is not to fake them: carry the layer's **QML** (or SLD)
-      alongside the friendly style, so QGIS ⇄ QGIS is lossless and the portal draws the closest
-      approximation it can. GeoDeploy already does exactly this for GeoLibre imports, where raw
-      MapLibre paint rides along in `style.maplibre` and the friendly keys describe what they can.
-- [ ] **Labels**, which are on this list twice for a reason: they are the other half of data-driven
-      symbology, they are what most QGIS layers actually carry, and MapLibre draws them well.
-- [ ] A **fidelity report** in the plugin: before a push, say which parts of the symbology will
-      travel exactly, which will be approximated, and which are carried but not drawn. Guessing
-      which of the three applies is the current experience.
+      disk that fails to rasterise, a geometry generator. Today the closest picture is sent, which
+      is right for the portal and lossy for QGIS ⇄ QGIS. The answer is to carry the layer's **QML**
+      alongside the friendly style, so a round trip through GeoDeploy returns exactly what went in
+      while the portal keeps drawing its approximation. GeoDeploy already does this for GeoLibre
+      imports, where raw MapLibre paint rides along in `style.maplibre`
+- [ ] **Inverted polygons** — a mask, the world minus the layer, which is how you dim everything
+      outside a study area
+- [ ] **3D drawn in QGIS from a portal group.** GeoDeploy renders extrusion and the plugin carries
+      it safely, and a layer opened from its DATA gets a real 3D renderer. A layer opened as the
+      fast preview cannot: QGIS has no 3D renderer for vector TILES in either 3.44 or 4.2, so the
+      group says so and points at the editable source rather than drawing it flat in silence
 
 <p class="gd-goal">The constraint that shapes all of it: GeoDeploy renders with MapLibre and
 TiTiler, not with QGIS. A symbol travels exactly when the web renderer can express it, and the
-useful question for each one is not "can we support it" but "does it survive a round trip unchanged,
-and if not, does the author find out before they publish?"</p>
+useful question for each one is not "can we support it" but "does it survive a round trip
+unchanged, and if not, does the author find out before they publish?"</p>
 
 </div>
 

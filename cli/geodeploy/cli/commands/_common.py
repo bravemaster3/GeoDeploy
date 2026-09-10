@@ -160,6 +160,13 @@ def add_style_args(parser, raster: bool = True) -> None:
     lab.add_argument("--label-offset", help="move the text, as 'x,y' in pixels")
     lab.add_argument("--label-placement", choices=("point", "line"),
                      help="place the text at a point, or bend it along the line")
+    lab.add_argument("--label-line-position", choices=("on", "above", "below"),
+                     help="where along-the-line labels sit. A contour's height is written ON the "
+                          "line; a river's name usually sits above it. Carried for QGIS, which is "
+                          "the only surface that can draw the difference")
+    lab.add_argument("--label-per-part", action="store_true",
+                     help="label every PART of a multi-part feature instead of the feature once — "
+                          "an archipelago wants this, a country with two islands does not")
     lab.add_argument("--label-transform", choices=("none", "uppercase", "lowercase"))
     lab.add_argument("--label-max-width", type=float, help="wrap the text at this many ems")
     lab.add_argument("--label-allow-overlap", action="store_true",
@@ -248,12 +255,17 @@ def style_from_args(args, client=None, layer_ref: Optional[Any] = None,
     for arg, key in (("label_field", "field"), ("label_size", "size"), ("label_color", "color"),
                      ("label_font", "font"), ("label_halo_color", "halo_color"),
                      ("label_halo_width", "halo_width"), ("label_placement", "placement"),
+                     ("label_line_position", "line_position"),
                      ("label_transform", "transform"), ("label_max_width", "max_width"),
                      ("label_priority", "priority"), ("label_min_zoom", "minzoom"),
                      ("label_max_zoom", "maxzoom")):
         value = getattr(args, arg, None)
         if value is not None:
             labels[key] = value
+    # A FLAG, so only its presence means anything: `store_true` leaves False for "not asked", and
+    # sending that would turn the setting OFF on a style that had it on.
+    if getattr(args, "label_per_part", False):
+        labels["label_per_part"] = True
     if getattr(args, "label_offset", None):
         labels["offset"] = parse_number_list(args.label_offset, "--label-offset", length=2)
     if getattr(args, "label_allow_overlap", False):
