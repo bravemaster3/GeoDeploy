@@ -155,11 +155,16 @@
    breakpoint of their own. */
 .gd-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  /* `min(…, 100%)` IS THE WHOLE FIX. `auto-fit` reflows to one column on a narrow screen, but the
+     minimum track is a floor: 20rem is 320px, which is a phone's entire width before the page's
+     own padding, so the grid stayed wider than the screen and the PAGE scrolled sideways —
+     carrying the header and its navigation off to the left. Capping the floor at 100% of whatever
+     space there is lets the track shrink below its ideal width instead of pushing the page. */
+  grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr));
   gap: 1.2rem;
   margin: 1.6rem 0;
 }
-.gd-tiles-2 { grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); }
+.gd-tiles-2 { grid-template-columns: repeat(auto-fit, minmax(min(20rem, 100%), 1fr)); }
 .gd-tiles figure { margin: 0; }
 .gd-tiles figure img { transition: transform .2s ease, box-shadow .2s ease; }
 .gd-tiles figure img:hover {
@@ -293,3 +298,34 @@
 .gd-chip-done { color: #22c55e; background: rgba(34, 197, 94, .14); }
 .gd-chip-now  { color: #f59e0b; background: rgba(245, 158, 11, .14); }
 .gd-chip-next { color: #38bdf8; background: rgba(56, 189, 248, .14); }
+
+
+/* ── Nothing wider than the screen ─────────────────────────────────────────
+   A phone in portrait is about 20rem wide, and anything that measures itself in absolute units —
+   a screenshot at its natural size, a grid with a minimum track, a full-bleed band sized against
+   the viewport — is wider than that. The symptom is not a clipped image: it is the whole PAGE
+   sliding sideways, taking the header and its navigation with it, which reads as the site being
+   broken rather than as one picture being too big. */
+
+/* Media scales to its column, never past it. `height: auto` keeps the aspect ratio when it does. */
+.md-typeset img,
+.md-typeset svg,
+.md-typeset video,
+.md-typeset canvas,
+.md-typeset iframe {
+  max-width: 100%;
+  height: auto;
+}
+
+/* A figure is a block that HOLDS media, so it needs the same ceiling — a figure inside a grid
+   track can otherwise set the track's width from its content. */
+.md-typeset figure { max-width: 100%; }
+
+/* THE FULL-BLEED HERO measures itself against the VIEWPORT (`100vw`), which on a desktop includes
+   the scrollbar's width — so the band is a few pixels wider than the page can show, and those few
+   pixels are enough to make the document scrollable sideways. Clipping at the body keeps the bleed
+   (which reaches the viewport edge, exactly as intended) and drops the overhang.
+   `clip` rather than `hidden`: `hidden` would make the body a scroll container and break the
+   sticky header. */
+body { overflow-x: clip; }
+.gd-hero { max-width: 100vw; }
