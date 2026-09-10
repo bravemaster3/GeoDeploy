@@ -1,5 +1,15 @@
 <template>
   <div class="flex items-center gap-4 px-4 py-3 hover:bg-muted/60 group">
+    <!-- SELECTION. Shown only to someone who may delete, because choosing rows you are not
+         allowed to act on is an offer the page cannot keep. `.stop` so ticking a row never
+         triggers whatever else the row does when clicked. -->
+    <label v-if="selectable" class="flex-shrink-0 flex items-center" @click.stop
+      :title="selected ? 'Deselect' : 'Select'">
+      <input type="checkbox" :checked="selected" @change="$emit('toggle')"
+        class="w-4 h-4 rounded border-border text-primary focus:ring-1 focus:ring-primary/60
+               bg-background cursor-pointer" />
+    </label>
+
     <div class="w-8 h-8 rounded-md flex items-center justify-center text-[10px] font-bold flex-shrink-0"
       :class="badgeClass">{{ source.source_type.toUpperCase() }}</div>
     <div class="flex-1 min-w-0">
@@ -36,8 +46,15 @@ import { useAuthStore } from '@/stores/auth'
 import { setSourceSharing } from '@/api'
 import VisibilitySelect from '@/components/shared/VisibilitySelect.vue'
 
-const props = defineProps({ source: Object })
-defineEmits(['delete'])
+const props = defineProps({
+  source: Object,
+  // Selection is DRIVEN BY THE LIST, not held here: the list is what knows how many are
+  // chosen across all three sections, and a row that remembered its own tick would keep it
+  // through a filter change that hid the row.
+  selectable: { type: Boolean, default: false },
+  selected: { type: Boolean, default: false },
+})
+defineEmits(['delete', 'toggle'])
 
 const auth = useAuthStore()
 const savingVis = ref(false)

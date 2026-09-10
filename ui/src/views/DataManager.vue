@@ -21,6 +21,25 @@
         </div>
       </div>
 
+      <!-- WHAT IS SELECTED, AND THE ONE THING YOU CAN DO WITH IT. Sticky, because the rows it
+           counts are spread down three sections and a count you have to scroll back to is a count
+           you stop trusting. It appears only when something is selected, so the page is unchanged
+           for everyone who is not deleting in bulk. -->
+      <div v-if="selectedCount" class="sticky top-2 z-30">
+        <div class="card flex flex-wrap items-center gap-3 px-4 py-2.5 shadow-lg border-primary/40">
+          <span class="text-sm font-medium text-foreground">
+            {{ selectedCount }} selected
+          </span>
+          <span class="text-xs text-muted-foreground/80">{{ selectionSummary }}</span>
+          <span class="flex-1"></span>
+          <button @click="clearSelection" class="btn-secondary text-xs px-2.5 py-1.5">Clear</button>
+          <button @click="askDeleteSelected"
+            class="text-xs px-3 py-1.5 rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors">
+            <TrashIcon class="w-3.5 h-3.5" /> Delete {{ selectedCount }}
+          </button>
+        </div>
+      </div>
+
       <!-- Vector layers -->
       <section class="card overflow-hidden">
         <header class="flex flex-wrap items-center gap-3 px-5 py-3.5 border-b border-border/60">
@@ -38,6 +57,16 @@
           <input v-if="dataStore.vectorLayers.length > 3" v-model="vectorSearch" type="search"
             id="vector-search" name="vector-search" placeholder="Search…"
             class="w-36 max-w-full text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+          <!-- SELECT ALL, meaning everything the FILTER currently shows — not the page. The
+               page is a display detail; what you searched for is what you meant. -->
+          <label v-if="auth.canEdit && filteredVectors.length" class="flex items-center gap-1.5 cursor-pointer"
+            :title="`Select all ${filteredVectors.length} shown`">
+            <input type="checkbox" class="w-4 h-4 rounded border-border text-primary focus:ring-1 focus:ring-primary/60 bg-background cursor-pointer"
+              :checked="allSelected('vector', filteredVectors)"
+              :indeterminate.prop="someSelected('vector', filteredVectors)"
+              @change="toggleAll('vector', filteredVectors)" />
+            <span class="text-[11px] text-muted-foreground/70">All</span>
+          </label>
           <span class="text-xs font-medium text-muted-foreground bg-muted rounded-full px-2 py-0.5">{{ dataStore.vectorLayers.length }}</span>
           <button @click="toggleSection('vector')" class="flex-shrink-0 w-6 h-6 rounded flex items-center justify-center text-muted-foreground/70 hover:text-foreground hover:bg-muted"
             :title="sectionOpen.vector ? 'Collapse' : 'Expand'" :aria-expanded="sectionOpen.vector">
@@ -63,6 +92,8 @@
         </div>
         <div v-else class="divide-y divide-border/60">
           <VectorRow v-for="layer in pagedVectors" :key="layer.id" :layer="layer"
+            :selectable="auth.canEdit" :selected="isSelected('vector', layer)"
+            @toggle="toggleOne('vector', layer)"
             @delete="askDelete('vector', layer)" />
         </div>
         <!-- Pagination, shown only once it earns its place. Every row renders whether or not it is
@@ -95,6 +126,16 @@
           <input v-if="dataStore.rasterLayers.length > 3" v-model="rasterSearch" type="search"
             id="raster-search" name="raster-search" placeholder="Search…"
             class="w-36 max-w-full text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+          <!-- SELECT ALL, meaning everything the FILTER currently shows — not the page. The
+               page is a display detail; what you searched for is what you meant. -->
+          <label v-if="auth.canEdit && filteredRasters.length" class="flex items-center gap-1.5 cursor-pointer"
+            :title="`Select all ${filteredRasters.length} shown`">
+            <input type="checkbox" class="w-4 h-4 rounded border-border text-primary focus:ring-1 focus:ring-primary/60 bg-background cursor-pointer"
+              :checked="allSelected('raster', filteredRasters)"
+              :indeterminate.prop="someSelected('raster', filteredRasters)"
+              @change="toggleAll('raster', filteredRasters)" />
+            <span class="text-[11px] text-muted-foreground/70">All</span>
+          </label>
           <span class="text-xs font-medium text-muted-foreground bg-muted rounded-full px-2 py-0.5">{{ dataStore.rasterLayers.length }}</span>
           <button @click="toggleSection('raster')" class="flex-shrink-0 w-6 h-6 rounded flex items-center justify-center text-muted-foreground/70 hover:text-foreground hover:bg-muted"
             :title="sectionOpen.raster ? 'Collapse' : 'Expand'" :aria-expanded="sectionOpen.raster">
@@ -120,6 +161,8 @@
         </div>
         <div v-else class="divide-y divide-border/60">
           <RasterRow v-for="layer in pagedRasters" :key="layer.id" :layer="layer"
+            :selectable="auth.canEdit" :selected="isSelected('raster', layer)"
+            @toggle="toggleOne('raster', layer)"
             @delete="askDelete('raster', layer)" />
         </div>
         <!-- Pagination, shown only once it earns its place. Every row renders whether or not it is
@@ -152,6 +195,16 @@
           <input v-if="dataStore.externalSources.length > 3" v-model="sourceSearch" type="search"
             id="source-search" name="source-search" placeholder="Search…"
             class="w-36 max-w-full text-xs bg-background text-foreground placeholder:text-muted-foreground/60 border border-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/60" />
+          <!-- SELECT ALL, meaning everything the FILTER currently shows — not the page. The
+               page is a display detail; what you searched for is what you meant. -->
+          <label v-if="auth.canEdit && filteredSources.length" class="flex items-center gap-1.5 cursor-pointer"
+            :title="`Select all ${filteredSources.length} shown`">
+            <input type="checkbox" class="w-4 h-4 rounded border-border text-primary focus:ring-1 focus:ring-primary/60 bg-background cursor-pointer"
+              :checked="allSelected('source', filteredSources)"
+              :indeterminate.prop="someSelected('source', filteredSources)"
+              @change="toggleAll('source', filteredSources)" />
+            <span class="text-[11px] text-muted-foreground/70">All</span>
+          </label>
           <span class="text-xs font-medium text-muted-foreground bg-muted rounded-full px-2 py-0.5">{{ dataStore.externalSources.length }}</span>
           <button @click="toggleSection('source')" class="flex-shrink-0 w-6 h-6 rounded flex items-center justify-center text-muted-foreground/70 hover:text-foreground hover:bg-muted"
             :title="sectionOpen.source ? 'Collapse' : 'Expand'" :aria-expanded="sectionOpen.source">
@@ -177,6 +230,8 @@
         </div>
         <div v-else class="divide-y divide-border/60">
           <SourceRow v-for="src in pagedSources" :key="src.id" :source="src"
+            :selectable="auth.canEdit" :selected="isSelected('source', src)"
+            @toggle="toggleOne('source', src)"
             @delete="askDelete('source', src)" />
         </div>
         <!-- Pagination, shown only once it earns its place. Every row renders whether or not it is
@@ -202,9 +257,10 @@
     <UploadModal v-if="showRasterUpload" type="raster" @close="showRasterUpload = false" />
     <AddSourceModal v-if="showAddSource" @close="showAddSource = false" />
     <DiscoverModal v-if="showDiscover" @close="showDiscover = false" />
-    <ConfirmDeleteModal v-if="del" :name="del.name" :usage="del.usage"
+    <ConfirmDeleteModal v-if="del" :name="del.name" :items="del.items || []" :usage="del.usage"
       :loading-usage="del.loadingUsage" :busy="del.busy"
-      @confirm="confirmDelete" @cancel="del = null" />
+      :progress="del.progress" :failures="del.failures || []"
+      @confirm="confirmDelete" @cancel="closeDelete" />
   </div>
 </template>
 
@@ -212,7 +268,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useDataStore } from '@/stores/data'
-import { UploadIcon, DatabaseIcon, ImageIcon, LinkIcon, DownloadIcon, PlusIcon } from './icons'
+import { UploadIcon, DatabaseIcon, ImageIcon, LinkIcon, DownloadIcon, PlusIcon, TrashIcon } from './icons'
 import VectorRow from '@/components/data/VectorRow.vue'
 import RasterRow from '@/components/data/RasterRow.vue'
 import UploadModal from '@/components/data/UploadModal.vue'
@@ -235,21 +291,153 @@ const _removeFn = {
 }
 
 async function askDelete(type, item) {
-  del.value = { type, id: item.id, name: item.name, usage: [], loadingUsage: true, busy: false }
+  del.value = { items: [{ type, id: item.id, name: item.name }], name: item.name,
+                usage: [], loadingUsage: true, busy: false, progress: null, failures: [] }
   try {
     del.value.usage = (await _usageApi[type](item.id)).data
   } catch { /* show the confirm without usage if the check fails */ }
   finally { if (del.value) del.value.loadingUsage = false }
 }
 
+// ── Selecting several at once ───────────────────────────────────────────────────────────────────
+//
+// ONE SET ACROSS ALL THREE SECTIONS, keyed `type:id`. Vectors, rasters and external sources are
+// numbered in separate sequences, so the type is part of the identity — without it, deleting
+// "layer 3" would take a raster and a vector that have nothing to do with each other. That is the
+// same bug the portal style had when it keyed layers by id alone.
+const selected = ref(new Set())
+const selKey = (type, item) => `${type}:${item.id}`
+// The rows themselves, remembered as they are ticked. The lists are filtered and paginated, so a
+// selected row can be off-screen when the delete happens — and the confirmation has to be able to
+// NAME everything it is about to remove.
+const selectedItems = ref(new Map())
+
+const selectedCount = computed(() => selected.value.size)
+
+const selectionSummary = computed(() => {
+  const counts = { vector: 0, raster: 0, source: 0 }
+  for (const item of selectedItems.value.values()) counts[item.type] += 1
+  const parts = []
+  if (counts.vector) parts.push(`${counts.vector} vector`)
+  if (counts.raster) parts.push(`${counts.raster} raster`)
+  if (counts.source) parts.push(`${counts.source} external`)
+  return parts.join(' · ')
+})
+
+const isSelected = (type, item) => selected.value.has(selKey(type, item))
+
+function toggleOne(type, item) {
+  const key = selKey(type, item)
+  const next = new Set(selected.value)
+  const items = new Map(selectedItems.value)
+  if (next.has(key)) {
+    next.delete(key)
+    items.delete(key)
+  } else {
+    next.add(key)
+    items.set(key, { type, id: item.id, name: item.name })
+  }
+  // Replaced rather than mutated: a Set is not deeply reactive, so Vue only re-renders the rows
+  // when the reference changes.
+  selected.value = next
+  selectedItems.value = items
+}
+
+const allSelected = (type, list) =>
+  list.length > 0 && list.every((item) => selected.value.has(selKey(type, item)))
+const someSelected = (type, list) =>
+  !allSelected(type, list) && list.some((item) => selected.value.has(selKey(type, item)))
+
+function toggleAll(type, list) {
+  const next = new Set(selected.value)
+  const items = new Map(selectedItems.value)
+  const on = !allSelected(type, list)
+  for (const item of list) {
+    const key = selKey(type, item)
+    if (on) {
+      next.add(key)
+      items.set(key, { type, id: item.id, name: item.name })
+    } else {
+      next.delete(key)
+      items.delete(key)
+    }
+  }
+  selected.value = next
+  selectedItems.value = items
+}
+
+function clearSelection() {
+  selected.value = new Set()
+  selectedItems.value = new Map()
+}
+
+async function askDeleteSelected() {
+  const items = [...selectedItems.value.values()]
+  if (!items.length) return
+  del.value = { items, name: items[0].name, usage: [], loadingUsage: true, busy: false,
+                progress: null, failures: [] }
+  // EVERY PORTAL ANY OF THEM APPEARS IN, as one list. Asked in parallel because this is a dozen
+  // small reads and doing them one after another is a visible pause before a confirmation; the
+  // union is de-duplicated by portal id, since one portal usually draws several of the layers
+  // being deleted and listing it four times would read as four portals.
+  try {
+    const results = await Promise.allSettled(
+      items.map((item) => _usageApi[item.type](item.id)))
+    const byId = new Map()
+    for (const result of results) {
+      if (result.status !== 'fulfilled') continue
+      for (const portal of result.value.data || []) {
+        if (!byId.has(portal.id)) byId.set(portal.id, portal)
+      }
+    }
+    if (del.value) del.value.usage = [...byId.values()]
+  } catch { /* show the confirm without usage if the check fails */ }
+  finally { if (del.value) del.value.loadingUsage = false }
+}
+
+function closeDelete() {
+  // A batch that partly failed leaves the ones that failed selected, so the next attempt is about
+  // exactly them rather than about everything again.
+  del.value = null
+}
+
 async function confirmDelete() {
   if (!del.value || del.value.busy) return  // guard: one delete, no double-fire race
+  const items = del.value.items || []
   del.value.busy = true
-  try {
-    await _removeFn[del.value.type](del.value.id)
-  } finally {
-    del.value = null
+  del.value.progress = { done: 0, total: items.length }
+  const failures = []
+  // ONE AT A TIME, deliberately. Deleting a layer prunes it from every portal that draws it and
+  // RE-PUBLISHES the published ones; firing a dozen of those at once would have several publishes
+  // of the same portal racing each other. A batch of ten is a few seconds, and the button counts
+  // them off.
+  for (const item of items) {
+    try {
+      await _removeFn[item.type](item.id)
+      const next = new Set(selected.value)
+      const kept = new Map(selectedItems.value)
+      next.delete(`${item.type}:${item.id}`)
+      kept.delete(`${item.type}:${item.id}`)
+      selected.value = next
+      selectedItems.value = kept
+    } catch (err) {
+      // ONE FAILURE MUST NOT ABANDON THE REST. A layer another portal has locked, or one already
+      // gone, is a reason to skip it and say so — not to leave the other nine undeleted.
+      failures.push({ name: item.name,
+                      error: err?.response?.data?.detail || err?.message || 'failed' })
+    }
+    if (del.value) del.value.progress = { done: (del.value.progress?.done || 0) + 1,
+                                          total: items.length }
   }
+  if (!del.value) return
+  del.value.busy = false
+  if (failures.length) {
+    // Stay open with the reasons. Closing on a partial failure would leave somebody looking at a
+    // list that still holds four of the twelve they deleted, with nothing said about why.
+    del.value.failures = failures
+    return
+  }
+  del.value = null
 }
 
 // Per-section search (shown once a section holds more than a handful of layers) — matches on
