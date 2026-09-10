@@ -194,7 +194,7 @@ class Instance:
                     "{0}/api/public/portals/{1}".format(self.url.rstrip("/"), slug), cache=False)
                 if isinstance(doc, dict) and doc.get("layer_configs") is not None:
                     return dict(doc, _anonymous=not self.token)
-            except Exception:           # noqa: BLE001 - an older instance has no such route
+            except Exception:           # noqa: BLE001  # nosec B110 - intentional: an instance too old for this route falls through to the style below
                 pass
 
         if not slug:
