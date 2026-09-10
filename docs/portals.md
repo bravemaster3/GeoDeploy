@@ -76,6 +76,44 @@ guide; this page covers what they share — building, layout, access and templat
     A published portal is a static bundle, so changes only appear once you publish again. The button
     reads **Re-publish** after the first time.
 
+## Bringing in somebody else's service
+
+Not every layer has to be yours. **My Data ▸ Connect external source** registers a service you do
+not host — it is a reference, never a copy, so nothing is downloaded and the portal shows whatever
+the provider is serving that day.
+
+| Kind | What it is |
+| --- | --- |
+| **XYZ** | A `{z}/{x}/{y}` tile template — the usual basemap form |
+| **WMS** | Rendered map images, one `GetMap` per tile |
+| **WMTS** | Tiled map images, one `GetTile` per tile |
+| **WFS** | Vector features, fetched as GeoJSON |
+| **OGC API - Features** | A collection's items — paste the landing page, the collection or the items URL |
+| **Vector tiles** | A third-party `.pbf` tile set, or its TileJSON |
+| **PMTiles** | A remote archive, read a tile at a time — the whole file is never downloaded |
+
+Everything that can be checked is checked when you add it: a WFS and an OGC API collection are
+fetched, a TileJSON is read, a PMTiles header is parsed. That is where a wrong layer name or an
+unreachable host shows up — and it is also where the pieces you did not type come from, like the
+name of the layer inside a tile set, its zoom range and its extent.
+
+!!! note "Why some of them go through your instance"
+    A browser fetching a raster tile is doing something every tile server expects. Fetching GeoJSON,
+    a vector tile, or a byte range of a PMTiles archive is a cross-origin request, and a provider
+    who has not set `Access-Control-Allow-Origin` breaks it **silently** — an empty layer and a
+    console error your visitors will never see. So those are fetched through GeoDeploy and served
+    same-origin. It costs a little bandwidth; it buys a source that works for every visitor rather
+    than for the ones whose provider happens to be permissive.
+
+**Attribution is not optional.** The provider's credit is the condition of using their service, and
+it is carried onto the map with the layer. Fill it in.
+
+!!! warning "WCS is not here, and cannot be"
+    A WCS is not a display service: `GetCoverage` returns a coverage — a GeoTIFF, a NetCDF — not map
+    images or tiles, so there is nothing a web map can draw from it without first rendering it.
+    Almost every WCS server publishes the same data over **WMS**; add it that way to show it, or
+    download the coverage and upload it as a raster layer to analyse it.
+
 ## Layout options
 
 Beyond the experience, each portal exposes a few placement choices:
@@ -157,3 +195,29 @@ Two rules keep this predictable:
 
 Per-portal branding (accent colour, font, logo, light/dark) is set in the editor and overrides the
 template, whichever experience you are in.
+
+## Fonts for labels
+
+A web map draws text from **glyph sets**, not from the fonts on the reader's computer — so a portal
+can only label in faces the instance itself carries. GeoDeploy ships **Noto Sans** in Regular, Bold
+and Italic, which covers Latin, Greek, Cyrillic and Vietnamese.
+
+That is a drop-in directory, not a fixed list. To add a face — a serif, a monospace, your
+organisation's own — generate its glyphs from a TTF and copy them in:
+
+```bash
+docker run --rm -v "$PWD":/w -w /w node:20-bookworm bash -lc   'npm i --no-audit --no-fund fontnik && node scripts/build_glyphs.js NotoSerif-Regular.ttf "templates/shared/fonts/Noto Serif Regular"'
+```
+
+No rebuild and no restart: the next map that asks for it gets it, `GET /api/fonts` starts listing
+it, and the QGIS plugin offers it the next time it connects. A face is about 780 KB.
+
+**What happens to a font the instance does not have.** Nothing breaks and nothing goes blank. The
+label is drawn in the nearest face that *is* installed — a serif stays a serif, a monospace stays a
+monospace, and bold and italic are preserved — and the plugin says which substitution it made. The
+published style names the requested face *and* the fallback, so if you install the real one later,
+portals already published start using it without being republished.
+
+**QGIS is unaffected.** It draws with the fonts on your own machine, and a label pushed from QGIS
+keeps its original typeface and gets it back unchanged. The substitution only ever applies to what
+the web portal draws.

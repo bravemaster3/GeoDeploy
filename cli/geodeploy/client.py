@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json as _json
 import os
+import time as _time
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import quote, urlencode, urljoin
 
@@ -27,6 +28,22 @@ __all__ = ["Client"]
 
 #: Sent on every request. An instance's access log is where an operator works out that "the API is
 #: hammering us" is in fact someone's nightly CLI job, so it names the tool and its version.
+def _retry_after(response) -> Optional[float]:
+    """`Retry-After` in seconds, when the server sent one and it is a number.
+
+    The HTTP-date form is deliberately not parsed: it needs a clock the client cannot trust to
+    agree with the server's, and every limiter in this stack sends seconds or nothing at all.
+    """
+    raw = (response.headers or {}).get("retry-after")
+    if raw is None:
+        return None
+    try:
+        seconds = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(300.0, seconds)) if seconds == seconds else None
+
+
 def _default_user_agent() -> str:
     from . import __version__
     return "geodeploy-cli/{0}".format(__version__)
@@ -52,7 +69,9 @@ class Client(object):
                  transport: Optional[Any] = None, timeout: float = 120.0,
                  upload_timeout: float = 3600.0, user_agent: Optional[str] = None,
                  verify_tls: bool = True, retries: int = 2,
-                 on_request: Optional[Callable[[str, str], None]] = None):
+                 on_request: Optional[Callable[[str, str], None]] = None,
+                 rate_limit_retries: int = 6,
+                 on_throttled: Optional[Callable[[float, int, int], None]] = None):
         from .config import normalize_url
         self.url = normalize_url(url)
         self.token = token or None
@@ -64,6 +83,14 @@ class Client(object):
         #: Called with (method, url) before each request — the CLI's `-v` uses it, and a plugin can
         #: route it to the QGIS message log without this module knowing what logging is.
         self.on_request = on_request
+        #: How many times a 429 is waited out before it is raised. Six covers a group push against
+        #: the shipped `rate=5r/m` upload limit; past that something is wrong that waiting will not
+        #: fix, and the caller deserves to hear about it.
+        self.rate_limit_retries = max(0, int(rate_limit_retries))
+        #: Called with (seconds, attempt, of) each time a request is held back. The point is that a
+        #: long wait should look like progress rather than like a hang — the CLI prints it and the
+        #: plugin puts it in the status bar.
+        self.on_throttled = on_throttled
 
         # Namespaces. Imported here rather than at module scope because each one imports this
         # module for typing; the cost is one attribute lookup at construction.
@@ -137,9 +164,47 @@ class Client(object):
 
         if self.on_request:
             self.on_request(method.upper(), url)
-        response = self.transport.send(
-            Request(method, url, hdrs, data, timeout if timeout is not None else self.timeout))
-        return self._handle(response, parse)
+
+        # RATE LIMITING IS A WAIT, NOT A FAILURE. An instance throttles its upload route — nginx
+        # ships `rate=5r/m` — and pushing a group of layers is exactly the burst that trips it. The
+        # user saw "HTTP 429" partway through and had to press the button again to get the rest,
+        # which is the client asking a person to do a computer's job.
+        #
+        # RETRYING A POST IS SAFE HERE, and that is worth stating because usually it would not be:
+        # the rejection happens at the front door, before the request is proxied to the application
+        # at all, so nothing was created and nothing was half-done. A 429 means "not yet".
+        deadline_attempts = self.rate_limit_retries + 1
+        for attempt in range(deadline_attempts):
+            response = self.transport.send(
+                Request(method, url, hdrs, data,
+                        timeout if timeout is not None else self.timeout))
+            if response.status != 429 or attempt == deadline_attempts - 1:
+                return self._handle(response, parse)
+            wait = _retry_after(response) or self._backoff(attempt)
+            if self.on_throttled:
+                self.on_throttled(wait, attempt + 1, self.rate_limit_retries)
+            _time.sleep(wait)
+            # A BODY THAT WAS READ ONCE CANNOT BE SENT AGAIN. A file-like body is consumed by the
+            # first attempt, so it is rewound where that is possible and the retry abandoned where
+            # it is not — a silently truncated upload would be far worse than a 429.
+            if data is not None and not isinstance(data, (bytes, bytearray, str)):
+                seek = getattr(data, "seek", None)
+                if not callable(seek):
+                    return self._handle(response, parse)
+                try:
+                    seek(0)
+                except Exception:                                # noqa: BLE001
+                    return self._handle(response, parse)
+        return self._handle(response, parse)                     # pragma: no cover - loop returns
+
+    def _backoff(self, attempt: int) -> float:
+        """How long to wait before retry `attempt`, when the server did not say.
+
+        The shipped limit is `rate=5r/m` — one request every twelve seconds — so the first wait is
+        just over that, and later ones grow in case several clients are queued behind the same
+        bucket. Capped, because a wait nobody can see the end of is indistinguishable from a hang.
+        """
+        return min(60.0, 13.0 * (attempt + 1))
 
     def get(self, path: str, params: Optional[Dict[str, Any]] = None, **kw: Any) -> Any:
         return self.request("GET", path, params=params, **kw)
@@ -199,7 +264,7 @@ class Client(object):
     def _handle(self, response: Response, parse: bool = True) -> Any:
         if response.status >= 400:
             raise errors.from_status(response.status, _detail(response), response.url,
-                                     _safe_json(response))
+                                     _safe_json(response), _retry_after(response))
         if not parse:
             return response
         if response.status == 204 or not response.content:

@@ -1,11 +1,18 @@
-"""`geodeploy sources …` — external WMS / XYZ / WFS services used without ingesting them."""
+"""`geodeploy sources …` — somebody else's service, used in a portal without ingesting it.
+
+XYZ, WMS, WMTS, WFS, OGC API - Features, vector tiles and PMTiles. See
+`geodeploy/sources.py` for what each one is and which of them are fetched through the
+instance rather than straight from the provider (the answer is CORS).
+"""
 from __future__ import annotations
 
+from ...sources import SOURCE_TYPES
 from ..main import add_command, group_parser
 from ..output import EXIT_GENERIC, EXIT_OK
 from ._common import confirm
 
-COLUMNS = ["id", "name", "source_type", "kind", "url", "layer_name", "visibility", "created_by"]
+COLUMNS = ["id", "name", "source_type", "kind", "url", "layer_name", "source_layer",
+           "visibility", "created_by"]
 
 
 def register(subparsers) -> None:
@@ -22,16 +29,28 @@ examples:
       --layer-name ortho_2025 --version 1.3.0
   geodeploy sources add "Municipalities" https://wfs.example.org/ows --type wfs \\
       --layer-name ms:kommun
+  geodeploy sources add "Roads" https://example.org/ogc/collections/roads --type ogcapi
+  geodeploy sources add "Basemap" https://tiles.example.org/tiles.json --type vectortile
+  geodeploy sources add "Buildings" https://files.example.org/b.pmtiles --type pmtiles
 
-A WFS is probed when it is registered, so a wrong typeName fails here rather than as an empty
-layer on a published map.
+Everything that can be checked is checked when it is registered — a WFS and an OGC API
+collection are fetched, a TileJSON is read, a PMTiles header is parsed — so a wrong name or
+an unreachable host fails here rather than as an empty layer on a published map. That is
+also where the layer inside a tile set, its zoom range and its extent come from.
 """)
     add.add_argument("name")
     add.add_argument("service_url", metavar="url", help="the service endpoint")
-    add.add_argument("--type", dest="source_type", required=True, choices=["xyz", "wms", "wfs"])
-    add.add_argument("--layer-name", help="WMS `layers` / WFS `typeName` (required for both)")
+    add.add_argument("--type", dest="source_type", required=True, choices=list(SOURCE_TYPES))
+    add.add_argument("--layer-name",
+                     help="which layer of the service: WMS/WMTS `layers`, WFS `typeName`, or an "
+                          "OGC API collection id (optional when the URL already names it)")
+    add.add_argument("--source-layer",
+                     help="the layer INSIDE a vector tile or PMTiles archive. Read from the "
+                          "service where it publishes one (TileJSON, PMTiles metadata); give it "
+                          "when it does not, because a style that names none draws nothing")
+    add.add_argument("--matrix-set", help="WMTS TileMatrixSet (default GoogleMapsCompatible)")
     add.add_argument("--version", help="WMS (default 1.3.0) or WFS (default 2.0.0) version")
-    add.add_argument("--format", dest="image_format", help="WMS image format (default image/png)")
+    add.add_argument("--format", dest="image_format", help="WMS/WMTS image format (default image/png)")
     add.add_argument("--attribution")
 
     show = add_command(group, "show", cmd_show, "one source")
@@ -57,7 +76,8 @@ def cmd_list(ctx, args) -> int:
 
 def cmd_add(ctx, args) -> int:
     source = ctx.client().sources.create(
-        args.name, args.source_type, args.service_url, layer_name=args.layer_name, version=args.version,
+        args.name, args.source_type, args.service_url, layer_name=args.layer_name,
+        source_layer=args.source_layer, matrix_set=args.matrix_set, version=args.version,
         image_format=args.image_format, attribution=args.attribution)
     ctx.out.render(source, COLUMNS + ["bbox", "geometry_type"])
     if not ctx.out.json_mode:

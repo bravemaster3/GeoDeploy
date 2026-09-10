@@ -4,7 +4,7 @@
 The "hard parts" GeoDeploy hides from users: provisioning Docker containers, generating tile-server config, building tile URLs, COG conversion, and assembling published portals. Most tile-serving bugs live or die here.
 
 ## Contents
-- `postgis.py` — provisions the PostGIS container (random password, named volume `geodeploy_postgres`, `postgres` network alias), waits healthy, writes the initial Martin config, and starts the Martin container. Also `create_user_schema`, `test_connection`. Exposes constants reused elsewhere: `MARTIN_NAME`, `MARTIN_IMAGE`, `NETWORK`, `_get_host_bind_path`.
+- `postgis.py` — provisions the PostGIS container (random password, named volume `geodeploy_postgres`, `postgres` network alias), waits healthy, writes the initial Martin config, and starts the Martin container. Also `create_user_schema`, `test_connection`. Exposes constants reused elsewhere: `MARTIN_NAME`, `MARTIN_IMAGE`, `NETWORK`, `_get_host_bind_path`. Also `unique_table_name(name, prefix, fallback)` — the ONE place a PostGIS table name is built, because Postgres silently truncates any identifier past 63 characters and the callers' `f"{slug}_{hex6}"` put the random suffix at the end, where the truncation lands. And `derived_name(base, suffix)` for anything named AFTER a table (`_stg`, an index): appending to a name already at 63 characters returns that same name.
 - `minio.py` — **`browser_upload_url(key)`** returns a presigned PUT URL the *browser* can reach: for the local MinIO (internal hostname) it strips scheme+host and returns a same-origin `/s3/...` path that nginx proxies with the **signed Host preserved** (SigV4 still verifies, no CORS); for an external/public endpoint it returns the full presigned URL (bucket must allow cross-origin PUT). Used by the GeoParquet direct-upload flow. Also provisions the MinIO container (named volume `geodeploy_minio`, `minio` alias), ensures the bucket, and **starts the TiTiler container** via `_start_titiler()`. `_start_titiler` strips the `http://` scheme from the endpoint for GDAL's VSI S3 (`AWS_S3_ENDPOINT` must be `host:port`), **derives `AWS_HTTPS` from the endpoint scheme** (so a real HTTPS S3 works, not just the local HTTP MinIO) + sets `AWS_REGION`, and always recreates the container so credential changes take effect. **`restart_titiler(endpoint, key, secret, region)`** is the public entry the *existing-storage* setup branch calls (`routers/setup.py`) — the local branch goes through `provision_local()` instead. `AWS_VIRTUAL_HOSTING` stays `FALSE` (path-style works for MinIO/R2/B2/Hetzner and AWS).
 - `martin.py` — `regenerate_config(layers)` rebuilds `martin-config.yaml` and reloads Martin (restart, else create the container if missing). Per-layer `geometry_column`/`id_column`/`srid` (`_srid_from_crs` parses `EPSG:N` from the layer's `crs`) so **imported** tables that don't use GeoDeploy's `geom`/`id`/4326 conventions still serve; ingested layers default to geom/id/4326. **Martin is now a core always-on service** (no compose profile; started by `install.sh`; boots from a sources-less config written by `main.py::_ensure_martin_config` until a DB exists) — so both local and external PostGIS serve tiles without manual intervention. `get_tile_url(schema, table)` → `/tiles/{schema}.{table}/{z}/{x}/{y}`. The connection string + `_attach_properties`'s asyncpg connect use `settings.postgis_*` and append `?sslmode=` when `postgis_sslmode` is set (external/managed DBs; empty for the local DB). **Config notes:** (1) `listen_addresses` is top-level (Martin v1.x); the old `srv:` key is ignored. (2) `_attach_properties()` queries `information_schema.columns` and writes a `properties` map per table — **required**, because a configured Martin table source with no `properties` serves geometry only (feature popups would show no attributes). (3) Reload does a full **container restart**, not SIGHUP — Martin only builds table field/property definitions at startup, so SIGHUP leaves `vector_layers[].fields` empty after a config change.
 - `titiler.py` — **`tile_url_from_style(s3_key, style, band_count)` is the entry point every caller should use**; it unpacks a stored raster style through `STYLE_KEYS` so a new raster property reaches all seven surfaces (layer listing, public index, TileJSON, WMTS, STAC assets, share links, portal generator) without seven edits. `get_tile_url(s3_key, colormap, rescale, algorithm, zfactor, bidx, increment, thickness, minz, maxz)` → `/raster/cog/tiles/WebMercatorQuad/{z}/{x}/{y}?url=s3://...` (the `WebMercatorQuad` TileMatrixSet segment is **required** by the current TiTiler API). Supports `rescale` ("min,max" stretch); `algorithm` (e.g. `hillshade`, single-band; hillshade adds `expression=b1*{zfactor}` for vertical exaggeration); `bidx` (list of 1-based band indices → `&bidx=` per band: one band = single-band output, three = RGB composite); and `colormap_name`. **`algorithm=contours`** adds `algorithm_params` as URL-encoded JSON (`increment`, `thickness`, `minz`, `maxz`) — see `_contour_params`: TiTiler's contours colours the data across minz–maxz with a built-in terrain ramp and draws lines on it, its defaults span −12000..8000 m, and `minz`/`maxz` are typed **int** (a fractional one 422s the whole request), so the layer's own `rescale` is borrowed, floored and ceiled. Colormap is dropped for an RGB composite (`len(bidx)==3`) or when an algorithm is active; algorithm and colormap are mutually exclusive. `get_tilejson_url` uses `/cog/WebMercatorQuad/tilejson.json`. `COLORMAPS` list.
@@ -167,6 +167,69 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
 ## Dependencies / relationships
 - `postgis.py`/`minio.py` talk to the Docker daemon (`docker.from_env()`) and reuse each other's constants. They are called from `routers/setup.py`.
 - `martin.py` is called from `routers/data/vector.py` (on upload/delete), `routers/admin.py` (manual reload), and `tasks/vector_ingest.py` (after ingest).
+- **Rule-based layers (2026-09-03):** `portal_generator._rule_layers` emits **one render layer per
+  rule** in `style.rules`, each built by the ordinary `_vector_layer` path from the layer's style
+  with the rule's laid over it — so a rule is drawn by the code that already draws everything else,
+  rather than by a second renderer. The rule's `filter` and its `minzoom`/`maxzoom` are applied by
+  `_apply_rule_scope`, which **clamps the zoom range to 0–24**: QGIS stores scale thresholds well
+  outside that, and one out-of-range number makes MapLibre reject the WHOLE style. Ids are
+  `vector-{id}-r{n}` (plus `-outline`). Rules take precedence over the `style.maplibre` raw-paint
+  passthrough. **PARITY: `ui/src/lib/mapStyle.js` expands the same list before its draw loop**
+  (`expandRules` / `ruleScope` / `mlId`) — change both together. Pinned by `tests/test_rule_layers.py`.
+- **Ramps interpolate, and the class cap is 100 (2026-09-03):** `symbology.ramp_colors` blends
+  between a ramp's seven anchor stops instead of snapping to the nearest. Snapping had a ceiling
+  nobody had written down — **eight classes produced seven colours and twelve produced seven** — so
+  two classes were drawn identically under a legend saying they differed, and *that* is what the old
+  12-class cap was working around. `field-stats` now clamps to 2–100 (QGIS has never capped it), and
+  `LayerPanel.vue`'s spin box matches. Past twelve categories, `symbology.category_color` hands out a
+  golden-ratio hue wheel rather than cycling the palette, so a 40-value column gets 40 distinct
+  colours; it is deterministic, so a category keeps its colour when the data gains a value.
+  **PARITY: `ui/src/lib/symbology.js` holds `rampColors`/`blend`/`categoryColor`/`hslHex` as exact
+  twins** — verified byte-for-byte over every ramp × {1,2,3,5,7,8,9,12,20,50} plus 60 categories.
+  Note this CHANGES the colours a newly computed ramp produces (stored styles keep theirs, since a
+  class carries its own colour).
+- **Labels (2026-09-03), new to the platform:** `style.labels` becomes its own MapLibre `symbol`
+  layer via `symbology.label_layout` / `label_paint` / `label_scope` and
+  `portal_generator._label_layer`. Its OWN layer, not text on the geometry's, for three reasons that
+  would each be a bug otherwise: a label has its own zoom range, it must draw above every geometry
+  (layer order is the only thing that decides that), and a point layer's own layer is already a
+  `symbol` layer carrying an icon. Emitted for rule-based layers too, and it is the ONLY thing
+  emitted when `no_symbol` is set — which is how a layer kept for its labels works.
+- **Glyphs:** `routers/fonts.py` serves `/api/fonts/{fontstack}/{range}.pbf` from
+  `templates/shared/fonts/` when a set is installed and **redirects to MapLibre's public set**
+  otherwise. Both style builders name that one route: only the server knows what is installed, and
+  if `portal_generator` and `mapStyle.js` each guessed they would disagree the moment an operator
+  installed a set. A fontstack the glyph source lacks draws **nothing at all** — no error — which is
+  why `LABEL_FONTS` is a short allow-list and an unknown font falls back rather than being carried.
+- **Marker pictures (2026-09-03):** `style.marker_image` is a PNG data URI the QGIS plugin renders
+  from a symbol GeoDeploy cannot describe. `symbology.picture_id` (FNV-1a, content-addressed, twinned
+  in `ui/src/lib/symbology.js`) names it; `icon_image_expression` returns that id in preference to a
+  generated shape, and `marker_images` emits `{id, image}` so the runtime registers it from the
+  pixels. **A picture is ONE image for every feature** — a bitmap cannot be recoloured per class the
+  way a canvas shape can — so a classified layer keeps its classification everywhere except the
+  icon. `templates/shared/portal.js::setMarkerPicture` and `ui/src/lib/markerImage.js::loadMarkerPicture`
+  are the two runtime halves; both register with `pixelRatio: 2`, matching the plugin's render scale.
+- **Markers along a line (2026-09-03):** `style.line_marker` becomes a second render layer at
+  `symbol-placement: line` (`portal_generator._line_marker_layer`, `symbology.line_marker_layout`),
+  spaced by the QGIS interval and `icon-rotation-alignment: map` so an arrow points downstream. The
+  repeated symbol travels as a picture, like any marker GeoDeploy cannot describe. **It carries its
+  own `geodeploy:markerImages`** — the runtime registers bitmaps from that key and only the FIRST
+  render layer gets the full metadata block, so the stamping loop MERGES rather than assigns; it
+  used to assign, which erased the decoration's image and the ticks never appeared.
+- **Pattern fills (2026-09-04):** `style.fill_pattern` carries a tile the plugin REBUILT (not
+  photographed — `fill-pattern` repeats the image it is given, and a rendered patch shows a seam
+  every tile). `symbology.fill_pattern` validates it and `_vector_layer` sets `fill-pattern`,
+  **removing `fill-color`**: MapLibre draws one or the other, and leaving the colour set is a no-op
+  that reads as if it applied. `fill-opacity` still applies, which is how a hatch stays a wash. The
+  tile is registered through `marker_images` — the runtime's one "create these images" channel — and
+  it OUTRANKS a marker picture there, since a style carrying both is a polygon.
+- **Heatmaps and centroid markers (2026-09-04):** `style.heatmap` becomes MapLibre's own `heatmap`
+  layer type (`_heatmap_layer`), which REPLACES the feature layers rather than adding to them —
+  drawing the points as well would put a pin on every hot spot. Labels still ride along. The first
+  ramp stop is forced transparent: a ramp that starts opaque paints the whole viewport at density
+  zero, which is the one mistake that makes a heatmap look broken. `style.centroid_marker` becomes a
+  `symbol` layer over the polygon source (`_centroid_marker_layer`) — MapLibre places icons at a
+  polygon's LABEL POINT by default, which is inside a concave shape where a true centroid is not.
 - `titiler.py` is called from `routers/data/raster.py` and `portal_generator.py`.
 - `portal_generator.py` reads `templates/` (mounted at `/templates`) and writes `data/portals/`.
 - `cog_converter.py` is called from `tasks/raster_ingest.py`.
@@ -202,7 +265,114 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
   (`POST /data/vector/{id}/tile`); the fix only changes what new tiles contain. Regression test:
   `api/tests/test_native_crs.py`.
 
+## A layer that can never draw (2026-09-07)
+
+`_apply_rule_scope` drops a `minzoom`/`maxzoom` pair that is inverted. MapLibre honours
+`minzoom > maxzoom` literally — the layer is never rendered, at any zoom, with no error anywhere —
+and a plugin that read a QGIS scale range from the wrong ends published eight label layers like
+that. A whole place-names layer vanished from the map with nothing to chase.
+
+The range is dropped rather than trusted, because a style can arrive from an older plugin, an
+import or a hand edit. **Drawing at every zoom is wrong and visible; drawing at none is wrong and
+invisible, and only one of those gets reported.**
+
+## A labelling is a tree (2026-09-07)
+
+`symbology.label_rules(labels)` reads `labels.rules`, and `portal_generator._label_layers` emits ONE
+label layer per rule, filtered to it. QGIS labels a names layer by rule — water blue at 9pt,
+woodland green, a town brown at 11 — and MapLibre cannot vary text colour or size per feature within
+one layer, so a rule has to be a layer. The top-level block stays as the fallback, which is what a
+renderer knowing nothing about label rules draws; `label_rules` returning `[]` is that renderer's
+view.
+
+A rule list that produces no drawable text still labels the layer from the base block: switching to
+rules must never silently remove every label a layer had.
+
+## A class is more than a colour (2026-09-07)
+
+`symbology.CLASS_SHAPE_KEYS` names what a class of a classified layer may hold of its own — its
+dash, width, fill opacity, marker, outline. `class_style(style, entry)` lays a class's keys over the
+layer's; `expand_classes(style)` turns a classification that varies by more than colour into one
+pseudo-rule per class, and `portal_generator._vector_layers` feeds those to the SAME `_rule_layers`
+that draws a rule-based layer.
+
+**Why a class becomes a render layer rather than a data-driven expression.** MapLibre can vary a
+colour, an opacity and a width per feature, but `line-dasharray` is not data-driven at all — there
+is no expression that picks a dash from an attribute. So a layer whose classes differ by dash cannot
+be one render layer however it is written.
+
+**`expand_classes` returns None when the classes differ only in colour**, and that is not an
+optimisation — it is what keeps every classified layer already on every instance rendering byte for
+byte as it did, in one layer, through `color_expression`.
+
+**The graduated filters mirror `step`'s STOPS, not `min`/`max`.** `step` gives everything below the
+first boundary the first class's colour and everything above the last one the last class's, so
+filters read off the bounds literally would silently stop drawing the features outside the sampled
+range. `test_per_class_symbology.py` pins that.
+
+`legend_entries` builds each swatch from `class_style` too, or the legend shows a row of identical
+symbols for classes the map draws differently.
+
 ## Last updated
+2026-09-08b (**external sources: every kind a web map can draw.** `xyz | wms | wfs` becomes
+`xyz | wms | wmts | wfs | ogcapi | vectortile | pmtiles`, with four new nullable columns
+(`source_layer`, `matrix_set`, `min_zoom`, `max_zoom`) and a migration for them.
+
+**CORS decides the architecture.** A raster tile is fetched the way the web has fetched images for
+twenty years; GeoJSON, an MVT tile and a PMTiles byte range are cross-origin XHRs, and a provider
+without `Access-Control-Allow-Origin` breaks those silently — an empty layer and a console error the
+map's reader never sees. So anything read as DATA is proxied same-origin, which is the rule the WFS
+proxy already set: `/data/sources/{id}/features.geojson` gains OGC API, and a new
+`/data/sources/{id}/tiles/{z}/{x}/{y}` serves vector tiles and PMTiles. A remote PMTiles archive is
+read HERE with `pmtiles_reader` (range requests, driven from a thread the way the GeoParquet tile
+route does it), so the portal needs no PMTiles library and the provider needs no CORS policy.
+
+Everything that can be validated is validated at ADD time, which is also where the style's missing
+pieces come from: which layer inside the tiles, which zooms, which extent, and — for PMTiles —
+whether the archive is raster or vector, read from its header.
+
+**WCS is deliberately not a kind**: GetCoverage returns a coverage, not map images, so registering
+one would publish a layer that draws nothing. `IMPORT_ONLY_HINT` says so and points at WMS.
+
+Tests: `api/tests/test_external_kinds.py` (60), including a hand-built PMTiles header — the media
+type of an MVT archive ends in "tile", so sniffing it for "mvt" registered every vector archive as
+raster. Found by reading a real Protomaps archive, not by reading the code.)
+## Last updated
+2026-09-08 (**`label_points.py`: one label per feature.** A label layer over a polygon source is drawn once per TILE the polygon touches — tiles clip, MapLibre places a symbol per geometry as delivered, and no style property can say "these four pieces are one shape" — so a big polygon carried its name in a grid across itself. A new Martin function source serves one `ST_PointOnSurface` per feature (a point lies in exactly one tile, so it is placed once by construction); `portal_generator._label_source` points a POLYGON's label layers at it, registering the source into the style. Points, lines-along-their-line and GeoParquet layers are untouched. `label_per_part` — QGIS's "label every part", off by default in both — dumps the parts instead. `martin._ensure_pillar_function` is now `_ensure_tile_functions` + `_ensure_function`, installing both. Tests: `api/tests/test_label_points.py`, half of them against real PostGIS.)
+2026-09-07e (**a rule is a symbol: `_drawn_layers`.** The rules branch built only `_vector_layer` + outline per rule, so everything a symbol STACKS — a second stroke, a line of markers, a centroid symbol — was dropped for rule-based layers alone, while the editor preview (which expands rules into configs and runs its whole body per rule) drew them. Reported as "the red and blue line doesn't display correctly" on a published portal that looked right in the editor. `_drawn_layers` is now the one answer to "what does this symbol draw" and both branches call it; a rule's extras keep the rule in their id and carry its filter and zoom range. Tests: `test_rule_layers.py::TestARuleIsASymbol`.)
+2026-09-07d (`_apply_rule_scope` drops an INVERTED zoom range — see the section above — and `_vector_layers` no longer publishes a base line layer under a line of markers.)
+2026-09-07c (`symbology.label_rules` + `portal_generator._label_layers`: **one label layer per label rule.** See the section above. Tests: `api/tests/test_label_rules.py`.)
+2026-09-07b (`symbology.CLASS_SHAPE_KEYS` / `class_style` / `expand_classes`, and `legend_entries` built through them: **a class carries its own symbol, not just its colour**. See the section above for why a class becomes a render layer rather than a data-driven expression, and why an unvaried classification is deliberately left alone. Also `needs_outline_layer`: a polygon border asked to be DASHED gets its own line layer at any width — `fill-outline-color` is a colour with no width and no pattern, so a hairline dashed boundary drew solid. Tests: `api/tests/test_per_class_symbology.py`.)
+2026-09-07 (`titiler.py`: **contour lines can be coloured by their own value**, and the relief
+behind them can be switched off. A line takes its band number SHIFTED past the relief's range —
+1..N is the ground, N+1..2N the lines — because one band of output has to carry both "this pixel is
+a line" and "it is this high". With the relief off the ground goes TRANSPARENT rather than white, so
+the lines are read over the basemap. Both force GeoDeploy's own drawing path, since TiTiler's
+algorithm can express neither. `contour_relief` defaults to None, not True, because
+`tile_url_from_style` unpacks absent keys as None and a `bool()` of that would have inverted the
+default for every existing layer.)
+
+2026-09-04 (`symbology.legend_entries`: **the legend describes the symbologies the round trip
+added.** It knew only graduated and categorized COLOUR, so a rule-based layer and a heatmap both
+returned `[]` — no legend at all — and a classified layer of dashed lines or star markers came out
+as a column of plain squares. Heatmaps return a RAMP (density runs 0-1, there are no classes);
+rules return one entry each, ahead of `color_mode`, matching the precedence the renderers use; and
+every entry now carries the drawable parts of its own symbol (`dash`, `shape`, `marker_image`, a
+`fill_pattern` TILE, outline, widths) so a swatch can be the symbol rather than a stand-in. A
+pattern is carried only as a `data:` URI — it reaches an `img src` and a CSS `url()`, so anything
+else is refused rather than sanitised. Mirrored in `ui/src/lib/symbology.js`,
+`templates/shared/portal.js` and `cli/geodeploy/styles.py`; the rule label falls back to the
+EXPRESSION before a number, which is what the CLI already did.)
+
+2026-09-04 (`titiler.py::_contour_params`: **every contour parameter is now rounded and clamped to
+an integer.** `GET /algorithms/contours` declares increment 0-999, thickness 0-10 and minz/maxz
++/-99999, all `integer` — `increment` used to be typed as a float and we sent one, so after TiTiler
+tightened it every tile 422'd and a working contour layer simply stopped drawing, with no error
+anywhere. TiTiler runs from `:latest`, so this can happen again; `notes_temp/notes_for_future.md`
+carries the diagnosis. Half-up rounding is written out as `int(x + 0.5)` rather than `round()`,
+because Python rounds half to even and the JS twin in `ui/src/lib/mapStyle.js` rounds half up — a
+12.5 interval would otherwise draw at different spacings in the preview and the published portal.)
+
 2026-09-02 (`restore.py`: **the restore no longer replaces the PostGIS extension.** `--clean` drops
 the dump's objects in reverse dependency order, so tables go first and the `DROP EXTENSION postgis`
 the dump carries then SUCCEEDS — and the rebuilt `geometry` / `gist_geometry_ops_2d` come back with

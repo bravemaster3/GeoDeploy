@@ -34,23 +34,53 @@ def summarise(plan: dict) -> str:
         lines.append("    {0}  ->  {1}".format(rename[0] or "(untitled)", rename[1]))
         lines.append("")
 
-    def section(title, items):
+    def section(title, items, note=None):
+        """A heading with its COUNT, then the explanation, then the names.
+
+        The count belongs next to the title: `Restyled (2)` is the thing being scanned for, and a
+        sentence of explanation between the two pushes it past where the eye looks for it.
+        """
         if items:
             lines.append("{0} ({1}):".format(title, len(items)))
+            if note:
+                # INDENTED LESS THAN THE NAMES, or it reads as one of them — this list is scanned,
+                # and a sentence sitting at the same depth as "Weirs" is a sentence in the list.
+                lines.append("  " + note)
             lines.extend("    " + name for name in items)
             lines.append("")
 
     section("Unchanged", plan.get("unchanged") or [])
-    section("Restyled", plan.get("restyled") or [])
+    # WHERE THE RESTYLE LANDS, said here because the dialog is the only place it can be said.
+    # "Push group to portal" writes THIS portal's `layer_configs`; the layer's own default style —
+    # what its page shows, and what every other portal starts from — is written by "Save styling to
+    # GeoDeploy" and by nothing else. Read cold, a bare "Restyled (3)" sounds like the layers
+    # themselves are being changed, and somebody who restyles inside a group, pushes, then opens
+    # the layer's page and finds the old colours has no way to tell that was intended.
+    section("Restyled", plan.get("restyled") or [],
+            "in THIS portal only — each layer's own default style is left alone. "
+            "Use “Save styling to GeoDeploy” to change that.")
     # Said out loud, because the alternative is a silent no-op the user reads as a failed restyle.
     # A portal's raster is a server-rendered picture in QGIS — "Singleband color data", with nothing
     # to change — so its styling cannot be read back out. The portal keeps what it had.
-    section("Style kept as the portal has it — QGIS's version could not be read "
-            "(a raster opened as portal tiles has no bands to restyle; tick “Prefer the real data "
-            "over the styled view” to open the GeoTIFF itself, restyle that, and use “Save styling "
-            "to GeoDeploy”)", plan.get("kept") or [])
+    section("Style kept as the portal has it", plan.get("kept") or [],
+            "QGIS's version could not be read. A raster opened as portal tiles has no bands to "
+            "restyle; tick “Prefer the real data over the styled view” to open the GeoTIFF itself, "
+            "restyle that, and use “Save styling to GeoDeploy”.")
     section("Added — already on the instance", plan.get("added") or [])
-    section("New — not on the instance yet", plan.get("uploads") or [])
+    # …and the counterpart, which is the other half of the same rule: a layer that is not on the
+    # instance yet has no default style to preserve, so the one it is uploaded with becomes it.
+    section("New — not on the instance yet", plan.get("uploads") or [],
+            "uploaded, and this styling becomes their default — they have none to keep.")
+    # SERVED BY SOMEBODY ELSE, and said in its own section because the consequence is different
+    # from an upload's: nothing is copied, the provider keeps serving it, and the portal will show
+    # whatever they serve tomorrow. The credit travels with it, which is the other half of using
+    # somebody's service.
+    section("Registered as external sources — not uploaded", plan.get("sources") or [],
+            "referenced from the provider, not copied: no data is sent, and the portal fetches "
+            "from them at view time.")
+    # AND WHAT WILL NOT BE THERE. A layer silently missing from a published portal is the failure
+    # mode this section exists to prevent — the user chose to push it, so they are owed the reason.
+    section("Left out — GeoDeploy has no kind for these", plan.get("unsupported") or [])
     section("Removed from the portal", plan.get("removed") or [])
     if not lines:
         lines = ["Nothing would change."]
@@ -97,11 +127,23 @@ def confirm(parent, portal_title: str, plan: dict, creating: bool):
 
     uploads = plan.get("uploads") or []
     removed = plan.get("removed") or []
+    remote = plan.get("sources") or []
 
-    upload_box = QCheckBox("Upload the {0} new layer(s) and add them".format(len(uploads)))
+    # ONE OPT-IN FOR "ADD WHAT IS NOT THERE YET", because that is the decision being made. The
+    # label distinguishes the two kinds, since registering a service sends no data and uploading a
+    # file does — and a user who is watching for the second should not have to infer it from a
+    # count that silently includes the first.
+    if uploads and remote:
+        upload_label = "Upload the {0} new layer(s), and register {1} external source(s)".format(
+            len(uploads), len(remote))
+    elif remote:
+        upload_label = "Register {0} external source(s) — nothing is uploaded".format(len(remote))
+    else:
+        upload_label = "Upload the {0} new layer(s) and add them".format(len(uploads))
+    upload_box = QCheckBox(upload_label)
     upload_box.setChecked(True)
-    upload_box.setEnabled(bool(uploads))
-    if not uploads:
+    upload_box.setEnabled(bool(uploads or remote))
+    if not (uploads or remote):
         upload_box.setText("No new layers to upload")
     layout.addWidget(upload_box)
 
@@ -127,5 +169,5 @@ def confirm(parent, portal_title: str, plan: dict, creating: bool):
 
     if dialog.exec() != enum(QDialog, "DialogCode", "Accepted"):
         return (False, False, False)
-    return (True, upload_box.isChecked() and bool(uploads),
+    return (True, upload_box.isChecked() and bool(uploads or remote),
             drop_box.isChecked() and bool(removed))

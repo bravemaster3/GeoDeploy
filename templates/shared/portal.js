@@ -475,7 +475,23 @@
 
   // Generate point-marker icons on demand (also covers the first render gap).
   map.on('styleimagemissing', function (e) {
-    if (!e.id || e.id.indexOf('gd-pt-') !== 0 || map.hasImage(e.id)) return;
+    if (!e.id || map.hasImage(e.id)) return;
+    // A PICTURE the plugin rendered (`gd-img-`) cannot be built from its id — the id is a hash of
+    // the pixels, not a description of them — so it is found in the layer metadata that carries it.
+    // `ensurePointImages` normally registers these up front; this is the late path, for a layer
+    // whose style arrived after load.
+    if (e.id.indexOf('gd-img-') === 0) {
+      var owner = (STYLE.layers || []).find(function (x) {
+        return x.metadata && Array.isArray(x.metadata['geodeploy:markerImages'])
+          && x.metadata['geodeploy:markerImages'].some(function (im) { return im.id === e.id; });
+      });
+      if (owner) {
+        var picture = owner.metadata['geodeploy:markerImages'].find(function (im) { return im.id === e.id; });
+        if (picture && picture.image) setMarkerPicture(e.id, picture.image);
+      }
+      return;
+    }
+    if (e.id.indexOf('gd-pt-') !== 0) return;
     // The id CARRIES its parameters (gd-pt-<shape>-<hex>-<size>), so any missing image can be built
     // from the id alone. It used to be looked up from the layer's metadata, which only worked while
     // a layer had exactly ONE icon — a classified point layer has one per class, and `icon-image`
@@ -484,7 +500,7 @@
     if (spec) { setMarkerImage(e.id, spec.shape, spec.color, spec.size, spec.outline, spec.outlineWidth); return; }
     const l = (STYLE.layers || []).find(x => x.layout && x.layout['icon-image'] === e.id);
     const m = (l && l.metadata) || {};
-    setMarkerImage(e.id, m['geodeploy:marker'] || 'circle', m['geodeploy:markerColor'] || '#3b82f6', m['geodeploy:markerSize'] || 5);
+    setMarkerImage(e.id, m['geodeploy:marker'] || 'circle', m['geodeploy:markerColor'] || '#3b82f6', _markerSize(m));
   });
 
   // ── Auto-fit to data bounds ─────────────────────────────
@@ -584,7 +600,12 @@
    * while looking at their 3D layer is a decision, and this must not overrule it. `pitch == null`
    * means "never pinned", which is the case that needs the help.
    */
-  const has3D = (STYLE.layers || []).some(function (l) { return l && l.type === 'fill-extrusion'; });
+  // …and TERRAIN is the same argument again: a raised relief seen from directly overhead is a flat
+  // picture of a raised relief. It is a ROOT property of the style, not a layer, so it has to be
+  // asked about separately — a check that only looked at `layers` would publish a 3D terrain portal
+  // that opens looking exactly like the 2D one.
+  const has3D = !!STYLE.terrain
+    || (STYLE.layers || []).some(function (l) { return l && l.type === 'fill-extrusion'; });
   const DEFAULT_3D_PITCH = 45;
 
   if (savedView && Array.isArray(savedView.center) && savedView.center.length === 2) {
@@ -601,7 +622,7 @@
   } else if (validLonLatBounds(bounds)) {
     try {
       map.fitBounds([[bounds[0], bounds[1]], [bounds[2], bounds[3]]], {
-        padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 },
+        padding: fitPadding(),
         duration: 0,
         pitch: has3D ? DEFAULT_3D_PITCH : 0,
       });
@@ -721,12 +742,20 @@
         // name (renamed, or a re-prep that dropped it) → no extrusion, rather than a flat mesh.
         const aex = d.extrusion || {};
         const acol = (aex.enabled && aex.field && t.getChild) ? t.getChild(aex.field) : null;
+        // A FIXED height, with no field at all, is the shape QGIS's 2.5D renderer has: every
+        // building the same 10 m. Requiring a column meant that style travelled from QGIS, passed
+        // through the style envelope intact, and then rendered FLAT here — the one transport where
+        // it silently did nothing. `getElevation` is declared `{type: 'accessor'}`, so a constant is
+        // a legal value for it; the scale stays at 1 because the multiplier belongs to the field
+        // (`extrusion_paint` applies it the same way — the height itself is already in metres).
+        const aflat = (aex.enabled && !aex.field) ? (Number(aex.height) || 0) : 0;
+        const arise = acol || (aflat > 0 ? aflat : null);
         return new DK.geo.GeoArrowPolygonLayer({
           id: 'deck_' + d.layer_id, data: t, pickable: true,
-          filled: true, stroked: !acol && !noOutline,   // walls plus an outline is a smudge at any pitch
-          extruded: !!acol,
-          getElevation: acol || undefined,
-          elevationScale: Number(aex.scale) || 1,
+          filled: true, stroked: !arise && !noOutline,  // walls plus an outline is a smudge at any pitch
+          extruded: !!arise,
+          getElevation: arise || undefined,
+          elevationScale: acol ? (Number(aex.scale) || 1) : 1,
           getFillColor: rgb.concat(Math.round(255 * op * (d.fill_opacity != null ? d.fill_opacity : 0.45))),
           getLineColor: outline.concat(Math.round(255 * op)),
           lineWidthUnits: 'pixels',
@@ -768,7 +797,9 @@
     // PostGIS path does in the tile server. Until that is mirrored here, the editor hides 3D for
     // deck-rendered point layers rather than offering something that does nothing.
     const ex = d.extrusion || {};
-    const extruded = isPoly && !!ex.enabled && !!ex.field;
+    // Either a height field or one flat height for everything — see the GeoArrow branch above.
+    const exFlat = (!ex.field && Number(ex.height) > 0) ? Number(ex.height) : 0;
+    const extruded = isPoly && !!ex.enabled && (!!ex.field || exFlat > 0);
     const exScale = Number(ex.scale) || 1;
     return new DK.GeoJsonLayer({
       id: 'deck_' + d.layer_id,
@@ -783,9 +814,8 @@
       extruded: extruded,
       // A feature missing the property, or holding a non-numeric one, becomes 0 rather than NaN —
       // NaN propagates into the mesh and drops the whole layer, not just that feature.
-      getElevation: extruded
-        ? function (f) { const v = Number((f.properties || {})[ex.field]); return (isFinite(v) ? v : 0) * exScale; }
-        : 0,
+      getElevation: !extruded ? 0 : (exFlat > 0 ? exFlat
+        : function (f) { const v = Number((f.properties || {})[ex.field]); return (isFinite(v) ? v : 0) * exScale; }),
       getFillColor: rgb.concat(Math.round(255 * op * (isPoly ? (d.fill_opacity != null ? d.fill_opacity : 0.45) : 1))),
       getLineColor: (isPoly ? outline : rgb).concat(Math.round(255 * op)),
       lineWidthUnits: 'pixels',
@@ -1257,7 +1287,7 @@
             const finish = function () { if (done) return; done = true; resolve(); };
             map.once('moveend', finish);
             map.fitBounds([[u[0], u[1]], [u[2], u[3]]], {
-              padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 },
+              padding: fitPadding(),
               duration: 650,
             });
             setTimeout(finish, 900);  // safety: a barely-moving camera may not emit moveend
@@ -1334,7 +1364,7 @@
         if (!validLonLatBounds(d.bbox)) return;
         try {
           map.fitBounds([[d.bbox[0], d.bbox[1]], [d.bbox[2], d.bbox[3]]],
-            { padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 } });
+            { padding: fitPadding() });
         } catch (e) { /* ignore */ }
       });
       container.appendChild(card);
@@ -1814,8 +1844,20 @@
     else if (shape === 'cross') { const a = crossPoints(cx, cy, r).split(' '); a.forEach((pt, i) => { const xy = pt.split(','); i ? ctx.lineTo(+xy[0], +xy[1]) : ctx.moveTo(+xy[0], +xy[1]); }); ctx.closePath(); }
     else { ctx.arc(cx, cy, r, 0, Math.PI * 2); }
   }
+  //: The marker size a layer records, with 0 kept as 0. `|| 5` here was the same falsy-zero bug
+  //: as in markerImage(): a layer whose marker is deliberately invisible had it read back as 5.
+  function _markerSize(meta) {
+    const n = Number((meta || {})['geodeploy:markerSize']);
+    return Number.isFinite(n) && n >= 0 ? n : 5;
+  }
+
   function markerImage(shape, color, size, outline, outlineWidth) {
-    const dpr = 2, r = Math.max(3, Number(size) || 5);
+    // A SIZE OF ZERO IS A SIZE, NOT A MISSING VALUE. `Number(size) || 5` turned a marker its
+    // author deliberately sized 0 into a 5 px dot, and `Math.max(3, ...)` enlarged every marker
+    // under 3 px to 3. Reported on a place-names layer whose points exist only to carry labels:
+    // QGIS draws nothing and the portal drew 355 amber dots. Twin of ui/src/lib/markerImage.js.
+    const n = Number(size);
+    const dpr = 2, r = Number.isFinite(n) && n >= 0 ? n : 5;
     // A RATIO of the radius, not pixels: a 3 px ring around a 4 px dot and around a 20 px dot are
     // different symbols, and resizing a layer should keep the outline in proportion. 0.28 is what
     // the old hard-coded stroke was, so an unstyled marker is pixel-identical to before.
@@ -1850,6 +1892,25 @@
       outline: m[4] === undefined ? undefined : (m[4] === 'none' ? null : '#' + m[4]),
       outlineWidth: m[5] === undefined ? undefined : parseFloat(m[5]),
     };
+  }
+  // A marker the plugin RENDERED, rather than one drawn from a shape name. A QGIS symbol GeoDeploy
+  // has no words for — an SVG, raster or font marker, a multi-layer symbol — arrives as a PNG data
+  // URI: there is nothing to parameterise, the pixels ARE the marker. Asynchronous, because
+  // decoding an image is. Twin of `loadMarkerPicture` in ui/src/lib/markerImage.js.
+  function setMarkerPicture(imgId, dataUri) {
+    try {
+      var img = new Image();
+      img.onload = function () {
+        try {
+          // pixelRatio 2: the plugin renders at twice the marker's CSS size to stay crisp, the same
+          // trade markerImage() makes with its own canvas.
+          if (map.hasImage(imgId)) map.updateImage(imgId, img);
+          else map.addImage(imgId, img, { pixelRatio: 2 });
+        } catch (e) { /* one marker is not worth the map */ }
+      };
+      img.onerror = function () {};
+      img.src = dataUri;
+    } catch (e) { /* as above */ }
   }
   function setMarkerImage(imgId, shape, color, size, outline, outlineWidth) {
     // The WHOLE body is guarded, not just the add/update. `markerImage()` builds a canvas — it can
@@ -1888,12 +1949,15 @@
       // time that class scrolls into view, which looks like the map is still loading.
       const all = l.metadata['geodeploy:markerImages'];
       if (Array.isArray(all) && all.length) {
-        all.forEach(function (im) { setMarkerImage(im.id, im.shape, im.color, im.size, im.outline, im.outline_width); });
+        all.forEach(function (im) {
+          if (im.image) setMarkerPicture(im.id, im.image);
+          else setMarkerImage(im.id, im.shape, im.color, im.size, im.outline, im.outline_width);
+        });
         return;
       }
       if (l.metadata['geodeploy:marker'] === undefined) return;
       setMarkerImage(l.layout['icon-image'], l.metadata['geodeploy:marker'] || 'circle',
-        l.metadata['geodeploy:markerColor'] || '#3b82f6', l.metadata['geodeploy:markerSize'] || 5);
+        l.metadata['geodeploy:markerColor'] || '#3b82f6', _markerSize(l.metadata));
     } catch (e) { /* one layer's icons are not worth the rest of the load handler */ } });
   }
 
@@ -2014,7 +2078,7 @@
         if (!validLonLatBounds(b)) return;
         try {
           map.fitBounds([[b[0], b[1]], [b[2], b[3]]], {
-            padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 },
+            padding: fitPadding(),
           });
         } catch (err) { /* ignore */ }
       });
@@ -2151,7 +2215,7 @@
     if (!b) return;
     try {
       map.fitBounds([[b[0], b[1]], [b[2], b[3]]],
-        { padding: { top: 40, bottom: 40, left: sidebar.offsetWidth + 40, right: 40 } });
+        { padding: fitPadding() });
     } catch (e) { /* ignore */ }
   }
   function applyLayerGroups(tree) {
@@ -2672,6 +2736,57 @@
     return typeof c === 'string' ? { color: c, width: 1 } : null;
   }
 
+  // ONE ENTRY'S OWN SYMBOL, when it has one. A classified layer varies only by colour, so every
+  // row could share the layer's dash/shape/outline — but a RULE-BASED layer varies by everything at
+  // once, and drawing all its rules with the layer's base symbol reports a dashed rule, a hatched
+  // rule and a star-marker rule as three identical squares. `legend_entries` puts the drawable bits
+  // on each entry for exactly this; anything it did not carry falls back to the layer's.
+  function entrySwatch(entry, geom, color, dash, shape, outline) {
+    const e = entry || {};
+    if (e.heatmap && Array.isArray(e.ramp) && e.ramp.length) return rampSwatch(e.ramp);
+    if (e.marker_image) {
+      return '<img class="legend-swatch-img" src="' + dataUri(e.marker_image) + '" alt="" />';
+    }
+    if (e.fill_pattern) {
+      // The tile itself, tiled — a swatch showing the pattern is worth more than a square of the
+      // colour the pattern replaces.
+      return '<span class="legend-swatch-tile" style="background-image:url(' +
+        dataUri(e.fill_pattern) + ')"></span>';
+    }
+    var ol = outline;
+    if (e.outline_color || e.outline_width != null) {
+      ol = { color: e.outline_color || (outline && outline.color),
+             width: e.outline_width != null ? e.outline_width : (outline && outline.width) };
+    }
+    return legendSwatch(geom, e.color || color || '#999', e.dash || dash, e.shape || shape, ol);
+  }
+
+  // A heatmap has no classes to list — it has a ramp, and density runs 0 to 1 whatever the data
+  // holds. Drawn as the gradient itself over a chequer, because the first stop is transparent and a
+  // bar that merely starts pale misstates where the layer stops drawing.
+  function rampSwatch(ramp) {
+    const stops = ramp.map(function (c, i) {
+      return cssColor(c) + ' ' + Math.round(i / Math.max(1, ramp.length - 1) * 100) + '%';
+    }).join(',');
+    return '<span class="legend-swatch-ramp" style="background-image:linear-gradient(to right,' +
+      stops + ')"></span>';
+  }
+
+  // Only the shape a generated tile actually has. These strings reach an `img src` and a CSS
+  // `url()`, and HTML-escaping is the wrong guard for the second: inside a style attribute the
+  // parser unescapes before CSS ever sees it. Base64 has no quotes or parens, so a value that
+  // contains any is not one of ours and is refused rather than sanitised.
+  function dataUri(value) {
+    const s = String(value || '');
+    return /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(s) ? s : '';
+  }
+
+  // Likewise for a colour dropped into a gradient: a hex, an rgb()/rgba(), or nothing.
+  function cssColor(value) {
+    const s = String(value || '').trim();
+    return /^#[0-9a-f]{3,8}$/i.test(s) || /^rgba?\([\d.,\s%]+\)$/i.test(s) ? s : 'transparent';
+  }
+
   function legendSwatch(geom, color, dash, shape, outline) {
     const c = color || '#3b82f6';
     if (geom === 'line') {
@@ -2744,21 +2859,56 @@
   function effectiveAlgorithm(srcId) {
     const st = rasterState[srcId] || {};
     if (st.algorithm !== undefined) return st.algorithm || '';
-    return parseRasterParams(srcId).algorithm || '';
+    const fromUrl = parseRasterParams(srcId).algorithm;
+    if (fromUrl) return fromUrl;
+    // A CONTOUR LAYER WITH CHOSEN COLOURS CARRIES NO `algorithm=` AT ALL. TiTiler's own algorithm
+    // hard-codes its palette and its black lines, so a layer that asks for anything else is drawn
+    // by GeoDeploy instead — band maths plus an explicit colormap — and `algorithm=contours` is
+    // deliberately absent from the URL, because running both would contour an already-coloured
+    // image.
+    //
+    // Reading the algorithm back out of the URL therefore said "none", with two visible
+    // consequences: the style popover offered "None" for a layer plainly drawing contours, and the
+    // legend fell into the CLASSIFIED-raster branch and rendered the interval colormap as a class
+    // list — sixty-odd black swatches labelled 0, 1, 2, 3… which are the array's own indices.
+    //
+    // `geodeploy:contour` is baked at publish for exactly this kind of question: what the layer IS,
+    // rather than what its URL happens to spell.
+    return contourMeta(srcId) ? 'contours' : '';
   }
   function effectiveHillshade(srcId) {
     return effectiveAlgorithm(srcId) === 'hillshade';
   }
-  /** {increment, thickness} for contours — the viewer's, else what the author baked in. */
+  /** {increment, thickness} for contours — the viewer's, else what the author baked in.
+   *
+   * THE INTERVAL COMES FROM `geodeploy:contour`, NOT FROM THE URL. The URL's `algorithm_params`
+   * holds the SCALED interval: the data is multiplied so TiTiler's integer-only `increment` can
+   * express a fractional one, so an interval of 0.1 appears there as 10 — and the legend said
+   * "every 10" about lines drawn every 0.1. `thickness` is a width in pixels and is never scaled,
+   * so it can still be read from either.
+   */
   function effectiveContours(srcId) {
     const st = rasterState[srcId] || {};
     let baked = {};
     try { baked = JSON.parse(parseRasterParams(srcId).algorithm_params || '{}') || {}; } catch (e) { baked = {}; }
+    const authored = contourMeta(srcId);
     const pick = (key, fallback) => {
       if (st[key] !== undefined && st[key] !== '') return Number(st[key]);
       return baked[key] != null ? Number(baked[key]) : fallback;
     };
-    return { increment: pick('increment', 35), thickness: pick('thickness', 1) };
+    const increment = (st.increment !== undefined && st.increment !== '')
+      ? Number(st.increment)
+      : (authored && authored.increment != null ? Number(authored.increment)
+        : pick('increment', 35));
+    return { increment: increment, thickness: pick('thickness', 1) };
+  }
+
+  /** `geodeploy:contour` — the interval and range as the AUTHOR typed them, baked at publish. */
+  function contourMeta(srcId) {
+    const layer = (STYLE.layers || []).find(function (l) {
+      return l && l.source === srcId && l.metadata && l.metadata['geodeploy:type'] === 'raster';
+    });
+    return (layer && layer.metadata && layer.metadata['geodeploy:contour']) || null;
   }
   function effectiveZfactor(srcId) {
     const st = rasterState[srcId] || {};
@@ -2831,7 +2981,7 @@
     // swatch button uses; it was simply never reached from here.
     const rows = entries.map(function (e) {
       return '<div class="legend-class">' +
-        legendSwatch(geom, e.color || '#999', dash, shape, outline) +
+        entrySwatch(e, geom, e.color || '#999', dash, shape, outline) +
         '<span class="legend-label">' + escHtml(e.label == null ? '' : String(e.label)) + '</span>' +
         '</div>';
     }).join('');
@@ -2845,9 +2995,17 @@
     const head = '<button type="button" class="legend-toggle" aria-expanded="true" ' +
       'title="Hide these classes">' +
       '<span class="legend-caret" aria-hidden="true">▾</span>' +
-      '<span class="legend-count">' + entries.length + ' classes</span></button>';
+      '<span class="legend-count">' + legendCount(entries) + '</span></button>';
     return '<div class="layer-legend legend-classes">' + head +
       '<div class="legend-body">' + by + rows + sizeHtml + '</div></div>';
+  }
+
+  // What the rows ARE. "1 classes" was both wrong and ungrammatical for a heatmap, and a
+  // rule-based layer has rules rather than classes — the word is part of what the legend says.
+  function legendCount(entries) {
+    if (entries.length === 1 && entries[0] && entries[0].heatmap) return 'Density';
+    const noun = (entries[0] && entries[0].rule) ? 'rule' : 'class';
+    return entries.length + ' ' + noun + (entries.length === 1 ? '' : noun === 'rule' ? 's' : 'es');
   }
 
   function rasterLegendHtml(layer) {
@@ -2881,7 +3039,14 @@
       }
       let mapping = null;
       try { mapping = JSON.parse(parseRasterParams(srcId).colormap || 'null'); } catch (e) { mapping = null; }
-      if (mapping && typeof mapping === 'object' && Object.keys(mapping).length) {
+      // NOT AN ARRAY. TiTiler takes two colormap shapes: `{value: colour}`, which is a classified
+      // raster and is what this branch draws, and `[[[lo, hi], colour], …]`, which is a continuous
+      // one cut into intervals. An array passes `typeof === 'object'`, and `Object.keys` on it
+      // hands back "0", "1", "2"… — so the second shape rendered as a class list labelled by its
+      // own indices. Belt and braces beside the `effectiveAlgorithm` fix above: any future caller
+      // sending intervals gets no legend rather than a nonsense one.
+      if (mapping && typeof mapping === 'object' && !Array.isArray(mapping)
+          && Object.keys(mapping).length) {
         // `legend-class` / `legend-label` are the classes the VECTOR legend already uses and
         // portal.css already styles — a classified raster's legend is the same list, so it should
         // look like one rather than inventing a second set of names with no CSS behind them.
@@ -2902,8 +3067,18 @@
       : algorithm === 'contours' ? 'terrain'
       : effectiveColormap(srcId);
     const p = effectiveRescale(srcId).split(',');
-    const mn = (p[0] !== undefined && p[0] !== '') ? p[0] : 'min';
-    const mx = (p[1] !== undefined && p[1] !== '') ? p[1] : 'max';
+    let mn = (p[0] !== undefined && p[0] !== '') ? p[0] : 'min';
+    let mx = (p[1] !== undefined && p[1] !== '') ? p[1] : 'max';
+    // CONTOURS NEVER SEND `&rescale=`: they consume the stretch as `minz`/`maxz` instead, so the
+    // ends of this bar fell through to the literal words "min" and "max" — a legend for a coloured
+    // relief that declines to say what it is coloured over. The real numbers are baked.
+    if (algorithm === 'contours') {
+      const authored = contourMeta(srcId);
+      if (authored && authored.minz != null) {
+        mn = authored.minz;
+        mx = authored.maxz;
+      }
+    }
     const grad = LEGEND_GRADIENTS[cmap] || LEGEND_GRADIENTS.gray;
     let html = '<div class="legend-bar" style="background:' + grad + '"></div>' +
       '<div class="legend-range"><span>' + escHtml(String(mn)) + '</span><span>' + escHtml(String(mx)) + '</span></div>';
@@ -2912,9 +3087,16 @@
       // gradient above says what the colours mean, and this says what the lines mean.
       const c = effectiveContours(srcId);
       html += '<div class="legend-range"><span>contour lines</span><span>every ' +
-        escHtml(String(c.increment)) + '</span></div>';
+        escHtml(String(c.increment)) + ' ' + escHtml(contourUnits(srcId)) + '</span></div>';
     }
     return html;
+  }
+
+  /** What a contour interval is measured IN. The raster's own values have no stated unit — a DEM
+   *  is metres, a vegetation index is nothing at all — so this says "units" rather than inventing
+   *  one, which is what turns a bare "every 10" into a sentence. */
+  function contourUnits(srcId) {
+    return 'units';
   }
 
   function updateRasterLegend(srcId) {
@@ -2942,7 +3124,7 @@
       const m = layer.metadata || {};
       const imgId = (layer.layout && layer.layout['icon-image']) || ('gd-pt-' + m['geodeploy:layer_id']);
       const curShape = m['geodeploy:marker'] || 'circle';
-      const curSize = m['geodeploy:markerSize'] || 5;
+      const curSize = _markerSize(m);
       const shapeOpts = MARKER_SHAPES.map(s =>
         `<option value="${s}"${s === curShape ? ' selected' : ''}>${s[0].toUpperCase() + s.slice(1)}</option>`).join('');
       return `<div class="layer-style-row" data-style-for="${layer.id}">` +
@@ -3530,6 +3712,12 @@
          tiles: ['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png', 'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png'],
          attribution: '© OpenStreetMap contributors',
          thumb: 'https://a.tile.openstreetmap.org/4/8/5.png' }];
+  //: A chequerboard, drawn inline: the swatch for "nothing" must not itself need a tile server.
+  const NO_BASEMAP_THUMB = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">' +
+    '<rect width="64" height="64" fill="#fff"/>' +
+    '<path d="M0 0h16v16H0zM32 0h16v16H32zM16 16h16v16H16zM48 16h16v16H48z' +
+    'M0 32h16v16H0zM32 32h16v16H32zM16 48h16v16H16zM48 48h16v16H48z" fill="#e6e6e6"/></svg>');
   const BASEMAPS = BASEMAP_CATALOG;
   // The admin's chosen basemap, baked into the base layer at publish. Portals published BEFORE
   // basemap selection have no defaultBasemap → keep the template's own baked basemap (the '__default__'
@@ -3542,16 +3730,48 @@
   const BASE_REPOINTED = !!((STYLE.geodeploy || {}).baseRepointed);
   // Switcher options: catalog entries, plus a leading "Default" (the template's baked base) when the
   // portal didn't pick a basemap.
-  const BASEMAP_OPTS = HAS_DEFAULT_ENTRY
+  //: "No basemap" — the data on a plain ground, which is how you read a dense layer, check a
+  //: transparency, or take a figure for print without a map underneath it. A sentinel rather than a
+  //: catalog entry, because there is no source to add: `selectBasemap` simply shows none of them.
+  const NO_BASEMAP = '__none__';
+  const BASEMAP_OPTS = (HAS_DEFAULT_ENTRY
     ? [{ id: '__default__', name: 'Default', thumb: BASEMAP_CATALOG[0].thumb }].concat(BASEMAP_CATALOG)
-    : BASEMAP_CATALOG;
+    : BASEMAP_CATALOG.slice()
+  ).concat([{ id: NO_BASEMAP, name: 'None', thumb: NO_BASEMAP_THUMB }]);
 
   function builtinBasemapIds() {
-    return STYLE.layers.filter(l => !(l.metadata && l.metadata['geodeploy:name'])).map(l => l.id);
+    // A LAYER IS THE TEMPLATE'S BASEMAP ONLY IF IT IS NOT ONE OF OURS, and "ours" cannot be
+    // decided by `geodeploy:name` — only the FIRST render layer of a GeoDeploy layer carries it.
+    // A polygon's `-outline`, a `-labels` layer, `-linemarkers`, and every `-r0`/`-r1` of a
+    // rule-based or split classification carry `geodeploy:layer_id` and nothing else. Filtering on
+    // the name meant choosing a basemap HID all of them: an outline-only polygon vanished
+    // completely (its fill is transparent — the outline IS the layer), labels went, and every
+    // class past the first went with them. Reported as "changing the basemap makes the rectangle
+    // box disappear, and same as some other layers".
+    //
+    // Any `geodeploy:` key at all marks a layer as the portal's own. `portal_generator` guarantees
+    // every render layer it emits carries at least `geodeploy:layer_id`.
+    return STYLE.layers.filter(function (l) {
+      const meta = l.metadata || {};
+      return !Object.keys(meta).some(function (k) { return k.indexOf('geodeploy:') === 0; });
+    }).map(function (l) { return l.id; })
+      // THE GROUND IS NEVER A BASEMAP. It is added at runtime today, so it is not in `STYLE.layers`
+      // and this changes nothing — but if it is ever baked into a published style, the rule above
+      // would class it as the template's basemap and hide it, and "no basemap" would go black
+      // again. One line, so that cannot happen quietly.
+      .filter(function (id) { return id !== 'gd-ground'; });
   }
 
   function setupBasemaps() {
     const firstId = (map.getStyle().layers[0] || {}).id;
+    // A GROUND UNDER EVERYTHING. Hiding every basemap leaves the map with no painted background at
+    // all, and what shows through is the canvas — black. "No basemap" is meant to be the data on a
+    // plain white ground, so the ground has to be a real layer. Added FIRST and never hidden: a
+    // basemap covers it completely, so it costs nothing when one is showing.
+    if (!map.getLayer('gd-ground')) {
+      map.addLayer({ id: 'gd-ground', type: 'background',
+        paint: { 'background-color': '#ffffff' } }, firstId);
+    }
     BASEMAPS.forEach(bm => {
       const srcId = 'gd-basemap-' + bm.id;
       if (!map.getSource(srcId)) {
@@ -3602,13 +3822,67 @@
     } else { goHome(); }
   }
   // Padding that keeps the fit clear of a docked layer list on its side.
+  // A FLYOUT MUST FIT THE SPACE IT OPENS INTO. These hang off a control that can sit anywhere down
+  // the edge of the map — top cluster, bottom cluster, a tall stack of buttons — so a fixed cap is
+  // either too small on a big screen or still off the edge on a small one. With eight basemaps it
+  // ran past the bottom of the window and the last entries, "None" among them, could not be
+  // reached at all: nothing scrolled, because nothing was over its max-height.
+  //
+  // Measured on open, when the control's position is finally known. The CSS cap stays as the floor.
+  function fitFlyout(container) {
+    const menu = container && container.querySelector('.gd-basemap-menu, .gd-tools-menu');
+    if (!menu) return;
+    menu.style.maxHeight = '';                 // measure against the natural position, not the last
+    try {
+      const box = menu.getBoundingClientRect();
+      const wrap = document.getElementById('map-wrap') || document.body;
+      const bounds = wrap.getBoundingClientRect();
+      // Whichever edge this one grows toward: a bottom cluster opens upward (`bottom: 0` in CSS).
+      const room = getComputedStyle(menu).top === 'auto'
+        ? box.bottom - Math.max(bounds.top, 0) - 12
+        : Math.min(window.innerHeight, bounds.bottom) - box.top - 12;
+      if (room > 80) menu.style.maxHeight = Math.round(room) + 'px';
+    } catch (e) { /* the CSS cap still applies */ }
+  }
+
   function fitPadding() {
     const p = { top: 40, bottom: 40, left: 40, right: 40 };
     const sb = document.getElementById('sidebar');
     if (sb && LAYOUT.panels.layerCatalog && LAYOUT.regions.layerList.mode === 'docked' && !sb.classList.contains('collapsed')) {
       p[LAYOUT.regions.layerList.side] = (sb.offsetWidth || 260) + 40;
     }
-    return p;
+    return clampPadding(p);
+  }
+
+  // PADDING BIGGER THAN THE MAP MEANS NO ZOOM AT ALL, silently. MapLibre cannot fit a box into a
+  // negative viewport, so it gives up and leaves the camera where it was — no exception to catch,
+  // nothing in the console for a user to report. On a phone the layer panel is 85vw, so
+  // "sidebar width + 40" was already wider than the whole canvas: every "Zoom to layer" tap did
+  // nothing, which reads exactly like a button that missed your finger.
+  //
+  // So the panel is avoided only while there is room to avoid it. Beyond that the map keeps a
+  // usable margin and the layer is fitted to the WHOLE canvas — partly behind the panel, which on
+  // a phone slides away over the map anyway, and which is in every case better than not moving.
+  function clampPadding(p) {
+    const canvas = map && map.getCanvas ? map.getCanvas() : null;
+    const w = (canvas && canvas.clientWidth) || 0;
+    const h = (canvas && canvas.clientHeight) || 0;
+    const out = { top: p.top, bottom: p.bottom, left: p.left, right: p.right };
+    // Half the canvas at most on each axis, so what is being zoomed to always has half the map.
+    if (w > 0 && out.left + out.right > w * 0.5) {
+      const spare = Math.max(0, w * 0.5);
+      if (out.left + out.right > 0) {
+        const scale = spare / (out.left + out.right);
+        out.left = Math.floor(out.left * scale);
+        out.right = Math.floor(out.right * scale);
+      }
+    }
+    if (h > 0 && out.top + out.bottom > h * 0.5) {
+      const scale = Math.max(0, h * 0.5) / (out.top + out.bottom);
+      out.top = Math.floor(out.top * scale);
+      out.bottom = Math.floor(out.bottom * scale);
+    }
+    return out;
   }
 
   function homeIcon() {
@@ -4325,7 +4599,7 @@
       const coordsTab = c.querySelector('.gd-tools-tab[data-tab="coords"]');
       // Each open resets to the initial hint state (the cross only appears after "Coordinates").
       function resetPanes() { hint.hidden = false; coordsPane.hidden = true; coordsTab.classList.remove('is-active'); }
-      btn.addEventListener('click', ev => { ev.stopPropagation(); c.classList.toggle('open'); if (c.classList.contains('open')) { collapseFloatingList(); resetPanes(); } });
+      btn.addEventListener('click', ev => { ev.stopPropagation(); c.classList.toggle('open'); if (c.classList.contains('open')) { collapseFloatingList(); resetPanes(); fitFlyout(c); } });
       menu.addEventListener('click', ev => ev.stopPropagation());
       document.addEventListener('click', () => c.classList.remove('open'));
       // "Draw a box" starts drawing immediately (no second click); "Coordinates" reveals the cross.
@@ -4597,14 +4871,28 @@
   }
 
   function selectBasemap(id) {
-    // '__default__' → show the template's baked base layer(s); any catalog id → hide the baked base
-    // and show that catalog raster instead.
+    // '__default__' → show the template's baked base layer(s); '__none__' → show none at all;
+    // any catalog id → hide the baked base and show that catalog raster instead.
     const showBuiltin = id === '__default__';
-    builtinBasemapIds().forEach(lid => { if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', showBuiltin ? 'visible' : 'none'); });
-    BASEMAPS.forEach(bm => {
+    builtinBasemapIds().forEach(function (lid) {
+      // NEVER TOUCH ONE OF OURS. `builtinBasemapIds` already excludes them, and this is the second
+      // lock on the same door: choosing a basemap is allowed to change the basemap and nothing
+      // else, and when it once did more the symptom was a layer silently vanishing — the kind of
+      // thing a user reports as "the box disappeared" and nobody can reproduce from a description.
+      if (isOurs(lid)) return;
+      if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', showBuiltin ? 'visible' : 'none');
+    });
+    BASEMAPS.forEach(function (bm) {
       const lid = 'gd-basemap-' + bm.id;
       if (map.getLayer(lid)) map.setLayoutProperty(lid, 'visibility', bm.id === id ? 'visible' : 'none');
     });
+  }
+
+  //: Whether a render layer belongs to the portal rather than to the template's basemap.
+  function isOurs(layerId) {
+    const found = (STYLE.layers || []).filter(function (l) { return l.id === layerId; })[0];
+    const meta = (found && found.metadata) || {};
+    return Object.keys(meta).some(function (k) { return k.indexOf('geodeploy:') === 0; });
   }
 
   function basemapIcon() {
@@ -4634,7 +4922,7 @@
         '</div>';
       const btn = c.querySelector('.gd-basemap-btn');
       const menu = c.querySelector('.gd-basemap-menu');
-      btn.addEventListener('click', ev => { ev.stopPropagation(); c.classList.toggle('open'); if (c.classList.contains('open')) collapseFloatingList(); });
+      btn.addEventListener('click', ev => { ev.stopPropagation(); c.classList.toggle('open'); if (c.classList.contains('open')) { collapseFloatingList(); fitFlyout(c); } });
       // Collapse the flyout after a choice (C6) — and on any outside click (below).
       menu.addEventListener('change', ev => { selectBasemap(ev.target.value); c.classList.remove('open'); });
       menu.addEventListener('click', ev => ev.stopPropagation());

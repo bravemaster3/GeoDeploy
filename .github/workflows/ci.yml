@@ -93,6 +93,68 @@ jobs:
           geodeploy --version
           geodeploy --help > /dev/null
 
+  qgis-real:
+    # THE ONE JOB THAT RUNS AGAINST QGIS ITSELF, and the reason it exists is worth stating: every
+    # other plugin test stubs the QGIS classes, and the stubs used to share a base that handed each
+    # symbol layer a `setWidth`/`width` pair only `QgsSimpleLineSymbolLayer` really has. The plugin
+    # called `setWidth` on a FILL, the stubbed suite went green, and in real QGIS every polygon
+    # layer raised AttributeError — drawn in QGIS's own default colour on the way in, uploaded with
+    # no styling at all on the way out. It shipped, and a user found it.
+    #
+    # A stub cannot be trusted to describe an API this wide. This job asserts the same round trip
+    # against a real PyQGIS on both ends of the supported range, and audits that every QGIS name the
+    # plugin calls exists there — which is what catches an enum QGIS moves into the `Qgis` namespace
+    # between versions, the failure that otherwise reads as "the plugin silently does nothing".
+    name: QGIS ${{ matrix.qgis }} (real PyQGIS)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # `ltr` is the version most people run; `4.2` is the Qt6 build. metadata.txt claims
+        # 3.28 through 4.99, and these are the two ends anyone can actually install today.
+        qgis: [ltr, "4.2"]
+    container:
+      image: qgis/qgis:${{ matrix.qgis }}
+      # Offscreen rather than xvfb: nothing here opens a window, it only builds renderers and
+      # symbols, and QgsApplication refuses to start without a platform plugin of some kind.
+      env:
+        QT_QPA_PLATFORM: offscreen
+        # UNBUFFERED, because the failure mode these jobs actually hit is a SIGABRT from QGIS's C++
+        # side — and Python's block buffering then discards everything printed before it. A real
+        # abort here reported `corrupted size vs. prev_size` and not one of the 233 check lines, so
+        # there was no way to tell which check was running. `notes_for_future.md` records the same
+        # trap with `tail` swallowing a pipeline's exit status; this is its other half.
+        PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: The symbology round trip, against QGIS itself
+        working-directory: integrations/qgis-plugin
+        run: python3 -u scripts/test_real_qgis.py
+
+      - name: The round trip as a matrix, generated from QGIS's registries
+        # The other half of the file above. That one is a REGRESSION suite — every check exists
+        # because a user hit something — so it cannot answer "is there anything QGIS can draw that
+        # we have never tried?". This instantiates every symbol layer the registry offers, builds
+        # every renderer it can build, and walks all eight render units, so a QGIS that gains one
+        # is covered the day it ships. Its first run found six defects the 337 hand-written checks
+        # had missed.
+        #
+        # The sections that ask what MapLibre would actually paint run here too: the script finds
+        # `api/geodeploy/services/symbology.py` relative to the checkout, and that module is pure
+        # stdlib precisely so it can be imported beside PyQGIS. It reports them as skipped rather
+        # than failing if it cannot.
+        working-directory: integrations/qgis-plugin
+        run: python3 -u scripts/test_roundtrip_matrix.py
+
+      - name: Every symbol QGIS offers is classified
+        # Reads QGIS's OWN registries — symbol layers, renderers, data-defined properties — and
+        # joins them against the verdicts declared in the script. Fails when this QGIS offers
+        # something the table does not classify, so a new QGIS version forces a decision instead
+        # of quietly widening a gap nobody has written down.
+        working-directory: integrations/qgis-plugin
+        run: python3 -u scripts/coverage_report.py
+
   qgis-plugin:
     name: QGIS plugin
     runs-on: ubuntu-latest
@@ -159,6 +221,44 @@ jobs:
         # that opens in the layers' default colours or quietly loses a layer to a clashing id.
         run: python integrations/qgis-plugin/scripts/test_published_style.py
 
+      - name: A stale or foreign client does not stop the plugin connecting
+        # `vendor/` on sys.path only decides where `geodeploy` is imported FROM the first time;
+        # after that `sys.modules` answers. Upgrading the plugin without restarting QGIS runs the
+        # new code against the OLD client, and a keyword the new one added became a hard stop on
+        # Connect. Anything beyond the long-standing arguments is offered, not required.
+        run: python integrations/qgis-plugin/scripts/test_stale_client.py
+
+      - name: The push dialog says where a restyle lands
+        # `summarise` is the only place the plugin can explain that "Push group to portal" changes
+        # THAT PORTAL and not the layers' own default styles. That sentence is a feature, and a
+        # feature made of words still breaks when somebody edits the words.
+        run: python integrations/qgis-plugin/scripts/test_push_summary.py
+
+      - name: The packaged plugin is one the site will accept
+        # Every upload to plugins.qgis.org is validated there, and a rejection BURNS the version
+        # number — the fix has to go out as a new one. Some of what they check fails nowhere else:
+        # a missing `supportsQt6` is a plugin that simply does not appear in QGIS 4's manager, with
+        # nothing wrong in any log. Building the artifact here also proves the vendored client is
+        # in step, since `build.py` refuses to package a stale one.
+        run: |
+          python integrations/qgis-plugin/scripts/build.py
+          python integrations/qgis-plugin/scripts/test_package.py
+
+      - name: A portal opens as well without a token as with one
+        # There used to be two implementations of "what does this portal look like": the API's
+        # authored `layer_configs`, and a backwards translation of the published MapLibre paint.
+        # The reverse is lossy by construction — a rule tree, a stacked stroke, a per-class marker
+        # and a label's placement have no paint value to be recovered from — so every symbology fix
+        # landed on one side and the anonymous path drifted. One path now; this pins its order.
+        run: python integrations/qgis-plugin/scripts/test_anonymous_parity.py
+
+      - name: A service layer becomes an external source
+        # A WMS, an XYZ set or a WFS has no file to upload, and GeoDeploy holds exactly that as an
+        # `external_source`. The parsing is of QGIS's own provider-URI grammars — two of them,
+        # neither a documented contract — so it is pinned against URIs QGIS itself encoded. The
+        # real-QGIS job re-derives them; this runs everywhere in a second.
+        run: python integrations/qgis-plugin/scripts/test_external_sources.py
+
       - name: Enums resolve on Qt5 and Qt6 alike
         # QGIS 4 is Qt6, where an enum member is only reachable through its scope. The migration
         # touched 94 call sites; one flat `Qgis.Warning` typed later would be invisible until a user
@@ -189,7 +289,12 @@ jobs:
           # conflict, which is why the declarations live in the code rather than in a config file.
           python -m bandit -q -r . -f json -o bandit-plain.json || true
           python -m bandit -r . -t B101,B110,B112,B310,B314,B405,B605 -f json                  -o bandit-selected.json 2> bandit-selected.log || true
-          if grep -qi "non-exclusive\|ERROR" bandit-selected.log; then
+          # MATCH THE LEVEL FIELD, not the substring. Bandit echoes every word of a `# nosec`
+          # comment back as `Test in comment: <word> is not a test name or id` — so a declaration
+          # that happened to contain the word "error" made this grep fire and failed the build with
+          # "bandit could not run with -t", which is not what went wrong. Its real messages are
+          # tab-separated with ERROR in the level field.
+          if grep -qE "^\[[a-z]+\][[:space:]]+ERROR|[Nn]on-exclusive" bandit-selected.log; then
             echo "bandit could not run with -t (the way plugins.qgis.org invokes it):"
             cat bandit-selected.log
             exit 1

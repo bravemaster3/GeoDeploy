@@ -349,19 +349,28 @@ class RasterLayer(Base):
 
 
 class ExternalSource(Base):
-    """A third-party map service (WMS/WMTS/XYZ raster or WFS vector) displayed in a
-    portal WITHOUT ingesting — tiles/features are fetched from the provider at view time."""
+    """A third-party map service displayed in a portal WITHOUT ingesting — tiles or features are
+    fetched at view time, from the provider or through our proxy (see `services/external_sources`
+    for which, and why CORS decides it)."""
     __tablename__ = "external_sources"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(256), nullable=False)
-    source_type: Mapped[str] = mapped_column(String(16), nullable=False)  # xyz | wms | wfs
+    # xyz | wms | wmts | wfs | ogcapi | vectortile | pmtiles
+    source_type: Mapped[str] = mapped_column(String(16), nullable=False)
     kind: Mapped[str] = mapped_column(String(8), nullable=False)          # raster | vector
-    url: Mapped[str] = mapped_column(Text, nullable=False)               # XYZ template or WMS/WFS base URL
-    layer_name: Mapped[str | None] = mapped_column(Text)                 # WMS layers= / WFS typeName
-    version: Mapped[str | None] = mapped_column(String(16))              # WMS/WFS version
-    image_format: Mapped[str | None] = mapped_column(String(32))         # WMS format (default image/png)
+    url: Mapped[str] = mapped_column(Text, nullable=False)               # template, base URL or archive
+    # WMS `layers` / WMTS layer / WFS typeName / OGC API collection id
+    layer_name: Mapped[str | None] = mapped_column(Text)
+    # The layer INSIDE a vector tile — a tile is a container of named layers, and a style that
+    # names none draws nothing at all, silently.
+    source_layer: Mapped[str | None] = mapped_column(Text)
+    matrix_set: Mapped[str | None] = mapped_column(Text)                 # WMTS TileMatrixSet
+    min_zoom: Mapped[int | None] = mapped_column(Integer)                # tiled sources, from the probe
+    max_zoom: Mapped[int | None] = mapped_column(Integer)
+    version: Mapped[str | None] = mapped_column(String(16))              # WMS/WFS/WMTS version
+    image_format: Mapped[str | None] = mapped_column(String(32))         # WMS/WMTS format
     attribution: Mapped[str | None] = mapped_column(Text)               # required credit string
     geometry_type: Mapped[str | None] = mapped_column(String(32))        # WFS: point|line|polygon (probed)
     bbox: Mapped[str | None] = mapped_column(Text)                       # JSON [minx,miny,maxx,maxy] EPSG:4326

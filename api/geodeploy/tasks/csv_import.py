@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 from ..celery_app import celery_app
 from ..config import get_settings
+from ..services import postgis
 from ..services import martin as martin_svc
 from .vector_ingest import _update_job, _update_layer, _get_all_layers, _get_setup
 
@@ -148,7 +149,9 @@ def _load_copy(path: str, schema: str, table: str, x_col: str | None, y_col: str
     # NATIVE-CRS STORAGE: store in the user-picked SRID. Only for 4326 do we apply the Web-Mercator
     # pole-clamp + (no-op) transform; a projected SRID is stored as-is (Martin reprojects native→3857).
     native = (srid != 4326)
-    stg = f"{table}_stg"
+    # NOT `f"{table}_stg"` — that truncates back to `table` itself for a long name, and
+    # the staging table then IS the destination table. See `postgis.derived_name`.
+    stg = postgis.derived_name(table, "stg")
 
     conn = psycopg2.connect(dsn)
     try:

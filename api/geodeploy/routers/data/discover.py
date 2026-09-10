@@ -20,6 +20,7 @@ from ...database import get_db
 from ...deps import require_scope
 from ...models import RasterLayer, UploadJob, User, VectorLayer
 from ...schemas import JobStatus
+from ...services import postgis
 from ...services import martin as martin_svc
 from ...services import cog_converter
 
@@ -298,7 +299,6 @@ async def import_storage(
     immediately; GeoParquet files become file-backed vector layers via a queued inspect+prep job
     (the prep writes its partitioned copy under vectors/ and NEVER touches the attached source —
     import = listing, delete = unlist)."""
-    from slugify import slugify
     from ...tasks.geoparquet_import import import_geoparquet
     settings = get_settings()
     if not req.items:
@@ -318,7 +318,7 @@ async def import_storage(
                 continue
             layer = VectorLayer(
                 user_id=user.id, name=name,
-                table_name=f"gpq_{slugify(name, separator='_') or 'layer'}_{uuid.uuid4().hex[:6]}",
+                table_name=postgis.unique_table_name(name, prefix="gpq_"),
                 schema_name=f"geodeploy_u{user.id}",
                 storage_backend="geoparquet", s3_key=key, source_s3_key=key,
                 status="processing",
@@ -395,7 +395,7 @@ async def import_csv(
         raise HTTPException(400, "Pick X/Y columns or a WKT geometry column.")
     name = (req.name or "").strip() or req.key.rsplit("/", 1)[-1].rsplit(".", 1)[0]
     schema = f"geodeploy_u{user.id}"
-    table = f"csv_{csv_import.safe_name(name, 'layer')}_{uuid.uuid4().hex[:6]}"
+    table = postgis.unique_table_name(name, prefix="csv_")
 
     layer = VectorLayer(
         user_id=user.id, name=name, schema_name=schema, table_name=table,

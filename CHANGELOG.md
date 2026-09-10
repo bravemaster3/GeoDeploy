@@ -6,6 +6,120 @@ upgrade needs manual work.
 
 ## Unreleased
 
+## v1.6 — 2026-09-10
+
+### The QGIS round trip, closed
+
+Styling has travelled between QGIS and GeoDeploy since v1.4, for the symbology GeoDeploy itself
+has. This release is about everything else QGIS draws — and about being honest where a web map
+cannot follow. All of it is measured against **real PyQGIS on both QGIS 3.44 LTR and QGIS 4.2**, in
+CI, on every commit: 349 regression checks and 531 more generated from QGIS's own symbol and
+renderer registries.
+
+- **Rule-based rendering.** A rule tree becomes one render layer per rule, each with its filter,
+  its symbol and its own scale range, and comes back as a rule tree. This is the one most real QGIS
+  projects reach for, and it used to arrive as a single flat symbol.
+- **A symbol is everything it stacks.** A casing under a road, a dashed overlay on a solid line, a
+  hatch: QGIS builds these by stacking simple lines in one symbol, and only the first was read. A
+  rule's symbol stacks the same way — that half was missing for longer, so a red line under blue
+  dashes published as plain red inside a rule while publishing correctly outside one.
+- **Markers along a line**, with their spacing — arrows on a river, ticks on a boundary, circles on
+  a route. The spacing used to travel as a number without its unit, so 20 screen pixels came back
+  as 15 millimetres and the markers landed three times too far apart, which reads as "they are
+  missing".
+- **Hatch and pattern fills, gradients, line offsets, 2.5D, centroid fills, heatmaps, arrow lines,
+  blend modes** — each either travels or is reported as approximated.
+- **A class carries its own symbol**, not only its colour. A categorized layer whose classes differ
+  by dash, width or marker shape is drawn that way on both sides.
+- **Anything GeoDeploy has no words for travels as a picture.** An SVG marker, a font marker, a
+  hatch, a multi-layer symbol — QGIS renders it, and the portal draws the thing you drew. A style
+  embedded in a file only names a path to an SVG on the machine that wrote it, which is of no use
+  anywhere else. Sizes survive the trip: QGIS sizes a raster marker by its canvas, not its ink.
+- **Labels are symbology too.** Label rule trees (water blue at 9pt, a town brown at 11), the text
+  expression, halo, letter spacing, capitalisation, offset, priority, per-label scale ranges, and
+  where the text sits — at a point, or bent along the line, on it or above it.
+
+### Labels drawn once
+
+- **A big polygon no longer carries its name in a grid across itself.** MapLibre places a symbol per
+  geometry *as the tile delivers it*, and tiles clip — so a polygon crossing four tiles was four
+  geometries, each getting the label. No style property can say otherwise. Labels for polygons are
+  now drawn from a point source (`ST_PointOnSurface`, so the label is *inside* the shape — a
+  centroid falls in the hole of a ring and puts a country's name in the sea).
+- **"Label every part of a multi-part feature"** is an option now, off by default, as it is in QGIS.
+  An archipelago wants it; a country with two islands does not.
+
+### External sources — every kind a web map can draw
+
+`xyz | wms | wfs` becomes **`xyz | wms | wmts | wfs | ogcapi | vectortile | pmtiles`**, from the web
+UI, the CLI and the QGIS plugin alike.
+
+- **OGC API - Features**: paste the landing page, the collection, or the items URL — all three work.
+- **Third-party vector tiles**: a `.pbf` template or its TileJSON.
+- **PMTiles**: a remote archive read a tile at a time by your instance, so the whole file is never
+  downloaded, the portal needs no PMTiles library, and the provider needs no CORS policy.
+- **WMTS** as its own kind, rather than being sent as a WMS to a server that only speaks `GetTile`.
+- **Everything that can be validated is validated when you add it** — a WFS and an OGC API
+  collection are fetched, a TileJSON is read, a PMTiles header is parsed. That is where a wrong
+  layer name or an unreachable host surfaces, and where the layer inside a tile set, its zoom range
+  and its extent come from.
+- **What is read as data is proxied same-origin.** A raster tile is fetched the way the web has
+  fetched images for twenty years; GeoJSON, a vector tile and a PMTiles byte range are cross-origin
+  requests, and a provider without `Access-Control-Allow-Origin` breaks those silently — an empty
+  layer and a console error a visitor never sees.
+- **WCS is deliberately not a kind**, and says so: `GetCoverage` returns a coverage, not map images,
+  so there is nothing a web map can draw from it. Most WCS servers publish the same data over WMS.
+
+### Without a token, the plugin now sees what it should
+
+- **A published public portal opens the same with or without an account** — same colours, rules,
+  labels and folders. There used to be two implementations of "what does this portal look like":
+  the authored styling for a signed-in user, and a *backwards* translation of the published
+  MapLibre paint for everyone else. The reverse is lossy by construction, so every symbology fix
+  landed on one side and the anonymous path drifted further behind with each release.
+  `GET /api/public/portals/{slug}` serves the authored configuration to anybody — the same map
+  `style.json` already publishes as paint, in the vocabulary it was written in.
+- **A public layer added on its own arrives styled.** The anonymous index is deliberately the
+  smallest view of an instance and carries no `default_style`; nothing had ever asked for the
+  detail that does.
+
+### In the browser
+
+- **Delete several layers at once.** Checkboxes in My Data, a select-all per section over what the
+  filter shows, and one Delete. The confirmation lists every item by name and the union of the
+  portals they appear in; deletions run one at a time (each prunes portals and re-publishes them),
+  and one failure is skipped with its reason rather than abandoning the rest.
+- **"No basemap"** is a choice everywhere a map is drawn, on a white ground rather than a black one.
+- **Changing the basemap changes the basemap and nothing else.** It used to be able to hide one of
+  the portal's own layers.
+- **Zoom to layer works on a phone.** Five call sites padded the fit by the sidebar's full width;
+  on a phone that panel is 85vw, so the padding exceeded the canvas and MapLibre silently declined
+  to move — a button that did nothing, with nothing in any log. Touch targets grew from 22px to
+  34px on coarse pointers, and a folder's zoom no longer hides behind hover.
+- **A control flyout fits the screen it opens on.** The basemap list ran off the bottom of a
+  landscape window with eight entries, and "None" could not be reached.
+
+### Uploads and ingest
+
+- **Every layer of a multi-layer GeoPackage is ingested**, including one with no styling saved and
+  one whose name collides after truncation.
+- **A zipped GeoPackage, FileGDB or shapefile set** is unpacked and read.
+
+### Fixes worth naming
+
+- A raster no longer draws unstretched (usually blank) when its style could not be read; the
+  portal keeps what it had rather than having it replaced with nothing.
+- A rate-limited upload waits and retries instead of failing a group push half way, so pushing a
+  portal no longer has to be done twice.
+- A stale `geodeploy` module no longer stops the QGIS plugin connecting after an in-place upgrade.
+
+### For operators
+
+Nothing to do. The new tile function and the four new `external_sources` columns are applied on
+start, and Martin's configuration is rebuilt with them. Published portals are unchanged until you
+re-publish; a portal re-published on this version gains the label-point source for its polygons.
+
+
 ## v1.5.4 — 2026-09-02
 
 **A restore could leave an instance reporting "GeoDeploy cannot reach its database" while the

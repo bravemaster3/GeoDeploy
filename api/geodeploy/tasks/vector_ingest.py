@@ -22,10 +22,12 @@ from datetime import datetime, timezone
 import fiona
 import psycopg2
 from shapely.geometry import shape as shp_shape
+from slugify import slugify
 
 from .. import state_db
 from ..celery_app import celery_app
 from ..config import get_settings
+from ..services import postgis
 from ..services import martin as martin_svc
 
 logger = logging.getLogger(__name__)
@@ -162,8 +164,98 @@ def _get_layer_user(layer_id: int) -> int | None:
         return row[0] if row else None
 
 
+#: Tables a GeoPackage carries that are NOT data. QGIS writes `layer_styles` into any project it
+#: packages — the QML for each layer, one row per layer — and GDAL exposes it as an ordinary
+#: (non-spatial) table, so a naive "ingest everything" would create a layer out of the styling.
+#: Matched case-insensitively, and only as a fast path: the real test is whether a layer has a
+#: geometry at all, which also catches attribute-only tables nobody has named yet.
+NON_SPATIAL_TABLES = {"layer_styles", "qgis_projects", "qgis_project"}
+
+
+def _spatial_layers(src_path: str) -> list[str]:
+    """Every layer in the source that actually holds geometry, in file order.
+
+    `fiona.open(path)` with no `layer=` returns the FIRST layer and nothing else, which is how a
+    nine-layer GeoPackage became one layer with nothing anywhere saying the other eight were
+    dropped. Listing them is the whole fix; the rest of this module just needs telling which one to
+    read.
+
+    A layer with no geometry is skipped rather than failed: a GeoPackage legitimately carries
+    attribute tables beside its spatial ones, and refusing the whole upload because one of them
+    exists would trade a silent loss for a loud one.
+    """
+    import fiona
+    try:
+        names = list(fiona.listlayers(src_path))
+    except Exception:                   # noqa: BLE001 - a driver with no concept of layers
+        return []
+    if len(names) <= 1:
+        # Nothing to choose between. Returning [] keeps the single-layer path byte-identical to
+        # what it was — `fiona.open(path)` with no `layer=` — rather than newly passing a name.
+        return []
+    out = []
+    for name in names:
+        if str(name).lower() in NON_SPATIAL_TABLES:
+            continue
+        try:
+            with fiona.open(src_path, layer=name) as src:
+                if (src.schema or {}).get("geometry") in (None, "None"):
+                    continue
+        except Exception:               # noqa: BLE001 - unreadable layer: skip it, keep the rest
+            continue
+        out.append(name)
+    return out
+
+
+def _create_sibling(parent_layer_id: int, name: str, schema_name: str, table_name: str) -> tuple:
+    """A second (third, ninth) layer row + job for one more layer of the same file.
+
+    Returns `(layer_id, job_id)`. The parent's own row is reused for the FIRST layer, so a
+    single-layer upload creates nothing extra and the job the caller is already polling stays the
+    one that finishes.
+    """
+    import uuid as _uuid
+
+    from ..models import new_uid
+    with state_db.connect() as conn:
+        conn.row_factory = state_db.dict_row
+        parent = conn.execute(
+            "SELECT user_id, file_size, visibility, is_public FROM vector_layers WHERE id = ?",
+            (parent_layer_id,)).fetchone()
+        if not parent:
+            raise ValueError("The layer this upload belongs to no longer exists.")
+        parent = dict(parent)
+        # SHARING IS INHERITED, and it has to be written EXPLICITLY. `visibility` and `is_public`
+        # are `nullable=False` on the model with a default declared in PYTHON, which SQLAlchemy
+        # applies only to an ORM insert — this is raw SQL, so both arrived NULL and Postgres
+        # refused the row. A multi-layer upload therefore failed outright with
+        # `NotNullViolation: null value in column "visibility"`, and only on a FRESH instance: a
+        # database old enough to have got the column from `_apply_schema_migrations` got it as a
+        # plain nullable `ALTER TABLE ... ADD COLUMN`, so the same code worked there.
+        #
+        # Inherited from the parent rather than defaulted, because the sibling is the same upload:
+        # a user who marked the file public means all of its layers, and silently making layer two
+        # of a public GeoPackage organization-only would be a sharing decision nobody made.
+        row = conn.execute(
+            "INSERT INTO vector_layers (uid, user_id, name, table_name, schema_name, file_size, "
+            "status, storage_backend, visibility, is_public) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'processing', 'postgis', ?, ?) RETURNING id",
+            (new_uid(), parent["user_id"], name, table_name, schema_name,
+             parent.get("file_size"), parent.get("visibility") or "organization",
+             bool(parent.get("is_public")))).fetchone()
+        layer_id = (dict(row) if not isinstance(row, (int, float)) else {"id": row})["id"]
+        job_id = str(_uuid.uuid4())
+        # `progress` is NOT NULL with its default declared in Python too — the same trap as
+        # `visibility` above, one table along, and it surfaced the moment that one was fixed.
+        conn.execute(
+            "INSERT INTO upload_jobs (id, layer_id, layer_type, status, progress) "
+            "VALUES (?, ?, 'vector', 'processing', 0)", (job_id, layer_id))
+    return layer_id, job_id
+
+
 @celery_app.task(bind=True, name="geodeploy.tasks.vector_ingest.ingest_vector")
-def ingest_vector(self, job_id: str, layer_id: int, file_path: str, layer_name: str, schema_name: str, table_name: str):
+def ingest_vector(self, job_id: str, layer_id: int, file_path: str, layer_name: str,
+                  schema_name: str, table_name: str, layer: str | None = None):
     settings = get_settings()
 
     def step(msg: str, progress: int) -> None:
@@ -174,35 +266,27 @@ def ingest_vector(self, job_id: str, layer_id: int, file_path: str, layer_name: 
         step("Validating file", 5)
         src_path = _resolve_source(file_path)
 
-        # Heavy files go to the GeoParquet lakehouse instead of PostGIS: cheaper to serve
-        # (deck.gl viewport reads off object storage, no multi-GB PostGIS table + MVT cost)
-        # and directly analysable with DuckDB. Same downstream pipeline as a .parquet upload.
-        threshold_mb = float(os.getenv("VECTOR_GEOPARQUET_THRESHOLD_MB", "200"))
-        if threshold_mb > 0 and _source_size(src_path) >= threshold_mb * 1024 * 1024:
-            _ingest_as_geoparquet(job_id, layer_id, src_path, layer_name, step, settings)
+        # EVERY LAYER, not just the first. `fiona.open(path)` with no `layer=` returns the first and
+        # says nothing about the rest, so a nine-layer GeoPackage became one layer and eight
+        # disappeared with no error in the job, the UI or the plugin. Issue #95.
+        #
+        # Done INSIDE this task rather than by fanning out one task per layer, because the upload is
+        # a single temp file that this task deletes in its `finally` — sibling tasks would race it,
+        # and a task that loses its source half way through is a much worse failure than a slow one.
+        # It also keeps the API contract untouched: the caller polls one job, and that job is still
+        # the one that finishes.
+        names = [] if layer else _spatial_layers(src_path)
+        if len(names) > 1:
+            _ingest_every_layer(job_id, layer_id, src_path, names, schema_name, settings, step)
+            step("Updating tile server", 95)
+            import asyncio
+            asyncio.run(martin_svc.regenerate_config(_get_all_layers()))
+            _update_job(job_id, status="ready", progress=100,
+                        completed_at=datetime.now(timezone.utc).isoformat())
             return
 
-        setup = _get_setup()
-        dsn = (f"host={setup['postgis_host']} port={setup['postgis_port']} dbname={setup['postgis_db']} "
-               f"user={setup['postgis_user']} password={setup['postgis_password']}")
-        # External/managed DBs may require SSL; the local provisioned DB leaves this empty.
-        if settings.postgis_sslmode:
-            dsn += f" sslmode={settings.postgis_sslmode}"
-
-        step("Loading into PostGIS (COPY)", 30)
-        res = _ingest_via_copy(dsn, schema_name, table_name, src_path, settings.data_dir)
-
-        step("Saving metadata", 90)
-        _update_layer(layer_id,
-                      status="ready",
-                      feature_count=res["count"],
-                      bbox=json.dumps(res["bbox"]) if res["bbox"] else None,
-                      columns=json.dumps(res["columns"]),
-                      geometry_type=res["geom_type"],
-                      geometry_column="geom",
-                      id_column="id",
-                      crs=res.get("crs", "EPSG:4326"),  # native SRID from _ingest_via_copy
-                      updated_at=datetime.now(timezone.utc).isoformat())
+        _ingest_one(job_id, layer_id, src_path, layer_name, schema_name, table_name,
+                    layer, settings, step)
 
         step("Updating tile server", 95)
         import asyncio
@@ -221,18 +305,159 @@ def ingest_vector(self, job_id: str, layer_id: int, file_path: str, layer_name: 
             os.unlink(file_path)
 
 
+def _ingest_every_layer(job_id: str, layer_id: int, src_path: str, names: list, schema_name: str,
+                        settings, step) -> None:
+    """One GeoDeploy layer per spatial layer in the file, named after it.
+
+    The FIRST reuses the row the upload already created — so the layer the caller is watching is a
+    real layer rather than an empty placeholder, and a re-ingest of a single-layer file is unchanged
+    — and the rest get rows of their own.
+
+    A layer that fails does not take the others down with it: nine layers where one has a broken
+    geometry should give eight good layers and one marked in error, not nothing at all. The job only
+    fails if EVERY layer did.
+    """
+    total = len(names)
+    done, failed = 0, []
+    for index, name in enumerate(names):
+        share = int(85 * index / total) + 5
+        step("Layer {0} of {1}: {2}".format(index + 1, total, name), share)
+        safe = slugify(name, separator="_") or "layer_{0}".format(index + 1)
+        # The TABLE name is built by `postgis.unique_table_name`, not glued together here: a long
+        # layer name plus a random suffix runs past Postgres's 63-character identifier limit, and
+        # what gets silently truncated is the suffix — see the helper for the failure that caused.
+        table = postgis.unique_table_name(name, fallback=safe)
+        if index == 0:
+            target, target_job = layer_id, job_id
+            _update_layer(layer_id, name=str(name), table_name=table)
+        else:
+            target, target_job = _create_sibling(layer_id, str(name), schema_name, table)
+        try:
+            _ingest_one(target_job, target, src_path, safe, schema_name, table,
+                        name, settings, lambda *_a, **_k: None)
+            if index:
+                _update_job(target_job, status="ready", progress=100,
+                            completed_at=datetime.now(timezone.utc).isoformat())
+            done += 1
+        except Exception as exc:        # noqa: BLE001 - one bad layer must not lose the good ones
+            failed.append("{0}: {1}".format(name, exc))
+            _update_layer(target, status="error", error_message=str(exc))
+            if index:
+                _update_job(target_job, status="error", error_message=str(exc),
+                            completed_at=datetime.now(timezone.utc).isoformat())
+    if not done:
+        raise ValueError("No layer in this file could be read. " + "; ".join(failed[:3]))
+    if failed:
+        # Recorded on the job the caller is watching, so a partial success SAYS it was partial
+        # rather than presenting itself as a clean import of fewer layers than the file holds.
+        _update_job(job_id, error_message="{0} of {1} layers failed: {2}".format(
+            len(failed), total, "; ".join(failed[:3])))
+
+
+def _ingest_one(job_id: str, layer_id: int, src_path: str, layer_name: str, schema_name: str,
+                table_name: str, layer: str | None, settings, step) -> None:
+    """One layer of one source into one GeoDeploy layer — the body this task always had."""
+    # Heavy files go to the GeoParquet lakehouse instead of PostGIS: cheaper to serve
+    # (deck.gl viewport reads off object storage, no multi-GB PostGIS table + MVT cost)
+    # and directly analysable with DuckDB. Same downstream pipeline as a .parquet upload.
+    threshold_mb = float(os.getenv("VECTOR_GEOPARQUET_THRESHOLD_MB", "200"))
+    if threshold_mb > 0 and _source_size(src_path) >= threshold_mb * 1024 * 1024:
+        _ingest_as_geoparquet(job_id, layer_id, src_path, layer_name, step, settings, layer)
+        return
+
+    setup = _get_setup()
+    dsn = (f"host={setup['postgis_host']} port={setup['postgis_port']} dbname={setup['postgis_db']} "
+           f"user={setup['postgis_user']} password={setup['postgis_password']}")
+    # External/managed DBs may require SSL; the local provisioned DB leaves this empty.
+    if settings.postgis_sslmode:
+        dsn += f" sslmode={settings.postgis_sslmode}"
+
+    step("Loading into PostGIS (COPY)", 30)
+    res = _ingest_via_copy(dsn, schema_name, table_name, src_path, settings.data_dir, layer)
+
+    step("Saving metadata", 90)
+    _update_layer(layer_id,
+                  status="ready",
+                  feature_count=res["count"],
+                  bbox=json.dumps(res["bbox"]) if res["bbox"] else None,
+                  columns=json.dumps(res["columns"]),
+                  geometry_type=res["geom_type"],
+                  geometry_column="geom",
+                  id_column="id",
+                  crs=res.get("crs", "EPSG:4326"),  # native SRID from _ingest_via_copy
+                  updated_at=datetime.now(timezone.utc).isoformat())
+
+
+
+def _open(src_path: str, layer: str | None = None):
+    """`fiona.open`, optionally on a named layer.
+
+    A single function so "which layer" is stated once. Passing `layer=None` through to Fiona is NOT
+    the same as omitting it on every driver, so the argument is only added when there is one.
+    """
+    return fiona.open(src_path, layer=layer) if layer else fiona.open(src_path)
+
+#: What a ZIP may contain, best first. A shapefile leads because that is why ZIPs are accepted at
+#: all — it is the one format that IS several files — but nothing about the archive says the thing
+#: inside has to be one. A GeoPackage, a GeoJSON, a FlatGeobuf, a KML or a GML zipped for size or
+#: for email is an ordinary thing to be handed, and refusing it with "ZIP file contains no .shp
+#: file" describes neither what was wrong nor what to do.
+_ZIP_DATASETS = (".shp", ".gpkg", ".geojson", ".json", ".fgb", ".kml", ".gml", ".tab", ".sqlite")
+
+
+def _safe_extract(archive: zipfile.ZipFile, destination: str) -> None:
+    """`extractall`, minus the entries that would write outside `destination`.
+
+    A ZIP entry may name `../../etc/whatever`, and `extractall` will happily follow it. Nothing
+    here is more than a few lines of guard, and the alternative is arbitrary file write from an
+    upload — so the members are filtered rather than trusted.
+    """
+    root = os.path.realpath(destination)
+    safe = []
+    for member in archive.infolist():
+        target = os.path.realpath(os.path.join(destination, member.filename))
+        if target == root or target.startswith(root + os.sep):
+            safe.append(member)
+    archive.extractall(destination, members=safe)   # nosec B202 - members filtered above
+
+
 def _resolve_source(file_path: str) -> str:
-    """Unzip shapefile ZIPs; return a path Fiona can open."""
-    if file_path.endswith(".zip"):
-        extract_dir = file_path + "_extracted"
-        os.makedirs(extract_dir, exist_ok=True)
-        with zipfile.ZipFile(file_path) as z:
-            z.extractall(extract_dir)
-        shps = [os.path.join(extract_dir, f) for f in os.listdir(extract_dir) if f.endswith(".shp")]
-        if not shps:
-            raise ValueError("ZIP file contains no .shp file.")
-        return shps[0]
-    return file_path
+    """Unzip an archive; return a path Fiona can open.
+
+    Searched RECURSIVELY. A shapefile exported by QGIS or ArcGIS is very often zipped inside a
+    folder of its own, and the old non-recursive listing reported that archive as containing no
+    shapefile at all — a correct-looking upload refused for a reason that was not true.
+    """
+    if not file_path.endswith(".zip"):
+        return file_path
+    extract_dir = file_path + "_extracted"
+    os.makedirs(extract_dir, exist_ok=True)
+    with zipfile.ZipFile(file_path) as z:
+        _safe_extract(z, extract_dir)
+
+    found: dict[str, list[str]] = {}
+    for root, _dirs, files in os.walk(extract_dir):
+        for name in files:
+            if name.startswith("."):            # __MACOSX sidecars and friends
+                continue
+            ext = os.path.splitext(name)[1].lower()
+            if ext in _ZIP_DATASETS:
+                found.setdefault(ext, []).append(os.path.join(root, name))
+    for ext in _ZIP_DATASETS:
+        paths = sorted(found.get(ext) or [])
+        if not paths:
+            continue
+        if len(paths) > 1:
+            # SAY SO. Taking the first of several silently ingests one dataset out of a bag of
+            # them and reports success, which reads as data loss rather than as a limitation.
+            logger.warning("ZIP holds %d %s datasets; ingesting %s. Upload them separately to "
+                           "get all of them.", len(paths), ext, os.path.basename(paths[0]))
+        return paths[0]
+    raise ValueError(
+        "ZIP file contains no dataset this can read. Looked for: {0}. Found: {1}.".format(
+            ", ".join(_ZIP_DATASETS),
+            ", ".join(sorted({os.path.splitext(f)[1].lower() or "(no extension)"
+                              for _r, _d, fs in os.walk(extract_dir) for f in fs})) or "nothing"))
 
 
 def _source_size(src_path: str) -> int:
@@ -369,7 +594,7 @@ def _kind_from_types(geom_types) -> str:
 
 
 def _ingest_as_geoparquet(job_id: str, layer_id: int, src_path: str,
-                          layer_name: str, step, settings) -> None:
+                          layer_name: str, step, settings, layer: str | None = None) -> None:
     """Heavy-file path: convert the source to GeoParquet (EPSG:4326, WKB) on object storage and
     chain the spatial prep — the layer becomes a `storage_backend='geoparquet'` layer exactly like
     a direct .parquet upload (geoparquet_import); prep marks the layer + job ready."""
@@ -379,7 +604,7 @@ def _ingest_as_geoparquet(job_id: str, layer_id: int, src_path: str,
     step("Converting to GeoParquet", 20)
     out_path = os.path.join(settings.data_dir, "temp", f"{uuid.uuid4().hex}.parquet")
     try:
-        res = _convert_to_geoparquet(src_path, out_path)
+        res = _convert_to_geoparquet(src_path, out_path, layer=layer)
 
         step("Uploading to storage", 60)
         creds = _get_storage_creds()
@@ -403,7 +628,8 @@ def _ingest_as_geoparquet(job_id: str, layer_id: int, src_path: str,
     prepare_geoparquet.delay(layer_id, s3_key, job_id)
 
 
-def _convert_to_geoparquet(src_path: str, out_path: str, batch_size: int = 20_000) -> dict:
+def _convert_to_geoparquet(src_path: str, out_path: str, batch_size: int = 20_000,
+                           layer: str | None = None) -> dict:
     """Stream Fiona features → GeoParquet 1.1 (WKB geometry, EPSG:4326, zstd). Batched: shapely
     WKB/bounds/reprojection run vectorised per batch (C, GIL released), so a multi-GB file never
     materialises in memory. The `geo` footer metadata (geometry types + bbox) is attached at close
@@ -418,7 +644,7 @@ def _convert_to_geoparquet(src_path: str, out_path: str, batch_size: int = 20_00
     _PA_TYPE = {"int": pa.int64(), "int32": pa.int64(), "int64": pa.int64(),
                 "float": pa.float64(), "bool": pa.bool_()}
 
-    with fiona.open(src_path) as src:
+    with _open(src_path, layer) as src:
         col_schema = src.schema["properties"]
         cols = list(col_schema.keys())
         crs_wkt = src.crs_wkt
@@ -527,12 +753,16 @@ def _convert_to_geoparquet(src_path: str, out_path: str, batch_size: int = 20_00
             "columns": [{"name": c, "type": str(col_schema[c])} for c in cols]}
 
 
-def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir: str) -> dict:
-    """Stream features → temp CSV (geom as WKB hex) → COPY into staging → INSERT…SELECT (reproject)."""
+def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir: str,
+                    layer: str | None = None) -> dict:
+    """Stream features → temp CSV (geom as WKB hex) → COPY into staging → INSERT…SELECT (reproject).
+
+    `layer` names ONE layer of a multi-layer source. None keeps Fiona's own behaviour — the first
+    layer — which is what every single-layer file wants and what this always did."""
     tmp_csv = os.path.join(data_dir, "temp", f"{uuid.uuid4().hex}.copy.csv")
     os.makedirs(os.path.dirname(tmp_csv), exist_ok=True)
 
-    with fiona.open(src_path) as src:
+    with _open(src_path, layer) as src:
         crs_wkt = src.crs_wkt
         geom_type = src.schema["geometry"]
         col_schema = src.schema["properties"]
@@ -600,9 +830,21 @@ def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir:
     # Store geometry in its native SRID — NO ST_Transform (client_tr already handled the unknown-EPSG
     # fallback to 4326, so `store_srid` is always the CRS the WKB coordinates are already in).
     geom_sql = _store_geom_sql(store_srid)
-    stg = f"{table}_stg"
+    # NOT `f"{table}_stg"` — that truncates back to `table` itself for a long name, and
+    # the staging table then IS the destination table. See `postgis.derived_name`.
+    stg = postgis.derived_name(table, "stg")
     coldefs = ", ".join(f"{_q(db)} {_pg_type(col_schema[src])}" for src, db in zip(cols, db_cols))
     copycols = ", ".join(_q(db) for db in db_cols)
+    # A LAYER CAN HAVE NO ATTRIBUTES AT ALL — a `Mapping extent` polygon, a drawn boundary, a
+    # sketch: `fid` and `geom` and nothing else. Both lists are then empty strings, and every
+    # statement below that interpolated `{coldefs}, geom` produced `(, geom)` — a syntax error, in
+    # four places, so the layer could never be ingested. Reported from a real QGIS-packaged
+    # GeoPackage where exactly one of the nine layers had no columns.
+    #
+    # The separator travels WITH the list rather than being written into each statement, because
+    # that is the version there is no way to get wrong at the next call site.
+    coldefs = coldefs + ", " if coldefs else ""
+    copycols = copycols + ", " if copycols else ""
     conn = psycopg2.connect(dsn)
     try:
         cur = conn.cursor()
@@ -610,10 +852,10 @@ def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir:
         cur.execute("CREATE EXTENSION IF NOT EXISTS postgis")
         cur.execute(f"DROP TABLE IF EXISTS {_q(schema)}.{_q(table)}")
         cur.execute(f"DROP TABLE IF EXISTS {_q(schema)}.{_q(stg)}")
-        cur.execute(f"CREATE UNLOGGED TABLE {_q(schema)}.{_q(stg)} ({coldefs}, geom geometry)")
+        cur.execute(f"CREATE UNLOGGED TABLE {_q(schema)}.{_q(stg)} ({coldefs}geom geometry)")
         with open(tmp_csv, "r", encoding="utf-8", newline="") as fh:
             cur.copy_expert(
-                f"COPY {_q(schema)}.{_q(stg)} ({copycols}, geom) FROM STDIN WITH (FORMAT csv)", fh)
+                f"COPY {_q(schema)}.{_q(stg)} ({copycols}geom) FROM STDIN WITH (FORMAT csv)", fh)
         # Z, IF THE DATA HAS IT.
         #
         # `geometry(Geometry, srid)` is a TWO-dimensional type, so a single 3D feature made the
@@ -633,11 +875,20 @@ def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir:
         geom_expr = _geom_value(geom_sql, has_z)
         geom_col = _geom_column(store_srid, has_z)
         cur.execute(f"CREATE TABLE {_q(schema)}.{_q(table)} "
-                    f"(id serial primary key, {coldefs}, geom {geom_col})")
-        cur.execute(f"INSERT INTO {_q(schema)}.{_q(table)} ({copycols}, geom) "
-                    f"SELECT {copycols}, {geom_expr} FROM {_q(schema)}.{_q(stg)}")
+                    f"(id serial primary key, {coldefs}geom {geom_col})")
+        cur.execute(f"INSERT INTO {_q(schema)}.{_q(table)} ({copycols}geom) "
+                    f"SELECT {copycols}{geom_expr} FROM {_q(schema)}.{_q(stg)}")
         cur.execute(f"DROP TABLE {_q(schema)}.{_q(stg)}")
-        cur.execute(f"CREATE INDEX {_q(table + '_geom_idx')} ON {_q(schema)}.{_q(table)} USING GIST (geom)")
+        # UNNAMED, so POSTGRES names it — which is what `tasks/csv_import` has always done here.
+        #
+        # `table + "_geom_idx"` was the bug behind `relation "…_svg_marker_0645" already exists`.
+        # Postgres truncates every identifier at 63 characters, and it cuts the END: for a table
+        # name already at or near the limit, appending `_geom_idx` and truncating gives back THE
+        # TABLE'S OWN NAME, so `CREATE INDEX` collided with the table it was indexing. It failed on
+        # every attempt, with a different suffix each time — which is exactly why deleting the
+        # layers and retrying did not help. Postgres's own naming handles the truncation and
+        # de-duplicates, so there is nothing left to get wrong; the name is used nowhere else.
+        cur.execute(f"CREATE INDEX ON {_q(schema)}.{_q(table)} USING GIST (geom)")
         # bbox is stored in EPSG:4326 app-wide (map fit / viewport), even when the geometry is native —
         # transform the extent BOX only (cheap; a no-op when already 4326). Mirrors discover._table_bbox_4326.
         cur.execute(f"SELECT ST_XMin(e), ST_YMin(e), ST_XMax(e), ST_YMax(e) FROM "

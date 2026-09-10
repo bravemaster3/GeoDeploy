@@ -112,9 +112,9 @@ def test_the_function_is_created_where_the_config_is_written():
 
     assert "CREATE OR REPLACE FUNCTION" in pillars.CREATE_SQL
     src = inspect.getsource(martin.regenerate_config)
-    assert "_ensure_pillar_function" in src
+    assert "_ensure_tile_functions" in src
     # Non-fatal: a database that refuses the DDL must not stop the tile config for every OTHER layer.
-    assert "except Exception" in inspect.getsource(martin._ensure_pillar_function)
+    assert "except Exception" in inspect.getsource(martin._ensure_function)
 
 
 # ── What the style emits ─────────────────────────────────────────────────────────────────────────
@@ -379,7 +379,7 @@ async def test_a_changed_function_body_asks_for_a_martin_restart(pg):
     geometry, with nothing in any log to explain it. That happened: the antimeridian fix was running
     on the instance and the stripe was still on screen.
 
-    So `_ensure_pillar_function` reports True when the body DIFFERS, not only when it was absent.
+    So `_ensure_function` reports True when the body DIFFERS, not only when it was absent.
     """
     from geodeploy.config import get_settings
     from geodeploy.services import martin
@@ -387,18 +387,18 @@ async def test_a_changed_function_body_asks_for_a_martin_restart(pg):
     settings = get_settings()
 
     # Already installed by the `pg` fixture with the current definition → nothing to restart for.
-    assert await martin._ensure_pillar_function(settings) is False
+    assert await martin._ensure_function(settings, pillars) is False
 
     # Now make the stored body differ, as an older release's definition would.
     await pg.execute(f"""
         CREATE OR REPLACE FUNCTION {pillars.QUALIFIED}(z integer, x integer, y integer, query json)
         RETURNS bytea AS $$ BEGIN RETURN NULL; END; $$ LANGUAGE plpgsql STABLE PARALLEL SAFE;
     """)
-    assert await martin._ensure_pillar_function(settings) is True, \
+    assert await martin._ensure_function(settings, pillars) is True, \
         "a stale body must trigger a restart, or Martin keeps serving tiles from it"
 
     # ...and it put the real definition back, so the next call is a no-op again.
-    assert await martin._ensure_pillar_function(settings) is False
+    assert await martin._ensure_function(settings, pillars) is False
 
 
 def test_the_body_is_extracted_without_swallowing_the_template():

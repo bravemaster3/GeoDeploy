@@ -1,5 +1,15 @@
 <template>
   <div class="gd-row flex items-center gap-4 px-4 py-3 hover:bg-muted/60 group">
+    <!-- SELECTION. Shown only to someone who may delete, because choosing rows you are not
+         allowed to act on is an offer the page cannot keep. `.stop` so ticking a row never
+         triggers whatever else the row does when clicked. -->
+    <label v-if="selectable" class="flex-shrink-0 flex items-center" @click.stop
+      :title="selected ? 'Deselect' : 'Select'">
+      <input type="checkbox" :checked="selected" @change="$emit('toggle')"
+        class="w-4 h-4 rounded border-border text-primary focus:ring-1 focus:ring-primary/60
+               bg-background cursor-pointer" />
+    </label>
+
     <div class="w-8 h-8 rounded-md bg-blue-500/15 text-blue-400 flex items-center justify-center text-xs font-bold flex-shrink-0">V</div>
     <div class="gd-row-main flex-1 min-w-0">
       <div class="flex items-center gap-1.5 min-w-0">
@@ -112,8 +122,15 @@ import SharingModal from '@/components/data/SharingModal.vue'
 import ShareLinksModal from '@/components/data/ShareLinksModal.vue'
 import StyleModal from '@/components/data/StyleModal.vue'
 
-const props = defineProps({ layer: Object })
-defineEmits(['delete'])
+const props = defineProps({
+  layer: Object,
+  // Selection is DRIVEN BY THE LIST, not held here: the list is what knows how
+  // many are chosen across all three sections, and a row that remembered its own
+  // tick would keep it through a filter change that hid the row.
+  selectable: { type: Boolean, default: false },
+  selected: { type: Boolean, default: false },
+})
+defineEmits(['delete', 'toggle'])
 
 const auth = useAuthStore()
 // Sharing-button affordance follows the layer's workspace visibility (public/private stay lit;

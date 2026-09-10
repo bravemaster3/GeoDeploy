@@ -22,7 +22,7 @@ from qgis.PyQt.QtWidgets import (QAbstractItemView, QAction, QCheckBox, QComboBo
                                  QHBoxLayout, QLabel, QLineEdit, QProgressBar,
                                  QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from . import (diffdialog, export, portals as portal_sync, sources, symbology,
+from . import (diffdialog, export, external, portals as portal_sync, sources, symbology,
                uploadpicker)
 from .connection import GeoDeployError, Instance, saved_instances
 try:                                    # a package, inside QGIS
@@ -135,6 +135,16 @@ class GeoDeployDock(QDockWidget):
         self.connect_btn = QPushButton("Connect")
         self.connect_btn.clicked.connect(self.connect_to_instance)
         row.addWidget(self.connect_btn)
+        # RE-READ THE CATALOG WITHOUT RECONNECTING. The list was refreshed only as a side effect of
+        # connecting, uploading or saving a style — so a layer added from the web UI, a portal
+        # published in another window, or an instance that has been reset since you connected all
+        # left the panel showing something that is no longer true, with no way to ask again short
+        # of typing the URL and connecting from scratch.
+        self.refresh_btn = QPushButton("Refresh")
+        self.refresh_btn.setToolTip("Re-read this instance's layers and portals.")
+        self.refresh_btn.clicked.connect(self.refresh_catalog)
+        self.refresh_btn.setEnabled(False)
+        row.addWidget(self.refresh_btn)
         outer.addLayout(row)
 
         self.token = QLineEdit()
@@ -234,6 +244,22 @@ class GeoDeployDock(QDockWidget):
         self.save_style_btn.clicked.connect(self.save_style)
         outer.addWidget(self.save_style_btn)
 
+        # WHY THEY ARE GREY, ON SCREEN. The reason lived only in a tooltip, and field testing found
+        # exactly what that costs: "'Upload selected layers' always seems to be greyed out - is this
+        # not implemented yet, or is it a problem that I don't have a login?" Nobody hovers a button
+        # they have already concluded is unfinished. So the answer has to be visible without being
+        # asked for, and actionable - hence a link to the tokens page of the instance you are
+        # actually connected to, rather than a sentence telling you to go and find it.
+        self.auth_hint = QLabel()
+        self.auth_hint.setWordWrap(True)
+        self.auth_hint.setOpenExternalLinks(True)
+        # `enum`, not `Qt.RichText`: Qt6 scopes it as `Qt.TextFormat.RichText`, so the flat
+        # spelling is an AttributeError on QGIS 4. Exactly the trap `compat.py` exists for,
+        # and the dock smoke test is what caught it before a user did.
+        self.auth_hint.setTextFormat(enum(Qt, "TextFormat", "RichText"))
+        self.auth_hint.setStyleSheet("color: palette(mid); font-size: 11px;")
+        outer.addWidget(self.auth_hint)
+
         # The actions that genuinely need a credential, each with the explanation it already carries.
         self._write_actions = [(b, b.toolTip()) for b in
                                (self.push_group_btn, self.upload_btn, self.save_style_btn)]
@@ -284,6 +310,8 @@ class GeoDeployDock(QDockWidget):
         explanation is its own kind of dead end.
         """
         signed_in = bool(self.instance and self.instance.token)
+        # Refresh needs a CONNECTION, not a token — anonymous browsing is a first-class mode here.
+        self.refresh_btn.setEnabled(bool(self.instance))
         for button, own in self._write_actions:
             button.setEnabled(signed_in)
             # `own` is the button's real explanation, captured when the dock was built — kept in a
@@ -292,7 +320,30 @@ class GeoDeployDock(QDockWidget):
             button.setToolTip(own if signed_in else
                               "Needs a token with write access — paste one above and connect "
                               "again.\n\n" + own)
+        self.auth_hint.setVisible(not signed_in)
+        if not signed_in:
+            self.auth_hint.setText(self._token_hint())
         self._on_selection_changed()
+
+    def _token_hint(self) -> str:
+        """The one sentence a person needs in order to un-grey the buttons, with somewhere to click.
+
+        (Not to be confused with `_auth_hint`, which explains a 401 that has already happened. This
+        one exists so that it does not.)
+
+        Two versions, because the useful next step differs. With no connection there is no instance
+        whose tokens page could be linked, so the answer is "connect first". Once connected
+        anonymously the answer is a specific page on a specific server, so it is LINKED rather than
+        described - which is the difference between an explanation and an instruction.
+        """
+        if not self.instance:
+            return ("Uploading and saving styles need an API token. Connect to an instance first, "
+                    "then create one under <b>Settings &rarr; API tokens</b>.")
+        base = (self.instance.url or "").rstrip("/")
+        return ("Connected without a token, so uploading and saving styles are unavailable. "
+                'Create one under <a href="{0}/settings?tab=api">Settings &rarr; API tokens</a> '
+                "on this instance, paste it into the token box above, and connect "
+                "again.".format(base))
 
     def _install_auth(self):
         """Attach the token to QGIS's OWN requests for this instance's host.
@@ -436,8 +487,16 @@ class GeoDeployDock(QDockWidget):
                     break
         try:
             self.instance = Instance(url, token)
-        except Exception as exc:                      # noqa: BLE001 - a bad URL is a message
+        except GeoDeployError as exc:                 # noqa: PERF203 - a bad URL is a message
             self._say(f"That URL will not do: {exc}", MSG_CRITICAL)
+            return
+        except Exception as exc:                      # noqa: BLE001
+            # NOT EVERY FAILURE HERE IS THE URL'S FAULT. Saying so sent a user hunting a typo in an
+            # address that was fine, when what had actually happened was a stale client module in a
+            # QGIS that had not been restarted after an upgrade. Only `GeoDeployError` means the
+            # address; everything else says what it was.
+            self._say("Could not open a connection: {0}: {1}".format(
+                type(exc).__name__, exc), MSG_CRITICAL)
             return
         self._busy(True)
         self._run(_Job("GeoDeploy: connecting", self.instance.check), self._connected)
@@ -445,13 +504,14 @@ class GeoDeployDock(QDockWidget):
     def _connected(self, job):
         self._busy(False)
         if job.error:
-            self._say(job.error, MSG_CRITICAL)
+            self._say(self._explain(job.error), MSG_CRITICAL)
             return
         info = job.result or {}
         # Before any layer is added: an OAPIF layer is fetched by QGIS itself, so the token has to
         # be on QGIS's requests, not only on ours.
         self._install_auth()
         self._apply_auth_ui()
+        self._load_fonts()
         who = f"signed in as {info.get('user')}" if info.get("authenticated") else "not signed in"
         extra = ("" if info.get("index_available")
                  else " — this instance does not publish an index, so only what your token can see "
@@ -467,6 +527,87 @@ class GeoDeployDock(QDockWidget):
                       f"{info.get('public_portals', 0)} are public.")
         self._say(f"{info.get('url')} — {who}. {counts}{extra}")
         self.refresh_layers()
+
+    def _load_fonts(self):
+        """Ask the instance which label faces it can draw, and tell the label translator.
+
+        WHICH FONTS EXIST IS PER-INSTANCE, not per-plugin: `templates/shared/fonts/` is a drop-in
+        directory, so an operator who installs Noto Serif has an instance that renders serif labels
+        correctly — and a plugin working from a compiled-in list would map every serif onto the sans
+        anyway, throwing away a substitution the server was ready to do properly.
+
+        Best-effort and public: the route needs no token, and an instance too old to publish it
+        simply leaves the shipped list in place.
+        """
+        try:
+            from . import labels as _labels
+        except ImportError:             # pragma: no cover - labels.py is optional
+            return
+        try:
+            answer = self.instance.client.get("/fonts", auth=False) or {}
+            _labels.set_available(answer.get("fonts"))
+        except Exception as exc:        # noqa: BLE001 - never block connecting over a font list
+            symbology._log("Could not read this instance's font list ({0}); using the faces "
+                           "GeoDeploy ships.".format(exc), level="info")
+
+    def refresh_catalog(self):
+        """Ask the instance for its catalog again, keeping the current connection and selection.
+
+        Separate from `refresh_layers` because it is a USER ACTION and has to behave like one: it
+        says what it is doing, and it reports an expired credential in terms of what to do about it
+        rather than as a bare HTTP 401.
+        """
+        if not self.instance:
+            self._say("Connect to an instance first.", MSG_WARNING)
+            return
+        self._say("Refreshing…", bar=False)
+        try:
+            self.refresh_layers()
+        except Exception as exc:        # noqa: BLE001 - a refresh must not take the dock down
+            self._say(self._auth_hint(exc), MSG_WARNING)
+            return
+        self._say("Refreshed.", bar=False)
+
+    @staticmethod
+    def _is_auth_failure(text: str) -> bool:
+        """Does this failure look like a rejected credential rather than a broken request?
+
+        Matched on the TEXT because it arrives as one: these come back through a worker thread as
+        strings, long after the status code was a number. `authoriz`/`authoris` rather than
+        `unauthor` — a server that answers "Not authorized" is saying the same thing, and both
+        spellings are in the wild.
+        """
+        low = (text or "").lower()
+        return ("401" in low or "403" in low or "token" in low
+                or "authoriz" in low or "authoris" in low)
+
+    def _explain(self, exc) -> str:
+        """A failure message that names the likeliest CAUSE instead of the status code.
+
+        A token that worked ten minutes ago and does not now is almost always one of two things, and
+        neither is obvious from `HTTP 401`: it was revoked, or the instance is a DEMO and has been
+        restored to its seed since — demo mode replaces the whole database on the hour, which
+        deletes every token a visitor created along with everything else they made. A tester hit
+        exactly that while working through the plugin: an upload that had worked five minutes
+        earlier started refusing, and nothing said why.
+
+        Anything that is NOT an auth failure comes back unchanged, which is what lets every failure
+        path use this. It was reachable only from `refresh_catalog` before, so the writes — the
+        upload, the style save, the portal push, which are the operations a token is actually FOR —
+        each reported the bare error instead.
+        """
+        text = str(exc)
+        if not self._is_auth_failure(text):
+            return text
+        return ("This instance no longer accepts that token ({0}). Create a new one under "
+                "Settings → API tokens and connect again. On a public demo this is normal: the "
+                "instance is restored to its starting state periodically — hourly on the "
+                "official one — and every token made since then goes with it.".format(text))
+
+    def _auth_hint(self, exc) -> str:
+        """`_explain`, with the wording a REFRESH wants for anything that is not an auth failure."""
+        text = str(exc)
+        return self._explain(exc) if self._is_auth_failure(text) else "Could not refresh: {0}".format(text)
 
     def refresh_layers(self):
         if not self.instance:
@@ -487,7 +628,7 @@ class GeoDeployDock(QDockWidget):
     def _listed(self, job):
         self._busy(False)
         if job.error:
-            self._say(job.error, MSG_CRITICAL)
+            self._say(self._explain(job.error), MSG_CRITICAL)
             return
         result = job.result or {}
         self._rows = result.get("layers") or []
@@ -568,11 +709,17 @@ class GeoDeployDock(QDockWidget):
     #: The two ways to open a PORTAL, offered in the same picker as a layer's sources because it is
     #: the same question one level up: draw it as published, or open what can actually be edited.
     PORTAL_SOURCES = [
+        # "AS THE PORTAL DRAWS IT" WAS A PROMISE THIS CANNOT KEEP, and it was read as one: every
+        # difference between the tile renderer and the published map came back as a bug report
+        # against a label that said the two were the same. QGIS's tile renderer and MapLibre are
+        # different engines — they place labels differently, generalize differently, and a tile
+        # renderer has no categorized or graduated renderer at all. "Fast preview" says what it is
+        # and what it is for, and the tooltip says where it stops.
         {"kind": "portal-tiles", "is_data": False,
-         "label": "As the portal draws it — fast",
-         "why": "Every layer from the source the portal publishes: tiles, coloured and generalized "
-                "by the server. Fastest to draw, and exactly what a visitor sees — but tiles offer "
-                "no categorized or graduated renderer, so symbology can only be nudged."},
+         "label": "Fast preview — the portal's tiles",
+         "why": "Every layer from the tiles the portal publishes — coloured and generalized by the "
+                "server. Fastest to draw and close to the published map, though a tile renderer "
+                "cannot reproduce every symbol exactly. Open it Editable to change the symbology."},
         {"kind": "portal-data", "is_data": True,
          "label": "Editable — each layer from its data",
          "why": "Every layer opened from its own data — features for a vector, the GeoTIFF for a "
@@ -680,7 +827,7 @@ class GeoDeployDock(QDockWidget):
                 # `symbology.apply` picks the renderer from the layer's TYPE — feature, raster and
                 # vector-tile layers need different ones, and choosing here by source kind is how
                 # the two drifted apart before.
-                applied = (", styled as the portal draws it"
+                applied = (", styled the way the portal styles it"
                            if symbology.apply(layer, style, row)
                            else " — but its saved style could not be applied; the reason is in "
                                 "View > Panels > Log Messages, under GeoDeploy")
@@ -755,7 +902,12 @@ class GeoDeployDock(QDockWidget):
 
         The tag is what makes the portal round trip safe: a group pushed back has to know WHICH
         layer each entry is, and matching by name would break the first time someone renames one.
+
+        The row is COMPLETED first. Adding a public layer without a token used to give a layer with
+        no symbology at all — not because the styling is private, but because the anonymous index
+        does not carry `default_style` and nothing ever asked for the detail that does.
         """
+        row = self._complete(row)
         if source["kind"] == "vector-tiles":
             layer, doc = self._vector_tiles(source, name)
             if layer is None:
@@ -874,6 +1026,12 @@ class GeoDeployDock(QDockWidget):
                     layer.setCustomProperty(symbology.P_GEOMETRY,
                                             cfg.get("geometry_type") or "")
                     self._set_tile_extent(layer, doc.get("bounds"))
+            elif kind == "geojson":
+                # AN EXTERNAL WFS, drawn by the portal through GeoDeploy's own GeoJSON proxy — the
+                # proxy exists so an unauthenticated portal is not blocked by the provider's CORS
+                # policy, and using it here means QGIS sees exactly the features the portal shows.
+                # `/vsicurl/` so GDAL streams it rather than being handed a path it cannot open.
+                layer = QgsVectorLayer("/vsicurl/" + url, name, "ogr")
             else:
                 return None
         except Exception as exc:        # noqa: BLE001 - one layer must not stop the group
@@ -882,6 +1040,9 @@ class GeoDeployDock(QDockWidget):
         if layer is None or not layer.isValid():
             return None
         if self.instance:
+            # THE TYPE THE CONFIG STATES, which for an external source is "external". Defaulting to
+            # "vector" here would tag somebody else's WMS as GeoDeploy vector layer N, and the next
+            # push would quietly point the portal at whatever layer N happens to be.
             portal_sync.tag_layer(layer, self.instance.url, cfg.get("layer_id"),
                                   cfg.get("layer_type") or "vector")
         return layer
@@ -1049,13 +1210,36 @@ class GeoDeployDock(QDockWidget):
             symbology._log("Could not set the raster's extent: {0}".format(exc))
 
     def _row_for(self, layer_id, layer_type):
-        """The listing row matching a portal layer_config entry."""
+        """The listing row matching a portal layer_config entry, COMPLETE.
+
+        An anonymous listing is deliberately the smallest view of an instance: no `default_style`,
+        no `columns`, no `schema_name`. That is a property of the cheap index, not of the layer's
+        permissions — the same layer's public detail carries all of it — so a row is completed here
+        rather than being used thin. `Instance.layer_detail` is a no-op for an authenticated row
+        and remembers what it fetched, so this stays one call per layer at most.
+        """
         for row in self._rows:
             kind = "raster" if (row.get("layer_type") == "raster"
                                 or row.get("storage_backend") == "raster") else "vector"
             if str(row.get("id")) == str(layer_id) and kind == layer_type:
-                return row
+                return self._complete(row)
         return None
+
+    def _complete(self, row):
+        """One layer row with everything the styling and source pickers need.
+
+        Kept as a method so the completion is remembered ON the listing: a portal group asks for
+        the same row when it opens, when it is restyled and when it is pushed back.
+        """
+        if not self.instance or not isinstance(row, dict) or not row.get("_public"):
+            return row
+        try:
+            full = self.instance.layer_detail(row)
+        except Exception:               # noqa: BLE001 - the thin row still opens the layer
+            return row
+        if full is not row and isinstance(full, dict):
+            row.update({k: v for k, v in full.items() if row.get(k) is None})
+        return row
 
     def open_portal_as_group(self):
         """Every layer of a portal, in its order, styled as the portal styles it, in one group.
@@ -1071,28 +1255,24 @@ class GeoDeployDock(QDockWidget):
             return
         if not self.instance:
             return
-        ref = row.get("id") or row.get("slug")
-        slug = row.get("slug")
+        # `portal_document` reads the row itself — which id or slug to use, and by which route, is
+        # its decision now rather than something unpicked here and there.
         instance = self.instance
 
         def work():
-            # With a token, ask the API — it is authoritative and covers unpublished portals.
-            if instance.token and ref is not None:
-                try:
-                    return portal_sync.enrich_from_published(
-                        instance.client.portals.get(ref), instance, symbology.style_from_legend)
-                except GeoDeployError:
-                    pass                # fall through: a published portal is readable anyway
-            # Without one, read what the portal PUBLISHES. Looking at a public portal should never
-            # require an account; only changing it should.
-            if not slug:
-                raise GeoDeployError("This portal has no published address to read.")
-            doc = instance.published_style(slug)
-            return {"id": row.get("id"), "slug": slug,
-                    "title": row.get("title") or row.get("name") or slug,
-                    "layer_configs": portal_sync.configs_from_published_style(
-                        doc, symbology.style_from_legend),
-                    "_anonymous": True}
+            # ONE PATH, TOKEN OR NOT. `Instance.portal_document` decides how to READ the portal —
+            # the API, the public portal route, or (for an old instance) the published style — and
+            # every one of them answers with the same `layer_configs`. `enrich_from_published`
+            # then adds what only the published document knows: the SOURCE each layer is drawn
+            # from, its geometry, its name.
+            #
+            # It used to branch here, and the anonymous half was a second implementation of "what
+            # does this portal look like" that nothing kept in step: a rule tree, a stacked stroke,
+            # a per-class marker and a label's placement have no paint value to be read back out
+            # of, so an anonymous visitor got an approximation that fell further behind with every
+            # symbology fix.
+            return portal_sync.enrich_from_published(
+                instance.portal_document(row), instance, symbology.style_from_legend)
 
         def work_and_warm():
             """The portal document, plus every per-layer document its build will need.
@@ -1121,7 +1301,7 @@ class GeoDeployDock(QDockWidget):
     def _portal_opened(self, job):
         self._busy(False)
         if job.error:
-            self._say(job.error, MSG_CRITICAL)
+            self._say(self._explain(job.error), MSG_CRITICAL)
             return
         doc = job.result or {}
         configs = doc.get("layer_configs") or []
@@ -1164,103 +1344,115 @@ class GeoDeployDock(QDockWidget):
             author built, so they come across as folders rather than being flattened."""
             nonlocal added
             for item in node_list:
-                if item.get("children") is not None:
-                    sub = parent.addGroup(item.get("name") or "Folder")
-                    sub.setCustomProperty(portal_sync.P_FOLDER_ID, str(item.get("id") or ""))
-                    sub.setExpanded(not item.get("collapsed"))
-                    place(item.get("children") or [], sub)
-                    continue
-                key = (int(item.get("layer_id")), str(item.get("layer_type") or "vector"))
-                cfg = by_key.get(key)
-                if cfg is None:
-                    continue
-                label = str(cfg.get("name") or cfg.get("layer_id"))
-                layer_row = self._row_for(cfg.get("layer_id"), cfg.get("layer_type"))
-                layer = None
-                portal_url = (cfg.get("source") or {}).get("url")
-                # EDITABLE MODE INVERTS THE PRIORITY. The portal's own source is what makes the
-                # group look like the portal, and it is also the one thing that cannot be restyled:
-                # tiles have no categorized or graduated renderer and a server-rendered raster
-                # reaches QGIS as colour. Asked for the editable group, each layer is opened from
-                # its DATA instead and then painted with the portal's styling below — same picture,
-                # but every renderer QGIS has now applies to it.
-                if editable and layer_row is not None:
-                    source = sources.describe(layer_row, prefer_attributes=True)
-                    layer = (self._open_best(layer_row, source,
-                                             layer_row.get("name") or "layer")[0]
-                             if source else None)
-                if layer is None and portal_url and not editable:
-                    # THE PORTAL'S OWN SOURCE, for every layer type, because that is what "open the
-                    # portal" means.
-                    #
-                    # For a RASTER it is the styling: the server colours these, and the portal bakes
-                    # its colormap, stretch, band choice and hillshade into the tile URL — the same
-                    # raster reads `&colormap_name=terrain` in one portal, a bare `&rescale=` in
-                    # another and `&algorithm=hillshade&expression=b1*5.0` in a third. For a VECTOR
-                    # it is which tiles: a 3D point layer is drawn from a `pillars` function that
-                    # buffers the points into polygons, and nothing in the layer's own listing entry
-                    # points there. Either way, going through the layer's entry instead draws
-                    # something the portal does not show.
-                    layer = self._layer_from_portal_source(cfg, label)
-                if layer is None and layer_row is not None and not editable:
-                    source = sources.describe(layer_row)
-                    layer = (self._open_best(layer_row, source,
-                                             layer_row.get("name") or "layer")[0]
-                             if source else None)
-                if layer is None and portal_url:
-                    # Not in the listing, or its data would not open: a layer that is not itself
-                    # published, on a portal that is. The portal's own style says where it draws
-                    # from, and that source is readable by anyone who can read the portal — which
-                    # is the whole point. In editable mode this is a fallback rather than the
-                    # first choice, so such a layer still appears; it simply cannot be restyled.
-                    layer = self._layer_from_portal_source(cfg, label)
-                    if editable:
-                        _log_editable_fallback(label)
-                if layer is None:
-                    missing.append(label)
-                    continue
-                project.addMapLayer(layer, False)   # False: placed into the group, not the root
-                tree_node = parent.addLayer(layer)
-                tree_node.setItemVisibilityChecked(bool(cfg.get("visible", True)))
-                # OPACITY IS PART OF THE PICTURE. The portal stores it per layer and the push path
-                # already sends it back, but nothing applied it on the way IN — so a half-transparent
-                # overlay opened solid, hid what it was drawn over, and pushing the group back then
-                # reported it as a change the user never made.
-                _set_opacity(layer, cfg.get("opacity"))
-                style = (cfg.get("style") or {}) if self.styled.isChecked() else {}
-                # A PORTAL'S RASTER COLOURS LIVE IN ITS TILE URL, not in its layer_config: the
-                # server does the colouring, so `style` for a raster is usually empty and the
-                # colormap, stretch, band and algorithm are baked into the template. Opened as a
-                # GeoTIFF there is nothing to read them from — so they are parsed back out, and the
-                # raster arrives coloured as THIS portal draws it rather than as the layer's default.
-                if style is not None and editable and cfg.get("layer_type") == "raster" and portal_url:
-                    baked = sources.raster_style_from_tile_url(portal_url)
-                    if baked:
-                        style = symbology.merge_style(style, baked)
-                # Rasters are no longer excluded: opened from their GeoTIFF they have real bands and
-                # `symbology.apply` builds them a renderer. Server-rendered tiles still have nothing
-                # to style, and `raster_to_qgis` declines those itself.
-                if style:
-                    # THE PORTAL'S style wins over the layer's default here — that is what opening
-                    # a portal means. Through the dispatcher, so a tile layer gets the tile
-                    # renderer instead of silently keeping the colour it was born with.
-                    #
-                    # The GEOMETRY has to come with it. A portal may show a layer that is not in
-                    # the public listing, and `layer_row` is then None — so the renderer was left
-                    # guessing, guessed "point", and drew polygons as a dot per vertex. The
-                    # published style records the geometry; prefer it, since it describes the very
-                    # tiles being drawn.
-                    row_for_style = dict(layer_row or {})
-                    if cfg.get("geometry_type"):
-                        row_for_style["geometry_type"] = cfg["geometry_type"]
-                    symbology.apply(layer, style, row_for_style)
-                    # 3D needs a FEATURE layer to hang a renderer on. Opened as the portal draws it,
-                    # an extruded layer is a tile layer and QGIS's 3D view shows it flat — which
-                    # reads as "3D is not implemented" unless somebody says otherwise.
-                    if symbology.is_extruded(style) and not isinstance(layer, QgsVectorLayer):
-                        flat_3d.append(label)
-                added += 1
+                try:
+                    if item.get("children") is not None:
+                        sub = parent.addGroup(item.get("name") or "Folder")
+                        sub.setCustomProperty(portal_sync.P_FOLDER_ID, str(item.get("id") or ""))
+                        sub.setExpanded(not item.get("collapsed"))
+                        place(item.get("children") or [], sub)
+                        continue
+                    key = (int(item.get("layer_id")), str(item.get("layer_type") or "vector"))
+                    cfg = by_key.get(key)
+                    if cfg is None:
+                        continue
+                    label = str(cfg.get("name") or cfg.get("layer_id"))
+                    layer_row = self._row_for(cfg.get("layer_id"), cfg.get("layer_type"))
+                    layer = None
+                    portal_url = (cfg.get("source") or {}).get("url")
+                    # EDITABLE MODE INVERTS THE PRIORITY. The portal's own source is what makes the
+                    # group look like the portal, and it is also the one thing that cannot be restyled:
+                    # tiles have no categorized or graduated renderer and a server-rendered raster
+                    # reaches QGIS as colour. Asked for the editable group, each layer is opened from
+                    # its DATA instead and then painted with the portal's styling below — same picture,
+                    # but every renderer QGIS has now applies to it.
+                    if editable and layer_row is not None:
+                        source = sources.describe(layer_row, prefer_attributes=True)
+                        layer = (self._open_best(layer_row, source,
+                                                 layer_row.get("name") or "layer")[0]
+                                 if source else None)
+                    if layer is None and portal_url and not editable:
+                        # THE PORTAL'S OWN SOURCE, for every layer type, because that is what "open the
+                        # portal" means.
+                        #
+                        # For a RASTER it is the styling: the server colours these, and the portal bakes
+                        # its colormap, stretch, band choice and hillshade into the tile URL — the same
+                        # raster reads `&colormap_name=terrain` in one portal, a bare `&rescale=` in
+                        # another and `&algorithm=hillshade&expression=b1*5.0` in a third. For a VECTOR
+                        # it is which tiles: a 3D point layer is drawn from a `pillars` function that
+                        # buffers the points into polygons, and nothing in the layer's own listing entry
+                        # points there. Either way, going through the layer's entry instead draws
+                        # something the portal does not show.
+                        layer = self._layer_from_portal_source(cfg, label)
+                    if layer is None and layer_row is not None and not editable:
+                        source = sources.describe(layer_row)
+                        layer = (self._open_best(layer_row, source,
+                                                 layer_row.get("name") or "layer")[0]
+                                 if source else None)
+                    if layer is None and portal_url:
+                        # Not in the listing, or its data would not open: a layer that is not itself
+                        # published, on a portal that is. The portal's own style says where it draws
+                        # from, and that source is readable by anyone who can read the portal — which
+                        # is the whole point. In editable mode this is a fallback rather than the
+                        # first choice, so such a layer still appears; it simply cannot be restyled.
+                        layer = self._layer_from_portal_source(cfg, label)
+                        if editable:
+                            _log_editable_fallback(label)
+                    if layer is None:
+                        missing.append(label)
+                        continue
+                    project.addMapLayer(layer, False)   # False: placed into the group, not the root
+                    tree_node = parent.addLayer(layer)
+                    tree_node.setItemVisibilityChecked(bool(cfg.get("visible", True)))
+                    # OPACITY IS PART OF THE PICTURE. The portal stores it per layer and the push path
+                    # already sends it back, but nothing applied it on the way IN — so a half-transparent
+                    # overlay opened solid, hid what it was drawn over, and pushing the group back then
+                    # reported it as a change the user never made.
+                    _set_opacity(layer, cfg.get("opacity"))
+                    style = (cfg.get("style") or {}) if self.styled.isChecked() else {}
+                    # A PORTAL'S RASTER COLOURS LIVE IN ITS TILE URL, not in its layer_config: the
+                    # server does the colouring, so `style` for a raster is usually empty and the
+                    # colormap, stretch, band and algorithm are baked into the template. Opened as a
+                    # GeoTIFF there is nothing to read them from — so they are parsed back out, and the
+                    # raster arrives coloured as THIS portal draws it rather than as the layer's default.
+                    if style is not None and editable and cfg.get("layer_type") == "raster" and portal_url:
+                        baked = sources.raster_style_from_tile_url(portal_url)
+                        if baked:
+                            style = symbology.merge_style(style, baked)
+                    # Rasters are no longer excluded: opened from their GeoTIFF they have real bands and
+                    # `symbology.apply` builds them a renderer. Server-rendered tiles still have nothing
+                    # to style, and `raster_to_qgis` declines those itself.
+                    if style:
+                        # THE PORTAL'S style wins over the layer's default here — that is what opening
+                        # a portal means. Through the dispatcher, so a tile layer gets the tile
+                        # renderer instead of silently keeping the colour it was born with.
+                        #
+                        # The GEOMETRY has to come with it. A portal may show a layer that is not in
+                        # the public listing, and `layer_row` is then None — so the renderer was left
+                        # guessing, guessed "point", and drew polygons as a dot per vertex. The
+                        # published style records the geometry; prefer it, since it describes the very
+                        # tiles being drawn.
+                        row_for_style = dict(layer_row or {})
+                        if cfg.get("geometry_type"):
+                            row_for_style["geometry_type"] = cfg["geometry_type"]
+                        symbology.apply(layer, style, row_for_style)
+                        # 3D needs a FEATURE layer to hang a renderer on. Opened as the portal draws it,
+                        # an extruded layer is a tile layer and QGIS's 3D view shows it flat — which
+                        # reads as "3D is not implemented" unless somebody says otherwise.
+                        if symbology.is_extruded(style) and not isinstance(layer, QgsVectorLayer):
+                            flat_3d.append(label)
+                    added += 1
 
+                except Exception as exc:        # noqa: BLE001
+                    # ONE LAYER MUST NOT COST THE GROUP. A colormap this build could not
+                    # parse threw out of here, and because the exception escaped the LOOP,
+                    # every layer AFTER it was never added to the tree — a portal opened
+                    # with its raster unstyled and a polygon simply missing from the layer
+                    # list, which reads as the polygon having been lost rather than as one
+                    # style having failed to parse.
+                    symbology._log("Could not add {0} to the group ({1}: {2}); the rest of "
+                                   "the portal is still opening.".format(
+                                       item.get("name") or item.get("layer_id"),
+                                       type(exc).__name__, exc), level="warning")
         # A portal with no folders is a flat list — the configs themselves, in order.
         # layer_configs[0] is the TOP, and adding in the same order puts it at the top here too.
         tree = doc.get("layer_groups") or [
@@ -1287,7 +1479,7 @@ class GeoDeployDock(QDockWidget):
                      + ", ".join(flat_3d[:3]) + ") - reopen the portal with Source set to "
                      "“Editable” to see and edit it. The 3D itself is unchanged.")
         how = ("every layer from its data, so all of QGIS's symbology applies" if editable
-               else "as the portal draws it")
+               else "as a fast preview from the portal's tiles")
         self._say("Opened " + str(doc.get("title")) + " as a group - " + str(added) +
                   " layer(s), " + how + "." + note + " Restyle it, then use Push group to portal.",
                   MSG_WARNING if (missing or not_editable or flat_3d) else MSG_INFO)
@@ -1340,6 +1532,12 @@ class GeoDeployDock(QDockWidget):
             self, title or "Untitled portal",
             {"unchanged": plan["unchanged"], "restyled": plan["restyled"], "added": plan["added"],
              "uploads": [name for name, _layer, _node in plan["uploads"]],
+             # A service is named WITH ITS ADDRESS: "OS Open Raster" says nothing about whose
+             # server the portal will be fetching from, and that is the fact being approved.
+             "sources": ["{0} — {1} {2}".format(name, spec["source_type"].upper(), spec["url"])
+                         for name, _layer, _node, spec in plan.get("sources") or []],
+             "unsupported": ["{0} — {1}".format(name, why)
+                             for name, why in plan.get("unsupported") or []],
              "removed": plan["removed"], "rename": plan.get("rename")},
             creating=portal_id is None)
         if not go:
@@ -1347,6 +1545,7 @@ class GeoDeployDock(QDockWidget):
             return
 
         uploads = list(plan["uploads"]) if upload_new else []
+        remote_sources = list(plan.get("sources") or []) if upload_new else []
         keep_removed = [] if drop_removed else [
             cfg for cfg in current
             if (int(cfg.get("layer_id")), str(cfg.get("layer_type")))
@@ -1358,13 +1557,49 @@ class GeoDeployDock(QDockWidget):
 
         def work():
             sent = []
+            # What could not be added, with its reason — reported at the end rather than raised,
+            # because a portal that publishes nine of ten layers is worth having and the tenth is
+            # worth naming.
+            failed = []
+            # SERVICES FIRST, because they are the cheap half: registering one sends no data, and
+            # doing them before a long upload means a group of ten layers with one WMS in it shows
+            # the WMS on the portal even if an upload later fails.
+            registered = []
+            for index, (name, qgis_layer, _node, spec) in enumerate(remote_sources, start=1):
+                self._progress.emit("Registering {0} ({1} of {2})…".format(
+                    name, index, len(remote_sources)))
+                try:
+                    made = client.sources.create(**spec)
+                except GeoDeployError as exc:
+                    # ONE SERVICE MUST NOT COST THE PORTAL. A WFS is PROBED when it is created, so
+                    # a typo in a typeName or a provider that is down fails here — and that is a
+                    # reason to leave one layer out, not to abandon a push the user has approved.
+                    failed.append("{0}: {1}".format(name, exc))
+                    continue
+                source_id = (made or {}).get("id")
+                if source_id is None:
+                    failed.append("{0}: the instance registered it without giving it an id".format(name))
+                    continue
+                # TAGGED like an upload, so the re-plan below puts it in its place in the group's
+                # order and the next push sees an existing source rather than registering a second
+                # copy of the same service.
+                portal_sync.tag_layer(qgis_layer, instance_url, source_id, "external")
+                registered.append(name)
+
             for index, (name, qgis_layer, _node) in enumerate(uploads, start=1):
                 # Reported from the worker thread: publishing a group of five files is a long
                 # operation, and silence through it reads as a hang.
                 self._progress.emit("Uploading {0} ({1} of {2})…".format(name, index, len(uploads)))
                 # Upload, then TAG the QGIS layer with the id it was given. The tag is what makes
                 # the next push see it as an existing layer rather than a new one all over again.
-                path, temporary = export.prepare(qgis_layer)
+                try:
+                    path, temporary = export.prepare(qgis_layer)
+                except export.NotUploadable as exc:
+                    # ONE UNSENDABLE LAYER MUST NOT COST THE PUSH EITHER. This used to raise
+                    # straight out of the worker, so a group containing anything that could not be
+                    # written out published NOTHING — with a message about that one layer.
+                    failed.append("{0}: {1}".format(name, exc))
+                    continue
                 try:
                     result = client.uploads.upload(path, name=name, wait=True)
                 finally:
@@ -1376,8 +1611,13 @@ class GeoDeployDock(QDockWidget):
                 portal_sync.tag_layer(qgis_layer, instance_url, result.layer_id, kind)
                 style = style_for(qgis_layer, kind)
                 if style:
-                    body = (dict(style, opacity=1.0) if kind == "raster"
-                            else {"opacity": 1.0, "style": style, "popup_fields": []})
+                    # THE LAYER'S OWN OPACITY, not 1.0. A layer drawn at 40% in QGIS arrived fully
+                    # opaque, because opacity is a property of the LAYER rather than of its symbol
+                    # and nothing on this path ever asked for it. `portals._opacity_of` is the one
+                    # place that reads it, so the three push paths cannot drift apart.
+                    alpha = portal_sync._opacity_of(qgis_layer)
+                    body = (dict(style, opacity=alpha) if kind == "raster"
+                            else {"opacity": alpha, "style": style, "popup_fields": []})
                     client.layers.api(kind).set_default_style(result.layer_id, body)
                 sent.append(name)
 
@@ -1405,6 +1645,8 @@ class GeoDeployDock(QDockWidget):
                     except OSError:
                         pass
             return {"portal": doc, "uploaded": sent, "kept": len(keep_removed),
+                    "registered": registered, "failed": failed,
+                    "unsupported": [n for n, _why in plan.get("unsupported") or []],
                     "skipped": [n for n, _l, _x in final["uploads"]]}
 
         self._busy(True)
@@ -1415,7 +1657,7 @@ class GeoDeployDock(QDockWidget):
     def _group_pushed(self, job):
         self._busy(False)
         if job.error:
-            self._say(job.error, MSG_CRITICAL)
+            self._say(self._explain(job.error), MSG_CRITICAL)
             return
         result = job.result or {}
         doc = result.get("portal") or {}
@@ -1424,12 +1666,21 @@ class GeoDeployDock(QDockWidget):
             bits.append("uploaded " + str(len(result["uploaded"])))
         if result.get("kept"):
             bits.append("kept " + str(result["kept"]) + " you chose not to remove")
+        if result.get("registered"):
+            bits.append("registered " + str(len(result["registered"])) + " external source(s)")
         if result.get("skipped"):
             bits.append("left out " + ", ".join(result["skipped"][:3]))
+        if result.get("unsupported"):
+            bits.append("no external kind for " + ", ".join(result["unsupported"][:3]))
+        # NAMED WITH THE REASON, and at WARNING, because "published" plus a silent omission is the
+        # one outcome nobody can debug from the map.
+        if result.get("failed"):
+            bits.append("could not add " + "; ".join(result["failed"][:3]))
         detail = (" (" + "; ".join(bits) + ")") if bits else ""
         base = self.instance.url.rstrip("/") if self.instance else ""
         self._say("Portal " + str(doc.get("title")) + " published: " +
-                  base + "/p/" + str(doc.get("slug")) + detail)
+                  base + "/p/" + str(doc.get("slug")) + detail,
+                  MSG_WARNING if (result.get("failed") or result.get("unsupported")) else MSG_INFO)
         self.refresh_layers()
 
     def open_in_browser(self):
@@ -1687,7 +1938,7 @@ class GeoDeployDock(QDockWidget):
     def _style_saved(self, job):
         self._busy(False)
         if job.error:
-            self._say(job.error, MSG_CRITICAL)
+            self._say(self._explain(job.error), MSG_CRITICAL)
             return
         result = job.result or {}
         saved, skipped = result.get("saved") or [], result.get("skipped") or []
@@ -1720,6 +1971,19 @@ class GeoDeployDock(QDockWidget):
         # visible with its reason rather than turning into an error after the fact.
         candidates = []
         for layer in layers:
+            # A SERVICE IS REGISTERED, NOT UPLOADED, and it is offered here rather than refused:
+            # there is no file to send, GeoDeploy holds it as a reference, and the row says so.
+            spec = external.describe(layer)
+            if spec is not None:
+                candidates.append((layer.name(), None,
+                                   "added as a {0} external source — nothing is uploaded".format(
+                                       spec["source_type"].upper())))
+                continue
+            if external.is_remote(layer):
+                why = external.refusal(layer)
+                if why:
+                    candidates.append((layer.name(), why))
+                    continue
             try:
                 export.check(layer)
                 candidates.append((layer.name(), None))
@@ -1734,9 +1998,14 @@ class GeoDeployDock(QDockWidget):
             return
         layers = [lyr for lyr in layers if lyr.name() in set(chosen)]
 
-        jobs = []           # (name, path, temporary, style)
+        jobs = []           # (name, path, temporary, style, source_layer)
+        service_jobs = []   # (name, spec, source_layer) — registered, never uploaded
         refused = []
         for layer in layers:
+            spec = external.describe(layer)
+            if spec is not None:
+                service_jobs.append((layer.name(), spec, layer))
+                continue
             try:
                 # Not `layer.source()`: a filtered layer's file holds MORE than the layer does, and
                 # a memory or PostGIS layer has no file at all. `prepare` writes those out first.
@@ -1754,9 +2023,11 @@ class GeoDeployDock(QDockWidget):
                 style = symbology.raster_from_qgis(layer, self._colormaps())
             else:
                 style = symbology.from_qgis(layer)
-            jobs.append((layer.name(), path, temporary, style))
+            # THE QGIS LAYER ITSELF rides along, so a successful upload can link it to what
+            # it became on the instance — see `_uploaded`.
+            jobs.append((layer.name(), path, temporary, style, layer))
 
-        if not jobs:
+        if not jobs and not service_jobs:
             # Everything was refused — say why, for each, rather than a generic failure.
             self._say(" | ".join(refused) or "Nothing could be uploaded.", MSG_WARNING)
             return
@@ -1765,8 +2036,27 @@ class GeoDeployDock(QDockWidget):
         total = len(jobs)
 
         def work():
-            uploaded, styled, failed = [], [], list(refused)
-            for index, (name, path, temporary, style) in enumerate(jobs, start=1):
+            uploaded, styled, failed, linked = [], [], list(refused), []
+            registered = []
+            # THE SERVICES FIRST, and each one's failure is its own: a WFS is probed as it is
+            # created, so an unreachable host or a wrong typeName surfaces here — for that layer.
+            for name, spec, source_layer in service_jobs:
+                self._progress.emit("Registering {0}…".format(name))
+                try:
+                    made = client.sources.create(**spec)
+                except Exception as exc:            # noqa: BLE001 - one service, not the batch
+                    failed.append("{0}: {1}".format(name, exc))
+                    continue
+                source_id = (made or {}).get("id")
+                if source_id is None:
+                    failed.append("{0}: registered without an id".format(name))
+                    continue
+                # Linked like an upload — applied on the main thread in `_uploaded` — so the layer
+                # already open answers "yes, I am that GeoDeploy source" to a later portal push.
+                if source_layer is not None:
+                    linked.append((source_layer, source_id, "external"))
+                registered.append(name)
+            for index, (name, path, temporary, style, source_layer) in enumerate(jobs, start=1):
                 # Reported from the worker thread: a queue that looks frozen for four of five files
                 # is worse than no progress at all.
                 self._progress.emit("Uploading {0} ({1} of {2})…".format(name, index, total))
@@ -1779,10 +2069,24 @@ class GeoDeployDock(QDockWidget):
                         api = client.layers.api(kind)
                         # The two kinds take different bodies. A raster's IS the style; a vector's
                         # wraps it, alongside opacity and popup fields.
-                        body = (dict(style, opacity=1.0) if kind == "raster"
-                                else {"opacity": 1.0, "style": style, "popup_fields": []})
+                        alpha = portal_sync._opacity_of(source_layer)
+                        body = (dict(style, opacity=alpha) if kind == "raster"
+                                else {"opacity": alpha, "style": style, "popup_fields": []})
                         api.set_default_style(result.layer_id, body)
                         styled.append(name)
+                    # LINK THE LAYER YOU ALREADY HAVE OPEN to what it just became. Without this the
+                    # obvious next step failed: upload a layer, restyle it in QGIS, press "Save
+                    # styling to GeoDeploy", and be told "A layer must have been ADDED from
+                    # GeoDeploy to be saved back to it" — about the very layer just uploaded. The
+                    # identity is all `layer_identity` needs, so the layer keeps its own local data
+                    # source (no reload, no round trip over the network) and still answers "yes, I
+                    # am that GeoDeploy layer" to Save styling, Restyle, and a portal push.
+                    #
+                    # Collected here and APPLIED ON THE MAIN THREAD in `_uploaded`: this runs inside
+                    # a QgsTask, and touching a map layer's properties off the main thread is how a
+                    # plugin crashes QGIS rather than merely failing.
+                    if getattr(result, "layer_id", None) and source_layer is not None:
+                        linked.append((source_layer, result.layer_id, result.plan.layer_type))
                     uploaded.append(name)
                 except Exception as exc:            # noqa: BLE001 - one bad layer, not the batch
                     # Four good layers must still arrive when the third one is broken.
@@ -1791,7 +2095,8 @@ class GeoDeployDock(QDockWidget):
                     if temporary:
                         # A multi-gigabyte export is not left behind in temp because upload failed.
                         shutil.rmtree(os.path.dirname(path), ignore_errors=True)
-            return {"uploaded": uploaded, "styled": styled, "failed": failed}
+            return {"uploaded": uploaded, "styled": styled, "failed": failed,
+                    "linked": linked, "registered": registered}
 
         self._busy(True)
         self._say("Uploading {0} layer(s)… large files go straight to storage.".format(total),
@@ -1801,12 +2106,22 @@ class GeoDeployDock(QDockWidget):
     def _uploaded(self, job):
         self._busy(False)
         if job.error:
-            self._say(job.error, MSG_CRITICAL)
+            self._say(self._explain(job.error), MSG_CRITICAL)
             return
         result = job.result or {}
         uploaded = result.get("uploaded") or []
         failed = result.get("failed") or []
         styled = result.get("styled") or []
+
+        # On the main thread, where touching a layer is safe — see the note in `work()`.
+        linked = 0
+        for source_layer, layer_id, kind in (result.get("linked") or []):
+            try:
+                portal_sync.tag_layer(source_layer, self.instance.url, layer_id, kind)
+                linked += 1
+            except Exception as exc:    # noqa: BLE001 - the upload landed; the link is a bonus
+                symbology._log("Uploaded, but could not link {0} to its GeoDeploy layer: {1}"
+                               .format(getattr(source_layer, "name", lambda: "a layer")(), exc))
         # Only claim what was actually sent. A renderer we cannot translate produces no style, and
         # saying "styling sent" anyway is how a silent no-op passes for a feature.
         if styled and len(styled) == len(uploaded):
@@ -1818,16 +2133,34 @@ class GeoDeployDock(QDockWidget):
         else:
             styling = ""
 
+        # Say that the link happened, because it changes what the user can do next.
+        link_note = (" Now linked to GeoDeploy — restyle in QGIS and press “Save styling to "
+                     "GeoDeploy”." if linked else "")
+
+        registered = result.get("registered") or []
+        # SAID SEPARATELY, because "uploaded" would be untrue: nothing was copied, and what the
+        # portal shows tomorrow is whatever the provider serves then.
+        service_note = ""
+        if registered:
+            service_note = (" Registered {0} as an external source — referenced from the "
+                            "provider, not copied.".format(registered[0]) if len(registered) == 1
+                            else " Registered {0} external sources — referenced from their "
+                                 "providers, not copied.".format(len(registered)))
+        if registered and not uploaded and not failed:
+            self._say(service_note.strip() + link_note)
+            self.refresh_layers()
+            return
         if uploaded and not failed:
             what = uploaded[0] if len(uploaded) == 1 else f"{len(uploaded)} layers"
-            self._say(f"Uploaded {what}.{styling}")
+            self._say(f"Uploaded {what}.{styling}{service_note}{link_note}")
         elif uploaded and failed:
             # Partial success is its own outcome. Reporting it as failure hides work that landed;
             # reporting it as success hides work that did not.
-            self._say(f"Uploaded {len(uploaded)}, but {len(failed)} did not: " + " | ".join(failed),
-                      MSG_WARNING)
+            self._say(self._explain(f"Uploaded {len(uploaded)}, but {len(failed)} did not: "
+                                    + " | ".join(failed)), MSG_WARNING)
         else:
-            self._say(" | ".join(failed) or "Nothing was uploaded.", MSG_CRITICAL)
+            self._say(self._explain(" | ".join(failed)) if failed else "Nothing was uploaded.",
+                      MSG_CRITICAL)
         if uploaded:
             self.refresh_layers()
 

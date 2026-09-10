@@ -15,7 +15,7 @@
       <!-- Type -->
       <div>
         <label class="text-xs text-muted-foreground block mb-1">Service type</label>
-        <div class="grid grid-cols-3 gap-2">
+        <div class="grid grid-cols-4 gap-2">
           <button v-for="t in types" :key="t.value" type="button"
             class="p-2 rounded-lg border text-xs font-medium transition-colors"
             :class="form.source_type === t.value ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-muted-foreground/40 text-foreground/85'"
@@ -36,12 +36,33 @@
         <input v-model="form.url" type="text" :placeholder="urlPlaceholder" class="input w-full text-sm font-mono" />
       </div>
 
-      <!-- Layer name (WMS/WFS) -->
-      <div v-if="form.source_type !== 'xyz'">
+      <!-- Which layer of the service. Not every kind has one, and the ones that do call it
+           different things — so the label names what THAT service calls it. -->
+      <div v-if="needsLayerName">
         <label class="text-xs text-muted-foreground block mb-1">
-          {{ form.source_type === 'wms' ? 'WMS layer name (layers=)' : 'WFS feature type (typeName)' }}
+          {{ layerNameLabel }}
+          <span v-if="form.source_type === 'ogcapi'" class="text-muted-foreground/70">(optional if the URL names it)</span>
         </label>
-        <input v-model="form.layer_name" type="text" placeholder="e.g. topp:states" class="input w-full text-sm font-mono" />
+        <input v-model="form.layer_name" type="text" :placeholder="layerNamePlaceholder" class="input w-full text-sm font-mono" />
+      </div>
+
+      <!-- The layer INSIDE a vector tile. A tile is a container of named layers, and a style that
+           names none draws nothing at all — so this is asked for, and probed where the provider
+           publishes it (a TileJSON, a PMTiles header). -->
+      <div v-if="needsSourceLayer">
+        <label class="text-xs text-muted-foreground block mb-1">
+          Layer inside the tiles
+          <span class="text-muted-foreground/70">(read automatically when the service publishes it)</span>
+        </label>
+        <input v-model="form.source_layer" type="text" placeholder="e.g. water" class="input w-full text-sm font-mono" />
+      </div>
+
+      <!-- WMTS tile matrix set. Nearly every server publishes the Web Mercator one beside its own. -->
+      <div v-if="form.source_type === 'wmts'">
+        <label class="text-xs text-muted-foreground block mb-1">
+          Tile matrix set <span class="text-muted-foreground/70">(default GoogleMapsCompatible)</span>
+        </label>
+        <input v-model="form.matrix_set" type="text" placeholder="GoogleMapsCompatible" class="input w-full text-sm font-mono" />
       </div>
 
       <!-- Attribution -->
@@ -72,9 +93,13 @@ const emit = defineEmits(['close'])
 const dataStore = useDataStore()
 
 const types = [
-  { value: 'xyz', label: 'XYZ / WMTS' },
+  { value: 'xyz', label: 'XYZ' },
   { value: 'wms', label: 'WMS' },
+  { value: 'wmts', label: 'WMTS' },
   { value: 'wfs', label: 'WFS' },
+  { value: 'ogcapi', label: 'OGC API' },
+  { value: 'vectortile', label: 'Vector tiles' },
+  { value: 'pmtiles', label: 'PMTiles' },
 ]
 
 const form = ref({
@@ -82,6 +107,8 @@ const form = ref({
   name: '',
   url: '',
   layer_name: '',
+  source_layer: '',
+  matrix_set: '',
   attribution: '',
 })
 const saving = ref(false)
@@ -90,17 +117,45 @@ const error = ref('')
 const typeHint = computed(() => ({
   xyz: 'Raster tiles. Paste a tile template with {z}/{x}/{y} (a WMTS RESTful template works too).',
   wms: 'Rendered map images. Paste the WMS base URL and the layer name.',
+  wmts: 'Tiled map images from a WMTS endpoint. Paste the service URL and the layer; a RESTful template is XYZ instead.',
   wfs: 'Vector features (validated on add, fetched as GeoJSON). Paste the WFS base URL and feature type.',
+  ogcapi: 'OGC API - Features. Paste the landing page, the collection, or the items URL — all three work.',
+  vectortile: 'A third-party vector tile set. Paste a {z}/{x}/{y}.pbf template or its TileJSON. Served through this instance, so the provider needs no CORS policy.',
+  pmtiles: 'A remote PMTiles archive, read a tile at a time by this instance — the whole file is never downloaded, and the provider needs no CORS policy.',
 }[form.value.source_type]))
 
-const urlLabel = computed(() => form.value.source_type === 'xyz' ? 'Tile URL template' : 'Service base URL')
-const urlPlaceholder = computed(() => form.value.source_type === 'xyz'
-  ? 'https://tiles.example.com/{z}/{x}/{y}.png'
-  : 'https://example.com/geoserver/ows')
+//: Which kinds have more than one layer behind one address, and what that service calls it.
+const LAYER_LABELS = {
+  wms: 'WMS layer name (layers=)',
+  wmts: 'WMTS layer',
+  wfs: 'WFS feature type (typeName)',
+  ogcapi: 'Collection id',
+}
+const needsLayerName = computed(() => !!LAYER_LABELS[form.value.source_type])
+const layerNameLabel = computed(() => LAYER_LABELS[form.value.source_type] || 'Layer')
+const layerNamePlaceholder = computed(() =>
+  form.value.source_type === 'ogcapi' ? 'e.g. roads' : 'e.g. topp:states')
+const needsSourceLayer = computed(() =>
+  ['vectortile', 'pmtiles'].includes(form.value.source_type))
+
+const urlLabel = computed(() => ({
+  xyz: 'Tile URL template',
+  vectortile: 'Tile template or TileJSON URL',
+  pmtiles: 'Archive URL',
+  ogcapi: 'Landing page, collection or items URL',
+}[form.value.source_type] || 'Service base URL'))
+const urlPlaceholder = computed(() => ({
+  xyz: 'https://tiles.example.com/{z}/{x}/{y}.png',
+  vectortile: 'https://tiles.example.com/{z}/{x}/{y}.pbf',
+  pmtiles: 'https://files.example.com/basemap.pmtiles',
+  ogcapi: 'https://example.com/ogc/collections/roads',
+}[form.value.source_type] || 'https://example.com/geoserver/ows'))
 
 const canSubmit = computed(() => {
   if (!form.value.name.trim() || !form.value.url.trim()) return false
-  if (form.value.source_type !== 'xyz' && !form.value.layer_name.trim()) return false
+  // A collection can be in the URL instead of the field, which is how people usually have it.
+  if (form.value.source_type === 'ogcapi') return true
+  if (needsLayerName.value && !form.value.layer_name.trim()) return false
   return true
 })
 
@@ -114,6 +169,8 @@ async function submit() {
       source_type: form.value.source_type,
       url: form.value.url.trim(),
       layer_name: form.value.layer_name.trim() || null,
+      source_layer: form.value.source_layer.trim() || null,
+      matrix_set: form.value.matrix_set.trim() || null,
       attribution: form.value.attribution.trim() || null,
     })
     dataStore.addExternal(data)

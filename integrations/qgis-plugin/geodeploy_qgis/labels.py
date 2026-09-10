@@ -1,0 +1,1053 @@
+"""QGIS labelling ⇄ GeoDeploy's `style.labels`.
+
+## Why labels are their own module and their own style block
+
+A label is a second thing drawn for the same feature. It has its own text, its own font, its own
+colour, its own placement and its own scale range, and none of that belongs in a symbol. QGIS keeps
+it in `QgsPalLayerSettings`, hung off the layer beside the renderer; GeoDeploy keeps it in
+`style.labels` and emits it as its own MapLibre `symbol` layer.
+
+## What travels, and the two places it does not
+
+`QgsPalLayerSettings` publishes **125 data-defined properties**. Most of them describe things
+MapLibre has: the text, the font, the size, the colour, the buffer (which is a halo), the offset,
+the rotation, the wrap width, the letter spacing, the capitalisation, whether labels may overlap,
+the priority, and the scale range. Those are read and written here and round-trip exactly.
+
+Two families do not, and both are named rather than approximated:
+
+* **Shadows and background shapes.** MapLibre draws a halo and nothing else — no drop shadow, no
+  rounded rectangle behind the text. Faking a shadow with a second offset label layer would put
+  real text under the real text, which breaks selection and collision.
+* **Callouts.** The leader line QGIS draws from a displaced label back to its feature is a second
+  geometry, and there is nowhere to put it.
+
+## Fonts are the sharp edge
+
+MapLibre renders text from GLYPH PBFs, and a fontstack the glyph source does not have draws
+**nothing at all** — no error, no fallback, no text. So a label's font is not carried verbatim: it
+is mapped onto the small set of stacks the instance can actually serve (`LABEL_FONTS`), keeping the
+weight and slant where they exist. Carrying "Helvetica Neue Condensed" faithfully would produce a
+map with no labels on it and nothing to say why.
+"""
+from __future__ import annotations
+
+import math
+
+from geodeploy import expressions
+from geodeploy.styles import zoom_for_scale, scale_for_zoom
+
+try:                                    # a package, inside QGIS
+    from . import symbology
+except ImportError:                     # pragma: no cover - exec'd standalone by the test harness
+    import symbology
+
+try:                                    # pragma: no cover - only present inside QGIS
+    from qgis.core import (QgsPalLayerSettings, QgsTextFormat, QgsTextBufferSettings,
+                           QgsVectorLayerSimpleLabeling)
+    QGIS_LABELS = True
+except ImportError:                     # pragma: no cover
+    QGIS_LABELS = False
+
+#: The faces GeoDeploy SHIPS. Used only when the instance has not been asked — see `set_available`.
+LABEL_FONTS = ("Noto Sans Regular", "Noto Sans Bold", "Noto Sans Italic")
+DEFAULT_FONT = "Noto Sans Regular"
+
+#: What THIS instance can actually draw, filled in from `GET /api/fonts` when the plugin connects.
+#: A module-level cache rather than a parameter threaded through six functions: the value belongs to
+#: the connection, changes once per connect, and every reader wants the same answer.
+_AVAILABLE = list(LABEL_FONTS)
+
+#: Families QGIS users reach for, grouped by what they ARE, so a substitution picks a face of the
+#: right kind rather than always landing on the sans. Lowercased; matched as a substring, which is
+#: what catches "Times New Roman PS MT" and "DejaVu Serif Condensed".
+_SERIF = ("serif", "times", "georgia", "garamond", "book", "roman", "cambria", "palatino",
+          "minion", "baskerville", "century", "constantia")
+_MONO = ("mono", "courier", "consolas", "menlo", "monaco", "inconsolata", "source code")
+
+
+def set_available(fonts) -> None:
+    """Record what this instance can draw. Called after connecting; safe to call with junk.
+
+    Without this the plugin would map every QGIS font onto the three faces GeoDeploy happens to
+    ship, even on an instance where the operator had installed Noto Serif — a substitution the
+    server was ready to render correctly and the plugin had already thrown away.
+    """
+    global _AVAILABLE
+    names = [str(f) for f in (fonts or []) if str(f).strip()]
+    _AVAILABLE = names or list(LABEL_FONTS)
+
+
+def available() -> list:
+    return list(_AVAILABLE)
+
+#: QGIS renders label sizes in points by default; GeoDeploy states them in CSS pixels like every
+#: other size, and `symbology.CSS_PX_TO_POINTS` is the same constant the symbol sizes use.
+_PT = symbology.CSS_PX_TO_POINTS
+
+
+def _value(settings, name, default=None):
+    """A `QgsPalLayerSettings` member, whether it is an attribute or a method.
+
+    **`QgsPalLayerSettings` mixes the two**, and the mix is not guessable: `fieldName`,
+    `isExpression`, `xOffset`, `priority`, `autoWrapLength`, `scaleVisibility` and friends are plain
+    PUBLIC ATTRIBUTES, while `format()` is a method. Calling an attribute raises
+    `TypeError: 'str' object is not callable`, which the caller's blanket handler turns into "this
+    layer has no labels" — silently, which is exactly how the first version of this module read
+    nothing at all from a perfectly well labelled layer.
+    """
+    if not hasattr(settings, name):
+        return default
+    member = getattr(settings, name)
+    if callable(member):
+        try:
+            return member()
+        except Exception:               # noqa: BLE001
+            return default
+    return member
+
+
+def has_labels(style) -> bool:
+    labels = (style or {}).get("labels")
+    return bool(isinstance(labels, dict) and labels.get("enabled"))
+
+
+# ── QGIS → GeoDeploy ─────────────────────────────────────────────────────────────────────────────
+
+def from_qgis(qgis_layer):
+    """`(labels, notes)` for a labelled layer, or `(None, notes)` when it has none."""
+    notes = []
+    if not QGIS_LABELS or qgis_layer is None:
+        return None, notes
+    try:
+        if not qgis_layer.labelsEnabled():
+            return None, notes
+        labeling = qgis_layer.labeling()
+    except Exception:                   # noqa: BLE001 - a raster or a broken layer has no labelling
+        return None, notes
+    if labeling is None:
+        return None, notes
+
+    kind = type(labeling).__name__
+    rules = []
+    if kind == "QgsRuleBasedLabeling":
+        # RULE-BASED LABELLING IS A TREE, exactly like rule-based rendering, and the rules are how a
+        # names layer says that water is blue at 9pt and a town is brown at 11. Reading only the
+        # first leaf — which is what this did — sent SEVEN colours and five sizes as one, and the
+        # note saying so was in a log nobody reads while the map drew every name identically.
+        #
+        # So the tree travels: `labels.rules`, one entry per leaf, the same shape `style.rules`
+        # uses. The first rule's settings stay at the top level as the fallback, so a renderer that
+        # knows nothing about label rules still draws something recognisable.
+        rules = _read_label_rules(labeling, notes)
+        settings = _first_rule_settings(labeling)
+        if settings is None:
+            return None, notes
+    else:
+        try:
+            settings = labeling.settings()
+        except Exception:               # noqa: BLE001
+            return None, notes
+    if settings is None:
+        return None, notes
+
+    labels = {"enabled": True}
+    _read_text(settings, labels, notes)
+    _read_format(settings, labels, notes)
+    _read_placement(settings, labels)
+    _read_scope(settings, labels)
+    if len(rules) > 1:
+        labels["rules"] = rules
+    return labels, notes
+
+
+def _read_label_rules(labeling, notes: list) -> list:
+    """Every leaf of a label rule tree, flattened — `[{label, expression, filter, labels, …}]`.
+
+    Flattened the way `rules.py` flattens a RENDER rule tree, and for the same reason: MapLibre has
+    no nesting, so a child's condition is ANDed with its parents' and the narrowest scale range on
+    the path wins. A rule whose filter cannot be translated is DROPPED with a note rather than
+    widened to everything — a rule that labels every feature is a different map, not a degraded one.
+    """
+    out = []
+
+    def walk(rule, inherited_filter, inherited_expr, lo, hi):
+        for child in rule.children():
+            expression = (child.filterExpression() or "").strip()
+            # WRAPPED ONLY WHEN THERE IS SOMETHING TO COMBINE. Bracketing a lone expression grows
+            # it by a pair of parentheses on EVERY round trip — `"type" = 'Water'` becomes
+            # `(("type" = 'Water'))` and then deeper — and the promise this key exists for is that
+            # a round trip hands somebody back the text they typed.
+            parts = [e for e in (inherited_expr, expression) if e]
+            combined_expr = (parts[0] if len(parts) == 1
+                             else " AND ".join("({0})".format(e) for e in parts))
+            child_lo, child_hi = _rule_zoom_range(child, lo, hi)
+            node = inherited_filter
+            if expression:
+                translated, reason = expressions.try_maplibre(expression)
+                if translated is None:
+                    notes.append("its label rule {0!r} filters on {1}, which {2} — that rule was "
+                                 "left behind rather than labelling everything"
+                                 .format(child.description() or expression, expression, reason))
+                    continue
+                node = (translated if inherited_filter is None
+                        else ["all", inherited_filter, translated])
+            settings = child.settings()
+            if settings is not None and child.active():
+                block = {"enabled": True}
+                _read_text(settings, block, notes)
+                _read_format(settings, block, notes)
+                _read_placement(settings, block)
+                _read_scope(settings, block)
+                if block.get("enabled"):
+                    entry = {"label": child.description() or combined_expr or "Labels",
+                             "labels": block}
+                    if node is not None:
+                        entry["filter"] = node
+                    if combined_expr:
+                        entry["expression"] = combined_expr
+                    # THE RULE'S scale range, which is separate from the label settings' own. The
+                    # narrower of the two is what QGIS actually draws with.
+                    if child_lo is not None:
+                        entry["minzoom"] = max(child_lo, block.get("minzoom", child_lo))
+                    if child_hi is not None:
+                        entry["maxzoom"] = min(child_hi, block.get("maxzoom", child_hi))
+                    out.append(entry)
+            walk(child, node, combined_expr, child_lo, child_hi)
+
+    try:
+        walk(labeling.rootRule(), None, "", None, None)
+    except Exception as exc:            # noqa: BLE001 - the first rule is still returned above
+        notes.append("its label rules could not be read ({0}); the first rule was sent alone"
+                     .format(type(exc).__name__))
+        return []
+    return out
+
+
+def _rule_zoom_range(rule, lo, hi):
+    """A label rule's own scale range as zooms, narrowed by whatever it inherits.
+
+    QGIS's `minimumScale` IS THE ZOOMED-OUT END, and the naming is the trap: a scale is a fraction,
+    so the *minimum* scale is the one with the LARGEST denominator. Measured on the reporter's own
+    layer — Town labels have `minimumScale` 1:500,000 and small settlements 1:30,000, and a town is
+    the one you see first as you zoom out — so `minimumScale` maps to `minzoom` and `maximumScale`
+    to `maxzoom`, exactly as `_read_scope` already does for a label's own range.
+
+    Reading them the other way round produced `minzoom: 24, maxzoom: 13.6` on every rule, and a
+    MapLibre layer whose minzoom is above its maxzoom draws NOTHING — so a whole place-names layer
+    silently vanished from the map.
+    """
+    try:
+        if not rule.dependsOnScale():
+            return lo, hi
+        low = zoom_for_scale(rule.minimumScale()) if rule.minimumScale() else None
+        high = zoom_for_scale(rule.maximumScale()) if rule.maximumScale() else None
+    except Exception:                   # noqa: BLE001
+        return lo, hi
+    out_lo = low if lo is None else (low if low is not None and low > lo else lo)
+    out_hi = high if hi is None else (high if high is not None and high < hi else hi)
+    return out_lo, out_hi
+
+
+def _first_rule_settings(labeling):
+    try:
+        for rule in labeling.rootRule().children():
+            if rule.settings() is not None:
+                return rule.settings()
+    except Exception:                   # noqa: BLE001  # nosec B110 - intentional: a font we cannot read is not a font we must fail on
+        pass
+    return None
+
+
+def _read_text(settings, labels: dict, notes: list) -> None:
+    """The `text-field`: a plain attribute, or an expression put through the translator."""
+    field = str(_value(settings, "fieldName", "") or "").strip()
+    if not field:
+        return
+    if bool(_value(settings, "isExpression", False)):
+        node, reason = expressions.try_maplibre(field)
+        if node is None:
+            # A label expression that cannot travel must not become a field read of the expression
+            # TEXT, which is what a naive fallback would do — every feature labelled with the same
+            # unreadable string.
+            notes.append("its label expression ({0}) {1}, so the layer was sent unlabelled"
+                         .format(field, reason))
+            labels.clear()
+            return
+        labels["expression"] = node
+        labels["qgis_expression"] = field
+    else:
+        labels["field"] = field
+
+
+def _read_format(settings, labels: dict, notes: list) -> None:
+    """Font, size, colour, opacity and the buffer, which is MapLibre's halo."""
+    try:
+        fmt = settings.format()
+    except Exception:                   # noqa: BLE001
+        return
+    try:
+        font = fmt.font()
+        family = font.family()
+        labels["font"] = _fontstack(family, font.bold(), font.italic(), notes)
+        # THE ORIGINAL FAMILY, CARRIED. The portal can only draw the stacks its glyph set contains,
+        # so `font` above is a substitution — but QGIS draws with real system fonts and has no such
+        # limit, so there is no reason for a round trip to cost somebody their typeface. Stored
+        # beside the mapped stack and handed straight back on the way in; the same device as a
+        # rule's `expression` and 2.5D's `qgis25d`.
+        if family and family.strip():
+            labels["qgis_font"] = {"family": family, "bold": bool(font.bold()),
+                                   "italic": bool(font.italic())}
+    except Exception:                   # noqa: BLE001
+        labels["font"] = DEFAULT_FONT
+    # IN THE UNIT THE FORMAT STATES, not assumed to be points: a label sized in millimetres — which
+    # is what QGIS's own dialog offers alongside points — came back nearly three times too small.
+    # Same defect as the symbol sizes; see `symbology._UNIT_TO_POINTS`.
+    size = symbology._points(_value(fmt, "size", None), symbology._call_or_none(fmt, "sizeUnit"))
+    if size:
+        labels["size"] = round(size / _PT, 2)
+    try:
+        labels["color"] = symbology._hex(fmt.color())
+    except Exception:                   # noqa: BLE001  # nosec B110 - intentional: a colour we cannot read leaves the default standing
+        pass
+    opacity = symbology._number(_value(fmt, "opacity", None), None)
+    if opacity is not None and opacity < 1.0:
+        labels["opacity"] = round(opacity, 3)
+
+    try:
+        buffer_settings = fmt.buffer()
+        if buffer_settings.enabled():
+            width = symbology._points(buffer_settings.size(),
+                                      symbology._call_or_none(buffer_settings, "sizeUnit"))
+            if width:
+                labels["halo_width"] = round(width / _PT, 2)
+                labels["halo_color"] = symbology._hex(buffer_settings.color())
+    except Exception:                   # noqa: BLE001 - no buffer is not an error  # nosec B110 - intentional: a label with no buffer is normal
+        pass
+
+    for getter, key, note in (("shadow", None, "its label shadow"),
+                              ("background", None, "its label background shape")):
+        try:
+            block = getattr(fmt, getter)()
+            if block is not None and block.enabled():
+                notes.append("{0} has no MapLibre equivalent and was not carried".format(note))
+        except Exception:               # noqa: BLE001  # nosec B110 - intentional: a shadow or background we cannot inspect is simply not reported
+            pass
+
+
+def _fontstack(family: str, bold: bool, italic: bool, notes: list) -> str:
+    """A QGIS font family onto a face this instance can actually draw.
+
+    NOT carried verbatim, deliberately: MapLibre draws NOTHING for a face its glyphs do not contain,
+    so a faithful "Helvetica Neue Condensed" would produce a map with no labels on it and nothing to
+    say why. The original family is kept in `labels.qgis_font` and handed straight back to QGIS, so
+    this substitution costs the WEB rendering only.
+
+    Matched in three passes, most specific first: the exact face, then the same FAMILY at the right
+    weight and slant, then the right KIND — a serif stays a serif and a monospace stays a monospace,
+    which is most of what a typeface choice communicates in a label.
+    """
+    have = available()
+    wanted_weight = "Bold" if bold else ("Italic" if italic else "Regular")
+    name = (family or "").strip()
+
+    # 1. The face itself, under the name the instance uses for it.
+    for candidate in ("{0} {1}".format(name, wanted_weight), name):
+        if candidate in have:
+            return candidate
+
+    # 2. The same family, at the weight and slant asked for.
+    lowered = name.lower()
+    same_family = [f for f in have if lowered and f.lower().startswith(lowered.split()[0].lower())]
+    for face in same_family:
+        if face.endswith(wanted_weight):
+            return face
+    if same_family:
+        return same_family[0]
+
+    # 3. The right KIND of face — serif, monospace or sans.
+    kind = ("Serif" if any(k in lowered for k in _SERIF)
+            else "Mono" if any(k in lowered for k in _MONO) else "Sans")
+    of_kind = [f for f in have if kind.lower() in f.lower()] or list(have)
+    chosen = next((f for f in of_kind if f.endswith(wanted_weight)), None) or of_kind[0]
+
+    if name and chosen.lower() != lowered:
+        notes.append("its label font ({0}) was drawn as {1} — a portal can only draw the faces its "
+                     "glyph set contains, and QGIS keeps the original either way".format(
+                         family, chosen))
+    return chosen
+
+
+def _read_placement(settings, labels: dict) -> None:
+    """Offset, rotation, wrapping, capitalisation, overlap and priority."""
+    x = symbology._number(_value(settings, "xOffset", 0), 0)
+    y = symbology._number(_value(settings, "yOffset", 0), 0)
+    if x or y:
+        # QGIS's Y grows DOWNWARD for a label offset and MapLibre's `text-offset` does too, so the
+        # sign is carried straight through — unlike the line offset, which is mirrored.
+        labels["offset"] = [round(x / _PT, 3), round(y / _PT, 3)]
+
+    angle = symbology._number(_value(settings, "angleOffset", 0), 0)
+    if angle:
+        labels["rotation"] = round(angle % 360, 3)
+
+    wrap = symbology._number(_value(settings, "autoWrapLength", 0), 0)
+    if wrap:
+        # QGIS wraps at a CHARACTER count and MapLibre at a width in ems; one em is roughly one
+        # character's advance for a proportional face, which makes this close and not exact.
+        labels["max_width"] = float(wrap)
+
+    try:
+        cap = int(settings.format().capitalization())
+        labels["transform"] = {1: "uppercase", 2: "lowercase"}.get(cap, "none")
+        if labels["transform"] == "none":
+            labels.pop("transform")
+    except Exception:                   # noqa: BLE001  # nosec B110 - intentional: a capitalisation we cannot read leaves the text as written
+        pass
+
+    try:
+        font = settings.format().font()
+        spacing = symbology._number(font.letterSpacing(), 0)
+        # QT'S PERCENTAGE SPACING IS 100 = NORMAL, and the writer duly sets `100 + value * 100` —
+        # but this read `value / 100`, so a spacing of 1.5 went out, came back as 2.5, and drifted
+        # further on every trip. `text-letter-spacing` is in EMS and 0 is normal, so the inverse of
+        # what the writer does is the whole conversion.
+        # `int()` ON A Qt6 ENUM RAISES. PyQt6 spells `QFont.SpacingType` as a real Python enum, not
+        # an int, so int-ing it throws a TypeError that this try swallowed — and letter spacing
+        # silently stopped travelling on QGIS 4 alone. Compared as a MEMBER, both builds agree.
+        try:
+            from qgis.PyQt.QtGui import QFont as _QFont
+            percentage_type = (_QFont.SpacingType.PercentageSpacing
+                               if hasattr(_QFont, "SpacingType") else 0)
+        except ImportError:             # pragma: no cover
+            percentage_type = 0
+        percentage = getattr(font, "letterSpacingType", lambda: percentage_type)() == percentage_type
+        # QT'S DEFAULT IS 0, NOT 100, even though 100 is what "normal" means once somebody sets it:
+        # a font nobody touched reports `letterSpacing() == 0` with the percentage type, so reading
+        # that as (0 - 100) / 100 gave every ordinary label a spacing of -1 em and made every
+        # labelled layer report itself as edited.
+        if percentage and (not spacing or abs(spacing - 100.0) < 1e-6):
+            value = 0.0
+        elif percentage:
+            value = (spacing - 100.0) / 100.0
+        else:
+            value = spacing / max(symbology._number(settings.format().size(), 12) or 12, 1e-6)
+        if round(value, 3):
+            labels["letter_spacing"] = round(value, 3)
+    except Exception:                   # noqa: BLE001  # nosec B110 - intentional: letter spacing is cosmetic and optional
+        pass
+
+    if _value(settings, "displayAll", False):
+        labels["allow_overlap"] = True
+    priority = symbology._number(_value(settings, "priority", None), None)
+    if priority is not None:
+        labels["priority"] = priority
+
+    # ONE LABEL PER PART, or one for the feature. QGIS ships this OFF and so does GeoDeploy, so
+    # only the ON case is worth carrying — and it is worth carrying: on an archipelago it is the
+    # difference between every island named and one name for the group.
+    if _value(settings, "labelPerPart", False):
+        labels["label_per_part"] = True
+
+    if _placement_name(_value(settings, "placement", None)) == "line":
+        labels["placement"] = "line"
+        position = _line_position_of(settings)
+        if position:
+            labels["line_position"] = position
+
+
+#: The QGIS placements that mean "along the geometry" rather than "at a point", BY NUMBER.
+#: `QgsPalLayerSettings.Placement` is a plain C++ enum: Line = 2, Curved = 3, PerimeterCurved = 7.
+#: The names are checked too, because Qt6 spells a member as `LabelPlacement.Curved` and Qt5 as a
+#: bare int — reading it as a WORD worked on one build and silently did nothing on the other.
+_ALONG_THE_LINE = (2, 3, 7)
+
+
+#: `Qgis.LabelLinePlacementFlag`: OnLine = 1, AboveLine = 2, BelowLine = 4, MapOrientation = 8.
+_ON_LINE, _ABOVE_LINE, _BELOW_LINE = 1, 2, 4
+
+
+def _line_position_of(settings) -> str:
+    """`"on"` / `"above"` / `"below"` — where along-the-line labels sit, or `""` if unreadable.
+
+    A contour's height is written ON the line, breaking it; a river's name sits above it. QGIS's
+    default for a placement nobody configured is ABOVE, so a contour layer rebuilt without this
+    came back with every height floating off its line — right numbers, wrong map.
+    """
+    flags = None
+    getter = getattr(settings, "lineSettings", None)
+    if callable(getter):
+        try:
+            flags = int(getter().placementFlags())
+        except Exception:               # noqa: BLE001  # nosec B110 - intentional: try the older spelling
+            flags = None
+    if flags is None:
+        try:
+            flags = int(_value(settings, "placementFlags", 0) or 0)
+        except (TypeError, ValueError):  # pragma: no cover - a QGIS we cannot ask
+            return ""
+    if flags & _ON_LINE:
+        return "on"
+    if flags & _ABOVE_LINE:
+        return "above"
+    if flags & _BELOW_LINE:
+        return "below"
+    return ""
+
+
+def _apply_line_position(settings, wanted: str) -> None:
+    """Put along-the-line labels on, above or below the line. Silent when this QGIS differs."""
+    flag = {"on": _ON_LINE, "above": _ABOVE_LINE, "below": _BELOW_LINE}.get(wanted)
+    if not flag:
+        return
+    # MAP ORIENTATION IS KEPT. Without it QGIS flips a label to stay upright relative to the SCREEN,
+    # which on a contour ring means the numbers face different ways on the two sides of a hill —
+    # not what the author had, and not what the browser draws.
+    value = flag | 8
+    getter = getattr(settings, "lineSettings", None)
+    setter = getattr(settings, "setLineSettings", None)
+    try:
+        if callable(getter) and callable(setter):
+            line = getter()
+            line.setPlacementFlags(_line_flags(value))
+            setter(line)
+            return
+        settings.placementFlags = value
+    except Exception as exc:            # noqa: BLE001 - the labels still draw, just placed by QGIS
+        symbology._log("This QGIS places along-the-line labels differently ({0}); they are placed "
+                       "the way it places them by default.".format(exc))
+
+
+def _line_flags(value: int):
+    """`value` as whatever type this QGIS's `setPlacementFlags` wants — an int, or a flags object."""
+    try:
+        from qgis.core import Qgis
+        return Qgis.LabelLinePlacementFlags(value)
+    except Exception:                   # noqa: BLE001 - an older QGIS takes the plain int
+        return value
+
+
+def _placement_name(placement) -> str:
+    """`"line"` when this QGIS placement follows the geometry, `"point"` when it sits at one.
+
+    WHY THIS EXISTS AT ALL. `str(placement).lower()` was the old test, and on QGIS LTR a placement
+    is an int, so `str(3)` is `"3"`: the check never matched, `labels["placement"]` was never
+    written, and every label came back with QGIS's default AroundPoint. On a POINT layer that is
+    invisible — it is the right answer anyway. On a LINE layer QGIS draws NOTHING AT ALL for a
+    point placement, so a contour layer's heights, a river's name and a road's number all vanished
+    on the way back while the same layer labelled correctly in the browser and in the file it came
+    from. Measured on the reported contour layer: 181 label pixels before, 0 after, 201 with only
+    the placement restored.
+    """
+    if placement is None:
+        return ""
+    try:
+        if int(placement) in _ALONG_THE_LINE:
+            return "line"
+        return "point"
+    except (TypeError, ValueError):
+        pass                            # a Qt6 enum member: read its name instead
+    text = str(getattr(placement, "name", placement)).lower()
+    if "curved" in text or "line" in text or "perimeter" in text:
+        return "line"
+    return "point" if text else ""
+
+
+def _apply_placement(settings, labels: dict, geometry=None) -> None:
+    """Place the labels the way the style asks — and never place a LINE's labels at a point.
+
+    Two jobs, and the second is the one that matters. A style that says `placement: "line"` gets a
+    curved placement, which is what `symbol-placement: line` means on the other side. A style that
+    says NOTHING gets a placement chosen from the GEOMETRY, because QGIS's default is AroundPoint
+    and a line labelled AroundPoint draws nothing: a line layer labelled in GeoDeploy — uploaded
+    there, never in QGIS — would otherwise come back looking unlabelled too. Points and polygons
+    keep the default, which is right for both.
+    """
+    try:
+        from qgis.core import QgsPalLayerSettings, QgsWkbTypes
+        try:
+            from .compat import enum as _enum
+        except ImportError:             # pragma: no cover - exec'd standalone
+            from compat import enum as _enum
+    except ImportError:                 # pragma: no cover - very old QGIS
+        return
+    stated = str(labels.get("placement") or "").lower()
+    is_line = False
+    if stated:
+        is_line = stated == "line"
+    elif geometry is not None:
+        try:
+            is_line = geometry == _enum(QgsWkbTypes, "GeometryType", "LineGeometry")
+        except Exception:               # noqa: BLE001  # nosec B110 - intentional: an unreadable geometry keeps QGIS's default
+            is_line = False
+    if not is_line:
+        return
+    try:
+        settings.placement = _enum(QgsPalLayerSettings, "Placement", "Curved")
+    except Exception as exc:            # noqa: BLE001 - a placement must not stop a label
+        symbology._log("Could not place these labels along the line ({0}); they are placed the "
+                       "way QGIS places labels by default.".format(exc))
+    # ON the line unless the author said otherwise — which is what `symbol-placement: line` draws
+    # in the browser, so the two surfaces agree, and what QGIS's own default (ABOVE) does not.
+    _apply_line_position(settings, str(labels.get("line_position") or "on").lower())
+
+
+def _read_scope(settings, labels: dict) -> None:
+    """A label's OWN scale range, which QGIS keeps separately from the layer's."""
+    try:
+        if not _value(settings, "scaleVisibility", False):
+            return
+        lo = zoom_for_scale(_value(settings, "minimumScale", 0))
+        hi = zoom_for_scale(_value(settings, "maximumScale", 0))
+        if lo is not None:
+            labels["minzoom"] = lo
+        if hi is not None:
+            labels["maxzoom"] = hi
+    except Exception:                   # noqa: BLE001 - a scale range is never worth failing a read  # nosec B110 - intentional: a scale range is never worth failing a read
+        pass
+
+
+# ── GeoDeploy → QGIS ─────────────────────────────────────────────────────────────────────────────
+
+def settings_of(labels: dict):
+    """A `QgsPalLayerSettings` built from one `labels` block, or None when it cannot be.
+
+    Pulled out of `to_qgis` so that a label RULE can be built with exactly the same code. A
+    rule-based labelling is a tree of these, and reading only the first one is what made a layer
+    whose place names are coloured by type — water blue, woodland green, towns brown — arrive with
+    every name in the first rule's colour.
+    """
+    from qgis.PyQt.QtGui import QColor, QFont
+    settings = QgsPalLayerSettings()
+
+
+    expression = (labels.get("qgis_expression") or "").strip()
+    if expression:
+        settings.fieldName = expression
+        settings.isExpression = True
+    elif labels.get("expression") is not None:
+        # Authored in GeoDeploy: rebuild QGIS text from the MapLibre expression, the same way
+        # a rule's filter is rebuilt when it has no carried source.
+        try:
+            settings.fieldName = expressions.from_maplibre(labels["expression"])
+            settings.isExpression = True
+        except Exception:           # noqa: BLE001 - fall back to the plain field, if any
+            settings.fieldName = str(labels.get("field") or "")
+    else:
+        settings.fieldName = str(labels.get("field") or "")
+    if not settings.fieldName:
+        return False
+
+    fmt = QgsTextFormat()
+    # THE CARRIED FAMILY WINS. A label that came from QGIS goes back in the typeface its author
+    # chose, not in the stack the portal had to substitute to draw it. Only a label authored in
+    # GeoDeploy — which has no carried font — falls back to the stack name.
+    carried = labels.get("qgis_font")
+    if isinstance(carried, dict) and carried.get("family"):
+        font = QFont(str(carried["family"]))
+        font.setBold(bool(carried.get("bold")))
+        font.setItalic(bool(carried.get("italic")))
+    else:
+        font = QFont(_family_of(labels.get("font")))
+        font.setBold("Bold" in str(labels.get("font") or ""))
+        font.setItalic("Italic" in str(labels.get("font") or ""))
+    spacing = symbology._number(labels.get("letter_spacing"), None)
+    if spacing:
+        font.setLetterSpacing(QFont.SpacingType.PercentageSpacing
+                              if hasattr(QFont, "SpacingType") else 0, 100 + spacing * 100)
+    fmt.setFont(font)
+    # CAPITALISATION, which was read and never written — so a layer labelled in CAPITALS in
+    # QGIS went to GeoDeploy as `transform: "uppercase"`, drew in capitals on the map, and came
+    # back in mixed case. QGIS keeps this on the text FORMAT, not on the font, and the enum
+    # lives on `Qgis` in 4.x and on `QgsStringUtils` in 3.x — hence the two spellings.
+    _set_capitalization(fmt, labels.get("transform"))
+    fmt.setSize(symbology._number(labels.get("size"), 12) * _PT)
+    # POINTS, stated rather than inherited — the same reason `symbology._use_points` exists for
+    # symbols. A format whose unit defaulted to millimetres would draw the number as a size
+    # nearly three times too large.
+    _points_unit(fmt, "setSizeUnit")
+    if labels.get("color"):
+        fmt.setColor(QColor(labels["color"]))
+    opacity = symbology._number(labels.get("opacity"), None)
+    if opacity is not None:
+        fmt.setOpacity(max(0.0, min(1.0, opacity)))
+
+    halo = symbology._number(labels.get("halo_width"), 0)
+    if halo:
+        buffer_settings = QgsTextBufferSettings()
+        buffer_settings.setEnabled(True)
+        buffer_settings.setSize(halo * _PT)
+        _points_unit(buffer_settings, "setSizeUnit")
+        buffer_settings.setColor(QColor(labels.get("halo_color") or "#ffffff"))
+        fmt.setBuffer(buffer_settings)
+    settings.setFormat(fmt)
+
+    offset = labels.get("offset")
+    if isinstance(offset, (list, tuple)) and len(offset) == 2:
+        settings.xOffset = symbology._number(offset[0], 0) * _PT
+        settings.yOffset = symbology._number(offset[1], 0) * _PT
+    rotation = symbology._number(labels.get("rotation"), None)
+    if rotation:
+        settings.angleOffset = rotation
+    width = symbology._number(labels.get("max_width"), None)
+    if width:
+        settings.autoWrapLength = int(width)
+    if labels.get("allow_overlap"):
+        settings.displayAll = True
+    if labels.get("label_per_part"):
+        # Set only when asked: QGIS's own default is False, and writing False explicitly would be
+        # the same thing said louder.
+        try:
+            settings.labelPerPart = True
+        except Exception:               # noqa: BLE001  # nosec B110 - intentional: a QGIS that spells it differently still labels
+            pass
+    priority = symbology._number(labels.get("priority"), None)
+    if priority is not None:
+        settings.priority = int(max(0, min(10, priority)))
+
+    lo, hi = labels.get("minzoom"), labels.get("maxzoom")
+    if lo is not None or hi is not None:
+        settings.scaleVisibility = True
+        if lo is not None:
+            settings.minimumScale = scale_for_zoom(lo)
+        if hi is not None:
+            settings.maximumScale = scale_for_zoom(hi)
+    return settings
+
+
+def to_qgis(qgis_layer, style) -> bool:
+    """Label `qgis_layer` the way `style.labels` describes. True when labelling was set.
+
+    A style with no labels turns labelling OFF rather than leaving it standing: switching labels off
+    in GeoDeploy and reopening the layer has to actually switch them off, or the two disagree and
+    the next push argues about which is right. Same reasoning as `apply_3d`.
+    """
+    if not QGIS_LABELS or qgis_layer is None:
+        return False
+    if not hasattr(qgis_layer, "setLabeling"):
+        return False
+    if not has_labels(style):
+        try:
+            qgis_layer.setLabeling(None)
+            if hasattr(qgis_layer, "setLabelsEnabled"):
+                qgis_layer.setLabelsEnabled(False)
+        except Exception:               # noqa: BLE001  # nosec B110
+            pass
+        return False
+
+    labels = style["labels"]
+    try:
+        # RULE-BASED LABELLING FIRST, for the same reason `apply_to_qgis` checks `rules` before
+        # `color_mode`: the top-level block is only the first rule's settings, kept so that a
+        # viewer knowing nothing about label rules still draws something. Reading it first would
+        # flatten seven colours into one.
+        if _rule_labeling(qgis_layer, labels):
+            qgis_layer.triggerRepaint()
+            return True
+        settings = settings_of(labels)
+        # WHERE THE LABELS SIT. Done here rather than in `settings_of` because it needs the layer:
+        # a style that states no placement takes one from the GEOMETRY, and a line labelled at a
+        # point is a line QGIS draws no labels for at all.
+        if settings:
+            _apply_placement(settings, labels, _geometry_of(qgis_layer, style))
+
+        # A VECTOR TILE LAYER IS LABELLED DIFFERENTLY, and until now it was not labelled at all:
+        # the guard asked for `setLabelsEnabled`, which `QgsVectorTileLayer` does not have, so
+        # every layer opened from a portal as a group came back with its labels missing. Reported
+        # that way — "labels are so many in geodeploy, and when it comes back it has no label" —
+        # and the reason is the SOURCE, not the labels: opening a portal as a group gives tiles.
+        # The settings above are the same either way; only the wrapper differs.
+        if not _tile_labeling(qgis_layer, settings, style):
+            qgis_layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
+            if hasattr(qgis_layer, "setLabelsEnabled"):
+                qgis_layer.setLabelsEnabled(True)
+        qgis_layer.triggerRepaint()
+        return True
+    except Exception as exc:            # noqa: BLE001 - labelling must never stop a layer loading
+        symbology._log("Could not apply the labels: {0}: {1}".format(type(exc).__name__, exc))
+        return False
+
+
+def _rule_expression(entry: dict) -> str:
+    """The QGIS filter text for one label rule.
+
+    The CARRIED source wins — a rule that came from QGIS goes back as the text its author typed.
+    Only one authored in GeoDeploy has to be rebuilt from its MapLibre filter.
+    """
+    expression = (entry.get("expression") or "").strip()
+    if expression:
+        return expression
+    node = entry.get("filter")
+    if node is None:
+        return ""
+    try:
+        return expressions.from_maplibre(node)
+    except Exception as exc:            # noqa: BLE001 - an unfiltered rule is visible and fixable
+        symbology._log("Label rule {0!r} has a filter QGIS cannot be given ({1}); it is shown "
+                       "unfiltered.".format(entry.get("label") or "", exc))
+        return ""
+
+
+def _rule_labeling(qgis_layer, labels: dict) -> bool:
+    """Rebuild a `QgsRuleBasedLabeling` from `labels.rules`. False when there is nothing to build.
+
+    The inverse of `_read_label_rules`. Each rule gets the QGIS expression it came from where one
+    was recorded — a round trip should hand somebody back the text they typed — and falls back to
+    translating the MapLibre filter otherwise, which is what a rule authored in GeoDeploy has.
+    """
+    rules = labels.get("rules")
+    if not isinstance(rules, list) or len(rules) < 2:
+        return False
+    try:
+        from qgis.core import QgsRuleBasedLabeling
+    except ImportError:                 # pragma: no cover - very old QGIS
+        return False
+    if not hasattr(qgis_layer, "setLabeling"):
+        return False
+    # A VECTOR TILE LAYER TAKES A DIFFERENT LABELLING CLASS ENTIRELY. `setLabeling` exists on both,
+    # so handing a `QgsRuleBasedLabeling` to a tile layer is accepted by Python and then labels
+    # nothing — which is how a portal opened as a group lost every label on its names layer. Tiles
+    # carry rules as several `QgsVectorTileBasicLabelingStyle`s instead; `_tile_labeling` does that.
+    try:
+        from qgis.core import QgsVectorTileLayer
+        if isinstance(qgis_layer, QgsVectorTileLayer):
+            return False
+    except ImportError:                 # pragma: no cover - older QGIS has no tile layers
+        pass
+
+    base = {k: v for k, v in labels.items() if k != "rules"}
+    root = QgsRuleBasedLabeling.Rule(None)
+    built = 0
+    for entry in rules:
+        if not isinstance(entry, dict):
+            continue
+        block = dict(base)
+        block.update(entry.get("labels") or {})
+        settings = settings_of(block)
+        if settings is None:
+            continue
+        _apply_placement(settings, block, _geometry_of(qgis_layer, {"labels": labels}))
+        rule = QgsRuleBasedLabeling.Rule(settings)
+        rule.setDescription(str(entry.get("label") or ""))
+        expression = _rule_expression(entry)
+        if expression:
+            rule.setFilterExpression(expression)
+        lo, hi = entry.get("minzoom"), entry.get("maxzoom")
+        if lo is not None or hi is not None:
+            try:
+                # `minzoom` is the zoomed-OUT end, and so is QGIS's `minimumScale` — see
+                # `_rule_zoom_range`. They correspond directly; it is `scale_for_zoom` that
+                # inverts the number, not the pairing.
+                rule.setMinimumScale(scale_for_zoom(lo) if lo is not None else 0)
+                rule.setMaximumScale(scale_for_zoom(hi) if hi is not None else 0)
+            except Exception:           # noqa: BLE001  # nosec B110 - intentional: a scale range this QGIS spells differently must not cost the rule its symbol
+                pass
+        root.appendChild(rule)
+        built += 1
+    if not built:
+        return False
+    qgis_layer.setLabeling(QgsRuleBasedLabeling(root))
+    if hasattr(qgis_layer, "setLabelsEnabled"):
+        qgis_layer.setLabelsEnabled(True)
+    return True
+
+
+def _set_capitalization(fmt, transform) -> None:
+    """`uppercase` / `lowercase` onto a `QgsTextFormat`. Silent when this QGIS spells it elsewhere.
+
+    The inverse of the `{1: "uppercase", 2: "lowercase"}` read — and it is read from the same
+    `format().capitalization()`, so the two cannot drift apart.
+    """
+    wanted = (transform or "").strip().lower()
+    if wanted not in ("uppercase", "lowercase"):
+        return
+    name = "AllUppercase" if wanted == "uppercase" else "AllLowercase"
+    setter = getattr(fmt, "setCapitalization", None)
+    if not callable(setter):
+        return
+    try:                                # a package, inside QGIS
+        from .compat import enum
+    except ImportError:                 # exec'd standalone by the test harness
+        from compat import enum
+    for module_name, holder in (("qgis.core", "Qgis"), ("qgis.core", "QgsStringUtils")):
+        try:
+            owner = getattr(__import__(module_name, fromlist=[holder]), holder)
+            setter(enum(owner, "Capitalization", name))
+            return
+        except Exception:               # noqa: BLE001 - try the other spelling  # nosec B112 - intentional: each attempt is one QGIS version's API
+            continue
+    symbology._log("This QGIS spells label capitalisation differently; the text case did not "
+                   "travel. The labels themselves are unaffected.")
+
+
+def _tile_labeling(qgis_layer, settings, style) -> bool:
+    """Label a `QgsVectorTileLayer`. False when this is not one, so the caller falls through.
+
+    A tile layer's labelling is a LIST OF STYLES, each scoped to a source-layer name, a geometry
+    type and a zoom range — because one tile set can carry many layers. GeoDeploy publishes one
+    source-layer per layer, so there is exactly one style here, and it is left unscoped by name
+    (`""` matches every source-layer) rather than guessing at a name that has to match exactly or
+    label nothing at all.
+    """
+    try:
+        from qgis.core import (QgsVectorTileBasicLabeling, QgsVectorTileBasicLabelingStyle,
+                               QgsVectorTileLayer)
+    except ImportError:                 # pragma: no cover - older QGIS
+        return False
+    if not isinstance(qgis_layer, QgsVectorTileLayer):
+        return False
+
+    geometry = _tile_geometry_type(qgis_layer, style)
+
+    def one(block, name, settings_for_style, filter_expression="", zoom=None):
+        tile_style = QgsVectorTileBasicLabelingStyle()
+        # THE SAME PLACEMENT THE FEATURE PATH USES. The fast draw has to draw what the portal
+        # draws; a line's labels placed at a point are drawn by neither, and were missing from the
+        # tile path for the same reason they were missing from the other one.
+        _apply_placement(settings_for_style, block, geometry)
+        tile_style.setLabelSettings(settings_for_style)
+        tile_style.setStyleName(name)
+        tile_style.setLayerName("")
+        tile_style.setEnabled(True)
+        if geometry is not None:
+            try:
+                tile_style.setGeometryType(geometry)
+            except Exception:           # noqa: BLE001 - the default still labels something  # nosec B110 - intentional: a geometry this QGIS names differently must not cost the labels
+                pass
+        # THE RULE'S OWN ZOOM RANGE, NOT THE LAYER'S. A label rule tree is how a names layer says a
+        # town appears at 1:500,000 and a hamlet only at 1:30,000, and that range is recorded on the
+        # RULE — `entry["minzoom"]`, beside its filter — not inside the label settings the rule
+        # merges over the layer's. Reading it from the merged block gave every rule the LAYER's
+        # range, so every place name appeared at once from the zoom the layer itself starts at:
+        # "all labels are displaying when it should hide some and only show them adaptively".
+        source = zoom if zoom is not None else block
+        lo = source.get("minzoom", style.get("minzoom"))
+        hi = source.get("maxzoom", style.get("maxzoom"))
+        try:
+            # CLAMPED to the range a tile pyramid has. QGIS stores a scale threshold far outside it
+            # — 29 here — and a max zoom above the deepest tile is a promise nothing can keep.
+            #
+            # AND ROUNDED THE WAY A ZOOM RANGE MEANS. A scale threshold converts to a FRACTIONAL
+            # zoom — 10.127, 13.771 — and a tile renderer only has whole ones. `int()` truncated,
+            # so a label whose range starts at 10.127 was given to zoom 10 and appeared a whole
+            # zoom level before it should: zoomed out, labels the browser had already dropped came
+            # back, then went again one step further out. The first WHOLE zoom inside the range is
+            # its ceiling at the near end and its floor at the far end, which is exactly what
+            # MapLibre draws when it compares the map's zoom against the same numbers.
+            tile_style.setMinZoomLevel(max(0, int(math.ceil(float(lo)))) if lo is not None else 0)
+            # THE TOP END IS EXCLUSIVE ON ONE SIDE AND INCLUSIVE ON THE OTHER. MapLibre draws for
+            # `minzoom <= z < maxzoom`; QGIS's `isActive` is `min <= z <= max` — asked of QGIS, not
+            # assumed. The last whole zoom inside the range is therefore `ceil(hi) - 1`.
+            tile_style.setMaxZoomLevel(
+                max(0, min(22, int(math.ceil(float(hi))) - 1)) if hi is not None else 22)
+        except (TypeError, ValueError):
+            pass
+        # A TILE STYLE CAN BE FILTERED, which is the whole reason label rules can travel here at
+        # all: one style per rule, each scoped to the features that rule selects.
+        #
+        # THE FILTER IS PASSED IN, NOT SMUGGLED THROUGH THE BLOCK. It was briefly written into
+        # `qgis_expression` — a key that means "the expression that produces the label TEXT" — so
+        # `settings_of` set the text to `"type" = 'Water'` and QGIS drew its boolean result: an
+        # entire layer of place names rendered as "1". Two different expressions, two arguments.
+        expression = (filter_expression or "").strip()
+        if expression and hasattr(tile_style, "setFilterExpression"):
+            try:
+                tile_style.setFilterExpression(expression)
+            except Exception:           # noqa: BLE001  # nosec B110 - intentional: an unfiltered style labels too much, which is visible and fixable
+                pass
+        return tile_style
+
+    labels_block = (style or {}).get("labels") or {}
+    rules = [r for r in (labels_block.get("rules") or []) if isinstance(r, dict)]
+    styles = []
+    if len(rules) > 1:
+        base = {k: v for k, v in labels_block.items() if k != "rules"}
+        for i, rule in enumerate(rules):
+            block = dict(base)
+            block.update(rule.get("labels") or {})
+            block.pop("rules", None)
+            rule_settings = settings_of(block)
+            if rule_settings is None:
+                continue
+            styles.append(one(block, str(rule.get("label") or "Rule {0}".format(i + 1)),
+                              rule_settings, _rule_expression(rule), rule))
+    if not styles:
+        styles = [one(labels_block, "GeoDeploy labels", settings)]
+
+    labeling = QgsVectorTileBasicLabeling()
+    labeling.setStyles(styles)
+    qgis_layer.setLabeling(labeling)
+    if hasattr(qgis_layer, "setLabelsEnabled"):
+        try:
+            qgis_layer.setLabelsEnabled(True)
+        except Exception:               # noqa: BLE001  # nosec B110
+            pass
+    return True
+
+
+def _geometry_of(qgis_layer, style):
+    """The `GeometryType` of a layer, feature or tile — or None when it cannot be had.
+
+    A feature layer answers for itself; a tile layer cannot, and `symbology` records the geometry
+    on it for exactly that reason (`_tile_geometry_type`).
+    """
+    getter = getattr(qgis_layer, "geometryType", None)
+    if callable(getter):
+        try:
+            return getter()
+        except Exception:               # noqa: BLE001  # nosec B110 - intentional: fall through to the recorded one
+            pass
+    return _tile_geometry_type(qgis_layer, style or {})
+
+
+def _tile_geometry_type(qgis_layer, style):
+    """The `QgsWkbTypes.GeometryType` a tile labelling style should be scoped to.
+
+    A tile layer cannot be asked its geometry — `symbology` records it on the layer for exactly
+    this reason — and the default (point) would label nothing on a line or polygon layer.
+    """
+    name = (symbology._geometry_name(qgis_layer) or "").lower()
+    try:
+        from qgis.core import QgsWkbTypes
+        from .compat import enum as _enum
+    except ImportError:                 # pragma: no cover
+        try:
+            from compat import enum as _enum
+            from qgis.core import QgsWkbTypes
+        except ImportError:
+            return None
+    which = ("LineGeometry" if name.startswith("line") else
+             "PolygonGeometry" if name.startswith("polygon") else "PointGeometry")
+    try:
+        return _enum(QgsWkbTypes, "GeometryType", which)
+    except Exception:                   # noqa: BLE001
+        return None
+
+
+def _points_unit(target, setter: str) -> None:
+    """State a text size in POINTS, so the number means the same thing on both sides."""
+    try:
+        from qgis.core import QgsUnitTypes
+        from .compat import enum as _enum
+    except ImportError:                 # pragma: no cover - exec'd standalone
+        try:
+            from compat import enum as _enum
+            from qgis.core import QgsUnitTypes
+        except ImportError:
+            return
+    fn = getattr(target, setter, None)
+    if not callable(fn):
+        return
+    try:
+        fn(_enum(QgsUnitTypes, "RenderUnit", "RenderPoints"))
+    except Exception:                   # noqa: BLE001 - the default still draws  # nosec B110
+        pass
+
+
+def _family_of(stack) -> str:
+    """The family name out of a fontstack — `"Noto Sans Bold"` is the Noto Sans family, bold."""
+    name = str(stack or DEFAULT_FONT)
+    for suffix in (" Regular", " Bold", " Italic"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name

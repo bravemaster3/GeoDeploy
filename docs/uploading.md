@@ -14,11 +14,17 @@ each row showing its status, size and how it is stored.
 
     | Format | Notes |
     | --- | --- |
-    | Shapefile | Upload as a `.zip` containing `.shp`, `.dbf`, `.shx`, `.prj` |
-    | GeoPackage | `.gpkg` |
+    | Shapefile | Upload as a `.zip` containing `.shp`, `.dbf`, `.shx`, `.prj` — a folder inside the zip is fine |
+    | GeoPackage | `.gpkg`, including one holding several layers: each becomes a layer |
     | GeoJSON | `.geojson` / `.json` |
     | CSV | With X/Y columns or a WKT geometry column — you choose at upload |
     | GeoParquet | `.parquet`, or an existing partitioned dataset already in your bucket |
+
+    A `.zip` is searched all the way down, so a shapefile inside a folder — which is what most
+    "download this dataset" buttons produce — is found. Any other single-file dataset the server can
+    read (a GeoPackage, a GeoJSON, a FlatGeobuf, a KML, a GML) is also read from inside a zip, which
+    is how to upload a format that is not in this table. If an archive holds more than one dataset
+    the shapefile wins; upload the others separately.
 
 === "Raster"
 
@@ -111,6 +117,21 @@ original projection.
 Each layer is inspected and given a default style. The row shows **Ready** when it can be added to a
 portal — how long that takes depends on the file, from near-instant for a small GeoJSON to a while for
 a large dataset being converted and tiled.
+
+!!! note "Styling in the file is not read — send it from QGIS instead"
+
+    The style a layer arrives with is **generated**, not taken from your file. A GeoPackage saved by
+    QGIS's *Package Layers*, or by *Save Style ▸ In database*, carries a `layer_styles` table with
+    your symbology in it; a `.qml` sitting beside a shapefile is the same idea. GeoDeploy reads
+    neither. Your data arrives intact and your styling does not.
+
+    The [QGIS plugin](qgis.md) is the way to keep it. **Upload selected layer(s)…** sends a layer
+    *with* its symbology, and it carries more than the file could: a symbol GeoDeploy has no words
+    for — an SVG or font marker, a hatch fill — is rendered by QGIS and sent as a picture, where a
+    style embedded in a file only points at an SVG on the machine that made it.
+
+    If the layer is already here, style it in GeoDeploy, or open it in QGIS through the plugin and
+    press **Save styling to GeoDeploy**.
 
 ### Add metadata
 

@@ -11,7 +11,21 @@
   shapes are matched by hand — change one, change the other (the parity note in CLAUDE.md).
 -->
 <template>
-  <svg :width="size" :height="size" viewBox="0 0 18 18" class="flex-shrink-0" aria-hidden="true">
+  <!-- SYMBOLOGY AN SVG SHAPE CANNOT STATE comes first, because for these the shape is not the
+       point. A rendered marker and a pattern tile are PIXELS — QGIS drew them, and redrawing them
+       as a circle is the exact loss this swatch exists to avoid. A heatmap is a ramp: it has no
+       classes, so there is no swatch to draw, only a gradient. Each falls back to the SVG below
+       when absent, so every existing caller is untouched. -->
+  <img v-if="image" :src="image" :width="size" :height="size" alt=""
+    class="flex-shrink-0 rounded-sm object-contain" :style="CHECKER" />
+  <span v-else-if="pattern" class="flex-shrink-0 rounded-sm"
+    :style="{ width: `${size}px`, height: `${size}px`,
+              backgroundImage: `url(${pattern})`, backgroundRepeat: 'repeat',
+              backgroundSize: '9px 9px', backgroundColor: 'rgba(128,128,128,0.12)' }" />
+  <span v-else-if="rampCss" class="flex-shrink-0 rounded-sm border border-border/60"
+    :style="{ width: `${size * 2}px`, height: `${size}px`, backgroundImage: rampCss,
+              backgroundColor: 'transparent' }" />
+  <svg v-else :width="size" :height="size" viewBox="0 0 18 18" class="flex-shrink-0" aria-hidden="true">
     <!-- Line: a stroke, dashed the way the layer is dashed. -->
     <line v-if="geom === 'line'" x1="2" y1="9" x2="16" y2="9"
       :stroke="color" stroke-width="3" stroke-linecap="round"
@@ -58,6 +72,24 @@ const props = defineProps({
   marker: { type: String, default: 'circle' },
   dash: { type: String, default: 'solid' },     // solid | dashed | dotted
   size: { type: Number, default: 16 },
+  // A marker QGIS rendered, or a pattern tile — both arrive as `data:` URIs on the legend entry.
+  image: { type: String, default: '' },
+  pattern: { type: String, default: '' },
+  // A heatmap's colours, low density first. The first is transparent, which is why the swatch sits
+  // on a chequer: that end is where the layer stops drawing, not merely where it goes pale.
+  ramp: { type: Array, default: null },
+})
+
+const CHECKER = {
+  backgroundImage: 'repeating-conic-gradient(rgba(128,128,128,.3) 0% 25%, transparent 0% 50%)',
+  backgroundSize: '8px 8px',
+}
+
+const rampCss = computed(() => {
+  const ramp = (props.ramp || []).filter(c => typeof c === 'string')
+  if (ramp.length < 2) return ''
+  const stops = ramp.map((c, i) => `${c} ${Math.round(i / (ramp.length - 1) * 100)}%`)
+  return `linear-gradient(to right, ${stops.join(', ')})`
 })
 
 const outline = { stroke: '#fff', 'stroke-width': 1.5, 'stroke-linejoin': 'round' }

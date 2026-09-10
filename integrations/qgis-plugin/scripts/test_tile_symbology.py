@@ -38,6 +38,16 @@ class _QColor:
         return self._name
 
 
+#: WHY `setWidth`/`width` LIVE ON THE LINE CLASS AND NOWHERE ELSE.
+#:
+#: They used to sit on `_SymbolLayer`, so every stub inherited a pair of methods that only
+#: `QgsSimpleLineSymbolLayer` actually has. The plugin called `layer0.setWidth(...)` on a FILL, this
+#: suite went green, and in real QGIS every polygon layer raised `AttributeError` — drawn in QGIS's
+#: own default colour on the way in, uploaded with no styling at all on the way out. A stub that is
+#: more generous than the API it stands for does not test the code; it tests itself.
+#:
+#: The rule for anything added here: put a method on the narrowest class that really has it, and
+#: check it against `scripts/test_real_qgis.py`, which asserts the same shape against a real PyQGIS.
 class _SymbolLayer:
     """The base every stub symbol layer shares.
 
@@ -52,12 +62,6 @@ class _SymbolLayer:
         self.stroke_width = None
         self.pen = None
         self.data_defined = None
-
-    def setWidth(self, w):
-        self._width = w
-
-    def width(self):                    # a METHOD in QGIS
-        return self._width
 
     def setStrokeWidth(self, w):
         # A marker's OUTLINE width — a different setter from setWidth, which is a line's own width.
@@ -119,11 +123,20 @@ class QgsSimpleMarkerSymbolLayer(_SymbolLayer):
 
 
 class QgsSimpleLineSymbolLayer(_SymbolLayer):
-    pass
+    """The ONE symbol layer with a `width` of its own — see the note above."""
+
+    def setWidth(self, w):
+        self._width = w
+
+    def width(self):                    # a METHOD in QGIS
+        return self._width
 
 
 class QgsSimpleFillSymbolLayer(_SymbolLayer):
-    pass
+    """A fill measures its outline through the STROKE setters, including the unit one."""
+
+    def setStrokeWidthUnit(self, unit):
+        self.stroke_width_unit = unit
 
 
 _LAYER_FOR = {0: QgsSimpleMarkerSymbolLayer, 1: QgsSimpleLineSymbolLayer,

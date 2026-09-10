@@ -72,6 +72,20 @@ Page-level route components. All except SetupWizard/Login render inside `Layout.
 - Raster layer `bbox` from the API is in source CRS (not lon/lat) — using it directly for `fitToBbox` can throw "Invalid LngLat" (see tasks/raster notes). Prefer zooming via vector bounds or TiTiler TileJSON.
 
 ## Last updated
+2026-09-10 (**`DataManager.vue`: select several, delete once.** A checkbox per row (only where
+`auth.canEdit`), a select-all per section over the FILTERED list rather than the page, and a sticky
+bar with the count and one Delete. The selection is one set across all three sections keyed
+`type:id`, and the ticked rows are remembered by value — the lists are filtered and paginated, so a
+selected row can be off-screen when the delete happens and the confirmation still has to name it.
+Deletes run ONE AT A TIME on purpose: removing a layer prunes it from every portal that draws it
+and re-publishes the published ones, so a dozen at once would race several publishes of the same
+portal. One failure skips that item and the dialog stays open with the reason.)
+
+## Last updated
+2026-09-04 (`PortalEditor.vue::makeDeckLayer`: a deck-rendered polygon now extrudes on a FIXED
+height as well as a field — the 2.5D shape. It required a field, so a 2.5D style previewed flat
+while the published portal raised it. Mirrors `templates/shared/portal.js`, both branches.)
+
 2026-08-24 (**V-16 dashboard archetype** — `PortalEditor` gains a fourth Experience and mounts
 `DashboardBuilder` for it. `dashboardLayers` deliberately excludes external sources (no attribute
 table to summarise, no COG to sample) and offers only layers the portal actually places, since a

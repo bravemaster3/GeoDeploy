@@ -30,6 +30,7 @@ from ..database import get_db
 from ..deps import require_scope
 from ..models import ExternalSource, Portal, RasterLayer, UploadJob, User, VectorLayer
 from ..routers.portals import _new_slug
+from ..services import postgis
 from ..services import geolibre_import as gli
 
 router = APIRouter(prefix="/interop", tags=["interop"])
@@ -102,7 +103,7 @@ async def publish_geolibre_project(
                 warnings.append(f"[{lyr['name']}] skipped: no features to ingest.")
                 continue
             layer_name = slugify(lyr["name"], separator="_") or "layer"
-            table_name = f"{layer_name}_{uuid.uuid4().hex[:6]}"
+            table_name = postgis.unique_table_name(layer_name)
             tmp_path = f"{settings.data_dir}/temp/{uuid.uuid4()}.geojson"
             with open(tmp_path, "w", encoding="utf-8") as fh:
                 json.dump(gj, fh)

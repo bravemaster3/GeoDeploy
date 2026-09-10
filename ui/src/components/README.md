@@ -19,7 +19,14 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
   PRESENTATION is duplicated — keep the row anatomy (label · Recommended · format · tools · URL ·
   copy · hint) and the ordering in step when you change either.
 - `data/UploadModal.vue` — drag/drop upload dialog; uses `useUpload` for progress + optimistic insert + background polling. `type` prop = `vector | raster`. **CSV** (vector): on selecting a `.csv` it parses the header client-side (with the chosen **delimiter** — comma/semicolon/tab/pipe) and shows a **Geometry mode picker (2026-07-11): X/Y point columns OR a WKT geometry column** (any geometry type — a column named wkt/geometry/geom/the_geom auto-selects WKT mode) + EPSG, then posts to `/data/vector/upload-csv` (background job) instead of the normal ingest. **GeoParquet** (vector, `.parquet`/`.geoparquet`): uploads **direct to storage** via `useUpload.uploadGeoParquet` (presign → PUT to `/s3/` → complete) — never through the API; 10 GB client-side cap. **Large files (≥ 2 GB, any vector format — CSV/GeoJSON/GPKG/zip, 2026-07-11):** `handleFile`/`importCsv` route them to `useUpload.uploadLargeVector` (presign → PUT → `/large/complete`) so they upload direct-to-storage and convert to GeoParquet in the background instead of hitting the API's 2 GB 413 (`LARGE_UPLOAD_THRESHOLD`). The CSV header is still parsed from the first 64 KB, so the X/Y/WKT pickers work at any file size.
-- `data/AddSourceModal.vue` — connect an **external source** (XYZ/WMTS · WMS · WFS): type picker, URL, layer name (WMS/WFS), attribution; POSTs to `/data/sources` (WFS validated server-side) and inserts via `dataStore.addExternal`.
+- `data/ConfirmDeleteModal.vue` — the delete confirmation, for ONE item or for MANY. A bulk
+  delete lists every item by name (a count is not a confirmation: "delete 12 items" cannot be
+  checked against what you meant to tick), shows the UNION of the portals they appear in,
+  counts the deletions off while they run, and stays open with a per-item reason if any failed.
+  `VectorRow`/`RasterRow`/`SourceRow` take `selectable`/`selected` and emit `toggle`; the
+  selection itself lives in `DataManager.vue`, keyed `type:id` — the three kinds are numbered in
+  separate sequences, so an id alone would put a raster and a vector in the same slot.
+- `data/AddSourceModal.vue` — connect an **external source** (XYZ · WMS · WMTS · WFS · OGC API - Features · vector tiles · PMTiles): type picker, URL, and the fields THAT kind needs — the layer of the service, the layer inside a vector tile, a WMTS matrix set — plus attribution. POSTs to `/data/sources`, where every kind that can be is validated and probed server-side (the tile layer name, the zoom range, the extent, and whether a PMTiles archive is raster or vector), then inserts via `dataStore.addExternal`.
 - `data/SourceRow.vue` — one external-source row (type badge, kind/geometry/layer, URL, delete).
 - `data/DiscoverModal.vue` — **import existing data**: two tabs (PostGIS tables / storage files) from `/data/discover/*`, checkbox-select with an editable per-row **name** (default = table/file name). Storage lists GeoTIFFs (raster) + **GeoParquet files (violet chip, 2026-07-11 — imported as file-backed layers via a background inspect+prep job whose `jobs` the modal polls)** + CSVs; selecting a CSV fetches its header (with a chosen **delimiter**) and shows a **geometry-mode picker (X/Y points or a WKT column, 2026-07-11)** + EPSG (CSV loads into PostGIS, the rest register catalog rows with no copy). Refreshes the store after import.
 - `infra/InfrastructurePanel.vue` (2026-07-30) — the consolidated Settings → Infrastructure view,
@@ -91,6 +98,86 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
 
 ## Dependencies / relationships
 - Read/write through `../../stores/` (mostly `data` and `portals`) and call the backend via `../../api`.
+- **`LegendSwatch` draws pictures, patterns and ramps** (2026-09-04), not only SVG shapes. A
+  rendered marker and a pattern tile are PIXELS — QGIS drew them, and redrawing them as a circle is
+  the exact loss the swatch exists to avoid; a heatmap has no classes at all, only a ramp. Each
+  falls back to the SVG when absent, so every existing caller is untouched. The layer page passes
+  each entry's own symbol through, because a rule-based layer varies by everything at once.
+- **The heatmap ramp is a dropdown plus one preview bar** (2026-09-04), the same control the
+  graduated ramp uses, with **Reverse**. Twelve ramps, and adding one is a single table entry.
+  Reversing flips the colours and rebuilds the transparent stop at whichever is now lowest —
+  reversing the finished list would strand transparency at the HIGH end, painting the whole
+  viewport at density zero. (An earlier attempt drew each ramp as its own CSS gradient over a
+  chequerboard; the `background-size` list applied to the gradient layer too, repeating it every
+  8px, so the four ramps rendered as boxes of vertical stripes.)
+- **The "Other" colour is editable** (2026-09-04). The categorized legend drew the `match`
+  fallback as a swatch with the picker **disabled**, directly above a hint reading "the rest draw in
+  the Other colour" — naming a colour with no way to choose it. On a truncated column that fallback
+  is most of the map. It writes `style.other_color`, which both renderers and the QGIS plugin have
+  always read; only the panel never set it.
+- **3D terrain for a raster** (2026-09-04) — the answer to "rasters can be 2.5D too, no?". It sits
+  BESIDE the `algorithm` dropdown rather than inside it: an algorithm replaces the picture
+  (hillshade returns finished relief, contours a coloured RGB image), while terrain leaves the
+  picture alone and adds a heightfield under it — so a hillshaded or contoured DEM draped over its
+  own relief is one tick, not a choice between them. Single-band only; three bands are a photograph.
+  The panel says the whole map is raised, because MapLibre has one terrain and the topmost layer
+  that asks for it wins.
+- **Custom dash patterns and centre markers** (2026-09-05) — the last two things the browser could
+  not author. A `dash_pattern` from QGIS OUTRANKS `lineType`, so such a line showed "Solid" in the
+  dropdown while drawing dashes, with no way to see or clear the real pattern; it has its own box
+  now, in multiples of the line width (MapLibre's unit, so the shape survives a width change) and
+  the dropdown reads "Custom pattern" rather than misreporting itself as the nearest preset. And
+  `centroid_marker` — a marker at each polygon's centre, QGIS's centroid fill — is drawn in the
+  browser into the same key and the same PNG data URI the plugin produces, so one made here and one
+  pushed from QGIS are the same thing to every renderer.
+- **Arrow SIZE** (2026-09-04) regenerates the tile rather than scaling it through `icon-size`: the
+  image is what every renderer draws and what the plugin reads back, so a size living only in the
+  layout would be lost the moment the style left this panel. One number scales head length and
+  thickness together — QGIS keeps its two apart, and an arrow pushed FROM QGIS keeps its own
+  proportions. Direction comes from the LINE'S OWN vertex order (`symbol-placement: line` +
+  `icon-rotation-alignment: map`), so "forward" means along the way the feature was digitised; it
+  is not a per-feature choice, and reversing it is what the "back" preset is for.
+- **Direction arrows on a line** (2026-09-04), drawn in the browser into the same `line_marker`
+  key and the same PNG data URI the plugin's `arrows.py` produces — so an arrow drawn here and a
+  QGIS arrow line are the same thing to every renderer. Forward, back or both, with a spacing.
+  Direction is the whole point of a flow, a one-way street or a river, and there was no way to show
+  it without QGIS. A hatch or arrow this panel drew carries a `hatch`/`preset` name, which is how
+  the "Styled in QGIS" block knows not to claim it — it would otherwise say "edited in QGIS" about
+  a control the author had just used.
+- **3D takes TWO height sources** (2026-09-04), because QGIS has two renderers here and they are not
+  variations of one control: `Qgs25DRenderer` gives every feature the SAME height — its height is a
+  project variable, `@qgis_25d_height`, not an attribute — while attribute-driven 3D reads a column.
+  The panel offered only the second, and `canExtrude` returned false without a numeric column, so
+  the entire 3D section was **hidden for a building-footprints layer with no height attribute** and
+  a 2.5D style pushed from QGIS could not be edited at all. *More 3D options* adds the roof colour
+  (MapLibre paints one volume with a vertical gradient, so the roof is the only colour it can
+  honour), a base — on the ground / a fixed lift / from a field, mirroring how MapLibre itself
+  overloads `fill-extrusion-base` — and a solidity slider. A style that came from 2.5D says so, and
+  says what the web cannot draw: QGIS rakes its walls off at an angle and drops a shadow, both of
+  which are still *carried* in `extrusion.qgis25d` for the trip back.
+- `LayerPanel.vue` (2026-09-04, second pass) now authors most of the vocabulary the QGIS round trip
+  added, arranged so the panel does not become a wall: **label positioning** as a nine-way anchor
+  grid ("above the point" is what somebody means; `text-anchor: bottom` is how MapLibre spells the
+  same thing, and the two read as opposites) with nudge/rotate/wrap/case/overlap/priority behind
+  *More label options*; **Draw as a heatmap** for point layers, with named ramps because a heatmap
+  ramp is a sequence and five hand-picked colours rarely make a good one; **fill pattern presets**
+  for polygons, whose tile is generated *in the browser* into the same `fill_pattern` data URI the
+  plugin produces, so a hatch made here and one pushed from QGIS are the same thing to every
+  renderer; and *More {geometry} options* holding cap, join, line offset, marker rotation/nudge/fade
+  and "draw no shapes".
+- `LayerPanel.vue` gained **labels**, a **visible zoom range**, and a **"Styled in QGIS"** block
+  (2026-09-04). The first two are authoring controls; the third is not — rules, a pattern fill, a
+  rendered marker and markers along a line are drawn but not editable here, and each of them
+  **outranks** the controls above it. Without naming them, the colour picker appears to do nothing
+  on such a layer and there is no way to find out why; the block says what is in charge and offers
+  one button to hand control back. Labels sit behind their own switch, following the 3D block: an
+  off switch and one line of text is the whole cost when you do not want them.
+- **`StyleModal.vue` gets all of it for free** — the layer's own page hosts this same component
+  rather than defining a second styling UI, and it persists the whole `style` dict.
+- `LayerPanel.vue`'s class-count spin box is **2–100** (2026-09-03), matching the server's clamp in
+  `field-stats`. It was 2–12, and that cap was working around `rampColors` snapping to one of seven
+  anchor stops — twelve classes came out in seven colours. Ramps interpolate now, so N classes give
+  N distinct colours; see `api/geodeploy/services/README.md` for the parity note.
 - `LayerPanel.vue` reads layer metadata (`columns`, `geometry_type`, `band_count`, `default_style`) from the data store; its style fields must stay consistent with the paint logic in `views/PortalEditor.vue` and the backend `portal_generator.py`.
 - Icons from `../../views/icons.js`.
 

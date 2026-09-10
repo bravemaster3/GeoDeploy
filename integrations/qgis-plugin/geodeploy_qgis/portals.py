@@ -135,7 +135,16 @@ def configs_from_published_style(style_doc: dict, style_from_legend) -> list[dic
         # portal holding vector 1 and raster 1 — an ordinary thing — had the second one swallowed
         # as a duplicate of the first, and the group opened missing a layer with no error anywhere.
         # Measured on a live portal: 7 layers in, 5 out.
-        key = (layer_id, meta.get("geodeploy:type") or "vector")
+        # AN EXTERNAL SOURCE IS ITS OWN KIND, and the published style does not say so directly:
+        # `geodeploy:type` carries the source's KIND (raster | vector) so a viewer knows what to
+        # draw, and `geodeploy:external` is the flag that says whose it is. Reading only the first
+        # gave a WMS source the identity of a GeoDeploy raster with the same number — so opening
+        # such a portal as a group and pushing it back rebound the portal's entry to a completely
+        # different layer, silently. Sources are numbered in their own sequence, which is also why
+        # they must be keyed apart from vectors and rasters here.
+        layer_type = ("external" if meta.get("geodeploy:external")
+                      else meta.get("geodeploy:type") or "vector")
+        key = (layer_id, layer_type)
         if layer_id is None or key in seen:
             continue
         seen.add(key)
@@ -144,7 +153,10 @@ def configs_from_published_style(style_doc: dict, style_from_legend) -> list[dic
                   "size": _size_of(meta.get("geodeploy:sizeLegend"))}
         configs.append({
             "layer_id": layer_id,
-            "layer_type": meta.get("geodeploy:type") or "vector",
+            "layer_type": layer_type,
+            # What the source HOLDS, which for an external source is not the same question as
+            # which kind of GeoDeploy record it is. The opener needs both.
+            "kind": meta.get("geodeploy:type") or "vector",
             "name": meta.get("geodeploy:name"),
             # POINT / LINE / POLYGON, and it matters more than it looks. A vector-tile renderer
             # takes one symbol PER GEOMETRY TYPE, so getting it wrong does not mean a wrong colour
@@ -282,6 +294,11 @@ def _source_of(style_doc: dict, ml_layer: dict):
                     "source_layer": ml_layer.get("source-layer")}
     if src.get("type") == "raster" and tiles:
         return {"kind": "raster-xyz", "url": tiles[0], "source_layer": None}
+    if src.get("type") == "geojson" and isinstance(src.get("data"), str):
+        # An external WFS: the portal draws it through GeoDeploy's same-origin GeoJSON proxy, so
+        # this is the address of the features themselves rather than of a tile pyramid. Without
+        # this shape the source was unreadable and a portal's WFS layer simply did not open.
+        return {"kind": "geojson", "url": src["data"], "source_layer": None}
     return None
 
 
@@ -334,6 +351,10 @@ def plan_push(group, style_for, current_configs) -> dict:
         before[(int(cfg.get("layer_id")), str(cfg.get("layer_type")))] = cfg
 
     configs, uploads, unchanged, restyled, added, kept = [], [], [], [], [], []
+    # A layer served by somebody else — a WMS, an XYZ tile set, a WFS — is REGISTERED rather than
+    # uploaded: `(name, layer, node, spec)`. And one whose service GeoDeploy has no kind for is
+    # named with its reason instead of being attempted: `(name, why)`.
+    remote_sources, unsupported = [], []
     seen = set()
 
     def walk(node):
@@ -355,6 +376,19 @@ def plan_push(group, style_for, current_configs) -> dict:
                 continue
             identity = layer_identity(qgis_layer)
             if identity is None:
+                # NOTHING SERVED FROM ELSEWHERE IS AN UPLOAD. A remote layer used to fall in with
+                # the local files, and `export.prepare` then raised inside the push worker — which
+                # aborted the whole push, so one basemap in a group meant nothing was published.
+                # A service GeoDeploy can hold becomes an external source; one it cannot is listed
+                # with the reason so the user can see it was left out and why.
+                spec = _external_spec(qgis_layer)
+                if spec is not None:
+                    remote_sources.append((qgis_layer.name(), qgis_layer, child, spec))
+                    continue
+                why = _external_refusal(qgis_layer)
+                if why:
+                    unsupported.append((qgis_layer.name(), why))
+                    continue
                 uploads.append((qgis_layer.name(), qgis_layer, child))
                 continue
             layer_id, layer_type = identity
@@ -415,7 +449,43 @@ def plan_push(group, style_for, current_configs) -> dict:
 
     return {"configs": configs, "uploads": uploads, "unchanged": unchanged,
             "restyled": restyled, "added": added, "removed": removed, "rename": rename,
-            "tree": tree, "kept": kept}
+            "tree": tree, "kept": kept, "sources": remote_sources,
+            "unsupported": unsupported}
+
+
+def _external_spec(qgis_layer):
+    """`external.describe`, and never a reason to fail a push. None when this is not a service."""
+    try:
+        from . import external
+    except ImportError:                 # pragma: no cover - exec'd standalone by the harness
+        try:
+            import external
+        except ImportError:
+            return None
+    try:
+        return external.describe(qgis_layer)
+    except Exception:                   # noqa: BLE001 - a layer we cannot read is not a source
+        return None
+
+
+def _external_refusal(qgis_layer):
+    """Why a REMOTE layer cannot become a source, or None — including for a local file, which is
+    not remote and therefore has no refusal: it is an upload."""
+    try:
+        from . import external
+    except ImportError:                 # pragma: no cover
+        try:
+            import external
+        except ImportError:
+            return None
+    try:
+        if not external.is_remote(qgis_layer):
+            return None
+        return external.refusal(qgis_layer) or (
+            "it is served from elsewhere and GeoDeploy has no external kind for it. Save it "
+            "locally and upload that instead.")
+    except Exception:                   # noqa: BLE001 - fall back to treating it as an upload
+        return None
 
 
 def _geometry_of_layer(qgis_layer):

@@ -19,7 +19,13 @@ function crossPts(cx, cy, r) {
 }
 
 export function markerImage(shape, color, size, outline, outlineWidth) {
-  const dpr = 2, r = Math.max(3, Number(size) || 5)
+  // A SIZE OF ZERO IS A SIZE, NOT A MISSING VALUE. `Number(size) || 5` turned a marker its author
+  // deliberately sized 0 into a 5 px dot, and `Math.max(3, ...)` enlarged every marker under 3 px
+  // to 3. Both are the same mistake: treating a real number the map should honour as an absent one.
+  // Reported on a place-names layer whose points exist only to carry labels — QGIS draws nothing
+  // and the browser drew 355 amber dots. The default applies only when there is no number at all.
+  const n = Number(size)
+  const dpr = 2, r = Number.isFinite(n) && n >= 0 ? n : 5
   // Outline width is a RATIO of the radius (see portal.js) so it stays proportional when a layer is
   // resized; 0.28 reproduces the old hard-coded stroke exactly.
   const ow = outlineWidth == null ? 0.28 : Number(outlineWidth)
@@ -57,9 +63,14 @@ export function registerMarkerImages(map, specs) {
   if (!map || map.__gdMarkerHook) return
   map.__gdMarkerHook = true
   map.on('styleimagemissing', (e) => {
-    if (!e.id || !e.id.startsWith('gd-pt-') || map.hasImage(e.id)) return
+    // Two id prefixes, two ways of getting an image. `gd-pt-` is a shape this code DRAWS from the
+    // id's own parameters; `gd-img-` is a picture the QGIS plugin rendered, whose pixels arrive in
+    // the spec because nothing about them can be reconstructed from an id.
+    if (!e.id || map.hasImage(e.id)) return
+    if (!e.id.startsWith('gd-pt-') && !e.id.startsWith('gd-img-')) return
     const spec = (map.__gdMarkerSpecs || {})[e.id]
     if (!spec) return
+    if (spec.image) { loadMarkerPicture(map, e.id, spec.image); return }
     const im = markerImage(spec.shape, spec.color, spec.size, spec.outline, spec.outline_width)
     try { map.addImage(e.id, im, { pixelRatio: im.pixelRatio }) } catch { /* already added */ }
   })
@@ -70,4 +81,33 @@ export function registerMarkerImages(map, specs) {
 export function setMarkerSpecs(map, specs) {
   if (!map) return
   map.__gdMarkerSpecs = { ...(map.__gdMarkerSpecs || {}), ...(specs || {}) }
+}
+
+
+/**
+ * Register a marker bitmap the plugin RENDERED, rather than one drawn from a shape name.
+ *
+ * A QGIS symbol GeoDeploy has no words for — an SVG marker, a raster or font marker, a multi-layer
+ * symbol — arrives as a PNG data URI. There is nothing to draw and nothing to parameterise: the
+ * pixels are the marker. Asynchronous because decoding an image is, which is why this returns a
+ * promise rather than an ImageData like `markerImage` does.
+ *
+ * The twin lives in `templates/shared/portal.js::setMarkerPicture`.
+ */
+export function loadMarkerPicture(map, id, dataUri) {
+  return new Promise((resolve) => {
+    if (!map || !id || !dataUri) return resolve(false)
+    const img = new Image()
+    img.onload = () => {
+      try {
+        // pixelRatio 2: the plugin renders at twice the marker's CSS size so the icon stays crisp,
+        // the same trade `markerImage` makes with its own canvas.
+        if (map.hasImage(id)) map.updateImage(id, img)
+        else map.addImage(id, img, { pixelRatio: 2 })
+      } catch (e) { /* one marker is not worth the map */ }
+      resolve(true)
+    }
+    img.onerror = () => resolve(false)
+    img.src = dataUri
+  })
 }

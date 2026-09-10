@@ -43,7 +43,10 @@ def summarise(candidates) -> str:
 def choose(parent, candidates):
     """Show the list. Returns the names to upload, or None if cancelled.
 
-    `candidates` is `[(name, reason_or_None)]`; a reason means it cannot be sent.
+    `candidates` is `[(name, reason_or_None)]`, or `[(name, reason_or_None, note_or_None)]`. A
+    REASON means it cannot be sent and greys the row out; a NOTE says what will happen to a row
+    that can — which is how a WMS or a WFS says "registered as an external source, nothing is
+    uploaded" while staying tickable.
     """
     if not QGIS:                        # pragma: no cover - no GUI in tests
         return None
@@ -58,8 +61,15 @@ def choose(parent, candidates):
     listing = QListWidget()
     listing.setSelectionMode(enum(QAbstractItemView, "SelectionMode", "NoSelection"))
     listing.setMinimumSize(420, 240)
-    for name, why in candidates:
-        item = QListWidgetItem(name if not why else "{0}  —  {1}".format(name, why))
+    for candidate in candidates:
+        name, why = candidate[0], candidate[1]
+        note = candidate[2] if len(candidate) > 2 else None
+        text = name
+        if why:
+            text = "{0}  —  {1}".format(name, why)
+        elif note:
+            text = "{0}  —  {1}".format(name, note)
+        item = QListWidgetItem(text)
         item.setData(enum(Qt, "ItemDataRole", "UserRole"), name)
         if why:
             # Visible but unusable: knowing WHY a layer is absent beats it silently not being there.

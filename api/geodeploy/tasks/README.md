@@ -189,7 +189,42 @@ Celery background workers that run the upload → ready pipelines so HTTP reques
   `docker compose build geodeploy-api && up -d --force-recreate geodeploy-api celery` (recreating only
   api leaves celery running stale code → tasks fail as "unregistered" or run the old logic).
 
+## What is inside the ZIP (2026-09-07)
+
+`vector_ingest._resolve_source` used to list the archive's TOP LEVEL and look for `.shp`, nothing
+else. Two ordinary uploads were refused with a message that was not true:
+
+* **a shapefile inside a folder** — what QGIS's *package layers*, ArcGIS's export and every
+  "download this dataset" button produce — reported *"ZIP file contains no .shp file"*, naming
+  exactly the thing the archive did contain;
+* **a zipped GeoPackage, GeoJSON, FlatGeobuf, KML or GML** reported the same sentence, about
+  formats that have no `.shp` in them by definition.
+
+It now walks the archive recursively, prefers a shapefile and falls back through `_ZIP_DATASETS`,
+skips dotfiles (macOS writes `__MACOSX/._x.shp` beside everything it compresses), logs a warning
+when an archive holds several datasets rather than silently ingesting one, and names both what it
+can read and what it found when there is nothing. `_safe_extract` filters traversing members —
+belt and braces, since CPython's `extractall` already strips them, and four lines on the one input
+where an arbitrary file write would be worst.
+
+**This also means a zip is the way to upload a format the route does not accept.** The extension
+list (`.zip`, `.geojson`, `.json`, `.gpkg`, `.csv`, `.parquet`, `.tif`) is unchanged; what changed
+is that a `.zip` is now read for what it actually holds.
+
 ## Last updated
+2026-09-07b (`vector_ingest._resolve_source`: **a ZIP is now read for what it holds**, not listed one level deep for a `.shp`. A shapefile inside a folder — what every dataset download produces — was refused with "ZIP file contains no .shp file", naming the thing it did contain. See the section above. Tests: `api/tests/test_archive_ingest.py`.)
+2026-09-07 (`vector_ingest._create_sibling`: **raw-SQL inserts must write every NOT NULL column themselves** — `vector_layers.visibility`, `vector_layers.is_public` and `upload_jobs.progress` all declare their default in Python, which SQLAlchemy applies only to an ORM insert, so a multi-layer upload died on a fresh install with `NotNullViolation`. Sharing is inherited from the parent row. Table names now come from `services.postgis.unique_table_name`, and names DERIVED from a table — the staging table, the geometry index — from `derived_name`; appending to a 63-character name returns that name unchanged, which is what `relation "…" already exists` was. `_ingest_via_copy` also handles a layer with NO attribute columns, which used to build `(, geom)`.)
+
+2026-09-04 (`vector_ingest`: **every layer of a multi-layer source is ingested, not just the first**
+— issue #95. `fiona.open(path)` with no `layer=` returns the first layer and says nothing about the
+rest, so a packaged QGIS project of nine layers became one layer with eight gone and no symptom
+anywhere. `_spatial_layers` lists them, skipping QGIS's `layer_styles` by name and any other
+attribute-only table by asking whether it has a geometry at all. The fan-out happens INSIDE the one
+task rather than as a task per layer, because the upload is a single temp file this task deletes in
+its `finally` — siblings would race it — and because the caller keeps polling one job. The first
+layer reuses the row the upload created; the rest get rows of their own. One bad layer is marked in
+error and the others still import; the job fails only if every layer did.)
+
 2026-09-02 (`restore.py`: `_repair_setup_config()` collapses `setup_config` back to ONE row
 and restores its primary key. `pg_restore --clean` empties the table, the live API inserts a blank
 default into the gap, the snapshot's row lands on top and ADD CONSTRAINT fails — leaving two rows,

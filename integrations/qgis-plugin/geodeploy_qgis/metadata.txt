@@ -2,12 +2,18 @@
 name=GeoDeploy
 qgisMinimumVersion=3.28
 qgisMaximumVersion=4.99
+; QGIS 4 IS A Qt6 BUILD, and the plugin manager there hides — or refuses to enable — a
+; plugin that has not said it works under Qt6. Claiming `qgisMaximumVersion=4.99` without
+; this says "I run on QGIS 4" to a human reading the page and nothing at all to the
+; installer. The claim is backed by `scripts/test_qt6_compat.py` (which walks the AST of
+; every module and refuses a flat enum) and by the full suite running on qgis:4.2 in CI.
+supportsQt6=True
 description=Browse a GeoDeploy instance, add its layers, and publish layers back to it.
 about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. This plugin connects
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.3.5
+version=0.7.0
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -26,7 +32,224 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.3.5 - Maximum version added because it is also supported in QGIS 4.2. 
+changelog=0.7.0 - The release that closes the symbology round trip.
+    EVERY SYMBOL QGIS CAN DRAW, or an honest account of why not. Rule-based rendering, stacked
+    strokes (a casing under a road), markers along a line, hatch and pattern fills, gradients, line
+    offsets, 2.5D, per-class symbols, and labels - their rules, their placement, whether they sit
+    on or above a line, and whether every part of a multi-part feature gets one. What cannot travel
+    is named before you push rather than found afterwards.
+    EXTERNAL SOURCES, BOTH WAYS. A WMS, WMTS, XYZ, WFS, OGC API - Features, vector tile set or
+    PMTiles archive open in QGIS is registered as a GeoDeploy source rather than refused; a
+    portal's own external sources open and push back without being mistaken for something else.
+    WITHOUT A TOKEN, A PORTAL OPENS EXACTLY AS IT DOES WITH ONE. There used to be two code paths
+    and only one of them ever got the new features.
+    Declared supportsQt6, so QGIS 4 will actually offer this plugin.
+    0.6.2 - WITHOUT A TOKEN, A PORTAL NOW OPENS EXACTLY AS IT DOES WITH ONE. There were
+    two implementations of "what does this portal look like": with a token the plugin read the
+    styling the author wrote; without one it read the published style.json and translated the
+    MapLibre paint backwards. That reverse is lossy - a rule tree, a stacked stroke, a per-class
+    marker, a label's placement and its scale range have no paint value to recover them from - so
+    every symbology fix landed on one side and the anonymous path fell further behind. There is one
+    path now, and an instance too old for it still opens (and says so). A public LAYER added on its
+    own gains its saved styling too: the anonymous index does not carry it, and nothing had ever
+    asked for the detail that does.
+    0.6.1 - EVERY KIND OF SERVICE, not just three. GeoDeploy now holds XYZ, WMS, WMTS,
+    WFS, OGC API - Features, vector tiles and PMTiles, and the plugin pushes all of them. QGIS
+    serves three of those through ONE provider, and the URI is the only thing that tells them
+    apart: sending a WMTS as a WMS publishes a layer asking GetMap of a server that only speaks
+    GetTile, which draws nothing and says nothing. What still has no home is refused by name -
+    ArcGIS REST, and WCS, which is not a display service at all (GetCoverage returns a coverage,
+    not map images; most WCS servers publish the same data over WMS).
+    Also: a label's PLACEMENT and whether it sits on, above or below its line now travel, so a
+    contour layer's heights come back; QGIS's "label every part of multi-part features" travels
+    too. Both need the instance rebuilt to show in the browser.
+    0.6.0 - A LAYER SERVED BY SOMEBODY ELSE CAN NOW BE PUSHED. A WMS, an XYZ tile set
+    or a WFS has no file to upload, and GeoDeploy has held exactly that as an "external source" -
+    a reference fetched at view time - since long before this plugin knew about it. Pushing one was
+    refused with "served from elsewhere, not a local file"; inside a GROUP it was worse, because
+    the layer fell in with the local files and the first export aborted the whole publish, so one
+    basemap in a group meant nothing reached the portal. Now it is registered, the provider's
+    attribution travels with it, and the dialog says "nothing is uploaded" before anything happens.
+    What GeoDeploy has no kind for - WMTS, third-party vector tiles or PMTiles, OGC API - Features,
+    ArcGIS REST - is named with the reason instead of being registered as the nearest neighbour
+    that would fetch from the wrong endpoint and draw nothing.
+    AND A PORTAL'S OWN EXTERNAL SOURCES SURVIVE THE ROUND TRIP. Their identity was read as the
+    KIND they hold, so a WMS source opened as "raster layer N" and pushing the group back pointed
+    the portal at whatever layer N happened to be. A portal's WFS layer also opens now, through the
+    same GeoJSON proxy the portal draws it with.
+    0.5.5 - THE FAST PREVIEW NOW THINS OUT THE WAY THE PORTAL DOES. A rule tree is how
+    a layer says "generalized outlines zoomed out, full detail zoomed in" - three rules, three
+    zoom ranges - and a tile renderer style left with no range is active at EVERY zoom, so the
+    fast path drew every rung of the ladder at once. Each rule and each class now carries its own
+    range, converted the way the two sides mean it: MapLibre draws for min <= z < max where QGIS
+    is inclusive at both ends, so the last whole zoom is ceil(max) - 1. Checked zoom by zoom
+    against a portal's own published style.
+    Also: the source picker says "Fast preview - the portal's tiles" rather than "As the portal
+    draws it". The old label was a promise a different rendering engine cannot keep, and every
+    remaining difference arrived as a report against it.
+    0.5.4 - A LINE'S LABELS COME BACK. Reported against a contour layer: the heights
+    showed in the file and in the browser and were simply absent once the portal was opened in
+    QGIS. The label PLACEMENT never travelled - it was read by stringifying an enum, which on this
+    QGIS is an int, so the test never matched and QGIS's default (around a point) stood. A line
+    labelled around a point draws NOTHING in QGIS: 181 label pixels became 0, and 181 again once
+    the placement was restored. Whether the labels sit ON the line or above it travels too, and a
+    line layer labelled in GeoDeploy - which never saw QGIS to say - is placed along its line
+    rather than left with a default that draws nothing.
+    AND THE FAST DRAW NO LONGER SHOWS LABELS A ZOOM EARLY. A scale threshold converts to a
+    fractional zoom (10.127) and a tile renderer has only whole ones; truncating handed that to
+    zoom 10, so zoomed out, labels the browser had already dropped came back for one step. The
+    first whole zoom inside the range is its ceiling, which is what the browser draws.
+    0.5.3 - A RULE IS A SYMBOL, and stacked strokes inside one now travel. A line
+    drawn as a solid red stroke with a dashed blue one over it published as plain red whenever it
+    lived inside a rule - the single-symbol path had learnt to read the whole stack in 0.5.0, but
+    the function that builds a RULE's style still read only the first stroke. (The other half of
+    the same report is server-side and ships with the instance.)
+    0.5.2 - Two things the FAST DRAW ("as the portal draws it") got wrong, both of
+    which made a layer look like it was missing.
+    THE CIRCLES ALONG A LINE SAT NEARLY THREE TIMES TOO FAR APART. The spacing between markers
+    travelled as a number without its unit, so 20 screen pixels was rebuilt as 15 MILLIMETRES -
+    QGIS's default unit, not the one the number was measured in. On a long thin line that reads as
+    "the markers are not drawn at all". Spacing is now stated in points, like every other size.
+    AND EVERY LABEL IN A RULE TREE APPEARED AT ONCE. A rule's zoom range lives on the RULE, beside
+    its filter; the tile path read it from the label settings instead and gave every rule the
+    LAYER's range - so a hamlet's name showed as far out as a city's, and the map was unreadable
+    zoomed out. Each rule now keeps the scale range it was drawn with.
+    0.5.1 - Two bugs 0.5.0 introduced, both reported within minutes of installing it.
+    CONNECTING COULD FAIL OUTRIGHT with "Client.__init__() got an unexpected keyword argument".
+    The client is vendored, but putting vendor/ on the path only decides where `geodeploy` is
+    imported FROM the first time - after that Python answers from its module cache, so upgrading
+    the plugin without restarting QGIS runs the new code against the OLD client. Anything the
+    plugin passes beyond the long-standing arguments is now OFFERED rather than required, so a
+    stale or pip-installed copy still connects; and the message no longer blames the URL for
+    something that was not the URL.
+    AND AN ENTIRE LAYER OF LABELS RENDERED AS "1". On the tile path a rule's FILTER was written
+    into the key that means "the expression that produces the label TEXT", so QGIS drew the
+    boolean result of `"type" = 'Water'` instead of the place name. Two different expressions,
+    two arguments.
+    0.5.0 - A LINE DRAWN AS SEVERAL STROKES now travels as all of them. QGIS builds a
+    casing, a dashed overlay and a hatch by stacking simple lines inside ONE symbol, and this read
+    only the first: a rule whose symbol is a solid RED line with a DASHED BLUE one over it - which
+    on screen reads as blue - arrived as plain red. `line_stack` carries the rest and the map
+    stacks them the same way.
+    A PICTURE MARKER COMES BACK THE SIZE IT LEFT. QGIS sizes a raster marker by its CANVAS, and the
+    canvas is deliberately roomier than the symbol so ink that overhangs is not clipped - so the
+    pin came back at half. The browser was right all along, which is why this only showed on the
+    way home.
+    A PORTAL GROUP now honours each layer's SCALE RANGE; before, every layer drew at every zoom.
+    And a RATE-LIMITED upload is waited out rather than failed: pushing a group is one request per
+    layer, an instance throttles that route, and the push used to stop partway with "HTTP 429" and
+    have to be repeated.
+    0.4.9 - Two more found by checking the 0.4.8 fix on the reported layer instead of
+    trusting it. The circles along a line came back at QGIS's DEFAULT size whatever they started
+    as - a rebuilt line marker is a raster marker, whose default has nothing to do with the symbol
+    it replaces, and the style carried the picture and the spacing but never the size. And a line
+    that is drawn entirely by symbols would have drawn NOTHING at all if the picture failed to
+    render, which is capped in bytes: worse than the band it replaced, so the zero width is
+    withdrawn and the line keeps a stroke instead.
+    0.4.8 - Five things reported against one map, all of them the plugin inventing
+    something the author never drew.
+    A LINE MADE OF MARKERS HAS NO STROKE. QGIS's marker line draws circles at intervals and
+    nothing between them, but `QgsLineSymbol.width()` reports its MARKER's size - so a line of
+    10 mm circles was read as a 10 mm stroke, the map painted a 37.8 px grey band underneath, and
+    the trip back added a "Simple Line" the symbol never had. Reported as "why do I have that wide
+    buffer around the line instead of circle markers".
+    A PICTURE IS NOW DRAWN AT THE SIZE QGIS DRAWS IT. `asImage` does not scale a symbol to fill
+    the canvas it is given, so the earlier size fix enlarged the canvas and added transparent
+    padding while the marker stayed put: a pin QGIS drew 27 px across arrived 14 px in the browser.
+    The symbol is scaled before rendering now, measured at 0.98 of QGIS rather than 0.5.
+    LABEL RULES WERE READ FROM THE WRONG END of the scale range, producing minzoom 24 with
+    maxzoom 13.6 - and MapLibre honours that literally, so all eight label layers of a place-names
+    layer drew NOTHING, at any zoom, with no error anywhere.
+    A PORTAL OPENED AS A GROUP now draws what the portal draws. That renderer knew about single,
+    graduated and categorized styles only: a RULE-BASED layer became one flat symbol, a marker
+    that travels as a picture became a plain dot, and a layer whose geometry was not in the row
+    was styled for all three geometry types at once.
+    0.4.7 - The push dialog now says WHERE a restyle lands. "Push group to portal"
+    changes that portal; a layer's own default style - what its page shows, and what every other
+    portal starts from - is changed only by "Save styling to GeoDeploy". The dialog listed
+    "Restyled (3)" and said neither, so restyling inside a group and then finding the layer's own
+    page unchanged looked like a bug. A layer that is NEW gets both, because an uploaded layer has
+    no default style to preserve, and the dialog says that too.
+    0.4.6 - A LABELLING IS A TREE, NOT ITS FIRST LEAF. QGIS labels a place-names
+    layer by rule - water blue at 9pt, woodland green, a town brown at 11 - and this plugin read
+    the FIRST rule and sent it as the whole labelling, so every name on the map came out in one
+    colour at one size. All eight rules now travel, each with the filter text its author typed,
+    and the trip back rebuilds the rule tree. Reported as "this layer has different colours from
+    what it had in qgis".
+    AND A SIZE OF ZERO IS A SIZE. A marker deliberately sized 0 - the ordinary way to make a point
+    layer that exists only to carry labels - was read as "unset" and drawn at 5, so 355 invisible
+    points became 355 coloured dots in the browser, and opening the layer back in QGIS gave it a
+    marker it never had. The same for a line of width 0. A default now applies only where there is
+    no number at all.
+    0.4.5 - A CLASS IS MORE THAN A COLOUR. A category or a range now keeps its own
+    symbol - its dash, its width, its fill opacity, its marker shape and size, its outline - where
+    before GeoDeploy carried a colour per class and one shape for the whole layer, taken from the
+    first class. Two categories in the same colour that differed only by dash arrived identical,
+    and the map lost the distinction it was made for. Classes that differ only in colour are
+    unchanged, so an ordinary classified layer is drawn exactly as it was.
+    Four more defects found by putting every symbol layer, every renderer and every render unit
+    this QGIS has through the round trip: a CROSS or X marker was drawn in white, because those
+    shapes have no inside and the colour was being set on a brush QGIS never paints with; a
+    POLYGON'S DASHED BORDER was read and never written back, so a dashed boundary went to
+    GeoDeploy correctly and returned solid (and a hairline one drew solid in the browser too,
+    since a fill's own edge cannot dash); LABEL CAPITALISATION was read and never written; and
+    LABEL LETTER SPACING did not invert, so 1.5 came back as 2.5 and drifted further every trip.
+    A marker QGIS draws as a picture - an SVG, a font or a raster marker - no longer reports the
+    layer as edited on every push: the bitmap that was applied is handed back while the symbol
+    still matches, instead of being photographed again slightly differently each time.
+    0.4.4 - Sizes are now read in the UNIT QGIS states them in. QGIS's default is
+    MILLIMETRES and this plugin had always read points, so every size authored in QGIS travelled
+    2.835x too small: a 10 mm marker became a 6.67 px radius ("the markers appear small in the
+    browser") and a 0.66 mm line a 0.88 px hairline. It went unnoticed because the plugin sets the
+    unit to points on everything it writes, so anything it had applied round-tripped perfectly.
+    An OUTLINE-ONLY POLYGON is no longer filled: a fill symbol whose layers are all strokes was
+    read by the line branch, so the border's colour arrived as the fill and a dashed extent
+    rectangle came back as a solid block over the map. A tile layer can now be LABELLED - it takes
+    a different labelling class, and asking for the wrong one meant every layer opened from a
+    portal as a group came back with no labels at all.
+    0.4.3 - A 2.5D layer authored in GEODEPLOY now opens as 2.5D in QGIS. It used to stay
+    a flat fill unless it had come from QGIS in the first place, which meant ticking "3D - raise
+    these polygons" in the browser produced a polygon that said nothing about height. You get both
+    renderers now: 2.5D on the ordinary canvas, and a 3D renderer so View > New 3D Map View shows
+    the real extrusion. A height driven by a FIELD travels as an expression rather than a number,
+    so the buildings vary instead of arriving as one flat slab. A classified layer keeps its
+    classes (2.5D is single-symbol) and a point layer stays pillars, both of which still get the 3D
+    renderer. And three things a TILED layer cannot draw - a heatmap, an extrusion, a raster
+    algorithm such as contours - now say so in the log instead of looking unstyled; a small heatmap
+    layer is opened from its data automatically so it simply works.
+    0.4.2 - Two things reported against 0.4.1. A heatmap now FADES IN at density zero the
+    way the web draws it: QGIS's QColor cannot read the CSS `rgba(0,0,255,0)` GeoDeploy stores as
+    the low stop, so it was silently dropped and the ramp started opaque - a flat wash over the
+    layer instead of a density map. And a pattern fill is now EMBEDDED in the symbol rather than
+    written to a file: QGIS reads an image path lazily on every repaint and has nowhere to report a
+    failure, so a path it could not read was a hatch that drew nothing at all.
+    0.4.1 - Styling now arrives in QGIS the way GeoDeploy draws it, in both the cases
+    testing found it did not. A pattern fill, a marker picture, markers along a line, a centre
+    marker, "draws nothing" and a HEATMAP could all be read OUT of QGIS and none could be written
+    back, so those layers opened as a plain colour; all six now rebuild. A pattern is added per
+    SYMBOL rather than per layer, so a graduated hatched polygon keeps its classes instead of
+    collapsing to one flat hatch. And WITHOUT A TOKEN the plugin reads the public legend, which now
+    carries the heatmap ramp and the pattern tile - previously an anonymous layer arrived unstyled
+    because the style lives on an authenticated endpoint.
+    Also: a style naming no colour no longer opens a different colour every time (QGIS's default
+    symbol picks one at random), and one unreadable layer can no longer abort opening a whole
+    portal group.
+    0.4.0 - The symbology round trip, widened a long way. Expressions and RULE-BASED
+    renderers travel; LABELS travel, with a shipped font set so the web draws the face QGIS drew;
+    2.5D arrives as a real extrusion, including a DATA-DEFINED height (an expression in the project
+    variable used to fall back to the default silently, so those buildings were the wrong height);
+    arrow lines are rebuilt rather than flattened; SVG, raster, font, ellipse and multi-layer
+    markers travel as their own pixels; pattern fills are rebuilt as tiles that repeat without a
+    seam; heatmaps and centroid fills translate. Gradients (fill, lineburst, shapeburst) read at
+    the MIDDLE of their ramp rather than one end; filled and raster lines pick a sensible colour
+    instead of falling through. Contour rasters carry a chosen palette and line colour, and a DEM
+    can raise the map as 3D terrain.
+    What cannot travel now SAYS SO instead of changing the map quietly: layer BLEND MODES (MapLibre
+    has none at all), cluster, displacement, merged-feature and inverted-polygon renderers. And the
+    write buttons explain why they are grey, with a link to the tokens page of the instance you are
+    connected to - a token failure now names the likeliest cause on every action, not only on
+    refresh.
+    0.3.5 - Maximum version added because it is also supported in QGIS 4.2. 
     0.3.4 - The plugin wears the GeoDeploy logo instead of a placeholder circle, six
     QDialogButtonBox enums missed by the first Qt6 pass are scoped (the scope belongs to the class
     you are calling, and that one is not QMessageBox), and a handful of unused imports and an

@@ -749,10 +749,17 @@ print("contours       -> drawn as a stretch, and its algorithm comes back intact
 # 25 m reported as "unchanged" in the push dialog.
 assert comparable_style({"algorithm": "contours", "increment": 5}) !=     comparable_style({"algorithm": "contours", "increment": 25})
 assert comparable_style({"algorithm": "contours", "thickness": 1}) !=     comparable_style({"algorithm": "contours", "thickness": 3})
-# …but an absent interval draws as TiTiler's default, so writing that default explicitly is the
-# same map as writing nothing.
-same({"algorithm": "contours"}, {"algorithm": "contours", "increment": 35, "thickness": 1},
-     "the algorithm's own defaults are not an edit")
+# …and an ABSENT interval is compared as absent. It used to fold into TiTiler's 35, on the reasoning
+# that a default written out is the same map as one left out — true then, false now: the server
+# derives the default from the raster's own range (range / 10, snapped) precisely because 35 is a
+# catastrophic interval for anything that is not elevation in metres. A vegetation index running
+# 0.55-0.95 drew one flat band at 35. The plugin cannot compute that default — it does not have the
+# range — so "absent" is left as absent, which is right: two layers that both leave it alone are the
+# same map whatever the server picks. `thickness` has no such problem and still folds.
+assert "increment" not in comparable_style({"algorithm": "contours"})
+assert comparable_style({"algorithm": "contours"}) !=     comparable_style({"algorithm": "contours", "increment": 35})
+same({"algorithm": "contours"}, {"algorithm": "contours", "thickness": 1},
+     "the line width's default is still not an edit")
 # A hillshade has neither, and must not grow them.
 assert "increment" not in comparable_style({"algorithm": "hillshade", "zfactor": 2})
 print("contour params -> the interval and width are compared, defaults fold, hillshade unaffected")
@@ -766,6 +773,66 @@ assert "algorithm" not in read, read
 assert read.get("colormap") == "viridis", read
 assert "algorithm" not in merge_style(future, read), merge_style(future, read)
 print("contours off   -> choosing a renderer in QGIS replaces it, and the merge clears it")
+
+
+# ── contour COLOURS survive QGIS, and a change to either is reported ─────────────────────────────
+#
+# The palette and the line colour are the picture, so a layer opened in QGIS and pushed back must
+# keep them, and changing either must read as the real edit it is. QGIS has no contour renderer at
+# all — it makes contours with a processing algorithm that outputs a VECTOR layer — so both ride
+# through in the recorded-algorithm blob, like the interval and the range beside them.
+coloured = {"algorithm": "contours", "increment": 0.05, "thickness": 1,
+            "rescale": "0.5563,0.9477", "contour_palette": "viridis",
+            "contour_color": "#ff0000"}
+
+assert raster_style_of(dict(coloured, opacity=0.7)) == coloured, raster_style_of(dict(coloured))
+assert comparable_style(coloured)["contour_palette"] == "viridis"
+assert comparable_style(coloured)["contour_color"].startswith("#ff0000")
+assert comparable_style(coloured) != comparable_style(dict(coloured, contour_palette="spectral")), \
+    "a change of relief palette is a change to the map"
+assert comparable_style(coloured) != comparable_style(dict(coloured, contour_color="#ffffff")), \
+    "a change of line colour is a change to the map"
+print("contour colours-> palette and line colour survive, and a change to either is seen")
+
+# NOT WRITING THEM IS THE SAME MAP AS WRITING TITILER'S OWN. A layer that has never been given
+# either renders through TiTiler's algorithm, which bakes in `terrain` and black — so the two
+# spellings have to compare equal, or every such layer would report itself as edited the first time
+# anyone opened it.
+plain = {"algorithm": "contours", "increment": 10, "thickness": 1, "rescale": "0,100"}
+assert comparable_style(plain) == comparable_style(
+    dict(plain, contour_palette="terrain", contour_color="#000000")), \
+    "the defaults written out must equal the defaults left out"
+assert comparable_style(plain) == comparable_style(
+    dict(plain, contour_palette="TERRAIN", contour_color="#000000FF")), \
+    "and so must a different spelling of the same two values"
+print("contour colours-> the defaults compare equal however they are spelled")
+
+# AN ABSENT INTERVAL STAYS ABSENT. The server's default is derived from the raster's own range
+# (range / 10, snapped), not TiTiler's global-DEM 35 — which on a vegetation index running 0.55-0.95
+# drew one flat band. The plugin cannot compute that; it does not have the range. So two layers that
+# both leave the interval alone are the same map, whatever the server picks for them.
+bare = {"algorithm": "contours", "rescale": "0,100"}
+assert "increment" not in comparable_style(bare), comparable_style(bare)
+assert comparable_style(bare) != comparable_style(dict(bare, increment=35)), \
+    "35 written explicitly is no longer 'the default' — the default depends on the data"
+print("contour default-> an absent interval is compared as absent, not as 35")
+
+# SWITCHING AWAY FROM CONTOURS CLEARS THEM. `_RASTER_KEYS` is what a raster read-back clears, and a
+# palette left behind on a hillshade would be a stale key nobody can see or remove.
+assert "contour_palette" in ns["_RASTER_KEYS"]
+assert "contour_color" in ns["_RASTER_KEYS"]
+print("contour keys   -> both are cleared when the algorithm changes")
+
+# …and the layer still DRAWS in QGIS, with its stretch, and comes back with both colours intact.
+layer = RasterLayer()
+assert raster_to_qgis(layer, coloured), "a coloured contour raster should still draw in QGIS"
+read = raster_from_qgis(layer, COLORMAPS)
+assert read.get("algorithm") == "contours", read
+merged = merge_style(coloured, read)
+assert merged.get("contour_palette") == "viridis", merged
+assert merged.get("contour_color") == "#ff0000", merged
+same(coloured, merged, "the contour colours did not survive the round trip")
+print("contour render -> it draws in QGIS and both colours come back unchanged")
 
 # A hillshade is NOT recorded this way — it becomes a real renderer and reads back on its own, so
 # recording it too would mean restoring a stale copy over a genuine edit.

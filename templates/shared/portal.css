@@ -405,6 +405,23 @@
       width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0;
       box-shadow: inset 0 0 0 1px rgba(0,0,0,.28);
     }
+    /* Swatches for symbology a coloured square cannot state: a rendered marker, a pattern tile,
+       a heatmap ramp. Sized to match `legendSwatch`'s 18x18 SVG so rows stay aligned whichever
+       kind a layer uses. The ramp and the tile sit on a chequer because both can be transparent —
+       a heatmap's low end always is, and that is where the layer stops drawing. */
+    .legend-swatch-img,
+    .legend-swatch-tile,
+    .legend-swatch-ramp {
+      width: 18px; height: 18px; flex: 0 0 18px; border-radius: 2px;
+      background-repeat: repeat; background-size: 9px 9px;
+    }
+    .legend-swatch-img { object-fit: contain; }
+    .legend-swatch-tile { background-color: rgba(128, 128, 128, 0.12); }
+    .legend-swatch-ramp {
+      width: 34px; flex-basis: 34px; background-size: auto; background-repeat: no-repeat;
+      border: 1px solid rgba(128, 128, 128, 0.35);
+    }
+
     .legend-label {
       font-size: 10.5px; color: var(--text-muted); white-space: nowrap;
       overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums;
@@ -450,6 +467,19 @@
     .layer-zoom:hover { background: var(--border); color: var(--accent); }
     .layer-zoom:disabled { opacity: .3; cursor: default; }
     .layer-zoom svg { width: 14px; height: 14px; }
+    /* A FINGER IS NOT A MOUSE POINTER. These are 22-24px, which is fine for a cursor and below
+       any usable touch target — and `.lg-zoom` is invisible until hover, which a touch screen
+       does not have at all. On a coarse pointer they grow to 34px and the folder's zoom is simply
+       shown; the hit area grows through padding and a negative margin, so the ICONS stay the size
+       they are and nothing about the desktop layout moves. */
+    @media (pointer: coarse) {
+      .layer-zoom, .layer-eye, .layer-swatch-btn, .lg-zoom {
+        width: 34px; height: 34px;
+      }
+      .layer-zoom svg { width: 16px; height: 16px; }
+      .lg-zoom { opacity: 1; }
+      .layer-row { gap: 4px; }
+    }
     .layer-opacity-row {
       display: flex; align-items: center; gap: 8px; margin-top: 8px;
     }
@@ -652,10 +682,22 @@
       display: none; position: absolute; top: 0; right: 40px; width: 250px;
       background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
       box-shadow: var(--shadow-lg); padding: 8px;
+      /* A LIST AS LONG AS ITS CATALOG. This is anchored to a control that can sit anywhere down
+         the edge of the map, so with eight basemaps it ran off the bottom of the window and the
+         last entries — including "None" — were unreachable: no scrollbar, nothing to drag. It was
+         capped only under `max-width: 640px`, which a landscape desktop window is not.
+         `fitFlyout()` in portal.js sets the exact height on open; this is the floor that holds
+         before any script runs. */
+      max-height: 60vh; overflow-y: auto;
+      /* Scrolling the LIST must not become scrolling (or zooming) the map behind it. */
+      overscroll-behavior: contain;
     }
     .gd-basemap-ctrl.open .gd-basemap-menu { display: block; }
     /* C1: when the control cluster is on the LEFT, open the flyout toward the map (to the right). */
     body[data-controls-side="left"] .gd-basemap-menu { right: auto; left: 40px; }
+
+    /* The tools flyout is the same shape and has the same problem. */
+    .gd-tools-menu { max-height: 60vh; overflow-y: auto; overscroll-behavior: contain; }
 
     /* C7: download tool flyout (draw a box OR type coordinates). Mirrors the basemap flyout. */
     /* overflow:visible so the absolutely-positioned flyout isn't clipped by the control group box. */

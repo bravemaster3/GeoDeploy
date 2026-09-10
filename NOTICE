@@ -9,3 +9,23 @@ Licensed under the Apache License, Version 2.0. See LICENSE.
 GeoDeploy runs alongside third-party services (PostGIS, MinIO, Martin, TiTiler,
 Redis, nginx) and bundles third-party libraries, each under its own licence.
 Those services run as separate processes; their licences are unaffected by this one.
+
+--------------------------------------------------------------------------------
+Bundled fonts
+--------------------------------------------------------------------------------
+
+templates/shared/fonts/ contains signed-distance-field glyphs generated from the
+Noto Sans typeface (Regular, Bold and Italic). Map labels are drawn from glyphs
+rather than from fonts installed on a reader's machine, so these travel with the
+software and are redistributed with it.
+
+    Noto Sans
+    Copyright 2022 The Noto Project Authors
+    (https://github.com/notofonts/latin-greek-cyrillic)
+
+    Licensed under the SIL Open Font License, Version 1.1.
+    https://openfontlicense.org
+
+The OFL requires this notice to accompany any redistribution of the fonts or of
+work derived from them, which the glyph sets are. Fonts added to that directory
+by an operator are that operator's to license; see templates/shared/fonts/README.md.
