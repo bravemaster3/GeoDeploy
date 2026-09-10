@@ -7,7 +7,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.6.1
+version=0.6.2
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -26,7 +26,16 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.6.1 - EVERY KIND OF SERVICE, not just three. GeoDeploy now holds XYZ, WMS, WMTS,
+changelog=0.6.2 - WITHOUT A TOKEN, A PORTAL NOW OPENS EXACTLY AS IT DOES WITH ONE. There were
+    two implementations of "what does this portal look like": with a token the plugin read the
+    styling the author wrote; without one it read the published style.json and translated the
+    MapLibre paint backwards. That reverse is lossy - a rule tree, a stacked stroke, a per-class
+    marker, a label's placement and its scale range have no paint value to recover them from - so
+    every symbology fix landed on one side and the anonymous path fell further behind. There is one
+    path now, and an instance too old for it still opens (and says so). A public LAYER added on its
+    own gains its saved styling too: the anonymous index does not carry it, and nothing had ever
+    asked for the detail that does.
+    0.6.1 - EVERY KIND OF SERVICE, not just three. GeoDeploy now holds XYZ, WMS, WMTS,
     WFS, OGC API - Features, vector tiles and PMTiles, and the plugin pushes all of them. QGIS
     serves three of those through ONE provider, and the URI is the only thing that tells them
     apart: sending a WMTS as a WMS publishes a layer asking GetMap of a server that only speaks

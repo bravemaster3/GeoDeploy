@@ -3822,6 +3822,29 @@
     } else { goHome(); }
   }
   // Padding that keeps the fit clear of a docked layer list on its side.
+  // A FLYOUT MUST FIT THE SPACE IT OPENS INTO. These hang off a control that can sit anywhere down
+  // the edge of the map — top cluster, bottom cluster, a tall stack of buttons — so a fixed cap is
+  // either too small on a big screen or still off the edge on a small one. With eight basemaps it
+  // ran past the bottom of the window and the last entries, "None" among them, could not be
+  // reached at all: nothing scrolled, because nothing was over its max-height.
+  //
+  // Measured on open, when the control's position is finally known. The CSS cap stays as the floor.
+  function fitFlyout(container) {
+    const menu = container && container.querySelector('.gd-basemap-menu, .gd-tools-menu');
+    if (!menu) return;
+    menu.style.maxHeight = '';                 // measure against the natural position, not the last
+    try {
+      const box = menu.getBoundingClientRect();
+      const wrap = document.getElementById('map-wrap') || document.body;
+      const bounds = wrap.getBoundingClientRect();
+      // Whichever edge this one grows toward: a bottom cluster opens upward (`bottom: 0` in CSS).
+      const room = getComputedStyle(menu).top === 'auto'
+        ? box.bottom - Math.max(bounds.top, 0) - 12
+        : Math.min(window.innerHeight, bounds.bottom) - box.top - 12;
+      if (room > 80) menu.style.maxHeight = Math.round(room) + 'px';
+    } catch (e) { /* the CSS cap still applies */ }
+  }
+
   function fitPadding() {
     const p = { top: 40, bottom: 40, left: 40, right: 40 };
     const sb = document.getElementById('sidebar');
@@ -4576,7 +4599,7 @@
       const coordsTab = c.querySelector('.gd-tools-tab[data-tab="coords"]');
       // Each open resets to the initial hint state (the cross only appears after "Coordinates").
       function resetPanes() { hint.hidden = false; coordsPane.hidden = true; coordsTab.classList.remove('is-active'); }
-      btn.addEventListener('click', ev => { ev.stopPropagation(); c.classList.toggle('open'); if (c.classList.contains('open')) { collapseFloatingList(); resetPanes(); } });
+      btn.addEventListener('click', ev => { ev.stopPropagation(); c.classList.toggle('open'); if (c.classList.contains('open')) { collapseFloatingList(); resetPanes(); fitFlyout(c); } });
       menu.addEventListener('click', ev => ev.stopPropagation());
       document.addEventListener('click', () => c.classList.remove('open'));
       // "Draw a box" starts drawing immediately (no second click); "Coordinates" reveals the cross.
@@ -4899,7 +4922,7 @@
         '</div>';
       const btn = c.querySelector('.gd-basemap-btn');
       const menu = c.querySelector('.gd-basemap-menu');
-      btn.addEventListener('click', ev => { ev.stopPropagation(); c.classList.toggle('open'); if (c.classList.contains('open')) collapseFloatingList(); });
+      btn.addEventListener('click', ev => { ev.stopPropagation(); c.classList.toggle('open'); if (c.classList.contains('open')) { collapseFloatingList(); fitFlyout(c); } });
       // Collapse the flyout after a choice (C6) — and on any outside click (below).
       menu.addEventListener('change', ev => { selectBasemap(ev.target.value); c.classList.remove('open'); });
       menu.addEventListener('click', ev => ev.stopPropagation());

@@ -902,7 +902,12 @@ class GeoDeployDock(QDockWidget):
 
         The tag is what makes the portal round trip safe: a group pushed back has to know WHICH
         layer each entry is, and matching by name would break the first time someone renames one.
+
+        The row is COMPLETED first. Adding a public layer without a token used to give a layer with
+        no symbology at all — not because the styling is private, but because the anonymous index
+        does not carry `default_style` and nothing ever asked for the detail that does.
         """
+        row = self._complete(row)
         if source["kind"] == "vector-tiles":
             layer, doc = self._vector_tiles(source, name)
             if layer is None:
@@ -1205,13 +1210,36 @@ class GeoDeployDock(QDockWidget):
             symbology._log("Could not set the raster's extent: {0}".format(exc))
 
     def _row_for(self, layer_id, layer_type):
-        """The listing row matching a portal layer_config entry."""
+        """The listing row matching a portal layer_config entry, COMPLETE.
+
+        An anonymous listing is deliberately the smallest view of an instance: no `default_style`,
+        no `columns`, no `schema_name`. That is a property of the cheap index, not of the layer's
+        permissions — the same layer's public detail carries all of it — so a row is completed here
+        rather than being used thin. `Instance.layer_detail` is a no-op for an authenticated row
+        and remembers what it fetched, so this stays one call per layer at most.
+        """
         for row in self._rows:
             kind = "raster" if (row.get("layer_type") == "raster"
                                 or row.get("storage_backend") == "raster") else "vector"
             if str(row.get("id")) == str(layer_id) and kind == layer_type:
-                return row
+                return self._complete(row)
         return None
+
+    def _complete(self, row):
+        """One layer row with everything the styling and source pickers need.
+
+        Kept as a method so the completion is remembered ON the listing: a portal group asks for
+        the same row when it opens, when it is restyled and when it is pushed back.
+        """
+        if not self.instance or not isinstance(row, dict) or not row.get("_public"):
+            return row
+        try:
+            full = self.instance.layer_detail(row)
+        except Exception:               # noqa: BLE001 - the thin row still opens the layer
+            return row
+        if full is not row and isinstance(full, dict):
+            row.update({k: v for k, v in full.items() if row.get(k) is None})
+        return row
 
     def open_portal_as_group(self):
         """Every layer of a portal, in its order, styled as the portal styles it, in one group.
@@ -1227,28 +1255,24 @@ class GeoDeployDock(QDockWidget):
             return
         if not self.instance:
             return
-        ref = row.get("id") or row.get("slug")
-        slug = row.get("slug")
+        # `portal_document` reads the row itself — which id or slug to use, and by which route, is
+        # its decision now rather than something unpicked here and there.
         instance = self.instance
 
         def work():
-            # With a token, ask the API — it is authoritative and covers unpublished portals.
-            if instance.token and ref is not None:
-                try:
-                    return portal_sync.enrich_from_published(
-                        instance.client.portals.get(ref), instance, symbology.style_from_legend)
-                except GeoDeployError:
-                    pass                # fall through: a published portal is readable anyway
-            # Without one, read what the portal PUBLISHES. Looking at a public portal should never
-            # require an account; only changing it should.
-            if not slug:
-                raise GeoDeployError("This portal has no published address to read.")
-            doc = instance.published_style(slug)
-            return {"id": row.get("id"), "slug": slug,
-                    "title": row.get("title") or row.get("name") or slug,
-                    "layer_configs": portal_sync.configs_from_published_style(
-                        doc, symbology.style_from_legend),
-                    "_anonymous": True}
+            # ONE PATH, TOKEN OR NOT. `Instance.portal_document` decides how to READ the portal —
+            # the API, the public portal route, or (for an old instance) the published style — and
+            # every one of them answers with the same `layer_configs`. `enrich_from_published`
+            # then adds what only the published document knows: the SOURCE each layer is drawn
+            # from, its geometry, its name.
+            #
+            # It used to branch here, and the anonymous half was a second implementation of "what
+            # does this portal look like" that nothing kept in step: a rule tree, a stacked stroke,
+            # a per-class marker and a label's placement have no paint value to be read back out
+            # of, so an anonymous visitor got an approximation that fell further behind with every
+            # symbology fix.
+            return portal_sync.enrich_from_published(
+                instance.portal_document(row), instance, symbology.style_from_legend)
 
         def work_and_warm():
             """The portal document, plus every per-layer document its build will need.

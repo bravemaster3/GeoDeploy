@@ -154,6 +154,48 @@ async def public_portals(request: Request, db: AsyncSession = Depends(get_db)) -
     return [_portal_out(p, base) for p in rows]
 
 
+@router.get("/portals/{slug}")
+async def public_portal(slug: str, request: Request,
+                        db: AsyncSession = Depends(get_db)) -> dict[str, Any]:
+    """ONE published portal, WITH the styling it was authored with.
+
+    WHY THIS EXISTS. A portal's `style.json` is the drawing instructions — MapLibre paint, baked
+    expressions, tile URLs — and a client that only has that has to run the translation BACKWARDS
+    to recover what the author actually chose. The plugin did exactly that, and the reverse
+    translation is lossy by construction: a rule tree, a stacked stroke, a per-class marker, a
+    label's placement and its scale range have no single paint value to be read out of. So an
+    anonymous visitor got an approximation of the portal while a signed-in one got the portal, and
+    every new symbology feature widened the gap — one more thing that "does not work without a
+    token".
+
+    Nothing here is a new disclosure. `layer_configs` IS the map: the same colours, widths, rules
+    and label settings that `style.json` already publishes as paint, and that anyone can read off
+    the page. This serves them in the vocabulary they were written in instead of the one they were
+    compiled to, so the plugin can use ONE code path for both kinds of visitor.
+
+    Only a portal that is PUBLISHED and PUBLIC, exactly as the listing above filters. A portal
+    behind a link or a password is not public and does not answer here.
+    """
+    await _require_enabled(db)
+    portal = (await db.execute(
+        select(Portal).where(Portal.slug == slug, Portal.published.is_(True),
+                             Portal.access_type == "public")
+    )).scalar_one_or_none()
+    if not portal:
+        raise HTTPException(404, "No public portal at this address.")
+    out = _portal_out(portal, _base_url(request))
+    out.update({
+        "published": True,
+        "layer_configs": json.loads(portal.layer_configs) if portal.layer_configs else [],
+        "layer_groups": json.loads(portal.layer_groups) if portal.layer_groups else None,
+        "layout": json.loads(portal.layout_config) if portal.layout_config else None,
+        "basemap": portal.basemap,
+        # The published start view, so a client opens where the portal opens.
+        "initial_view": json.loads(portal.initial_view) if portal.initial_view else None,
+    })
+    return out
+
+
 # ── shaping ──────────────────────────────────────────────────────────────────────────────────────
 
 def _portal_out(portal: Portal, base: str) -> dict[str, Any]:

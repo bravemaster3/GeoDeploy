@@ -97,6 +97,20 @@ Connect, pick any layer in QGIS, tick **Send its styling too**, and press **Uplo
 layers**. It appears in **My Data** on the instance, styled the way QGIS drew it. Note that the demo
 resets hourly, which invalidates tokens — if writes suddenly start failing, make a new one.
 
+### With a token, and without one
+
+A **published public portal opens the same way either way** — the same colours, the same rules, the
+same labels, the same folders. The plugin reads the portal's own authored styling from the instance
+(`/api/public/portals/<slug>`), not a reconstruction of it, so nothing is approximated for a
+visitor who has no account. The same goes for a public layer added on its own: its saved styling
+comes with it.
+
+What a token adds is what it should: portals that are not published, layers that are not shared,
+and everything that WRITES — uploading, saving styling, pushing a group.
+
+An instance older than this endpoint still opens, from the published style, and says so in the log
+— rules, stacked strokes, per-class symbols and label placement cannot be recovered that way.
+
 ## Add a layer
 
 Select a layer and press **Add to map**. It arrives styled as GeoDeploy draws it.

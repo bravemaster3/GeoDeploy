@@ -366,6 +366,32 @@ Findings in `vendor/` are fixed in `cli/geodeploy` and re-vendored — never edi
 `vendor.py --check` fails.
 
 ## Last updated
+2026-09-10 (**one path for a portal, token or not.** There were two implementations of "what does
+this portal look like": with a token the plugin asked the API for the authored `layer_configs`;
+without one it read `style.json` and translated the MapLibre paint BACKWARDS. That reverse is lossy
+by construction — a rule tree, a stacked stroke, a per-class marker, a label's placement and its
+scale range have no single paint value to recover them from — so every symbology fix landed on the
+authenticated side and the anonymous one drifted further behind with each release. Reported as
+"unauthenticated paths are lagging behind".
+
+`Instance.portal_document` is now the ONE place that decides how a portal is read: the API when
+there is a token (the only route that sees an unpublished portal), else the new
+`GET /api/public/portals/<slug>` which serves the same authored configs to anybody, else — only for
+an instance too old to have it — the published style, translated back and marked
+`_rebuilt_from_style` with a warning in the log. All three answer with the same `layer_configs`, so
+`enrich_from_published` and everything downstream has one shape.
+
+`Instance.layer_detail` does the same for a LAYER: the anonymous index is deliberately the smallest
+view of an instance and carries no `default_style`, `columns` or `schema_name` — so a public layer
+added without a token arrived with no symbology at all. It is completed from
+`/api/public/layers/<kind>/<ref>`, once, and remembered on the row (`_complete`). An authenticated
+row is returned untouched and asks the instance nothing.
+
+Also: a control flyout is bounded and scrollable at every screen size (the basemap list ran off a
+landscape window with eight entries and "None" could not be reached), and the 3D-on-tiles message
+was checked rather than trusted — neither QGIS 3.44 LTR nor 4.2 has a vector-tile 3D renderer, so
+it is accurate. Tests: `scripts/test_anonymous_parity.py` (29, in CI). Plugin 0.6.2.)
+## Last updated
 2026-09-08b (**every kind of external source.** `xyz | wms | wfs` becomes `xyz | wms | wmts | wfs | ogcapi | vectortile | pmtiles` on the instance, and the plugin pushes all of them. The interesting part is that QGIS's single `wms` provider serves THREE of them — XYZ, WMS and WMTS — and only the URI tells them apart; `spec_from_uri` does, because sending a WMTS as a WMS publishes a layer that asks GetMap of a server that only speaks GetTile. ArcGIS REST and WCS are refused by name, WCS with what it actually is. Also `label_per_part` (QGIS's "label every part") round-trips. 51 stub checks incl. a plugin-vs-server vocabulary comparison; 531 matrix, 349 real-QGIS. Plugin 0.6.1.)
 2026-09-08 (**external sources, both directions** — `external.py`. A WMS/XYZ/WFS layer is REGISTERED (`client.sources.create`) rather than uploaded, on the single-layer push and inside a group; `plan_push` returns `sources` and `unsupported` beside `uploads`, the dialog lists both before anything happens, and the push worker no longer dies on one unsendable layer (`export.prepare` raised straight out of it, so a group containing a basemap published NOTHING). On the way back, a portal's external source is keyed as `external` rather than as the kind it holds — it was opening as "raster layer N" and pushing back rebound the portal entry to a different layer — and a WFS source now opens through the portal's GeoJSON proxy. Verified against the live instance: created, read back, deleted. Tests: `scripts/test_external_sources.py` (36) + `external_services` in `test_real_qgis.py` (349). Plugin 0.6.0.)
 2026-09-07k (**a rule ladder thins out on the fast preview too.** A `QgsVectorTileBasicRendererStyle` with no zoom range is active at EVERY zoom, so a layer whose rules carry their own ranges — generalized zoomed out, detailed zoomed in — drew every rung at once, while the portal and the editable copy both showed one at a time. `_tile_style_zoom` applies each rule's and each class's own range. The conversion is not symmetric: MapLibre draws for `minzoom <= z < maxzoom` and QGIS's `isActive` is inclusive at both ends (asked of QGIS, not assumed), so the near end is `ceil(lo)` and the far end `ceil(hi) - 1`; the label path uses the same. Verified zoom by zoom against the reported portal's published style — 286's three rungs now agree at every zoom. 529 checks. Plugin 0.5.5.)

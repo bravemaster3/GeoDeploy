@@ -234,6 +234,14 @@ jobs:
         # feature made of words still breaks when somebody edits the words.
         run: python integrations/qgis-plugin/scripts/test_push_summary.py
 
+      - name: A portal opens as well without a token as with one
+        # There used to be two implementations of "what does this portal look like": the API's
+        # authored `layer_configs`, and a backwards translation of the published MapLibre paint.
+        # The reverse is lossy by construction — a rule tree, a stacked stroke, a per-class marker
+        # and a label's placement have no paint value to be recovered from — so every symbology fix
+        # landed on one side and the anonymous path drifted. One path now; this pins its order.
+        run: python integrations/qgis-plugin/scripts/test_anonymous_parity.py
+
       - name: A service layer becomes an external source
         # A WMS, an XYZ set or a WFS has no file to upload, and GeoDeploy holds exactly that as an
         # `external_source`. The parsing is of QGIS's own provider-URI grammars — two of them,

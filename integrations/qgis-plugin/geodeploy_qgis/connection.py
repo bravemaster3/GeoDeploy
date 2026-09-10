@@ -151,6 +151,98 @@ class Instance:
                 pass
         return (self.client.catalog.public() or {}).get("portals") or []
 
+    def portal_document(self, row: dict) -> dict:
+        """A portal's AUTHORED document — the same shape whether or not there is a token.
+
+        THE ONE PLACE THAT DECIDES HOW A PORTAL IS READ. There used to be two: the authenticated
+        path asked the API for `layer_configs` (the styling as the author wrote it) and the
+        anonymous path read `style.json` and translated the MapLibre paint BACKWARDS. That reverse
+        translation is lossy by construction — a rule tree, a stacked stroke, a per-class marker, a
+        label's placement and its scale range have no single paint value to recover them from — so
+        an anonymous visitor got an approximation, and every new symbology feature widened the gap.
+        Two implementations of "what does this portal look like", and only one of them was ever
+        updated.
+
+        Now there is one, with three transports tried in order:
+
+        1. the API, when there is a token — authoritative, and the only one that can see an
+           UNPUBLISHED portal;
+        2. `/api/public/portals/<slug>`, which serves the same authored `layer_configs` to anybody
+           for a published public portal;
+        3. the published `style.json`, translated back — kept only for an instance too old to have
+           (2), because a plugin that refuses to read an older instance is worse than one that
+           reads it approximately, and it says so in the log.
+
+        Every one of them returns `layer_configs`, so everything downstream — opening, styling,
+        pushing — has a single shape to work with.
+        """
+        from . import portals as portal_sync
+        from . import symbology
+
+        ref = row.get("id") or row.get("slug")
+        slug = row.get("slug")
+
+        if self.token and ref is not None:
+            try:
+                return self.client.portals.get(ref)
+            except GeoDeployError:
+                pass                    # published portals are readable without one; fall through
+
+        if slug:
+            try:
+                doc = self.fetch_json(
+                    "{0}/api/public/portals/{1}".format(self.url.rstrip("/"), slug), cache=False)
+                if isinstance(doc, dict) and doc.get("layer_configs") is not None:
+                    return dict(doc, _anonymous=not self.token)
+            except Exception:           # noqa: BLE001 - an older instance has no such route
+                pass
+
+        if not slug:
+            raise GeoDeployError("This portal has no published address to read.")
+        symbology._log(
+            "This instance does not publish a portal's own styling to anonymous readers "
+            "(/api/public/portals/<slug>), so it is being rebuilt from the published style. "
+            "Rules, stacked strokes, per-class symbols and label placement cannot be recovered "
+            "that way — upgrading the instance, or connecting with a token, restores them.",
+            level="warning")
+        return {"id": row.get("id"), "slug": slug,
+                "title": row.get("title") or row.get("name") or slug,
+                "layer_configs": portal_sync.configs_from_published_style(
+                    self.published_style(slug), symbology.style_from_legend),
+                "_anonymous": True, "_rebuilt_from_style": True}
+
+    def layer_detail(self, row: dict) -> dict:
+        """One layer's FULL row — again the same shape with or without a token.
+
+        The authenticated listing carries everything (`default_style`, `columns`, `schema_name`,
+        `storage_backend`, `tile_status`); the public INDEX is deliberately the smallest view of an
+        instance and carries none of it. So an anonymous user adding a public layer got no
+        symbology at all — not because the styling is private, but because the cheap listing does
+        not include it. `/api/public/layers/<kind>/<ref>` does, for exactly the layers an anonymous
+        caller may see, and it is fetched once per layer and remembered.
+        """
+        if not isinstance(row, dict):
+            return row
+        if row.get("default_style") is not None or not row.get("_public"):
+            return row                  # already complete, or an authenticated row
+        ref = row.get("uid") or row.get("id")
+        if ref is None:
+            return row
+        kind = "raster" if (row.get("layer_type") == "raster"
+                            or row.get("kind") == "raster") else "vector"
+        try:
+            detail = self.fetch_json("{0}/api/public/layers/{1}/{2}".format(
+                self.url.rstrip("/"), kind, ref))
+        except Exception:               # noqa: BLE001 - the thin row still opens the layer
+            return row
+        if not isinstance(detail, dict):
+            return row
+        # The ROW's own keys win: it carries `_base`, `_public` and the layer_type the caller
+        # decided, none of which the server knows about.
+        merged = dict(detail)
+        merged.update({k: v for k, v in row.items() if v is not None})
+        return merged
+
     def fetch_json(self, url: str, cache: bool = True) -> dict:
         """GET any URL on this instance as JSON, with the token when there is one.
 

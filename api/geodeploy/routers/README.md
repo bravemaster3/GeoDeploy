@@ -352,6 +352,16 @@ deliberately NOT visibility-filtered (published portals depend on them).
 - No rate limiting beyond nginx; no pagination on list endpoints (fine at current scale).
 
 ## Last updated
+2026-09-10 (**`GET /api/public/portals/{slug}`** — a published public portal WITH its authored
+`layer_configs`, `layer_groups`, basemap and initial view. `style.json` is the drawing instructions
+and a client that has only that must translate the paint backwards, which is lossy: a rule tree, a
+stacked stroke, a per-class marker and a label's placement have no paint value to be recovered
+from. This is what lets the QGIS plugin use one code path for anonymous and authenticated readers
+instead of two that drift. Not a new disclosure — `layer_configs` IS the map, already published as
+paint — and the same exposure filter as the listing: published AND `access_type == "public"`, under
+the instance's anonymous-index switch. Tests: `api/tests/test_public_portal_detail.py`.)
+
+## Last updated
 2026-08-24 (**V-16 dashboard archetype**: four PUBLIC vector endpoints (`/aggregate`, `/table`,
 `/pick`, `/distinct`) and one raster endpoint (`/zonal-stats`) behind the dashboard's widgets, all
 with the existing published-portal posture. `/pick` exists because `queryRenderedFeatures` returns

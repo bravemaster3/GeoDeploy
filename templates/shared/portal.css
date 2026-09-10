@@ -682,10 +682,22 @@
       display: none; position: absolute; top: 0; right: 40px; width: 250px;
       background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
       box-shadow: var(--shadow-lg); padding: 8px;
+      /* A LIST AS LONG AS ITS CATALOG. This is anchored to a control that can sit anywhere down
+         the edge of the map, so with eight basemaps it ran off the bottom of the window and the
+         last entries — including "None" — were unreachable: no scrollbar, nothing to drag. It was
+         capped only under `max-width: 640px`, which a landscape desktop window is not.
+         `fitFlyout()` in portal.js sets the exact height on open; this is the floor that holds
+         before any script runs. */
+      max-height: 60vh; overflow-y: auto;
+      /* Scrolling the LIST must not become scrolling (or zooming) the map behind it. */
+      overscroll-behavior: contain;
     }
     .gd-basemap-ctrl.open .gd-basemap-menu { display: block; }
     /* C1: when the control cluster is on the LEFT, open the flyout toward the map (to the right). */
     body[data-controls-side="left"] .gd-basemap-menu { right: auto; left: 40px; }
+
+    /* The tools flyout is the same shape and has the same problem. */
+    .gd-tools-menu { max-height: 60vh; overflow-y: auto; overscroll-behavior: contain; }
 
     /* C7: download tool flyout (draw a box OR type coordinates). Mirrors the basemap flyout. */
     /* overflow:visible so the absolutely-positioned flyout isn't clipped by the control group box. */
