@@ -6,6 +6,8 @@ upgrade needs manual work.
 
 ## Unreleased
 
+## v1.6.1 — 2026-09-11
+
 - **"No basemap" now actually removes the basemap.** Choosing it in the portal editor appeared to
   do nothing, and the reason was not in the editor: its preview is a real published bundle, and the
   bundle builder looked `__none__` up in the basemap catalog, found nothing (there is no service

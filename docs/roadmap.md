@@ -5,7 +5,7 @@ description: >-
 
 # Roadmap
 
-GeoDeploy is at **v1.6**. Everything under *In v1.0* and in the releases after it is built and
+GeoDeploy is at **v1.6.1**. Everything under *In v1.0* and in the releases after it is built and
 running in production; the groups at the end are what comes next.
 
 <div class="gd-legend" markdown>
@@ -386,14 +386,8 @@ against real PyQGIS on both QGIS 3.44 LTR and QGIS 4.2, in CI, on every commit.<
       registered, restyled and left out, and `coverage_report.py` classifies every symbol QGIS
       offers as exact, approximated, carried or not yet done
 
-</div>
-
-<div class="gd-rel done" markdown>
-### v1.6 — somebody else's services, and the anonymous half
-<span class="gd-when">Shipped · 10 Sep 2026</span>
-
-<p class="gd-goal">A portal is rarely only your data, and a public portal should not be a lesser
-portal for the person reading it without an account.</p>
+<p class="gd-goal">And the other half of the same release: a portal is rarely only your data, and a
+public portal should not be a lesser portal for the person reading it without an account.</p>
 
 - [x] **Seven kinds of external source** — XYZ, WMS, WMTS, WFS, OGC API - Features, third-party
       vector tiles and remote PMTiles — from the web UI, the CLI and the QGIS plugin alike
@@ -408,6 +402,22 @@ portal for the person reading it without an account.</p>
 - [x] **Delete several layers at once** in My Data, with the portals they are used in named first
 - [x] **No basemap** as a choice, on a white ground; **zoom to layer works on a phone**; a control
       flyout fits the screen it opens on
+
+</div>
+
+<div class="gd-rel done" markdown>
+### v1.6.1 — "no basemap" actually removes the basemap
+<span class="gd-when">Shipped · 11 Sep 2026</span>
+
+<p class="gd-goal">Choosing it in the editor appeared to do nothing, and the editor was innocent:
+its preview is a REAL published bundle, so what the preview shows is decided at publish.</p>
+
+- [x] **The bundle honours `__none__`.** It is deliberately not a catalog entry — there is no
+      service behind it — so the lookup found nothing and the template's own basemap stayed baked
+      in. The runtime switcher could still hide it afterwards, which is why it looked as though
+      only the published portal honoured the setting
+- [x] The basemap is taken OUT at publish rather than hidden on load, on a white ground, so a
+      portal opens as it was authored with no flash of a map nobody asked for
 
 </div>
 
