@@ -78,6 +78,14 @@ fastest source it offers, and upload a QGIS layer back — with its styling. Sit
     drawn as a regular grid at the same density, which is a different picture and says so. Every
     size goes through `_px_of`: QGIS states these in MILLIMETRES by default, and reading one as a
     pixel turns a 4 mm hatch into a solid block.
+    **The tile carries the fill beneath it** (`_base_colour`), because MapLibre draws
+    `fill-pattern` *instead of* `fill-color` and a plain fill under a hatch has nowhere else to
+    live — without it a red polygon with a black hatch published with the red gone. The symbol
+    builder therefore must NOT paint a fill under the tile either (`symbology._has_pattern`), or
+    the hatch lands on a block of its own colour and the polygon reads as solid. **And writing the
+    tile back is the one size in this plugin that is not millimetres by default:**
+    `QgsRasterFillSymbolLayer.width` counts PIXELS, so `_raster_layer` states points and sets the
+    unit — handing it millimetres drew every tile at a quarter size.
   - `vendor/geodeploy/` — the published client, checked in (see below).
 - `scripts/test_real_qgis.py` — **the round trip against a real PyQGIS**, and the only test here
   that is not stubbed. Every other `scripts/test_*.py` replaces the QGIS classes, and the stubs
@@ -366,6 +374,14 @@ Findings in `vendor/` are fixed in `cli/geodeploy` and re-vendored — never edi
 `vendor.py --check` fails.
 
 ## Last updated
+2026-09-11 (**a hatched polygon comes home hatched.** Every pattern fill opened from GeoDeploy as a
+solid block, on all three routes, because a solid fill was painted under the tile in the same
+colour as the hatch on top of it — and because the tile's width was given in millimetres where
+`QgsRasterFillSymbolLayer` counts pixels, drawing a 16px hatch at 4px. A plain fill that really is
+underneath is now painted INTO the tile, which is also what MapLibre needs. Pinned by rendering
+eleven pattern kinds and comparing the ink: the style dict was correct the whole time, so only
+pixels could catch it. See `notes_temp/notes_for_future.md`.)
+
 2026-09-10 (**one path for a portal, token or not.** There were two implementations of "what does
 this portal look like": with a token the plugin asked the API for the authored `layer_configs`;
 without one it read `style.json` and translated the MapLibre paint BACKWARDS. That reverse is lossy
