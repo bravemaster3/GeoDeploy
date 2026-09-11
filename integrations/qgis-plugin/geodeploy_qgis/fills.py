@@ -118,7 +118,7 @@ def _base_colour(symbol, above: int):
         try:
             if under.brushStyle() != solid:
                 continue
-        except Exception:               # noqa: BLE001  # nosec B110 - a brush we cannot read is not a base
+        except Exception:               # noqa: BLE001  # nosec B112 - a brush we cannot read is not a base
             continue
         found = under.color()
     return found
