@@ -436,9 +436,17 @@ trip — edit in the tool you prefer, publish back.</p>
 v1.6 above — including external services in both directions. What is left here is the rest of the
 round trip, not yet scheduled.</p>
 
-- [ ] **Push from GeoLibre** — a "Publish to GeoDeploy" plugin and a `.geolibre.json` importer
+- [x] **A `.geolibre.json` importer** — `POST /api/interop/geolibre/preview` (a dry run that
+      says what would be imported) and `/publish` (creates a layer per source and builds the
+      portal). Shipped in v1.0
+- [ ] **Push from GeoLibre** — the other end: a "Publish to GeoDeploy" plugin inside
+      GeoLibre, so a project goes across without exporting a file first
 - [ ] Write-back: expose a layer as editable GeoJSON and re-ingest the edit
-- [ ] Catalog **search**, so a client can discover a dataset rather than fetch a known URL
+- [x] Catalog **search** — STAC `GET`/`POST /api/stac/search` by bbox, collection, datetime
+      and id (what QGIS's STAC browser and pystac-client send), and the catalog experience's
+      own search box over names, keywords and abstracts. Shipped in v1.0 and v1.4
+- [ ] **Free-text search across the whole instance** — one box that finds a layer, a portal
+      or a dataset by anything written about it, rather than a filter per surface
 
 </div>
 
@@ -522,28 +530,24 @@ a flag. <a href="https://github.com/bravemaster3/GeoDeploy/issues/79">#79</a></p
 
 <div class="gd-rel" markdown>
 ### A page for a layer
-<span class="gd-when">Planned</span>
+<span class="gd-when">Mostly shipped · v1.4</span>
 
-<p class="gd-goal">My Data lists layers but never shows you one. To actually LOOK at a layer today
-you have to build a portal around it — which is a strange price for answering "what is in this
-file?"</p>
+<p class="gd-goal">A layer is a thing in its own right, not only a row in a list — so it has an
+address, and a page at it. <code>/layers/&lt;kind&gt;/&lt;id&gt;</code> is public for a shared
+layer and the same page appears inside the app; a private one asks for a sign-in.</p>
 
-- [ ] **Click a layer, get its page.** A map of just that layer, at its own extent, with the
-      basemap and the ordinary map controls.
-- [ ] **What it is**: geometry type, feature count, CRS, extent, size on disk, when it was
-      uploaded and by whom, and the fields with their types.
-- [ ] **How it is served**: whether it is tiled and how far, whether a GeoParquet layer is
-      partitioned, whether a raster has overviews and what its zoom floor is — the facts that
-      decide whether it draws well, currently visible only through the API.
-- [ ] **Its symbology, edited and saved here** — the same panel the portal editor uses, writing the
-      same default style. Styling a layer already works from My Data; this puts it next to the map
-      it affects instead of in a modal with nothing to preview against.
-- [ ] **The attribute table**, paged, with a click-through from a feature on the map.
-- [ ] **Everything that already exists about a layer, in one place**: its share links, its
-      download formats, which portals use it, and its sharing settings.
-
-The page has no new backend behind it — layer metadata, `/field-stats`, `/legend`, share links and
-the tile URLs are all already served. This is about giving them somewhere to be seen together.
+- [x] **Click a layer, get its page.** A map of just that layer, at its own extent, drawn by the
+      same style builder the portal editor uses — so the page shows what a portal would
+- [x] **What it is**: geometry type, feature count, CRS, extent, size on disk, when it was added
+- [x] **How it is served**: whether it is tiled and how (PostGIS tiles, a PMTiles archive, a COG),
+      and whether a GeoParquet layer has been tiled yet
+- [x] **Its symbology, edited and saved here** — the same panel My Data uses, writing the layer's
+      default style
+- [x] **Everything that already exists about a layer, in one place**: its share links, its legend,
+      its sharing state, and the actions that apply to it
+- [ ] **The attribute table**, paged, with a click-through from a feature on the map. The one part
+      of this page still missing — the data is reachable today only through the API or by
+      downloading the layer
 
 </div>
 
@@ -559,9 +563,16 @@ the tile URLs are all already served. This is about giving them somewhere to be 
 - [ ] Draw a box to *filter* a catalog, not only to download
 - [x] **Data-driven symbology** — shipped in v1.1. Size-from-a-field and labels are scheduled in
       v1.2, above
-- [ ] Rule-based and expression symbology; a wider template gallery
-- [ ] **Heatmap and cluster renderers** — the other renderers a data-driven style makes possible
-- [ ] Multi-file and archive uploads (`.tar.gz` alongside `.zip`)
+- [x] **Rule-based and expression symbology** — shipped in v1.6, both directions through the
+      QGIS plugin and authorable in the portal editor
+- [ ] A wider template gallery (13 today: webmap, story, catalog and six dashboards)
+- [x] **Heatmap and cluster renderers** — heatmaps shipped in v1.6 (authorable per layer, with
+      a ramp), low-zoom point clustering in v1.5 (applied by tippecanoe when a GeoParquet
+      layer is tiled)
+- [x] **Multi-file and archive uploads** — pick several files at once in the browser, and a
+      `.zip` holding a shapefile set, a GeoPackage, a FileGDB or any other supported dataset
+      is unpacked and read (v1.6)
+- [ ] `.tar.gz` alongside `.zip`
 - [ ] **Choose what a restore replaces** — files, portal assets and database as separate choices,
       instead of all-or-nothing. (Restoring layers *without* users is a different, harder thing:
       `user_id` is a NOT NULL foreign key on layers, portals and tokens, so it needs id remapping,
@@ -587,7 +598,8 @@ the tile URLs are all already served. This is about giving them somewhere to be 
 <p class="gd-goal">Capabilities that change what a portal can be.</p>
 
 - [ ] **Temporal layers** with a time slider
-- [ ] **3D terrain and 3D tiles** in the globe view
+- [x] **3D terrain** — raise the map by a DEM, per raster layer, in the globe view (v1.6)
+- [ ] **3D tiles** in the globe view — somebody else's 3D tileset, drawn beside your data
 - [ ] Live connectors — scheduled re-sync, so published maps stay current
 - [ ] Photo features — bulk-import geotagged images into a field-story layer
 - [ ] In-browser analysis console — SQL against hosted GeoParquet
