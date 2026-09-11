@@ -46,6 +46,9 @@ RASTER_STYLE_KEYS = ("colormap", "colormap_reverse", "rescale", "algorithm", "zf
 _SIMPLE_KEYS = (
     ("color", "color"),
     ("fill_opacity", "fill_opacity"),
+    # A LINE's own opacity — the twin of `marker_opacity` below. QGIS keeps it beside the colour
+    # rather than on the symbol, and it multiplies with the LAYER's opacity when the map is drawn.
+    ("line_opacity", "line_opacity"),
     ("outline_color", "outline_color"),
     ("outline_width", "outline_width"),
     ("line_width", "line_width"),

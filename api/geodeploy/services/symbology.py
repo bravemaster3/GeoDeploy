@@ -437,7 +437,7 @@ def outline_color(style: dict, default: str = "#1d4ed8"):
 #: identical, and the map lost the distinction it was made for. Reported on exactly that layer.
 CLASS_SHAPE_KEYS = (
     "line_width", "lineType", "dash_pattern", "line_offset", "line_cap", "line_join",
-    "fill_opacity", "fill_pattern", "outline_color", "outline_width",
+    "fill_opacity", "line_opacity", "fill_pattern", "outline_color", "outline_width",
     "radius", "marker", "marker_image", "marker_offset", "line_marker", "spacing",
 )
 
@@ -916,6 +916,21 @@ def marker_layout(style: dict) -> dict:
 def marker_opacity(style: dict, opacity: float) -> float:
     """The layer's opacity times the marker's own, which QGIS keeps separately."""
     own = style.get("marker_opacity")
+    try:
+        own = float(own)
+    except (TypeError, ValueError):
+        return opacity
+    return round(opacity * max(0.0, min(1.0, own)), 4)
+
+
+def line_opacity(style: dict, opacity: float) -> float:
+    """The layer's opacity times the LINE's own, which QGIS keeps separately.
+
+    The twin of `marker_opacity`, and it exists for the same reason: QGIS has two opacities — the
+    symbol's, and the alpha inside the colour picker — and they multiply into the one number a
+    style carries. Without this a boundary drawn at 40% published fully opaque.
+    """
+    own = style.get("line_opacity")
     try:
         own = float(own)
     except (TypeError, ValueError):

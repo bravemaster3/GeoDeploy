@@ -150,6 +150,12 @@ def main():
     check("the changelog mentions this version", version in changelog.split("\n")[0],
           changelog.split("\n")[0][:80])
 
+    # A BARE PER-CENT SIGN BREAKS THE FILE. `metadata.txt` is read with `configparser`, where `%`
+    # begins an interpolation — so "set to 0%" in a changelog entry makes the whole file
+    # unparseable, and the plugin has no metadata at all. Caught here once, writing exactly that.
+    check("no bare per-cent sign anywhere in the metadata", "%" not in raw,
+          [ln for ln in raw.splitlines() if "%" in ln][:2])
+
     tags = [t.strip() for t in (meta.get("tags") or "").split(",") if t.strip()]
     check("the tags are a comma-separated list", len(tags) >= 3, tags)
     check("...and none of them is empty or absurdly long",

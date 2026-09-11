@@ -434,3 +434,138 @@ class TestFetchingAVectorTile:
         for code in (404, 204):
             monkeypatch.setattr(ext.httpx, "AsyncClient", lambda **kw: Client(code))
             assert await ext.fetch_vector_tile(Src(), 1, 1, 1) is None
+
+
+class TestMixedContent:
+    """An `http://` tile inside an `https://` portal is blocked by the browser, silently.
+
+    REPORTED AS two Google tile sources added side by side: the `https` one drew, the `http` one
+    did not, and both worked in QGIS — which is a desktop application with no such rule. Nothing
+    appears on the map and nothing appears in any log the operator reads; the error is in the
+    visitor's console.
+
+    So it is resolved when the source is ADDED, while there is somebody to tell.
+    """
+
+    def test_the_hint_says_what_is_wrong_and_what_to_do(self):
+        assert "https" in ext.MIXED_CONTENT_HINT
+        assert "never draw" in ext.MIXED_CONTENT_HINT
+
+    @pytest.mark.asyncio
+    async def test_an_https_url_is_never_probed(self, monkeypatch):
+        # The question is only ever asked about an http address.
+        called = []
+        monkeypatch.setattr(ext.httpx, "AsyncClient", lambda **kw: called.append(1))
+        assert await ext.serves_over_https("https://t.example/{z}/{x}/{y}.png") is False
+        assert not called
+
+    @pytest.mark.asyncio
+    async def test_a_template_is_probed_with_a_real_tile(self, monkeypatch):
+        """`{z}/{x}/{y}` is not a URL. Fetching the template verbatim asks the provider for a file
+        called `{z}`, which many answer with a 404 — so the source would be refused for being
+        unreachable when it is merely a template."""
+        asked = {}
+
+        class Resp:
+            status_code, content = 200, b"\x89PNG"
+
+        class Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get(self, url, **kw):
+                asked["url"] = url
+                return Resp()
+
+        monkeypatch.setattr(ext.httpx, "AsyncClient", lambda **kw: Client())
+        assert await ext.serves_over_https("http://t.example/{z}/{x}/{y}.png") is True
+        assert asked["url"] == "https://t.example/0/0/0.png"
+
+    @pytest.mark.asyncio
+    async def test_a_provider_that_does_not_answer_over_https_says_so(self, monkeypatch):
+        class Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get(self, url, **kw):
+                raise OSError("no route to host")
+
+        monkeypatch.setattr(ext.httpx, "AsyncClient", lambda **kw: Client())
+        assert await ext.serves_over_https("http://t.example/{z}/{x}/{y}.png") is False
+
+    @pytest.mark.asyncio
+    async def test_an_empty_body_is_not_an_answer(self, monkeypatch):
+        # A 200 with nothing in it is a proxy or a login page, not a tile.
+        class Resp:
+            status_code, content = 200, b""
+
+        class Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get(self, url, **kw):
+                return Resp()
+
+        monkeypatch.setattr(ext.httpx, "AsyncClient", lambda **kw: Client())
+        assert await ext.serves_over_https("http://t.example/{z}/{x}/{y}.png") is False
+
+
+class TestLineOpacity:
+    """A line's own opacity, which QGIS keeps beside the colour and GeoDeploy carries as a number.
+
+    The twin of `marker_opacity`, added for the same reason a polygon's fill needed one: QGIS has
+    TWO opacities — the symbol's, and the alpha inside the colour picker — and `QColor.name()`
+    drops the second. A boundary drawn at 40% published fully opaque.
+    """
+
+    def test_it_multiplies_with_the_layers_own(self):
+        from geodeploy.services import symbology as sym
+        assert sym.line_opacity({"line_opacity": 0.5}, 0.5) == 0.25
+
+    def test_a_style_that_says_nothing_leaves_the_layer_alone(self):
+        from geodeploy.services import symbology as sym
+        assert sym.line_opacity({}, 0.8) == 0.8
+
+    def test_nonsense_is_ignored_rather_than_drawn(self):
+        from geodeploy.services import symbology as sym
+        assert sym.line_opacity({"line_opacity": "very"}, 0.8) == 0.8
+        assert sym.line_opacity({"line_opacity": 5}, 1.0) == 1.0
+        assert sym.line_opacity({"line_opacity": -2}, 1.0) == 0.0
+
+    def test_the_line_paint_honours_it(self):
+        class Line:
+            id = 3
+            name = "Boundary"
+            geometry_type = "LineString"
+            storage_backend = "postgis"
+            schema_name = "gd"
+            table_name = "b"
+            geometry_column = "geom"
+            uid = "u3"
+            s3_key = None
+            pmtiles_key = None
+            bbox = None
+            default_style = {}
+            tile_status = "ready"
+            cluster_points = False
+
+        built = generator._vector_layers("vector_3", Line(), {
+            "layer_id": 3, "layer_type": "vector", "opacity": 1.0,
+            "style": {"color": "#1f4fd8", "line_width": 2, "line_opacity": 0.4}}, {})
+        line = [ml for ml in built if ml["type"] == "line"][0]
+        assert line["paint"]["line-opacity"] == 0.4
+
+    def test_and_it_is_a_per_class_shape_key(self):
+        # A class whose only difference is its transparency must become its own render layer,
+        # exactly like one that differs by dash or width.
+        from geodeploy.services import symbology as sym
+        assert "line_opacity" in sym.CLASS_SHAPE_KEYS

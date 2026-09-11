@@ -676,6 +676,16 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
         layer0.setWidth(_stated(style.get("line_width"), DEFAULT_LINE_WIDTH) * CSS_PX_TO_POINTS)
         _apply_line_decoration(layer0, style)
         _apply_stroke_stack(symbol, style)
+        # A TRANSLUCENT LINE. GeoDeploy carries one number; QGIS has two knobs for it (the symbol's
+        # opacity and the colour's own alpha) and they multiply. Put it on the SYMBOL: that is the
+        # one QGIS shows in Layer Rendering, where somebody looking for it will look, and for a
+        # single-stroke line the two are indistinguishable on screen.
+        line_alpha = _number(style.get("line_opacity"), None)
+        if line_alpha is not None:
+            try:
+                symbol.setOpacity(max(0.0, min(1.0, line_alpha)))
+            except Exception:           # noqa: BLE001  # nosec B110 - intentional: a cosmetic failure must not take down the layer
+                pass
     elif isinstance(layer0, QgsSimpleFillSymbolLayer):
         outline = style.get("outline_color")
         if outline == "none":
@@ -766,7 +776,8 @@ def style_from_legend(legend: dict) -> dict:
                         if isinstance(e.get(key), str) and e[key].startswith("data:image/")), None)
         if picture:
             style[key] = {"image": picture} if key == "fill_pattern" else picture
-    for key in ("dash", "shape", "outline_color", "outline_width", "line_width", "fill_opacity"):
+    for key in ("dash", "shape", "outline_color", "outline_width", "line_width", "fill_opacity",
+                "line_opacity", "marker_opacity"):
         value = next((e.get(key) for e in entries if e.get(key) is not None), None)
         if value is not None:
             style["lineType" if key == "dash" else
@@ -1322,7 +1333,8 @@ def _comparable_class(item: dict) -> dict:
         # A class may now carry its OWN shape (`CLASS_SHAPE_KEYS`), and those numbers need the same
         # treatment the layer-level ones get above: a width of 2.27 and one of 2.2700000000000005
         # are the same line, and comparing them as written reports an edit nobody made.
-        elif key in ("line_width", "radius", "fill_opacity", "outline_width", "line_offset",
+        elif key in ("line_width", "radius", "fill_opacity", "line_opacity", "marker_opacity",
+                     "outline_width", "line_offset",
                      "spacing") and value is not None:
             try:
                 out[key] = round(float(value), 3)
@@ -2744,6 +2756,38 @@ def _hex(color) -> str:
     return color.name() if hasattr(color, "name") else str(color)
 
 
+def _alpha_of(color) -> float:
+    """A QColor's own alpha, 0..1. Opaque when it cannot be read.
+
+    QGIS HAS TWO OPACITIES AND THIS IS THE OTHER ONE. "Layer rendering ▸ Opacity" dims the whole
+    symbol; the alpha slider inside the colour picker dims just that colour — a fill drawn at 0%
+    with an opaque outline is one gesture in the colour dialog. `QColor.name()` returns `#rrggbb`
+    and drops it, so a polygon whose fill was set fully transparent published as a solid block.
+    Reported exactly that way, and the portal THUMBNAIL disagreed with the map, which is a fair
+    clue: the card is a screenshot of the QGIS canvas, so it had the alpha the style had lost.
+
+    GeoDeploy states an opacity as a number beside the colour (`fill_opacity`, `marker_opacity`,
+    `line_opacity`), so the two QGIS knobs multiply into that one number. They multiply in QGIS
+    too — a 50% symbol holding a 50% colour draws at 25% — so this is the same arithmetic, not an
+    approximation.
+    """
+    try:
+        value = float(color.alphaF())
+    except Exception:                   # noqa: BLE001 - a colour we cannot ask is opaque
+        return 1.0
+    if value != value or value < 0:     # NaN, or a build that answers nonsense
+        return 1.0
+    return min(1.0, value)
+
+
+def _paint_opacity(symbol, color) -> float:
+    """The symbol's opacity times the colour's own — the single number GeoDeploy carries."""
+    own = _number(_call_or_none(symbol, "opacity"), 1.0)
+    if own is None:
+        own = 1.0
+    return round(max(0.0, min(1.0, own)) * _alpha_of(color), 4)
+
+
 #: Must match `services/titiler.MAX_COLOR_CLASSES`. The mapping rides in the URL of every tile
 #: request, so the ceiling is set by what a proxy accepts, not by taste — 128 classes is ~5 kB,
 #: against nginx's default 8 kB request line.
@@ -4071,10 +4115,16 @@ def _style_from_symbol(symbol) -> dict:
         stack = _stroke_stack(symbol)
         if stack:
             style["line_stack"] = stack
+        # …and a LINE's colour has an alpha as well. Same gesture, same dialog: a translucent
+        # boundary drawn at 40% in the colour picker arrived fully opaque.
+        line_alpha = _paint_opacity(symbol, _call_or_none(layer0, "color") or symbol.color())
+        if line_alpha < 1.0:
+            style["line_opacity"] = round(line_alpha, 3)
     elif isinstance(layer0, QgsSimpleFillSymbolLayer) or _is_fill(symbol):
-        opacity = number(symbol.opacity)
-        if opacity is not None:
-            style["fill_opacity"] = round(opacity, 3)
+        # THE FILL COLOUR'S OWN ALPHA COUNTS TOO — see `_alpha_of`. Reading only the symbol's
+        # opacity published a fill set to 0% in the colour picker as a solid block of colour.
+        style["fill_opacity"] = round(
+            _paint_opacity(symbol, _call_or_none(layer0, "color") or symbol.color()), 3)
         if isinstance(layer0, QgsSimpleFillSymbolLayer):
             style["outline_color"] = _stroke_of(layer0)
         # The border WIDTH, which used to be dropped because GeoDeploy could not draw one: a
@@ -4412,12 +4462,11 @@ def _marker_placement_of(symbol, layer0) -> dict:
                 out["marker_offset"] = [round(x, 3), round(y, 3)]
         except Exception:               # noqa: BLE001 - not every build returns a QPointF  # nosec B110 - intentional: not every QGIS build returns a QPointF here
             pass
-    fn = getattr(symbol, "opacity", None)
-    if callable(fn):
-        value = _number(fn(), None)
-        # 1.0 is the default and saying so on every marker would be noise in every style.
-        if value is not None and value < 1.0:
-            out["marker_opacity"] = round(value, 3)
+    # The symbol's opacity AND the marker colour's own alpha — see `_alpha_of`.
+    value = _paint_opacity(symbol, symbol.color())
+    # 1.0 is the default and saying so on every marker would be noise in every style.
+    if value < 1.0:
+        out["marker_opacity"] = round(value, 3)
     return out
 
 
@@ -4904,9 +4953,16 @@ def _stroke_of(layer0) -> str:
     except Exception:                   # noqa: BLE001 - not every symbol layer has one  # nosec B110 - intentional: a cosmetic failure must not take down the layer
         pass
     try:
-        return _hex(layer0.strokeColor())
+        colour = layer0.strokeColor()
     except Exception:                   # noqa: BLE001
         return ""
+    # A FULLY TRANSPARENT STROKE IS NOT A COLOUR, it is the absence of a border — and it is how
+    # somebody who has the colour dialog open says "no outline" without hunting for the pen style.
+    # Carried as the colour alone, it came back as a solid border in whatever hue the invisible
+    # one happened to be.
+    if _alpha_of(colour) <= 0:
+        return "none"
+    return _hex(colour)
 
 
 def _shape_name(layer0):

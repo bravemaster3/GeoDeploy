@@ -680,6 +680,19 @@ export function markerLayout(style = {}) {
 }
 
 /** The layer's opacity times the marker's own. Twin of `symbology.marker_opacity`. */
+/**
+ * The layer's opacity times the LINE's own, which QGIS keeps separately.
+ *
+ * The twin of `markerOpacity`, for the same reason: QGIS has two opacities — the symbol's, and the
+ * alpha inside the colour picker — and they multiply into the one number a style carries. Mirrors
+ * `services/symbology.line_opacity`.
+ */
+export function lineOpacity(style = {}, opacity = 1) {
+  const own = Number(style.line_opacity)
+  if (!Number.isFinite(own)) return opacity
+  return Math.round(opacity * Math.min(1, Math.max(0, own)) * 10000) / 10000
+}
+
 export function markerOpacity(style = {}, opacity = 1) {
   const own = Number(style.marker_opacity)
   if (!Number.isFinite(own)) return opacity

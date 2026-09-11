@@ -692,6 +692,110 @@ def _line_flags(value: int):
         return value
 
 
+def colour_alpha():
+    """A COLOUR'S OWN ALPHA IS AN OPACITY, and QGIS keeps it separately from the symbol's.
+
+    REPORTED ON A POLYGON: the fill colour's alpha was set to 0% in QGIS's colour picker — the
+    slider inside the dialog, not "Layer rendering ▸ Opacity" and not the layer's — and the polygon
+    published as a solid block. `QColor.name()` returns `#rrggbb` and drops the alpha, so the only
+    opacity that travelled was the symbol's, which was still 1.
+
+    The two multiply in QGIS (a 50% symbol holding a 50% colour draws at 25%), so folding them into
+    the one number GeoDeploy carries is the same arithmetic rather than an approximation.
+
+    EVERY CASE BUILDS A FRESH SYMBOL. `QgsSingleSymbolRenderer` takes OWNERSHIP of the symbol it is
+    handed, so mutating one and wrapping it again is a use-after-free — it killed this section
+    outright the first time, with no traceback, which is the signature of that mistake.
+    """
+    section("A colour's own alpha")
+    from qgis.core import (QgsFillSymbol, QgsLineSymbol, QgsMarkerSymbol,
+                           QgsSingleSymbolRenderer)
+    from qgis.PyQt.QtGui import QColor
+
+    def translucent(hexcolour, alpha):
+        colour = QColor(hexcolour)
+        colour.setAlphaF(alpha)
+        return colour
+
+    def polygon_style(fill_alpha, symbol_opacity=1.0, stroke_alpha=1.0):
+        """One polygon layer read back, with the alphas set on a symbol nothing else holds."""
+        layer = make_layer("Polygon")
+        symbol = QgsFillSymbol.createSimple({"color": "#c43c39", "outline_color": "#ffffff"})
+        first = symbol.symbolLayer(0)
+        first.setColor(translucent("#c43c39", fill_alpha))
+        first.setStrokeColor(translucent("#ffffff", stroke_alpha))
+        symbol.setOpacity(symbol_opacity)
+        layer.setRenderer(QgsSingleSymbolRenderer(symbol))
+        return symbology.from_qgis(layer) or {}
+
+    # ── A POLYGON, which is what was reported ───────────────────────────────────────────────────
+    style = polygon_style(0.0)
+    check("a fill set fully transparent travels as fill_opacity 0",
+          style.get("fill_opacity") == 0.0, style.get("fill_opacity"))
+    check("...and keeps its colour, so turning it back up restores the right one",
+          (style.get("color") or "").lower() == "#c43c39", style.get("color"))
+
+    # …and a PARTLY transparent one, which must not be rounded to either end.
+    style = polygon_style(0.4)
+    check("a 40% fill travels as 0.4", abs((style.get("fill_opacity") or 0) - 0.4) < 0.01,
+          style.get("fill_opacity"))
+
+    # …and the two opacities MULTIPLY, exactly as QGIS draws them.
+    style = polygon_style(0.4, symbol_opacity=0.5)
+    check("a 50% symbol holding a 40% colour is 0.2",
+          abs((style.get("fill_opacity") or 0) - 0.2) < 0.01, style.get("fill_opacity"))
+
+    # A POLYGON'S OUTLINE set fully transparent is NO outline, not a solid one in that hue.
+    style = polygon_style(1.0, stroke_alpha=0.0)
+    check("an invisible outline travels as no outline",
+          style.get("outline_color") == "none", style.get("outline_color"))
+
+    # ── A LINE, the same gesture ────────────────────────────────────────────────────────────────
+    line_layer = make_layer("LineString")
+    line = QgsLineSymbol.createSimple({"color": "#1f4fd8", "width": "1"})
+    line.symbolLayer(0).setColor(translucent("#1f4fd8", 0.4))
+    line_layer.setRenderer(QgsSingleSymbolRenderer(line))
+    style = symbology.from_qgis(line_layer) or {}
+    check("a 40% line travels as line_opacity 0.4",
+          abs((style.get("line_opacity") or 0) - 0.4) < 0.01, style.get("line_opacity"))
+
+    plain_line = make_layer("LineString")
+    plain_line.setRenderer(QgsSingleSymbolRenderer(
+        QgsLineSymbol.createSimple({"color": "#1f4fd8", "width": "1"})))
+    check("...and an opaque line says nothing at all",
+          "line_opacity" not in (symbology.from_qgis(plain_line) or {}),
+          "line_opacity was written for an opaque line")
+
+    # ── A MARKER, the same gesture ──────────────────────────────────────────────────────────────
+    point = make_layer("Point")
+    marker = QgsMarkerSymbol.createSimple({"name": "circle", "color": "#00ff00"})
+    marker.symbolLayer(0).setColor(translucent("#00ff00", 0.25))
+    point.setRenderer(QgsSingleSymbolRenderer(marker))
+    style = symbology.from_qgis(point) or {}
+    check("a 25% marker travels as marker_opacity 0.25",
+          abs((style.get("marker_opacity") or 0) - 0.25) < 0.01, style.get("marker_opacity"))
+
+    # ── AND BACK. The number returns as something QGIS draws the same way ───────────────────────
+    back = make_layer("Polygon")
+    symbology.apply_to_qgis(back, {"color": "#c43c39", "fill_opacity": 0.4,
+                                   "outline_color": "#ffffff"})
+    drawn = back.renderer().symbol()
+    effective = drawn.opacity() * drawn.symbolLayer(0).color().alphaF()
+    check("a 40% fill comes back drawn at 40%", abs(effective - 0.4) < 0.02, effective)
+    again = symbology.from_qgis(back) or {}
+    check("...and a second trip does not drift",
+          abs((again.get("fill_opacity") or 0) - 0.4) < 0.02, again.get("fill_opacity"))
+
+    back_line = make_layer("LineString")
+    symbology.apply_to_qgis(back_line, {"color": "#1f4fd8", "line_width": 2, "line_opacity": 0.4})
+    drawn = back_line.renderer().symbol()
+    effective = drawn.opacity() * drawn.symbolLayer(0).color().alphaF()
+    check("a 40% line comes back drawn at 40%", abs(effective - 0.4) < 0.02, effective)
+    again = symbology.from_qgis(back_line) or {}
+    check("...and a second trip does not drift",
+          abs((again.get("line_opacity") or 0) - 0.4) < 0.02, again.get("line_opacity"))
+
+
 def label_matrix():
     """Every label property, both directions, on a feature layer and on a vector-tile layer.
 
@@ -1775,7 +1879,8 @@ def main():
     print("QGIS {0}   |   web renderer: {1}".format(
         Qgis.QGIS_VERSION, "mounted" if WEB is not None else "NOT MOUNTED (sections skipped)"))
     for run in (registry_sweep, renderer_sweep, unit_matrix, per_class_matrix, property_matrix,
-                scope_matrix, label_matrix, label_rules, tile_matrix, special_renderers,
+                scope_matrix, colour_alpha, label_matrix, label_rules, tile_matrix,
+                special_renderers,
                 zero_is_a_size, lines_made_of_markers, pictures_are_the_right_size,
                 tiles_match_the_portal, stacked_strokes, maplibre_matrix,
                 determinism):
