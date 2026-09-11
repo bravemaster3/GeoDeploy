@@ -438,7 +438,13 @@ round trip, not yet scheduled.</p>
 
 - [x] **A `.geolibre.json` importer** — `POST /api/interop/geolibre/preview` (a dry run that
       says what would be imported) and `/publish` (creates a layer per source and builds the
-      portal). Shipped in v1.0
+      portal). Shipped in v1.0, and **API-only**: it reads a whole project — XYZ and COG layers,
+      extruded buildings, a 3D-Z track, categorized, graduated and single-symbol vectors, the
+      story sections and the 3D view — carrying raw MapLibre paint for what the friendly style
+      cannot say, and a `source_identity` on every layer for a future write-back
+- [ ] **Somewhere to drop the file** — the importer has no button. Today it is a `curl` to
+      `/api/interop/geolibre/preview`, which means nobody who has not read the API reference knows
+      it exists
 - [ ] **Push from GeoLibre** — the other end: a "Publish to GeoDeploy" plugin inside
       GeoLibre, so a project goes across without exporting a file first
 - [ ] Write-back: expose a layer as editable GeoJSON and re-ingest the edit
