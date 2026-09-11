@@ -72,6 +72,17 @@ BASEMAP_CATALOG = [
 
 _BASEMAP_BY_ID = {b["id"]: b for b in BASEMAP_CATALOG}
 
+#: "No basemap" — the data on a plain ground. NOT a catalog entry, because there is no service
+#: behind it: it is the absence of one. The same sentinel the editor (`ui/src/lib/basemaps.js`) and
+#: the published runtime (`templates/shared/portal.js`) use, restated here because this is the file
+#: that decides what a published bundle actually contains.
+NO_BASEMAP_ID = "__none__"
+
+#: What a map stands on when no basemap does. A real `background` layer rather than nothing at all:
+#: with no painted ground, what shows through the map is the canvas, which is black.
+GROUND_LAYER = {"id": "gd-ground", "type": "background",
+                "paint": {"background-color": "#ffffff"}}
+
 
 def _ref(layer) -> str:
     """A layer's STABLE public id for baked URLs (models.new_uid). Published portals outlive the
@@ -950,21 +961,7 @@ def build_portal_bundle(slug: str, title: str, user_data: dict, template_id: str
         },
     }
 
-    # Repoint the template's base raster source at the admin-chosen basemap (so the published portal
-    # OPENS on it, no flash) and record the id so portal.js marks the matching switcher option active.
-    bm = _BASEMAP_BY_ID.get(basemap)
-    if bm:
-        base_src_id = next((lyr.get("source") for lyr in basemap_style.get("layers", [])
-                            if lyr.get("type") == "raster"), None)
-        if base_src_id is None and "basemap" in full_style["sources"]:
-            base_src_id = "basemap"
-        if base_src_id and base_src_id in full_style["sources"]:
-            full_style["sources"][base_src_id]["tiles"] = bm["tiles"]
-            full_style["sources"][base_src_id]["attribution"] = bm["attribution"]
-            # The builtin base layer NOW shows the chosen basemap, so portal.js must NOT swap it for the
-            # catalog copy on load (that redundant swap is a visible flash). See setupBasemaps.
-            full_style["geodeploy"]["baseRepointed"] = True
-        full_style["geodeploy"]["defaultBasemap"] = bm["id"]
+    apply_basemap_choice(full_style, basemap_style, user_data, basemap)
 
     # MapLibre v5 reads `projection` from the STYLE. Baking it means a globe portal loads as a globe
     # rather than loading flat and being corrected afterwards — the style's own projection was
@@ -2536,6 +2533,59 @@ def read_deck_core_bbox(s3_key: str | None) -> list | None:
     except Exception:
         pass
     return None
+
+
+def apply_basemap_choice(full_style: dict, basemap_style: dict, user_data: dict,
+                         basemap: str | None) -> None:
+    """Put the author's basemap choice INTO the bundle, in place. Three cases, and all three matter.
+
+    **A catalog basemap** repoints the template's own base raster source at it, so the published
+    portal OPENS on that basemap rather than loading the template's and being corrected — a
+    correction the reader sees as a flash.
+
+    **"No basemap"** takes the basemap OUT. This is the case that was missing, and it failed in a
+    way that pointed at the wrong place: `__none__` is deliberately not in `BASEMAP_CATALOG` —
+    there is no service behind it — so `_BASEMAP_BY_ID.get` returned None, nothing ran, and the
+    template's basemap stayed. The runtime switcher could still turn it off afterwards, which is
+    why it looked as though only the published portal honoured the setting while the editor
+    ignored it. The editor's preview IS a published bundle; it was honouring it exactly as much as
+    the portal was, which was not at all.
+
+    Removing it here rather than hiding it at runtime also means no flash of a map nobody asked
+    for, and `baseRepointed` tells `setupBasemaps` there is nothing left to swap in on load.
+
+    **Nothing chosen** leaves the template alone, which is what every portal published before
+    basemap selection existed depends on. So does an id the catalog does not know: a typo, or a
+    basemap since removed, must not silently publish a blank map.
+    """
+    if basemap == NO_BASEMAP_ID:
+        # Only the TEMPLATE's sources go. A user source that happens to share a name with one of
+        # them is the map's actual data, and dropping it would empty the portal.
+        template_sources = set(basemap_style.get("sources", {}))
+        keep = set(user_data.get("sources") or {})
+        full_style["sources"] = {k: v for k, v in full_style["sources"].items()
+                                 if k in keep or k not in template_sources}
+        full_style["layers"] = [dict(GROUND_LAYER)] + list(user_data.get("layers") or [])
+        # A vector template's sprite belongs to layers that are no longer here.
+        full_style["sprite"] = ""
+        full_style["geodeploy"]["defaultBasemap"] = NO_BASEMAP_ID
+        full_style["geodeploy"]["baseRepointed"] = True
+        return
+
+    bm = _BASEMAP_BY_ID.get(basemap)
+    if not bm:
+        return
+    base_src_id = next((lyr.get("source") for lyr in basemap_style.get("layers", [])
+                        if lyr.get("type") == "raster"), None)
+    if base_src_id is None and "basemap" in full_style["sources"]:
+        base_src_id = "basemap"
+    if base_src_id and base_src_id in full_style["sources"]:
+        full_style["sources"][base_src_id]["tiles"] = bm["tiles"]
+        full_style["sources"][base_src_id]["attribution"] = bm["attribution"]
+        # The builtin base layer NOW shows the chosen basemap, so portal.js must NOT swap it for
+        # the catalog copy on load (that redundant swap is a visible flash). See setupBasemaps.
+        full_style["geodeploy"]["baseRepointed"] = True
+    full_style["geodeploy"]["defaultBasemap"] = bm["id"]
 
 
 def _load_basemap(template_dir: Path) -> dict:
