@@ -76,8 +76,9 @@ async def create_source(
     # machine behind a VPN — an http tile is exactly right and nothing blocks it.
     if (url.lower().startswith("http://")
             and (request.headers.get("x-forwarded-proto") or request.url.scheme) == "https"):
-        if await ext.serves_over_https(url):
-            url = "https://" + url[len("http://"):]
+        secure = await ext.secure_alternative(url)
+        if secure:
+            url = secure
         else:
             raise HTTPException(400, ext.MIXED_CONTENT_HINT)
 

@@ -6,6 +6,21 @@ upgrade needs manual work.
 
 ## Unreleased
 
+## v1.6.4 — 2026-09-11
+
+- **A tile source that redirects to `http` is now recognised as insecure, and moved to the host
+  that does serve https.** v1.6.3's mixed-content guard followed redirects and asked only for "a
+  200 with bytes in it", which the reported Google satellite URL passes *while ending on plain
+  http*: `http://www.google.cn/maps/vt?…` answers `302 → http://www.google.com/maps/vt?…`
+  whichever scheme you ask it in. So the guard called the https form secure and would have stored
+  an address that still cannot draw — the browser blocks a chain that ends insecure exactly as it
+  blocks an `http` URL typed in directly. Every hop of the chain must now be https. And because
+  the redirect changed *only the host*, the source is stored at
+  `https://www.google.com/maps/vt?…`, which serves byte-identical tiles. A redirect that changes
+  the path or the query is **not** followed: a consent wall or a per-tile CDN URL is not a
+  template, and rewriting a source to one would store an address that works for tile 0/0/0 and
+  nothing else.
+
 ## v1.6.3 — 2026-09-11
 
 - **A hatched polygon comes home hatched.** Opening a portal from GeoDeploy drew every pattern

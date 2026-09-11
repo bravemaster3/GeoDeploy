@@ -445,18 +445,65 @@ class TestMixedContent:
     visitor's console.
 
     So it is resolved when the source is ADDED, while there is somebody to tell.
+
+    THE REPORTED URL IS THE HARD CASE, and the first version of this check got it wrong:
+    `http://www.google.cn/maps/vt?...` answers 302 — to `http://www.google.com/...`, on http,
+    whether you ask it over http OR https. Following redirects and asking only for "200 with bytes
+    in it" therefore called the https form secure, and the source would have been stored at an
+    address that still cannot draw. A chain that touches http anywhere is not https.
     """
+
+    @staticmethod
+    def _client(monkeypatch, handler):
+        """Install a fake httpx whose `get` is `handler(url) -> Resp`."""
+        class Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get(self, url, **kw):
+                return handler(url)
+
+        monkeypatch.setattr(ext.httpx, "AsyncClient", lambda **kw: Client())
+
+    @staticmethod
+    def _resp(final, status=200, content=b"\x89PNG", hops=()):
+        """A response that ENDED at `final`, having passed through `hops` on the way."""
+        class Url:
+            def __init__(self, raw):
+                self.raw = raw
+                self.scheme = raw.split(":", 1)[0]
+
+            def __str__(self):
+                return self.raw
+
+        class Hop:
+            def __init__(self, raw):
+                self.url = Url(raw)
+
+        class Resp:
+            pass
+
+        r = Resp()
+        r.status_code, r.content = status, content
+        r.url = Url(final)
+        r.history = [Hop(h) for h in hops]
+        return r
 
     def test_the_hint_says_what_is_wrong_and_what_to_do(self):
         assert "https" in ext.MIXED_CONTENT_HINT
         assert "never draw" in ext.MIXED_CONTENT_HINT
+        # …and it now accounts for the redirect, which is the case that was reported.
+        assert "redirects" in ext.MIXED_CONTENT_HINT
 
     @pytest.mark.asyncio
     async def test_an_https_url_is_never_probed(self, monkeypatch):
         # The question is only ever asked about an http address.
         called = []
         monkeypatch.setattr(ext.httpx, "AsyncClient", lambda **kw: called.append(1))
-        assert await ext.serves_over_https("https://t.example/{z}/{x}/{y}.png") is False
+        assert await ext.secure_alternative("https://t.example/{z}/{x}/{y}.png") is None
         assert not called
 
     @pytest.mark.asyncio
@@ -464,59 +511,86 @@ class TestMixedContent:
         """`{z}/{x}/{y}` is not a URL. Fetching the template verbatim asks the provider for a file
         called `{z}`, which many answer with a 404 — so the source would be refused for being
         unreachable when it is merely a template."""
-        asked = {}
-
-        class Resp:
-            status_code, content = 200, b"\x89PNG"
-
-        class Client:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *a):
-                return False
-
-            async def get(self, url, **kw):
-                asked["url"] = url
-                return Resp()
-
-        monkeypatch.setattr(ext.httpx, "AsyncClient", lambda **kw: Client())
-        assert await ext.serves_over_https("http://t.example/{z}/{x}/{y}.png") is True
-        assert asked["url"] == "https://t.example/0/0/0.png"
+        asked = []
+        self._client(monkeypatch, lambda url: (asked.append(url), self._resp(url))[1])
+        got = await ext.secure_alternative("http://t.example/{z}/{x}/{y}.png")
+        assert got == "https://t.example/{z}/{x}/{y}.png"
+        assert "https://t.example/0/0/0.png" in asked
 
     @pytest.mark.asyncio
     async def test_a_provider_that_does_not_answer_over_https_says_so(self, monkeypatch):
-        class Client:
-            async def __aenter__(self):
-                return self
+        def handler(url):
+            raise OSError("no route to host")
 
-            async def __aexit__(self, *a):
-                return False
-
-            async def get(self, url, **kw):
-                raise OSError("no route to host")
-
-        monkeypatch.setattr(ext.httpx, "AsyncClient", lambda **kw: Client())
-        assert await ext.serves_over_https("http://t.example/{z}/{x}/{y}.png") is False
+        self._client(monkeypatch, handler)
+        assert await ext.secure_alternative("http://t.example/{z}/{x}/{y}.png") is None
 
     @pytest.mark.asyncio
     async def test_an_empty_body_is_not_an_answer(self, monkeypatch):
         # A 200 with nothing in it is a proxy or a login page, not a tile.
-        class Resp:
-            status_code, content = 200, b""
+        self._client(monkeypatch, lambda url: self._resp(url, content=b""))
+        assert await ext.secure_alternative("http://t.example/{z}/{x}/{y}.png") is None
 
-        class Client:
-            async def __aenter__(self):
-                return self
+    @pytest.mark.asyncio
+    async def test_a_chain_that_ends_on_http_is_not_https(self, monkeypatch):
+        """THE HOLE THE FIRST VERSION HAD. Starting secure and finishing insecure is blocked by a
+        browser exactly as an `http` URL is, so a 200 at the end of that chain proves nothing."""
+        self._client(monkeypatch, lambda url: self._resp(
+            "http://elsewhere.example/0/0/0.png", hops=[url]))
+        assert await ext._answers_securely("https://t.example/{z}/{x}/{y}.png") is False
 
-            async def __aexit__(self, *a):
-                return False
+    @pytest.mark.asyncio
+    async def test_a_chain_that_stays_on_https_is_fine(self, monkeypatch):
+        # A CDN redirect between two https hosts is ordinary and must not be refused.
+        self._client(monkeypatch, lambda url: self._resp(
+            "https://cdn.example/0/0/0.png", hops=[url]))
+        assert await ext._answers_securely("https://t.example/{z}/{x}/{y}.png") is True
 
-            async def get(self, url, **kw):
-                return Resp()
+    @pytest.mark.asyncio
+    async def test_the_reported_google_url_is_moved_to_the_host_that_serves_it(self, monkeypatch):
+        """The reported case end to end, with the real shape of Google's answer.
 
-        monkeypatch.setattr(ext.httpx, "AsyncClient", lambda **kw: Client())
-        assert await ext.serves_over_https("http://t.example/{z}/{x}/{y}.png") is False
+        `www.google.cn` 302s to `http://www.google.com` — the same path, the same query, a
+        different host — however you ask it. So the same-address upgrade fails and the MOVED
+        address is the one that works.
+        """
+        def handler(url):
+            if "google.cn" in url:
+                return self._resp(url.replace("https://", "http://")
+                                     .replace("google.cn", "google.com"), hops=[url])
+            return self._resp(url)
+
+        self._client(monkeypatch, handler)
+        template = "http://www.google.cn/maps/vt?lyrs=s@189&gl=cn&x={x}&y={y}&z={z}"
+        assert await ext.secure_alternative(template) == (
+            "https://www.google.com/maps/vt?lyrs=s@189&gl=cn&x={x}&y={y}&z={z}")
+
+    @pytest.mark.asyncio
+    async def test_a_redirect_that_changes_the_path_is_not_followed(self, monkeypatch):
+        """A consent wall, a login page or a per-tile CDN URL is not a template.
+
+        Rewriting the source to one would store an address that works for tile 0/0/0 and for
+        nothing else, so only a pure change of HOST is treated as a move.
+        """
+        def handler(url):
+            if "t.example" in url:
+                return self._resp("http://t.example/please-log-in", hops=[url])
+            return self._resp(url)
+
+        self._client(monkeypatch, handler)
+        assert await ext.secure_alternative("http://t.example/{z}/{x}/{y}.png") is None
+
+    @pytest.mark.asyncio
+    async def test_the_same_address_wins_over_the_one_it_redirects_to(self, monkeypatch):
+        """Order matters: a provider that serves https at its own address keeps that address."""
+        def handler(url):
+            if url.startswith("https://t.example"):
+                return self._resp(url)
+            return self._resp(url.replace("t.example", "other.example"), hops=[url])
+
+        self._client(monkeypatch, handler)
+        assert await ext.secure_alternative(
+            "http://t.example/{z}/{x}/{y}.png") == "https://t.example/{z}/{x}/{y}.png"
 
 
 class TestLineOpacity:

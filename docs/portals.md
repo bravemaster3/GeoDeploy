@@ -105,6 +105,22 @@ name of the layer inside a tile set, its zoom range and its extent.
     same-origin. It costs a little bandwidth; it buys a source that works for every visitor rather
     than for the ones whose provider happens to be permissive.
 
+!!! note "An `http://` address on an `https://` instance"
+    A browser will not load `http://` tiles into an `https://` page. It blocks them and says so
+    only in the visitor's console, so the source registers, the layer appears in the list, and the
+    map stays empty with nothing to explain it. (QGIS is a desktop application and has no such
+    rule, which is why an address can work there and not here.)
+
+    So an `http` address is resolved when you add it. GeoDeploy fetches one real tile over `https`
+    — at the same address, and at the address it redirects to if that is only a different host —
+    and stores whichever one actually answers. A chain that *ends* on `http` does not count: some
+    providers redirect every request to an insecure address, and that is blocked exactly as the
+    original was. If nothing secure answers, the source is refused with the reason rather than
+    stored as a layer that can never draw.
+
+    This applies only when your instance is itself served over https. On a plain-http install — a
+    LAN deployment, a machine behind a VPN — an `http` tile is exactly right and nothing blocks it.
+
 **Attribution is not optional.** The provider's credit is the condition of using their service, and
 it is carried onto the map with the layer. Fill it in.
 
