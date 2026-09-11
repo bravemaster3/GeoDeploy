@@ -114,6 +114,9 @@ def add_style_args(parser, raster: bool = True) -> None:
     line.add_argument("--marker-rotation", type=float, help="turn each marker, in degrees")
     line.add_argument("--marker-offset", help="move each marker, as 'x,y' in pixels")
     line.add_argument("--marker-opacity", type=float, help="the marker's own opacity, 0-1")
+    # THE LINE'S OWN, the twin of the marker's. `--opacity` is the LAYER's; QGIS keeps a symbol's
+    # separately (and an alpha inside the colour picker as well), and they multiply when drawn.
+    line.add_argument("--line-opacity", type=float, help="the line's own opacity, 0-1")
 
     # PICTURES FROM A FILE. These three keys already SURVIVED a CLI restyle — `build_style` merges
     # onto the existing style, so a marker rendered by the QGIS plugin was never dropped — but there
@@ -222,6 +225,7 @@ def style_from_args(args, client=None, layer_ref: Optional[Any] = None,
                  "extrude_field", "extrude_scale", "extrude_base", "extrude_color",
                  "extrude_opacity", "extrude_radius",
                  "line_cap", "line_join", "line_offset", "marker_rotation", "marker_opacity",
+                 "line_opacity",
                  "min_zoom", "max_zoom"):
         kwargs[name] = getattr(args, name, None)
     if getattr(args, "bidx", None):

@@ -44,6 +44,7 @@ import {
   heatmapPaint as symHeatmapPaint,
   fillPattern as symFillPattern,
   lineMarker as symLineMarker,
+  lineOpacity as symLineOpacity,
   strokeStack as symStrokeStack,
   lineMarkerLayout as symLineMarkerLayout,
   // For the contour colouring below, which builds its own colormap from a named ramp — the same
@@ -289,7 +290,9 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
         const linePaint = {
           'line-color': color,
           'line-width': symSizeExpression(st, st.line_width ?? 2),
-          'line-opacity': opacity,
+          // The LINE's own opacity as well as the layer's — QGIS has two and they multiply.
+          // Mirrors portal_generator's line paint.
+          'line-opacity': symLineOpacity(st, opacity),
         }
         // An explicit `dash_pattern` (QGIS's custom dash vector) wins over the two named presets;
         // both are in line-width multiples, which is MapLibre's unit. Mirrors _vector_layer.

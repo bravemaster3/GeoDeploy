@@ -6,6 +6,28 @@ upgrade needs manual work.
 
 ## Unreleased
 
+## v1.6.2 — 2026-09-11
+
+- **A colour's own transparency now travels.** QGIS has *two* opacities and only one of them was
+  being read: "Layer rendering ▸ Opacity" dims the whole symbol, while the alpha slider inside the
+  colour picker dims just that colour. `QColor.name()` returns `#rrggbb` and drops the second, so a
+  polygon whose fill was set to 0% in the colour dialog published as a solid block. The portal card
+  disagreed with the map, which was a fair clue: the card is a screenshot of the QGIS canvas, so it
+  still had the alpha the style had lost. The two multiply in QGIS — a 50% symbol holding a 50%
+  colour draws at 25% — and they now multiply into the one number GeoDeploy carries, for **fills,
+  lines and markers** alike. A fully transparent outline travels as no outline.
+- **`line_opacity`**, the twin of `marker_opacity`, so a translucent boundary has somewhere to
+  live. Drawn by the portal and the editor preview, round-tripped by the plugin, and settable from
+  the CLI (`--line-opacity`).
+- **An `http://` tile source is resolved when it is added, not left to fail in the browser.** A
+  browser refuses to load `http://` tiles into an `https://` page — the source registers, the layer
+  appears in the list, and the map stays empty with the error only in the visitor's console.
+  Reported as two Google tile URLs added side by side, one drawing and one not, while both worked
+  in QGIS (a desktop application, with no such rule). An http address is now upgraded when the
+  provider answers over https — almost all do, including the reported one — and refused with the
+  reason when it cannot. Only on an instance served over https: on a plain-http install an http
+  tile is exactly right.
+
 ## v1.6.1 — 2026-09-11
 
 - **"No basemap" now actually removes the basemap.** Choosing it in the portal editor appeared to

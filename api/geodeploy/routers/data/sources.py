@@ -11,7 +11,7 @@ The provider's licence applies — `attribution` is surfaced on the map.
 """
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from ...json_safe import SafeJSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,12 +58,29 @@ async def source_usage(source_id: int, user: User = Depends(require_scope("data:
 @router.post("", response_model=ExternalSourceOut, status_code=201)
 async def create_source(
     req: ExternalSourceCreate,
+    request: Request,
     user: User = Depends(require_scope("data:write")),
     db: AsyncSession = Depends(get_db),
 ):
     url = (req.url or "").strip()
     if not url.lower().startswith(("http://", "https://")):
         raise HTTPException(400, "URL must start with http:// or https://")
+
+    # MIXED CONTENT. A browser will not load an `http://` tile into an `https://` page, and it says
+    # so only in the console — the source registers, the layer appears in the list, and the map
+    # stays empty. So an http address is resolved HERE, while there is somebody to tell: upgraded
+    # when the provider answers over https (almost all of them do), refused when it cannot, because
+    # storing it would be storing a layer that can never draw.
+    #
+    # Only when THIS instance is served over https. On a plain-http install — a LAN deployment, a
+    # machine behind a VPN — an http tile is exactly right and nothing blocks it.
+    if (url.lower().startswith("http://")
+            and (request.headers.get("x-forwarded-proto") or request.url.scheme) == "https"):
+        if await ext.serves_over_https(url):
+            url = "https://" + url[len("http://"):]
+        else:
+            raise HTTPException(400, ext.MIXED_CONTENT_HINT)
+
     kind = ext.kind_for(req.source_type)
 
     # A LAYER NAME IS PART OF THE ADDRESS for the services that have more than one layer behind one

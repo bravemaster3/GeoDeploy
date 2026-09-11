@@ -580,3 +580,42 @@ async def fetch_vector_tile(source, z: int, x: int, y: int) -> tuple[bytes, str]
     # `application/x-protobuf` or `application/vnd.mapbox-vector-tile` and MapLibre accepts both.
     media = r.headers.get("content-type") or "application/x-protobuf"
     return r.content, media.split(";")[0].strip()
+
+
+# ── Mixed content ────────────────────────────────────────────────────────────────────────────────
+
+
+async def serves_over_https(url: str) -> bool:
+    """Whether the same address answers over **https**.
+
+    WHY THIS QUESTION IS ASKED AT ALL. A browser will not load an `http://` image into an `https://`
+    page — that is mixed content, and it is blocked with no visible error on the map. The source is
+    registered, the layer is in the list, the tiles never arrive. Reported exactly that way: two
+    Google tile URLs added side by side, the `https` one drawing and the `http` one not, while both
+    worked in QGIS — which is a desktop application and has no such rule.
+
+    Almost every provider that still publishes an `http` template also answers on `https` (the
+    reported one does), so the fix is usually to store the other scheme. This is what decides that,
+    rather than assuming it: one real tile is fetched.
+    """
+    if not url.lower().startswith("http://"):
+        return False
+    candidate = "https://" + url[len("http://"):]
+    probe = candidate
+    if is_tile_template(candidate):
+        probe = (normalise_template(candidate)
+                 .replace("{z}", "0").replace("{x}", "0").replace("{y}", "0"))
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            response = await client.get(probe)
+    except Exception:                                       # noqa: BLE001 - it does not answer
+        return False
+    return response.status_code == 200 and bool(response.content)
+
+
+MIXED_CONTENT_HINT = (
+    "This instance is served over https, and a browser refuses to load http:// tiles into an "
+    "https:// page — the layer would be registered and then never draw, with nothing on the map "
+    "to say why. This provider does not answer over https either, so there is no address that "
+    "would work. Ask the provider for an https endpoint, or use one that has one."
+)

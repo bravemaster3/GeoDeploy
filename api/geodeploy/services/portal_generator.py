@@ -1618,7 +1618,8 @@ def _external_vector_layer(source_id: str, src, geom: str, style: dict, opacity:
     if geom == "line":
         return {
             "id": lid, "type": "line", "source": source_id,
-            "paint": {"line-color": color, "line-width": style.get("line_width", 2), "line-opacity": opacity},
+            "paint": {"line-color": color, "line-width": style.get("line_width", 2),
+                      "line-opacity": symbology.line_opacity(style, opacity)},
         }
     return {
         "id": lid, "type": "circle", "source": source_id,
@@ -2272,7 +2273,10 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
         paint = {
             "line-color": color,
             "line-width": symbology.size_expression(style, style.get("line_width", 2)),
-            "line-opacity": opacity,
+            # THE LINE'S OWN OPACITY as well as the layer's. QGIS has two — the symbol's, and the
+            # alpha inside the colour picker — and they multiply; without this a boundary drawn at
+            # 40% published fully opaque. The twin of `marker_opacity` on a point.
+            "line-opacity": symbology.line_opacity(style, opacity),
         }
         # An explicit `dash_pattern` (read out of QGIS's custom dash vector) wins over the two
         # named presets. Both are in MULTIPLES OF THE LINE WIDTH, which is MapLibre's unit — see
