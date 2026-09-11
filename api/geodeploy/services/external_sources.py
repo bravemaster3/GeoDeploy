@@ -43,6 +43,7 @@ that is the right way to SHOW it. `IMPORT_ONLY_HINT` is what the API says when s
 """
 import json
 
+from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 DEFAULT_WMS_VERSION = "1.3.0"
@@ -585,37 +586,109 @@ async def fetch_vector_tile(source, z: int, x: int, y: int) -> tuple[bytes, str]
 # ── Mixed content ────────────────────────────────────────────────────────────────────────────────
 
 
-async def serves_over_https(url: str) -> bool:
-    """Whether the same address answers over **https**.
+def _probe_url(template: str) -> str:
+    """A template with a real tile in it — `{z}/{x}/{y}` is not an address.
 
-    WHY THIS QUESTION IS ASKED AT ALL. A browser will not load an `http://` image into an `https://`
-    page — that is mixed content, and it is blocked with no visible error on the map. The source is
-    registered, the layer is in the list, the tiles never arrive. Reported exactly that way: two
-    Google tile URLs added side by side, the `https` one drawing and the `http` one not, while both
-    worked in QGIS — which is a desktop application and has no such rule.
-
-    Almost every provider that still publishes an `http` template also answers on `https` (the
-    reported one does), so the fix is usually to store the other scheme. This is what decides that,
-    rather than assuming it: one real tile is fetched.
+    Fetching the template verbatim asks the provider for a file called `{z}`, which many answer
+    with a 404, so the source would be refused for being unreachable when it is merely a template.
     """
-    if not url.lower().startswith("http://"):
+    if not is_tile_template(template):
+        return template
+    return (normalise_template(template)
+            .replace("{z}", "0").replace("{x}", "0").replace("{y}", "0"))
+
+
+def _with_origin(template: str, origin: str) -> str:
+    """`template` moved to another scheme and host, keeping its path, query and placeholders."""
+    parts = urlsplit(template)
+    other = urlsplit(origin)
+    return urlunsplit((other.scheme, other.netloc, parts.path, parts.query, parts.fragment))
+
+
+async def _answers_securely(template: str) -> bool:
+    """Whether this address really delivers a tile over https — REDIRECTS INCLUDED.
+
+    THE HOP IS THE WHOLE POINT. `https://www.google.cn/maps/vt?...` answers 302 and sends the
+    caller to `http://www.google.com/maps/vt?...`, so the request begins secure and ends insecure
+    — which a browser blocks exactly as it blocks an `http` URL typed in directly. An earlier
+    version of this check followed redirects and asked only for a 200 with bytes in it, so it
+    called that address secure and would have "upgraded" a source to a URL that still cannot draw.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            response = await client.get(_probe_url(template))
+    except Exception:                                       # noqa: BLE001 - it does not answer
         return False
-    candidate = "https://" + url[len("http://"):]
-    probe = candidate
-    if is_tile_template(candidate):
-        probe = (normalise_template(candidate)
-                 .replace("{z}", "0").replace("{x}", "0").replace("{y}", "0"))
+    if response.status_code != 200 or not response.content:
+        return False
+    hops = [*(h.url for h in response.history), response.url]
+    return all(str(getattr(hop, "scheme", "")) == "https" for hop in hops)
+
+
+async def _redirected_origin(template: str) -> str | None:
+    """Where an address sends callers, when it sends them somewhere that is only a different host.
+
+    A provider that has moved says so in a 302 rather than in its documentation — the reported
+    `www.google.cn` template redirects every request, http or https, to `www.google.com` — and the
+    new host is very often the one that serves https. ONLY A MOVE IS FOLLOWED: if the redirect
+    changes the PATH or the QUERY it is answering a different question (a login page, a consent
+    wall, a per-tile CDN URL that no template could be built from), and guessing at it would store
+    an address that works for tile 0/0/0 and for nothing else.
+    """
+    probe = _probe_url(template)
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             response = await client.get(probe)
-    except Exception:                                       # noqa: BLE001 - it does not answer
-        return False
-    return response.status_code == 200 and bool(response.content)
+    except Exception:                                       # noqa: BLE001
+        return None
+    here, there = urlsplit(probe), urlsplit(str(response.url))
+    if not there.netloc or (there.path, there.query) != (here.path, here.query):
+        return None
+    if there.netloc == here.netloc:
+        return None
+    return urlunsplit((there.scheme, there.netloc, "", "", ""))
+
+
+async def secure_alternative(url: str) -> str | None:
+    """The https address that serves this http one, or None when there is not one.
+
+    WHY THIS QUESTION IS ASKED AT ALL. A browser will not load an `http://` image into an
+    `https://` page — that is mixed content, and it is blocked with no visible error on the map.
+    The source is registered, the layer is in the list, the tiles never arrive. Reported exactly
+    that way: two Google tile URLs added side by side, the `https` one drawing and the `http` one
+    not, while both worked in QGIS — which is a desktop application and has no such rule.
+
+    TWO PLACES ARE TRIED, because a provider that still publishes `http` has usually either moved
+    to https at the same address or moved house entirely:
+
+    * the same address on https;
+    * the address it REDIRECTS to, on https. The reported one is this case and only this case.
+      `www.google.cn` answers every request with a 302 to `http://www.google.com`, so the https
+      form of the address the user has is NOT secure — it ends on http — while
+      `https://www.google.com/maps/vt?...` serves the identical bytes. Nothing but the host
+      changes, which is what makes swapping it safe.
+
+    Nothing is assumed: each candidate is fetched, and a candidate whose redirect chain touches
+    `http` at any point is not secure however well it answers.
+    """
+    if not url.lower().startswith("http://"):
+        return None
+    candidates = ["https://" + url[len("http://"):]]
+    origin = await _redirected_origin(url)
+    if origin:
+        moved = _with_origin(url, "https://" + urlsplit(origin).netloc)
+        if moved not in candidates:
+            candidates.append(moved)
+    for candidate in candidates:
+        if await _answers_securely(candidate):
+            return candidate
+    return None
 
 
 MIXED_CONTENT_HINT = (
     "This instance is served over https, and a browser refuses to load http:// tiles into an "
     "https:// page — the layer would be registered and then never draw, with nothing on the map "
-    "to say why. This provider does not answer over https either, so there is no address that "
-    "would work. Ask the provider for an https endpoint, or use one that has one."
+    "to say why. Neither this address nor the one it redirects to answers over https, so there is "
+    "no version of it that would work. Ask the provider for an https endpoint, or use one that "
+    "has one."
 )
