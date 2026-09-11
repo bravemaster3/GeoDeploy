@@ -6,6 +6,14 @@ upgrade needs manual work.
 
 ## Unreleased
 
+- **"No basemap" now actually removes the basemap.** Choosing it in the portal editor appeared to
+  do nothing, and the reason was not in the editor: its preview is a real published bundle, and the
+  bundle builder looked `__none__` up in the basemap catalog, found nothing (there is no service
+  behind it — it is the absence of one) and left the template's own basemap in place. The runtime
+  switcher could still turn it off afterwards, which is why it seemed that only the published
+  portal honoured the setting. The basemap is now taken out of the style at publish, on a white
+  ground, so a portal opens the way it was authored with no flash of a map nobody asked for.
+
 ## v1.6 — 2026-09-10
 
 ### The QGIS round trip, closed

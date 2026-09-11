@@ -314,6 +314,7 @@ range. `test_per_class_symbology.py` pins that.
 symbols for classes the map draws differently.
 
 ## Last updated
+2026-09-11 (**`apply_basemap_choice`** — the basemap decision extracted from `build_portal_bundle`, and "no basemap" honoured there. `__none__` is not a catalog entry, so `_BASEMAP_BY_ID.get` returned None and the template's basemap stayed baked in; the runtime switcher could still hide it, which is why it looked as though only the published portal honoured the choice while the editor ignored it — the editor's preview IS a published bundle. Extracted because `build_portal_bundle` reads the container's `/templates` mount and cannot be driven from a test. Tests: `api/tests/test_no_basemap.py` (21).)
 2026-09-08b (**external sources: every kind a web map can draw.** `xyz | wms | wfs` becomes
 `xyz | wms | wmts | wfs | ogcapi | vectortile | pmtiles`, with four new nullable columns
 (`source_layer`, `matrix_set`, `min_zoom`, `max_zoom`) and a migration for them.
