@@ -6,6 +6,26 @@ upgrade needs manual work.
 
 ## Unreleased
 
+## v1.6.3 — 2026-09-11
+
+- **A hatched polygon comes home hatched.** Opening a portal from GeoDeploy drew every pattern
+  fill — hatch, cross, dense, line, point — as a solid block of colour, on every route at once
+  (fast preview, editable, with a token and without), because every route ends in the same symbol
+  builder. Two faults, both on the way back. A solid fill was painted *under* the tile in the same
+  colour as the hatch drawn on top of it, which is a solid block by definition: measured at 82%
+  transparent in QGIS and 0% after the trip home. And the tile's width was stated in millimetres
+  where `QgsRasterFillSymbolLayer` counts in **pixels** — the one size in the plugin whose default
+  unit is not millimetres — so a 16-pixel hatch drew at 4 and its diagonals collapsed into a grey
+  stipple that reads as a flat wash.
+- **A plain fill beneath a pattern is carried in the tile.** MapLibre draws `fill-pattern`
+  *instead of* `fill-color`, so a red polygon with a black hatch published with the red missing.
+  The fill underneath is now painted into the tile itself, which is the only place it can live —
+  and is what lets the browser and QGIS draw the same thing. A polygon that is *only* a pattern
+  says it has no outline, rather than being given the default blue one.
+- Eleven pattern kinds are now pinned by **rendering** them and comparing the ink, in both QGIS
+  images. The style dictionary looked correct throughout this bug, which is why the check is a
+  measurement of pixels rather than of keys.
+
 ## v1.6.2 — 2026-09-11
 
 - **A colour's own transparency now travels.** QGIS has *two* opacities and only one of them was

@@ -796,6 +796,122 @@ def colour_alpha():
           abs((again.get("line_opacity") or 0) - 0.4) < 0.02, again.get("line_opacity"))
 
 
+def pattern_fills():
+    """A HATCHED POLYGON COMES HOME HATCHED — measured in ink, not in keys.
+
+    REPORTED AS: "hashed polygons are coming back solid filled instead of hashed", from every route
+    at once — fast preview, editable, with a token and without. Every route ends in the same
+    symbol builder, and that builder painted a solid fill in the style's colour and then let
+    `fills.decorate` lay the hatch ON TOP OF IT — in the same colour. A hatch QGIS drew 82%
+    transparent came back 0% transparent: a block.
+
+    Two faults, and neither shows up in a style dict, which is why this section renders:
+
+    * the fill under the pattern. MapLibre drops `fill-color` the moment `fill-pattern` is set, so
+      the browser draws the tile over nothing; QGIS has to do the same, and the plain fill a symbol
+      really does have underneath is painted INTO the tile instead (`fills._base_colour`);
+    * the tile's SIZE. `QgsRasterFillSymbolLayer.width` defaults to PIXELS — the one size in this
+      plugin whose default is not millimetres — and it was being handed millimetres, so a 16px tile
+      drew at 4px and the diagonals collapsed into a grey stipple that reads as a flat wash.
+
+    So the assertion is INK: the mean alpha of the rendered swatch, which is the same number for
+    two hatches that look alike and a very different one for a hatch and a block. Pixel counting
+    would call two identical hatches different the moment one lands half a pixel over.
+    """
+    section("Pattern fills — a hatch is still a hatch on the way home")
+    from qgis.core import (QgsFillSymbol, QgsLinePatternFillSymbolLayer,
+                           QgsPointPatternFillSymbolLayer, QgsSingleSymbolRenderer)
+    from qgis.PyQt.QtCore import QSize
+    from qgis.PyQt.QtGui import QColor
+
+    def ink(symbol, n=64):
+        """Mean alpha of what this symbol paints, 0-100."""
+        image = symbol.asImage(QSize(n, n))
+        total = 0
+        for y in range(n):
+            for x in range(n):
+                total += image.pixelColor(x, y).alpha()
+        return total * 100 // (n * n * 255)
+
+    def build(kind):
+        """A fresh symbol every time — `QgsSingleSymbolRenderer` OWNS the one it is given."""
+        if kind == "line-pattern over a plain fill":
+            symbol = QgsFillSymbol.createSimple({"color": "#c43c39", "outline_color": "#000000"})
+            hatch = QgsLinePatternFillSymbolLayer()
+            hatch.setLineAngle(45); hatch.setDistance(2.0); hatch.setColor(QColor("#111111"))
+            symbol.appendSymbolLayer(hatch)
+            return symbol
+        if kind == "a line-pattern hatch alone":
+            symbol = QgsFillSymbol()
+            hatch = QgsLinePatternFillSymbolLayer()
+            hatch.setLineAngle(45); hatch.setDistance(2.0); hatch.setColor(QColor("#c43c39"))
+            symbol.changeSymbolLayer(0, hatch)
+            return symbol
+        if kind == "a point pattern over a plain fill":
+            symbol = QgsFillSymbol.createSimple({"color": "#c43c39"})
+            symbol.appendSymbolLayer(QgsPointPatternFillSymbolLayer())
+            return symbol
+        symbol = QgsFillSymbol.createSimple({"color": "#c43c39", "outline_color": "#000000"})
+        symbol.symbolLayer(0).setBrushStyle(enum(Qt, "BrushStyle", kind))
+        return symbol
+
+    # Qt's OWN hatch brushes are what "Fill style: Diagonal / Cross / Dense" is in the Symbology
+    # panel, and they are the ones that came back solid: the hatch colour IS the style's colour,
+    # so a solid fill under it is invisible as a fault and total as a difference.
+    kinds = ["BDiagPattern", "FDiagPattern", "DiagCrossPattern", "HorPattern", "VerPattern",
+             "CrossPattern", "Dense3Pattern", "Dense6Pattern",
+             "line-pattern over a plain fill", "a line-pattern hatch alone",
+             "a point pattern over a plain fill"]
+    for kind in kinds:
+        source = make_layer("Polygon")
+        source.setRenderer(QgsSingleSymbolRenderer(build(kind)))
+        drawn = ink(source.renderer().symbol())
+        style = symbology.from_qgis(source) or {}
+        block = style.get("fill_pattern") or {}
+        check("{0}: travels as a tile".format(kind),
+              str(block.get("image", "")).startswith("data:image/"), sorted(style))
+
+        target = make_layer("Polygon")
+        symbology.apply_to_qgis(target, style)
+        back = ink(target.renderer().symbol())
+        check("{0}: comes home drawing the same amount of ink".format(kind),
+              abs(drawn - back) <= 8, "QGIS drew {0}%, it came back {1}%".format(drawn, back))
+
+    # THE ONE THAT WAS REPORTED, stated as its own check so the failure names the symptom: a hatch
+    # that comes back opaque everywhere is a solid block, whatever else is true of it.
+    source = make_layer("Polygon")
+    source.setRenderer(QgsSingleSymbolRenderer(build("BDiagPattern")))
+    style = symbology.from_qgis(source) or {}
+    target = make_layer("Polygon")
+    symbology.apply_to_qgis(target, style)
+    rebuilt = target.renderer().symbol()
+    check("a diagonal hatch does not come back as a solid block", ink(rebuilt) < 40,
+          "{0}% ink — a solid fill is 100".format(ink(rebuilt)))
+    # …and the reason it used to: the fill UNDER the pattern must not paint.
+    base = rebuilt.symbolLayer(0)
+    getter = getattr(base, "brushStyle", None)
+    brush = getter() if callable(getter) else None
+    check("...because nothing solid is painted under the tile",
+          brush is None or brush == enum(Qt, "BrushStyle", "NoBrush"), brush)
+
+    # A PLAIN FILL BENEATH A PATTERN IS CARRIED IN THE TILE, since `fill-pattern` leaves no room
+    # for `fill-color`. Without this the red polygon with a black hatch published transparent.
+    source = make_layer("Polygon")
+    source.setRenderer(QgsSingleSymbolRenderer(build("line-pattern over a plain fill")))
+    style = symbology.from_qgis(source) or {}
+    target = make_layer("Polygon")
+    symbology.apply_to_qgis(target, style)
+    check("a fill beneath a hatch is baked into the tile", ink(target.renderer().symbol()) >= 90,
+          "{0}% ink — the fill under it went missing".format(ink(target.renderer().symbol())))
+
+    # AND THE WEB DRAWS THE TILE, NOT THE COLOUR — the parity half of the same fact.
+    if WEB is None:
+        skip("MapLibre draws the pattern instead of the colour", "the web renderer is not mounted")
+    else:
+        tile = WEB.fill_pattern(style)
+        check("MapLibre is given the same tile", bool(tile.get("image")), tile.keys())
+
+
 def label_matrix():
     """Every label property, both directions, on a feature layer and on a vector-tile layer.
 
@@ -1879,7 +1995,8 @@ def main():
     print("QGIS {0}   |   web renderer: {1}".format(
         Qgis.QGIS_VERSION, "mounted" if WEB is not None else "NOT MOUNTED (sections skipped)"))
     for run in (registry_sweep, renderer_sweep, unit_matrix, per_class_matrix, property_matrix,
-                scope_matrix, colour_alpha, label_matrix, label_rules, tile_matrix,
+                scope_matrix, colour_alpha, pattern_fills, label_matrix, label_rules,
+                tile_matrix,
                 special_renderers,
                 zero_is_a_size, lines_made_of_markers, pictures_are_the_right_size,
                 tiles_match_the_portal, stacked_strokes, maplibre_matrix,

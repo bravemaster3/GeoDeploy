@@ -578,6 +578,18 @@ def _apply_marker_placement(symbol, layer0, style: dict) -> None:
 
 
 
+def _has_pattern(style) -> bool:
+    """Whether this style's polygons are drawn as a repeating tile rather than a flat colour."""
+    try:
+        try:                            # a package, inside QGIS
+            from . import fills as _fills
+        except ImportError:             # exec'd standalone by the test harness
+            import fills as _fills
+        return bool(_fills.has_pattern(style))
+    except Exception:                   # noqa: BLE001 - no pattern module, no pattern
+        return False
+
+
 def _decorate_symbol(symbol, style) -> None:
     """Add a pattern fill or a centre marker on top of a symbol that is otherwise finished.
 
@@ -715,7 +727,21 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
         # to the whole symbol, border included, so setting it to zero here made an outline-only
         # polygon vanish completely on the way back. The brush is what has to go.
         opacity = float(style.get("fill_opacity", DEFAULT_FILL_OPACITY))
-        if opacity <= 0 and _set_brush(layer0, False):
+        # A PATTERN REPLACES THE FILL; IT IS NOT PAINTED OVER ONE.
+        #
+        # MapLibre drops `fill-color` the moment a `fill-pattern` is set — the tile carries its own
+        # colours, the base colour among them — so the portal draws the tile over nothing. Putting
+        # a solid fill underneath here painted the polygon in the style's colour and then drew a
+        # hatch of THE SAME COLOUR on top of it: a solid block. Reported exactly that way, from
+        # every route at once — "hashed polygons are coming back solid filled instead of hashed" —
+        # because every route ends in this branch. Measured at 82% transparent in QGIS and 0% after
+        # the trip home.
+        #
+        # `fill_opacity` still applies, the same as `fill-opacity` does to a pattern in the browser,
+        # so a hatch can still be a wash.
+        if _has_pattern(style) and _set_brush(layer0, False):
+            symbol.setOpacity(opacity)
+        elif opacity <= 0 and _set_brush(layer0, False):
             symbol.setOpacity(1.0)
         else:
             _set_brush(layer0, True)
@@ -4157,6 +4183,19 @@ def _style_from_symbol(symbol) -> dict:
         # is usually a plain fill with a hatch stacked on it. See `fills.py` for why the tile is
         # REBUILT rather than photographed.
         style.update(_fill_pattern_of(symbol))
+        # AND THE OPACITY A PATTERN CARRIES IS THE SYMBOL'S ALONE. Every colour in the tile was
+        # painted with its own alpha already in it, so multiplying by a colour's alpha a second
+        # time here — which is what `_paint_opacity` does, rightly, for a flat fill — would fade
+        # the hatch twice.
+        if style.get("fill_pattern"):
+            own = _number(_call_or_none(symbol, "opacity"), 1.0)
+            style["fill_opacity"] = round(max(0.0, min(1.0, 1.0 if own is None else own)), 3)
+            # AND A PATTERN ON ITS OWN HAS NO BORDER. Only a simple fill layer carries one, so a
+            # symbol built entirely from a hatch says nothing about an outline — and both renderers
+            # fill that silence with their default, which is a blue edge nobody drew. Saying "none"
+            # is the true reading of a symbol that has no stroke in it.
+            if "outline_color" not in style:
+                style["outline_color"] = "none"
     style.update(_size_from_qgis(symbol, layer0))
     return style
 

@@ -13,7 +13,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.7.1
+version=0.7.2
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -32,7 +32,16 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.7.1 - A COLOUR'S OWN TRANSPARENCY TRAVELS. QGIS has two opacities and only one was
+changelog=0.7.2 - A HATCHED POLYGON COMES HOME HATCHED. Opening a portal from GeoDeploy drew
+    every pattern fill as a solid block of colour, on all three routes at once. Two faults, both
+    in the way back: a solid fill was painted under the tile in the SAME colour as the hatch on
+    top of it, and the tile's own width was stated in millimetres where a raster fill counts in
+    pixels, so a 16-pixel hatch drew at 4 and its diagonals collapsed into a stipple. A plain fill
+    that really does sit under a pattern is now painted INTO the tile, which is also what the
+    browser needed: MapLibre draws fill-pattern instead of fill-color, so a red polygon with a
+    black hatch used to publish with the red missing. Eleven pattern kinds are now checked by
+    rendering them and comparing the ink.
+    0.7.1 - A COLOUR'S OWN TRANSPARENCY TRAVELS. QGIS has two opacities and only one was
     read: "Layer rendering - Opacity" dims the whole symbol, the alpha slider inside the colour
     picker dims just that colour, and QColor.name() drops the second. A polygon whose fill was set
     fully transparent in the colour dialog published as a solid block - while the portal card,

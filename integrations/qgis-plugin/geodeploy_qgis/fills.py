@@ -86,7 +86,7 @@ def from_qgis(symbol):
         if not isinstance(symbol, QgsFillSymbol):
             return {}, notes
         for i in range(symbol.symbolLayerCount()):
-            block, note = _tile_for(symbol.symbolLayer(i))
+            block, note = _tile_for(symbol.symbolLayer(i), _base_colour(symbol, i))
             if note:
                 notes.append(note)
             if block and "__centroid__" in block:
@@ -99,16 +99,41 @@ def from_qgis(symbol):
     return {}, notes
 
 
-def _tile_for(sl):
+def _base_colour(symbol, above: int):
+    """The flat colour a pattern at index `above` is drawn ON TOP of, or None.
+
+    A hatched polygon in QGIS is usually two symbol layers: a plain fill, and the hatch over it.
+    GeoDeploy carries ONE tile for the pair, because `fill-pattern` replaces `fill-color` in
+    MapLibre and a fill under a pattern has nowhere else to go — so the plain half is painted into
+    the tile and the pattern drawn over it. Only a layer BELOW the pattern counts, and only one
+    that actually paints: a `NoBrush` fill is the outline-only case and has no colour to lend.
+    """
+    from qgis.PyQt.QtCore import Qt
+    solid = symbology.enum(Qt, "BrushStyle", "SolidPattern")
+    found = None
+    for i in range(above):
+        under = symbol.symbolLayer(i)
+        if not isinstance(under, QgsSimpleFillSymbolLayer):
+            continue
+        try:
+            if under.brushStyle() != solid:
+                continue
+        except Exception:               # noqa: BLE001  # nosec B110 - a brush we cannot read is not a base
+            continue
+        found = under.color()
+    return found
+
+
+def _tile_for(sl, base=None):
     """`(block, note)` for one symbol layer — `(None, None)` when it is not a pattern."""
     if isinstance(sl, QgsSimpleFillSymbolLayer):
-        return _brush_tile(sl)
+        return _brush_tile(sl, base)
     if isinstance(sl, QgsLinePatternFillSymbolLayer):
-        return _line_tile(sl)
+        return _line_tile(sl, base)
     if isinstance(sl, QgsPointPatternFillSymbolLayer):
-        return _point_tile(sl)
+        return _point_tile(sl, base)
     if isinstance(sl, QgsRandomMarkerFillSymbolLayer):
-        return _random_tile(sl)
+        return _random_tile(sl, base)
     if _is_centroid(sl):
         # NOT a tile: a centroid fill draws ONE marker per polygon, at its centre. MapLibre places a
         # symbol layer's icons at a polygon's label point by default, so it is a marker, not a
@@ -116,9 +141,9 @@ def _tile_for(sl):
         marker = _centroid_marker(sl)
         return ({"__centroid__": marker} if marker else None), None
     if isinstance(sl, QgsSVGFillSymbolLayer):
-        return _image_tile(sl, sl.svgFilePath(), _px_of(sl, "patternWidth"), svg=True)
+        return _image_tile(sl, sl.svgFilePath(), _px_of(sl, "patternWidth"), svg=True, base=base)
     if isinstance(sl, QgsRasterFillSymbolLayer):
-        return _image_tile(sl, sl.imageFilePath(), _px_of(sl, "width"), svg=False)
+        return _image_tile(sl, sl.imageFilePath(), _px_of(sl, "width"), svg=False, base=base)
     return None, None
 
 
@@ -144,7 +169,7 @@ def _centroid_marker(sl):
     return block
 
 
-def _brush_tile(sl):
+def _brush_tile(sl, base=None):
     """A Qt hatch, cross or dense pattern, painted the way QGIS paints it."""
     from qgis.PyQt.QtCore import Qt
     from qgis.PyQt.QtGui import QBrush
@@ -153,7 +178,7 @@ def _brush_tile(sl):
     none_ = symbology.enum(Qt, "BrushStyle", "NoBrush")
     if style in (solid, none_):
         return None, None               # a plain fill is describable; it needs no tile
-    image = _canvas(BRUSH_TILE_PX)
+    image = _canvas(BRUSH_TILE_PX, base=base)
     painter = _painter(image)
     try:
         painter.fillRect(0, 0, BRUSH_TILE_PX, BRUSH_TILE_PX, QBrush(sl.color(), style))
@@ -162,7 +187,7 @@ def _brush_tile(sl):
     return _encode(image), None
 
 
-def _line_tile(sl):
+def _line_tile(sl, base=None):
     """Hatch lines at a spacing and an angle.
 
     THE ANGLE IS SNAPPED, and this is the one real approximation in the module. A square tile can
@@ -186,7 +211,7 @@ def _line_tile(sl):
 
     side = spacing if angle in (0.0, 90.0) else spacing * math.sqrt(2.0)
     side = int(max(MIN_TILE_PX, min(MAX_TILE_PX, round(side))))
-    image = _canvas(side)
+    image = _canvas(side, base=base)
     painter = _painter(image)
     try:
         pen = QPen(sl.color())
@@ -212,14 +237,14 @@ def _line_tile(sl):
     return _encode(image), note
 
 
-def _point_tile(sl):
+def _point_tile(sl, base=None):
     """Markers on a grid. Closes at exactly distanceX x distanceY."""
     w = int(max(MIN_TILE_PX, min(MAX_TILE_PX, round(_px_of(sl, "distanceX") or 12))))
     h = int(max(MIN_TILE_PX, min(MAX_TILE_PX, round(_px_of(sl, "distanceY") or 12))))
-    return _marker_grid(sl, w, h), None
+    return _marker_grid(sl, w, h, base), None
 
 
-def _random_tile(sl):
+def _random_tile(sl, base=None):
     """A scattered fill, drawn as a REGULAR one at the same density.
 
     Randomness has no period, so there is no tile that reproduces it. A grid at the same density is
@@ -234,12 +259,12 @@ def _random_tile(sl):
         # of the equivalent square is the square root of the converted area over the count.
         side = math.sqrt(max(1.0, (area * MM_TO_PX) / count))
     side = int(max(MIN_TILE_PX, min(MAX_TILE_PX, round(side))))
-    return _marker_grid(sl, side, side), (
+    return _marker_grid(sl, side, side, base), (
         "its randomly scattered fill was drawn as an evenly spaced one at the same density: a "
         "random pattern has no repeating tile")
 
 
-def _marker_grid(sl, w: int, h: int):
+def _marker_grid(sl, w: int, h: int, base=None):
     """One marker centred in a w x h tile, repeated at every neighbouring offset so an overhang
     reappears on the opposite edge instead of being clipped."""
     from qgis.PyQt.QtCore import QSize
@@ -253,7 +278,7 @@ def _marker_grid(sl, w: int, h: int):
         return None
     if marker is None or marker.isNull():
         return None
-    image = _canvas(w, h)
+    image = _canvas(w, h, base)
     painter = _painter(image)
     try:
         x = (w - marker.width()) / 2.0
@@ -267,7 +292,7 @@ def _marker_grid(sl, w: int, h: int):
 
 
 
-def _embedded_tile(payload: str):
+def _embedded_tile(payload: str, base=None):
     """`({image, width, height}, None)` for a `base64:` image the symbol carries inline."""
     import base64
     try:
@@ -279,13 +304,21 @@ def _embedded_tile(payload: str):
         image = QImage.fromData(raw)
         if image.isNull():
             return None, None
+        if base is not None and base.alpha() > 0:
+            ground = _canvas(image.width(), image.height(), base)
+            painter = _painter(ground)
+            try:
+                painter.drawImage(0, 0, image)
+            finally:
+                painter.end()
+            return _encode(ground), None
         return ({"image": "data:image/png;base64," + payload,
                  "width": image.width(), "height": image.height()}, None)
     except Exception:                   # noqa: BLE001  # nosec B110
         return None, None
 
 
-def _image_tile(sl, path: str, width_px: float, svg: bool):
+def _image_tile(sl, path: str, width_px: float, svg: bool, base=None):
     """An SVG or raster fill: the source image IS the tile, at the width QGIS repeats it.
 
     `path` may be a FILE or a `base64:` blob. The plugin writes patterns embedded now — a file path
@@ -295,9 +328,9 @@ def _image_tile(sl, path: str, width_px: float, svg: bool):
     if not path:
         return None, None
     if str(path).startswith("base64:"):
-        return _embedded_tile(str(path)[len("base64:"):])
+        return _embedded_tile(str(path)[len("base64:"):], base)
     side = int(max(MIN_TILE_PX, min(MAX_TILE_PX, round(width_px or 24))))
-    image = _canvas(side)
+    image = _canvas(side, base=base)
     painter = _painter(image)
     try:
         if svg:
@@ -324,12 +357,27 @@ def _image_tile(sl, path: str, width_px: float, svg: bool):
 
 # ── Plumbing ─────────────────────────────────────────────────────────────────────────────────────
 
-def _canvas(w: int, h: int | None = None):
-    """A transparent ARGB image. Transparent, not white: a hatch shows the fill beneath it."""
+def _canvas(w: int, h: int | None = None, base=None):
+    """An ARGB image to draw a tile on — transparent, or filled with the fill that sits beneath it.
+
+    TRANSPARENT BY DEFAULT, because a hatch shows what is under it. `base` is that "under it" when
+    the symbol actually has one, and it has to be painted INTO the tile rather than left to the
+    renderer: MapLibre draws `fill-pattern` INSTEAD of `fill-color`, so a red polygon with a black
+    hatch published as a transparent polygon with a black hatch — the red simply gone. Baking it in
+    is what makes the browser and QGIS draw the same thing, since QGIS cannot show a fill through
+    an opaque tile either.
+    """
     from qgis.PyQt.QtGui import QImage
     image = QImage(int(w), int(h if h is not None else w),
                    symbology.enum(QImage, "Format", "Format_ARGB32_Premultiplied"))
     image.fill(0)
+    if base is not None and base.alpha() > 0:
+        from qgis.PyQt.QtGui import QPainter
+        painter = QPainter(image)
+        try:
+            painter.fillRect(0, 0, image.width(), image.height(), base)
+        finally:
+            painter.end()
     return image
 
 
@@ -559,7 +607,16 @@ def _raster_layer(uri, block):
     layer.setImageFilePath(path)
     width = block.get("width")
     if width:
-        layer.setWidth(round(float(width) / MM_TO_PX, 3))
+        # IN POINTS, AND SAID SO. A raster fill's width unit defaults to PIXELS, not millimetres —
+        # it is the one size in this plugin whose default is not mm — so converting the tile's
+        # pixel width into millimetres and leaving the unit alone stated a quarter of the size. A
+        # 16px hatch tile drew at 4px, which is smaller than the pattern's own period: the
+        # diagonals collapsed into a grey stipple that reads as a flat wash, not a hatch.
+        #
+        # Points, like every other size here, so `_points_unit` is the same call the rest of the
+        # module makes and the number means the same thing everywhere.
+        layer.setWidth(round(float(width) * symbology.CSS_PX_TO_POINTS, 3))
+        _points_unit(layer, "setWidthUnit")
     return layer
 
 
