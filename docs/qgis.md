@@ -13,6 +13,23 @@ it can see is what your account can see, and what it publishes is what a portal 
 the same Python client the [CLI](cli.md) is built on — so anything you can do here, you can also
 script. ([Which interface should I use?](api-reference.md#which-interface-should-i-use))
 
+!!! tip "You do not need an instance to try this"
+    [**geodeploy-demo.kndev.org**](https://geodeploy-demo.kndev.org) is a live GeoDeploy, and the
+    plugin works against it like any other. [Install the plugin](#install), paste that URL, and
+    press **Connect** — with no token at all you get its public portals and layers, and **Add to
+    map** brings one into QGIS styled the way the portal draws it.
+
+    To push *back* — upload a layer, save styling, publish a group as a portal — you need a token,
+    and the demo gives you one in under a minute:
+
+    1. Open the demo and **join with a name** — no email, no password.
+    2. **Settings ▸ API tokens ▸ Create token**, with **write** access.
+    3. Copy it (it is shown once) and paste it into the plugin's **Token** box.
+
+    Two things about the demo specifically: everyone shares **one workspace**, so treat what you
+    put there as public; and it is **wiped every hour, on the hour**, which invalidates tokens
+    along with everything else. If writes suddenly start failing, make a new token.
+
 ## Which QGIS you need
 
 | | |
@@ -90,8 +107,8 @@ them, with a link to the tokens page of the instance you are connected to.
 
 #### Quick start against the demo
 
-    URL:   https://demo.geodeploy.org
-    Token: create one under Settings -> API tokens after signing in
+    URL:   https://geodeploy-demo.kndev.org
+    Token: join with a name, then Settings -> API tokens -> Create token (write)
 
 Connect, pick any layer in QGIS, tick **Send its styling too**, and press **Upload selected
 layers**. It appears in **My Data** on the instance, styled the way QGIS drew it. Note that the demo
