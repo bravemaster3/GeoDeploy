@@ -130,7 +130,27 @@ jobs:
 
       - name: The symbology round trip, against QGIS itself
         working-directory: integrations/qgis-plugin
-        run: python3 -u scripts/test_real_qgis.py
+        # A NATIVE CRASH IS RETRIED ONCE; A FAILED CHECK IS NEVER RETRIED. PyQGIS occasionally
+        # dies from a signal here instead of returning a verdict — SIGSEGV (139) and SIGABRT (134)
+        # both seen, on the 4.2 image, at a different place each time, and passing on a rerun of
+        # the identical commit. It has been chased twice: 300 rounds of the section it last died
+        # in, and 9 full runs under GC stress, neither reproduced it, so there is no fix to make
+        # and pretending otherwise would be worse than saying so.
+        #
+        # What is NOT papered over: an exit code below 128 is a real result and fails immediately,
+        # so a broken round trip still stops the build on the first try. Only a signal gets the
+        # second attempt, and it is announced as a warning so the flake stays visible in the run
+        # summary rather than disappearing. `faulthandler` is enabled inside each script, so the
+        # crashing run now prints the Python stack it died on — which is the thing that will
+        # eventually turn this into a diagnosis.
+        run: |
+          set +e
+          python3 -u scripts/test_real_qgis.py
+          code=$?
+          set -e
+          if [ "$code" -lt 128 ]; then exit "$code"; fi
+          echo "::warning::PyQGIS was killed by signal $((code - 128)), not a failed check. Retrying once; the crash printed a Python stack above."
+          python3 -u scripts/test_real_qgis.py
 
       - name: The round trip as a matrix, generated from QGIS's registries
         # The other half of the file above. That one is a REGRESSION suite — every check exists
@@ -145,7 +165,14 @@ jobs:
         # stdlib precisely so it can be imported beside PyQGIS. It reports them as skipped rather
         # than failing if it cannot.
         working-directory: integrations/qgis-plugin
-        run: python3 -u scripts/test_roundtrip_matrix.py
+        run: |
+          set +e
+          python3 -u scripts/test_roundtrip_matrix.py
+          code=$?
+          set -e
+          if [ "$code" -lt 128 ]; then exit "$code"; fi
+          echo "::warning::PyQGIS was killed by signal $((code - 128)), not a failed check. Retrying once; the crash printed a Python stack above."
+          python3 -u scripts/test_roundtrip_matrix.py
 
       - name: Every symbol QGIS offers is classified
         # Reads QGIS's OWN registries — symbol layers, renderers, data-defined properties — and
@@ -153,7 +180,14 @@ jobs:
         # something the table does not classify, so a new QGIS version forces a decision instead
         # of quietly widening a gap nobody has written down.
         working-directory: integrations/qgis-plugin
-        run: python3 -u scripts/coverage_report.py
+        run: |
+          set +e
+          python3 -u scripts/coverage_report.py
+          code=$?
+          set -e
+          if [ "$code" -lt 128 ]; then exit "$code"; fi
+          echo "::warning::PyQGIS was killed by signal $((code - 128)), not a failed check. Retrying once; the crash printed a Python stack above."
+          python3 -u scripts/coverage_report.py
 
   qgis-plugin:
     name: QGIS plugin

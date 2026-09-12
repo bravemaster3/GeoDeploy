@@ -26,10 +26,22 @@ Run it the way `test_real_qgis.py` runs:
     docker run --rm -v <plugin-dir>:/src -w /src -e QT_QPA_PLATFORM=offscreen \\
         qgis/qgis:ltr python3 scripts/coverage_report.py
 """
+import faulthandler
 import os
 import sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+# A CRASH OUT OF QGIS'S C++ SIDE MUST SAY WHERE IT WAS. These scripts die from a SIGSEGV or a
+# SIGABRT often enough to have their own note in `notes_temp/notes_for_future.md` — a borrowed
+# symbol pointer read after its temporary is gone is the classic one — and the shell reports it as
+# nothing but `Segmentation fault (core dumped)`, exit 139. Which of the hundreds of checks was
+# running is then a matter of reading the last line that happened to be flushed.
+#
+# `faulthandler` prints the Python stack from the signal handler, so the answer arrives with the
+# crash instead of being reconstructed from it. It costs nothing when nothing crashes.
+faulthandler.enable()
+
 from qgis.core import (Qgis, QgsApplication, QgsPalLayerSettings,  # noqa: E402
                        QgsSymbolLayer)
 
