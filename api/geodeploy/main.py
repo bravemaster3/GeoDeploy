@@ -317,7 +317,10 @@ def _ensure_martin_config(settings) -> None:
 
 app = FastAPI(
     title="GeoDeploy API",
-    version="1.5.4",
+    # KEPT IN STEP WITH THE CHANGELOG by `api/tests/test_version_string.py`. This literal
+    # went three releases stale once, and a live instance told operators it was 1.5.4
+    # while running 1.6.4 — bump it when you cut a release.
+    version="1.6.4",
     description="Self-hosted spatial data management and geoportal builder",
     lifespan=lifespan,
     # Every response, not only the ones we thought to guard: a NaN anywhere in the content used to
