@@ -35,18 +35,19 @@ upgrade needs manual work.
   the container to `running` with the right port mapping and nothing listening. Preflight, the
   updater and the dashboard now detect this and name the fix (`up -d --force-recreate nginx`).
 
-!!! warning "`443:443` is no longer published by the base compose file"
-    The container has no TLS listener — `nginx.conf`'s `server { listen 443 ssl; }` block has always
-    been commented out — so publishing 443 reserved the machine's most contested port and served
-    nothing, which by itself made installing beside any HTTPS site impossible. **If you provisioned
-    certificates by hand and uncommented that block, add one line to `.env` before updating:**
+**`443:443` is no longer published by the base compose file.** The container has no TLS listener —
+`nginx.conf`'s `server { listen 443 ssl; }` block has always been commented out — so publishing 443
+reserved the machine's most contested port and served nothing, which by itself made installing
+beside any HTTPS site impossible. **If you provisioned certificates by hand and uncommented that
+block, add one line to `.env` before updating:**
 
-    ```
-    COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml
-    ```
+```
+COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml
+```
 
-    Everything else is unaffected: with none of the new keys in `.env`, the publish resolves to
-    `0.0.0.0:80:80` exactly as before.
+Nothing else is affected: with none of the new keys in `.env` the publish resolves to
+`0.0.0.0:80:80`, exactly as before. Existing containers keep their current bindings until nginx is
+next recreated.
 
 ## v1.6.4 — 2026-09-11
 
