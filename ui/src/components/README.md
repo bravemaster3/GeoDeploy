@@ -61,6 +61,13 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
   **Verify** (`POST /deployment/verify`) checks DNS, reaches the domain from the server and confirms
   it lands on THIS instance with the hostname intact. `mismatch` deliberately requires
   `reality.port` to be non-null: an unreadable Docker socket means unknown, not wrong.
+  Since 2026-09-12 the domain half is a **three-step flow**, not a text box: step 1 is DNS on its own
+  — this server's public address with a copy button, the A record laid out the way a control panel
+  asks for it (`Name` is the subdomain ALONE, because every panel appends the zone and
+  `maps.example.org.example.org` is the commonest mistake there is), and a **Check DNS** that is
+  deliberately separate from Verify. "Not propagated yet" and "pointing at another machine" look
+  identical from a browser and need opposite reactions, and a Cloudflare-proxied record is recognised
+  as CORRECT rather than reported as wrong. Steps 2 and 3 are the proxy config and Verify.
 - `portal/CreatePortalModal.vue` — new-portal dialog (title, description, access); creates via the portals store then routes to the editor.
 - `portal/LayerPanel.vue` (resolves vector/raster/**external** layers from the data store; external sources get an opacity-only popover, plus a colour picker for WFS vector) — **thin row** mirroring the published portal: drag handle (reorder is wired in `PortalEditor.vue`) · eye/eye-off (`update {visible}`) · **symbol swatch** that opens a **teleported symbology popover** · name · zoom · remove. The popover holds: opacity; vector colour/fill/outline/width; **line type** (solid/dashed/dotted); **point marker shape** (circle/square/triangle/diamond/star/cross) + size; popup-field picker; **raster band selection** (multiband → RGB composite with R/G/B band pickers, or single band) + palette/hillshade/Z (single-band output) and stretch/rescale (all); save/use default. Band selection stores `style.bidx` (`[n]` single, `[r,g,b]` RGB). The list swatch (`geomSvg`/`markerSvg`) draws the actual symbol (colour, dash, marker shape). Emits `update`/`remove`/`zoom`.
   **Two hosts, one control** (issue #23): `standalone` renders the symbology body ALONE — no row, no
@@ -263,6 +270,10 @@ previous value: the classic one-step-lag bug). Polygons also gain a 3D "extrude 
 hidden when the layer has no numeric column. The row swatch now shows the MIDDLE class via
 `lib/symbology.representativeColor` — the flat `color` is unused under a classification, and a
 swatch showing a colour that appears nowhere on the map is a small lie told constantly.)
+2026-09-12b (`infra/DeploymentPanel.vue` gained the three-step domain flow; `infra/ConnectionDetails.vue`
+now says that a managed database's host and port are the address INSIDE the Docker network — it was
+showing `postgres:5432` beside a password with nothing to say that no client outside the stack can
+dial it)
 2026-09-12 (new `infra/DeploymentPanel.vue` — Settings → Infrastructure → Deployment, the
 shared-machine install's UI half; see its entry above)
 2026-08-06 (`infra/ConnectionDetails.vue` documented + it now shows which source each credential

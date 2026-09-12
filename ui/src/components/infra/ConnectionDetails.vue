@@ -29,6 +29,19 @@
             (external — you provided this)
           </span>
         </h3>
+        <!-- A MANAGED database's host and port are the INTERNAL Docker network address. They are
+             correct, and they are also not dialable from anyone's laptop — so a panel that shows
+             `postgres:5432` beside a password, and says nothing else, invites an operator to try a
+             connection that cannot work and to conclude their credentials are wrong. External
+             databases need no such note: those values are the ones the operator gave us, and they
+             are reachable wherever they already were. -->
+        <p v-if="group.internalOnly" class="text-[11px] text-muted-foreground/70 mb-2 leading-relaxed">
+          This is the address <em>inside</em> GeoDeploy's own Docker network — the database is not
+          published to this machine or to the internet, so nothing outside can connect to it yet.
+          To reach it from QGIS, psql or DBeaver, see
+          <a href="https://docs-geodeploy.kndev.org/data-access/#connecting-straight-to-the-database"
+             target="_blank" rel="noopener" class="underline hover:text-foreground">Connecting straight to the database</a>.
+        </p>
         <div class="space-y-1.5">
           <div v-for="f in group.fields" :key="f.label"
             class="flex items-center gap-2 text-xs">
@@ -88,7 +101,10 @@ const groups = computed(() => {
   const d = data.value.database, s = data.value.storage
   return [
     {
-      title: 'Database (PostGIS)', managed: d.managed,
+      // `internalOnly` is not the same as `managed`, even though today they coincide: a managed
+      // database becomes reachable the moment docker-compose.db-port.yml is enabled, and this note
+      // should stop being shown then. Named for the property it describes so that stays possible.
+      title: 'Database (PostGIS)', managed: d.managed, internalOnly: d.managed && !d.published,
       fields: [
         { label: 'Host', value: d.host }, { label: 'Port', value: String(d.port ?? '') },
         { label: 'Database', value: d.database }, { label: 'User', value: d.user },

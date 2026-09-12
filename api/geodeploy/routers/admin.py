@@ -15,7 +15,7 @@ from ..deps import require_admin, require_owner
 from ..models import DeploymentRun, Portal, RasterLayer, SetupConfig, User, VectorLayer
 from ..schemas import (DeploymentRunOut, EmailSettings, EmailSettingsOut, OidcSettings,
                        OidcSettingsOut, ServiceHealth, StorageStats)
-from ..services import notifications
+from ..services import deployment, notifications
 from .common import record_audit
 from .users import request_origin
 
@@ -536,7 +536,17 @@ async def connection_details(user: User = Depends(require_owner), db: AsyncSessi
     # its purpose. Threadpooled — it is a file read on the event loop otherwise.
     env = await run_in_threadpool(envfile.read_all)
     await record_audit(db, user, "admin.credentials.view", "system", None, {})
-    return merge_credentials(env, get_settings(), cfg)
+    out = merge_credentials(env, get_settings(), cfg)
+    # `bind:port` when the provisioned database is actually published to the host
+    # (docker-compose.db-port.yml), None when it is reachable only from inside the Docker network —
+    # which is the default. The panel needs it because otherwise it shows `postgres:5432` beside a
+    # password with nothing to say that no client outside this stack can dial it.
+    #
+    # Computed HERE rather than inside merge_credentials, which is deliberately a pure function of
+    # (env, settings, cfg) so the precedence rule above can be tested without Docker, an app or a
+    # request. Threadpooled: the Docker socket is blocking I/O.
+    out["database"]["published"] = await run_in_threadpool(deployment.postgres_published)
+    return out
 
 
 def merge_credentials(env: dict, settings, cfg) -> dict:
@@ -1166,6 +1176,20 @@ class DeploymentVerifyRequest(BaseModel):
     domain: str
 
 
+# A hostname, and only a hostname. It is interpolated into a configuration file the operator will
+# paste into their web server and passed to a resolver, so anything that could carry a newline, a
+# directive or a shell character has no business here. One definition, so the three deployment
+# endpoints cannot drift apart on what they accept.
+_DOMAIN_RE = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+")
+
+
+def _valid_domain(raw: str) -> str:
+    domain = (raw or "").strip().lower().rstrip(".")
+    if not _DOMAIN_RE.fullmatch(domain):
+        raise HTTPException(400, "That does not look like a domain name (for example: maps.example.org).")
+    return domain
+
+
 @router.get("/deployment")
 async def deployment_status(request: Request, _: User = Depends(require_owner)):
     """Intent (.env), reality (the nginx container) and what this very request looked like."""
@@ -1180,6 +1204,9 @@ async def deployment_status(request: Request, _: User = Depends(require_owner)):
         "observed": observed,
         "verdict": deployment.verdict(intent, reality, observed),
         "domain_hint": deployment.domain_hint(),
+        # What an A record has to point at. Fetched here so the DNS step can show it with a copy
+        # button instead of telling the operator to go and find their own server's address.
+        "server_ip": await run_in_threadpool(deployment.server_ip),
         "local_url": f"http://127.0.0.1{'' if intent['port'] == '80' else ':' + intent['port']}",
         "flavors": list(deployment.FLAVORS),
     }
@@ -1195,12 +1222,49 @@ async def deployment_proxy_config(domain: str = "", flavor: str = "nginx",
     if flavor not in deployment.FLAVORS:
         raise HTTPException(400, f"Unknown proxy: {flavor}")
     domain = (domain or "").strip().lower()
-    # A hostname, and only a hostname. It is interpolated into a config file the operator will paste
-    # into their web server, so anything that could carry a newline, a directive or a shell
-    # character has no business here.
-    if domain and not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+", domain):
-        raise HTTPException(400, "That does not look like a domain name (for example: maps.example.org).")
+    if domain:
+        domain = _valid_domain(domain)
     return deployment.proxy_config(domain, flavor, deployment.read_intent())
+
+
+@router.post("/deployment/check-dns")
+async def deployment_check_dns(body: DeploymentVerifyRequest, _: User = Depends(require_owner)):
+    """Does the domain point at this server yet? Separate from the full Verify on purpose.
+
+    DNS is the step with a WAITING PERIOD in it, and the only one the operator performs somewhere
+    else entirely — in a control panel we cannot see. Making them run the whole end-to-end check to
+    find out whether a record has propagated conflates "you have not finished" with "you did it
+    wrong", and those need completely different reactions: one is patience, the other is a fix.
+    """
+    from ..services import deployment as dep
+
+    domain = _valid_domain(body.domain)
+    addresses = await run_in_threadpool(dep.resolve_domain, domain)
+    ours = await run_in_threadpool(dep.server_ip)
+    expected = ours.get("public") or ours.get("outbound")
+
+    if not addresses:
+        return {"state": "unresolved", "addresses": [], "expected": expected,
+                "detail": f"{domain} does not resolve to anything yet.",
+                "fix": "Add an A record for it pointing at this server, then wait a few minutes. A "
+                       "new record is usually live within minutes, occasionally up to an hour."}
+    if expected and expected in addresses:
+        return {"state": "ok", "addresses": addresses, "expected": expected,
+                "detail": f"{domain} points at this server ({expected})."}
+    if dep.looks_like_cloudflare(addresses):
+        return {"state": "proxied", "addresses": addresses, "expected": expected,
+                "detail": f"{domain} resolves to Cloudflare ({', '.join(addresses)}), not directly "
+                          f"to this server. That is what Cloudflare's proxy — the orange cloud — "
+                          f"does, and it is fine.",
+                "fix": "Two things to know while it is on: Cloudflare terminates HTTPS itself, so "
+                       "your own certificate must still be valid to it (set SSL/TLS mode to Full "
+                       "(strict)); and if you are getting a certificate with certbot's HTTP "
+                       "challenge, turn the proxy off (grey cloud) until it succeeds."}
+    return {"state": "elsewhere", "addresses": addresses, "expected": expected,
+            "detail": f"{domain} resolves to {', '.join(addresses)}"
+                      f"{f', but this server is {expected}' if expected else ''}.",
+            "fix": "Point the A record at this server's address. If you only just changed it, the "
+                   "old value can be cached for as long as its TTL — wait, then check again."}
 
 
 @router.post("/deployment/verify")
@@ -1221,9 +1285,7 @@ async def deployment_verify(body: DeploymentVerifyRequest, _: User = Depends(req
 
     from ..services import deployment
 
-    domain = (body.domain or "").strip().lower()
-    if not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+", domain):
-        raise HTTPException(400, "That does not look like a domain name (for example: maps.example.org).")
+    domain = _valid_domain(body.domain)
 
     steps: list[dict] = []
     def step(name, ok, detail, fix=None):

@@ -60,6 +60,18 @@ Bash scripts that take a bare Linux VPS to a running GeoDeploy (the `curl instal
   up — the rollback is itself health-checked before it claims success.
 - `reset.sh` — destructive: removes all `geodeploy*` containers, the api/ui images, the network, and the install dir (confirmation prompt).
 
+## Tests
+`installer/tests/` — the plan and the suites for everything above; **read its README first**, it is
+the test plan. Four suites: `test-unit.sh` (parsing and selection, no Docker, ~1s), `test-proxy.sh`
+(the generated config validated by real `nginx -t` / `caddy validate`, then a live proxy),
+`test-install.sh` (the question and every path that picks a port), `test-ports.sh` (fallback, re-run
+drift, moving it, the wedged bind). `test-port80.sh` is opt-in — it takes port 80 and stops any
+GeoDeploy already running. `run-all.sh` runs them in order.
+
+Not in CI: a shared runner cannot be asked for port 80, and these want a real Docker daemon. The
+Python half (`services/deployment.py`, the endpoints) is covered by `api/tests/test_deployment*.py`
+and does run in CI.
+
 ## The compose overrides
 Two optional files at the repo root, both opted into the same way — `COMPOSE_FILE` in `.env`, which
 the Compose CLI reads exactly as it already reads `COMPOSE_PROFILES`, so install/update/self-update

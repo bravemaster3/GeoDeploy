@@ -234,3 +234,55 @@ def test_a_loopback_bind_is_never_mistaken_for_a_dead_one():
 def test_nothing_to_say_is_not_a_failure():
     assert deployment._mapping_is_live({}) is None
     assert deployment._mapping_is_live({"NetworkSettings": {}}) is None
+
+
+# ── Is the provisioned database reachable from outside the Docker network? ────────────────────────
+# Same runtime-vs-requested distinction as the ingress: `NetworkSettings.Ports` is what is in effect.
+# The credentials panel shows a host of `postgres` and a password; without this it would imply that
+# pair is dialable from a laptop, and it is not.
+
+class _FakeContainer:
+    def __init__(self, name, ports):
+        self.name = name
+        self.attrs = {"NetworkSettings": {"Ports": ports}}
+
+
+def _with_containers(monkeypatch, containers):
+    class _Client:
+        def __init__(self):
+            self.containers = self
+        def list(self, *a, **k):
+            return containers
+    fake = type("m", (), {"from_env": staticmethod(_Client)})
+    monkeypatch.setitem(__import__("sys").modules, "docker", fake)
+
+
+def test_an_unpublished_database_reads_as_unreachable(monkeypatch):
+    _with_containers(monkeypatch, [_FakeContainer("geodeploy-postgres", {"5432/tcp": None})])
+    assert deployment.postgres_published() is None
+
+
+def test_a_published_database_reports_where(monkeypatch):
+    _with_containers(monkeypatch, [_FakeContainer(
+        "geodeploy-postgres", {"5432/tcp": [{"HostIp": "127.0.0.1", "HostPort": "5432"}]})])
+    assert deployment.postgres_published() == "127.0.0.1:5432"
+
+
+def test_an_empty_host_ip_means_every_interface(monkeypatch):
+    _with_containers(monkeypatch, [_FakeContainer(
+        "geodeploy-postgres", {"5432/tcp": [{"HostIp": "", "HostPort": "55432"}]})])
+    assert deployment.postgres_published() == "0.0.0.0:55432"
+
+
+def test_somebody_elses_postgres_is_not_ours(monkeypatch):
+    _with_containers(monkeypatch, [_FakeContainer(
+        "unrelated-postgres", {"5432/tcp": [{"HostIp": "0.0.0.0", "HostPort": "5432"}]})])
+    assert deployment.postgres_published() is None
+
+
+def test_no_docker_is_not_an_error(monkeypatch):
+    def boom():
+        raise RuntimeError("no socket")
+    monkeypatch.setitem(__import__("sys").modules, "docker",
+                        type("m", (), {"from_env": staticmethod(boom)}))
+    assert deployment.postgres_published() is None

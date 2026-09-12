@@ -103,6 +103,10 @@ export const getDeployment = () => api.get('/admin/deployment')
 export const getProxyConfig = (domain, flavor) =>
   api.get('/admin/deployment/proxy-config', { params: { domain, flavor } })
 export const verifyDeployment = (domain) => api.post('/admin/deployment/verify', { domain })
+// DNS on its own. Separate from verifyDeployment because it is the one step with a WAITING PERIOD
+// in it: "not propagated yet" and "pointed at the wrong server" need opposite reactions, and making
+// someone run the whole end-to-end check to tell them apart conflates the two.
+export const checkDeploymentDns = (domain) => api.post('/admin/deployment/check-dns', { domain })
 
 // Backups (admin Settings -> Backups). The destination is a SEPARATE S3; secret_key is
 // write-only (blank keeps the stored one). `stored` reads the destination's own manifests, which
