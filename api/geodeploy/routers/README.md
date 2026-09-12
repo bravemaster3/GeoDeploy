@@ -475,3 +475,24 @@ value); bounded by `max_size` and by `MAX_COLOR_CLASSES`, and a raster with frac
 values is reported as **continuous with a reason** rather than truncated into a classification that
 would mis-colour most of the map. Verified against every raster on the live instance: the DEMs
 answer "continuous", and a 3-class mask answers `[0, 1, 2]`.)
+
+### Deployment (2026-09-12)
+`admin.py` gained three owner-only endpoints, and `public.py` one unauthenticated one, for the
+shared-machine install (issue #79):
+
+- `GET /admin/deployment` — intent vs reality vs the observed origin, plus a plain-language verdict.
+- `GET /admin/deployment/proxy-config` — the nginx/Caddy/Apache/Traefik block for a domain. The
+  domain is validated as a hostname and nothing else, because it is interpolated into a config file
+  the operator will paste into their web server.
+- `POST /admin/deployment/verify` — resolves the domain, fetches `/api/public/whoami` through it, and
+  reports four checks individually ("it does not work" is not actionable). Outbound and
+  owner-only: `follow_redirects=False`, only the fields `whoami` defines are read, and the body is
+  never surfaced.
+- `GET /api/public/whoami` — **deliberately unauthenticated**, because the whole point is to be
+  fetched through a brand-new public domain to find out what arrives. Echoes four derived fields and
+  never a caller-supplied header, so it cannot reflect content. `instance` is a salted, truncated
+  hash of the secret key: it proves the domain reaches THIS GeoDeploy without revealing which one.
+  Already inside `main.py::_PUBLIC_CORS` via the `public(/.*)?` branch.
+
+## Last updated
+2026-09-12 (the deployment endpoints above)

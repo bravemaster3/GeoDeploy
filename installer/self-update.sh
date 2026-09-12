@@ -28,7 +28,28 @@ if [ -z "${GD_UPDATER_REPO:-}" ]; then
 fi
 cd "$GD_UPDATER_REPO" || exit 1   # repo root (this script lives in installer/)
 STATUS_FILE="data/temp/update-status.json"   # under data/temp (mounted into the API → the UI can poll it)
-HEALTH_URL="${GEODEPLOY_HEALTH_URL:-http://localhost/health}"
+
+# WHERE THIS INSTALLATION IS PUBLISHED. An update must never change it: the operator's reverse
+# proxy, DNS record and bookmarks all point at that port, and a port that moved on its own would be
+# indistinguishable from a broken update. So this is READ here, never chosen — nothing below writes
+# GEODEPLOY_HTTP_*.
+#
+# Read inline rather than by sourcing installer/lib-deploy.sh, because this script runs from a copy
+# of itself (see above) while the checkout is being reset under it: the version of the library on
+# disk at any given moment belongs to whichever commit git last wrote, and a health check is not
+# worth that coupling. The defaults MUST match the `:-` defaults in docker-compose.yml.
+_envget() { # KEY
+  local v; v="$(grep -E "^[[:space:]]*(export[[:space:]]+)?$1[[:space:]]*=" .env 2>/dev/null | tail -1)" || true
+  v="${v#*=}"; v="${v%\"}"; v="${v#\"}"
+  printf '%s' "$v"
+}
+GD_BIND="$(_envget GEODEPLOY_HTTP_BIND)"; GD_BIND="${GD_BIND:-0.0.0.0}"
+GD_PORT="$(_envget GEODEPLOY_HTTP_PORT)"; GD_PORT="${GD_PORT:-80}"
+# Always 127.0.0.1: in behind-proxy mode nothing else can reach it, and in dedicated mode loopback
+# works too. `http://localhost/health` was hard-coded here, which on any install not on port 80
+# would have failed the post-update health check and ROLLED BACK a perfectly good update.
+if [ "$GD_PORT" = 80 ]; then _gd_local="http://127.0.0.1"; else _gd_local="http://127.0.0.1:${GD_PORT}"; fi
+HEALTH_URL="${GEODEPLOY_HEALTH_URL:-${_gd_local}/health}"
 HEALTH_TRIES="${GEODEPLOY_HEALTH_TRIES:-40}"   # × 3s ≈ 2 min for the stack to come back healthy
 # Recreate ONLY the code services. NGINX IS DELIBERATELY EXCLUDED: it's the single ingress, so
 # recreating it takes the whole site down for a few seconds (Cloudflare 521). Instead we leave it
@@ -104,6 +125,40 @@ apply_nginx() {
   fi
 }
 
+# The published PORT has the same stale-container problem as nginx.conf, from the other direction.
+# nginx is deliberately left out of CORE_SERVICES (it is the single ingress; recreating it drops the
+# site), so a change to GEODEPLOY_HTTP_BIND/PORT in .env — or the compose file gaining the variables
+# in the first place — would sit there unapplied while everything reported success. Compare what the
+# running container actually publishes with what .env now asks for, and recreate ONLY on a real
+# difference, so the normal update stays zero-downtime.
+#
+# An empty HostIp means "all interfaces", which is what a container created from the old literal
+# `80:80` shows. Normalising it to 0.0.0.0 is what keeps every existing install from taking a
+# pointless recreate on the first update after the variables landed — the binding is identical.
+ensure_nginx_ports() {
+  local cid actual want
+  cid=$(docker compose ps -q nginx 2>/dev/null | head -1)
+  [ -n "$cid" ] || return 0
+  actual=$(docker inspect -f '{{range $p, $b := .HostConfig.PortBindings}}{{if eq $p "80/tcp"}}{{range $b}}{{.HostIp}}:{{.HostPort}}{{end}}{{end}}{{end}}' "$cid" 2>/dev/null) || return 0
+  [ -n "$actual" ] || return 0
+  case "$actual" in :*) actual="0.0.0.0$actual" ;; esac
+  want="${GD_BIND}:${GD_PORT}"
+  if [ "$actual" != "$want" ]; then
+    echo "[self-update] nginx publishes $actual but .env asks for $want — recreating nginx to apply it"
+    docker compose up -d --force-recreate nginx >/dev/null 2>&1 || true
+    return
+  fi
+  # The bindings AGREE and the port can still be dead. If the host port was occupied when the
+  # container last started, the bind failed, and neither `up -d` nor `restart` re-establishes it —
+  # Docker reports `running` with the right PortBindings and nothing listens (measured 2026-09-12).
+  # Only a recreate repairs it, and an update is exactly the moment to notice, because the operator
+  # is already expecting a brief interruption.
+  if ! curl -fsS --max-time 3 "$_gd_local/health" >/dev/null 2>&1; then
+    echo "[self-update] nothing answers on $want though nginx is up — recreating nginx to re-establish the port"
+    docker compose up -d --force-recreate nginx >/dev/null 2>&1 || true
+  fi
+}
+
 
 # ── Did the new code ACTUALLY get deployed? ───────────────────────────────────────────────────────
 # A health check proves the stack is UP, not that it is NEW. An old-but-healthy API answers /health
@@ -162,7 +217,7 @@ rollback() { # old_sha reason
   # right sha (a post-recreate write only lands on the NEXT recreate — the bug fixed 2026-07-29).
   record_sha "$1"
   record_ref "$OLD_REF"    # the ref goes back with the code, or the panel claims a version we rolled off
-  docker compose build && docker compose up -d --force-recreate $CORE_SERVICES && apply_nginx
+  docker compose build && docker compose up -d --force-recreate $CORE_SERVICES && apply_nginx && ensure_nginx_ports
   if healthy; then
     write_status rolledback "Rolled back to ${1:0:7} ($2). No changes applied."
   else
@@ -261,6 +316,7 @@ record_sha "$NEW_SHA"
 record_ref "$TARGET"
 if ! docker compose up -d --force-recreate $CORE_SERVICES; then rollback "$OLD_SHA" "Restart failed"; exit 1; fi
 apply_nginx               # recreate-or-reload nginx so an nginx.conf change ACTUALLY lands (stale single-file mount)
+ensure_nginx_ports        # …and recreate it if the published host port drifted from .env
 ensure_nginx_mount_synced # …and recreate nginx if its data/portals mount diverged (else portals ghost/404)
 
 write_status running "Checking health"
