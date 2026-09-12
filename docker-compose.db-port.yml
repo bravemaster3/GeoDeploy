@@ -1,0 +1,51 @@
+# Reach the PostGIS database GeoDeploy provisioned from OUTSIDE GeoDeploy — QGIS, psql, DBeaver,
+# ogr2ogr, a notebook.
+#
+# NOT ACTIVE BY DEFAULT, and that default is deliberate. Out of the box `postgres` publishes no host
+# port at all: it exists only on the `geodeploy` Docker network, so nothing on the machine and
+# nothing on the internet can open a connection to it. A database reachable from the network is
+# protected by its password and nothing else, and the internet scans for 5432 constantly.
+#
+# ── Turning it on ────────────────────────────────────────────────────────────────────────────────
+#
+#     echo 'COMPOSE_FILE=docker-compose.yml:docker-compose.db-port.yml' >> .env
+#     docker compose up -d postgres
+#
+# COMPOSE_FILE is read by the Compose CLI from .env, the same way COMPOSE_PROFILES already is, so
+# install.sh, update.sh, self-update.sh and the dashboard's apply helper all honour it afterwards
+# with no further changes. (If you also publish 443, chain both:
+# `COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml:docker-compose.db-port.yml`.)
+#
+# Your credentials are in Settings → Infrastructure → Connection details, or in `.env` as
+# POSTGIS_USER / POSTGIS_PASSWORD / POSTGIS_DB.
+#
+# ── Reaching it from your own computer ───────────────────────────────────────────────────────────
+#
+# The default bind is 127.0.0.1, so the port is open to the SERVER and to nobody else. That is the
+# right setting for almost everyone: tunnel to it over SSH, which you already have.
+#
+#     ssh -L 5432:127.0.0.1:5432 you@your-server
+#
+# then point QGIS at localhost:5432 as if the database were on your laptop. The connection is
+# encrypted by SSH, no port is exposed, and nothing needs to change on the server.
+#
+# ── Opening it to the network ────────────────────────────────────────────────────────────────────
+#
+# If you genuinely need direct access — a colleague's QGIS, a BI tool, a scheduled job elsewhere —
+# set GEODEPLOY_POSTGIS_BIND=0.0.0.0 and understand what that means:
+#
+#   * The database is then reachable by anyone who can route to this machine. A Docker publish on
+#     0.0.0.0 also inserts its forwarding rule AHEAD of ufw, so `ufw deny 5432` will NOT hold it
+#     back. Restrict it in your cloud provider's firewall / security group instead, to the specific
+#     addresses that need it.
+#   * The provisioned PostGIS speaks plain TCP with no TLS, so credentials and query results cross
+#     the network in clear text. Over anything but a trusted private network, tunnel instead.
+#   * Use a separate, least-privileged role for outside consumers rather than handing out the
+#     POSTGIS_USER superuser that GeoDeploy itself runs as.
+#
+# A different host port is fine too, and often tidier if the machine already runs a PostgreSQL of
+# its own: GEODEPLOY_POSTGIS_PORT=55432.
+services:
+  postgres:
+    ports:
+      - "${GEODEPLOY_POSTGIS_BIND:-127.0.0.1}:${GEODEPLOY_POSTGIS_PORT:-5432}:5432"

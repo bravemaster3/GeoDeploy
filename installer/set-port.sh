@@ -64,13 +64,22 @@ while [ $# -gt 0 ]; do
     --port) shift; NEW_PORT="${1:-}" ;;
     --bind) shift; NEW_BIND="${1:-}" ;;
     -y|--yes) ASSUME_YES=1 ;;
-    -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    # The header comment IS the help, printed up to the first line that is not a comment — a fixed
+    # line range silently starts leaking code into --help the moment the header grows.
+    -h|--help) awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; exit 0 ;;
     -*) error "Unknown option: $1" ;;
     *) NEW_PORT="$1" ;;
   esac
   shift
 done
 
+# `--behind-proxy` with no port is a complete instruction — "get off the public port" — so pick the
+# first CANDIDATE THAT IS FREE rather than making the operator go and look one up.
+if [ -z "$NEW_PORT" ] && [ "$NEW_MODE" = behind-proxy ]; then
+  NEW_PORT="$(gd_first_free_candidate || true)"
+  [ -n "$NEW_PORT" ] || error "None of $(gd_candidates) is free. Name a port: set-port.sh --port <n>."
+  info "Using ${NEW_PORT} — the first free port of $(gd_candidates)."
+fi
 [ -n "$NEW_PORT" ] || { show_current; error "Say which port. e.g. 'set-port.sh 8081', or 'set-port.sh --dedicated'."; }
 gd_valid_port "$NEW_PORT" || error "'$NEW_PORT' is not a port number (1–65535)."
 
@@ -85,8 +94,12 @@ case "$NEW_BIND" in
   0.0.0.0|127.0.0.1|::|::1) ;;
   *[!0-9.]*) error "--bind must be an IP address on this machine (0.0.0.0 or 127.0.0.1 in almost every case)." ;;
 esac
+# The same one rule the installer uses: PORT 80 IS DEDICATED, anything else is behind-proxy. The
+# mode answers "does GeoDeploy own this machine's web-server role", and port 80 is what that comes
+# down to — so `--port 8081 --bind 0.0.0.0` (a proxy on a DIFFERENT machine) is still behind-proxy,
+# and the two scripts cannot disagree about what an installation is.
 if [ -z "$NEW_MODE" ]; then
-  if [ "$NEW_BIND" = "127.0.0.1" ]; then NEW_MODE=behind-proxy; else NEW_MODE=dedicated; fi
+  if [ "$NEW_PORT" = 80 ]; then NEW_MODE=dedicated; else NEW_MODE=behind-proxy; fi
 fi
 
 if [ "$NEW_PORT" = "$OLD_PORT" ] && [ "$NEW_BIND" = "$OLD_BIND" ]; then
@@ -105,7 +118,25 @@ if gd_port_in_use "$NEW_PORT"; then
     :
   else
     holder="$(gd_port_holder "$NEW_PORT")"
-    error "Port ${NEW_PORT} is already in use${holder:+ by $holder}. Nothing has been changed — GeoDeploy is still on ${OLD_BIND}:${OLD_PORT}."
+    # Offer somewhere to go. Every port named here has just had gd_port_in_use run against it, so
+    # the list is what is free NOW rather than a static suggestion — being refused with no way
+    # forward is the same dead end as not checking at all.
+    alternatives="$(gd_free_candidates 6)"
+    echo "" >&2
+    warn "Port ${NEW_PORT} is already in use${holder:+ by $holder}."
+    warn "Nothing has been changed — GeoDeploy is still on ${OLD_BIND}:${OLD_PORT}."
+    if [ -n "$alternatives" ]; then
+      echo "" >&2
+      echo "  Free right now:  ${alternatives}" >&2
+      echo "  For example:     sudo bash installer/set-port.sh ${alternatives%% *}" >&2
+      echo "" >&2
+    else
+      echo "" >&2
+      echo "  None of $(gd_candidates) is free either. Pick a port you know is available," >&2
+      echo "  or set GEODEPLOY_PORT_CANDIDATES to a list that suits this machine." >&2
+      echo "" >&2
+    fi
+    exit 1
   fi
 fi
 

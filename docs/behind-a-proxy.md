@@ -48,23 +48,67 @@ The installer checks the machine first and shows you what it found, then asks:
 ```
   Docker                    ✓  usable with sudo
   Port 80                   ✗  in use — nginx (systemd: nginx.service)
-  Port 443                  ✗  in use — nginx (systemd: nginx.service)
   A free port for GeoDeploy    8080
 
-  This machine is already serving something on port 80.
+  This machine is already serving something on port 80 or 443.
   GeoDeploy will not touch it, whichever option you choose.
 
 How should GeoDeploy be published?
 
-  1) Take over port 80 — GeoDeploy becomes this machine's web server.
-  2) Behind the web server you already run — 127.0.0.1:8080.
+  1) Make this machine a dedicated GeoDeploy server.
+     GeoDeploy takes port 80 and answers at http://203.0.113.10 — no port in
+     the address. It becomes the machine's web server: anything else that wants
+     port 80 afterwards will fail to start. Nothing running now is stopped by
+     this installer. Choose this on a server you bought for GeoDeploy.
+     Not available right now — port 80 is in use by nginx (pid 812).
+
+  2) Use the default port — 127.0.0.1:8080
+     GeoDeploy shares the machine. It listens on port 8080, reachable only from
+     this server, and a reverse proxy you already run publishes it on a domain.
+
+  3) Choose a different port.
+     Same as 2, on a port you pick.
+     Free right now: 8080 8082 8090 8880 9080 9090
 
 Choose [2]:
 ```
 
-The recommendation is pre-selected, but pressing Enter is still you choosing. If you pick **1)**
-while something else holds port 80, the installer refuses and asks again — it will not stop the
-other service for you.
+Option 1 is the recommendation on an empty machine, option 2 when something else is already serving.
+Either way the recommendation is only pre-selected — pressing Enter is you choosing it. Picking 1
+while something holds port 80 is refused and re-asked; the installer will not stop the other service
+for you.
+
+**Option 3** asks which port, offering the ones that are free *at that moment* and accepting any
+other you type. A port that is taken is refused, with the process that holds it named, and you are
+asked again — GeoDeploy never quietly substitutes a working port for the one you asked for.
+
+### Choosing the port up front
+
+If you already know, skip the question:
+
+```bash
+curl -fsSL …/install.sh | bash -s -- --port 8081
+curl -fsSL …/install.sh | bash -s -- --dedicated
+```
+
+`bash -s --` is how arguments reach a piped script. The port is still checked: if 8081 is taken you
+are told what holds it and offered what is free, rather than getting an install that completes and
+leaves nginx dead.
+
+### Which ports get offered
+
+`GEODEPLOY_PORT_CANDIDATES` in `.env` (or in the environment, which wins) — ten by default:
+
+```
+GEODEPLOY_PORT_CANDIDATES=8080,8081,8082,8090,8880,9080,9090,8008,7080,8888
+```
+
+It is a **suggestion list**, read only while a port is being chosen, and always filtered to the ones
+actually free at that moment. It is not the same as `GEODEPLOY_HTTP_PORT`, which records the port
+you *chose* and is authoritative from then on. Keeping them apart is what stops the port drifting:
+if the installer re-scanned the list on every run, an install that landed on 8081 because 8080 was
+busy would move back to 8080 the day that service was retired — while your `proxy_pass`, your DNS
+record and everyone's bookmarks still pointed at 8081.
 
 ### Checking before you install
 
