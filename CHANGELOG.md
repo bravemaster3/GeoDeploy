@@ -6,6 +6,48 @@ upgrade needs manual work.
 
 ## Unreleased
 
+- **GeoDeploy can be installed on a machine that already runs other software** — and it no longer
+  takes the machine's web-server role without being asked. The installer now checks what is on the
+  box first (ports, an existing nginx/Caddy/Apache, a conflicting Docker network or container name,
+  swap) and **asks** how GeoDeploy should be published: take over port 80, or listen on
+  `127.0.0.1:<port>` behind the reverse proxy you already run. It never stops, edits or
+  reconfigures anything already running, and the recommendation is pre-selected but never
+  auto-accepted — including on an empty server. With no terminal to ask with, it installs
+  behind-proxy on a free local port, the only choice that claims nothing; set
+  `GEODEPLOY_DEPLOY_MODE` in the environment for cloud-init or Ansible.
+  [#79](https://github.com/bravemaster3/GeoDeploy/issues/79)
+- **Settings → Deployment** (owner-only) says where the instance is published, who can reach it, and
+  — the useful part — what address GeoDeploy is *observing*, because every link it hands out is
+  built from that. It generates the nginx, Caddy, Apache or Traefik configuration for a domain, and
+  **Verify** then checks DNS, reaches the domain from the server, and confirms the request lands
+  here with the hostname intact. GeoDeploy never writes to a web server it did not install: on a
+  shared machine, a bad reload takes down everybody else's sites too.
+- **`installer/set-port.sh`** moves GeoDeploy between ports, reversibly: it checks the target is
+  free, recreates only nginx so running ingests are untouched, and restores the old settings if the
+  new ones do not come up. **`installer/preflight.sh`** reports every conflict at once and changes
+  nothing.
+- **The port never moves by itself.** Updates and re-running the installer both keep the configured
+  port; if it is taken at startup GeoDeploy fails and says which process has it, rather than
+  relocating behind your reverse proxy's back.
+- Fixed: both updaters hard-coded `http://localhost/health`. On any install not on port 80,
+  `self-update.sh` would have failed its post-update health check and **rolled back a good update**.
+- Fixed: a failed port bind is not repaired by `docker compose restart` or `up -d` — Docker returns
+  the container to `running` with the right port mapping and nothing listening. Preflight, the
+  updater and the dashboard now detect this and name the fix (`up -d --force-recreate nginx`).
+
+!!! warning "`443:443` is no longer published by the base compose file"
+    The container has no TLS listener — `nginx.conf`'s `server { listen 443 ssl; }` block has always
+    been commented out — so publishing 443 reserved the machine's most contested port and served
+    nothing, which by itself made installing beside any HTTPS site impossible. **If you provisioned
+    certificates by hand and uncommented that block, add one line to `.env` before updating:**
+
+    ```
+    COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml
+    ```
+
+    Everything else is unaffected: with none of the new keys in `.env`, the publish resolves to
+    `0.0.0.0:80:80` exactly as before.
+
 ## v1.6.4 — 2026-09-11
 
 - **A tile source that redirects to `http` is now recognised as insecure, and moved to the host

@@ -305,3 +305,40 @@ async def _require_enabled(db: AsyncSession) -> None:
     cfg = (await db.execute(select(SetupConfig).limit(1))).scalar_one_or_none()
     if not index_enabled(cfg):
         raise HTTPException(404, "This instance does not publish a public index.")
+
+
+@router.get("/whoami")
+async def whoami(request: Request) -> dict[str, Any]:
+    """What this instance sees when you reach it — the reverse-proxy check, from the outside.
+
+    Deliberately UNAUTHENTICATED, because it has to be: the whole point is for the operator (via
+    Settings -> Deployment -> Verify) to fetch it through their brand-new public domain and find out
+    whether the request that arrives still says who it was addressed to. An authenticated endpoint
+    could not answer that question, since the credentials would be going to the address under test.
+
+    WHAT IT DOES NOT DO is as designed as what it does. It echoes exactly four derived facts and
+    never a header the caller supplied verbatim, so it cannot be used to reflect content; it names
+    no version, no user, no layer and no configuration; and `instance` is a one-way hash, so it
+    proves "this is the same GeoDeploy" without revealing anything about which one.
+
+    `instance` is the field that makes Verify meaningful. Reaching *a* GeoDeploy at the domain
+    proves nothing — reaching THIS one does, and comparing the hash is how the check knows the
+    operator's DNS and proxy actually land here rather than on some other instance.
+    """
+    import hashlib
+    from ..config import get_settings
+
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("host") or request.url.netloc
+    # Salted so the digest cannot be matched against a precomputed table of likely secret keys, and
+    # truncated because 16 hex characters is far more than enough to tell two instances apart.
+    digest = hashlib.sha256(
+        b"geodeploy-instance-id:" + (get_settings().secret_key or "").encode()
+    ).hexdigest()[:16]
+    return {
+        "geodeploy": True,
+        "instance": digest,
+        "scheme": proto,
+        "host": host,
+        "origin": f"{proto}://{host}",
+    }

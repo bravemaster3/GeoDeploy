@@ -49,6 +49,18 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
   carries a `source` per group for diagnostics; it is deliberately **not rendered** — the panel
   answers "what are my credentials", and where they were read from is our plumbing, not the
   operator's question (user call, 2026-08-06).
+- `infra/DeploymentPanel.vue` (2026-09-12) — owner-only. Where this instance is published, and how
+  to put a domain in front of it. Renders three facts side by side because their DISAGREEMENTS are
+  the diagnosis: what `.env` asks for, what the nginx container actually publishes, and the scheme +
+  host of the live request (`GET /admin/deployment`). The last is the one that matters — GeoDeploy
+  builds every link it hands out from the address the request arrived on, so a proxy that drops
+  `Host` produces shared links pointing at `127.0.0.1` and nothing notices for days. The verdict is
+  one plain sentence, never a table of variables. Below it, a domain field generates the
+  nginx/Caddy/Apache/Traefik block (`/deployment/proxy-config`, copy-only — GeoDeploy never writes to
+  a web server it did not install, because other people's sites may be on that machine), and
+  **Verify** (`POST /deployment/verify`) checks DNS, reaches the domain from the server and confirms
+  it lands on THIS instance with the hostname intact. `mismatch` deliberately requires
+  `reality.port` to be non-null: an unreadable Docker socket means unknown, not wrong.
 - `portal/CreatePortalModal.vue` — new-portal dialog (title, description, access); creates via the portals store then routes to the editor.
 - `portal/LayerPanel.vue` (resolves vector/raster/**external** layers from the data store; external sources get an opacity-only popover, plus a colour picker for WFS vector) — **thin row** mirroring the published portal: drag handle (reorder is wired in `PortalEditor.vue`) · eye/eye-off (`update {visible}`) · **symbol swatch** that opens a **teleported symbology popover** · name · zoom · remove. The popover holds: opacity; vector colour/fill/outline/width; **line type** (solid/dashed/dotted); **point marker shape** (circle/square/triangle/diamond/star/cross) + size; popup-field picker; **raster band selection** (multiband → RGB composite with R/G/B band pickers, or single band) + palette/hillshade/Z (single-band output) and stretch/rescale (all); save/use default. Band selection stores `style.bidx` (`[n]` single, `[r,g,b]` RGB). The list swatch (`geomSvg`/`markerSvg`) draws the actual symbol (colour, dash, marker shape). Emits `update`/`remove`/`zoom`.
   **Two hosts, one control** (issue #23): `standalone` renders the symbology body ALONE — no row, no
@@ -251,6 +263,8 @@ previous value: the classic one-step-lag bug). Polygons also gain a 3D "extrude 
 hidden when the layer has no numeric column. The row swatch now shows the MIDDLE class via
 `lib/symbology.representativeColor` — the flat `color` is unused under a classification, and a
 swatch showing a colour that appears nowhere on the map is a small lie told constantly.)
+2026-09-12 (new `infra/DeploymentPanel.vue` — Settings → Infrastructure → Deployment, the
+shared-machine install's UI half; see its entry above)
 2026-08-06 (`infra/ConnectionDetails.vue` documented + it now shows which source each credential
 group came from — issue #2)
 2026-07-29 (new `data/ShareLinksModal.vue` + a link button on VectorRow/RasterRow — the per-layer

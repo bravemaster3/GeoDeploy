@@ -1151,3 +1151,149 @@ async def update_oidc_settings(body: OidcSettings, request: Request,
     await db.commit()
     await db.refresh(cfg)
     return _oidc_out(cfg, request)
+
+
+# ── Deployment: where this instance is published, and how to put a domain in front ────────────────
+# The panel behind these three endpoints exists because the shared-machine install mode (issue #79)
+# ends with GeoDeploy on 127.0.0.1:<port>, which is safe, correct, and completely opaque to anyone
+# who is not already comfortable with reverse proxies. Reporting the truth plainly, generating the
+# configuration and then PROVING it works is what makes that mode usable by the people it is for.
+#
+# All three are READ-ONLY with respect to the host. Nothing here edits the operator's web server —
+# these machines have other people's sites on them.
+
+class DeploymentVerifyRequest(BaseModel):
+    domain: str
+
+
+@router.get("/deployment")
+async def deployment_status(request: Request, _: User = Depends(require_owner)):
+    """Intent (.env), reality (the nginx container) and what this very request looked like."""
+    from ..services import deployment
+
+    intent = deployment.read_intent()
+    reality = await run_in_threadpool(deployment.read_reality)
+    observed = deployment.observe(request)
+    return {
+        "intent": intent,
+        "reality": reality,
+        "observed": observed,
+        "verdict": deployment.verdict(intent, reality, observed),
+        "domain_hint": deployment.domain_hint(),
+        "local_url": f"http://127.0.0.1{'' if intent['port'] == '80' else ':' + intent['port']}",
+        "flavors": list(deployment.FLAVORS),
+    }
+
+
+@router.get("/deployment/proxy-config")
+async def deployment_proxy_config(domain: str = "", flavor: str = "nginx",
+                                  _: User = Depends(require_owner)):
+    """The configuration block for one reverse proxy. Text for the operator to paste — we never
+    write it, and we never reload anything of theirs."""
+    from ..services import deployment
+
+    if flavor not in deployment.FLAVORS:
+        raise HTTPException(400, f"Unknown proxy: {flavor}")
+    domain = (domain or "").strip().lower()
+    # A hostname, and only a hostname. It is interpolated into a config file the operator will paste
+    # into their web server, so anything that could carry a newline, a directive or a shell
+    # character has no business here.
+    if domain and not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+", domain):
+        raise HTTPException(400, "That does not look like a domain name (for example: maps.example.org).")
+    return deployment.proxy_config(domain, flavor, deployment.read_intent())
+
+
+@router.post("/deployment/verify")
+async def deployment_verify(body: DeploymentVerifyRequest, _: User = Depends(require_owner)):
+    """Does the domain actually reach THIS GeoDeploy, and does the proxy pass the hostname?
+
+    Four checks, reported individually, because "it does not work" is not an answer anyone can act
+    on. The failure this exists to catch first is DNS that has not propagated — which looks exactly
+    like a broken proxy from the browser and is fixed by waiting.
+
+    `instance` is what makes the last check meaningful: reaching *a* GeoDeploy at the domain proves
+    nothing, reaching *this* one does.
+    """
+    import hashlib
+    import socket
+
+    import httpx
+
+    from ..services import deployment
+
+    domain = (body.domain or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+", domain):
+        raise HTTPException(400, "That does not look like a domain name (for example: maps.example.org).")
+
+    steps: list[dict] = []
+    def step(name, ok, detail, fix=None):
+        steps.append({"name": name, "ok": ok, "detail": detail, "fix": fix})
+
+    # 1 — DNS.
+    try:
+        addrs = sorted({info[4][0] for info in await run_in_threadpool(
+            socket.getaddrinfo, domain, None, 0, socket.SOCK_STREAM)})
+        step("DNS", True, f"{domain} resolves to {', '.join(addrs)}")
+    except Exception:
+        step("DNS", False, f"{domain} does not resolve yet.",
+             "Add an A record pointing it at this server's public IP. A new record can take a few "
+             "minutes to an hour to propagate — this check is worth repeating before changing anything.")
+        return {"ok": False, "steps": steps}
+
+    ours = hashlib.sha256(
+        b"geodeploy-instance-id:" + (get_settings().secret_key or "").encode()).hexdigest()[:16]
+
+    # 2/3/4 — reach it the way a visitor would. HTTPS first, then plain HTTP, so an operator who has
+    # not set up a certificate yet still gets a useful answer rather than a bare failure.
+    #
+    # `follow_redirects=False` deliberately: an http:// -> https:// redirect is the RIGHT answer and
+    # is reported as such, and not following anything keeps this from being turned into a general
+    # fetcher. The response body is parsed only for the four fields whoami defines.
+    result = None
+    for scheme in ("https", "http"):
+        try:
+            async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+                resp = await client.get(f"{scheme}://{domain}/api/public/whoami")
+            if resp.status_code in (301, 302, 307, 308) and scheme == "http":
+                continue          # redirected to HTTPS — try there, that is where the answer is
+            if resp.status_code != 200:
+                continue
+            result = (scheme, resp.json())
+            break
+        except Exception:
+            continue
+
+    if result is None:
+        step("Reachable", False, f"Nothing answered at https://{domain} or http://{domain}.",
+             "Check the reverse proxy is running and its configuration was reloaded, and that a "
+             "firewall is not blocking ports 80 and 443.")
+        return {"ok": False, "steps": steps}
+
+    scheme, seen = result
+    step("Reachable", True, f"{scheme}://{domain} answered.")
+
+    if scheme == "https":
+        step("HTTPS", True, "The certificate is valid.")
+    else:
+        step("HTTPS", False, "Reachable over plain HTTP only — sign-in tokens travel in clear text.",
+             "Give the reverse proxy a certificate. Caddy does it automatically; for nginx: "
+             f"sudo certbot --nginx -d {domain}")
+
+    if not isinstance(seen, dict) or seen.get("instance") != ours:
+        step("Reaches this GeoDeploy", False,
+             f"Something answered at {domain}, but it is not this instance.",
+             "The domain is pointing at a different server, or at a different application on this one.")
+        return {"ok": False, "steps": steps}
+    step("Reaches this GeoDeploy", True, "Confirmed — the same instance you are signed in to.")
+
+    seen_host = str(seen.get("host") or "").split(":")[0]
+    if seen_host != domain:
+        step("Hostname passed through", False,
+             f"GeoDeploy sees these requests as '{seen.get('host')}', not '{domain}'.",
+             "Add  proxy_set_header Host $host;  to the proxy's GeoDeploy block. Without it every "
+             "link GeoDeploy generates — shared links, portal previews, the STAC and OGC "
+             "catalogues — points at an address nobody else can open.")
+        return {"ok": False, "steps": steps}
+    step("Hostname passed through", True, f"Links will be built as {seen.get('origin')}.")
+
+    return {"ok": all(s["ok"] for s in steps), "steps": steps, "origin": seen.get("origin")}

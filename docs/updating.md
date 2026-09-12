@@ -157,8 +157,10 @@ docker start geodeploy-postgres geodeploy-minio geodeploy-redis geodeploy-martin
 # 4. Start the application services. --no-deps so Compose touches nothing else.
 docker compose up -d --no-deps geodeploy-api geodeploy-ui celery nginx
 
-# 5. Confirm.
-curl -sf localhost/health && echo "healthy"
+# 5. Confirm. The port comes from .env — an install behind a reverse proxy is not on port 80,
+#    and `localhost/health` would report a perfectly healthy stack as dead.
+source <(grep '^GEODEPLOY_HTTP_PORT=' .env) 2>/dev/null
+curl -sf "127.0.0.1:${GEODEPLOY_HTTP_PORT:-80}/health" && echo "healthy"
 docker compose logs --tail=50 geodeploy-api
 ```
 

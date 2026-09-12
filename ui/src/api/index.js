@@ -95,6 +95,15 @@ export const applyEnvVars = (values) => api.post('/admin/env/apply', { values })
 
 export const listDeployments = (limit = 20) => api.get('/admin/deployments', { params: { limit } })
 
+// Where this instance is published, and how to put a domain in front of it (Settings ->
+// Infrastructure -> Deployment). Owner-only. `getDeployment` compares what .env asks for against
+// what the nginx container actually publishes AND what the current request looked like — the last
+// of those is why it must be a live call rather than anything cached.
+export const getDeployment = () => api.get('/admin/deployment')
+export const getProxyConfig = (domain, flavor) =>
+  api.get('/admin/deployment/proxy-config', { params: { domain, flavor } })
+export const verifyDeployment = (domain) => api.post('/admin/deployment/verify', { domain })
+
 // Backups (admin Settings -> Backups). The destination is a SEPARATE S3; secret_key is
 // write-only (blank keeps the stored one). `stored` reads the destination's own manifests, which
 // is the only trustworthy answer about what exists -- our run history lives in the state DB, and

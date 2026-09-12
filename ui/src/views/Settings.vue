@@ -150,6 +150,11 @@
            you pick the service again. -->
       <InfrastructurePanel />
 
+      <!-- Where this instance is published (owner-only). Sits directly under Infrastructure because
+           "which port am I on, and can anyone else reach me?" is the same question as service
+           health for anyone running GeoDeploy alongside other software. -->
+      <DeploymentPanel v-if="auth.isOwner" />
+
       <section v-if="auth.isAdmin && systemStore.stats" class="card overflow-hidden">
         <header class="flex items-center gap-3 px-5 py-3.5 border-b border-border/60">
           <span class="w-9 h-9 rounded-lg bg-amber-500/15 text-amber-400 flex items-center justify-center flex-shrink-0">
@@ -909,6 +914,7 @@
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ConnectionDetails from '@/components/infra/ConnectionDetails.vue'
+import DeploymentPanel from '@/components/infra/DeploymentPanel.vue'
 import { useSystemStore } from '@/stores/system'
 import { useAuthStore } from '@/stores/auth'
 import { ServerIcon, HardDriveIcon, UserIcon, RefreshIcon, MailIcon, KeyIcon, TrashIcon, AlertIcon } from './icons'

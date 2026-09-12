@@ -617,3 +617,25 @@ byte-identically. The key does double duty and the docstrings say so: `outline_w
 the radius on a point and a WIDTH IN PIXELS on a polygon; they are never read by the same branch,
 and a marker's 0.28 left on a polygon falls below the hairline and changes nothing. Tests:
 `api/tests/test_polygon_outline.py`.)
+
+- `deployment.py` (2026-09-12) — **where this GeoDeploy is published, and what a reverse proxy in
+  front of it would need.** Three questions kept separate because they come apart silently: INTENT
+  (`.env`: mode/bind/port), REALITY (the nginx container's `HostConfig.PortBindings`, plus whether
+  the port is ACTUALLY listening) and OBSERVED (the scheme and `Host` of the current request).
+  Intent ≠ reality means `.env` was edited and nginx never recreated; observed ≠ intent usually means
+  a proxy is not passing `Host`, which yields shared links and portal `og:` tags nobody else can
+  open. `observe()` tells a broken proxy from an SSH tunnel — both look like `Host: 127.0.0.1:8080` —
+  by counting `X-Forwarded-For` entries: our own nginx APPENDS to that header, so two or more means
+  something forwarded to us before nginx did. `_mapping_is_live()` compares Docker's two views of the
+  port — `HostConfig.PortBindings` (asked for) against `NetworkSettings.Ports` (in effect) — because
+  a failed bind leaves the container `running` with the first intact and the second empty, and only
+  `--force-recreate` repairs it. NOT a socket probe: this runs inside a container, where the host's
+  `127.0.0.1` is unreachable by design in behind-proxy mode, so probing would call every healthy
+  loopback install dead. `proxy_config()` renders
+  nginx/Caddy/Apache/Traefik; every directive in the nginx block is there because its absence is a
+  real GeoDeploy failure — notably `client_max_body_size`, whose 1 MB default in the OUTER proxy
+  shadows our 11G and 413s every upload, verified against a naive config in the WSL harness. Writes
+  nothing, anywhere: the operator pastes it.
+
+## Last updated
+2026-09-12 (added `deployment.py` — the port/reverse-proxy slice of issue #79)

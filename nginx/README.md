@@ -15,6 +15,28 @@ The single public entrypoint. Reverse-proxies the SPA, the API, the two tile ser
   - `location /` and `@spa` forward **`X-Forwarded-Proto $forwarded_proto`** to the UI container, which is how *it* knows the public scheme for the same substitution. Its map whitelists `http`/`https` rather than echoing the header, because the value lands inside an HTML attribute.
   - **`merge_slashes off;`** at the server level — left in but **was a misdiagnosis**: `merge_slashes` only normalizes the URI *path*, never the query string, so it never affected `?url=s3://...`. Harmless; the real query-forwarding fix is the explicit `$uri$is_args$args` proxy_pass above.
 
+## Where this nginx is PUBLISHED on the host
+Not in this file — in `docker-compose.yml`, from `.env`:
+`"${GEODEPLOY_HTTP_BIND:-0.0.0.0}:${GEODEPLOY_HTTP_PORT:-80}:80"`. The container always listens on
+:80 internally; only the host side varies (`0.0.0.0:80` dedicated, `127.0.0.1:<port>` behind an
+existing reverse proxy). The `:-` defaults reproduce the old literal `80:80` exactly, so an install
+whose `.env` predates the keys is unchanged. Change it with `installer/set-port.sh`, never by hand —
+editing `.env` does nothing until the container is RECREATED.
+
+**`443:443` is no longer published by the base compose file.** The TLS `server` block below is
+commented out, so the container never listened on 443 — publishing it reserved the machine's most
+contested port and served nothing, which alone made coexistence with any HTTPS site impossible.
+`docker-compose.tls.yml` adds the publish back (`COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml`),
+and is where the certbot work will pick it up. The certbot mounts stay on the service.
+
+**A failed port bind is not repaired by a restart** (measured 2026-09-12). If the host port is taken
+when the container starts, the bind fails; free the port and `docker compose up -d` or `restart`
+afterwards and Docker returns the container to `running` with the correct PortBindings AND NO HOST
+MAPPING — `docker compose ps` says Up, `ss` shows nothing, every request is refused. Only
+`docker compose up -d --force-recreate nginx` re-establishes it. `installer/preflight.sh`,
+`self-update.sh::ensure_nginx_ports` and Settings → Deployment all detect this state by making a
+real request rather than trusting Docker's own report.
+
 ## Dependencies / relationships
 - Bind-mounted read-only into the `nginx` container (`docker-compose.yml`), plus `data/portals` as `/var/www/portals` and the certbot dirs.
 - Routes to `geodeploy-api`, `geodeploy-ui`, `martin`, `titiler` by their network aliases — those must resolve on the `geodeploy` network.
@@ -26,6 +48,10 @@ The single public entrypoint. Reverse-proxies the SPA, the API, the two tile ser
 - HTTPS/443 is stubbed but not wired (no automated certbot flow yet).
 
 ## Last updated
+2026-09-12 (the host publish became a `.env` variable and `443:443` moved out of the base compose
+file — see "Where this nginx is PUBLISHED on the host" above. This file itself is UNCHANGED: it
+already listened only on :80 and already honoured `X-Forwarded-Proto`, which is why serving behind
+someone else's reverse proxy needed no config work at all.)
 2026-08-18 (**link previews**: `sub_filter` rewrites `__GEODEPLOY_ORIGIN__` to `$forwarded_proto://$host` on every `text/html` response, so published portals carry absolute `og:` URLs; `X-Forwarded-Proto` now forwarded to `geodeploy-ui`. Verified with `nginx -t` and a throwaway container: a spoofed `X-Forwarded-Proto: "><script>` falls back to `https` rather than reaching the page. **This file needs the container recreated, not reloaded** — see below.)
 2026-08-07 (**a tile that misses the raster is EMPTY, not missing.** TiTiler answers 404 for a tile
 outside the COG bounds — correct for an API, wrong for a tile pyramid, where the off-the-edge tiles

@@ -12,7 +12,7 @@ description: >-
 | **RAM** | **4 GB recommended.** A running instance is comfortable there, including tiling. **2 GB has been tested and runs well** — but see the warning below: *building* the dashboard, which happens during an update, needs more memory than running it. |
 | **CPU** | 2 cores recommended; 1 is enough to get started. Tiling and raster conversion are the only CPU-heavy steps, and they run in the background. |
 | **Disk** | Depends entirely on your data, not on GeoDeploy. The software itself is small; layers are what grow. |
-| **Domain** | Optional, but recommended — you get HTTPS and a stable portal URL. |
+| **Domain** | Optional, but recommended — a stable portal URL, and HTTPS once you put a reverse proxy in front ([how](behind-a-proxy.md)). GeoDeploy does not yet obtain its own certificate. |
 
 !!! warning "Check you have swap — many VPS images ship with none"
     This is not only a small-server concern. **Building** GeoDeploy peaks far above what running it
@@ -58,9 +58,34 @@ curl -fsSL https://raw.githubusercontent.com/bravemaster3/geodeploy/main/install
 
 This command:
 1. Clones the GeoDeploy repository to `~/geodeploy`
-2. Generates a `.env` file with a random secret key
-3. Starts the core Docker services
-4. Opens the setup wizard at `http://your-server-ip`
+2. Checks the machine — Docker, swap, which ports are free, what else is already serving
+3. **Asks how GeoDeploy should be published** (see below)
+4. Generates a `.env` file with a random secret key
+5. Starts the core Docker services
+6. Opens the setup wizard, and prints the address
+
+### The one question the installer asks
+
+GeoDeploy never takes ports 80 and 443 without being told it may — not even on an empty server — and
+it never stops or reconfigures anything already running.
+
+- **Take over port 80.** GeoDeploy becomes the machine's web server, and you reach it at
+  `http://your-server-ip`. The right answer on a VPS you bought for this, and the one the installer
+  recommends when nothing else is serving.
+- **Behind the web server you already run.** GeoDeploy listens on `127.0.0.1:8080`, reachable only
+  from the server itself, and an nginx, Caddy or Apache you already run publishes it on a domain.
+  The right answer on a lab server, a shared machine, or anything already hosting a site — and the
+  installer recommends it when it finds port 80 in use.
+
+Either way you can change your mind later with one command
+(`sudo bash installer/set-port.sh --dedicated`, or a port number). The full story — the SSH tunnel
+that gets you to the dashboard before you have a domain, the reverse-proxy configuration the
+dashboard writes for you, and what breaks if it is wrong — is in
+[Installing alongside other software](behind-a-proxy.md).
+
+If the installer has no terminal to ask with (cloud-init, Ansible, CI), set `GEODEPLOY_DEPLOY_MODE`
+to `dedicated` or `behind-proxy` in the environment. With neither a terminal nor a setting, it
+installs behind-proxy on a free local port: the only choice that takes nothing from the machine.
 
 ## Setup wizard
 

@@ -79,6 +79,7 @@ nav:
       - Command line: cli.md
       - API reference: api-reference.md
   - Operating:
+      - Installing alongside other software: behind-a-proxy.md
       - Updating: updating.md
       - Backups and restore: backups.md
       - Performance tuning: performance-tuning.md

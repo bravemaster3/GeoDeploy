@@ -505,16 +505,22 @@ unchanged, and if not, does the author find out before they publish?"</p>
 
 <div class="gd-rel" markdown>
 ### Install somewhere that is not empty
-<span class="gd-when">Planned</span>
+<span class="gd-when">Partly shipped</span>
 
-<p class="gd-goal">Every install path so far assumes a bare VPS that GeoDeploy owns — ports 80 and
-443 free, fixed container names available, nothing else on the box wanting any of it. That is the
-right default and stays the default. It also rules out a lab server, a shared research machine, or
-a VM that already serves something on 443.</p>
+<p class="gd-goal">Every install path assumed a bare VPS that GeoDeploy owns — ports 80 and 443
+free, fixed container names available, nothing else on the box wanting any of it. The port half of
+that is now fixed: GeoDeploy asks before taking the machine's web-server role, and can sit behind an
+nginx, Caddy or Apache you already run. What is left is the base path and namespacing.</p>
 
-- [ ] **Serve behind an existing reverse proxy** — publish to a configurable port, or to no host
-      port at all, with the `proxy_pass` an operator already running nginx or Caddy needs. The
-      single biggest unlock, and the first step
+- [x] **Serve behind an existing reverse proxy.** The host port is a setting, the installer asks
+      which shape you want rather than assuming, and behind-proxy mode binds `127.0.0.1` — not
+      merely a high port, because a Docker publish on `0.0.0.0` is not covered by ufw. Settings →
+      Deployment reports where the instance is and what address it is *observing* (the thing every
+      generated link is built from), writes the reverse-proxy configuration for a domain, and
+      verifies it end to end. `installer/preflight.sh` reports every conflict before anything
+      starts; `installer/set-port.sh` moves the port, reversibly. The port never moves on its own —
+      not on an update, not on a re-run. See [Installing alongside other
+      software](behind-a-proxy.md)
 - [ ] **A base path.** A portal lives at `/portals/<slug>/` today; on a shared host it may need to
       live under `/geodeploy/…`. Every absolute URL the app emits — vector tiles, `pmtiles://`, the
       parquet range proxy, published portal assets — has to be built from a configured prefix
@@ -524,8 +530,10 @@ a VM that already serves something on 443.</p>
       neither collides with unrelated software
 - [ ] **A rootless path**, or at minimum a preflight that states the privileges required and fails
       early and legibly without them
-- [ ] **A preflight that reports every conflict at once** — ports in use, names taken, network
-      present — before it writes anything
+- [x] **A preflight that reports every conflict at once** — ports in use and who holds them, an
+      existing web server, container names taken, a *foreign* Docker network called `geodeploy` we
+      would otherwise silently join, and whether the ingress is actually answering. Writes nothing,
+      starts nothing, and is safe to run on a production box at any time
 
 <p class="gd-goal">Half-doing the base path produces an instance that mostly works and breaks on the
 paths nobody clicked while testing, which is the worst failure available to a self-hosted product:
