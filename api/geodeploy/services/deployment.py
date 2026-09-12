@@ -149,6 +149,106 @@ def read_reality() -> dict:
     return out
 
 
+def postgres_published() -> str | None:
+    """`bind:port` if the provisioned PostGIS is reachable from outside the Docker network, else None.
+
+    Exists so the credentials panel can stop implying that `postgres:5432` is dialable. By default it
+    is not published at all — the container lives only on GeoDeploy's own network — and showing a
+    host, a port and a password with no further comment invites an operator to try a connection that
+    cannot work and to conclude their credentials are wrong.
+
+    Reads `NetworkSettings.Ports` (what is IN EFFECT) rather than `HostConfig.PortBindings` (what was
+    asked for), for the reason spelled out in `_mapping_is_live`: a bind that failed leaves the
+    second populated and the first empty.
+    """
+    try:
+        import docker
+        client = docker.from_env()
+        for c in client.containers.list():
+            if "postgres" not in c.name or "geodeploy" not in c.name:
+                continue
+            for spec in ((c.attrs.get("NetworkSettings") or {}).get("Ports") or {}).get("5432/tcp") or []:
+                return f"{spec.get('HostIp') or DEFAULT_BIND}:{spec.get('HostPort')}"
+            return None
+    except Exception:
+        return None
+    return None
+
+
+# ── This server's address, for the DNS step ──────────────────────────────────────────────────────
+
+def server_ip() -> dict:
+    """The address an A record should point at, from two independent angles.
+
+    `outbound` is the source address of a route to the internet, read WITHOUT sending anything:
+    connecting a UDP socket only fixes a route in the kernel. It is the machine's own view, so on a
+    NATed VPS or behind a load balancer it is a PRIVATE address and pointing DNS at it would be
+    wrong — which is exactly why `public` is asked for separately.
+
+    `public` is what the rest of the internet sees, and needs an outside observer to answer. Two
+    plain-text responders are tried in turn so one being down is not a dead end; neither is trusted
+    beyond "does this parse as an IP", and failure is None rather than an error — the panel then
+    shows what it has and tells the operator to check with their provider.
+    """
+    import ipaddress
+    import socket
+
+    out: dict = {"outbound": None, "public": None, "differs": False}
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.settimeout(2)
+        sock.connect(("1.1.1.1", 80))          # no packet is sent; this only selects a route
+        out["outbound"] = sock.getsockname()[0]
+    except OSError:
+        pass
+    finally:
+        sock.close()
+
+    import httpx
+    for url in ("https://api.ipify.org", "https://ifconfig.me/ip"):
+        try:
+            with httpx.Client(timeout=4, follow_redirects=False) as client:
+                text = client.get(url).text.strip()
+            ipaddress.ip_address(text)          # rejects an error page pretending to be an address
+            out["public"] = text
+            break
+        except Exception:
+            continue
+
+    # Worth saying out loud when they disagree: it means NAT or a load balancer, and the A record
+    # must carry the public one even though the server only knows about the private one.
+    out["differs"] = bool(out["outbound"] and out["public"] and out["outbound"] != out["public"])
+    return out
+
+
+def resolve_domain(domain: str) -> list[str]:
+    """Every address `domain` currently resolves to, or an empty list."""
+    import socket
+    try:
+        return sorted({info[4][0] for info in
+                       socket.getaddrinfo(domain, None, 0, socket.SOCK_STREAM)})
+    except Exception:
+        return []
+
+
+# Cloudflare's proxy ("orange cloud") answers DNS with ITS OWN addresses rather than the server's, so
+# a correctly configured domain legitimately resolves somewhere else entirely. Reporting that as
+# "points at the wrong server" would be wrong and would send the operator to undo a working setup.
+# These are the published ranges; membership is checked by prefix, which is enough to recognise the
+# situation and say something useful about it.
+_CLOUDFLARE_V4 = (
+    "173.245.48.", "103.21.244.", "103.22.200.", "103.31.4.", "141.101.", "108.162.",
+    "190.93.", "188.114.", "197.234.240.", "198.41.128.", "162.158.", "104.16.", "104.17.",
+    "104.18.", "104.19.", "104.20.", "104.21.", "104.22.", "104.23.", "104.24.", "104.25.",
+    "104.26.", "104.27.", "172.64.", "172.65.", "172.66.", "172.67.", "131.0.72.",
+)
+
+
+def looks_like_cloudflare(addresses: list[str]) -> bool:
+    return any(a.startswith(prefix) for a in addresses for prefix in _CLOUDFLARE_V4)
+
+
 # ── Observed ──────────────────────────────────────────────────────────────────────────────────────
 
 def _looks_like_a_domain(host: str) -> bool:

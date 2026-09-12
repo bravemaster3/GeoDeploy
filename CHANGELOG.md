@@ -29,6 +29,20 @@ upgrade needs manual work.
   network. One line in `.env` publishes it on `127.0.0.1:5432` for an SSH tunnel from QGIS, psql or
   DBeaver; opening it to the network is a separate, documented decision. See
   [Access from other tools](https://docs-geodeploy.kndev.org/data-access/).
+- **Giving GeoDeploy a domain is now a guided three-step flow**, not a text box. Settings →
+  Deployment shows *this server's public address with a copy button* and the A record laid out the
+  way a DNS panel asks for it — including the two mistakes almost everyone makes: typing the full
+  name in the Name field (most panels append the zone), and leaving Cloudflare's orange cloud on
+  while certbot's HTTP challenge is still trying. **Check DNS** is separate from Verify because it is
+  the step with a waiting period in it: "not propagated yet" and "pointing at another server" need
+  opposite reactions, and a proxied Cloudflare record is recognised as correct rather than reported
+  as wrong. Then the proxy config, then Verify.
+- **Uninstalling is documented** — it was not, anywhere. What each option deletes, what survives, and
+  the things GeoDeploy deliberately leaves behind: Docker itself, your reverse-proxy vhost, your DNS
+  record, your certificates. Including the trap that local MinIO buckets live *inside* the directory
+  `reset.sh` removes, so a backup written there does not survive it.
+- The credentials panel no longer implies the managed database is dialable from your laptop. It shows
+  `postgres:5432` because that is the address inside GeoDeploy's own network, and now says so.
 - **Settings → Deployment** (owner-only) says where the instance is published, who can reach it, and
   — the useful part — what address GeoDeploy is *observing*, because every link it hands out is
   built from that. It generates the nginx, Caddy, Apache or Traefik configuration for a domain, and

@@ -494,5 +494,17 @@ shared-machine install (issue #79):
   hash of the secret key: it proves the domain reaches THIS GeoDeploy without revealing which one.
   Already inside `main.py::_PUBLIC_CORS` via the `public(/.*)?` branch.
 
+- `POST /admin/deployment/check-dns` — DNS on its own, returning `ok` / `unresolved` / `elsewhere` /
+  `proxied`. Separate from Verify because it is the step with a WAITING PERIOD in it: "not propagated
+  yet" and "pointing at another machine" look identical and need opposite reactions. `proxied`
+  exists because a Cloudflare-proxied record resolves to Cloudflare, which is CORRECT — calling it a
+  misconfiguration would send the operator to undo a working setup.
+
+`_valid_domain` is shared by all three: the string reaches a resolver AND a config file the operator
+will paste into their web server, so a newline could carry an nginx directive. Pinned by
+`api/tests/test_deployment_api.py`, which also checks the endpoints are owner-only (not merely
+admin) and that `whoami` cannot be turned into a reflector.
+
 ## Last updated
+2026-09-12b (check-dns, and one shared domain validator)
 2026-09-12 (the deployment endpoints above)

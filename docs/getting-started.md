@@ -143,6 +143,86 @@ The wizard recognises it, restores those settings into `.env`, and offers two ch
     re-entered. Copy the old `GEODEPLOY_SECRET_KEY` into the new `.env` before running the wizard and
     nothing is lost. See [Backups and restore](backups.md).
 
+## Giving it a domain name
+
+After the wizard you have a working GeoDeploy at an IP address or a local port. Turning that into
+`https://maps.example.org` takes three steps, and **the dashboard walks you through all three** —
+Settings → Infrastructure → **Deployment**. What follows is the same thing in prose, so you know what
+you are agreeing to before you start.
+
+You do **not** need to buy a new domain. If you already own `example.org`, a subdomain such as
+`maps.example.org` costs nothing and is created in the same control panel.
+
+### 1 · Point the domain at your server
+
+In whoever manages your domain — Cloudflare, Namecheap, GoDaddy, your registrar — add a single
+**A record**:
+
+| Field | Value |
+| --- | --- |
+| **Type** | `A` |
+| **Name** | `maps` — the subdomain **only**. The panel appends `example.org` itself. |
+| **Value** / *Points to* | your server's public IP address, e.g. `203.0.113.10` |
+| **TTL** | Auto, or 300 |
+| **Proxy status** *(Cloudflare only)* | **DNS only** — the grey cloud, to start with |
+
+The dashboard shows your server's public address with a copy button, so you do not have to go and
+find it. It also checks the record for you and tells the difference between *not propagated yet*
+(wait; usually minutes) and *pointing at a different machine* (fix the record) — those need opposite
+reactions, which is why it is a step of its own.
+
+!!! tip "The two mistakes almost everyone makes here"
+    **Typing the full name in the Name field.** Most panels append the zone, so entering
+    `maps.example.org` gives you `maps.example.org.example.org`. Enter `maps`.
+
+    **Leaving Cloudflare's orange cloud on too early.** Proxied means Cloudflare answers DNS with its
+    own addresses and terminates HTTPS itself. That is a fine end state, but while you are still
+    getting a certificate with certbot's HTTP challenge it will fail — turn the proxy off (grey
+    cloud) until the certificate is issued, then turn it back on and set SSL/TLS mode to
+    **Full (strict)**.
+
+### 2 · Put a reverse proxy in front
+
+A reverse proxy is the piece that answers on ports 80/443, holds the HTTPS certificate, and forwards
+requests to GeoDeploy. The dashboard writes the configuration for **nginx, Caddy, Apache or Traefik**
+and you paste it — GeoDeploy never edits your web server itself, because on a shared machine a bad
+reload takes down everybody else's sites too.
+
+If you are choosing one and the machine is yours, **Caddy is three lines and gets the certificate
+automatically**:
+
+```
+maps.example.org {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+For nginx there are four settings that are not optional — without them shared links point at
+`127.0.0.1`, and uploads over 1 MB fail with a 413. The generated block includes them, with a comment
+on each explaining what breaks; the full version is in
+[Installing alongside other software](behind-a-proxy.md).
+
+### 3 · Verify
+
+Press **Verify** in the dashboard. It resolves the domain, reaches it from the server, and confirms
+the request lands on *this* instance with the hostname intact — reporting each check separately, so a
+failure tells you which part to fix rather than just "it does not work".
+
+That last check matters more than it looks: GeoDeploy builds every link it hands out — shared links,
+portal previews, the STAC and OGC catalogues — from the hostname the request arrived on. A proxy that
+forgets to pass it produces links pointing at an address nobody else can open, and nothing else
+notices for days.
+
+!!! info "If GeoDeploy took port 80 (the dedicated option)"
+    It serves plain HTTP on your IP address and does not yet obtain its own certificate. To get
+    HTTPS, move it to a local port and put a proxy in front — one command, reversible:
+
+    ```bash
+    cd ~/geodeploy && sudo bash installer/set-port.sh 8080
+    ```
+
+    Then follow the three steps above. Automatic certificates in dedicated mode are on the roadmap.
+
 ## Upload your first dataset
 
 1. Go to **My Data** and choose **Upload vector** or **Upload raster**.
@@ -168,6 +248,18 @@ page — processing continues, and the row updates when it is done.
 3. In the editor: click **+ Add** to add your layers
 4. Choose a template
 5. Click **Publish** — your portal is live at `http://your-server/portals/your-portal-name/`
+
+## Removing it again
+
+One command, and it takes nothing else on the machine with it:
+
+```bash
+cd ~/geodeploy && sudo docker compose down    # stop it, keep everything
+```
+
+To remove it properly — including the option that deletes your data, and the things it deliberately
+leaves behind (Docker, your reverse-proxy config, your DNS record) — see
+[Uninstalling](uninstall.md).
 
 ## Keeping it up to date
 
