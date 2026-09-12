@@ -26,6 +26,7 @@ The `/api` mount is OPTIONAL: without it the MapLibre sections are skipped and r
 so the script still runs anywhere the plugin does. Exit code 0 = everything passed.
 """
 import json
+import faulthandler
 import os
 import sys
 import traceback
@@ -34,6 +35,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_ROOT = os.path.normpath(os.path.join(HERE, ".."))
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+# A CRASH OUT OF QGIS'S C++ SIDE MUST SAY WHERE IT WAS. These scripts die from a SIGSEGV or a
+# SIGABRT often enough to have their own note in `notes_temp/notes_for_future.md` — a borrowed
+# symbol pointer read after its temporary is gone is the classic one — and the shell reports it as
+# nothing but `Segmentation fault (core dumped)`, exit 139. Which of the hundreds of checks was
+# running is then a matter of reading the last line that happened to be flushed.
+#
+# `faulthandler` prints the Python stack from the signal handler, so the answer arrives with the
+# crash instead of being reconstructed from it. It costs nothing when nothing crashes.
+faulthandler.enable()
+
 from qgis.core import QgsApplication                                            # noqa: E402
 
 QgsApplication.setPrefixPath(os.environ.get("QGIS_PREFIX_PATH", "/usr"), True)
