@@ -16,6 +16,19 @@ upgrade needs manual work.
   behind-proxy on a free local port, the only choice that claims nothing; set
   `GEODEPLOY_DEPLOY_MODE` in the environment for cloud-init or Ansible.
   [#79](https://github.com/bravemaster3/GeoDeploy/issues/79)
+- **Choosing the port is a real choice.** The installer offers three options rather than two, because
+  "dedicated or not" and "which port" are different questions: make this machine a dedicated
+  GeoDeploy server (spelled out — it takes port 80, the address carries no port, anything else
+  wanting 80 later will fail to start, nothing running now is stopped), use the default port, or pick
+  another from the ports that are free *at that moment*. Any port can be typed, on the list or not.
+  `--port 8081` / `--dedicated` skip the question (`bash -s -- --port 8081` through a pipe), and
+  `GEODEPLOY_PORT_CANDIDATES` in `.env` sets what gets offered — ten by default. **Every path checks
+  the port before anything starts**, including a last look immediately before the containers come up.
+- **You can connect straight to the PostGIS database.** Off by default and deliberately so — the
+  `postgres` container publishes no host port at all, so it lives only on GeoDeploy's internal
+  network. One line in `.env` publishes it on `127.0.0.1:5432` for an SSH tunnel from QGIS, psql or
+  DBeaver; opening it to the network is a separate, documented decision. See
+  [Access from other tools](https://docs-geodeploy.kndev.org/data-access/).
 - **Settings → Deployment** (owner-only) says where the instance is published, who can reach it, and
   — the useful part — what address GeoDeploy is *observing*, because every link it hands out is
   built from that. It generates the nginx, Caddy, Apache or Traefik configuration for a domain, and

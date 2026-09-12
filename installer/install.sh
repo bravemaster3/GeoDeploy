@@ -11,6 +11,44 @@ info()  { echo -e "${GREEN}[geodeploy]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[geodeploy]${NC} $*"; }
 error() { echo -e "${RED}[geodeploy]${NC} $*" >&2; exit 1; }
 
+# ── Arguments ─────────────────────────────────────────────────────────────────
+# Answering the port question up front, for people who already know what they want.
+#
+#   curl -fsSL …/install.sh | bash -s -- --port 8081
+#   curl -fsSL …/install.sh | bash -s -- --dedicated
+#
+# `bash -s --` is how you pass arguments to a piped script; the environment variables below work
+# too, and are the friendlier form for cloud-init and Ansible. Either way the port is CHECKED before
+# anything starts — being told "8081 is taken, here are three that are free" beats an install that
+# completes and leaves nginx dead.
+GD_WANT_PORT="${GEODEPLOY_HTTP_PORT:-}"
+GD_WANT_BIND="${GEODEPLOY_HTTP_BIND:-}"
+GD_WANT_MODE="${GEODEPLOY_DEPLOY_MODE:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --port)         shift; GD_WANT_PORT="${1:-}" ;;
+    --port=*)       GD_WANT_PORT="${1#*=}" ;;
+    --bind)         shift; GD_WANT_BIND="${1:-}" ;;
+    --bind=*)       GD_WANT_BIND="${1#*=}" ;;
+    --dedicated)    GD_WANT_MODE=dedicated ;;
+    --behind-proxy) GD_WANT_MODE=behind-proxy ;;
+    -h|--help)
+      echo "Usage: install.sh [--port N] [--bind ADDR] [--dedicated | --behind-proxy]"
+      echo ""
+      echo "  --port N         publish on host port N (checked for availability first)"
+      echo "  --bind ADDR      0.0.0.0 (reachable from the network) or 127.0.0.1 (this machine only)"
+      echo "  --dedicated      take port 80 — GeoDeploy becomes this machine's web server"
+      echo "  --behind-proxy   a local port only, published by a reverse proxy you already run"
+      echo ""
+      echo "With none of these, and a terminal to ask with, the installer asks."
+      echo "Environment equivalents: GEODEPLOY_HTTP_PORT, GEODEPLOY_HTTP_BIND, GEODEPLOY_DEPLOY_MODE,"
+      echo "GEODEPLOY_PORT_CANDIDATES (the ports offered when choosing), GEODEPLOY_DIR, GEODEPLOY_VERSION."
+      exit 0 ;;
+    *) error "Unknown option: $1  (try --help)" ;;
+  esac
+  shift
+done
+
 # ── Checks ────────────────────────────────────────────────────────────────────
 
 command -v curl >/dev/null 2>&1 || error "curl is required."
@@ -69,6 +107,58 @@ fi
 # lib-deploy.sh. These three are what get written; every path below sets them.
 GD_MODE=""; GD_BIND=""; GD_PORT=""
 
+# Resolve Docker access up front. `_gd_port_is_ours` needs it, and the port checks below have to be
+# able to tell "in use by a stranger" from "in use by the GeoDeploy we are re-running over" — the
+# second is the normal, healthy state of every re-run and must not read as a conflict. Cheap, and
+# gd_preflight_run resets the findings list before it re-runs this, so nothing is double-reported.
+check_docker
+
+# Which port, once "behind a proxy" is chosen. Enter takes the suggestion; ANY port can be typed,
+# because the candidate list is a convenience and not a menu — an operator who wants 3000 because
+# that is what their proxy config already says should be able to say so. A typed port that is taken
+# is refused with the reason and re-asked, never silently swapped for a working one.
+ask_for_port() { # default → prints the chosen port, or fails if the operator gives up
+  local default="$1" reply tries=0 held listed
+  while [ "$tries" -lt 4 ]; do
+    tries=$((tries+1))
+    # RE-CHECKED on every pass, never a list captured earlier. The suggestions are only worth
+    # anything if they are true right now: something can bind a port while this prompt is open, and
+    # offering a port that has just been taken is worse than offering none. Each entry has had
+    # gd_port_in_use run against it a moment ago.
+    listed="$(gd_free_candidates 6)"
+    if [ -z "$default" ] || gd_port_in_use "$default"; then
+      default="${listed%% *}"
+    fi
+    echo "" >&2
+    if [ -n "$listed" ]; then
+      echo -e "  ${DIM}Free right now: ${listed}   (or type any other port)${NC}" >&2
+    else
+      echo -e "  ${YELLOW}None of the suggested ports is free ($(gd_candidates)).${NC}" >&2
+      echo -e "  ${DIM}Type a port you know is free, or press Ctrl-C and set GEODEPLOY_PORT_CANDIDATES.${NC}" >&2
+    fi
+    printf "Which port? [%s]: " "$default" >&2
+    read -r reply < /dev/tty || reply=""
+    [ -n "$reply" ] || reply="$default"
+    if ! gd_valid_port "$reply"; then
+      warn "'$reply' is not a port number (1–65535)." >&2
+      continue
+    fi
+    if [ "$reply" -lt 1024 ]; then
+      warn "Port $reply is privileged. Ports below 1024 need root and are usually wanted by something else — pick a higher one, or choose option 1 for port 80." >&2
+      continue
+    fi
+    if gd_port_in_use "$reply"; then
+      held="$(gd_port_holder "$reply")"
+      warn "Port $reply is already in use${held:+ by $held}. GeoDeploy will not take it." >&2
+      continue
+    fi
+    printf '%s' "$reply"
+    return 0
+  done
+  warn "No port chosen." >&2
+  return 1
+}
+
 decide_publish() {
   # 1. An existing installation. NEVER re-pick — an update or a re-run that moved the port would
   #    silently orphan the operator's reverse proxy, DNS record and bookmarks, and would look
@@ -85,15 +175,51 @@ decide_publish() {
     info "Existing installation — recording its current publish address (0.0.0.0:80). Unchanged."
     return
   fi
-  # 3. Told explicitly. The supported non-interactive path: cloud-init, Ansible, CI.
-  if [ -n "${GEODEPLOY_DEPLOY_MODE:-}${GEODEPLOY_HTTP_PORT:-}${GEODEPLOY_HTTP_BIND:-}" ]; then
-    GD_MODE="${GEODEPLOY_DEPLOY_MODE:-}"; GD_PORT="${GEODEPLOY_HTTP_PORT:-}"; GD_BIND="${GEODEPLOY_HTTP_BIND:-}"
-    [ -n "$GD_MODE" ] || { [ "${GD_BIND:-}" = "127.0.0.1" ] && GD_MODE=behind-proxy || GD_MODE=dedicated; }
+  # 3. Told explicitly, by --port/--dedicated or the matching environment variables. The supported
+  #    non-interactive path: cloud-init, Ansible, CI.
+  if [ -n "${GD_WANT_MODE}${GD_WANT_PORT}${GD_WANT_BIND}" ]; then
+    GD_MODE="$GD_WANT_MODE"; GD_PORT="$GD_WANT_PORT"; GD_BIND="$GD_WANT_BIND"
+    # ONE rule for what "mode" means, shared with set-port.sh: PORT 80 IS DEDICATED, anything else
+    # is behind-proxy. The mode is not a separate fact to guess at — it is the answer to "does
+    # GeoDeploy own this machine's web-server role", and port 80 is exactly what that comes down to.
+    #
+    # It matters that `--port 8081` lands on behind-proxy: nobody publishes a high port to the whole
+    # network on purpose, and inferring dedicated would default the bind to 0.0.0.0 and quietly
+    # expose an instance the operator believed was local — which, per the note in docker-compose.yml,
+    # ufw would not stop.
+    if [ -z "$GD_MODE" ]; then
+      if [ "${GD_PORT:-}" = 80 ] || { [ -z "${GD_PORT:-}" ] && [ "${GD_BIND:-}" != "127.0.0.1" ]; }; then
+        GD_MODE=dedicated
+      else
+        GD_MODE=behind-proxy
+      fi
+    fi
     [ -n "$GD_PORT" ] || { [ "$GD_MODE" = dedicated ] && GD_PORT=80 || GD_PORT="$(gd_first_free_candidate || echo 8080)"; }
     [ -n "$GD_BIND" ] || { [ "$GD_MODE" = dedicated ] && GD_BIND=0.0.0.0 || GD_BIND=127.0.0.1; }
-    gd_valid_port "$GD_PORT" || error "GEODEPLOY_HTTP_PORT='$GD_PORT' is not a port number."
-    info "Publishing on ${GD_BIND}:${GD_PORT} (${GD_MODE}) — set in the environment."
-    return
+    gd_valid_port "$GD_PORT" || error "'$GD_PORT' is not a port number (1–65535)."
+
+    # CHECK IT. A requested port that is already taken used to be accepted here, and the install
+    # then completed with nginx dead — the failure appears one layer away from its cause, which is
+    # the worst place for it. Asking is better than guessing, and guessing is better than lying:
+    # with a terminal we say who holds it and offer what is free; without one we stop.
+    # No `_gd_port_is_ours` guard needed: branches 1 and 2 have already returned for any existing
+    # installation, so nothing here can be holding the port on our behalf. (Another GeoDeploy in a
+    # different directory would be holding it on ITS behalf, and refusing is right for that too.)
+    if gd_port_in_use "$GD_PORT"; then
+      local held; held="$(gd_port_holder "$GD_PORT")"
+      if [ -r /dev/tty ] && [ -t 1 ]; then
+        echo ""
+        warn "You asked for port ${GD_PORT}, but it is already in use${held:+ by $held}."
+        warn "GeoDeploy will not take it from them, and will not silently pick a different one."
+        GD_MODE=""; GD_PORT=""; GD_BIND=""     # fall through to the chooser below
+      else
+        error "Port ${GD_PORT} is already in use${held:+ by $held}, and there is no terminal to ask with. Free it, or pass a different --port. Free right now: $(gd_free_candidates 5)"
+      fi
+    fi
+    if [ -n "$GD_MODE" ]; then
+      info "Publishing on ${GD_BIND}:${GD_PORT} (${GD_MODE}) — as requested."
+      return
+    fi
   fi
 
   # 4. Ask. First, what is actually on this machine.
@@ -106,6 +232,12 @@ decide_publish() {
   fi
 
   local free_port="$GD_FREE_CANDIDATE"
+  # The candidate list is a SUGGESTION, so show several rather than one: an operator very often has
+  # a port in mind already, or a reason to avoid the obvious one, and a single take-it-or-leave-it
+  # number hides that this is a free choice. `gd_candidates` reads GEODEPLOY_PORT_CANDIDATES from
+  # the environment or .env before falling back to the built-in list.
+  local free_ports; free_ports="$(gd_free_candidates 6)"
+  local GD_IP_HINT; GD_IP_HINT="$(gd_public_ip)"
   local ports_free=0
   [ "$GD_PORT80_FREE" = 1 ] && [ "$GD_PORT443_FREE" = 1 ] && [ -z "$GD_WEBSERVER" ] && ports_free=1
 
@@ -141,22 +273,41 @@ decide_publish() {
   echo ""
   echo "How should GeoDeploy be published?"
   echo ""
-  echo -e "  ${GREEN}1)${NC} Take over port 80 — GeoDeploy becomes this machine's web server."
-  echo "     Open http://<this server> and it is there. Best on a server bought for GeoDeploy."
+  # THREE options, not two, because "dedicated or not" and "which port" are different questions and
+  # bundling them hid the second one. Option 2 is the whole answer for most people; option 3 exists
+  # because plenty of operators already know the port their proxy config names.
+  echo -e "  ${GREEN}1) Make this machine a dedicated GeoDeploy server.${NC}"
+  echo "     GeoDeploy takes port 80 and answers at http://${GD_IP_HINT:-<this server>} — no port in"
+  echo "     the address. It becomes the machine's web server: anything else that wants port 80"
+  echo "     afterwards will fail to start. Nothing running now is stopped by this installer."
+  echo "     Choose this on a server you bought for GeoDeploy."
   if [ "$GD_PORT80_FREE" != 1 ]; then
-    echo -e "     ${YELLOW}Not available right now: port 80 is in use${GD_PORT80_HOLDER:+ by $GD_PORT80_HOLDER}.${NC}"
+    echo -e "     ${YELLOW}Not available right now — port 80 is in use${GD_PORT80_HOLDER:+ by $GD_PORT80_HOLDER}.${NC}"
   fi
   echo ""
-  echo -e "  ${GREEN}2)${NC} Behind the web server you already run — GeoDeploy listens on"
-  echo "     127.0.0.1:${free_port:-????}, reachable only from this machine. You then point a"
-  echo "     domain at it, and the dashboard writes the reverse-proxy config for you."
+  if [ -n "$free_port" ]; then
+    echo -e "  ${GREEN}2) Use the default port — 127.0.0.1:${free_port}${NC}"
+    echo "     GeoDeploy shares the machine. It listens on port ${free_port}, reachable only from this"
+    echo "     server, and a reverse proxy you already run publishes it on a domain — the dashboard"
+    echo "     writes that configuration for you. Nothing else on the machine is affected."
+  else
+    echo -e "  ${GREEN}2) Use the default port${NC}"
+    echo -e "     ${YELLOW}Unavailable — none of the suggested ports is free ($(gd_candidates)).${NC}"
+  fi
+  echo ""
+  echo -e "  ${GREEN}3) Choose a different port.${NC}"
+  echo "     Same as 2, on a port you pick."
+  if [ -n "$free_ports" ]; then
+    echo -e "     ${DIM}Free right now: ${free_ports}${NC}"
+  fi
   echo ""
   local default_choice=2
   [ "$ports_free" = 1 ] && default_choice=1
-  [ -n "$free_port" ] || default_choice=1
+  [ -n "$free_port" ] || default_choice=3
+  [ "$ports_free" = 1 ] && [ -z "$free_port" ] && default_choice=1
 
   local tries=0 choice
-  while [ "$tries" -lt 3 ]; do
+  while [ "$tries" -lt 4 ]; do
     tries=$((tries+1))
     printf "Choose [%s]: " "$default_choice"
     read -r choice < /dev/tty || choice=""
@@ -166,15 +317,23 @@ decide_publish() {
         if [ "$GD_PORT80_FREE" != 1 ]; then
           echo ""
           warn "Port 80 is in use${GD_PORT80_HOLDER:+ by $GD_PORT80_HOLDER}, and this installer will not stop it for you."
-          warn "Stop that service yourself and run the installer again, or choose 2."
+          warn "Stop that service yourself and run the installer again, or choose 2 or 3."
           echo ""
           continue
         fi
         GD_MODE=dedicated; GD_BIND=0.0.0.0; GD_PORT=80; break ;;
       2)
-        [ -n "$free_port" ] || { warn "No free port among $(gd_candidates). Free one, or choose 1."; continue; }
+        # Re-checked rather than trusted: `free_port` was measured when the menu was printed, and
+        # something can bind a port while someone is reading it.
+        if [ -z "$free_port" ] || gd_port_in_use "$free_port"; then
+          warn "Port ${free_port:-—} is no longer free. Choose 3 and pick another."
+          continue
+        fi
         GD_MODE=behind-proxy; GD_BIND=127.0.0.1; GD_PORT="$free_port"; break ;;
-      *) warn "Type 1 or 2." ;;
+      3)
+        GD_PORT="$(ask_for_port "$free_port")" || continue
+        GD_MODE=behind-proxy; GD_BIND=127.0.0.1; break ;;
+      *) warn "Type 1, 2 or 3." ;;
     esac
   done
   [ -n "$GD_MODE" ] || error "No choice made. Nothing has been started."
@@ -252,6 +411,15 @@ sudo docker compose pull geodeploy-ui nginx redis 2>/dev/null || true
 # ── Start core services ───────────────────────────────────────────────────────
 # martin (vector tiles) + titiler (raster tiles) are core — needed for both local and
 # external PostGIS/S3 — so they start here rather than being profile-gated.
+
+# LAST CHECK, immediately before anything binds. The port was verified when it was chosen, but the
+# clone, the .env write, the network create and the image pull all happen in between — on a busy
+# machine that is easily a minute, and a port can be taken in a minute. Failing here costs nothing;
+# failing after `up -d` leaves a half-started stack and an error from Docker rather than from us.
+if gd_port_in_use "$GD_PORT" && ! _gd_port_is_ours "$GD_PORT"; then
+  GD_HELD="$(gd_port_holder "$GD_PORT")"
+  error "Port ${GD_PORT} was free when you chose it and has been taken since${GD_HELD:+, by $GD_HELD}. Nothing has been started. Re-run the installer, or pick another port: sudo bash installer/set-port.sh <port> after installing. Free right now: $(gd_free_candidates 5)"
+fi
 
 info "Starting GeoDeploy…"
 sudo docker compose up -d geodeploy-api geodeploy-ui nginx redis celery martin titiler

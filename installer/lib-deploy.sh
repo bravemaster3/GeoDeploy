@@ -103,22 +103,54 @@ gd_port_holder() { # PORT → "nginx (pid 1234)" | "a Docker container" | ""
   return 0
 }
 
-# The default candidates. Deliberately boring, high, and unlikely to collide with something the
-# operator cares about; 8080 first because it is the one people expect and recognise.
-GD_DEFAULT_CANDIDATES="8080 8081 8090 9080 8880 8008"
+# TWO SETTINGS, and the difference between them is the whole design:
+#
+#   GEODEPLOY_PORT_CANDIDATES   a SUGGESTION list, read only while a port is being CHOSEN
+#   GEODEPLOY_HTTP_PORT         the CHOSEN port — authoritative from then on, and never re-derived
+#
+# Keeping them apart is what stops the port drifting. If the installer re-scanned the candidates on
+# every run, an install that landed on 8081 because 8080 was busy would silently move BACK to 8080
+# the day that service was retired — and the operator's proxy_pass, DNS record and bookmarks would
+# all still point at 8081.
+#
+# The defaults are deliberately boring, high, and unlikely to collide with something the operator
+# cares about. 8080 first because it is the one people expect and recognise; the rest spread across
+# the ranges different stacks favour, so a machine that is busy in one neighbourhood is usually free
+# in another.
+GD_DEFAULT_CANDIDATES="8080 8081 8082 8090 8880 9080 9090 8008 7080 8888"
 
-gd_candidates() { # → the candidate list, honouring GEODEPLOY_PORT_CANDIDATES (comma or space separated)
-  local raw="${GEODEPLOY_PORT_CANDIDATES:-$GD_DEFAULT_CANDIDATES}"
-  printf '%s' "$raw" | tr ',' ' ' | tr -s ' '
+gd_candidates() { # → the candidate list
+  # Precedence: the environment (an explicit answer for THIS run) → .env (the operator's standing
+  # preference for this installation) → the built-in list. The .env step matters: `.env.example`
+  # advertises this key, and reading only the environment would have made that line decorative.
+  local raw="${GEODEPLOY_PORT_CANDIDATES:-}"
+  [ -n "$raw" ] || raw="$(gd_env_get GEODEPLOY_PORT_CANDIDATES "${1:-.env}")"
+  [ -n "$raw" ] || raw="$GD_DEFAULT_CANDIDATES"
+  # Comma or space separated, deduplicated in order, non-numbers dropped rather than carried into a
+  # port test that would silently treat them as free.
+  printf '%s' "$raw" | tr ',;' '  ' | tr -s ' ' | awk '{
+    for (i = 1; i <= NF; i++)
+      if ($i ~ /^[0-9]+$/ && $i+0 >= 1 && $i+0 <= 65535 && !seen[$i]++)
+        printf "%s%s", (n++ ? " " : ""), $i
+  }'
+}
+
+gd_free_candidates() { # [max] → every candidate that is free right now, in order
+  local max="${1:-0}" n=0 p out=""
+  for p in $(gd_candidates); do
+    gd_port_in_use "$p" && continue
+    out="${out:+$out }$p"
+    n=$((n+1))
+    if [ "$max" -gt 0 ] && [ "$n" -ge "$max" ]; then break; fi
+  done
+  printf '%s' "$out"
 }
 
 gd_first_free_candidate() { # → the first free candidate, or empty
-  local p
-  for p in $(gd_candidates); do
-    case "$p" in ''|*[!0-9]*) continue ;; esac
-    gd_port_in_use "$p" || { printf '%s' "$p"; return 0; }
-  done
-  return 1
+  local first
+  first="$(gd_free_candidates 1)"
+  [ -n "$first" ] || return 1
+  printf '%s' "$first"
 }
 
 gd_valid_port() { # PORT → 0 if a usable TCP port number
