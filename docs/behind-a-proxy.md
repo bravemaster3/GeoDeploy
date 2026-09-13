@@ -270,5 +270,8 @@ the internet. Bind the loopback instead: `sudo bash installer/set-port.sh 8080`.
   reason behind-proxy is worth choosing even on a machine you own.
 - **A base path.** GeoDeploy has to live at the root of its domain or subdomain; it cannot yet be
   served under `https://example.org/geodeploy/`.
-- **Two GeoDeploys on one machine.** Container and network names are fixed, so a second instance
-  collides with the first. Preflight reports it rather than letting it half-install.
+- **Two GeoDeploys on one machine.** Five containers still have fixed names and every instance joins
+  the same Docker network, where the first one's database answers to the alias `postgres` — so a
+  second instance could connect to the first one's data. Preflight refuses rather than letting it
+  half-install, and names the directory it found. Running GeoDeploy alongside *other software* is
+  what this page is about and is fully supported; it is two copies of GeoDeploy that cannot coexist.

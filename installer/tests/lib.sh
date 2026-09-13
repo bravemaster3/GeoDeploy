@@ -75,6 +75,41 @@ CONF
   docker network create geodeploy >/dev/null 2>&1 || true
 }
 
+# Since preflight blocks a SECOND GeoDeploy (it would share the first one's database through the
+# `geodeploy` network's `postgres` alias), any suite that performs installs needs the machine to have
+# none. On a developer box that usually means one is in the way.
+#
+# `down` rather than `stop`, because the check counts STOPPED containers too — a stopped install
+# still owns the container names. But ONLY the code services are named, never a blanket
+# `docker compose down`: postgres, minio, titiler and martin are provisioned by the setup wizard
+# OUTSIDE Compose with fixed container names, and a blanket command removes them and then cannot
+# recreate them ("container name /geodeploy-postgres is already in use" once their restart policy
+# has brought them back). That is the trap docs/updating.md warns about, and this helper fell into
+# it on a live instance — the recovery was `up -d --no-deps` over the same list.
+#
+# Data is in bind mounts under the install directory and is untouched either way.
+GD_CODE_SERVICES="geodeploy-api geodeploy-ui celery nginx redis"
+GD_PAUSED=""
+pause_other_installs() {
+  local id wd
+  for id in $(docker ps -aq --filter ancestor=geodeploy/api:latest --filter ancestor=geodeploy/ui:latest 2>/dev/null); do
+    wd="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$id" 2>/dev/null)" || continue
+    [ -n "$wd" ] && [ -d "$wd" ] || continue
+    case " $GD_PAUSED " in *" $wd "*) continue ;; esac
+    echo "### pausing the GeoDeploy at $wd for the duration (data untouched; restored on exit) ###"
+    ( cd "$wd" && docker compose rm -sf $GD_CODE_SERVICES ) >/dev/null 2>&1
+    GD_PAUSED="${GD_PAUSED:+$GD_PAUSED }$wd"
+  done
+}
+resume_other_installs() {
+  local wd
+  for wd in ${GD_PAUSED:-}; do
+    echo "### restoring the GeoDeploy at $wd ###"
+    ( cd "$wd" && docker compose up -d --no-deps $GD_CODE_SERVICES ) >/dev/null 2>&1
+  done
+  GD_PAUSED=""
+}
+
 dc(){ ( cd "$REPO" && docker compose "$@" ); }
 ev(){ grep -E "^$1=" "$REPO/.env" 2>/dev/null | tail -1 | cut -d= -f2-; }
 binding(){ docker inspect -f '{{range $p,$b := .HostConfig.PortBindings}}{{range $b}}{{.HostIp}}:{{.HostPort}}{{end}}{{end}}' "$(dc ps -q nginx 2>/dev/null | head -1)" 2>/dev/null; }

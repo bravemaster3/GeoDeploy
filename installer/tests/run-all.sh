@@ -17,6 +17,8 @@ run "unit"    test-unit.sh
 run "proxy"   test-proxy.sh
 run "install" test-install.sh
 run "ports"   test-ports.sh
+# Read-only, and needs another GeoDeploy present to mean anything; skips itself otherwise.
+run "second"  test-second-install.sh
 # Opt-in: it takes port 80, and stops any GeoDeploy already using it.
 if [ "${GD_PORT80:-0}" = 1 ]; then run "port80" test-port80.sh; fi
 

@@ -6,7 +6,8 @@
 # surfacing one layer away from its cause.
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 harness_build
-trap 'kill_decoys' EXIT
+trap 'kill_decoys; resume_other_installs' EXIT
+pause_other_installs
 
 # ─────────────────────────────────────────────────────────────────────────────
 hdr "C0  three options, and 'dedicated' is explained rather than merely named"
@@ -84,10 +85,15 @@ chk "bound to the LOOPBACK"             '[ "$(binding)" = "127.0.0.1:8087" ]'
 chk "did not ask"                       '! grep -q "How should GeoDeploy be published" "$O"'
 
 hdr "C5d  --dedicated while :80 is busy is refused, not forced"
-reset_install
+# Its OWN decoy on 80. This used to lean on whatever GeoDeploy happened to be running on the
+# machine, which the suite now pauses out of the way — so the test quietly stopped testing anything
+# and started asserting that a legitimate install had failed.
+reset_install; decoy 80 "SOMEONE-ELSE"
 run_install --dedicated
 chk "refused"                           'grep -qi "already in use" "$O"'
 chk "started nothing"                   '[ -z "$(dc ps -q nginx 2>/dev/null)" ]'
+chk "the other site is untouched"       '[ "$(curl -s --max-time 3 http://127.0.0.1/)" = "SOMEONE-ELSE" ]'
+kill_decoys
 
 hdr "C5e  a nonsense --port is rejected before anything happens"
 for p in 0 65536 -1 abc; do

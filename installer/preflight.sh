@@ -31,7 +31,7 @@ row() { GD_ROWS+=("$1|$2|$3"); [ "$1" = bad ] && GD_BLOCKERS=$((GD_BLOCKERS+1));
 # Machine-readable facts, for --json and for install.sh to read back.
 GD_PORT80_FREE=1; GD_PORT443_FREE=1; GD_PORT80_HOLDER=""; GD_PORT443_HOLDER=""
 GD_WEBSERVER=""; GD_FREE_CANDIDATE=""; GD_DOCKER_OK=0; GD_DOCKER_SUDO=0
-GD_NET_FOREIGN=0; GD_NAME_COLLISIONS=""; GD_SWAP_MB=0
+GD_NET_FOREIGN=0; GD_NAME_COLLISIONS=""; GD_SWAP_MB=0; GD_OTHER_INSTALL=""
 
 # ── Docker ────────────────────────────────────────────────────────────────────────────────────────
 
@@ -153,6 +153,44 @@ check_ingress() {
   fi
 }
 
+# ── Another GeoDeploy on this machine ─────────────────────────────────────────────────────────────
+
+# TWO INSTANCES ARE NOT SUPPORTED YET, and the way they fail is worse than a name clash.
+#
+# Five services carry a FIXED container_name — geodeploy-{postgres,redis,minio,martin,titiler} — so a
+# second install cannot create them. But before it gets that far it joins the SAME external network,
+# `geodeploy`, where those containers answer to the generic aliases `postgres`, `redis`, `minio`.
+# A second instance's API would resolve `postgres` to the FIRST instance's database. That is not a
+# collision, it is two products sharing one datastore without either being told.
+#
+# So this is a blocker, and it is detected precisely: Compose records the directory it was run from
+# on every container it creates, so "a geodeploy/api or geodeploy/ui container whose working_dir is
+# not ours" is exactly and only another installation. Stopped ones count — they still own the names.
+#
+# Namespacing (COMPOSE_PROJECT_NAME + templated container names) is the slice that makes this work;
+# until then, saying so plainly beats a half-install. See issue #79.
+check_other_install() {
+  [ "$GD_DOCKER_OK" = 1 ] || return 0
+  local mine other id wd
+  mine="$(pwd -P)"
+  other=""
+  while read -r id; do
+    [ -n "$id" ] || continue
+    wd="$(_docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$id" 2>/dev/null)" || wd=""
+    [ -n "$wd" ] || continue
+    [ "$wd" = "$mine" ] && continue
+    case " $other " in *" $wd "*) ;; *) other="${other:+$other }$wd" ;; esac
+  done <<EOF
+$(_docker ps -aq --filter "ancestor=geodeploy/api:latest" 2>/dev/null; _docker ps -aq --filter "ancestor=geodeploy/ui:latest" 2>/dev/null)
+EOF
+  if [ -n "$other" ]; then
+    GD_OTHER_INSTALL="$other"
+    row bad "Another GeoDeploy" "one is already installed on this machine, at: ${other}. Two instances cannot coexist yet — they share the Docker network 'geodeploy', where the first one's database answers to the alias 'postgres', so the second would silently connect to it. Update the existing installation instead, or remove it first (installer/reset.sh)."
+  else
+    row ok "Another GeoDeploy" "none — this is the only one"
+  fi
+}
+
 # ── Docker names and networks ─────────────────────────────────────────────────────────────────────
 
 # The network is created `external`, and the installer's `docker network create geodeploy || true`
@@ -246,6 +284,7 @@ gd_preflight_run() { # [env_file]
   check_ports
   check_configured_port "${1:-.env}"
   check_ingress "${1:-.env}"
+  check_other_install
   check_network
   check_names
   check_swap
@@ -274,6 +313,7 @@ gd_preflight_json() {
   printf '"port80_holder":"%s","port443_holder":"%s",' "$(printf '%s' "$GD_PORT80_HOLDER" | sed 's/"/\\"/g')" "$(printf '%s' "$GD_PORT443_HOLDER" | sed 's/"/\\"/g')"
   printf '"web_server":"%s","free_candidate":"%s","docker_ok":%s,"docker_sudo":%s,' \
          "$GD_WEBSERVER" "$GD_FREE_CANDIDATE" "$GD_DOCKER_OK" "$GD_DOCKER_SUDO"
+  printf '"other_install":"%s",' "$(printf '%s' "$GD_OTHER_INSTALL" | sed 's/"/\\"/g')"
   printf '"network_foreign":%s,"name_collisions":"%s","swap_mb":%s,"checks":[' \
          "$GD_NET_FOREIGN" "$GD_NAME_COLLISIONS" "${GD_SWAP_MB:-0}"
   for r in "${GD_ROWS[@]}"; do
