@@ -249,6 +249,43 @@ page — processing continues, and the row updates when it is done.
 4. Choose a template
 5. Click **Publish** — your portal is live at `http://your-server/portals/your-portal-name/`
 
+## If GeoDeploy is already installed here
+
+Running the install command again on a machine that already has GeoDeploy is **safe, and is a
+supported way to move to a different version**. It updates the checkout, rebuilds and restarts — and
+deliberately changes nothing about where the instance lives:
+
+- **The port is kept.** It is not re-picked, even if the port it originally avoided is now free, and
+  even if you pass a different one. Your reverse proxy, your DNS record and everyone's bookmarks all
+  point at that number. To move it, use `installer/set-port.sh`.
+- **Your data is untouched** — `data/` and `.env` are outside version control.
+- **The setup wizard does not run again.**
+
+One thing to know: the installer does a `git reset --hard` onto the version you asked for, so **any
+edits you made to tracked files are discarded** — `docker-compose.yml`, `nginx/nginx.conf`, and so
+on. Settings belong in `.env`, which is never touched. If you have customised a tracked file, keep
+it as a patch or a fork.
+
+To install to a different directory, set `GEODEPLOY_DIR`:
+
+```bash
+GEODEPLOY_DIR=/opt/geodeploy curl -fsSL …/install.sh | bash
+```
+
+### Can I run two GeoDeploys on one machine?
+
+**Not yet, and the installer will refuse rather than let you try.** It is on the roadmap.
+
+Five containers still have fixed names — `geodeploy-postgres`, `-redis`, `-minio`, `-martin`,
+`-titiler` — and every instance joins the same Docker network, where the first one's database answers
+to the generic name `postgres`. A second instance would not merely collide: **its API could connect
+to the first instance's database.** Rather than risk that, preflight detects an existing installation
+anywhere on the machine and stops, naming the directory it found.
+
+Note this is *different* from running GeoDeploy alongside **other software**, which is fully
+supported — see [Installing alongside other software](behind-a-proxy.md). It is specifically two
+copies of GeoDeploy that cannot coexist.
+
 ## Removing it again
 
 One command, and it takes nothing else on the machine with it:

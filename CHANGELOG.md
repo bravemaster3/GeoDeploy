@@ -16,6 +16,16 @@ upgrade needs manual work.
   behind-proxy on a free local port, the only choice that claims nothing; set
   `GEODEPLOY_DEPLOY_MODE` in the environment for cloud-init or Ansible.
   [#79](https://github.com/bravemaster3/GeoDeploy/issues/79)
+- **A second GeoDeploy on the same machine is refused, with the reason.** It was never supported, but
+  it used to fail confusingly halfway through — and worse than that: every instance joins the same
+  Docker network, where the first one's database answers to the generic alias `postgres`, so a second
+  instance's API could have connected to the first one's data. Preflight now detects an existing
+  installation anywhere on the machine and stops, naming the directory it found. (Running GeoDeploy
+  alongside *other software* is what this release is about and is fully supported; it is two copies
+  of GeoDeploy that cannot coexist yet.)
+- **Re-running the installer is documented** — it keeps your port, leaves your data alone, does not
+  re-run the wizard, and discards edits to tracked files (`git reset --hard`). `GEODEPLOY_DIR`
+  installs elsewhere.
 - **Choosing the port is a real choice.** The installer offers three options rather than two, because
   "dedicated or not" and "which port" are different questions: make this machine a dedicated
   GeoDeploy server (spelled out — it takes port 80, the address carries no port, anything else

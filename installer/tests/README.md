@@ -25,14 +25,25 @@ bash installer/tests/test-unit.sh      # ~1s,  no Docker at all
 bash installer/tests/test-proxy.sh     # ~1m,  pulls the nginx and caddy images
 bash installer/tests/test-install.sh   # ~12m, full install cycles
 bash installer/tests/test-ports.sh     # ~8m
+bash installer/tests/test-second-install.sh  # ~5s, read-only; needs another install to mean anything
 bash installer/tests/test-port80.sh    # ~6m,  NEEDS PORT 80 — see the warning below
 ```
 
 !!! Each suite prints `N passed, M failed` and exits non-zero on failure.
 
-**`test-port80.sh` stops any GeoDeploy already running on this machine** and restarts it from an
-`EXIT` trap. Do not run it against something you care about. (It is written with the trap precisely
-because an early version died on a quoting error and left the machine's instance down.)
+**`test-install.sh`, `test-ports.sh` and `test-port80.sh` disturb a GeoDeploy already on this
+machine** and restore it from an `EXIT` trap. Do not run them against something you care about.
+
+They have to: since preflight now refuses a SECOND installation (it would share the first one's
+database through the `geodeploy` network's `postgres` alias), a suite that installs needs the
+machine to have none. `pause_other_installs` removes only the CODE services —
+`geodeploy-api geodeploy-ui celery nginx redis` — never a blanket `docker compose down`, because
+postgres, minio, titiler and martin are wizard-provisioned outside Compose with fixed names and a
+blanket command removes them and then cannot recreate them. Data lives in bind mounts and is
+untouched. Both traps are written down because both were hit here.
+
+`test-second-install.sh` is the exception: entirely read-only (preflight writes nothing), and it
+NEEDS another installation present, so it neither pauses nor is paused.
 
 ## What is covered
 
@@ -74,6 +85,7 @@ asserting it is present.
 | Re-run | the port does **not** move, even with a different candidate list |
 | The wedged bind | a plain `up -d` leaves it wedged; preflight catches it; `--force-recreate` recovers |
 | Rollback | `set-port` to an unbindable address restores the old settings and comes back up |
+| **A second GeoDeploy** | refused, naming the other install's directory (skipped when the machine has no other install to detect) |
 
 ### `test-port80.sh` — the cases that need port 80
 | Area | Cases |
@@ -94,8 +106,10 @@ asserting it is present.
   lines and shares `gd_port_in_use` with everything above, which is tested hard.
 - **Rootless Docker, SELinux, non-Debian hosts.** Out of scope for this slice, and stated as such in
   the issue.
-- **Two GeoDeploys on one machine.** Container and network names are still fixed — that is the
-  namespacing slice. Preflight detects the collision, which *is* tested.
+- **Two GeoDeploys actually RUNNING side by side.** They cannot, by design for now — five fixed
+  container names and one shared network whose `postgres` alias belongs to whoever registered it
+  first. What is tested is that preflight *refuses* the second install; making it work is the
+  namespacing slice.
 - **`--strict` docs and the UI build** are separate: `mkdocs build --strict` and `npm run build`.
 
 ## Dependencies / relationships
@@ -113,7 +127,8 @@ asserting it is present.
 
 ## Current status & known issues
 - All five suites pass on WSL2 + Docker 29.5.2 (2026-09-12), 210 assertions in total:
-  `test-unit` 54 · `test-proxy` 31 · `test-install` 60 · `test-ports` 37 · `test-port80` 28.
+  `test-unit` 54 · `test-proxy` 31 · `test-install` 61 · `test-ports` 37 · `test-second-install` 11
+  · `test-port80` 28.
 - Not wired into CI, for the port-80 reason above. A subset (`test-unit.sh`, and `test-proxy.sh`
   minus the live half) could be, and probably should be.
 

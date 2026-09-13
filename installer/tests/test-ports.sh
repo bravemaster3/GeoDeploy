@@ -3,7 +3,8 @@
 # moving it, and the wedged bind that Docker reports as healthy.
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 harness_build
-trap 'kill_decoys' EXIT
+trap 'kill_decoys; resume_other_installs' EXIT
+pause_other_installs
 
 # ─────────────────────────────────────────────────────────────────────────────
 hdr "P1  the first candidate is busy — take the next one, leave it alone"

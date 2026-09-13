@@ -48,7 +48,11 @@ Bash scripts that take a bare Linux VPS to a running GeoDeploy (the `curl instal
   them, an installed web server, a free candidate port, the configured port, whether the ingress is
   actually **answering**, a FOREIGN `geodeploy` Docker network (we would silently join it and share
   the DNS names `postgres`/`redis`/`minio` with a stranger's stack), container-name collisions, and
-  swap. Ownership of a container is judged by the Compose project label **or the image**, because
+  swap, **and another GeoDeploy installed anywhere else on the machine** — a blocker, because the two
+  would share the `geodeploy` network where the first one's database answers to the alias `postgres`,
+  so the second's API could connect to the first's data. Detected precisely from Compose's
+  `com.docker.compose.project.working_dir` label on the geodeploy/api and geodeploy/ui containers, so
+  an installation never flags itself. Ownership of a container is judged by the Compose project label **or the image**, because
   postgres/martin/titiler/minio are wizard-provisioned outside Compose and carry no label — checking
   only the label flagged a healthy install as a collision.
 - `set-port.sh` — **the only supported way to change the host port**, and reversible.
