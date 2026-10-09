@@ -176,9 +176,21 @@ def test_the_upstream_follows_the_configured_port():
 
 def test_the_edge_sets_the_scheme_itself_rather_than_echoing_the_client():
     """`$scheme`, never `$http_x_forwarded_proto` — otherwise any client could claim https and get a
-    Secure cookie issued over a plaintext connection."""
+    Secure cookie issued over a plaintext connection. This block is reachable from the internet, so
+    the header cannot be trusted here.
+
+    The opposite case is real too and is why the opt-in exists: when a proxy in front (Cloudflare in
+    Flexible mode, a load balancer) really did terminate TLS, `$scheme` is "http" while the visitor
+    is on https://, and GeoDeploy reports "reachable, but without HTTPS" on a site the browser is
+    reading over https. That is a deliberate, commented-out choice the operator makes once they know
+    nothing but that proxy can reach this port — never the default.
+    """
     body = deployment.proxy_config("maps.example.org", "nginx", BEHIND)["config"]
-    assert "$http_x_forwarded_proto" not in body
+    active = "\n".join(line for line in body.splitlines() if not line.lstrip().startswith("#"))
+    assert "$http_x_forwarded_proto" not in active
+    assert "X-Forwarded-Proto $scheme" in active
+    # The opt-in for a trusted proxy in front exists, and is commented out.
+    assert "# map $http_x_forwarded_proto" in body
 
 
 def test_publishing_on_all_interfaces_is_flagged_when_a_proxy_is_being_set_up():
