@@ -159,7 +159,7 @@ The wizard recognises it, restores those settings into `.env`, and offers two ch
 ## Giving it a domain name
 
 After the wizard you have a working GeoDeploy at an IP address or a local port. Turning that into
-`https://maps.example.org` takes three steps, and **the dashboard walks you through all three** —
+`https://maps.example.org` takes three steps, and **the dashboard does or walks you through all three** —
 Settings → Infrastructure → **Deployment**. What follows is the same thing in prose, so you know what
 you are agreeing to before you start.
 
@@ -197,11 +197,27 @@ reactions, which is why it is a step of its own.
 ### 2 · Put a reverse proxy in front
 
 A reverse proxy is the piece that answers on ports 80/443, holds the HTTPS certificate, and forwards
-requests to GeoDeploy. The dashboard writes the configuration for **nginx, Caddy, Apache or Traefik**
-and you paste it — GeoDeploy never edits your web server itself, because on a shared machine a bad
-reload takes down everybody else's sites too.
+requests to GeoDeploy. The dashboard offers **two routes, side by side**, and neither is a fallback
+for the other:
 
-If you are choosing one and the machine is yours, **Caddy is three lines and gets the certificate
+**Let GeoDeploy configure it.** It works out what is already in front of it — nginx, Caddy or Apache,
+running on the host or in a container — adds **one new file** to that server's drop-in directory
+(`geodeploy.conf`, carrying a `managed by GeoDeploy` marker), tests the configuration, and reloads.
+It never edits `nginx.conf`, your Caddyfile, or any other site's configuration, and it never restarts
+anything. **Remove it** takes the file away again and reloads, testing first.
+
+It also refuses rather than guesses, and the refusals are the point of the feature. It stops, with
+the reason, if your configuration does not already pass its own test (reloading would be what finally
+published somebody else's latent breakage), if the domain is already served on this machine, if a
+file of that name exists that GeoDeploy did not write, or if the drop-in directory is not actually
+included by the main configuration. Traefik gets precise manual instructions instead of a button,
+because its routing lives in container labels or a file provider and there is no file to drop.
+
+**I'll configure it myself.** The same configuration as text, for you to place. If you would rather
+own every change to your own web server — a reasonable position on a machine other people depend on —
+this route is always available and always offered.
+
+If you are choosing a proxy and the machine is yours, **Caddy is three lines and gets the certificate
 automatically**:
 
 ```
@@ -214,6 +230,39 @@ For nginx there are four settings that are not optional — without them shared 
 `127.0.0.1`, and uploads over 1 MB fail with a 413. The generated block includes them, with a comment
 on each explaining what breaks; the full version is in
 [Installing alongside other software](behind-a-proxy.md).
+
+!!! warning "If this machine already serves HTTPS for another site"
+    The block GeoDeploy writes listens on **port 80**. If something else already holds port 443 —
+    especially a `server_name _;` catch-all, which answers for every hostname — then
+    `https://your-domain` reaches **that site**, not GeoDeploy, until your domain has its own
+    certificate. `http://` works immediately.
+
+    Behind Cloudflare this decides everything, because the SSL/TLS mode picks which origin port
+    Cloudflare connects to:
+
+    | Cloudflare SSL/TLS mode | Connects to your server on | Before you have a certificate |
+    | --- | --- | --- |
+    | **Flexible** | port 80 | works |
+    | Full / Full (strict) | port 443 | you get the other site, or a 525/526 error |
+
+    Use **Flexible** until the certificate exists, then **Full (strict)**. The dashboard warns about
+    this before you apply and checks port 443 as well as port 80 afterwards.
+
+### 2b · HTTPS
+
+- **Caddy** obtains and renews the certificate itself. Nothing to do.
+- **nginx and Apache** use certbot, as a separate button you press after Apply. It is deliberately
+  not folded into Apply: it reaches an external certificate authority under terms you accept, puts
+  the hostname in the public Certificate Transparency log, and spends a rate limit. GeoDeploy will
+  **not install certbot for you** — installing packages on your server is the kind of uninvited
+  change this whole mode exists to avoid. If it is missing you get the command:
+
+  ```bash
+  sudo apt install certbot python3-certbot-nginx
+  ```
+
+- **Behind Cloudflare's proxy**, visitors already get HTTPS from Cloudflare. Your own certificate is
+  what lets you move from Flexible to Full (strict), which is where you want to end up.
 
 ### 3 · Verify
 
