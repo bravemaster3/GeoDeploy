@@ -314,8 +314,12 @@ done
 # awk assigns each listen/server_name to the most recent `server {`. Sound for nginx: `location`
 # blocks contain neither directive, and `upstream`'s `server 1.2.3.4;` has no brace.
 section nginxblocks
-if [ -x $H/usr/sbin/nginx ]; then
-  chroot $H /usr/sbin/nginx -T 2>/dev/null | awk '
+NGINXBIN=""
+for c in /usr/sbin/nginx /usr/bin/nginx /usr/local/sbin/nginx ; do
+  [ -x "$H$c" ] && { NGINXBIN="$c"; break; }
+done
+if [ -n "$NGINXBIN" ]; then
+  chroot $H "$NGINXBIN" -T 2>/dev/null | awk '
     /^# configuration file / { ours = ($0 ~ /geodeploy\.(conf|caddy):/) }
     /server[ \t]*\{/ { b++; cur="b" b; if (ours) print cur, "GEODEPLOY_OWN" }
     /^[ \t]*listen[ \t]/ { if (cur != "") print cur, $0 }
@@ -324,8 +328,8 @@ if [ -x $H/usr/sbin/nginx ]; then
 fi
 
 section nginxtest
-if [ -x $H/usr/sbin/nginx ]; then
-  OUT=$(chroot $H /usr/sbin/nginx -t 2>&1) ; RC=$? ; echo "$OUT" | tail -8 ; echo "rc=$RC"
+if [ -n "$NGINXBIN" ]; then
+  OUT=$(chroot $H "$NGINXBIN" -t 2>&1) ; RC=$? ; echo "$OUT" | tail -8 ; echo "rc=$RC"
 fi
 
 section apachetest
@@ -508,7 +512,24 @@ def _containerised_proxies(client) -> list[dict]:
 
 # ── Adapters: where the file goes, how it is tested, how it is reloaded ──────────────────────────
 
-def _nginx_host_adapter(dirs: list[str], includes: list[str]) -> dict | None:
+def _which(binaries: list[str], *names: str) -> str:
+    """The first discovered path whose basename is one of `names`.
+
+    The probe looks in several places for each proxy — nginx lives at `/usr/sbin/nginx` on Debian and
+    `/usr/bin/nginx` elsewhere, Caddy at `/usr/bin/caddy` from the package and `/usr/local/bin/caddy`
+    from a manual install, which is how most people install Caddy. Hardcoding one path meant Apply
+    wrote the file, could not run the test, rolled back and reported failure on a machine that was
+    perfectly fine. Found by re-reading the adapters, not by a test — none of these paths has run
+    against real hardware.
+    """
+    for path in binaries or []:
+        if path.rsplit("/", 1)[-1] in names:
+            return path
+    return ""
+
+
+def _nginx_host_adapter(dirs: list[str], includes: list[str],
+                        binaries: list[str] | None = None) -> dict | None:
     """Prefer `conf.d`, fall back to `sites-available` + a symlink.
 
     `conf.d` is one file and no symlink, and it is the directory both Debian and RHEL layouts
@@ -520,38 +541,42 @@ def _nginx_host_adapter(dirs: list[str], includes: list[str]) -> dict | None:
     /etc/nginx/conf.d/*.conf;` and `include conf.d/*.conf;` are both real and both work.
     """
     joined = " ".join(includes)
+    binary = _which(binaries, "nginx")
     if "/conf.d" in dirs and "conf.d" in joined:
         return {"kind": "nginx", "where": "host", "container": None,
                 "target": "/etc/nginx/conf.d/geodeploy.conf", "symlink": None,
-                "reload": "nginx -s reload", "tls": "certbot"}
+                "reload": "nginx -s reload", "tls": "certbot", "bin": binary}
     if "/etc/nginx/conf.d" in dirs and "conf.d" in joined:
         return {"kind": "nginx", "where": "host", "container": None,
                 "target": "/etc/nginx/conf.d/geodeploy.conf", "symlink": None,
-                "reload": "nginx -s reload", "tls": "certbot"}
+                "reload": "nginx -s reload", "tls": "certbot", "bin": binary}
     if "/etc/nginx/sites-available" in dirs and "/etc/nginx/sites-enabled" in dirs \
             and "sites-enabled" in joined:
         return {"kind": "nginx", "where": "host", "container": None,
                 "target": "/etc/nginx/sites-available/geodeploy.conf",
                 "symlink": "/etc/nginx/sites-enabled/geodeploy.conf",
-                "reload": "nginx -s reload", "tls": "certbot"}
+                "reload": "nginx -s reload", "tls": "certbot", "bin": binary}
     return None
 
 
-def _apache_host_adapter(dirs: list[str], includes: list[str]) -> dict | None:
+def _apache_host_adapter(dirs: list[str], includes: list[str],
+                         binaries: list[str] | None = None) -> dict | None:
     joined = " ".join(includes)
+    binary = _which(binaries, "apache2", "httpd")
     if "/etc/apache2/sites-available" in dirs and "sites-enabled" in joined:
         return {"kind": "apache", "where": "host", "container": None,
                 "target": "/etc/apache2/sites-available/geodeploy.conf",
                 "symlink": "/etc/apache2/sites-enabled/geodeploy.conf",
-                "reload": "apache2ctl graceful", "tls": "certbot"}
+                "reload": "apache2ctl graceful", "tls": "certbot", "bin": binary}
     if "/etc/httpd/conf.d" in dirs and "conf.d" in joined:
         return {"kind": "apache", "where": "host", "container": None,
                 "target": "/etc/httpd/conf.d/geodeploy.conf", "symlink": None,
-                "reload": "httpd -k graceful", "tls": "certbot"}
+                "reload": "httpd -k graceful", "tls": "certbot", "bin": binary}
     return None
 
 
-def _caddy_host_adapter(dirs: list[str], includes: list[str]) -> dict | None:
+def _caddy_host_adapter(dirs: list[str], includes: list[str],
+                        binaries: list[str] | None = None) -> dict | None:
     """Caddy only if the Caddyfile already imports a drop-in directory.
 
     Caddy has no conf.d convention of its own — a site block lives in the single Caddyfile unless
@@ -563,7 +588,8 @@ def _caddy_host_adapter(dirs: list[str], includes: list[str]) -> dict | None:
     if "/etc/caddy/conf.d" in dirs and re.search(r"import\s+\S*conf\.d", " ".join(includes)):
         return {"kind": "caddy", "where": "host", "container": None,
                 "target": "/etc/caddy/conf.d/geodeploy.caddy", "symlink": None,
-                "reload": "caddy reload --config /etc/caddy/Caddyfile", "tls": "automatic"}
+                "reload": "caddy reload --config /etc/caddy/Caddyfile", "tls": "automatic",
+                "bin": _which(binaries, "caddy")}
     return None
 
 
@@ -688,11 +714,11 @@ def detect() -> dict:
                     out["adapter"] = adapter
                     return out
         if kind == "nginx":
-            adapter = _nginx_host_adapter(out["dirs"], out["includes"])
+            adapter = _nginx_host_adapter(out["dirs"], out["includes"], out["binaries"])
         elif kind == "apache":
-            adapter = _apache_host_adapter(out["dirs"], out["includes"])
+            adapter = _apache_host_adapter(out["dirs"], out["includes"], out["binaries"])
         elif kind == "caddy":
-            adapter = _caddy_host_adapter(out["dirs"], out["includes"])
+            adapter = _caddy_host_adapter(out["dirs"], out["includes"], out["binaries"])
         else:
             adapter = None
         if adapter:
@@ -912,10 +938,22 @@ def _no_adapter_detail(found: dict) -> str:
         return ("No nginx, Caddy or Apache was found on this machine, and no proxy container "
                 "publishes port 80 or 443. There is nothing in front of GeoDeploy to configure.")
     names = ", ".join(sorted(set(installed))) or "a proxy"
-    return (f"{names} is installed here, but its configuration is not laid out in a way GeoDeploy may "
-            f"add one file to: either the drop-in directory does not exist, or the main configuration "
-            f"does not include it. GeoDeploy will not edit the main configuration file — a file "
-            f"written where nothing reads it would look like success and do nothing.")
+    detail = (f"{names} is installed here, but its configuration is not laid out in a way GeoDeploy "
+              f"may add one file to: either the drop-in directory does not exist, or the main "
+              f"configuration does not include it. GeoDeploy will not edit the main configuration "
+              f"file — a file written where nothing reads it would look like success and do nothing.")
+    # Caddy deserves the extra sentence: a stock Caddyfile has no drop-in import at all, so this is
+    # the DEFAULT state for a Caddy machine rather than an unusual one — and Caddy is the best case
+    # for everything downstream, since it gets the certificate itself. Telling them the exact line to
+    # add turns a dead end into one edit they make themselves, which keeps R1 intact.
+    if any("caddy" in name for name in installed):
+        detail += ("\n\nFor Caddy this is normal: a stock Caddyfile has no drop-in directory. Add one "
+                   "line at the end of /etc/caddy/Caddyfile and GeoDeploy can take it from there — "
+                   "including the HTTPS certificate, which Caddy obtains by itself:\n\n"
+                   "    import /etc/caddy/conf.d/*.caddy\n\n"
+                   "Then `sudo mkdir -p /etc/caddy/conf.d && sudo systemctl reload caddy`, and "
+                   "re-check here.")
+    return detail
 
 
 # ── Applying ──────────────────────────────────────────────────────────────────────────────────────
@@ -1006,13 +1044,14 @@ def _host_test_command(adapter: dict) -> str:
     a passing one and silently disable R2 and R4. Keeping the pipe out of this table makes that
     mistake impossible to make in only one of the four call sites.
     """
+    binary = adapter.get("bin") or ""
     if adapter["kind"] == "nginx":
-        return "chroot $H /usr/sbin/nginx -t"
+        return f"chroot $H {binary or '/usr/sbin/nginx'} -t"
     if adapter["kind"] == "apache":
-        if "httpd" in adapter["target"]:
-            return "chroot $H /usr/sbin/httpd -t"
+        if binary.endswith("httpd") or "httpd" in adapter["target"]:
+            return f"chroot $H {binary or '/usr/sbin/httpd'} -t"
         return "chroot $H /usr/sbin/apache2ctl configtest"
-    return "chroot $H /usr/bin/caddy validate --config /etc/caddy/Caddyfile"
+    return f"chroot $H {binary or '/usr/bin/caddy'} validate --config /etc/caddy/Caddyfile"
 
 
 def _host_reload_command(adapter: dict) -> str:
@@ -1023,13 +1062,14 @@ def _host_reload_command(adapter: dict) -> str:
     master process is what every init script does underneath anyway, works identically on systemd,
     sysvinit and a hand-started binary, and is the same operation the operator would run.
     """
+    binary = adapter.get("bin") or ""
     if adapter["kind"] == "nginx":
-        return "chroot $H /usr/sbin/nginx -s reload"
+        return f"chroot $H {binary or '/usr/sbin/nginx'} -s reload"
     if adapter["kind"] == "apache":
-        if "httpd" in adapter["target"]:
-            return "chroot $H /usr/sbin/httpd -k graceful"
+        if binary.endswith("httpd") or "httpd" in adapter["target"]:
+            return f"chroot $H {binary or '/usr/sbin/httpd'} -k graceful"
         return "chroot $H /usr/sbin/apache2ctl graceful"
-    return "chroot $H /usr/bin/caddy reload --config /etc/caddy/Caddyfile"
+    return f"chroot $H {binary or '/usr/bin/caddy'} reload --config /etc/caddy/Caddyfile"
 
 
 def _exec(client, name: str, argv: list[str], timeout: int = 60) -> tuple[int, str]:

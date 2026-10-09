@@ -445,3 +445,52 @@ def test_the_tls_picture_reaches_the_payload_apply_reads_it_from(monkeypatch):
     plan = hostproxy.plan("maps.example.org", _INTENT)
     assert plan["detected"]["tls"]["has_tls"] is True
     assert plan["detected"]["tls"]["catchall"] is True
+
+
+# ── The binary is where the probe found it, not where Debian puts it ─────────────────────────────
+#
+# Caddy from the package is /usr/bin/caddy; Caddy installed by hand — how most people install it —
+# is /usr/local/bin/caddy. nginx is /usr/sbin/nginx on Debian and /usr/bin/nginx elsewhere. The
+# command table hardcoded one of each, so on the other half of the world Apply wrote the file, could
+# not run the test, rolled back and reported failure on a machine that was perfectly fine.
+
+def test_caddy_installed_by_hand_is_tested_with_the_binary_that_exists():
+    adapter = hostproxy._caddy_host_adapter(
+        ["/etc/caddy", "/etc/caddy/conf.d"], ["import /etc/caddy/conf.d/*.caddy"],
+        ["/usr/local/bin/caddy"])
+    assert adapter["bin"] == "/usr/local/bin/caddy"
+    assert "/usr/local/bin/caddy validate" in hostproxy._host_test_command(adapter)
+    assert "/usr/local/bin/caddy reload" in hostproxy._host_reload_command(adapter)
+
+
+def test_nginx_outside_usr_sbin_is_tested_with_the_binary_that_exists():
+    adapter = hostproxy._nginx_host_adapter(
+        ["/etc/nginx/conf.d"], ["include /etc/nginx/conf.d/*.conf"], ["/usr/bin/nginx"])
+    assert hostproxy._host_test_command(adapter) == "chroot $H /usr/bin/nginx -t"
+    assert hostproxy._host_reload_command(adapter) == "chroot $H /usr/bin/nginx -s reload"
+
+
+def test_httpd_is_recognised_by_its_binary_not_only_by_its_path():
+    adapter = hostproxy._apache_host_adapter(
+        ["/etc/httpd/conf.d"], ["IncludeOptional conf.d/*.conf"], ["/usr/sbin/httpd"])
+    assert adapter["bin"] == "/usr/sbin/httpd"
+    assert "httpd -t" in hostproxy._host_test_command(adapter)
+
+
+def test_an_unknown_layout_still_falls_back_to_the_usual_path():
+    """No binary discovered is not a reason to emit an empty command — the fallback is the path the
+    overwhelming majority of machines use, and a wrong guess fails safely in the test step."""
+    adapter = {"kind": "nginx", "target": "/etc/nginx/conf.d/geodeploy.conf"}
+    assert hostproxy._host_test_command(adapter) == "chroot $H /usr/sbin/nginx -t"
+
+
+def test_a_stock_caddy_is_told_the_one_line_that_unlocks_it(monkeypatch):
+    """A Caddyfile with no drop-in import is the DEFAULT state of a Caddy machine, not an odd one —
+    and Caddy is the best case downstream, since it gets the certificate itself. A bare "cannot help"
+    there wastes the easiest win available."""
+    _detected(monkeypatch, adapter=None, binaries=["/usr/bin/caddy"],
+              dirs=["/etc/caddy"], includes=[])
+    plan = hostproxy.plan("maps.example.org", _INTENT)
+    detail = plan["blockers"][0]["detail"]
+    assert "import /etc/caddy/conf.d/*.caddy" in detail
+    assert "Caddy obtains by itself" in detail

@@ -110,14 +110,32 @@ here too:
 
 - **Docker itself** is left installed. `install.sh` may have installed it for you; uninstalling
   GeoDeploy does not remove it, because anything else on the machine may now depend on it.
-- **Your reverse proxy configuration is left alone.** If you added an nginx, Caddy or Apache virtual
-  host pointing at GeoDeploy, that file is still there and still references a port nothing answers
-  on. Remove it yourself — for nginx, typically:
+- **Your reverse proxy configuration.** This is the one thing GeoDeploy may have written *outside*
+  its own directory, so it is the one to deal with first.
 
-  ```bash
-  sudo rm /etc/nginx/sites-enabled/geodeploy.conf
-  sudo nginx -t && sudo systemctl reload nginx
-  ```
+    **If GeoDeploy configured it for you** (Settings → Deployment → Apply), remove it from there —
+    **before you uninstall**, while the dashboard still exists. **Remove it** deletes the file it
+    wrote, tests the configuration, and only then reloads. That ordering matters: taking the file
+    away can expose an unrelated problem elsewhere in your configuration, and a tidy-up must not be
+    what takes the other sites on this machine down.
+
+    **If you have already removed GeoDeploy**, or you placed the file yourself, do it by hand. The
+    file is `geodeploy.conf` and carries a `managed by GeoDeploy` comment — check that before
+    deleting, in case the name collides with something of yours:
+
+    ```bash
+    grep -l 'managed by GeoDeploy' /etc/nginx/conf.d/geodeploy.conf       /etc/nginx/sites-available/geodeploy.conf 2>/dev/null
+
+    sudo rm -f /etc/nginx/conf.d/geodeploy.conf
+    sudo rm -f /etc/nginx/sites-enabled/geodeploy.conf /etc/nginx/sites-available/geodeploy.conf
+    sudo nginx -t && sudo systemctl reload nginx     # test FIRST; reload only if it passes
+    ```
+
+    Caddy: `/etc/caddy/conf.d/geodeploy.caddy`, then `sudo systemctl reload caddy`. Apache:
+    `/etc/apache2/sites-available/geodeploy.conf` plus its `sites-enabled` symlink, then
+    `sudo apache2ctl configtest && sudo systemctl reload apache2`.
+
+    Left in place, the file is harmless but points at a port nothing answers on — visitors get a 502.
 
 - **Your DNS record is left alone.** The A record you created still points at this server. Remove it
   in the same control panel you created it in, or repoint it, otherwise the name resolves to a
