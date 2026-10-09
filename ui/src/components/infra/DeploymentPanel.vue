@@ -270,12 +270,12 @@
                        class="border-t border-border/60 pt-3 space-y-2">
                     <p class="text-xs text-foreground font-medium">HTTPS</p>
                     <p class="text-[11px] text-muted-foreground/80 leading-relaxed">
-                      The domain works over plain HTTP now. certbot
-                      {{ hostPlan.detected && hostPlan.detected.certbot ? 'is installed here and can' : 'is not installed here, so GeoDeploy cannot' }}
-                      obtain a free certificate for it. GeoDeploy will not install packages on this
-                      machine.
+                      The domain works over plain HTTP now. GeoDeploy can get a free Let’s Encrypt
+                      certificate for it and switch this block to HTTPS — running certbot in a
+                      throwaway container, so <strong>nothing is installed on this machine</strong>.
+                      It renews itself daily from then on.
                     </p>
-                    <div v-if="hostPlan.detected && hostPlan.detected.certbot" class="flex gap-2 flex-wrap">
+                    <div class="flex gap-2 flex-wrap">
                       <input v-model="certEmail" type="email" placeholder="you@example.org"
                              spellcheck="false" autocapitalize="off"
                              class="flex-1 min-w-[12rem] text-xs font-mono bg-background text-foreground border border-border rounded-lg px-2.5 py-1.5" />
@@ -284,11 +284,14 @@
                         {{ certBusy ? 'Asking Let’s Encrypt…' : 'Get a certificate' }}
                       </button>
                     </div>
-                    <p v-if="hostPlan.detected && hostPlan.detected.certbot"
-                       class="text-[11px] text-muted-foreground/70 leading-relaxed">
+                    <p class="text-[11px] text-muted-foreground/70 leading-relaxed">
                       Let’s Encrypt needs a contact address for expiry notices, and you are agreeing
                       to their subscriber terms. The name becomes public in the Certificate
-                      Transparency log — that is true of every HTTPS certificate.
+                      Transparency log — that is true of every HTTPS certificate. The challenge is a
+                      file fetched over port 80, so
+                      <strong v-if="dns && dns.state === 'proxied'">turn Cloudflare’s orange cloud
+                        off while it runs</strong><span v-else>port 80 must be reachable from the
+                        internet</span>.
                     </p>
                     <ul v-if="certSteps.length" class="space-y-2 pt-1">
                       <li v-for="s in certSteps" :key="s.name" class="flex items-start gap-2.5 text-xs">

@@ -494,3 +494,90 @@ def test_a_stock_caddy_is_told_the_one_line_that_unlocks_it(monkeypatch):
     detail = plan["blockers"][0]["detail"]
     assert "import /etc/caddy/conf.d/*.caddy" in detail
     assert "Caddy obtains by itself" in detail
+
+
+# ── Automatic HTTPS: certbot in a container, and the renewal that makes it mean anything ─────────
+
+def test_the_https_block_keeps_the_acme_path_unredirected():
+    """Renewal uses the same HTTP-01 challenge. Redirecting it to a port whose certificate has just
+    expired is how an auto-renewing certificate quietly stops auto-renewing."""
+    from geodeploy.services import deployment
+    body = deployment.proxy_config(
+        "maps.example.org", "nginx", _INTENT, tls=True, redirect=True)["config"]
+    port80 = body.split("server {", 1)[1].split("server {", 1)[0]
+    assert ".well-known/acme-challenge" in port80
+    assert port80.index(".well-known") < port80.index("return 301")
+
+
+def test_behind_cloudflare_port_80_serves_instead_of_redirecting():
+    """Cloudflare on Flexible connects to port 80; a 301 to https sends the browser back to
+    Cloudflare, which connects to port 80 again. That is an infinite loop, and it appears on a site
+    that worked a minute earlier."""
+    from geodeploy.services import deployment
+    body = deployment.proxy_config(
+        "maps.example.org", "nginx", _INTENT, tls=True, redirect=False)["config"]
+    port80 = body.split("server {", 1)[1].split("server {", 1)[0]
+    assert "return 301" not in port80
+    assert "proxy_pass" in port80
+    assert "Always Use HTTPS" in body          # says what to turn on at Cloudflare instead
+
+
+def test_the_two_blocks_carry_the_same_proxy_settings():
+    """One generator, two layouts. A setting present on 443 and missing on 80 produces a site that
+    works until somebody follows an http:// link, then 413s on upload."""
+    from geodeploy.services import deployment
+    body = deployment.proxy_config(
+        "maps.example.org", "nginx", _INTENT, tls=True, redirect=False)["config"]
+    for required in ("client_max_body_size 11G", "proxy_request_buffering off",
+                     "proxy_set_header Host              $host"):
+        assert body.count(required) == 2, f"{required} must appear in both blocks"
+
+
+def test_the_certificate_paths_are_certbots_own():
+    from geodeploy.services import deployment
+    body = deployment.proxy_config("maps.example.org", "nginx", _INTENT, tls=True)["config"]
+    assert "/etc/letsencrypt/live/maps.example.org/fullchain.pem" in body
+    assert "/etc/letsencrypt/live/maps.example.org/privkey.pem" in body
+
+
+def test_renewal_is_a_no_op_without_a_certificate(monkeypatch):
+    """Almost every install never asks for one. The daily tick must cost a state-file read, not a
+    container start."""
+    monkeypatch.setattr(hostproxy, "read_state", lambda: {})
+    started = []
+    monkeypatch.setattr(hostproxy, "_certbot", lambda *a, **k: started.append(a) or (0, ""))
+    result = hostproxy.renew_certificates()
+    assert result["renewed"] is False
+    assert started == []
+
+
+def test_renewal_does_not_reload_when_nothing_changed(monkeypatch):
+    """Reloading somebody's web server daily for no reason is the habit this module exists to avoid.
+    The gate is the certificate file's mtime, not certbot's prose."""
+    monkeypatch.setattr(hostproxy, "read_state", lambda: {
+        "certificate": {"domain": "maps.example.org"},
+        "adapter": {"kind": "nginx", "target": "/etc/nginx/conf.d/geodeploy.conf"}})
+    monkeypatch.setattr(hostproxy, "_cert_mtime", lambda d: "1760000000")
+    monkeypatch.setattr(hostproxy, "_certbot", lambda *a, **k: (0, "Cert not yet due for renewal"))
+    reloaded = []
+    monkeypatch.setattr(hostproxy, "_host_run", lambda *a, **k: reloaded.append(a) or (0, ""))
+    result = hostproxy.renew_certificates()
+    assert result["renewed"] is False
+    assert reloaded == []
+
+
+def test_a_failed_test_after_renewal_does_not_reload(monkeypatch):
+    """The certificate renewed but the configuration is broken for some unrelated reason. Reloading
+    would publish that breakage; the old certificate stays live instead, which is the safe side."""
+    monkeypatch.setattr(hostproxy, "read_state", lambda: {
+        "certificate": {"domain": "maps.example.org"},
+        "adapter": {"kind": "nginx", "target": "/etc/nginx/conf.d/geodeploy.conf"}})
+    mtimes = iter(["1760000000", "1760999999"])
+    monkeypatch.setattr(hostproxy, "_cert_mtime", lambda d: next(mtimes))
+    monkeypatch.setattr(hostproxy, "_certbot", lambda *a, **k: (0, "renewed"))
+    monkeypatch.setattr(hostproxy, "_host_run",
+                        lambda *a, **k: (0, "==test==\nnginx: [emerg] bad\nrc=1\n==end==\n"))
+    result = hostproxy.renew_certificates()
+    assert result["ok"] is False
+    assert result["reloaded"] is False
+    assert "NOT reloaded" in result["detail"]

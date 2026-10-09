@@ -403,41 +403,10 @@ def verdict(intent: dict, reality: dict, observed: dict) -> dict:
 #                             turns it back on and spools the whole body to its own disk first
 #   X-Forwarded-Proto       — cookies lose Secure and every emitted URL says http:// on an HTTPS site
 
-def _nginx_conf(domain: str, upstream: str) -> str:
-    return f"""# GeoDeploy — put this in /etc/nginx/sites-available/geodeploy.conf and symlink it into
-# sites-enabled/, or drop it in /etc/nginx/conf.d/. Then:  sudo nginx -t && sudo systemctl reload nginx
-#
-# This does not replace anything you already serve; it adds one more virtual host.
-
-# IF SOMETHING ELSE TERMINATES HTTPS IN FRONT OF THIS SERVER — Cloudflare's proxy, a load balancer,
-# another nginx — uncomment the three lines below AND the matching proxy_set_header further down.
-#
-# Why it is not on by default: this server block is reachable from the internet, so honouring a
-# client-supplied X-Forwarded-Proto lets anyone claim https over a plaintext connection and have a
-# Secure cookie issued on it. `$scheme` cannot be spoofed. But when a trusted proxy in front really
-# did terminate TLS, `$scheme` here is "http" while the visitor is on https:// — and GeoDeploy then
-# emits http:// links and reports "reachable, but without HTTPS" on a site the browser is reading
-# over https. Uncomment ONLY if nothing can reach this port except that proxy.
-#
-# The better fix, if you can: give this server its own certificate (certbot) and set the proxy in
-# front to pass through to HTTPS — Cloudflare calls that Full (strict). Then $scheme is https and
-# nothing has to be trusted.
-#
-# map $http_x_forwarded_proto $geodeploy_forwarded_proto {{
-#     default $scheme;
-#     https   https;
-#     http    http;
-# }}
-
-server {{
-    listen 80;
-    listen [::]:80;
-    server_name {domain};
-
-    # For certbot. Run:  sudo certbot --nginx -d {domain}
-    location /.well-known/acme-challenge/ {{ root /var/www/html; }}
-
-    location / {{
+# The proxy body, written once and used by both the plain-HTTP block and the HTTPS one. They must
+# not drift: a setting that is present on 443 and missing on 80 produces a site that works until
+# somebody follows an http:// link, and then 413s on upload or hands out 127.0.0.1 URLs.
+_NGINX_LOCATION = """    location / {{
         proxy_pass {upstream};
 
         # REQUIRED. GeoDeploy builds every absolute URL it emits — shared links, portal og: tags,
@@ -447,9 +416,7 @@ server {{
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         # REQUIRED once you have HTTPS: session cookies take their Secure flag from this, and
         # GeoDeploy uses it to decide whether to emit http:// or https:// links.
-        proxy_set_header X-Forwarded-Proto $scheme;
-        # …and the other half of the opt-in above: comment the line above, uncomment this one.
-        # proxy_set_header X-Forwarded-Proto $geodeploy_forwarded_proto;
+        proxy_set_header X-Forwarded-Proto $scheme;{optin}
 
         # REQUIRED. nginx defaults to 1 MB, and THIS setting shadows GeoDeploy's own — without it
         # every upload over a megabyte fails with 413.
@@ -465,7 +432,112 @@ server {{
         proxy_http_version 1.1;
         proxy_set_header Upgrade    $http_upgrade;
         proxy_set_header Connection "upgrade";
-    }}
+    }}"""
+
+_OPTIN = """
+        # …and the other half of the opt-in above: comment the line above, uncomment this one.
+        # proxy_set_header X-Forwarded-Proto $geodeploy_forwarded_proto;"""
+
+_XFP_PREAMBLE = """
+# IF SOMETHING ELSE TERMINATES HTTPS IN FRONT OF THIS SERVER — Cloudflare's proxy, a load balancer,
+# another nginx — uncomment the three lines below AND the matching proxy_set_header further down.
+#
+# Why it is not on by default: this server block is reachable from the internet, so honouring a
+# client-supplied X-Forwarded-Proto lets anyone claim https over a plaintext connection and have a
+# Secure cookie issued on it. `$scheme` cannot be spoofed. But when a trusted proxy in front really
+# did terminate TLS, `$scheme` here is "http" while the visitor is on https:// — and GeoDeploy then
+# emits http:// links and reports "reachable, but without HTTPS" on a site the browser is reading
+# over https. Uncomment ONLY if nothing can reach this port except that proxy.
+#
+# The better fix, and the one the dashboard can do for you: give this server its own certificate,
+# then set the proxy in front to pass through to HTTPS — Cloudflare calls that Full (strict). Then
+# $scheme really is https and nothing has to be trusted.
+#
+# map $http_x_forwarded_proto $geodeploy_forwarded_proto {{
+#     default $scheme;
+#     https   https;
+#     http    http;
+# }}
+"""
+
+
+def _nginx_conf(domain: str, upstream: str) -> str:
+    return f"""# GeoDeploy — put this in /etc/nginx/sites-available/geodeploy.conf and symlink it into
+# sites-enabled/, or drop it in /etc/nginx/conf.d/. Then:  sudo nginx -t && sudo systemctl reload nginx
+#
+# This does not replace anything you already serve; it adds one more virtual host.
+{_XFP_PREAMBLE}
+server {{
+    listen 80;
+    listen [::]:80;
+    server_name {domain};
+
+    # The ACME challenge, so a certificate can be issued for this name without changing anything
+    # here. Settings → Deployment can do that for you, or:  sudo certbot --nginx -d {domain}
+    location /.well-known/acme-challenge/ {{ root /var/www/html; }}
+
+{_NGINX_LOCATION.format(upstream=upstream, optin=_OPTIN)}
+}}
+"""
+
+
+def _nginx_conf_tls(domain: str, upstream: str, redirect: bool = True) -> str:
+    """The same vhost once a certificate exists: HTTPS on 443, and port 80 kept for the ACME
+    challenge that renews it.
+
+    `redirect` is NOT cosmetic, and defaulting it to True on every machine would break a common one.
+    Behind Cloudflare in Flexible mode, Cloudflare connects to this server on port 80; a 301 to
+    https sends the browser back to Cloudflare, which connects to port 80 again — an infinite
+    redirect loop, and the operator sees ERR_TOO_MANY_REDIRECTS on a site that worked a moment ago.
+    So when the domain resolves to Cloudflare, we serve both ports and let Cloudflare's own "Always
+    Use HTTPS" do the redirecting, where it can see the visitor's real scheme.
+
+    The ACME location stays OUTSIDE the redirect in both shapes: renewal uses the same HTTP-01
+    challenge, and redirecting it to a port whose certificate has expired is how an auto-renewing
+    certificate stops auto-renewing.
+    """
+    port80_body = ("""    location / {
+        return 301 https://$host$request_uri;
+    }"""
+                   if redirect else
+                   _NGINX_LOCATION.format(upstream=upstream, optin=""))
+    note = ("" if redirect else """
+# This machine's domain resolves to Cloudflare, so port 80 serves the application rather than
+# redirecting: with SSL/TLS set to Flexible, Cloudflare talks to port 80 and a redirect here would
+# bounce the browser between Cloudflare and this server forever. Turn on "Always Use HTTPS" in
+# Cloudflare and set SSL/TLS to Full (strict) now that this server has its own certificate.""")
+    return f"""# GeoDeploy — HTTPS for {domain}, with the certificate obtained by Let's Encrypt.
+#
+# Port 80 keeps serving the ACME challenge so renewal keeps working. The certificate paths are
+# certbot's own, and renewal replaces the files in place — nothing here has to change for it.{note}
+{_XFP_PREAMBLE}
+server {{
+    listen 80;
+    listen [::]:80;
+    server_name {domain};
+
+    # Renewal uses this. Never redirect it: a challenge that 301s to an expired certificate is how
+    # an auto-renewing certificate quietly stops renewing.
+    location /.well-known/acme-challenge/ {{ root /var/www/html; }}
+
+{port80_body}
+}}
+
+server {{
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name {domain};
+
+    ssl_certificate     /etc/letsencrypt/live/{domain}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{domain}/privkey.pem;
+    # Conservative and self-contained: no include of certbot's options file, which only exists when
+    # the nginx plugin wrote it, and is not there when the certificate came from the webroot plugin.
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:GeoDeploySSL:10m;
+    ssl_session_timeout 1d;
+
+{_NGINX_LOCATION.format(upstream=upstream, optin="")}
 }}
 """
 
@@ -540,9 +612,18 @@ services:
 FLAVORS = ("nginx", "caddy", "apache", "traefik")
 
 
-def proxy_config(domain: str, flavor: str, intent: dict) -> dict:
-    """The configuration for ONE reverse proxy, plus the steps around it. Never written anywhere by
-    us — the operator pastes it, on their own machine, having read it."""
+def proxy_config(domain: str, flavor: str, intent: dict, tls: bool = False,
+                 redirect: bool = True) -> dict:
+    """The configuration for ONE reverse proxy, plus the steps around it.
+
+    `tls=True` is the shape used once a certificate exists for this name — HTTPS on 443, port 80 kept
+    for the renewal challenge. It is rendered by the same generator as the plain one so the proxy
+    settings cannot drift between the two. `redirect=False` keeps port 80 serving the application
+    instead of bouncing to HTTPS, which is what a Cloudflare-fronted site needs: see
+    `_nginx_conf_tls`.
+
+    For the manual route none of this is written by us — the operator pastes it, having read it.
+    """
     port = intent["port"]
     upstream = f"http://127.0.0.1:{port}"
     domain = (domain or "geodeploy.example.org").strip()
@@ -557,7 +638,8 @@ def proxy_config(domain: str, flavor: str, intent: dict) -> dict:
         body, path = _traefik_conf(domain, port), "docker-compose.override.yml"
         test, reload_cmd = "", "docker compose up -d nginx"
     else:
-        body, path = _nginx_conf(domain, upstream), "/etc/nginx/sites-available/geodeploy.conf"
+        body = _nginx_conf_tls(domain, upstream, redirect) if tls else _nginx_conf(domain, upstream)
+        path = "/etc/nginx/sites-available/geodeploy.conf"
         test, reload_cmd = "sudo nginx -t", "sudo systemctl reload nginx"
 
     warnings: list[str] = []

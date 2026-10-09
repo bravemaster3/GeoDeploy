@@ -211,7 +211,20 @@ where an arbitrary file write would be worst.
 list (`.zip`, `.geojson`, `.json`, `.gpkg`, `.csv`, `.parquet`, `.tif`) is unchanged; what changed
 is that a `.zip` is now read for what it actually holds.
 
+- `certificates.py` (2026-10-09) — **daily renewal of the Let's Encrypt certificate GeoDeploy
+  obtained for the HOST's reverse proxy** (`services/hostproxy.renew_certificates`). The issuance is
+  the easy half; this is the half that makes automatic HTTPS automatic, because a 90-day certificate
+  that stops renewing fails for every visitor at once, two months after anyone last touched the
+  server, with a browser warning that looks like an attack. Deliberately dull: daily rather than
+  clever (certbot decides whether renewal is due, so a failure gets ~30 chances before anything
+  expires), a no-op costing one state-file read on the installs that never asked for a certificate,
+  and the proxy reload gated on the certificate file CHANGING rather than on certbot's output.
+  Scheduled in `celery_app.BEAT_SCHEDULE` on the `backup` queue — and remember the invariant
+  `test_celery_schedule.py` pins: a task in a schedule must also be in `include`, or beat sends a
+  message the worker has never imported.
+
 ## Last updated
+2026-10-09 (added `certificates.py` — daily renewal for automatic HTTPS)
 2026-09-07b (`vector_ingest._resolve_source`: **a ZIP is now read for what it holds**, not listed one level deep for a `.shp`. A shapefile inside a folder — what every dataset download produces — was refused with "ZIP file contains no .shp file", naming the thing it did contain. See the section above. Tests: `api/tests/test_archive_ingest.py`.)
 2026-09-07 (`vector_ingest._create_sibling`: **raw-SQL inserts must write every NOT NULL column themselves** — `vector_layers.visibility`, `vector_layers.is_public` and `upload_jobs.progress` all declare their default in Python, which SQLAlchemy applies only to an ORM insert, so a multi-layer upload died on a fresh install with `NotNullViolation`. Sharing is inherited from the parent row. Table names now come from `services.postgis.unique_table_name`, and names DERIVED from a table — the staging table, the geometry index — from `derived_name`; appending to a 63-character name returns that name unchanged, which is what `relation "…" already exists` was. `_ingest_via_copy` also handles a layer with NO attribute columns, which used to build `(, geom)`.)
 

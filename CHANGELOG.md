@@ -30,11 +30,17 @@ upgrade needs manual work.
   use in the meantime (Flexible until the certificate exists, then Full (strict) — the mode decides
   which origin port Cloudflare connects to). The written file also no longer carries the paste
   instructions meant for someone placing it by hand.
-- **HTTPS, as its own decision.** With Caddy there is nothing to do — it obtains and renews the
-  certificate itself. With nginx or Apache there is a separate button that runs the certbot already
-  on your machine; GeoDeploy will not install packages for you, and will not fold a request to an
-  external CA into a button labelled something else. Behind Cloudflare's proxy the panel says what to
-  set and when (Flexible until the origin has a certificate, then Full (strict)).
+- **Automatic HTTPS, without installing anything.** Press **Get a certificate** in Settings →
+  Deployment: GeoDeploy runs certbot in a throwaway container, obtains a Let's Encrypt certificate
+  over the HTTP-01 challenge, rewrites its own proxy block to serve HTTPS on 443, tests and reloads —
+  then renews it daily. Nothing is installed on your machine; the certbot image is removed when it
+  exits. Caddy still needs none of this, and Apache still gets the command to run.
+  Two details that exist because of how this fails otherwise: port 80 keeps serving the ACME path
+  **unredirected**, since renewal uses the same challenge and redirecting it to an expired
+  certificate is how auto-renewal quietly stops; and on a Cloudflare-fronted domain port 80 serves
+  the application rather than redirecting, because with SSL/TLS on Flexible a redirect bounces the
+  browser between Cloudflare and your server forever. Renewal reloads your proxy only when the
+  certificate file actually changed, and never reloads a configuration that fails its own test.
 - **The installer says which mode it chose.** The screen at the end of a shared-machine install
   explained that nothing outside the server can reach GeoDeploy "which is the point of this mode"
   without ever naming the mode. It now says `behind-proxy` — the word `.env`, `set-port.sh --show`

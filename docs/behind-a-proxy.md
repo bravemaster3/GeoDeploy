@@ -224,17 +224,45 @@ configuration, and a tidy-up must not be what takes your sites down.
 
 Getting the certificate depends on which proxy you run:
 
-- **Caddy** obtains and renews the certificate itself as soon as the domain resolves to the machine.
-  There is no certificate step, which is why Caddy is the easiest correct answer here.
-- **nginx and Apache** use certbot, as a **separate button** you press after Apply. It is deliberately
-  not part of Apply: it reaches an external CA under terms you have to accept, publishes the hostname
-  to the public Certificate Transparency log, and spends a rate limit that is unpleasant to exhaust.
-  GeoDeploy will **not install certbot** for you — installing packages on your server is exactly the
-  kind of uninvited change this page is about. If it is not there, you get the command.
-- **Behind Cloudflare's proxy** (the orange cloud), Cloudflare terminates HTTPS for visitors, so the
-  site is encrypted the moment the proxy works. Set SSL/TLS to **Flexible** until this server has its
-  own certificate — with a plain-HTTP origin, Full (strict) will refuse — then switch to **Full
-  (strict)** once it does. certbot's HTTP challenge needs the orange cloud turned off while it runs.
+- **Caddy** obtains and renews it itself. There is nothing to do, and nothing below applies.
+- **nginx** — press **Get a certificate** in the panel. GeoDeploy runs certbot **in a throwaway
+  container**, so nothing is installed on your machine, gets a Let's Encrypt certificate over the
+  HTTP-01 challenge, rewrites its own block to serve HTTPS on 443, tests, and reloads. It then
+  renews itself daily.
+- **Apache** is not automated yet; the panel gives you `sudo certbot --apache -d your-domain`.
+
+#### What automatic HTTPS does to your machine
+
+More than one config file, so it is worth knowing before you press it:
+
+| | |
+| --- | --- |
+| Installed on the host | **nothing** — certbot runs in a container that is removed afterwards |
+| Created on the host | `/etc/letsencrypt` (certificates, account key) and `/var/lib/letsencrypt` |
+| Changed | GeoDeploy's own `geodeploy.conf`, nothing else |
+| Renewal | a daily task in GeoDeploy's worker; certbot no-ops until renewal is due |
+
+The HTTP-01 challenge is a file fetched over **port 80** from the public internet, so port 80 must
+reach this server for that name. **Behind Cloudflare, turn the orange cloud off while it runs** —
+with the proxy on, the challenge may be served or cached by Cloudflare instead of reaching you.
+
+!!! note "Two deliberate details, both of which exist because of how this breaks"
+
+    **Port 80 keeps serving the ACME path, never redirected.** Renewal uses the same challenge, and
+    redirecting it to a port whose certificate has just expired is exactly how an auto-renewing
+    certificate quietly stops renewing.
+
+    **Behind Cloudflare, port 80 serves the application rather than redirecting to HTTPS.** With
+    SSL/TLS on Flexible, Cloudflare connects to port 80; a redirect there sends the browser back to
+    Cloudflare, which connects to port 80 again — an infinite loop on a site that worked a minute
+    earlier. GeoDeploy detects the Cloudflare case and omits the redirect. Turn on **Always Use
+    HTTPS** in Cloudflare instead, and switch SSL/TLS to **Full (strict)** now that your server has
+    its own certificate.
+
+Renewal reloads your proxy **only when the certificate file actually changed** — not on a schedule,
+and not by parsing certbot's output, which is prose and changes between versions. If the
+configuration fails its test at renewal time, nothing is reloaded and the existing certificate stays
+live, which buys you the remaining weeks of its validity to fix the real problem.
 
 ### If you would rather do it by hand
 

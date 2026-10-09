@@ -251,18 +251,20 @@ on each explaining what breaks; the full version is in
 ### 2b · HTTPS
 
 - **Caddy** obtains and renews the certificate itself. Nothing to do.
-- **nginx and Apache** use certbot, as a separate button you press after Apply. It is deliberately
-  not folded into Apply: it reaches an external certificate authority under terms you accept, puts
-  the hostname in the public Certificate Transparency log, and spends a rate limit. GeoDeploy will
-  **not install certbot for you** — installing packages on your server is the kind of uninvited
-  change this whole mode exists to avoid. If it is missing you get the command:
+- **nginx** — press **Get a certificate**. GeoDeploy runs certbot in a throwaway container, so
+  **nothing is installed on your machine**, obtains a Let's Encrypt certificate, rewrites its own
+  block to serve HTTPS, tests and reloads — then renews it daily.
+- **Apache** is not automated yet: `sudo certbot --apache -d your-domain`.
 
-  ```bash
-  sudo apt install certbot python3-certbot-nginx
-  ```
+It is a separate button, never folded into Apply, because it reaches an external certificate
+authority under terms you accept and puts the hostname in the public Certificate Transparency log.
 
-- **Behind Cloudflare's proxy**, visitors already get HTTPS from Cloudflare. Your own certificate is
-  what lets you move from Flexible to Full (strict), which is where you want to end up.
+The challenge is a file fetched over **port 80**, so port 80 must be reachable for that name — and
+**behind Cloudflare, turn the orange cloud off while it runs**. Afterwards, set SSL/TLS to
+**Full (strict)** and turn on **Always Use HTTPS**: your server now has its own certificate, and
+GeoDeploy deliberately does not redirect port 80 on a Cloudflare-fronted site, because on Flexible
+that loops forever. The full story is in
+[Installing alongside other software](behind-a-proxy.md).
 
 ### 3 · Verify
 
