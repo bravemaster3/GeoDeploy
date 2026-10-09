@@ -24,6 +24,17 @@ Bash scripts that take a bare Linux VPS to a running GeoDeploy (the `curl instal
   EXISTING install never has its port re-picked (an update or re-run that moved it would orphan the
   operator's `proxy_pass`, DNS and bookmarks); one predating the keys is recorded as `0.0.0.0:80`,
   which is what it already was.
+  **2026-10-09, after the first field install:** two failures that only appear when the installer is
+  pointed at something other than the default branch. (1) The sourcing of `lib-deploy.sh` /
+  `preflight.sh` is now GUARDED — a `GEODEPLOY_VERSION=<branch> curl … | bash` sends the variable to
+  *curl*, not to bash (a prefix assignment applies to the command it prefixes, and the two sides of a
+  pipe are separate processes), so the branch's installer ran with `VERSION=main`, cloned main, and
+  died on a bare "No such file or directory". It now names the cause and the fix in one sentence.
+  (2) The EXISTING-CHECKOUT path does `--unshallow`, `git remote set-branches origin '*'`,
+  `--prune-tags` and `git remote prune`, exactly as `self-update.sh` has since 2026-08-06 — without
+  them a re-run at a different ref fails "No such version" on the very clones this script makes,
+  because its own clone is `--depth 1 --branch X`, i.e. shallow AND single-branch. **Keep the two in
+  step.** The end-of-install banner also now NAMES behind-proxy mode instead of saying "this mode".
   `GEODEPLOY_VERSION` picks the version (branch, **tag** or commit; default `main`). On an EXISTING checkout it now resolves that ref itself — branch, then tag, then commit — and `git reset --hard`s to it; the old `git pull origin "$VERSION"` could not reach a tag at all (a tag is not a branch, so pulling one onto a detached HEAD merges or refuses), which made re-running the installer the wrong way to pin a release.
 - `update.sh` — `git pull` → **rewrites `GEODEPLOY_GIT_SHA` in `.env`** → `docker compose build` → `docker compose up -d --remove-orphans`. (A dev `docker compose up` that skips these scripts leaves `GEODEPLOY_GIT_SHA=unknown`; the Updates panel then shows "Running unknown" but still reports the latest available commit.)
   Since 2026-08-18 it also **applies an `nginx.conf` change**: the file is a single-file bind mount and `git pull` gives it a new inode, so a running container stays on the old one and `up -d` reports "up-to-date" while the change silently never lands. It compares the container's config to the host file and force-recreates nginx only when they differ — the same check `self-update.sh::apply_nginx` has always done. **Keep the two in step.**
@@ -135,4 +146,5 @@ a 2-hour-old commit, with the panel reading "Up to date". Now, after the health 
 have been rebuilt IF its build context changed (`git diff -- api/`, so a docs-only update stays
 silent), and each service must be RUNNING that image; on failure the sha/ref markers are restored and
 the status is an error naming the exact recovery command.)
+2026-10-09 (install.sh: a guarded source with a real diagnosis, the self-update git fixes, and the mode is named on the banner)
 2026-08-06 (branch + release targets reach a default clone: un-shallow, all-branch refspec, tag/branch pruning; the deployed ref is recorded — issue #4)
