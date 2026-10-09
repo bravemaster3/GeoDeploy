@@ -64,28 +64,41 @@ This command:
 5. Starts the core Docker services
 6. Opens the setup wizard, and prints the address
 
-### The one question the installer asks
+### What the installer asks you
 
 GeoDeploy never takes ports 80 and 443 without being told it may — not even on an empty server — and
-it never stops or reconfigures anything already running.
+it never stops or reconfigures anything already running. So before it starts anything it reports what
+it found on the machine and offers three choices:
 
-- **Take over port 80.** GeoDeploy becomes the machine's web server, and you reach it at
-  `http://your-server-ip`. The right answer on a VPS you bought for this, and the one the installer
-  recommends when nothing else is serving.
-- **Behind the web server you already run.** GeoDeploy listens on `127.0.0.1:8080`, reachable only
-  from the server itself, and an nginx, Caddy or Apache you already run publishes it on a domain.
-  The right answer on a lab server, a shared machine, or anything already hosting a site — and the
-  installer recommends it when it finds port 80 in use.
+1. **Make this machine a dedicated GeoDeploy server.** GeoDeploy takes port 80 and answers at
+   `http://your-server-ip`, with no port in the address. It becomes the machine's web server, so
+   anything else that wants port 80 afterwards will fail to start. The right answer on a VPS you
+   bought for this, and what the installer recommends when nothing else is serving. It is offered but
+   refused if something already holds port 80 — the installer will not stop that service for you.
+2. **Use the default port.** GeoDeploy listens on `127.0.0.1` on the first port that is actually
+   free, reachable only from the server itself, and an nginx, Caddy or Apache you already run
+   publishes it on a domain. The right answer on a lab server, a shared machine, or anything already
+   hosting a site — and what the installer recommends when it finds port 80 in use.
+3. **Choose a different port.** The same as 2, on a port you name. It exists because plenty of
+   operators already know the port their proxy configuration refers to. The installer shows which
+   ports are free at that moment and accepts any other you type; one that is taken is refused, with
+   the process holding it named.
 
-Either way you can change your mind later with one command
-(`sudo bash installer/set-port.sh --dedicated`, or a port number). The full story — the SSH tunnel
-that gets you to the dashboard before you have a domain, the reverse-proxy configuration the
-dashboard writes for you, and what breaks if it is wrong — is in
-[Installing alongside other software](behind-a-proxy.md).
+Options 2 and 3 are the same mode — it is called **behind-proxy**, which is the word `.env`,
+`installer/set-port.sh --show` and the dashboard all use for it. Option 1 is **dedicated**.
+
+Choosing 2 or 3 asks one more question: the domain you intend to use, if you know it yet. Blank is
+fine — it only pre-fills the field in the dashboard so you do not have to type it twice.
+
+You can change your mind later with one command (`sudo bash installer/set-port.sh --dedicated`, or a
+port number). The full story — the SSH tunnel that gets you to the dashboard before you have a
+domain, **the dashboard configuring your existing web server for you**, and what breaks if it is
+wrong — is in [Installing alongside other software](behind-a-proxy.md).
 
 If the installer has no terminal to ask with (cloud-init, Ansible, CI), set `GEODEPLOY_DEPLOY_MODE`
-to `dedicated` or `behind-proxy` in the environment. With neither a terminal nor a setting, it
-installs behind-proxy on a free local port: the only choice that takes nothing from the machine.
+to `dedicated` or `behind-proxy` in the environment, optionally with `GEODEPLOY_HTTP_PORT`. With
+neither a terminal nor a setting, it installs behind-proxy on a free local port: the only choice that
+takes nothing from the machine.
 
 ## Setup wizard
 

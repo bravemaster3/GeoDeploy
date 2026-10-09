@@ -78,7 +78,23 @@ if [ -d ".git" ]; then
   # it. `git pull origin "$VERSION"` could not do this: a TAG is not a branch, so pulling one onto a
   # detached HEAD either merges or refuses, and re-running the installer pinned at a release was the
   # obvious way to reach one. Tags also have to be fetched explicitly.
-  git fetch --tags --force origin >/dev/null 2>&1 || warn "Could not fetch from GitHub — continuing with what is here."
+  # THREE things a plain `git fetch origin` cannot do on a checkout THIS SCRIPT created, each of
+  # which makes re-running the installer at a different version fail for a reason that reads like
+  # "that version does not exist". `self-update.sh` has done these since 2026-08-06; install.sh had
+  # none of them until a branch install hit it (notes_for_future.md §5k). KEEP THE TWO IN STEP.
+  #
+  #   --unshallow            the clone below is --depth 1, so a tag resolves to a commit with no
+  #                          history and there is nothing to roll back into
+  #   set-branches '*'       the clone below is --branch X, i.e. SINGLE-BRANCH: the refspec fetches
+  #                          only X, so refs/remotes/origin/<anything-else> never exists and every
+  #                          other branch is "No such version" on a repository that has it
+  #   prune / --prune-tags   a tag moved or a branch deleted upstream must stop resolving here
+  git fetch --unshallow --tags origin >/dev/null 2>&1 || true
+  git remote set-branches origin '*' >/dev/null 2>&1 || true
+  git fetch --tags --force --prune-tags origin >/dev/null 2>&1 \
+    || git fetch --tags --force origin >/dev/null 2>&1 \
+    || warn "Could not fetch from GitHub — continuing with what is here."
+  git remote prune origin >/dev/null 2>&1 || true
   GD_TARGET=""
   for candidate in "refs/remotes/origin/$VERSION" "refs/tags/$VERSION" "$VERSION"; do
     if GD_TARGET="$(git rev-parse -q --verify "${candidate}^{commit}" 2>/dev/null)" && [ -n "$GD_TARGET" ]; then break; fi
@@ -97,6 +113,27 @@ fi
 # Why the checks happen AFTER the clone: preflight.sh and lib-deploy.sh ship in the repository, and
 # `curl … | bash` has no repository until now. Cloning is reversible and takes nothing from the
 # machine; no container is started and no port is bound until the question below is answered.
+
+# The installer you PIPED and the code it just CLONED can be different versions, and when they are,
+# this is where it shows up. `GEODEPLOY_VERSION=<branch> curl … | bash` is the shape that does it:
+# a shell prefix assignment applies to the command it prefixes, so the variable reaches `curl` and
+# NOT `bash` — the branch's installer runs with VERSION=main, clones main, and then sources files
+# main does not have. Unguarded, that surfaces as a bare "No such file or directory" naming a path,
+# which sends people looking for a corrupt clone. Say what it actually is. (notes_for_future.md §5k)
+for _gd_need in lib-deploy.sh preflight.sh; do
+  [ -f "$GEODEPLOY_DIR/installer/$_gd_need" ] && continue
+  echo ""
+  warn "This installer needs installer/$_gd_need, and the checked-out version does not have it."
+  warn "The installer you ran and the version it cloned are not the same ($VERSION)."
+  echo ""
+  echo "  If you meant to install a branch or a release, the variable has to reach BASH, not curl:"
+  echo "      curl -fsSL <url> | GEODEPLOY_VERSION=$VERSION bash"
+  echo "  A leading  GEODEPLOY_VERSION=… curl … | bash  sets it for curl only, and bash still"
+  echo "  clones the default branch."
+  echo ""
+  error "Nothing has been started, and nothing on this machine was changed."
+done
+unset _gd_need
 
 # shellcheck source=lib-deploy.sh
 . "$GEODEPLOY_DIR/installer/lib-deploy.sh"
@@ -457,15 +494,19 @@ if [ "$GD_MODE" = behind-proxy ]; then
   echo ""
   echo "  On this machine       $(gd_local_url)"
   echo ""
+  # NAME the mode. It is called behind-proxy in .env, in `set-port.sh --show` and in the dashboard,
+  # and a screen that says "this mode" without ever saying which leaves the operator with nothing to
+  # search for. (Asked verbatim during the first field install: "what mode are we talking about?")
   echo -e "  ${YELLOW}Nothing outside this server can reach it yet — that is the point of${NC}"
-  echo -e "  ${YELLOW}this mode. Two ways on:${NC}"
+  echo -e "  ${YELLOW}behind-proxy mode, which is what this install chose. Two ways on:${NC}"
   echo ""
   echo "  To open the dashboard now, from your own computer:"
   echo "      ssh -L ${GD_PORT}:127.0.0.1:${GD_PORT} $(id -un)@$(gd_public_ip)"
   echo "      then open http://localhost:${GD_PORT}"
   echo ""
-  echo "  To give it a domain, point your existing web server at $(gd_local_url)."
-  echo "  Settings → Deployment in the dashboard writes that configuration for you."
+  echo "  To give it a domain, add a DNS record for it and open Settings → Deployment."
+  echo "  GeoDeploy can configure this machine's web server for it — or hand you the"
+  echo "  configuration to place yourself, if you would rather do that."
   if [ -n "${GD_DOMAIN_HINT:-}" ]; then
     echo "  (It will start from the domain you gave: ${GD_DOMAIN_HINT})"
   fi
