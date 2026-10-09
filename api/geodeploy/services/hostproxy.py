@@ -892,6 +892,10 @@ def plan(domain: str, intent: dict) -> dict:
             "tests": found.get("tests"),
             "certbot": found.get("certbot"),
             "probe_ok": found.get("probe_ok"),
+            # MUST be carried through: `apply()` reads it from here to decide whether to probe 443
+            # after writing. Leaving it out silently skipped the HTTPS check — reintroducing, in the
+            # payload, exactly the blind spot §5o was written to close.
+            "tls": found.get("tls"),
         },
     }
     if adapter:
