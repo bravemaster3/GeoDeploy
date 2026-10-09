@@ -296,6 +296,26 @@ done
 # succeeding would report a FAILING `nginx -t` as a pass. That inverts the one check R2 depends on:
 # a machine whose config is already broken would be declared healthy and then reloaded. Capture
 # first, trim after.
+# Which server blocks claim which ports, from the MERGED configuration (`nginx -T`) rather than from
+# the files — includes are followed, so a block in a file we never looked at still counts.
+#
+# This exists because of a failure found in the field (2026-10-09): our block listens on 80 only, the
+# machine had a `listen 443 ssl; server_name _;` catch-all for another site, and Cloudflare connects
+# to the origin on 443 in Full mode. Result: port 80 served GeoDeploy perfectly, every real visitor
+# got the other website, and every check we had said success. Associating listens with server_names
+# is what lets us say that BEFORE the operator finds out from a browser.
+#
+# awk assigns each listen/server_name to the most recent `server {`. Sound for nginx: `location`
+# blocks contain neither directive, and `upstream`'s `server 1.2.3.4;` has no brace.
+section nginxblocks
+if [ -x $H/usr/sbin/nginx ]; then
+  chroot $H /usr/sbin/nginx -T 2>/dev/null | awk '
+    /server[ \t]*\{/ { b++; cur="b" b }
+    /^[ \t]*listen[ \t]/ { if (cur != "") print cur, $0 }
+    /^[ \t]*server_name[ \t]/ { if (cur != "") print cur, $0 }
+  ' | head -400
+fi
+
 section nginxtest
 if [ -x $H/usr/sbin/nginx ]; then
   OUT=$(chroot $H /usr/sbin/nginx -t 2>&1) ; RC=$? ; echo "$OUT" | tail -8 ; echo "rc=$RC"
@@ -370,6 +390,46 @@ def _names_from(lines: list[str]) -> set[str]:
             if token:
                 names.add(token)
     return names
+
+
+def _tls_picture(lines: list[str], domain: str) -> dict:
+    """Who answers HTTPS on this machine, and would our domain reach us there?
+
+    The question this answers is the one that cost a field install: a port-80 block is perfectly
+    correct and completely bypassed when the request arrives on 443. Three outcomes, and they need
+    different words:
+
+      no TLS at all            nothing serves 443, so nothing is being shadowed — stay quiet
+      TLS, and ours is in it   a certificate for this name already exists; nothing to warn about
+      TLS, and ours is NOT     every HTTPS request for this domain lands on somebody else's block.
+                               A `server_name _` catch-all makes it certain rather than likely.
+    """
+    blocks: dict[str, dict] = {}
+    for line in lines:
+        parts = line.split(None, 1)
+        if len(parts) != 2 or not parts[0].startswith("b"):
+            continue
+        block = blocks.setdefault(parts[0], {"listens": [], "names": set()})
+        body = parts[1].strip().rstrip(";")
+        if body.startswith("listen"):
+            block["listens"].append(body)
+        elif body.startswith("server_name"):
+            block["names"] |= _names_from([body])
+            if re.fullmatch(r"server_name\s+_", body):
+                block["catchall"] = True
+
+    tls_blocks = [b for b in blocks.values()
+                  if any("443" in item or " ssl" in item for item in b["listens"])]
+    if not tls_blocks:
+        return {"has_tls": False, "serves_domain": False, "catchall": False, "names": []}
+
+    serves = any(_name_conflict(domain, b["names"]) for b in tls_blocks)
+    catchall = any(b.get("catchall") for b in tls_blocks)
+    names: set[str] = set()
+    for b in tls_blocks:
+        names |= b["names"]
+    return {"has_tls": True, "serves_domain": serves, "catchall": catchall,
+            "names": sorted(names)}
 
 
 def _name_conflict(domain: str, names: set[str]) -> str | None:
@@ -575,6 +635,13 @@ def detect() -> dict:
         parts = line.split()
         if len(parts) == 2:
             out["our_files"][parts[0]] = parts[1]
+    # The merged config is a better source of claimed names than grepping files — it follows
+    # includes — so union the two rather than choosing. Over-collecting is the safe direction: a
+    # name we wrongly think is taken is a refusal the operator can read and work around.
+    out["blocks"] = sec.get("nginxblocks", [])
+    _block_names = [parts[1] for parts in (ln.split(None, 1) for ln in out["blocks"])
+                    if len(parts) == 2 and parts[1].startswith("server_name")]
+    out["server_names"] = sorted(set(out["server_names"]) | _names_from(_block_names))
     for key, name in (("nginxtest", "nginx"), ("apachetest", "apache"), ("caddytest", "caddy")):
         result = _test_result(sec.get(key, []))
         if result:
@@ -633,10 +700,22 @@ def _body(adapter: dict, domain: str, intent: dict) -> str:
     from . import deployment
 
     cfg = deployment.proxy_config(domain, adapter["kind"], intent)
+    body = cfg["config"]
+    # Drop the generator's LEADING comment block — "put this in /etc/nginx/sites-available/… then
+    # run nginx -t && systemctl reload". Right for someone copying the text by hand, nonsense in a
+    # file we have already placed in conf.d, tested and reloaded; it was in the first version and
+    # read as a to-do list for work that was already done. Only the preamble goes: the per-directive
+    # comments inside the block are the reason anyone can review what we wrote, and they stay.
+    lines = body.splitlines(keepends=True)
+    start = 0
+    while start < len(lines) and (lines[start].lstrip().startswith("#") or not lines[start].strip()):
+        start += 1
     note = (f"# {MARKER} — do not edit by hand.\n"
-            f"# Written by the Deployment panel for {domain}. Remove it from there, not with rm,\n"
-            f"# so the proxy is tested and reloaded the same way it was when this was added.\n")
-    return note + cfg["config"]
+            f"# Written by the Deployment panel for {domain}, then tested and reloaded.\n"
+            f"# Remove it from there rather than with rm, so the proxy is tested before it is\n"
+            f"# reloaded — taking this file away can expose an unrelated problem in the rest of\n"
+            f"# the configuration, and a tidy-up must not be what takes the other sites down.\n")
+    return note + "".join(lines[start:])
 
 
 def plan(domain: str, intent: dict) -> dict:
@@ -648,6 +727,7 @@ def plan(domain: str, intent: dict) -> dict:
     """
     domain = _safe_domain(domain)
     found = detect()
+    found["tls"] = _tls_picture(found.get("blocks") or [], domain)
     adapter = found.get("adapter")
     blockers: list[dict] = []
     warnings: list[str] = []
@@ -736,6 +816,24 @@ def plan(domain: str, intent: dict) -> dict:
         if adapter["tls"] == "automatic":
             warnings.append("Caddy will obtain the HTTPS certificate by itself once the domain "
                             "resolves here — there is no separate certificate step.")
+
+        # THE ONE THAT COST A FIELD INSTALL. Our block listens on 80. If this machine already
+        # terminates HTTPS for something else and no 443 block claims our name, then every https://
+        # request for this domain is answered by somebody else's site — and the operator finds out
+        # from a browser, after a panel that said success, because port 80 was perfect all along.
+        # Worth saying BEFORE Apply, not in a troubleshooting page.
+        tls = found.get("tls") or {}
+        if tls.get("has_tls") and not tls.get("serves_domain"):
+            warnings.append(
+                "This machine already serves HTTPS for other sites, and nothing on port 443 claims "
+                f"{domain} yet — so `https://{domain}` will reach "
+                + ("the catch-all block that answers for every name here"
+                   if tls.get("catchall") else "whichever site answers 443 by default")
+                + ", not GeoDeploy, until it has its own certificate. Plain `http://` works as soon "
+                  "as you apply. Behind Cloudflare this bites immediately: in Full or Full (strict) "
+                  "mode Cloudflare connects to this server on 443, so visitors would get the other "
+                  "site. Use SSL/TLS mode Flexible until the certificate exists, then Full (strict)."
+            )
 
     if not intent["bind"].startswith("127."):
         warnings.append(
@@ -854,6 +952,23 @@ else
   echo "rc=$RC2"
 fi
 set -e
+
+# And 443, separately, because a correct port-80 block is INVISIBLE to a visitor arriving over
+# HTTPS when another block holds 443 — the failure that shipped on 2026-10-09. Asking only the port
+# we configured is how a panel reports success while every real request gets somebody else's site.
+say route443
+set +e
+if [ "{probe_tls}" = "" ] || ! wget --help 2>&1 | grep -q -- '--header' ; then
+  echo "skipped"
+else
+  OUT=$(wget -q -O - --no-check-certificate --header "Host: {domain}" --timeout 8 \
+        "https://127.0.0.1/api/public/whoami" 2>&1)
+  RC3=$?
+  echo "$OUT" | head -c 400
+  echo ""
+  echo "rc=$RC3"
+fi
+set -e
 echo "==end=="
 """
 
@@ -938,6 +1053,7 @@ def apply(domain: str, intent: dict) -> dict:
     # a failure of the thing we just did correctly. An empty port skips the check and says so.
     on_80 = any(item["socket"].endswith(":80") or item["socket"].endswith(".80")
                 for item in (checked["detected"].get("listeners") or []))
+    tls = checked["detected"].get("tls") or {}
     script = _APPLY_HOST.format(
         target=adapter["target"],
         link=adapter["symlink"] or "",
@@ -945,6 +1061,7 @@ def apply(domain: str, intent: dict) -> dict:
         reload_cmd=_host_reload_command(adapter),
         domain=domain,
         probe_port="80" if on_80 else "",
+        probe_tls="443" if tls.get("has_tls") else "",
     )
     code, text = _host_run(script, files={"config": body}, timeout=240)
     sec = _sections(text)
@@ -1000,6 +1117,26 @@ def apply(domain: str, intent: dict) -> dict:
              "reach GeoDeploy.\n\n" + "\n".join(route[:6]),
              "Most often another block on this machine matches the request first. The file is in "
              "place and valid; Verify below will say what a visitor gets.")
+
+    # HTTPS, as its own step. Reported even though the file is correct, because "correct" and
+    # "what a visitor gets" came apart here once already: port 80 answered perfectly while every
+    # https:// request landed on another site's catch-all.
+    route443 = sec.get("route443", [])
+    if route443 and not any(line == "skipped" for line in route443):
+        if any("instance" in line for line in route443):
+            step("HTTPS reaches GeoDeploy too", True,
+                 f"https://{domain} is answered by GeoDeploy on this machine as well.")
+        else:
+            step("HTTPS does NOT reach GeoDeploy yet", False,
+                 "This machine serves HTTPS for something else, and a request for this domain on "
+                 "port 443 is answered by that, not by GeoDeploy. The block GeoDeploy just wrote "
+                 "listens on port 80 — which is correct, and invisible to anyone arriving over "
+                 "HTTPS.",
+                 f"Get a certificate for {domain} (the button below, or "
+                 f"`sudo certbot --nginx -d {domain}`): it adds a 443 block for this exact name, "
+                 f"and an exact match beats a catch-all. Behind Cloudflare, set SSL/TLS to Flexible "
+                 f"until then — in Full mode Cloudflare connects to this server on 443 and your "
+                 f"visitors get the other site.")
     return {"ok": all(s["ok"] for s in steps), "steps": steps, "plan": checked,
             "domain": domain, "target": adapter["target"]}
 

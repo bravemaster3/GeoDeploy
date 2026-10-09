@@ -202,7 +202,27 @@ configuration, and a tidy-up must not be what takes your sites down.
 
 ### HTTPS
 
-Depends on which proxy you run:
+!!! warning "A port-80 block is invisible to anyone arriving over HTTPS"
+
+    The block GeoDeploy writes listens on **port 80**. If your machine already terminates HTTPS for
+    another site — and especially if that site's block is `listen 443 ssl; server_name _;`, a
+    catch-all that answers for every hostname — then `https://your-domain` is answered by **that
+    site**, not GeoDeploy, no matter how correct our block is. `http://` works immediately;
+    `https://` does not, until the domain has its own certificate.
+
+    **Behind Cloudflare this bites straight away**, because the SSL/TLS mode decides which origin
+    port Cloudflare connects to:
+
+    | Cloudflare SSL/TLS mode | Connects to your origin on | Result before you have a certificate |
+    | --- | --- | --- |
+    | **Flexible** | port 80 | works |
+    | Full / Full (strict) | port 443 | you get the other site, or a 525/526 |
+
+    So: **Flexible** until the certificate exists, then **Full (strict)**. The panel warns about this
+    before you apply, and checks port 443 as well as port 80 afterwards, so it says plainly when the
+    configuration is right and HTTPS still lands elsewhere.
+
+Getting the certificate depends on which proxy you run:
 
 - **Caddy** obtains and renews the certificate itself as soon as the domain resolves to the machine.
   There is no certificate step, which is why Caddy is the easiest correct answer here.
