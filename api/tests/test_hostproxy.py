@@ -435,3 +435,13 @@ def test_our_marked_block_still_counts_for_the_https_question(monkeypatch):
         ["b1 GEODEPLOY_OWN", "b1 listen 443 ssl;", "b1 server_name maps.example.org;"],
         "maps.example.org")
     assert tls["has_tls"] is True and tls["serves_domain"] is True
+
+
+def test_the_tls_picture_reaches_the_payload_apply_reads_it_from(monkeypatch):
+    """apply() decides whether to probe 443 from plan()["detected"]["tls"]. Computing it and not
+    carrying it through skipped the HTTPS check silently — the blind spot §5o exists to close, put
+    back by omission in a dict literal. Caught on a real machine by a missing step in the results."""
+    _detected(monkeypatch, blocks=_BLOCKS_CATCHALL_TLS)
+    plan = hostproxy.plan("maps.example.org", _INTENT)
+    assert plan["detected"]["tls"]["has_tls"] is True
+    assert plan["detected"]["tls"]["catchall"] is True
