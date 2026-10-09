@@ -387,3 +387,51 @@ def test_the_apply_script_probes_443_as_well_as_80():
     assert "say route443" in script
     assert "--no-check-certificate" in script
     assert "https://127.0.0.1/api/public/whoami" in script
+
+
+# ── Self-collision: GeoDeploy must not refuse because of its own file ────────────────────────────
+#
+# Reported from the field the day Apply first worked: the FIRST apply succeeded, and every visit to
+# the panel afterwards refused with "something already serves that name here" — pointing, invisibly,
+# at the file GeoDeploy had just written. R5 is right; sweeping our own configuration into the list
+# of what "somebody else" serves is not.
+
+def test_our_own_block_is_not_counted_as_somebody_elses_name(monkeypatch):
+    _detected(monkeypatch,
+              server_names=["shop.example.org"],      # the probe now excludes our file
+              our_files={"/etc/nginx/conf.d/geodeploy.conf": "ours"})
+    monkeypatch.setattr(hostproxy, "read_state", lambda: {
+        "domain": "maps.example.org",
+        "adapter": {"target": "/etc/nginx/conf.d/geodeploy.conf", "where": "host"}})
+    plan = hostproxy.plan("maps.example.org", _INTENT)
+    assert plan["can_apply"] is True
+    assert "name-taken" not in _codes(plan)
+
+
+def test_the_recorded_domain_is_forgiven_even_if_the_probe_still_reports_it(monkeypatch):
+    """Belt and braces over the probe's own exclusion — an operator who renamed the file, or a probe
+    that could not run `find`, must still be able to re-apply."""
+    _detected(monkeypatch,
+              server_names=["maps.example.org"],
+              our_files={"/etc/nginx/conf.d/geodeploy.conf": "ours"})
+    monkeypatch.setattr(hostproxy, "read_state", lambda: {
+        "domain": "maps.example.org",
+        "adapter": {"target": "/etc/nginx/conf.d/geodeploy.conf", "where": "host"}})
+    assert hostproxy.plan("maps.example.org", _INTENT)["can_apply"] is True
+
+
+def test_a_name_served_by_somebody_else_is_still_refused(monkeypatch):
+    """The forgiveness above must not become a hole: a DIFFERENT name, or no file of ours, still
+    blocks."""
+    _detected(monkeypatch, server_names=["maps.example.org"], our_files={})
+    monkeypatch.setattr(hostproxy, "read_state", lambda: {})
+    assert "name-taken" in _codes(hostproxy.plan("maps.example.org", _INTENT))
+
+
+def test_our_marked_block_still_counts_for_the_https_question(monkeypatch):
+    """Excluded from R5, INCLUDED in the TLS picture: once certbot adds a 443 block to our file, that
+    block is exactly what proves HTTPS now reaches GeoDeploy."""
+    tls = hostproxy._tls_picture(
+        ["b1 GEODEPLOY_OWN", "b1 listen 443 ssl;", "b1 server_name maps.example.org;"],
+        "maps.example.org")
+    assert tls["has_tls"] is True and tls["serves_domain"] is True
