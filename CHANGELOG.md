@@ -21,6 +21,15 @@ upgrade needs manual work.
   **The copy-and-paste route is not going anywhere:** both are offered side by side, every time, for
   operators who would rather own every change to their own web server.
   [#79](https://github.com/bravemaster3/GeoDeploy/issues/79)
+- **HTTPS lands where you expect, or GeoDeploy tells you why not.** The proxy block GeoDeploy writes
+  listens on port 80, and on a machine that already serves HTTPS for another site — particularly with
+  a `server_name _` catch-all on 443 — every `https://` request for your new domain is answered by
+  that other site while port 80 serves GeoDeploy perfectly. Found on a real server, where every check
+  reported success and the browser showed somebody else's website. The panel now says so **before**
+  you apply, checks port 443 as well as port 80 **after**, and names the Cloudflare SSL/TLS mode to
+  use in the meantime (Flexible until the certificate exists, then Full (strict) — the mode decides
+  which origin port Cloudflare connects to). The written file also no longer carries the paste
+  instructions meant for someone placing it by hand.
 - **HTTPS, as its own decision.** With Caddy there is nothing to do — it obtains and renews the
   certificate itself. With nginx or Apache there is a separate button that runs the certbot already
   on your machine; GeoDeploy will not install packages for you, and will not fold a request to an

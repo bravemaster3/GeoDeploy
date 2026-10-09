@@ -45,7 +45,7 @@ def test_the_apply_script_captures_before_it_trims():
         target="/etc/nginx/conf.d/geodeploy.conf", link="",
         test_cmd="chroot $H /usr/sbin/nginx -t",
         reload_cmd="chroot $H /usr/sbin/nginx -s reload",
-        domain="maps.example.org", probe_port="80")
+        domain="maps.example.org", probe_port="80", probe_tls="443")
     assert "OUT=$(chroot $H /usr/sbin/nginx -t 2>&1)\nRC=$?" in script
     assert 'echo "rc=$RC"' in script
     # and the rollback must remove the file BEFORE it re-tests, with no reload after a failure
@@ -60,7 +60,8 @@ def test_a_symlink_points_at_the_host_path_not_the_helper_path():
     script = hostproxy._APPLY_HOST.format(
         target="/etc/nginx/sites-available/geodeploy.conf",
         link="/etc/nginx/sites-enabled/geodeploy.conf",
-        test_cmd="true", reload_cmd="true", domain="x.example.org", probe_port="80")
+        test_cmd="true", reload_cmd="true", domain="x.example.org", probe_port="80",
+        probe_tls="")
     assert 'ln -sfn "/etc/nginx/sites-available/geodeploy.conf" "$H$LINK"' in script
 
 
@@ -314,3 +315,75 @@ def test_nothing_applied_yet_reports_none_not_an_empty_shell(monkeypatch):
     _detected(monkeypatch)
     monkeypatch.setattr(hostproxy, "read_state", lambda: {})
     assert hostproxy.plan("maps.example.org", _INTENT)["applied"] is None
+
+
+# ── HTTPS shadowing: the failure that reached a real browser (2026-10-09) ────────────────────────
+#
+# Found in the field. Our block listens on 80 and was perfect; the machine had
+# `listen 443 ssl; server_name _;` for another site; Cloudflare in Full mode connects to the origin
+# on 443. Port 80 served GeoDeploy, every real visitor got the other website, and every check we had
+# reported success. These pin the three outcomes apart.
+
+_BLOCKS_CATCHALL_TLS = [
+    "b1 listen 80;",
+    "b1 server_name shop.example.org;",
+    "b2 listen 443 ssl;",
+    "b2 server_name _;",
+]
+
+
+def test_a_443_catchall_means_https_does_not_reach_us():
+    tls = hostproxy._tls_picture(_BLOCKS_CATCHALL_TLS, "maps.example.org")
+    assert tls == {"has_tls": True, "serves_domain": False, "catchall": True, "names": []}
+
+
+def test_a_443_block_for_our_own_name_is_not_a_problem():
+    tls = hostproxy._tls_picture(
+        ["b1 listen 443 ssl;", "b1 server_name maps.example.org;"], "maps.example.org")
+    assert tls["has_tls"] is True and tls["serves_domain"] is True
+
+
+def test_a_machine_with_no_tls_at_all_says_nothing():
+    """Nothing serves 443, so nothing is being shadowed. Warning here would be noise on exactly the
+    machines where the port-80 block is the whole answer."""
+    tls = hostproxy._tls_picture(["b1 listen 80;", "b1 server_name shop.example.org;"], "maps.example.org")
+    assert tls["has_tls"] is False
+
+
+def test_the_plan_warns_before_apply_when_https_would_land_elsewhere(monkeypatch):
+    """Said BEFORE Apply, not in a troubleshooting page: the operator otherwise learns it from a
+    browser, after a panel that said success."""
+    _detected(monkeypatch, blocks=_BLOCKS_CATCHALL_TLS)
+    plan = hostproxy.plan("maps.example.org", _INTENT)
+    assert plan["can_apply"] is True           # the http:// configuration is still correct
+    warning = next((w for w in plan["warnings"] if "443" in w or "HTTPS" in w), None)
+    assert warning is not None
+    assert "catch-all" in warning
+    assert "Flexible" in warning               # the Cloudflare mode that works before a certificate
+
+
+def test_no_https_warning_when_this_machine_serves_no_tls(monkeypatch):
+    _detected(monkeypatch, blocks=["b1 listen 80;", "b1 server_name shop.example.org;"])
+    plan = hostproxy.plan("maps.example.org", _INTENT)
+    assert not any("HTTPS" in w for w in plan["warnings"])
+
+
+def test_the_written_file_does_not_carry_paste_instructions(monkeypatch):
+    """The generator's preamble tells the reader to place the file and reload — a to-do list for work
+    that already happened by the time it is on disk. The marker and the per-directive comments stay."""
+    _detected(monkeypatch)
+    body = hostproxy.plan("maps.example.org", _INTENT)["config"]
+    assert hostproxy.MARKER in body
+    assert "put this in" not in body
+    assert "systemctl reload" not in body.split("server {")[0]
+    assert "client_max_body_size" in body      # the comments that matter are still there
+    assert "proxy_set_header Host" in body
+
+
+def test_the_apply_script_probes_443_as_well_as_80():
+    script = hostproxy._APPLY_HOST.format(
+        target="/etc/nginx/conf.d/geodeploy.conf", link="", test_cmd="true", reload_cmd="true",
+        domain="maps.example.org", probe_port="80", probe_tls="443")
+    assert "say route443" in script
+    assert "--no-check-certificate" in script
+    assert "https://127.0.0.1/api/public/whoami" in script

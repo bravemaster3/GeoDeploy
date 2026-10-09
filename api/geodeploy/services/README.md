@@ -669,6 +669,15 @@ and a marker's 0.28 left on a polygon falls below the hairline and changes nothi
   For a containerised proxy the file goes to the **host side** of its config bind mount (a container's
   own filesystem is discarded by the next `up -d`) and the test and reload are `docker exec`, so the
   proxy validates with its own binary and no privileged helper is involved in either.
+  **The HTTPS-shadowing check (2026-10-09, found in the field, not by reading):** our block listens on
+  80. On a machine that already terminates TLS for another site — `listen 443 ssl; server_name _;` is
+  the common shape — every `https://` request for the new domain is answered by THAT block, while
+  port 80 serves GeoDeploy perfectly and every check reports success. Cloudflare in Full mode
+  connects to the origin on 443, so this is what a real visitor gets. `_tls_picture()` associates
+  listens with server_names from the MERGED config (`nginx -T` through awk, so includes are followed)
+  and `plan()` warns before Apply; `apply()` then probes 443 as well as 80 and reports the two
+  separately. Probing only the port we configured is how a panel reports success while every visitor
+  gets somebody else's site.
   Certificates are `issue_certificate()`, a separate explicitly-consented action, and it will not
   install certbot — installing packages on somebody's server is the uninvited change this module
   exists to avoid.
