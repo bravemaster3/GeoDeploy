@@ -273,11 +273,17 @@ grep -rhoE '^[[:space:]]*(import|include)[[:space:]]+[^[:space:]]+' $H/etc/caddy
 grep -rhoE '^[[:space:]]*Include(Optional)?[[:space:]]+[^[:space:]]+' \
      $H/etc/apache2/apache2.conf $H/etc/httpd/conf/httpd.conf 2>/dev/null
 
+# The names this machine serves — SKIPPING OUR OWN FILE. R5 refuses a domain that is already
+# configured here, and our own file configures exactly that domain: sweeping it in makes GeoDeploy
+# collide with itself, so the SECOND visit to the panel refuses to re-apply or change the domain and
+# blames "something else". Reported from the field on 2026-10-09, after a successful first apply.
 section servernames
-grep -rhoE '^[[:space:]]*server_name[[:space:]]+[^;]+' $H/etc/nginx 2>/dev/null | head -300
-grep -rhioE '^[[:space:]]*Server(Name|Alias)[[:space:]]+[^[:space:]]+' \
-     $H/etc/apache2 $H/etc/httpd 2>/dev/null | head -300
-grep -rhoE '^[a-z0-9][a-z0-9.*-]+[a-z0-9][[:space:]]*\{' $H/etc/caddy 2>/dev/null | head -300
+for f in $(find $H/etc/nginx $H/etc/apache2 $H/etc/httpd $H/etc/caddy -type f 2>/dev/null | head -400); do
+  case "$f" in */geodeploy.conf|*/geodeploy.caddy) continue ;; esac
+  grep -hoE '^[[:space:]]*server_name[[:space:]]+[^;]+' "$f" 2>/dev/null
+  grep -hioE '^[[:space:]]*Server(Name|Alias)[[:space:]]+[^[:space:]]+' "$f" 2>/dev/null
+  grep -hoE '^[a-z0-9][a-z0-9.*-]+[a-z0-9][[:space:]]*\{' "$f" 2>/dev/null
+done | head -300
 
 section ourfiles
 for f in etc/nginx/conf.d/geodeploy.conf etc/nginx/sites-available/geodeploy.conf \
@@ -310,7 +316,8 @@ done
 section nginxblocks
 if [ -x $H/usr/sbin/nginx ]; then
   chroot $H /usr/sbin/nginx -T 2>/dev/null | awk '
-    /server[ \t]*\{/ { b++; cur="b" b }
+    /^# configuration file / { ours = ($0 ~ /geodeploy\.(conf|caddy):/) }
+    /server[ \t]*\{/ { b++; cur="b" b; if (ours) print cur, "GEODEPLOY_OWN" }
     /^[ \t]*listen[ \t]/ { if (cur != "") print cur, $0 }
     /^[ \t]*server_name[ \t]/ { if (cur != "") print cur, $0 }
   ' | head -400
@@ -639,8 +646,15 @@ def detect() -> dict:
     # includes — so union the two rather than choosing. Over-collecting is the safe direction: a
     # name we wrongly think is taken is a refusal the operator can read and work around.
     out["blocks"] = sec.get("nginxblocks", [])
+    # Our OWN block is marked and excluded here, for the reason in the probe's servernames comment:
+    # R5 would otherwise see the domain we configured last time as "already taken by something else"
+    # and refuse every re-apply. It is NOT excluded from `_tls_picture`, which asks a different
+    # question — once certbot adds a 443 block to our file, that block is exactly what proves HTTPS
+    # now reaches us.
+    _own = {parts[0] for parts in (ln.split(None, 1) for ln in out["blocks"])
+            if len(parts) == 2 and parts[1].strip() == "GEODEPLOY_OWN"}
     _block_names = [parts[1] for parts in (ln.split(None, 1) for ln in out["blocks"])
-                    if len(parts) == 2 and parts[1].startswith("server_name")]
+                    if len(parts) == 2 and parts[1].startswith("server_name") and parts[0] not in _own]
     out["server_names"] = sorted(set(out["server_names"]) | _names_from(_block_names))
     for key, name in (("nginxtest", "nginx"), ("apachetest", "apache"), ("caddytest", "caddy")):
         result = _test_result(sec.get(key, []))
@@ -781,8 +795,15 @@ def plan(domain: str, intent: dict) -> dict:
                 f"cannot promise the file it writes will load. It will still test before reloading, "
                 f"and will remove the file rather than reload a configuration that fails."
             )
-        # R5 — the name must not already be served.
+        # R5 — the name must not already be served. Belt and braces over the probe's own exclusion:
+        # if the clashing name is the one WE recorded applying, and our file is still there carrying
+        # our marker, then the thing serving it is us. Without this, changing the domain or simply
+        # re-opening the panel after a successful apply refuses with "something already serves that
+        # name" — pointing at GeoDeploy's own file.
         clash = _name_conflict(domain, set(found["server_names"]))
+        if clash and clash == (read_state().get("domain") or "") \
+                and found["our_files"].get(adapter["target"]) == "ours":
+            clash = None
         if clash:
             blockers.append({
                 "code": "name-taken",
