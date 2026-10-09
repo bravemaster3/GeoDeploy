@@ -145,13 +145,76 @@ then open `http://localhost:8080`. The installer prints this line with your port
 
 ## Giving it a domain
 
-**Settings → Deployment** in the dashboard. Type the domain, pick your web server, and it writes the
-configuration out for you to paste. Then press **Verify**, which checks DNS, reaches the domain from
-the server, and confirms the request lands on this instance with the hostname intact.
+**Settings → Deployment** in the dashboard. Add a DNS record, type the domain, and choose one of two
+routes — both are offered every time, and neither is a fallback for the other:
 
-GeoDeploy never writes to your web server's configuration itself. On a machine with other people's
-sites on it, a bad reload takes all of them down — so the dashboard hands you the text and you
-decide.
+- **Let GeoDeploy configure it.** It looks at what is actually in front of it, adds one new file to
+  your web server, tests it, and reloads. Described below.
+- **I'll configure it myself.** The same configuration as text, for you to place. If you would rather
+  own every change to your own web server, this is the right choice and always available —
+  [the settings are explained here](#if-you-would-rather-do-it-by-hand).
+
+Either way, finish with **Verify**: it checks DNS, reaches the domain from the server, and confirms
+the request lands on *this* instance with the hostname intact.
+
+### Letting GeoDeploy configure it
+
+It works with **nginx, Caddy and Apache**, whether they run on the host or in a container. What it
+does is deliberately small: it adds **one new file** — `geodeploy.conf` in your web server's drop-in
+directory, carrying a `managed by GeoDeploy` marker — and reloads. It never edits `nginx.conf`, your
+Caddyfile, or any other site's configuration, and it never restarts anything.
+
+Before writing anything it checks six things, and **refuses rather than guesses**:
+
+| It stops if | Because |
+| --- | --- |
+| Your configuration does not currently pass its own test | Reloading would be what finally applies whatever is already wrong in there, and your sites would go down with GeoDeploy's name on it. It tells you what `nginx -t` said and writes nothing. |
+| The domain is already served on this machine | Two blocks claiming one hostname is not an error — one silently wins. Adding ours could change a site that works today. |
+| `geodeploy.conf` exists without our marker | The name matches but the file is somebody else's. |
+| The drop-in directory is not actually included by the main configuration | The file would be written where nothing reads it: success that does nothing, which you would then debug as a DNS problem. |
+| Traefik is the proxy | Its routing comes from container labels, a file provider or Kubernetes resources — there is no single file to drop that is correct across those. You get [the exact manual steps](#traefik-or-any-proxy-in-docker) instead. |
+| There is no reverse proxy at all | A machine with no proxy is not one GeoDeploy should be installing one on. |
+
+After writing, it tests again. **A failed test removes the file and never reaches the reload** — a
+configuration that is never loaded has harmed nobody — and it tells you whether the machine's own
+test passes again, so you know whether the problem was ours. Only a passing test gets a reload, and
+it is always a reload, never a restart: existing connections keep being served, and a proxy that
+rejects the new configuration keeps running the old one.
+
+When it succeeds it asks the proxy for your domain over the machine's own loopback and checks that
+GeoDeploy answers. That is worth more than it sounds: it proves the proxy is correct **whether or not
+DNS has propagated yet**, which is the one thing you otherwise cannot tell apart from a broken
+configuration.
+
+**Remove it** undoes exactly what was added — the file, the symlink if there was one — then tests
+*before* reloading, for the same reason: taking our file away can expose an unrelated problem in your
+configuration, and a tidy-up must not be what takes your sites down.
+
+!!! note "What this needs, and why it is not a new risk"
+
+    The dashboard reaches your web server through a one-shot privileged container, using the Docker
+    socket GeoDeploy already has. That socket is root on the host by any measure — anything that can
+    reach it can already do this — so the capability is not new. What is new is that it is now used
+    for a small, audited, reversible set of operations instead of being available for anything. Every
+    apply and removal is recorded in the audit log with the file it wrote.
+
+    If you would rather GeoDeploy never did this, use the manual route. It is the same text.
+
+### HTTPS
+
+Depends on which proxy you run:
+
+- **Caddy** obtains and renews the certificate itself as soon as the domain resolves to the machine.
+  There is no certificate step, which is why Caddy is the easiest correct answer here.
+- **nginx and Apache** use certbot, as a **separate button** you press after Apply. It is deliberately
+  not part of Apply: it reaches an external CA under terms you have to accept, publishes the hostname
+  to the public Certificate Transparency log, and spends a rate limit that is unpleasant to exhaust.
+  GeoDeploy will **not install certbot** for you — installing packages on your server is exactly the
+  kind of uninvited change this page is about. If it is not there, you get the command.
+- **Behind Cloudflare's proxy** (the orange cloud), Cloudflare terminates HTTPS for visitors, so the
+  site is encrypted the moment the proxy works. Set SSL/TLS to **Flexible** until this server has its
+  own certificate — with a plain-HTTP origin, Full (strict) will refuse — then switch to **Full
+  (strict)** once it does. certbot's HTTP challenge needs the orange cloud turned off while it runs.
 
 ### If you would rather do it by hand
 

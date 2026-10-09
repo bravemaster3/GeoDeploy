@@ -637,5 +637,42 @@ and a marker's 0.28 left on a polygon falls below the hairline and changes nothi
   shadows our 11G and 413s every upload, verified against a naive config in the WSL harness. Writes
   nothing, anywhere: the operator pastes it.
 
+- `hostproxy.py` (2026-10-09) — **configures the HOST's reverse proxy for a domain, and refuses far
+  more often than it acts.** The other half of `deployment.py`: that one answers "what would a proxy
+  in front need?" and writes nothing, this one applies it to whatever the machine already runs —
+  nginx, Caddy or Apache, **on the host or in a container** — so the operator's whole job is a DNS
+  record and a domain typed into the dashboard. Traefik is a named refusal, not a gap: its routing is
+  labels/providers/CRDs and no single dropped file is correct across those.
+  **Read the module docstring's six rules before changing anything here.** The two that cost the most
+  if they go: R2, test the EXISTING configuration first and refuse if it fails — otherwise our reload
+  is what finally publishes somebody else's latent breakage, with GeoDeploy's name on it; and R4, a
+  failed post-write test removes the file and NEVER reaches the reload. Also R1 (one new file, with a
+  `managed by GeoDeploy` marker, never an edit to `nginx.conf` or a Caddyfile), R3 (reload, never
+  restart), R5 (refuse a domain the machine already serves — two blocks claiming one name is not an
+  error, one silently wins), R6 (refuse a drop-in dir the main config does not `include`, because a
+  file written where nothing reads it is success that does nothing).
+  **The shell trap that defeats R2 and R4 silently:** `cmd | tail; rc=$?` yields `tail`'s status, so a
+  FAILING `nginx -t` reads as a pass. `_host_test_command`/`_host_reload_command` therefore return
+  the bare command with no pipe and no redirection — the caller captures first and trims after — and
+  `test_hostproxy.py` asserts that on the table itself, because the bug is invisible in any test that
+  goes through it.
+  **How it reaches the host:** a one-shot privileged container (`pid`/`network` host, `/` bind-mounted
+  at `/host`) via the Docker socket the API already has — so no new capability, just a small audited
+  set of operations instead of an open-ended one. It runs the HOST's own `nginx -t` under `chroot`,
+  never this image's: a different build tests a different set of modules. The mount is READ-WRITE even
+  for the probe because `nginx -t` opens its error log for append, and on a read-only mount a good
+  config fails the one test R2 relies on. Reload is a signal to the master process, never `systemctl`
+  (which needs the host's private D-Bus and fails in ways that look like a broken proxy). Operator
+  text — the domain, inside a generated config — reaches the host ONLY as `put_archive` file content,
+  never as part of a shell command; the scripts interpolate paths from this module's own tables plus a
+  domain that has been through `_safe_domain`.
+  For a containerised proxy the file goes to the **host side** of its config bind mount (a container's
+  own filesystem is discarded by the next `up -d`) and the test and reload are `docker exec`, so the
+  proxy validates with its own binary and no privileged helper is involved in either.
+  Certificates are `issue_certificate()`, a separate explicitly-consented action, and it will not
+  install certbot — installing packages on somebody's server is the uninvited change this module
+  exists to avoid.
+
 ## Last updated
+2026-10-09 (added `hostproxy.py` — GeoDeploy configures the machine's existing web server)
 2026-09-12 (added `deployment.py` — the port/reverse-proxy slice of issue #79)

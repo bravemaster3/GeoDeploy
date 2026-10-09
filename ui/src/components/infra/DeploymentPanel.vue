@@ -165,6 +165,158 @@
               <span class="text-xs font-medium text-foreground flex-1">Tell your web server about it</span>
             </div>
             <div class="p-4 space-y-3">
+              <!-- Two routes, shown as a choice rather than a fallback. The automatic one is for
+                   people who do not want to think about nginx; the manual one is for people who
+                   would rather place the file themselves, and it is not a consolation prize — it
+                   is the same text, and on a machine someone else depends on it is a perfectly
+                   reasonable preference. Neither is ever hidden because the other is available. -->
+              <div class="flex gap-1.5 flex-wrap">
+                <button @click="mode = 'auto'"
+                        class="text-[11px] px-2.5 py-1 rounded-md border"
+                        :class="mode === 'auto' ? 'border-sky-500/60 bg-sky-500/15 text-sky-300'
+                                                : 'border-border text-muted-foreground/80 hover:text-foreground'">
+                  Let GeoDeploy configure it
+                </button>
+                <button @click="mode = 'manual'"
+                        class="text-[11px] px-2.5 py-1 rounded-md border"
+                        :class="mode === 'manual' ? 'border-sky-500/60 bg-sky-500/15 text-sky-300'
+                                                  : 'border-border text-muted-foreground/80 hover:text-foreground'">
+                  I’ll configure it myself
+                </button>
+              </div>
+
+              <!-- ── AUTOMATIC ─────────────────────────────────────────────────────────────── -->
+              <div v-if="mode === 'auto'" class="space-y-3">
+                <p v-if="hostBusy" class="text-xs text-muted-foreground/85">
+                  Looking at what this machine runs…
+                </p>
+                <p v-else-if="hostError" class="text-xs text-red-400">{{ hostError }}</p>
+
+                <template v-else-if="hostPlan">
+                  <p class="text-xs text-muted-foreground/85 leading-relaxed">
+                    <span v-if="hostPlan.adapter">
+                      In front of GeoDeploy:
+                      <strong class="text-foreground capitalize">{{ hostPlan.adapter.kind }}</strong>
+                      <span v-if="hostPlan.adapter.where === 'container'">
+                        , running as the container
+                        <code class="font-mono">{{ hostPlan.adapter.container }}</code></span>.
+                      GeoDeploy would add one new file,
+                      <code class="font-mono break-all">{{ hostPlan.adapter.target }}</code>, and
+                      reload it. Nothing else on this machine is read, edited or restarted.
+                    </span>
+                    <span v-else>
+                      GeoDeploy looked at what this machine runs and cannot configure it
+                      automatically. The manual route works everywhere.
+                    </span>
+                  </p>
+
+                  <!-- Each refusal, in full. A blocker is not an error — it is GeoDeploy declining
+                       to touch something, and the operator needs the reason to decide what to do. -->
+                  <div v-for="b in hostPlan.blockers" :key="b.code"
+                       class="text-xs rounded-lg px-3 py-2 border border-amber-500/30 bg-amber-500/10">
+                    <p class="text-foreground font-medium">{{ b.title }}</p>
+                    <p class="text-muted-foreground/85 mt-1 leading-relaxed whitespace-pre-wrap">{{ b.detail }}</p>
+                    <p v-if="b.fix" class="text-amber-300/90 mt-1.5 leading-relaxed">{{ b.fix }}</p>
+                  </div>
+
+                  <p v-if="hostPlan.applied"
+                     class="text-[11px] text-muted-foreground/80 bg-muted/30 border border-border/60 rounded-lg px-3 py-2 leading-relaxed">
+                    GeoDeploy has already written
+                    <code class="font-mono break-all">{{ hostPlan.applied.target }}</code>
+                    <span v-if="hostPlan.applied.domain"> for
+                      <strong class="text-foreground">{{ hostPlan.applied.domain }}</strong></span>.
+                    Applying again replaces it; <strong>Remove it</strong> takes it away and reloads.
+                  </p>
+
+                  <div v-for="w in hostPlan.warnings" :key="w"
+                       class="text-[11px] text-muted-foreground/80 bg-muted/30 border border-border/60 rounded-lg px-3 py-2 leading-relaxed">
+                    {{ w }}
+                  </div>
+
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <button v-if="hostPlan.can_apply" @click="applyProxy" :disabled="applyBusy"
+                            class="btn-primary text-xs px-3 py-1.5">
+                      {{ applyBusy ? 'Applying…' : applied ? 'Apply again' : 'Apply' }}
+                    </button>
+                    <button v-else @click="mode = 'manual'" class="btn-secondary text-xs px-3 py-1.5">
+                      Show me the configuration instead
+                    </button>
+                    <button v-if="applied" @click="removeProxy" :disabled="removeBusy"
+                            class="btn-secondary text-xs px-3 py-1.5">
+                      {{ removeBusy ? 'Removing…' : 'Remove it' }}
+                    </button>
+                    <button @click="loadHostPlan" :disabled="hostBusy"
+                            class="text-[11px] text-muted-foreground/70 hover:text-foreground">
+                      Re-check
+                    </button>
+                  </div>
+
+                  <ul v-if="applySteps.length" class="space-y-2">
+                    <li v-for="s in applySteps" :key="s.name" class="flex items-start gap-2.5 text-xs">
+                      <span class="flex-shrink-0 mt-0.5" :class="s.ok ? 'text-green-400' : 'text-red-400'"
+                            aria-hidden="true">{{ s.ok ? '✓' : '✗' }}</span>
+                      <div class="min-w-0">
+                        <span class="text-foreground">{{ s.name }}</span>
+                        <p class="text-muted-foreground/80 whitespace-pre-wrap leading-relaxed">{{ s.detail }}</p>
+                        <p v-if="s.fix" class="text-[11px] text-amber-300/90 mt-1 leading-relaxed">{{ s.fix }}</p>
+                      </div>
+                    </li>
+                  </ul>
+
+                  <!-- HTTPS is its own decision, never a side effect of Apply: it reaches an
+                       external CA, publishes the hostname to a public log, and spends a rate
+                       limit. Caddy says so itself and needs no button. -->
+                  <div v-if="applied && hostPlan.adapter && hostPlan.adapter.tls === 'certbot'"
+                       class="border-t border-border/60 pt-3 space-y-2">
+                    <p class="text-xs text-foreground font-medium">HTTPS</p>
+                    <p class="text-[11px] text-muted-foreground/80 leading-relaxed">
+                      The domain works over plain HTTP now. certbot
+                      {{ hostPlan.detected && hostPlan.detected.certbot ? 'is installed here and can' : 'is not installed here, so GeoDeploy cannot' }}
+                      obtain a free certificate for it. GeoDeploy will not install packages on this
+                      machine.
+                    </p>
+                    <div v-if="hostPlan.detected && hostPlan.detected.certbot" class="flex gap-2 flex-wrap">
+                      <input v-model="certEmail" type="email" placeholder="you@example.org"
+                             spellcheck="false" autocapitalize="off"
+                             class="flex-1 min-w-[12rem] text-xs font-mono bg-background text-foreground border border-border rounded-lg px-2.5 py-1.5" />
+                      <button @click="getCertificate" :disabled="!certEmail || certBusy"
+                              class="btn-secondary text-xs px-3 py-1.5">
+                        {{ certBusy ? 'Asking Let’s Encrypt…' : 'Get a certificate' }}
+                      </button>
+                    </div>
+                    <p v-if="hostPlan.detected && hostPlan.detected.certbot"
+                       class="text-[11px] text-muted-foreground/70 leading-relaxed">
+                      Let’s Encrypt needs a contact address for expiry notices, and you are agreeing
+                      to their subscriber terms. The name becomes public in the Certificate
+                      Transparency log — that is true of every HTTPS certificate.
+                    </p>
+                    <ul v-if="certSteps.length" class="space-y-2 pt-1">
+                      <li v-for="s in certSteps" :key="s.name" class="flex items-start gap-2.5 text-xs">
+                        <span class="flex-shrink-0 mt-0.5" :class="s.ok ? 'text-green-400' : 'text-red-400'"
+                              aria-hidden="true">{{ s.ok ? '✓' : '✗' }}</span>
+                        <div class="min-w-0">
+                          <span class="text-foreground">{{ s.name }}</span>
+                          <p class="text-muted-foreground/80 whitespace-pre-wrap leading-relaxed">{{ s.detail }}</p>
+                          <p v-if="s.fix" class="text-[11px] text-amber-300/90 mt-1 leading-relaxed">{{ s.fix }}</p>
+                        </div>
+                      </li>
+                    </ul>
+                  </div>
+
+                  <p v-if="dns && dns.state === 'proxied'"
+                     class="text-[11px] text-sky-300/90 bg-sky-500/10 border border-sky-500/30 rounded-lg px-3 py-2 leading-relaxed">
+                    This domain is behind Cloudflare’s proxy. Cloudflare terminates HTTPS for
+                    visitors, so the site is encrypted the moment the proxy works — but set SSL/TLS
+                    to <strong>Flexible</strong> until this server has its own certificate, or
+                    Cloudflare will refuse to talk to a plain-HTTP origin. Switch to
+                    <strong>Full (strict)</strong> once you have one. certbot’s HTTP challenge needs
+                    the orange cloud turned off while it runs.
+                  </p>
+                </template>
+              </div>
+
+              <!-- ── MANUAL — unchanged, and the only route that works on every machine ─────── -->
+              <div v-else class="space-y-3">
               <div class="flex gap-1.5 flex-wrap">
                 <button v-for="f in data.flavors" :key="f" @click="flavor = f; loadConfig()"
                         class="text-[11px] px-2.5 py-1 rounded-md border capitalize"
@@ -196,6 +348,7 @@
                   </button>
                 </div>
                 <pre class="text-[11px] font-mono bg-background border border-border rounded-lg p-3 overflow-x-auto max-h-80 overflow-y-auto whitespace-pre">{{ cfg.config }}</pre>
+              </div>
               </div>
             </div>
           </div>
@@ -238,7 +391,10 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { checkDeploymentDns, getDeployment, getProxyConfig, verifyDeployment } from '@/api'
+import {
+  applyHostProxy, checkDeploymentDns, getDeployment, getHostProxyPlan, getProxyConfig,
+  issueCertificate, removeHostProxy, verifyDeployment,
+} from '@/api'
 
 const data = ref(null)
 const busy = ref(false)
@@ -257,6 +413,21 @@ const copied = ref('')
 
 const dns = ref(null)
 const dnsBusy = ref(false)
+
+// The automatic route. `mode` starts on 'auto' and is moved to 'manual' by loadHostPlan() when this
+// machine turns out not to be one GeoDeploy can configure — so the operator lands on the route that
+// will actually work for them, while both remain one click apart.
+const mode = ref('auto')
+const hostPlan = ref(null)
+const hostBusy = ref(false)
+const hostError = ref('')
+const applyBusy = ref(false)
+const applySteps = ref([])
+const applied = ref(false)
+const removeBusy = ref(false)
+const certEmail = ref('')
+const certBusy = ref(false)
+const certSteps = ref([])
 
 // The A record, laid out the way a DNS control panel asks for it, so it can be copied field by
 // field rather than translated from prose. `Name` is the subdomain ALONE — every panel appends the
@@ -342,6 +513,7 @@ async function checkDns() {
     dnsBusy.value = false
   }
   await loadConfig()
+  await loadHostPlan()
 }
 
 async function loadConfig() {
@@ -355,6 +527,73 @@ async function loadConfig() {
     cfgError.value = e?.response?.data?.detail || 'Could not build the configuration.'
   } finally {
     cfgBusy.value = false
+  }
+}
+
+// Called alongside loadConfig(), never instead of it: the manual configuration is always fetched, so
+// switching to the manual route is instant and works even if this call fails outright.
+async function loadHostPlan() {
+  if (!domain.value) return
+  hostBusy.value = true; hostError.value = ''; applySteps.value = []
+  try {
+    const { data: d } = await getHostProxyPlan(domain.value.trim())
+    hostPlan.value = d
+    // From the SERVER's record, not this session: a configuration applied last week must still be
+    // removable from the panel, or the only way to undo it is `rm` over SSH — which skips the
+    // test-before-reload that makes removal safe.
+    applied.value = !!d.applied
+    // A machine we cannot configure should not leave the operator looking at a disabled button.
+    if (!d.can_apply) mode.value = 'manual'
+  } catch (e) {
+    hostPlan.value = null
+    hostError.value = e?.response?.data?.detail
+      || 'Could not inspect this machine. The manual route below works everywhere.'
+    mode.value = 'manual'
+  } finally {
+    hostBusy.value = false
+  }
+}
+
+async function applyProxy() {
+  applyBusy.value = true; applySteps.value = []; certSteps.value = []
+  try {
+    const { data: d } = await applyHostProxy(domain.value.trim())
+    applySteps.value = d.steps || []
+    // "Applied" means the file is in place, which is also true when a later step failed — the
+    // Remove button has to be offered in exactly that case, since that is when it is needed.
+    applied.value = (d.steps || []).some((s) => s.name === 'Wrote the configuration' && s.ok)
+    if (d.ok) await load()
+  } catch (e) {
+    applySteps.value = [{ name: 'Apply', ok: false, detail: e?.response?.data?.detail || 'Apply failed.' }]
+  } finally {
+    applyBusy.value = false
+  }
+}
+
+async function removeProxy() {
+  removeBusy.value = true
+  try {
+    const { data: d } = await removeHostProxy()
+    applySteps.value = d.steps || []
+    if (d.ok) { applied.value = false; await load() }
+  } catch (e) {
+    applySteps.value = [{ name: 'Remove', ok: false, detail: e?.response?.data?.detail || 'Remove failed.' }]
+  } finally {
+    removeBusy.value = false
+  }
+}
+
+async function getCertificate() {
+  certBusy.value = true; certSteps.value = []
+  try {
+    const { data: d } = await issueCertificate(domain.value.trim(), certEmail.value.trim())
+    certSteps.value = d.steps || []
+    if (d.ok) await load()
+  } catch (e) {
+    certSteps.value = [{ name: 'Certificate', ok: false,
+                         detail: e?.response?.data?.detail || 'The certificate request failed.' }]
+  } finally {
+    certBusy.value = false
   }
 }
 
