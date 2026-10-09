@@ -408,6 +408,27 @@ def _nginx_conf(domain: str, upstream: str) -> str:
 # sites-enabled/, or drop it in /etc/nginx/conf.d/. Then:  sudo nginx -t && sudo systemctl reload nginx
 #
 # This does not replace anything you already serve; it adds one more virtual host.
+
+# IF SOMETHING ELSE TERMINATES HTTPS IN FRONT OF THIS SERVER — Cloudflare's proxy, a load balancer,
+# another nginx — uncomment the three lines below AND the matching proxy_set_header further down.
+#
+# Why it is not on by default: this server block is reachable from the internet, so honouring a
+# client-supplied X-Forwarded-Proto lets anyone claim https over a plaintext connection and have a
+# Secure cookie issued on it. `$scheme` cannot be spoofed. But when a trusted proxy in front really
+# did terminate TLS, `$scheme` here is "http" while the visitor is on https:// — and GeoDeploy then
+# emits http:// links and reports "reachable, but without HTTPS" on a site the browser is reading
+# over https. Uncomment ONLY if nothing can reach this port except that proxy.
+#
+# The better fix, if you can: give this server its own certificate (certbot) and set the proxy in
+# front to pass through to HTTPS — Cloudflare calls that Full (strict). Then $scheme is https and
+# nothing has to be trusted.
+#
+# map $http_x_forwarded_proto $geodeploy_forwarded_proto {{
+#     default $scheme;
+#     https   https;
+#     http    http;
+# }}
+
 server {{
     listen 80;
     listen [::]:80;
@@ -427,6 +448,8 @@ server {{
         # REQUIRED once you have HTTPS: session cookies take their Secure flag from this, and
         # GeoDeploy uses it to decide whether to emit http:// or https:// links.
         proxy_set_header X-Forwarded-Proto $scheme;
+        # …and the other half of the opt-in above: comment the line above, uncomment this one.
+        # proxy_set_header X-Forwarded-Proto $geodeploy_forwarded_proto;
 
         # REQUIRED. nginx defaults to 1 MB, and THIS setting shadows GeoDeploy's own — without it
         # every upload over a megabyte fails with 413.
@@ -477,6 +500,10 @@ def _apache_conf(domain: str, upstream: str) -> str:
 
     # Cookies take their Secure flag from this, and it decides http:// vs https:// in emitted URLs.
     RequestHeader set X-Forwarded-Proto "http"
+    # If a trusted proxy in front terminates HTTPS (Cloudflare, a load balancer), swap the line above
+    # for this one so the visitor's scheme survives — and only then, since `setifempty` keeps a
+    # header the client may have sent:
+    #   RequestHeader setifempty X-Forwarded-Proto "http"
 
     # Long ingests and large downloads.
     ProxyTimeout 600
