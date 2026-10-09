@@ -68,6 +68,18 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
   deliberately separate from Verify. "Not propagated yet" and "pointing at another machine" look
   identical from a browser and need opposite reactions, and a Cloudflare-proxied record is recognised
   as CORRECT rather than reported as wrong. Steps 2 and 3 are the proxy config and Verify.
+  **Since 2026-10-09 step 2 is a CHOICE, not a page of text:** "Let GeoDeploy configure it" against
+  "I'll configure it myself", both always offered. The automatic side calls `/deployment/host-proxy`
+  first and on its own, so the panel can withhold the button honestly — a machine GeoDeploy cannot
+  configure flips `mode` to manual rather than leaving a disabled button, and every refusal is
+  rendered in full (title, detail, fix) because a blocker is GeoDeploy DECLINING to touch something,
+  not an error. `applied` is set when the WROTE step succeeded, not when the whole apply did: that is
+  exactly when **Remove it** has to be reachable. The certificate half appears only for
+  `tls === 'certbot'` and only with certbot present — Caddy says so itself instead — and the
+  Cloudflare note (Flexible until there is an origin certificate, then Full (strict)) is keyed off the
+  DNS step's `proxied` state, so it shows for the people it is true for. The manual route is NOT a
+  fallback and is never hidden: the same text, the same `/deployment/proxy-config` call, for operators
+  who would rather own every change to their own web server.
 - `portal/CreatePortalModal.vue` — new-portal dialog (title, description, access); creates via the portals store then routes to the editor.
 - `portal/LayerPanel.vue` (resolves vector/raster/**external** layers from the data store; external sources get an opacity-only popover, plus a colour picker for WFS vector) — **thin row** mirroring the published portal: drag handle (reorder is wired in `PortalEditor.vue`) · eye/eye-off (`update {visible}`) · **symbol swatch** that opens a **teleported symbology popover** · name · zoom · remove. The popover holds: opacity; vector colour/fill/outline/width; **line type** (solid/dashed/dotted); **point marker shape** (circle/square/triangle/diamond/star/cross) + size; popup-field picker; **raster band selection** (multiband → RGB composite with R/G/B band pickers, or single band) + palette/hillshade/Z (single-band output) and stretch/rescale (all); save/use default. Band selection stores `style.bidx` (`[n]` single, `[r,g,b]` RGB). The list swatch (`geomSvg`/`markerSvg`) draws the actual symbol (colour, dash, marker shape). Emits `update`/`remove`/`zoom`.
   **Two hosts, one control** (issue #23): `standalone` renders the symbology body ALONE — no row, no
@@ -213,6 +225,7 @@ All dialogs (`UploadModal`, `AddSourceModal`, `DiscoverModal`, `portal/CreatePor
   icon logic in `views/PortalEditor.vue` + `templates/shared/portal.js` — change all three together.
 
 ## Last updated
+2026-10-09 (DeploymentPanel: two routes — GeoDeploy configures the host proxy, or you do)
 2026-08-31 (`portal/DashboardBuilder.vue`: a **Fill the screen** checkbox in the board-wide
 settings, writing `grid.fit`. Its hint is deliberate about the limit — it stretches, it does not
 squeeze, so a screen too short still scrolls.)

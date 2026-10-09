@@ -1359,3 +1359,100 @@ async def deployment_verify(body: DeploymentVerifyRequest, _: User = Depends(req
     step("Hostname passed through", True, f"Links will be built as {seen.get('origin')}.")
 
     return {"ok": all(s["ok"] for s in steps), "steps": steps, "origin": seen.get("origin")}
+
+
+# ── Configuring the host's reverse proxy for them ────────────────────────────────────────────────
+#
+# These four are the only endpoints in GeoDeploy that change software GeoDeploy did not install, so
+# they are the only ones with this comment. Three things make that defensible:
+#
+#   * require_owner, not require_admin. The owner is the person whose machine this is.
+#   * The service refuses far more often than it acts — see `hostproxy`'s six rules — and every
+#     refusal is returned as a readable blocker rather than an error, because "GeoDeploy will not do
+#     this, and here is why" is the useful answer on a machine hosting somebody else's sites.
+#   * Every call is audited with what was written and where, so the change is attributable later by
+#     someone who did not make it.
+#
+# The manual path is never taken away: `/deployment/proxy-config` still returns the same text for an
+# operator who would rather place it themselves, and the panel offers both side by side. Automating
+# this is a convenience for people who do not want to think about nginx — not a claim that we know
+# their machine better than they do.
+
+class CertificateRequest(BaseModel):
+    domain: str
+    email: str
+
+
+@router.get("/deployment/host-proxy")
+async def deployment_host_proxy(domain: str = "", _: User = Depends(require_owner)):
+    """What GeoDeploy found in front of itself, and whether it could configure it for this domain.
+
+    Called before the button is shown, so a machine we cannot help says so while the operator is
+    still choosing — rather than after they press Apply, which would read as their setup failing
+    rather than ours declining.
+    """
+    from ..services import deployment, hostproxy
+
+    if not (domain or "").strip():
+        found = await run_in_threadpool(hostproxy.detect)
+        return {"domain": None, "can_apply": False, "adapter": found.get("adapter"),
+                "blockers": [], "warnings": [], "detected": found}
+    try:
+        return await run_in_threadpool(hostproxy.plan, _valid_domain(domain),
+                                       deployment.read_intent())
+    except hostproxy.ProxyError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/deployment/host-proxy/apply")
+async def deployment_host_proxy_apply(body: DeploymentVerifyRequest,
+                                      user: User = Depends(require_owner),
+                                      db: AsyncSession = Depends(get_db)):
+    """Write the configuration, test it, reload the proxy — or put everything back."""
+    from ..services import deployment, hostproxy
+
+    domain = _valid_domain(body.domain)
+    try:
+        result = await run_in_threadpool(hostproxy.apply, domain, deployment.read_intent())
+    except hostproxy.ProxyError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await record_audit(db, user, "admin.deployment.proxy.apply", "system", None,
+                       {"domain": domain, "ok": result.get("ok"),
+                        "target": result.get("target"),
+                        "adapter": (result.get("plan") or {}).get("adapter")})
+    return result
+
+
+@router.post("/deployment/host-proxy/remove")
+async def deployment_host_proxy_remove(user: User = Depends(require_owner),
+                                       db: AsyncSession = Depends(get_db)):
+    """Take away exactly what Apply added, testing before the reload so a tidy-up cannot be what
+    breaks the machine."""
+    from ..services import hostproxy
+
+    try:
+        result = await run_in_threadpool(hostproxy.remove)
+    except hostproxy.ProxyError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await record_audit(db, user, "admin.deployment.proxy.remove", "system", None,
+                       {"ok": result.get("ok")})
+    return result
+
+
+@router.post("/deployment/host-proxy/certificate")
+async def deployment_host_proxy_certificate(body: CertificateRequest,
+                                            user: User = Depends(require_owner),
+                                            db: AsyncSession = Depends(get_db)):
+    """Ask the host's certbot for a certificate. Separate from Apply and never implied by it — it
+    reaches an external CA under an agreement the operator has to accept, publishes the hostname to
+    the public Certificate Transparency log, and spends a rate limit that is painful to exhaust."""
+    from ..services import hostproxy
+
+    domain = _valid_domain(body.domain)
+    try:
+        result = await run_in_threadpool(hostproxy.issue_certificate, domain, body.email)
+    except hostproxy.ProxyError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await record_audit(db, user, "admin.deployment.certificate", "system", None,
+                       {"domain": domain, "ok": result.get("ok")})
+    return result

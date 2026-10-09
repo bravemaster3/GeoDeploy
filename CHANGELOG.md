@@ -6,6 +6,37 @@ upgrade needs manual work.
 
 ## Unreleased
 
+- **The dashboard can configure your existing web server for you.** Settings → Deployment: add a DNS
+  record, type the domain, press Apply — GeoDeploy works out what is in front of it (nginx, Caddy or
+  Apache, on the host or in a container), adds **one new file** to its drop-in directory, tests the
+  configuration, and reloads. It never edits `nginx.conf`, a Caddyfile, or any other site's
+  configuration, and it never restarts anything. It also refuses, with the reason, more often than it
+  acts: if your configuration does not already pass its own test it writes nothing and shows you what
+  the test said, because reloading would be what finally published somebody else's latent breakage;
+  if the domain is already served here, if a file of that name exists and GeoDeploy did not write it,
+  or if the drop-in directory is not actually included by the main configuration, it stops. A failed
+  test after writing removes the file and never reaches the reload. **Remove it** undoes exactly what
+  was added, testing before it reloads for the same reason. Traefik is a named refusal with precise
+  manual steps rather than a guess — its routing is labels and providers, not a file we can drop.
+  **The copy-and-paste route is not going anywhere:** both are offered side by side, every time, for
+  operators who would rather own every change to their own web server.
+  [#79](https://github.com/bravemaster3/GeoDeploy/issues/79)
+- **HTTPS, as its own decision.** With Caddy there is nothing to do — it obtains and renews the
+  certificate itself. With nginx or Apache there is a separate button that runs the certbot already
+  on your machine; GeoDeploy will not install packages for you, and will not fold a request to an
+  external CA into a button labelled something else. Behind Cloudflare's proxy the panel says what to
+  set and when (Flexible until the origin has a certificate, then Full (strict)).
+- **The installer says which mode it chose.** The screen at the end of a shared-machine install
+  explained that nothing outside the server can reach GeoDeploy "which is the point of this mode"
+  without ever naming the mode. It now says `behind-proxy` — the word `.env`, `set-port.sh --show`
+  and the dashboard all use.
+- **Installing a branch or a release re-run no longer fails confusingly.** Re-running the installer
+  against a different `GEODEPLOY_VERSION` could not reach any branch but the one originally cloned
+  (the clone is single-branch and shallow), and an installer piped from one version while cloning
+  another died with a bare "No such file or directory". Both are fixed: the existing-checkout path
+  now un-shallows and widens the refspec the way `self-update.sh` always has, and a version mismatch
+  is diagnosed in one sentence that names the cause — a `VAR=… curl … | bash` prefix sets the
+  variable for *curl*, not for bash.
 - **GeoDeploy can be installed on a machine that already runs other software** — and it no longer
   takes the machine's web-server role without being asked. The installer now checks what is on the
   box first (ports, an existing nginx/Caddy/Apache, a conflicting Docker network or container name,

@@ -505,6 +505,29 @@ will paste into their web server, so a newline could carry an nginx directive. P
 `api/tests/test_deployment_api.py`, which also checks the endpoints are owner-only (not merely
 admin) and that `whoami` cannot be turned into a reflector.
 
+### Configuring the host's reverse proxy (2026-10-09)
+Four more owner-only endpoints, and the only ones in GeoDeploy that change software GeoDeploy did not
+install. They delegate every decision to `services/hostproxy.py` — see its docstring for the six
+rules — and the routers' own job is validation, threadpool dispatch and the audit record.
+
+- `GET /admin/deployment/host-proxy?domain=…` — `hostproxy.plan()`: what is in front of GeoDeploy,
+  the file it would add, and every reason it would refuse. Called BEFORE the button is offered, so a
+  machine we cannot help says so while the operator is still choosing rather than after they commit.
+  With no `domain` it returns bare detection, for the panel's first paint.
+- `POST /admin/deployment/host-proxy/apply` — write one file, test, reload; or put everything back
+  and reload nothing. `plan()` runs again INSIDE `apply()`, so an API client that skips the GET hits
+  exactly the same refusals (`test_apply_refuses_without_writing_when_the_plan_says_no`).
+- `POST /admin/deployment/host-proxy/remove` — undoes precisely what was written, from the recorded
+  state, testing before the reload.
+- `POST /admin/deployment/host-proxy/certificate` — runs the HOST's certbot. Separate from apply and
+  never implied by it: an external CA, a public Certificate Transparency entry, and a rate limit.
+
+`require_owner`, not `require_admin` — the owner is the person whose machine this is. A `ProxyError`
+becomes a 400 with its own text, because every one of them is a sentence the operator needs to read
+rather than an internal fault. `/deployment/proxy-config` is untouched and still returns the same
+text for an operator who would rather place it themselves; the panel offers both routes side by side.
+
 ## Last updated
+2026-10-09 (the four host-proxy endpoints — GeoDeploy configures the machine's own web server)
 2026-09-12b (check-dns, and one shared domain validator)
 2026-09-12 (the deployment endpoints above)

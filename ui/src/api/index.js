@@ -108,6 +108,18 @@ export const verifyDeployment = (domain) => api.post('/admin/deployment/verify',
 // someone run the whole end-to-end check to tell them apart conflates the two.
 export const checkDeploymentDns = (domain) => api.post('/admin/deployment/check-dns', { domain })
 
+// Configuring the HOST's reverse proxy — the "Apply" path, for operators who do not want to think
+// about nginx. `getHostProxyPlan` is the one to call FIRST and on its own: it reports what is in
+// front of GeoDeploy and every reason Apply would refuse, so the panel can offer (or withhold) the
+// button honestly before anyone commits to it. The manual path never goes away — `getProxyConfig`
+// above returns the same text for anyone who would rather place it themselves.
+export const getHostProxyPlan = (domain) =>
+  api.get('/admin/deployment/host-proxy', { params: { domain } })
+export const applyHostProxy = (domain) => api.post('/admin/deployment/host-proxy/apply', { domain })
+export const removeHostProxy = () => api.post('/admin/deployment/host-proxy/remove')
+export const issueCertificate = (domain, email) =>
+  api.post('/admin/deployment/host-proxy/certificate', { domain, email })
+
 // Backups (admin Settings -> Backups). The destination is a SEPARATE S3; secret_key is
 // write-only (blank keeps the stored one). `stored` reads the destination's own manifests, which
 // is the only trustworthy answer about what exists -- our run history lives in the state DB, and
