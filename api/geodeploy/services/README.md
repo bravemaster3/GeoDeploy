@@ -678,9 +678,23 @@ and a marker's 0.28 left on a polygon falls below the hairline and changes nothi
   and `plan()` warns before Apply; `apply()` then probes 443 as well as 80 and reports the two
   separately. Probing only the port we configured is how a panel reports success while every visitor
   gets somebody else's site.
-  Certificates are `issue_certificate()`, a separate explicitly-consented action, and it will not
-  install certbot — installing packages on somebody's server is the uninvited change this module
-  exists to avoid.
+  **Automatic HTTPS (2026-10-09):** `issue_certificate()` runs **certbot in a throwaway container**,
+  not on the host — which is what lets this exist at all, since the rule against installing packages
+  on somebody else's server stands and a container satisfies both halves. HTTP-01 over the **webroot**
+  plugin, never `--nginx`: the nginx plugin EDITS the host's config and R1 forbids that, while the
+  webroot plugin only drops a challenge file under `/var/www/html`, which the block we already wrote
+  already serves. The HTTPS server block then goes into OUR OWN file through the same
+  write-test-reload path as any apply. `renew_certificates()` is the half that makes it mean
+  anything, scheduled daily in `tasks/certificates.py`: it no-ops on installs with no certificate
+  (one state-file read, no container), and **gates the reload on the certificate file's mtime** —
+  not on parsing certbot's output, which is prose and has changed between versions. A renewal whose
+  config then fails its test does NOT reload; the old certificate stays live, which buys the
+  remaining weeks of its validity to fix the real problem.
+  Two shapes in `deployment._nginx_conf_tls` that are not cosmetic: port 80 keeps the ACME location
+  **outside any redirect** (renewal uses the same challenge, and redirecting it to a just-expired
+  certificate is how auto-renewal silently stops), and on a **Cloudflare-fronted** domain port 80
+  serves the app instead of redirecting, because Cloudflare on Flexible connects to port 80 and a
+  301 there loops between Cloudflare and the origin forever.
 
 ## Last updated
 2026-10-09 (added `hostproxy.py` — GeoDeploy configures the machine's existing web server)

@@ -1344,16 +1344,109 @@ def remove() -> dict:
     return {"ok": all(s["ok"] for s in steps), "steps": steps}
 
 
-# ── HTTPS ─────────────────────────────────────────────────────────────────────────────────────────
+# ── HTTPS, obtained without installing anything ──────────────────────────────────────────────────
+#
+# certbot runs in a CONTAINER, not on the host. That is what lets GeoDeploy do this at all: the rule
+# against installing packages on somebody else's server stands, and a throwaway container satisfies
+# both halves — the operator gets automatic HTTPS, and `apt list --installed` is unchanged tomorrow.
+#
+# HTTP-01 over the webroot, not the nginx plugin. The plugin would EDIT the host's nginx config, and
+# R1 says we never do that; the webroot plugin only writes a challenge file under /var/www/html,
+# which the block we already wrote already serves. We then write the HTTPS server block into OUR OWN
+# file — the same file, the same marker, the same test-then-reload.
+#
+# What this does add to the machine, and it is worth being honest that it is more than one config
+# file: /etc/letsencrypt (certificates and account key) and /var/lib/letsencrypt (certbot's working
+# state), both owned by root, both outliving GeoDeploy unless they are removed by hand.
+
+CERTBOT_IMAGE = "certbot/certbot:latest"
+WEBROOT = "/var/www/html"
+LETSENCRYPT = "/etc/letsencrypt"
+
+
+def _certbot(args: list[str], timeout: int = 300) -> tuple[int, str]:
+    """Run certbot in a throwaway container against the host's /etc/letsencrypt.
+
+    Not through `_host_run`: this one wants certbot's own image rather than the host filesystem, and
+    it needs outbound network to reach Let's Encrypt. Default bridge networking is deliberate — host
+    networking would be a larger claim than this needs, and the ACME servers are reached outbound
+    either way.
+    """
+    client = _client()
+    try:
+        client.images.get(CERTBOT_IMAGE)
+    except Exception:
+        try:
+            client.images.pull(CERTBOT_IMAGE)
+        except Exception as exc:
+            raise ProxyError(
+                "Could not fetch the certbot image, so GeoDeploy cannot request a certificate: "
+                f"{exc}. This machine may have no outbound internet access — which would also stop "
+                "Let's Encrypt from working."
+            ) from exc
+    container = None
+    try:
+        container = client.containers.create(
+            image=CERTBOT_IMAGE,
+            command=args,
+            volumes={
+                LETSENCRYPT: {"bind": "/etc/letsencrypt", "mode": "rw"},
+                "/var/lib/letsencrypt": {"bind": "/var/lib/letsencrypt", "mode": "rw"},
+                WEBROOT: {"bind": WEBROOT, "mode": "rw"},
+            },
+            name=f"geodeploy-certbot-{int(time.time() * 1000) % 100000000}",
+        )
+        container.start()
+        result = container.wait(timeout=timeout)
+        out = container.logs(stdout=True, stderr=True).decode("utf-8", "replace")
+        return int(result.get("StatusCode", 1)), out
+    except ProxyError:
+        raise
+    except Exception as exc:
+        raise ProxyError(f"certbot could not run: {exc}") from exc
+    finally:
+        if container is not None:
+            try:
+                container.remove(force=True)
+            except Exception:
+                pass
+
+
+def _cert_mtime(domain: str) -> str:
+    """When the live certificate was last written, as a bare epoch string ('' if there is none).
+
+    Comparing this across a renewal run is how we know whether anything actually changed, and it is
+    deliberately not a parse of certbot's output: that text is prose, it is localised, and it has
+    changed between versions. A file either has a new mtime or it does not.
+    """
+    _, out = _host_run(
+        f'stat -c %Y "/host{LETSENCRYPT}/live/{domain}/fullchain.pem" 2>/dev/null || echo ""\n'
+        f'echo "==end=="\n', timeout=60)
+    for line in out.splitlines():
+        line = line.strip()
+        if line.isdigit():
+            return line
+    return ""
+
+
+def _is_cloudflare(domain: str) -> bool:
+    """Does this name resolve to Cloudflare's proxy? Decides whether the HTTPS block may redirect
+    port 80 — see `deployment._nginx_conf_tls`. A lookup failure answers False, which is the
+    conservative direction here: a redirect that should not be there is visible immediately, while a
+    missing one is a minor imperfection."""
+    from . import deployment
+    try:
+        return deployment.looks_like_cloudflare(deployment.resolve_domain(domain))
+    except Exception:
+        return False
+
 
 def issue_certificate(domain: str, email: str) -> dict:
-    """Run the host's certbot for this domain, against the proxy we configured.
+    """Get a Let's Encrypt certificate for this domain and switch our own block to HTTPS.
 
-    Separate from Apply, and never implied by it, for three reasons an operator would care about: it
-    talks to an external CA under an agreement they have to accept, it publishes the hostname to the
-    public Certificate Transparency log, and Let's Encrypt's rate limits make a careless retry
-    expensive. We also do not INSTALL certbot — installing packages on somebody's server is exactly
-    the kind of uninvited change this whole module is built to avoid.
+    Separate from Apply, and never implied by it: it reaches an external CA under terms the operator
+    accepts, publishes the hostname to the public Certificate Transparency log, and spends a rate
+    limit that is unpleasant to exhaust. Those are decisions, not side effects.
     """
     domain = _safe_domain(domain)
     email = (email or "").strip()
@@ -1362,8 +1455,6 @@ def issue_certificate(domain: str, email: str) -> dict:
 
     state = read_state()
     adapter = state.get("adapter") or {}
-    found = detect()
-    certbot = found.get("certbot")
     steps: list[dict] = []
 
     def step(name, ok, detail, fix=None):
@@ -1376,42 +1467,154 @@ def issue_certificate(domain: str, email: str) -> dict:
         return {"ok": True, "steps": steps}
     if adapter.get("where") == "container":
         step("Not available here", False,
-             "The proxy is a container, and certbot on the host cannot reload or configure it.",
-             "Issue the certificate the way that container expects — most proxy images have their own "
-             "ACME support, which is the right thing to turn on.")
+             "The proxy is a container, and a certificate obtained out here could not be loaded by it.",
+             "Turn on that image's own ACME support — most proxy images have it, and it is the right "
+             "thing to use when the proxy is containerised.")
         return {"ok": False, "steps": steps}
-    if not certbot:
-        step("certbot is not installed", False,
-             "GeoDeploy will not install packages on this machine.",
-             f"sudo apt install certbot python3-certbot-nginx   # then: sudo certbot --nginx -d {domain}")
+    if adapter.get("kind") != "nginx":
+        step("Not available yet", False,
+             f"Automatic certificates are implemented for nginx; this machine runs "
+             f"{adapter.get('kind') or 'something else'}.",
+             f"sudo certbot --apache -d {domain}")
         return {"ok": False, "steps": steps}
     if not adapter.get("target"):
         step("No configuration to secure", False,
              "GeoDeploy has not written a proxy configuration on this machine yet.",
-             "Apply the domain first; certbot edits that block to add HTTPS.")
+             "Apply the domain first — the certificate is added to that block.")
         return {"ok": False, "steps": steps}
 
-    flag = "--nginx" if adapter["kind"] == "nginx" else "--apache"
-    script = (
-        'set -e\nH=/host\necho "==certbot=="\nset +e\n'
-        f'chroot $H {certbot} {flag} -d {domain} --non-interactive --agree-tos '
-        f'-m {email} --redirect 2>&1 | tail -25\n'
-        'echo "rc=$?"\nset -e\necho "==end=="\n'
-    )
-    code, text = _host_run(script, timeout=300)
+    # The challenge is a FILE FETCHED OVER PORT 80 from the public internet. Saying that before
+    # spending a rate limit is worth four lines: the two ways it fails are both visible from here.
+    behind_cloudflare = _is_cloudflare(domain)
+    _host_run(f'mkdir -p "/host{WEBROOT}/.well-known/acme-challenge"\necho "==end=="\n', timeout=60)
+
+    code, out = _certbot([
+        "certonly", "--webroot", "-w", WEBROOT, "-d", domain,
+        "--non-interactive", "--agree-tos", "-m", email,
+        "--keep-until-expiring", "--no-eff-email",
+    ])
+    tail = "\n".join(out.strip().splitlines()[-18:])
+    if code != 0:
+        step("Let's Encrypt issued a certificate", False, tail,
+             ("Cloudflare's proxy is on for this domain. The HTTP-01 challenge has to reach THIS "
+              "server over port 80 — turn the orange cloud off (DNS only) while it runs, then turn "
+              "it back on."
+              if behind_cloudflare else
+              "The challenge is a file fetched over port 80 from the public internet. Check that "
+              f"http://{domain}/.well-known/acme-challenge/ reaches this server and that no "
+              "firewall blocks port 80."))
+        return {"ok": False, "steps": steps}
+    step("Let's Encrypt issued a certificate", True,
+         f"For {domain}, valid for 90 days and renewed automatically from here.")
+
+    # Now OUR file becomes the HTTPS one. Same path, same marker, same test-then-reload — this is an
+    # ordinary apply of a different body, not a special case with its own rules.
+    from . import deployment
+    intent = deployment.read_intent()
+    cfg = deployment.proxy_config(domain, "nginx", intent, tls=True, redirect=not behind_cloudflare)
+    body = (f"# {MARKER} — do not edit by hand.\n"
+            f"# Written by the Deployment panel for {domain}, with HTTPS.\n"
+            f"# Remove it from there rather than with rm, so the proxy is tested before it is\n"
+            f"# reloaded.\n" + cfg["config"]).encode("utf-8")
+
+    script = _APPLY_HOST.format(
+        target=adapter["target"], link=adapter.get("symlink") or "",
+        test_cmd=_host_test_command(adapter), reload_cmd=_host_reload_command(adapter),
+        domain=domain, probe_port="80", probe_tls="443")
+    _, text = _host_run(script, files={"config": body}, timeout=240)
     sec = _sections(text)
-    result = _test_result(sec.get("certbot", []))
-    if not result:
-        step("certbot ran", False, text[-800:].strip() or "No output from certbot.")
+
+    test = _test_result(sec.get("test", []))
+    if test and not test["ok"]:
+        step("nginx accepted the HTTPS configuration", False,
+             "It did not, so nothing was reloaded and the HTTPS block has been removed. nginx said:\n\n"
+             + (test["output"] or "(no output)"),
+             "The certificate was still issued and is on disk — this is only about the configuration. "
+             "The site is back exactly as it was before this ran.")
         return {"ok": False, "steps": steps}
-    if not result["ok"]:
-        step("certbot ran", False, result["output"],
-             "The commonest cause is the HTTP-01 challenge not reaching this machine: the domain must "
-             "resolve here and port 80 must be open. Behind Cloudflare's proxy (the orange cloud), "
-             "turn it off until the certificate is issued, or use a DNS challenge.")
+    step("nginx accepted the HTTPS configuration", True, (test or {}).get("output") or "Test passed.")
+
+    reload_result = _test_result(sec.get("reload", []))
+    if reload_result and not reload_result["ok"]:
+        step("Reloaded", False, reload_result["output"] or "The reload failed.",
+             f"The configuration is valid and in place; reload it yourself: {adapter['reload']}")
         return {"ok": False, "steps": steps}
-    step("certbot ran", True, result["output"])
-    step("HTTPS", True,
-         f"https://{domain} now has a certificate, and certbot added the redirect from HTTP. It "
-         f"renews itself through the timer certbot installs.")
-    return {"ok": True, "steps": steps}
+    step("Reloaded", True, "The proxy reloaded without dropping connections.")
+
+    state["certificate"] = {"domain": domain, "email": email, "at": int(time.time()),
+                            "mtime": _cert_mtime(domain), "redirect": not behind_cloudflare}
+    state["tls"] = True
+    _write_state(state)
+
+    route443 = sec.get("route443", [])
+    if any("instance" in line for line in route443):
+        step("HTTPS reaches GeoDeploy", True,
+             f"https://{domain} is answered by GeoDeploy, with its own certificate.")
+    elif route443 and not any(line == "skipped" for line in route443):
+        step("HTTPS reaches GeoDeploy", False,
+             "The certificate is installed and the configuration loaded, but a request for this "
+             "domain on port 443 still does not reach GeoDeploy.\n\n" + "\n".join(route443[:6]),
+             "Another block on this machine may still be matching first. Press Verify to see what a "
+             "visitor gets.")
+
+    if behind_cloudflare:
+        step("One thing left, at Cloudflare", True,
+             "This server now has its own certificate, so set SSL/TLS to Full (strict) — Cloudflare "
+             "will then connect to it over HTTPS and verify it. Turn on 'Always Use HTTPS' there too: "
+             "port 80 here deliberately does NOT redirect, because with Cloudflare on Flexible a "
+             "redirect loops between Cloudflare and this server forever.")
+    return {"ok": all(s["ok"] for s in steps), "steps": steps, "domain": domain}
+
+
+def renew_certificates() -> dict:
+    """Renew anything due, and reload the proxy only if something actually changed.
+
+    Run from a scheduled task, daily. certbot itself decides whether renewal is due — calling this
+    every day is correct and cheap, and is what makes a 90-day certificate a non-event.
+
+    The reload is gated on the certificate FILE changing, not on certbot's output: that text is
+    prose, localised, and has changed between versions, while an mtime is an mtime. Reloading on
+    every tick would be harmless but is still a daily perturbation of somebody else's web server for
+    no reason, which is exactly the habit this module exists to avoid.
+    """
+    state = read_state()
+    cert = state.get("certificate") or {}
+    adapter = state.get("adapter") or {}
+    domain = cert.get("domain")
+    if not domain or not adapter.get("target"):
+        return {"ok": True, "renewed": False, "detail": "No GeoDeploy-managed certificate."}
+
+    before = _cert_mtime(domain)
+    code, out = _certbot(["renew", "--webroot", "-w", WEBROOT, "--no-random-sleep-on-renew"],
+                         timeout=600)
+    tail = "\n".join(out.strip().splitlines()[-12:])
+    if code != 0:
+        return {"ok": False, "renewed": False, "detail": tail}
+
+    after = _cert_mtime(domain)
+    if before and after and before == after:
+        return {"ok": True, "renewed": False, "detail": "Not due for renewal."}
+
+    script = (
+        'set -e\nH=/host\nsay() { echo "==$1=="; }\nsay test\nset +e\n'
+        'OUT=$(' + _host_test_command(adapter) + ' 2>&1)\nRC=$?\nset -e\n'
+        'echo "$OUT" | tail -10\necho "rc=$RC"\n'
+        'if [ "$RC" != "0" ]; then echo "==end=="; exit 4; fi\n'
+        'say reload\nset +e\n'
+        'OUT=$(' + _host_reload_command(adapter) + ' 2>&1)\nRC=$?\nset -e\n'
+        'echo "$OUT" | tail -5\necho "rc=$RC"\necho "==end=="\n'
+    )
+    _, text = _host_run(script, timeout=180)
+    sec = _sections(text)
+    test = _test_result(sec.get("test", []))
+    if test and not test["ok"]:
+        return {"ok": False, "renewed": True, "reloaded": False,
+                "detail": "The certificate renewed, but the proxy configuration does not pass its "
+                          "own test, so it was NOT reloaded. The old certificate stays live until "
+                          "that is fixed.\n\n" + test["output"]}
+    reload_result = _test_result(sec.get("reload", []))
+    state.setdefault("certificate", {})["mtime"] = after
+    _write_state(state)
+    return {"ok": bool(reload_result and reload_result["ok"]), "renewed": True,
+            "reloaded": bool(reload_result and reload_result["ok"]),
+            "detail": f"Renewed the certificate for {domain} and reloaded the proxy."}
