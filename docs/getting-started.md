@@ -188,11 +188,11 @@ reactions, which is why it is a step of its own.
     **Typing the full name in the Name field.** Most panels append the zone, so entering
     `maps.example.org` gives you `maps.example.org.example.org`. Enter `maps`.
 
-    **Leaving Cloudflare's orange cloud on too early.** Proxied means Cloudflare answers DNS with its
-    own addresses and terminates HTTPS itself. That is a fine end state, but while you are still
-    getting a certificate with certbot's HTTP challenge it will fail — turn the proxy off (grey
-    cloud) until the certificate is issued, then turn it back on and set SSL/TLS mode to
-    **Full (strict)**.
+    **Leaving Cloudflare's SSL/TLS mode on Full before you have a certificate.** Proxied means
+    Cloudflare answers DNS with its own addresses and terminates HTTPS itself — a fine end state. But
+    on **Full** or **Full (strict)** Cloudflare connects to your server over HTTPS, and until it has
+    a certificate that is a 525 error and a failed ACME challenge. Use **Flexible** until the
+    certificate exists, then switch to **Full (strict)**.
 
 ### 2 · Put a reverse proxy in front
 
@@ -259,8 +259,9 @@ on each explaining what breaks; the full version is in
 It is a separate button, never folded into Apply, because it reaches an external certificate
 authority under terms you accept and puts the hostname in the public Certificate Transparency log.
 
-The challenge is a file fetched over **port 80**, so port 80 must be reachable for that name — and
-**behind Cloudflare, turn the orange cloud off while it runs**. Afterwards, set SSL/TLS to
+The challenge is a file fetched over **port 80**, so port 80 must be reachable for that name. Behind
+Cloudflare it normally passes straight through the proxy — if it fails, grey-cloud the record for two
+minutes and retry. Afterwards, set SSL/TLS to
 **Full (strict)** and turn on **Always Use HTTPS**: your server now has its own certificate, and
 GeoDeploy deliberately does not redirect port 80 on a Cloudflare-fronted site, because on Flexible
 that loops forever. The full story is in

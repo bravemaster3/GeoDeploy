@@ -1256,10 +1256,12 @@ async def deployment_check_dns(body: DeploymentVerifyRequest, _: User = Depends(
                 "detail": f"{domain} resolves to Cloudflare ({', '.join(addresses)}), not directly "
                           f"to this server. That is what Cloudflare's proxy — the orange cloud — "
                           f"does, and it is fine.",
-                "fix": "Two things to know while it is on: Cloudflare terminates HTTPS itself, so "
-                       "your own certificate must still be valid to it (set SSL/TLS mode to Full "
-                       "(strict)); and if you are getting a certificate with certbot's HTTP "
-                       "challenge, turn the proxy off (grey cloud) until it succeeds."}
+                "fix": "Two things to know while it is on. Cloudflare terminates HTTPS itself, so "
+                       "until this server has its own certificate keep SSL/TLS on Flexible — on "
+                       "Full or Full (strict) Cloudflare tries HTTPS against an origin that has "
+                       "none and every request is a 525. And the ACME challenge normally passes "
+                       "straight through the proxy; grey-cloud for two minutes only if it fails, "
+                       "which rules out Bot Fight Mode, a WAF rule and a cache rule at once."}
     return {"state": "elsewhere", "addresses": addresses, "expected": expected,
             "detail": f"{domain} resolves to {', '.join(addresses)}"
                       f"{f', but this server is {expected}' if expected else ''}.",

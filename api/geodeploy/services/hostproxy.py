@@ -1496,9 +1496,13 @@ def issue_certificate(domain: str, email: str) -> dict:
     tail = "\n".join(out.strip().splitlines()[-18:])
     if code != 0:
         step("Let's Encrypt issued a certificate", False, tail,
-             ("Cloudflare's proxy is on for this domain. The HTTP-01 challenge has to reach THIS "
-              "server over port 80 — turn the orange cloud off (DNS only) while it runs, then turn "
-              "it back on."
+             ("Cloudflare's proxy is on for this domain. That usually works — Let's Encrypt reaches "
+              "Cloudflare on port 80 and Cloudflare forwards the challenge here — so read certbot's "
+              "output above for what actually happened. The three things that do break it: Bot Fight "
+              "Mode, a WAF rule or 'Under Attack' mode answering the challenge with a JavaScript "
+              "page; a cache or page rule on /.well-known/; and SSL/TLS already set to Full, where "
+              "Cloudflare tries HTTPS against an origin that has no certificate yet. Turning the "
+              "orange cloud off (DNS only) for two minutes rules out all three."
               if behind_cloudflare else
               "The challenge is a file fetched over port 80 from the public internet. Check that "
               f"http://{domain}/.well-known/acme-challenge/ reaches this server and that no "
