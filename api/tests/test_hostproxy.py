@@ -770,3 +770,37 @@ def test_changing_the_domain_clears_the_certificate_record(monkeypatch):
     state = hostproxy._next_state("new.example.org", dict(_NGINX_ADAPTER), applied=True)
     assert "certificate" not in state
     assert not state.get("tls")
+
+
+def test_remove_says_what_will_happen_to_the_domain(monkeypatch):
+    """Measured on a real instance: Remove produced a 526 for every visitor, because the Cloudflare
+    rule still required HTTPS from this server and nothing claimed the name on 443 any more. That
+    is correct behaviour and a nasty surprise, which is exactly the combination that belongs in the
+    output rather than in the operator's afternoon."""
+    monkeypatch.setattr(hostproxy, "read_state", lambda: {
+        "domain": "maps.example.org",
+        "certificate": {"domain": "maps.example.org"},
+        "adapter": {"kind": "nginx", "where": "host", "symlink": None,
+                    "target": "/etc/nginx/conf.d/geodeploy.conf"}})
+    monkeypatch.setattr(hostproxy, "_host_run", lambda *a, **k: (0,
+        "==removed==\nok\n==test==\nsyntax is ok\nrc=0\n==reload==\ndone\nrc=0\n==end==\n"))
+    monkeypatch.setattr(hostproxy, "_write_state", lambda v: None)
+    result = hostproxy.remove()
+    warned = [s for s in result["steps"] if "no longer served" in s["name"]]
+    assert warned, "removal must say what happens to the domain"
+    assert "443" in warned[0]["detail"]
+    assert "Apply again" in warned[0]["fix"]
+
+
+def test_remove_without_a_certificate_does_not_invent_a_warning(monkeypatch):
+    """No certificate means nothing in front was told to require HTTPS from us, so the domain simply
+    falls back to the other site. Warning there would be noise."""
+    monkeypatch.setattr(hostproxy, "read_state", lambda: {
+        "domain": "maps.example.org",
+        "adapter": {"kind": "nginx", "where": "host", "symlink": None,
+                    "target": "/etc/nginx/conf.d/geodeploy.conf"}})
+    monkeypatch.setattr(hostproxy, "_host_run", lambda *a, **k: (0,
+        "==removed==\nok\n==test==\nok\nrc=0\n==reload==\ndone\nrc=0\n==end==\n"))
+    monkeypatch.setattr(hostproxy, "_write_state", lambda v: None)
+    result = hostproxy.remove()
+    assert not [s for s in result["steps"] if "no longer served" in s["name"]]
