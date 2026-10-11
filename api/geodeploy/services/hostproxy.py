@@ -1432,6 +1432,29 @@ def _is_cloudflare(domain: str) -> bool:
         return False
 
 
+def _fronted_by_something(domain: str) -> bool:
+    """Does this name resolve somewhere other than this machine?
+
+    A yes means a CDN, load balancer or another proxy is answering for it — which is the condition
+    for "the hop into this server may still be plaintext even though visitors see HTTPS". Deliberately
+    weaker than `_is_cloudflare`: that one recognises a product and may therefore name its menus,
+    while this one only knows that SOMETHING is there and must stay generic.
+
+    Unknowable answers are False. Saying nothing is the right failure here — an instruction about a
+    product we have not identified is how you send someone to the wrong screen.
+    """
+    from . import deployment
+    try:
+        addresses = set(deployment.resolve_domain(domain))
+        if not addresses:
+            return False
+        ours = deployment.server_ip()
+        mine = {a for a in (ours.get("public"), ours.get("outbound")) if a}
+        return bool(mine) and not (addresses & mine)
+    except Exception:
+        return False
+
+
 def neighbours_failing_strict(domain: str, names: list[str]) -> list[str]:
     """Which OTHER hostnames on this machine would break if Cloudflare's zone was set to Full
     (strict) — measured, by name.
@@ -1635,6 +1658,24 @@ def issue_certificate(domain: str, email: str) -> dict:
                  "none of them would break, but it cannot see sites in your Cloudflare zone that "
                  "live on OTHER servers. If you have any, scope it instead: Rules → Configuration "
                  f'Rules, expression http.host eq "{domain}", setting SSL → Full (strict).')
+    elif _fronted_by_something(domain):
+        # SOMETHING is in front, and it is not Cloudflare. We will not invent menu paths for a
+        # product we have not identified — naming the wrong screen is worse than naming none — so
+        # this says what to look for in anyone's vocabulary.
+        #
+        # Worth knowing, and the reason the Cloudflare branch above is so careful: a zone-wide
+        # origin-TLS switch is unusual. Most CDNs configure the origin connection per service or per
+        # origin (CloudFront's origin protocol policy, Fastly's per-backend TLS, Front Door's origin
+        # settings), so the change is naturally scoped and cannot reach a neighbour.
+        step("One thing left, at whatever is in front of this server", True,
+             f"{domain} does not resolve to this machine, so a CDN or load balancer is terminating "
+             "HTTPS for visitors. This server now has its own certificate, so point that product at "
+             "port 443 here and turn on certificate verification for this origin — the last hop is "
+             "in clear text until you do.",
+             "It is usually a per-origin or per-backend setting (CloudFront: origin protocol policy; "
+             "Fastly: backend TLS; Front Door: origin settings), which means it affects only this "
+             "site. If yours is a single switch covering several sites, check the others first — "
+             "that is how a change for GeoDeploy takes somebody else down.")
     return {"ok": all(s["ok"] for s in steps), "steps": steps, "domain": domain}
 
 
