@@ -852,17 +852,15 @@ def plan(domain: str, intent: dict) -> dict:
                        "hand under a different name.",
             })
         if state == "ours":
-            warnings.append(f"{adapter['target']} was written by GeoDeploy earlier and will be "
-                            f"replaced — this is how changing the domain works.")
+            warnings.append(f"{adapter['target']} will be replaced — this is how changing the "
+                            f"domain works.")
         if adapter["where"] == "container":
             warnings.append(
-                f"The proxy is the container '{adapter['container']}'. GeoDeploy writes to the host "
-                f"side of its configuration mount, so the change survives that container being "
-                f"recreated, and reloads it with `docker exec`."
+                f"The proxy is the container '{adapter['container']}'. The file goes to the host "
+                f"side of its config mount, so it survives the container being recreated."
             )
         if adapter["tls"] == "automatic":
-            warnings.append("Caddy will obtain the HTTPS certificate by itself once the domain "
-                            "resolves here — there is no separate certificate step.")
+            warnings.append("Caddy obtains the certificate itself — no separate step.")
 
         # THE ONE THAT COST A FIELD INSTALL. Our block listens on 80. If this machine already
         # terminates HTTPS for something else and no 443 block claims our name, then every https://
@@ -872,21 +870,14 @@ def plan(domain: str, intent: dict) -> dict:
         tls = found.get("tls") or {}
         if tls.get("has_tls") and not tls.get("serves_domain"):
             warnings.append(
-                "This machine already serves HTTPS for other sites, and nothing on port 443 claims "
-                f"{domain} yet — so `https://{domain}` will reach "
-                + ("the catch-all block that answers for every name here"
-                   if tls.get("catchall") else "whichever site answers 443 by default")
-                + ", not GeoDeploy, until it has its own certificate. Plain `http://` works as soon "
-                  "as you apply. Behind Cloudflare this bites immediately: in Full or Full (strict) "
-                  "mode Cloudflare connects to this server on 443, so visitors would get the other "
-                  "site. Use SSL/TLS mode Flexible until the certificate exists, then Full (strict)."
+                f"`https://{domain}` will reach another site on this machine until you get a "
+                f"certificate — `http://` works straight away. Get one below."
             )
 
     if not intent["bind"].startswith("127."):
         warnings.append(
-            f"GeoDeploy is published on {intent['bind']}:{intent['port']}, so it stays reachable "
-            f"directly as well as through the proxy. Once this works, "
-            f"`sudo bash installer/set-port.sh {intent['port']}` moves it to 127.0.0.1."
+            f"GeoDeploy is also reachable directly on {intent['bind']}:{intent['port']}. Once the "
+            f"proxy works: sudo bash installer/set-port.sh {intent['port']}"
         )
 
     # What we have ALREADY written, from the state file rather than from this session. Without this

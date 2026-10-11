@@ -353,10 +353,11 @@ def verdict(intent: dict, reality: dict, observed: dict) -> dict:
                 "level": "warning",
                 "title": f"Reachable at {observed['origin']}, but without HTTPS",
                 "detail": (
-                    "Sign-in tokens and uploads travel in clear text. Your reverse proxy is already "
-                    "in the right place to terminate TLS."
+                    "The last hop into this server is in clear text. GeoDeploy can fix that: "
+                    "a free certificate, renewed automatically, nothing installed."
                 ),
-                "fix": "Give the proxy a certificate — Caddy does it automatically; nginx uses certbot.",
+                "fix": None,
+                "action": "certificate",
             }
         return {
             "level": "ok",
