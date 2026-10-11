@@ -475,8 +475,98 @@ Add `proxy_set_header Host $host;`. Settings → Deployment says so explicitly w
 on `0.0.0.0` inserts its forwarding rule ahead of ufw, so `ufw deny 8080` will not keep that port off
 the internet. Bind the loopback instead: `sudo bash installer/set-port.sh 8080`.
 
+### Behind a CDN: what each error code means
+
+Every one of these was hit on a real machine while building this feature.
+
+**526 Invalid SSL certificate.** Cloudflare is set to Full (strict) and your origin's certificate
+for that hostname does not verify — usually because nothing claims the name on port 443 at all, so
+the request lands on another site's block and its certificate. Two common causes: you pressed
+**Remove it** while the strict setting was still in place, or you switched the mode before issuing
+a certificate. Fix: press **Apply** (the certificate is still on disk), or relax the SSL mode until
+the origin is ready.
+
+**525 SSL handshake failed.** Cloudflare is on Full or Full (strict) and your origin does not
+answer HTTPS on 443 at all. Same fix, same order: certificate first, mode second.
+
+**ERR_TOO_MANY_REDIRECTS.** Cloudflare is on **Flexible** while your origin redirects HTTP to
+HTTPS: Cloudflare connects on port 80, gets a 301 to https, goes back to Cloudflare, connects on
+port 80 again. GeoDeploy omits that redirect on a Cloudflare-fronted domain for exactly this
+reason — if you see it, something else on the machine is redirecting, or the mode was changed after
+the configuration was written.
+
+**The domain shows a different website.** Almost always HTTPS reaching a block that is not yours.
+A port-80 block is not a candidate for a request that arrives on 443, so if another site holds 443
+— a `server_name _;` catch-all does, for every name — it answers. Get a certificate for your
+domain; an exact `server_name` beats a catch-all.
+
+**The Cloudflare rule is deployed and nothing changed.** Three ways that happens, all silent:
+*All incoming requests* instead of *Custom filter expression* (applies zone-wide, which is not what
+you wanted and may break neighbours); the **Field** left on its default `URI Full`, which matches
+nothing; or the SSL setting never **+ Added**, so the rule carries no action. The Expression Preview
+must read `(http.host eq "your.domain")`.
+
+**Check what is true rather than what looks true:**
+
+```bash
+curl -s https://your.domain/api/public/whoami
+```
+
+`"scheme":"https"` means the hop from the CDN into your server is encrypted. `"host"` tells you what
+GeoDeploy thinks it is called, which is what every link it emits will say.
+
+### Certificates and renewal
+
+**Is renewal actually going to work?** Do not wait sixty days to find out:
+
+```bash
+sudo docker run --rm \
+  -v /etc/letsencrypt:/etc/letsencrypt \
+  -v /var/lib/letsencrypt:/var/lib/letsencrypt \
+  -v /var/www/html:/var/www/html \
+  certbot/certbot renew --webroot -w /var/www/html --dry-run
+```
+
+"Simulated renewal succeeded" means the challenge works against the real ACME protocol. Confirm the
+daily task is registered too:
+
+```bash
+cd ~/geodeploy
+sudo docker compose exec celery celery -A geodeploy.celery_app inspect registered | grep certificates
+```
+
+**Renewal fails.** GeoDeploy logs it at error level in the worker, keeps the existing certificate,
+and does not reload. You have the remaining validity to fix it — commonly port 80 no longer
+reaching the server, or the ACME path being redirected. Check:
+
+```bash
+curl -sI http://your.domain/.well-known/acme-challenge/probe   # want 404, NOT 301
+```
+
+A 301 there is the silent killer: the challenge follows the redirect to a port whose certificate has
+expired, and renewal stops working permanently.
+
+**The certificate renewed but the site did not pick it up.** GeoDeploy only reloads when the
+certificate file actually changed, and never reloads a configuration failing its own test. If the
+test was failing, the old certificate stays live and the log says so.
+
 ## What is not here yet
 
+- **Automatic HTTPS is nginx-only.** Caddy needs none (it gets its own certificate). Apache gets the
+  certbot command to run rather than a button, because the config rewrite afterwards is not written
+  yet.
+- **One domain at a time.** The panel manages a single hostname — one file, one `server_name`.
+  Serving GeoDeploy on two names at once means writing the block yourself with both on the
+  `server_name` line, under a different filename so Apply does not overwrite it.
+- **HTTP-01 only.** The challenge is a file fetched over port 80, so port 80 must be reachable from
+  the internet for that name. There is no DNS-01 option, which would need an API token for your DNS
+  provider stored on the server.
+- **No certificate automation for a containerised proxy.** GeoDeploy writes that proxy's
+  configuration, but a certificate obtained out here could not be loaded by it. Use that image's own
+  ACME support.
+- **Automatic HTTPS needs a proxy in front.** In dedicated mode GeoDeploy *is* the web server and
+  there is no host proxy to configure, so the certificate button does not apply — move to a local
+  port and put a proxy in front first (`installer/set-port.sh 8080`).
 - **HTTPS in dedicated mode.** GeoDeploy does not yet obtain its own certificate; in that mode it
   serves plain HTTP. Until it does, a reverse proxy in front is how you get HTTPS — which is another
   reason behind-proxy is worth choosing even on a machine you own.
