@@ -284,8 +284,15 @@ free.
 
     | | |
     | --- | --- |
-    | Expression | `http.host eq "maps.example.org"` |
+    | Field | **Hostname** — *not* the default "URI Full" |
+    | Operator | **equals** |
+    | Value | `maps.example.org` — bare hostname, no scheme, no slash, no wildcard |
     | Setting | SSL → **Full (strict)** |
+
+    The Expression Preview should read `(http.host eq "maps.example.org")`. If it still says
+    `http.request.full_uri wildcard …`, the Field is on its default and **the rule will deploy and
+    match nothing** — it looks configured, and the only symptom is that the hop stays in clear text.
+    You can also click **Edit expression** and paste `http.host eq "maps.example.org"` straight in.
 
     This verifies the connection for GeoDeploy's hostname and changes nothing for anything else. The
     older equivalent, if Configuration Rules are not available on your plan, is a **Page Rule** on
