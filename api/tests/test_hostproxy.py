@@ -804,3 +804,38 @@ def test_remove_without_a_certificate_does_not_invent_a_warning(monkeypatch):
     monkeypatch.setattr(hostproxy, "_write_state", lambda v: None)
     result = hostproxy.remove()
     assert not [s for s in result["steps"] if "no longer served" in s["name"]]
+
+
+# ── Dedicated mode must not be told to do what behind-proxy mode does ───────────────────────────
+
+_DEDICATED = {"mode": "dedicated", "bind": "0.0.0.0", "port": "80"}
+
+
+def test_dedicated_mode_says_there_is_nothing_to_configure(monkeypatch):
+    """"No reverse proxy found" is true here and useless — it reads as a missing dependency and
+    invites installing nginx on the port GeoDeploy is already holding."""
+    _detected(monkeypatch, adapter=None, binaries=[], containers=[], dirs=[], includes=[])
+    plan = hostproxy.plan("maps.example.org", _DEDICATED)
+    assert "dedicated" in _codes(plan)
+    assert "no-adapter" not in _codes(plan)
+    detail = plan["blockers"][0]["detail"]
+    assert "A record" in detail           # a domain really does need nothing else here
+
+
+def test_dedicated_mode_warns_against_the_cdn_setting_that_breaks_it(monkeypatch):
+    """Measured twice on a real instance: Full (strict) with no 443 listener gives every visitor a
+    521. The panel has to say so BEFORE, since the symptom names neither the cause nor this mode."""
+    _detected(monkeypatch, adapter=None, binaries=[], containers=[], dirs=[], includes=[])
+    detail = hostproxy.plan("maps.example.org", _DEDICATED)["blockers"][0]["detail"]
+    assert "521" in detail
+    assert "Flexible" in detail
+    assert "set-port.sh" in hostproxy.plan("maps.example.org", _DEDICATED)["blockers"][0]["fix"]
+
+
+def test_a_loopback_install_with_no_proxy_still_gets_the_old_message(monkeypatch):
+    """behind-proxy with nothing installed is a genuinely different situation: there SHOULD be a
+    proxy there and there is not."""
+    _detected(monkeypatch, adapter=None, binaries=[], containers=[], dirs=[], includes=[])
+    plan = hostproxy.plan("maps.example.org", _INTENT)
+    assert "no-adapter" in _codes(plan)
+    assert "dedicated" not in _codes(plan)

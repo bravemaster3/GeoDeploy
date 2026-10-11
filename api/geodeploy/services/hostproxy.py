@@ -807,6 +807,35 @@ def plan(domain: str, intent: dict) -> dict:
                 "fix": "Use the Traefik instructions below: one `docker network connect`, and labels "
                        "on GeoDeploy's own nginx service.",
             })
+        elif not intent["bind"].startswith("127."):
+            # DEDICATED MODE. There is no proxy here because GeoDeploy IS the web server, so
+            # "no reverse proxy found" would be true and useless — it reads as a missing
+            # dependency and invites installing nginx on a port GeoDeploy already holds.
+            #
+            # The HTTPS half matters more. This mode has NO HTTPS listener at all: port 443 is not
+            # published and the TLS server block is commented out. A CDN in front set to verify the
+            # origin therefore cannot connect, and the operator gets 521 on a site that worked a
+            # moment earlier. Measured, twice, on a real instance — so it is stated before they try
+            # it rather than diagnosed afterwards.
+            blockers.append({
+                "code": "dedicated",
+                "title": "GeoDeploy is this machine's web server",
+                "detail": (
+                    f"It answers directly on {intent['bind']}:{intent['port']}, so there is no "
+                    f"reverse proxy in front to configure — and a domain needs nothing here but an "
+                    f"A record pointing at this server.\n\n"
+                    f"HTTPS is the catch: this mode has no HTTPS listener. If you put a CDN in "
+                    f"front, leave it terminating TLS for visitors and talking to this server over "
+                    f"plain HTTP — Cloudflare calls that Flexible. Setting Full or Full (strict) "
+                    f"makes it dial port 443 here, where nothing is listening, and every visitor "
+                    f"gets a 521."
+                ),
+                "fix": (
+                    "For automatic HTTPS, move GeoDeploy to a local port and run a proxy in front: "
+                    f"sudo bash installer/set-port.sh 8080 — then this panel can configure that "
+                    f"proxy and get a certificate for you."
+                ),
+            })
         else:
             blockers.append({
                 "code": "no-adapter",
