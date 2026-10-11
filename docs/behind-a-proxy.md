@@ -567,7 +567,17 @@ test was failing, the old certificate stays live and the log says so.
 - **Automatic HTTPS needs a proxy in front.** In dedicated mode GeoDeploy *is* the web server and
   there is no host proxy to configure, so the certificate button does not apply — move to a local
   port and put a proxy in front first (`installer/set-port.sh 8080`).
-- **HTTPS in dedicated mode.** GeoDeploy does not yet obtain its own certificate; in that mode it
+- **HTTPS in dedicated mode**, and it is the sharpest gap here, because dedicated is what the
+  installer recommends on an empty server. GeoDeploy publishes port 80 only: 443 is not published
+  and the TLS server block in `nginx/nginx.conf` is commented out, so **there is no HTTPS listener
+  at all**. A CDN in front must therefore stay on a mode that talks to the origin over plain HTTP
+  (Cloudflare's **Flexible**). Setting Full or Full (strict) makes it dial port 443, where nothing
+  answers, and every visitor gets a **521** — observed twice while testing. Until this lands, the
+  way to get HTTPS is to move to a local port and run a proxy in front:
+  `sudo bash installer/set-port.sh 8080`. The scaffolding for doing it in-place exists and is
+  deliberately inert — `docker-compose.tls.yml` publishes 443, the server block awaits certificate
+  paths — see its header comment.
+- **HTTPS in dedicated mode (original note).** GeoDeploy does not yet obtain its own certificate; in that mode it
   serves plain HTTP. Until it does, a reverse proxy in front is how you get HTTPS — which is another
   reason behind-proxy is worth choosing even on a machine you own.
 - **A base path.** GeoDeploy has to live at the root of its domain or subdomain; it cannot yet be

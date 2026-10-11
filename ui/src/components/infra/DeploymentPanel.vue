@@ -361,9 +361,17 @@
 
                   <p v-if="dns && dns.state === 'proxied'"
                      class="text-[11px] text-sky-300/90 bg-sky-500/10 border border-sky-500/30 rounded-lg px-3 py-2 leading-relaxed">
-                    Behind Cloudflare: keep SSL/TLS on <strong>Flexible</strong> until this server
-                    has its own certificate, then switch to <strong>Full (strict)</strong>.
-                    <InfoDot text="Cloudflare terminates HTTPS for visitors either way. The mode decides which port Cloudflare connects to here: Flexible uses port 80, Full uses 443 and fails with a 525 until a certificate exists. Full (strict) is what stops that last hop being plaintext." />
+                    <template v-if="data.intent.mode === 'dedicated'">
+                      Behind Cloudflare: keep SSL/TLS on <strong>Flexible</strong> and leave it
+                      there. In this mode GeoDeploy has no HTTPS listener, so Full or Full (strict)
+                      would make Cloudflare dial port 443 here and every visitor would get a 521.
+                      <InfoDot text="Visitors still get HTTPS from Cloudflare; it is the Cloudflare-to-this-server hop that stays plain HTTP. To encrypt that too, move GeoDeploy to a local port (installer/set-port.sh 8080) and run a reverse proxy in front — then this panel can obtain a certificate for you." />
+                    </template>
+                    <template v-else>
+                      Behind Cloudflare: keep SSL/TLS on <strong>Flexible</strong> until this server
+                      has its own certificate, then switch to <strong>Full (strict)</strong>.
+                      <InfoDot text="Cloudflare terminates HTTPS for visitors either way. The mode decides which port Cloudflare connects to here: Flexible uses port 80, Full uses 443 and fails until a certificate exists. Full (strict) is what stops that last hop being plaintext." />
+                    </template>
                   </p>
                 </template>
               </div>
