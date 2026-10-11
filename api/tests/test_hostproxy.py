@@ -684,3 +684,89 @@ def test_the_scoped_rule_is_the_recommendation_even_when_no_neighbour_is_at_risk
     assert "Configuration Rules" in cf[0]["detail"]
     # The zone-wide switch may be mentioned as an alternative, never as the instruction.
     assert "SSL/TLS → Overview" not in cf[0]["detail"]
+
+
+# ── The three that a critical re-read found, after the feature was already "working" ────────────
+#
+# None of these needed a new machine to find — only asking "what does the NEXT press of this button
+# do?". All three are one click away on an instance that is serving happily.
+
+def test_apply_after_a_certificate_writes_the_HTTPS_shape(monkeypatch):
+    """Severity 1. The panel offers "Apply again", and remove-then-reapply is the natural recovery.
+    Rendering the plain port-80 block would overwrite a working HTTPS vhost — and behind Cloudflare
+    on Full (strict), where Cloudflare connects to 443, nothing would claim the name there, the
+    catch-all would answer, and every visitor would get 526. A downgrade on paper, an outage in
+    fact."""
+    _detected(monkeypatch, certs=["maps.example.org"])
+    monkeypatch.setattr(hostproxy, "read_state", lambda: {
+        "certificate": {"domain": "maps.example.org", "redirect": False}})
+    plan = hostproxy.plan("maps.example.org", _INTENT)
+    assert plan["has_certificate"] is True
+    assert "listen 443 ssl" in plan["config"]
+    assert "/etc/letsencrypt/live/maps.example.org/fullchain.pem" in plan["config"]
+
+
+def test_apply_without_a_certificate_still_writes_plain_http(monkeypatch):
+    """The other direction must not regress: a first apply has no certificate, and a 443 block
+    naming files that do not exist fails nginx's test and takes the whole config with it."""
+    _detected(monkeypatch, certs=[])
+    monkeypatch.setattr(hostproxy, "read_state", lambda: {})
+    plan = hostproxy.plan("maps.example.org", _INTENT)
+    assert plan["has_certificate"] is False
+    assert "listen 443 ssl" not in plan["config"]
+
+
+def test_the_recorded_redirect_choice_survives_a_reapply(monkeypatch):
+    """The no-redirect decision was made when the certificate was issued, from the Cloudflare check.
+    Re-deciding it on every apply means a DNS blip can flip a Cloudflare-fronted site into the
+    redirect loop `_nginx_conf_tls` exists to avoid."""
+    _detected(monkeypatch, certs=["maps.example.org"])
+    monkeypatch.setattr(hostproxy, "read_state", lambda: {
+        "certificate": {"domain": "maps.example.org", "redirect": False}})
+    monkeypatch.setattr(hostproxy, "_is_cloudflare", lambda d: False)   # would say "redirect" today
+    body = hostproxy.plan("maps.example.org", _INTENT)["config"]
+    port80 = body.split("server {", 1)[1].split("server {", 1)[0]
+    assert "return 301" not in port80
+
+
+def test_a_failed_test_restores_the_previous_file_rather_than_deleting_it():
+    """`rm` is right only when the file is NEW. Replacing a working vhost and then deleting it on a
+    failed test turns "the new config was rejected" into "the site has no configuration at all"."""
+    script = hostproxy._APPLY_HOST.format(
+        target="/etc/nginx/conf.d/geodeploy.conf", link="", test_cmd="true", reload_cmd="true",
+        domain="maps.example.org", probe_port="80", probe_tls="")
+    assert 'cp "$TARGET" "$TARGET.gd-prev"' in script
+    rollback = script.split("say rollback", 1)[1].split("say reload", 1)[0]
+    assert 'mv -f "$TARGET.gd-prev" "$TARGET"' in rollback
+    assert "echo restored" in rollback
+    # and the backup must not survive a success, where a stale copy would confuse the next rollback
+    assert 'rm -f "$TARGET.gd-prev"' in script
+
+
+def test_the_backup_name_is_not_picked_up_by_a_dropin_glob():
+    """conf.d/*.conf and conf.d/*.caddy must not match the backup, or nginx loads two copies of the
+    same server block while it sits there."""
+    for suffix in (".conf", ".caddy"):
+        assert not f"geodeploy{suffix}.gd-prev".endswith(suffix)
+
+
+def test_reapplying_the_same_domain_keeps_the_certificate_record(monkeypatch):
+    """Dropping it meant renewal silently stopped: the site still served HTTPS, the daily task found
+    no certificate in state, and it failed for every visitor 90 days later."""
+    monkeypatch.setattr(hostproxy, "read_state", lambda: {
+        "domain": "maps.example.org", "tls": True,
+        "certificate": {"domain": "maps.example.org", "at": 1}})
+    state = hostproxy._next_state("maps.example.org", dict(_NGINX_ADAPTER), applied=True)
+    assert state["certificate"]["domain"] == "maps.example.org"
+    assert state["tls"] is True
+
+
+def test_changing_the_domain_clears_the_certificate_record(monkeypatch):
+    """That certificate is no longer the one this installation serves; renewing it would keep a name
+    alive that nothing here uses."""
+    monkeypatch.setattr(hostproxy, "read_state", lambda: {
+        "domain": "old.example.org", "tls": True,
+        "certificate": {"domain": "old.example.org", "at": 1}})
+    state = hostproxy._next_state("new.example.org", dict(_NGINX_ADAPTER), applied=True)
+    assert "certificate" not in state
+    assert not state.get("tls")

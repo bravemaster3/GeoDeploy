@@ -313,6 +313,12 @@ done
 #
 # awk assigns each listen/server_name to the most recent `server {`. Sound for nginx: `location`
 # blocks contain neither directive, and `upstream`'s `server 1.2.3.4;` has no brace.
+# Which names already have a Let's Encrypt certificate. Collected HERE, in the probe that is
+# already running, because the alternative is a second helper container on every plan() call —
+# and the answer changes what configuration we would write, so it is needed every time.
+section certs
+ls -1 $H/etc/letsencrypt/live 2>/dev/null | grep -v README | head -50
+
 section nginxblocks
 NGINXBIN=""
 for c in /usr/sbin/nginx /usr/bin/nginx /usr/local/sbin/nginx ; do
@@ -632,7 +638,7 @@ def detect() -> dict:
     out: dict = {
         "probe_ok": False, "error": None, "os": None, "listeners": [], "units": [],
         "binaries": [], "dirs": [], "includes": [], "server_names": [], "our_files": {},
-        "tests": {}, "containers": [], "adapter": None, "certbot": None,
+        "tests": {}, "containers": [], "adapter": None, "certbot": None, "certs": [],
     }
     try:
         client = _client()
@@ -672,6 +678,7 @@ def detect() -> dict:
     # includes — so union the two rather than choosing. Over-collecting is the safe direction: a
     # name we wrongly think is taken is a refusal the operator can read and work around.
     out["blocks"] = sec.get("nginxblocks", [])
+    out["certs"] = [line.strip() for line in sec.get("certs", []) if line.strip()]
     # Our OWN block is marked and excluded here, for the reason in the probe's servernames comment:
     # R5 would otherwise see the domain we configured last time as "already taken by something else"
     # and refuse every re-apply. It is NOT excluded from `_tls_picture`, which asks a different
@@ -729,7 +736,8 @@ def detect() -> dict:
 
 # ── The configuration we would write ─────────────────────────────────────────────────────────────
 
-def _body(adapter: dict, domain: str, intent: dict) -> str:
+def _body(adapter: dict, domain: str, intent: dict, has_cert: bool = False,
+          redirect: bool = True) -> str:
     """The file content, from `deployment.py`'s generators plus our marker.
 
     One generator, two consumers: the text an operator pastes and the text we write are the SAME
@@ -739,7 +747,14 @@ def _body(adapter: dict, domain: str, intent: dict) -> str:
     """
     from . import deployment
 
-    cfg = deployment.proxy_config(domain, adapter["kind"], intent)
+    # WITH A CERTIFICATE, APPLY MUST WRITE THE HTTPS SHAPE. Rendering the plain port-80 block here
+    # would overwrite a working HTTPS vhost with an HTTP-only one — and behind Cloudflare on Full
+    # (strict), where Cloudflare connects to 443, that is not a downgrade but an outage: no block
+    # claims the name on 443, the catch-all answers, every visitor gets 526. The panel offers
+    # "Apply again" and removal-then-reapply is the natural recovery path, so this is a button
+    # press away, not a corner case.
+    cfg = deployment.proxy_config(domain, adapter["kind"], intent,
+                                  tls=has_cert and adapter["kind"] == "nginx", redirect=redirect)
     body = cfg["config"]
     # Drop the generator's LEADING comment block — "put this in /etc/nginx/sites-available/… then
     # run nginx -t && systemctl reload". Right for someone copying the text by hand, nonsense in a
@@ -916,8 +931,16 @@ def plan(domain: str, intent: dict) -> dict:
         },
     }
     if adapter:
+        has_cert = domain in (found.get("certs") or [])
+        # The redirect decision was made when the certificate was issued; reuse it rather than
+        # re-deciding, so a DNS blip cannot silently flip a Cloudflare-fronted site into the
+        # redirect loop that `_nginx_conf_tls` exists to avoid.
+        recorded = (read_state().get("certificate") or {})
+        redirect = recorded.get("redirect", True) if recorded.get("domain") == domain \
+            else not _is_cloudflare(domain)
         out["target"] = adapter["target"]
-        out["config"] = _body(adapter, domain, intent)
+        out["has_certificate"] = has_cert
+        out["config"] = _body(adapter, domain, intent, has_cert=has_cert, redirect=redirect)
     return out
 
 
@@ -959,6 +982,11 @@ LINK="{link}"
 say() {{ echo "==$1=="; }}
 
 say write
+# Keep what was there. `rm` on rollback is right only when the file is NEW; when we are REPLACING a
+# working vhost — re-applying, or rewriting it for HTTPS — deleting it on a failed test turns "the
+# new config was rejected" into "the site has no configuration at all". The backup name does not end
+# in .conf or .caddy, so no drop-in glob picks it up while it sits there.
+if [ -f "$TARGET" ]; then cp "$TARGET" "$TARGET.gd-prev"; PREV=1; else PREV=0; fi
 cp /tmp/config "$TARGET"
 chmod 644 "$TARGET"
 if [ -n "$LINK" ]; then ln -sfn "{target}" "$H$LINK"; fi
@@ -974,8 +1002,14 @@ echo "rc=$RC"
 
 if [ "$RC" != "0" ]; then
   say rollback
-  rm -f "$TARGET"
-  if [ -n "$LINK" ]; then rm -f "$H$LINK"; fi
+  if [ "$PREV" = "1" ]; then
+    mv -f "$TARGET.gd-prev" "$TARGET"
+    echo restored
+  else
+    rm -f "$TARGET"
+    if [ -n "$LINK" ]; then rm -f "$H$LINK"; fi
+    echo removed
+  fi
   set +e
   {test_cmd} >/dev/null 2>&1
   echo "rc=$?"
@@ -983,6 +1017,7 @@ if [ "$RC" != "0" ]; then
   echo "==end=="
   exit 3
 fi
+rm -f "$TARGET.gd-prev"
 
 say reload
 set +e
@@ -1070,6 +1105,26 @@ def _exec(client, name: str, argv: list[str], timeout: int = 60) -> tuple[int, s
     return int(result.exit_code or 0), out
 
 
+def _next_state(domain: str, adapter: dict, applied: bool) -> dict:
+    """The state file after an apply, KEEPING the certificate record when the domain is unchanged.
+
+    Writing a fresh dict here dropped it, which meant re-applying the same domain silently stopped
+    renewal: the configuration still served HTTPS, the daily task found no certificate in state and
+    returned "nothing to renew", and the whole thing failed for every visitor 90 days later. A
+    certificate that quietly stops renewing is worse than never having had one.
+
+    A DIFFERENT domain does clear it, which is right — that certificate is no longer the one this
+    installation serves, and renewing it would keep a name alive that nothing here uses.
+    """
+    state = {"domain": domain, "adapter": adapter, "applied": applied, "at": int(time.time())}
+    previous = read_state()
+    cert = previous.get("certificate") or {}
+    if cert.get("domain") == domain:
+        state["certificate"] = cert
+        state["tls"] = previous.get("tls", False)
+    return state
+
+
 def apply(domain: str, intent: dict) -> dict:
     """Write, test, reload — or put everything back and reload nothing.
 
@@ -1133,9 +1188,12 @@ def apply(domain: str, intent: dict) -> dict:
     nginx_test = _test_result(sec.get("test", []))
     if nginx_test and not nginx_test["ok"]:
         back = _test_result(sec.get("rollback", []))
+        restored = any(line == "restored" for line in sec.get("rollback", []))
         step(f"{kind} accepted it", False,
-             f"It did not, so nothing was reloaded and the file has been removed. {kind} said:\n\n"
-             + (nginx_test["output"] or "(no output)"),
+             ("It did not, so nothing was reloaded and the previous configuration has been put back."
+              if restored else
+              "It did not, so nothing was reloaded and the file has been removed.")
+             + f" {kind} said:\n\n" + (nginx_test["output"] or "(no output)"),
              "This machine is exactly as it was before Apply ran"
              + ("" if not back else (" — its configuration test passes again." if back["ok"] else
                 " — but its test is still failing, which means the problem was not ours. Run the "
@@ -1149,11 +1207,11 @@ def apply(domain: str, intent: dict) -> dict:
              (reload_result["output"] or "The reload command failed."),
              "The file is in place and valid, but the proxy did not pick it up. Reload it yourself "
              f"({adapter['reload']}), or remove the file from this panel.")
-        _write_state({"domain": domain, "adapter": adapter, "applied": False})
+        _write_state(_next_state(domain, adapter, applied=False))
         return {"ok": False, "steps": steps, "plan": checked}
     step("Reloaded", True, "The proxy reloaded without dropping connections.")
 
-    _write_state({"domain": domain, "adapter": adapter, "applied": True, "at": int(time.time())})
+    _write_state(_next_state(domain, adapter, applied=True))
 
     route = sec.get("route", [])
     reached = any("instance" in line for line in route)
@@ -1250,10 +1308,10 @@ def _apply_in_container(adapter: dict, domain: str, body: bytes, steps: list[dic
     if rc != 0:
         step("Reloaded", False, out.strip() or "The reload failed.",
              f"The file is valid and in place; reload '{name}' yourself.")
-        _write_state({"domain": domain, "adapter": adapter, "applied": False})
+        _write_state(_next_state(domain, adapter, applied=False))
         return {"ok": False, "steps": steps, "plan": checked}
     step("Reloaded", True, f"'{name}' reloaded without dropping connections.")
-    _write_state({"domain": domain, "adapter": adapter, "applied": True, "at": int(time.time())})
+    _write_state(_next_state(domain, adapter, applied=True))
     return {"ok": True, "steps": steps, "plan": checked, "domain": domain, "target": target}
 
 
