@@ -301,6 +301,23 @@ free.
     **If something is already failing**, set the zone back to **Flexible** first. That is the state
     everything worked in; fix the scoping afterwards, not during an outage.
 
+!!! note "Other CDNs: the same hop, usually without the footgun"
+
+    If something other than Cloudflare is in front — CloudFront, Fastly, Front Door, Akamai, another
+    nginx — the question is identical: once this server has its own certificate, point that product
+    at **port 443** here and turn on certificate verification for this origin, or the last hop stays
+    in clear text.
+
+    The difference is the blast radius. **A zone-wide origin-TLS switch is unusual to Cloudflare.**
+    Most CDNs configure the origin connection per service or per origin — CloudFront's origin
+    protocol policy, Fastly's per-backend TLS, Front Door's origin settings — so the change only
+    affects the site you are configuring and cannot reach a neighbour. If yours is a single switch
+    covering several sites, treat it like Cloudflare's: check the others before you save.
+
+    GeoDeploy only names menu paths for a product it has positively identified (Cloudflare, by its
+    published IP ranges). For anything else it says what to look for and leaves the vocabulary to
+    you, because naming the wrong screen is worse than naming none.
+
 Renewal reloads your proxy **only when the certificate file actually changed** — not on a schedule,
 and not by parsing certbot's output, which is prose and changes between versions. If the
 configuration fails its test at renewal time, nothing is reloaded and the existing certificate stays

@@ -634,3 +634,29 @@ def test_neighbour_names_go_through_the_hostname_validator(monkeypatch):
     hostproxy.neighbours_failing_strict("maps.example.org", ["ok.example.org", "bad;rm -rf /"])
     assert "ok.example.org" in seen["script"]
     assert "rm -rf" not in seen["script"]
+
+
+def test_cloudflare_menu_paths_are_only_emitted_for_cloudflare(monkeypatch):
+    """"Rules → Configuration Rules" is Cloudflare's vocabulary. Showing it to a Fastly or
+    CloudFront user sends them hunting for a screen that does not exist, which is worse than
+    generic advice."""
+    from geodeploy.services import deployment
+    monkeypatch.setattr(deployment, "resolve_domain", lambda d: ["203.0.113.9"])
+    monkeypatch.setattr(deployment, "server_ip", lambda: {"public": "198.51.100.1", "outbound": None})
+    assert hostproxy._is_cloudflare("maps.example.org") is False
+    assert hostproxy._fronted_by_something("maps.example.org") is True
+
+
+def test_a_domain_pointing_straight_at_us_has_nothing_in_front(monkeypatch):
+    from geodeploy.services import deployment
+    monkeypatch.setattr(deployment, "resolve_domain", lambda d: ["198.51.100.1"])
+    monkeypatch.setattr(deployment, "server_ip", lambda: {"public": "198.51.100.1", "outbound": None})
+    assert hostproxy._fronted_by_something("maps.example.org") is False
+
+
+def test_an_unknowable_answer_stays_quiet(monkeypatch):
+    """No DNS, or no idea what our own address is: say nothing rather than guess at somebody's CDN."""
+    from geodeploy.services import deployment
+    monkeypatch.setattr(deployment, "resolve_domain", lambda d: [])
+    monkeypatch.setattr(deployment, "server_ip", lambda: {"public": None, "outbound": None})
+    assert hostproxy._fronted_by_something("maps.example.org") is False
