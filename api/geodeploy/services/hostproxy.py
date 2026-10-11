@@ -1554,10 +1554,15 @@ def issue_certificate(domain: str, email: str) -> dict:
 
     if behind_cloudflare:
         step("One thing left, at Cloudflare", True,
-             "This server now has its own certificate, so set SSL/TLS to Full (strict) — Cloudflare "
-             "will then connect to it over HTTPS and verify it. Turn on 'Always Use HTTPS' there too: "
-             "port 80 here deliberately does NOT redirect, because with Cloudflare on Flexible a "
-             "redirect loops between Cloudflare and this server forever.")
+             "Set SSL/TLS to Full (strict). Until you do, Cloudflare still connects to this server "
+             "in clear text — the certificate alone does not change that. Turn on 'Always Use "
+             "HTTPS' there too; port 80 here deliberately does not redirect, because against "
+             "Flexible a redirect loops forever.",
+             "CHECK FIRST: the SSL/TLS mode is per-ZONE, not per-hostname, so it applies to every "
+             "proxied record in this domain. Any other site in the zone whose origin has a "
+             "self-signed or missing certificate will start returning 526. If one does, give it a "
+             "certificate too, scope the mode with a Configuration Rule, or use Full rather than "
+             "Full (strict) — which still encrypts the hop, just without verifying it.")
     return {"ok": all(s["ok"] for s in steps), "steps": steps, "domain": domain}
 
 
