@@ -583,3 +583,54 @@ def test_a_failed_test_after_renewal_does_not_reload(monkeypatch):
     assert result["ok"] is False
     assert result["reloaded"] is False
     assert "NOT reloaded" in result["detail"]
+
+
+# ── Advice has a blast radius too ────────────────────────────────────────────────────────────────
+#
+# GeoDeploy told an operator to switch Cloudflare to Full (strict). That setting is per-ZONE, and
+# every other site in the zone started failing with 526. We did not touch those sites — we told
+# someone to, which is the same thing from where they were sitting. "Do not break what you did not
+# install" has to cover the advice, not only the files.
+
+def test_neighbours_that_would_break_are_named(monkeypatch):
+    monkeypatch.setattr(hostproxy, "_host_run", lambda *a, **k: (0,
+        "==strict==\nshop.example.org untrusted\nblog.example.org ok\n"
+        "old.example.org unreachable\n==end==\n"))
+    failing = hostproxy.neighbours_failing_strict(
+        "maps.example.org", ["shop.example.org", "blog.example.org", "old.example.org"])
+    assert failing == ["shop.example.org"]
+
+
+def test_a_name_that_merely_fails_to_answer_is_not_called_broken(monkeypatch):
+    """`unreachable` is not `untrusted`. Naming a site as about-to-break when it is simply down
+    sends the operator to fix the wrong thing, and makes the warning untrustworthy next time."""
+    monkeypatch.setattr(hostproxy, "_host_run", lambda *a, **k: (0,
+        "==strict==\ndown.example.org unreachable\n==end==\n"))
+    assert hostproxy.neighbours_failing_strict("maps.example.org", ["down.example.org"]) == []
+
+
+def test_our_own_domain_is_never_listed_as_a_neighbour(monkeypatch):
+    called = []
+    monkeypatch.setattr(hostproxy, "_host_run", lambda *a, **k: called.append(a) or (0, ""))
+    assert hostproxy.neighbours_failing_strict("maps.example.org", ["maps.example.org"]) == []
+    assert called == []                      # nothing to test means no container at all
+
+
+def test_a_failed_measurement_returns_nothing_rather_than_a_guess(monkeypatch):
+    """The caller says 'these will break'. It must never say 'nothing else will' on the strength of
+    a probe that did not run."""
+    def boom(*a, **k):
+        raise hostproxy.ProxyError("no docker")
+    monkeypatch.setattr(hostproxy, "_host_run", boom)
+    assert hostproxy.neighbours_failing_strict("maps.example.org", ["shop.example.org"]) == []
+
+
+def test_neighbour_names_go_through_the_hostname_validator(monkeypatch):
+    """They come from the machine's own config rather than a request, but they still reach a shell
+    loop — so the same gate applies, and anything that fails it is simply not tested."""
+    seen = {}
+    monkeypatch.setattr(hostproxy, "_host_run",
+                        lambda script, **k: seen.update(script=script) or (0, "==strict==\n==end==\n"))
+    hostproxy.neighbours_failing_strict("maps.example.org", ["ok.example.org", "bad;rm -rf /"])
+    assert "ok.example.org" in seen["script"]
+    assert "rm -rf" not in seen["script"]

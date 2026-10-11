@@ -669,6 +669,15 @@ and a marker's 0.28 left on a polygon falls below the hairline and changes nothi
   For a containerised proxy the file goes to the **host side** of its config bind mount (a container's
   own filesystem is discarded by the next `up -d`) and the test and reload are `docker exec`, so the
   proxy validates with its own binary and no privileged helper is involved in either.
+  **`neighbours_failing_strict()` (2026-10-09) — because GeoDeploy caused an outage.** The
+  certificate step told an operator to set Cloudflare to Full (strict); that mode is per-ZONE, every
+  other site in the zone began returning 526, and the advice was ours. The module's rule — do not
+  break what you did not install — has to cover the ADVICE, not only the files. So it now probes
+  each other hostname this machine serves on 443 (`wget` with and against `--no-check-certificate`,
+  since Alpine's busybox wget validates via `ssl_client`) and NAMES the ones that would fail, then
+  recommends a per-hostname Configuration Rule instead of the zone switch. A measurement that could
+  not run returns an empty list, so the caller may say "these will break" and must never say
+  "nothing else will".
   **The HTTPS-shadowing check (2026-10-09, found in the field, not by reading):** our block listens on
   80. On a machine that already terminates TLS for another site — `listen 443 ssl; server_name _;` is
   the common shape — every `https://` request for the new domain is answered by THAT block, while
