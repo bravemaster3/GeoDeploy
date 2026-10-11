@@ -6,6 +6,12 @@ upgrade needs manual work.
 
 ## Unreleased
 
+- **Portal About pages work on a phone, and every archetype has one.** The About page scrolled
+  sideways on a narrow screen — a long link in the description has no wrap opportunity, so it set
+  the width of the whole document — and the "Open the map" button was sized for a desktop header.
+  Both fixed, along with images, tables and code blocks that could be wider than the screen. The
+  About panel was also only offered on the `webmap` archetype; catalogs, dashboards and story maps
+  now have it too. Leaving the description empty is still how you get no About page.
 - **The dashboard can configure your existing web server for you.** Settings → Deployment: add a DNS
   record, type the domain, press Apply — GeoDeploy works out what is in front of it (nginx, Caddy or
   Apache, on the host or in a container), adds **one new file** to its drop-in directory, tests the
