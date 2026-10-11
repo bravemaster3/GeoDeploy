@@ -282,17 +282,23 @@ free.
 
     *Rules → Configuration Rules → Create rule*
 
-    | | |
-    | --- | --- |
-    | Field | **Hostname** — *not* the default "URI Full" |
-    | Operator | **equals** |
-    | Value | `maps.example.org` — bare hostname, no scheme, no slash, no wildcard |
-    | Setting | SSL → **Full (strict)** |
+    1. **If incoming requests match… → Custom filter expression.** Not *All incoming requests* —
+       that applies the setting to every site in the zone, which is the thing this rule exists to
+       avoid.
+    2. **Field: Hostname · Operator: equals · Value:** `maps.example.org` — bare hostname, no
+       scheme, no slash, no wildcard. The Field box **defaults to "URI Full"**; left there the rule
+       matches nothing.
+    3. **Check the Expression Preview** reads `(http.host eq "maps.example.org")`. If it says
+       `http.request.full_uri wildcard …`, go back to step 2.
+    4. **Setting: SSL → Full (strict)**, then Deploy.
 
-    The Expression Preview should read `(http.host eq "maps.example.org")`. If it still says
-    `http.request.full_uri wildcard …`, the Field is on its default and **the rule will deploy and
-    match nothing** — it looks configured, and the only symptom is that the hop stays in clear text.
-    You can also click **Edit expression** and paste `http.host eq "maps.example.org"` straight in.
+    Both of this form's defaults fail *silently*: a rule scoped to all requests breaks the
+    neighbours, and a rule on the wrong field does nothing at all. In each case the rule looks
+    configured. Verify by result, not by appearance:
+
+    ```bash
+    curl -s https://maps.example.org/api/public/whoami     # "scheme":"https" means it worked
+    ```
 
     This verifies the connection for GeoDeploy's hostname and changes nothing for anything else. The
     older equivalent, if Configuration Rules are not available on your plan, is a **Page Rule** on
