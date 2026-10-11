@@ -1376,6 +1376,23 @@ def remove() -> dict:
     code, text = _host_run(script, timeout=180)
     sec = _sections(text)
     step("Removed the file", "removed" in sec, target + (f" and {link}" if link else ""))
+
+    # What the operator is about to discover on their own, said here instead. Removing our block
+    # leaves the domain unserved — which is the point — but when a proxy in front has been told to
+    # REQUIRE HTTPS from this server, "unserved" is not a fallback to the other site, it is an error
+    # page for every visitor. Measured on a real instance: Remove produced a 526 from Cloudflare,
+    # because the Configuration Rule still said Full (strict) and nothing claimed the name on 443.
+    certificate = (state.get("certificate") or {}).get("domain")
+    if certificate:
+        step("The domain is no longer served from here", True,
+             f"{certificate} now falls through to whatever else this machine answers with. If a "
+             "proxy in front is set to require HTTPS from this server (Cloudflare's Full or Full "
+             "(strict)), visitors get an error rather than the other site, because nothing claims "
+             "this name on port 443 any more.",
+             "Apply again to bring it back — the certificate is untouched, still on disk, and Apply "
+             "will write the HTTPS block straight away. Or relax that setting in front while the "
+             "domain is unused.")
+
     test = _test_result(sec.get("test", []))
     if test and not test["ok"]:
         step(f"{adapter['kind']} configuration still valid", False,
