@@ -1216,11 +1216,12 @@ async def deployment_status(request: Request, _: User = Depends(require_owner)):
     intent = deployment.read_intent()
     reality = await run_in_threadpool(deployment.read_reality)
     observed = deployment.observe(request)
+    managed = {"domain": _managed_domain(), "tls": _managed_tls()}
     return {
         "intent": intent,
         "reality": reality,
         "observed": observed,
-        "verdict": deployment.verdict(intent, reality, observed),
+        "verdict": deployment.verdict(intent, reality, observed, managed),
         "domain_hint": deployment.domain_hint(),
         # The domain GeoDeploy has ALREADY configured, from hostproxy's own state. Without it the
         # panel cannot tell "no domain yet" from "a working domain that only lacks HTTPS", and it

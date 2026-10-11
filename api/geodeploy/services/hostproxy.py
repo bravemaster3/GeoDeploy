@@ -883,7 +883,11 @@ def plan(domain: str, intent: dict) -> dict:
         # from a browser, after a panel that said success, because port 80 was perfect all along.
         # Worth saying BEFORE Apply, not in a troubleshooting page.
         tls = found.get("tls") or {}
-        if tls.get("has_tls") and not tls.get("serves_domain"):
+        # Suppressed once a certificate exists for this name: the warning is about the GAP between
+        # having a port-80 block and having HTTPS, and after issuance there is no gap. Leaving it up
+        # tells someone who has just finished to go and do the thing they did.
+        if tls.get("has_tls") and not tls.get("serves_domain") \
+                and domain not in (found.get("certs") or []):
             warnings.append(
                 f"`https://{domain}` will reach another site on this machine until you get a "
                 f"certificate — `http://` works straight away. Get one below."

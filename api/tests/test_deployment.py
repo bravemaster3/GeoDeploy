@@ -298,3 +298,45 @@ def test_no_docker_is_not_an_error(monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "docker",
                         type("m", (), {"from_env": staticmethod(boom)}))
     assert deployment.postgres_published() is None
+
+
+# ── A loopback bind is not the same as "no domain" ──────────────────────────────────────────────
+
+_BEHIND_LOOPBACK = {"mode": "behind-proxy", "bind": "127.0.0.1", "port": "8080"}
+_TUNNEL = {"scheme": "http", "host": "localhost:8080", "origin": "http://localhost:8080",
+           "is_domain": False, "behind_outer_proxy": False, "forwarded_for_depth": 0}
+_NO_REALITY = {"bind": "127.0.0.1", "port": "8080", "running": True, "listening": True, "error": None}
+
+
+def test_a_configured_domain_is_reported_even_when_viewed_down_a_tunnel():
+    """Measured complaint: an operator who had just finished the whole flow, successfully, was told
+    to "give it a domain" — because the verdict read only the current request, and the request came
+    through an SSH tunnel as localhost:8080. The tunnel is the NORMAL way to reach the dashboard
+    while setting this up, so this was the moment of success being reported as failure."""
+    v = deployment.verdict(_BEHIND_LOOPBACK, _NO_REALITY, _TUNNEL,
+                           {"domain": "maps.example.org", "tls": True})
+    assert v["level"] == "ok"
+    assert "maps.example.org" in v["title"]
+    assert v["url"] == "https://maps.example.org"
+    assert "SSH tunnel" in v["detail"]          # explains the localhost line above it
+
+
+def test_a_configured_domain_without_a_certificate_still_points_at_the_next_step():
+    v = deployment.verdict(_BEHIND_LOOPBACK, _NO_REALITY, _TUNNEL,
+                           {"domain": "maps.example.org", "tls": False})
+    assert v["url"] == "http://maps.example.org"
+    assert v["action"] == "certificate"
+    assert "plain HTTP" in v["detail"]
+
+
+def test_with_no_configured_domain_the_old_advice_is_still_right():
+    """The warning must survive for the case it was written for: a loopback install with nothing in
+    front of it really does need a domain."""
+    v = deployment.verdict(_BEHIND_LOOPBACK, _NO_REALITY, _TUNNEL, {"domain": None, "tls": False})
+    assert v["level"] == "warning"
+    assert v["action"] == "configure-domain"
+
+
+def test_the_managed_argument_is_optional():
+    """Callers that predate it must keep working rather than raising."""
+    assert deployment.verdict(_BEHIND_LOOPBACK, _NO_REALITY, _TUNNEL)["action"] == "configure-domain"
