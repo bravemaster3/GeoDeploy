@@ -290,7 +290,10 @@ free.
        matches nothing.
     3. **Check the Expression Preview** reads `(http.host eq "maps.example.org")`. If it says
        `http.request.full_uri wildcard …`, go back to step 2.
-    4. **Setting: SSL → Full (strict)**, then Deploy.
+    4. Scroll to **SSL (optional)** and click **+ Add** — *then* choose **Full (strict)**. Without
+       that click the rule carries no setting and refuses to deploy with `action parameters are
+       required for the set_config action`.
+    5. **Deploy.**
 
     Both of this form's defaults fail *silently*: a rule scoped to all requests breaks the
     neighbours, and a rule on the wrong field does nothing at all. In each case the rule looks
