@@ -200,6 +200,29 @@ configuration, and a tidy-up must not be what takes your sites down.
 
     If you would rather GeoDeploy never did this, use the manual route. It is the same text.
 
+### Removing it again
+
+**Remove it** in the panel undoes exactly what Apply added: it deletes `geodeploy.conf` and its
+symlink, runs the proxy's own configuration test, and **only then** reloads. The test comes first
+because taking our file away can expose an unrelated problem elsewhere in your configuration — a
+tidy-up must not be what takes the other sites down.
+
+It asks for confirmation, because the consequence is not obvious:
+
+- The domain **stops being served from here.** Without a certificate it falls through to whatever
+  else the machine answers with.
+- **With** a certificate, and a proxy in front told to require HTTPS from this server, it returns an
+  **error** rather than the other site — there is nothing left claiming the name on port 443. Behind
+  Cloudflare on Full (strict) that is a **526** for every visitor. (Observed, on a live instance.)
+- The **certificate is not deleted.** `/etc/letsencrypt` is untouched, so pressing **Apply** brings
+  the site straight back, HTTPS included.
+- **GeoDeploy keeps running** on its local port. Reach the dashboard with
+  `ssh -L 8080:127.0.0.1:8080 you@your-server` and open `http://localhost:8080`.
+
+!!! tip "If you removed it and the domain is now erroring"
+    Tunnel in as above, then press **Apply**. GeoDeploy sees the certificate still on disk and
+    writes the HTTPS block directly. Nothing else needs changing — not DNS, not Cloudflare.
+
 ### HTTPS
 
 !!! warning "A port-80 block is invisible to anyone arriving over HTTPS"

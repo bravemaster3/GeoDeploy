@@ -295,7 +295,7 @@ def observe(request) -> dict:
 
 # ── The verdict ───────────────────────────────────────────────────────────────────────────────────
 
-def verdict(intent: dict, reality: dict, observed: dict) -> dict:
+def verdict(intent: dict, reality: dict, observed: dict, managed: dict | None = None) -> dict:
     """One state, in the operator's terms. Ordered by severity: a genuine misconfiguration outranks
     an incomplete setup, which outranks a working one."""
     bind = intent["bind"]
@@ -367,6 +367,29 @@ def verdict(intent: dict, reality: dict, observed: dict) -> dict:
         }
 
     if bind.startswith("127."):
+        # A LOOPBACK BIND IS NOT THE SAME AS "NO DOMAIN". Once GeoDeploy has configured the host's
+        # proxy, it knows the public address even when THIS request arrived down an SSH tunnel as
+        # `localhost:8080` — and the tunnel is the normal way to reach the dashboard while setting
+        # things up. Reading only the current request told an operator who had just finished the
+        # whole flow, successfully, to go and "give it a domain": the one piece of advice guaranteed
+        # to be wrong, delivered at the moment of success.
+        site = (managed or {}).get("domain")
+        if site:
+            scheme = "https" if (managed or {}).get("tls") else "http"
+            return {
+                "level": "ok",
+                "title": f"Published at {scheme}://{site}",
+                "detail": (
+                    f"GeoDeploy listens on {bind}:{port} and this machine's web server publishes it "
+                    f"at that address. You are viewing this through an SSH tunnel, which is why the "
+                    f"line above says localhost — visitors do not see that."
+                    + ("" if scheme == "https" else
+                       " The last hop into this server is still plain HTTP; a certificate fixes that.")
+                ),
+                "fix": None,
+                "action": None if scheme == "https" else "certificate",
+                "url": f"{scheme}://{site}",
+            }
         return {
             "level": "warning",
             "title": "Only this machine can reach GeoDeploy",

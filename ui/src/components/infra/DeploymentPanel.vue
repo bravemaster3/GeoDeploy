@@ -30,6 +30,12 @@
           <div class="min-w-0 flex-1">
             <p class="text-sm font-medium text-foreground">{{ data.verdict.title }}</p>
             <p class="text-xs text-muted-foreground/85 mt-1 leading-relaxed">{{ data.verdict.detail }}</p>
+            <p v-if="data.verdict.url" class="mt-2">
+              <a :href="data.verdict.url" target="_blank" rel="noopener"
+                 class="text-sm font-mono text-sky-400 hover:text-sky-300 underline break-all">
+                {{ data.verdict.url }}
+              </a>
+            </p>
             <div v-if="data.verdict.fix" class="mt-2 flex items-center gap-2 flex-wrap">
               <code class="text-[11px] font-mono bg-background/70 border border-border rounded px-2 py-1 break-all">{{ data.verdict.fix }}</code>
               <button @click="copy(data.verdict.fix, 'fix')" class="text-[11px] text-muted-foreground/70 hover:text-foreground">
@@ -250,14 +256,51 @@
                     <button v-else @click="mode = 'manual'" class="btn-secondary text-xs px-3 py-1.5">
                       Show me the configuration instead
                     </button>
-                    <button v-if="applied" @click="removeProxy" :disabled="removeBusy"
+                    <button v-if="applied && !confirmRemove" @click="confirmRemove = true"
                             class="btn-secondary text-xs px-3 py-1.5">
-                      {{ removeBusy ? 'Removing…' : 'Remove it' }}
+                      Remove it
                     </button>
                     <button @click="loadHostPlan" :disabled="hostBusy"
                             class="text-[11px] text-muted-foreground/70 hover:text-foreground">
                       Re-check
                     </button>
+                  </div>
+
+                  <!-- Remove is the one destructive action here, and its consequence is not
+                       obvious: with a certificate and a proxy in front told to require HTTPS, the
+                       domain does not fall back to the other site, it returns an error for every
+                       visitor. Measured on a live instance — a 526 from Cloudflare. So it asks
+                       first, says exactly what will happen, and says how to undo it. -->
+                  <div v-if="confirmRemove"
+                       class="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2.5 space-y-2">
+                    <p class="text-xs font-medium text-foreground">
+                      Remove GeoDeploy's configuration from this machine's web server?
+                    </p>
+                    <ul class="text-[11px] text-muted-foreground/85 list-disc list-inside space-y-0.5">
+                      <li>
+                        <code class="font-mono">{{ hostPlan.applied && hostPlan.applied.domain || domain }}</code>
+                        stops being served from here.
+                      </li>
+                      <li v-if="data.managed_tls">
+                        It will return an <strong>error</strong>, not the other site — a proxy in
+                        front told to require HTTPS from this server has nothing to talk to on 443.
+                      </li>
+                      <li v-else>It falls through to whatever else this machine answers with.</li>
+                      <li>The certificate is <strong>not</strong> deleted, so Apply brings it
+                        straight back.</li>
+                      <li>GeoDeploy keeps running on
+                        <code class="font-mono">{{ data.local_url }}</code> — reach it with
+                        <code class="font-mono">ssh -L {{ data.intent.port }}:127.0.0.1:{{ data.intent.port }}</code>.</li>
+                    </ul>
+                    <div class="flex gap-2">
+                      <button @click="removeProxy" :disabled="removeBusy"
+                              class="btn-secondary text-xs px-3 py-1.5 border-red-500/50 text-red-300">
+                        {{ removeBusy ? 'Removing…' : 'Yes, remove it' }}
+                      </button>
+                      <button @click="confirmRemove = false" class="btn-secondary text-xs px-3 py-1.5">
+                        Cancel
+                      </button>
+                    </div>
                   </div>
 
                   <ul v-if="applySteps.length" class="space-y-2">
@@ -435,6 +478,7 @@ const applyBusy = ref(false)
 const applySteps = ref([])
 const applied = ref(false)
 const removeBusy = ref(false)
+const confirmRemove = ref(false)
 const certEmail = ref('')
 const certBusy = ref(false)
 const certSteps = ref([])
@@ -581,7 +625,10 @@ async function applyProxy() {
     // "Applied" means the file is in place, which is also true when a later step failed — the
     // Remove button has to be offered in exactly that case, since that is when it is needed.
     applied.value = (d.steps || []).some((s) => s.name === 'Wrote the configuration' && s.ok)
-    if (d.ok) await load()
+    // Reload the verdict so the banner switches to "Published at https://…" with the live link.
+    // Leaving the operator on a successful step list under a banner still saying "give it a domain"
+    // is how a finished job reads as an unfinished one.
+    if (d.ok) { await load(); showDomain.value = false }
   } catch (e) {
     applySteps.value = [{ name: 'Apply', ok: false, detail: e?.response?.data?.detail || 'Apply failed.' }]
   } finally {
@@ -590,6 +637,7 @@ async function applyProxy() {
 }
 
 async function removeProxy() {
+  confirmRemove.value = false
   removeBusy.value = true
   try {
     const { data: d } = await removeHostProxy()
@@ -607,7 +655,7 @@ async function getCertificate() {
   try {
     const { data: d } = await issueCertificate(domain.value.trim(), certEmail.value.trim())
     certSteps.value = d.steps || []
-    if (d.ok) await load()
+    if (d.ok) { await load(); showDomain.value = false }
   } catch (e) {
     certSteps.value = [{ name: 'Certificate', ok: false,
                          detail: e?.response?.data?.detail || 'The certificate request failed.' }]
