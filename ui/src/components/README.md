@@ -49,6 +49,15 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
   carries a `source` per group for diagnostics; it is deliberately **not rendered** — the panel
   answers "what are my credentials", and where they were read from is our plumbing, not the
   operator's question (user call, 2026-08-06).
+- `PasswordField.vue` (2026-10-11) — a password box you can read back, used by the sign-in form and
+  every secret field in the setup wizard. Typing a long generated secret into a field of dots and
+  getting "authentication failed" says nothing about WHICH character went wrong, and the usual
+  recovery is to retype it blind. Reveal is per-field and per-press and **starts hidden on every
+  mount** — a field that remembers being revealed shows a secret to whoever walks past next. The
+  toggle is `tabindex="-1"` so it never sits between the password and the submit button, and
+  carries `aria-pressed`. `autocomplete` defaults to `new-password`, which is right for every field
+  in this app except the sign-in box: the browser otherwise substitutes a saved credential for the
+  host, the dots look identical, and the operator submits someone else's value.
 - `InfoDot.vue` (2026-10-09) — the ⓘ that holds the sentence a panel does not need to say out loud.
   **A component rather than a `title=` attribute because touch devices have no hover**, so a native
   tooltip is invisible on a phone — the exact place a wall of explanatory text hurts most. Hover
@@ -243,6 +252,7 @@ All dialogs (`UploadModal`, `AddSourceModal`, `DiscoverModal`, `portal/CreatePor
   icon logic in `views/PortalEditor.vue` + `templates/shared/portal.js` — change all three together.
 
 ## Last updated
+2026-10-11 (PasswordField: reveal toggle everywhere, and a confirm field in setup)
 2026-10-09 (DeploymentPanel: two routes — GeoDeploy configures the host proxy, or you do)
 2026-08-31 (`portal/DashboardBuilder.vue`: a **Fill the screen** checkbox in the board-wide
 settings, writing `grid.fit`. Its hint is deliberate about the limit — it stretches, it does not

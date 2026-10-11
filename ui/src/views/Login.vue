@@ -75,7 +75,8 @@
         </div>
         <div>
           <label class="label">Password</label>
-          <input v-model="password" type="password" class="input" @keydown.enter="submit" />
+          <PasswordField v-model="password" autocomplete="current-password"
+                         name="password" @enter="submit" />
         </div>
         <div v-if="error" class="text-sm text-red-400">{{ error }}</div>
         <button @click="submit" :disabled="busy" class="btn-primary w-full justify-center">
@@ -117,6 +118,7 @@
 </template>
 
 <script setup>
+import PasswordField from '@/components/PasswordField.vue'
 import { onMounted, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'

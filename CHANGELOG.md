@@ -6,6 +6,13 @@ upgrade needs manual work.
 
 ## Unreleased
 
+- **Passwords can be read back, and the admin password is confirmed.** Every password and secret
+  field — sign-in, the database password, the storage secret key, the admin password — now has a
+  reveal toggle, because typing a long generated secret into a field of dots and getting
+  "authentication failed" tells you nothing about which character went wrong. The setup wizard also
+  asks for the admin password twice: it is set once, the next screen is a sign-in form that cannot
+  tell a typo from a wrong password, and a fresh instance has no mail configured and so no way to
+  reset it except from a shell.
 - **Portal About pages work on a phone, and every archetype has one.** The About page scrolled
   sideways on a narrow screen — a long link in the description has no wrap opportunity, so it set
   the width of the whole document — and the "Open the map" button was sized for a desktop header.
