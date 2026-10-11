@@ -1643,8 +1643,17 @@ def issue_certificate(domain: str, email: str) -> dict:
         except Exception:
             at_risk = []
         detail = (
-            "Rules → Configuration Rules → Create rule. Expression: "
-            f'http.host eq "{domain}"   ·   Setting: SSL → Full (strict).\n\n'
+            # The three DROPDOWN values, not only the expression. Cloudflare's rule builder defaults
+            # Field to "URI Full"; left there with a wildcard and a bare origin it matches nothing a
+            # real request looks like, so the rule deploys, does nothing, and the only symptom is
+            # that the hop stays in clear text. Giving the expression alone is what sent someone
+            # there — a silent no-op is the worst shape for an instruction to fail in.
+            "Rules → Configuration Rules → Create rule:\n\n"
+            "    Field: Hostname     Operator: equals     "
+            f"Value: {domain}\n"
+            "    Setting: SSL → Full (strict)\n\n"
+            "Change the Field — it defaults to 'URI Full', which will not match. The Expression "
+            f'Preview should read:   http.host eq "{domain}"\n\n'
             "Until something sets this, Cloudflare connects to this server in clear text."
         )
         if at_risk:
