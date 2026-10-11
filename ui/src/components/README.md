@@ -93,6 +93,11 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
   is keyed off `managed_domain` rather than the verdict level, because "Give it a domain" to someone
   whose domain already works implied the work had not been done, and hid the certificate button
   behind it; when the verdict carries `action: 'certificate'` it becomes a primary **Set up HTTPS**.
+  **The rule the trim pass had to learn:** shorten the explanation, never the LABEL. Trimming left
+  the certificate email as a bare placeholder next to a button that contacts a certificate
+  authority, and the operator asked "should I just type in my email? it doesn't say why" — which is
+  the right question to ask of an unlabelled box. Both inputs in this panel now have a real
+  `<label for>`; the *why* lives in the `InfoDot` beside it.
 - `portal/CreatePortalModal.vue` — new-portal dialog (title, description, access); creates via the portals store then routes to the editor.
 - `portal/LayerPanel.vue` (resolves vector/raster/**external** layers from the data store; external sources get an opacity-only popover, plus a colour picker for WFS vector) — **thin row** mirroring the published portal: drag handle (reorder is wired in `PortalEditor.vue`) · eye/eye-off (`update {visible}`) · **symbol swatch** that opens a **teleported symbology popover** · name · zoom · remove. The popover holds: opacity; vector colour/fill/outline/width; **line type** (solid/dashed/dotted); **point marker shape** (circle/square/triangle/diamond/star/cross) + size; popup-field picker; **raster band selection** (multiband → RGB composite with R/G/B band pickers, or single band) + palette/hillshade/Z (single-band output) and stretch/rescale (all); save/use default. Band selection stores `style.bidx` (`[n]` single, `[r,g,b]` RGB). The list swatch (`geomSvg`/`markerSvg`) draws the actual symbol (colour, dash, marker shape). Emits `update`/`remove`/`zoom`.
   **Two hosts, one control** (issue #23): `standalone` renders the symbology body ALONE — no row, no

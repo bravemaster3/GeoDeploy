@@ -283,19 +283,26 @@
                       this machine.
                       <InfoDot text="certbot runs in a throwaway container against /etc/letsencrypt, gets the certificate over the HTTP-01 challenge, and GeoDeploy rewrites its own block to serve HTTPS. A daily task renews it, and reloads the proxy only when the certificate actually changes." />
                     </p>
+                    <!-- A form field needs a LABEL, not just a placeholder. Trimming the copy took
+                         this one out and left an unexplained box next to a button that contacts a
+                         certificate authority — "should I just type in my email? it doesn't say
+                         why". The rule is: shorten the explanation, never the label. -->
+                    <label for="gd-cert-email" class="block text-xs font-medium text-foreground">
+                      Your email address
+                      <span class="font-normal text-muted-foreground/70">
+                        — so Let’s Encrypt can warn you if renewal ever stops working
+                      </span>
+                      <InfoDot text="It goes to Let's Encrypt, not to GeoDeploy, and is not published. They email you only if the certificate is approaching expiry without having renewed — which, since renewal here is automatic, is the warning that the automation broke while there is still time to fix it. Submitting accepts their subscriber terms. The hostname also becomes public in the Certificate Transparency log, as it does for every HTTPS certificate." />
+                    </label>
                     <div class="flex gap-2 flex-wrap">
-                      <input v-model="certEmail" type="email" placeholder="you@example.org"
-                             spellcheck="false" autocapitalize="off"
+                      <input id="gd-cert-email" v-model="certEmail" type="email"
+                             placeholder="you@example.org" spellcheck="false" autocapitalize="off"
                              class="flex-1 min-w-[12rem] text-xs font-mono bg-background text-foreground border border-border rounded-lg px-2.5 py-1.5" />
                       <button @click="getCertificate" :disabled="!certEmail || certBusy"
-                              class="btn-secondary text-xs px-3 py-1.5">
+                              class="btn-primary text-xs px-3 py-1.5">
                         {{ certBusy ? 'Asking Let’s Encrypt…' : 'Get a certificate' }}
                       </button>
                     </div>
-                    <p class="text-[11px] text-muted-foreground/70">
-                      Used for expiry notices; you are accepting Let’s Encrypt’s terms.
-                      <InfoDot text="The hostname becomes public in the Certificate Transparency log — true of every HTTPS certificate. The challenge is a file fetched over port 80, so it must be reachable from the internet. Behind Cloudflare it normally passes straight through; if it fails, grey-cloud for two minutes and retry." />
-                    </p>
                     <ul v-if="certSteps.length" class="space-y-2 pt-1">
                       <li v-for="s in certSteps" :key="s.name" class="flex items-start gap-2.5 text-xs">
                         <span class="flex-shrink-0 mt-0.5" :class="s.ok ? 'text-green-400' : 'text-red-400'"
