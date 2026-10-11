@@ -1643,17 +1643,27 @@ def issue_certificate(domain: str, email: str) -> dict:
         except Exception:
             at_risk = []
         detail = (
-            # The three DROPDOWN values, not only the expression. Cloudflare's rule builder defaults
-            # Field to "URI Full"; left there with a wildcard and a bare origin it matches nothing a
-            # real request looks like, so the rule deploys, does nothing, and the only symptom is
-            # that the hop stays in clear text. Giving the expression alone is what sent someone
-            # there — a silent no-op is the worst shape for an instruction to fail in.
-            "Rules → Configuration Rules → Create rule:\n\n"
-            "    Field: Hostname     Operator: equals     "
+            # A RECIPE, not an expression. This form has two defaults that lead somewhere wrong and
+            # both fail silently:
+            #
+            #   "All incoming requests" applies the setting to every request in the zone — which is
+            #   the zone-wide blast radius this rule exists to avoid, reproduced inside the rule.
+            #   Field "URI Full" with a wildcard and a bare origin matches nothing a real request
+            #   looks like, so the rule deploys, does nothing, and the only symptom is that the hop
+            #   stays in clear text.
+            #
+            # Handing over the finished expression and trusting the operator to reach it through
+            # those defaults is what sent someone to both. Spell out every field.
+            "Rules → Configuration Rules → Create rule\n\n"
+            "1.  If incoming requests match…  →  Custom filter expression\n"
+            "    NOT 'All incoming requests' — that applies to every site in this Cloudflare\n"
+            "    zone, which is exactly what this rule exists to avoid.\n\n"
+            "2.  Field: Hostname     Operator: equals     "
             f"Value: {domain}\n"
-            "    Setting: SSL → Full (strict)\n\n"
-            "Change the Field — it defaults to 'URI Full', which will not match. The Expression "
-            f'Preview should read:   http.host eq "{domain}"\n\n'
+            "    The Field box defaults to 'URI Full'. Leave it there and the rule matches\n"
+            "    nothing — it will look configured and do nothing.\n\n"
+            f'3.  Check the Expression Preview reads:   http.host eq "{domain}"\n\n'
+            "4.  Then, under the settings: SSL → Full (strict).  Deploy.\n\n"
             "Until something sets this, Cloudflare connects to this server in clear text."
         )
         if at_risk:
