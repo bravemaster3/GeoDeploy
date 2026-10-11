@@ -1633,31 +1633,41 @@ def issue_certificate(domain: str, email: str) -> dict:
              "visitor gets.")
 
     if behind_cloudflare:
-        # Named neighbours, not a general caution. "This might affect other sites" is advice nobody
-        # acts on; "this will break shop.example.org" is.
+        # ONE recommendation, in both cases: the scoped rule. Leading with the zone switch when we
+        # happen to find no at-risk sites ON THIS MACHINE was still misleading — GeoDeploy cannot
+        # see the rest of the zone, and absence of evidence is not evidence of safety. The rule is
+        # correct whether or not neighbours exist, costs the same, and cannot reach anything else,
+        # so there is no case where the zone switch is the better DEFAULT.
         try:
             at_risk = neighbours_failing_strict(domain, (checked_tls.get("names") or []))
         except Exception:
             at_risk = []
+        detail = (
+            "Rules → Configuration Rules → Create rule. Expression: "
+            f'http.host eq "{domain}"   ·   Setting: SSL → Full (strict).\n\n'
+            "Until something sets this, Cloudflare connects to this server in clear text."
+        )
         if at_risk:
-            step("At Cloudflare — use a rule for this hostname ONLY", True,
-                 "Do NOT switch the zone to Full (strict): the mode is per-zone, and these sites on "
-                 "this machine have certificates that will not verify, so they would start failing "
-                 "with 526 — " + ", ".join(at_risk) + ".\n\n"
-                 "Instead: Rules → Configuration Rules → Create rule, expression "
-                 f'http.host eq "{domain}", setting SSL → Full (strict). That encrypts and verifies '
-                 "this hostname and changes nothing for the others.",
-                 "To move the whole zone later, give those sites certificates too — the same button "
-                 "here does it, one hostname at a time.")
-        else:
-            step("One thing left, at Cloudflare", True,
-                 "Set SSL/TLS to Full (strict) — until you do, Cloudflare still connects to this "
-                 "server in clear text. Turn on 'Always Use HTTPS' too; port 80 here deliberately "
-                 "does not redirect, because against Flexible a redirect loops forever.",
-                 "The mode is per-ZONE. GeoDeploy checked the other names this machine serves and "
-                 "none of them would break, but it cannot see sites in your Cloudflare zone that "
-                 "live on OTHER servers. If you have any, scope it instead: Rules → Configuration "
-                 f'Rules, expression http.host eq "{domain}", setting SSL → Full (strict).')
+            detail += ("\n\nDo NOT use SSL/TLS → Overview for it: that is per-zone, and these "
+                       "sites on this machine would start failing with 526 — "
+                       + ", ".join(at_risk) + ".")
+        step("At Cloudflare: add a rule for this hostname", True, detail,
+             "The zone-wide setting (SSL/TLS → Overview) does the same job for EVERY proxied record "
+             "in the domain, including sites on servers GeoDeploy cannot see — any origin whose "
+             "certificate does not verify starts returning 526 the moment it is saved. The rule is "
+             "the same protection for this hostname with nothing else at stake. If GeoDeploy is the "
+             "only thing in this Cloudflare zone, the zone setting is equivalent and simpler.")
+
+        # Separate step, because it is a separate setting with its own blast radius — and
+        # recommending a second zone-wide toggle in the same breath as warning about the first one
+        # would be exactly the mistake again.
+        step("Optional: force HTTPS for visitors", True,
+             "SSL/TLS → Edge Certificates → Always Use HTTPS. Port 80 here deliberately does not "
+             "redirect — against Flexible a redirect loops between Cloudflare and this server — so "
+             "Cloudflare is the right place to do it.",
+             "Also zone-wide: it would force HTTPS for every name in the domain, which breaks any "
+             "site there that is still http-only. A Redirect Rule scoped to this hostname does the "
+             "same for this site alone.")
     elif _fronted_by_something(domain):
         # SOMETHING is in front, and it is not Cloudflare. We will not invent menu paths for a
         # product we have not identified — naming the wrong screen is worse than naming none — so

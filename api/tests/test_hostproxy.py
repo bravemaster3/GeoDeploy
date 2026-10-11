@@ -660,3 +660,27 @@ def test_an_unknowable_answer_stays_quiet(monkeypatch):
     monkeypatch.setattr(deployment, "resolve_domain", lambda d: [])
     monkeypatch.setattr(deployment, "server_ip", lambda: {"public": None, "outbound": None})
     assert hostproxy._fronted_by_something("maps.example.org") is False
+
+
+def test_the_scoped_rule_is_the_recommendation_even_when_no_neighbour_is_at_risk(monkeypatch):
+    """Finding nothing at risk ON THIS MACHINE is not evidence the zone is safe — GeoDeploy cannot
+    see records pointing at other servers. The scoped rule is correct either way, so it is the
+    recommendation either way; the zone switch is never the default."""
+    import geodeploy.services.hostproxy as hp
+    _detected(monkeypatch)
+    monkeypatch.setattr(hp, "read_state", lambda: {
+        "adapter": {"kind": "nginx", "where": "host", "tls": "certbot",
+                    "target": "/etc/nginx/conf.d/geodeploy.conf", "symlink": None,
+                    "reload": "nginx -s reload"}})
+    monkeypatch.setattr(hp, "_is_cloudflare", lambda d: True)
+    monkeypatch.setattr(hp, "neighbours_failing_strict", lambda d, n: [])
+    monkeypatch.setattr(hp, "_certbot", lambda *a, **k: (0, "Congratulations"))
+    monkeypatch.setattr(hp, "_cert_mtime", lambda d: "1")
+    monkeypatch.setattr(hp, "_host_run", lambda *a, **k: (0,
+        "==write==\nok\n==test==\nok\nrc=0\n==reload==\ndone\nrc=0\n==route==\nskipped\n==end==\n"))
+    result = hp.issue_certificate("maps.example.org", "me@example.org")
+    cf = [s for s in result["steps"] if "Cloudflare" in s["name"]]
+    assert cf, "there must be a Cloudflare step"
+    assert "Configuration Rules" in cf[0]["detail"]
+    # The zone-wide switch may be mentioned as an alternative, never as the instruction.
+    assert "SSL/TLS → Overview" not in cf[0]["detail"]

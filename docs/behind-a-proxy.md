@@ -275,7 +275,10 @@ free.
     machine that exists to host more than GeoDeploy, that is somebody else's website going down
     because of a change you made for ours. It has happened.
 
-    **Scope it to the one hostname instead:**
+    **Use a rule for the one hostname instead — in every case, not only when you know other
+    sites exist.** GeoDeploy cannot see records in your zone that point at other servers, so neither
+    of you can be sure the zone-wide switch is safe. The rule is the same protection with nothing
+    else at stake:
 
     *Rules → Configuration Rules → Create rule*
 
