@@ -267,23 +267,39 @@ free.
     HTTPS** in Cloudflare instead, and switch SSL/TLS to **Full (strict)** now that your server has
     its own certificate.
 
-!!! warning "Cloudflare's SSL/TLS mode is per-zone, not per-hostname"
+!!! danger "Do not switch the Cloudflare ZONE to Full (strict) on a shared machine"
 
-    Switching to **Full (strict)** applies to **every proxied record in that domain**, not just the
-    one you set up. Any other site in the zone whose origin has a self-signed or missing certificate
-    will start returning **526 Invalid SSL certificate** — on a shared machine, that is somebody
-    else's website breaking because of a change you made for GeoDeploy.
+    The encryption mode is per-**zone**, not per-hostname, so switching it applies to **every proxied
+    record in the domain** — including sites on other servers entirely. Any origin whose certificate
+    does not verify starts returning **526 Invalid SSL certificate** the moment you save. On a
+    machine that exists to host more than GeoDeploy, that is somebody else's website going down
+    because of a change you made for ours. It has happened.
 
-    Check each other proxied hostname first:
+    **Scope it to the one hostname instead:**
 
-    ```bash
-    curl -sI --resolve other.example.org:443:YOUR.SERVER.IP https://other.example.org/ | head -1
-    ```
+    *Rules → Configuration Rules → Create rule*
 
-    A certificate error there means Full (strict) would break it. Give that site a certificate too,
-    scope the mode with a **Configuration Rule** per hostname, or use **Full** rather than Full
-    (strict) — which still encrypts the Cloudflare-to-origin hop, it just does not verify the
-    certificate. All three are better than staying on Flexible, where that hop is plaintext.
+    | | |
+    | --- | --- |
+    | Expression | `http.host eq "maps.example.org"` |
+    | Setting | SSL → **Full (strict)** |
+
+    This verifies the connection for GeoDeploy's hostname and changes nothing for anything else. The
+    older equivalent, if Configuration Rules are not available on your plan, is a **Page Rule** on
+    `maps.example.org/*` with *SSL: Full (strict)*.
+
+    After issuing a certificate, GeoDeploy **checks the other hostnames this machine serves** and
+    names the ones whose certificates would fail — so you get "this would break shop.example.org",
+    not a general caution. It cannot see sites in your Cloudflare zone that live on other servers,
+    so the scoped rule is the right default either way.
+
+    **Cloudflare's "Automatic SSL/TLS"** is a good zone default here: it scans each origin and will
+    not apply a mode a server cannot support. It optimises for the zone, though, so it will not give
+    GeoDeploy a verified hop while other origins in the zone lack certificates — combine it with the
+    rule above.
+
+    **If something is already failing**, set the zone back to **Flexible** first. That is the state
+    everything worked in; fix the scoping afterwards, not during an outage.
 
 Renewal reloads your proxy **only when the certificate file actually changed** — not on a schedule,
 and not by parsing certbot's output, which is prose and changes between versions. If the

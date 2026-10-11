@@ -1432,6 +1432,60 @@ def _is_cloudflare(domain: str) -> bool:
         return False
 
 
+def neighbours_failing_strict(domain: str, names: list[str]) -> list[str]:
+    """Which OTHER hostnames on this machine would break if Cloudflare's zone was set to Full
+    (strict) — measured, by name.
+
+    This exists because GeoDeploy caused an outage. The certificate step told an operator to switch
+    Cloudflare to Full (strict); that setting is per-ZONE, every other site in the zone started
+    failing with 526, and the advice came from us. The rule the rest of this module lives by — do
+    not touch what you did not install — has to cover the ADVICE we hand out, not only the files we
+    write. A recommendation whose blast radius reaches somebody else's website is our problem.
+
+    GeoDeploy is in an unusually good position to answer this: it already knows every hostname this
+    machine serves on 443, so it can ask each one whether its certificate verifies. The test is
+    `wget` with and without `--no-check-certificate` against the local 443 with SNI: Alpine's busybox
+    wget validates through `ssl_client`, so a name that fetches only with the check disabled is a
+    name Full (strict) would reject.
+
+    Returns the names that would break. An empty list means the zone-wide switch is safe; a failure
+    to measure returns an empty list too, so the caller must present this as "these will break"
+    rather than "nothing else will".
+    """
+    others = [n for n in names if n and n != domain and "*" not in n][:12]
+    if not others:
+        return []
+    # The names come from the machine's own nginx config, not from a request, but they are still
+    # interpolated into a shell loop — so they go through the same hostname validator as everything
+    # else here, and anything that does not pass is simply not tested.
+    safe = []
+    for name in others:
+        try:
+            safe.append(_safe_domain(name))
+        except ProxyError:
+            continue
+    if not safe:
+        return []
+    script = 'echo "==strict=="\n'
+    for name in safe:
+        script += (
+            f'if wget -q -O /dev/null --timeout 6 --header "Host: {name}" '
+            f'"https://127.0.0.1/" 2>/dev/null; then echo "{name} ok"; '
+            f'elif wget -q -O /dev/null --timeout 6 --no-check-certificate --header "Host: {name}" '
+            f'"https://127.0.0.1/" 2>/dev/null; then echo "{name} untrusted"; '
+            f'else echo "{name} unreachable"; fi\n')
+    script += 'echo "==end=="\n'
+    try:
+        _, text = _host_run(script, timeout=120)
+    except ProxyError:
+        return []
+    failing = []
+    for line in _sections(text).get("strict", []):
+        parts = line.split()
+        if len(parts) == 2 and parts[1] == "untrusted":
+            failing.append(parts[0])
+    return failing
+
 def issue_certificate(domain: str, email: str) -> dict:
     """Get a Let's Encrypt certificate for this domain and switch our own block to HTTPS.
 
@@ -1477,6 +1531,9 @@ def issue_certificate(domain: str, email: str) -> dict:
     # The challenge is a FILE FETCHED OVER PORT 80 from the public internet. Saying that before
     # spending a rate limit is worth four lines: the two ways it fails are both visible from here.
     behind_cloudflare = _is_cloudflare(domain)
+    # ONE detect() call: each one starts a helper container, and the certificate step is already the
+    # slowest thing in this module. The TLS picture is needed at the end, for the Cloudflare advice.
+    checked_tls = _tls_picture(detect().get("blocks") or [], domain)
     _host_run(f'mkdir -p "/host{WEBROOT}/.well-known/acme-challenge"\necho "==end=="\n', timeout=60)
 
     code, out = _certbot([
@@ -1553,16 +1610,31 @@ def issue_certificate(domain: str, email: str) -> dict:
              "visitor gets.")
 
     if behind_cloudflare:
-        step("One thing left, at Cloudflare", True,
-             "Set SSL/TLS to Full (strict). Until you do, Cloudflare still connects to this server "
-             "in clear text — the certificate alone does not change that. Turn on 'Always Use "
-             "HTTPS' there too; port 80 here deliberately does not redirect, because against "
-             "Flexible a redirect loops forever.",
-             "CHECK FIRST: the SSL/TLS mode is per-ZONE, not per-hostname, so it applies to every "
-             "proxied record in this domain. Any other site in the zone whose origin has a "
-             "self-signed or missing certificate will start returning 526. If one does, give it a "
-             "certificate too, scope the mode with a Configuration Rule, or use Full rather than "
-             "Full (strict) — which still encrypts the hop, just without verifying it.")
+        # Named neighbours, not a general caution. "This might affect other sites" is advice nobody
+        # acts on; "this will break shop.example.org" is.
+        try:
+            at_risk = neighbours_failing_strict(domain, (checked_tls.get("names") or []))
+        except Exception:
+            at_risk = []
+        if at_risk:
+            step("At Cloudflare — use a rule for this hostname ONLY", True,
+                 "Do NOT switch the zone to Full (strict): the mode is per-zone, and these sites on "
+                 "this machine have certificates that will not verify, so they would start failing "
+                 "with 526 — " + ", ".join(at_risk) + ".\n\n"
+                 "Instead: Rules → Configuration Rules → Create rule, expression "
+                 f'http.host eq "{domain}", setting SSL → Full (strict). That encrypts and verifies '
+                 "this hostname and changes nothing for the others.",
+                 "To move the whole zone later, give those sites certificates too — the same button "
+                 "here does it, one hostname at a time.")
+        else:
+            step("One thing left, at Cloudflare", True,
+                 "Set SSL/TLS to Full (strict) — until you do, Cloudflare still connects to this "
+                 "server in clear text. Turn on 'Always Use HTTPS' too; port 80 here deliberately "
+                 "does not redirect, because against Flexible a redirect loops forever.",
+                 "The mode is per-ZONE. GeoDeploy checked the other names this machine serves and "
+                 "none of them would break, but it cannot see sites in your Cloudflare zone that "
+                 "live on OTHER servers. If you have any, scope it instead: Rules → Configuration "
+                 f'Rules, expression http.host eq "{domain}", setting SSL → Full (strict).')
     return {"ok": all(s["ok"] for s in steps), "steps": steps, "domain": domain}
 
 
