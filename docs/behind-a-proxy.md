@@ -243,8 +243,16 @@ More than one config file, so it is worth knowing before you press it:
 | Renewal | a daily task in GeoDeploy's worker; certbot no-ops until renewal is due |
 
 The HTTP-01 challenge is a file fetched over **port 80** from the public internet, so port 80 must
-reach this server for that name. **Behind Cloudflare, turn the orange cloud off while it runs** —
-with the proxy on, the challenge may be served or cached by Cloudflare instead of reaching you.
+reach this server for that name.
+
+**Behind Cloudflare it usually works with the proxy on**: Let's Encrypt connects to Cloudflare on
+port 80 and Cloudflare forwards the challenge to you, and a redirect to HTTPS is followed and
+accepted. Three things genuinely break it — Bot Fight Mode, a WAF rule or "Under Attack" mode
+answering with a JavaScript page; a cache or page rule on `/.well-known/`; and SSL/TLS already set to
+**Full**, where Cloudflare tries HTTPS against an origin that has no certificate yet. Try it with the
+orange cloud on; if it fails, grey-cloud for two minutes and retry, which rules out all three at
+once. Let's Encrypt allows 5 failed validations per hostname per hour, so failures are cheap but not
+free.
 
 !!! note "Two deliberate details, both of which exist because of how this breaks"
 

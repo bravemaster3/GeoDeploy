@@ -288,10 +288,11 @@
                       Let’s Encrypt needs a contact address for expiry notices, and you are agreeing
                       to their subscriber terms. The name becomes public in the Certificate
                       Transparency log — that is true of every HTTPS certificate. The challenge is a
-                      file fetched over port 80, so
-                      <strong v-if="dns && dns.state === 'proxied'">turn Cloudflare’s orange cloud
-                        off while it runs</strong><span v-else>port 80 must be reachable from the
-                        internet</span>.
+                      file fetched over port 80, so it must be reachable from the internet.
+                      <span v-if="dns && dns.state === 'proxied'">Cloudflare’s proxy normally passes
+                        it through — if it fails, turn the orange cloud off (DNS only) for two
+                        minutes and try again, which rules out Bot Fight Mode, a WAF rule and a
+                        cache rule in one go.</span>
                     </p>
                     <ul v-if="certSteps.length" class="space-y-2 pt-1">
                       <li v-for="s in certSteps" :key="s.name" class="flex items-start gap-2.5 text-xs">
@@ -312,8 +313,8 @@
                     visitors, so the site is encrypted the moment the proxy works — but set SSL/TLS
                     to <strong>Flexible</strong> until this server has its own certificate, or
                     Cloudflare will refuse to talk to a plain-HTTP origin. Switch to
-                    <strong>Full (strict)</strong> once you have one. certbot’s HTTP challenge needs
-                    the orange cloud turned off while it runs.
+                    <strong>Full (strict)</strong> once you have one. certbot’s HTTP challenge usually passes
+                    straight through the proxy; grey-cloud it only if the request fails.
                   </p>
                 </template>
               </div>
