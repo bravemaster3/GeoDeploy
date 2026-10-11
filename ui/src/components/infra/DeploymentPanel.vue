@@ -66,16 +66,29 @@
           </span>
         </dd>
       </dl>
-      <p class="text-[11px] text-muted-foreground/70 leading-relaxed">
-        The last line is what matters most: GeoDeploy builds every link it hands out — shared links,
-        portal previews, the STAC and OGC catalogues — from the address the request arrived on.
+      <p class="text-[11px] text-muted-foreground/70">
+        Every link GeoDeploy hands out is built from that last address.
+        <InfoDot text="Shared links, portal previews, the STAC and OGC catalogues. A proxy that does not pass the visitor's hostname makes all of them point somewhere nobody else can open." />
       </p>
 
       <!-- ── Give it a domain ────────────────────────────────────────────────────────────── -->
       <div class="border-t border-border/60 pt-4">
-        <button v-if="!showDomain" @click="openDomain" class="btn-secondary text-xs px-3 py-1.5">
-          {{ data.verdict.level === 'ok' ? 'Change the domain' : 'Give it a domain' }}
-        </button>
+        <!-- The label is keyed off whether a domain is actually CONFIGURED, not off the verdict
+             level. Keying it off the verdict said "Give it a domain" to someone whose domain works
+             and only lacks HTTPS — implying the work was not done, and hiding the certificate
+             button two clicks behind it. -->
+        <div v-if="!showDomain" class="flex items-center gap-2 flex-wrap">
+          <button @click="openDomain"
+                  :class="needsCertificate ? 'btn-primary' : 'btn-secondary'"
+                  class="text-xs px-3 py-1.5">
+            {{ needsCertificate ? 'Set up HTTPS'
+               : data.managed_domain ? 'Manage the domain' : 'Give it a domain' }}
+          </button>
+          <span v-if="data.managed_domain" class="text-[11px] text-muted-foreground/70">
+            GeoDeploy configured this machine's web server for
+            <code class="font-mono">{{ data.managed_domain }}</code>{{ data.managed_tls ? ', with HTTPS' : '' }}.
+          </span>
+        </div>
 
         <div v-else class="space-y-4">
           <div>
@@ -91,9 +104,8 @@
               </button>
             </div>
             <p class="text-[11px] text-muted-foreground/70 mt-1.5">
-              A subdomain of a domain you own. You do not need a new domain for this — if you have
-              <code class="font-mono">example.org</code>, something like
-              <code class="font-mono">maps.example.org</code> is free to create.
+              A subdomain of a domain you own — <code class="font-mono">maps.example.org</code>.
+              Creating one costs nothing.
             </p>
           </div>
 
@@ -150,7 +162,7 @@
                   {{ dnsBusy ? 'Checking…' : 'Check DNS' }}
                 </button>
                 <span class="text-[11px] text-muted-foreground/70">
-                  A new record is usually live within minutes. Checking again is free.
+                  Usually live within minutes.
                 </span>
               </div>
             </div>
@@ -195,18 +207,16 @@
                 <template v-else-if="hostPlan">
                   <p class="text-xs text-muted-foreground/85 leading-relaxed">
                     <span v-if="hostPlan.adapter">
-                      In front of GeoDeploy:
                       <strong class="text-foreground capitalize">{{ hostPlan.adapter.kind }}</strong>
-                      <span v-if="hostPlan.adapter.where === 'container'">
-                        , running as the container
-                        <code class="font-mono">{{ hostPlan.adapter.container }}</code></span>.
-                      GeoDeploy would add one new file,
-                      <code class="font-mono break-all">{{ hostPlan.adapter.target }}</code>, and
-                      reload it. Nothing else on this machine is read, edited or restarted.
+                      <span v-if="hostPlan.adapter.where === 'container'">(container
+                        <code class="font-mono">{{ hostPlan.adapter.container }}</code>)</span>
+                      is the proxy here. GeoDeploy adds one file,
+                      <code class="font-mono break-all">{{ hostPlan.adapter.target }}</code>, and reloads.
+                      <InfoDot text="Nothing else is read, edited or restarted. The configuration is tested first and refused if it does not already pass; a failed test after writing removes the file and never reloads." />
                     </span>
                     <span v-else>
-                      GeoDeploy looked at what this machine runs and cannot configure it
-                      automatically. The manual route works everywhere.
+                      GeoDeploy cannot configure this machine automatically. The manual route works
+                      everywhere.
                     </span>
                   </p>
 
@@ -221,11 +231,10 @@
 
                   <p v-if="hostPlan.applied"
                      class="text-[11px] text-muted-foreground/80 bg-muted/30 border border-border/60 rounded-lg px-3 py-2 leading-relaxed">
-                    GeoDeploy has already written
-                    <code class="font-mono break-all">{{ hostPlan.applied.target }}</code>
-                    <span v-if="hostPlan.applied.domain"> for
-                      <strong class="text-foreground">{{ hostPlan.applied.domain }}</strong></span>.
-                    Applying again replaces it; <strong>Remove it</strong> takes it away and reloads.
+                    Already configured for
+                    <strong class="text-foreground">{{ hostPlan.applied.domain }}</strong>
+                    (<code class="font-mono break-all">{{ hostPlan.applied.target }}</code>).
+                    Applying again replaces it.
                   </p>
 
                   <div v-for="w in hostPlan.warnings" :key="w"
@@ -269,11 +278,10 @@
                   <div v-if="applied && hostPlan.adapter && hostPlan.adapter.tls === 'certbot'"
                        class="border-t border-border/60 pt-3 space-y-2">
                     <p class="text-xs text-foreground font-medium">HTTPS</p>
-                    <p class="text-[11px] text-muted-foreground/80 leading-relaxed">
-                      The domain works over plain HTTP now. GeoDeploy can get a free Let’s Encrypt
-                      certificate for it and switch this block to HTTPS — running certbot in a
-                      throwaway container, so <strong>nothing is installed on this machine</strong>.
-                      It renews itself daily from then on.
+                    <p class="text-[11px] text-muted-foreground/80">
+                      Free Let’s Encrypt certificate, renewed automatically. Nothing is installed on
+                      this machine.
+                      <InfoDot text="certbot runs in a throwaway container against /etc/letsencrypt, gets the certificate over the HTTP-01 challenge, and GeoDeploy rewrites its own block to serve HTTPS. A daily task renews it, and reloads the proxy only when the certificate actually changes." />
                     </p>
                     <div class="flex gap-2 flex-wrap">
                       <input v-model="certEmail" type="email" placeholder="you@example.org"
@@ -284,15 +292,9 @@
                         {{ certBusy ? 'Asking Let’s Encrypt…' : 'Get a certificate' }}
                       </button>
                     </div>
-                    <p class="text-[11px] text-muted-foreground/70 leading-relaxed">
-                      Let’s Encrypt needs a contact address for expiry notices, and you are agreeing
-                      to their subscriber terms. The name becomes public in the Certificate
-                      Transparency log — that is true of every HTTPS certificate. The challenge is a
-                      file fetched over port 80, so it must be reachable from the internet.
-                      <span v-if="dns && dns.state === 'proxied'">Cloudflare’s proxy normally passes
-                        it through — if it fails, turn the orange cloud off (DNS only) for two
-                        minutes and try again, which rules out Bot Fight Mode, a WAF rule and a
-                        cache rule in one go.</span>
+                    <p class="text-[11px] text-muted-foreground/70">
+                      Used for expiry notices; you are accepting Let’s Encrypt’s terms.
+                      <InfoDot text="The hostname becomes public in the Certificate Transparency log — true of every HTTPS certificate. The challenge is a file fetched over port 80, so it must be reachable from the internet. Behind Cloudflare it normally passes straight through; if it fails, grey-cloud for two minutes and retry." />
                     </p>
                     <ul v-if="certSteps.length" class="space-y-2 pt-1">
                       <li v-for="s in certSteps" :key="s.name" class="flex items-start gap-2.5 text-xs">
@@ -309,12 +311,9 @@
 
                   <p v-if="dns && dns.state === 'proxied'"
                      class="text-[11px] text-sky-300/90 bg-sky-500/10 border border-sky-500/30 rounded-lg px-3 py-2 leading-relaxed">
-                    This domain is behind Cloudflare’s proxy. Cloudflare terminates HTTPS for
-                    visitors, so the site is encrypted the moment the proxy works — but set SSL/TLS
-                    to <strong>Flexible</strong> until this server has its own certificate, or
-                    Cloudflare will refuse to talk to a plain-HTTP origin. Switch to
-                    <strong>Full (strict)</strong> once you have one. certbot’s HTTP challenge usually passes
-                    straight through the proxy; grey-cloud it only if the request fails.
+                    Behind Cloudflare: keep SSL/TLS on <strong>Flexible</strong> until this server
+                    has its own certificate, then switch to <strong>Full (strict)</strong>.
+                    <InfoDot text="Cloudflare terminates HTTPS for visitors either way. The mode decides which port Cloudflare connects to here: Flexible uses port 80, Full uses 443 and fails with a 525 until a certificate exists. Full (strict) is what stops that last hop being plaintext." />
                   </p>
                 </template>
               </div>
@@ -331,9 +330,8 @@
               </div>
 
               <div v-if="flavor === 'caddy'" class="text-[11px] text-emerald-300/90 bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-3 py-2">
-                Caddy gets the certificate itself and needs none of the header or upload settings the
-                others do. If you are choosing a reverse proxy for a machine you control, this is the
-                shortest correct answer.
+                Caddy gets the certificate itself and needs none of the settings the others do.
+                <InfoDot text="No header or upload directives, and no certbot step. If you are choosing a reverse proxy for a machine you control, this is the shortest correct answer." />
               </div>
               <div v-for="w in cfg.warnings" :key="w"
                    class="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
@@ -368,7 +366,7 @@
                 {{ verifyBusy ? 'Checking…' : 'Verify' }}
               </button>
               <span class="text-[11px] text-muted-foreground/70 ml-2">
-                Reaches the domain from this server and confirms it lands on this instance.
+                Checks what a visitor actually gets.
               </span>
 
               <ul v-if="checks.length" class="mt-3 space-y-2">
@@ -395,6 +393,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import InfoDot from '@/components/InfoDot.vue'
 import {
   applyHostProxy, checkDeploymentDns, getDeployment, getHostProxyPlan, getProxyConfig,
   issueCertificate, removeHostProxy, verifyDeployment,
@@ -468,6 +467,11 @@ const mismatch = computed(() => {
   return d.reality.port !== d.intent.port || d.reality.bind !== d.intent.bind
 })
 
+// The one case worth a primary button: the domain works, and the only thing left is the hop that is
+// still in clear text. `action: 'certificate'` is set by the verdict rather than inferred here, so
+// the API decides when this is true and the panel only renders it.
+const needsCertificate = computed(() => data.value?.verdict?.action === 'certificate')
+
 const modeExplainer = computed(() =>
   data.value?.intent.mode === 'dedicated'
     ? 'GeoDeploy is this machine’s web server'
@@ -489,7 +493,8 @@ async function load() {
     data.value = d
     // The domain typed during install, so the field is already filled the first time someone opens
     // this — they gave the answer once and should not be asked for it again.
-    if (!domain.value && d.domain_hint) domain.value = d.domain_hint
+    if (!domain.value) domain.value = d.managed_domain || d.domain_hint || ''
+
   } catch (e) {
     error.value = e?.response?.data?.detail || 'Could not read the deployment settings.'
   } finally {
@@ -499,6 +504,9 @@ async function load() {
 
 function openDomain() {
   showDomain.value = true
+  // Prefer the domain GeoDeploy already configured over the install-time hint: the hint is what
+  // someone typed before anything existed, and after an Apply the managed one is the truth.
+  if (data.value?.managed_domain) domain.value = data.value.managed_domain
   if (domain.value) checkDns()
 }
 

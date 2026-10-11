@@ -255,7 +255,7 @@ def test_our_own_earlier_file_is_replaced_not_refused(monkeypatch):
     _detected(monkeypatch, our_files={"/etc/nginx/conf.d/geodeploy.conf": "ours"})
     plan = hostproxy.plan("maps.example.org", _INTENT)
     assert plan["can_apply"] is True
-    assert any("written by GeoDeploy earlier" in w for w in plan["warnings"])
+    assert any("will be replaced" in w for w in plan["warnings"])
 
 
 def test_traefik_is_a_named_refusal_not_a_shrug(monkeypatch):
@@ -356,10 +356,12 @@ def test_the_plan_warns_before_apply_when_https_would_land_elsewhere(monkeypatch
     _detected(monkeypatch, blocks=_BLOCKS_CATCHALL_TLS)
     plan = hostproxy.plan("maps.example.org", _INTENT)
     assert plan["can_apply"] is True           # the http:// configuration is still correct
-    warning = next((w for w in plan["warnings"] if "443" in w or "HTTPS" in w), None)
+    # Assert the CLAIM, not the phrasing: https goes somewhere else, http does not, and a
+    # certificate is the fix. The wording is UI copy and is allowed to be rewritten.
+    warning = next((w for w in plan["warnings"] if "https://" in w), None)
     assert warning is not None
-    assert "catch-all" in warning
-    assert "Flexible" in warning               # the Cloudflare mode that works before a certificate
+    assert "certificate" in warning
+    assert "http://" in warning
 
 
 def test_no_https_warning_when_this_machine_serves_no_tls(monkeypatch):

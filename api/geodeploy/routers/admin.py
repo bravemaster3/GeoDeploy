@@ -1190,6 +1190,24 @@ def _valid_domain(raw: str) -> str:
     return domain
 
 
+def _managed_domain() -> str | None:
+    """The domain in hostproxy's state file, or None. Cheap and failure-tolerant: this is a label on
+    a button, never a precondition for anything."""
+    try:
+        from ..services import hostproxy
+        return (hostproxy.read_state().get("certificate") or {}).get("domain")             or hostproxy.read_state().get("domain")
+    except Exception:
+        return None
+
+
+def _managed_tls() -> bool:
+    try:
+        from ..services import hostproxy
+        return bool(hostproxy.read_state().get("tls"))
+    except Exception:
+        return False
+
+
 @router.get("/deployment")
 async def deployment_status(request: Request, _: User = Depends(require_owner)):
     """Intent (.env), reality (the nginx container) and what this very request looked like."""
@@ -1204,6 +1222,12 @@ async def deployment_status(request: Request, _: User = Depends(require_owner)):
         "observed": observed,
         "verdict": deployment.verdict(intent, reality, observed),
         "domain_hint": deployment.domain_hint(),
+        # The domain GeoDeploy has ALREADY configured, from hostproxy's own state. Without it the
+        # panel cannot tell "no domain yet" from "a working domain that only lacks HTTPS", and it
+        # labelled the second one "Give it a domain" — hiding the certificate button two clicks
+        # behind a button that implied the work was not done.
+        "managed_domain": _managed_domain(),
+        "managed_tls": _managed_tls(),
         # What an A record has to point at. Fetched here so the DNS step can show it with a copy
         # button instead of telling the operator to go and find their own server's address.
         "server_ip": await run_in_threadpool(deployment.server_ip),
