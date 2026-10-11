@@ -1663,7 +1663,10 @@ def issue_certificate(domain: str, email: str) -> dict:
             "    The Field box defaults to 'URI Full'. Leave it there and the rule matches\n"
             "    nothing — it will look configured and do nothing.\n\n"
             f'3.  Check the Expression Preview reads:   http.host eq "{domain}"\n\n'
-            "4.  Then, under the settings: SSL → Full (strict).  Deploy.\n\n"
+            "4.  Scroll to 'SSL (optional)' and click + Add, THEN choose Full (strict).\n"
+            "    Without that click the rule has no setting and refuses to deploy with\n"
+            "    'action parameters are required for the set_config action'.\n\n"
+            "5.  Deploy.\n\n"
             "Until something sets this, Cloudflare connects to this server in clear text."
         )
         if at_risk:
