@@ -6,6 +6,15 @@ upgrade needs manual work.
 
 ## Unreleased
 
+- **GeoDeploy never fetches its own images from Docker Hub.** `geodeploy/*` there belongs to someone
+  else. Docker Compose, by default, asks the Hub for an image before building it, and the installer
+  pulled `geodeploy-ui` explicitly — both found nothing and built locally, but would have installed
+  whatever that account published. GeoDeploy's own services are now marked to always build from
+  your checkout (`pull_policy: never`), and the installer pulls only third-party images. Nothing
+  changes for a running instance: images are named and built exactly as before.
+- The swap snippet in Getting started is safe to run twice, and explains the harmless
+  `sudo: unable to resolve host` warning fresh cloud images print.
+
 ## v1.6.4 — 2026-09-11
 
 - **A tile source that redirects to `http` is now recognised as insecure, and moved to the host
