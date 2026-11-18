@@ -92,7 +92,11 @@ fi
 # ── Pull images ───────────────────────────────────────────────────────────────
 
 info "Pulling Docker images…"
-sudo docker compose pull geodeploy-ui nginx redis 2>/dev/null || true
+# Third-party images only. geodeploy-ui used to be on this line, and `geodeploy/*` on Docker Hub is
+# somebody else's namespace: it 404s today and the build below takes over, but it would have pulled
+# whatever that account published. docker-compose.yml marks our own services `pull_policy: never`
+# as well, so a bare `docker compose pull` cannot fetch them either.
+sudo docker compose pull nginx redis 2>/dev/null || true
 
 # ── Start core services ───────────────────────────────────────────────────────
 # martin (vector tiles) + titiler (raster tiles) are core — needed for both local and
