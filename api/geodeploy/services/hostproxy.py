@@ -244,9 +244,13 @@ section() { echo "==$1=="; }
 section os
 sed -n 's/^ID=//p;s/^ID_LIKE=//p' $H/etc/os-release 2>/dev/null | tr -d '"'
 
+# The process column is everything from field 7 on, NOT `$NF`: busybox netstat prints nginx as
+# `309/nginx: master p` (its truncated "master process" title), so the last field is `p` and the
+# "which proxy holds the port" choice below never saw nginx at all. Found on a real Debian nginx by
+# installer/tests/test-hostproxy.sh.
 section listeners
 { netstat -lntp 2>/dev/null || ss -lntp 2>/dev/null; } \
-  | awk '$4 ~ /[:.](80|443)$/ { print $4, $NF }'
+  | awk '$4 ~ /[:.](80|443)$/ { p=$7; for (i=8; i<=NF; i++) p=p " " $i; print $4, p }'
 
 section binaries
 for b in usr/sbin/nginx usr/bin/nginx usr/bin/caddy usr/local/bin/caddy \
@@ -277,13 +281,45 @@ grep -rhoE '^[[:space:]]*Include(Optional)?[[:space:]]+[^[:space:]]+' \
 # configured here, and our own file configures exactly that domain: sweeping it in makes GeoDeploy
 # collide with itself, so the SECOND visit to the panel refuses to re-apply or change the domain and
 # blames "something else". Reported from the field on 2026-10-09, after a successful first apply.
+#
+# Each pattern is deliberately loose, because R5 fails SILENTLY in the other direction — a missed name
+# is a neighbour's site changing behaviour. Three misses were measured on real servers by
+# test-hostproxy.sh and are why these are not anchored or first-token-only any more:
+#   nginx   `server { listen 80; server_name a b; }` on ONE line — server_name is not at line start
+#   Apache  `ServerAlias www.a.example a.example` — every name on the line, not the first
+#   Caddy   `http://a.example, http://www.a.example {` — a scheme, and a comma list
 section servernames
 for f in $(find $H/etc/nginx $H/etc/apache2 $H/etc/httpd $H/etc/caddy -type f 2>/dev/null | head -400); do
   case "$f" in */geodeploy.conf|*/geodeploy.caddy) continue ;; esac
-  grep -hoE '^[[:space:]]*server_name[[:space:]]+[^;]+' "$f" 2>/dev/null
-  grep -hioE '^[[:space:]]*Server(Name|Alias)[[:space:]]+[^[:space:]]+' "$f" 2>/dev/null
-  grep -hoE '^[a-z0-9][a-z0-9.*-]+[a-z0-9][[:space:]]*\{' "$f" 2>/dev/null
+  grep -hoE 'server_name[[:space:]]+[^;]+' "$f" 2>/dev/null
+  grep -hioE '^[[:space:]]*Server(Name|Alias)[[:space:]]+[^#]+' "$f" 2>/dev/null
+  case "$f" in
+    $H/etc/caddy/*) grep -hoE '^[[:space:]]*[a-z0-9:/][^#{]*\{' "$f" 2>/dev/null \
+                      | grep -E '[a-z0-9-]+\.[a-z0-9.-]+' ;;
+  esac
 done | head -300
+
+# Caddy's OWN reading of its configuration, imports followed: `caddy adapt` turns the Caddyfile into
+# JSON whose `"host":[…]` matchers are exactly the names it serves, whatever syntax wrote them. Our
+# own file is included here — plan() forgives the recorded domain while our marked file is present.
+section caddyhosts
+for c in usr/bin/caddy usr/local/bin/caddy ; do
+  if [ -x "$H/$c" ] && [ -f $H/etc/caddy/Caddyfile ]; then
+    chroot $H "/$c" adapt --config /etc/caddy/Caddyfile 2>/dev/null \
+      | grep -oE '"host":\[[^]]*\]' | sed 's/"host"://; s/[]["]//g; s/,/ /g'
+    break
+  fi
+done | head -100
+
+# Apache on Debian ships with mod_proxy DISABLED, and our vhost needs it. Without this check Apply
+# writes the file, configtest rejects it, and it rolls back — safe, but the operator learns why only
+# from Apache's error text. Saying it first turns that into one command they run.
+section apachemods
+if [ -d $H/etc/apache2/mods-enabled ]; then
+  for m in proxy proxy_http headers ; do
+    [ -e "$H/etc/apache2/mods-enabled/$m.load" ] || echo "$m"
+  done
+fi
 
 section ourfiles
 for f in etc/nginx/conf.d/geodeploy.conf etc/nginx/sites-available/geodeploy.conf \
@@ -324,8 +360,13 @@ NGINXBIN=""
 for c in /usr/sbin/nginx /usr/bin/nginx /usr/local/sbin/nginx ; do
   [ -x "$H$c" ] && { NGINXBIN="$c"; break; }
 done
+# The first awk puts every directive on its own line (comments dropped first, so a brace in a
+# comment cannot open a phantom block): a one-line `server { listen 443 ssl; server_name x; }` is
+# legal nginx, and line-anchored matching below would otherwise see neither its listen nor its name.
 if [ -n "$NGINXBIN" ]; then
-  chroot $H "$NGINXBIN" -T 2>/dev/null | awk '
+  chroot $H "$NGINXBIN" -T 2>/dev/null \
+  | awk '/^# configuration file / { print; next } { sub(/#.*/, ""); gsub(/[;{}]/, "&\n"); print }' \
+  | awk '
     /^# configuration file / { ours = ($0 ~ /geodeploy\.(conf|caddy):/) }
     /server[ \t]*\{/ { b++; cur="b" b; if (ours) print cur, "GEODEPLOY_OWN" }
     /^[ \t]*listen[ \t]/ { if (cur != "") print cur, $0 }
@@ -688,7 +729,9 @@ def detect() -> dict:
             if len(parts) == 2 and parts[1].strip() == "GEODEPLOY_OWN"}
     _block_names = [parts[1] for parts in (ln.split(None, 1) for ln in out["blocks"])
                     if len(parts) == 2 and parts[1].startswith("server_name") and parts[0] not in _own]
-    out["server_names"] = sorted(set(out["server_names"]) | _names_from(_block_names))
+    out["server_names"] = sorted(set(out["server_names"]) | _names_from(_block_names)
+                                 | _names_from(sec.get("caddyhosts", [])))
+    out["apache_missing_mods"] = sec.get("apachemods", [])
     for key, name in (("nginxtest", "nginx"), ("apachetest", "apache"), ("caddytest", "caddy")):
         result = _test_result(sec.get(key, []))
         if result:
@@ -845,8 +888,63 @@ def plan(domain: str, intent: dict) -> dict:
                        "needs no further setup and obtains the certificate itself.",
             })
 
-    if adapter:
+    if adapter and adapter["where"] == "container":
+        # A PROXY IN A CONTAINER IS A NAMED REFUSAL, like Traefik. Measured on a fake shared machine
+        # by installer/tests/test-hostproxy.sh, it failed three ways at once, each silently:
+        #   * the vhost proxies to 127.0.0.1:<port> — which, inside the proxy's container, is the
+        #     container itself. Every visitor got 502, and Apply reported success, because nothing
+        #     after the reload asked the proxy for the page.
+        #   * the probe reads the HOST's /etc/nginx, not the container's mount, so R1 (somebody
+        #     else's geodeploy.conf) and R5 (a name the container already serves) could not fire —
+        #     and a site the container served for that name went from 200 to 502.
+        # Making it work needs GeoDeploy's network joined to THEIR container, which changes a
+        # container we did not create and is undone by their next `docker compose up`. That is the
+        # operator's call, so it gets exact steps instead of a button.
+        blockers.append({
+            "code": "container-proxy",
+            "title": f"This machine's web server runs in a container ('{adapter['container']}')",
+            "detail": (
+                "From inside a container, 127.0.0.1 is the container itself — so a site pointing at "
+                "GeoDeploy's local port would answer every visitor with an error. Reaching GeoDeploy "
+                "means connecting that container to GeoDeploy's Docker network, which changes a "
+                "container GeoDeploy did not create, so it will not do that by itself."
+            ),
+            "fix": (
+                f"Run  docker network connect geodeploy {adapter['container']}  and use the "
+                f"configuration below with  proxy_pass http://nginx:80;  (Caddy: "
+                f"reverse_proxy nginx:80) in place of the 127.0.0.1 address. Add the network to "
+                f"that container's compose file too, or the next recreate drops it."
+            ),
+        })
+    elif adapter:
         kind = adapter["kind"]
+        # A proxy that is installed but serves nothing. Writing to it "works": the file passes the
+        # test, the reload fails because nothing is running, and the vhost then goes live
+        # unannounced the next time somebody starts that web server — possibly a package left over
+        # from years ago. The ingress is whatever holds 80/443; when nothing does, there is no
+        # ingress to add to.
+        if adapter["where"] == "host" and not found.get("listeners"):
+            blockers.append({
+                "code": "not-serving",
+                "title": f"{kind} is installed here, but nothing is listening on port 80 or 443",
+                "detail": (f"So {kind} is not what serves this machine's websites. GeoDeploy will "
+                           f"not add a site to a web server that is not running: the file would go "
+                           f"live, unannounced, whenever somebody next starts it."),
+                "fix": (f"If {kind} should be running, start it, check your sites, and re-check "
+                        f"here. Otherwise apply the configuration below to whatever does serve "
+                        f"this machine."),
+            })
+        missing = found.get("apache_missing_mods") or []
+        if kind == "apache" and missing:
+            blockers.append({
+                "code": "apache-modules",
+                "title": "Apache's proxy modules are not enabled",
+                "detail": ("GeoDeploy's site needs " + ", ".join(f"mod_{m}" for m in missing)
+                           + ". Debian ships them disabled, and enabling a module changes Apache "
+                             "for every site here, so GeoDeploy leaves that to you."),
+                "fix": (f"sudo a2enmod {' '.join(missing)} && sudo apache2ctl configtest "
+                        f"&& sudo systemctl reload apache2 — then re-check here."),
+            })
         # R2 — the big one. Measured on the real machine, not assumed: a config that was already
         # failing is a config whose breakage our reload would publish.
         test = found["tests"].get(kind)
@@ -1189,14 +1287,17 @@ def apply(domain: str, intent: dict) -> dict:
             else ". Its configuration test could not be run — the new file will still be tested "
                  "before anything is reloaded."))
 
-    if adapter["where"] == "container":
-        return _apply_in_container(adapter, domain, body, steps, checked)
-
     # The post-apply routing check only means anything if the proxy actually listens on 80 — on a
     # machine where it serves 443 only, asking the loopback for port 80 proves nothing and reads as
     # a failure of the thing we just did correctly. An empty port skips the check and says so.
-    on_80 = any(item["socket"].endswith(":80") or item["socket"].endswith(".80")
-                for item in (checked["detected"].get("listeners") or []))
+    #
+    # Caddy is skipped too: for a site address without a scheme it answers port 80 with a redirect
+    # to https://<domain>, so the loopback request leaves this machine through DNS and fails while
+    # the certificate is still being obtained — reporting a failure on a correct configuration.
+    # Measured on a real Caddy by test-hostproxy.sh; Verify asks the way a visitor does instead.
+    on_80 = adapter["kind"] != "caddy" and any(
+        item["socket"].endswith(":80") or item["socket"].endswith(".80")
+        for item in (checked["detected"].get("listeners") or []))
     tls = checked["detected"].get("tls") or {}
     script = _APPLY_HOST.format(
         target=adapter["target"],
@@ -1250,9 +1351,13 @@ def apply(domain: str, intent: dict) -> dict:
     reached = any("instance" in line for line in route)
     if any(line == "skipped" for line in route):
         step("The proxy reaches GeoDeploy", True,
-             "Not checked from here — this machine's proxy does not listen on port 80, or the "
-             "helper image's wget cannot set a Host header. The configuration is written, valid "
-             "and loaded; Verify below checks it the way a visitor would.")
+             ("Not checked from here — Caddy redirects plain HTTP to HTTPS and obtains the "
+              "certificate in the background, so a request over this machine's loopback proves "
+              "nothing yet. " if adapter["kind"] == "caddy" else
+              "Not checked from here — this machine's proxy does not listen on port 80, or the "
+              "helper image's wget cannot set a Host header. ")
+             + "The configuration is written, valid and loaded; Verify below checks it the way a "
+               "visitor would.")
     elif reached:
         step("The proxy reaches GeoDeploy", True,
              f"Asked the proxy for {domain} over this machine's own loopback and GeoDeploy answered. "
@@ -1286,66 +1391,6 @@ def apply(domain: str, intent: dict) -> dict:
                  f"visitors get the other site.")
     return {"ok": all(s["ok"] for s in steps), "steps": steps, "plan": checked,
             "domain": domain, "target": adapter["target"]}
-
-
-def _apply_in_container(adapter: dict, domain: str, body: bytes, steps: list[dict],
-                        checked: dict) -> dict:
-    """The containerised path: the file goes to the host side of the bind mount, and the proxy tests
-    and reloads itself with its own binary through `docker exec` — no privileged helper involved in
-    either. Writing the file still needs the host filesystem, so that one step uses the helper."""
-    def step(name, ok, detail, fix=None):
-        steps.append({"name": name, "ok": ok, "detail": detail, "fix": fix})
-
-    target = adapter["target"]
-    code, text = _host_run(
-        f'set -e\ncp /tmp/config "/host{target}"\nchmod 644 "/host{target}"\n'
-        f'echo "==write=="\necho ok\necho "==end=="\n',
-        files={"config": body}, timeout=120)
-    if "==write==" not in text:
-        step("Wrote the configuration", False, text[-800:].strip() or "The file could not be written.")
-        return {"ok": False, "steps": steps, "plan": checked}
-    step("Wrote the configuration", True, f"{target} (the host side of the proxy's config mount)")
-
-    client = _client()
-    name = adapter["container"]
-    kind = adapter["kind"]
-    try:
-        if kind == "nginx":
-            rc, out = _exec(client, name, ["nginx", "-t"])
-        else:
-            rc, out = _exec(client, name, ["caddy", "validate", "--config", "/etc/caddy/Caddyfile"])
-    except Exception as exc:
-        step(f"{kind} accepted it", False, f"Could not run the test in '{name}': {exc}",
-             "The file is written but has not been tested or loaded. Test and reload the proxy "
-             "yourself, or remove the file from this panel.")
-        return {"ok": False, "steps": steps, "plan": checked}
-
-    if rc != 0:
-        try:
-            _host_run(f'rm -f "/host{target}"\necho "==end=="\n', timeout=60)
-        except ProxyError:
-            pass
-        step(f"{kind} accepted it", False,
-             f"It did not, so nothing was reloaded and the file has been removed. {kind} said:\n\n{out.strip()}",
-             f"The container '{name}' is exactly as it was before Apply ran.")
-        return {"ok": False, "steps": steps, "plan": checked}
-    step(f"{kind} accepted it", True, out.strip() or "Configuration test passed.")
-
-    try:
-        if kind == "nginx":
-            rc, out = _exec(client, name, ["nginx", "-s", "reload"])
-        else:
-            rc, out = _exec(client, name, ["caddy", "reload", "--config", "/etc/caddy/Caddyfile"])
-    except Exception as exc:
-        rc, out = 1, str(exc)
-    if rc != 0:
-        step("Reloaded", False, out.strip() or "The reload failed.",
-             f"The file is valid and in place; reload '{name}' yourself.")
-        _write_state(_next_state(domain, adapter, applied=False))
-        return {"ok": False, "steps": steps, "plan": checked}
-    step("Reloaded", True, f"'{name}' reloaded without dropping connections.")
-    _write_state(_next_state(domain, adapter, applied=True))
-    return {"ok": True, "steps": steps, "plan": checked, "domain": domain, "target": target}
 
 
 # ── Undoing it ────────────────────────────────────────────────────────────────────────────────────

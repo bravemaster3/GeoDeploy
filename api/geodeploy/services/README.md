@@ -640,9 +640,17 @@ and a marker's 0.28 left on a polygon falls below the hairline and changes nothi
 - `hostproxy.py` (2026-10-09) — **configures the HOST's reverse proxy for a domain, and refuses far
   more often than it acts.** The other half of `deployment.py`: that one answers "what would a proxy
   in front need?" and writes nothing, this one applies it to whatever the machine already runs —
-  nginx, Caddy or Apache, **on the host or in a container** — so the operator's whole job is a DNS
-  record and a domain typed into the dashboard. Traefik is a named refusal, not a gap: its routing is
-  labels/providers/CRDs and no single dropped file is correct across those.
+  nginx, Caddy or Apache **installed on the host** — so the operator's whole job is a DNS record and
+  a domain typed into the dashboard. Traefik is a named refusal, not a gap: its routing is
+  labels/providers/CRDs and no single dropped file is correct across those. **A proxy in a container
+  is a named refusal too (2026-11-18)**: `installer/tests/test-hostproxy.sh` showed the automatic path
+  wrote `proxy_pass http://127.0.0.1:<port>` into it (the container's own loopback — 502 for every
+  visitor, while Apply said success), overwrote a `geodeploy.conf` it could not see was foreign, and
+  turned a neighbour's site for the same name into a 502. `_container_adapter` still classifies, so
+  the refusal names the container; `_apply_in_container` was deleted. Same round added the
+  `not-serving` (installed, nothing listening) and `apache-modules` refusals, widened R5's name
+  collection (one-line nginx blocks, every `ServerAlias` name, Caddy via `caddy adapt`), and fixed the
+  listener parse (`$NF` was `p` for busybox's `nginx: master p`).
   **Read the module docstring's six rules before changing anything here.** The two that cost the most
   if they go: R2, test the EXISTING configuration first and refuse if it fails — otherwise our reload
   is what finally publishes somebody else's latent breakage, with GeoDeploy's name on it; and R4, a
@@ -706,5 +714,5 @@ and a marker's 0.28 left on a polygon falls below the hairline and changes nothi
   301 there loops between Cloudflare and the origin forever.
 
 ## Last updated
-2026-10-09 (added `hostproxy.py` — GeoDeploy configures the machine's existing web server)
+2026-11-18 (`hostproxy.py`: container proxies refused, not-serving / apache-modules refusals, wider R5 — all from the fake-machine harness)
 2026-09-12 (added `deployment.py` — the port/reverse-proxy slice of issue #79)

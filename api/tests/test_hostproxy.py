@@ -267,6 +267,72 @@ def test_traefik_is_a_named_refusal_not_a_shrug(monkeypatch):
     assert "labels" in plan["blockers"][0]["fix"]
 
 
+# ── Found on a fake shared machine by installer/tests/test-hostproxy.sh (2026-11-18) ──────────────
+
+def test_a_containerised_proxy_is_a_named_refusal(monkeypatch):
+    """Its 127.0.0.1 is itself (every visitor got 502 while Apply said success), and the probe cannot
+    see the names or files inside its mount, so R1 and R5 could not fire — a neighbour's site for the
+    same name went from 200 to 502."""
+    adapter = hostproxy._container_adapter({
+        "kind": "nginx", "name": "edge-nginx",
+        "mounts": [{"host": "/srv/edge/conf.d", "container": "/etc/nginx/conf.d", "rw": True}]})
+    _detected(monkeypatch, adapter=adapter)
+    plan = hostproxy.plan("maps.example.org", _INTENT)
+    assert plan["can_apply"] is False
+    assert "container-proxy" in _codes(plan)
+    assert "docker network connect geodeploy edge-nginx" in plan["blockers"][0]["fix"]
+
+
+def test_a_proxy_that_listens_on_nothing_is_not_configured(monkeypatch):
+    """Installed but not running: the file would pass its test, the reload would fail, and the
+    vhost would go live unannounced the next time somebody starts that web server."""
+    _detected(monkeypatch, listeners=[])
+    plan = hostproxy.plan("maps.example.org", _INTENT)
+    assert "not-serving" in _codes(plan)
+
+
+def test_apache_without_its_proxy_modules_is_told_the_command_first(monkeypatch):
+    _detected(monkeypatch, adapter={
+        "kind": "apache", "where": "host", "container": None,
+        "target": "/etc/apache2/sites-available/geodeploy.conf",
+        "symlink": "/etc/apache2/sites-enabled/geodeploy.conf",
+        "reload": "apache2ctl graceful", "tls": "certbot", "bin": "/usr/sbin/apache2"},
+        tests={"apache": {"ok": True, "output": "Syntax OK"}},
+        apache_missing_mods=["proxy", "proxy_http"])
+    plan = hostproxy.plan("maps.example.org", _INTENT)
+    assert "apache-modules" in _codes(plan)
+    assert "a2enmod proxy proxy_http" in plan["blockers"][0]["fix"]
+
+
+def test_every_name_on_a_serveralias_line_counts():
+    assert {"www.a.example.org", "maps.example.org"} <= hostproxy._names_from(
+        ["ServerAlias www.a.example.org maps.example.org"])
+
+
+def test_caddy_addresses_with_a_scheme_and_a_comma_list_count():
+    names = hostproxy._names_from(["http://maps.example.org, http://www.maps.example.org {"])
+    assert {"maps.example.org", "www.maps.example.org"} <= names
+
+
+def test_caddy_adapt_host_lists_count():
+    """The `caddyhosts` probe section: `caddy adapt`'s "host":[…] matchers, flattened to spaces."""
+    assert hostproxy._names_from(["maps.example.org www.maps.example.org"]) == {
+        "maps.example.org", "www.maps.example.org"}
+
+
+def test_the_probe_splits_one_line_server_blocks_before_reading_them():
+    """`server { listen 80; server_name x; }` on one line is legal nginx; a line-anchored match
+    sees neither directive. The probe must split on ; { } first, and match server_name unanchored."""
+    assert 'gsub(/[;{}]/, "&\\n")' in hostproxy._PROBE
+    assert "grep -hoE 'server_name[[:space:]]+[^;]+'" in hostproxy._PROBE
+
+
+def test_the_listener_process_is_not_just_the_last_field():
+    """busybox netstat prints `309/nginx: master p`; `$NF` is `p`, and nginx never counted as the
+    holder of port 80."""
+    assert "$NF" not in hostproxy._PROBE.split("section listeners", 1)[1].split("section", 1)[0]
+
+
 def test_no_proxy_at_all_says_so_plainly(monkeypatch):
     _detected(monkeypatch, adapter=None, binaries=[], containers=[], dirs=[], includes=[])
     plan = hostproxy.plan("maps.example.org", _INTENT)

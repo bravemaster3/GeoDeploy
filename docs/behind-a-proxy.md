@@ -159,12 +159,13 @@ the request lands on *this* instance with the hostname intact.
 
 ### Letting GeoDeploy configure it
 
-It works with **nginx, Caddy and Apache**, whether they run on the host or in a container. What it
+It works with **nginx, Caddy and Apache installed on the host**. A web server that runs in a
+container gets [exact manual steps](#traefik-or-any-proxy-in-docker) instead — see the table. What it
 does is deliberately small: it adds **one new file** — `geodeploy.conf` in your web server's drop-in
 directory, carrying a `managed by GeoDeploy` marker — and reloads. It never edits `nginx.conf`, your
 Caddyfile, or any other site's configuration, and it never restarts anything.
 
-Before writing anything it checks six things, and **refuses rather than guesses**:
+Before writing anything it checks all of these, and **refuses rather than guesses**:
 
 | It stops if | Because |
 | --- | --- |
@@ -172,6 +173,9 @@ Before writing anything it checks six things, and **refuses rather than guesses*
 | The domain is already served on this machine | Two blocks claiming one hostname is not an error — one silently wins. Adding ours could change a site that works today. |
 | `geodeploy.conf` exists without our marker | The name matches but the file is somebody else's. |
 | The drop-in directory is not actually included by the main configuration | The file would be written where nothing reads it: success that does nothing, which you would then debug as a DNS problem. |
+| The web server is installed but not running (nothing listens on 80 or 443) | It is not what serves your sites. A file added to it would go live, unannounced, the next time somebody starts it. |
+| Apache's `proxy`, `proxy_http` or `headers` module is not enabled | Debian ships them off. Enabling one changes Apache for every site, so you get the exact `a2enmod` command instead. |
+| The web server runs in a container (nginx, Caddy, Apache) | From inside a container `127.0.0.1` is the container itself, so a site pointing at GeoDeploy's local port would answer every visitor with an error — and GeoDeploy cannot see which names or files that container already has. Connecting it to GeoDeploy's network changes a container GeoDeploy did not create, so you get [the steps](#traefik-or-any-proxy-in-docker) instead. |
 | Traefik is the proxy | Its routing comes from container labels, a file provider or Kubernetes resources — there is no single file to drop that is correct across those. You get [the exact manual steps](#traefik-or-any-proxy-in-docker) instead. |
 | There is no reverse proxy at all | A machine with no proxy is not one GeoDeploy should be installing one on. |
 
@@ -423,10 +427,18 @@ A container cannot reach a `127.0.0.1` host port — that isolation is the whole
 put the proxy on GeoDeploy's network and route to the container instead of the host port:
 
 ```bash
-docker network connect geodeploy <your-traefik-container>
+docker network connect geodeploy <your-proxy-container>
 ```
 
-Settings → Deployment's **Traefik** tab generates the labels.
+Add `geodeploy` (as an `external: true` network) to that container's own compose file as well, or the
+next `docker compose up` recreates it without the connection and the site starts returning 502.
+
+- **Traefik:** Settings → Deployment's **Traefik** tab generates the labels.
+- **nginx in a container:** use the nginx configuration from the manual route, with
+  `proxy_pass http://nginx:80;` in place of `proxy_pass http://127.0.0.1:<port>;`.
+- **Caddy in a container:** `reverse_proxy nginx:80`.
+
+`nginx` here is GeoDeploy's own ingress, by its service name on the `geodeploy` network.
 
 ## Changing the port later
 
@@ -561,9 +573,8 @@ test was failing, the old certificate stays live and the log says so.
 - **HTTP-01 only.** The challenge is a file fetched over port 80, so port 80 must be reachable from
   the internet for that name. There is no DNS-01 option, which would need an API token for your DNS
   provider stored on the server.
-- **No certificate automation for a containerised proxy.** GeoDeploy writes that proxy's
-  configuration, but a certificate obtained out here could not be loaded by it. Use that image's own
-  ACME support.
+- **No automatic configuration for a containerised proxy.** It gets the manual steps above, and
+  HTTPS from that image's own ACME support.
 - **Automatic HTTPS needs a proxy in front.** In dedicated mode GeoDeploy *is* the web server and
   there is no host proxy to configure, so the certificate button does not apply — move to a local
   port and put a proxy in front first (`installer/set-port.sh 8080`).
@@ -577,9 +588,6 @@ test was failing, the old certificate stays live and the log says so.
   `sudo bash installer/set-port.sh 8080`. The scaffolding for doing it in-place exists and is
   deliberately inert — `docker-compose.tls.yml` publishes 443, the server block awaits certificate
   paths — see its header comment.
-- **HTTPS in dedicated mode (original note).** GeoDeploy does not yet obtain its own certificate; in that mode it
-  serves plain HTTP. Until it does, a reverse proxy in front is how you get HTTPS — which is another
-  reason behind-proxy is worth choosing even on a machine you own.
 - **A base path.** GeoDeploy has to live at the root of its domain or subdomain; it cannot yet be
   served under `https://example.org/geodeploy/`.
 - **Two GeoDeploys on one machine.** Five containers still have fixed names and every instance joins
