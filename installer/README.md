@@ -110,6 +110,21 @@ rather than the other way round.
 - The `geodeploy` network is created `external` and persists across `compose down/up`.
 
 ## Current status & known issues
+- **2026-11-18 — what an existing instance, an old release and another branch each get.**
+  (1) Compose reads ONE key, `GEODEPLOY_HTTP_PUBLISH` (`80`, or `127.0.0.1:8080`), written only by
+  `lib-deploy.sh::gd_set_publish` from MODE/BIND/PORT. The earlier `${BIND:-0.0.0.0}:${PORT}` form
+  was IPv4-only (Docker publishes an explicit 0.0.0.0 on v4 alone; the old bare `80:80` did both),
+  and `${VAR:+...}` is rejected by Compose < 2.12 — measured on 2.0.1 ... 5.1.4 and v1.29. A `.env`
+  with BIND/PORT but no PUBLISH is migrated by `self-update.sh`, `update.sh` and the API at startup
+  (`deployment.ensure_publish_key`). (2) A version that predates the port choice — detected by
+  `grep -qE 'GEODEPLOY_HTTP_(PUBLISH|PORT)'` on its docker-compose.yml; a unit test checks the
+  pattern against the file it ships with, because the first version of it did not match — is handed
+  to its OWN installer on a fresh clone (after saying it takes 80 and 443, consent, and a free-port
+  check), refused on a re-run over an existing checkout (before the reset — use self-update), and
+  refused by `self-update.sh` when the instance is not on port 80. (3) `update.sh` is rewritten by
+  its own `git pull` while bash reads it by byte offset — everything above that line must stay
+  byte-identical across versions; the file says so.
+  Covered by `tests/test-upgrade.sh` (real installers and updaters on fake machines).
 - **`update.sh` runs `docker compose ... ` without `--profile` flags.** Per `notes_temp/notes_for_future.md` (note #1), this can drop the optional profile services (postgres/martin/titiler/minio) out of Compose management and break their DNS aliases. A real fix needs the active profiles persisted (e.g. `COMPOSE_PROFILES` in `.env`) and passed on every `up`.
 - `install.sh` uses `sudo docker` in places and assumes a Debian/Ubuntu-ish host (`get.docker.com`, `apt` hint).
 - UI-driven updates (Coolify-style "deploy" button) are planned — see notes_temp note #2.
@@ -118,6 +133,7 @@ rather than the other way round.
   everywhere.
 
 ## Last updated
+2026-11-18 (single PUBLISH key and its migration; older releases hand over to their own installer; downgrade guard; `update.sh` byte-offset note)
 2026-09-12b (**round two, after review**: `GEODEPLOY_PORT_CANDIDATES` is a real, active `.env` key
 read environment → `.env` → built-in ten, and the installer's question became THREE options —
 dedicated (spelled out), the default port, or choose another from the ports free at that moment.

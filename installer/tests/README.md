@@ -27,6 +27,11 @@ bash installer/tests/test-install.sh   # ~12m, full install cycles
 bash installer/tests/test-ports.sh     # ~8m
 bash installer/tests/test-second-install.sh  # ~5s, read-only; needs another install to mean anything
 bash installer/tests/test-port80.sh    # ~6m,  NEEDS PORT 80 — see the warning below
+
+# On FAKE MACHINES — privileged containers with their own dockerd. They touch nothing on this
+# machine, including an instance running here. Not in run-all.sh: they build images and take a while.
+bash installer/tests/test-hostproxy.sh   # ~12m, Apply against real nginx/Apache/Caddy, 24 scenarios
+bash installer/tests/test-upgrade.sh     # ~40m, real installers + updaters, old releases, branches
 ```
 
 !!! Each suite prints `N passed, M failed` and exits non-zero on failure.
@@ -95,6 +100,52 @@ asserting it is present.
 | Behind-proxy | binds `127.0.0.1:N` · answers on loopback · **refused from the LAN address** · leaves port 80 alone · prints the SSH tunnel · asks for and stores a domain |
 | `set-port` | 80 → 8080 → 80, both directions, releasing the old port each time |
 
+### `test-hostproxy.sh` — does Apply leave somebody else's web server alone?
+Each scenario boots a throwaway Debian machine (`hostproxy/Dockerfile`) with its own dockerd and a
+real web server already serving neighbour sites, then drives the branch's `services/hostproxy.py`
+with `DOCKER_HOST` pointed at it — so the privileged helper's `/` is the fake machine's `/`. After
+every step it photographs the config trees (sha256 of every file, target of every symlink), each
+neighbour's response, the master PID, and a 6 MB download held in flight across the reload.
+
+| Scenario | What the machine has | Expected, and asserted |
+| --- | --- | --- |
+| N1 | Debian nginx: default site, a sites-enabled vhost, a conf.d vhost, an HTTPS catch-all | plan writes nothing; Apply adds exactly `conf.d/geodeploy.conf`; neighbours byte-identical; same PID; the in-flight download completes; Host/X-Forwarded-* right, a client cannot forge https; a 3 MB upload passes; the HTTPS gap is its own failing step; Apply twice is idempotent; changing the domain moves it; Remove restores the tree byte-for-byte; Remove twice does nothing |
+| N2 | a config already broken on disk, never reloaded | refused (R2) quoting nginx; nothing written or reloaded, every site still up |
+| N3 | the name already served — second token of a one-line block, and under a wildcard | refused (R5); nothing written |
+| N4 | a `geodeploy.conf` GeoDeploy did not write | refused (R1); the file byte-identical, also after Remove |
+| N5 | hand-built nginx.conf including neither drop-in dir | refused (R6); nothing written |
+| N6 | sites-enabled only | sites-available + symlink; Remove takes both |
+| N7 | a small `server_names_hash_bucket_size` and a long name | the new file fails `nginx -t` → removed (fresh) or the previous one restored (re-apply); nothing reloaded |
+| N8 | the config broken by somebody AFTER Apply, then Remove | our file removed, test fails, NOT reloaded, sites still up, their file left alone |
+| N9 | nginx installed but not running | refused (`not-serving`); nothing written, nothing started |
+| N10 | IPv6 disabled on the machine | applies; neighbours unaffected |
+| A1 | stock Debian Apache (mod_proxy off) | refused up front with the `a2enmod` line; nothing written |
+| A2 | Apache with the proxy modules | the N1 lifecycle; a graceful reload keeps the parent PID |
+| A3 | the name as a second `ServerAlias` | refused (R5) |
+| C1 | stock Caddyfile, no import | refused with the one import line to add; Caddyfile untouched |
+| C2 | Caddyfile importing conf.d | applies; HTTPS through Caddy reaches GeoDeploy; Remove byte-identical |
+| C3 | the name as `http://a, http://b {` | refused (R5, via `caddy adapt`) |
+| M1 / M2 | Apache on 80 with an idle nginx / nginx on 80 with an idle Apache | the one holding the port is chosen; the idle one untouched |
+| B1 | no web server | refused; nothing created |
+| D1–D4 | nginx or Caddy **in a container** — plain, with a foreign `geodeploy.conf`, already serving the name | refused (`container-proxy`) with the network steps; nothing written into the mount |
+| T1 | Traefik in a container | named refusal |
+
+### `test-upgrade.sh` — existing instances, old releases, other branches
+Fake machines again (stage `machine`), the REAL installers and updaters, and a bare copy of this
+repository standing in for GitHub through git's `insteadOf`. Installs preload images; every update
+builds for real inside the machine.
+
+| Scenario | Expected, and asserted |
+| --- | --- |
+| F1–F4 | an old release (default `v1.6.4`) with this installer: refused without consent (piped, or `n` at the prompt), refused `--behind-proxy`, refused while somebody holds port 80 — the clone removed, nothing listening |
+| F5 | the old release with `--dedicated`: handed to its own installer, the checkout IS that tag, serving on 80 over IPv4 and IPv6 |
+| F6 / F7 | this branch: piped with no flags → behind-proxy on loopback, never 80; `--dedicated` → a bare `80:80`, IPv6 included, nothing on 443 |
+| U1–U3 | install `main` with main's installer, "Update now" to this branch with **main's** self-update.sh (the copy on disk): success, nginx NOT recreated, `.env` untouched, IPv6 kept; nginx recreated later → bare `:80`, 443 released, IPv6 kept |
+| U4 / U5 | downgrade to the old release with this updater (allowed on port 80), and forward again with the old release's updater |
+| U6–U8 | `set-port.sh 8080`; a `.env` without PUBLISH migrated by the API at startup and by the updater, so a recreate stays on 127.0.0.1:8080 |
+| U9 / U10 | behind a proxy: downgrade to the old release refused with the reason, checkout unmoved; installer re-run onto it refused before the reset |
+| M1 / M2 | the manual `update.sh` from main's copy after `main` is fast-forwarded to this branch (as the merge does): finishes, nginx recreated on a bare `:80`, IPv6 kept |
+
 ## What is deliberately NOT covered, and why
 
 - **A real domain, real DNS, a real certificate.** Verify and the DNS check are tested against
@@ -126,6 +177,8 @@ asserting it is present.
   because the prompt reads `/dev/tty` and nothing writes there.
 
 ## Current status & known issues
+- 2026-11-18: `test-hostproxy.sh` 24 scenarios / 159 assertions green on WSL2 + Docker 29.5.2,
+  after fixing the defects it found; `test-upgrade.sh` results are recorded in the PR description.
 - All five suites pass on WSL2 + Docker 29.5.2 (2026-09-12), 210 assertions in total:
   `test-unit` 54 · `test-proxy` 31 · `test-install` 61 · `test-ports` 37 · `test-second-install` 11
   · `test-port80` 28.
@@ -133,4 +186,5 @@ asserting it is present.
   minus the live half) could be, and probably should be.
 
 ## Last updated
+2026-11-18 (test-hostproxy.sh and test-upgrade.sh: fake shared machines)
 2026-09-12
