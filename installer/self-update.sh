@@ -308,7 +308,7 @@ fi
 # machine's web-server role. Checked BEFORE the reset, so refusing leaves the checkout untouched.
 # An installation on the default publish (no keys, or dedicated on 80) loses nothing by going back:
 # that version publishes what it always did.
-if ! git show "${TARGET_COMMIT}:docker-compose.yml" 2>/dev/null | grep -q 'GEODEPLOY_HTTP_PORT'; then
+if ! git show "${TARGET_COMMIT}:docker-compose.yml" 2>/dev/null | grep -qE 'GEODEPLOY_HTTP_(PUBLISH|PORT)'; then
   if [ "$GD_PORT" != 80 ] || { [ "$GD_BIND" != 0.0.0.0 ] && [ "$GD_BIND" != "" ]; }; then
     write_status error "${TARGET} predates choosing where GeoDeploy is published: it always takes ports 80 and 443, and this installation is on ${GD_BIND}:${GD_PORT}. Nothing was changed. Choose a newer version, or move to port 80 first (sudo bash installer/set-port.sh --dedicated) if that is really what you want."
     exit 1

@@ -17,10 +17,11 @@ The single public entrypoint. Reverse-proxies the SPA, the API, the two tile ser
 
 ## Where this nginx is PUBLISHED on the host
 Not in this file — in `docker-compose.yml`, from `.env`:
-`"${GEODEPLOY_HTTP_BIND:-0.0.0.0}:${GEODEPLOY_HTTP_PORT:-80}:80"`. The container always listens on
-:80 internally; only the host side varies (`0.0.0.0:80` dedicated, `127.0.0.1:<port>` behind an
-existing reverse proxy). The `:-` defaults reproduce the old literal `80:80` exactly, so an install
-whose `.env` predates the keys is unchanged. Change it with `installer/set-port.sh`, never by hand —
+`"${GEODEPLOY_HTTP_PUBLISH:-80}:80"`. The container always listens on :80 internally; only the host
+side varies (`80` dedicated — every interface, IPv4 and IPv6 — or `127.0.0.1:<port>` behind an
+existing reverse proxy). The default reproduces the old literal `80:80` exactly, so an install whose
+`.env` predates the keys is unchanged. NOT `0.0.0.0:80:80`: Docker publishes that on IPv4 only.
+PUBLISH is derived from `GEODEPLOY_HTTP_BIND`/`_PORT` by `installer/lib-deploy.sh::gd_set_publish`. Change it with `installer/set-port.sh`, never by hand —
 editing `.env` does nothing until the container is RECREATED.
 
 **`443:443` is no longer published by the base compose file.** The TLS `server` block below is

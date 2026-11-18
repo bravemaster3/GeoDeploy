@@ -17,7 +17,7 @@ they happen to be free, and it never stops, edits or reconfigures anything alrea
 
 | | **Dedicated** | **Behind a proxy** |
 | --- | --- | --- |
-| Publishes on | `0.0.0.0:80` | `127.0.0.1:<port>` |
+| Publishes on | port 80, every interface (IPv4 and IPv6) | `127.0.0.1:<port>` |
 | Reachable from | anywhere | this machine only |
 | HTTPS and the domain | not yet configured | your existing reverse proxy |
 | Right when | the server was bought for GeoDeploy | anything else on the box serves the web |

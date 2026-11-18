@@ -105,7 +105,7 @@ if [ -d ".git" ]; then
   # to source), and switching an existing installation between versions is self-update.sh's job —
   # it builds, health-checks and rolls back. Checked BEFORE the reset: refusing after it would leave
   # the checkout on one version and the running containers on another.
-  if ! git show "${GD_TARGET}:docker-compose.yml" 2>/dev/null | grep -q 'GEODEPLOY_HTTP_PORT'; then
+  if ! git show "${GD_TARGET}:docker-compose.yml" 2>/dev/null | grep -qE 'GEODEPLOY_HTTP_(PUBLISH|PORT)'; then
     error "$VERSION predates this installer. To move this installation to it, use the updater — it builds, checks health and rolls back: cd $GEODEPLOY_DIR && sudo bash installer/self-update.sh $VERSION   (Nothing was changed.)"
   fi
   git reset --hard "$GD_TARGET" >/dev/null || error "Could not check out $VERSION."
@@ -134,7 +134,7 @@ _gd_old_abort() { # MESSAGE — remove the clone THIS run made, so a re-run star
   fi
   error "$1 Nothing has been started, and nothing on this machine was changed."
 }
-if [ "${GD_FRESH_CLONE:-0}" = 1 ] && ! grep -q 'GEODEPLOY_HTTP_PORT' docker-compose.yml 2>/dev/null; then
+if [ "${GD_FRESH_CLONE:-0}" = 1 ] && ! grep -qE 'GEODEPLOY_HTTP_(PUBLISH|PORT)' docker-compose.yml 2>/dev/null; then
   echo ""
   warn "$VERSION predates choosing where GeoDeploy is published."
   warn "It always takes ports 80 AND 443 and becomes this machine's web server (dedicated mode)."

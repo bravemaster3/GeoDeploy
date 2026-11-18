@@ -15,8 +15,10 @@ sysctl -qw net.ipv6.conf.all.disable_ipv6=0 2>/dev/null || :
 sysctl -qw net.ipv6.conf.default.disable_ipv6=0 2>/dev/null || :
 
 # tcp:2375 without TLS is acceptable ONLY because this daemon lives on a throwaway, test-only Docker
-# network and dies with the scenario. vfs because overlay-on-overlay is unreliable under WSL2.
+# network and dies with the scenario. vfs by default because overlay-on-overlay is unreliable under
+# WSL2; test-upgrade.sh puts /var/lib/docker on a volume and asks for overlay2, which is far faster
+# with multi-gigabyte images.
 dockerd --host=unix:///var/run/docker.sock --host=tcp://0.0.0.0:2375 --tls=false \
-        --storage-driver=vfs >/var/log/dockerd.log 2>&1 &
+        --storage-driver="${GDHP_STORAGE:-vfs}" >/var/log/dockerd.log 2>&1 &
 python3 /opt/gdhp/upstream.py >/var/log/upstream.log 2>&1 &
 exec sleep infinity

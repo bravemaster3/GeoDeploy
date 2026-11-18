@@ -30,3 +30,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends caddy && rm -rf
 
 FROM base AS mixed
 RUN apt-get update && apt-get install -y --no-install-recommends nginx apache2 && rm -rf /var/lib/apt/lists/*
+
+# For test-upgrade.sh: a machine the REAL installer and updaters can run on — git to clone, sudo
+# because every script says `sudo docker`. The compose plugin is mounted in from the test host.
+FROM base AS machine
+RUN apt-get update && apt-get install -y --no-install-recommends git sudo && rm -rf /var/lib/apt/lists/*

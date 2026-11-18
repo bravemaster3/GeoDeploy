@@ -392,3 +392,19 @@ def test_a_dedicated_env_gets_the_bare_port_not_an_ipv4_only_bind(tmp_path):
 
 def test_a_missing_env_file_is_not_an_error(tmp_path):
     assert deployment.ensure_publish_key(str(tmp_path / "absent.env")) is None
+
+
+def test_the_version_detector_recognises_the_compose_file_it_ships_with():
+    """install.sh and self-update.sh decide "does this version predate the port choice?" by grepping
+    the target's docker-compose.yml. That pattern once named a variable this very compose file had
+    stopped using, so THIS version was refused as too old to install (caught by test-upgrade.sh)."""
+    import pathlib
+    import re
+    root = pathlib.Path(__file__).resolve().parents[2]
+    compose = (root / "docker-compose.yml").read_text(encoding="utf-8")
+    for script in ("installer/install.sh", "installer/self-update.sh"):
+        text = (root / script).read_text(encoding="utf-8")
+        patterns = re.findall(r"grep -qE '(GEODEPLOY_HTTP_[^']+)'", text)
+        assert patterns, f"{script} no longer carries the version detector"
+        for pattern in patterns:
+            assert re.search(pattern, compose), f"{script}: {pattern} does not match docker-compose.yml"

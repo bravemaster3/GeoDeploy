@@ -28,6 +28,31 @@ upgrade needs manual work.
   changes for a running instance: images are named and built exactly as before.
 - The swap snippet in Getting started is safe to run twice, and explains the harmless
   `sudo: unable to resolve host` warning fresh cloud images print.
+- **Checked against real web servers before release, and five ways Apply could disturb one closed.**
+  A new suite (`installer/tests/test-hostproxy.sh`) runs Apply against throwaway machines with a
+  real nginx, Apache or Caddy serving other sites — 24 scenarios, each asserting the configuration
+  is byte-identical afterwards, every other site answers exactly as before, and the web server was
+  reloaded, never restarted. It found: a web server **in a container** was given an address it
+  cannot reach (every visitor got an error while Apply reported success), could have a file it did
+  not own overwritten, and a site it already served for the same name stopped working — it is now a
+  named refusal with the manual steps; a name another site already serves went unnoticed when
+  written on one line, as a second `ServerAlias`, or as Caddy's `http://a, http://b {`; a web server
+  that is installed but not running was configured; and stock Debian Apache always rolled back
+  without saying it needs `a2enmod proxy proxy_http headers`.
+- **Existing instances keep IPv6.** The port line read `0.0.0.0:80:80`, which Docker publishes on
+  IPv4 only; the `80:80` it replaced also served IPv6, so any instance reached over IPv6 would have
+  lost it the first time its nginx was recreated. Compose now reads one key,
+  `GEODEPLOY_HTTP_PUBLISH`, which defaults to exactly `80` — and parses on every Docker Compose from
+  2.0 to 5.x (the conditional forms that would have avoided a new key are rejected by Compose
+  before 2.12). The installer and `set-port.sh` write it; installations that recorded a port before
+  it existed get it automatically.
+- **Older releases and branches still install.** The new installer needed files that releases up to
+  v1.6.4 do not have, so `GEODEPLOY_VERSION=v1.6.4 … | bash` would have stopped with an error. It now
+  hands over to that release's own installer — after saying that it takes ports 80 and 443, asking
+  (or `--dedicated`), and refusing if either port is already in use.
+- **No downgrade into ports 80 and 443.** Updating an instance that runs behind a proxy to a release
+  from before this one is refused, with the reason, before anything changes — those releases always
+  publish 80 and 443 and would collide with the web server in front.
 - **Passwords can be read back, and the admin password is confirmed.** Every password and secret
   field — sign-in, the database password, the storage secret key, the admin password — now has a
   reveal toggle, because typing a long generated secret into a field of dots and getting
@@ -163,8 +188,8 @@ block, add one line to `.env` before updating:**
 COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml
 ```
 
-Nothing else is affected: with none of the new keys in `.env` the publish resolves to
-`0.0.0.0:80:80`, exactly as before. Existing containers keep their current bindings until nginx is
+Nothing else is affected: with none of the new keys in `.env` the publish resolves to `80:80`,
+exactly as before — IPv4 and IPv6. Existing containers keep their current bindings until nginx is
 next recreated.
 
 ## v1.6.4 — 2026-09-11

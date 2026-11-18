@@ -127,6 +127,14 @@ curl -fsSL https://raw.githubusercontent.com/bravemaster3/geodeploy/main/install
   | GEODEPLOY_VERSION=v1.0 bash
 ```
 
+!!! note "Releases up to v1.6.4 always take ports 80 and 443"
+    They predate [choosing where GeoDeploy is published](behind-a-proxy.md). Installing one hands
+    over to that release's own installer, which is exactly how it always installed — but first the
+    installer says so, asks (non-interactively: pass `--dedicated` after `bash -s --`), and refuses
+    if port 80 or 443 is already in use. For the same reason, an instance running **behind a proxy**
+    cannot be updated or downgraded to one of those releases: the updater refuses before changing
+    anything, because that release would publish 80 and 443 next to the web server in front.
+
 !!! danger "Use the script, and run it from the install directory"
     Prefer `installer/self-update.sh` over `git pull && docker compose up -d`. A bare `docker compose
     up -d` also targets the containers the setup wizard provisions outside Compose (postgres, minio,
