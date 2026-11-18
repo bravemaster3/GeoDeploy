@@ -30,22 +30,24 @@ if [ -d "$LIVE" ]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-hdr "B1  BACK-COMPAT: a .env with none of the publish keys still binds 0.0.0.0:80"
+hdr "B1  BACK-COMPAT: a .env with none of the publish keys still publishes a bare 80:80 (v4 AND v6)"
 reset_install
 cp "$REPO/.env.example" "$REPO/.env"
 sed -i '/^GEODEPLOY_DEPLOY_MODE=/d;/^GEODEPLOY_HTTP_BIND=/d;/^GEODEPLOY_HTTP_PORT=/d' "$REPO/.env"
 chk "the keys really are absent"      '! grep -q "^GEODEPLOY_HTTP_PORT" "$REPO/.env"'
 dc up -d nginx >/dev/null 2>&1; sleep 2
-chk "compose defaulted to 0.0.0.0:80" '[ "$(binding)" = "0.0.0.0:80" ]'
+chk "compose defaulted to a bare :80"  '[ "$(binding)" = ":80" ]'
 chk "serving on :80"                  '[ "$(curl -s -o /dev/null -w %{http_code} http://127.0.0.1/health)" = 200 ]'
+chk "serving over IPv6 too"           '[ "$(v6health)" = 200 ]'
 
 hdr "B1b the installer over that old .env records the truth and moves nothing"
 run_piped
 chk "recorded dedicated"              '[ "$(ev GEODEPLOY_DEPLOY_MODE)" = dedicated ]'
-chk "recorded 0.0.0.0"                '[ "$(ev GEODEPLOY_HTTP_BIND)" = 0.0.0.0 ]'
+chk "recorded an empty bind (every interface)" '[ "$(ev GEODEPLOY_HTTP_BIND)" = "" ] && grep -q "^GEODEPLOY_HTTP_BIND=$" "$REPO/.env"'
 chk "recorded 80"                     '[ "$(ev GEODEPLOY_HTTP_PORT)" = 80 ]'
 chk "said it was an existing install" 'grep -qi "Existing installation" "$O"'
-chk "still bound 0.0.0.0:80"          '[ "$(binding)" = "0.0.0.0:80" ]'
+chk "still a bare :80"                '[ "$(binding)" = ":80" ]'
+chk "still serving over IPv6"         '[ "$(v6health)" = 200 ]'
 chk "still serving"                   '[ "$(curl -s -o /dev/null -w %{http_code} http://127.0.0.1/health)" = 200 ]'
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -55,7 +57,8 @@ run_tty $'1\n'
 chk "reported the ports free"         'grep -qi "Ports 80 and 443 are free" "$O"'
 chk "dedicated was the default"       'grep -q "Choose \[1\]" "$O"'
 chk "mode dedicated"                  '[ "$(ev GEODEPLOY_DEPLOY_MODE)" = dedicated ]'
-chk "bound 0.0.0.0:80"                '[ "$(binding)" = "0.0.0.0:80" ]'
+chk "bound a bare :80"                '[ "$(binding)" = ":80" ]'
+chk "reachable over IPv6"             '[ "$(v6health)" = 200 ]'
 chk "reachable on the LAN address"    '[ "$(curl -s -o /dev/null -w %{http_code} "http://$LANIP/health")" = 200 ]'
 chk "told them how to move it later"  'grep -q "set-port.sh 8080" "$O"'
 chk "did NOT ask for a domain"        '! grep -qi "Do you have a domain name" "$O"'
@@ -65,7 +68,8 @@ run_setport 8080 -y
 chk "moved to 127.0.0.1:8080"         '[ "$(binding)" = "127.0.0.1:8080" ]'
 chk "port 80 released"                '! curl -sf --max-time 3 http://127.0.0.1/health >/dev/null 2>&1'
 run_setport --dedicated -y
-chk "back on 0.0.0.0:80"              '[ "$(binding)" = "0.0.0.0:80" ]'
+chk "back on a bare :80"              '[ "$(binding)" = ":80" ]'
+chk "IPv6 back too"                   '[ "$(v6health)" = 200 ]'
 chk "serving on 80 again"             '[ "$(curl -s -o /dev/null -w %{http_code} http://127.0.0.1/health)" = 200 ]'
 
 # ─────────────────────────────────────────────────────────────────────────────

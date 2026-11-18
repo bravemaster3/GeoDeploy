@@ -177,9 +177,7 @@ fi
 # ── Apply, with rollback ──────────────────────────────────────────────────────────────────────────
 
 apply() { # mode bind port
-  gd_env_set GEODEPLOY_DEPLOY_MODE "$1" || return 1
-  gd_env_set GEODEPLOY_HTTP_BIND   "$2" || return 1
-  gd_env_set GEODEPLOY_HTTP_PORT   "$3" || return 1
+  gd_set_publish "$1" "$2" "$3" || return 1
   # ONLY nginx. The API, the worker and anything they are in the middle of are none of this script's
   # business — and recreating them would abort running ingest jobs for a change they cannot observe.
   DC up -d --force-recreate nginx

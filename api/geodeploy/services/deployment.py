@@ -32,6 +32,58 @@ DEFAULT_BIND = "0.0.0.0"
 DEFAULT_PORT = "80"
 
 
+def publish_spec(bind: str, port: str) -> str:
+    """The host side of compose's `ports:` entry — what GEODEPLOY_HTTP_PUBLISH holds. Same rule as
+    `gd_publish_spec` in installer/lib-deploy.sh: every interface is the BARE port (Docker publishes
+    that on IPv4 and IPv6; an explicit 0.0.0.0 is IPv4 only), and an IPv6 address is bracketed."""
+    bind = (bind or "").strip()
+    if bind in ("", "0.0.0.0"):
+        return port
+    return f"[{bind}]:{port}" if ":" in bind else f"{bind}:{port}"
+
+
+def ensure_publish_key(path: str | None = None) -> str | None:
+    """Give a .env that recorded BIND/PORT, but predates GEODEPLOY_HTTP_PUBLISH, that key.
+
+    docker-compose.yml reads only PUBLISH. An installation made before it existed has BIND/PORT and
+    nothing else, so the next nginx recreate would fall back to `80:80` — on a behind-proxy machine,
+    straight into the host's own nginx. The updaters add it before any compose call, but an update
+    run by an OLDER updater (whatever copy was on disk when "Update now" was pressed) does not know
+    to; the API starting on the new code is the first thing that does, before anything recreates
+    nginx. A .env with neither key is left alone: compose's default IS that installation's binding.
+
+    Appended, never rewritten — `.env` is a single-file bind mount and a rewrite-by-rename would
+    leave every running container on the old inode. Returns the value written, or None.
+    """
+    from . import envfile
+    path = path or envfile.ENV_PATH
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    keys = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("export "):
+            stripped = stripped[7:].lstrip()
+        if "=" in stripped and not stripped.startswith("#"):
+            k, v = stripped.split("=", 1)
+            keys[k.strip()] = v.strip().strip('"').strip("'")
+    if "GEODEPLOY_HTTP_PUBLISH" in keys:
+        return None
+    if "GEODEPLOY_HTTP_BIND" not in keys and "GEODEPLOY_HTTP_PORT" not in keys:
+        return None
+    value = publish_spec(keys.get("GEODEPLOY_HTTP_BIND", ""), keys.get("GEODEPLOY_HTTP_PORT") or DEFAULT_PORT)
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(("" if text.endswith("\n") or not text else "\n")
+                     + f"GEODEPLOY_HTTP_PUBLISH={value}\n")
+    except OSError:
+        return None
+    return value
+
+
 # ── Intent ────────────────────────────────────────────────────────────────────────────────────────
 
 def read_intent() -> dict:

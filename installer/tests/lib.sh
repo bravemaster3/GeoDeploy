@@ -50,7 +50,7 @@ services:
     image: nginx:alpine
     restart: unless-stopped
     ports:
-      - "${GEODEPLOY_HTTP_BIND:-0.0.0.0}:${GEODEPLOY_HTTP_PORT:-80}:80"
+      - "${GEODEPLOY_HTTP_PUBLISH:-80}:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     networks: [geodeploy]
@@ -112,6 +112,9 @@ resume_other_installs() {
 
 dc(){ ( cd "$REPO" && docker compose "$@" ); }
 ev(){ grep -E "^$1=" "$REPO/.env" 2>/dev/null | tail -1 | cut -d= -f2-; }
+# `:80` (empty HostIp) is what a bare `80:80` gives: every interface, IPv4 AND IPv6. `0.0.0.0:80` is
+# IPv4 only — so the two are NOT the same thing, and the suites assert which one they got.
+v6health(){ curl -s -o /dev/null -w '%{http_code}' --max-time 3 -g "http://[::1]${1:+:$1}/health"; }
 binding(){ docker inspect -f '{{range $p,$b := .HostConfig.PortBindings}}{{range $b}}{{.HostIp}}:{{.HostPort}}{{end}}{{end}}' "$(dc ps -q nginx 2>/dev/null | head -1)" 2>/dev/null; }
 reset_install(){ dc down --remove-orphans >/dev/null 2>&1; rm -f "$REPO/.env" "$REPO/data/temp/deploy-hints.json"; }
 # Colour codes break `grep -w` on a number (the character before it becomes the `m` of an escape).

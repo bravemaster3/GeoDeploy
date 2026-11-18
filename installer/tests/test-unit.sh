@@ -79,6 +79,21 @@ printf 'GEODEPLOY_HTTP_BIND=127.0.0.1\nGEODEPLOY_HTTP_PORT=8080\n' > proxy.env
 is "loopback bind"    "$(gd_publish_bind proxy.env)" "127.0.0.1"
 is "url carries port" "$(gd_local_url proxy.env)"    "http://127.0.0.1:8080"
 
+hdr "writing the publish — 'every interface' is the BARE port (Docker: 0.0.0.0 is IPv4 only)"
+is "spec: every interface"   "$(gd_publish_spec "" 80)"          "80"
+is "spec: 0.0.0.0 is bare"   "$(gd_publish_spec 0.0.0.0 80)"     "80"
+is "spec: loopback"          "$(gd_publish_spec 127.0.0.1 8080)" "127.0.0.1:8080"
+is "spec: IPv6 is bracketed" "$(gd_publish_spec ::1 8080)"       "[::1]:8080"
+printf 'GEODEPLOY_HTTP_BIND=127.0.0.1\nGEODEPLOY_HTTP_PORT=8080\nGEODEPLOY_HTTP_PUBLISH=127.0.0.1:8080\n' > w.env
+gd_set_publish dedicated 0.0.0.0 80 w.env
+is "0.0.0.0 is written empty"        "$(grep '^GEODEPLOY_HTTP_BIND=' w.env)"    "GEODEPLOY_HTTP_BIND="
+is "…and still reads back 0.0.0.0"   "$(gd_publish_bind w.env)"                  "0.0.0.0"
+is "publish follows: bare 80"        "$(grep '^GEODEPLOY_HTTP_PUBLISH=' w.env)" "GEODEPLOY_HTTP_PUBLISH=80"
+gd_set_publish behind-proxy 127.0.0.1 8081 w.env
+is "publish follows: loopback"       "$(grep '^GEODEPLOY_HTTP_PUBLISH=' w.env)" "GEODEPLOY_HTTP_PUBLISH=127.0.0.1:8081"
+is "mode written"                    "$(gd_publish_mode w.env)"                  "behind-proxy"
+is "one of each key, not two"        "$(grep -c '^GEODEPLOY_HTTP_' w.env)"       "3"
+
 # ── Candidates ────────────────────────────────────────────────────────────────────────────────────
 hdr "gd_candidates — precedence, sanitising, deduplication"
 : > .env

@@ -101,9 +101,71 @@ if [ -d ".git" ]; then
     GD_TARGET=""
   done
   [ -n "$GD_TARGET" ] || error "No such version: $VERSION (expected a release tag like v1.0, 'main', or a commit)."
+  # A version from before the port choice cannot run under THIS installer (it has no lib-deploy.sh
+  # to source), and switching an existing installation between versions is self-update.sh's job —
+  # it builds, health-checks and rolls back. Checked BEFORE the reset: refusing after it would leave
+  # the checkout on one version and the running containers on another.
+  if ! git show "${GD_TARGET}:docker-compose.yml" 2>/dev/null | grep -q 'GEODEPLOY_HTTP_PORT'; then
+    error "$VERSION predates this installer. To move this installation to it, use the updater — it builds, checks health and rolls back: cd $GEODEPLOY_DIR && sudo bash installer/self-update.sh $VERSION   (Nothing was changed.)"
+  fi
   git reset --hard "$GD_TARGET" >/dev/null || error "Could not check out $VERSION."
 else
   git clone --branch "$VERSION" --depth 1 "$REPO" .
+  GD_FRESH_CLONE=1
+fi
+
+# ── A version from BEFORE the port choice ─────────────────────────────────────
+# Releases up to v1.6.x (and any branch cut before this work) have `80:80` and `443:443` written into
+# docker-compose.yml and their own installer, which takes both ports without asking. This installer
+# cannot drive them — they ship none of the files it sources below — so it hands over to THEIR
+# installer, run exactly as installing that version always ran. That keeps "install an older
+# version" working byte-for-byte as before. What it adds is the one thing those versions never did:
+# saying so first, and taking 80/443 only with consent and only if they are free.
+_gd_old_held() { # PORT → 0 if something listens on it (any address family)
+  if command -v ss >/dev/null 2>&1; then
+    [ -n "$(ss -Hlnt "( sport = :$1 )" 2>/dev/null)" ]
+  else
+    (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
+  fi
+}
+_gd_old_abort() { # MESSAGE — remove the clone THIS run made, so a re-run starts clean, then stop
+  if [ "${GD_FRESH_CLONE:-0}" = 1 ] && [ -d "$GEODEPLOY_DIR/.git" ] && [ -f "$GEODEPLOY_DIR/docker-compose.yml" ]; then
+    cd / && rm -rf "$GEODEPLOY_DIR"
+  fi
+  error "$1 Nothing has been started, and nothing on this machine was changed."
+}
+if [ "${GD_FRESH_CLONE:-0}" = 1 ] && ! grep -q 'GEODEPLOY_HTTP_PORT' docker-compose.yml 2>/dev/null; then
+  echo ""
+  warn "$VERSION predates choosing where GeoDeploy is published."
+  warn "It always takes ports 80 AND 443 and becomes this machine's web server (dedicated mode)."
+  if [ "$GD_WANT_MODE" = behind-proxy ] || { [ -n "$GD_WANT_PORT" ] && [ "$GD_WANT_PORT" != 80 ]; } \
+     || { [ -n "$GD_WANT_BIND" ] && [ "$GD_WANT_BIND" != 0.0.0.0 ]; }; then
+    _gd_old_abort "$VERSION cannot be published behind a proxy or on another port — install a newer version for that."
+  fi
+  for _p in 80 443; do
+    if _gd_old_held "$_p"; then
+      _gd_old_abort "Port $_p is already in use on this machine, and $VERSION would need it."
+    fi
+  done
+  if [ "$GD_WANT_MODE" != dedicated ] && [ "$GD_WANT_PORT" != 80 ]; then
+    if [ -r /dev/tty ] && [ -t 1 ]; then
+      printf "Install %s and let it take ports 80 and 443? [y/N]: " "$VERSION"
+      read -r _gd_yes < /dev/tty || _gd_yes=""
+      case "$_gd_yes" in y|Y|yes|YES) ;; *) _gd_old_abort "Not confirmed." ;; esac
+    else
+      _gd_old_abort "There is no terminal to ask with. Pass --dedicated (or GEODEPLOY_DEPLOY_MODE=dedicated) to confirm that $VERSION may take ports 80 and 443."
+    fi
+  fi
+  info "Handing over to the installer of $VERSION…"
+  _gd_old_installer="$(mktemp "${TMPDIR:-/tmp}/gd-install-old.XXXXXX")"
+  cp installer/install.sh "$_gd_old_installer"
+  cd / && rm -rf "$GEODEPLOY_DIR"
+  export GEODEPLOY_VERSION="$VERSION" GEODEPLOY_DIR
+  # Its stdin must NOT be ours: under `curl | bash` ours is the rest of THIS script, and any `read`
+  # in that installer would consume it as an answer. Test by OPENING /dev/tty: `[ -r /dev/tty ]` is
+  # true even with no controlling terminal (measured in a container), and the exec would then die.
+  if (exec < /dev/tty) 2>/dev/null; then exec bash "$_gd_old_installer" < /dev/tty; fi
+  exec bash "$_gd_old_installer" < /dev/null
 fi
 
 # ── Where should GeoDeploy be published? ─────────────────────────────────────
@@ -417,9 +479,7 @@ printf '%s' "$VERSION" > data/temp/deployed-ref 2>/dev/null || true
 # Written with gd_env_set, which rewrites .env IN PLACE. `sed -i` gives the file a new inode, and
 # .env is a single-file bind mount into the api and celery containers — a running container would go
 # on reading the old one. (The sed calls above run before any container exists, so they are safe.)
-gd_env_set GEODEPLOY_DEPLOY_MODE "$GD_MODE"
-gd_env_set GEODEPLOY_HTTP_BIND   "$GD_BIND"
-gd_env_set GEODEPLOY_HTTP_PORT   "$GD_PORT"
+gd_set_publish "$GD_MODE" "$GD_BIND" "$GD_PORT"
 
 # A domain the operator typed at install time. Only a HINT — the dashboard opens its Deployment
 # screen with the field filled in rather than making them find it again. Same bind-mounted data/temp

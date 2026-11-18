@@ -340,3 +340,55 @@ def test_with_no_configured_domain_the_old_advice_is_still_right():
 def test_the_managed_argument_is_optional():
     """Callers that predate it must keep working rather than raising."""
     assert deployment.verdict(_BEHIND_LOOPBACK, _NO_REALITY, _TUNNEL)["action"] == "configure-domain"
+
+
+# ── GEODEPLOY_HTTP_PUBLISH: the one key compose reads, and the migration onto it (2026-11-18) ─────
+
+@pytest.mark.parametrize("bind,port,spec", [
+    ("", "80", "80"),                       # every interface: BARE, so Docker publishes v4 AND v6
+    ("0.0.0.0", "80", "80"),                # …never `0.0.0.0:80`, which is IPv4 only
+    ("127.0.0.1", "8080", "127.0.0.1:8080"),
+    ("::1", "8080", "[::1]:8080"),          # an IPv6 address needs brackets in a port spec
+])
+def test_the_publish_spec_matches_the_installers(bind, port, spec):
+    assert deployment.publish_spec(bind, port) == spec
+
+
+def _env(tmp_path, text):
+    path = tmp_path / ".env"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_a_behind_proxy_env_from_before_the_key_gets_it(tmp_path):
+    """Without it, the next nginx recreate lands on `80:80` — into the host's own nginx."""
+    path = _env(tmp_path, "GEODEPLOY_DEPLOY_MODE=behind-proxy\nGEODEPLOY_HTTP_BIND=127.0.0.1\n"
+                          "GEODEPLOY_HTTP_PORT=8080\n")
+    inode = path.stat().st_ino
+    assert deployment.ensure_publish_key(str(path)) == "127.0.0.1:8080"
+    assert "GEODEPLOY_HTTP_PUBLISH=127.0.0.1:8080\n" in path.read_text()
+    assert path.stat().st_ino == inode        # appended in place: .env is a single-file bind mount
+
+
+def test_an_env_with_no_publish_keys_at_all_is_left_alone(tmp_path):
+    """Every instance installed before the port choice: compose's default IS its binding."""
+    path = _env(tmp_path, "GEODEPLOY_SECRET_KEY=x\n")
+    assert deployment.ensure_publish_key(str(path)) is None
+    assert path.read_text() == "GEODEPLOY_SECRET_KEY=x\n"
+
+
+def test_an_env_that_already_has_the_key_is_never_touched(tmp_path):
+    text = "GEODEPLOY_HTTP_BIND=127.0.0.1\nGEODEPLOY_HTTP_PORT=8080\nGEODEPLOY_HTTP_PUBLISH=127.0.0.1:8080\n"
+    path = _env(tmp_path, text)
+    assert deployment.ensure_publish_key(str(path)) is None
+    assert path.read_text() == text
+
+
+def test_a_dedicated_env_gets_the_bare_port_not_an_ipv4_only_bind(tmp_path):
+    path = _env(tmp_path, "GEODEPLOY_HTTP_BIND=0.0.0.0\nGEODEPLOY_HTTP_PORT=80")    # no final newline
+    assert deployment.ensure_publish_key(str(path)) == "80"
+    assert path.read_text().endswith("GEODEPLOY_HTTP_PORT=80\nGEODEPLOY_HTTP_PUBLISH=80\n")
+
+
+def test_a_missing_env_file_is_not_an_error(tmp_path):
+    assert deployment.ensure_publish_key(str(tmp_path / "absent.env")) is None

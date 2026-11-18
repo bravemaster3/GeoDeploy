@@ -165,6 +165,30 @@ gd_valid_port() { # PORT → 0 if a usable TCP port number
 # The defaults MUST match the `:-` defaults in docker-compose.yml — an install whose .env predates
 # these keys is on 0.0.0.0:80, exactly as it always was.
 gd_publish_bind() { local v; v="$(gd_env_get GEODEPLOY_HTTP_BIND "${1:-.env}")"; printf '%s' "${v:-0.0.0.0}"; }
+
+# The host side of compose's `ports:` entry — what GEODEPLOY_HTTP_PUBLISH holds. "Every interface"
+# is the BARE port, never `0.0.0.0:PORT`: Docker publishes a bare port on IPv4 AND IPv6, and an
+# explicit 0.0.0.0 on IPv4 only. An IPv6 address needs brackets or its colons are ambiguous.
+gd_publish_spec() { # BIND PORT
+  case "$1" in
+    ""|0.0.0.0) printf '%s' "$2" ;;
+    *:*)        printf '[%s]:%s' "$1" "$2" ;;
+    *)          printf '%s:%s' "$1" "$2" ;;
+  esac
+}
+
+# THE ONLY WRITER of where GeoDeploy is published. All four keys, together, every time — so the keys
+# people read (MODE/BIND/PORT) and the one Compose reads (PUBLISH) cannot drift apart. "Every
+# interface" is stored as an EMPTY bind, for the same IPv6 reason; everything that READS the bind
+# still sees 0.0.0.0 (gd_publish_bind above).
+gd_set_publish() { # MODE BIND PORT [FILE]
+  local f="${4:-.env}" bind="$2"
+  [ "$bind" = 0.0.0.0 ] && bind=""
+  gd_env_set GEODEPLOY_DEPLOY_MODE  "$1" "$f" || return 1
+  gd_env_set GEODEPLOY_HTTP_BIND    "$bind" "$f" || return 1
+  gd_env_set GEODEPLOY_HTTP_PORT    "$3" "$f" || return 1
+  gd_env_set GEODEPLOY_HTTP_PUBLISH "$(gd_publish_spec "$bind" "$3")" "$f"
+}
 gd_publish_port() { local v; v="$(gd_env_get GEODEPLOY_HTTP_PORT "${1:-.env}")"; printf '%s' "${v:-80}"; }
 gd_publish_mode() { local v; v="$(gd_env_get GEODEPLOY_DEPLOY_MODE "${1:-.env}")"; printf '%s' "${v:-dedicated}"; }
 

@@ -45,6 +45,20 @@ _envget() { # KEY
 }
 GD_BIND="$(_envget GEODEPLOY_HTTP_BIND)"; GD_BIND="${GD_BIND:-0.0.0.0}"
 GD_PORT="$(_envget GEODEPLOY_HTTP_PORT)"; GD_PORT="${GD_PORT:-80}"
+# docker-compose.yml reads ONE key, GEODEPLOY_HTTP_PUBLISH (see the comment there). An installation
+# that recorded BIND/PORT before that key existed must get it BEFORE any compose command here, or the
+# next nginx recreate falls back to `80:80` — on a behind-proxy machine, straight into the host's own
+# nginx. Appended, never rewritten: `>>` keeps the inode, and .env is a single-file bind mount. The
+# API does the same at startup (deployment.ensure_publish_key) for updates run by an older updater.
+if ! grep -qE '^[[:space:]]*GEODEPLOY_HTTP_PUBLISH[[:space:]]*=' .env 2>/dev/null \
+   && grep -qE '^[[:space:]]*GEODEPLOY_HTTP_(BIND|PORT)[[:space:]]*=' .env 2>/dev/null; then
+  case "$GD_BIND" in
+    0.0.0.0) _gd_pub="$GD_PORT" ;;
+    *:*)     _gd_pub="[$GD_BIND]:$GD_PORT" ;;
+    *)       _gd_pub="$GD_BIND:$GD_PORT" ;;
+  esac
+  printf '\nGEODEPLOY_HTTP_PUBLISH=%s\n' "$_gd_pub" >> .env
+fi
 # Always 127.0.0.1: in behind-proxy mode nothing else can reach it, and in dedicated mode loopback
 # works too. `http://localhost/health` was hard-coded here, which on any install not on port 80
 # would have failed the post-update health check and ROLLED BACK a perfectly good update.
@@ -286,6 +300,19 @@ done
 if [ -z "$TARGET_COMMIT" ]; then
   write_status error "No such version: ${TARGET}. Expected a release tag (e.g. v1.0), a branch, 'main', or a commit."
   exit 1
+fi
+# A VERSION THAT CANNOT KEEP THIS INSTALLATION WHERE IT IS. Every release before the port choice has
+# `80:80` and `443:443` written into docker-compose.yml and never reads GEODEPLOY_HTTP_*. Moving an
+# installation that lives on 127.0.0.1:8080 behind somebody's nginx to one of those would publish 80
+# and 443 the next time nginx is recreated — colliding with that nginx, or quietly taking the
+# machine's web-server role. Checked BEFORE the reset, so refusing leaves the checkout untouched.
+# An installation on the default publish (no keys, or dedicated on 80) loses nothing by going back:
+# that version publishes what it always did.
+if ! git show "${TARGET_COMMIT}:docker-compose.yml" 2>/dev/null | grep -q 'GEODEPLOY_HTTP_PORT'; then
+  if [ "$GD_PORT" != 80 ] || { [ "$GD_BIND" != 0.0.0.0 ] && [ "$GD_BIND" != "" ]; }; then
+    write_status error "${TARGET} predates choosing where GeoDeploy is published: it always takes ports 80 and 443, and this installation is on ${GD_BIND}:${GD_PORT}. Nothing was changed. Choose a newer version, or move to port 80 first (sudo bash installer/set-port.sh --dedicated) if that is really what you want."
+    exit 1
+  fi
 fi
 if ! git reset --hard "$TARGET_COMMIT" >/dev/null 2>&1; then write_status error "git update failed."; exit 1; fi
 NEW_SHA="$(git rev-parse HEAD)"

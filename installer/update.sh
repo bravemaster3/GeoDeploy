@@ -8,6 +8,21 @@ cd "$GEODEPLOY_DIR"
 
 echo -e "${GREEN}[geodeploy]${NC} Pulling latest changes…"
 git pull
+# KEEP EVERYTHING ABOVE THIS LINE BYTE-IDENTICAL ACROSS VERSIONS. `git pull` rewrites this very file,
+# and bash goes on reading it from the same byte offset — so the old script resumes HERE, in the new
+# one, and only lines above this point have to agree for that to be safe.
+
+# docker-compose.yml reads GEODEPLOY_HTTP_PUBLISH (see the comment there). An installation that
+# recorded BIND/PORT before that key existed must get it before `up -d` below, or nginx is recreated
+# on `80:80` — on a behind-proxy machine, straight into the host's own nginx. Mirrors self-update.sh.
+if ! grep -qE '^[[:space:]]*GEODEPLOY_HTTP_PUBLISH[[:space:]]*=' .env 2>/dev/null \
+   && grep -qE '^[[:space:]]*GEODEPLOY_HTTP_(BIND|PORT)[[:space:]]*=' .env 2>/dev/null; then
+  gd_b=$(grep -E '^[[:space:]]*GEODEPLOY_HTTP_BIND[[:space:]]*=' .env | tail -1 | cut -d= -f2- | tr -d '"' || true)
+  gd_p=$(grep -E '^[[:space:]]*GEODEPLOY_HTTP_PORT[[:space:]]*=' .env | tail -1 | cut -d= -f2- | tr -d '"' || true)
+  gd_p=${gd_p:-80}
+  case "$gd_b" in ""|0.0.0.0) gd_pub="$gd_p" ;; *:*) gd_pub="[$gd_b]:$gd_p" ;; *) gd_pub="$gd_b:$gd_p" ;; esac
+  printf '\nGEODEPLOY_HTTP_PUBLISH=%s\n' "$gd_pub" >> .env
+fi
 
 # Record the now-deployed commit in .env so the admin "Updates" panel reflects the new version
 # (the API reads GEODEPLOY_GIT_SHA via env_file after the recreate below).
