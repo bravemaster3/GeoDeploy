@@ -6,6 +6,14 @@ upgrade needs manual work.
 
 ## Unreleased
 
+- **New installs could not set up local storage: MinIO's images no longer exist.** The setup wizard
+  failed with *"pull access denied for minio/minio, repository does not exist"*. MinIO ended its
+  community distribution — Docker Hub, Quay and its download server all answer 404 or 410, and the
+  source repository is archived. Local storage now runs [SILO](https://github.com/pgsty/silo), the
+  community-maintained fork of the MinIO server published by [Pigsty](https://pigsty.io) — thank
+  you to its maintainers — with the same protocol, the same data format and the same settings. It was checked as a drop-in before switching, including on storage written by the
+  official MinIO image. **Existing installations are not changed** — their storage container keeps
+  running the image it was created with.
 - **GeoDeploy never fetches its own images from Docker Hub.** `geodeploy/*` there belongs to someone
   else. Docker Compose, by default, asks the Hub for an image before building it, and the installer
   pulled `geodeploy-ui` explicitly — both found nothing and built locally, but would have installed

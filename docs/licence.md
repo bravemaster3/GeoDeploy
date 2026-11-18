@@ -69,11 +69,26 @@ page.
 ## Third-party components
 
 GeoDeploy runs alongside services that are **separate programs with their own licences** — PostGIS,
-MinIO, Martin, TiTiler, Redis and nginx among them — and bundles third-party browser libraries such
+SILO, Martin, TiTiler, Redis and nginx among them — and bundles third-party browser libraries such
 as MapLibre GL JS and deck.gl. Running them alongside GeoDeploy does not change their terms or bring
 them under this one.
 
 If you redistribute a GeoDeploy deployment, check those components' licences as well as this one.
+
+### Local object storage: SILO
+
+When you let GeoDeploy provision storage, it runs **[SILO](https://github.com/pgsty/silo)**, an
+independent, community-maintained fork of the open-source MinIO server, published by
+[Pigsty](https://pigsty.io) ([silo.pgsty.com](https://silo.pgsty.com/)). When MinIO, Inc. ended its
+community distribution in 2025 — no more images or binaries, and the source repository later
+archived — SILO kept one release line of the server alive, with builds, security fixes and
+multi-architecture images, while keeping the S3 protocol and the on-disk data format unchanged.
+That continuity is why GeoDeploy can offer local storage at all on a new installation, and why an
+existing installation's data needed no migration. Thank you to the Pigsty maintainers.
+
+SILO is licensed under the **GNU AGPL v3**, as MinIO was. GeoDeploy runs the published, unmodified
+images (`pgsty/silo`, and `pgsty/mc` for one administrative step) as separate containers; it does
+not include or link SILO's code. SILO is not affiliated with MinIO, Inc., and neither is GeoDeploy.
 
 !!! note "Not legal advice"
     This page summarises the licence in plain language for orientation. Where it and the

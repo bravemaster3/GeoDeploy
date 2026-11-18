@@ -583,7 +583,7 @@ translation fully tested; ingestion orchestration + endpoints next. Parity TODO:
 story into `style.geodeploy.layout`/`.story`; mirrored in portal.js + PortalEditor.vue — see the bullet)
 2026-07-14 (SECURITY: `portal_generator._json_for_html` HTML-escapes JSON embedded in the portal
 `<script>` (blocks a layer-name `</`+`script>` breakout); title is `_esc`'d. `minio._ensure_readonly_user`
-mints a read-only, bucket-scoped MinIO user (via a short-lived `minio/mc` container) that TiTiler runs
+mints a read-only, bucket-scoped MinIO user (via a short-lived `mc` container, `MC_IMAGE`) that TiTiler runs
 as instead of the root key — falls back to root if mc is unavailable so raster never breaks.)
 2026-07-11 (duckdb_engine: native FlatGeobuf tiling feed `export_geoparquet_to_fgb` via baked `spatial`; memory-bounded tiling feeds; `loc` NameError fix)
 2026-08-17 (**contour lines, and one unpacking point for raster styles.** `algorithm=contours` joins
