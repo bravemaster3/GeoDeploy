@@ -153,6 +153,10 @@ celery_app.conf.update(
         # the worker does not consume (-Q ingest,backup), and the task waits there forever looking
         # exactly like a reset that silently did nothing.
         "geodeploy.tasks.demo_reset.*": {"queue": "backup"},
+        # Certificate renewal: the beat entry pins `backup`, but — exactly as for demo_reset — a
+        # bare `.delay()` would otherwise land on the default queue nobody consumes, and a renewal
+        # that silently never runs fails for every visitor 90 days later.
+        "geodeploy.tasks.certificates.*": {"queue": "backup"},
     },
     # Scheduled backups. The tick is cheap and does nothing unless a schedule is configured; the
     # SCHEDULE ITSELF lives in the DB and is read per tick, so changing it in Settings takes effect

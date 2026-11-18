@@ -37,7 +37,10 @@ STORYMAP = {
         "controls": {"position": "top-right"},
         "header": {"style": "minimal"},
     },
-    "panels": {"layerCatalog": True, "legend": True, "basemap": True, "about": False,
+    # About is on for EVERY archetype since 2026-10-11 — a page about the PORTAL (who publishes it,
+    # how to cite it) is not something a story or a catalog replaces. It only appears when the
+    # author wrote a description, and an explicit `"about": False` is still honoured.
+    "panels": {"layerCatalog": True, "legend": True, "basemap": True, "about": True,
                "story": True},
 }
 
@@ -79,12 +82,13 @@ class TestCatalogArchetype:
         assert out["panels"]["catalog"] is True
         assert out["panels"]["layerCatalog"] is False
 
-    def test_catalog_has_no_about_page(self):
-        """Every dataset already carries its abstract, licence and access links on its own card, so an
-        About page would just restate the catalog."""
-        assert resolve_layout({"archetype": "catalog"})["panels"]["about"] is False
-        # ...but a web map still has one.
+    def test_catalog_has_an_about_page_unless_the_author_turns_it_off(self):
+        """Reversed on 2026-10-11: the dataset cards describe the DATASETS; an About page describes
+        the PORTAL — who publishes it, how to cite it — and nothing on a card replaces that."""
+        assert resolve_layout({"archetype": "catalog"})["panels"]["about"] is True
         assert resolve_layout({"archetype": "webmap"})["panels"]["about"] is True
+        off = resolve_layout({"archetype": "catalog", "panels": {"about": False}})
+        assert off["panels"]["about"] is False
 
     def test_catalog_scope_defaults_to_this_portal(self):
         """Default must be the portal's OWN layers. Defaulting to instance-wide would silently
