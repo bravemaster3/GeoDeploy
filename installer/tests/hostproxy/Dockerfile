@@ -34,4 +34,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends nginx apache2 &
 # For test-upgrade.sh: a machine the REAL installer and updaters can run on — git to clone, sudo
 # because every script says `sudo docker`. The compose plugin is mounted in from the test host.
 FROM base AS machine
+ENV GDHP_UPSTREAM=0
 RUN apt-get update && apt-get install -y --no-install-recommends git sudo && rm -rf /var/lib/apt/lists/*

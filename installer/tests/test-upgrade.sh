@@ -28,6 +28,9 @@ W="${GD_UP_HOME:-$HOME/gdup}"
 BR="${GD_BRANCH:-$(git -C "$SRC" rev-parse --abbrev-ref HEAD)}"
 OLD="${GD_OLD:-v1.6.4}"
 PLUGIN="${GD_COMPOSE_PLUGIN:-/usr/libexec/docker/cli-plugins/docker-compose}"
+# buildx too: api/Dockerfile uses `RUN --mount=type=cache`, which needs BuildKit, and Debian's own
+# docker.io has no buildx — the build then fails (and the updater, correctly, rolls back).
+BUILDX="${GD_BUILDX_PLUGIN:-/usr/libexec/docker/cli-plugins/docker-buildx}"
 IMAGES="geodeploy/api:latest geodeploy/ui:latest nginx:alpine redis:7-alpine ghcr.io/maplibre/martin:latest ghcr.io/developmentseed/titiler:latest"
 ONLY=" $* "
 
@@ -53,7 +56,7 @@ boot() { # NAME
   docker rm -f "$FH" >/dev/null 2>&1; docker volume rm -f "$FH-docker" >/dev/null 2>&1
   docker run -d --privileged --name "$FH" --hostname "$1" --network gdhp -e GDHP_STORAGE=overlay2 \
     -v "$FH-docker:/var/lib/docker" -v "$W/origin.git:/srv/origin.git:ro" \
-    -v "$PLUGIN:/usr/libexec/docker/cli-plugins/docker-compose:ro" gdhp-fakehost:machine >/dev/null
+    -v "$PLUGIN:/usr/libexec/docker/cli-plugins/docker-compose:ro"     -v "$BUILDX:/usr/libexec/docker/cli-plugins/docker-buildx:ro" -e DOCKER_BUILDKIT=1     gdhp-fakehost:machine >/dev/null
   for _ in $(seq 1 60); do docker exec "$FH" docker info >/dev/null 2>&1 && break; sleep 1; done
   docker exec -i "$FH" docker load < "$W/images.tar" >/dev/null
   fx "git config --system url./srv/origin.git.insteadOf https://github.com/bravemaster3/geodeploy
@@ -74,7 +77,7 @@ nginx_id() { fx "cd $G && docker compose ps -q nginx | head -1"; }
 head_is() { [ "$(fx "git -C $G rev-parse HEAD")" = "$(git -C "$W/origin.git" rev-parse "$1^{commit}")" ]; }
 envget() { fx "grep -E '^$1=' $G/.env | tail -1 | cut -d= -f2-"; }
 haskey() { fx "grep -qE '^$1=' $G/.env"; }
-status_state() { fx "python3 -c 'import json; print(json.load(open(\"$G/data/temp/update-status.json\")).get(\"state\"))'"; }
+status_state() { fx "python3 -c 'import json; print(json.load(open(\"$G/data/temp/update-status.json\")).get(\"phase\"))'"; }
 status_msg() { fx "python3 -c 'import json; print(json.load(open(\"$G/data/temp/update-status.json\")).get(\"message\"))'"; }
 wait_health() { for _ in $(seq 1 60); do [ "$(health "${1:-}")" = 200 ] && return 0; sleep 3; done; return 1; }
 teardown_install() { fx "cd $G 2>/dev/null && docker compose down >/dev/null 2>&1; cd / && rm -rf $G; docker network rm geodeploy >/dev/null 2>&1; true"; }

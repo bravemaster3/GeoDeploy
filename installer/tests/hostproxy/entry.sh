@@ -20,5 +20,7 @@ sysctl -qw net.ipv6.conf.default.disable_ipv6=0 2>/dev/null || :
 # with multi-gigabyte images.
 dockerd --host=unix:///var/run/docker.sock --host=tcp://0.0.0.0:2375 --tls=false \
         --storage-driver="${GDHP_STORAGE:-vfs}" >/var/log/dockerd.log 2>&1 &
-python3 /opt/gdhp/upstream.py >/var/log/upstream.log 2>&1 &
+# Not on the `machine` stage (GDHP_UPSTREAM=0): the installer suites need 8080 free, and a stand-in
+# holding it made `set-port.sh 8080` refuse and a decoy fail to bind.
+if [ "${GDHP_UPSTREAM:-1}" = 1 ]; then python3 /opt/gdhp/upstream.py >/var/log/upstream.log 2>&1 & fi
 exec sleep infinity

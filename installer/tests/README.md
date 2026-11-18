@@ -179,6 +179,14 @@ builds for real inside the machine.
 ## Current status & known issues
 - 2026-11-18: `test-hostproxy.sh` 24 scenarios / 159 assertions green on WSL2 + Docker 29.5.2,
   after fixing the defects it found; `test-upgrade.sh` results are recorded in the PR description.
+- 2026-11-18, every suite re-run INSIDE fake machines (so port 80 and a live instance are never
+  touched): unit 64/64, proxy 31/31, install 61/61, port80 32/32 (with new IPv6 assertions),
+  ports 34/37. The three `ports` failures are P8, the wedged bind: on Docker 29.10 inside dind a plain
+  `up -d` does not reproduce the wedge measured on WSL's Docker 29.5.2 in September, so there is no
+  dead port for preflight to catch. The pre-change installer fails the same three in the same
+  machine — environment, not a regression — but it means P8 is currently UNVERIFIED, not passing.
+- `test-proxy.sh`'s "the edge sets the scheme" check grepped comments, and had been red since the
+  2026-10-09 commented-out opt-in; it now reads active lines only. Nobody had re-run the suite.
 - All five suites pass on WSL2 + Docker 29.5.2 (2026-09-12), 210 assertions in total:
   `test-unit` 54 · `test-proxy` 31 · `test-install` 61 · `test-ports` 37 · `test-second-install` 11
   · `test-port80` 28.

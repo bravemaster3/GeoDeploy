@@ -84,8 +84,10 @@ chk "request buffering off"   'grep -q "proxy_request_buffering off;" "$W/nginx.
 chk "long timeouts"           'grep -q "proxy_read_timeout 600s;" "$W/nginx.conf"'
 chk "websocket upgrade"       'grep -q "Upgrade" "$W/nginx.conf"'
 # $scheme, never $http_x_forwarded_proto: an edge that echoes the client's header lets anyone claim
-# https and be issued a Secure cookie over a plaintext connection.
-chk "the edge sets the scheme, not the client" '! grep -q "http_x_forwarded_proto" "$W/nginx.conf"'
+# https and be issued a Secure cookie over a plaintext connection. ACTIVE lines only: since
+# 2026-10-09 the block carries a commented-out, documented opt-in for a trusted CDN in front, and
+# a grep over comments had this suite red from then on without anyone re-running it.
+chk "the edge sets the scheme, not the client" '! grep -v "^[[:space:]]*#" "$W/nginx.conf" | grep -q "http_x_forwarded_proto"'
 chk "the upstream follows the port" 'gen nginx 9099 | grep -q "proxy_pass http://127.0.0.1:9099;"'
 
 # ── Live: a real proxy in front of a stub GeoDeploy ───────────────────────────────────────────────
