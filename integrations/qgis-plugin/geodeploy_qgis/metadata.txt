@@ -13,7 +13,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.7.8
+version=0.7.9
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -32,7 +32,12 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.7.8 - INSTALLING OVER AN OLDER VERSION WORKS WITHOUT A RESTART. Installing 0.7.7 over
+changelog=0.7.9 - CONNECTING WITHOUT A TOKEN ALWAYS WORKS. With the token field empty, the plugin
+    used to borrow a token stored by the command-line `geodeploy login`, invisibly; when that
+    stored token had since been revoked, Connect failed with "This instance no longer accepts that
+    token" for someone who had never typed one, and public layers and portals could not be browsed.
+    The plugin now sends only the token in its own field.
+    0.7.8 - INSTALLING OVER AN OLDER VERSION WORKS WITHOUT A RESTART. Installing 0.7.7 over
     0.7.6 in a running QGIS failed on the first push with "module 'geodeploy.styles' has no
     attribute 'set_latitude'": QGIS reloads a plugin's own modules but not the client it bundles,
     so the new plugin ran against the old client. The plugin now replaces it when it loads.

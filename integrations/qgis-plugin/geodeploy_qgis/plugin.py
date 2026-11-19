@@ -478,13 +478,12 @@ class GeoDeployDock(QDockWidget):
         if not url:
             self._say("Enter the instance URL first.", MSG_WARNING)
             return
+        # ONLY the token typed here. A token stored by `geodeploy login` used to be borrowed when
+        # this field was empty — invisibly: a CLI login that had gone stale since (revoked, or a demo
+        # reset) then blocked the connection with "This instance no longer accepts that token" for
+        # someone who had never typed one, and public browsing failed with it. What is in the box is
+        # what is sent; empty means anonymous. Saved logins still fill the URL list (addresses only).
         token = (self.token.text() or "").strip() or None
-        if not token:
-            # A token stored by `geodeploy login` counts as being signed in here.
-            for saved_url, saved_token in saved_instances():
-                if saved_url.rstrip("/") == url.rstrip("/").replace("http://", "https://"):
-                    token = saved_token
-                    break
         try:
             self.instance = Instance(url, token)
         except GeoDeployError as exc:                 # noqa: PERF203 - a bad URL is a message

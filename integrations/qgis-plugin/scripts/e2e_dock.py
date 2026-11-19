@@ -249,6 +249,28 @@ def main():
     project = QgsProject.instance()
     root = project.layerTreeRoot()
 
+    section("Connect with an empty token field and a STALE `geodeploy login` on this machine")
+    # A CLI login whose token had since been revoked used to be borrowed when the field was empty,
+    # and blocked the connection with "This instance no longer accepts that token" — for someone who
+    # never typed one. Only the typed token is used now: empty means anonymous, whatever is stored.
+    real_saved = plugin.saved_instances
+    plugin.saved_instances = lambda: [(URL, "gdp_stale_token_from_an_old_cli_login")]
+    try:
+        dock.url.setEditText(URL)
+        dock.token.setText("")
+        press("Connect (empty field, stale stored login)", dock.connect_to_instance)
+        check("connected anonymously; the stored token was not used",
+              dock.instance is not None and dock.instance.token is None)
+
+        dock.token.setText("gdp_typed_but_wrong")
+        start = len(MESSAGES)
+        dock.connect_to_instance()
+        typed = MESSAGES[start:]
+        check("a TYPED bad token still fails loudly",
+              any(lvl == plugin.MSG_CRITICAL for lvl, _t in typed), typed)
+    finally:
+        plugin.saved_instances = real_saved
+
     section("Connect")
     dock.url.setEditText(URL)
     dock.token.setText(TOKEN)

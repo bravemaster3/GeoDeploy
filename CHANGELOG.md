@@ -6,6 +6,11 @@ upgrade needs manual work.
 
 ## Unreleased
 
+- **QGIS plugin 0.7.9: connecting without a token always works.** With the token field empty, the plugin
+  borrowed a token stored by the CLI's `geodeploy login`, without saying so. A stored token that
+  had since been revoked made Connect fail ("This instance no longer accepts that token") for
+  someone who never typed one, which blocked public browsing. The plugin now sends only the token in
+  its own field; saved logins still fill the URL list.
 - **QGIS plugin 0.7.8: installing over an older version works without restarting QGIS.**
   Installing 0.7.7 over 0.7.6 failed on the first push with "module 'geodeploy.styles' has no
   attribute 'set_latitude'". QGIS reloads a plugin's own modules but not the client the plugin
