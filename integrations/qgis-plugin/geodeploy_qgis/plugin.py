@@ -929,7 +929,8 @@ class GeoDeployDock(QDockWidget):
             # tiles themselves — and fall back to the row's.
             self._set_tile_extent(layer, doc.get("bounds") or row.get("bbox"))
             if self.instance:
-                portal_sync.tag_layer(layer, self.instance.url, row.get("id"), "vector")
+                portal_sync.tag_layer(layer, self.instance.url, row.get("id"), "vector",
+                                      instance_id=self.instance.identity())
             return layer
         if source["kind"] == "wmts":
             layer = self._raster_from_wmts(source["wmts_url"], name)
@@ -964,7 +965,8 @@ class GeoDeployDock(QDockWidget):
             is_raster = (row.get("layer_type") == "raster"
                          or row.get("storage_backend") == "raster")
             portal_sync.tag_layer(layer, self.instance.url, row.get("id"),
-                                  "raster" if is_raster else "vector")
+                                  "raster" if is_raster else "vector",
+                                  instance_id=self.instance.identity())
         return layer
 
     def _layer_from_portal_source(self, cfg, name):
@@ -1044,7 +1046,8 @@ class GeoDeployDock(QDockWidget):
             # "vector" here would tag somebody else's WMS as GeoDeploy vector layer N, and the next
             # push would quietly point the portal at whatever layer N happens to be.
             portal_sync.tag_layer(layer, self.instance.url, cfg.get("layer_id"),
-                                  cfg.get("layer_type") or "vector")
+                                  cfg.get("layer_type") or "vector",
+                                  instance_id=self.instance.identity())
         return layer
 
     def _raster_bounds(self, ref):
@@ -1515,18 +1518,41 @@ class GeoDeployDock(QDockWidget):
 
         # What the portal looks like NOW, so the plan is a real comparison rather than a guess.
         current = []
+        new_portal = False
         if portal_id is not None:
             try:
                 current = (client.portals.get(portal_id) or {}).get("layer_configs") or []
             except GeoDeployError as exc:
-                self._say(f"Could not read the portal to compare against: {exc}", MSG_CRITICAL)
-                return
+                if getattr(exc, "status", None) != 404:
+                    self._say(f"Could not read the portal to compare against: {exc}", MSG_CRITICAL)
+                    return
+                # THE PORTAL WAS DELETED on the instance. This used to stop here — and the group
+                # remembers that portal forever, so it could never be pushed again (issue #128).
+                # It becomes a new portal instead; the dialog says "create", and nothing is sent
+                # until it is approved.
+                self._say("The portal this group was published as no longer exists on the "
+                          "instance, so this push will create a new one.", MSG_INFO, bar=False)
+                new_portal = True
+                portal_id = None
+                current = []
+
+        # Which tags still point at a layer that is THERE. Asked once, here, and used for both plans
+        # so the dialog and the push agree; None (the listing failed) trusts tags, as before.
+        instance_id = self.instance.identity()
+        usable = self._usable_tags(client, instance_id)
 
         try:
-            plan = portal_sync.plan_push(group, style_for, current)
+            plan = portal_sync.plan_push(group, style_for, current, usable=usable)
         except Exception as exc:            # noqa: BLE001 - never crash QGIS over a layer tree
             self._say(f"Could not read that group: {exc}", MSG_CRITICAL)
             return
+
+        if plan.get("stale"):
+            self._say("{0} had a link to a GeoDeploy layer that is no longer there (deleted, or on "
+                      "another instance), so it will be uploaded again: {1}".format(
+                          "One layer" if len(plan["stale"]) == 1
+                          else str(len(plan["stale"])) + " layers",
+                          ", ".join(plan["stale"][:5])), MSG_INFO, bar=False)
 
         go, upload_new, drop_removed = diffdialog.confirm(
             self, title or "Untitled portal",
@@ -1583,7 +1609,8 @@ class GeoDeployDock(QDockWidget):
                 # TAGGED like an upload, so the re-plan below puts it in its place in the group's
                 # order and the next push sees an existing source rather than registering a second
                 # copy of the same service.
-                portal_sync.tag_layer(qgis_layer, instance_url, source_id, "external")
+                portal_sync.tag_layer(qgis_layer, instance_url, source_id, "external",
+                                      instance_id=instance_id)
                 registered.append(name)
 
             for index, (name, qgis_layer, _node) in enumerate(uploads, start=1):
@@ -1608,7 +1635,8 @@ class GeoDeployDock(QDockWidget):
                 if not getattr(result, "layer_id", None):
                     continue
                 kind = result.plan.layer_type
-                portal_sync.tag_layer(qgis_layer, instance_url, result.layer_id, kind)
+                portal_sync.tag_layer(qgis_layer, instance_url, result.layer_id, kind,
+                                      instance_id=instance_id)
                 style = style_for(qgis_layer, kind)
                 if style:
                     # THE LAYER'S OWN OPACITY, not 1.0. A layer drawn at 40% in QGIS arrived fully
@@ -1624,12 +1652,12 @@ class GeoDeployDock(QDockWidget):
             # Re-plan AFTER the uploads: the new layers are tagged now, so this puts them in their
             # place in the group's order rather than making the caller reconstruct it.
             self._progress.emit("Publishing the portal…")
-            final = portal_sync.plan_push(group, style_for, current)
+            final = portal_sync.plan_push(group, style_for, current, usable=usable)
             configs = final["configs"] + keep_removed
             # The rename was listed in the dialog and approved with everything else.
             new_title = (plan.get("rename") or (None, None))[1]
             doc = portal_sync.push(client, group, configs, new_title=new_title,
-                                   tree=final.get("tree"))
+                                   tree=final.get("tree"), new_portal=new_portal)
             # The card image. The dashboard captures its own map at publish time, so a portal
             # published from anywhere else had a blank card — which makes it look unfinished in the
             # one place people browse portals. Never fatal: a missing picture is not a failed
@@ -1653,6 +1681,35 @@ class GeoDeployDock(QDockWidget):
         verb = "Updating" if portal_id else "Creating"
         self._say(verb + " portal " + str(title) + "...", bar=False)
         self._run(_Job("GeoDeploy: pushing portal", work), self._group_pushed)
+
+    def _links_changed(self):
+        """Mark the project modified: the links to GeoDeploy are stored IN it.
+
+        A push tags every layer with the GeoDeploy layer it became, and the group with its portal.
+        Those tags are custom properties, which QGIS does not count as a change — so the project was
+        not marked modified, closing QGIS did not ask to save, and the links were silently lost. The
+        next push then saw nothing it recognised and uploaded every layer again (issue #128,
+        reproduced in real QGIS). Called on the GUI thread only.
+        """
+        try:
+            QgsProject.instance().setDirty(True)
+        except Exception:               # noqa: BLE001  # nosec B110 - a flag is not worth an error
+            pass
+
+    def _usable_tags(self, client, instance_id):
+        """`portals.usable_tags` for the layers this instance has right now, or None when they could
+        not be listed — in which case tags are trusted, exactly as before, rather than every tagged
+        layer being re-uploaded because one request failed."""
+        try:
+            existing = {(int(r.get("id")), str(r.get("layer_type")))
+                        for r in client.layers.list() if r.get("id") is not None}
+            existing |= {(int(r.get("id")), "external")
+                         for r in client.sources.list() if r.get("id") is not None}
+        except Exception as exc:        # noqa: BLE001 - a listing failure must not block a push
+            symbology._log("Could not check which linked layers still exist ({0}); trusting the "
+                           "links.".format(exc), level="info")
+            return None
+        return portal_sync.usable_tags(instance_id, existing)
 
     def _group_pushed(self, job):
         self._busy(False)
@@ -1679,8 +1736,10 @@ class GeoDeployDock(QDockWidget):
         detail = (" (" + "; ".join(bits) + ")") if bits else ""
         base = self.instance.url.rstrip("/") if self.instance else ""
         self._say("Portal " + str(doc.get("title")) + " published: " +
-                  base + "/p/" + str(doc.get("slug")) + detail,
+                  base + "/p/" + str(doc.get("slug")) + detail +
+                  ". Save the project to keep this group linked to it.",
                   MSG_WARNING if (result.get("failed") or result.get("unsupported")) else MSG_INFO)
+        self._links_changed()
         self.refresh_layers()
 
     def open_in_browser(self):
@@ -2115,9 +2174,12 @@ class GeoDeployDock(QDockWidget):
 
         # On the main thread, where touching a layer is safe — see the note in `work()`.
         linked = 0
+        # Marked modified even if a link below fails: the upload itself happened.
+        self._links_changed()
         for source_layer, layer_id, kind in (result.get("linked") or []):
             try:
-                portal_sync.tag_layer(source_layer, self.instance.url, layer_id, kind)
+                portal_sync.tag_layer(source_layer, self.instance.url, layer_id, kind,
+                                      instance_id=self.instance.identity())
                 linked += 1
             except Exception as exc:    # noqa: BLE001 - the upload landed; the link is a bonus
                 symbology._log("Uploaded, but could not link {0} to its GeoDeploy layer: {1}"

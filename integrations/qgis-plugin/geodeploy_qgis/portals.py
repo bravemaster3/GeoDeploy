@@ -36,6 +36,9 @@ def _note(message: str) -> None:
 P_LAYER_ID = "geodeploy/layer_id"
 P_LAYER_TYPE = "geodeploy/layer_type"
 P_INSTANCE = "geodeploy/instance"
+#: The instance's own stable id (`/api/public/whoami` → `instance`), which — unlike its URL —
+#: survives the server moving from an IP to a domain, or from http to https.
+P_INSTANCE_ID = "geodeploy/instance_id"
 P_PORTAL_ID = "geodeploy/portal_id"
 P_PORTAL_TITLE = "geodeploy/portal_title"
 P_FOLDER_ID = "geodeploy/folder_id"
@@ -45,11 +48,14 @@ class PortalError(Exception):
     """Explains, in words a user can act on, why a portal cannot be opened or pushed."""
 
 
-def tag_layer(qgis_layer, instance_url: str, layer_id, layer_type: str) -> None:
+def tag_layer(qgis_layer, instance_url: str, layer_id, layer_type: str,
+              instance_id: str | None = None) -> None:
     """Record which GeoDeploy layer this is, so a later push knows what it is looking at."""
     qgis_layer.setCustomProperty(P_LAYER_ID, str(layer_id))
     qgis_layer.setCustomProperty(P_LAYER_TYPE, layer_type)
     qgis_layer.setCustomProperty(P_INSTANCE, instance_url)
+    if instance_id:
+        qgis_layer.setCustomProperty(P_INSTANCE_ID, str(instance_id))
 
 
 def layer_identity(qgis_layer):
@@ -62,6 +68,35 @@ def layer_identity(qgis_layer):
         return (int(lid), str(ltype))
     except (TypeError, ValueError):
         return None
+
+
+def usable_tags(instance_id, existing):
+    """A predicate for `plan_push`: does this layer's tag point at a GeoDeploy layer that is THERE,
+    on THIS instance? `existing` is the set of `(layer_id, layer_type)` the instance lists;
+    `instance_id` is its stable id from `/api/public/whoami`, or None when it has none.
+
+    A tag is only a pointer, and two things break it without QGIS noticing (issue #128):
+    * the layer was DELETED on the instance — the portal would then reference an id the server
+      silently skips, so the layer the dialog called "already on the instance" never appears;
+    * the tag was written for ANOTHER instance — id 42 there is somebody else's layer here, or
+      nothing at all.
+    Either way the honest plan is to upload it again, which is what an untagged layer gets.
+
+    Instances are compared by their stable id, NEVER by URL: the same server moved from an IP to a
+    domain is the same server, and its layers must not be uploaded twice. A tag written before the
+    id was recorded (or for a server too old to report one) is judged on whether its layer exists.
+    """
+    here = str(instance_id or "")
+
+    def usable(identity, qgis_layer) -> bool:
+        try:
+            there = str(qgis_layer.customProperty(P_INSTANCE_ID) or "")
+        except Exception:               # noqa: BLE001
+            there = ""
+        if there and here and there != here:
+            return False
+        return identity in existing
+    return usable
 
 
 def group_portal(group):
@@ -329,7 +364,7 @@ def _size_of(size_legend):
                       [size_legend.get("max_value"), size_legend.get("max_size")]]}
 
 
-def plan_push(group, style_for, current_configs) -> dict:
+def plan_push(group, style_for, current_configs, usable=None) -> dict:
     """What pushing this group would do, as five named lists plus the configs to send.
 
     Compared by IDENTITY, never by name or position, so renaming a layer in QGIS or dragging it up
@@ -345,6 +380,10 @@ def plan_push(group, style_for, current_configs) -> dict:
     * `kept`      — on the portal, and its QGIS styling could not be read, so the portal's own is
                     left exactly as it was. Named so the dialog can say that out loud instead of
                     reporting the layer as "unchanged", which would be true only by accident.
+    * `stale`     — names whose tag `usable` rejected (see `usable_tags`); they are in `uploads`.
+
+    `usable(identity, qgis_layer)`, when given, decides whether a tag still points at a layer; one
+    it rejects is planned as an upload. None keeps the tag on trust, as before.
     """
     before = {}
     for cfg in (current_configs or []):
@@ -355,6 +394,7 @@ def plan_push(group, style_for, current_configs) -> dict:
     # uploaded: `(name, layer, node, spec)`. And one whose service GeoDeploy has no kind for is
     # named with its reason instead of being attempted: `(name, why)`.
     remote_sources, unsupported = [], []
+    stale = []
     seen = set()
 
     def walk(node):
@@ -375,6 +415,9 @@ def plan_push(group, style_for, current_configs) -> dict:
                 tree.append(folder)
                 continue
             identity = layer_identity(qgis_layer)
+            if identity is not None and usable is not None and not usable(identity, qgis_layer):
+                stale.append(qgis_layer.name())
+                identity = None
             if identity is None:
                 # NOTHING SERVED FROM ELSEWHERE IS AN UPLOAD. A remote layer used to fall in with
                 # the local files, and `export.prepare` then raised inside the push worker — which
@@ -450,7 +493,7 @@ def plan_push(group, style_for, current_configs) -> dict:
     return {"configs": configs, "uploads": uploads, "unchanged": unchanged,
             "restyled": restyled, "added": added, "removed": removed, "rename": rename,
             "tree": tree, "kept": kept, "sources": remote_sources,
-            "unsupported": unsupported}
+            "unsupported": unsupported, "stale": stale}
 
 
 def _external_spec(qgis_layer):
@@ -551,7 +594,7 @@ def _opacity_of(qgis_layer) -> float:
 
 
 def push(client, group, configs, publish: bool = True, new_title: str | None = None,
-         tree=None) -> dict:
+         tree=None, new_portal: bool = False) -> dict:
     """Create or update the portal this group represents. Returns the portal document.
 
     Updating is a WHOLE-document write of `layer_configs`, not a series of add/remove calls: the
@@ -559,6 +602,10 @@ def push(client, group, configs, publish: bool = True, new_title: str | None = N
     something nobody asked for if one call failed halfway.
     """
     portal_id, title = group_portal(group)
+    if new_portal:
+        # The group's portal was deleted on the instance (issue #128). Updating id N would 404
+        # forever; the group becomes a NEW portal, and the re-tag below points it there.
+        portal_id = None
     if not configs:
         raise PortalError("This group has no GeoDeploy layers in it. Add layers from an instance, "
                           "or upload the ones you have, and try again.")

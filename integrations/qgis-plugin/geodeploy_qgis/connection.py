@@ -117,6 +117,20 @@ class Instance:
 
     # -- discovery ---------------------------------------------------------------------------------
 
+    def identity(self) -> str | None:
+        """The instance's stable id (`/api/public/whoami`), or None for a server too old to say.
+
+        Asked once and remembered: it identifies the SERVER, so it does not change while QGIS runs,
+        and a push tags every layer with it (see `portals.usable_tags`).
+        """
+        if not hasattr(self, "_identity"):
+            try:
+                body = self.client.get("/public/whoami")
+                self._identity = str(body.get("instance") or "") or None                     if isinstance(body, dict) and body.get("geodeploy") else None
+            except Exception:           # noqa: BLE001 - an old server simply has no id
+                self._identity = None
+        return self._identity
+
     def layers(self) -> list[dict]:
         """Every layer this connection may see, newest listing first.
 

@@ -13,7 +13,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.7.3
+version=0.7.4
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -32,7 +32,16 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.7.3 - SCALE LIMITS WRITTEN INTO AN EXPRESSION TRAVEL. A rule filter or a label
+changelog=0.7.4 - PUSHING A GROUP AGAIN RECOGNISES WHAT IS STILL THERE, AND ONLY THAT. A push
+    links each layer to what it became on GeoDeploy, but QGIS did not count those links as a
+    change, so closing without a save prompt lost them and the next push uploaded everything
+    again: a push now marks the project modified and says to save it. A group whose portal was
+    deleted could never be pushed again; it now becomes a new portal. And a link to a layer
+    deleted on the instance, or written for another instance, was trusted, so the portal
+    silently lost that layer; such a layer is now uploaded again, and the dialog says why.
+    Instances are told apart by their own id, not their address, so a server that moved from
+    an IP to a domain is still the same server.
+    0.7.3 - SCALE LIMITS WRITTEN INTO AN EXPRESSION TRAVEL. A rule filter or a label
     expression like `"fclass" = 'museum' AND @map_scale < 140000` is how many projects say
     "only when zoomed in", and the rule was dropped because @map_scale is not a feature
     property. A layer whose rules were ALL dropped was then published as every feature: on a
