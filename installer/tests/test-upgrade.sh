@@ -151,6 +151,10 @@ if want F; then
   chk "nginx bound bare :80, nothing on 443"       '[ "$(binding)" = "80/tcp=:80" ]'
   chk "serving on 80"                              'wait_health'
   chk "serving over IPv6"                          '[ "$(v6health)" = 200 ]'
+  # The tile servers run the versions the code pins (services/postgis.py, services/minio.py).
+  pin() { fx "git -C $G show HEAD:api/geodeploy/services/$2" | tr -d '\r' | sed -n "s/^$1 = \"\(.*\)\"$/\1/p"; }
+  chk "martin runs the pinned image, and is up"    '[ "$(fx "docker inspect -f {{.Config.Image}} geodeploy-martin")" = "$(pin MARTIN_IMAGE postgis.py)" ] && [ "$(fx "docker inspect -f {{.State.Running}} geodeploy-martin")" = true ]'
+  chk "titiler runs the pinned image, and is up"   '[ "$(fx "docker inspect -f {{.Config.Image}} geodeploy-titiler")" = "$(pin TITILER_IMAGE minio.py)" ] && [ "$(fx "docker inspect -f {{.State.Running}} geodeploy-titiler")" = true ]'
   teardown_install
   down
 fi
