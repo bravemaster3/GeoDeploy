@@ -429,8 +429,7 @@ def _ground_factor(qgis_layer):
     """
     try:
         import math
-        from qgis.core import (QgsCoordinateReferenceSystem, QgsCoordinateTransform,
-                               QgsProject, QgsUnitTypes)
+        from qgis.core import QgsProject, QgsUnitTypes
         project = QgsProject.instance()
         crs = project.crs()
         if not crs.isValid() and hasattr(qgis_layer, "crs"):
