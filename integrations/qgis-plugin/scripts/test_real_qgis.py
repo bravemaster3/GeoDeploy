@@ -571,6 +571,160 @@ def rule_based():
           len(got) == 1 and got[0].get("label") == "A", repr([r.get("label") for r in got]))
 
 
+# ══ 6b. @map_scale in rules and labels (issue #132) ═══════════════════════════════════════════════
+
+def map_scale_gates():
+    """Scale-dependence written INTO an expression travels as a zoom range.
+
+    A real OSM project wrote every threshold as `"fclass" = 'museum' AND @map_scale < 140000`. Each
+    such rule was dropped, and a layer whose rules were ALL dropped published every feature: 27,754
+    points of interest at every zoom for a layer QGIS showed as 139. These pin the fix on QGIS
+    itself.
+    """
+    section("@map_scale — rule filters and label expressions become zoom ranges")
+    from qgis.core import (QgsLineSymbol, QgsPalLayerSettings, QgsRuleBasedLabeling,
+                           QgsRuleBasedRenderer, QgsVectorLayerSimpleLabeling)
+    from geodeploy.styles import zoom_for_scale
+
+    def rules_layer(specs):
+        root = QgsRuleBasedRenderer.Rule(None)
+        for expr, colour, label in specs:
+            rule = QgsRuleBasedRenderer.Rule(QgsLineSymbol.createSimple({"color": colour}))
+            if expr is None:
+                rule.setIsElse(True)
+            else:
+                rule.setFilterExpression(expr)
+            rule.setLabel(label)
+            root.appendChild(rule)
+        layer = make_layer("LineString")
+        layer.setRenderer(QgsRuleBasedRenderer(root))
+        return layer
+
+    z = zoom_for_scale
+
+    got = (symbology.from_qgis(rules_layer([
+        ("\"kind\" = 'a' AND @map_scale < 140000", "#ff0000", "A")])) or {}).get("rules") or []
+    check("map_scale: the rule travels instead of being dropped", len(got) == 1, repr(got))
+    check("map_scale: the scale part becomes minzoom",
+          got and got[0].get("minzoom") == z(140000) and got[0].get("maxzoom") is None, repr(got))
+    check("map_scale: the rest is the filter",
+          got and got[0].get("filter") == ["==", ["get", "kind"], "a"], repr(got[:1]))
+    check("map_scale: the QGIS source rides along untouched",
+          got and got[0].get("expression") == "\"kind\" = 'a' AND @map_scale < 140000", repr(got[:1]))
+
+    got = (symbology.from_qgis(rules_layer([
+        ("5000 < @map_scale AND @map_scale <= 140000 AND \"pop\" > 1", "#ff0000", "A")])) or {}
+           ).get("rules") or []
+    check("map_scale: both ends, either side of the comparison",
+          got and got[0].get("minzoom") == z(140000) and got[0].get("maxzoom") == z(5000),
+          repr(got))
+    got = (symbology.from_qgis(rules_layer([
+        ("@map_scale BETWEEN 5000 AND 140000", "#ff0000", "A")])) or {}).get("rules") or []
+    check("map_scale: BETWEEN, and a rule that is ONLY a scale gate has no filter",
+          got and got[0].get("minzoom") == z(140000) and got[0].get("maxzoom") == z(5000)
+          and got[0].get("filter") is None, repr(got))
+
+    got = (symbology.from_qgis(rules_layer([
+        ("\"kind\" = 'a' OR @map_scale < 5000", "#ff0000", "A")])) or {}).get("rules") or []
+    check("map_scale: an OR becomes one piece per alternative",
+          len(got) == 2 and got[0].get("filter") == ["==", ["get", "kind"], "a"]
+          and got[0].get("minzoom") is None, repr(got))
+    check("map_scale: ...and the later piece excludes the earlier, so nothing is drawn twice",
+          len(got) == 2 and got[1].get("filter") == ["!", ["==", ["get", "kind"], "a"]]
+          and got[1].get("minzoom") == z(5000) and "expression" not in got[1], repr(got[1:]))
+
+    got = (symbology.from_qgis(rules_layer([
+        ("\"kind\" = 'a' AND @map_scale < 100000", "#ff0000", "A"),
+        (None, "#888888", "Else")])) or {}).get("rules") or []
+    else_pieces = [r for r in got if r.get("label") == "Else"]
+    check("map_scale: an ELSE behind a scale-gated sibling is exact on both sides of the threshold",
+          len(else_pieces) == 2
+          and else_pieces[0].get("filter") is None and else_pieces[0].get("maxzoom") == z(100000)
+          and else_pieces[1].get("filter") == ["!", ["==", ["get", "kind"], "a"]]
+          and else_pieces[1].get("minzoom") == z(100000), repr(else_pieces))
+
+    style = symbology.from_qgis(rules_layer([
+        ("\"kind\" = 'a' AND @layer_name = 'x'", "#ff0000", "A"),
+        ("@map_scale * 2 < 5000", "#0000ff", "B")])) or {}
+    check("map_scale: a variable that is not a zoom gate is still refused",
+          not style.get("rules"), repr(style.get("rules")))
+    check("map_scale: a layer whose EVERY rule is refused draws nothing, not every feature",
+          style.get("no_symbol") is True, repr(style))
+
+    # Out and back: the rules come back with their source text and their zoom ranges.
+    style = symbology.from_qgis(rules_layer([
+        ("\"kind\" = 'a' AND @map_scale < 140000", "#ff0000", "A"),
+        ("\"kind\" = 'b'", "#0000ff", "B")])) or {}
+    back = make_layer("LineString")
+    check("map_scale: applied back to QGIS", symbology.apply(back, style))
+    again = (symbology.from_qgis(back) or {}).get("rules") or []
+    check("map_scale: survives a full round trip",
+          [(r.get("expression"), r.get("minzoom"), r.get("filter")) for r in again]
+          == [(r.get("expression"), r.get("minzoom"), r.get("filter")) for r in style["rules"]],
+          repr(again))
+
+    # ── labels ──
+    def labelled(expression, is_expression=True):
+        settings = QgsPalLayerSettings()
+        settings.fieldName = expression
+        settings.isExpression = is_expression
+        layer = make_layer("Point")
+        layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
+        layer.setLabelsEnabled(True)
+        return layer
+
+    case = ("CASE WHEN \"kind\" = 'c' THEN NULL "
+            "WHEN \"kind\" = 'a' THEN \"kind\" "
+            "WHEN \"kind\" = 'b' AND @map_scale < 100000 THEN \"pop\" END")
+    labels = (symbology.from_qgis(labelled(case)) or {}).get("labels") or {}
+    rules = labels.get("rules") or []
+    check("map_scale labels: a CASE gated on @map_scale is not sent unlabelled",
+          labels.get("enabled") and len(rules) == 2, repr(labels))
+    check("map_scale labels: the top level keeps a text, so the server does not drop the block",
+          labels.get("expression") is not None, repr(labels))
+    check("map_scale labels: an earlier THEN NULL still claims its features",
+          rules and rules[0].get("filter") == ["all", ["==", ["get", "kind"], "a"],
+                                               ["!", ["==", ["get", "kind"], "c"]]],
+          repr(rules[:1]))
+    check("map_scale labels: the gated branch has its zoom and its own text",
+          len(rules) == 2 and rules[1].get("minzoom") == z(100000)
+          and rules[1]["labels"].get("expression") == ["get", "pop"], repr(rules[1:]))
+
+    labels = (symbology.from_qgis(labelled(
+        "CASE WHEN @map_scale * 2 < 1 THEN \"kind\" END")) or {}).get("labels")
+    # "Unlabelled" is a block without `enabled` (the server's `labels_of`), exactly as before.
+    check("map_scale labels: a CASE that cannot travel is still sent unlabelled, as before",
+          not (labels or {}).get("enabled") and not (labels or {}).get("rules"), repr(labels))
+
+    # ONE label rule kept its filter? It used to be thrown away (`len(rules) > 1`), labelling all.
+    settings = QgsPalLayerSettings()
+    settings.fieldName = "kind"
+    root = QgsRuleBasedLabeling.Rule(None)
+    only = QgsRuleBasedLabeling.Rule(settings)
+    only.setFilterExpression("\"kind\" = 'a'")
+    root.appendChild(only)
+    layer = make_layer("Point")
+    layer.setLabeling(QgsRuleBasedLabeling(root))
+    layer.setLabelsEnabled(True)
+    labels = (symbology.from_qgis(layer) or {}).get("labels") or {}
+    check("labels: a single label rule keeps its filter instead of labelling everything",
+          len(labels.get("rules") or []) == 1
+          and labels["rules"][0].get("filter") == ["==", ["get", "kind"], "a"], repr(labels))
+
+    settings = QgsPalLayerSettings()
+    settings.fieldName = "kind"
+    root = QgsRuleBasedLabeling.Rule(None)
+    bad = QgsRuleBasedLabeling.Rule(settings)
+    bad.setFilterExpression("@layer_name = 'x'")
+    root.appendChild(bad)
+    layer = make_layer("Point")
+    layer.setLabeling(QgsRuleBasedLabeling(root))
+    layer.setLabelsEnabled(True)
+    labels = (symbology.from_qgis(layer) or {}).get("labels")
+    check("labels: when every label rule is left behind, nothing is labelled (not everything)",
+          not (labels or {}).get("enabled"), repr(labels))
+
+
 # ══ 7. 2.5D ══════════════════════════════════════════════════════════════════════════════════════
 
 def two_and_a_half_d():
@@ -1909,6 +2063,7 @@ def main():
     unknown_geometry()
     authored_in_qgis()
     rule_based()
+    map_scale_gates()
     two_and_a_half_d()
     natives()
     labelling()

@@ -156,8 +156,22 @@ def from_qgis(qgis_layer):
     _read_format(settings, labels, notes)
     _read_placement(settings, labels)
     _read_scope(settings, labels)
-    if len(rules) > 1:
+    if kind == "QgsRuleBasedLabeling":
+        # The top level is only the FALLBACK here; the rules are the labelling. Two things this got
+        # wrong, both labelling EVERY feature (issue #132): ONE rule was thrown away (`> 1`), and
+        # with it its filter — and when every rule was left behind for a filter that cannot travel,
+        # the fallback still labelled everything. A rule that labels every feature is a different
+        # map, so the rules always travel, and no rules means no labels.
+        labels.pop("rules", None)
+        if not rules:
+            notes.append("none of its label rules could be published, so it was sent unlabelled")
+            return None, notes
         labels["rules"] = rules
+    elif labels.get("rules"):
+        # A label expression expanded into rules by `_read_text`: each rule's zoom range is
+        # narrowed by the label's own scale visibility, which is the outer limit QGIS applies.
+        for entry in labels["rules"]:
+            _narrow_zooms(entry, labels.get("minzoom"), labels.get("maxzoom"))
     return labels, notes
 
 
@@ -182,38 +196,64 @@ def _read_label_rules(labeling, notes: list) -> list:
             combined_expr = (parts[0] if len(parts) == 1
                              else " AND ".join("({0})".format(e) for e in parts))
             child_lo, child_hi = _rule_zoom_range(child, lo, hi)
-            node = inherited_filter
+            pieces = [(None, None, None)]
             if expression:
-                translated, reason = expressions.try_maplibre(expression)
-                if translated is None:
+                # Usually one piece; a filter gated on @map_scale is the same rule with a zoom
+                # range, peeled exactly as a render rule's is (`rules._pieces`, issue #132).
+                pieces, reason = _filter_pieces(expression)
+                if pieces is None:
                     notes.append("its label rule {0!r} filters on {1}, which {2} — that rule was "
                                  "left behind rather than labelling everything"
                                  .format(child.description() or expression, expression, reason))
                     continue
-                node = (translated if inherited_filter is None
-                        else ["all", inherited_filter, translated])
-            settings = child.settings()
-            if settings is not None and child.active():
-                block = {"enabled": True}
-                _read_text(settings, block, notes)
-                _read_format(settings, block, notes)
-                _read_placement(settings, block)
-                _read_scope(settings, block)
-                if block.get("enabled"):
-                    entry = {"label": child.description() or combined_expr or "Labels",
-                             "labels": block}
-                    if node is not None:
-                        entry["filter"] = node
-                    if combined_expr:
-                        entry["expression"] = combined_expr
-                    # THE RULE'S scale range, which is separate from the label settings' own. The
-                    # narrower of the two is what QGIS actually draws with.
-                    if child_lo is not None:
-                        entry["minzoom"] = max(child_lo, block.get("minzoom", child_lo))
-                    if child_hi is not None:
-                        entry["maxzoom"] = min(child_hi, block.get("maxzoom", child_hi))
-                    out.append(entry)
-            walk(child, node, combined_expr, child_lo, child_hi)
+            for translated, p_out, p_in in pieces:
+                node = inherited_filter
+                if translated is not None:
+                    node = (translated if inherited_filter is None
+                            else ["all", inherited_filter, translated])
+                p_lo, p_hi = _zooms_within(child_lo, child_hi, p_out, p_in)
+                if p_lo is not None and p_hi is not None and p_lo >= p_hi:
+                    continue
+                settings = child.settings()
+                if settings is not None and child.active():
+                    block = {"enabled": True}
+                    _read_text(settings, block, notes)
+                    _read_format(settings, block, notes)
+                    _read_placement(settings, block)
+                    _read_scope(settings, block)
+                    # A label TEXT that expanded into rules (`_read_scope` above set the label's
+                    # own range on `block`): one entry per expanded rule, each ANDed with this one.
+                    expanded = block.pop("rules", None) or [None]
+                    if block.get("enabled"):
+                        for sub in expanded:
+                            this = dict(block)
+                            f, e_lo, e_hi, e_expr = node, p_lo, p_hi, combined_expr
+                            if sub is not None:
+                                this.update(sub.get("labels") or {})
+                                if sub.get("filter") is not None:
+                                    f = sub["filter"] if f is None else ["all", f, sub["filter"]]
+                                e_lo = _tighter(e_lo, sub.get("minzoom"), max)
+                                e_hi = _tighter(e_hi, sub.get("maxzoom"), min)
+                                # The carried source can no longer describe this entry alone.
+                                e_expr = ""
+                            entry = {"label": child.description() or combined_expr or "Labels",
+                                     "labels": this}
+                            if f is not None:
+                                entry["filter"] = f
+                            # The source, while this rule is still one web rule — see rules._walk.
+                            if e_expr and len(pieces) == 1:
+                                entry["expression"] = e_expr
+                            # THE RULE'S scale range, which is separate from the label settings'
+                            # own. The narrower of the two is what QGIS actually draws with.
+                            if e_lo is not None:
+                                entry["minzoom"] = max(e_lo, this.get("minzoom", e_lo))
+                            if e_hi is not None:
+                                entry["maxzoom"] = min(e_hi, this.get("maxzoom", e_hi))
+                            if (entry.get("minzoom") is not None and entry.get("maxzoom") is not None
+                                    and entry["minzoom"] >= entry["maxzoom"]):
+                                continue
+                            out.append(entry)
+                walk(child, node, combined_expr, p_lo, p_hi)
 
     try:
         walk(labeling.rootRule(), None, "", None, None)
@@ -222,6 +262,103 @@ def _read_label_rules(labeling, notes: list) -> list:
                      .format(type(exc).__name__))
         return []
     return out
+
+
+# ── @map_scale in labels (issue #132) ────────────────────────────────────────────────────────────
+
+def _filter_pieces(text):
+    """A label rule's filter as `rules._pieces` reads a render rule's — one implementation."""
+    try:
+        from . import rules as _rules
+    except ImportError:                 # exec'd standalone by the test harness
+        import rules as _rules
+    return _rules._pieces(text)
+
+
+def _tighter(a, b, pick):
+    return b if a is None else (a if b is None else pick(a, b))
+
+
+def _zooms_within(lo, hi, zoomed_out, zoomed_in):
+    """A zoom range narrowed by a scale window given as denominators."""
+    w_lo = zoom_for_scale(zoomed_out) if zoomed_out else None
+    w_hi = zoom_for_scale(zoomed_in) if zoomed_in else None
+    return _tighter(lo, w_lo, max), _tighter(hi, w_hi, min)
+
+
+def _narrow_zooms(entry: dict, lo, hi) -> None:
+    """Narrow one label rule's zoom range to an outer `(lo, hi)`, in place."""
+    new_lo = _tighter(entry.get("minzoom"), lo, max)
+    new_hi = _tighter(entry.get("maxzoom"), hi, min)
+    if new_lo is not None:
+        entry["minzoom"] = new_lo
+    if new_hi is not None:
+        entry["maxzoom"] = new_hi
+
+
+def _scale_label_rules(field: str):
+    """Label rules for a label expression whose CASE branches gate on `@map_scale`, or None.
+
+    `CASE WHEN "fclass" = 'village' AND @map_scale < 100000 THEN "name" ... END` labels villages only
+    when zoomed in past 1:100,000 — and there is no web label expression that can ask for the zoom
+    inside a condition (MapLibre takes `zoom` only as the input of a top-level step/interpolate). It
+    IS expressible as label rules, which already carry a filter, a text and a zoom range each: one
+    rule per branch, made first-match-exact by `expressions.prioritized`, so a feature an earlier
+    branch claims is not labelled again by a later one — at the zooms that earlier branch applies.
+    A `THEN NULL` branch draws nothing but still claims its features, exactly as in QGIS.
+
+    None for anything else — a non-CASE expression, a part that cannot be translated, `@map_scale`
+    used in a way that is not a zoom gate — and the caller then behaves as it always did.
+    """
+    case = expressions.case_branches(field)
+    if case is None:
+        return None
+    branches, else_text = case
+    candidates = []
+    for when, then in branches:
+        alternatives = expressions.scale_alternatives(when)
+        if alternatives is None:
+            return None
+        for cond, zoomed_out, zoomed_in in alternatives:
+            candidates.append((cond, zoomed_out, zoomed_in, then))
+    if else_text is not None:
+        candidates.append(("", None, None, else_text))
+
+    rules = []
+    for cond, excluded, zoomed_out, zoomed_in, then in expressions.prioritized(candidates):
+        if then.strip().upper() == "NULL":
+            continue                    # claims its features, labels nothing
+        text, why = expressions.try_maplibre(then)
+        if why is not None:
+            return None
+        parts, source = [], []
+        if cond:
+            node, why = expressions.try_maplibre(cond)
+            if why is not None:
+                return None
+            parts.append(node)
+            source.append(cond)
+        if excluded:
+            nodes = []
+            for other in excluded:
+                node, why = expressions.try_maplibre(other)
+                if why is not None:
+                    return None
+                nodes.append(node)
+            parts.append(expressions.negate(nodes))
+            source.append("NOT ({0})".format(" OR ".join("({0})".format(e) for e in excluded)))
+        entry = {"label": cond or "Labels",
+                 "labels": {"enabled": True, "expression": text, "qgis_expression": then}}
+        if parts:
+            entry["filter"] = parts[0] if len(parts) == 1 else ["all"] + parts
+            entry["expression"] = (source[0] if len(source) == 1
+                                   else " AND ".join("({0})".format(x) for x in source))
+        if zoomed_out:
+            entry["minzoom"] = zoom_for_scale(zoomed_out)
+        if zoomed_in:
+            entry["maxzoom"] = zoom_for_scale(zoomed_in)
+        rules.append(entry)
+    return rules or None
 
 
 def _rule_zoom_range(rule, lo, hi):
@@ -267,6 +404,19 @@ def _read_text(settings, labels: dict, notes: list) -> None:
     if bool(_value(settings, "isExpression", False)):
         node, reason = expressions.try_maplibre(field)
         if node is None:
+            scaled = _scale_label_rules(field) if "@" in field else None
+            if scaled:
+                # A CASE whose branches gate on @map_scale: one label rule per branch, each with its
+                # zoom range — the same labels QGIS draws, at the same scales (issue #132).
+                labels["rules"] = scaled
+                # The FIRST rule's text at the top level as well, exactly as rule-based labelling
+                # keeps its first rule's settings there: the server, the editor and the portal all
+                # treat a label block with no text as unlabelled (`symbology.labels_of`), rules or
+                # not — so without it every one of these labels would silently vanish. The top
+                # level is only drawn when no rule is.
+                labels["expression"] = scaled[0]["labels"]["expression"]
+                labels["qgis_expression"] = field
+                return
             # A label expression that cannot travel must not become a field read of the expression
             # TEXT, which is what a naive fallback would do — every feature labelled with the same
             # unreadable string.
