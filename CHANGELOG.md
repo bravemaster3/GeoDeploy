@@ -6,6 +6,31 @@ upgrade needs manual work.
 
 ## Unreleased
 
+## v1.7 — 2026-11-19
+
+The headlines, in more detail below:
+
+- **Install GeoDeploy alongside other software.** The installer asks before taking ports 80 and 443,
+  and the dashboard can configure an existing nginx, Caddy or Apache in front of GeoDeploy.
+- **Local storage runs SILO**, the maintained fork of MinIO. MinIO's own images are no longer
+  published. **The tile servers are pinned:** Martin 1.16.1 and TiTiler 2.4.1.
+- **QGIS styles arrive as QGIS draws them:**
+  - scale limits arrive at the right zoom, measured at the layer's latitude;
+  - `@map_scale` and `$area` in rules and labels carry over;
+  - dash-dot lines, class dashes, borders, washes and widths in metres on the ground carry over;
+  - on a real OSM project, feature by feature at 18 scales, all 8 layers match QGIS.
+- **A layer's page can be read:** click popups, an attribute table, a basemap picker with None,
+  and an arrow cursor over clickable features on every map.
+- **Many fixes**, including:
+  - Copy buttons over http;
+  - the DNS step's false "behind NAT" warning;
+  - classified rasters served as PNG instead of JPEG;
+  - a label that is empty for some features no longer blanks the map;
+  - the update warning only lists work that is really running;
+  - login and invite pages explain their errors;
+  - the layer page draws rule-based layers that have labels.
+- **QGIS plugin 0.7.9** and **CLI 1.7.0** are released alongside.
+
 - **A layer's page can be read, not only looked at.**
   - **Click a feature** for the same popup a portal shows, with every field. Its **View attribute
     table** link opens the table under the map and highlights that feature.
