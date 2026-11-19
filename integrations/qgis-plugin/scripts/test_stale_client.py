@@ -156,6 +156,30 @@ def main():
         raised = "{0}: {1}".format(type(exc).__name__, exc)
     check("an unrelated TypeError is not swallowed", raised == "something else entirely", raised)
 
+    # THE CAUSE, not the symptom: loading the plugin must replace whatever `geodeploy` is in memory
+    # with the copy it ships. 0.7.7 installed over 0.7.6 without a restart died on its first push:
+    # "module 'geodeploy.styles' has no attribute 'set_latitude'".
+    print("\nLoading the plugin replaces a stale client in memory")
+    import importlib.util
+    stale = types.ModuleType("geodeploy")
+    stale.__path__ = []
+    stale_styles = types.ModuleType("geodeploy.styles")      # the 0.7.6 shape: no set_latitude
+    stale_styles.zoom_for_scale = lambda d: 0
+    sys.modules["geodeploy"] = stale
+    sys.modules["geodeploy.styles"] = stale_styles
+    spec = importlib.util.spec_from_file_location("gdq_init", os.path.join(PLUGIN, "__init__.py"))
+    init = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(init)
+    init._use_shipped_client()
+    import geodeploy.styles as fresh
+    vendor = os.path.realpath(os.path.join(PLUGIN, "vendor"))
+    check("after a load, `geodeploy.styles` is the shipped copy",
+          os.path.realpath(fresh.__file__).startswith(vendor), getattr(fresh, "__file__", None))
+    check("...with what the new plugin calls", hasattr(fresh, "set_latitude"))
+    check("...and the shipped copy is first on the path", sys.path[0] == init._vendor_dir(), sys.path[:2])
+    init._use_shipped_client()
+    check("loading twice keeps ONE path entry", sys.path.count(init._vendor_dir()) == 1)
+
     print("\n{0} checks, {1} failed".format(CHECKS[0], len(FAILURES)))
     for name in FAILURES:
         print("   FAILED: {0}".format(name))

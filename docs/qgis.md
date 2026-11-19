@@ -35,6 +35,7 @@ script. ([Which interface should I use?](api-reference.md#which-interface-should
 | | |
 | --- | --- |
 | **Minimum** | QGIS **3.28** |
+| **QGIS 4** | supported — the plugin is tested on both the 3.x LTR and QGIS 4 (Qt6) on every change |
 | **Recommended** | the current **LTR** (Long Term Release) — `Help ▸ About` tells you what you have |
 | **GDAL** | 3.8+ *only* for one optional path (see below); QGIS ships its own, so this is rarely something you choose |
 
@@ -78,6 +79,13 @@ affect this route.
 
 There is nothing to `pip install`: the Python client is vendored inside the plugin, which is why it
 has no dependencies and runs on the Python that ships with QGIS.
+
+### Upgrading
+
+Install the new version over the old one, from the repository or from a ZIP — no need to uninstall
+first, and from **0.7.8** on no need to restart QGIS either. Versions before 0.7.8 could keep the
+previous version's client in memory after an in-place upgrade and fail on the first push
+(`module 'geodeploy.styles' has no attribute …`); if you see that, restart QGIS once.
 
 ## Connect
 
@@ -196,6 +204,24 @@ The **Source** picker offers a portal two ways:
 Restyle the group and press **Push group to portal**. A group opened from a portal updates that
 portal; any other group creates a new one. Nothing is published until you have read the summary of
 what will change.
+
+### Pushing a group again
+
+A push remembers what each layer became on GeoDeploy, and which portal the group became, so the next
+push of the same group **updates** that portal and uploads only what is new. That memory is part of
+the project: **save the project** after a push, or the next session will not know the layers are
+already there and will upload them again.
+
+- **A layer you deleted on the instance** is uploaded again, rather than referenced by an id that
+  no longer exists.
+- **A portal you deleted on the instance** is created again, from the same group, without
+  re-uploading its layers.
+- **A different instance** — the same project pushed to a second server — gets its own uploads; the
+  plugin never mistakes another server's layer for one of yours, and a server that has only moved
+  to a new address is still recognised as the same one.
+- **A push interrupted half way** — a dropped connection, QGIS closed — can simply be pressed again.
+  Each layer is recorded the moment its upload finishes, so the second push sends only what is
+  still missing.
 
 ## Styling, both ways
 
@@ -328,7 +354,17 @@ which would be a different map, not a simpler one. The Log Messages panel names 
 part it could not read.
 
 A rule's scale range becomes a zoom range on the published map, so a rule that only draws below
-1:10 000 in QGIS only draws at those zooms in the portal.
+1:10 000 in QGIS only draws at those zooms in the portal. The conversion is made **at the layer's
+latitude**: a web map's zoom level shows the ground at a different scale at every latitude, and a
+QGIS scale is measured on the ground — so a threshold means the same map at Dresden as at the
+equator. (Before plugin 0.7.7 it did not, and scale limits arrived about 1.6 zoom levels late at
+51°N; re-push a group to republish its limits.) A layer's own *Scale dependent visibility* travels
+the same way.
+
+**`@map_scale` in an expression** travels too, when it is used the way QGIS projects use it — as a
+scale gate: `"fclass" = 'village' AND @map_scale < 100000`, or a `CASE` whose branches each gate
+on the scale. Each branch becomes its own zoom range. Any other use of `@map_scale`, and any other
+variable, is reported and left behind.
 
 ### Markers QGIS draws and a web map cannot describe
 
@@ -405,7 +441,21 @@ Two things to know:
   else, and the leader line from a displaced label back to its feature is a second geometry with
   nowhere to go.
 
-Rule-based labelling is read as its first rule, and says so.
+A label whose text is a `CASE` gated on `@map_scale` — a common way to show village names only when
+zoomed in — becomes one label rule per branch, each with its own zoom range. Rule-based labelling
+travels as its rules (see [Labels by rule](#labels-by-rule)).
+
+### Styles that measure geometry
+
+`$area`, `$length` and `$perimeter` — and `area($geometry)` and friends — in a rule or a label
+(*label only forests larger than 4 km²*) cannot be evaluated by a web map, which only ever holds a
+tile's clipped piece of each feature. So when a layer's style uses one, the plugin **computes it in
+QGIS at upload** — with the project's ellipsoid and units, so the value is exactly the one QGIS
+compares — and sends it as a hidden column. The rule or label then travels unchanged.
+
+Those columns are GeoDeploy's own: no popup, attribute table, export or OGC API response shows them.
+A layer uploaded *before* its style used a measure does not have them; the plugin says so on the
+next push, and uploading that layer again fixes it.
 
 ### 2.5D
 
@@ -469,7 +519,6 @@ guarding against.
 | **Inverted polygons** | Would need a server-derived mask (the layer's union subtracted from the world). Until then the polygons themselves are drawn — the inverse of the picture. |
 | **Point displacement** | No web equivalent. Clustering is the nearest honest approximation. |
 | **Merged features** | Drawn as the underlying symbol, so the joins QGIS dissolves stay visible. |
-| **A layer's own scale range** | Not carried yet, although a *rule's* is. |
 
 ### Sizes, and the unit they are stated in
 

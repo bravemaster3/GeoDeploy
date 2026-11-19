@@ -35,6 +35,7 @@ End-user / operator documentation (not developer internals — those live in eac
 - User-facing docs; for build quirks and debugging history use `notes_temp/notes_for_future.md` instead.
 
 ## Last updated
+2026-11-19 (`qgis.md` caught up with plugin 0.7.3–0.7.8: QGIS 4 row in *Which QGIS you need*; *Upgrading* (in place, no restart from 0.7.8); *Pushing a group again* (re-push recognition, deleted layer/portal, another instance, interrupted push — save the project); scale ranges convert at the layer's latitude; `@map_scale` gates in rules and CASE labels; *Styles that measure geometry* (`$area` & co. computed at upload). Two stale claims removed: rule-based labelling "read as its first rule" and "a layer's own scale range is not carried".)
 2026-08-31 (**SEO pass + v1.5.1.** Every page now carries its own `description:` front matter —
 all eighteen were falling back to `site_description` from mkdocs.yml, so every GeoDeploy search
 result shipped an identical snippet. `index.md` also gained a `title:` so its `<title>` carries the

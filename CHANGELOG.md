@@ -6,6 +6,11 @@ upgrade needs manual work.
 
 ## Unreleased
 
+- **QGIS plugin 0.7.8: installing over an older version works without restarting QGIS.**
+  Installing 0.7.7 over 0.7.6 failed on the first push with "module 'geodeploy.styles' has no
+  attribute 'set_latitude'". QGIS reloads a plugin's own modules but not the client the plugin
+  bundles, so the new plugin ran against the old client. The plugin now replaces it when it
+  loads; a new CI step reloads it over a stale client through QGIS's own loader.
 - **QGIS plugin 0.7.7: push group and scales fixed.**
   - **Push group to portal:** on a group of new layers it uploaded them all and then failed with
     "This group has no GeoDeploy layers in it"

@@ -245,6 +245,7 @@ def main():
 
     iface = Iface()
     dock = build_dock(iface)
+    sweep = True                        # see below: an earlier run that CRASHED never cleaned up
     project = QgsProject.instance()
     root = project.layerTreeRoot()
 
@@ -254,6 +255,16 @@ def main():
     press("Connect", dock.connect_to_instance)
     check("connected with a write token", dock.instance is not None and bool(dock.instance.token))
     client = dock.instance.client
+    if sweep:
+        # A run killed by a native crash never reaches its `finally`, and left its portals and
+        # layers on the instance. Everything this script makes starts with "E2E-dock-", so the
+        # next run clears it before starting.
+        for p in client.portals.list():
+            if str(p.get("title", "")).startswith("E2E-dock-"):
+                client.portals.delete(p["id"])
+        for r in client.layers.list():
+            if str(r.get("name", "")).startswith("E2E-dock-"):
+                client.layers.api(r["layer_type"]).delete(r["id"])
 
     a, b = make_points(PREFIX + "-a"), make_points(PREFIX + "-b", kinds=("castle", "museum", "park"))
     project.addMapLayers([a, b], False)

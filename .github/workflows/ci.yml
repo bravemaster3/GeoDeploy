@@ -181,6 +181,14 @@ jobs:
           echo "::warning::PyQGIS was killed by signal $((code - 128)), not a failed check. Retrying once; the crash printed a Python stack above."
           python3 -u scripts/test_roundtrip_matrix.py
 
+      - name: Installing over an older version works without restarting QGIS
+        # QGIS's reload unloads only the modules its import hook recorded as the plugin's, so the
+        # bundled `geodeploy` client survived an upgrade and 0.7.7 ran against 0.7.6's copy
+        # ("no attribute 'set_latitude'"). This reloads the plugin through QGIS's own loader over a
+        # stale client and uses it.
+        working-directory: integrations/qgis-plugin
+        run: python3 -u scripts/test_upgrade_in_place.py
+
       - name: Every symbol QGIS offers is classified
         # Reads QGIS's OWN registries — symbol layers, renderers, data-defined properties — and
         # joins them against the verdicts declared in the script. Fails when this QGIS offers
