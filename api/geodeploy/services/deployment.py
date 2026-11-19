@@ -243,19 +243,16 @@ def server_ip() -> dict:
     shows what it has and tells the operator to check with their provider.
     """
     import ipaddress
-    import socket
 
     out: dict = {"outbound": None, "public": None, "differs": False}
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        sock.settimeout(2)
-        sock.connect(("1.1.1.1", 80))          # no packet is sent; this only selects a route
-        out["outbound"] = sock.getsockname()[0]
-    except OSError:
-        pass
-    finally:
-        sock.close()
+    # INSIDE A CONTAINER the route's source is the CONTAINER's address on Docker's bridge (172.18.x
+    # on every install), not the machine's — so it says nothing about the host, and comparing it with
+    # the public address told every operator their VPS was "behind NAT" (reported on a plain VPS).
+    # Worse, with no public answer it would have been offered as the A record. The API always runs
+    # in a container in production; `outbound` is only meaningful when it does not.
+    if not _in_container():
+        out["outbound"] = _route_source()
 
     import httpx
     for url in ("https://api.ipify.org", "https://ifconfig.me/ip"):
@@ -272,6 +269,25 @@ def server_ip() -> dict:
     # must carry the public one even though the server only knows about the private one.
     out["differs"] = bool(out["outbound"] and out["public"] and out["outbound"] != out["public"])
     return out
+
+
+def _in_container() -> bool:
+    return os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
+
+
+def _route_source() -> str | None:
+    """The source address of a route to the internet. No packet is sent: connecting a UDP socket
+    only selects a route in the kernel."""
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.settimeout(2)
+        sock.connect(("1.1.1.1", 80))
+        return sock.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        sock.close()
 
 
 def resolve_domain(domain: str) -> list[str]:

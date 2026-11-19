@@ -153,9 +153,15 @@
               </p>
               <p v-if="!(data.server_ip && data.server_ip.public)"
                  class="text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2 leading-relaxed">
-                GeoDeploy could not confirm this server's public address from the outside. The value
-                above is what the server sees for itself, which is right on most VPSes and wrong
-                behind NAT — check it against your provider's control panel before relying on it.
+                <template v-if="data.server_ip && data.server_ip.outbound">
+                  GeoDeploy could not confirm this server's public address from the outside. The value
+                  above is what the server sees for itself, which is right on most VPSes and wrong
+                  behind NAT — check it against your provider's control panel before relying on it.
+                </template>
+                <template v-else>
+                  GeoDeploy could not look up this server's public address (the lookup needs outbound
+                  internet access). Use the IPv4 address shown in your provider's control panel.
+                </template>
               </p>
 
               <div v-if="dns" class="text-xs rounded-lg px-3 py-2 border" :class="dnsBoxClass">
