@@ -96,7 +96,9 @@ Open **GeoDeploy** from the Plugins menu (or the toolbar) and paste your instanc
 URL shows every public layer and portal. A token adds whatever else you can see, and is required for
 anything that writes: uploading, saving a style, pushing a portal.
 
-If you have already run `geodeploy login` at a shell, the plugin finds that token by itself.
+The plugin uses **only the token in its own field** — leave it empty to browse anonymously. Instances
+you have used with `geodeploy login` at a shell are offered in the URL list, but their tokens are not
+sent (from plugin 0.7.9): a stored login that had since been revoked used to block anonymous browsing.
 
 ### Getting a token
 

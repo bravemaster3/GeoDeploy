@@ -5,8 +5,9 @@ it shares (`GET /api/public`), so someone can paste a URL and see the public por
 before signing in to anything. A token then reveals whatever that token is allowed to see. Both
 paths return rows of the same shape, so nothing downstream has to care which one it got.
 
-The credential comes from the vendored client's own config, which means **a `geodeploy login` at a
-shell is already a login here** — one place where instances and tokens live, not two.
+Instances stored by `geodeploy login` are OFFERED in the URL list (`saved_instances`); their tokens
+are not used — the plugin sends only the token typed in its own field (0.7.9; a stale stored token
+used to block anonymous browsing).
 """
 from __future__ import annotations
 
