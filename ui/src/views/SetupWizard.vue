@@ -243,7 +243,7 @@ const dbOptions = [
 ]
 const storageOptions = [
   { value: 'local', label: 'Store files on this server',
-    desc: 'Installs and manages MinIO here. Fast and free, but limited by the disk on this machine — growing later means attaching a bigger volume. Good for a modest amount of data.' },
+    desc: 'Installs and manages SILO here — the maintained, MinIO-compatible storage server. Fast and free, but limited by the disk on this machine — growing later means attaching a bigger volume. Good for a modest amount of data.' },
   { value: 's3', label: 'Use S3-compatible object storage',
     desc: 'AWS S3, Hetzner Object Storage, Cloudflare R2, Backblaze B2. Grows on demand and is billed by what you use — the better choice if you expect many layers or large rasters.' },
 ]
