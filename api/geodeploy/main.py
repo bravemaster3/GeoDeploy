@@ -33,6 +33,17 @@ async def lifespan(app: FastAPI):
     for subdir in ("portals", "portal_assets", "temp", "martin"):
         os.makedirs(f"{settings.data_dir}/{subdir}", exist_ok=True)
 
+    # FIRST, before anything can recreate nginx: an installation that recorded where it is published
+    # (GEODEPLOY_HTTP_BIND/_PORT) before docker-compose.yml read GEODEPLOY_HTTP_PUBLISH gets that key
+    # now, or its next nginx recreate lands on `80:80`. See deployment.ensure_publish_key.
+    try:
+        from .services import deployment
+        written = deployment.ensure_publish_key()
+        if written:
+            logging.getLogger(__name__).info("recorded GEODEPLOY_HTTP_PUBLISH=%s in .env", written)
+    except Exception:
+        logging.getLogger(__name__).exception("could not record GEODEPLOY_HTTP_PUBLISH")
+
     # State lives in PostgreSQL, which the SETUP WIZARD configures — so the app must boot with no
     # database at all and still serve /api/setup/*. `configure()` returns None until credentials
     # exist in the environment; `routers/setup.configure_db` calls it again and creates the schema

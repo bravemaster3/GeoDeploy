@@ -127,6 +127,24 @@ curl -fsSL https://raw.githubusercontent.com/bravemaster3/geodeploy/main/install
   | GEODEPLOY_VERSION=v1.0 bash
 ```
 
+!!! note "Releases up to v1.6.4 always take ports 80 and 443"
+    They predate [choosing where GeoDeploy is published](behind-a-proxy.md). Installing one hands
+    over to that release's own installer, which is exactly how it always installed — but first the
+    installer says so, asks (non-interactively: pass `--dedicated` after `bash -s --`), and refuses
+    if port 80 or 443 is already in use. For the same reason, an instance running **behind a proxy**
+    cannot be updated or downgraded to one of those releases: the updater refuses before changing
+    anything, because that release would publish 80 and 443 next to the web server in front.
+
+!!! info "Updating an instance installed before you could choose the port"
+    It stays exactly where it was: **dedicated, on port 80**, IPv4 and IPv6. Updates never move the
+    port. Moving is something you do on purpose, with `installer/set-port.sh`. The one change is that
+    port **443 is no longer published**. GeoDeploy's own nginx never listened on it (its HTTPS block
+    ships commented out), so nothing that worked stops working. A site behind Cloudflare on
+    *Flexible* is unaffected. To check before updating, run
+    `curl -sk -o /dev/null -w '%{http_code}\n' https://127.0.0.1/` on the server: `000` means
+    nothing serves 443 there. Any other answer means you set up HTTPS on the server by hand. Read
+    the changelog entry on `docker-compose.tls.yml` first.
+
 !!! danger "Use the script, and run it from the install directory"
     Prefer `installer/self-update.sh` over `git pull && docker compose up -d`. A bare `docker compose
     up -d` also targets the containers the setup wizard provisions outside Compose (postgres, minio,
@@ -157,8 +175,10 @@ docker start geodeploy-postgres geodeploy-minio geodeploy-redis geodeploy-martin
 # 4. Start the application services. --no-deps so Compose touches nothing else.
 docker compose up -d --no-deps geodeploy-api geodeploy-ui celery nginx
 
-# 5. Confirm.
-curl -sf localhost/health && echo "healthy"
+# 5. Confirm. The port comes from .env — an install behind a reverse proxy is not on port 80,
+#    and `localhost/health` would report a perfectly healthy stack as dead.
+source <(grep '^GEODEPLOY_HTTP_PORT=' .env) 2>/dev/null
+curl -sf "127.0.0.1:${GEODEPLOY_HTTP_PORT:-80}/health" && echo "healthy"
 docker compose logs --tail=50 geodeploy-api
 ```
 

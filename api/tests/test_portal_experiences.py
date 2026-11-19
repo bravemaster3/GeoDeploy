@@ -194,3 +194,40 @@ async def test_portal_defaults_have_no_layout_or_story(client, db):
     got = (await client.get("/api/portals/8", headers=h)).json()
     assert got["layout_config"] is None
     assert got["story"] is None
+
+
+# ── About belongs to every archetype (2026-10-11) ───────────────────────────────────────────────
+
+def test_every_archetype_offers_an_about_panel():
+    """It was on for `webmap` only. The reasoning for turning it off in `catalog` — the cards
+    already carry each dataset's abstract — is true of the DATASETS and no substitute for a page
+    about the PORTAL: who publishes it, how to cite it, what it is for. An author who does not want
+    one leaves the description empty and no page is generated; a missing toggle is not a default,
+    it is a refusal."""
+    from geodeploy.services import portal_generator as pg
+    for name, arch in pg._LAYOUT_ARCHETYPES.items():
+        assert arch["panels"].get("about") is True, f"{name} should offer an About panel"
+
+
+def test_the_three_surfaces_agree_on_every_archetype_panel():
+    """The parity contract from CLAUDE.md, checked rather than trusted — the editor had drifted to
+    `layerCatalog: false` for dashboard while the server and the runtime both said true, so the
+    editor drew a portal its own publisher would not produce."""
+    import re
+    from pathlib import Path
+    from geodeploy.services import portal_generator as pg
+
+    root = Path(__file__).resolve().parents[2]
+    sources = {
+        "portal.js": (root / "templates/shared/portal.js").read_text(encoding="utf-8"),
+        "PortalEditor.vue": (root / "ui/src/views/PortalEditor.vue").read_text(encoding="utf-8"),
+    }
+    for arch_name, arch in pg._LAYOUT_ARCHETYPES.items():
+        for surface, text in sources.items():
+            line = next((ln for ln in text.splitlines()
+                         if re.match(rf"\s*{arch_name}:\s*\{{", ln)), None)
+            assert line, f"{arch_name} missing from {surface}"
+            for panel, value in arch["panels"].items():
+                expected = f"{panel}: {'true' if value else 'false'}"
+                assert expected in line, \
+                    f"{surface}: {arch_name} should have `{expected}` to match the server"

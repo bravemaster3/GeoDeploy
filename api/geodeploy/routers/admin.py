@@ -15,7 +15,7 @@ from ..deps import require_admin, require_owner
 from ..models import DeploymentRun, Portal, RasterLayer, SetupConfig, User, VectorLayer
 from ..schemas import (DeploymentRunOut, EmailSettings, EmailSettingsOut, OidcSettings,
                        OidcSettingsOut, ServiceHealth, StorageStats)
-from ..services import notifications
+from ..services import deployment, notifications
 from .common import record_audit
 from .users import request_origin
 
@@ -536,7 +536,17 @@ async def connection_details(user: User = Depends(require_owner), db: AsyncSessi
     # its purpose. Threadpooled — it is a file read on the event loop otherwise.
     env = await run_in_threadpool(envfile.read_all)
     await record_audit(db, user, "admin.credentials.view", "system", None, {})
-    return merge_credentials(env, get_settings(), cfg)
+    out = merge_credentials(env, get_settings(), cfg)
+    # `bind:port` when the provisioned database is actually published to the host
+    # (docker-compose.db-port.yml), None when it is reachable only from inside the Docker network —
+    # which is the default. The panel needs it because otherwise it shows `postgres:5432` beside a
+    # password with nothing to say that no client outside this stack can dial it.
+    #
+    # Computed HERE rather than inside merge_credentials, which is deliberately a pure function of
+    # (env, settings, cfg) so the precedence rule above can be tested without Docker, an app or a
+    # request. Threadpooled: the Docker socket is blocking I/O.
+    out["database"]["published"] = await run_in_threadpool(deployment.postgres_published)
+    return out
 
 
 def merge_credentials(env: dict, settings, cfg) -> dict:
@@ -1151,3 +1161,325 @@ async def update_oidc_settings(body: OidcSettings, request: Request,
     await db.commit()
     await db.refresh(cfg)
     return _oidc_out(cfg, request)
+
+
+# ── Deployment: where this instance is published, and how to put a domain in front ────────────────
+# The panel behind these three endpoints exists because the shared-machine install mode (issue #79)
+# ends with GeoDeploy on 127.0.0.1:<port>, which is safe, correct, and completely opaque to anyone
+# who is not already comfortable with reverse proxies. Reporting the truth plainly, generating the
+# configuration and then PROVING it works is what makes that mode usable by the people it is for.
+#
+# All three are READ-ONLY with respect to the host. Nothing here edits the operator's web server —
+# these machines have other people's sites on them.
+
+class DeploymentVerifyRequest(BaseModel):
+    domain: str
+
+
+# A hostname, and only a hostname. It is interpolated into a configuration file the operator will
+# paste into their web server and passed to a resolver, so anything that could carry a newline, a
+# directive or a shell character has no business here. One definition, so the three deployment
+# endpoints cannot drift apart on what they accept.
+_DOMAIN_RE = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+")
+
+
+def _valid_domain(raw: str) -> str:
+    domain = (raw or "").strip().lower().rstrip(".")
+    if not _DOMAIN_RE.fullmatch(domain):
+        raise HTTPException(400, "That does not look like a domain name (for example: maps.example.org).")
+    return domain
+
+
+def _managed_domain() -> str | None:
+    """The domain in hostproxy's state file, or None. Cheap and failure-tolerant: this is a label on
+    a button, never a precondition for anything."""
+    try:
+        from ..services import hostproxy
+        return (hostproxy.read_state().get("certificate") or {}).get("domain")             or hostproxy.read_state().get("domain")
+    except Exception:
+        return None
+
+
+def _managed_tls() -> bool:
+    try:
+        from ..services import hostproxy
+        return bool(hostproxy.read_state().get("tls"))
+    except Exception:
+        return False
+
+
+@router.get("/deployment")
+async def deployment_status(request: Request, _: User = Depends(require_owner)):
+    """Intent (.env), reality (the nginx container) and what this very request looked like."""
+    from ..services import deployment
+
+    intent = deployment.read_intent()
+    reality = await run_in_threadpool(deployment.read_reality)
+    observed = deployment.observe(request)
+    managed = {"domain": _managed_domain(), "tls": _managed_tls()}
+    return {
+        "intent": intent,
+        "reality": reality,
+        "observed": observed,
+        "verdict": deployment.verdict(intent, reality, observed, managed),
+        "domain_hint": deployment.domain_hint(),
+        # The domain GeoDeploy has ALREADY configured, from hostproxy's own state. Without it the
+        # panel cannot tell "no domain yet" from "a working domain that only lacks HTTPS", and it
+        # labelled the second one "Give it a domain" — hiding the certificate button two clicks
+        # behind a button that implied the work was not done.
+        "managed_domain": _managed_domain(),
+        "managed_tls": _managed_tls(),
+        # What an A record has to point at. Fetched here so the DNS step can show it with a copy
+        # button instead of telling the operator to go and find their own server's address.
+        "server_ip": await run_in_threadpool(deployment.server_ip),
+        "local_url": f"http://127.0.0.1{'' if intent['port'] == '80' else ':' + intent['port']}",
+        "flavors": list(deployment.FLAVORS),
+    }
+
+
+@router.get("/deployment/proxy-config")
+async def deployment_proxy_config(domain: str = "", flavor: str = "nginx",
+                                  _: User = Depends(require_owner)):
+    """The configuration block for one reverse proxy. Text for the operator to paste — we never
+    write it, and we never reload anything of theirs."""
+    from ..services import deployment
+
+    if flavor not in deployment.FLAVORS:
+        raise HTTPException(400, f"Unknown proxy: {flavor}")
+    domain = (domain or "").strip().lower()
+    if domain:
+        domain = _valid_domain(domain)
+    return deployment.proxy_config(domain, flavor, deployment.read_intent())
+
+
+@router.post("/deployment/check-dns")
+async def deployment_check_dns(body: DeploymentVerifyRequest, _: User = Depends(require_owner)):
+    """Does the domain point at this server yet? Separate from the full Verify on purpose.
+
+    DNS is the step with a WAITING PERIOD in it, and the only one the operator performs somewhere
+    else entirely — in a control panel we cannot see. Making them run the whole end-to-end check to
+    find out whether a record has propagated conflates "you have not finished" with "you did it
+    wrong", and those need completely different reactions: one is patience, the other is a fix.
+    """
+    from ..services import deployment as dep
+
+    domain = _valid_domain(body.domain)
+    addresses = await run_in_threadpool(dep.resolve_domain, domain)
+    ours = await run_in_threadpool(dep.server_ip)
+    expected = ours.get("public") or ours.get("outbound")
+
+    if not addresses:
+        return {"state": "unresolved", "addresses": [], "expected": expected,
+                "detail": f"{domain} does not resolve to anything yet.",
+                "fix": "Add an A record for it pointing at this server, then wait a few minutes. A "
+                       "new record is usually live within minutes, occasionally up to an hour."}
+    if expected and expected in addresses:
+        return {"state": "ok", "addresses": addresses, "expected": expected,
+                "detail": f"{domain} points at this server ({expected})."}
+    if dep.looks_like_cloudflare(addresses):
+        return {"state": "proxied", "addresses": addresses, "expected": expected,
+                "detail": f"{domain} resolves to Cloudflare ({', '.join(addresses)}), not directly "
+                          f"to this server. That is what Cloudflare's proxy — the orange cloud — "
+                          f"does, and it is fine.",
+                "fix": "Two things to know while it is on. Cloudflare terminates HTTPS itself, so "
+                       "until this server has its own certificate keep SSL/TLS on Flexible — on "
+                       "Full or Full (strict) Cloudflare tries HTTPS against an origin that has "
+                       "none and every request is a 525. And the ACME challenge normally passes "
+                       "straight through the proxy; grey-cloud for two minutes only if it fails, "
+                       "which rules out Bot Fight Mode, a WAF rule and a cache rule at once."}
+    return {"state": "elsewhere", "addresses": addresses, "expected": expected,
+            "detail": f"{domain} resolves to {', '.join(addresses)}"
+                      f"{f', but this server is {expected}' if expected else ''}.",
+            "fix": "Point the A record at this server's address. If you only just changed it, the "
+                   "old value can be cached for as long as its TTL — wait, then check again."}
+
+
+@router.post("/deployment/verify")
+async def deployment_verify(body: DeploymentVerifyRequest, _: User = Depends(require_owner)):
+    """Does the domain actually reach THIS GeoDeploy, and does the proxy pass the hostname?
+
+    Four checks, reported individually, because "it does not work" is not an answer anyone can act
+    on. The failure this exists to catch first is DNS that has not propagated — which looks exactly
+    like a broken proxy from the browser and is fixed by waiting.
+
+    `instance` is what makes the last check meaningful: reaching *a* GeoDeploy at the domain proves
+    nothing, reaching *this* one does.
+    """
+    import hashlib
+    import socket
+
+    import httpx
+
+    from ..services import deployment
+
+    domain = _valid_domain(body.domain)
+
+    steps: list[dict] = []
+    def step(name, ok, detail, fix=None):
+        steps.append({"name": name, "ok": ok, "detail": detail, "fix": fix})
+
+    # 1 — DNS.
+    try:
+        addrs = sorted({info[4][0] for info in await run_in_threadpool(
+            socket.getaddrinfo, domain, None, 0, socket.SOCK_STREAM)})
+        step("DNS", True, f"{domain} resolves to {', '.join(addrs)}")
+    except Exception:
+        step("DNS", False, f"{domain} does not resolve yet.",
+             "Add an A record pointing it at this server's public IP. A new record can take a few "
+             "minutes to an hour to propagate — this check is worth repeating before changing anything.")
+        return {"ok": False, "steps": steps}
+
+    ours = hashlib.sha256(
+        b"geodeploy-instance-id:" + (get_settings().secret_key or "").encode()).hexdigest()[:16]
+
+    # 2/3/4 — reach it the way a visitor would. HTTPS first, then plain HTTP, so an operator who has
+    # not set up a certificate yet still gets a useful answer rather than a bare failure.
+    #
+    # `follow_redirects=False` deliberately: an http:// -> https:// redirect is the RIGHT answer and
+    # is reported as such, and not following anything keeps this from being turned into a general
+    # fetcher. The response body is parsed only for the four fields whoami defines.
+    result = None
+    for scheme in ("https", "http"):
+        try:
+            async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+                resp = await client.get(f"{scheme}://{domain}/api/public/whoami")
+            if resp.status_code in (301, 302, 307, 308) and scheme == "http":
+                continue          # redirected to HTTPS — try there, that is where the answer is
+            if resp.status_code != 200:
+                continue
+            result = (scheme, resp.json())
+            break
+        except Exception:
+            continue
+
+    if result is None:
+        step("Reachable", False, f"Nothing answered at https://{domain} or http://{domain}.",
+             "Check the reverse proxy is running and its configuration was reloaded, and that a "
+             "firewall is not blocking ports 80 and 443.")
+        return {"ok": False, "steps": steps}
+
+    scheme, seen = result
+    step("Reachable", True, f"{scheme}://{domain} answered.")
+
+    if scheme == "https":
+        step("HTTPS", True, "The certificate is valid.")
+    else:
+        step("HTTPS", False, "Reachable over plain HTTP only — sign-in tokens travel in clear text.",
+             "Give the reverse proxy a certificate. Caddy does it automatically; for nginx: "
+             f"sudo certbot --nginx -d {domain}")
+
+    if not isinstance(seen, dict) or seen.get("instance") != ours:
+        step("Reaches this GeoDeploy", False,
+             f"Something answered at {domain}, but it is not this instance.",
+             "The domain is pointing at a different server, or at a different application on this one.")
+        return {"ok": False, "steps": steps}
+    step("Reaches this GeoDeploy", True, "Confirmed — the same instance you are signed in to.")
+
+    seen_host = str(seen.get("host") or "").split(":")[0]
+    if seen_host != domain:
+        step("Hostname passed through", False,
+             f"GeoDeploy sees these requests as '{seen.get('host')}', not '{domain}'.",
+             "Add  proxy_set_header Host $host;  to the proxy's GeoDeploy block. Without it every "
+             "link GeoDeploy generates — shared links, portal previews, the STAC and OGC "
+             "catalogues — points at an address nobody else can open.")
+        return {"ok": False, "steps": steps}
+    step("Hostname passed through", True, f"Links will be built as {seen.get('origin')}.")
+
+    return {"ok": all(s["ok"] for s in steps), "steps": steps, "origin": seen.get("origin")}
+
+
+# ── Configuring the host's reverse proxy for them ────────────────────────────────────────────────
+#
+# These four are the only endpoints in GeoDeploy that change software GeoDeploy did not install, so
+# they are the only ones with this comment. Three things make that defensible:
+#
+#   * require_owner, not require_admin. The owner is the person whose machine this is.
+#   * The service refuses far more often than it acts — see `hostproxy`'s six rules — and every
+#     refusal is returned as a readable blocker rather than an error, because "GeoDeploy will not do
+#     this, and here is why" is the useful answer on a machine hosting somebody else's sites.
+#   * Every call is audited with what was written and where, so the change is attributable later by
+#     someone who did not make it.
+#
+# The manual path is never taken away: `/deployment/proxy-config` still returns the same text for an
+# operator who would rather place it themselves, and the panel offers both side by side. Automating
+# this is a convenience for people who do not want to think about nginx — not a claim that we know
+# their machine better than they do.
+
+class CertificateRequest(BaseModel):
+    domain: str
+    email: str
+
+
+@router.get("/deployment/host-proxy")
+async def deployment_host_proxy(domain: str = "", _: User = Depends(require_owner)):
+    """What GeoDeploy found in front of itself, and whether it could configure it for this domain.
+
+    Called before the button is shown, so a machine we cannot help says so while the operator is
+    still choosing — rather than after they press Apply, which would read as their setup failing
+    rather than ours declining.
+    """
+    from ..services import deployment, hostproxy
+
+    if not (domain or "").strip():
+        found = await run_in_threadpool(hostproxy.detect)
+        return {"domain": None, "can_apply": False, "adapter": found.get("adapter"),
+                "blockers": [], "warnings": [], "detected": found}
+    try:
+        return await run_in_threadpool(hostproxy.plan, _valid_domain(domain),
+                                       deployment.read_intent())
+    except hostproxy.ProxyError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/deployment/host-proxy/apply")
+async def deployment_host_proxy_apply(body: DeploymentVerifyRequest,
+                                      user: User = Depends(require_owner),
+                                      db: AsyncSession = Depends(get_db)):
+    """Write the configuration, test it, reload the proxy — or put everything back."""
+    from ..services import deployment, hostproxy
+
+    domain = _valid_domain(body.domain)
+    try:
+        result = await run_in_threadpool(hostproxy.apply, domain, deployment.read_intent())
+    except hostproxy.ProxyError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await record_audit(db, user, "admin.deployment.proxy.apply", "system", None,
+                       {"domain": domain, "ok": result.get("ok"),
+                        "target": result.get("target"),
+                        "adapter": (result.get("plan") or {}).get("adapter")})
+    return result
+
+
+@router.post("/deployment/host-proxy/remove")
+async def deployment_host_proxy_remove(user: User = Depends(require_owner),
+                                       db: AsyncSession = Depends(get_db)):
+    """Take away exactly what Apply added, testing before the reload so a tidy-up cannot be what
+    breaks the machine."""
+    from ..services import hostproxy
+
+    try:
+        result = await run_in_threadpool(hostproxy.remove)
+    except hostproxy.ProxyError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await record_audit(db, user, "admin.deployment.proxy.remove", "system", None,
+                       {"ok": result.get("ok")})
+    return result
+
+
+@router.post("/deployment/host-proxy/certificate")
+async def deployment_host_proxy_certificate(body: CertificateRequest,
+                                            user: User = Depends(require_owner),
+                                            db: AsyncSession = Depends(get_db)):
+    """Ask the host's certbot for a certificate. Separate from Apply and never implied by it — it
+    reaches an external CA under an agreement the operator has to accept, publishes the hostname to
+    the public Certificate Transparency log, and spends a rate limit that is painful to exhaust."""
+    from ..services import hostproxy
+
+    domain = _valid_domain(body.domain)
+    try:
+        result = await run_in_threadpool(hostproxy.issue_certificate, domain, body.email)
+    except hostproxy.ProxyError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await record_audit(db, user, "admin.deployment.certificate", "system", None,
+                       {"domain": domain, "ok": result.get("ok")})
+    return result

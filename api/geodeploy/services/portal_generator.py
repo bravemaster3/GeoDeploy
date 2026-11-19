@@ -710,10 +710,13 @@ _LAYOUT_ARCHETYPES = {
                 "perPage": 12,
             },
         },
+        # About is ON for every archetype (2026-10-11). It was off here on the reasoning that a
+        # catalog's cards already carry each dataset's abstract and links — true of the DATASETS,
+        # and no substitute for a page about the PORTAL: who publishes it, how to cite it, what it
+        # is for. An author who does not want one simply leaves the description empty, and no page
+        # is generated; a missing toggle is not a default, it is a refusal.
         "panels": {"catalog": True, "layerCatalog": False, "legend": True, "basemap": True,
-                   # No About page: every dataset already carries its abstract, licence and access
-                   # links on its own card, so an About page would only restate the catalog.
-                   "about": False, "story": False},
+                   "about": True, "story": False},
     },
     # V-16 DASHBOARD — a single screen of widgets over the portal's own layers, wired to
     # cross-filter each other. The MAP IS A WIDGET here, not the page: `#layout` becomes the widget
@@ -742,7 +745,7 @@ _LAYOUT_ARCHETYPES = {
             },
         },
         "panels": {"dashboard": True, "layerCatalog": True, "legend": True, "basemap": True,
-                   "about": False, "story": False},
+                   "about": True, "story": False},
     },
     # scrollytelling — a narrative column drives the map camera; the layer list floats (collapsed by
     # default), reachable from the toggle at the top of the control cluster, like a normal web map.
@@ -753,7 +756,7 @@ _LAYOUT_ARCHETYPES = {
             "controls": {"position": "top-right"},
             "header": {"style": "minimal"},
         },
-        "panels": {"layerCatalog": True, "legend": True, "basemap": True, "about": False, "story": True},
+        "panels": {"layerCatalog": True, "legend": True, "basemap": True, "about": True, "story": True},
     },
 }
 # Back-compat: the Phase-1 archetypes 'webmap+catalog'/'catalog' were dropped (their only difference was
@@ -1460,6 +1463,45 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
   .s-hint {{ font-size: 11.5px; color: var(--muted); margin-top: 6px; }}
   .foot {{ font-size: 12.5px; color: var(--muted); margin-top: 40px; }}
   .foot a {{ color: var(--primary); text-decoration: none; }}
+
+  /* ── Phones ──────────────────────────────────────────────────────────────────────────────
+     A long URL is the usual reason a page scrolls sideways on a phone: an unbroken string has no
+     wrap opportunity, so it sets the width of the whole document and every other line inherits
+     the overflow. The author's description is free text and routinely contains one. Break them
+     anywhere, and cap the other things that can be wider than the screen — an image, a wide
+     table, a code block — rather than letting them push the layout. */
+  .doc, .abstract, .layer-name, .s-hint {{ overflow-wrap: anywhere; }}
+  .doc a, .foot a, .links a {{ word-break: break-word; }}
+  .doc img {{ max-width: 100%; height: auto; }}
+  .doc pre {{ overflow-x: auto; max-width: 100%; }}
+  .doc table {{ display: block; max-width: 100%; overflow-x: auto; }}
+  /* Flex children do not shrink below their content unless told to, which is how one long word
+     inside a row widens the row past the viewport. */
+  .top > *, .s-head > *, .s-urlrow > * {{ min-width: 0; }}
+
+  @media (max-width: 640px) {{
+    body {{ font-size: 15px; }}
+    .wrap {{ padding: 0 16px 56px; }}
+    .top {{ padding: 14px 0; margin-bottom: 30px; gap: 10px; }}
+    h1 {{ font-size: 27px; margin-bottom: 18px; }}
+    .doc h2 {{ font-size: 20px; margin-top: 26px; }}
+    .doc h3, .doc h4 {{ font-size: 16.5px; }}
+    /* Justified text needs a column wide enough to absorb the spacing; on a phone it produces
+       rivers and strange breaks instead. */
+    .doc p {{ text-align: left; hyphens: none; }}
+    /* The button was sized for a desktop header bar and took most of a phone's width beside the
+       brand. The arrow carries the meaning once the label is short. */
+    .open-map {{ padding: 7px 13px; font-size: 12.5px; gap: 6px; }}
+    .theme-toggle {{ width: 32px; height: 32px; }}
+    .theme-toggle svg {{ width: 15px; height: 15px; }}
+    .brand {{ font-size: 11.5px; }}
+  }}
+  @media (max-width: 380px) {{
+    /* At this width the label and the brand cannot both fit; the arrow alone still reads as
+       "go to the map", and the link keeps its accessible name. */
+    .open-map .label {{ display: none; }}
+    .open-map {{ padding: 7px 11px; }}
+  }}
 </style>
 </head>
 <body>
@@ -1468,7 +1510,7 @@ def _about_page(slug: str, title: str, description: str | None, layers_info: lis
     <span class="brand">GeoDeploy portal</span>
     <span class="top-actions">
       <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle theme"></button>
-      <a class="open-map" href="./">Open the map →</a>
+      <a class="open-map" href="./" aria-label="Open the map"><span class="label">Open the map</span> →</a>
     </span>
   </div>
   <div class="kicker">Documentation</div>

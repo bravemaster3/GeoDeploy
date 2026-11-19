@@ -475,3 +475,59 @@ value); bounded by `max_size` and by `MAX_COLOR_CLASSES`, and a raster with frac
 values is reported as **continuous with a reason** rather than truncated into a classification that
 would mis-colour most of the map. Verified against every raster on the live instance: the DEMs
 answer "continuous", and a 3-class mask answers `[0, 1, 2]`.)
+
+### Deployment (2026-09-12)
+`admin.py` gained three owner-only endpoints, and `public.py` one unauthenticated one, for the
+shared-machine install (issue #79):
+
+- `GET /admin/deployment` — intent vs reality vs the observed origin, plus a plain-language verdict.
+- `GET /admin/deployment/proxy-config` — the nginx/Caddy/Apache/Traefik block for a domain. The
+  domain is validated as a hostname and nothing else, because it is interpolated into a config file
+  the operator will paste into their web server.
+- `POST /admin/deployment/verify` — resolves the domain, fetches `/api/public/whoami` through it, and
+  reports four checks individually ("it does not work" is not actionable). Outbound and
+  owner-only: `follow_redirects=False`, only the fields `whoami` defines are read, and the body is
+  never surfaced.
+- `GET /api/public/whoami` — **deliberately unauthenticated**, because the whole point is to be
+  fetched through a brand-new public domain to find out what arrives. Echoes four derived fields and
+  never a caller-supplied header, so it cannot reflect content. `instance` is a salted, truncated
+  hash of the secret key: it proves the domain reaches THIS GeoDeploy without revealing which one.
+  Already inside `main.py::_PUBLIC_CORS` via the `public(/.*)?` branch.
+
+- `POST /admin/deployment/check-dns` — DNS on its own, returning `ok` / `unresolved` / `elsewhere` /
+  `proxied`. Separate from Verify because it is the step with a WAITING PERIOD in it: "not propagated
+  yet" and "pointing at another machine" look identical and need opposite reactions. `proxied`
+  exists because a Cloudflare-proxied record resolves to Cloudflare, which is CORRECT — calling it a
+  misconfiguration would send the operator to undo a working setup.
+
+`_valid_domain` is shared by all three: the string reaches a resolver AND a config file the operator
+will paste into their web server, so a newline could carry an nginx directive. Pinned by
+`api/tests/test_deployment_api.py`, which also checks the endpoints are owner-only (not merely
+admin) and that `whoami` cannot be turned into a reflector.
+
+### Configuring the host's reverse proxy (2026-10-09)
+Four more owner-only endpoints, and the only ones in GeoDeploy that change software GeoDeploy did not
+install. They delegate every decision to `services/hostproxy.py` — see its docstring for the six
+rules — and the routers' own job is validation, threadpool dispatch and the audit record.
+
+- `GET /admin/deployment/host-proxy?domain=…` — `hostproxy.plan()`: what is in front of GeoDeploy,
+  the file it would add, and every reason it would refuse. Called BEFORE the button is offered, so a
+  machine we cannot help says so while the operator is still choosing rather than after they commit.
+  With no `domain` it returns bare detection, for the panel's first paint.
+- `POST /admin/deployment/host-proxy/apply` — write one file, test, reload; or put everything back
+  and reload nothing. `plan()` runs again INSIDE `apply()`, so an API client that skips the GET hits
+  exactly the same refusals (`test_apply_refuses_without_writing_when_the_plan_says_no`).
+- `POST /admin/deployment/host-proxy/remove` — undoes precisely what was written, from the recorded
+  state, testing before the reload.
+- `POST /admin/deployment/host-proxy/certificate` — runs the HOST's certbot. Separate from apply and
+  never implied by it: an external CA, a public Certificate Transparency entry, and a rate limit.
+
+`require_owner`, not `require_admin` — the owner is the person whose machine this is. A `ProxyError`
+becomes a 400 with its own text, because every one of them is a sentence the operator needs to read
+rather than an internal fault. `/deployment/proxy-config` is untouched and still returns the same
+text for an operator who would rather place it themselves; the panel offers both routes side by side.
+
+## Last updated
+2026-10-09 (the four host-proxy endpoints — GeoDeploy configures the machine's own web server)
+2026-09-12b (check-dns, and one shared domain validator)
+2026-09-12 (the deployment endpoints above)

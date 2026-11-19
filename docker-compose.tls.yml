@@ -1,0 +1,28 @@
+# Publish host 443 as well as 80 — for an installation where GeoDeploy terminates TLS itself.
+#
+# NOT ACTIVE BY DEFAULT, and not yet useful on its own: nginx/nginx.conf's `server { listen 443 ssl; }`
+# block is still commented out, so today the container has nothing listening on 443. This file exists
+# so that publishing 443 is a deliberate opt-in rather than something the base compose file does to
+# every machine — see the note above `ports:` in docker-compose.yml.
+#
+# TWO uses:
+#
+#  1. You already provisioned certificates by hand and uncommented the TLS server block. Before this
+#     change the base file published 443 for you. Now you ask for it:
+#
+#         echo 'COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml' >> .env
+#         docker compose up -d --force-recreate nginx
+#
+#     COMPOSE_FILE is read by the Compose CLI from .env, the same way COMPOSE_PROFILES already is, so
+#     install.sh, update.sh, self-update.sh and the dashboard's apply helper all honour it with no
+#     further changes.
+#
+#  2. The certbot flow, when it lands.
+#
+# Compose merges `ports:` lists ADDITIVELY — an override can add a mapping but never remove one —
+# which is precisely why the base file carries the one publish everybody needs and this file adds the
+# optional second, rather than the other way round.
+services:
+  nginx:
+    ports:
+      - "${GEODEPLOY_HTTPS_BIND:-0.0.0.0}:${GEODEPLOY_HTTPS_PORT:-443}:443"

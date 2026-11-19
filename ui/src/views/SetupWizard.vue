@@ -45,8 +45,7 @@
                      dots look identical, so the operator submits someone else's password and reads
                      "password authentication failed" for a password they can see is correct. This
                      is not a login form: nothing saved for this host is ever the right value. -->
-                <input v-model="db.password" type="password" class="input"
-                  autocomplete="new-password" name="geodeploy-db-password" spellcheck="false" />
+                <PasswordField v-model="db.password" name="geodeploy-db-password" />
               </div>
             </div>
           </template>
@@ -74,8 +73,7 @@
               <div><label class="label">Access Key</label><input v-model="storage.access_key" class="input" /></div>
               <div>
                 <label class="label">Secret Key</label>
-                <input v-model="storage.secret_key" type="password" class="input"
-                  autocomplete="new-password" name="geodeploy-storage-secret" spellcheck="false" />
+                <PasswordField v-model="storage.secret_key" name="geodeploy-storage-secret" />
               </div>
             </div>
           </template>
@@ -88,10 +86,23 @@
             <div><label class="label">Full name</label><input v-model="admin.name" class="input" /></div>
             <div><label class="label">Email</label><input v-model="admin.email" type="email" class="input" /></div>
             <div>
-              <label class="label">Password</label>
-              <input v-model="admin.password" type="password" class="input" minlength="8"
-                autocomplete="new-password" name="geodeploy-new-admin-password" />
+              <label class="label" for="gd-admin-password">Password</label>
+              <PasswordField id="gd-admin-password" v-model="admin.password" minlength="8"
+                             name="geodeploy-new-admin-password" />
               <p class="text-xs text-muted-foreground mt-1">Minimum 8 characters</p>
+            </div>
+            <!-- Confirmation, because this password is set ONCE and the next screen is a sign-in
+                 form that cannot tell a typo from a wrong password. There is no "forgot password"
+                 on a fresh instance with no mail configured, so a mistyped character here means
+                 resetting the admin from a shell. -->
+            <div>
+              <label class="label" for="gd-admin-password2">Confirm password</label>
+              <PasswordField id="gd-admin-password2" v-model="adminPassword2"
+                             name="geodeploy-new-admin-password-confirm"
+                             :invalid="passwordMismatch" />
+              <p v-if="passwordMismatch" class="text-xs text-red-400 mt-1">
+                The two passwords are different.
+              </p>
             </div>
           </div>
         </template>
@@ -121,9 +132,8 @@
             </p>
             <input v-model="recoverAccessKey" class="input w-full text-sm"
               autocomplete="off" name="gd-recover-access" placeholder="Access key" />
-            <input v-model="recoverSecretKey" type="password" class="input w-full text-sm"
-              autocomplete="new-password" name="gd-recover-secret" placeholder="Secret key"
-              @keydown.enter="submitStorageSecret" />
+            <PasswordField v-model="recoverSecretKey" name="gd-recover-secret"
+                           placeholder="Secret key" @enter="submitStorageSecret" />
             <button @click="submitStorageSecret" :disabled="busy || !recoverSecretKey.trim()"
               class="btn-secondary w-full justify-center text-sm disabled:opacity-60">
               {{ busy ? 'Checking…' : 'Save storage credentials' }}
@@ -185,7 +195,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import PasswordField from '@/components/PasswordField.vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { configureDB, configureStorage, createAdmin, getSetupStatus, recoverStorageSecret } from '@/api'
 
@@ -296,6 +307,12 @@ async function createAndContinue() {
   }
 }
 
+// Only flagged once the second field has something in it — showing "different" against an empty
+// box while someone is still typing the first character is noise, not help.
+const adminPassword2 = ref('')
+const passwordMismatch = computed(() =>
+  adminPassword2.value.length > 0 && admin.password !== adminPassword2.value)
+
 async function next() {
   error.value = ''
   busy.value = true
@@ -315,6 +332,12 @@ async function next() {
       await configureStorage(storage)
       step.value++
     } else {
+      // Checked here as well as in the button's disabled state: the Enter key, a restored form and
+      // a programmatic submit all reach this line without passing the button.
+      if (admin.password !== adminPassword2) {
+        error.value = 'The two passwords are different.'
+        return
+      }
       await createAdmin(admin)
       router.push('/login')
     }

@@ -49,6 +49,64 @@ Reusable presentational/interactive widgets used by the views, grouped by featur
   carries a `source` per group for diagnostics; it is deliberately **not rendered** — the panel
   answers "what are my credentials", and where they were read from is our plumbing, not the
   operator's question (user call, 2026-08-06).
+- `PasswordField.vue` (2026-10-11) — a password box you can read back, used by the sign-in form and
+  every secret field in the setup wizard. Typing a long generated secret into a field of dots and
+  getting "authentication failed" says nothing about WHICH character went wrong, and the usual
+  recovery is to retype it blind. Reveal is per-field and per-press and **starts hidden on every
+  mount** — a field that remembers being revealed shows a secret to whoever walks past next. The
+  toggle is `tabindex="-1"` so it never sits between the password and the submit button, and
+  carries `aria-pressed`. `autocomplete` defaults to `new-password`, which is right for every field
+  in this app except the sign-in box: the browser otherwise substitutes a saved credential for the
+  host, the dots look identical, and the operator submits someone else's value.
+- `InfoDot.vue` (2026-10-09) — the ⓘ that holds the sentence a panel does not need to say out loud.
+  **A component rather than a `title=` attribute because touch devices have no hover**, so a native
+  tooltip is invisible on a phone — the exact place a wall of explanatory text hurts most. Hover
+  opens it on a pointer device (gated on `matchMedia('(hover: hover)')`, since a touch "hover" fires
+  alongside the tap and would toggle twice), tap toggles it anywhere, Escape and an outside tap
+  close it. Use it to move the *why* out of the default view: the panel should say what is true, the
+  dot should say why it matters.
+- `infra/DeploymentPanel.vue` (2026-09-12) — owner-only. Where this instance is published, and how
+  to put a domain in front of it. Renders three facts side by side because their DISAGREEMENTS are
+  the diagnosis: what `.env` asks for, what the nginx container actually publishes, and the scheme +
+  host of the live request (`GET /admin/deployment`). The last is the one that matters — GeoDeploy
+  builds every link it hands out from the address the request arrived on, so a proxy that drops
+  `Host` produces shared links pointing at `127.0.0.1` and nothing notices for days. The verdict is
+  one plain sentence, never a table of variables. Below it, a domain field generates the
+  nginx/Caddy/Apache/Traefik block (`/deployment/proxy-config`, copy-only — GeoDeploy never writes to
+  a web server it did not install, because other people's sites may be on that machine), and
+  **Verify** (`POST /deployment/verify`) checks DNS, reaches the domain from the server and confirms
+  it lands on THIS instance with the hostname intact. `mismatch` deliberately requires
+  `reality.port` to be non-null: an unreadable Docker socket means unknown, not wrong.
+  Since 2026-09-12 the domain half is a **three-step flow**, not a text box: step 1 is DNS on its own
+  — this server's public address with a copy button, the A record laid out the way a control panel
+  asks for it (`Name` is the subdomain ALONE, because every panel appends the zone and
+  `maps.example.org.example.org` is the commonest mistake there is), and a **Check DNS** that is
+  deliberately separate from Verify. "Not propagated yet" and "pointing at another machine" look
+  identical from a browser and need opposite reactions, and a Cloudflare-proxied record is recognised
+  as CORRECT rather than reported as wrong. Steps 2 and 3 are the proxy config and Verify.
+  **Since 2026-10-09 step 2 is a CHOICE, not a page of text:** "Let GeoDeploy configure it" against
+  "I'll configure it myself", both always offered. The automatic side calls `/deployment/host-proxy`
+  first and on its own, so the panel can withhold the button honestly — a machine GeoDeploy cannot
+  configure flips `mode` to manual rather than leaving a disabled button, and every refusal is
+  rendered in full (title, detail, fix) because a blocker is GeoDeploy DECLINING to touch something,
+  not an error. `applied` is set when the WROTE step succeeded, not when the whole apply did: that is
+  exactly when **Remove it** has to be reachable. The certificate half appears only for
+  `tls === 'certbot'` and only with certbot present — Caddy says so itself instead — and the
+  Cloudflare note (Flexible until there is an origin certificate, then Full (strict)) is keyed off the
+  DNS step's `proxied` state, so it shows for the people it is true for. The manual route is NOT a
+  fallback and is never hidden: the same text, the same `/deployment/proxy-config` call, for operators
+  who would rather own every change to their own web server.
+  **Copy trimmed 2026-10-09** on the operator's note that it "looks too much AI": the panel states
+  the fact, an `InfoDot` holds the reasoning. Same for the server-side strings in `hostproxy.plan()`
+  — the warnings are one sentence and actionable now, with the detail in the docs. The button label
+  is keyed off `managed_domain` rather than the verdict level, because "Give it a domain" to someone
+  whose domain already works implied the work had not been done, and hid the certificate button
+  behind it; when the verdict carries `action: 'certificate'` it becomes a primary **Set up HTTPS**.
+  **The rule the trim pass had to learn:** shorten the explanation, never the LABEL. Trimming left
+  the certificate email as a bare placeholder next to a button that contacts a certificate
+  authority, and the operator asked "should I just type in my email? it doesn't say why" — which is
+  the right question to ask of an unlabelled box. Both inputs in this panel now have a real
+  `<label for>`; the *why* lives in the `InfoDot` beside it.
 - `portal/CreatePortalModal.vue` — new-portal dialog (title, description, access); creates via the portals store then routes to the editor.
 - `portal/LayerPanel.vue` (resolves vector/raster/**external** layers from the data store; external sources get an opacity-only popover, plus a colour picker for WFS vector) — **thin row** mirroring the published portal: drag handle (reorder is wired in `PortalEditor.vue`) · eye/eye-off (`update {visible}`) · **symbol swatch** that opens a **teleported symbology popover** · name · zoom · remove. The popover holds: opacity; vector colour/fill/outline/width; **line type** (solid/dashed/dotted); **point marker shape** (circle/square/triangle/diamond/star/cross) + size; popup-field picker; **raster band selection** (multiband → RGB composite with R/G/B band pickers, or single band) + palette/hillshade/Z (single-band output) and stretch/rescale (all); save/use default. Band selection stores `style.bidx` (`[n]` single, `[r,g,b]` RGB). The list swatch (`geomSvg`/`markerSvg`) draws the actual symbol (colour, dash, marker shape). Emits `update`/`remove`/`zoom`.
   **Two hosts, one control** (issue #23): `standalone` renders the symbology body ALONE — no row, no
@@ -194,6 +252,8 @@ All dialogs (`UploadModal`, `AddSourceModal`, `DiscoverModal`, `portal/CreatePor
   icon logic in `views/PortalEditor.vue` + `templates/shared/portal.js` — change all three together.
 
 ## Last updated
+2026-10-11 (PasswordField: reveal toggle everywhere, and a confirm field in setup)
+2026-10-09 (DeploymentPanel: two routes — GeoDeploy configures the host proxy, or you do)
 2026-08-31 (`portal/DashboardBuilder.vue`: a **Fill the screen** checkbox in the board-wide
 settings, writing `grid.fit`. Its hint is deliberate about the limit — it stretches, it does not
 squeeze, so a screen too short still scrolls.)
@@ -251,6 +311,12 @@ previous value: the classic one-step-lag bug). Polygons also gain a 3D "extrude 
 hidden when the layer has no numeric column. The row swatch now shows the MIDDLE class via
 `lib/symbology.representativeColor` — the flat `color` is unused under a classification, and a
 swatch showing a colour that appears nowhere on the map is a small lie told constantly.)
+2026-09-12b (`infra/DeploymentPanel.vue` gained the three-step domain flow; `infra/ConnectionDetails.vue`
+now says that a managed database's host and port are the address INSIDE the Docker network — it was
+showing `postgres:5432` beside a password with nothing to say that no client outside the stack can
+dial it)
+2026-09-12 (new `infra/DeploymentPanel.vue` — Settings → Infrastructure → Deployment, the
+shared-machine install's UI half; see its entry above)
 2026-08-06 (`infra/ConnectionDetails.vue` documented + it now shows which source each credential
 group came from — issue #2)
 2026-07-29 (new `data/ShareLinksModal.vue` + a link button on VectorRow/RasterRow — the per-layer

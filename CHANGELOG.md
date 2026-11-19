@@ -28,6 +28,177 @@ upgrade needs manual work.
   changes for a running instance: images are named and built exactly as before.
 - The swap snippet in Getting started is safe to run twice, and explains the harmless
   `sudo: unable to resolve host` warning fresh cloud images print.
+- **Settings → Deployment on a port-80 (dedicated) instance**, found on an instance updated from
+  an older release: Copy buttons did nothing on plain `http://` (the browser only allows the
+  clipboard API over https — every Copy button now falls back, and says *Copied* only when it
+  copied); the panel told a machine with no proxy to run `set-port.sh 80` "once the proxy works";
+  the manual configuration pointed a proxy at `127.0.0.1:80`, GeoDeploy's own public port; and a
+  Cloudflare-fronted instance visited over `http` was offered a certificate it has nowhere to
+  install. Now the configuration targets `127.0.0.1:8080` and starts with the move there, Apply
+  refuses until GeoDeploy has left port 80, and a domain reached over `https` reads as published.
+- **Checked against real web servers before release, and five ways Apply could disturb one closed.**
+  A new suite (`installer/tests/test-hostproxy.sh`) runs Apply against throwaway machines with a
+  real nginx, Apache or Caddy serving other sites — 25 scenarios, each asserting the configuration
+  is byte-identical afterwards, every other site answers exactly as before, and the web server was
+  reloaded, never restarted. It found: a web server **in a container** was given an address it
+  cannot reach (every visitor got an error while Apply reported success), could have a file it did
+  not own overwritten, and a site it already served for the same name stopped working — it is now a
+  named refusal with the manual steps; a name another site already serves went unnoticed when
+  written on one line, as a second `ServerAlias`, or as Caddy's `http://a, http://b {`; a web server
+  that is installed but not running was configured; and stock Debian Apache always rolled back
+  without saying it needs `a2enmod proxy proxy_http headers`.
+- **Existing instances keep IPv6.** The port line read `0.0.0.0:80:80`, which Docker publishes on
+  IPv4 only; the `80:80` it replaced also served IPv6, so any instance reached over IPv6 would have
+  lost it the first time its nginx was recreated. Compose now reads one key,
+  `GEODEPLOY_HTTP_PUBLISH`, which defaults to exactly `80` — and parses on every Docker Compose from
+  2.0 to 5.x (the conditional forms that would have avoided a new key are rejected by Compose
+  before 2.12). The installer and `set-port.sh` write it; installations that recorded a port before
+  it existed get it automatically.
+- **Older releases and branches still install.** The new installer needed files that releases up to
+  v1.6.4 do not have, so `GEODEPLOY_VERSION=v1.6.4 … | bash` would have stopped with an error. It now
+  hands over to that release's own installer — after saying that it takes ports 80 and 443, asking
+  (or `--dedicated`), and refusing if either port is already in use.
+- **No downgrade into ports 80 and 443.** Updating an instance that runs behind a proxy to a release
+  from before this one is refused, with the reason, before anything changes — those releases always
+  publish 80 and 443 and would collide with the web server in front.
+- **Passwords can be read back, and the admin password is confirmed.** Every password and secret
+  field — sign-in, the database password, the storage secret key, the admin password — now has a
+  reveal toggle, because typing a long generated secret into a field of dots and getting
+  "authentication failed" tells you nothing about which character went wrong. The setup wizard also
+  asks for the admin password twice: it is set once, the next screen is a sign-in form that cannot
+  tell a typo from a wrong password, and a fresh instance has no mail configured and so no way to
+  reset it except from a shell.
+- **Portal About pages work on a phone, and every archetype has one.** The About page scrolled
+  sideways on a narrow screen — a long link in the description has no wrap opportunity, so it set
+  the width of the whole document — and the "Open the map" button was sized for a desktop header.
+  Both fixed, along with images, tables and code blocks that could be wider than the screen. The
+  About panel was also only offered on the `webmap` archetype; catalogs, dashboards and story maps
+  now have it too. Leaving the description empty is still how you get no About page.
+- **The dashboard can configure your existing web server for you.** Settings → Deployment: add a DNS
+  record, type the domain, press Apply — GeoDeploy works out what is in front of it (nginx, Caddy or
+  Apache, on the host or in a container), adds **one new file** to its drop-in directory, tests the
+  configuration, and reloads. It never edits `nginx.conf`, a Caddyfile, or any other site's
+  configuration, and it never restarts anything. It also refuses, with the reason, more often than it
+  acts: if your configuration does not already pass its own test it writes nothing and shows you what
+  the test said, because reloading would be what finally published somebody else's latent breakage;
+  if the domain is already served here, if a file of that name exists and GeoDeploy did not write it,
+  or if the drop-in directory is not actually included by the main configuration, it stops. A failed
+  test after writing removes the file and never reaches the reload. **Remove it** undoes exactly what
+  was added, testing before it reloads for the same reason. Traefik is a named refusal with precise
+  manual steps rather than a guess — its routing is labels and providers, not a file we can drop.
+  **The copy-and-paste route is not going anywhere:** both are offered side by side, every time, for
+  operators who would rather own every change to their own web server.
+  [#79](https://github.com/bravemaster3/GeoDeploy/issues/79)
+- **HTTPS lands where you expect, or GeoDeploy tells you why not.** The proxy block GeoDeploy writes
+  listens on port 80, and on a machine that already serves HTTPS for another site — particularly with
+  a `server_name _` catch-all on 443 — every `https://` request for your new domain is answered by
+  that other site while port 80 serves GeoDeploy perfectly. Found on a real server, where every check
+  reported success and the browser showed somebody else's website. The panel now says so **before**
+  you apply, checks port 443 as well as port 80 **after**, and names the Cloudflare SSL/TLS mode to
+  use in the meantime (Flexible until the certificate exists, then Full (strict) — the mode decides
+  which origin port Cloudflare connects to). The written file also no longer carries the paste
+  instructions meant for someone placing it by hand.
+- **Automatic HTTPS, without installing anything.** Press **Get a certificate** in Settings →
+  Deployment: GeoDeploy runs certbot in a throwaway container, obtains a Let's Encrypt certificate
+  over the HTTP-01 challenge, rewrites its own proxy block to serve HTTPS on 443, tests and reloads —
+  then renews it daily. Nothing is installed on your machine; the certbot image is removed when it
+  exits. Caddy still needs none of this, and Apache still gets the command to run.
+  Two details that exist because of how this fails otherwise: port 80 keeps serving the ACME path
+  **unredirected**, since renewal uses the same challenge and redirecting it to an expired
+  certificate is how auto-renewal quietly stops; and on a Cloudflare-fronted domain port 80 serves
+  the application rather than redirecting, because with SSL/TLS on Flexible a redirect bounces the
+  browser between Cloudflare and your server forever. Renewal reloads your proxy only when the
+  certificate file actually changed, and never reloads a configuration that fails its own test.
+- **The installer says which mode it chose.** The screen at the end of a shared-machine install
+  explained that nothing outside the server can reach GeoDeploy "which is the point of this mode"
+  without ever naming the mode. It now says `behind-proxy` — the word `.env`, `set-port.sh --show`
+  and the dashboard all use.
+- **Installing a branch or a release re-run no longer fails confusingly.** Re-running the installer
+  against a different `GEODEPLOY_VERSION` could not reach any branch but the one originally cloned
+  (the clone is single-branch and shallow), and an installer piped from one version while cloning
+  another died with a bare "No such file or directory". Both are fixed: the existing-checkout path
+  now un-shallows and widens the refspec the way `self-update.sh` always has, and a version mismatch
+  is diagnosed in one sentence that names the cause — a `VAR=… curl … | bash` prefix sets the
+  variable for *curl*, not for bash.
+- **GeoDeploy can be installed on a machine that already runs other software** — and it no longer
+  takes the machine's web-server role without being asked. The installer now checks what is on the
+  box first (ports, an existing nginx/Caddy/Apache, a conflicting Docker network or container name,
+  swap) and **asks** how GeoDeploy should be published: take over port 80, or listen on
+  `127.0.0.1:<port>` behind the reverse proxy you already run. It never stops, edits or
+  reconfigures anything already running, and the recommendation is pre-selected but never
+  auto-accepted — including on an empty server. With no terminal to ask with, it installs
+  behind-proxy on a free local port, the only choice that claims nothing; set
+  `GEODEPLOY_DEPLOY_MODE` in the environment for cloud-init or Ansible.
+  [#79](https://github.com/bravemaster3/GeoDeploy/issues/79)
+- **A second GeoDeploy on the same machine is refused, with the reason.** It was never supported, but
+  it used to fail confusingly halfway through — and worse than that: every instance joins the same
+  Docker network, where the first one's database answers to the generic alias `postgres`, so a second
+  instance's API could have connected to the first one's data. Preflight now detects an existing
+  installation anywhere on the machine and stops, naming the directory it found. (Running GeoDeploy
+  alongside *other software* is what this release is about and is fully supported; it is two copies
+  of GeoDeploy that cannot coexist yet.)
+- **Re-running the installer is documented** — it keeps your port, leaves your data alone, does not
+  re-run the wizard, and discards edits to tracked files (`git reset --hard`). `GEODEPLOY_DIR`
+  installs elsewhere.
+- **Choosing the port is a real choice.** The installer offers three options rather than two, because
+  "dedicated or not" and "which port" are different questions: make this machine a dedicated
+  GeoDeploy server (spelled out — it takes port 80, the address carries no port, anything else
+  wanting 80 later will fail to start, nothing running now is stopped), use the default port, or pick
+  another from the ports that are free *at that moment*. Any port can be typed, on the list or not.
+  `--port 8081` / `--dedicated` skip the question (`bash -s -- --port 8081` through a pipe), and
+  `GEODEPLOY_PORT_CANDIDATES` in `.env` sets what gets offered — ten by default. **Every path checks
+  the port before anything starts**, including a last look immediately before the containers come up.
+- **You can connect straight to the PostGIS database.** Off by default and deliberately so — the
+  `postgres` container publishes no host port at all, so it lives only on GeoDeploy's internal
+  network. One line in `.env` publishes it on `127.0.0.1:5432` for an SSH tunnel from QGIS, psql or
+  DBeaver; opening it to the network is a separate, documented decision. See
+  [Access from other tools](https://docs-geodeploy.kndev.org/data-access/).
+- **Giving GeoDeploy a domain is now a guided three-step flow**, not a text box. Settings →
+  Deployment shows *this server's public address with a copy button* and the A record laid out the
+  way a DNS panel asks for it — including the two mistakes almost everyone makes: typing the full
+  name in the Name field (most panels append the zone), and leaving Cloudflare's orange cloud on
+  while certbot's HTTP challenge is still trying. **Check DNS** is separate from Verify because it is
+  the step with a waiting period in it: "not propagated yet" and "pointing at another server" need
+  opposite reactions, and a proxied Cloudflare record is recognised as correct rather than reported
+  as wrong. Then the proxy config, then Verify.
+- **Uninstalling is documented** — it was not, anywhere. What each option deletes, what survives, and
+  the things GeoDeploy deliberately leaves behind: Docker itself, your reverse-proxy vhost, your DNS
+  record, your certificates. Including the trap that local MinIO buckets live *inside* the directory
+  `reset.sh` removes, so a backup written there does not survive it.
+- The credentials panel no longer implies the managed database is dialable from your laptop. It shows
+  `postgres:5432` because that is the address inside GeoDeploy's own network, and now says so.
+- **Settings → Deployment** (owner-only) says where the instance is published, who can reach it, and
+  — the useful part — what address GeoDeploy is *observing*, because every link it hands out is
+  built from that. It generates the nginx, Caddy, Apache or Traefik configuration for a domain, and
+  **Verify** then checks DNS, reaches the domain from the server, and confirms the request lands
+  here with the hostname intact. GeoDeploy never writes to a web server it did not install: on a
+  shared machine, a bad reload takes down everybody else's sites too.
+- **`installer/set-port.sh`** moves GeoDeploy between ports, reversibly: it checks the target is
+  free, recreates only nginx so running ingests are untouched, and restores the old settings if the
+  new ones do not come up. **`installer/preflight.sh`** reports every conflict at once and changes
+  nothing.
+- **The port never moves by itself.** Updates and re-running the installer both keep the configured
+  port; if it is taken at startup GeoDeploy fails and says which process has it, rather than
+  relocating behind your reverse proxy's back.
+- Fixed: both updaters hard-coded `http://localhost/health`. On any install not on port 80,
+  `self-update.sh` would have failed its post-update health check and **rolled back a good update**.
+- Fixed: a failed port bind is not repaired by `docker compose restart` or `up -d` — Docker returns
+  the container to `running` with the right port mapping and nothing listening. Preflight, the
+  updater and the dashboard now detect this and name the fix (`up -d --force-recreate nginx`).
+
+**`443:443` is no longer published by the base compose file.** The container has no TLS listener —
+`nginx.conf`'s `server { listen 443 ssl; }` block has always been commented out — so publishing 443
+reserved the machine's most contested port and served nothing, which by itself made installing
+beside any HTTPS site impossible. **If you provisioned certificates by hand and uncommented that
+block, add one line to `.env` before updating:**
+
+```
+COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml
+```
+
+Nothing else is affected: with none of the new keys in `.env` the publish resolves to `80:80`,
+exactly as before — IPv4 and IPv6. Existing containers keep their current bindings until nginx is
+next recreated.
 
 ## v1.6.4 — 2026-09-11
 

@@ -14,6 +14,7 @@
 <script setup>
 import { ref } from 'vue'
 import { CopyIcon } from '@/views/icons'
+import { copyText } from '@/lib/clipboard'
 
 const props = defineProps({
   url: { type: String, required: true },
@@ -23,17 +24,7 @@ const props = defineProps({
 const copied = ref(false)
 
 async function copy() {
-  try {
-    await navigator.clipboard.writeText(props.url)
-  } catch {
-    // Clipboard API needs a secure context — fall back to select+execCommand.
-    const el = document.createElement('textarea')
-    el.value = props.url
-    document.body.appendChild(el)
-    el.select()
-    document.execCommand('copy')
-    document.body.removeChild(el)
-  }
+  if (!(await copyText(props.url))) return   // blocked — the link is on screen and selectable
   copied.value = true
   setTimeout(() => (copied.value = false), 2000)
 }

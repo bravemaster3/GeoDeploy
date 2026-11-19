@@ -247,7 +247,20 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
 - Adding template-level **colour personalization** later = exposing a few `--accent`/etc. overrides
   per portal (theming is already variable-based). Tracked as roadmap `V-10` (template gallery & branding).
 
+- **About is available on every archetype (2026-10-11).** `panels.about` was true for `webmap`
+  only; `catalog`, `dashboard` and `storymap` had it off. The standalone `about.html` was always
+  generated — it is the in-map About panel that was missing — so the effect was an archetype-
+  dependent gap with no reason the author could see. The catalog case had a stated rationale (the
+  cards carry each dataset's abstract), which is true of the DATASETS and no substitute for a page
+  about the PORTAL. Empty description still means no page, which is the real opt-out.
+- **The About page is responsive (2026-10-11).** A long URL in the author's description has no wrap
+  opportunity, so it set the width of the whole document and the page scrolled sideways on a phone;
+  `overflow-wrap: anywhere` plus caps on images, tables and `pre` fixes it at the source. The
+  `.open-map` button was sized for a desktop header and took most of a phone's width — smaller
+  under 640px, label hidden under 380px with the arrow and an `aria-label` carrying the meaning.
+
 ## Last updated
+2026-10-11 (About on every archetype; the About page works on a phone)
 2026-08-31 (`shared/portal.css`: the map's bottom chrome — scale bar, **bottom-centre** coordinate
 readout, attribution — sits on ONE line, on every archetype. `.maplibregl-ctrl-bottom-left` had
 carried `bottom: 24px` since the first shared-runtime refactor while `-bottom-right` kept MapLibre's

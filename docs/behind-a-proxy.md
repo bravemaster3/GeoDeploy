@@ -1,0 +1,601 @@
+---
+description: >-
+  Install GeoDeploy on a machine that already runs other software: a local port instead of ports 80
+  and 443, an existing nginx, Caddy or Apache in front, and a domain configured from the dashboard.
+---
+
+# Installing alongside other software
+
+GeoDeploy does not have to own the server. It can publish itself on a local port and sit behind an
+nginx, Caddy, Apache or Traefik you already run — a lab server, a shared research machine, a VM with
+someone else's website on it.
+
+The installer **asks** which of these you want, every time. It never takes ports 80 and 443 because
+they happen to be free, and it never stops, edits or reconfigures anything already running.
+
+## The two shapes
+
+| | **Dedicated** | **Behind a proxy** |
+| --- | --- | --- |
+| Publishes on | port 80, every interface (IPv4 and IPv6) | `127.0.0.1:<port>` |
+| Reachable from | anywhere | this machine only |
+| HTTPS and the domain | not yet configured | your existing reverse proxy |
+| Right when | the server was bought for GeoDeploy | anything else on the box serves the web |
+
+```
+DEDICATED                          BEHIND A PROXY
+
+internet                           internet
+   │                                  │
+   ▼                                  ▼
+0.0.0.0:80                       your nginx :443  ──► other sites
+   │                                  │
+   ▼                                  ▼
+GeoDeploy nginx                  127.0.0.1:8080
+                                      │
+                                      ▼
+                                 GeoDeploy nginx
+```
+
+## Installing
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bravemaster3/geodeploy/main/installer/install.sh | bash
+```
+
+The installer checks the machine first and shows you what it found, then asks:
+
+```
+  Docker                    ✓  usable with sudo
+  Port 80                   ✗  in use — nginx (systemd: nginx.service)
+  A free port for GeoDeploy    8080
+
+  This machine is already serving something on port 80 or 443.
+  GeoDeploy will not touch it, whichever option you choose.
+
+How should GeoDeploy be published?
+
+  1) Make this machine a dedicated GeoDeploy server.
+     GeoDeploy takes port 80 and answers at http://203.0.113.10 — no port in
+     the address. It becomes the machine's web server: anything else that wants
+     port 80 afterwards will fail to start. Nothing running now is stopped by
+     this installer. Choose this on a server you bought for GeoDeploy.
+     Not available right now — port 80 is in use by nginx (pid 812).
+
+  2) Use the default port — 127.0.0.1:8080
+     GeoDeploy shares the machine. It listens on port 8080, reachable only from
+     this server, and a reverse proxy you already run publishes it on a domain.
+
+  3) Choose a different port.
+     Same as 2, on a port you pick.
+     Free right now: 8080 8082 8090 8880 9080 9090
+
+Choose [2]:
+```
+
+Option 1 is the recommendation on an empty machine, option 2 when something else is already serving.
+Either way the recommendation is only pre-selected — pressing Enter is you choosing it. Picking 1
+while something holds port 80 is refused and re-asked; the installer will not stop the other service
+for you.
+
+**Option 3** asks which port, offering the ones that are free *at that moment* and accepting any
+other you type. A port that is taken is refused, with the process that holds it named, and you are
+asked again — GeoDeploy never quietly substitutes a working port for the one you asked for.
+
+### Choosing the port up front
+
+If you already know, skip the question:
+
+```bash
+curl -fsSL …/install.sh | bash -s -- --port 8081
+curl -fsSL …/install.sh | bash -s -- --dedicated
+```
+
+`bash -s --` is how arguments reach a piped script. The port is still checked: if 8081 is taken you
+are told what holds it and offered what is free, rather than getting an install that completes and
+leaves nginx dead.
+
+### Which ports get offered
+
+`GEODEPLOY_PORT_CANDIDATES` in `.env` (or in the environment, which wins) — ten by default:
+
+```
+GEODEPLOY_PORT_CANDIDATES=8080,8081,8082,8090,8880,9080,9090,8008,7080,8888
+```
+
+It is a **suggestion list**, read only while a port is being chosen, and always filtered to the ones
+actually free at that moment. It is not the same as `GEODEPLOY_HTTP_PORT`, which records the port
+you *chose* and is authoritative from then on. Keeping them apart is what stops the port drifting:
+if the installer re-scanned the list on every run, an install that landed on 8081 because 8080 was
+busy would move back to 8080 the day that service was retired — while your `proxy_pass`, your DNS
+record and everyone's bookmarks still pointed at 8081.
+
+### Checking before you install
+
+`preflight.sh` runs every check and changes nothing. Safe on a production box at any time:
+
+```bash
+bash installer/preflight.sh
+```
+
+### Installing without a terminal
+
+Cloud-init, Ansible, CI — anywhere the installer cannot ask a question. Set the answer in the
+environment and it will not prompt:
+
+```bash
+GEODEPLOY_DEPLOY_MODE=behind-proxy GEODEPLOY_HTTP_PORT=8080 bash install.sh
+GEODEPLOY_DEPLOY_MODE=dedicated bash install.sh
+```
+
+With no terminal **and** no setting, GeoDeploy installs behind-proxy on the first free port. That is
+the only choice that can neither break anything nor claim anything, and taking port 80 is never
+inferred from silence.
+
+## Reaching the dashboard before you have a domain
+
+In behind-proxy mode nothing outside the server can reach GeoDeploy — that is the point. Open an SSH
+tunnel from your own computer:
+
+```bash
+ssh -L 8080:127.0.0.1:8080 you@your-server
+```
+
+then open `http://localhost:8080`. The installer prints this line with your port already in it.
+
+## Giving it a domain
+
+**Settings → Deployment** in the dashboard. Add a DNS record, type the domain, and choose one of two
+routes — both are offered every time, and neither is a fallback for the other:
+
+- **Let GeoDeploy configure it.** It looks at what is actually in front of it, adds one new file to
+  your web server, tests it, and reloads. Described below.
+- **I'll configure it myself.** The same configuration as text, for you to place. If you would rather
+  own every change to your own web server, this is the right choice and always available —
+  [the settings are explained here](#if-you-would-rather-do-it-by-hand).
+
+Either way, finish with **Verify**: it checks DNS, reaches the domain from the server, and confirms
+the request lands on *this* instance with the hostname intact.
+
+### Letting GeoDeploy configure it
+
+It works with **nginx, Caddy and Apache installed on the host**. A web server that runs in a
+container gets [exact manual steps](#traefik-or-any-proxy-in-docker) instead — see the table. What it
+does is deliberately small: it adds **one new file** — `geodeploy.conf` in your web server's drop-in
+directory, carrying a `managed by GeoDeploy` marker — and reloads. It never edits `nginx.conf`, your
+Caddyfile, or any other site's configuration, and it never restarts anything.
+
+Before writing anything it checks all of these, and **refuses rather than guesses**:
+
+| It stops if | Because |
+| --- | --- |
+| Your configuration does not currently pass its own test | Reloading would be what finally applies whatever is already wrong in there, and your sites would go down with GeoDeploy's name on it. It tells you what `nginx -t` said and writes nothing. |
+| The domain is already served on this machine | Two blocks claiming one hostname is not an error — one silently wins. Adding ours could change a site that works today. |
+| `geodeploy.conf` exists without our marker | The name matches but the file is somebody else's. |
+| The drop-in directory is not actually included by the main configuration | The file would be written where nothing reads it: success that does nothing, which you would then debug as a DNS problem. |
+| The web server is installed but not running (nothing listens on 80 or 443) | It is not what serves your sites. A file added to it would go live, unannounced, the next time somebody starts it. |
+| Apache's `proxy`, `proxy_http` or `headers` module is not enabled | Debian ships them off. Enabling one changes Apache for every site, so you get the exact `a2enmod` command instead. |
+| The web server runs in a container (nginx, Caddy, Apache) | From inside a container `127.0.0.1` is the container itself, so a site pointing at GeoDeploy's local port would answer every visitor with an error — and GeoDeploy cannot see which names or files that container already has. Connecting it to GeoDeploy's network changes a container GeoDeploy did not create, so you get [the steps](#traefik-or-any-proxy-in-docker) instead. |
+| Traefik is the proxy | Its routing comes from container labels, a file provider or Kubernetes resources — there is no single file to drop that is correct across those. You get [the exact manual steps](#traefik-or-any-proxy-in-docker) instead. |
+| GeoDeploy itself holds port 80 (dedicated mode) and a proxy is installed | Both cannot listen on 80, and `127.0.0.1:80` would be GeoDeploy's own public listener. Move it first with `sudo bash installer/set-port.sh 8080`; the manual configuration is already written for `127.0.0.1:8080` and starts with that step. |
+| There is no reverse proxy at all | A machine with no proxy is not one GeoDeploy should be installing one on. |
+
+After writing, it tests again. **A failed test removes the file and never reaches the reload** — a
+configuration that is never loaded has harmed nobody — and it tells you whether the machine's own
+test passes again, so you know whether the problem was ours. Only a passing test gets a reload, and
+it is always a reload, never a restart: existing connections keep being served, and a proxy that
+rejects the new configuration keeps running the old one.
+
+When it succeeds it asks the proxy for your domain over the machine's own loopback and checks that
+GeoDeploy answers. That is worth more than it sounds: it proves the proxy is correct **whether or not
+DNS has propagated yet**, which is the one thing you otherwise cannot tell apart from a broken
+configuration.
+
+**Remove it** undoes exactly what was added — the file, the symlink if there was one — then tests
+*before* reloading, for the same reason: taking our file away can expose an unrelated problem in your
+configuration, and a tidy-up must not be what takes your sites down.
+
+!!! note "What this needs, and why it is not a new risk"
+
+    The dashboard reaches your web server through a one-shot privileged container, using the Docker
+    socket GeoDeploy already has. That socket is root on the host by any measure — anything that can
+    reach it can already do this — so the capability is not new. What is new is that it is now used
+    for a small, audited, reversible set of operations instead of being available for anything. Every
+    apply and removal is recorded in the audit log with the file it wrote.
+
+    If you would rather GeoDeploy never did this, use the manual route. It is the same text.
+
+### Removing it again
+
+**Remove it** in the panel undoes exactly what Apply added: it deletes `geodeploy.conf` and its
+symlink, runs the proxy's own configuration test, and **only then** reloads. The test comes first
+because taking our file away can expose an unrelated problem elsewhere in your configuration — a
+tidy-up must not be what takes the other sites down.
+
+It asks for confirmation, because the consequence is not obvious:
+
+- The domain **stops being served from here.** Without a certificate it falls through to whatever
+  else the machine answers with.
+- **With** a certificate, and a proxy in front told to require HTTPS from this server, it returns an
+  **error** rather than the other site — there is nothing left claiming the name on port 443. Behind
+  Cloudflare on Full (strict) that is a **526** for every visitor. (Observed, on a live instance.)
+- The **certificate is not deleted.** `/etc/letsencrypt` is untouched, so pressing **Apply** brings
+  the site straight back, HTTPS included.
+- **GeoDeploy keeps running** on its local port. Reach the dashboard with
+  `ssh -L 8080:127.0.0.1:8080 you@your-server` and open `http://localhost:8080`.
+
+!!! tip "If you removed it and the domain is now erroring"
+    Tunnel in as above, then press **Apply**. GeoDeploy sees the certificate still on disk and
+    writes the HTTPS block directly. Nothing else needs changing — not DNS, not Cloudflare.
+
+### HTTPS
+
+!!! warning "A port-80 block is invisible to anyone arriving over HTTPS"
+
+    The block GeoDeploy writes listens on **port 80**. If your machine already terminates HTTPS for
+    another site — and especially if that site's block is `listen 443 ssl; server_name _;`, a
+    catch-all that answers for every hostname — then `https://your-domain` is answered by **that
+    site**, not GeoDeploy, no matter how correct our block is. `http://` works immediately;
+    `https://` does not, until the domain has its own certificate.
+
+    **Behind Cloudflare this bites straight away**, because the SSL/TLS mode decides which origin
+    port Cloudflare connects to:
+
+    | Cloudflare SSL/TLS mode | Connects to your origin on | Result before you have a certificate |
+    | --- | --- | --- |
+    | **Flexible** | port 80 | works |
+    | Full / Full (strict) | port 443 | you get the other site, or a 525/526 |
+
+    So: **Flexible** until the certificate exists, then **Full (strict)**. The panel warns about this
+    before you apply, and checks port 443 as well as port 80 afterwards, so it says plainly when the
+    configuration is right and HTTPS still lands elsewhere.
+
+Getting the certificate depends on which proxy you run:
+
+- **Caddy** obtains and renews it itself. There is nothing to do, and nothing below applies.
+- **nginx** — press **Get a certificate** in the panel. GeoDeploy runs certbot **in a throwaway
+  container**, so nothing is installed on your machine, gets a Let's Encrypt certificate over the
+  HTTP-01 challenge, rewrites its own block to serve HTTPS on 443, tests, and reloads. It then
+  renews itself daily.
+- **Apache** is not automated yet; the panel gives you `sudo certbot --apache -d your-domain`.
+
+#### What automatic HTTPS does to your machine
+
+More than one config file, so it is worth knowing before you press it:
+
+| | |
+| --- | --- |
+| Installed on the host | **nothing** — certbot runs in a container that is removed afterwards |
+| Created on the host | `/etc/letsencrypt` (certificates, account key) and `/var/lib/letsencrypt` |
+| Changed | GeoDeploy's own `geodeploy.conf`, nothing else |
+| Renewal | a daily task in GeoDeploy's worker; certbot no-ops until renewal is due |
+
+The HTTP-01 challenge is a file fetched over **port 80** from the public internet, so port 80 must
+reach this server for that name.
+
+**Behind Cloudflare it usually works with the proxy on**: Let's Encrypt connects to Cloudflare on
+port 80 and Cloudflare forwards the challenge to you, and a redirect to HTTPS is followed and
+accepted. Three things genuinely break it — Bot Fight Mode, a WAF rule or "Under Attack" mode
+answering with a JavaScript page; a cache or page rule on `/.well-known/`; and SSL/TLS already set to
+**Full**, where Cloudflare tries HTTPS against an origin that has no certificate yet. Try it with the
+orange cloud on; if it fails, grey-cloud for two minutes and retry, which rules out all three at
+once. Let's Encrypt allows 5 failed validations per hostname per hour, so failures are cheap but not
+free.
+
+!!! note "Two deliberate details, both of which exist because of how this breaks"
+
+    **Port 80 keeps serving the ACME path, never redirected.** Renewal uses the same challenge, and
+    redirecting it to a port whose certificate has just expired is exactly how an auto-renewing
+    certificate quietly stops renewing.
+
+    **Behind Cloudflare, port 80 serves the application rather than redirecting to HTTPS.** With
+    SSL/TLS on Flexible, Cloudflare connects to port 80; a redirect there sends the browser back to
+    Cloudflare, which connects to port 80 again — an infinite loop on a site that worked a minute
+    earlier. GeoDeploy detects the Cloudflare case and omits the redirect. Turn on **Always Use
+    HTTPS** in Cloudflare instead, and switch SSL/TLS to **Full (strict)** now that your server has
+    its own certificate.
+
+!!! danger "Do not switch the Cloudflare ZONE to Full (strict) on a shared machine"
+
+    The encryption mode is per-**zone**, not per-hostname, so switching it applies to **every proxied
+    record in the domain** — including sites on other servers entirely. Any origin whose certificate
+    does not verify starts returning **526 Invalid SSL certificate** the moment you save. On a
+    machine that exists to host more than GeoDeploy, that is somebody else's website going down
+    because of a change you made for ours. It has happened.
+
+    **Use a rule for the one hostname instead — in every case, not only when you know other
+    sites exist.** GeoDeploy cannot see records in your zone that point at other servers, so neither
+    of you can be sure the zone-wide switch is safe. The rule is the same protection with nothing
+    else at stake:
+
+    *Rules → Configuration Rules → Create rule*
+
+    1. **If incoming requests match… → Custom filter expression.** Not *All incoming requests* —
+       that applies the setting to every site in the zone, which is the thing this rule exists to
+       avoid.
+    2. **Field: Hostname · Operator: equals · Value:** `maps.example.org` — bare hostname, no
+       scheme, no slash, no wildcard. The Field box **defaults to "URI Full"**; left there the rule
+       matches nothing.
+    3. **Check the Expression Preview** reads `(http.host eq "maps.example.org")`. If it says
+       `http.request.full_uri wildcard …`, go back to step 2.
+    4. Scroll to **SSL (optional)** and click **+ Add** — *then* choose **Full (strict)**. Without
+       that click the rule carries no setting and refuses to deploy with `action parameters are
+       required for the set_config action`.
+    5. **Deploy.**
+
+    Both of this form's defaults fail *silently*: a rule scoped to all requests breaks the
+    neighbours, and a rule on the wrong field does nothing at all. In each case the rule looks
+    configured. Verify by result, not by appearance:
+
+    ```bash
+    curl -s https://maps.example.org/api/public/whoami     # "scheme":"https" means it worked
+    ```
+
+    This verifies the connection for GeoDeploy's hostname and changes nothing for anything else. The
+    older equivalent, if Configuration Rules are not available on your plan, is a **Page Rule** on
+    `maps.example.org/*` with *SSL: Full (strict)*.
+
+    After issuing a certificate, GeoDeploy **checks the other hostnames this machine serves** and
+    names the ones whose certificates would fail — so you get "this would break shop.example.org",
+    not a general caution. It cannot see sites in your Cloudflare zone that live on other servers,
+    so the scoped rule is the right default either way.
+
+    **Cloudflare's "Automatic SSL/TLS"** is a good zone default here: it scans each origin and will
+    not apply a mode a server cannot support. It optimises for the zone, though, so it will not give
+    GeoDeploy a verified hop while other origins in the zone lack certificates — combine it with the
+    rule above.
+
+    **If something is already failing**, set the zone back to **Flexible** first. That is the state
+    everything worked in; fix the scoping afterwards, not during an outage.
+
+!!! note "Other CDNs: the same hop, usually without the footgun"
+
+    If something other than Cloudflare is in front — CloudFront, Fastly, Front Door, Akamai, another
+    nginx — the question is identical: once this server has its own certificate, point that product
+    at **port 443** here and turn on certificate verification for this origin, or the last hop stays
+    in clear text.
+
+    The difference is the blast radius. **A zone-wide origin-TLS switch is unusual to Cloudflare.**
+    Most CDNs configure the origin connection per service or per origin — CloudFront's origin
+    protocol policy, Fastly's per-backend TLS, Front Door's origin settings — so the change only
+    affects the site you are configuring and cannot reach a neighbour. If yours is a single switch
+    covering several sites, treat it like Cloudflare's: check the others before you save.
+
+    GeoDeploy only names menu paths for a product it has positively identified (Cloudflare, by its
+    published IP ranges). For anything else it says what to look for and leaves the vocabulary to
+    you, because naming the wrong screen is worse than naming none.
+
+Renewal reloads your proxy **only when the certificate file actually changed** — not on a schedule,
+and not by parsing certbot's output, which is prose and changes between versions. If the
+configuration fails its test at renewal time, nothing is reloaded and the existing certificate stays
+live, which buys you the remaining weeks of its validity to fix the real problem.
+
+### If you would rather do it by hand
+
+The four settings below are not optional. Each one is a real GeoDeploy failure if it is missing, and
+the first two are the ones people leave out:
+
+```nginx
+server {
+    listen 80;
+    server_name maps.example.org;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+
+        # Without this every link GeoDeploy generates — shared links, portal previews, the STAC and
+        # OGC catalogues — points at 127.0.0.1 instead of your domain.
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        # Session cookies take their Secure flag from this, and it decides http:// vs https://
+        # in every URL GeoDeploy emits.
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # nginx defaults to 1 MB and THIS setting shadows GeoDeploy's own: without it every
+        # upload over a megabyte fails with 413.
+        client_max_body_size 11G;
+        # Large uploads stream straight through to object storage; buffering here would spool the
+        # whole file onto this server's disk first.
+        proxy_request_buffering off;
+
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+Then `sudo nginx -t && sudo systemctl reload nginx`, and add a certificate with
+`sudo certbot --nginx -d maps.example.org`.
+
+!!! tip "Caddy needs three lines"
+    ```
+    maps.example.org {
+        reverse_proxy 127.0.0.1:8080
+    }
+    ```
+    `reverse_proxy` sets `Host` and the `X-Forwarded-*` headers itself, streams request bodies
+    without buffering, has no size limit, and obtains and renews the TLS certificate on its own. If
+    you are choosing a reverse proxy for a machine you control, this is the shortest correct answer.
+
+### Traefik, or any proxy in Docker
+
+A container cannot reach a `127.0.0.1` host port — that isolation is the whole point of the mode. So
+put the proxy on GeoDeploy's network and route to the container instead of the host port:
+
+```bash
+docker network connect geodeploy <your-proxy-container>
+```
+
+Add `geodeploy` (as an `external: true` network) to that container's own compose file as well, or the
+next `docker compose up` recreates it without the connection and the site starts returning 502.
+
+- **Traefik:** Settings → Deployment's **Traefik** tab generates the labels.
+- **nginx in a container:** use the nginx configuration from the manual route, with
+  `proxy_pass http://nginx:80;` in place of `proxy_pass http://127.0.0.1:<port>;`.
+- **Caddy in a container:** `reverse_proxy nginx:80`.
+
+`nginx` here is GeoDeploy's own ingress, by its service name on the `geodeploy` network.
+
+## Changing the port later
+
+Never by hand. Editing `.env` changes nothing until nginx is recreated, so the file says one thing
+and the running container does another:
+
+```bash
+cd ~/geodeploy
+sudo bash installer/set-port.sh 8081        # move it
+sudo bash installer/set-port.sh --dedicated # take port 80
+sudo bash installer/set-port.sh --show      # where is it now?
+```
+
+Each one checks the target port is free first, recreates only nginx — leaving the API, the worker and
+any running ingest untouched — and **puts the old settings back if the new ones do not come up**.
+
+## The port never moves on its own
+
+Chosen once, at install, and then left alone. Updates do not re-pick it, and re-running the installer
+does not either. This matters more than it sounds: your reverse proxy's `proxy_pass`, a DNS record
+and everyone's bookmarks all point at that number, and a port that moved by itself would be
+indistinguishable from a broken install.
+
+If the configured port is taken when GeoDeploy starts, nginx fails and says so. It does not go
+looking for another one.
+
+## When something is wrong
+
+**"Nothing is listening on port 8080" although nginx is running.** If the port was occupied at the
+moment the container started, the bind failed — and neither `restart` nor `up -d` re-establishes it.
+Docker will report the container as running with the correct port mapping while nothing answers.
+Only a recreate repairs it:
+
+```bash
+docker compose up -d --force-recreate nginx
+```
+
+`installer/preflight.sh` detects this state, and so does Settings → Deployment.
+
+**Shared links and portal previews point at `127.0.0.1`.** Your proxy is not passing the hostname.
+Add `proxy_set_header Host $host;`. Settings → Deployment says so explicitly when it sees it.
+
+**Uploads over 1 MB fail with 413.** Your proxy's `client_max_body_size`, not GeoDeploy's.
+
+**GeoDeploy is on 0.0.0.0 and you expected the firewall to cover it.** It does not. A Docker publish
+on `0.0.0.0` inserts its forwarding rule ahead of ufw, so `ufw deny 8080` will not keep that port off
+the internet. Bind the loopback instead: `sudo bash installer/set-port.sh 8080`.
+
+### Behind a CDN: what each error code means
+
+Every one of these was hit on a real machine while building this feature.
+
+**526 Invalid SSL certificate.** Cloudflare is set to Full (strict) and your origin's certificate
+for that hostname does not verify — usually because nothing claims the name on port 443 at all, so
+the request lands on another site's block and its certificate. Two common causes: you pressed
+**Remove it** while the strict setting was still in place, or you switched the mode before issuing
+a certificate. Fix: press **Apply** (the certificate is still on disk), or relax the SSL mode until
+the origin is ready.
+
+**525 SSL handshake failed.** Cloudflare is on Full or Full (strict) and your origin does not
+answer HTTPS on 443 at all. Same fix, same order: certificate first, mode second.
+
+**ERR_TOO_MANY_REDIRECTS.** Cloudflare is on **Flexible** while your origin redirects HTTP to
+HTTPS: Cloudflare connects on port 80, gets a 301 to https, goes back to Cloudflare, connects on
+port 80 again. GeoDeploy omits that redirect on a Cloudflare-fronted domain for exactly this
+reason — if you see it, something else on the machine is redirecting, or the mode was changed after
+the configuration was written.
+
+**The domain shows a different website.** Almost always HTTPS reaching a block that is not yours.
+A port-80 block is not a candidate for a request that arrives on 443, so if another site holds 443
+— a `server_name _;` catch-all does, for every name — it answers. Get a certificate for your
+domain; an exact `server_name` beats a catch-all.
+
+**The Cloudflare rule is deployed and nothing changed.** Three ways that happens, all silent:
+*All incoming requests* instead of *Custom filter expression* (applies zone-wide, which is not what
+you wanted and may break neighbours); the **Field** left on its default `URI Full`, which matches
+nothing; or the SSL setting never **+ Added**, so the rule carries no action. The Expression Preview
+must read `(http.host eq "your.domain")`.
+
+**Check what is true rather than what looks true:**
+
+```bash
+curl -s https://your.domain/api/public/whoami
+```
+
+`"scheme":"https"` means the hop from the CDN into your server is encrypted. `"host"` tells you what
+GeoDeploy thinks it is called, which is what every link it emits will say.
+
+### Certificates and renewal
+
+**Is renewal actually going to work?** Do not wait sixty days to find out:
+
+```bash
+sudo docker run --rm \
+  -v /etc/letsencrypt:/etc/letsencrypt \
+  -v /var/lib/letsencrypt:/var/lib/letsencrypt \
+  -v /var/www/html:/var/www/html \
+  certbot/certbot renew --webroot -w /var/www/html --dry-run
+```
+
+"Simulated renewal succeeded" means the challenge works against the real ACME protocol. Confirm the
+daily task is registered too:
+
+```bash
+cd ~/geodeploy
+sudo docker compose exec celery celery -A geodeploy.celery_app inspect registered | grep certificates
+```
+
+**Renewal fails.** GeoDeploy logs it at error level in the worker, keeps the existing certificate,
+and does not reload. You have the remaining validity to fix it — commonly port 80 no longer
+reaching the server, or the ACME path being redirected. Check:
+
+```bash
+curl -sI http://your.domain/.well-known/acme-challenge/probe   # want 404, NOT 301
+```
+
+A 301 there is the silent killer: the challenge follows the redirect to a port whose certificate has
+expired, and renewal stops working permanently.
+
+**The certificate renewed but the site did not pick it up.** GeoDeploy only reloads when the
+certificate file actually changed, and never reloads a configuration failing its own test. If the
+test was failing, the old certificate stays live and the log says so.
+
+## What is not here yet
+
+- **Automatic HTTPS is nginx-only.** Caddy needs none (it gets its own certificate). Apache gets the
+  certbot command to run rather than a button, because the config rewrite afterwards is not written
+  yet.
+- **One domain at a time.** The panel manages a single hostname — one file, one `server_name`.
+  Serving GeoDeploy on two names at once means writing the block yourself with both on the
+  `server_name` line, under a different filename so Apply does not overwrite it.
+- **HTTP-01 only.** The challenge is a file fetched over port 80, so port 80 must be reachable from
+  the internet for that name. There is no DNS-01 option, which would need an API token for your DNS
+  provider stored on the server.
+- **No automatic configuration for a containerised proxy.** It gets the manual steps above, and
+  HTTPS from that image's own ACME support.
+- **Automatic HTTPS needs a proxy in front.** In dedicated mode GeoDeploy *is* the web server and
+  there is no host proxy to configure, so the certificate button does not apply — move to a local
+  port and put a proxy in front first (`installer/set-port.sh 8080`, then for example
+  `sudo apt install caddy`). A domain itself needs nothing in this mode but its A record, which
+  Step 1 of the panel gives you, and an instance reached at `https://` through a CDN or certificates
+  you set up yourself is reported as published, not as insecure.
+- **HTTPS in dedicated mode**, and it is the sharpest gap here, because dedicated is what the
+  installer recommends on an empty server. GeoDeploy publishes port 80 only: 443 is not published
+  and the TLS server block in `nginx/nginx.conf` is commented out, so **there is no HTTPS listener
+  at all**. A CDN in front must therefore stay on a mode that talks to the origin over plain HTTP
+  (Cloudflare's **Flexible**). Setting Full or Full (strict) makes it dial port 443, where nothing
+  answers, and every visitor gets a **521** — observed twice while testing. Until this lands, the
+  way to get HTTPS is to move to a local port and run a proxy in front:
+  `sudo bash installer/set-port.sh 8080`. The scaffolding for doing it in-place exists and is
+  deliberately inert — `docker-compose.tls.yml` publishes 443, the server block awaits certificate
+  paths — see its header comment.
+- **A base path.** GeoDeploy has to live at the root of its domain or subdomain; it cannot yet be
+  served under `https://example.org/geodeploy/`.
+- **Two GeoDeploys on one machine.** Five containers still have fixed names and every instance joins
+  the same Docker network, where the first one's database answers to the alias `postgres` — so a
+  second instance could connect to the first one's data. Preflight refuses rather than letting it
+  half-install, and names the directory it found. Running GeoDeploy alongside *other software* is
+  what this page is about and is fully supported; it is two copies of GeoDeploy that cannot coexist.

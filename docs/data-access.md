@@ -338,6 +338,46 @@ a whole portal as a styled group, and upload back. It carries symbology in both 
 layer opens looking like the portal and what you restyle there goes home. The protocols below are
 what it uses underneath, and remain the right choice for anything scripted.
 
+## Connecting straight to the database
+
+Everything above goes through GeoDeploy's API. You can also connect a client **directly** to the
+PostGIS database it provisioned — QGIS's PostGIS browser, `psql`, DBeaver, `ogr2ogr`, a notebook —
+which is the right tool when you want SQL, write access, or a table GeoDeploy does not publish.
+
+It is **off by default, and deliberately so**: the `postgres` container publishes no host port at
+all, so it lives only on GeoDeploy's internal Docker network and nothing outside can open a
+connection to it. A database on the network is protected by its password and nothing else, and 5432
+is scanned constantly.
+
+To turn it on, add one line to `.env` in your install directory and recreate the container:
+
+```bash
+echo 'COMPOSE_FILE=docker-compose.yml:docker-compose.db-port.yml' >> .env
+docker compose up -d postgres
+```
+
+That publishes it on `127.0.0.1:5432` — reachable from the server itself and from nowhere else.
+Tunnel to it over the SSH you already have:
+
+```bash
+ssh -L 5432:127.0.0.1:5432 you@your-server
+```
+
+and point QGIS at `localhost:5432` as though the database were on your laptop. Credentials are in
+**Settings → Infrastructure → Connection details**.
+
+!!! warning "Opening it to the network is a separate decision"
+    `GEODEPLOY_POSTGIS_BIND=0.0.0.0` makes the database reachable by anyone who can route to the
+    machine. Three things to know before you do it: a Docker publish on `0.0.0.0` inserts its
+    forwarding rule **ahead of ufw**, so `ufw deny 5432` will not hold it back — restrict it in your
+    provider's firewall instead; the provisioned PostGIS speaks plain TCP with no TLS, so
+    credentials cross the network in clear text; and outside consumers should get a separate
+    least-privileged role, not the superuser GeoDeploy itself runs as. `GEODEPLOY_POSTGIS_PORT`
+    moves it off 5432 if the machine already runs a PostgreSQL of its own.
+
+If you connected GeoDeploy to a database **you already run**, none of this applies — you control
+that server's access yourself, and GeoDeploy never changes its configuration.
+
 ## Not yet implemented
 
 - Private catalog access via API token (shared layers are public; unshared layers are simply

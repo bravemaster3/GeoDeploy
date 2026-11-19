@@ -83,7 +83,8 @@ celery_app = Celery(
              "geodeploy.tasks.geoparquet_import", "geodeploy.tasks.pmtiles_tile",
              "geodeploy.tasks.geoparquet_prep", "geodeploy.tasks.convert_upload",
              "geodeploy.tasks.geolibre_publish", "geodeploy.tasks.backup",
-             "geodeploy.tasks.restore", "geodeploy.tasks.demo_reset"],
+             "geodeploy.tasks.restore", "geodeploy.tasks.demo_reset",
+             "geodeploy.tasks.certificates"],
 )
 
 # Beat entries. Split out of `conf.update` so the DEMO entry can be added conditionally and so a test
@@ -96,6 +97,16 @@ BEAT_SCHEDULE = {
     "check-scheduled-backups": {
         "task": "geodeploy.tasks.backup.check_scheduled_backups",
         "schedule": 900.0,      # every 15 min
+        "options": {"queue": "backup"},
+    },
+    # Certificate renewal. Daily, and a no-op on every install that never asked GeoDeploy for a
+    # certificate — it reads one state file and returns. A Let's Encrypt certificate lasts 90 days,
+    # so this tick is the entire difference between "automatic HTTPS" and "HTTPS that fails for
+    # every visitor at once, two months after anyone last touched the server". Daily rather than
+    # weekly because it gives a failure thirty chances to resolve before anything expires.
+    "renew-certificates": {
+        "task": "geodeploy.tasks.certificates.renew_certificates",
+        "schedule": 86400.0,    # daily
         "options": {"queue": "backup"},
     },
 }
@@ -142,6 +153,10 @@ celery_app.conf.update(
         # the worker does not consume (-Q ingest,backup), and the task waits there forever looking
         # exactly like a reset that silently did nothing.
         "geodeploy.tasks.demo_reset.*": {"queue": "backup"},
+        # Certificate renewal: the beat entry pins `backup`, but — exactly as for demo_reset — a
+        # bare `.delay()` would otherwise land on the default queue nobody consumes, and a renewal
+        # that silently never runs fails for every visitor 90 days later.
+        "geodeploy.tasks.certificates.*": {"queue": "backup"},
     },
     # Scheduled backups. The tick is cheap and does nothing unless a schedule is configured; the
     # SCHEDULE ITSELF lives in the DB and is read per tick, so changing it in Settings takes effect

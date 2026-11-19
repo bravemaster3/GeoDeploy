@@ -95,6 +95,31 @@ export const applyEnvVars = (values) => api.post('/admin/env/apply', { values })
 
 export const listDeployments = (limit = 20) => api.get('/admin/deployments', { params: { limit } })
 
+// Where this instance is published, and how to put a domain in front of it (Settings ->
+// Infrastructure -> Deployment). Owner-only. `getDeployment` compares what .env asks for against
+// what the nginx container actually publishes AND what the current request looked like — the last
+// of those is why it must be a live call rather than anything cached.
+export const getDeployment = () => api.get('/admin/deployment')
+export const getProxyConfig = (domain, flavor) =>
+  api.get('/admin/deployment/proxy-config', { params: { domain, flavor } })
+export const verifyDeployment = (domain) => api.post('/admin/deployment/verify', { domain })
+// DNS on its own. Separate from verifyDeployment because it is the one step with a WAITING PERIOD
+// in it: "not propagated yet" and "pointed at the wrong server" need opposite reactions, and making
+// someone run the whole end-to-end check to tell them apart conflates the two.
+export const checkDeploymentDns = (domain) => api.post('/admin/deployment/check-dns', { domain })
+
+// Configuring the HOST's reverse proxy — the "Apply" path, for operators who do not want to think
+// about nginx. `getHostProxyPlan` is the one to call FIRST and on its own: it reports what is in
+// front of GeoDeploy and every reason Apply would refuse, so the panel can offer (or withhold) the
+// button honestly before anyone commits to it. The manual path never goes away — `getProxyConfig`
+// above returns the same text for anyone who would rather place it themselves.
+export const getHostProxyPlan = (domain) =>
+  api.get('/admin/deployment/host-proxy', { params: { domain } })
+export const applyHostProxy = (domain) => api.post('/admin/deployment/host-proxy/apply', { domain })
+export const removeHostProxy = () => api.post('/admin/deployment/host-proxy/remove')
+export const issueCertificate = (domain, email) =>
+  api.post('/admin/deployment/host-proxy/certificate', { domain, email })
+
 // Backups (admin Settings -> Backups). The destination is a SEPARATE S3; secret_key is
 // write-only (blank keeps the stored one). `stored` reads the destination's own manifests, which
 // is the only trustworthy answer about what exists -- our run history lives in the state DB, and

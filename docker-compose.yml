@@ -53,9 +53,35 @@ services:
   nginx:
     image: nginx:alpine
     restart: unless-stopped
+    # WHERE GEODEPLOY IS PUBLISHED ON THE HOST. Chosen once by the installer, with the operator's
+    # answer, and recorded in .env — see installer/lib-deploy.sh and docs/behind-a-proxy.md.
+    #
+    #   dedicated    0.0.0.0:80    GeoDeploy is this machine's web server (the default, unchanged)
+    #   behind-proxy 127.0.0.1:N   only this machine can reach it; an existing nginx/Caddy publishes it
+    #
+    # ONE variable, the whole host side of the mapping: `80` (dedicated) or `127.0.0.1:8080`
+    # (behind-proxy). The installer and set-port.sh derive it from GEODEPLOY_HTTP_BIND/_PORT, which
+    # are the keys people read; never edit it by hand. Two measured reasons it is not
+    # "${BIND:-0.0.0.0}:${PORT:-80}":
+    #   * a bare `80:80` publishes on IPv4 AND IPv6; an explicit `0.0.0.0:80:80` is IPv4 ONLY
+    #     (`[::1]` refused). That form took IPv6 away from every existing instance the first time
+    #     its nginx was recreated.
+    #   * the conditional forms that would avoid it (`${VAR:+...}`) are REJECTED by Docker Compose
+    #     before 2.12, and nested ones before ~2.18 — every compose command fails. A plain `:-`
+    #     default parses identically on every Compose from 2.0.1 to 5.x, and on v1.29.
+    # So with no .env, or a .env from before these keys, this is `80:80` — EXACTLY what the file said
+    # before. Nothing re-picks the port later; a port that moves on its own silently orphans the
+    # reverse proxy, DNS record or bookmark pointing at it.
+    #
+    # 127.0.0.1 is not cosmetic. A Docker publish on 0.0.0.0 inserts its own DNAT rule AHEAD of the
+    # host firewall, so a "ufw deny 8080" does NOT keep a 0.0.0.0-published port off the internet.
+    # Binding the loopback is what actually makes the shared-machine mode private.
+    #
+    # 443 is NOT published here: the container has no 443 listener (nginx.conf's TLS server block is
+    # commented out), so publishing it reserved the most contested port on the machine and served
+    # nothing. docker-compose.tls.yml adds it back for the TLS work.
     ports:
-      - "80:80"
-      - "443:443"
+      - "${GEODEPLOY_HTTP_PUBLISH:-80}:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./data/portals:/var/www/portals:ro

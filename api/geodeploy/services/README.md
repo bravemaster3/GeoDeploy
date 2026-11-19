@@ -617,3 +617,109 @@ byte-identically. The key does double duty and the docstrings say so: `outline_w
 the radius on a point and a WIDTH IN PIXELS on a polygon; they are never read by the same branch,
 and a marker's 0.28 left on a polygon falls below the hairline and changes nothing. Tests:
 `api/tests/test_polygon_outline.py`.)
+
+- `deployment.py` (2026-09-12) — **where this GeoDeploy is published, and what a reverse proxy in
+  front of it would need.** Three questions kept separate because they come apart silently: INTENT
+  (`.env`: mode/bind/port), REALITY (the nginx container's `HostConfig.PortBindings`, plus whether
+  the port is ACTUALLY listening) and OBSERVED (the scheme and `Host` of the current request).
+  Intent ≠ reality means `.env` was edited and nginx never recreated; observed ≠ intent usually means
+  a proxy is not passing `Host`, which yields shared links and portal `og:` tags nobody else can
+  open. `observe()` tells a broken proxy from an SSH tunnel — both look like `Host: 127.0.0.1:8080` —
+  by counting `X-Forwarded-For` entries: our own nginx APPENDS to that header, so two or more means
+  something forwarded to us before nginx did. `_mapping_is_live()` compares Docker's two views of the
+  port — `HostConfig.PortBindings` (asked for) against `NetworkSettings.Ports` (in effect) — because
+  a failed bind leaves the container `running` with the first intact and the second empty, and only
+  `--force-recreate` repairs it. NOT a socket probe: this runs inside a container, where the host's
+  `127.0.0.1` is unreachable by design in behind-proxy mode, so probing would call every healthy
+  loopback install dead. `proxy_config()` renders
+  nginx/Caddy/Apache/Traefik; every directive in the nginx block is there because its absence is a
+  real GeoDeploy failure — notably `client_max_body_size`, whose 1 MB default in the OUTER proxy
+  shadows our 11G and 413s every upload, verified against a naive config in the WSL harness. Writes
+  nothing, anywhere: the operator pastes it.
+
+- `hostproxy.py` (2026-10-09) — **configures the HOST's reverse proxy for a domain, and refuses far
+  more often than it acts.** The other half of `deployment.py`: that one answers "what would a proxy
+  in front need?" and writes nothing, this one applies it to whatever the machine already runs —
+  nginx, Caddy or Apache **installed on the host** — so the operator's whole job is a DNS record and
+  a domain typed into the dashboard. Traefik is a named refusal, not a gap: its routing is
+  labels/providers/CRDs and no single dropped file is correct across those. **A proxy in a container
+  is a named refusal too (2026-11-18)**: `installer/tests/test-hostproxy.sh` showed the automatic path
+  wrote `proxy_pass http://127.0.0.1:<port>` into it (the container's own loopback — 502 for every
+  visitor, while Apply said success), overwrote a `geodeploy.conf` it could not see was foreign, and
+  turned a neighbour's site for the same name into a 502. `_container_adapter` still classifies, so
+  the refusal names the container; `_apply_in_container` was deleted. Same round added the
+  `not-serving` (installed, nothing listening) and `apache-modules` refusals, widened R5's name
+  collection (one-line nginx blocks, every `ServerAlias` name, Caddy via `caddy adapt`), and fixed the
+  listener parse (`$NF` was `p` for busybox's `nginx: master p`).
+  **Port 80 held by GeoDeploy (2026-11-19)**: a dedicated instance on port 80 gets the
+  `port-80-held` refusal when a proxy is detected (both cannot listen on 80; the upstream would be
+  GeoDeploy's own public port), and `deployment.proxy_config` writes the manual config for
+  `127.0.0.1:8080` with `set-port.sh 8080` as step one. The "once the proxy works" warning is for a
+  public non-80 port only. `deployment.verdict` no longer offers a certificate to a dedicated
+  instance behind a CDN (no host proxy to install it into).
+  **Read the module docstring's six rules before changing anything here.** The two that cost the most
+  if they go: R2, test the EXISTING configuration first and refuse if it fails — otherwise our reload
+  is what finally publishes somebody else's latent breakage, with GeoDeploy's name on it; and R4, a
+  failed post-write test removes the file and NEVER reaches the reload. Also R1 (one new file, with a
+  `managed by GeoDeploy` marker, never an edit to `nginx.conf` or a Caddyfile), R3 (reload, never
+  restart), R5 (refuse a domain the machine already serves — two blocks claiming one name is not an
+  error, one silently wins), R6 (refuse a drop-in dir the main config does not `include`, because a
+  file written where nothing reads it is success that does nothing).
+  **The shell trap that defeats R2 and R4 silently:** `cmd | tail; rc=$?` yields `tail`'s status, so a
+  FAILING `nginx -t` reads as a pass. `_host_test_command`/`_host_reload_command` therefore return
+  the bare command with no pipe and no redirection — the caller captures first and trims after — and
+  `test_hostproxy.py` asserts that on the table itself, because the bug is invisible in any test that
+  goes through it.
+  **How it reaches the host:** a one-shot privileged container (`pid`/`network` host, `/` bind-mounted
+  at `/host`) via the Docker socket the API already has — so no new capability, just a small audited
+  set of operations instead of an open-ended one. It runs the HOST's own `nginx -t` under `chroot`,
+  never this image's: a different build tests a different set of modules. The mount is READ-WRITE even
+  for the probe because `nginx -t` opens its error log for append, and on a read-only mount a good
+  config fails the one test R2 relies on. Reload is a signal to the master process, never `systemctl`
+  (which needs the host's private D-Bus and fails in ways that look like a broken proxy). Operator
+  text — the domain, inside a generated config — reaches the host ONLY as `put_archive` file content,
+  never as part of a shell command; the scripts interpolate paths from this module's own tables plus a
+  domain that has been through `_safe_domain`.
+  For a containerised proxy the file goes to the **host side** of its config bind mount (a container's
+  own filesystem is discarded by the next `up -d`) and the test and reload are `docker exec`, so the
+  proxy validates with its own binary and no privileged helper is involved in either.
+  **`neighbours_failing_strict()` (2026-10-09) — because GeoDeploy caused an outage.** The
+  certificate step told an operator to set Cloudflare to Full (strict); that mode is per-ZONE, every
+  other site in the zone began returning 526, and the advice was ours. The module's rule — do not
+  break what you did not install — has to cover the ADVICE, not only the files. So it now probes
+  each other hostname this machine serves on 443 (`wget` with and against `--no-check-certificate`,
+  since Alpine's busybox wget validates via `ssl_client`) and NAMES the ones that would fail, then
+  recommends a per-hostname Configuration Rule instead of the zone switch. A measurement that could
+  not run returns an empty list, so the caller may say "these will break" and must never say
+  "nothing else will".
+  **The HTTPS-shadowing check (2026-10-09, found in the field, not by reading):** our block listens on
+  80. On a machine that already terminates TLS for another site — `listen 443 ssl; server_name _;` is
+  the common shape — every `https://` request for the new domain is answered by THAT block, while
+  port 80 serves GeoDeploy perfectly and every check reports success. Cloudflare in Full mode
+  connects to the origin on 443, so this is what a real visitor gets. `_tls_picture()` associates
+  listens with server_names from the MERGED config (`nginx -T` through awk, so includes are followed)
+  and `plan()` warns before Apply; `apply()` then probes 443 as well as 80 and reports the two
+  separately. Probing only the port we configured is how a panel reports success while every visitor
+  gets somebody else's site.
+  **Automatic HTTPS (2026-10-09):** `issue_certificate()` runs **certbot in a throwaway container**,
+  not on the host — which is what lets this exist at all, since the rule against installing packages
+  on somebody else's server stands and a container satisfies both halves. HTTP-01 over the **webroot**
+  plugin, never `--nginx`: the nginx plugin EDITS the host's config and R1 forbids that, while the
+  webroot plugin only drops a challenge file under `/var/www/html`, which the block we already wrote
+  already serves. The HTTPS server block then goes into OUR OWN file through the same
+  write-test-reload path as any apply. `renew_certificates()` is the half that makes it mean
+  anything, scheduled daily in `tasks/certificates.py`: it no-ops on installs with no certificate
+  (one state-file read, no container), and **gates the reload on the certificate file's mtime** —
+  not on parsing certbot's output, which is prose and has changed between versions. A renewal whose
+  config then fails its test does NOT reload; the old certificate stays live, which buys the
+  remaining weeks of its validity to fix the real problem.
+  Two shapes in `deployment._nginx_conf_tls` that are not cosmetic: port 80 keeps the ACME location
+  **outside any redirect** (renewal uses the same challenge, and redirecting it to a just-expired
+  certificate is how auto-renewal silently stops), and on a **Cloudflare-fronted** domain port 80
+  serves the app instead of redirecting, because Cloudflare on Flexible connects to port 80 and a
+  301 there loops between Cloudflare and the origin forever.
+
+## Last updated
+2026-11-19 (port-80-held refusal; manual config for a port-80 instance targets 8080; dedicated CDN verdict)
+2026-11-18 (`hostproxy.py`: container proxies refused, not-serving / apache-modules refusals, wider R5 — all from the fake-machine harness)
+2026-09-12 (added `deployment.py` — the port/reverse-proxy slice of issue #79)
