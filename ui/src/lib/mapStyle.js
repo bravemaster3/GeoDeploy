@@ -121,12 +121,17 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
     if (!Array.isArray(rules) || !rules.length) return [cfg]
     const base = { ...(cfg.style || {}) }
     delete base.rules
-    return rules.filter(r => r && typeof r === 'object').map((rule, i) => {
+    const kept = rules.filter(r => r && typeof r === 'object')
+    return kept.map((rule, i) => {
       const merged = { ...base, ...(rule.style || {}) }
       // A rule is ONE symbol, never a classification: its colour lives in the rule, so a
       // color_mode inherited from the layer would classify inside a rule and draw the wrong colour.
       for (const k of ['color_mode', 'classes', 'categories', 'color_field', 'classes_n']) delete merged[k]
-      return { ...cfg, style: merged, __rule: rule, __ruleIndex: i }
+      // `__lastRule`: the LABELS belong to the layer, not to a rule, and are emitted once — with the
+      // last rule, so they draw above every rule's features. Emitted with each rule they were the
+      // same label layer N times under one id, and MapLibre rejected the whole style: an empty
+      // layer page for any rule-based layer that had labels. Twin of portal_generator._vector_layers.
+      return { ...cfg, style: merged, __rule: rule, __ruleIndex: i, __lastRule: i === kept.length - 1 }
     })
   }
   // MapLibre rejects a whole style over a zoom outside 0-24, and QGIS stores thresholds well past
@@ -423,7 +428,7 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
       // exactly like rule-based rendering — it is how a names layer says water is blue at 9pt and a
       // town brown at 11 — and drawing only the top-level block, which is the first rule's settings
       // kept as a fallback, put every name in one colour at one size.
-      const labels = symLabelsOf(st)
+      const labels = (cfg.__rule && !cfg.__lastRule) ? {} : symLabelsOf(st)
       if (Object.keys(labels).length) {
         const labelRuleList = symLabelRules(labels)
         // ONE LABEL PER FEATURE, from a POINT source. A label layer over a polygon source is drawn

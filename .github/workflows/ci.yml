@@ -408,3 +408,7 @@ jobs:
       - name: Build
         working-directory: ui
         run: npm run build
+
+      - name: Unit tests (node --test, no extra dependencies)
+        working-directory: ui
+        run: node --test tests/mapStyle.test.mjs
