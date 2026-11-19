@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 from slugify import slugify
@@ -1773,6 +1773,10 @@ async def delete_layer(
             pass
 
     await db.delete(layer)
+    # Its upload jobs go too. Left behind, a job that was still `queued` (a worker that died, an
+    # upload abandoned mid-way) was counted as work in progress by the update preflight forever.
+    await db.execute(sa_delete(UploadJob).where(UploadJob.layer_type == "vector",
+                                                UploadJob.layer_id == layer_id))
     await db.commit()
     invalidate_public_layers()  # drop cached exposure/key entries for the removed layer
     pruned = await prune_layer_from_portals(db, "vector", layer_id)  # drop the ghost from portals + re-publish

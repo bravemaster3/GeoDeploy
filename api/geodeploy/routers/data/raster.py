@@ -3,7 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
-from sqlalchemy import select
+from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
@@ -916,6 +916,10 @@ async def delete_layer(layer_id: int, user: User = Depends(require_scope("data:w
         pass
 
     await db.delete(layer)
+    # Its upload jobs go too. Left behind, a job that was still `queued` (a worker that died, an
+    # upload abandoned mid-way) was counted as work in progress by the update preflight forever.
+    await db.execute(sa_delete(UploadJob).where(UploadJob.layer_type == "raster",
+                                                UploadJob.layer_id == layer_id))
     await db.commit()
     pruned = await prune_layer_from_portals(db, "raster", layer_id)  # drop the ghost from portals + re-publish
     await record_audit(db, user, "raster.delete", "raster", layer_id,

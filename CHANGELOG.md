@@ -6,6 +6,11 @@ upgrade needs manual work.
 
 ## Unreleased
 
+- **Update no longer warns about uploads that are not running.** Every press of Update could say
+  *"vector layer being processed — queued"* for uploads whose layers had long been deleted, or had
+  finished: deleting a layer left its upload job behind, and a job the worker never picked up stays
+  `queued` forever. The warning now lists only a layer that still exists and is still processing,
+  by name; and deleting a layer deletes its upload jobs.
 - **A portal published from QGIS showed no map when a label was empty for some features.** A
   label like `CASE WHEN "pop" > 1000 THEN "name" END` (no `ELSE`) or `if(…, "name", NULL)` is NULL
   for the other features; the plugin translates that faithfully, but MapLibre refuses a null label
