@@ -135,6 +135,16 @@ curl -fsSL https://raw.githubusercontent.com/bravemaster3/geodeploy/main/install
     cannot be updated or downgraded to one of those releases: the updater refuses before changing
     anything, because that release would publish 80 and 443 next to the web server in front.
 
+!!! info "Updating an instance installed before you could choose the port"
+    It stays exactly where it was: **dedicated, on port 80**, IPv4 and IPv6. Updates never move the
+    port. Moving is something you do on purpose, with `installer/set-port.sh`. The one change is that
+    port **443 is no longer published**. GeoDeploy's own nginx never listened on it (its HTTPS block
+    ships commented out), so nothing that worked stops working. A site behind Cloudflare on
+    *Flexible* is unaffected. To check before updating, run
+    `curl -sk -o /dev/null -w '%{http_code}\n' https://127.0.0.1/` on the server: `000` means
+    nothing serves 443 there. Any other answer means you set up HTTPS on the server by hand. Read
+    the changelog entry on `docker-compose.tls.yml` first.
+
 !!! danger "Use the script, and run it from the install directory"
     Prefer `installer/self-update.sh` over `git pull && docker compose up -d`. A bare `docker compose
     up -d` also targets the containers the setup wizard provisions outside Compose (postgres, minio,
