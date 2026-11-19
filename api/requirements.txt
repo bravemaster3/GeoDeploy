@@ -14,6 +14,13 @@ pyproj==3.7.0
 boto3==1.35.88
 minio==7.2.12
 celery==5.4.0
+# kombu is celery's transport, and celery 5.4 accepts ANY kombu <6. kombu 5.7.0 (2026-11-03) imports
+# `packaging` in its Redis transport but declares it only under the `redis` extra, so every image
+# built after that date crashed the worker on start and 500'd every queued job with
+# "No module named 'packaging'". Pinned to the version the working images had; `packaging` is named
+# outright so the next transitive reshuffle cannot drop it either.
+kombu==5.6.2
+packaging>=24
 redis==5.2.1
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
