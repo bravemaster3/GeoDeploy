@@ -9,7 +9,12 @@ on:
 jobs:
   api:
     name: API tests
-    runs-on: ubuntu-latest
+    # PINNED, not ubuntu-latest. When `latest` moved to 26.04 (2026-11) three jobs broke at once for
+    # reasons that had nothing to do with the code: setup-python has no 3.9 there (the CLI and the
+    # QGIS plugin promise 3.9), and the runner's pg_dump became 18, whose dumps carry
+    # `SET transaction_timeout` that the PostgreSQL 16 service rejects — while production pins
+    # postgresql-client-16 in api/Dockerfile for exactly that reason. Move this deliberately.
+    runs-on: ubuntu-24.04
 
     # State lives in PostgreSQL now, so the suite needs a real server. PostGIS rather than plain
     # postgres because create_all runs against the same database the spatial data uses.
@@ -59,7 +64,7 @@ jobs:
 
   cli:
     name: CLI tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     # No services and no install of the API: the suite runs the client against a fake instance it
     # starts itself (cli/tests/conftest.py), so it is seconds rather than minutes.
@@ -106,7 +111,7 @@ jobs:
     # plugin calls exists there — which is what catches an enum QGIS moves into the `Qgis` namespace
     # between versions, the failure that otherwise reads as "the plugin silently does nothing".
     name: QGIS ${{ matrix.qgis }} (real PyQGIS)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -191,7 +196,7 @@ jobs:
 
   qgis-plugin:
     name: QGIS plugin
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -372,7 +377,7 @@ jobs:
 
   ui:
     name: UI build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
