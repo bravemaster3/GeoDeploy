@@ -360,11 +360,31 @@ async def update_preflight(_: User = Depends(require_admin), db: AsyncSession = 
 
     busy: list[dict] = []
 
+    # A job row alone is not evidence of work. Rows outlive what they describe: deleting a layer
+    # used to leave its jobs behind, a worker that died never marks its job, and a re-run starts a
+    # NEW job beside the old one. Reported: three "vector layer being processed — queued" on every
+    # update, for uploads deleted days earlier. So a job counts only when it is its layer's LATEST
+    # and that layer still exists and is itself still queued/processing — the same test My Data
+    # uses to show a layer as busy (common.busy_job_progress).
     rows = (await db.execute(select(UploadJob).where(
         UploadJob.status.in_(("queued", "processing"))))).scalars().all()
-    for j in rows:
-        busy.append({"kind": "upload", "what": f"{j.layer_type} layer being processed",
-                     "detail": j.current_step or j.status, "recovers": False})
+    for model, kind in ((VectorLayer, "vector"), (RasterLayer, "raster")):
+        ids = {j.layer_id for j in rows if j.layer_type == kind}
+        if not ids:
+            continue
+        names = dict((await db.execute(select(model.id, model.name).where(
+            model.id.in_(ids), model.status.in_(("queued", "processing"))))).all())
+        latest: dict[int, str] = {}
+        for lid, jid in (await db.execute(
+                select(UploadJob.layer_id, UploadJob.id)
+                .where(UploadJob.layer_type == kind, UploadJob.layer_id.in_(ids))
+                .order_by(UploadJob.created_at.desc(), UploadJob.id))).all():
+            latest.setdefault(lid, jid)
+        for j in rows:
+            if j.layer_type != kind or j.layer_id not in names or latest.get(j.layer_id) != j.id:
+                continue
+            busy.append({"kind": "upload", "what": f"“{names[j.layer_id]}” being processed",
+                         "detail": j.current_step or j.status, "recovers": False})
 
     tiling = (await db.execute(select(VectorLayer).where(
         VectorLayer.tile_status == "tiling"))).scalars().all()
