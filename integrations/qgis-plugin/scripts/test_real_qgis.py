@@ -725,6 +725,46 @@ def map_scale_gates():
           not (labels or {}).get("enabled"), repr(labels))
 
 
+# ══ 6c. The links to GeoDeploy live in the project (issue #128) ══════════════════════════════════
+
+def links_survive():
+    """Tags are custom properties, which QGIS does not count as a change: a push left the project
+    UNmodified, closing did not ask to save, and the next push uploaded everything again. The
+    plugin now marks the project modified after a push (`_links_changed`); this pins that doing so
+    is what makes QGIS keep them, on QGIS itself."""
+    section("Links to GeoDeploy — kept only if the project is saved, so a push marks it modified")
+    import tempfile
+    from qgis.core import QgsProject
+    try:
+        from geodeploy_qgis import portals as _portals
+    except ImportError:
+        sys.path.insert(0, os.path.join(PLUGIN, ".."))
+        from geodeploy_qgis import portals as _portals
+    path = os.path.join(tempfile.mkdtemp(), "links.qgz")
+    project = QgsProject.instance()
+    project.clear()
+    layer = make_layer("Point", name="roads")
+    project.addMapLayer(layer)
+    group = project.layerTreeRoot().addGroup("My portal")
+    project.write(path)
+    _portals.tag_layer(layer, "https://gd.example.org", 5, "vector", instance_id="abc123")
+    group.setCustomProperty(_portals.P_PORTAL_ID, "7")
+    check("links: tagging alone leaves the project unmodified (the trap)", not project.isDirty())
+    project.setDirty(True)              # what `_links_changed` does after a push
+    check("links: marked modified, so QGIS asks to save on close", project.isDirty())
+    project.write(path)
+    project.clear()
+    project.read(path)
+    back = next(iter(project.mapLayers().values()), None)
+    check("links: saved, the layer's link survives a reopen",
+          back is not None and _portals.layer_identity(back) == (5, "vector")
+          and back.customProperty(_portals.P_INSTANCE_ID) == "abc123",
+          back and _portals.layer_identity(back))
+    check("links: ...and so does the group's portal",
+          _portals.group_portal(project.layerTreeRoot().findGroup("My portal"))[0] == 7)
+    project.clear()
+
+
 # ══ 7. 2.5D ══════════════════════════════════════════════════════════════════════════════════════
 
 def two_and_a_half_d():
@@ -2064,6 +2104,7 @@ def main():
     authored_in_qgis()
     rule_based()
     map_scale_gates()
+    links_survive()
     two_and_a_half_d()
     natives()
     labelling()

@@ -275,6 +275,11 @@ jobs:
         # feature made of words still breaks when somebody edits the words.
         run: python integrations/qgis-plugin/scripts/test_push_summary.py
 
+      - name: A re-push recognises what is still there, and only that (issue #128)
+        # A tag on a deleted layer or from another instance was trusted (the portal silently lost
+        # the layer), and a group whose portal was deleted could never be pushed again.
+        run: python integrations/qgis-plugin/scripts/test_repush.py
+
       - name: The packaged plugin is one the site will accept
         # Every upload to plugins.qgis.org is validated there, and a rejection BURNS the version
         # number — the fix has to go out as a new one. Some of what they check fails nowhere else:
