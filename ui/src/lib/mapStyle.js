@@ -27,6 +27,8 @@ import {
   dashArray as symDashArray,
   lineLayout as symLineLayout,
   lineOffset as symLineOffset,
+  outlineOpacity as symOutlineOpacity,
+  groundWidth as symGroundWidth,
   markerLayout as symMarkerLayout,
   markerOpacity as symMarkerOpacity,
   layerScope as symLayerScope,
@@ -250,9 +252,12 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
           // A DASH OR AN OFFSET ALSO NEEDS THE LINE LAYER: `fill-outline-color` is a colour with no
           // width and no pattern, so a hairline border asked to be dashed drew SOLID. Twin of
           // symbology.needs_outline_layer.
+          // …AND A BORDER WITH ITS OWN STRENGTH (`outline_opacity`, from QGIS), which a fill's edge
+          // would fade with the fill. Twin of symbology.needs_outline_layer.
           const wantsOutlineLayer = st.outline_color !== NO_OUTLINE
             && (outlineWidth > POLYGON_OUTLINE_WIDTH
-              || symDashArray(st) != null || symLineOffset(st) != null)
+              || symDashArray(st) != null || symLineOffset(st) != null
+              || st.outline_opacity != null || symGroundWidth(st.outline_width_m) != null)
           if (st.outline_color === NO_OUTLINE || wantsOutlineLayer) fillPaint['fill-antialias'] = false
           else fillPaint['fill-outline-color'] = st.outline_color || '#1d4ed8'
           // A PATTERN REPLACES THE COLOUR: MapLibre draws `fill-pattern` instead of `fill-color`,
@@ -274,10 +279,11 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
               type: 'line', source: srcId, 'source-layer': sourceLayer,
               paint: {
                 'line-color': st.outline_color || '#1d4ed8',
-                'line-width': outlineWidth,
+                // A border measured on the ground grows with the zoom. Twin of _outline_paint.
+                'line-width': symGroundWidth(st.outline_width_m, midLatitude(layer)) ?? outlineWidth,
                 // The layer's opacity, not the fill's: a 45% wash with a solid border is the
-                // ordinary way to draw a polygon.
-                'line-opacity': opacity,
+                // ordinary way to draw a polygon. Times the border's own strength, when stated.
+                'line-opacity': Math.round(opacity * symOutlineOpacity(st) * 10000) / 10000,
                 // An outline IS a line, so the line vocabulary applies to it. Mirrors
                 // portal_generator._outline_paint.
                 ...(symDashArray(st) ? { 'line-dasharray': symDashArray(st) } : {}),
@@ -289,7 +295,10 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
       } else if (geom.includes('line')) {
         const linePaint = {
           'line-color': color,
-          'line-width': symSizeExpression(st, st.line_width ?? 2),
+          // A width measured on the ground (QGIS map units) grows with the zoom. Twin of the
+          // portal's line paint.
+          'line-width': symGroundWidth(st.line_width_m, midLatitude(layer))
+            ?? symSizeExpression(st, st.line_width ?? 2),
           // The LINE's own opacity as well as the layer's — QGIS has two and they multiply.
           // Mirrors portal_generator's line paint.
           'line-opacity': symLineOpacity(st, opacity),
@@ -586,6 +595,12 @@ export function buildMapStyle({ configs = [], layers = [], rasters = [], sources
   return { style, bounds, markerSpecs }
 }
 
+
+/** The latitude in the middle of a layer's extent, or null. Twin of `_middle_latitude`. */
+function midLatitude(layer) {
+  const b = lonLatBbox(layer?.bbox)
+  return b ? (b[1] + b[3]) / 2 : null
+}
 
 export function lonLatBbox(b) {
   return (Array.isArray(b) && b.length === 4 &&

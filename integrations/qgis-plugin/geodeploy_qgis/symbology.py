@@ -128,9 +128,21 @@ CSS_PX_TO_POINTS = 0.75
 #: class carrying them would be a layer inside a layer.
 CLASS_SHAPE_KEYS = (
     "line_width", "lineType", "dash_pattern", "line_offset", "line_cap", "line_join",
-    "fill_opacity", "fill_pattern", "outline_color", "outline_width",
+    "fill_opacity", "fill_pattern", "outline_color", "outline_width", "outline_opacity",
+    "line_width_m", "outline_width_m",
     "radius", "marker", "marker_image", "marker_offset", "line_marker", "spacing",
 )
+
+
+#: Keys whose ABSENCE means "none" rather than "unknown": a class with no dash is solid, a class
+#: with no fill pattern is flat. `class_overrides` must therefore say so explicitly when the layer
+#: level has one — otherwise the class inherits it. Reported (issue #118): a categorized polygon
+#: layer whose FIRST class is a dotted hachure drew the solid outline of every other class dotted,
+#: because the layer-level shape is read from the first class and the others carried no dash.
+CLASS_PRESENCE_KEYS = ("dash_pattern", "fill_pattern", "line_offset", "marker_image",
+                       "marker_offset", "line_marker",
+                       # absent = measured on SCREEN; a class must not inherit another's ground width
+                       "line_width_m", "outline_width_m")
 
 
 def class_overrides(shape: dict, own: dict) -> dict:
@@ -145,6 +157,8 @@ def class_overrides(shape: dict, own: dict) -> dict:
     out = {}
     for key in CLASS_SHAPE_KEYS:
         if key not in own:
+            if key in CLASS_PRESENCE_KEYS and shape.get(key) not in (None, "", [], {}):
+                out[key] = None         # this class has none of what the layer level has
             continue
         mine = own[key]
         if key in shape and _same_shape_value(shape[key], mine):
@@ -165,6 +179,69 @@ def class_style(style: dict, entry: dict) -> dict:
     return dict(style, **extra) if extra else style
 
 
+#: Qt's named pen styles that have no `lineType` word, as `dash_pattern`s. Qt defines them in
+#: MULTIPLES OF THE PEN WIDTH (QPen docs), which is exactly `dash_pattern`'s unit and MapLibre's
+#: `line-dasharray`'s — so they travel exactly, with no server change. They were sent as SOLID
+#: (issue #118: a canal centreline and tithe boundaries drawn dash-dot arrived as plain lines).
+_QT_DASH_PRESETS = (("DashDotLine", [4.0, 2.0, 1.0, 2.0]),
+                    ("DashDotDotLine", [4.0, 2.0, 1.0, 2.0, 1.0, 2.0]))
+
+
+def _pen_dash(pen) -> dict:
+    """`lineType` (and `dash_pattern` for dash-dot styles) for a Qt pen style. One reader for every
+    place a pen is read, so a style cannot be understood in one branch and lost in another."""
+    try:
+        if pen == enum(Qt, "PenStyle", "DashLine"):
+            return {"lineType": "dashed"}
+        if pen == enum(Qt, "PenStyle", "DotLine"):
+            return {"lineType": "dotted"}
+        for name, pattern in _QT_DASH_PRESETS:
+            if pen == enum(Qt, "PenStyle", name):
+                return {"lineType": "solid", "dash_pattern": list(pattern)}
+    except Exception:                   # noqa: BLE001  # nosec B110 - an unreadable pen is solid
+        pass
+    return {"lineType": "solid"}
+
+
+def _preset_pen(pattern):
+    """The Qt pen style a `dash_pattern` IS, when it is one of Qt's own — so a dash-dot line comes
+    back to QGIS as `DashDotLine`, not as a custom vector that only looks like it."""
+    try:
+        values = [float(v) for v in pattern]
+    except (TypeError, ValueError):
+        return None
+    for name, preset in _QT_DASH_PRESETS:
+        if len(values) == len(preset) and all(abs(a - b) < 1e-6 for a, b in zip(values, preset)):
+            return enum(Qt, "PenStyle", name)
+    return None
+
+
+def _apply_ground_width(layer0, metres, setter: str, unit_setter: str,
+                        pattern=None) -> None:
+    """A width stated in metres goes back as metres on the ground — and a custom dash with it.
+
+    `_apply_line_decoration` writes a dash as pattern x (screen width in points); for a ground
+    width that screen width is meaningless, so the vector is rebuilt as pattern x metres, in the
+    same ground unit. `pattern` is the style's `dash_pattern` (multiples of the width).
+    """
+    value = _number(metres, None)
+    if value is None or value <= 0:
+        return
+    fn = getattr(layer0, setter, None)
+    if not callable(fn):
+        return
+    try:
+        fn(value)
+        _set_ground_unit(layer0, unit_setter)
+        if (setter == "setWidth" and isinstance(pattern, (list, tuple)) and len(pattern) >= 2
+                and _preset_pen(pattern) is None
+                and callable(getattr(layer0, "setCustomDashVector", None))):
+            layer0.setCustomDashVector([float(v) * value for v in pattern])
+            _set_ground_unit(layer0, "setCustomDashPatternUnit")
+    except Exception as exc:            # noqa: BLE001 - a width is not worth failing the symbol
+        _log("Could not apply a width in metres: {0}".format(exc))
+
+
 def _set_stroke_dash(layer0, style: dict) -> None:
     """A polygon outline's dash, from `lineType`. The inverse of what `_outline_from_strokes` reads.
 
@@ -176,6 +253,14 @@ def _set_stroke_dash(layer0, style: dict) -> None:
     if not callable(setter):
         return
     kind = (style.get("lineType") or "").lower()
+    preset = (_preset_pen(style.get("dash_pattern"))
+              if isinstance(style.get("dash_pattern"), (list, tuple)) else None)
+    if preset is not None:
+        try:
+            setter(preset)
+        except Exception as exc:        # noqa: BLE001 - a dash is not worth failing the symbol
+            _log("Could not apply the outline dash: {0}".format(exc))
+        return
     if not kind and isinstance(style.get("dash_pattern"), (list, tuple)):
         # A pattern whose ON segment is short relative to its gap reads as dotted; anything else is
         # a dash. Approximate, and said so — a fill cannot hold the vector itself.
@@ -291,6 +376,109 @@ def _points(value, unit):
     except (TypeError, ValueError):
         return number
     return None if factor is None else number * factor
+
+
+#: `QgsUnitTypes.RenderUnit` values for widths measured ON THE GROUND rather than on screen.
+_RENDER_MAP_UNITS = 1
+_RENDER_METERS_IN_MAP_UNITS = 7
+
+
+def _ground_metres(obj, getter: str, unit_getter: str):
+    """A size stated ON THE GROUND, in metres — or None when it is stated on screen, or in degrees.
+
+    QGIS lets a width be "map units" (the project CRS's own unit) or "metres at scale", and either
+    keeps a feature its real size: a 10 m path is 10 m wide at every zoom. `_UNIT_TO_POINTS` rightly
+    refuses to turn either into points, so such a width was not sent at all and the web drew its
+    default instead (issue #118: a 10 m path and 2.4 m hachures as fixed 2 px lines). Sent as
+    metres, the portal draws it as a width that doubles with every zoom level, which is the same
+    thing. Map units in DEGREES have no ground size, so those stay unsent, as before.
+    """
+    value = _number(_call_or_none(obj, getter), None)
+    if value is None or value <= 0:
+        return None
+    try:
+        unit = int(_call_or_none(obj, unit_getter))
+    except (TypeError, ValueError):
+        return None
+    if unit == _RENDER_METERS_IN_MAP_UNITS:
+        return value
+    if unit != _RENDER_MAP_UNITS:
+        return None
+    factor = _GROUND.get("factor")
+    return value * factor if factor else None
+
+
+#: Ground metres per MAP UNIT for the layer being read — set by `from_qgis`, None when map units
+#: have no ground size (degrees, or no usable CRS). Module state because the readers that need it
+#: sit several calls below the one place that knows the layer.
+_GROUND = {"factor": None}
+
+#: Web Mercator's spellings. Its "metres" are not ground metres: they stretch by 1/cos(latitude).
+_WEB_MERCATOR = ("EPSG:3857", "EPSG:900913", "EPSG:3785", "ESRI:102100", "ESRI:102113")
+
+
+def _ground_factor(qgis_layer):
+    """Ground metres per map unit for this layer, or None.
+
+    QGIS's "map units" are the PROJECT's CRS units (the layer's when the project has no usable
+    CRS). Two corrections make them metres on the ground: the unit itself (feet, kilometres…), and
+    — for Web Mercator, by far the commonest projected CRS in a web-bound project — the Mercator
+    stretch, cos(latitude) at the middle of the layer. The portal divides by the same cosine at the
+    same latitude (`symbology.ground_width`), so the pair is exact: QGIS and MapLibre both draw on
+    the Mercator grid. In another projected CRS the scale factor is ~1 and is taken as 1.
+    """
+    try:
+        import math
+        from qgis.core import QgsProject, QgsUnitTypes
+        project = QgsProject.instance()
+        crs = project.crs()
+        if not crs.isValid() and hasattr(qgis_layer, "crs"):
+            crs = qgis_layer.crs()
+        if not crs.isValid() or crs.isGeographic():
+            return None
+        try:
+            metres = enum(QgsUnitTypes, "DistanceUnit", "DistanceMeters")
+        except Exception:               # noqa: BLE001 - QGIS 4 spells it in Qgis
+            from qgis.core import Qgis
+            metres = enum(Qgis, "DistanceUnit", "Meters")
+        factor = QgsUnitTypes.fromUnitToUnitFactor(crs.mapUnits(), metres)
+        if not factor or factor <= 0:
+            return None
+        if crs.authid().upper() in _WEB_MERCATOR:
+            lat = _middle_latitude(qgis_layer, project)
+            if lat is None:
+                return None
+            factor *= math.cos(math.radians(lat))
+        return factor
+    except Exception:                   # noqa: BLE001 - no CRS to speak of: nothing honest to send
+        return None
+
+
+def _middle_latitude(qgis_layer, project):
+    """The latitude in the middle of a layer's extent, or None. The same point the portal uses."""
+    try:
+        from qgis.core import QgsCoordinateReferenceSystem, QgsCoordinateTransform
+        extent = qgis_layer.extent()
+        if extent.isEmpty():
+            return None
+        wgs84 = QgsCoordinateReferenceSystem("EPSG:4326")
+        box = QgsCoordinateTransform(qgis_layer.crs(), wgs84, project).transformBoundingBox(extent)
+        return (box.yMinimum() + box.yMaximum()) / 2.0
+    except Exception:                   # noqa: BLE001
+        return None
+
+
+def _set_ground_unit(layer0, setter: str) -> None:
+    """Measure a width in metres on the ground — the inverse of `_ground_metres`. Metres-at-scale
+    rather than map units, so it means the same whatever CRS the project the style lands in uses."""
+    fn = getattr(layer0, setter, None)
+    if not callable(fn):
+        return
+    try:
+        from qgis.core import QgsUnitTypes
+        fn(enum(QgsUnitTypes, "RenderUnit", "RenderMetersInMapUnits"))
+    except Exception:                   # noqa: BLE001  # nosec B110 - very old QGIS: leave the unit
+        pass
 
 
 def _first_symbol_layer(symbol):
@@ -475,7 +663,10 @@ def _apply_line_decoration(layer0, style: dict) -> None:
     somebody changed the width, on either side.
     """
     pattern = style.get("dash_pattern")
-    if isinstance(pattern, (list, tuple)) and len(pattern) >= 2:
+    preset = _preset_pen(pattern) if isinstance(pattern, (list, tuple)) else None
+    if preset is not None:
+        layer0.setPenStyle(preset)
+    elif isinstance(pattern, (list, tuple)) and len(pattern) >= 2:
         try:
             width = _number(style.get("line_width"), DEFAULT_LINE_WIDTH) * CSS_PX_TO_POINTS
             vector = [float(v) * width for v in pattern]
@@ -687,6 +878,8 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
         # hairline, so an unstyled line came out far thinner than the portal draws it.
         layer0.setWidth(_stated(style.get("line_width"), DEFAULT_LINE_WIDTH) * CSS_PX_TO_POINTS)
         _apply_line_decoration(layer0, style)
+        _apply_ground_width(layer0, style.get("line_width_m"), "setWidth", "setWidthUnit",
+                            style.get("dash_pattern"))
         _apply_stroke_stack(symbol, style)
         # A TRANSLUCENT LINE. GeoDeploy carries one number; QGIS has two knobs for it (the symbol's
         # opacity and the colour's own alpha) and they multiply. Put it on the SYMBOL: that is the
@@ -705,7 +898,14 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
         else:
             # The map's default outline, not QGIS's — `fill-outline-color: #1d4ed8` in
             # portal_generator when the style names none.
-            layer0.setStrokeColor(QColor(outline or DEFAULT_FILL_OUTLINE))
+            stroke = QColor(outline or DEFAULT_FILL_OUTLINE)
+            # The border's own strength comes back as its colour's alpha — where QGIS keeps it.
+            if style.get("outline_opacity") is not None:
+                try:
+                    stroke.setAlphaF(max(0.0, min(1.0, float(style["outline_opacity"]))))
+                except (TypeError, ValueError):
+                    pass
+            layer0.setStrokeColor(stroke)
             # AND ITS WIDTH. On a POLYGON `outline_width` is a width in CSS pixels — the same unit a
             # line uses, because it is one — where on a marker the same key is a RATIO of the
             # radius. The two are never read by the same branch. 1 px is what a MapLibre fill's own
@@ -714,6 +914,8 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
             _set_stroke_width(layer0,
                               _number(style.get("outline_width"), DEFAULT_POLYGON_OUTLINE)
                               * CSS_PX_TO_POINTS)
+            _apply_ground_width(layer0, style.get("outline_width_m"), "setStrokeWidth",
+                                "setStrokeWidthUnit")
             # AND ITS DASH. The reader has always reported a polygon's dashed border — that is how
             # an outline-only polygon travels at all — but nothing ever wrote it back, so a dashed
             # boundary went to GeoDeploy correctly and returned SOLID. Reported on a survey extent
@@ -742,6 +944,16 @@ def _symbol_of(geometry_type, color: str | None, style: dict):
         if _has_pattern(style) and _set_brush(layer0, False):
             symbol.setOpacity(opacity)
         elif opacity <= 0 and _set_brush(layer0, False):
+            symbol.setOpacity(1.0)
+        elif style.get("outline_opacity") is not None:
+            # A BORDER STRONGER THAN ITS FILL (`outline_opacity`, issue #118). The symbol's opacity
+            # would fade the border with the fill, so the fill's opacity goes in the FILL COLOUR's
+            # alpha instead and the symbol stays opaque; the border's alpha was set above. A style
+            # without the key is written exactly as before.
+            _set_brush(layer0, True)
+            fill = layer0.color()
+            fill.setAlphaF(max(0.0, min(1.0, opacity)))
+            layer0.setColor(fill)
             symbol.setOpacity(1.0)
         else:
             _set_brush(layer0, True)
@@ -3769,6 +3981,7 @@ def from_qgis(qgis_layer) -> dict:
         # of saving the styles it could read. Reading a style is never worth that.
         _log("Could not read the tile layer's styling: {0}: {1}".format(type(exc).__name__, exc))
         return {}
+    _GROUND["factor"] = _ground_factor(qgis_layer)
     renderer = qgis_layer.renderer() if hasattr(qgis_layer, "renderer") else None
     if renderer is None:
         return {}
@@ -4139,9 +4352,10 @@ def _style_from_symbol(symbol) -> dict:
         width = _css_px(layer0, "width", "widthUnit")
         if width is not None:
             style["line_width"] = round(width, 2)
-        pen = layer0.penStyle()
-        style["lineType"] = ("dashed" if pen == enum(Qt, "PenStyle", "DashLine")
-                             else "dotted" if pen == enum(Qt, "PenStyle", "DotLine") else "solid")
+        ground = _ground_metres(layer0, "width", "widthUnit")
+        if ground is not None:
+            style["line_width_m"] = round(ground, 4)
+        style.update(_pen_dash(layer0.penStyle()))
         style.update(_line_decoration_of(layer0, style.get("line_width")))
         style.update(_line_decoration_symbol(symbol))
         # A LINE DRAWN AS SEVERAL STROKES STACKED. QGIS builds a casing, a dashed overlay, a
@@ -4164,6 +4378,12 @@ def _style_from_symbol(symbol) -> dict:
             _paint_opacity(symbol, _call_or_none(layer0, "color") or symbol.color()), 3)
         if isinstance(layer0, QgsSimpleFillSymbolLayer):
             style["outline_color"] = _stroke_of(layer0)
+            # THE BORDER'S OWN STRENGTH. QGIS draws a border at its colour's alpha whatever the fill
+            # is; a web fill fades its edge with the fill. Stated so the portal draws it apart, at
+            # this strength (issue #118: a 50% woodland's solid green border published near-white).
+            if style["outline_color"] not in ("none", ""):
+                style["outline_opacity"] = round(
+                    _paint_opacity(symbol, _call_or_none(layer0, "strokeColor")), 3)
         # The border WIDTH, which used to be dropped because GeoDeploy could not draw one: a
         # MapLibre fill strokes its own edge at a fixed hairline. It draws one now (a `line` layer
         # beside the fill), so the number is worth carrying — divided by the same constant the
@@ -4174,14 +4394,16 @@ def _style_from_symbol(symbol) -> dict:
         width = _stroke_width_of(layer0) if isinstance(layer0, QgsSimpleFillSymbolLayer) else None
         if width is not None:
             style["outline_width"] = round(width / CSS_PX_TO_POINTS, 2)
+        if isinstance(layer0, QgsSimpleFillSymbolLayer):
+            ground = _ground_metres(layer0, "strokeWidth", "strokeWidthUnit")
+            if ground is not None:
+                style["outline_width_m"] = round(ground, 4)
         # AND ITS DASH. A polygon whose border is dashed said nothing about it here — only the
         # outline-ONLY branch below ever read one — so a filled parcel with a dashed boundary
         # arrived with a solid one, in the browser and on the way back to QGIS.
         stroke_style = _call_or_none(layer0, "strokeStyle")
         if stroke_style is not None and stroke_style != enum(Qt, "PenStyle", "NoPen"):
-            style["lineType"] = ("dashed" if stroke_style == enum(Qt, "PenStyle", "DashLine")
-                                 else "dotted" if stroke_style == enum(Qt, "PenStyle", "DotLine")
-                                 else "solid")
+            style.update(_pen_dash(stroke_style))
         # AN OUTLINE-ONLY POLYGON. Nothing in the symbol paints an area — every layer is a stroke,
         # or the one fill layer has `NoBrush` — so the fill must be switched OFF rather than drawn
         # in whatever colour the border happens to be. `fill_opacity: 0` is how GeoDeploy says
@@ -4194,6 +4416,13 @@ def _style_from_symbol(symbol) -> dict:
         # is usually a plain fill with a hatch stacked on it. See `fills.py` for why the tile is
         # REBUILT rather than photographed.
         style.update(_fill_pattern_of(symbol))
+        # A BORDER DRAWN AS A LINE LAYER. QGIS draws a polygon's boundary with a `SimpleLine`
+        # symbol layer as often as with the fill's own pen — a dotted shoreline over a flat water
+        # fill, a green edge round a marsh pattern — and only the outline-ONLY case above read it.
+        # Everywhere else the fill's "no pen" won and the border QGIS draws was published as none
+        # (issue #118: Water and Marsh lost theirs).
+        if style.get("outline_color") in (None, "", "none") and _has_line_layer(symbol):
+            style.update(_outline_from_strokes(symbol))
         # AND THE OPACITY A PATTERN CARRIES IS THE SYMBOL'S ALONE. Every colour in the tile was
         # painted with its own alpha already in it, so multiplying by a colour's alpha a second
         # time here — which is what `_paint_opacity` does, rightly, for a flat fill — would fade
@@ -4207,6 +4436,17 @@ def _style_from_symbol(symbol) -> dict:
             # is the true reading of a symbol that has no stroke in it.
             if "outline_color" not in style:
                 style["outline_color"] = "none"
+    # A BORDER'S OWN STRENGTH IS ONLY WORTH STATING WHERE IT DIFFERS FROM THE FILL'S. The web fades
+    # a fill's edge with the fill, so a border AS strong as its fill already draws right — and
+    # stating it anyway made every polygon that went to QGIS and back report an edit nobody made
+    # (QGIS stores a GeoDeploy fill opacity on the whole symbol, border included). Decided here,
+    # once, against the FINAL fill opacity, because an outline-only polygon only becomes
+    # `fill_opacity: 0` above.
+    if "outline_opacity" in style:
+        if (style.get("outline_color") in (None, "", "none")
+                or abs(float(style["outline_opacity"])
+                       - float(style.get("fill_opacity", DEFAULT_FILL_OPACITY))) < 0.005):
+            style.pop("outline_opacity", None)
     style.update(_size_from_qgis(symbol, layer0))
     return style
 
@@ -4464,6 +4704,16 @@ def _line_decoration_of(layer0, line_width) -> dict:
         if callable(uses_custom) and uses_custom() and callable(vector):
             width = _number(line_width, DEFAULT_LINE_WIDTH) * CSS_PX_TO_POINTS
             raw = [float(v) for v in (vector() or [])]
+            # BOTH ON THE GROUND (issue #118's hachures: 2.4 map-unit lines dashed 0.3;2 map units).
+            # The pattern is a multiple of the width, and both are in the same unit, so the ratio is
+            # exact — whereas the screen width below does not exist for a ground width.
+            try:
+                same = (int(layer0.widthUnit()) in (_RENDER_MAP_UNITS, _RENDER_METERS_IN_MAP_UNITS)
+                        and int(layer0.customDashPatternUnit()) == int(layer0.widthUnit()))
+            except Exception:           # noqa: BLE001
+                same = False
+            if same and _number(_call_or_none(layer0, "width"), 0):
+                width = float(layer0.width())
             if width and len(raw) >= 2:
                 out["dash_pattern"] = [round(v / width, 4) for v in raw]
                 # A custom pattern is the real dash; the preset name would contradict it.
@@ -4831,10 +5081,7 @@ def _stroke_stack(symbol) -> list:
         if width is not None:
             entry["line_width"] = round(width, 2)
         try:
-            pen = layer.penStyle()
-            entry["lineType"] = ("dashed" if pen == enum(Qt, "PenStyle", "DashLine")
-                                 else "dotted" if pen == enum(Qt, "PenStyle", "DotLine")
-                                 else "solid")
+            entry.update(_pen_dash(layer.penStyle()))
         except Exception:               # noqa: BLE001  # nosec B110 - intentional: a pen we cannot read is drawn solid
             pass
         entry.update(_line_decoration_of(layer, entry.get("line_width")))
@@ -4933,6 +5180,18 @@ def _has_fill_paint(symbol) -> bool:
     return False
 
 
+def _has_line_layer(symbol) -> bool:
+    """Whether a fill symbol has an enabled `SimpleLine` layer — a border drawn as a line."""
+    try:
+        for i in range(symbol.symbolLayerCount()):
+            sl = symbol.symbolLayer(i)
+            if isinstance(sl, QgsSimpleLineSymbolLayer) and getattr(sl, "enabled", lambda: True)():
+                return True
+    except Exception:                   # noqa: BLE001  # nosec B110 - an unreadable symbol has none
+        pass
+    return False
+
+
 def _outline_from_strokes(symbol) -> dict:
     """The border of an outline-only polygon, read off the LINE layer that draws it.
 
@@ -4954,12 +5213,17 @@ def _outline_from_strokes(symbol) -> dict:
         if not isinstance(sl, QgsSimpleLineSymbolLayer):
             continue
         out["outline_color"] = _hex(sl.color())
+        # Stated for the same reason as a fill's border (see `_style_from_symbol`), and here it is
+        # not cosmetic: an outline-only polygon is sent with `fill_opacity: 0`, and a web fill fades
+        # its own edge with that — so a solid hairline border was INVISIBLE on the portal.
+        out["outline_opacity"] = round(_paint_opacity(symbol, sl.color()), 3)
         width = _css_px(sl, "width", "widthUnit")
         if width is not None:
             out["outline_width"] = round(width, 2)
-        pen = _call_or_none(sl, "penStyle")
-        out["lineType"] = ("dashed" if pen == enum(Qt, "PenStyle", "DashLine")
-                           else "dotted" if pen == enum(Qt, "PenStyle", "DotLine") else "solid")
+        ground = _ground_metres(sl, "width", "widthUnit")
+        if ground is not None:
+            out["outline_width_m"] = round(ground, 4)
+        out.update(_pen_dash(_call_or_none(sl, "penStyle")))
         # The custom dash and the cap/join, which is what makes `5;2` come back as `5;2` rather
         # than as MapLibre's generic dash.
         out.update(_line_decoration_of(sl, out.get("outline_width")))
