@@ -794,8 +794,30 @@ export function labelRules(labels = {}) {
 }
 
 export function labelText(labels = {}) {
-  if (labels.expression != null) return labels.expression
+  if (labels.expression != null) return nullTextToEmpty(labels.expression)
   return ['to-string', ['get', String(labels.field)]]
+}
+
+// Twin of symbology.py::_branch_outputs — where each branching operator keeps its OUTPUTS.
+function branchOutputs(expr) {
+  const op = expr[0], n = expr.length, out = []
+  if (op === 'case') { for (let i = 2; i < n - 1; i += 2) out.push(i); out.push(n - 1) }
+  else if (op === 'match') { for (let i = 3; i < n - 1; i += 2) out.push(i); out.push(n - 1) }
+  else if (op === 'step') { for (let i = 2; i < n; i += 2) out.push(i) }
+  else if (op === 'coalesce') { for (let i = 1; i < n; i++) out.push(i) }
+  else if (op === 'let') out.push(n - 1)
+  return out
+}
+
+// Twin of symbology.py::_null_text_to_empty. A QGIS label with no ELSE translates to a null
+// fallback, which MapLibre rejects in `text-field` — and with it the WHOLE style, so no map draws.
+// "" draws nothing, as QGIS does. Only outputs are touched; a null in a condition is meant.
+export function nullTextToEmpty(expr) {
+  if (expr == null) return ''
+  if (!Array.isArray(expr) || !expr.length || typeof expr[0] !== 'string') return expr
+  const out = expr.slice()
+  for (const i of branchOutputs(expr)) out[i] = nullTextToEmpty(out[i])
+  return out
 }
 
 /** The `layout` half of a label layer. Twin of `symbology.label_layout`. */
