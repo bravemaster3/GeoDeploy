@@ -3304,7 +3304,11 @@
   function applyRaster(srcId) {
     const baseFull = (STYLE.sources[srcId] && STYLE.sources[srcId].tiles && STYLE.sources[srcId].tiles[0]) || '';
     if (!baseFull) return;
-    const base = baseFull.split('&')[0];  // keep up to ?url=s3://... (s3 key has no '&')
+    let base = baseFull.split('&')[0];  // keep up to ?url=s3://... (s3 key has no '&')
+    // Ask for PNG where the picture is sharp edges — class colours, contour lines. A URL naming no
+    // format is answered as JPEG for any tile with no transparent pixel, which smears them (issue
+    // #126). Mirrors services/titiler.py::_lossless.
+    const lossless = u => (u.indexOf('/{y}?') >= 0 ? u.replace('/{y}?', '/{y}.png?') : u);
     const params = [];
     // EVERY param is rebuilt from the effective* helpers, not from `st` alone. Reading `st` directly
     // meant that changing one control dropped every baked param the viewer had not touched — pick a
@@ -3331,6 +3335,7 @@
       const z = effectiveZfactor(srcId);
       if (Number(z) !== 1) params.push('expression=b1*' + z);
     } else if (algorithm === 'contours') {
+      base = lossless(base);
       params.push('algorithm=contours');
       const c = effectiveContours(srcId);
       const p = { increment: c.increment > 0 ? c.increment : 35,
@@ -3348,7 +3353,10 @@
       // drop: touching any control rebuilt the URL without it and a land-cover layer fell back to
       // grayscale mid-session. Kept whenever the viewer has not chosen a named palette instead.
       if (cmap && bidx.length !== 3) params.push('colormap_name=' + cmap);  // ignored for RGB
-      else if (usesClasses) params.push('colormap=' + encodeURIComponent(bakedClasses));
+      else if (usesClasses) {
+        params.push('colormap=' + encodeURIComponent(bakedClasses));
+        base = lossless(base);
+      }
     }
     const url = base + (params.length ? '&' + params.join('&') : '');
     const src = map.getSource(srcId);
@@ -3361,7 +3369,7 @@
     const base = baseFull.split('&')[0];
     const qIdx = base.indexOf('?');
     if (qIdx < 0) return;
-    const statsUrl = base.slice(0, qIdx).replace(/\/cog\/tiles\/[^/]+\/\{z\}\/\{x\}\/\{y\}/, '/cog/statistics') + base.slice(qIdx);
+    const statsUrl = base.slice(0, qIdx).replace(/\/cog\/tiles\/[^/]+\/\{z\}\/\{x\}\/\{y\}(?:\.[a-z0-9]+)?/, '/cog/statistics') + base.slice(qIdx);
     const orig = btn ? btn.textContent : '';
     if (btn) { btn.textContent = '…'; btn.disabled = true; }
     try {
@@ -3558,7 +3566,7 @@
     const qIdx = base.indexOf('?');
     if (qIdx < 0) return null;
     const url = base.slice(0, qIdx)
-      .replace(/\/cog\/tiles\/[^/]+\/\{z\}\/\{x\}\/\{y\}/, '/cog/point/' + lngLat.lng + ',' + lngLat.lat) + base.slice(qIdx);
+      .replace(/\/cog\/tiles\/[^/]+\/\{z\}\/\{x\}\/\{y\}(?:\.[a-z0-9]+)?/, '/cog/point/' + lngLat.lng + ',' + lngLat.lat) + base.slice(qIdx);
     try {
       const r = await fetch(url);
       if (!r.ok) return null;

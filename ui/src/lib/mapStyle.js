@@ -836,14 +836,22 @@ export function terrainOf(style) {
 // directly. Deliberately NOT built through `rasterTilesUrl`: every style key that would add — a
 // colormap, a stretch, a band selection — would corrupt a heightfield rather than style it.
 export function terrainTilesUrl(baseTileUrl) {
-  const base = (baseTileUrl || '').split('&')[0]
+  // `.png` ALWAYS: the heights ARE the pixel bytes, and a tile URL naming no format comes back as
+  // JPEG whenever the tile has no transparent pixel — lossy bytes are wrong heights. The published
+  // portal's terrain_tile_url always said .png; this preview did not (issue #126).
+  const base = lossless((baseTileUrl || '').split('&')[0])
   const url = `${base}&algorithm=terrainrgb`
   return url.startsWith('/') ? location.origin + url : url
 }
 
+// Twin of services/titiler.py::_lossless — ask for PNG, never TiTiler's JPEG default (issue #126).
+export function lossless(url) {
+  return url.includes('/{y}?') ? url.replace('/{y}?', '/{y}.png?') : url
+}
+
 // Build a raster tile URL from the layer's base URL + the configured raster style.
 export function rasterTilesUrl(baseTileUrl, style, bandCount) {
-  const base = (baseTileUrl || '').split('&')[0]  // s3 key has no '&', so this keeps ?url=...
+  let base = (baseTileUrl || '').split('&')[0]  // s3 key has no '&', so this keeps ?url=...
   const params = []
   let bands = Array.isArray(style?.bidx) ? style.bidx.filter(b => b != null) : []
   // Mirrors services/titiler.py::get_tile_url. A PNG holds at most four channels and TiTiler adds
@@ -874,6 +882,7 @@ export function rasterTilesUrl(baseTileUrl, style, bandCount) {
       const [lo, hi] = contourRange(style)
       const step = Number(style.increment) > 0 ? Number(style.increment) : defaultIncrement(lo, hi)
       const scale = contourScale(step, lo, hi)
+      base = lossless(base)        // contour lines are sharp edges — mirrors titiler.py
       if (contoursAreDefault(style)) {
         // Scaling the DATA is the only way to ask TiTiler for an interval finer than 1.
         if (scale !== 1) params.push(`expression=b${expressionBand(bands)}*${scale}`)
@@ -900,7 +909,10 @@ export function rasterTilesUrl(baseTileUrl, style, bandCount) {
     // layer coloured per pixel VALUE drew here in plain grayscale while the published portal drew
     // its classes. The editor is supposed to be the preview — a preview that disagrees with the
     // thing it previews is worse than none.
-    if (explicitCmap) params.push(`colormap=${encodeURIComponent(explicitCmap)}`)
+    if (explicitCmap) {
+      params.push(`colormap=${encodeURIComponent(explicitCmap)}`)
+      base = lossless(base)        // class colours must survive exactly — mirrors titiler.py
+    }
     else if (style?.colormap) {
       // Mirrors services/titiler.py: matplotlib spells a reversed ramp with an `_r` suffix, and the
       // flag is the single source of truth — a stored `viridis_r` with reverse off is forward.

@@ -113,8 +113,8 @@ def get_tile_url(
             relief = contour_relief is not False       # absent means "yes", see the signature
             plain = (not contour_line_palette) and relief
             if plain and _contours_are_default(contour_palette, contour_color):
-                # TiTiler's own algorithm draws exactly this, so use it and keep the URL
-                # byte-identical to what every existing contour layer already has.
+                # TiTiler's own algorithm draws exactly this, so use it: the URL every existing
+                # contour layer already had, plus `.png` (issue #126).
                 if scale != 1:
                     # The data is multiplied BEFORE the algorithm runs, which is the only way to
                     # ask TiTiler for an interval finer than 1 — see `_contour_scale`.
@@ -122,6 +122,7 @@ def get_tile_url(
                 params = _contour_params(increment, thickness, minz, maxz, rescale, scale)
                 if params:
                     url += f"&algorithm_params={quote(params, safe='')}"
+                url = _lossless(url)          # lines are sharp edges too — see _lossless
             else:
                 # A CHOSEN palette or line colour, which the algorithm cannot express — it hard-codes
                 # `terrain` and black. Reproduced as band maths plus an explicit colormap; see
@@ -143,6 +144,7 @@ def get_tile_url(
                 url += f"&expression={quote(expr, safe='')}"
                 cmap = _contour_colormap(palette, colour, bool(contour_line_palette), relief)
                 url += f"&colormap={quote(cmap, safe='')}"
+                url = _lossless(url)
     # colormap only makes sense for single-band output (one selected band, or a
     # single-band raster). It is ignored when an algorithm or an RGB composite is active.
     elif len(bands) != 3:
@@ -151,6 +153,7 @@ def get_tile_url(
             # per VALUE, which no named gradient can express: interpolating between class 3 and
             # class 4 is meaningless. TiTiler takes the mapping itself as JSON.
             url += f"&colormap={quote(explicit, safe='')}"
+            url = _lossless(url)
         elif colormap:
             # matplotlib — and so rio-tiler, and so TiTiler — spells a reversed ramp with an `_r`
             # suffix. Appended rather than stored that way, so the stored style still names the
@@ -159,6 +162,18 @@ def get_tile_url(
             url += f"&colormap_name={name}_r" if colormap_reverse else f"&colormap_name={name}"
     return url
 
+
+
+def _lossless(url: str) -> str:
+    """Ask TiTiler for PNG explicitly.
+
+    A tile URL that names no format is answered as JPEG whenever the tile has no transparent pixel —
+    every tile fully inside the data. JPEG is lossy: it smears sharp colour edges, so a classified
+    raster drew colours nobody chose along every class boundary, and contour lines smeared (27 colours measured in a tile
+    styled with four, on TiTiler 2.2.1 and 2.4.1 alike — issue #126). Continuous imagery is fine as
+    JPEG and keeps the smaller tiles; colour-per-value and drawn contour lines are not.
+    """
+    return url.replace("/{y}?", "/{y}.png?", 1)
 
 
 def _expression_band(bands) -> int:
