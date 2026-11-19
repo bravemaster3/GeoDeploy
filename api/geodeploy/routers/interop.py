@@ -31,6 +31,7 @@ from ..deps import require_scope
 from ..models import ExternalSource, Portal, RasterLayer, UploadJob, User, VectorLayer
 from ..routers.portals import _new_slug
 from ..services import postgis
+from ..services.internal_columns import JSONB_STRIP
 from ..services import geolibre_import as gli
 
 router = APIRouter(prefix="/interop", tags=["interop"])
@@ -223,7 +224,7 @@ def _read_layer_geojson(schema: str, table: str, cap: int) -> str:
             "COALESCE(jsonb_agg(f.feat), '[]'::jsonb))::text FROM ("
             "  SELECT jsonb_build_object('type','Feature',"
             f"    'geometry', ST_AsGeoJSON({_geom_out(srid, 4326)})::jsonb,"
-            "    'properties', to_jsonb(t) - 'geom' - 'id') AS feat"
+            f"    'properties', to_jsonb(t) - 'geom' - 'id' - {JSONB_STRIP}) AS feat"
             f'  FROM "{schema}"."{table}" t'
             f"  LIMIT {int(cap)}"
             ") f"

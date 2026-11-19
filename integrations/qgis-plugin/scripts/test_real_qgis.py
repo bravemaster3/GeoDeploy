@@ -28,6 +28,7 @@ Run it:
 Exit code 0 = every check passed; 1 = at least one failed, each printed with what it expected.
 """
 import faulthandler
+import json
 import os
 import sys
 import traceback
@@ -902,6 +903,77 @@ def issue_118():
     check("118: map units in DEGREES have no ground size and are not sent",
           "line_width_m" not in (symbology.from_qgis(layer) or {}))
     project.setCrs(saved)
+
+
+# ══ 6e. Geometry measures in the upload (issue #133) ════════════════════════════════════════════
+
+def geometry_measures():
+    """`$area > 4000000` labels only large forests in QGIS; a web map cannot measure a tile. The
+    plugin writes the measure INTO the upload, computed by QGIS itself in the project's context."""
+    section("Geometry measures — $area travels as a column QGIS computed")
+    from qgis.core import (QgsExpression, QgsExpressionContext, QgsExpressionContextUtils,
+                           QgsPalLayerSettings, QgsVectorLayer, QgsVectorLayerSimpleLabeling)
+    try:
+        from geodeploy_qgis import export as _export
+    except ImportError:
+        sys.path.insert(0, os.path.join(PLUGIN, ".."))
+        from geodeploy_qgis import export as _export
+
+    plain = make_layer("Polygon")
+    check("measures: a layer whose style measures nothing is not touched",
+          _export.measures_used(plain) == [], _export.measures_used(plain))
+
+    layer = make_layer("Polygon")
+    settings = QgsPalLayerSettings()
+    settings.fieldName = "CASE WHEN $area > 0.5 THEN \"kind\" END"
+    settings.isExpression = True
+    layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
+    layer.setLabelsEnabled(True)
+    check("measures: a label using $area is found", _export.measures_used(layer) == ["$area"],
+          _export.measures_used(layer))
+
+    path, temporary = _export.prepare(layer)
+    out = QgsVectorLayer(path, "out", "ogr")
+    check("measures: the upload is a GeoPackage carrying __gd_area",
+          temporary and out.isValid() and out.fields().indexOf("__gd_area") >= 0,
+          [f.name() for f in out.fields()])
+    ctx = QgsExpressionContext(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
+    expr = QgsExpression("$area")
+    expr.prepare(ctx)
+    want, got = [], []
+    for src, row in zip(layer.getFeatures(), out.getFeatures()):
+        ctx.setFeature(src)
+        want.append(expr.evaluate(ctx))
+        got.append(row["__gd_area"])
+    check("measures: every value is exactly QGIS's own $area",
+          len(got) == 3 and all(abs(float(a) - float(b)) < 1e-6 for a, b in zip(want, got)),
+          "{0} vs {1}".format(got, want))
+    check("measures: the layer's own attributes travel unchanged",
+          [row["kind"] for row in out.getFeatures()] == ["a", "b", "c"])
+
+    labels = (symbology.from_qgis(layer) or {}).get("labels") or {}
+    check("measures: the label translates instead of being sent unlabelled",
+          labels.get("enabled") and "__gd_area" in json.dumps(labels), repr(labels)[:300])
+
+    # When a label cannot travel, the note names the part that REALLY blocks it — not the first
+    # `@map_scale`, which is handled. It used to blame @map_scale for what was really `$area`.
+    layer = make_layer("Polygon")
+    settings = QgsPalLayerSettings()
+    settings.fieldName = ("CASE WHEN \"kind\" = 'a' AND @map_scale < 1000 "
+                          "AND soundex(\"kind\") = 'A000' THEN \"kind\" END")
+    settings.isExpression = True
+    layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
+    layer.setLabelsEnabled(True)
+    captured = []
+    real_log = symbology._log
+    symbology._log = lambda m, level="warning": captured.append(m)
+    try:
+        symbology.from_qgis(layer)
+    finally:
+        symbology._log = real_log
+    note = " ".join(m for m in captured if "label expression" in m)
+    check("measures: an untranslatable label names its real blocker, not @map_scale",
+          "soundex" in note and "@map_scale is not supported" not in note, note[:300])
 
 
 # ══ 7. 2.5D ══════════════════════════════════════════════════════════════════════════════════════
@@ -2245,6 +2317,7 @@ def main():
     map_scale_gates()
     links_survive()
     issue_118()
+    geometry_measures()
     two_and_a_half_d()
     natives()
     labelling()

@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from ..celery_app import celery_app
 from ..config import get_settings
+from ..services.internal_columns import JSONB_STRIP
 
 log = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ def _vec_geojson(cur, schema: str, table: str, b, srid: int, out_srid: int) -> t
         "COALESCE(jsonb_agg(f.feat), '[]'::jsonb))::text, count(*) FROM ("
         "  SELECT jsonb_build_object('type','Feature',"
         f"    'geometry', ST_AsGeoJSON({_geom_out(srid, out_srid)})::jsonb,"
-        "    'properties', to_jsonb(t) - 'geom') AS feat"
+        f"    'properties', to_jsonb(t) - 'geom' - {JSONB_STRIP}) AS feat"
         f'  FROM "{schema}"."{table}" t'
         f"  {where}"
         f"  LIMIT {cap}"
@@ -92,7 +93,7 @@ def _vec_csv(cur, schema: str, table: str, b, srid: int, out_srid: int) -> tuple
     import csv
     where, params, cap = _filter(b, srid)
     sql = (
-        f"SELECT (to_jsonb(t) - 'geom')::text AS props, ST_AsText({_geom_out(srid, out_srid)}) AS wkt "
+        f"SELECT (to_jsonb(t) - 'geom' - {JSONB_STRIP})::text AS props, ST_AsText({_geom_out(srid, out_srid)}) AS wkt "
         f'FROM "{schema}"."{table}" t '
         f"{where} LIMIT {cap}"
     )

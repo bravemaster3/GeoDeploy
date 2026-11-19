@@ -6,6 +6,13 @@ upgrade needs manual work.
 
 ## Unreleased
 
+- **Styles that measure geometry travel from QGIS** ([#133](https://github.com/bravemaster3/GeoDeploy/issues/133),
+  with QGIS plugin 0.7.6). A label or rule using `$area`, `$length` or `$perimeter` (*label only
+  forests larger than 4 km²*) can't be evaluated by a web map, which only has clipped tiles, so
+  those layers were published unlabelled. The plugin now uploads each measure as a column, computed
+  by QGIS with the project's ellipsoid and units, so a threshold picks exactly the features it
+  picks in QGIS. These `__gd_*` columns reach the map tiles and nothing else: no popup, attribute
+  table, export, OGC API Features response or field list shows them.
 - **Portals draw QGIS styles more faithfully** ([#118](https://github.com/bravemaster3/GeoDeploy/issues/118),
   with QGIS plugin 0.7.5), checked on the reporter's D+S Canal project:
   - **Widths in map units** (a 10 m path) are drawn at their real ground size at every zoom.

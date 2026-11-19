@@ -1572,7 +1572,8 @@ const escAttr = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').re
 function attrTableHtml(title, props, fields) {
   const keys = fields && fields.length
     ? fields.filter(k => props[k] != null)
-    : Object.keys(props).filter(k => props[k] != null).slice(0, 8)
+    // `__gd_*` are GeoDeploy's own measure columns (issue #133): for the style, never the popup.
+    : Object.keys(props).filter(k => props[k] != null && !String(k).startsWith('__gd_')).slice(0, 8)
   const body = keys.length
     ? '<table style="font-size:12px;border-collapse:collapse">' + keys.map(k =>
         `<tr><th style="text-align:left;padding:2px 8px 2px 0;color:#6b7280">${escAttr(k)}</th><td style="padding:2px 0">${escAttr(props[k])}</td></tr>`).join('') + '</table>'
