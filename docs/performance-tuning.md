@@ -152,11 +152,11 @@ Apply, and the worker is recreated with the new values.
 docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}'
 ```
 
-PostgreSQL and MinIO are the resident baseline; the worker is what spikes. If you are only serving
+PostgreSQL and the storage server (SILO) are the resident baseline; the worker is what spikes. If you are only serving
 published portals and not ingesting, the worker can be stopped entirely
 (`docker compose stop celery`) and started again when you next upload — portals, tiles and the
 dashboard do not depend on it.
 
 !!! tip "Object storage takes the pressure off"
-    Pointing storage at an external S3 provider removes MinIO from the server entirely — one fewer
+    Pointing storage at an external S3 provider removes the local storage server entirely — one fewer
     resident process, and disk stops being a server decision. See [Getting started](getting-started.md).
