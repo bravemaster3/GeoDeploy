@@ -31,6 +31,7 @@ bash installer/tests/test-port80.sh    # ~6m,  NEEDS PORT 80 — see the warning
 # On FAKE MACHINES — privileged containers with their own dockerd. They touch nothing on this
 # machine, including an instance running here. Not in run-all.sh: they build images and take a while.
 bash installer/tests/test-hostproxy.sh   # ~12m, Apply against real nginx/Apache/Caddy, 25 scenarios
+API_IMAGE=<built from api/> bash installer/tests/test-tiles.sh   # ~3m, every Martin/TiTiler request we make, decoded
 bash installer/tests/test-upgrade.sh     # ~40m, real installers + updaters, old releases, branches
 ```
 
@@ -178,6 +179,13 @@ builds for real inside the machine.
   because the prompt reads `/dev/tty` and nothing writes there.
 
 ## Current status & known issues
+- 2026-11-19: `test-tiles.sh` (+ `tiles/prepare.py`, `tiles/check.py`) — PostGIS, SILO, Martin, TiTiler
+  and the real `nginx.conf` on a throwaway network; data and both servers configured by GeoDeploy's
+  own code (Martin config builder, tile functions, COG converter, TiTiler's read-only key and
+  `_start_titiler`). 79 checks on Martin 1.16.1 / TiTiler 2.4.1 (the pins) and on 1.10.1 / 2.2.1.
+  Override with `GDT_MARTIN_IMAGE` / `GDT_TITILER_IMAGE` to vet a bump; `GDT_KEEP=1` leaves it up.
+  Needs an `API_IMAGE` built from this checkout. WSL's dockerd restarting mid-run stops the
+  containers — rerun.
 - 2026-11-19: `test-hostproxy.sh` 25 scenarios / 172 assertions green (new **P1**: GeoDeploy still on
   port 80 beside a host nginx is refused with nothing touched, then applies once moved to 8080).
 - 2026-11-18: `test-hostproxy.sh` 24 scenarios / 159 assertions green on WSL2 + Docker 29.5.2,

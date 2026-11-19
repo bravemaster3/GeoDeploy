@@ -31,7 +31,8 @@ PLUGIN="${GD_COMPOSE_PLUGIN:-/usr/libexec/docker/cli-plugins/docker-compose}"
 # buildx too: api/Dockerfile uses `RUN --mount=type=cache`, which needs BuildKit, and Debian's own
 # docker.io has no buildx — the build then fails (and the updater, correctly, rolls back).
 BUILDX="${GD_BUILDX_PLUGIN:-/usr/libexec/docker/cli-plugins/docker-buildx}"
-IMAGES="geodeploy/api:latest geodeploy/ui:latest nginx:alpine redis:7-alpine ghcr.io/maplibre/martin:latest ghcr.io/developmentseed/titiler:latest"
+# Both the pinned tile servers (this branch) and `:latest` (what older versions name).
+IMAGES="geodeploy/api:latest geodeploy/ui:latest nginx:alpine redis:7-alpine ghcr.io/maplibre/martin:latest ghcr.io/developmentseed/titiler:latest ghcr.io/maplibre/martin:1.16.1 ghcr.io/developmentseed/titiler:2.4.1"
 ONLY=" $* "
 
 P=0; F=0; FAILS=""
@@ -47,7 +48,9 @@ prepare() {
   docker build -q --target machine -t gdhp-fakehost:machine "$W/ctx" >/dev/null || { echo "build failed"; exit 2; }
   # The stand-in for GitHub: every branch and tag of this checkout, including commits not pushed yet.
   rm -rf "$W/origin.git"; git clone -q --bare "$SRC" "$W/origin.git"
-  [ -f "$W/images.tar" ] || docker save $IMAGES -o "$W/images.tar"
+  # Keyed on the image LIST, so changing IMAGES cannot silently reuse a tar without the new ones.
+  TAR="$W/images-$(echo "$IMAGES" | md5sum | cut -c1-12).tar"
+  [ -f "$TAR" ] || docker save $IMAGES -o "$TAR"
   docker network create gdhp >/dev/null 2>&1 || true
 }
 
@@ -58,7 +61,7 @@ boot() { # NAME
     -v "$FH-docker:/var/lib/docker" -v "$W/origin.git:/srv/origin.git:ro" \
     -v "$PLUGIN:/usr/libexec/docker/cli-plugins/docker-compose:ro"     -v "$BUILDX:/usr/libexec/docker/cli-plugins/docker-buildx:ro" -e DOCKER_BUILDKIT=1     gdhp-fakehost:machine >/dev/null
   for _ in $(seq 1 60); do docker exec "$FH" docker info >/dev/null 2>&1 && break; sleep 1; done
-  docker exec -i "$FH" docker load < "$W/images.tar" >/dev/null
+  docker exec -i "$FH" docker load < "$TAR" >/dev/null
   fx "git config --system url./srv/origin.git.insteadOf https://github.com/bravemaster3/geodeploy
       git config --system --add safe.directory '*'"
 }
@@ -148,6 +151,10 @@ if want F; then
   chk "nginx bound bare :80, nothing on 443"       '[ "$(binding)" = "80/tcp=:80" ]'
   chk "serving on 80"                              'wait_health'
   chk "serving over IPv6"                          '[ "$(v6health)" = 200 ]'
+  # The tile servers run the versions the code pins (services/postgis.py, services/minio.py).
+  pin() { fx "git -C $G show HEAD:api/geodeploy/services/$2" | tr -d '\r' | sed -n "s/^$1 = \"\(.*\)\"$/\1/p"; }
+  chk "martin runs the pinned image, and is up"    '[ "$(fx "docker inspect -f {{.Config.Image}} geodeploy-martin")" = "$(pin MARTIN_IMAGE postgis.py)" ] && [ "$(fx "docker inspect -f {{.State.Running}} geodeploy-martin")" = true ]'
+  chk "titiler runs the pinned image, and is up"   '[ "$(fx "docker inspect -f {{.Config.Image}} geodeploy-titiler")" = "$(pin TITILER_IMAGE minio.py)" ] && [ "$(fx "docker inspect -f {{.State.Running}} geodeploy-titiler")" = true ]'
   teardown_install
   down
 fi

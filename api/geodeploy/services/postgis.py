@@ -14,7 +14,12 @@ CONTAINER_NAME = "geodeploy-postgres"
 IMAGE = "postgis/postgis:16-3.4"
 NETWORK = "geodeploy"
 MARTIN_NAME = "geodeploy-martin"
-MARTIN_IMAGE = "ghcr.io/maplibre/martin:latest"
+# PINNED, like every image GeoDeploy runs: `:latest` changed the tile server under installations
+# nobody had updated, and Martin's config and URL formats have moved before. 1.16.1 is what `:latest`
+# pointed at on 2026-11-19 (same digest). docker-compose.yml's `martin` names the same image;
+# test_tile_images keeps them in step, and installer/tests/test-tiles.sh is the check to run before
+# moving it.
+MARTIN_IMAGE = "ghcr.io/maplibre/martin:1.16.1"
 
 
 def _random_password(length: int = 32) -> str:
