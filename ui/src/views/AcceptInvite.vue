@@ -33,7 +33,10 @@
           <input v-model="confirm" type="password" class="input" @keydown.enter="submit" />
         </div>
         <div v-if="error" class="text-sm text-red-400">{{ error }}</div>
-        <button @click="submit" :disabled="!canSubmit || busy" class="btn-primary w-full justify-center">
+        <!-- Enabled whatever the form holds: a DISABLED button swallows the click, so the reason
+             ("Passwords do not match") was shown only to someone who pressed Enter — a click did
+             nothing and said nothing. `submit` checks and explains. -->
+        <button @click="submit" :disabled="busy" class="btn-primary w-full justify-center">
           <span v-if="busy" class="animate-spin">⟳</span>
           Create account
         </button>
@@ -65,6 +68,12 @@ const busy = ref(false)
 
 const canSubmit = computed(() =>
   name.value.trim() && password.value.length >= 8 && password.value === confirm.value)
+//: What stops the form, in the order a person fixes it. Never empty when `canSubmit` is false.
+function whyNot() {
+  if (!name.value.trim()) return 'Enter your name.'
+  if (password.value.length < 8) return 'Password must be at least 8 characters.'
+  return 'Passwords do not match.'
+}
 
 onMounted(async () => {
   if (!token) { linkError.value = 'This invitation link is incomplete.'; return }
@@ -80,9 +89,9 @@ onMounted(async () => {
 })
 
 async function submit() {
-  if (!canSubmit.value || busy.value) {
-    if (password.value && password.value.length < 8) error.value = 'Password must be at least 8 characters.'
-    else if (confirm.value && password.value !== confirm.value) error.value = 'Passwords do not match.'
+  if (busy.value) return
+  if (!canSubmit.value) {
+    error.value = whyNot()
     return
   }
   busy.value = true
