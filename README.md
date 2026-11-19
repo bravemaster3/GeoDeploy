@@ -148,7 +148,7 @@ Every instance also serves its own interactive API documentation at `/api/docs`.
 | State + spatial database | PostgreSQL / PostGIS (provisioned automatically) |
 | Vector tiles | Martin |
 | Raster tiles | TiTiler |
-| Object storage | MinIO, S3-compatible (provisioned automatically) |
+| Object storage | [SILO](https://github.com/pgsty/silo), the community-maintained fork of the MinIO server by [Pigsty](https://pigsty.io) — S3-compatible, provisioned automatically |
 | Columnar analytics | DuckDB (embedded) |
 | Frontend | Vue 3 + MapLibre GL JS + deck.gl |
 | Infrastructure | Docker Compose, nginx |

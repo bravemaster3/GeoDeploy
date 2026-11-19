@@ -329,7 +329,9 @@ async def configure_storage(req: ConfigureStorageRequest, request: Request, db: 
         try:
             creds = await minio_svc.provision_local()
         except Exception as exc:
-            raise HTTPException(500, f"Failed to start MinIO: {exc}") from exc
+            # Named for what the operator chose ("store files on this server"), with the server in
+            # brackets: SILO, the maintained MinIO fork (services/minio.py::IMAGE).
+            raise HTTPException(500, f"Failed to start local storage (SILO): {exc}") from exc
         config.storage_type = "local"
         config.storage_endpoint = creds["endpoint"]
         config.storage_bucket = creds["bucket"]

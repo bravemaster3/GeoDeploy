@@ -9,7 +9,17 @@ from botocore.exceptions import ClientError, EndpointResolutionError
 from ..config import get_settings
 
 CONTAINER_NAME = "geodeploy-minio"
-IMAGE = "minio/minio:latest"
+# SILO — the maintained community fork of the MinIO server (github.com/pgsty/silo, AGPL-3.0, the
+# same protocol, data format and MINIO_* variables). Not `minio/minio`: MinIO ended community
+# distribution, so that repository, `minio/mc`, the Quay mirror and dl.min.io all answer 404/410,
+# and the upstream source repo was archived in April 2026. Every NEW install failed at the storage
+# step with "pull access denied for minio/minio". Verified as a drop-in before switching: started
+# with the same command as below, the read-only-user script runs unchanged, and storage written by
+# the official image is read, written and keeps its users. PINNED: a moving tag would change the
+# server under an installation without anyone choosing it. docker-compose.yml's `minio` service
+# names the same image; test_storage_images keeps the two in step.
+IMAGE = "pgsty/silo:RELEASE.2026-11-12T00-00-00Z"
+MC_IMAGE = "pgsty/mc:RELEASE.2026-11-12T00-00-00Z"
 NETWORK = "geodeploy"
 TITILER_NAME = "geodeploy-titiler"
 TITILER_IMAGE = "ghcr.io/developmentseed/titiler:latest"
@@ -27,7 +37,7 @@ _TITILER_RO_USER = "gd-titiler-ro"
 
 def _ensure_readonly_user(endpoint: str, root_access: str, root_secret: str, bucket: str) -> tuple[str, str] | None:
     """Create/refresh a READ-ONLY MinIO user scoped to `bucket` (GetObject + ListBucket only) and
-    return its (access_key, secret_key). Uses a short-lived `minio/mc` container against the local
+    return its (access_key, secret_key). Uses a short-lived `mc` container (MC_IMAGE) against the local
     MinIO admin API. Best-effort: returns None on ANY failure so the caller falls back to the root
     credentials and raster serving is never broken by this hardening step."""
     ro_secret = _random_key(40)
@@ -54,7 +64,7 @@ def _ensure_readonly_user(endpoint: str, root_access: str, root_secret: str, buc
     try:
         client = docker.from_env()
         out = client.containers.run(
-            "minio/mc", entrypoint="/bin/sh", command=["-c", script],
+            MC_IMAGE, entrypoint="/bin/sh", command=["-c", script],
             network=NETWORK, remove=True, stderr=True)
         if b"GEODEPLOY_RO_OK" in (out or b""):
             return _TITILER_RO_USER, ro_secret

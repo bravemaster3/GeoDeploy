@@ -126,7 +126,9 @@ services:
       - geodeploy
 
   minio:
-    image: minio/minio:latest
+    # SILO, the maintained fork of the MinIO server — minio/minio no longer exists. Same image as
+    # services/minio.py::IMAGE (the wizard's container); see the note there.
+    image: pgsty/silo:RELEASE.2026-11-12T00-00-00Z
     restart: unless-stopped
     profiles: ["local-storage"]
     container_name: geodeploy-minio
