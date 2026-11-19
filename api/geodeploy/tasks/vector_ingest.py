@@ -29,6 +29,7 @@ from ..celery_app import celery_app
 from ..config import get_settings
 from ..services import postgis
 from ..services import martin as martin_svc
+from ..services import internal_columns
 
 logger = logging.getLogger(__name__)
 
@@ -646,7 +647,9 @@ def _convert_to_geoparquet(src_path: str, out_path: str, batch_size: int = 20_00
 
     with _open(src_path, layer) as src:
         col_schema = src.schema["properties"]
-        cols = list(col_schema.keys())
+        # GeoDeploy's own measure columns are for MapLibre filters on PostGIS tiles; a GeoParquet
+        # layer is drawn by deck.gl, which does not read them, so they are not written at all.
+        cols = internal_columns.visible(list(col_schema.keys()))
         crs_wkt = src.crs_wkt
         srid = _srid_of(crs_wkt)
 
@@ -935,5 +938,8 @@ def _ingest_via_copy(dsn: str, schema: str, table: str, src_path: str, data_dir:
     return {
         "bbox": bbox, "count": count, "geom_type": geom_type,
         "crs": f"EPSG:{store_srid}",  # native SRID (or 4326 fallback) — recorded by the caller
-        "columns": [{"name": db, "type": str(col_schema[src])} for src, db in zip(cols, db_cols)],
+        # Internal measure columns stay in the TABLE (Martin serves them to the tiles that need
+        # them) and out of the column list every picker and popup is built from.
+        "columns": [{"name": db, "type": str(col_schema[src])} for src, db in zip(cols, db_cols)
+                    if not internal_columns.is_internal(db)],
     }

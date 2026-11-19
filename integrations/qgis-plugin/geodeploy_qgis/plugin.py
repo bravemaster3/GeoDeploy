@@ -1547,6 +1547,12 @@ class GeoDeployDock(QDockWidget):
             self._say(f"Could not read that group: {exc}", MSG_CRITICAL)
             return
 
+        stale_measures = self._layers_missing_measures(group)
+        if stale_measures:
+            self._say("Area/length-based styling needs the layer uploaded again, because its copy "
+                      "on the instance predates measure fields: {0}. Until then those rules and "
+                      "labels draw nothing.".format(", ".join(stale_measures[:5])),
+                      MSG_INFO, bar=False)
         if plan.get("stale"):
             self._say("{0} had a link to a GeoDeploy layer that is no longer there (deleted, or on "
                       "another instance), so it will be uploaded again: {1}".format(
@@ -1619,6 +1625,7 @@ class GeoDeployDock(QDockWidget):
                 self._progress.emit("Uploading {0} ({1} of {2})…".format(name, index, len(uploads)))
                 # Upload, then TAG the QGIS layer with the id it was given. The tag is what makes
                 # the next push see it as an existing layer rather than a new one all over again.
+                carried = export.measures_used(qgis_layer)
                 try:
                     path, temporary = export.prepare(qgis_layer)
                 except export.NotUploadable as exc:
@@ -1636,7 +1643,7 @@ class GeoDeployDock(QDockWidget):
                     continue
                 kind = result.plan.layer_type
                 portal_sync.tag_layer(qgis_layer, instance_url, result.layer_id, kind,
-                                      instance_id=instance_id)
+                                      instance_id=instance_id, measures=carried)
                 style = style_for(qgis_layer, kind)
                 if style:
                     # THE LAYER'S OWN OPACITY, not 1.0. A layer drawn at 40% in QGIS arrived fully
@@ -1695,6 +1702,27 @@ class GeoDeployDock(QDockWidget):
             QgsProject.instance().setDirty(True)
         except Exception:               # noqa: BLE001  # nosec B110 - a flag is not worth an error
             pass
+
+    def _layers_missing_measures(self, group) -> list:
+        """Names of layers in `group` already on the instance whose style measures geometry
+        (`$area` …) that their upload did not carry — uploaded before measure fields existed."""
+        out = []
+
+        def walk(node):
+            for child in node.children():
+                layer = getattr(child, "layer", lambda: None)()
+                if layer is None:
+                    walk(child)
+                    continue
+                if portal_sync.layer_identity(layer) is None:
+                    continue            # it will be uploaded now, measures and all
+                if portal_sync.measures_missing(layer, export.measures_used(layer)):
+                    out.append(layer.name())
+        try:
+            walk(group)
+        except Exception:               # noqa: BLE001 - a note, never a reason to stop a push
+            return []
+        return out
 
     def _usable_tags(self, client, instance_id):
         """`portals.usable_tags` for the layers this instance has right now, or None when they could
@@ -2058,6 +2086,7 @@ class GeoDeployDock(QDockWidget):
         layers = [lyr for lyr in layers if lyr.name() in set(chosen)]
 
         jobs = []           # (name, path, temporary, style, source_layer)
+        carried_by = {}     # id(source_layer) -> the measures its upload carries (issue #133)
         service_jobs = []   # (name, spec, source_layer) — registered, never uploaded
         refused = []
         for layer in layers:
@@ -2085,6 +2114,7 @@ class GeoDeployDock(QDockWidget):
             # THE QGIS LAYER ITSELF rides along, so a successful upload can link it to what
             # it became on the instance — see `_uploaded`.
             jobs.append((layer.name(), path, temporary, style, layer))
+            carried_by[id(layer)] = export.measures_used(layer)
 
         if not jobs and not service_jobs:
             # Everything was refused — say why, for each, rather than a generic failure.
@@ -2113,7 +2143,7 @@ class GeoDeployDock(QDockWidget):
                 # Linked like an upload — applied on the main thread in `_uploaded` — so the layer
                 # already open answers "yes, I am that GeoDeploy source" to a later portal push.
                 if source_layer is not None:
-                    linked.append((source_layer, source_id, "external"))
+                    linked.append((source_layer, source_id, "external", None))
                 registered.append(name)
             for index, (name, path, temporary, style, source_layer) in enumerate(jobs, start=1):
                 # Reported from the worker thread: a queue that looks frozen for four of five files
@@ -2145,7 +2175,8 @@ class GeoDeployDock(QDockWidget):
                     # a QgsTask, and touching a map layer's properties off the main thread is how a
                     # plugin crashes QGIS rather than merely failing.
                     if getattr(result, "layer_id", None) and source_layer is not None:
-                        linked.append((source_layer, result.layer_id, result.plan.layer_type))
+                        linked.append((source_layer, result.layer_id, result.plan.layer_type,
+                                       carried_by.get(id(source_layer))))
                     uploaded.append(name)
                 except Exception as exc:            # noqa: BLE001 - one bad layer, not the batch
                     # Four good layers must still arrive when the third one is broken.
@@ -2176,10 +2207,11 @@ class GeoDeployDock(QDockWidget):
         linked = 0
         # Marked modified even if a link below fails: the upload itself happened.
         self._links_changed()
-        for source_layer, layer_id, kind in (result.get("linked") or []):
+        for source_layer, layer_id, kind, carried in (result.get("linked") or []):
             try:
                 portal_sync.tag_layer(source_layer, self.instance.url, layer_id, kind,
-                                      instance_id=self.instance.identity())
+                                      instance_id=self.instance.identity(),
+                                      measures=carried)
                 linked += 1
             except Exception as exc:    # noqa: BLE001 - the upload landed; the link is a bonus
                 symbology._log("Uploaded, but could not link {0} to its GeoDeploy layer: {1}"

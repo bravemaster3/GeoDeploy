@@ -35,6 +35,9 @@ from __future__ import annotations
 import math
 
 from geodeploy import expressions
+# `$area` / `$length` / `$perimeter` translate to the measure columns `export.prepare` writes
+# into every upload whose style uses them (issue #133).
+expressions.enable_measures()
 from geodeploy.styles import zoom_for_scale, scale_for_zoom
 
 try:                                    # a package, inside QGIS
@@ -297,7 +300,8 @@ def _narrow_zooms(entry: dict, lo, hi) -> None:
 
 
 def _scale_label_rules(field: str):
-    """Label rules for a label expression whose CASE branches gate on `@map_scale`, or None.
+    """`(label rules, None)` for a label expression whose CASE branches gate on `@map_scale`, or
+    `(None, reason)` naming the part that cannot travel (`(None, None)` when it is not that shape).
 
     `CASE WHEN "fclass" = 'village' AND @map_scale < 100000 THEN "name" ... END` labels villages only
     when zoomed in past 1:100,000 — and there is no web label expression that can ask for the zoom
@@ -312,13 +316,13 @@ def _scale_label_rules(field: str):
     """
     case = expressions.case_branches(field)
     if case is None:
-        return None
+        return None, None
     branches, else_text = case
     candidates = []
     for when, then in branches:
         alternatives = expressions.scale_alternatives(when)
         if alternatives is None:
-            return None
+            return None, None
         for cond, zoomed_out, zoomed_in in alternatives:
             candidates.append((cond, zoomed_out, zoomed_in, then))
     if else_text is not None:
@@ -330,12 +334,12 @@ def _scale_label_rules(field: str):
             continue                    # claims its features, labels nothing
         text, why = expressions.try_maplibre(then)
         if why is not None:
-            return None
+            return None, why
         parts, source = [], []
         if cond:
             node, why = expressions.try_maplibre(cond)
             if why is not None:
-                return None
+                return None, why
             parts.append(node)
             source.append(cond)
         if excluded:
@@ -343,7 +347,7 @@ def _scale_label_rules(field: str):
             for other in excluded:
                 node, why = expressions.try_maplibre(other)
                 if why is not None:
-                    return None
+                    return None, why
                 nodes.append(node)
             parts.append(expressions.negate(nodes))
             source.append("NOT ({0})".format(" OR ".join("({0})".format(e) for e in excluded)))
@@ -358,7 +362,7 @@ def _scale_label_rules(field: str):
         if zoomed_in:
             entry["maxzoom"] = zoom_for_scale(zoomed_in)
         rules.append(entry)
-    return rules or None
+    return (rules or None), None
 
 
 def _rule_zoom_range(rule, lo, hi):
@@ -404,7 +408,9 @@ def _read_text(settings, labels: dict, notes: list) -> None:
     if bool(_value(settings, "isExpression", False)):
         node, reason = expressions.try_maplibre(field)
         if node is None:
-            scaled = _scale_label_rules(field) if "@" in field else None
+            scaled, why = _scale_label_rules(field) if "@" in field else (None, None)
+            if why:
+                reason = why            # the part that really cannot travel, not the first `@`
             if scaled:
                 # A CASE whose branches gate on @map_scale: one label rule per branch, each with its
                 # zoom range — the same labels QGIS draws, at the same scales (issue #132).

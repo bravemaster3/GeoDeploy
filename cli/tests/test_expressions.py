@@ -454,3 +454,34 @@ class TestPrioritized:
     def test_no_thresholds_is_one_piece_per_candidate(self):
         assert prioritized([("a", None, None, 1), ("b", None, None, 2)]) == [
             ("a", [], None, None, 1), ("b", ["a"], None, None, 2)]
+
+
+class TestGeometryMeasures:
+    """`$area` & co. need the measure columns the QGIS plugin writes (issue #133) — opt-in only."""
+
+    def setup_method(self):
+        from geodeploy import expressions
+        self.expressions = expressions
+        expressions.enable_measures(False)
+
+    def teardown_method(self):
+        self.expressions.enable_measures(False)
+
+    def test_refused_by_default(self):
+        for text in ("$area > 1", "$length < 2", "$perimeter = 3", "area($geometry) > 1"):
+            assert try_maplibre(text)[0] is None, text
+
+    def test_translated_once_enabled(self):
+        self.expressions.enable_measures()
+        assert to_maplibre("$area > 4000000") == [">", ["get", "__gd_area"], 4000000]
+        assert to_maplibre("$length < 10") == ["<", ["get", "__gd_length"], 10]
+        assert to_maplibre("$perimeter >= 5") == [">=", ["get", "__gd_perimeter"], 5]
+        assert to_maplibre("area($geometry) > 1") == [">", ["get", "__gd_area"], 1]
+        assert to_maplibre("length( $geometry ) > 1") == [">", ["get", "__gd_length"], 1]
+
+    def test_string_length_is_not_a_measure(self):
+        self.expressions.enable_measures()
+        assert to_maplibre('length("name") > 3') == [">", ["length", ["get", "name"]], 3]
+
+    def test_the_column_comes_home_as_the_measure(self):
+        assert from_maplibre([">", ["get", "__gd_area"], 4000000]) == "$area > 4000000"

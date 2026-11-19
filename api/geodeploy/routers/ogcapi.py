@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from ..config import get_settings
+from ..services import internal_columns
 from ..database import get_db
 from ..models import VectorLayer
 from .common import by_ref, visible_to
@@ -317,7 +318,9 @@ async def _pg_columns(conn, schema: str, table: str, geom_col: str) -> list[str]
     rows = await conn.fetch(
         "SELECT column_name FROM information_schema.columns "
         "WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position", schema, table)
-    return [r["column_name"] for r in rows if r["column_name"] != geom_col]
+    # GeoDeploy's internal `__gd_*` columns are not part of the published feature schema.
+    return [r["column_name"] for r in rows
+            if r["column_name"] != geom_col and not internal_columns.is_internal(r["column_name"])]
 
 
 def _pg_geom_col(layer) -> str:

@@ -13,7 +13,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.7.5
+version=0.7.6
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -32,7 +32,15 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.7.5 - THE D+S CANAL EXAMPLE, SYMBOL BY SYMBOL (issue #118). Dash-dot and
+changelog=0.7.6 - STYLES THAT MEASURE GEOMETRY TRAVEL (issue #133). A rule or label using $area,
+    $length or $perimeter ("label only forests larger than 4 km2") could not travel, because a
+    web map cannot measure a clipped tile, so those layers were published unlabelled. The upload
+    now carries each measure as a column, computed by QGIS itself with the project's ellipsoid
+    and units, so the threshold means exactly what it means on the QGIS map; GeoDeploy keeps
+    those columns out of popups, the attribute table, exports and field lists. Checked feature by
+    feature against QGIS: on a real OSM project all 8 layers now draw and label identically.
+    A layer already on the instance needs uploading again to gain them, and the plugin says so.
+    0.7.5 - THE D+S CANAL EXAMPLE, SYMBOL BY SYMBOL (issue #118). Dash-dot and
     dash-dot-dot lines were published solid; they travel as Qt's own patterns and come back as
     the named pen styles. A categorized layer's first-class dash leaked into every class that had
     none, so a solid aqueduct outline drew dotted. A border drawn by a line layer (a dotted

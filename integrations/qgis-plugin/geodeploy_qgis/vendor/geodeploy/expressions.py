@@ -212,6 +212,26 @@ _FUNCTIONS = {
 
 # ── Parser ───────────────────────────────────────────────────────────────────────────────────────
 
+#: GEOMETRY MEASURES (issue #133). `$area`, `$length` and `$perimeter` are computed from a feature's
+#: geometry, which a web map cannot do from a clipped vector tile — so they are only translatable
+#: when the data CARRIES them as fields. The QGIS plugin writes them into the upload, computed by
+#: QGIS itself with the project's ellipsoid and units (so a threshold means exactly what the author
+#: tuned it to mean), into GeoDeploy-internal columns named below. EMPTY BY DEFAULT: a caller that
+#: has not arranged for the fields to exist must keep refusing these, or a filter would compare
+#: against a field that is not there. `enable_measures()` is how the plugin opts in.
+MEASURE_FIELDS = {}                                     # e.g. {"$area": "__gd_area"}
+_MEASURES = {"$area": "__gd_area", "$length": "__gd_length", "$perimeter": "__gd_perimeter"}
+_MEASURE_FUNCTIONS = {"area": "$area", "length": "$length", "perimeter": "$perimeter"}
+
+
+def enable_measures(on: bool = True) -> None:
+    """Translate `$area` / `$length` / `$perimeter` (and `area($geometry)` …) to the internal
+    columns the QGIS plugin writes. Off restores the refusal."""
+    MEASURE_FIELDS.clear()
+    if on:
+        MEASURE_FIELDS.update(_MEASURES)
+
+
 class _Parser(object):
     """Precedence-climbing over the token list. One pass, no AST — it emits MapLibre directly.
 
@@ -234,6 +254,13 @@ class _Parser(object):
         t = self.tokens[self.i]
         self.i += 1
         return t
+
+    def _at_geometry_call(self) -> bool:
+        """Whether the tokens from here read `name ( $geometry )`."""
+        ahead = self.tokens[self.i:self.i + 4]
+        return (len(ahead) == 4 and ahead[1].kind == "op" and ahead[1].value == "("
+                and ahead[2].kind == "word" and ahead[2].value.lower() == "$geometry"
+                and ahead[3].kind == "op" and ahead[3].value == ")")
 
     def at_op(self, *ops) -> bool:
         return self.tok.kind == "op" and self.tok.value in ops
@@ -436,8 +463,19 @@ class _Parser(object):
             if word == "$id":
                 self.next()
                 return ["id"]
+            if word.lower() in MEASURE_FIELDS:
+                self.next()
+                return ["get", MEASURE_FIELDS[word.lower()]]
+            if word.lower() in _MEASURES:
+                raise Unsupported(word, "a geometry measure needs the measure fields, which only an "
+                                        "upload from the QGIS plugin writes")
             if word.startswith("$"):
                 raise Unsupported(word, "only $id has a MapLibre equivalent")
+            # `area($geometry)` is `$area` spelled as a function — the same measure.
+            measure = _MEASURE_FUNCTIONS.get(low)
+            if measure and MEASURE_FIELDS and self._at_geometry_call():
+                self.i += 4                     # area ( $geometry )
+                return ["get", MEASURE_FIELDS[measure]]
             if low in _KEYWORDS:
                 raise Unsupported(word.upper(), "unexpected keyword at position {0}".format(t.pos))
 
@@ -946,6 +984,9 @@ def _back(node: Any) -> str:
     op, args = node[0], node[1:]
 
     if op == "get" and len(args) == 1 and isinstance(args[0], str):
+        for measure, column in _MEASURES.items():
+            if args[0] == column:
+                return measure                  # the internal column IS the measure, back home
         return '"' + args[0].replace('"', '""') + '"'
     if op == "id" and not args:
         return "$id"

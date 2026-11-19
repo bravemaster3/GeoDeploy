@@ -39,6 +39,9 @@ P_INSTANCE = "geodeploy/instance"
 #: The instance's own stable id (`/api/public/whoami` → `instance`), which — unlike its URL —
 #: survives the server moving from an IP to a domain, or from http to https.
 P_INSTANCE_ID = "geodeploy/instance_id"
+#: Which geometry measures (`$area`, …) the layer's upload carried as columns — see
+#: `export.measures_used`. A layer uploaded before they existed has none of them (issue #133).
+P_MEASURES = "geodeploy/measures"
 P_PORTAL_ID = "geodeploy/portal_id"
 P_PORTAL_TITLE = "geodeploy/portal_title"
 P_FOLDER_ID = "geodeploy/folder_id"
@@ -49,13 +52,28 @@ class PortalError(Exception):
 
 
 def tag_layer(qgis_layer, instance_url: str, layer_id, layer_type: str,
-              instance_id: str | None = None) -> None:
-    """Record which GeoDeploy layer this is, so a later push knows what it is looking at."""
+              instance_id: str | None = None, measures=None) -> None:
+    """Record which GeoDeploy layer this is, so a later push knows what it is looking at.
+
+    `measures` — the geometry measures the UPLOAD carried — is given only by the upload paths;
+    adding a layer from an instance says nothing about it, and leaves any earlier record alone.
+    """
     qgis_layer.setCustomProperty(P_LAYER_ID, str(layer_id))
     qgis_layer.setCustomProperty(P_LAYER_TYPE, layer_type)
     qgis_layer.setCustomProperty(P_INSTANCE, instance_url)
     if instance_id:
         qgis_layer.setCustomProperty(P_INSTANCE_ID, str(instance_id))
+    if measures is not None:
+        qgis_layer.setCustomProperty(P_MEASURES, ",".join(measures))
+
+
+def measures_missing(qgis_layer, wanted) -> list:
+    """The measures `wanted` by the layer's style that its copy on the instance does not carry."""
+    try:
+        have = set(filter(None, str(qgis_layer.customProperty(P_MEASURES) or "").split(",")))
+    except Exception:                   # noqa: BLE001
+        have = set()
+    return [m for m in wanted if m not in have]
 
 
 def layer_identity(qgis_layer):

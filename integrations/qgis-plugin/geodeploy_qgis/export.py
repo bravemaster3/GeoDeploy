@@ -100,6 +100,14 @@ def prepare(layer, on_status=None) -> tuple[str, bool]:
         raise NotUploadable("This layer has unsaved edits. Save or discard them first — otherwise "
                             "what arrives would not be what you are looking at.")
 
+    # A STYLE THAT MEASURES GEOMETRY ($area, $length, $perimeter — issue #133) needs those numbers
+    # IN THE DATA, because a web map cannot measure a clipped tile. Written into the upload as
+    # GeoDeploy-internal columns, computed by QGIS itself, so the threshold means what it means here.
+    measures = measures_used(layer)
+    if measures:
+        say("Measuring {0}…".format(", ".join(m.lstrip("$") for m in measures)))
+        return _write_with_measures(layer, measures), True
+
     plain = _plain_file_source(layer)
     if plain:
         ext = os.path.splitext(plain)[1].lower()
@@ -133,6 +141,94 @@ def prepare(layer, on_status=None) -> tuple[str, bool]:
         message = error[1] if isinstance(error, (tuple, list)) and len(error) > 1 else code
         raise NotUploadable(f"QGIS could not write this layer out: {message}")
     return tmp, True
+
+
+#: QGIS measure → the internal column it travels in. Must match `expressions._MEASURES` and the
+#: server's `services/internal_columns.MEASURE_COLUMNS`.
+MEASURE_COLUMNS = {"$area": "__gd_area", "$length": "__gd_length", "$perimeter": "__gd_perimeter"}
+_MEASURE_IN_TEXT = {
+    "$area": ("$area", "area($geometry)", "area( $geometry )"),
+    "$length": ("$length", "length($geometry)", "length( $geometry )"),
+    "$perimeter": ("$perimeter", "perimeter($geometry)", "perimeter( $geometry )"),
+}
+
+
+def measures_used(layer) -> list:
+    """The geometry measures this layer's style uses anywhere — rules, labels, data-defined
+    properties, the subset filter — read off the style document QGIS itself saves, so no place a
+    measure can hide is missed. `[]` when none (the upload is then exactly what it always was)."""
+    if not isinstance(layer, QgsVectorLayer):
+        return []
+    try:
+        from qgis.PyQt.QtXml import QDomDocument
+        doc = QDomDocument()
+        layer.exportNamedStyle(doc)
+        text = doc.toString().lower().replace("&quot;", '"')
+        text += " " + (layer.subsetString() or "").lower()
+    except Exception:                   # noqa: BLE001 - no style document: nothing to measure
+        return []
+    compact = text.replace(" ", "")
+    return [m for m, spellings in _MEASURE_IN_TEXT.items()
+            if any(sp.replace(" ", "") in compact for sp in spellings)]
+
+
+def _write_with_measures(layer, measures) -> str:
+    """The layer as a GeoPackage, plus one internal column per measure, evaluated per feature by
+    QGIS's own expression engine in the PROJECT's context — the context that carries the project's
+    ellipsoid and distance/area units, which is exactly what `$area` means on the QGIS map."""
+    from qgis.core import (QgsExpression, QgsExpressionContext, QgsExpressionContextUtils,
+                           QgsFeature, QgsField, QgsFields)
+    try:
+        from qgis.PyQt.QtCore import QMetaType
+        double = QMetaType.Type.Double
+    except Exception:                   # noqa: BLE001 - Qt5 spells it QVariant
+        from qgis.PyQt.QtCore import QVariant
+        double = QVariant.Double
+
+    tmp = os.path.join(tempfile.mkdtemp(prefix="geodeploy-"), f"{_safe(layer.name())}.gpkg")
+    fields = QgsFields(layer.fields())
+    taken = {f.name().lower() for f in layer.fields()}
+    columns = []
+    for m in measures:
+        name = MEASURE_COLUMNS[m]
+        if name.lower() in taken:       # the source already has it: overwrite nothing of theirs
+            continue
+        fields.append(QgsField(name, double))
+        columns.append((name, QgsExpression(m)))
+
+    options = QgsVectorFileWriter.SaveVectorOptions()
+    options.driverName = "GPKG"
+    options.layerName = _safe(layer.name())
+    options.fileEncoding = "UTF-8"
+    from qgis.core import QgsProject
+    writer = QgsVectorFileWriter.create(tmp, fields, layer.wkbType(), layer.crs(),
+                                        QgsProject.instance().transformContext(), options)
+    if writer is None or writer.hasError() != enum(QgsVectorFileWriter, "WriterError", "NoError"):
+        message = writer.errorMessage() if writer is not None else "no writer"
+        raise NotUploadable(f"QGIS could not write this layer out: {message}")
+
+    context = QgsExpressionContext(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
+    for _name, expression in columns:
+        expression.prepare(context)
+    try:
+        for feature in layer.getFeatures():           # the FILTERED features, as everywhere else
+            context.setFeature(feature)
+            values = []
+            for _name, expression in columns:
+                value = expression.evaluate(context)
+                try:
+                    values.append(float(value) if value is not None else None)
+                except (TypeError, ValueError):
+                    values.append(None)
+            out = QgsFeature(fields)
+            out.setGeometry(feature.geometry())
+            out.setAttributes(list(feature.attributes()) + values)
+            if not writer.addFeature(out):
+                raise NotUploadable("QGIS could not write a feature out: "
+                                    + (writer.errorMessage() or "unknown error"))
+    finally:
+        del writer                      # flushes and closes the GeoPackage
+    return tmp
 
 
 def _zip_shapefile(shp_path: str, say=None) -> str:

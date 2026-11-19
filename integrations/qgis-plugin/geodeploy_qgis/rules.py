@@ -36,6 +36,9 @@ QGIS here is what keeps a pushed layer looking like the one on screen.
 from __future__ import annotations
 
 from geodeploy import expressions
+# `$area` / `$length` / `$perimeter` translate to the measure columns `export.prepare` writes
+# into every upload whose style uses them (issue #133).
+expressions.enable_measures()
 from geodeploy.styles import zoom_for_scale, scale_for_zoom
 
 try:                                    # a package, inside QGIS

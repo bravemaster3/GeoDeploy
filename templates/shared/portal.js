@@ -3447,7 +3447,7 @@
       const props = f.properties || {};
       const keys = fields && fields.length
         ? fields.filter(k => props[k] != null)
-        : Object.keys(props).filter(k => props[k] != null).slice(0, 8);
+        : Object.keys(props).filter(k => props[k] != null && !isInternalField(k)).slice(0, 8);
       const body = keys.length
         ? '<table class="popup-table">' + keys.map(k =>
             '<tr><th>' + escHtml(k) + '</th><td>' + escHtml(String(props[k])) + '</td></tr>').join('') + '</table>'
@@ -3504,13 +3504,18 @@
     } catch (e) { return null; }
   }
 
+  // GeoDeploy's own `__gd_*` columns (geometry measures the QGIS plugin writes so a style can say
+  // `$area > …`, issue #133) ride in the tiles for the style's filters — never in a popup or the
+  // attribute table. Mirrors services/internal_columns.is_internal.
+  function isInternalField(k) { return String(k).indexOf('__gd_') === 0; }
+
   function deckIdentifyHtml(results) {
     return (results || []).filter(Boolean).map(r => {
       const fields = POPUP_CONFIG[r.layerId] || POPUP_CONFIG[String(r.layerId)];
       const props = r.feats[0] || {};
       const keys = fields && fields.length
         ? fields.filter(k => props[k] != null)
-        : Object.keys(props).filter(k => props[k] != null).slice(0, 8);
+        : Object.keys(props).filter(k => props[k] != null && !isInternalField(k)).slice(0, 8);
       const body = keys.length
         ? '<table class="popup-table">' + keys.map(k =>
             '<tr><th>' + escHtml(k) + '</th><td>' + escHtml(String(props[k])) + '</td></tr>').join('') + '</table>'
@@ -3611,7 +3616,7 @@
         'No features in the current view. Zoom or pan to load features, then try again.</p>';
     } else {
       const cols = [];
-      rows.forEach(p => Object.keys(p).forEach(k => { if (!cols.includes(k)) cols.push(k); }));
+      rows.forEach(p => Object.keys(p).forEach(k => { if (!cols.includes(k) && !isInternalField(k)) cols.push(k); }));
       countEl.textContent = rows.length + ' feature' + (rows.length === 1 ? '' : 's') + ' in view';
       const thead = '<thead><tr>' + cols.map(c => `<th>${escHtml(c)}</th>`).join('') + '</tr></thead>';
       const tbody = '<tbody>' + rows.map(p => '<tr>' + cols.map(c => {
