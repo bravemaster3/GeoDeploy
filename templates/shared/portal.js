@@ -5398,8 +5398,20 @@
       const copy = e.target.closest('[data-copy]');
       if (copy) {
         const done = function () { const o = copy.textContent; copy.textContent = 'Copied'; setTimeout(function () { copy.textContent = o; }, 1200); };
-        if (navigator.clipboard) navigator.clipboard.writeText(copy.dataset.copy).then(done, function () {});
-        else done();
+        // navigator.clipboard needs https; on plain http fall back to a selected textarea, and only
+        // say "Copied" when something was copied (the old else-branch claimed it without copying).
+        const fallback = function () {
+          const ta = document.createElement('textarea');
+          ta.value = copy.dataset.copy; ta.setAttribute('readonly', '');
+          ta.style.position = 'fixed'; ta.style.opacity = '0';
+          document.body.appendChild(ta); ta.select();
+          let ok = false;
+          try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+          ta.remove();
+          if (ok) done();
+        };
+        if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(copy.dataset.copy).then(done, fallback);
+        else fallback();
         return;
       }
       const act = e.target.closest('[data-act]');

@@ -88,6 +88,7 @@
 <script setup>
 import { ref, reactive, computed } from 'vue'
 import { getConnectionDetails } from '@/api'
+import { copyText } from '@/lib/clipboard'
 
 const loaded = ref(false)
 const busy = ref(false)
@@ -139,10 +140,8 @@ async function load() {
 }
 
 async function copy(f) {
-  try {
-    await navigator.clipboard.writeText(f.value || '')
-    copied.value = f.label
-    setTimeout(() => { if (copied.value === f.label) copied.value = '' }, 1400)
-  } catch { /* clipboard blocked — the field is selectable as a fallback */ }
+  if (!(await copyText(f.value || ''))) return   // blocked — the field is selectable as a fallback
+  copied.value = f.label
+  setTimeout(() => { if (copied.value === f.label) copied.value = '' }, 1400)
 }
 </script>

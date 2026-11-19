@@ -452,6 +452,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import InfoDot from '@/components/InfoDot.vue'
+import { copyText } from '@/lib/clipboard'
 import {
   applyHostProxy, checkDeploymentDns, getDeployment, getHostProxyPlan, getProxyConfig,
   issueCertificate, removeHostProxy, verifyDeployment,
@@ -686,11 +687,10 @@ async function verify() {
 }
 
 async function copy(text, key) {
-  try {
-    await navigator.clipboard.writeText(text)
-    copied.value = key
-    setTimeout(() => { if (copied.value === key) copied.value = '' }, 1500)
-  } catch { /* clipboard blocked — the text is on screen and selectable */ }
+  // copyText falls back for http — a fresh instance is on http while its domain is being set up.
+  if (!(await copyText(text))) return   // blocked — the text is on screen and selectable
+  copied.value = key
+  setTimeout(() => { if (copied.value === key) copied.value = '' }, 1500)
 }
 
 onMounted(load)

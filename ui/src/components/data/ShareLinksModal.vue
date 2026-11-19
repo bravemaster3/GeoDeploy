@@ -72,6 +72,7 @@
 import { ref, onMounted } from 'vue'
 import { getVectorLinks, getRasterLinks } from '@/api'
 import { AlertIcon, CheckIcon, CopyIcon, ExternalLinkIcon } from '@/views/icons'
+import { copyText } from '@/lib/clipboard'
 
 const props = defineProps({
   layer: Object,
@@ -116,17 +117,7 @@ onMounted(async () => {
 })
 
 async function copy(l) {
-  try {
-    await navigator.clipboard.writeText(l.url)
-  } catch {
-    // clipboard API needs a secure context — fall back to a hidden textarea
-    const ta = document.createElement('textarea')
-    ta.value = l.url
-    document.body.appendChild(ta)
-    ta.select()
-    document.execCommand('copy')
-    ta.remove()
-  }
+  if (!(await copyText(l.url))) return   // blocked — the link is on screen and selectable
   copied.value = l.id
   setTimeout(() => { if (copied.value === l.id) copied.value = '' }, 1500)
 }
