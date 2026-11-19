@@ -6,6 +6,18 @@ upgrade needs manual work.
 
 ## Unreleased
 
+- **QGIS plugin 0.7.7: push group and scales fixed.**
+  - **Push group to portal:** on a group of new layers it uploaded them all and then failed with
+    "This group has no GeoDeploy layers in it"
+    ([#143](https://github.com/bravemaster3/GeoDeploy/issues/143)).
+  - **Scales:** QGIS scale limits on rules and labels arrived about 1.6 zoom levels too deep at 51°N
+    ([#144](https://github.com/bravemaster3/GeoDeploy/issues/144)). The conversion used the
+    256-pixel-tile constant and ignored latitude, so labels QGIS showed at 1:28,764 needed about 3×
+    more zoom on the web. Re-push a group to republish its scale limits.
+  - **Restyle:** it no longer raises an error after reopening a layer
+    ([#145](https://github.com/bravemaster3/GeoDeploy/issues/145)).
+- **Portal:** the About (ⓘ) icon in the layer list's toolbar sits level with the reset icon. It
+  was raised on a grey box.
 - **Styles that measure geometry travel from QGIS** ([#133](https://github.com/bravemaster3/GeoDeploy/issues/133),
   with QGIS plugin 0.7.6). A label or rule using `$area`, `$length` or `$perimeter` (*label only
   forests larger than 4 km²*) can't be evaluated by a web map, which only has clipped tiles, so

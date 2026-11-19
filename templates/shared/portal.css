@@ -205,6 +205,10 @@
     .layer-actions-row #reset-styling,
     .layer-actions-row #gd-about-btn {
       margin: 0; padding: 0; width: 26px; height: 26px; border: 1px solid transparent; border-radius: 6px;
+      /* The pill's `display:block` and filled background are on an ID selector, which outranks
+         `.la-icon` — so the About icon kept them: a grey box with its glyph pinned to the TOP
+         instead of centred, sitting higher than the reset icon beside it. */
+      display: inline-flex; align-items: center; justify-content: center; background: none;
     }
     .layer-actions-row #reset-styling:hover,
     .layer-actions-row #gd-about-btn:hover { background: var(--surface); color: var(--text); border-color: var(--border); }

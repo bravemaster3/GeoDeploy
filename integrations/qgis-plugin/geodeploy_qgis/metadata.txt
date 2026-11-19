@@ -13,7 +13,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.7.6
+version=0.7.7
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -32,7 +32,15 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.7.6 - STYLES THAT MEASURE GEOMETRY TRAVEL (issue #133). A rule or label using $area,
+changelog=0.7.7 - PUSH GROUP AND SCALES, FIXED. Push group to portal on a group of new layers
+    uploaded them all and then failed with "This group has no GeoDeploy layers in it" (issue
+    #143): the re-plan after the uploads used a list of the instance's layers taken before them.
+    Scale-dependent rules and labels appeared ~1.6 zoom levels later on the web than in QGIS at
+    Dresden's latitude (issue #144): the scale-to-zoom conversion used the 256-pixel-tile constant
+    and ignored latitude; it now converts at the layer's own latitude, and labels appear at the
+    scale they do in QGIS. Restyle no longer raises an error after reopening a layer (#145).
+    Every dock button is now exercised end to end against a live instance before release.
+    0.7.6 - STYLES THAT MEASURE GEOMETRY TRAVEL (issue #133). A rule or label using $area,
     $length or $perimeter ("label only forests larger than 4 km2") could not travel, because a
     web map cannot measure a clipped tile, so those layers were published unlabelled. The upload
     now carries each measure as a column, computed by QGIS itself with the project's ellipsoid

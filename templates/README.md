@@ -260,6 +260,7 @@ AFTER portal.css so it overrides), `{{STYLE_JSON}}`, `{{POPUP_CONFIG}}`, `{{ACCE
   under 640px, label hidden under 380px with the arrow and an `aria-label` carrying the meaning.
 
 ## Last updated
+2026-11-19 (`portal.css`: the layer-list toolbar's About icon is centred like the reset icon — the old pill rule's `display:block` + background are on an ID selector that outranked `.la-icon`; the toolbar override now resets both. Measured in a browser: centres 137.5 vs 142 px before, equal after.)
 2026-10-11 (About on every archetype; the About page works on a phone)
 2026-08-31 (`shared/portal.css`: the map's bottom chrome — scale bar, **bottom-centre** coordinate
 readout, attribution — sits on ONE line, on every archetype. `.maplibregl-ctrl-bottom-left` had

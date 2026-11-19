@@ -200,6 +200,7 @@ the CLI yet; see below).
   run on, and only the second one is visible to a user with an old install.
 
 ## Last updated
+2026-11-19b (`styles.zoom_for_scale` / `scale_for_zoom`: SCALE_AT_ZOOM_0 is now MapLibre's 512-px world at 96 dpi (295,829,355, was the 256-px OGC 559,082,264) and both take a `latitude` — default from `set_latitude()` — because a Web Mercator zoom is a different ground scale at every latitude. Issue #144.)
 2026-11-19 (`expressions.scale_alternatives` / `case_branches` / `prioritized`: `@map_scale` compared with a number becomes a zoom range instead of refusing the expression — the plugin's rules and labels use it, issue #132. `tokenize(variables=True)` is opt-in; the default still refuses every variable.)
 2026-09-05 (`styles.picture_data_uri` + `--marker-image` / `--fill-pattern` / `--line-marker` /
 `--centroid-marker`, each taking a local image FILE. These four keys already *survived* a CLI

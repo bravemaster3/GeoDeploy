@@ -468,6 +468,24 @@ def _middle_latitude(qgis_layer, project):
         return None
 
 
+def _scale_latitude(qgis_layer) -> None:
+    """Convert this layer's scale gates at ITS latitude (`styles.set_latitude`).
+
+    A QGIS scale is measured on the ground; a web zoom level is a different ground scale at every
+    latitude. Set once per layer, before its rules, labels and visibility range are read or
+    written, so all of them convert at the same place — the middle of the layer, the point the
+    ground widths use too. Unknown (no extent, no CRS) falls back to the equator.
+    """
+    lat = None
+    try:
+        from qgis.core import QgsProject
+        lat = _middle_latitude(qgis_layer, QgsProject.instance())
+    except Exception:                   # noqa: BLE001 - outside QGIS: no latitude to be had  # nosec B110 - intentional: the equator is the documented fallback
+        pass
+    from geodeploy import styles as _styles
+    _styles.set_latitude(lat)
+
+
 def _set_ground_unit(layer0, setter: str) -> None:
     """Measure a width in metres on the ground — the inverse of `_ground_metres`. Metres-at-scale
     rather than map units, so it means the same whatever CRS the project the style lands in uses."""
@@ -1647,6 +1665,7 @@ def apply(qgis_layer, style: dict, row: dict | None = None) -> bool:
     """
     if not QGIS or not style:
         return False
+    _scale_latitude(qgis_layer)
     try:
         from qgis.core import QgsRasterLayer, QgsVectorTileLayer
         is_tiles = isinstance(qgis_layer, QgsVectorTileLayer)
@@ -1802,6 +1821,7 @@ def apply_to_qgis(qgis_layer, style: dict) -> bool:
 def _apply_to_qgis(qgis_layer, style: dict) -> bool:
     if not QGIS or not style:
         return False
+    _scale_latitude(qgis_layer)         # callers may come straight here, not through `apply`
     from geodeploy import parse_style
     model = parse_style(style)
 
@@ -3982,6 +4002,7 @@ def from_qgis(qgis_layer) -> dict:
         _log("Could not read the tile layer's styling: {0}: {1}".format(type(exc).__name__, exc))
         return {}
     _GROUND["factor"] = _ground_factor(qgis_layer)
+    _scale_latitude(qgis_layer)
     renderer = qgis_layer.renderer() if hasattr(qgis_layer, "renderer") else None
     if renderer is None:
         return {}

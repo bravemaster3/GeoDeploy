@@ -1617,6 +1617,8 @@ class GeoDeployDock(QDockWidget):
                 # copy of the same service.
                 portal_sync.tag_layer(qgis_layer, instance_url, source_id, "external",
                                       instance_id=instance_id)
+                if usable is not None:
+                    usable.remember((int(source_id), "external"))
                 registered.append(name)
 
             for index, (name, qgis_layer, _node) in enumerate(uploads, start=1):
@@ -1644,6 +1646,10 @@ class GeoDeployDock(QDockWidget):
                 kind = result.plan.layer_type
                 portal_sync.tag_layer(qgis_layer, instance_url, result.layer_id, kind,
                                       instance_id=instance_id, measures=carried)
+                # The instance listing was taken BEFORE this upload; without this the re-plan
+                # below judged the new layer "missing" and the portal went out empty.
+                if usable is not None:
+                    usable.remember((int(result.layer_id), kind))
                 style = style_for(qgis_layer, kind)
                 if style:
                     # THE LAYER'S OWN OPACITY, not 1.0. A layer drawn at 40% in QGIS arrived fully
@@ -1902,11 +1908,15 @@ class GeoDeployDock(QDockWidget):
                       MSG_CRITICAL)
             return
 
-        replacement.setName(layer.name())
+        # Read now: `_swap_layer` REMOVES `layer` from the project, which deletes it, and any call on
+        # it afterwards raises "wrapped C/C++ object has been deleted" — the swap happened, and the
+        # user got a Python error instead of the message saying so.
+        name = layer.name()
+        replacement.setName(name)
         applied = symbology.apply(replacement, style, row) if style else False
         _set_opacity(replacement, portal_sync._opacity_of(layer))
         if not self._swap_layer(layer, replacement):
-            self._say("Could not put {0} back where it was.".format(layer.name()), MSG_CRITICAL)
+            self._say("Could not put {0} back where it was.".format(name), MSG_CRITICAL)
             return
         self.iface.setActiveLayer(replacement)
         # The picker's default is deliberately NOT changed. Restyling one layer is a targeted act;
@@ -1914,7 +1924,7 @@ class GeoDeployDock(QDockWidget):
         # slow surface — full features re-queried on every pan — for a choice made about a raster.
         self._say("{0} reopened as {1}{2}. Its symbology is now fully editable — classify it, then "
                   "use “Save styling to GeoDeploy” or “Push group to portal”.".format(
-                      layer.name(), source["why"],
+                      name, source["why"],
                       ", with its current styling carried across" if applied
                       else " (it had no styling to carry across)"))
 
