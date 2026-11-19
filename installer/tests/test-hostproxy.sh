@@ -73,6 +73,7 @@ N=0
 drv() {
   N=$((N+1))
   docker run --rm --network "$NET" -e DOCKER_HOST="tcp://$FH:2375" -e GEODEPLOY_DATA_DIR=/work/data \
+    -e GD_BIND="${GD_BIND:-127.0.0.1}" -e GD_PORT="${GD_PORT:-8080}" \
     -v "$W/data/$FH:/work/data" -v "$W/api:/repo/api:ro" -v "$W/ctx/driver.py:/driver.py:ro" \
     "$API_IMAGE" python /driver.py "$@" 2>"$W/logs/$SC-$N-$1.err" \
     | sed -n 's/^@@JSON@@//p' > "$W/out.json"
@@ -751,6 +752,31 @@ EOF
   snap after
   same "nothing written" before after files
   same "neighbour answers as before" before after http
+  down
+fi
+
+if want P1; then
+  boot P1 nginx; nginx_neighbours
+  hdr "GeoDeploy still on port 80 (dedicated, e.g. updated from an older release) beside a host nginx"
+  snap before
+  GD_BIND=0.0.0.0 GD_PORT=80 drv plan $D
+  jt "plan: refused — GeoDeploy holds port 80" "not d['can_apply'] and 'port-80-held' in [b['code'] for b in d['blockers']]" codes
+  jt "plan: the fix is set-port.sh 8080" "'set-port.sh 8080' in d['blockers'][0]['fix']" "d['blockers']"
+  jt "plan: no 'set-port.sh 80' advice" "not any('set-port.sh 80' in w and 'set-port.sh 8080' not in w for w in d['warnings'])" "d['warnings']"
+  GD_BIND=0.0.0.0 GD_PORT=80 drv apply $D
+  jt "apply: refused" "not d['ok']" steps
+  snap refused
+  same "refused: nothing written" before refused files
+  same "refused: every neighbour answers as before" before refused http
+  same "refused: same master PID" before refused pid
+  # After  set-port.sh 8080  the intent is 127.0.0.1:8080, the transition this scenario is about.
+  drv apply $D
+  jt "after the move: apply passes write / test / reload / route" "[s['ok'] for s in d['steps']][:4]==[True]*4" "steps"
+  ours_answers "after the move: $D reaches GeoDeploy with Host intact"
+  snap applied
+  only_ours "after the move: the only change on disk is GeoDeploy's file" before applied
+  same "after the move: every neighbour answers as before" before applied http
+  no_leftovers
   down
 fi
 
