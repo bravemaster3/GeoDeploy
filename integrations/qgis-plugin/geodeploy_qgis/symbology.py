@@ -3963,6 +3963,17 @@ def from_qgis(qgis_layer) -> dict:
                     # nothing about rules still draws something recognisable rather than a default.
                     base = dict(carried[0].get("style") or {})
                     return with_3d(dict(base, color_mode="single", rules=carried))
+                if notes:
+                    # EVERY RULE WAS LEFT BEHIND. Falling through to the single-symbol path below
+                    # drew EVERY feature in the first rule's symbol — on a real project, 27,754
+                    # points of interest at every zoom for a layer QGIS showed as 139 museums and
+                    # castles (issue #132). A rule that draws everything is a different map, so the
+                    # layer is published drawing nothing, listed and labelled as usual, and says why.
+                    _log("{0}: none of its rules could be published (reasons above), so it was sent "
+                         "drawing NOTHING rather than every feature. Its labels, popups and listing "
+                         "are unchanged.".format(
+                             qgis_layer.name() if hasattr(qgis_layer, "name") else "This layer"))
+                    return with_scope({"no_symbol": True})
         except ImportError:             # pragma: no cover - rules.py is optional
             pass
         except Exception as exc:        # noqa: BLE001 - fall through to the single symbol below

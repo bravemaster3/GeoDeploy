@@ -90,8 +90,13 @@ class _Token(object):
         return "<{0} {1!r}>".format(self.kind, self.value)
 
 
-def tokenize(text: str) -> List[_Token]:
-    """`text` split into tokens. Raises `Unsupported` for characters the subset has no meaning for."""
+def tokenize(text: str, variables: bool = False) -> List[_Token]:
+    """`text` split into tokens. Raises `Unsupported` for characters the subset has no meaning for.
+
+    `variables=True` keeps `@name` as a `var` token instead of refusing it, for the one caller that
+    knows what to do with one — `scale_alternatives`, which turns `@map_scale` into a zoom range.
+    Everything else still refuses them, and must: a variable is not a feature property.
+    """
     out, i, n = [], 0, len(text)
     while i < n:
         ch = text[i]
@@ -150,6 +155,10 @@ def tokenize(text: str) -> List[_Token]:
         if ch == "@":                                   # @map_scale, @layer_name, …
             m = _WORD.match(text, i + 1)
             name = "@" + (m.group(0) if m else "")
+            if variables and m:
+                out.append(_Token("var", name, i))
+                i = m.end()
+                continue
             raise Unsupported(name, "a rendering variable has no feature-level equivalent")
         m = _NUMBER.match(text, i)
         if m:
@@ -607,6 +616,281 @@ def try_maplibre(expression: str) -> Tuple[Optional[Any], Optional[str]]:
 def supports(expression: str) -> bool:
     """True when `expression` translates. For a UI that wants to grey something out."""
     return try_maplibre(expression)[1] is None
+
+
+# ── @map_scale: the one rendering variable with a web equivalent ─────────────────────────────────
+
+#: QGIS authors very often write scale-dependence INTO a rule's filter or a label's expression —
+#: `"fclass" = 'museum' AND @map_scale < 140000` — instead of using the rule's scale range. Both mean
+#: the same thing in QGIS, but only the second had a web form, and refusing the first threw the
+#: whole rule away: on a real OSM project a points-of-interest layer whose two rules both read like
+#: that lost both, and was published as EVERY point at every zoom (issue #132).
+#:
+#: `@map_scale` compared with a number IS a zoom range, so it is peeled off the expression and
+#: returned as scale denominators; the caller turns those into `minzoom`/`maxzoom`, which the web
+#: already draws. It is accepted only where that is exactly what it means — AND-ed at the top level,
+#: or inside an OR that is itself AND-ed (see `scale_alternatives`). Anywhere else (`NOT`, inside
+#: arithmetic or a function, compared with anything but a number) it is still refused.
+MAP_SCALE = "@map_scale"
+_FLIP = {"<": ">", "<=": ">=", ">": "<", ">=": "<="}
+
+
+def _top_level(tokens: Sequence[_Token], keyword: str) -> List[int]:
+    """Indexes of `keyword` (and / or) at nesting depth 0: outside parentheses and CASE … END, and
+    not the AND that belongs to a BETWEEN."""
+    out, depth, case, between = [], 0, 0, 0
+    for k, t in enumerate(tokens):
+        if t.kind == "op" and t.value == "(":
+            depth += 1
+        elif t.kind == "op" and t.value == ")":
+            depth -= 1
+        elif t.kind == "word" and depth == 0:
+            w = str(t.value).lower()
+            if w == "case":
+                case += 1
+            elif w == "end" and case:
+                case -= 1
+            elif not case:
+                if w == "between":
+                    between += 1
+                elif w == "and" and between:
+                    between -= 1
+                elif w == keyword:
+                    out.append(k)
+    return out
+
+
+def _split(text: str, keyword: str) -> List[str]:
+    """`text` cut at its top-level `keyword`, as source text."""
+    tokens = tokenize(text, variables=True)
+    cuts = _top_level(tokens, keyword)
+    parts, start = [], 0
+    for cut in cuts + [len(tokens) - 1]:            # the last token is the `end` sentinel
+        if cut > start:
+            parts.append(text[tokens[start].pos:tokens[cut].pos].strip())
+        start = cut + 1
+    return parts
+
+
+def _unwrap(text: str) -> str:
+    """`text` without parentheses that enclose ALL of it — `((a OR b))` → `a OR b`, but `(a) AND (b)`
+    is left alone because its brackets are two pairs, not one."""
+    while True:
+        tokens = tokenize(text, variables=True)[:-1]
+        if len(tokens) < 2 or not (tokens[0].kind == "op" and tokens[0].value == "(") \
+                or not (tokens[-1].kind == "op" and tokens[-1].value == ")"):
+            return text
+        depth = 0
+        for k, t in enumerate(tokens):
+            if t.kind == "op" and t.value in ("(", ")"):
+                depth += 1 if t.value == "(" else -1
+                if depth == 0 and k != len(tokens) - 1:
+                    return text
+        text = text[tokens[0].pos + 1:tokens[-1].pos].strip()
+
+
+def _scale_bound(text: str) -> Optional[Tuple[Optional[float], Optional[float]]]:
+    """`(zoomed_out, zoomed_in)` denominators for ONE comparison of @map_scale with numbers, else None.
+
+    `@map_scale < N` draws while the denominator is under N, so N is the zoomed-OUT limit — QGIS's
+    "minimum scale". `@map_scale > N` is the zoomed-IN limit. `<` and `<=` differ only at exactly
+    1:N, which no zoom level lands on.
+    """
+    toks = tokenize(text, variables=True)[:-1]
+    vals = [(t.kind, str(t.value).lower() if t.kind in ("word", "var") else t.value) for t in toks]
+    if len(vals) == 3:
+        (ka, a), (ko, op), (kb, b) = vals
+        if ko != "op" or op not in _FLIP:
+            return None
+        if ka == "number" and kb == "var":
+            ka, a, kb, b, op = kb, b, ka, a, _FLIP[op]
+        if ka == "var" and a == MAP_SCALE and kb == "number" and b > 0:
+            return (float(b), None) if op in ("<", "<=") else (None, float(b))
+        return None
+    if len(vals) == 5 and vals[0] == ("var", MAP_SCALE) and vals[1] == ("word", "between") \
+            and vals[3] == ("word", "and") and vals[2][0] == "number" and vals[4][0] == "number":
+        lo, hi = sorted((float(vals[2][1]), float(vals[4][1])))
+        if hi <= 0:
+            return None
+        return (hi, lo if lo > 0 else None)
+    return None
+
+
+def _narrow(a: Optional[float], b: Optional[float], tighter) -> Optional[float]:
+    return b if a is None else (a if b is None else tighter(a, b))
+
+
+def _uses_variable(text: str) -> bool:
+    return any(t.kind == "var" for t in tokenize(text, variables=True))
+
+
+def scale_alternatives(expression: str) -> Optional[List[Tuple[str, Optional[float], Optional[float]]]]:
+    """`[(condition, zoomed_out, zoomed_in), ...]` for an expression using `@map_scale` as a zoom gate.
+
+    Each entry is one way the expression can be true: `condition` is what remains as QGIS text (""
+    when nothing does), and the two numbers are scale DENOMINATORS — `zoomed_out` the largest the
+    expression still allows (`@map_scale < N`), `zoomed_in` the smallest (`@map_scale > N`); None
+    means no limit on that side. The caller translates `condition` as it would any expression.
+
+    One entry for `X AND @map_scale < N`. Several for an OR of such terms that is AND-ed with the
+    rest, each alternative carrying the shared part:
+        `"name" IS NOT NULL AND (("a" = 1 AND @map_scale < 350000) OR ("a" = 2 AND @map_scale < 70000))`
+    is two entries, so a label that shows stations from 1:350,000 and halts from 1:70,000 keeps both.
+
+    None when `@map_scale` is used any other way, or any other variable appears — the caller then
+    refuses the expression exactly as it did before this existed.
+    """
+    try:
+        text = _unwrap(expression.strip())
+        tokens = tokenize(text, variables=True)
+    except Unsupported:
+        return None
+    variables = [str(t.value).lower() for t in tokens if t.kind == "var"]
+    if not variables:
+        return [(text, None, None)]
+    if any(v != MAP_SCALE for v in variables):
+        return None
+    try:
+        parts = _split(text, "and")
+        fixed: List[str] = []
+        out_d: Optional[float] = None
+        in_d: Optional[float] = None
+        alternatives: Optional[List[Tuple[str, Optional[float], Optional[float]]]] = None
+        for part in parts:
+            inner = _unwrap(part)
+            if not _uses_variable(inner):
+                fixed.append(part)
+                continue
+            bound = _scale_bound(inner)
+            if bound is not None:
+                out_d = _narrow(out_d, bound[0], min)   # the narrower window is the one that holds
+                in_d = _narrow(in_d, bound[1], max)
+                continue
+            branches = _split(inner, "or")
+            if len(branches) < 2 or alternatives is not None:
+                return None                              # not AND/OR-shaped, or two such ORs
+            alternatives = []
+            for branch in branches:
+                sub = scale_alternatives(branch)
+                if sub is None:
+                    return None
+                alternatives.extend(sub)
+    except Unsupported:
+        return None
+
+    def joined(extra: List[str]) -> str:
+        items = [x for x in fixed + extra if x]
+        if not items:
+            return ""
+        return items[0] if len(items) == 1 else " AND ".join("({0})".format(x) for x in items)
+
+    if alternatives is None:
+        return [(joined([]), out_d, in_d)]
+    return [(joined([cond]), _narrow(out_d, a_out, min), _narrow(in_d, a_in, max))
+            for cond, a_out, a_in in alternatives]
+
+
+def case_branches(expression: str) -> Optional[Tuple[List[Tuple[str, str]], Optional[str]]]:
+    """`([(when, then), ...], else_or_None)` for an expression that is ONE top-level `CASE ... END`,
+    as source text — for a caller that expands a CASE into one web rule per branch. None otherwise."""
+    try:
+        text = _unwrap(expression.strip())
+        tokens = tokenize(text, variables=True)[:-1]
+    except Unsupported:
+        return None
+
+    def word(t, *names):
+        return t.kind == "word" and str(t.value).lower() in names
+
+    if len(tokens) < 5 or not word(tokens[0], "case") or not word(tokens[-1], "end"):
+        return None
+    marks, depth, case = [], 0, 0
+    for k, t in enumerate(tokens):
+        if t.kind == "op" and t.value in ("(", ")"):
+            depth += 1 if t.value == "(" else -1
+            continue
+        if not word(t, "case", "when", "then", "else", "end"):
+            continue
+        w = str(t.value).lower()
+        if w == "case":
+            case += 1
+            continue
+        if w == "end":
+            case -= 1
+            if case == 0 and k != len(tokens) - 1:
+                return None                              # `CASE ... END || 'x'` is not one CASE
+            if case == 0:
+                marks.append(("end", k))
+            continue
+        if case == 1 and depth == 0:
+            marks.append((w, k))
+
+    def between(a: int, b: int) -> str:
+        start = tokens[a].pos + len(str(tokens[a].value))
+        return text[start:tokens[b].pos].strip()
+
+    branches, else_text = [], None
+    for idx in range(len(marks) - 1):
+        kind, k = marks[idx]
+        nxt_kind, nxt = marks[idx + 1]
+        if kind == "when":
+            if nxt_kind != "then" or idx + 2 >= len(marks):
+                return None
+            branches.append((between(k, nxt), between(nxt, marks[idx + 2][1])))
+        elif kind == "else":
+            else_text = between(k, nxt)
+    return (branches, else_text) if branches else None
+
+
+def _inside(band: Tuple[Optional[float], Optional[float]], zoomed_out: Optional[float],
+            zoomed_in: Optional[float]) -> bool:
+    """Whether a band of scale denominators `(upper, lower)` lies within a window. None is open."""
+    upper, lower = band
+    return ((zoomed_out is None or (upper is not None and upper <= zoomed_out))
+            and (zoomed_in is None or (lower is not None and lower >= zoomed_in)))
+
+
+def prioritized(candidates: Sequence[Tuple[Any, Optional[float], Optional[float], Any]]
+                ) -> List[Tuple[Any, List[Any], Optional[float], Optional[float], Any]]:
+    """Make "the first candidate that matches wins" exact for a renderer that has no "first".
+
+    `candidates` are `(condition, zoomed_out, zoomed_in, payload)` in priority order — the branches
+    of a QGIS `CASE`, the alternatives of an OR, the siblings an `ELSE` rule stands behind. A
+    condition of None or "" matches every feature. The two numbers are a scale window (see
+    `scale_alternatives`); payload is carried through untouched.
+
+    Returns `(condition, excluded, zoomed_out, zoomed_in, payload)` pieces, where `excluded` lists
+    the conditions of EARLIER candidates that are in force over that piece's whole window. Drawing
+    each piece with `condition AND NOT (any excluded)` over its window gives exactly the first-match
+    result, because the zoom axis is first cut into bands at every threshold any candidate uses —
+    within a band, which earlier candidates are active does not change. Without the bands, excluding
+    an earlier candidate is only right where that candidate is itself drawn: a label for villages
+    shown from 1:100,000 must not hide towns' labels further out, where the village rule is off.
+
+    Adjacent bands that end up with the same exclusions are merged, so a candidate with no
+    thresholds around it is one piece, as before. A piece whose exclusions include an
+    unconditional earlier candidate can never draw and is dropped.
+    """
+    thresholds = sorted({d for c in candidates for d in (c[1], c[2]) if d}, reverse=True)
+    edges: List[Optional[float]] = [None] + thresholds + [None]
+    bands = [(edges[i], edges[i + 1]) for i in range(len(edges) - 1)]
+    out = []
+    for k, (cond, zoomed_out, zoomed_in, payload) in enumerate(candidates):
+        pieces: List[Tuple[Tuple[Optional[float], Optional[float]], List[Any]]] = []
+        for band in bands:
+            if not _inside(band, zoomed_out, zoomed_in):
+                continue
+            excluded = [candidates[j][0] for j in range(k)
+                        if _inside(band, candidates[j][1], candidates[j][2])]
+            if pieces and pieces[-1][1] == excluded and pieces[-1][0][1] == band[0]:
+                pieces[-1] = ((pieces[-1][0][0], band[1]), excluded)
+            else:
+                pieces.append((band, excluded))
+        for (upper, lower), excluded in pieces:
+            if any(e is None or e == "" for e in excluded):
+                continue
+            out.append((cond, excluded, upper, lower, payload))
+    return out
 
 
 def negate(filters: Sequence[Any]) -> Any:

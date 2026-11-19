@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import pytest
 
-from geodeploy.expressions import (Unsupported, from_maplibre, negate, supports,
-                                   to_maplibre, try_maplibre)
+from geodeploy.expressions import (Unsupported, case_branches, from_maplibre, negate,
+                                   prioritized, scale_alternatives, supports, to_maplibre,
+                                   try_maplibre)
 
 
 class TestLiteralsAndFields:
@@ -372,3 +373,84 @@ class TestBackToQgis:
         """
         once = to_maplibre(expression)
         assert to_maplibre(from_maplibre(once)) == once
+
+
+class TestMapScaleGates:
+    """`@map_scale` compared with a number is a zoom range (issue #132).
+
+    A real OSM project wrote every threshold into its rule filters, and refusing the variable
+    dropped those rules — one layer then published every one of its 27,754 points.
+    """
+
+    def test_the_default_tokenizer_still_refuses_every_variable(self):
+        with pytest.raises(Unsupported):
+            to_maplibre("@map_scale < 1000")
+        with pytest.raises(Unsupported):
+            to_maplibre("\"a\" = 1 AND @map_scale < 1000")
+
+    @pytest.mark.parametrize("expression, expected", [
+        ("\"fclass\" = 'museum' AND @map_scale < 140000", [("\"fclass\" = 'museum'", 140000.0, None)]),
+        ("@map_scale <= 70000", [("", 70000.0, None)]),
+        ("140000 > @map_scale AND \"a\" = 1", [("\"a\" = 1", 140000.0, None)]),
+        ("\"a\" = 1 AND @map_scale > 5000", [("\"a\" = 1", None, 5000.0)]),
+        ("\"a\" = 1 AND @map_scale BETWEEN 5000 AND 140000", [("\"a\" = 1", 140000.0, 5000.0)]),
+        ("@map_scale < 1000 AND @map_scale < 500", [("", 500.0, None)]),
+        ("\"x\" BETWEEN 1 AND 3 AND @map_scale < 1000", [("\"x\" BETWEEN 1 AND 3", 1000.0, None)]),
+        ("(\"a\" = 1 AND @map_scale < 1000)", [("\"a\" = 1", 1000.0, None)]),
+        ("\"a\" = 1", [("\"a\" = 1", None, None)]),
+    ])
+    def test_a_top_level_scale_gate_is_peeled_off(self, expression, expected):
+        assert scale_alternatives(expression) == expected
+
+    def test_an_or_of_gated_terms_is_one_alternative_each_with_the_shared_part(self):
+        got = scale_alternatives(
+            "\"name\" IS NOT NULL AND ((\"f\" = 's' AND @map_scale < 350000) OR "
+            "(\"f\" = 'h' AND @map_scale < 70000))")
+        assert got == [("(\"name\" IS NOT NULL) AND (\"f\" = 's')", 350000.0, None),
+                       ("(\"name\" IS NOT NULL) AND (\"f\" = 'h')", 70000.0, None)]
+
+    @pytest.mark.parametrize("expression", [
+        "NOT (@map_scale < 5000)",
+        "@map_scale * 2 < 5000",
+        "@map_scale = 5000",
+        "@map_scale < \"limit\"",
+        "\"a\" = 1 AND @layer_name = 'x'",
+        "if(@map_scale < 5000, 1, 0) = 1",
+        "\"a\" = 1 AND (@map_scale < 5 OR @map_scale > 9) AND (\"b\" = 1 OR @map_scale < 3)",
+    ])
+    def test_any_other_use_is_refused(self, expression):
+        assert scale_alternatives(expression) is None
+
+    def test_case_branches_reads_one_top_level_case(self):
+        got = case_branches("CASE WHEN \"a\" = 1 THEN NULL WHEN \"b\" = 2 AND @map_scale < 10 "
+                            "THEN \"name\" ELSE 'x' END")
+        assert got == ([("\"a\" = 1", "NULL"), ("\"b\" = 2 AND @map_scale < 10", "\"name\"")], "'x'")
+
+    def test_a_nested_case_stays_inside_its_branch(self):
+        got = case_branches("CASE WHEN \"a\" = 1 THEN CASE WHEN \"b\" THEN \"x\" END ELSE \"y\" END")
+        assert got == ([("\"a\" = 1", "CASE WHEN \"b\" THEN \"x\" END")], "\"y\"")
+
+    @pytest.mark.parametrize("expression", ["\"name\"", "CASE WHEN \"a\" THEN \"b\" END || 'x'",
+                                            "upper(\"name\")"])
+    def test_anything_but_one_case_is_none(self, expression):
+        assert case_branches(expression) is None
+
+
+class TestPrioritized:
+    """First-match semantics, made exact with zoom bands."""
+
+    def test_an_earlier_branch_excludes_later_ones_only_where_it_applies(self):
+        got = prioritized([("C", None, None, "c"), ("V", 100000.0, None, "v"),
+                           (None, None, None, "else")])
+        assert got == [("C", [], None, None, "c"),
+                       ("V", ["C"], 100000.0, None, "v"),
+                       (None, ["C"], None, 100000.0, "else"),
+                       (None, ["C", "V"], 100000.0, None, "else")]
+
+    def test_an_unconditional_earlier_candidate_shadows_completely(self):
+        got = prioritized([("", None, None, 1), ("a", None, None, 2)])
+        assert got == [("", [], None, None, 1)]
+
+    def test_no_thresholds_is_one_piece_per_candidate(self):
+        assert prioritized([("a", None, None, 1), ("b", None, None, 2)]) == [
+            ("a", [], None, None, 1), ("b", ["a"], None, None, 2)]

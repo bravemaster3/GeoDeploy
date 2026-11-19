@@ -200,6 +200,7 @@ the CLI yet; see below).
   run on, and only the second one is visible to a user with an old install.
 
 ## Last updated
+2026-11-19 (`expressions.scale_alternatives` / `case_branches` / `prioritized`: `@map_scale` compared with a number becomes a zoom range instead of refusing the expression — the plugin's rules and labels use it, issue #132. `tokenize(variables=True)` is opt-in; the default still refuses every variable.)
 2026-09-05 (`styles.picture_data_uri` + `--marker-image` / `--fill-pattern` / `--line-marker` /
 `--centroid-marker`, each taking a local image FILE. These four keys already *survived* a CLI
 restyle — `build_style` merges onto the existing style, so a marker the QGIS plugin rendered was

@@ -91,7 +91,8 @@ def _walk(rule, qgis_layer, parent_filter, parent_min, parent_max, out, notes, d
 
     # Sibling filters are needed before any ELSE among them can be expressed, so translate the whole
     # level first and only then emit — an ELSE is "none of the others", and it cannot be written
-    # until the others are known.
+    # until the others are known. Each child becomes one or more PIECES `(node, zoomed_out,
+    # zoomed_in)`: one, unless its filter gates on `@map_scale` (see `_pieces`).
     translated = []
     for child in children:
         if hasattr(child, "active") and not child.active():
@@ -101,49 +102,136 @@ def _walk(rule, qgis_layer, parent_filter, parent_min, parent_max, out, notes, d
             continue
         text = (child.filterExpression() or "").strip()
         if not text:
-            translated.append((child, "none", None))
+            translated.append((child, "none", [(None, None, None)]))
             continue
-        node, reason = expressions.try_maplibre(text)
-        if reason is not None:
+        pieces, reason = _pieces(text)
+        if pieces is None:
             notes.append("{0}: {1}".format(_label(child), reason))
             continue
-        translated.append((child, "filter", node))
+        translated.append((child, "filter", pieces))
 
-    non_else = [node for _c, kind, node in translated if kind == "filter" and node is not None]
+    # What an ELSE stands behind: every sibling piece, over the scales that sibling is really drawn
+    # at — its own scale range as well as any `@map_scale` in its filter. QGIS asks "did no other
+    # rule draw this feature AT THIS SCALE?", so a sibling that is switched off at this zoom does not
+    # exclude anything from the ELSE there.
+    # Only siblings WITH a filter, as before: a filterless sibling is often a group whose children do
+    # the matching, and counting it as "matches everything" would empty the ELSE.
+    siblings = []
+    for child, kind, pieces in translated:
+        if kind != "filter":
+            continue
+        own_out, own_in = _own_denominators(child)
+        for node, p_out, p_in in pieces:
+            siblings.append((node, _tighter(own_out, p_out, min), _tighter(own_in, p_in, max), None))
 
-    for child, kind, node in translated:
+    for child, kind, pieces in translated:
         if kind == "else":
-            node = expressions.negate(non_else)
-            if node is None and non_else:
+            own_out, own_in = _own_denominators(child)
+            pieces = []
+            for _cond, excluded, p_out, p_in, _ in expressions.prioritized(
+                    siblings + [(_ELSE, own_out, own_in, None)]):
+                if _cond is not _ELSE:
+                    continue
+                node = expressions.negate(excluded) if excluded else None
+                if node is None and excluded:
+                    continue            # the siblings match everything here
+                pieces.append((node, p_out, p_in))
+            if not pieces:
                 # Every sibling matched everything, so the ELSE draws nothing. Emitting it would
                 # cover the map in the catch-all symbol.
                 notes.append("{0}: an ELSE rule with no siblings left to exclude".format(
                     _label(child)))
                 continue
-        combined = _and(parent_filter, node)
         lo, hi = _scales(child, parent_min, parent_max)
+        text = (child.filterExpression() or "").strip()
+        for node, p_out, p_in in pieces:
+            combined = _and(parent_filter, node)
+            p_lo, p_hi = _zooms(lo, hi, p_out, p_in)
+            if p_lo is not None and p_hi is not None and p_lo >= p_hi:
+                continue                # an empty window: nothing to draw, nothing to recurse into
+            symbol = child.symbol() if hasattr(child, "symbol") else None
+            if symbol is not None:
+                entry = {"label": _label(child), "filter": combined}
+                # THE SOURCE, carried, so QGIS gets back the text the author typed. Only while the
+                # rule is still ONE web rule: a rule split into pieces is handed back as its pieces'
+                # own filters, each with its zoom range, which is what draws the same features.
+                if kind == "filter" and text and len(pieces) == 1:
+                    entry["expression"] = text
+                try:
+                    entry["style"] = symbology._style_from_symbol(symbol)
+                except Exception as exc:    # noqa: BLE001 - one rule, not the whole renderer
+                    notes.append("{0}: its symbol could not be read ({1})".format(
+                        _label(child), exc))
+                    entry["style"] = {}
+                if p_lo is not None:
+                    entry["minzoom"] = p_lo
+                if p_hi is not None:
+                    entry["maxzoom"] = p_hi
+                out.append(entry)
 
-        symbol = child.symbol() if hasattr(child, "symbol") else None
-        if symbol is not None:
-            entry = {"label": _label(child), "filter": combined}
-            text = (child.filterExpression() or "").strip()
-            if kind == "filter" and text:
-                # THE SOURCE, carried. QGIS gets this back verbatim rather than a re-rendering.
-                entry["expression"] = text
-            try:
-                entry["style"] = symbology._style_from_symbol(symbol)
-            except Exception as exc:    # noqa: BLE001 - one rule, not the whole renderer
-                notes.append("{0}: its symbol could not be read ({1})".format(
-                    _label(child), exc))
-                entry["style"] = {}
-            if lo is not None:
-                entry["minzoom"] = lo
-            if hi is not None:
-                entry["maxzoom"] = hi
-            out.append(entry)
+            if hasattr(child, "children") and child.children():
+                _walk(child, qgis_layer, combined, p_lo, p_hi, out, notes, depth + 1)
 
-        if hasattr(child, "children") and child.children():
-            _walk(child, qgis_layer, combined, lo, hi, out, notes, depth + 1)
+
+#: Marks the ELSE candidate among its siblings in `expressions.prioritized`.
+_ELSE = object()
+
+
+def _pieces(text):
+    """`([(node, zoomed_out, zoomed_in), ...], None)` for a rule filter, or `(None, reason)`.
+
+    Usually one piece with no scale window — the filter, translated. A filter that gates on
+    `@map_scale` (`"fclass" = 'museum' AND @map_scale < 140000`) is the same rule with a zoom range,
+    so the scale part is peeled off into the window and the rest translated (issue #132). An OR of
+    such terms becomes one piece per alternative, made mutually exclusive so a feature that
+    satisfies two of them is still drawn once.
+    """
+    node, reason = expressions.try_maplibre(text)
+    if reason is None:
+        return [(node, None, None)], None
+    alternatives = expressions.scale_alternatives(text) if "@" in text else None
+    if alternatives is None:
+        return None, reason
+    pieces = []
+    for cond, excluded, p_out, p_in, _ in expressions.prioritized(
+            [(cond, a_out, a_in, None) for cond, a_out, a_in in alternatives]):
+        cond_node = None
+        if cond:
+            cond_node, why = expressions.try_maplibre(cond)
+            if why is not None:
+                return None, why
+        excluded_nodes = []
+        for other in excluded:
+            other_node, why = expressions.try_maplibre(other)
+            if why is not None:
+                return None, why
+            excluded_nodes.append(other_node)
+        pieces.append((_and(cond_node, expressions.negate(excluded_nodes))
+                       if excluded_nodes else cond_node, p_out, p_in))
+    return pieces, None
+
+
+def _own_denominators(rule):
+    """A rule's own scale range as `(zoomed_out, zoomed_in)` denominators, None for "no limit"."""
+    try:
+        if hasattr(rule, "dependsOnScale") and not rule.dependsOnScale():
+            return None, None
+        zoomed_out = float(rule.minimumScale()) if hasattr(rule, "minimumScale") else 0.0
+        zoomed_in = float(rule.maximumScale()) if hasattr(rule, "maximumScale") else 0.0
+    except Exception:                   # noqa: BLE001 - a scale is never worth failing a rule
+        return None, None
+    return (zoomed_out or None), (zoomed_in or None)
+
+
+def _tighter(a, b, pick):
+    return b if a is None else (a if b is None else pick(a, b))
+
+
+def _zooms(lo, hi, zoomed_out, zoomed_in):
+    """A zoom range narrowed by a scale window given as denominators."""
+    w_lo = zoom_for_scale(zoomed_out) if zoomed_out else None
+    w_hi = zoom_for_scale(zoomed_in) if zoomed_in else None
+    return _tighter(lo, w_lo, max), _tighter(hi, w_hi, min)
 
 
 def _is_else(rule) -> bool:

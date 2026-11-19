@@ -13,7 +13,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.7.2
+version=0.7.3
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -32,7 +32,17 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.7.2 - A HATCHED POLYGON COMES HOME HATCHED. Opening a portal from GeoDeploy drew
+changelog=0.7.3 - SCALE LIMITS WRITTEN INTO AN EXPRESSION TRAVEL. A rule filter or a label
+    expression like `"fclass" = 'museum' AND @map_scale < 140000` is how many projects say
+    "only when zoomed in", and the rule was dropped because @map_scale is not a feature
+    property. A layer whose rules were ALL dropped was then published as every feature: on a
+    real OSM project, 27,754 points of interest at every zoom where QGIS showed 139 museums and
+    castles. A scale gate now becomes the rule's zoom range, an OR of gated terms one rule per
+    alternative, and a CASE label one label rule per branch — checked feature by feature against
+    QGIS at every threshold. A layer none of whose rules can travel is published drawing
+    nothing, not everything; a single label rule keeps its filter (it labelled every feature);
+    and an ELSE rule is exact on both sides of its siblings' scale ranges.
+    0.7.2 - A HATCHED POLYGON COMES HOME HATCHED. Opening a portal from GeoDeploy drew
     every pattern fill as a solid block of colour, on all three routes at once. Two faults, both
     in the way back: a solid fill was painted under the tile in the SAME colour as the hatch on
     top of it, and the tile's own width was stated in millimetres where a raster fill counts in
