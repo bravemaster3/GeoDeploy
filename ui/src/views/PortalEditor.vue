@@ -571,6 +571,7 @@ import { BASEMAPS, NO_BASEMAP } from '@/lib/basemaps'
 import { registerMarkerImages, setMarkerSpecs } from '@/lib/markerImage'
 import { capturePortalThumbnail } from '@/composables/portalThumbnail'
 import maplibregl from 'maplibre-gl'
+import { attrTableHtml, hoverCursor, vectorFeatureAt } from '@/lib/identify'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { GeoJsonLayer } from '@deck.gl/layers'
 import { ExternalLinkIcon, GlobeIcon, KeyIcon, UsersIcon, UserIcon, CheckIcon } from '@/views/icons'
@@ -1439,7 +1440,9 @@ function makeDeckLayer(cfg) {
   return new GeoJsonLayer({
     id: `deck_${cfg.layer_id}`,
     data,
-    pickable: false,
+    // Pickable so the hover cursor can find a feature (as portal.js); the overview above is not —
+    // a density cell is not a feature, and a click on one identifies nothing.
+    pickable: true,
     filled: !isLine,
     // Lines ARE their stroke, so noOutline must not erase them — it is a POLYGON outline setting.
     stroked: isLine || (!extruded && !(isPoly && noOutline)),
@@ -1565,22 +1568,9 @@ async function refreshDeck(refetch) {
 // Clicking the preview shows feature attributes, like the published portal: MVT (PostGIS)
 // layers via queryRenderedFeatures; GeoParquet (deck-rendered) layers via the server identify
 // endpoint — the deck data is geometry-only/capped, so attributes are fetched per click.
-// Mirrors the popup logic in templates/shared/portal.js (keep in sync).
+// Mirrors the popup logic in templates/shared/portal.js (keep in sync); the popup HTML itself is
+// `lib/identify.attrTableHtml`, shared with the layer page.
 const previewPopup = new maplibregl.Popup({ closeButton: true, closeOnClick: false, maxWidth: '300px' })
-const escAttr = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-
-function attrTableHtml(title, props, fields) {
-  const keys = fields && fields.length
-    ? fields.filter(k => props[k] != null)
-    // `__gd_*` are GeoDeploy's own measure columns (issue #133): for the style, never the popup.
-    : Object.keys(props).filter(k => props[k] != null && !String(k).startsWith('__gd_')).slice(0, 8)
-  const body = keys.length
-    ? '<table style="font-size:12px;border-collapse:collapse">' + keys.map(k =>
-        `<tr><th style="text-align:left;padding:2px 8px 2px 0;color:#6b7280">${escAttr(k)}</th><td style="padding:2px 0">${escAttr(props[k])}</td></tr>`).join('') + '</table>'
-    : '<div style="font-size:12px;color:#6b7280">No attributes</div>'
-  return `<div style="font-weight:600;font-size:12px;margin-bottom:4px">${escAttr(title)}</div>` + body
-}
-
 async function onPreviewClick(e) {
   if (!map.value) return
   const sections = []
@@ -1682,6 +1672,10 @@ watch(loaded, (v) => {
     deckOverlay = new MapboxOverlay({ interleaved: false, layers: [] })
     map.value.addControl(deckOverlay)
     map.value.on('click', onPreviewClick)
+    // The arrow over anything a click would identify — MapLibre layers by query, GeoParquet ones
+    // by deck's own picking (they have no MapLibre layer to query).
+    hoverCursor(map.value, (pt) => !!vectorFeatureAt(map.value, pt, 3),
+      (pt) => deckOverlay?.pickObject({ x: pt.x, y: pt.y, radius: 4 })?.object)
     map.value.on('moveend', () => refreshDeck(true))
     // Mid-gesture: hide the coarse overview grid the moment the viewport qualifies for detail —
     // don't wait for moveend + the fetch (mirrors portal.js).

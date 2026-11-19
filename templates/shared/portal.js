@@ -3641,6 +3641,9 @@
   // That is why the deck layers are `pickable` (see buildDeckLayer); the density OVERVIEW stays
   // unpickable on purpose — a grid cell is not a feature and clicking one does nothing.
   let pickTimer = null, deckHit = false;
+  // An ARROW over anything clickable, against MapLibre's open hand for panning: the change of shape
+  // says a click here does something a drag does not. Same value as ui/src/lib/identify.js.
+  const FEATURE_CURSOR = 'default';
   function setCursor(c) {
     // One writer. The draw-box and area-select modes own the cursor while they are active and set
     // it to crosshair themselves; this must not fight them.
@@ -3665,7 +3668,7 @@
         const info = deckOverlay.pickObject({ x: pt.x, y: pt.y, radius: 4 });
         hit = !!(info && info.object);
       } catch (e) { hit = false; }   // older bundle without pickObject, or a layer mid-update
-      if (hit !== deckHit) { deckHit = hit; setCursor(hit ? 'pointer' : ''); }
+      if (hit !== deckHit) { deckHit = hit; setCursor(hit ? FEATURE_CURSOR : ''); }
     }, PICK_SETTLE_MS);
   }
   map.on('mousemove', e => {
@@ -3685,7 +3688,7 @@
       // would land a moment later and overwrite this with its own (stale) answer.
       if (pickTimer) { clearTimeout(pickTimer); pickTimer = null; }
       deckHit = false;
-      setCursor('pointer');
+      setCursor(FEATURE_CURSOR);
       return;
     }
     setCursor('');
