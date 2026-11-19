@@ -96,6 +96,13 @@
           </div>
           <button @click="ssoLogin" class="btn-secondary w-full justify-center">{{ ssoLabel }}</button>
         </template>
+        <!-- WITH THE BUTTON IT CAME FROM. It used to share the password form's error slot, between
+             the password field and "Sign in" — so "No GeoDeploy account for this address" read as
+             a verdict on an email and password nobody had typed. Outside the `ssoEnabled` block so
+             "Single sign-on is not enabled" (SSO switched off mid-flow) is still shown. -->
+        <div v-if="ssoError" class="text-sm text-red-400" role="alert">
+          <span class="font-medium">Single sign-on:</span> {{ ssoError }}
+        </div>
         <button v-if="isDemo" @click="showSignIn = false"
           class="text-xs text-muted-foreground hover:text-foreground w-full text-center">
           ← Back to the demo
@@ -131,6 +138,8 @@ const auth = useAuthStore()
 const email = ref('')
 const password = ref('')
 const error = ref('')
+// An SSO refusal, shown with the SSO button (the provider's verdict, not the password form's).
+const ssoError = ref('')
 const busy = ref(false)
 const mode = ref('login')
 
@@ -174,7 +183,7 @@ onMounted(async () => {
   try { isDemo.value = !!(await getDemoInfo()).data.demo } catch { isDemo.value = false }
   finally { demoChecked.value = true }
   // An SSO refusal (unknown account, blocked domain, provider error) bounces here with ?sso_error=.
-  if (typeof route.query.sso_error === 'string') error.value = route.query.sso_error
+  if (typeof route.query.sso_error === 'string') ssoError.value = route.query.sso_error
   try {
     const { data } = await getSetupStatus()
     emailEnabled.value = !!data.email_enabled
