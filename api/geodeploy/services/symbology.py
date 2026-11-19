@@ -1065,9 +1065,45 @@ def label_text(labels: dict):
     """
     expression = labels.get("expression")
     if expression is not None:
-        return expression
+        return _null_text_to_empty(expression)
     # `to-string` because MapLibre's text-field wants a string and a numeric column is common.
     return ["to-string", ["get", str(labels.get("field"))]]
+
+
+# Where each branching operator keeps its OUTPUTS (as opposed to its conditions and match labels).
+def _branch_outputs(expr: list) -> list[int]:
+    op, n = expr[0], len(expr)
+    if op == "case":                          # case, c1, o1, c2, o2, …, fallback
+        return list(range(2, n - 1, 2)) + [n - 1]
+    if op == "match":                         # match, input, l1, o1, …, fallback
+        return list(range(3, n - 1, 2)) + [n - 1]
+    if op == "step":                          # step, input, o0, s1, o1, …
+        return list(range(2, n, 2))
+    if op == "coalesce":
+        return list(range(1, n))
+    if op == "let":                           # let, name, value, …, body
+        return [n - 1]
+    return []
+
+
+def _null_text_to_empty(expr):
+    """A label expression with every literal null OUTPUT replaced by "".
+
+    QGIS's `CASE WHEN … THEN "name" END` (no ELSE) and `if(cond, "name", NULL)` mean "no label" on
+    the other features, and the translator writes exactly that: a null fallback. That is right for
+    a filter, but MapLibre type-checks `text-field` as text and REJECTS a null branch — the whole
+    style fails to load and the portal shows no map at all ("layers[11].layout.text-field[3]:
+    Expected formatted but found null", reported from a real QGIS publish). "" draws nothing, which
+    is what QGIS draws. Only outputs are touched: a null compared against in a condition is meant.
+    """
+    if expr is None:
+        return ""
+    if not isinstance(expr, list) or not expr or not isinstance(expr[0], str):
+        return expr
+    out = list(expr)
+    for i in _branch_outputs(expr):
+        out[i] = _null_text_to_empty(out[i])
+    return out
 
 
 def label_layout(labels: dict) -> dict:

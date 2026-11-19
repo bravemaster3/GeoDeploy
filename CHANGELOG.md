@@ -6,6 +6,12 @@ upgrade needs manual work.
 
 ## Unreleased
 
+- **A portal published from QGIS showed no map when a label was empty for some features.** A
+  label like `CASE WHEN "pop" > 1000 THEN "name" END` (no `ELSE`) or `if(…, "name", NULL)` is NULL
+  for the other features; the plugin translates that faithfully, but MapLibre refuses a null label
+  and with it the whole style (*"text-field: Expected formatted but found null"*). Those features
+  now simply get no label, as in QGIS, in the published portal and the editor preview alike.
+  Re-publish an affected portal to pick it up — the QGIS plugin needs no update.
 - **New installs could not set up local storage: MinIO's images no longer exist.** The setup wizard
   failed with *"pull access denied for minio/minio, repository does not exist"*. MinIO ended its
   community distribution — Docker Hub, Quay and its download server all answer 404 or 410, and the
