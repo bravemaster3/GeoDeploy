@@ -11,6 +11,15 @@ upgrade needs manual work.
   finished: deleting a layer left its upload job behind, and a job the worker never picked up stays
   `queued` forever. The warning now lists only a layer that still exists and is still processing,
   by name; and deleting a layer deletes its upload jobs.
+- **Classified rasters draw exactly their class colours** ([#126](https://github.com/bravemaster3/GeoDeploy/issues/126)).
+  A raster coloured per value (land cover, soils) showed smeared colours nobody chose along every
+  class edge, and contour lines were smeared too. The tile URLs named no image format, and TiTiler
+  then sends JPEG for any tile with no transparent pixel; JPEG is lossy. Those layers now ask for
+  PNG, in the published portal, the editor preview and the portal's own style controls. Measured:
+  27 colours in a tile styled with four, now exactly the four. The **editor's 3D terrain preview** had
+  the same flaw worse: terrain encodes heights in the pixel bytes, so a JPEG tile meant wrong
+  heights. It now asks for PNG too, as the published portal always did. Continuous imagery keeps
+  the smaller JPEG tiles.
 - **The tile servers are pinned: Martin 1.16.1 and TiTiler 2.4.1**, instead of `:latest`. A new
   install, or any recreated tile container, could get a tile server nobody had tested, and TiTiler's
   `:latest` is rebuilt from its development branch; its contract has changed under us before

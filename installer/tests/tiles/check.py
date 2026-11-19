@@ -243,6 +243,13 @@ def raster():
     raster_tile("dem hillshade", ST({"rescale": rescale, "algorithm": "hillshade"}))
     raster_tile("dem hillshade ×3", ST({"rescale": rescale, "algorithm": "hillshade", "zfactor": 3}))
     raster_tile("dem contours (default)", ST({"rescale": rescale, "algorithm": "contours"}))
+    for label, style in (("default", {"rescale": rescale, "algorithm": "contours"}),
+                         ("chosen colours", {"rescale": rescale, "algorithm": "contours",
+                                             "contour_palette": "viridis", "contour_color": "#ff0000"})):
+        chk(f"contours ({label}): served as PNG, lines not smeared (#126)",
+            ctype(ST(style)) == "image/png", ctype(ST(style)))
+    chk("continuous imagery keeps TiTiler's format choice (smaller JPEG tiles)",
+        ".png" not in ST({"rescale": rescale, "colormap": "viridis"}), ST({"rescale": rescale}))
     raster_tile("dem contours every 12.5 (scaled)", ST({"rescale": rescale, "algorithm": "contours", "increment": 12.5}))
     raster_tile("dem contours, chosen palette + colour", ST({"rescale": rescale, "algorithm": "contours",
                                                              "contour_palette": "viridis", "contour_color": "#ff0000"}))
@@ -256,15 +263,11 @@ def raster():
     if arr is not None:
         opaque = arr[:3, arr[3] > 0].T if arr.shape[0] == 4 else arr[:3].reshape(3, -1).T
         seen = {tuple(int(v) for v in c) for c in opaque}
-        exact = seen <= {(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0)} and len(seen) >= 2
-        if exact:
-            ok("classified raster: exactly the chosen class colours")
-        else:
-            # KNOWN, and the same on every TiTiler version tested (2.2.1, 2.4.1): a tile URL naming
-            # no format is sent as JPEG whenever the tile has no transparent pixel, and JPEG smears
-            # colours along class edges. Fixed separately by asking for .png on classified layers.
-            print(f"   KNOWN classified raster sent as {ctype(classes_url)}: {len(seen)} colours, "
-                  f"not the 4 chosen (JPEG artefacts)")
+        # Issue #126: a URL naming no format came back as JPEG for any tile with no transparent
+        # pixel, and JPEG smeared the class edges into colours nobody chose (27 in this tile).
+        chk("classified raster: served as PNG", ctype(classes_url) == "image/png", ctype(classes_url))
+        chk("classified raster: exactly the chosen class colours",
+            seen <= {(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0)} and len(seen) >= 2, seen)
     raster_tile("RGB default", ST({}, "rasters/rgb.tif", 3))
     raster_tile("RGB bands 3,2,1", ST({"bidx": [3, 2, 1]}, "rasters/rgb.tif", 3))
     raster_tile("4-band (defaults to bands 1-3)", ST({"rescale": "0,65535"}, "rasters/multi.tif", 4))
@@ -281,14 +284,45 @@ def raster():
     else:
         bad(f"terrain-RGB tile → {tr.status_code} {tr.text[:200]}")
 
+    # The editor's 3D-terrain URL (ui/src/lib/mapStyle.js::terrainTilesUrl): the layer's base URL
+    # + algorithm=terrainrgb. Without `.png` that came back as JPEG — lossy bytes are wrong heights.
+    base_plain = ST({"rescale": rescale}).split("&")[0]
+    old_shape = base_plain + "&algorithm=terrainrgb"
+    new_shape = base_plain.replace("/{y}?", "/{y}.png?") + "&algorithm=terrainrgb"
+    print(f"   info  editor terrain URL without .png → {ctype(old_shape)} (before #126)")
+    er = get(fill(new_shape, *DEM_TILE))
+    if er.status_code == 200 and er.headers.get("content-type") == "image/png":
+        a = png(er).astype("float64")
+        hh = (-10000 + (a[0] * 65536 + a[1] * 256 + a[2]) * 0.1)[(a[3] > 0) if a.shape[0] == 4 else slice(None)]
+        hh = hh[hh > lo - 5]
+        chk("editor terrain URL: PNG, and decodes to the DEM's heights",
+            hh.size > 0 and lo - 5 <= hh.min() and hh.max() <= hi + 5, (hh.min(), hh.max(), lo, hi))
+    else:
+        bad(f"editor terrain URL → {er.status_code} {er.headers.get('content-type')}")
+
+    # portal.js rewrites a layer's tile URL into /cog/point (identify) and /cog/statistics
+    # (auto-stretch) with one regex; it must accept the `.png` a classified layer now carries.
+    import re
+    rx = re.compile(r"/cog/tiles/[^/]+/\{z\}/\{x\}/\{y\}(?:\.[a-z0-9]+)?")
+    cls_base = classes_url.split("&")[0]
+    q = cls_base.index("?")
+    pt_url = rx.sub("/cog/point/17.64,59.87", cls_base[:q]) + cls_base[q:]
+    pr = get(pt_url)
+    chk("portal.js identify on a .png (classified) layer", pr.status_code == 200 and pr.json().get("values"),
+        (pt_url, pr.status_code, pr.text[:150]))
+    st_url = rx.sub("/cog/statistics", cls_base[:q]) + cls_base[q:]
+    sr = get(st_url)
+    chk("portal.js auto-stretch on a .png (classified) layer", sr.status_code == 200, (st_url, sr.status_code))
+
     # What portal.js composes in the browser when a viewer changes a raster's settings.
     base = f"/raster/cog/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}?url=s3://{s.storage_bucket}/{dem}"
     lo_i, hi_i = math.floor(float(rescale.split(',')[0])), math.ceil(float(rescale.split(',')[1]))
     raster_tile("portal.js: palette change", f"{base}&rescale={rescale}&colormap_name=plasma_r")
     raster_tile("portal.js: hillshade ×2", f"{base}&algorithm=hillshade&expression=b1*2")
     p = quote(json.dumps({"increment": 35, "thickness": 1, "minz": lo_i, "maxz": hi_i}))
-    raster_tile("portal.js: contours with algorithm_params", f"{base}&algorithm=contours&algorithm_params={p}")
-    raster_tile("portal.js: classes kept", f"/raster/cog/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}?url=s3://{s.storage_bucket}/rasters/classes.tif"
+    raster_tile("portal.js: contours with algorithm_params (as PNG)",
+                f"{base.replace('/{y}?', '/{y}.png?')}&algorithm=contours&algorithm_params={p}")
+    raster_tile("portal.js: classes kept (as PNG)", f"/raster/cog/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}.png?url=s3://{s.storage_bucket}/rasters/classes.tif"
                 f"&colormap={quote(json.dumps({'1': [255, 0, 0, 255], '2': [0, 255, 0, 255], '3': [0, 0, 255, 255], '5': [255, 255, 0, 255]}))}")
     st = get(f"/raster/cog/statistics?url=s3://{s.storage_bucket}/{dem}")
     band1 = next((v for v in st.json().values() if isinstance(v, dict)), {}) if st.status_code == 200 else {}
