@@ -54,7 +54,14 @@
         <span class="badge" :class="statusClass">{{ layer.status }}</span>
         <span v-if="layer.tile_status === 'ready'" class="badge badge-muted"
           title="Tiled to PMTiles — renders as fast static vector tiles">Tiled</span>
-        <span class="badge badge-muted">{{ visibilityLabel }}</span>
+        <!-- Who can see it — and, for someone who may change that, the way to change it: the badge
+             is where the eye goes to answer "who sees this?", so that is where the control is. -->
+        <button v-if="auth.canEdit && ready && !isExternal" type="button" @click="showSharing = true"
+          class="badge badge-muted hover:bg-muted hover:text-foreground cursor-pointer"
+          :title="`Visible to: ${visibilityLabel.toLowerCase()}. Click to change who can see it.`">
+          {{ visibilityLabel }} <span aria-hidden="true" class="opacity-60">✎</span>
+        </button>
+        <span v-else class="badge badge-muted">{{ visibilityLabel }}</span>
         <div class="w-px h-6 bg-border mx-1" aria-hidden="true" />
       <button v-if="auth.canEdit && ready && !isExternal" @click="showStyle = true"
         class="gd-act" title="Default style — colour, size, classification">
@@ -227,6 +234,11 @@
       </p>
     </div>
 
+    <!-- The table, directly under the map it drives: a row click shows that feature on the map,
+         and the map popup's "View attribute table" opens this and scrolls to it. -->
+    <AttributeTable v-if="layer && hasTable" ref="attrTable" :layer="layer"
+      :view-bbox="viewBbox" :view-version="viewVersion" @select="showRow" />
+
     <!-- Not found / still loading. Below the map, which stays mounted. -->
     <div v-if="!layer" class="card p-8 text-center text-muted-foreground">
       <p v-if="publicError" class="text-sm">{{ publicError }}</p>
@@ -343,9 +355,14 @@ import { useAuthStore } from '@/stores/auth'
 import { useMaplibre } from '@/composables/useMaplibre'
 import { buildMapStyle, lonLatBbox } from '@/lib/mapStyle'
 import { registerMarkerImages, setMarkerSpecs } from '@/lib/markerImage'
-import { DEFAULT_BASEMAP } from '@/lib/basemaps'
+import { BASEMAP_OPTIONS, NO_BASEMAP } from '@/lib/basemaps'
+import { BasemapControl } from '@/lib/basemapControl'
 import { legendEntries, representativeColor } from '@/lib/symbology'
-import { getPublicLayer } from '@/api'
+import { getPublicLayer, listBasemaps } from '@/api'
+import maplibregl from 'maplibre-gl'
+import { attrTableHtml, fetchRasterPoint, geometryBbox, hoverCursor, rasterValuesHtml,
+         vectorFeatureAt } from '@/lib/identify'
+import AttributeTable from '@/components/data/AttributeTable.vue'
 import StyleModal from '@/components/data/StyleModal.vue'
 import SharingModal from '@/components/data/SharingModal.vue'
 import ShareLinksModal from '@/components/data/ShareLinksModal.vue'
@@ -584,7 +601,7 @@ const extent = computed(() => {
 // Through the shared composable, not a hand-rolled maplibregl.Map: it is what registers the
 // `pmtiles://` protocol (a tiled GeoParquet layer fails with 'URL scheme "pmtiles" is not
 // supported' without it), and it owns the map's lifecycle and the globe/zoom controls.
-const { map, loaded, applyStyle, fitToBbox, addFullscreen, addZoomToExtent, addTilt } =
+const { map, loaded, applyStyle, fitToBbox, addFullscreen, addZoomToExtent, addTilt, addTopRightControlFirst } =
   useMaplibre('gd-layer-map', { version: 8, sources: {}, layers: [] })
 const mapNote = ref('')
 
@@ -629,7 +646,30 @@ function addExtentOutline(style, bbox) {
   })
 }
 
-function renderMap() {
+// -- the basemap -----------------------------------------------------------------------------
+// The same picker the portal editor has, "None" included — a layer is often easier to read on
+// nothing at all. The instance's own catalog (/api/basemaps) when it answers, the built-in list
+// otherwise. The choice is the VIEWER's, remembered in this browser only: it is a way of looking at
+// a layer, not a property of it, so it is not saved to the layer.
+const BASEMAP_KEY = 'gd-layerpage-basemap'
+const basemapCatalog = ref(BASEMAP_OPTIONS)
+const basemapId = ref((() => { try { return localStorage.getItem(BASEMAP_KEY) } catch { return null } })())
+const currentBasemap = () =>
+  basemapCatalog.value.find(b => b.id === basemapId.value) || basemapCatalog.value[0]
+let basemapControl = null
+onMounted(async () => {
+  try {
+    const { data } = await listBasemaps()
+    if (Array.isArray(data) && data.length) basemapCatalog.value = data.concat([NO_BASEMAP])
+  } catch { /* signed out, or an older instance: the built-in list stands */ }
+})
+watch(basemapId, (id) => {
+  try { localStorage.setItem(BASEMAP_KEY, id) } catch { /* private window: not remembered */ }
+  renderMap({ refit: false })         // a different backdrop, the same view
+})
+watch(basemapCatalog, () => { basemapControl?.refresh(); renderMap({ refit: false }) })
+
+function renderMap({ refit = true } = {}) {
   const l = layer.value
   if (!l || !map.value || !loaded.value) return
 
@@ -645,14 +685,14 @@ function renderMap() {
     layers: (isVector.value && !isExternal.value) ? [l] : [],
     rasters: (isRaster.value && !isExternal.value) ? [l] : [],
     sources: isExternal.value ? [l] : [],
-    basemap: DEFAULT_BASEMAP,
+    basemap: currentBasemap(),
   })
   addExtentOutline(style, l.bbox)
   // Points are symbol layers whose icons are generated on demand — without this they draw nothing.
   registerMarkerImages(map.value, markerSpecs)
   setMarkerSpecs(map.value, markerSpecs)
   applyStyle(style)
-  fitToBbox(lonLatBbox(bounds) || lonLatBbox(l.bbox))
+  if (refit) fitToBbox(lonLatBbox(bounds) || lonLatBbox(l.bbox))
   tiltIfThreeD(style)
 }
 
@@ -717,10 +757,96 @@ let controlsAdded = false
 watch(loaded, (ready) => {
   if (!ready || controlsAdded) return
   controlsAdded = true
+  basemapControl = new BasemapControl({
+    catalog: () => basemapCatalog.value,
+    current: () => currentBasemap().id,
+    pick: (id) => { basemapId.value = id },
+    group: 'gd-basemap-layer',
+  })
+  addTopRightControlFirst(basemapControl)
   addTilt()
   addFullscreen()
   addZoomToExtent(() => lonLatBbox(layer.value?.bbox), 'Zoom to this layer')
+  // Identify, as a portal does: the arrow over a feature, its attributes on a click.
+  hoverCursor(map.value, (pt) => !!vectorFeatureAt(map.value, pt, 3))
+  map.value.on('click', onMapClick)
+  map.value.on('moveend', () => { viewVersion.value += 1 })
 }, { immediate: true })
+
+// -- identify + attribute table --------------------------------------------------------------
+// The SAME popup a portal shows, with one difference: every attribute, not the first 8. A portal
+// author picks a popup's fields for their readers; here there is no author, and this popup is how
+// a feature gets read.
+const popup = new maplibregl.Popup({ closeButton: true, closeOnClick: false, maxWidth: '320px' })
+const attrTable = ref(null)
+const viewVersion = ref(0)
+//: The table is OGC API - Features, which serves ready vector layers (PostGIS or GeoParquet).
+const hasTable = computed(() => isVector.value && ready.value)
+
+function viewBbox() {
+  if (!map.value) return null
+  const b = map.value.getBounds()
+  // Clamped: a world view wraps past ±180, and the server rejects a bbox outside the globe.
+  return [Math.max(-180, b.getWest()), Math.max(-90, b.getSouth()),
+          Math.min(180, b.getEast()), Math.min(90, b.getNorth())]
+}
+
+async function onMapClick(e) {
+  const l = layer.value
+  if (!l || !map.value) return
+  if (isVector.value) {
+    const f = vectorFeatureAt(map.value, e.point)
+    if (!f) { popup.remove(); return }
+    const props = f.properties || {}
+    popup.setLngLat(e.lngLat)
+      .setHTML(attrTableHtml(l.name, props, null, {
+        limit: Infinity,
+        action: hasTable.value ? { id: 'table', label: 'View attribute table ▸' } : null,
+      }))
+      .addTo(map.value)
+    popup.getElement()?.querySelector('[data-gd-action="table"]')
+      ?.addEventListener('click', () => attrTable.value?.reveal(props))
+    return
+  }
+  if (isRaster.value && !isExternal.value) {
+    const b = lonLatBbox(l.bbox)
+    if (b && (e.lngLat.lng < b[0] || e.lngLat.lng > b[2] || e.lngLat.lat < b[1] || e.lngLat.lat > b[3])) {
+      popup.remove()              // off the raster: TiTiler would answer 500, and there is no value
+      return
+    }
+    const src = map.value.getSource(`raster_${l.id}`)
+    const tileUrl = src?.tiles?.[0]
+    popup.setLngLat(e.lngLat)
+      .setHTML('<div style="font-size:12px;color:#6b7280">Reading values…</div>').addTo(map.value)
+    const html = rasterValuesHtml(l.name, await fetchRasterPoint(tileUrl, e.lngLat))
+    popup.setHTML(html || '<div style="font-size:12px;color:#6b7280">No value at this point.</div>')
+  }
+}
+
+/** A table row clicked: fly to the feature and mark it, so the row and the shape are linked. */
+function showRow(row) {
+  const m = map.value
+  if (!m || !row.geometry) return
+  const data = { type: 'Feature', properties: {}, geometry: row.geometry }
+  // Added on demand rather than baked into the style: `applyStyle` replaces the style wholesale,
+  // and a highlight is transient anyway.
+  if (m.getSource('gd-selected')) m.getSource('gd-selected').setData(data)
+  else {
+    m.addSource('gd-selected', { type: 'geojson', data })
+    m.addLayer({ id: 'gd-selected-fill', type: 'fill', source: 'gd-selected',
+                 filter: ['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false],
+                 paint: { 'fill-color': '#facc15', 'fill-opacity': 0.25 } })
+    m.addLayer({ id: 'gd-selected-line', type: 'line', source: 'gd-selected',
+                 paint: { 'line-color': '#facc15', 'line-width': 3 } })
+    m.addLayer({ id: 'gd-selected-point', type: 'circle', source: 'gd-selected',
+                 filter: ['match', ['geometry-type'], ['Point', 'MultiPoint'], true, false],
+                 paint: { 'circle-radius': 9, 'circle-color': 'rgba(0,0,0,0)',
+                          'circle-stroke-color': '#facc15', 'circle-stroke-width': 3 } })
+  }
+  const b = geometryBbox(row.geometry)
+  if (b) m.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 60, maxZoom: 17, duration: 600 })
+  document.getElementById('gd-layer-map')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+}
 
 // -- actions ---------------------------------------------------------------------------------
 const showStyle = ref(false)

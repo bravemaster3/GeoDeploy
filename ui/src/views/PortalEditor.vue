@@ -571,6 +571,8 @@ import { BASEMAPS, NO_BASEMAP } from '@/lib/basemaps'
 import { registerMarkerImages, setMarkerSpecs } from '@/lib/markerImage'
 import { capturePortalThumbnail } from '@/composables/portalThumbnail'
 import maplibregl from 'maplibre-gl'
+import { BasemapControl } from '@/lib/basemapControl'
+import { attrTableHtml, hoverCursor, vectorFeatureAt } from '@/lib/identify'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { GeoJsonLayer } from '@deck.gl/layers'
 import { ExternalLinkIcon, GlobeIcon, KeyIcon, UsersIcon, UserIcon, CheckIcon } from '@/views/icons'
@@ -1439,7 +1441,9 @@ function makeDeckLayer(cfg) {
   return new GeoJsonLayer({
     id: `deck_${cfg.layer_id}`,
     data,
-    pickable: false,
+    // Pickable so the hover cursor can find a feature (as portal.js); the overview above is not —
+    // a density cell is not a feature, and a click on one identifies nothing.
+    pickable: true,
     filled: !isLine,
     // Lines ARE their stroke, so noOutline must not erase them — it is a POLYGON outline setting.
     stroked: isLine || (!extruded && !(isPoly && noOutline)),
@@ -1565,22 +1569,9 @@ async function refreshDeck(refetch) {
 // Clicking the preview shows feature attributes, like the published portal: MVT (PostGIS)
 // layers via queryRenderedFeatures; GeoParquet (deck-rendered) layers via the server identify
 // endpoint — the deck data is geometry-only/capped, so attributes are fetched per click.
-// Mirrors the popup logic in templates/shared/portal.js (keep in sync).
+// Mirrors the popup logic in templates/shared/portal.js (keep in sync); the popup HTML itself is
+// `lib/identify.attrTableHtml`, shared with the layer page.
 const previewPopup = new maplibregl.Popup({ closeButton: true, closeOnClick: false, maxWidth: '300px' })
-const escAttr = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-
-function attrTableHtml(title, props, fields) {
-  const keys = fields && fields.length
-    ? fields.filter(k => props[k] != null)
-    // `__gd_*` are GeoDeploy's own measure columns (issue #133): for the style, never the popup.
-    : Object.keys(props).filter(k => props[k] != null && !String(k).startsWith('__gd_')).slice(0, 8)
-  const body = keys.length
-    ? '<table style="font-size:12px;border-collapse:collapse">' + keys.map(k =>
-        `<tr><th style="text-align:left;padding:2px 8px 2px 0;color:#6b7280">${escAttr(k)}</th><td style="padding:2px 0">${escAttr(props[k])}</td></tr>`).join('') + '</table>'
-    : '<div style="font-size:12px;color:#6b7280">No attributes</div>'
-  return `<div style="font-weight:600;font-size:12px;margin-bottom:4px">${escAttr(title)}</div>` + body
-}
-
 async function onPreviewClick(e) {
   if (!map.value) return
   const sections = []
@@ -1677,11 +1668,20 @@ watch(loaded, (v) => {
   if (!deckOverlay) {
     // Basemap picker control — top-right, above the globe/zoom controls, mirroring the published
     // portal's switcher exactly (same grid icon, same flyout menu).
-    basemapControl = new BasemapControl()
+    basemapControl = new BasemapControl({
+      catalog: () => basemapCatalog.value,
+      current: () => currentBasemap().id,
+      pick: (id) => { basemap.value = id },
+      group: 'gd-basemap-editor',
+    })
     addTopRightControlFirst(basemapControl)
     deckOverlay = new MapboxOverlay({ interleaved: false, layers: [] })
     map.value.addControl(deckOverlay)
     map.value.on('click', onPreviewClick)
+    // The arrow over anything a click would identify — MapLibre layers by query, GeoParquet ones
+    // by deck's own picking (they have no MapLibre layer to query).
+    hoverCursor(map.value, (pt) => !!vectorFeatureAt(map.value, pt, 3),
+      (pt) => deckOverlay?.pickObject({ x: pt.x, y: pt.y, radius: 4 })?.object)
     map.value.on('moveend', () => refreshDeck(true))
     // Mid-gesture: hide the coarse overview grid the moment the viewport qualifies for detail —
     // don't wait for moveend + the fetch (mirrors portal.js).
@@ -1720,59 +1720,6 @@ watch(loaded, (v) => {
 // run at setup time, so it must exist before them.)
 function currentBasemap() {
   return basemapCatalog.value.find(b => b.id === basemap.value) || basemapCatalog.value[0]
-}
-
-const _escHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-
-// MapLibre control mirroring the published portal's BasemapControl (templates/shared/portal.js):
-// a grid-icon button that opens a flyout list of basemaps. Picking one sets `basemap`, which the
-// watcher rebuilds the preview from. Same markup/classes as the portal so the shared .gd-basemap-*
-// CSS (in this component's global <style> block) styles it identically.
-const _checkIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" ' +
-  'stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>'
-class BasemapControl {
-  // Rebuild the menu's option rows from the current catalog + selection. Called on add and whenever
-  // the catalog changes (e.g. after the /api/basemaps fetch resolves with more basemaps).
-  _renderMenu() {
-    if (!this._menu) return
-    const cur = currentBasemap().id
-    this._menu.innerHTML = '<div class="gd-basemap-title">Basemap</div>' +
-      basemapCatalog.value.map(bm =>
-        '<label class="gd-basemap-opt"><input type="radio" name="gd-basemap-editor" value="' + bm.id + '"' +
-        (bm.id === cur ? ' checked' : '') + '>' +
-        '<img class="gd-basemap-thumb" src="' + bm.thumb + '" alt="" loading="lazy">' +
-        '<span class="gd-basemap-name">' + _escHtml(bm.name) + '</span>' +
-        '<span class="gd-basemap-check">' + _checkIcon + '</span></label>').join('')
-  }
-  refresh() { this._renderMenu() }
-  onAdd() {
-    const gridIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">' +
-      '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>' +
-      '<rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>'
-    const c = document.createElement('div')
-    c.className = 'maplibregl-ctrl maplibregl-ctrl-group gd-basemap-ctrl'
-    c.innerHTML =
-      '<button type="button" class="gd-basemap-btn" title="Basemaps" aria-label="Choose basemap">' + gridIcon + '</button>' +
-      '<div class="gd-basemap-menu"></div>'
-    const btn = c.querySelector('.gd-basemap-btn')
-    const menu = c.querySelector('.gd-basemap-menu')
-    this._menu = menu
-    this._renderMenu()
-    btn.addEventListener('click', ev => {
-      ev.stopPropagation()
-      // Re-render so the checked row matches the current basemap (it may have loaded from the portal
-      // AFTER this control was built) and reflects any catalog update.
-      this._renderMenu()
-      c.classList.toggle('open')
-    })
-    menu.addEventListener('change', ev => { basemap.value = ev.target.value })
-    menu.addEventListener('click', ev => ev.stopPropagation())
-    this._docClose = () => c.classList.remove('open')
-    document.addEventListener('click', this._docClose)
-    this._c = c
-    return c
-  }
-  onRemove() { document.removeEventListener('click', this._docClose); this._c?.remove() }
 }
 
 function buildPreviewStyle() {
@@ -2048,50 +1995,3 @@ async function handlePublish() {
 .gd-tiptap :deep(img.ProseMirror-selectednode) { outline: 2px solid hsl(var(--primary)); }
 </style>
 
-<!-- Non-scoped: the basemap control DOM is created imperatively (MapLibre control), so scoped
-     styles wouldn't reach it. Mirrors templates/shared/portal.css .gd-basemap-* but colored from the
-     editor's theme tokens (which flip under html.dark) so it matches the published portal. -->
-<style>
-.gd-basemap-ctrl { position: relative; }
-/* Selector is intentionally specific (.gd-basemap-ctrl .gd-basemap-btn) so it beats MapLibre's own
-   `.maplibregl-ctrl-group button` rule — otherwise its display/box-model wins and the child SVG
-   isn't centered. */
-.gd-basemap-ctrl .gd-basemap-btn {
-  width: 29px; height: 29px; display: flex; align-items: center; justify-content: center;
-  padding: 0; background: transparent; border: none; cursor: pointer; color: hsl(var(--foreground));
-}
-.gd-basemap-ctrl .gd-basemap-btn svg { width: 18px; height: 18px; display: block; }
-.gd-basemap-menu {
-  display: none; position: absolute; top: 0; right: 40px; width: 250px;
-  background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: 12px;
-  box-shadow: 0 10px 25px -5px rgb(0 0 0 / 0.35); padding: 8px;
-}
-.gd-basemap-ctrl.open .gd-basemap-menu { display: block; }
-.gd-basemap-title {
-  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
-  color: hsl(var(--muted-foreground)); padding: 3px 6px 8px;
-}
-.gd-basemap-opt {
-  display: flex; align-items: center; gap: 12px; padding: 7px 8px;
-  font-size: 13px; border-radius: 9px; cursor: pointer; position: relative;
-  border: 1.5px solid transparent; transition: background .12s, border-color .12s;
-}
-.gd-basemap-opt:hover { background: hsl(var(--muted) / .6); }
-.gd-basemap-opt input { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }
-.gd-basemap-opt:has(input:checked) { border-color: hsl(var(--primary)); background: hsl(var(--primary) / .1); }
-.gd-basemap-name { flex: 1; font-weight: 500; color: hsl(var(--foreground)); white-space: nowrap; }
-.gd-basemap-check { display: flex; color: hsl(var(--primary)); opacity: 0; flex-shrink: 0; }
-.gd-basemap-check svg { width: 17px; height: 17px; }
-.gd-basemap-opt:has(input:checked) .gd-basemap-check { opacity: 1; }
-.gd-basemap-thumb {
-  width: 68px; height: 46px; object-fit: cover; border-radius: 7px;
-  border: 1px solid hsl(var(--border)); flex-shrink: 0; background: hsl(var(--muted));
-}
-/* Dark-mode MapLibre controls (globe/zoom) — recolour to the theme surface + invert the built-in
-   glyphs so the whole top-right stack matches (the basemap button uses currentColor, not
-   .maplibregl-ctrl-icon, so the filter leaves it alone). */
-.dark .maplibregl-ctrl-group { background: hsl(var(--card)); box-shadow: 0 0 0 1px hsl(var(--border)), 0 2px 6px rgb(0 0 0 / .3); }
-.dark .maplibregl-ctrl-group button + button { border-top-color: hsl(var(--border)); }
-.dark .maplibregl-ctrl-group button:hover { background: hsl(var(--muted)); }
-.dark .maplibregl-ctrl button .maplibregl-ctrl-icon { filter: invert(1) hue-rotate(180deg) brightness(1.05); }
-</style>
