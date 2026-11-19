@@ -30,7 +30,7 @@ bash installer/tests/test-port80.sh    # ~6m,  NEEDS PORT 80 — see the warning
 
 # On FAKE MACHINES — privileged containers with their own dockerd. They touch nothing on this
 # machine, including an instance running here. Not in run-all.sh: they build images and take a while.
-bash installer/tests/test-hostproxy.sh   # ~12m, Apply against real nginx/Apache/Caddy, 24 scenarios
+bash installer/tests/test-hostproxy.sh   # ~12m, Apply against real nginx/Apache/Caddy, 25 scenarios
 bash installer/tests/test-upgrade.sh     # ~40m, real installers + updaters, old releases, branches
 ```
 
@@ -128,6 +128,7 @@ neighbour's response, the master PID, and a 6 MB download held in flight across 
 | M1 / M2 | Apache on 80 with an idle nginx / nginx on 80 with an idle Apache | the one holding the port is chosen; the idle one untouched |
 | B1 | no web server | refused; nothing created |
 | D1–D4 | nginx or Caddy **in a container** — plain, with a foreign `geodeploy.conf`, already serving the name | refused (`container-proxy`) with the network steps; nothing written into the mount |
+| P1 | GeoDeploy still on **port 80** (dedicated, as after an update from an older release) beside a host nginx | refused (`port-80-held`, fix `set-port.sh 8080`), nothing touched; after the move Apply works and every neighbour answers as before |
 | T1 | Traefik in a container | named refusal |
 
 ### `test-upgrade.sh` — existing instances, old releases, other branches
@@ -177,6 +178,8 @@ builds for real inside the machine.
   because the prompt reads `/dev/tty` and nothing writes there.
 
 ## Current status & known issues
+- 2026-11-19: `test-hostproxy.sh` 25 scenarios / 172 assertions green (new **P1**: GeoDeploy still on
+  port 80 beside a host nginx is refused with nothing touched, then applies once moved to 8080).
 - 2026-11-18: `test-hostproxy.sh` 24 scenarios / 159 assertions green on WSL2 + Docker 29.5.2,
   after fixing the defects it found; `test-upgrade.sh` results are recorded in the PR description.
 - 2026-11-18, every suite re-run INSIDE fake machines (so port 80 and a live instance are never

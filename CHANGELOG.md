@@ -38,7 +38,7 @@ upgrade needs manual work.
   refuses until GeoDeploy has left port 80, and a domain reached over `https` reads as published.
 - **Checked against real web servers before release, and five ways Apply could disturb one closed.**
   A new suite (`installer/tests/test-hostproxy.sh`) runs Apply against throwaway machines with a
-  real nginx, Apache or Caddy serving other sites — 24 scenarios, each asserting the configuration
+  real nginx, Apache or Caddy serving other sites — 25 scenarios, each asserting the configuration
   is byte-identical afterwards, every other site answers exactly as before, and the web server was
   reloaded, never restarted. It found: a web server **in a container** was given an address it
   cannot reach (every visitor got an error while Apply reported success), could have a file it did
