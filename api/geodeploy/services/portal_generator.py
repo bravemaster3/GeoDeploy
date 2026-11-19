@@ -2235,7 +2235,7 @@ def _polygon_outline_layer(source_id: str, layer, cfg: dict, base: dict) -> dict
         "type": "line",
         "source": source_id,
         "source-layer": _source_layer_name(layer),
-        "paint": _outline_paint(style, cfg),
+        "paint": _outline_paint(style, cfg, _middle_latitude(layer)),
         # No metadata here on purpose: the caller stamps it, giving the FIRST layer the full
         # `geodeploy:*` block and every other one `{layer_id, part: True}` — which is what keeps the
         # switcher listing this layer once while the eye toggle hides the outline with its fill.
@@ -2243,16 +2243,25 @@ def _polygon_outline_layer(source_id: str, layer, cfg: dict, base: dict) -> dict
     }
 
 
-def _outline_paint(style: dict, cfg: dict) -> dict:
+def _middle_latitude(layer):
+    """The latitude in the middle of a layer's extent — where a ground width is measured — or None."""
+    bounds = _lonlat_bounds(getattr(layer, "bbox", None))
+    return (bounds[1] + bounds[3]) / 2.0 if bounds else None
+
+
+def _outline_paint(style: dict, cfg: dict, latitude=None) -> dict:
     """A polygon outline's paint. Its own function because an outline IS a line, and the line
     vocabulary — dash pattern, offset — applies to it exactly as it does to a line layer."""
     paint = {
         "line-color": symbology.outline_color(style),
-        "line-width": symbology.outline_width_px(style),
+        # A border measured on the ground (QGIS map units) grows with the zoom, like a line's.
+        "line-width": (symbology.ground_width(style.get("outline_width_m"), latitude)
+                       or symbology.outline_width_px(style)),
         # The outline follows the layer's own opacity, not the FILL's: a polygon drawn as a 45%
         # wash with a solid border is the ordinary way to draw one, and tying the border to
-        # `fill_opacity` would make it fade with the wash.
-        "line-opacity": cfg.get("opacity", 1.0),
+        # `fill_opacity` would make it fade with the wash. A border with a strength of its own
+        # (`outline_opacity`, from QGIS) is drawn at that strength — see `needs_outline_layer`.
+        "line-opacity": round(cfg.get("opacity", 1.0) * symbology.outline_opacity(style), 4),
     }
     dashes = symbology.dash_array(style)
     if dashes:
@@ -2314,7 +2323,9 @@ def _vector_layer(source_id: str, layer, cfg: dict) -> dict:
     if "line" in geom:
         paint = {
             "line-color": color,
-            "line-width": symbology.size_expression(style, style.get("line_width", 2)),
+            # A width measured on the ground (QGIS map units) grows with the zoom — issue #118.
+            "line-width": (symbology.ground_width(style.get("line_width_m"), _middle_latitude(layer))
+                           or symbology.size_expression(style, style.get("line_width", 2))),
             # THE LINE'S OWN OPACITY as well as the layer's. QGIS has two — the symbol's, and the
             # alpha inside the colour picker — and they multiply; without this a boundary drawn at
             # 40% published fully opaque. The twin of `marker_opacity` on a point.

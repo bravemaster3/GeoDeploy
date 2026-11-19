@@ -720,6 +720,7 @@ and a marker's 0.28 left on a polygon falls below the hairline and changes nothi
   301 there loops between Cloudflare and the origin forever.
 
 ## Last updated
+2026-11-19c (`symbology.ground_width` — map-unit widths as an exponential-2 zoom interpolation at the layer's middle latitude (`line_width_m`, `outline_width_m`); `outline_opacity` / `outline_width_m` force the outline line layer; all gated on plugin-only keys so editor-made portals are byte-identical. #118.)
 2026-11-19 (port-80-held refusal; manual config for a port-80 instance targets 8080; dedicated CDN verdict)
 2026-11-18 (`hostproxy.py`: container proxies refused, not-serving / apache-modules refusals, wider R5 — all from the fake-machine harness)
 2026-09-12 (added `deployment.py` — the port/reverse-proxy slice of issue #79)

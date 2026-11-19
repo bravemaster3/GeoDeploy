@@ -765,6 +765,145 @@ def links_survive():
     project.clear()
 
 
+# ══ 6d. Issue #118 — the D+S Canal example, symbol by symbol ═════════════════════════════════════
+
+def issue_118():
+    """What the reporter's project drew differently, rebuilt on QGIS itself and pinned."""
+    section("#118 — dash-dot, class dashes, border strength, line borders, washes, ground widths")
+    import math
+    from qgis.core import (QgsCategorizedSymbolRenderer, QgsCoordinateReferenceSystem,
+                           QgsFillSymbol, QgsLineSymbol, QgsProject, QgsRendererCategory,
+                           QgsSimpleFillSymbolLayer, QgsSimpleLineSymbolLayer,
+                           QgsSingleSymbolRenderer, QgsUnitTypes)
+    from qgis.PyQt.QtCore import Qt
+    from qgis.PyQt.QtGui import QColor
+    pen = lambda name: symbology.enum(Qt, "PenStyle", name)               # noqa: E731
+
+    # Qt's dash-dot pen styles travel as their own pattern, and come back as the named style.
+    for name, pattern in (("DashDotLine", [4.0, 2.0, 1.0, 2.0]),
+                          ("DashDotDotLine", [4.0, 2.0, 1.0, 2.0, 1.0, 2.0])):
+        layer = make_layer("LineString")
+        sym = QgsLineSymbol.createSimple({"color": "#f5a358", "width": "2"})
+        sym.symbolLayer(0).setPenStyle(pen(name))
+        layer.setRenderer(QgsSingleSymbolRenderer(sym))
+        style = symbology.from_qgis(layer) or {}
+        check("118: {0} is sent as its pattern, not solid".format(name),
+              style.get("dash_pattern") == pattern, repr(style))
+        back = make_layer("LineString")
+        symbology.apply(back, style)
+        sl = back.renderer().symbol().symbolLayer(0)
+        check("118: ...and comes back to QGIS as {0}".format(name),
+              sl.penStyle() == pen(name) and not sl.useCustomDashPattern(),
+              "{0} custom={1}".format(sl.penStyle(), sl.useCustomDashPattern()))
+
+    # A class with no dash does not inherit the first class's dash.
+    layer = make_layer("Polygon")
+    hach = QgsFillSymbol()
+    hach.deleteSymbolLayer(0)
+    line = QgsSimpleLineSymbolLayer(QColor("#673f20"), 2.4)
+    line.setUseCustomDashPattern(True)
+    line.setCustomDashVector([0.3, 2.0])
+    hach.appendSymbolLayer(line)
+    solid = QgsFillSymbol.createSimple({"color": "#d5b43c", "outline_color": "#8e7424",
+                                        "outline_width": "0.5"})
+    layer.setRenderer(QgsCategorizedSymbolRenderer("kind", [
+        QgsRendererCategory("a", hach, "Hachure"), QgsRendererCategory("b", solid, "Aqueduct")]))
+    style = symbology.from_qgis(layer) or {}
+    cats = style.get("categories") or []
+    check("118: the first class keeps its own dash", bool(style.get("dash_pattern")), repr(style))
+    check("118: a class with no dash says so, instead of inheriting the first one's",
+          len(cats) == 2 and "dash_pattern" in cats[1] and cats[1]["dash_pattern"] is None,
+          repr(cats))
+
+    # A border's own strength over a translucent fill, and its round trip.
+    layer = make_layer("Polygon")
+    sym = QgsFillSymbol.createSimple({"color": "209,231,195,128", "outline_color": "#bacdae",
+                                      "outline_width": "0.26"})
+    layer.setRenderer(QgsSingleSymbolRenderer(sym))
+    style = symbology.from_qgis(layer) or {}
+    check("118: a border states its own strength (QGIS does not fade it with the fill)",
+          style.get("outline_opacity") == 1.0 and style.get("fill_opacity") < 0.6, repr(style))
+    style["outline_opacity"] = 0.4
+    back = make_layer("Polygon")
+    symbology.apply(back, style)
+    alpha = back.renderer().symbol().symbolLayer(0).strokeColor().alphaF()
+    check("118: ...and it comes back as the border colour's alpha", abs(alpha - 0.4) < 0.01,
+          alpha)
+
+    # A border drawn by a LINE layer, on a fill whose own pen is off.
+    layer = make_layer("Polygon")
+    sym = QgsFillSymbol.createSimple({"color": "57,229,232,91", "outline_style": "no"})
+    edge = QgsSimpleLineSymbolLayer(QColor("#228b8f"), 0.26)
+    edge.setPenStyle(pen("DotLine"))
+    sym.appendSymbolLayer(edge)
+    layer.setRenderer(QgsSingleSymbolRenderer(sym))
+    style = symbology.from_qgis(layer) or {}
+    check("118: a border drawn as a line layer is the polygon's border",
+          style.get("outline_color") == "#228b8f" and style.get("lineType") == "dotted",
+          repr(style))
+
+    # A translucent wash ABOVE a pattern is painted into the tile.
+    from qgis.core import QgsLinePatternFillSymbolLayer
+    layer = make_layer("Polygon")
+    sym = QgsFillSymbol()
+    sym.deleteSymbolLayer(0)
+    hatch = QgsLinePatternFillSymbolLayer()
+    hatch.setLineAngle(45)
+    hatch.setDistance(4)
+    sym.appendSymbolLayer(hatch)
+    wash = QgsSimpleFillSymbolLayer(QColor(202, 185, 130, 91))
+    wash.setStrokeStyle(pen("NoPen"))
+    sym.appendSymbolLayer(wash)
+    layer.setRenderer(QgsSingleSymbolRenderer(sym))
+    style = symbology.from_qgis(layer) or {}
+    tile = (style.get("fill_pattern") or {}).get("image", "")
+    from qgis.PyQt.QtGui import QImage
+    import base64 as _b64
+    img = QImage.fromData(_b64.b64decode(tile.split(",", 1)[-1]), "PNG") if tile else QImage()
+    covered = (not img.isNull()) and all(
+        QColor(img.pixel(x, y)).alpha() > 0 for x in range(0, img.width(), 3)
+        for y in range(0, img.height(), 3))
+    check("118: a wash drawn over a pattern is in the tile (no transparent pixel left)", covered,
+          "tile {0}x{1}".format(img.width(), img.height()))
+
+    # A width in MAP UNITS, in a Web Mercator project around 51 deg N.
+    project = QgsProject.instance()
+    saved = project.crs()
+    project.setCrs(QgsCoordinateReferenceSystem("EPSG:3857"))
+    uri = "LineString?crs=EPSG:4326&field=kind:string"
+    from qgis.core import QgsVectorLayer
+    layer = QgsVectorLayer(uri, "path", "memory")
+    f = QgsFeature(layer.fields())
+    f.setGeometry(QgsGeometry.fromWkt("LINESTRING(13.6 51.1, 13.7 51.3)"))
+    f.setAttributes(["a"])
+    layer.dataProvider().addFeature(f)
+    layer.updateExtents()
+    sym = QgsLineSymbol.createSimple({"color": "#84d9ff"})
+    sl = sym.symbolLayer(0)
+    sl.setWidth(15.95)
+    sl.setWidthUnit(symbology.enum(QgsUnitTypes, "RenderUnit", "RenderMapUnits"))
+    layer.setRenderer(QgsSingleSymbolRenderer(sym))
+    style = symbology.from_qgis(layer) or {}
+    expected = 15.95 * math.cos(math.radians(51.2))
+    check("118: a map-unit width is sent as metres on the ground (Mercator corrected)",
+          abs((style.get("line_width_m") or 0) - expected) < 0.05,
+          "line_width_m={0} expected~{1:.3f}".format(style.get("line_width_m"), expected))
+    back = make_layer("LineString")
+    symbology.apply(back, style)
+    bl = back.renderer().symbol().symbolLayer(0)
+    check("118: ...comes back as metres at scale, the same number",
+          bl.widthUnit() == symbology.enum(QgsUnitTypes, "RenderUnit", "RenderMetersInMapUnits")
+          and abs(bl.width() - style["line_width_m"]) < 1e-6, "{0} {1}".format(bl.width(),
+                                                                                 bl.widthUnit()))
+    again = symbology.from_qgis(back) or {}
+    check("118: ...and a second push sends the same metres",
+          again.get("line_width_m") == style.get("line_width_m"), repr(again))
+    project.setCrs(QgsCoordinateReferenceSystem("EPSG:4326"))
+    check("118: map units in DEGREES have no ground size and are not sent",
+          "line_width_m" not in (symbology.from_qgis(layer) or {}))
+    project.setCrs(saved)
+
+
 # ══ 7. 2.5D ══════════════════════════════════════════════════════════════════════════════════════
 
 def two_and_a_half_d():
@@ -2105,6 +2244,7 @@ def main():
     rule_based()
     map_scale_gates()
     links_survive()
+    issue_118()
     two_and_a_half_d()
     natives()
     labelling()

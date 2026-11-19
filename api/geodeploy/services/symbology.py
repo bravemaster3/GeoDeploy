@@ -438,6 +438,7 @@ def outline_color(style: dict, default: str = "#1d4ed8"):
 CLASS_SHAPE_KEYS = (
     "line_width", "lineType", "dash_pattern", "line_offset", "line_cap", "line_join",
     "fill_opacity", "line_opacity", "fill_pattern", "outline_color", "outline_width",
+    "outline_opacity", "line_width_m", "outline_width_m",
     "radius", "marker", "marker_image", "marker_offset", "line_marker", "spacing",
 )
 
@@ -632,6 +633,45 @@ def outline_width_px(style: dict, default: float = POLYGON_OUTLINE_WIDTH) -> flo
     return min(max(width, 0.0), 40.0)
 
 
+#: MapLibre's ground resolution at zoom 0 on the equator, in metres per pixel: zoom 0 is a world
+#: 512 pixels wide, and each zoom level halves it.
+_M_PER_PX_Z0 = 40075016.68557849 / 512
+
+
+def ground_width(metres, latitude=None):
+    """A width measured ON THE GROUND, as a MapLibre `line-width` — or None when there is none.
+
+    QGIS keeps a width in map units (or "metres at scale") the same size on the ground at every
+    zoom: a 10 m path is 10 m wide. Such a width used to arrive with no width at all, so the portal
+    drew its 2 px default (issue #118). On the web it is a width that doubles with each zoom level,
+    which MapLibre interpolates exponentially with base 2 — exact, not an approximation, apart from
+    the Mercator stretch across one layer's extent, which is why the LATITUDE is the layer's own.
+    """
+    import math
+    try:
+        m = float(metres)
+    except (TypeError, ValueError):
+        return None
+    if not (m > 0) or m != m or m == float("inf"):
+        return None
+    try:
+        lat = max(-85.0, min(85.0, float(latitude))) if latitude is not None else 0.0
+    except (TypeError, ValueError):
+        lat = 0.0
+    at_zero = m / (_M_PER_PX_Z0 * math.cos(math.radians(lat)))
+    return ["interpolate", ["exponential", 2], ["zoom"],
+            0, float("%.6g" % at_zero), 24, float("%.6g" % (at_zero * 2 ** 24))]
+
+
+def outline_opacity(style: dict) -> float:
+    """A polygon border's own strength, 0–1; 1 when the style does not state one."""
+    try:
+        value = float(style.get("outline_opacity"))
+    except (TypeError, ValueError):
+        return 1.0
+    return min(max(value, 0.0), 1.0)
+
+
 def needs_outline_layer(style: dict) -> bool:
     """Whether a polygon needs its own `line` layer, or a plain `fill` already draws it right.
 
@@ -643,6 +683,17 @@ def needs_outline_layer(style: dict) -> bool:
     if outline_color(style) is None:
         return False                     # no outline at all; nothing to widen
     if outline_width_px(style) > POLYGON_OUTLINE_WIDTH:
+        return True
+    # AN OUTLINE WITH ITS OWN STRENGTH. MapLibre fades `fill-outline-color` with `fill-opacity`;
+    # QGIS draws a border at its own colour's strength whatever the fill is. A QGIS woodland at a 50%
+    # wash with a solid green border therefore published with a border faded to near-white (issue
+    # #118). The QGIS plugin states the border's own strength as `outline_opacity`; a style that
+    # carries it gets the line layer, drawn at that strength. A style authored in the editor does not
+    # carry it, so every portal made there renders exactly as before.
+    if style.get("outline_opacity") is not None:
+        return True
+    # A width ON THE GROUND changes with every zoom, which a fill's one-pixel edge cannot do.
+    if ground_width(style.get("outline_width_m")) is not None:
         return True
     # A DASH IS ALSO SOMETHING A FILL'S OWN EDGE CANNOT DRAW. `fill-outline-color` is a colour with
     # no width and no pattern, so a hairline border asked to be dashed drew solid — a dashed

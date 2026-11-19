@@ -6,6 +6,18 @@ upgrade needs manual work.
 
 ## Unreleased
 
+- **Portals draw QGIS styles more faithfully** ([#118](https://github.com/bravemaster3/GeoDeploy/issues/118),
+  with QGIS plugin 0.7.5), checked on the reporter's D+S Canal project:
+  - **Widths in map units** (a 10 m path) are drawn at their real ground size at every zoom.
+    They used to be sent as nothing and drawn at the default 2 px.
+  - **A border stronger than its fill keeps its strength.** MapLibre faded a fill's edge with
+    the fill, so a woodland's dark edge showed near-white and an outline-only polygon's 1 px
+    border vanished.
+  - **The editor reads the same per-class keys as the portal.** It ignored a per-class line
+    opacity.
+
+  Styles authored in the editor are unaffected: every new behaviour depends on a key only the
+  QGIS plugin sends.
 - **Update no longer warns about uploads that are not running.** Every press of Update could say
   *"vector layer being processed — queued"* for uploads whose layers had long been deleted, or had
   finished: deleting a layer left its upload job behind, and a job the worker never picked up stays

@@ -218,7 +218,10 @@ export function isExtruded(style = {}) {
  */
 export const CLASS_SHAPE_KEYS = [
   'line_width', 'lineType', 'dash_pattern', 'line_offset', 'line_cap', 'line_join',
-  'fill_opacity', 'fill_pattern', 'outline_color', 'outline_width',
+  // `line_opacity` was missing here while the server had it, so the editor ignored a per-class
+  // line opacity the portal honoured. `outline_opacity`: see `needsOutlineLayer`.
+  'fill_opacity', 'line_opacity', 'fill_pattern', 'outline_color', 'outline_width', 'outline_opacity',
+  'line_width_m', 'outline_width_m',
   'radius', 'marker', 'marker_image', 'marker_offset', 'line_marker', 'spacing',
 ]
 
@@ -969,4 +972,28 @@ export function heatmapPaint (block = {}, opacity = 1) {
     paint['heatmap-weight'] = ['interpolate', ['linear'], ['to-number', ['get', field], 0], 0, 0, top, 1]
   }
   return paint
+}
+
+/** A polygon border's own strength, 0–1; 1 when unstated. Twin of `symbology.outline_opacity`. */
+export function outlineOpacity(style = {}) {
+  const n = Number(style.outline_opacity)
+  if (style.outline_opacity == null || !Number.isFinite(n)) return 1
+  return Math.min(Math.max(n, 0), 1)
+}
+
+// MapLibre's ground resolution at zoom 0 on the equator: a 512-pixel-wide world.
+const M_PER_PX_Z0 = 40075016.68557849 / 512
+const sig6 = (n) => Number(n.toPrecision(6))
+
+/**
+ * A width measured ON THE GROUND, as a `line-width` that doubles with every zoom level — or null.
+ * Twin of `symbology.ground_width`: QGIS map-unit widths (a 10 m path) keep their real size.
+ */
+export function groundWidth(metres, latitude = null) {
+  const m = Number(metres)
+  if (metres == null || !Number.isFinite(m) || !(m > 0)) return null
+  let lat = Number(latitude)
+  lat = (latitude == null || !Number.isFinite(lat)) ? 0 : Math.max(-85, Math.min(85, lat))
+  const atZero = m / (M_PER_PX_Z0 * Math.cos(lat * Math.PI / 180))
+  return ['interpolate', ['exponential', 2], ['zoom'], 0, sig6(atZero), 24, sig6(atZero * 2 ** 24)]
 }

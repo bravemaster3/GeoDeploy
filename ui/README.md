@@ -54,6 +54,7 @@ Two other versions are deliberately NOT in step and must not be swept up by a pr
   repository, on its own cadence.
 
 ## Last updated
+2026-11-19c (`lib/symbology.js`: `groundWidth` / `outlineOpacity` twins and `line_opacity` + ground-width keys in `CLASS_SHAPE_KEYS` (it had drifted from the server's; `api/tests/test_qgis_fidelity_118.py` now pins the two lists equal). `lib/mapStyle.js` mirrors the portal's outline layer and ground widths. #118.)
 2026-11-19 (`src/lib/clipboard.js`: every Copy button works on plain http.)
 2026-08-31 (`package.json` brought in line with the product at 1.5.1, and a note above on which
 versions track it and which are deliberately independent.)

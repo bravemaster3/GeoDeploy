@@ -92,7 +92,7 @@ def from_qgis(symbol):
             if block and "__centroid__" in block:
                 return {"centroid_marker": block["__centroid__"]}, notes
             if block:
-                return {"fill_pattern": block}, notes
+                return {"fill_pattern": _washed(block, _washes_above(symbol, i))}, notes
     except Exception as exc:            # noqa: BLE001 - a pattern is never worth failing a style
         symbology._log("Could not read this fill's pattern ({0}: {1}).".format(
             type(exc).__name__, exc))
@@ -122,6 +122,55 @@ def _base_colour(symbol, above: int):
             continue
         found = under.color()
     return found
+
+
+def _washes_above(symbol, below: int) -> list:
+    """The colours of solid fills drawn ABOVE the pattern at index `below`, bottom first.
+
+    `_base_colour` handles a fill UNDER a pattern. A fill OVER one is the other common shape — a
+    translucent wash laid across a hatch or an SVG pattern — and MapLibre has nowhere to put it
+    either: `fill-pattern` replaces `fill-color`. It was dropped, so a marsh drawn as a pattern under
+    a 35% tan wash published as the bare pattern (issue #118). Painted over the tile instead, which
+    is exactly what QGIS paints.
+    """
+    from qgis.PyQt.QtCore import Qt
+    solid = symbology.enum(Qt, "BrushStyle", "SolidPattern")
+    out = []
+    for i in range(below + 1, symbol.symbolLayerCount()):
+        over = symbol.symbolLayer(i)
+        if not isinstance(over, QgsSimpleFillSymbolLayer):
+            continue
+        try:
+            if not over.enabled() or over.brushStyle() != solid or over.color().alpha() == 0:
+                continue
+        except Exception:               # noqa: BLE001  # nosec B112 - a fill we cannot read is skipped
+            continue
+        out.append(over.color())
+    return out
+
+
+def _washed(block, colours):
+    """`block`'s tile with `colours` painted over it, in order. The block unchanged when there are
+    none, or when the tile cannot be decoded — a pattern without its wash beats no pattern."""
+    if not colours or not isinstance(block, dict):
+        return block
+    try:
+        from qgis.PyQt.QtGui import QImage, QPainter
+        raw = base64.b64decode(str(block.get("image", "")).split(",", 1)[-1])
+        image = QImage.fromData(raw, "PNG")
+        if image.isNull():
+            return block
+        image = image.convertToFormat(symbology.enum(QImage, "Format", "Format_ARGB32_Premultiplied"))
+        painter = QPainter(image)
+        try:
+            for colour in colours:
+                painter.fillRect(0, 0, image.width(), image.height(), colour)
+        finally:
+            painter.end()
+        washed = _encode(image)
+        return dict(block, **washed) if washed else block
+    except Exception:                   # noqa: BLE001 - the wash is cosmetic next to the pattern
+        return block
 
 
 def _tile_for(sl, base=None):
