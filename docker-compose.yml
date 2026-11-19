@@ -113,7 +113,8 @@ services:
       retries: 10
 
   martin:
-    image: ghcr.io/maplibre/martin:latest
+    # Pinned; services/postgis.py::MARTIN_IMAGE names the same image (test_tile_images).
+    image: ghcr.io/maplibre/martin:1.16.1
     restart: unless-stopped
     # Core service (NOT profile-gated): vector tiles are needed for both local and external
     # PostGIS. Boots from a sources-less config until a DB is configured (see main.py).
@@ -127,7 +128,8 @@ services:
           - martin
 
   titiler:
-    image: ghcr.io/developmentseed/titiler:latest
+    # Pinned; services/minio.py::TITILER_IMAGE names the same image (test_tile_images).
+    image: ghcr.io/developmentseed/titiler:2.4.1
     restart: unless-stopped
     # Core service (NOT profile-gated): the raster tile server. Harmless to run before
     # storage is configured (S3 access is per-request via env). Local/external both use it.

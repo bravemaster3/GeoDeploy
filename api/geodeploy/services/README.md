@@ -235,7 +235,7 @@ The "hard parts" GeoDeploy hides from users: provisioning Docker containers, gen
 - `cog_converter.py` is called from `tasks/raster_ingest.py`.
 
 ## Current status & known issues
-- **Tile URL formats are version-coupled to Martin and TiTiler `:latest` images.** The TiTiler `WebMercatorQuad` path segment and the Martin top-level `listen_addresses` were both breaking changes discovered this session. If raster/vector tiles 404 after an image bump, re-verify these paths first (see `notes_temp/notes_for_future.md`).
+- **Tile URL formats are version-coupled to Martin and TiTiler** (pinned since 2026-11-19: Martin 1.16.1, TiTiler 2.4.1 — `installer/tests/test-tiles.sh` checks every request we make before a pin moves). The TiTiler `WebMercatorQuad` path segment and the Martin top-level `listen_addresses` were both breaking changes discovered this session. If raster/vector tiles 404 after an image bump, re-verify these paths first (see `notes_temp/notes_for_future.md`).
 - GDAL needs `AWS_S3_ENDPOINT` **without** scheme; both `minio.py::_start_titiler` and `routers/setup.py` strip it. The compose file reads `${TITILER_S3_ENDPOINT}` for the same reason — keep all three in sync.
 - **Existing/external storage + DB (2026-06-04, implemented but UNTESTED on real providers):** the "connect to existing" wizard branches now configure TiTiler HTTPS (`TITILER_AWS_HTTPS`/`_start_titiler` derive it from the endpoint) and PostGIS `sslmode` (`postgis_sslmode`, wizard sets `prefer` for external). Verify on a real AWS/R2/B2 + managed Postgres before trusting. The local provisioned path is unchanged (http → `AWS_HTTPS=NO`, local DB → no sslmode). See `notes_temp/notes_for_future.md` (DONE 2026-06-04 external).
 - `martin.py` and `minio.py` start containers programmatically (Docker SDK) AND those services exist in `docker-compose.yml` under profiles. Mixing the two can cause name conflicts / lost network aliases — see the "profile management" note in notes_temp.
@@ -372,7 +372,7 @@ EXPRESSION before a number, which is what the CLI already did.)
 an integer.** `GET /algorithms/contours` declares increment 0-999, thickness 0-10 and minz/maxz
 +/-99999, all `integer` — `increment` used to be typed as a float and we sent one, so after TiTiler
 tightened it every tile 422'd and a working contour layer simply stopped drawing, with no error
-anywhere. TiTiler runs from `:latest`, so this can happen again; `notes_temp/notes_for_future.md`
+anywhere. TiTiler ran from `:latest` then (pinned now, so a contract change arrives only with a deliberate bump); `notes_temp/notes_for_future.md`
 carries the diagnosis. Half-up rounding is written out as `int(x + 0.5)` rather than `round()`,
 because Python rounds half to even and the JS twin in `ui/src/lib/mapStyle.js` rounds half up — a
 12.5 interval would otherwise draw at different spacings in the preview and the published portal.)

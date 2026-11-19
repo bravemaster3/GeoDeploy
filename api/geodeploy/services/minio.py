@@ -22,7 +22,11 @@ IMAGE = "pgsty/silo:RELEASE.2026-11-12T00-00-00Z"
 MC_IMAGE = "pgsty/mc:RELEASE.2026-11-12T00-00-00Z"
 NETWORK = "geodeploy"
 TITILER_NAME = "geodeploy-titiler"
-TITILER_IMAGE = "ghcr.io/developmentseed/titiler:latest"
+# PINNED. TiTiler's `:latest` is rebuilt from its development branch, and its request contract has
+# tightened under us twice (contour parameters retyped to integers, which blanked every contour
+# layer with no error anywhere). 2.4.1 is the release `:latest` was built from on 2026-11-19 (same
+# source revision and build). Compose's `titiler` names the same image — see MARTIN_IMAGE.
+TITILER_IMAGE = "ghcr.io/developmentseed/titiler:2.4.1"
 
 
 def _random_key(length: int = 32) -> str:

@@ -11,6 +11,15 @@ upgrade needs manual work.
   finished: deleting a layer left its upload job behind, and a job the worker never picked up stays
   `queued` forever. The warning now lists only a layer that still exists and is still processing,
   by name; and deleting a layer deletes its upload jobs.
+- **The tile servers are pinned: Martin 1.16.1 and TiTiler 2.4.1**, instead of `:latest`. A new
+  install, or any recreated tile container, could get a tile server nobody had tested, and TiTiler's
+  `:latest` is rebuilt from its development branch; its contract has changed under us before
+  (contour parameters retyped, which blanked every contour layer). These are exactly the versions
+  `:latest` served on 2026-11-19, so a new install gets the same tile servers it got yesterday.
+  An existing instance keeps the tile containers it has until they are next created; the new
+  `installer/tests/test-tiles.sh` passed on both the pinned versions and the older ones (Martin
+  1.10.1, TiTiler 2.2.1). It makes every request GeoDeploy makes of them, through the real nginx
+  configuration, and decodes the answers: 79 checks.
 - **A portal published from QGIS showed no map when a label was empty for some features.** A
   label like `CASE WHEN "pop" > 1000 THEN "name" END` (no `ELSE`) or `if(…, "name", NULL)` is NULL
   for the other features; the plugin translates that faithfully, but MapLibre refuses a null label
