@@ -117,8 +117,8 @@ or point it at a database you already run. Neither is "the right one": the first
 not already run a spatial database, the second for people who do, or who want the database on
 separate hardware.
 
-**Step 2 — File storage.** Either let GeoDeploy install and manage MinIO here, or use any
-S3-compatible provider. Local storage is limited by this machine's disk; S3 grows on demand and is
+**Step 2 — File storage.** Either let GeoDeploy install and manage SILO here — the maintained,
+MinIO-compatible storage server — or use any S3-compatible provider. Local storage is limited by this machine's disk; S3 grows on demand and is
 billed by use.
 
 **Step 3 — Admin account.** Create your login.

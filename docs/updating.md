@@ -39,6 +39,18 @@ does not come up healthy.
     not, it reports an error and leaves the version marker on the OLD commit rather than claiming a
     version that is not running.
 
+!!! info "What the preflight checks"
+    Before an update starts, the dashboard lists the work that is **in flight right now**, because an
+    update restarts the API and the background worker and anything mid-way dies with them:
+
+    - an **upload** still being processed — it will need to be started again;
+    - a layer being **tiled** — that one resumes by itself when the worker comes back;
+    - a **backup** or **restore** that is running.
+
+    Only work that is really running is listed: a leftover record of a job whose layer was deleted,
+    or that a crashed worker never closed, is not. The list never blocks the update — it is there so
+    you choose the moment knowingly.
+
 !!! note "What survives an update"
     Your database, uploaded files, published portals and settings are all outside the application
     containers, so an update replaces the software and leaves your data alone.
@@ -97,12 +109,16 @@ You can also start, stop and restart individual services from here.
 | **api** | The application: dashboard backend, uploads, publishing |
 | **celery** | Background work: ingestion, tiling, exports, backups |
 | **postgres** | The spatial database, and GeoDeploy's own state |
-| **minio** | Object storage for files, rasters and portal assets |
+| **minio** | Object storage for files, rasters and portal assets — since November 2026 the server is [SILO](licence.md), the maintained fork of MinIO; the service keeps its old name |
 | **martin** | Vector tiles from the database |
 | **titiler** | Raster tiles from Cloud-Optimized GeoTIFFs |
 | **redis** | The task queue |
 | **nginx** | Routing and TLS |
 | **ui** | The dashboard itself |
+
+**Martin** and **TiTiler** run at versions pinned and tested with each GeoDeploy release, not
+"whatever is newest": their URL formats have changed between versions before, and a tile server
+that moves on its own breaks every map at once. They change only when GeoDeploy does.
 
 A red service is worth investigating before anything else — most "my layer will not draw" reports
 turn out to be a tile service that is not running.
