@@ -460,3 +460,35 @@ def test_the_version_detector_recognises_the_compose_file_it_ships_with():
         assert patterns, f"{script} no longer carries the version detector"
         for pattern in patterns:
             assert re.search(pattern, compose), f"{script}: {pattern} does not match docker-compose.yml"
+
+
+# ── This server's address ─────────────────────────────────────────────────────────────────────────
+
+class _Resp:
+    text = "151.245.139.229\n"
+
+
+class _Client:
+    def __init__(self, *a, **k): pass
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def get(self, url): return _Resp()
+
+
+def test_inside_a_container_the_bridge_address_is_never_called_the_servers(monkeypatch):
+    """Reported on a plain VPS: 'This server sees its own address as 172.18.0.5 … behind NAT'. That
+    was the API CONTAINER's address on Docker's bridge, which every install has."""
+    import httpx
+    monkeypatch.setattr(httpx, "Client", _Client)
+    monkeypatch.setattr(deployment, "_in_container", lambda: True)
+    monkeypatch.setattr(deployment, "_route_source", lambda: "172.18.0.5")
+    ip = deployment.server_ip()
+    assert ip == {"outbound": None, "public": "151.245.139.229", "differs": False}
+
+
+def test_outside_a_container_a_private_route_is_still_reported_as_nat(monkeypatch):
+    import httpx
+    monkeypatch.setattr(httpx, "Client", _Client)
+    monkeypatch.setattr(deployment, "_in_container", lambda: False)
+    monkeypatch.setattr(deployment, "_route_source", lambda: "10.0.0.5")
+    assert deployment.server_ip()["differs"] is True

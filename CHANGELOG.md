@@ -34,7 +34,8 @@ upgrade needs manual work.
   copied); the panel told a machine with no proxy to run `set-port.sh 80` "once the proxy works";
   the manual configuration pointed a proxy at `127.0.0.1:80`, GeoDeploy's own public port; and a
   Cloudflare-fronted instance visited over `http` was offered a certificate it has nowhere to
-  install. Now the configuration targets `127.0.0.1:8080` and starts with the move there, Apply
+  install; and every server was called "behind NAT", because the address it compared was the API
+  container's own (`172.18.x`) rather than the machine's. Now the configuration targets `127.0.0.1:8080` and starts with the move there, Apply
   refuses until GeoDeploy has left port 80, and a domain reached over `https` reads as published.
 - **Checked against real web servers before release, and five ways Apply could disturb one closed.**
   A new suite (`installer/tests/test-hostproxy.sh`) runs Apply against throwaway machines with a
