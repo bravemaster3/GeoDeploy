@@ -1,0 +1,102 @@
+name: Images
+
+# GeoDeploy's own images, published to GHCR on every platform release tag (`v1.7`, `v1.7.1` — not
+# `cli-v*` / `qgis-plugin-v*`, which are other release trains):
+#
+#   ghcr.io/bravemaster3/geodeploy-api:<tag> and :latest   (the API and the Celery worker)
+#   ghcr.io/bravemaster3/geodeploy-ui:<tag>  and :latest   (the dashboard)
+#
+# Built exactly as an install builds them — the same context, the same default final stage — so
+# a published image is the image a server would have built from that tag.
+#
+# ONLY THE NEWEST VERSION IS KEPT (`prune`): an older release can still be installed, it simply
+# builds locally as every install does today. Nothing on an installed instance uses these yet; the
+# compose services keep `pull_policy: never` and their local names (see docker-compose.yml).
+#
+# On a pull request that touches a Dockerfile or this file, both images are BUILT and not pushed —
+# a Dockerfile that no longer builds is found in review, not on release day.
+
+on:
+  push:
+    tags: ['v[0-9]*']
+  pull_request:
+    paths:
+      - 'api/Dockerfile'
+      - 'api/requirements*.txt'
+      - 'api/constraints.txt'
+      - 'ui/Dockerfile'
+      - 'ui/package*.json'
+      - '.github/workflows/images.yml'
+  workflow_dispatch:      # run it FROM A TAG to (re)publish that release
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.component }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [api, ui]
+    env:
+      # Publishing happens only from a release tag, whatever triggered the run.
+      PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/geodeploy-${{ matrix.component }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ env.PUBLISH }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.title=geodeploy-${{ matrix.component }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.component }}
+          platforms: linux/amd64
+          push: ${{ env.PUBLISH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # One plain manifest per push. Attestations would add untagged child manifests that the
+          # prune below would count as versions — and deleting one breaks the image it belongs to.
+          provenance: false
+          sbom: false
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+
+  prune:
+    name: keep only the newest ${{ matrix.component }}
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        component: [api, ui]
+    steps:
+      - uses: actions/delete-package-versions@v5
+        with:
+          package-name: geodeploy-${{ matrix.component }}
+          package-type: container
+          min-versions-to-keep: 1

@@ -29,6 +29,17 @@ GitHub Actions CI and the community-template validation pipeline.
     `setWidth` on a FILL, this workflow went green, and in real QGIS every polygon layer raised
     `AttributeError` — it shipped, and a user reported it. Offscreen rather than xvfb because
     nothing opens a window; the images are ~3.5 GB, so this job is the slow one.
+- `workflows/images.yml` — publishes GeoDeploy's own images to GHCR on every **platform release tag**
+  (`v[0-9]*`, so not `cli-v*` / `qgis-plugin-v*`): `ghcr.io/bravemaster3/geodeploy-api` (API + Celery)
+  and `geodeploy-ui`, each as `:<tag>` and `:latest`, built from the same contexts and default final
+  stages an install builds. **Only the newest version is kept** (`prune`, `min-versions-to-keep: 1`)
+  — an older release still installs by building locally. `provenance`/`sbom` are OFF on purpose:
+  attestations add untagged child manifests that the prune would count as versions, and deleting one
+  breaks its image. On a pull request touching a Dockerfile, requirements or this file, both images
+  are BUILT, not pushed. **Nothing installed uses them yet** — compose keeps `pull_policy: never` and
+  the local `geodeploy/*:latest` names (old updaters check those); pulling them in the installer and
+  updater, with the local build as fallback, is a separate change. **One-time:** a container package
+  first published by a workflow is PRIVATE — set each to Public under the repo's Packages once.
 - `workflows/publish-cli.yml` — publishes `cli/` to PyPI on a **`cli-v*`** tag, via **Trusted
   Publishing**: PyPI verifies a short-lived OIDC token minted by GitHub for this repo, workflow
   filename and environment, so no API token is stored anywhere. `workflow_dispatch` runs the same
