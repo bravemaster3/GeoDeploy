@@ -187,3 +187,50 @@
   .gd-row > .gd-row-main { flex: 1 1 100%; order: -1; min-width: 0; }
   .gd-row-meta { flex-wrap: wrap; row-gap: .25rem; }
 }
+
+/* The basemap picker (lib/basemapControl.js) — every map in the app. Global, not scoped: the control's
+   DOM is built imperatively by MapLibre. Mirrors templates/shared/portal.css .gd-basemap-*, coloured
+   from the theme tokens (which flip under html.dark). Moved here from PortalEditor.vue, where it
+   only existed once the editor had been opened. */
+.gd-basemap-ctrl { position: relative; }
+/* Selector is intentionally specific (.gd-basemap-ctrl .gd-basemap-btn) so it beats MapLibre's own
+   `.maplibregl-ctrl-group button` rule — otherwise its display/box-model wins and the child SVG
+   isn't centered. */
+.gd-basemap-ctrl .gd-basemap-btn {
+  width: 29px; height: 29px; display: flex; align-items: center; justify-content: center;
+  padding: 0; background: transparent; border: none; cursor: pointer; color: hsl(var(--foreground));
+}
+.gd-basemap-ctrl .gd-basemap-btn svg { width: 18px; height: 18px; display: block; }
+.gd-basemap-menu {
+  display: none; position: absolute; top: 0; right: 40px; width: 250px;
+  background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: 12px;
+  box-shadow: 0 10px 25px -5px rgb(0 0 0 / 0.35); padding: 8px;
+}
+.gd-basemap-ctrl.open .gd-basemap-menu { display: block; }
+.gd-basemap-title {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  color: hsl(var(--muted-foreground)); padding: 3px 6px 8px;
+}
+.gd-basemap-opt {
+  display: flex; align-items: center; gap: 12px; padding: 7px 8px;
+  font-size: 13px; border-radius: 9px; cursor: pointer; position: relative;
+  border: 1.5px solid transparent; transition: background .12s, border-color .12s;
+}
+.gd-basemap-opt:hover { background: hsl(var(--muted) / .6); }
+.gd-basemap-opt input { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }
+.gd-basemap-opt:has(input:checked) { border-color: hsl(var(--primary)); background: hsl(var(--primary) / .1); }
+.gd-basemap-name { flex: 1; font-weight: 500; color: hsl(var(--foreground)); white-space: nowrap; }
+.gd-basemap-check { display: flex; color: hsl(var(--primary)); opacity: 0; flex-shrink: 0; }
+.gd-basemap-check svg { width: 17px; height: 17px; }
+.gd-basemap-opt:has(input:checked) .gd-basemap-check { opacity: 1; }
+.gd-basemap-thumb {
+  width: 68px; height: 46px; object-fit: cover; border-radius: 7px;
+  border: 1px solid hsl(var(--border)); flex-shrink: 0; background: hsl(var(--muted));
+}
+/* Dark-mode MapLibre controls (globe/zoom) — recolour to the theme surface + invert the built-in
+   glyphs so the whole top-right stack matches (the basemap button uses currentColor, not
+   .maplibregl-ctrl-icon, so the filter leaves it alone). */
+.dark .maplibregl-ctrl-group { background: hsl(var(--card)); box-shadow: 0 0 0 1px hsl(var(--border)), 0 2px 6px rgb(0 0 0 / .3); }
+.dark .maplibregl-ctrl-group button + button { border-top-color: hsl(var(--border)); }
+.dark .maplibregl-ctrl-group button:hover { background: hsl(var(--muted)); }
+.dark .maplibregl-ctrl button .maplibregl-ctrl-icon { filter: invert(1) hue-rotate(180deg) brightness(1.05); }

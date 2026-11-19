@@ -6,6 +6,16 @@ upgrade needs manual work.
 
 ## Unreleased
 
+- **A layer's page can be read, not only looked at.**
+  - **Click a feature** for the same popup a portal shows, with every field. Its **View attribute
+    table** link opens the table under the map and highlights that feature.
+  - **The attribute table** pages through the whole layer (PostGIS or GeoParquet), optionally only
+    what is in view. Clicking a row flies to the feature.
+  - **Rasters:** a click shows band values.
+  - **A basemap picker**, with **None**, is remembered per browser.
+  - **The visibility badge** opens the sharing settings.
+- **Every map:** the pointer turns into an arrow over anything you can click, against the hand used
+  for panning.
 - **QGIS plugin 0.7.9: connecting without a token always works.** With the token field empty, the plugin
   borrowed a token stored by the CLI's `geodeploy login`, without saying so. A stored token that
   had since been revoked made Connect fail ("This instance no longer accepts that token") for

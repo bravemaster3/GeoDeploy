@@ -355,9 +355,10 @@ import { useAuthStore } from '@/stores/auth'
 import { useMaplibre } from '@/composables/useMaplibre'
 import { buildMapStyle, lonLatBbox } from '@/lib/mapStyle'
 import { registerMarkerImages, setMarkerSpecs } from '@/lib/markerImage'
-import { DEFAULT_BASEMAP } from '@/lib/basemaps'
+import { BASEMAP_OPTIONS, NO_BASEMAP } from '@/lib/basemaps'
+import { BasemapControl } from '@/lib/basemapControl'
 import { legendEntries, representativeColor } from '@/lib/symbology'
-import { getPublicLayer } from '@/api'
+import { getPublicLayer, listBasemaps } from '@/api'
 import maplibregl from 'maplibre-gl'
 import { attrTableHtml, fetchRasterPoint, geometryBbox, hoverCursor, rasterValuesHtml,
          vectorFeatureAt } from '@/lib/identify'
@@ -600,7 +601,7 @@ const extent = computed(() => {
 // Through the shared composable, not a hand-rolled maplibregl.Map: it is what registers the
 // `pmtiles://` protocol (a tiled GeoParquet layer fails with 'URL scheme "pmtiles" is not
 // supported' without it), and it owns the map's lifecycle and the globe/zoom controls.
-const { map, loaded, applyStyle, fitToBbox, addFullscreen, addZoomToExtent, addTilt } =
+const { map, loaded, applyStyle, fitToBbox, addFullscreen, addZoomToExtent, addTilt, addTopRightControlFirst } =
   useMaplibre('gd-layer-map', { version: 8, sources: {}, layers: [] })
 const mapNote = ref('')
 
@@ -645,7 +646,30 @@ function addExtentOutline(style, bbox) {
   })
 }
 
-function renderMap() {
+// -- the basemap -----------------------------------------------------------------------------
+// The same picker the portal editor has, "None" included — a layer is often easier to read on
+// nothing at all. The instance's own catalog (/api/basemaps) when it answers, the built-in list
+// otherwise. The choice is the VIEWER's, remembered in this browser only: it is a way of looking at
+// a layer, not a property of it, so it is not saved to the layer.
+const BASEMAP_KEY = 'gd-layerpage-basemap'
+const basemapCatalog = ref(BASEMAP_OPTIONS)
+const basemapId = ref((() => { try { return localStorage.getItem(BASEMAP_KEY) } catch { return null } })())
+const currentBasemap = () =>
+  basemapCatalog.value.find(b => b.id === basemapId.value) || basemapCatalog.value[0]
+let basemapControl = null
+onMounted(async () => {
+  try {
+    const { data } = await listBasemaps()
+    if (Array.isArray(data) && data.length) basemapCatalog.value = data.concat([NO_BASEMAP])
+  } catch { /* signed out, or an older instance: the built-in list stands */ }
+})
+watch(basemapId, (id) => {
+  try { localStorage.setItem(BASEMAP_KEY, id) } catch { /* private window: not remembered */ }
+  renderMap({ refit: false })         // a different backdrop, the same view
+})
+watch(basemapCatalog, () => { basemapControl?.refresh(); renderMap({ refit: false }) })
+
+function renderMap({ refit = true } = {}) {
   const l = layer.value
   if (!l || !map.value || !loaded.value) return
 
@@ -661,14 +685,14 @@ function renderMap() {
     layers: (isVector.value && !isExternal.value) ? [l] : [],
     rasters: (isRaster.value && !isExternal.value) ? [l] : [],
     sources: isExternal.value ? [l] : [],
-    basemap: DEFAULT_BASEMAP,
+    basemap: currentBasemap(),
   })
   addExtentOutline(style, l.bbox)
   // Points are symbol layers whose icons are generated on demand — without this they draw nothing.
   registerMarkerImages(map.value, markerSpecs)
   setMarkerSpecs(map.value, markerSpecs)
   applyStyle(style)
-  fitToBbox(lonLatBbox(bounds) || lonLatBbox(l.bbox))
+  if (refit) fitToBbox(lonLatBbox(bounds) || lonLatBbox(l.bbox))
   tiltIfThreeD(style)
 }
 
@@ -733,6 +757,13 @@ let controlsAdded = false
 watch(loaded, (ready) => {
   if (!ready || controlsAdded) return
   controlsAdded = true
+  basemapControl = new BasemapControl({
+    catalog: () => basemapCatalog.value,
+    current: () => currentBasemap().id,
+    pick: (id) => { basemapId.value = id },
+    group: 'gd-basemap-layer',
+  })
+  addTopRightControlFirst(basemapControl)
   addTilt()
   addFullscreen()
   addZoomToExtent(() => lonLatBbox(layer.value?.bbox), 'Zoom to this layer')
