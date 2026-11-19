@@ -188,6 +188,27 @@ def main():
           and [n for n, _l, _x in trusting["uploads"]] == ["parks"] and not trusting["stale"],
           trusting)
 
+    print("\nA group of NEW layers: plan, upload, re-plan (the push's own sequence)")
+    # The instance listing is taken ONCE, before anything is uploaded. The re-plan after the
+    # uploads used that same snapshot, judged every just-uploaded layer "missing", and sent an
+    # empty portal: "This group has no GeoDeploy layers in it" — after uploading all of them.
+    usable = portals.usable_tags(here, {(5, "vector")})
+    parks, rivers = Layer("parks"), Layer("rivers")
+    group = Group([Node(parks), Node(rivers), Node(tagged("roads", 5, here))])
+    first = portals.plan_push(group, lambda _l, _t: {}, [], usable=usable)
+    check("first plan: the two new layers are uploads",
+          [n for n, _l, _x in first["uploads"]] == ["parks", "rivers"], first["uploads"])
+    for layer, new_id in ((parks, 9), (rivers, 10)):         # what the worker does per upload
+        portals.tag_layer(layer, "https://x", new_id, "vector", instance_id=here)
+        usable.remember((new_id, "vector"))
+    final = portals.plan_push(group, lambda _l, _t: {}, [], usable=usable)
+    check("the re-plan publishes them, in group order",
+          [c["layer_id"] for c in final["configs"]] == [9, 10, 5], final["configs"])
+    check("...with nothing called stale and nothing left to upload",
+          not final["stale"] and not final["uploads"], (final["stale"], final["uploads"]))
+    check("remembering one push's layers does not vouch for a deleted one",
+          not usable((7, "vector"), tagged("gone", 7, here)))
+
     print("\nA group whose portal was deleted")
     client = FakeClient()
     group = Group([Node(tagged("roads", 5, here))],

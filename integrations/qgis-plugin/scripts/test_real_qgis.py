@@ -550,9 +550,12 @@ def rule_based():
     got = (symbology.from_qgis(layer) or {}).get("rules") or []
     lo = got[0].get("minzoom") if got else None
     hi = got[0].get("maxzoom") if got else None
+    # Derived here, not copied from the code: MapLibre's zoom 0 is the equator over 512 px, a QGIS
+    # scale counts 1/96-inch pixels, and the test layer sits at ~1 degree north (cos ~ 1).
+    want_lo, want_hi = _web_zoom(100000, 1.0), _web_zoom(1000, 1.0)
     check("rules: a scale range becomes a zoom range",
-          lo is not None and hi is not None and 12 < lo < 13 and 18 < hi < 20,
-          "minzoom={0} maxzoom={1}".format(lo, hi))
+          lo is not None and hi is not None and abs(lo - want_lo) < 0.01 and abs(hi - want_hi) < 0.01,
+          "minzoom={0} maxzoom={1}, want {2:.3f} / {3:.3f}".format(lo, hi, want_lo, want_hi))
 
     # A nested rule inherits its parent's filter.
     layer = build(make_layer("LineString"), [
@@ -905,6 +908,14 @@ def issue_118():
     project.setCrs(saved)
 
 
+def _web_zoom(denominator, latitude):
+    """MapLibre zoom showing the ground at 1:`denominator` at `latitude`, from first principles:
+    the equator over a 512-pixel zoom-0 world, in 1/96-inch pixels, shrunk by cos(latitude)."""
+    import math
+    metres_per_pixel_z0 = 40075016.68557849 / 512 * math.cos(math.radians(latitude))
+    return math.log(metres_per_pixel_z0 / (0.0254 / 96) / denominator, 2)
+
+
 # ══ 6e. Geometry measures in the upload (issue #133) ════════════════════════════════════════════
 
 def geometry_measures():
@@ -1169,8 +1180,25 @@ def natives():
     read = symbology.from_qgis(layer)
     lo, hi = read.get("minzoom"), read.get("maxzoom")
     check("a layer's scale range becomes a zoom range",
-          lo is not None and hi is not None and 12 < lo < 13 and 18 < hi < 20,
+          lo is not None and hi is not None
+          and abs(lo - _web_zoom(100000, 1.0)) < 0.01 and abs(hi - _web_zoom(1000, 1.0)) < 0.01,
           "minzoom={0} maxzoom={1}".format(lo, hi))
+
+    # AT THE LAYER'S LATITUDE. A QGIS scale is measured on the ground; a web zoom level shows the
+    # ground smaller the further from the equator. At Dresden (51 N) the old conversion put every
+    # gate ~1.6 zoom levels too deep — labels QGIS shows at 1:28,764 needed ~3x more zoom on the web.
+    north = QgsVectorLayer("LineString?crs=EPSG:4326&field=kind:string", "dresden", "memory")
+    f = QgsFeature(north.fields())
+    f.setGeometry(QgsGeometry.fromWkt("LINESTRING(13.6 51.0, 13.9 51.1)"))
+    f.setAttributes(["a"])
+    north.dataProvider().addFeatures([f])
+    north.updateExtents()
+    north.setScaleBasedVisibility(True)
+    north.setMinimumScale(28764.0)
+    north.setMaximumScale(0.0)
+    got = (symbology.from_qgis(north) or {}).get("minzoom")
+    check("at 51 N the scale converts at 51 N (1:28,764 -> zoom 12.66, not 14.25)",
+          got is not None and abs(got - _web_zoom(28764, 51.05)) < 0.01, got)
     back = make_layer("LineString")
     symbology.apply(back, read)
     check("and goes back as a scale range",

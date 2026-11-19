@@ -116,19 +116,54 @@ def parse_number_list(raw: Any, label: str, length: Optional[int] = None) -> Lis
     return out
 
 
-#: The scale denominator one Web Mercator tile pixel covers at zoom 0, at the equator and 96 dpi.
-#: MapLibre, QGIS and every slippy-map tool agree on this number; it is what makes a QGIS scale
-#: threshold and a MapLibre zoom threshold the same statement about the map.
-SCALE_AT_ZOOM_0 = 559082264.0287178
+#: The scale denominator of MapLibre's zoom 0 ON THE EQUATOR, as QGIS states a scale: the
+#: equator's length over MapLibre's 512-pixel world, in pixels of 1/96 inch (QGIS's and the
+#: browser's reference pixel). 295,829,355.
+#:
+#: NOT 559,082,264, which this used to be: that is the OGC/WMTS figure for 256-pixel tiles and
+#: 0.28 mm pixels — the wrong tile size AND the wrong pixel for MapLibre — and it put every QGIS scale
+#: gate about one zoom level too deep, before latitude made it worse.
+SCALE_AT_ZOOM_0 = 40075016.68557849 / 512 / (0.0254 / 96)
+
+#: The latitude scale conversions assume when none is passed — see `set_latitude`.
+_LATITUDE = {"value": None}
+_UNSET = object()
 
 
-def zoom_for_scale(denominator: Any) -> Optional[float]:
+def set_latitude(latitude: Optional[float]) -> None:
+    """Make `latitude` the default for `zoom_for_scale` / `scale_for_zoom` (None: the equator).
+
+    A Web Mercator zoom level is a different SCALE at every latitude — the map stretches by
+    1/cos(latitude) — while a QGIS scale is measured on the ground. So a scale threshold only has
+    a zoom level at a given latitude. The QGIS plugin sets it to the middle of the layer whose
+    style it is reading or writing, once, so every gate in that style (rules, labels, the layer's
+    own range) converts at the same place.
+    """
+    _LATITUDE["value"] = None if latitude is None else float(latitude)
+
+
+def _stretch(latitude) -> float:
+    """cos(latitude): how much a zoom level's equatorial scale shrinks at that latitude."""
+    import math
+    if latitude is _UNSET:
+        latitude = _LATITUDE["value"]
+    if latitude is None:
+        return 1.0
+    lat = max(-85.0511, min(85.0511, float(latitude)))     # Web Mercator's own limit
+    return math.cos(math.radians(lat))
+
+
+def zoom_for_scale(denominator: Any, latitude: Any = _UNSET) -> Optional[float]:
     """A QGIS scale DENOMINATOR as a MapLibre zoom level, or None for "no limit".
 
     QGIS states visibility as a scale range and MapLibre as a zoom range, and the two run in
     OPPOSITE directions: a denominator gets larger as you zoom out, a zoom level smaller. So a
     layer's `minimumScale` (its most-zoomed-OUT limit, the larger denominator) becomes `minzoom`,
     and `maximumScale` becomes `maxzoom` — which reads backwards and is right.
+
+    `latitude` is where the scale is meant (default: `set_latitude`'s). At Dresden, 51°N, the same
+    zoom level shows the ground at 0.63 of its equatorial scale; ignoring that put QGIS's labels
+    two thirds of a zoom level later on the web.
 
     0 is QGIS's "unset" for both ends, and it must not become zoom 29: a rule with no lower limit
     would then be invisible everywhere.
@@ -140,16 +175,16 @@ def zoom_for_scale(denominator: Any) -> Optional[float]:
     if value <= 0:
         return None
     import math
-    return round(math.log(SCALE_AT_ZOOM_0 / value, 2), 3)
+    return round(math.log(SCALE_AT_ZOOM_0 * _stretch(latitude) / value, 2), 3)
 
 
-def scale_for_zoom(zoom: Any) -> Optional[float]:
+def scale_for_zoom(zoom: Any, latitude: Any = _UNSET) -> Optional[float]:
     """The inverse, for writing a MapLibre zoom back into a QGIS scale threshold."""
     try:
         value = float(zoom)
     except (TypeError, ValueError):
         return None
-    return SCALE_AT_ZOOM_0 / (2.0 ** value)
+    return SCALE_AT_ZOOM_0 * _stretch(latitude) / (2.0 ** value)
 
 
 

@@ -103,8 +103,13 @@ def usable_tags(instance_id, existing):
     Instances are compared by their stable id, NEVER by URL: the same server moved from an IP to a
     domain is the same server, and its layers must not be uploaded twice. A tag written before the
     id was recorded (or for a server too old to report one) is judged on whether its layer exists.
+
+    `existing` is a snapshot, taken before the push. Whatever the push then CREATES — an upload, a
+    registered source — must be passed to `usable.remember(identity)`, or the re-plan that follows
+    the uploads finds every new layer "missing" and publishes a portal with nothing in it.
     """
     here = str(instance_id or "")
+    known = set(existing)
 
     def usable(identity, qgis_layer) -> bool:
         try:
@@ -113,7 +118,8 @@ def usable_tags(instance_id, existing):
             there = ""
         if there and here and there != here:
             return False
-        return identity in existing
+        return identity in known
+    usable.remember = known.add
     return usable
 
 
