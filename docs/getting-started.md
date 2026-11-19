@@ -24,11 +24,19 @@ description: >-
     Swap row. If it reads 0, add some whatever your RAM:
 
     ```bash
-    sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
-    sudo mkswap /swapfile && sudo swapon /swapfile
-    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab   # survives a reboot
+    # Safe to run twice: it skips what is already done.
+    if ! swapon --show | grep -q '^/swapfile '; then
+      sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+      sudo mkswap /swapfile && sudo swapon /swapfile
+    fi
+    grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
     swapon --show                                                # confirm
     ```
+
+    `sudo: unable to resolve host <name>` printed along the way is harmless: the server's own name is
+    missing from `/etc/hosts`, which is common on fresh cloud images. The command still runs. To
+    silence it for good (and for the installer, which uses `sudo` too):
+    `echo "127.0.1.1 $(hostname)" | sudo tee -a /etc/hosts`
 
     The less RAM you have the sooner it bites — on 2 GB it is close to certain — but a 4 GB server
     with no swap and a busy worker can hit it too.

@@ -109,9 +109,12 @@ free -m          # the Swap row: total 0 means you have none
 Add it once, and it survives reboots:
 
 ```bash
-fallocate -l 2G /swapfile && chmod 600 /swapfile
-mkswap /swapfile && swapon /swapfile
-echo '/swapfile none swap sw 0 0' >> /etc/fstab   # survives a reboot
+# Safe to run twice: it skips what is already done.
+if ! swapon --show | grep -q '^/swapfile '; then
+  fallocate -l 2G /swapfile && chmod 600 /swapfile
+  mkswap /swapfile && swapon /swapfile
+fi
+grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 swapon --show                                    # confirm
 ```
 

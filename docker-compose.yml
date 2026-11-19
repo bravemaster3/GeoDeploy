@@ -4,6 +4,16 @@ services:
       context: ./api
       pull: false
     image: geodeploy/api:latest
+    # NEVER PULLED. These images are built here, from this checkout — but `geodeploy/*` on Docker
+    # Hub is somebody else's namespace, and with Compose's default (`missing`) an `up` on a machine
+    # without the image ASKS THE HUB FIRST and builds only if that fails (measured on a clean
+    # daemon). The day that account publishes geodeploy/api, a new install would run it — with the
+    # Docker socket mounted, which is root on the host. `never` builds when the image is missing,
+    # does not rebuild on later `up`s, and makes `docker compose pull` skip it; parsed identically by
+    # every Compose from 2.0.1 to 5.x and v1.29. (`build` would also block the pull, but rebuilds on
+    # EVERY `up` — set-port, the env-apply in Settings, each update.) The names are local labels;
+    # prebuilt images, when they exist, come from ghcr.io/bravemaster3/geodeploy-*.
+    pull_policy: never
     restart: unless-stopped
     env_file: .env
     volumes:
@@ -33,6 +43,7 @@ services:
       context: ./ui
       pull: false
     image: geodeploy/ui:latest
+    pull_policy: never        # see geodeploy-api
     restart: unless-stopped
     networks:
       - geodeploy
@@ -152,6 +163,7 @@ services:
       context: ./api
       pull: false
     image: geodeploy/api:latest
+    pull_policy: never        # see geodeploy-api
     restart: unless-stopped
     # -Q ingest,backup: backups get their own queue so a multi-hour object copy can't
     #   occupy the ingest slots. -B: embedded beat drives the scheduled-backup tick
