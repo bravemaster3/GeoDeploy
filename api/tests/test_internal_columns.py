@@ -96,8 +96,14 @@ async def test_nor_ogc_api_features(ingested):
     import asyncpg
     from geodeploy.routers import ogcapi
     schema, table, _res = ingested
-    conn = await asyncpg.connect(host="127.0.0.1", port=55432, user="geodeploy", password="test",
-                                 database="geodeploy_test")
+    import os
+    # The SAME settings `_dsn()` reads: CI's PostGIS is on 5432, a local throwaway on 55432.
+    conn = await asyncpg.connect(
+        host=os.environ.get("POSTGIS_HOST", "127.0.0.1"),
+        port=int(os.environ.get("POSTGIS_PORT", "55432")),
+        user=os.environ.get("POSTGIS_USER", "geodeploy"),
+        password=os.environ.get("POSTGIS_PASSWORD", "test"),
+        database=os.environ.get("POSTGIS_DB", "geodeploy_test"))
     try:
         cols = await ogcapi._pg_columns(conn, schema, table, "geom")
     finally:
