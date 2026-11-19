@@ -34,6 +34,9 @@ Vue 3 single-page dashboard — the browser-only control panel for setup, data u
   produced a different fourth colour. It was invisible only because nothing imported `rampColors`
   yet. Both now use `x + 0.5` truncated, and `api/tests/test_symbology.py` pins literal colour lists
   as the contract. **When you touch either file, run the parity check, not just the tests.**
+- **Copy to clipboard goes through `src/lib/clipboard.js::copyText`.** `navigator.clipboard` exists
+  only over https, and a fresh instance is on `http://<ip>` while its domain is set up — a bare
+  `writeText` silently did nothing there (2026-11-19). Never call it directly.
 - `vite.config.js` dev proxy must stay aligned with `nginx/nginx.conf` (prefix stripping + titiler port 80).
 
 ## Version
@@ -51,6 +54,7 @@ Two other versions are deliberately NOT in step and must not be swept up by a pr
   repository, on its own cadence.
 
 ## Last updated
+2026-11-19 (`src/lib/clipboard.js`: every Copy button works on plain http.)
 2026-08-31 (`package.json` brought in line with the product at 1.5.1, and a note above on which
 versions track it and which are deliberately independent.)
 

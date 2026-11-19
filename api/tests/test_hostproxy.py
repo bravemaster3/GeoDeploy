@@ -349,9 +349,31 @@ def test_a_probe_that_could_not_run_is_distinguished_from_one_that_found_nothing
 
 def test_a_publicly_bound_geodeploy_is_warned_about_but_not_blocked(monkeypatch):
     _detected(monkeypatch)
-    plan = hostproxy.plan("maps.example.org", {"mode": "dedicated", "bind": "0.0.0.0", "port": "80"})
+    plan = hostproxy.plan("maps.example.org", {"mode": "dedicated", "bind": "0.0.0.0", "port": "8081"})
     assert plan["can_apply"] is True
-    assert any("set-port.sh" in w for w in plan["warnings"])
+    assert any("set-port.sh 8081" in w for w in plan["warnings"])
+
+
+def test_geodeploy_on_port_80_must_move_before_a_proxy_can_publish_it(monkeypatch):
+    """Port 80 cannot be GeoDeploy's AND the proxy's, and the upstream would be 127.0.0.1:80 —
+    GeoDeploy's own public listener. The old plan allowed Apply and then told the operator to
+    'set-port.sh 80', the port it was already on."""
+    _detected(monkeypatch)
+    plan = hostproxy.plan("maps.example.org", {"mode": "dedicated", "bind": "", "port": "80"})
+    assert plan["can_apply"] is False
+    assert "port-80-held" in _codes(plan)
+    assert "set-port.sh 8080" in plan["blockers"][0]["fix"]
+    assert not any("set-port.sh 80" in w and "8080" not in w for w in plan["warnings"])
+
+
+def test_dedicated_mode_with_no_proxy_is_not_told_once_the_proxy_works(monkeypatch):
+    """Reported on a real instance: the dedicated blocker said what to do, and a warning below it
+    said 'Once the proxy works: set-port.sh 80' — naming a proxy that does not exist and the port
+    GeoDeploy is already on."""
+    _detected(monkeypatch, adapter=None, binaries=[], containers=[], dirs=[], includes=[])
+    plan = hostproxy.plan("maps.example.org", {"mode": "dedicated", "bind": "0.0.0.0", "port": "80"})
+    assert _codes(plan) == {"dedicated"}
+    assert not any("proxy works" in w for w in plan["warnings"])
 
 
 def test_apply_refuses_without_writing_when_the_plan_says_no(monkeypatch):

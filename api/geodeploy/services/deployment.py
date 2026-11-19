@@ -400,6 +400,19 @@ def verdict(intent: dict, reality: dict, observed: dict, managed: dict | None = 
         }
 
     if observed["behind_outer_proxy"] and observed["is_domain"]:
+        if observed["scheme"] != "https" and not bind.startswith("127."):
+            # Dedicated mode behind a CDN, visited over http. The certificate action needs a proxy
+            # on this machine to install it into, and there is none — GeoDeploy IS the web server.
+            return {
+                "level": "warning",
+                "title": f"Reachable at {observed['origin']}, but visitors can use plain HTTP",
+                "detail": (
+                    "The domain works. Your CDN serves it over https, but this visit came in over "
+                    "http — turn on its \"Always Use HTTPS\" setting so every visitor is moved to "
+                    "https. In this mode the hop from the CDN to this server stays plain HTTP."
+                ),
+                "fix": None,
+            }
         if observed["scheme"] != "https":
             return {
                 "level": "warning",
@@ -456,7 +469,8 @@ def verdict(intent: dict, reality: dict, observed: dict, managed: dict | None = 
 
     return {
         "level": "warning",
-        "title": f"GeoDeploy is open to the network at {observed['origin']}, without HTTPS",
+        "title": (f"Published at {observed['origin']}, without HTTPS" if observed["is_domain"]
+                  else f"GeoDeploy is open to the network at {observed['origin']}, without HTTPS"),
         "detail": (
             "Sign-in tokens travel in clear text. Put a reverse proxy with a certificate in front, "
             f"and move GeoDeploy to a local port ({local}) so only that proxy can reach it."
@@ -701,6 +715,13 @@ def proxy_config(domain: str, flavor: str, intent: dict, tls: bool = False,
     For the manual route none of this is written by us — the operator pastes it, having read it.
     """
     port = intent["port"]
+    public = not intent["bind"].startswith("127.")
+    # GeoDeploy on port 80 IS the web server: a proxy cannot listen on 80 beside it, and
+    # 127.0.0.1:80 would be GeoDeploy's own public listener. The config is therefore written for
+    # where it goes FIRST (set-port.sh 8080), and the steps start with that move.
+    holds_80 = public and str(port) == "80"
+    if holds_80:
+        port = "8080"
     upstream = f"http://127.0.0.1:{port}"
     domain = (domain or "geodeploy.example.org").strip()
 
@@ -719,7 +740,13 @@ def proxy_config(domain: str, flavor: str, intent: dict, tls: bool = False,
         test, reload_cmd = "sudo nginx -t", "sudo systemctl reload nginx"
 
     warnings: list[str] = []
-    if not intent["bind"].startswith("127."):
+    if holds_80:
+        warnings.append(
+            "GeoDeploy holds port 80 itself, which your web server needs. Move it first with  "
+            "sudo bash installer/set-port.sh 8080  — the configuration below already points at "
+            "127.0.0.1:8080. If 8080 is taken, pick another port and change it below to match."
+        )
+    elif public:
         warnings.append(
             f"GeoDeploy is currently published on {intent['bind']}:{port}, so it is reachable "
             f"directly as well as through the proxy — and a Docker publish on 0.0.0.0 is not "
@@ -736,6 +763,7 @@ def proxy_config(domain: str, flavor: str, intent: dict, tls: bool = False,
         "reload_command": reload_cmd,
         "warnings": warnings,
         "steps": [
+            *(["Move GeoDeploy off port 80: sudo bash installer/set-port.sh 8080"] if holds_80 else []),
             f"Point {domain} at this server: an A record for its public IP address.",
             f"Save the configuration below as {path}.",
             *([f"Check it: {test}"] if test else []),

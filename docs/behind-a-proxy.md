@@ -177,6 +177,7 @@ Before writing anything it checks all of these, and **refuses rather than guesse
 | Apache's `proxy`, `proxy_http` or `headers` module is not enabled | Debian ships them off. Enabling one changes Apache for every site, so you get the exact `a2enmod` command instead. |
 | The web server runs in a container (nginx, Caddy, Apache) | From inside a container `127.0.0.1` is the container itself, so a site pointing at GeoDeploy's local port would answer every visitor with an error — and GeoDeploy cannot see which names or files that container already has. Connecting it to GeoDeploy's network changes a container GeoDeploy did not create, so you get [the steps](#traefik-or-any-proxy-in-docker) instead. |
 | Traefik is the proxy | Its routing comes from container labels, a file provider or Kubernetes resources — there is no single file to drop that is correct across those. You get [the exact manual steps](#traefik-or-any-proxy-in-docker) instead. |
+| GeoDeploy itself holds port 80 (dedicated mode) and a proxy is installed | Both cannot listen on 80, and `127.0.0.1:80` would be GeoDeploy's own public listener. Move it first with `sudo bash installer/set-port.sh 8080`; the manual configuration is already written for `127.0.0.1:8080` and starts with that step. |
 | There is no reverse proxy at all | A machine with no proxy is not one GeoDeploy should be installing one on. |
 
 After writing, it tests again. **A failed test removes the file and never reaches the reload** — a
@@ -577,7 +578,10 @@ test was failing, the old certificate stays live and the log says so.
   HTTPS from that image's own ACME support.
 - **Automatic HTTPS needs a proxy in front.** In dedicated mode GeoDeploy *is* the web server and
   there is no host proxy to configure, so the certificate button does not apply — move to a local
-  port and put a proxy in front first (`installer/set-port.sh 8080`).
+  port and put a proxy in front first (`installer/set-port.sh 8080`, then for example
+  `sudo apt install caddy`). A domain itself needs nothing in this mode but its A record, which
+  Step 1 of the panel gives you, and an instance reached at `https://` through a CDN or certificates
+  you set up yourself is reported as published, not as insecure.
 - **HTTPS in dedicated mode**, and it is the sharpest gap here, because dedicated is what the
   installer recommends on an empty server. GeoDeploy publishes port 80 only: 443 is not published
   and the TLS server block in `nginx/nginx.conf` is commented out, so **there is no HTTPS listener

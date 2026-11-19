@@ -28,6 +28,14 @@ upgrade needs manual work.
   changes for a running instance: images are named and built exactly as before.
 - The swap snippet in Getting started is safe to run twice, and explains the harmless
   `sudo: unable to resolve host` warning fresh cloud images print.
+- **Settings → Deployment on a port-80 (dedicated) instance**, found on an instance updated from
+  an older release: Copy buttons did nothing on plain `http://` (the browser only allows the
+  clipboard API over https — every Copy button now falls back, and says *Copied* only when it
+  copied); the panel told a machine with no proxy to run `set-port.sh 80` "once the proxy works";
+  the manual configuration pointed a proxy at `127.0.0.1:80`, GeoDeploy's own public port; and a
+  Cloudflare-fronted instance visited over `http` was offered a certificate it has nowhere to
+  install. Now the configuration targets `127.0.0.1:8080` and starts with the move there, Apply
+  refuses until GeoDeploy has left port 80, and a domain reached over `https` reads as published.
 - **Checked against real web servers before release, and five ways Apply could disturb one closed.**
   A new suite (`installer/tests/test-hostproxy.sh`) runs Apply against throwaway machines with a
   real nginx, Apache or Caddy serving other sites — 24 scenarios, each asserting the configuration

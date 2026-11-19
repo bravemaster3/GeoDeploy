@@ -651,6 +651,12 @@ and a marker's 0.28 left on a polygon falls below the hairline and changes nothi
   `not-serving` (installed, nothing listening) and `apache-modules` refusals, widened R5's name
   collection (one-line nginx blocks, every `ServerAlias` name, Caddy via `caddy adapt`), and fixed the
   listener parse (`$NF` was `p` for busybox's `nginx: master p`).
+  **Port 80 held by GeoDeploy (2026-11-19)**: a dedicated instance on port 80 gets the
+  `port-80-held` refusal when a proxy is detected (both cannot listen on 80; the upstream would be
+  GeoDeploy's own public port), and `deployment.proxy_config` writes the manual config for
+  `127.0.0.1:8080` with `set-port.sh 8080` as step one. The "once the proxy works" warning is for a
+  public non-80 port only. `deployment.verdict` no longer offers a certificate to a dedicated
+  instance behind a CDN (no host proxy to install it into).
   **Read the module docstring's six rules before changing anything here.** The two that cost the most
   if they go: R2, test the EXISTING configuration first and refuse if it fails — otherwise our reload
   is what finally publishes somebody else's latent breakage, with GeoDeploy's name on it; and R4, a
@@ -714,5 +720,6 @@ and a marker's 0.28 left on a polygon falls below the hairline and changes nothi
   301 there loops between Cloudflare and the origin forever.
 
 ## Last updated
+2026-11-19 (port-80-held refusal; manual config for a port-80 instance targets 8080; dedicated CDN verdict)
 2026-11-18 (`hostproxy.py`: container proxies refused, not-serving / apache-modules refusals, wider R5 — all from the fake-machine harness)
 2026-09-12 (added `deployment.py` — the port/reverse-proxy slice of issue #79)

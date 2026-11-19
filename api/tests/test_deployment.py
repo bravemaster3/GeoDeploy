@@ -151,6 +151,40 @@ def test_exposed_to_the_network_without_tls():
     assert "set-port.sh" in v["fix"]
 
 
+# A dedicated instance that already has a domain is judged by how it is being REACHED: an upgraded
+# install fronted by Cloudflare, or with certificates set up by hand, must not be called insecure.
+_DED_REALITY = dict(bind="0.0.0.0", port="80")
+
+
+def test_a_dedicated_instance_reached_over_https_is_ok():
+    # Cloudflare (Flexible) in front: two XFF entries, X-Forwarded-Proto https passed through.
+    via_cdn = deployment.observe(_request({"host": "maps.example.org", "x-forwarded-proto": "https",
+                                           "x-forwarded-for": "198.51.100.4, 172.68.1.1"}))
+    # Hand-made TLS on GeoDeploy's own nginx: its map passes $scheme, i.e. https.
+    own_tls = deployment.observe(_request({"host": "maps.example.org", "x-forwarded-proto": "https"}))
+    for observed in (via_cdn, own_tls):
+        v = deployment.verdict(DEDICATED, _reality(**_DED_REALITY), observed)
+        assert v["level"] == "ok"
+        assert "https://maps.example.org" in v["title"]
+
+
+def test_a_dedicated_instance_behind_a_cdn_over_http_is_not_offered_a_certificate():
+    """The certificate flow installs into a proxy on this machine; dedicated mode has none."""
+    v = deployment.verdict(DEDICATED, _reality(**_DED_REALITY),
+                           deployment.observe(_request({"host": "maps.example.org",
+                                                        "x-forwarded-for": "198.51.100.4, 172.68.1.1"})))
+    assert v["level"] == "warning"
+    assert v.get("action") != "certificate"
+    assert "maps.example.org" in v["title"] and "Always Use HTTPS" in v["detail"]
+
+
+def test_a_dedicated_instance_reached_by_domain_over_http_names_the_domain():
+    v = deployment.verdict(DEDICATED, _reality(**_DED_REALITY),
+                           deployment.observe(_request({"host": "maps.example.org"})))
+    assert v["level"] == "warning"
+    assert v["title"] == "Published at http://maps.example.org, without HTTPS"
+
+
 # ── The generated configuration ───────────────────────────────────────────────────────────────────
 
 def test_the_nginx_block_carries_every_directive_whose_absence_is_a_real_failure():
@@ -198,6 +232,24 @@ def test_publishing_on_all_interfaces_is_flagged_when_a_proxy_is_being_set_up():
     assert cfg["warnings"], "an 0.0.0.0 publish bypasses ufw and should be called out"
     assert "set-port.sh" in cfg["warnings"][0]
     assert not deployment.proxy_config("maps.example.org", "nginx", BEHIND)["warnings"]
+
+
+@pytest.mark.parametrize("flavor", ["nginx", "caddy", "apache"])
+def test_a_port_80_instance_gets_a_config_for_where_it_moves_first(flavor):
+    """GeoDeploy on port 80 is the web server: a proxy cannot listen beside it, and 127.0.0.1:80
+    would be GeoDeploy's own public listener. The config targets 8080 and step one is the move."""
+    cfg = deployment.proxy_config("maps.example.org", flavor, DEDICATED)
+    assert cfg["upstream"] == "http://127.0.0.1:8080"
+    assert "127.0.0.1:8080" in cfg["config"] and "127.0.0.1:80;" not in cfg["config"]
+    assert cfg["steps"][0].endswith("set-port.sh 8080")
+    assert "set-port.sh 8080" in cfg["warnings"][0]
+
+
+def test_a_public_non_80_instance_keeps_its_port_in_the_config():
+    cfg = deployment.proxy_config("maps.example.org", "nginx",
+                                  {"mode": "dedicated", "bind": "0.0.0.0", "port": "8081"})
+    assert cfg["upstream"] == "http://127.0.0.1:8081"
+    assert "set-port.sh 8081" in cfg["warnings"][0]
 
 
 @pytest.mark.parametrize("flavor", deployment.FLAVORS)

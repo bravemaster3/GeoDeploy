@@ -874,9 +874,10 @@ def plan(domain: str, intent: dict) -> dict:
                     f"gets a 521."
                 ),
                 "fix": (
-                    "For automatic HTTPS, move GeoDeploy to a local port and run a proxy in front: "
-                    f"sudo bash installer/set-port.sh 8080 — then this panel can configure that "
-                    f"proxy and get a certificate for you."
+                    "For automatic HTTPS, move GeoDeploy to a local port and install a reverse "
+                    "proxy in front: sudo bash installer/set-port.sh 8080, then install one "
+                    "(Caddy is the simplest — sudo apt install caddy). This panel can then "
+                    "configure it and get a certificate for you."
                 ),
             })
         else:
@@ -1020,10 +1021,28 @@ def plan(domain: str, intent: dict) -> dict:
                 f"certificate — `http://` works straight away. Get one below."
             )
 
-    if not intent["bind"].startswith("127."):
+    public = not intent["bind"].startswith("127.")
+    if public and str(intent["port"]) == "80" and adapter:
+        # GeoDeploy HOLDS port 80 — the port the vhost we would write listens on. Both cannot have
+        # it, so the proxy either is not answering for 80 or the file fails to bind on reload; and
+        # the upstream would be 127.0.0.1:80, GeoDeploy's own public listener. Moving GeoDeploy off
+        # 80 comes first, and only the operator can do that (set-port.sh recreates nginx).
+        blockers.append({
+            "code": "port-80-held",
+            "title": f"GeoDeploy holds port 80, which {adapter['kind']} needs",
+            "detail": (f"GeoDeploy is published on {intent['bind']}:80 — it is this machine's web "
+                       f"server. A site in {adapter['kind']} listens on port 80 too, so GeoDeploy "
+                       f"has to move to a local port before {adapter['kind']} can publish it."),
+            "fix": ("Run  sudo bash installer/set-port.sh 8080  (it moves GeoDeploy to "
+                    "127.0.0.1:8080 and rolls back if that fails), then re-check here."),
+        })
+    elif public and not any(b["code"] == "dedicated" for b in blockers):
+        # Published on a public non-80 port with a proxy in front: reachable around the proxy until
+        # it is moved to loopback. Dedicated mode with no proxy has its own blocker, which already
+        # says what to do — repeating "once the proxy works" there names a proxy that does not exist.
         warnings.append(
             f"GeoDeploy is also reachable directly on {intent['bind']}:{intent['port']}. Once the "
-            f"proxy works: sudo bash installer/set-port.sh {intent['port']}"
+            f"proxy works, move it to 127.0.0.1: sudo bash installer/set-port.sh {intent['port']}"
         )
 
     # What we have ALREADY written, from the state file rather than from this session. Without this
