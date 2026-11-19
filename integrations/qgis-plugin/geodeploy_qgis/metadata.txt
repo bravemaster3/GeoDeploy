@@ -13,7 +13,7 @@ about=GeoDeploy is a self-hosted spatial data platform and geoportal builder. Th
     QGIS to an instance: browse what it publishes (no account needed for public data), add a layer
     using the fastest source it offers, and upload a QGIS layer back — including multi-gigabyte
     files, which go straight to object storage. Pure Python, no external dependencies.
-version=0.7.7
+version=0.7.8
 author=Koffi Dodji Noumonvi
 email=noumonvikoffidodji@hotmail.fr
 
@@ -32,7 +32,11 @@ license=Apache-2.0
 
 ; The client is vendored under vendor/geodeploy — a plugin cannot pip-install into a user's QGIS.
 ; It is the same package published as `geodeploy` on PyPI, kept identical by integrations/qgis-plugin/scripts/vendor.py.
-changelog=0.7.7 - PUSH GROUP AND SCALES, FIXED. Push group to portal on a group of new layers
+changelog=0.7.8 - INSTALLING OVER AN OLDER VERSION WORKS WITHOUT A RESTART. Installing 0.7.7 over
+    0.7.6 in a running QGIS failed on the first push with "module 'geodeploy.styles' has no
+    attribute 'set_latitude'": QGIS reloads a plugin's own modules but not the client it bundles,
+    so the new plugin ran against the old client. The plugin now replaces it when it loads.
+    0.7.7 - PUSH GROUP AND SCALES, FIXED. Push group to portal on a group of new layers
     uploaded them all and then failed with "This group has no GeoDeploy layers in it" (issue
     #143): the re-plan after the uploads used a list of the instance's layers taken before them.
     Scale-dependent rules and labels appeared ~1.6 zoom levels later on the web than in QGIS at
