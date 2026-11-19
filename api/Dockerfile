@@ -1,15 +1,26 @@
 # Build tippecanoe (vector-tile / PMTiles generator) from the maintained felt fork — there is
-# no apt package. Built on the same Debian base as python:3.12-slim so the binary is ABI-compatible;
-# only the binary is copied into the final image (keeps it lean).
+# no apt package. Built on bookworm and run on trixie (the base below): a binary linked against an
+# older glibc runs on a newer one. Only the binary is copied into the final image (keeps it lean).
+#
+# PINNED TO A COMMIT. This used to clone the default branch, so every build compiled whatever was
+# committed that morning — the same drift that broke the worker through kombu (constraints.txt).
+# felt tags releases rarely (2.79.0 was July 2025) while the branch moved on to v2.82.0 with real
+# fixes, so the pin is a commit, not a tag. To upgrade: pick a newer commit, build, ingest a layer.
+ARG TIPPECANOE_COMMIT=a888304b19cf1ed144341a8218a9421f47248d4e
 FROM debian:bookworm-slim AS tippecanoe
+ARG TIPPECANOE_COMMIT
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential libsqlite3-dev zlib1g-dev git ca-certificates \
-    && git clone --depth 1 https://github.com/felt/tippecanoe.git /src \
+    && git init -q /src \
+    && git -C /src fetch -q --depth 1 https://github.com/felt/tippecanoe.git "$TIPPECANOE_COMMIT" \
+    && git -C /src checkout -q FETCH_HEAD \
     && make -C /src -j"$(nproc)" \
     && make -C /src install \
     && rm -rf /var/lib/apt/lists/*
 
-FROM python:3.12-slim AS base
+# The Debian release named, not implied: plain `python:3.12-slim` follows whatever Debian is
+# current, and moving to the next one would change the system GDAL every import runs on.
+FROM python:3.12-slim-trixie AS base
 
 # postgresql-client-16 is for BACKUPS (services/backup.dump_postgis). It must be pinned to the
 # SERVER's major version: our PostGIS is postgis/postgis:16-3.4, and pg_dump REFUSES to dump a
@@ -37,9 +48,11 @@ ENV GDAL_VERSION=3.8 \
 
 WORKDIR /app
 
-COPY requirements.txt .
+# constraints.txt pins EVERY package, transitive ones included, so a build next month installs what
+# was tested — not whatever is newest that day (see the header of constraints.txt for why).
+COPY requirements.txt constraints.txt ./
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --timeout 120 --retries 5 -r requirements.txt
+    pip install --timeout 120 --retries 5 -r requirements.txt -c constraints.txt
 
 # Bake DuckDB's httpfs + spatial extensions into the image so S3/GeoParquet reads AND native
 # geometry conversion (GeoParquet → FlatGeobuf for PMTiles tiling) work with NO runtime download.

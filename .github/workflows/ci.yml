@@ -47,7 +47,9 @@ jobs:
         # No system GDAL/libpq needed: psycopg2-binary, rasterio and fiona ship self-contained
         # manylinux wheels. (Installing libgdal-dev pulled a liblzma-dev version that 404s on the
         # runner mirror — see git history.)
-        run: pip install -r requirements.txt pytest pytest-asyncio httpx
+        # -c constraints.txt: the SAME versions api/Dockerfile installs, so the tests run against
+        # what ships rather than against whatever was newest on the day CI ran.
+        run: pip install -r requirements.txt -c constraints.txt pytest pytest-asyncio httpx
 
       - name: Run tests
         working-directory: api
