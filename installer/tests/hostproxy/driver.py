@@ -29,6 +29,14 @@ try:
         out = hostproxy.remove()
     elif action == "state":
         out = hostproxy.read_state()
+    elif action == "manual":
+        # GET /admin/deployment/proxy-config, as the router builds it: the container route only for
+        # the tab whose kind matches the proxy container in front.
+        from geodeploy.services import deployment  # noqa: E402
+        flavor = sys.argv[3] if len(sys.argv) > 3 else "nginx"
+        route = hostproxy.container_ingress() if flavor != "traefik" else None
+        out = deployment.proxy_config(domain, flavor, intent,
+                                      container=route if route and route["kind"] == flavor else None)
     else:
         raise SystemExit(f"unknown action {action}")
 except hostproxy.ProxyError as exc:

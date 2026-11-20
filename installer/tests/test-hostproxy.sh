@@ -755,6 +755,78 @@ EOF
   down
 fi
 
+# A stand-in for GeoDeploy's OWN nginx container, on the `geodeploy` network, answering whoami the
+# way the host stand-in does — what a proxy container reaches once it joins that network (#162).
+gd_container() {
+  fsh <<'EOF'
+docker network create geodeploy >/dev/null
+mkdir -p /srv/gd
+cat > /srv/gd/default.conf <<'C'
+server {
+    listen 80 default_server;
+    location /api/public/whoami {
+        default_type application/json;
+        return 200 '{"instance": "fake-instance-0001", "host": "$host"}';
+    }
+}
+C
+docker run -d --name geodeploy-nginx-1 --network geodeploy \
+  -v /srv/gd/default.conf:/etc/nginx/conf.d/default.conf:ro nginx:alpine >/dev/null
+EOF
+}
+
+if want D5; then
+  boot D5 bare caddy:2-alpine
+  hdr "Caddy in a CONTAINER with ONE mounted Caddyfile — follow the panel's own instructions (#162)"
+  gd_container
+  fsh <<'EOF'
+mkdir -p /srv/edge/caddy
+cat > /srv/edge/caddy/Caddyfile <<'C'
+{
+	local_certs
+	skip_install_trust
+}
+a.example.test {
+	respond "EDGE-CADDY-A"
+}
+C
+echo "https a.example.test /" > /root/neighbours
+docker run -d --name edge-caddy -p 80:80 -p 443:443 \
+  -v /srv/edge/caddy/Caddyfile:/etc/caddy/Caddyfile caddy:2-alpine >/dev/null
+EOF
+  sleep 3; snap before
+  drv plan $D
+  jt "plan: the container is named — not 'a proxy is installed here'" "not d['can_apply'] and [b['code'] for b in d['blockers']]==['container-proxy']" codes
+  jt "plan: the fix is the network join, and the config is used as it is" "'docker network connect geodeploy edge-caddy' in d['blockers'][0]['fix'] and 'as it is' in d['blockers'][0]['fix']" "d['blockers']"
+  jt "plan: it names the mounted Caddyfile on the host" "'/srv/edge/caddy/Caddyfile' in d['blockers'][0]['detail']" "d['blockers']"
+  jt "plan: the panel is told to open the Caddy tab" "d['ingress']=={'kind': 'caddy', 'container': 'edge-caddy'}" "d.get('ingress')"
+  drv apply $D
+  jt "apply: refused" "not d['ok']" steps
+  snap refused
+  same "refused: nothing written" before refused files
+  drv manual $D caddy
+  jt "manual: proxies to GeoDeploy's container, not 127.0.0.1" "d['upstream']=='http://geodeploy-nginx-1:80' and 'reverse_proxy http://geodeploy-nginx-1:80' in d['config']" "d['config']"
+  jt "manual: the file is the host side of the mount" "d['path']=='/srv/edge/caddy/Caddyfile'" "d['path']"
+  # Follow the instructions LITERALLY, as an operator pasting them would: every command from the
+  # steps, the block appended to the named file.
+  connect=$(j "[s.split(': ',1)[1] for s in d['steps'] if s.startswith('Connect the proxy')][0]")
+  test_cmd=$(j "d['test_command']"); reload_cmd=$(j "d['reload_command']"); path=$(j "d['path']")
+  j "d['config']" > "$W/block.txt"
+  drv manual $D nginx
+  jt "manual: a tab of another kind keeps the host configuration" "d['upstream']=='http://127.0.0.1:8080' and 'container' not in d" "d['upstream']"
+  # An empty command "succeeds" — so each must be there before it can pass.
+  [ -n "$connect" ] && fx "$connect" && ok "step: $connect" || bad "step failed: '$connect'"
+  docker cp "$W/block.txt" "$FH:/root/block.txt"
+  [ -n "$path" ] && fx "printf '\n' >> '$path' && cat /root/block.txt >> '$path'"
+  [ -n "$test_cmd" ] && fx "$test_cmd" >/dev/null 2>&1 && ok "step: $test_cmd" || bad "step failed: '$test_cmd'"
+  [ -n "$reload_cmd" ] && fx "$reload_cmd" >/dev/null 2>&1 && ok "step: $reload_cmd" || bad "step failed: '$reload_cmd'"
+  sleep 3
+  ours_answers "after the steps: https://$D reaches GeoDeploy with Host intact" https
+  snap followed
+  same "after the steps: the neighbour answers as before" before followed http
+  down
+fi
+
 if want P1; then
   boot P1 nginx; nginx_neighbours
   hdr "GeoDeploy still on port 80 (dedicated, e.g. updated from an older release) beside a host nginx"

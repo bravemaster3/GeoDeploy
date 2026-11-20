@@ -718,8 +718,85 @@ services:
 FLAVORS = ("nginx", "caddy", "apache", "traefik")
 
 
+def _strip_preamble(body: str) -> str:
+    """The generator's leading comment block, which is written for a proxy installed on the host
+    ("put this in /etc/nginx/…, then systemctl reload"). The per-directive comments inside stay."""
+    lines = body.splitlines(keepends=True)
+    start = 0
+    while start < len(lines) and (lines[start].lstrip().startswith("#") or not lines[start].strip()):
+        start += 1
+    return "".join(lines[start:])
+
+
+def _container_commands(flavor: str, route: dict) -> tuple[str, str]:
+    """Test and reload, run INSIDE the proxy's container with its own binary."""
+    name = route["proxy"]
+    if flavor == "caddy":
+        # The official image starts Caddy with /etc/caddy/Caddyfile; a single mounted Caddyfile
+        # elsewhere is used as mounted.
+        mounted = route.get("config_container") or ""
+        cfg = mounted if mounted.lower().endswith("caddyfile") else "/etc/caddy/Caddyfile"
+        return (f"docker exec {name} caddy validate --config {cfg}",
+                f"docker exec {name} caddy reload --config {cfg}")
+    if flavor == "apache":
+        return f"docker exec {name} apachectl configtest", f"docker exec {name} apachectl graceful"
+    return f"docker exec {name} nginx -t", f"docker exec {name} nginx -s reload"
+
+
+def _container_variant(cfg: dict, flavor: str, route: dict) -> dict:
+    """Rewrite a host configuration for a proxy that runs in a CONTAINER (#162).
+
+    Inside that container 127.0.0.1 is the container itself, and GeoDeploy's port is bound to the
+    host's loopback, which no container can reach — so the host text, followed to the letter, gave
+    every visitor a 502. A container reaches GeoDeploy by joining its Docker network and naming its
+    nginx container, the same route the Traefik instructions have always used. GeoDeploy does not
+    make that join itself: it changes a container somebody else owns.
+    """
+    network, upstream_host = route["network"], route["upstream_host"]
+    upstream = f"http://{upstream_host}:80"
+    body = cfg["config"].replace(cfg["upstream"], upstream)
+    single_file = bool(route.get("config_host")) and not route.get("config_is_dir")
+    if route.get("config_host"):
+        path = route["config_host"]
+        if route.get("config_is_dir"):
+            path = path.rstrip("/") + ("/geodeploy.caddy" if flavor == "caddy" else "/geodeploy.conf")
+        where = (f"Add the block below to {path} (the host side of the file mounted into "
+                 f"'{route['proxy']}')." if single_file else f"Save the configuration below as {path}.")
+    else:
+        path = cfg["path"]
+        where = (f"Add the configuration below to '{route['proxy']}'s configuration. Its config is not "
+                 f"mounted from the host, so a change made inside the container is lost when it is "
+                 f"recreated — put it wherever that container's configuration really comes from.")
+    test, reload_cmd = _container_commands(flavor, route)
+    header = (f"# GeoDeploy — for the {flavor} container '{route['proxy']}'.\n"
+              f"# It reaches GeoDeploy over Docker's '{network}' network, at {upstream} — not at\n"
+              f"# 127.0.0.1, which inside a container is the container itself.\n")
+    if flavor == "nginx":
+        header += ("# The ACME location below is for a certificate obtained on the host; if this "
+                   "container\n# gets its certificates another way, it does no harm.\n")
+    compose = route.get("compose_files") or "that container's compose file"
+    service = route.get("service") or "<the proxy's service>"
+    persist = (f"`docker network connect` lasts until '{route['proxy']}' is recreated — the next "
+               f"`docker compose up` that changes it, or an image update. To keep it, add the network "
+               f"to that service in {compose}, keeping any networks it already lists:\n\n"
+               f"  services:\n    {service}:\n      networks: [default, {network}]\n"
+               f"  networks:\n    {network}:\n      external: true")
+    steps = [s for s in cfg["steps"] if s.startswith(("Move GeoDeploy off port 80", "Point "))]
+    steps += [
+        f"Connect the proxy to GeoDeploy's network: docker network connect {network} {route['proxy']}",
+        where,
+        f"Check it: {test}",
+        f"Apply it: {reload_cmd}",
+        "Come back here and press Verify.",
+    ]
+    return {**cfg, "upstream": upstream, "path": path, "config": header + _strip_preamble(body),
+            "test_command": test, "reload_command": reload_cmd,
+            "warnings": [*cfg["warnings"], persist], "steps": steps,
+            "container": route["proxy"]}
+
+
 def proxy_config(domain: str, flavor: str, intent: dict, tls: bool = False,
-                 redirect: bool = True) -> dict:
+                 redirect: bool = True, container: dict | None = None) -> dict:
     """The configuration for ONE reverse proxy, plus the steps around it.
 
     `tls=True` is the shape used once a certificate exists for this name — HTTPS on 443, port 80 kept
@@ -729,7 +806,13 @@ def proxy_config(domain: str, flavor: str, intent: dict, tls: bool = False,
     `_nginx_conf_tls`.
 
     For the manual route none of this is written by us — the operator pastes it, having read it.
+
+    `container` is the route to a proxy running in a container (`hostproxy.container_route`). Without
+    it — every host proxy — the output is exactly what it always was.
     """
+    if container and flavor in ("nginx", "caddy", "apache"):
+        return _container_variant(proxy_config(domain, flavor, intent, tls=tls, redirect=redirect),
+                                  flavor, container)
     port = intent["port"]
     public = not intent["bind"].startswith("127.")
     # GeoDeploy on port 80 IS the web server: a proxy cannot listen on 80 beside it, and

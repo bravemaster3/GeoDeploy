@@ -622,6 +622,13 @@ async function loadHostPlan() {
     applied.value = !!d.applied
     // A machine we cannot configure should not leave the operator looking at a disabled button.
     if (!d.can_apply) mode.value = 'manual'
+    // A proxy in a container: open the manual configuration on ITS kind, which is the one written
+    // for the container (#162) — the nginx tab would be the wrong proxy with the wrong address.
+    const kind = d.ingress?.kind
+    if (kind && kind !== flavor.value && data.value?.flavors?.includes(kind)) {
+      flavor.value = kind
+      await loadConfig()
+    }
   } catch (e) {
     hostPlan.value = null
     hostError.value = e?.response?.data?.detail

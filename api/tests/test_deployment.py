@@ -267,6 +267,79 @@ def test_traefik_routes_to_the_container_not_the_loopback_port():
     assert "loadbalancer.server.port=80" in body
 
 
+# ── A proxy in a CONTAINER (#162) ─────────────────────────────────────────────────────────────────
+# Found on a real server: Caddy in another Compose project, a single Caddyfile bind-mounted. The
+# configuration handed out proxied to 127.0.0.1:8080 — inside that container, the container itself.
+
+CADDY_SINGLE_FILE = {
+    "proxy": "sso-mail-caddy-1", "kind": "caddy", "service": "caddy",
+    "compose_files": "/opt/sso-mail/docker-compose.yml",
+    "config_host": "/opt/sso-mail/Caddyfile", "config_container": "/etc/caddy/Caddyfile",
+    "config_is_dir": False, "upstream_host": "geodeploy-nginx-1", "network": "geodeploy",
+}
+NGINX_DROPIN = {
+    "proxy": "edge-nginx", "kind": "nginx", "service": "web", "compose_files": None,
+    "config_host": "/srv/edge/conf.d", "config_container": "/etc/nginx/conf.d",
+    "config_is_dir": True, "upstream_host": "geodeploy-nginx-1", "network": "geodeploy",
+}
+
+
+def _active(body: str) -> str:
+    return "\n".join(line for line in body.splitlines() if not line.lstrip().startswith("#"))
+
+
+@pytest.mark.parametrize("flavor,route", [("caddy", CADDY_SINGLE_FILE), ("nginx", NGINX_DROPIN),
+                                          ("apache", {**NGINX_DROPIN, "kind": "apache"})])
+@pytest.mark.parametrize("intent", [BEHIND, DEDICATED])
+def test_a_container_proxy_is_sent_to_our_container_never_to_loopback(flavor, route, intent):
+    cfg = deployment.proxy_config("maps.example.org", flavor, intent, container=route)
+    assert "127.0.0.1" not in _active(cfg["config"])
+    assert cfg["upstream"] == "http://geodeploy-nginx-1:80"
+    assert "http://geodeploy-nginx-1:80" in _active(cfg["config"])
+    assert (f"Connect the proxy to GeoDeploy's network: docker network connect geodeploy "
+            f"{route['proxy']}") in cfg["steps"]
+    assert cfg["reload_command"].startswith(f"docker exec {route['proxy']} ")
+    assert cfg["test_command"].startswith(f"docker exec {route['proxy']} ")
+    assert cfg["container"] == route["proxy"]
+    assert "maps.example.org" in cfg["config"]
+
+
+def test_a_single_mounted_caddyfile_is_edited_on_the_host_side():
+    cfg = deployment.proxy_config("maps.example.org", "caddy", BEHIND, container=CADDY_SINGLE_FILE)
+    assert cfg["path"] == "/opt/sso-mail/Caddyfile"
+    assert any(s.startswith("Add the block below to /opt/sso-mail/Caddyfile") for s in cfg["steps"])
+    assert cfg["reload_command"] == \
+        "docker exec sso-mail-caddy-1 caddy reload --config /etc/caddy/Caddyfile"
+    assert "reverse_proxy http://geodeploy-nginx-1:80" in cfg["config"]
+    # The host preamble ("then: sudo systemctl reload caddy") is for a proxy on the host.
+    assert "systemctl" not in cfg["config"]
+
+
+def test_a_mounted_dropin_gets_its_own_file():
+    cfg = deployment.proxy_config("maps.example.org", "nginx", BEHIND, container=NGINX_DROPIN)
+    assert cfg["path"] == "/srv/edge/conf.d/geodeploy.conf"
+    assert cfg["reload_command"] == "docker exec edge-nginx nginx -s reload"
+
+
+def test_making_the_network_join_permanent_names_the_service_and_its_compose_file():
+    cfg = deployment.proxy_config("maps.example.org", "caddy", BEHIND, container=CADDY_SINGLE_FILE)
+    persist = cfg["warnings"][-1]
+    assert "/opt/sso-mail/docker-compose.yml" in persist
+    assert "    caddy:\n      networks: [default, geodeploy]" in persist
+    assert "external: true" in persist
+
+
+def test_without_a_container_route_nothing_changes():
+    """Every host proxy, and Traefik even WITH a route, gets exactly what it got before #162."""
+    for flavor in deployment.FLAVORS:
+        for intent in (BEHIND, DEDICATED):
+            assert deployment.proxy_config("maps.example.org", flavor, intent, container=None) == \
+                deployment.proxy_config("maps.example.org", flavor, intent)
+    assert deployment.proxy_config("maps.example.org", "traefik", BEHIND,
+                                   container=CADDY_SINGLE_FILE) == \
+        deployment.proxy_config("maps.example.org", "traefik", BEHIND)
+
+
 # ── The wedged mapping, detected from Docker's own two views ──────────────────────────────────────
 # Measured 2026-09-12 against a real daemon: with the port occupied at start, `HostConfig.PortBindings`
 # keeps the request while `NetworkSettings.Ports` goes empty and the container still reports running.

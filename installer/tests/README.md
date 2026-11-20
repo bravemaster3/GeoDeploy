@@ -30,7 +30,7 @@ bash installer/tests/test-port80.sh    # ~6m,  NEEDS PORT 80 — see the warning
 
 # On FAKE MACHINES — privileged containers with their own dockerd. They touch nothing on this
 # machine, including an instance running here. Not in run-all.sh: they build images and take a while.
-bash installer/tests/test-hostproxy.sh   # ~12m, Apply against real nginx/Apache/Caddy, 25 scenarios
+bash installer/tests/test-hostproxy.sh   # ~13m, Apply against real nginx/Apache/Caddy, 26 scenarios
 API_IMAGE=<built from api/> bash installer/tests/test-tiles.sh   # ~3m, every Martin/TiTiler request we make, decoded
 bash installer/tests/test-upgrade.sh     # ~40m, real installers + updaters, old releases, branches
 ```
@@ -129,6 +129,7 @@ neighbour's response, the master PID, and a 6 MB download held in flight across 
 | M1 / M2 | Apache on 80 with an idle nginx / nginx on 80 with an idle Apache | the one holding the port is chosen; the idle one untouched |
 | B1 | no web server | refused; nothing created |
 | D1–D4 | nginx or Caddy **in a container** — plain, with a foreign `geodeploy.conf`, already serving the name | refused (`container-proxy`) with the network steps; nothing written into the mount |
+| D5 | Caddy in a container with ONE mounted `Caddyfile` (no drop-in) — the shape of #162 | refused as `container-proxy` (not "a proxy is installed here"); the `manual` driver action builds the Caddy tab as the router does; its steps are then **run literally** — `docker network connect`, block appended to the named host file, `docker exec … caddy validate` / `reload` — and the domain reaches a stand-in `geodeploy-nginx-1` over HTTPS with Host intact, neighbour unchanged. 8 of its 14 checks fail on the code before #162 |
 | P1 | GeoDeploy still on **port 80** (dedicated, as after an update from an older release) beside a host nginx | refused (`port-80-held`, fix `set-port.sh 8080`), nothing touched; after the move Apply works and every neighbour answers as before |
 | T1 | Traefik in a container | named refusal |
 
@@ -186,6 +187,8 @@ builds for real inside the machine.
   Override with `GDT_MARTIN_IMAGE` / `GDT_TITILER_IMAGE` to vet a bump; `GDT_KEEP=1` leaves it up.
   Needs an `API_IMAGE` built from this checkout. WSL's dockerd restarting mid-run stops the
   containers — rerun.
+- 2026-11-20: `test-hostproxy.sh` 26 scenarios / 186 assertions green (new **D5**, #162: a proxy
+  container with a single mounted Caddyfile; the panel's own instructions followed literally work).
 - 2026-11-19: `test-hostproxy.sh` 25 scenarios / 172 assertions green (new **P1**: GeoDeploy still on
   port 80 beside a host nginx is refused with nothing touched, then applies once moved to 8080).
 - 2026-11-18: `test-hostproxy.sh` 24 scenarios / 159 assertions green on WSL2 + Docker 29.5.2,

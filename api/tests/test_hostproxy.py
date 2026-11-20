@@ -283,6 +283,76 @@ def test_a_containerised_proxy_is_a_named_refusal(monkeypatch):
     assert "docker network connect geodeploy edge-nginx" in plan["blockers"][0]["fix"]
 
 
+# ── #162: a proxy container with NO drop-in mount (a single Caddyfile) ───────────────────────────
+# Seen on a real server: it fell through to the generic "no-adapter" refusal ("a proxy is installed
+# here … main configuration"), over a manual configuration pointing at 127.0.0.1.
+
+_CADDY_CONTAINER = {"kind": "caddy", "name": "sso-mail-caddy-1", "image": "caddy:2.10.0",
+                    "ports": ["443", "80"], "service": "caddy",
+                    "compose_files": "/opt/sso-mail/docker-compose.yml",
+                    "mounts": [{"host": "/opt/sso-mail/Caddyfile", "container": "/etc/caddy/Caddyfile",
+                                "rw": True}]}
+_NO_HOST_PROXY = dict(adapter=None, binaries=[], dirs=[], includes=[], units=[], tests={},
+                      listeners=[{"socket": "0.0.0.0:80", "process": "9087/docker-proxy"}])
+
+
+def test_a_single_mounted_caddyfile_gets_no_file_writing_adapter():
+    assert hostproxy._container_adapter(_CADDY_CONTAINER) is None
+
+
+def test_a_proxy_container_without_a_dropin_is_named_not_called_an_installed_proxy(monkeypatch):
+    _detected(monkeypatch, containers=[dict(_CADDY_CONTAINER)],
+              ours={"name": "geodeploy-nginx-1", "network": "geodeploy"}, **_NO_HOST_PROXY)
+    plan = hostproxy.plan("maps.example.org", _INTENT)
+    assert plan["can_apply"] is False
+    assert _codes(plan) == {"container-proxy"}
+    blocker = plan["blockers"][0]
+    assert "docker network connect geodeploy sso-mail-caddy-1" in blocker["fix"]
+    assert "http://geodeploy-nginx-1:80" in blocker["fix"]
+    assert "/opt/sso-mail/Caddyfile" in blocker["detail"]
+    assert "in place of the 127.0.0.1" not in blocker["fix"]
+    assert plan["ingress"] == {"kind": "caddy", "container": "sso-mail-caddy-1"}
+
+
+def test_a_container_proxy_beside_a_public_geodeploy_is_not_called_dedicated(monkeypatch):
+    """GeoDeploy on 0.0.0.0:8080 with a proxy container holding 80: GeoDeploy is NOT the web server."""
+    _detected(monkeypatch, containers=[dict(_CADDY_CONTAINER)], **_NO_HOST_PROXY)
+    plan = hostproxy.plan("maps.example.org", {"mode": "behind-proxy", "bind": "0.0.0.0",
+                                               "port": "8080"})
+    assert "container-proxy" in _codes(plan) and "dedicated" not in _codes(plan)
+
+
+def test_traefik_still_wins_over_another_proxy_container(monkeypatch):
+    _detected(monkeypatch, containers=[
+        {"kind": "traefik", "name": "traefik", "image": "traefik:v3", "ports": ["80"], "mounts": []},
+        dict(_CADDY_CONTAINER)], **_NO_HOST_PROXY)
+    plan = hostproxy.plan("maps.example.org", _INTENT)
+    assert _codes(plan) == {"traefik"}
+    assert plan["ingress"] is None
+
+
+def test_a_machine_with_no_proxy_container_is_unchanged(monkeypatch):
+    """The host paths do not see any of this: no `ingress`, the same refusals as before."""
+    _detected(monkeypatch)
+    plan = hostproxy.plan("maps.example.org", _INTENT)
+    assert plan["ingress"] is None and plan["can_apply"] is True
+    assert "route" not in plan["adapter"]
+
+
+def test_the_route_prefers_a_dropin_over_the_main_file():
+    route = hostproxy.container_route({
+        "kind": "nginx", "name": "edge", "mounts": [
+            {"host": "/srv/edge/nginx.conf", "container": "/etc/nginx/nginx.conf", "rw": True},
+            {"host": "/srv/edge/conf.d", "container": "/etc/nginx/conf.d", "rw": True}]})
+    assert (route["config_host"], route["config_is_dir"]) == ("/srv/edge/conf.d", True)
+    single = hostproxy.container_route(_CADDY_CONTAINER)
+    assert (single["config_host"], single["config_is_dir"]) == ("/opt/sso-mail/Caddyfile", False)
+    bare = hostproxy.container_route({"kind": "nginx", "name": "x", "mounts": []})
+    assert bare["config_host"] is None
+    # With nothing asked of Docker, the compose defaults: project `geodeploy`, network `geodeploy`.
+    assert (bare["upstream_host"], bare["network"]) == ("geodeploy-nginx-1", "geodeploy")
+
+
 def test_a_proxy_that_listens_on_nothing_is_not_configured(monkeypatch):
     """Installed but not running: the file would pass its test, the reload would fail, and the
     vhost would go live unannounced the next time somebody starts that web server."""
