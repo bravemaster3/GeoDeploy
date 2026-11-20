@@ -30,7 +30,7 @@
     <span v-else-if="source.visibility === 'private'"
       class="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 flex-shrink-0">Private</span>
     <button v-if="auth.canEdit" @click="$emit('delete')"
-      class="opacity-0 group-hover:opacity-100 p-1.5 text-muted-foreground/70 hover:text-red-500 rounded transition-all"
+      class="sm:opacity-0 sm:group-hover:opacity-100 p-1.5 text-muted-foreground/70 hover:text-red-500 rounded transition-all"
       title="Remove source"
     >
       <TrashIcon class="w-4 h-4" />
