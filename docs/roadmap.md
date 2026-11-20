@@ -5,7 +5,7 @@ description: >-
 
 # Roadmap
 
-GeoDeploy is at **v1.6.1**. Everything under *In v1.0* and in the releases after it is built and
+GeoDeploy is at **v1.7**. Everything under *In v1.0* and in the releases after it is built and
 running in production; the groups at the end are what comes next.
 
 <div class="gd-legend" markdown>
@@ -421,6 +421,49 @@ its preview is a REAL published bundle, so what the preview shows is decided at 
 
 </div>
 
+<div class="gd-rel done" markdown>
+### v1.7 — beside the software you already run
+<span class="gd-when">Shipped · 19 Nov 2026</span>
+
+<p class="gd-goal">GeoDeploy stops assuming it owns the machine, QGIS styles arrive as QGIS draws
+them, and a layer's page can finally be read rather than only looked at.</p>
+
+- [x] **Install beside other software.**
+  - The installer asks before taking ports 80 and 443, and can bind a local port behind the web
+    server you already run.
+  - Settings → Deployment configures **nginx, Caddy or Apache** for you, with the change shown
+    first, tested, and rolled back on failure. The copy-and-paste route stays beside it.
+  - **Get a certificate** obtains and renews Let's Encrypt without installing anything.
+  - [More under *Install somewhere that is not empty*](#install-somewhere-that-is-not-empty).
+    [#79](https://github.com/bravemaster3/GeoDeploy/issues/79)
+- [x] **QGIS scale limits arrive at the right zoom.** They're converted at the layer's latitude,
+      with MapLibre's own 512-pixel scale. Before, labels QGIS showed at 1:28,764 needed about 3×
+      more zoom on the web.
+- [x] **`@map_scale` and `$area` / `$length` / `$perimeter` in rules and labels.** A scale gate
+      becomes a zoom range. The plugin computes geometry measures in QGIS at upload, and GeoDeploy
+      keeps those columns out of popups, tables and exports.
+- [x] **More of a QGIS symbol carries over:** dash-dot lines, dashes per class, polygon borders,
+      washes over patterns, and widths in metres on the ground.
+- [x] **Checked feature by feature against QGIS** on a real OSM project, at 18 scales: all 8 layers
+      draw and label identically.
+- [x] **A page for a layer, finished.**
+  - **Click popups** with every field.
+  - **An attribute table** that pages through the whole layer (PostGIS or GeoParquet), optionally
+    only what's in view, highlights the clicked feature, and flies to a row's feature.
+  - **A basemap picker** with **None**.
+  - **The visibility badge** opens sharing.
+- [x] **An arrow pointer over anything clickable**, on every map.
+- [x] **Local storage runs SILO**, the maintained fork of MinIO (MinIO's own images are gone).
+      **Martin and TiTiler are pinned** to tested versions.
+- [x] **QGIS plugin 0.7.9:**
+  - re-pushing a group recognises what is already there;
+  - an in-place upgrade needs no restart;
+  - connecting without a token always works.
+- [x] **CLI 1.7.0.** Release images are published to GHCR as `geodeploy-api` and `geodeploy-ui`;
+      installs don't use them yet.
+
+</div>
+
 ---
 
 ## Next up
@@ -505,7 +548,7 @@ unchanged, and if not, does the author find out before they publish?"</p>
 
 <div class="gd-rel" markdown>
 ### Install somewhere that is not empty
-<span class="gd-when">Partly shipped</span>
+<span class="gd-when">Partly shipped · v1.7</span>
 
 <p class="gd-goal">Every install path assumed a bare VPS that GeoDeploy owns — ports 80 and 443
 free, fixed container names available, nothing else on the box wanting any of it. The port half of
@@ -539,29 +582,6 @@ nginx, Caddy or Apache you already run. What is left is the base path and namesp
 paths nobody clicked while testing, which is the worst failure available to a self-hosted product:
 the operator cannot tell whether they misconfigured it or it is broken. Hence a release rather than
 a flag. <a href="https://github.com/bravemaster3/GeoDeploy/issues/79">#79</a></p>
-
-</div>
-
-<div class="gd-rel" markdown>
-### A page for a layer
-<span class="gd-when">Mostly shipped · v1.4</span>
-
-<p class="gd-goal">A layer is a thing in its own right, not only a row in a list — so it has an
-address, and a page at it. <code>/layers/&lt;kind&gt;/&lt;id&gt;</code> is public for a shared
-layer and the same page appears inside the app; a private one asks for a sign-in.</p>
-
-- [x] **Click a layer, get its page.** A map of just that layer, at its own extent, drawn by the
-      same style builder the portal editor uses — so the page shows what a portal would
-- [x] **What it is**: geometry type, feature count, CRS, extent, size on disk, when it was added
-- [x] **How it is served**: whether it is tiled and how (PostGIS tiles, a PMTiles archive, a COG),
-      and whether a GeoParquet layer has been tiled yet
-- [x] **Its symbology, edited and saved here** — the same panel My Data uses, writing the layer's
-      default style
-- [x] **Everything that already exists about a layer, in one place**: its share links, its legend,
-      its sharing state, and the actions that apply to it
-- [ ] **The attribute table**, paged, with a click-through from a feature on the map. The one part
-      of this page still missing — the data is reachable today only through the API or by
-      downloading the layer
 
 </div>
 
